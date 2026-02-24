@@ -1,0 +1,25 @@
+# Dart / Flutter tool state
+.dart_tool/
+.packages
+.pub/
+build/
+coverage/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Flutter generated
+**/.dart_tool/
+**/build/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+**/Generated.xcconfig
+**/ephemeral/
+
+# Local example artifacts (not source)
+example/doom/freedoom-*.zip
+example/doom/freedoom1.wad
+example/doom/frame_*.ppm
