@@ -167,28 +167,28 @@ Future<List<StepResult>> _runJsSuite(
   required bool strictProposals,
 }) async {
   final steps = <StepResult>[];
-  if (suite != RunnerSuite.proposal) {
-    final nodeCheck = await _runStep(
-      name: 'node-check',
-      command: ['node', '--version'],
-      optional: true,
+  final nodeCheck = await _runStep(
+    name: 'node-check',
+    command: ['node', '--version'],
+    optional: true,
+  );
+  steps.add(nodeCheck);
+
+  if (!nodeCheck.success) {
+    steps.add(
+      StepResult(
+        name: 'js-target-prerequisite',
+        command: const ['node', '--version'],
+        exitCode: 1,
+        durationMs: 0,
+        stdout: '',
+        stderr: 'Node.js is required for --target=js.',
+      ),
     );
-    steps.add(nodeCheck);
+    return steps;
+  }
 
-    if (!nodeCheck.success) {
-      steps.add(
-        StepResult(
-          name: 'js-tests',
-          command: const ['dart', 'test', '-p', 'node'],
-          exitCode: 1,
-          durationMs: 0,
-          stdout: '',
-          stderr: 'Node.js is required for --target=js.',
-        ),
-      );
-      return steps;
-    }
-
+  if (suite != RunnerSuite.proposal) {
     steps.add(
       await _runStep(name: 'js-tests', command: ['dart', 'test', '-p', 'node']),
     );
@@ -196,7 +196,19 @@ Future<List<StepResult>> _runJsSuite(
   if (suite != RunnerSuite.core) {
     steps.add(
       await _runStep(
-        name: 'proposal-testsuite',
+        name: 'js-threads-portable',
+        command: [
+          'dart',
+          'test',
+          '-p',
+          'node',
+          'test/threads_portable_test.dart',
+        ],
+      ),
+    );
+    steps.add(
+      await _runStep(
+        name: 'proposal-testsuite-vm-fallback',
         command: _proposalRunnerCommand(testsuiteDir),
         optional: !strictProposals,
       ),
@@ -240,9 +252,54 @@ Future<List<StepResult>> _runWasmSuite(
     );
   }
   if (suite != RunnerSuite.core) {
+    final nodeCheck = await _runStep(
+      name: 'node-check',
+      command: ['node', '--version'],
+      optional: true,
+    );
+    steps.add(nodeCheck);
+
+    if (!nodeCheck.success) {
+      steps.add(
+        StepResult(
+          name: 'wasm-target-prerequisite',
+          command: const ['node', '--version'],
+          exitCode: 1,
+          durationMs: 0,
+          stdout: '',
+          stderr: 'Node.js is required to run --target=wasm checks.',
+        ),
+      );
+      return steps;
+    }
+
     steps.add(
       await _runStep(
-        name: 'proposal-testsuite',
+        name: 'wasm-threads-portable-compile',
+        command: [
+          'dart',
+          'compile',
+          'wasm',
+          'tool/threads_portable_check.dart',
+          '-o',
+          '.dart_tool/spec_runner/threads_portable_check.wasm',
+        ],
+      ),
+    );
+    steps.add(
+      await _runStep(
+        name: 'wasm-threads-portable-run',
+        command: [
+          'node',
+          'tool/run_wasm_main.mjs',
+          '.dart_tool/spec_runner/threads_portable_check.mjs',
+          '.dart_tool/spec_runner/threads_portable_check.wasm',
+        ],
+      ),
+    );
+    steps.add(
+      await _runStep(
+        name: 'proposal-testsuite-vm-fallback',
         command: _proposalRunnerCommand(testsuiteDir),
         optional: !strictProposals,
       ),
