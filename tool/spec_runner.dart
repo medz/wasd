@@ -5,6 +5,26 @@ enum RunnerTarget { vm, js, wasm }
 
 enum RunnerSuite { core, proposal, all }
 
+enum _SpecSuiteKind { core, proposal }
+
+final class _SpecSuiteArtifacts {
+  const _SpecSuiteArtifacts({
+    required this.suite,
+    required this.stepPrefix,
+    required this.manifestPath,
+    required this.bundlePath,
+    required this.resultJsonPath,
+    required this.reportMarkdownPath,
+  });
+
+  final _SpecSuiteKind suite;
+  final String stepPrefix;
+  final String manifestPath;
+  final String bundlePath;
+  final String resultJsonPath;
+  final String reportMarkdownPath;
+}
+
 final class StepResult {
   StepResult({
     required this.name,
@@ -142,14 +162,18 @@ Future<List<StepResult>> _runVmSuite(
   if (suite != RunnerSuite.proposal) {
     steps.add(await _runStep(name: 'vm-tests', command: ['dart', 'test']));
   }
-  if (suite != RunnerSuite.core) {
+  for (final specSuite in _specSuitesForRunnerSuite(suite)) {
+    final artifacts = _artifactsForSuite(specSuite);
+    final optional = specSuite == _SpecSuiteKind.proposal && !strictProposals;
     steps.add(
       await _runStep(
-        name: 'proposal-testsuite',
-        command: _proposalRunnerCommand(testsuiteDir),
-        optional: !strictProposals,
+        name: '${artifacts.stepPrefix}-testsuite',
+        command: _testsuiteRunnerCommand(artifacts, testsuiteDir),
+        optional: optional,
       ),
     );
+  }
+  if (suite != RunnerSuite.core) {
     steps.add(
       await _runStep(
         name: 'spec-sync-check',
@@ -193,30 +217,33 @@ Future<List<StepResult>> _runJsSuite(
       await _runStep(name: 'js-tests', command: ['dart', 'test', '-p', 'node']),
     );
   }
-  if (suite != RunnerSuite.core) {
-    final proposalOptional = !strictProposals;
+  for (final specSuite in _specSuitesForRunnerSuite(suite)) {
+    final artifacts = _artifactsForSuite(specSuite);
+    final optional = specSuite == _SpecSuiteKind.proposal && !strictProposals;
+    if (specSuite == _SpecSuiteKind.proposal) {
+      steps.add(
+        await _runStep(
+          name: 'js-threads-portable',
+          command: [
+            'dart',
+            'test',
+            '-p',
+            'node',
+            'test/threads_portable_test.dart',
+          ],
+        ),
+      );
+    }
     steps.add(
       await _runStep(
-        name: 'js-threads-portable',
-        command: [
-          'dart',
-          'test',
-          '-p',
-          'node',
-          'test/threads_portable_test.dart',
-        ],
+        name: '${artifacts.stepPrefix}-prepare-manifest',
+        command: _testsuitePrepareManifestCommand(artifacts, testsuiteDir),
+        optional: optional,
       ),
     );
     steps.add(
       await _runStep(
-        name: 'proposal-prepare-manifest',
-        command: _proposalPrepareManifestCommand(testsuiteDir),
-        optional: proposalOptional,
-      ),
-    );
-    steps.add(
-      await _runStep(
-        name: 'proposal-player-js-compile',
+        name: '${artifacts.stepPrefix}-player-js-compile',
         command: const [
           'dart',
           'compile',
@@ -225,35 +252,31 @@ Future<List<StepResult>> _runJsSuite(
           '-o',
           '.dart_tool/spec_runner/spec_testsuite_player.js',
         ],
-        optional: proposalOptional,
+        optional: optional,
       ),
     );
     steps.add(
       await _runStep(
-        name: 'proposal-player-js-run',
-        command: const [
+        name: '${artifacts.stepPrefix}-player-js-run',
+        command: [
           'node',
           'tool/run_spec_player_js.mjs',
           '.dart_tool/spec_runner/spec_testsuite_player.js',
-          '.dart_tool/spec_runner/proposal_manifest.json',
-          '.dart_tool/spec_runner/proposal_latest.json',
+          artifacts.manifestPath,
+          artifacts.resultJsonPath,
         ],
-        optional: proposalOptional,
+        optional: optional,
       ),
     );
     steps.add(
       await _runStep(
-        name: 'proposal-report',
-        command: const [
-          'dart',
-          'run',
-          'tool/spec_result_report.dart',
-          '--input-json=.dart_tool/spec_runner/proposal_latest.json',
-          '--output-md=doc/wasm_proposal_failures.md',
-        ],
-        optional: proposalOptional,
+        name: '${artifacts.stepPrefix}-report',
+        command: _resultReportCommand(artifacts),
+        optional: optional,
       ),
     );
+  }
+  if (suite != RunnerSuite.core) {
     steps.add(
       await _runStep(
         name: 'spec-sync-check',
@@ -292,63 +315,66 @@ Future<List<StepResult>> _runWasmSuite(
       ),
     );
   }
-  if (suite != RunnerSuite.core) {
-    final nodeCheck = await _runStep(
-      name: 'node-check',
-      command: ['node', '--version'],
-      optional: true,
-    );
-    steps.add(nodeCheck);
+  final nodeCheck = await _runStep(
+    name: 'node-check',
+    command: ['node', '--version'],
+    optional: true,
+  );
+  steps.add(nodeCheck);
 
-    if (!nodeCheck.success) {
+  if (!nodeCheck.success) {
+    steps.add(
+      StepResult(
+        name: 'wasm-target-prerequisite',
+        command: const ['node', '--version'],
+        exitCode: 1,
+        durationMs: 0,
+        stdout: '',
+        stderr: 'Node.js is required to run --target=wasm checks.',
+      ),
+    );
+    return steps;
+  }
+
+  for (final specSuite in _specSuitesForRunnerSuite(suite)) {
+    final artifacts = _artifactsForSuite(specSuite);
+    final optional = specSuite == _SpecSuiteKind.proposal && !strictProposals;
+    if (specSuite == _SpecSuiteKind.proposal) {
       steps.add(
-        StepResult(
-          name: 'wasm-target-prerequisite',
-          command: const ['node', '--version'],
-          exitCode: 1,
-          durationMs: 0,
-          stdout: '',
-          stderr: 'Node.js is required to run --target=wasm checks.',
+        await _runStep(
+          name: 'wasm-threads-portable-compile',
+          command: [
+            'dart',
+            'compile',
+            'wasm',
+            'tool/threads_portable_check.dart',
+            '-o',
+            '.dart_tool/spec_runner/threads_portable_check.wasm',
+          ],
         ),
       );
-      return steps;
+      steps.add(
+        await _runStep(
+          name: 'wasm-threads-portable-run',
+          command: [
+            'node',
+            'tool/run_wasm_main.mjs',
+            '.dart_tool/spec_runner/threads_portable_check.mjs',
+            '.dart_tool/spec_runner/threads_portable_check.wasm',
+          ],
+        ),
+      );
     }
-
     steps.add(
       await _runStep(
-        name: 'wasm-threads-portable-compile',
-        command: [
-          'dart',
-          'compile',
-          'wasm',
-          'tool/threads_portable_check.dart',
-          '-o',
-          '.dart_tool/spec_runner/threads_portable_check.wasm',
-        ],
+        name: '${artifacts.stepPrefix}-prepare-manifest',
+        command: _testsuitePrepareManifestCommand(artifacts, testsuiteDir),
+        optional: optional,
       ),
     );
     steps.add(
       await _runStep(
-        name: 'wasm-threads-portable-run',
-        command: [
-          'node',
-          'tool/run_wasm_main.mjs',
-          '.dart_tool/spec_runner/threads_portable_check.mjs',
-          '.dart_tool/spec_runner/threads_portable_check.wasm',
-        ],
-      ),
-    );
-    final proposalOptional = !strictProposals;
-    steps.add(
-      await _runStep(
-        name: 'proposal-prepare-manifest',
-        command: _proposalPrepareManifestCommand(testsuiteDir),
-        optional: proposalOptional,
-      ),
-    );
-    steps.add(
-      await _runStep(
-        name: 'proposal-player-wasm-compile',
+        name: '${artifacts.stepPrefix}-player-wasm-compile',
         command: const [
           'dart',
           'compile',
@@ -357,44 +383,38 @@ Future<List<StepResult>> _runWasmSuite(
           '-o',
           '.dart_tool/spec_runner/spec_testsuite_player.wasm',
         ],
-        optional: proposalOptional,
+        optional: optional,
       ),
     );
     steps.add(
       await _runStep(
-        name: 'proposal-player-wasm-run',
-        command: const [
+        name: '${artifacts.stepPrefix}-player-wasm-run',
+        command: [
           'node',
           'tool/run_spec_player_wasm.mjs',
           '.dart_tool/spec_runner/spec_testsuite_player.mjs',
           '.dart_tool/spec_runner/spec_testsuite_player.wasm',
-          '.dart_tool/spec_runner/proposal_manifest.json',
-          '.dart_tool/spec_runner/proposal_latest.json',
+          artifacts.manifestPath,
+          artifacts.resultJsonPath,
         ],
-        optional: proposalOptional,
+        optional: optional,
       ),
     );
     steps.add(
       await _runStep(
-        name: 'proposal-report',
-        command: const [
-          'dart',
-          'run',
-          'tool/spec_result_report.dart',
-          '--input-json=.dart_tool/spec_runner/proposal_latest.json',
-          '--output-md=doc/wasm_proposal_failures.md',
-        ],
-        optional: proposalOptional,
-      ),
-    );
-    steps.add(
-      await _runStep(
-        name: 'spec-sync-check',
-        command: ['dart', 'run', 'tool/spec_sync.dart'],
-        optional: true,
+        name: '${artifacts.stepPrefix}-report',
+        command: _resultReportCommand(artifacts),
+        optional: optional,
       ),
     );
   }
+  steps.add(
+    await _runStep(
+      name: 'spec-sync-check',
+      command: ['dart', 'run', 'tool/spec_sync.dart'],
+      optional: true,
+    ),
+  );
   return steps;
 }
 
@@ -458,27 +478,82 @@ Future<StepResult> _runStep({
   );
 }
 
-List<String> _proposalRunnerCommand(String? testsuiteDir) {
+List<_SpecSuiteKind> _specSuitesForRunnerSuite(RunnerSuite suite) {
+  switch (suite) {
+    case RunnerSuite.core:
+      return const <_SpecSuiteKind>[_SpecSuiteKind.core];
+    case RunnerSuite.proposal:
+      return const <_SpecSuiteKind>[_SpecSuiteKind.proposal];
+    case RunnerSuite.all:
+      return const <_SpecSuiteKind>[
+        _SpecSuiteKind.core,
+        _SpecSuiteKind.proposal,
+      ];
+  }
+}
+
+_SpecSuiteArtifacts _artifactsForSuite(_SpecSuiteKind suite) {
+  switch (suite) {
+    case _SpecSuiteKind.core:
+      return const _SpecSuiteArtifacts(
+        suite: _SpecSuiteKind.core,
+        stepPrefix: 'core',
+        manifestPath: '.dart_tool/spec_runner/core_manifest.json',
+        bundlePath: '.dart_tool/spec_runner/core_bundle',
+        resultJsonPath: '.dart_tool/spec_runner/core_latest.json',
+        reportMarkdownPath: 'doc/wasm_core_failures.md',
+      );
+    case _SpecSuiteKind.proposal:
+      return const _SpecSuiteArtifacts(
+        suite: _SpecSuiteKind.proposal,
+        stepPrefix: 'proposal',
+        manifestPath: '.dart_tool/spec_runner/proposal_manifest.json',
+        bundlePath: '.dart_tool/spec_runner/proposal_bundle',
+        resultJsonPath: '.dart_tool/spec_runner/proposal_latest.json',
+        reportMarkdownPath: 'doc/wasm_proposal_failures.md',
+      );
+  }
+}
+
+List<String> _testsuiteRunnerCommand(
+  _SpecSuiteArtifacts artifacts,
+  String? testsuiteDir,
+) {
   return <String>[
     'dart',
     'run',
     'tool/spec_testsuite_runner.dart',
-    '--suite=proposal',
+    '--suite=${artifacts.suite.name}',
+    '--output-json=${artifacts.resultJsonPath}',
+    '--output-md=${artifacts.reportMarkdownPath}',
     if (testsuiteDir != null && testsuiteDir.trim().isNotEmpty)
       '--testsuite-dir=${testsuiteDir.trim()}',
   ];
 }
 
-List<String> _proposalPrepareManifestCommand(String? testsuiteDir) {
+List<String> _testsuitePrepareManifestCommand(
+  _SpecSuiteArtifacts artifacts,
+  String? testsuiteDir,
+) {
   return <String>[
     'dart',
     'run',
     'tool/spec_testsuite_runner.dart',
-    '--suite=proposal',
-    '--prepare-manifest=.dart_tool/spec_runner/proposal_manifest.json',
-    '--prepare-root=.dart_tool/spec_runner/proposal_bundle',
+    '--suite=${artifacts.suite.name}',
+    '--prepare-manifest=${artifacts.manifestPath}',
+    '--prepare-root=${artifacts.bundlePath}',
     if (testsuiteDir != null && testsuiteDir.trim().isNotEmpty)
       '--testsuite-dir=${testsuiteDir.trim()}',
+  ];
+}
+
+List<String> _resultReportCommand(_SpecSuiteArtifacts artifacts) {
+  return <String>[
+    'dart',
+    'run',
+    'tool/spec_result_report.dart',
+    '--input-json=${artifacts.resultJsonPath}',
+    '--output-md=${artifacts.reportMarkdownPath}',
   ];
 }
 
@@ -512,10 +587,20 @@ String _renderMarkdownReport({
   b.writeln();
   b.writeln('## Notes');
   b.writeln();
-  b.writeln(
-    '- Proposal testsuite summary is written to `doc/wasm_proposal_failures.md`.',
-  );
-  if (payload['strict_proposals'] != true) {
+  final suite = payload['suite'] as String? ?? 'all';
+  if (suite == RunnerSuite.core.name) {
+    b.writeln('- Core testsuite summary is written to `doc/wasm_core_failures.md`.');
+  } else if (suite == RunnerSuite.proposal.name) {
+    b.writeln(
+      '- Proposal testsuite summary is written to `doc/wasm_proposal_failures.md`.',
+    );
+  } else {
+    b.writeln('- Core testsuite summary is written to `doc/wasm_core_failures.md`.');
+    b.writeln(
+      '- Proposal testsuite summary is written to `doc/wasm_proposal_failures.md`.',
+    );
+  }
+  if (payload['strict_proposals'] != true && suite != RunnerSuite.core.name) {
     b.writeln(
       '- Proposal failures are non-gating by default; pass `--strict-proposals` to enforce them.',
     );

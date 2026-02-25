@@ -88,13 +88,13 @@ final class _CommandResult {
 }
 
 final class _ExpectedValue {
-  const _ExpectedValue.i32(this.value)
+  const _ExpectedValue.i32(int this.value)
     : type = 'i32',
       isNaN = false,
       floatBits = null,
       expectsRef = false,
       expectsNullRef = false;
-  const _ExpectedValue.i64(this.value)
+  const _ExpectedValue.i64(BigInt this.value)
     : type = 'i64',
       isNaN = false,
       floatBits = null,
@@ -126,7 +126,7 @@ final class _ExpectedValue {
 
   final String type;
   final bool isNaN;
-  final int? value;
+  final Object? value;
   final int? floatBits;
   final bool expectsRef;
   final bool expectsNullRef;
@@ -610,7 +610,7 @@ final class _ScriptExecutionState {
         return _signedBits(BigInt.parse(valueString), 32);
       case 'i64':
         final valueString = value as String;
-        return _signedBits(BigInt.parse(valueString), 64);
+        return _signedBitsBigInt(BigInt.parse(valueString), 64);
       case 'f32':
         final valueString = value as String;
         return _f32FromBits(_parseFloatBits(valueString, 32));
@@ -660,7 +660,9 @@ final class _ScriptExecutionState {
         return _ExpectedValue.i32(_signedBits(BigInt.parse(valueString), 32));
       case 'i64':
         final valueString = value as String;
-        return _ExpectedValue.i64(_signedBits(BigInt.parse(valueString), 64));
+        return _ExpectedValue.i64(
+          _signedBitsBigInt(BigInt.parse(valueString), 64),
+        );
       case 'f32':
         final valueString = value as String;
         if (valueString.startsWith('nan:')) {
@@ -700,10 +702,22 @@ final class _ScriptExecutionState {
     }
     switch (expected.type) {
       case 'i32':
-        return actual is int && actual.toSigned(32) == expected.value;
-      case 'i64':
+        final expectedValue = expected.value;
         return actual is int &&
-            _signedBits(BigInt.from(actual), 64) == expected.value;
+            expectedValue is int &&
+            actual.toSigned(32) == expectedValue;
+      case 'i64':
+        final expectedValue = expected.value;
+        if (expectedValue is! BigInt) {
+          return false;
+        }
+        if (actual is BigInt) {
+          return _signedBitsBigInt(actual, 64) == expectedValue;
+        }
+        if (actual is int) {
+          return _signedBitsBigInt(BigInt.from(actual), 64) == expectedValue;
+        }
+        return false;
       case 'f32':
         if (actual is! double) {
           return false;
@@ -755,7 +769,7 @@ final class _ScriptExecutionState {
     return (value & mask).toInt();
   }
 
-  static int _signedBits(BigInt value, int bits) {
+  static BigInt _signedBitsBigInt(BigInt value, int bits) {
     final width = BigInt.one << bits;
     final mask = width - BigInt.one;
     var normalized = value & mask;
@@ -763,7 +777,11 @@ final class _ScriptExecutionState {
     if ((normalized & signBit) != BigInt.zero) {
       normalized -= width;
     }
-    return normalized.toInt();
+    return normalized;
+  }
+
+  static int _signedBits(BigInt value, int bits) {
+    return _signedBitsBigInt(value, bits).toInt();
   }
 
   static double _parseFloating(String value) {
@@ -919,14 +937,14 @@ Future<void> main(List<String> args) async {
 
 Future<void> _runVmMode(List<String> args) async {
   final suite = _parseSuite(_argValue(args, '--suite') ?? 'proposal');
+  final defaultOutputJson = _defaultOutputJsonForSuite(suite);
+  final defaultOutputMarkdown = _defaultOutputMarkdownForSuite(suite);
   final testsuiteDir =
       _argValue(args, '--testsuite-dir') ??
       '${Directory.current.path}/third_party/wasm-spec-tests';
   final outputJson =
-      _argValue(args, '--output-json') ??
-      '.dart_tool/spec_runner/proposal_latest.json';
-  final outputMarkdown =
-      _argValue(args, '--output-md') ?? 'doc/wasm_proposal_failures.md';
+      _argValue(args, '--output-json') ?? defaultOutputJson;
+  final outputMarkdown = _argValue(args, '--output-md') ?? defaultOutputMarkdown;
   final maxFilesRaw = _argValue(args, '--max-files');
   final maxFiles = maxFilesRaw == null ? null : int.tryParse(maxFilesRaw);
 
@@ -1013,13 +1031,13 @@ Future<void> _runPrepareManifestMode(
   String manifestPath,
 ) async {
   final suite = _parseSuite(_argValue(args, '--suite') ?? 'proposal');
+  final defaultPrepareRoot = _defaultPrepareRootForSuite(suite);
   final testsuiteDir =
       _argValue(args, '--testsuite-dir') ??
       '${Directory.current.path}/third_party/wasm-spec-tests';
   final maxFilesRaw = _argValue(args, '--max-files');
   final maxFiles = maxFilesRaw == null ? null : int.tryParse(maxFilesRaw);
-  final prepareRoot =
-      _argValue(args, '--prepare-root') ?? '.dart_tool/spec_runner/proposal_bundle';
+  final prepareRoot = _argValue(args, '--prepare-root') ?? defaultPrepareRoot;
 
   final converter = await _resolveWastConverter(
     jsonFromWast: _argValue(args, '--json-from-wast'),
@@ -1422,6 +1440,39 @@ _SpecSuite _parseSuite(String raw) {
   }
 }
 
+String _defaultOutputJsonForSuite(_SpecSuite suite) {
+  switch (suite) {
+    case _SpecSuite.core:
+      return '.dart_tool/spec_runner/core_latest.json';
+    case _SpecSuite.proposal:
+      return '.dart_tool/spec_runner/proposal_latest.json';
+    case _SpecSuite.all:
+      return '.dart_tool/spec_runner/all_latest.json';
+  }
+}
+
+String _defaultOutputMarkdownForSuite(_SpecSuite suite) {
+  switch (suite) {
+    case _SpecSuite.core:
+      return 'doc/wasm_core_failures.md';
+    case _SpecSuite.proposal:
+      return 'doc/wasm_proposal_failures.md';
+    case _SpecSuite.all:
+      return 'doc/wasm_all_failures.md';
+  }
+}
+
+String _defaultPrepareRootForSuite(_SpecSuite suite) {
+  switch (suite) {
+    case _SpecSuite.core:
+      return '.dart_tool/spec_runner/core_bundle';
+    case _SpecSuite.proposal:
+      return '.dart_tool/spec_runner/proposal_bundle';
+    case _SpecSuite.all:
+      return '.dart_tool/spec_runner/all_bundle';
+  }
+}
+
 List<String> _collectSuiteFiles(String testsuiteDir, _SpecSuite suite) {
   final files = <String>[];
   for (final entity in Directory(testsuiteDir).listSync(recursive: true)) {
@@ -1483,9 +1534,10 @@ String _renderMarkdown({
   final totals = payload['totals'] as Map<String, Object?>;
   final reasonCounts = (payload['reason_counts'] as Map)
       .cast<String, Object?>();
+  final suiteLabel = _suiteLabel(payload['suite'] as String?);
 
   final b = StringBuffer()
-    ..writeln('# WASM Proposal Failure Board')
+    ..writeln('# WASM $suiteLabel Failure Board')
     ..writeln()
     ..writeln('- Started at (UTC): `${payload['started_at_utc']}`')
     ..writeln('- Ended at (UTC): `${payload['ended_at_utc']}`')
@@ -1550,6 +1602,19 @@ String _renderMarkdown({
   }
 
   return b.toString();
+}
+
+String _suiteLabel(String? suite) {
+  switch ((suite ?? '').trim().toLowerCase()) {
+    case 'core':
+      return 'Core';
+    case 'proposal':
+      return 'Proposal';
+    case 'all':
+      return 'All';
+    default:
+      return 'Testsuite';
+  }
 }
 
 String _markdownEscape(String input) {

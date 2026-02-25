@@ -117,9 +117,10 @@ String _renderMarkdown({
   final reasonCounts =
       (payload['reason_counts'] as Map?)?.cast<String, Object?>() ??
       <String, Object?>{};
+  final suiteLabel = _suiteLabel(payload['suite'] as String?);
 
   final b = StringBuffer()
-    ..writeln('# WASM Proposal Failure Board')
+    ..writeln('# WASM $suiteLabel Failure Board')
     ..writeln()
     ..writeln('- Started at (UTC): `${payload['started_at_utc']}`')
     ..writeln('- Ended at (UTC): `${payload['ended_at_utc']}`')
@@ -184,6 +185,19 @@ String _renderMarkdown({
   }
 
   return b.toString();
+}
+
+String _suiteLabel(String? suite) {
+  switch ((suite ?? '').trim().toLowerCase()) {
+    case 'core':
+      return 'Core';
+    case 'proposal':
+      return 'Proposal';
+    case 'all':
+      return 'All';
+    default:
+      return 'Testsuite';
+  }
 }
 
 String _markdownEscape(String input) {

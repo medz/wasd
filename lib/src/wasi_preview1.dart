@@ -706,10 +706,10 @@ final class WasiPreview1 {
 
   Object? _fdFdstatSetRights(List<Object?> args) {
     final fd = _asI32(args, 0, 'fd');
-    final rightsBase = WasmI64.unsigned(_asI64(args, 1, 'rights_base'));
+    final rightsBase = WasmI64.unsigned(_asI64(args, 1, 'rights_base')).toInt();
     final rightsInheriting = WasmI64.unsigned(
       _asI64(args, 2, 'rights_inheriting'),
-    );
+    ).toInt();
 
     final entry = _fdTable[fd];
     if (entry == null) {
@@ -997,6 +997,8 @@ final class WasiPreview1 {
     final rightsInheriting = WasmI64.unsigned(
       _asI64(args, 6, 'rights_inheriting'),
     );
+    final rightsBaseInt = rightsBase.toInt();
+    final rightsInheritingInt = rightsInheriting.toInt();
     final fdFlags = _asI32(args, 7, 'fdflags').toUnsigned(16);
     final fdOutPtr = _asI32(args, 8, 'fd_out_ptr');
 
@@ -1039,15 +1041,15 @@ final class WasiPreview1 {
       return _errnoNotdir;
     }
 
-    final canRead = (rightsBase & _rightFdRead) != 0;
-    final canWrite = (rightsBase & _rightFdWrite) != 0;
+    final canRead = (rightsBaseInt & _rightFdRead) != 0;
+    final canWrite = (rightsBaseInt & _rightFdWrite) != 0;
     if (!canRead && !canWrite) {
       return _errnoPerm;
     }
-    if ((rightsBase & ~dirEntry.rightsInheriting) != 0) {
+    if ((rightsBaseInt & ~dirEntry.rightsInheriting) != 0) {
       return _errnoPerm;
     }
-    if ((rightsInheriting & ~dirEntry.rightsInheriting) != 0) {
+    if ((rightsInheritingInt & ~dirEntry.rightsInheriting) != 0) {
       return _errnoPerm;
     }
 
@@ -1072,8 +1074,8 @@ final class WasiPreview1 {
     final openedFd = _allocateDynamicFd();
     _fdTable[openedFd] = _FdEntry.file(
       descriptor,
-      rightsBase: rightsBase,
-      rightsInheriting: rightsInheriting,
+      rightsBase: rightsBaseInt,
+      rightsInheriting: rightsInheritingInt,
       fdFlags: fdFlags,
     );
 
@@ -1836,8 +1838,8 @@ final class WasiPreview1 {
     }
 
     final now = DateTime.now().microsecondsSinceEpoch * 1000;
-    final atimeNs = atimNow ? now : (atimSet ? WasmI64.signed(atim) : null);
-    final mtimeNs = mtimNow ? now : (mtimSet ? WasmI64.signed(mtim) : null);
+    final atimeNs = atimNow ? now : (atimSet ? WasmI64.signed(atim).toInt() : null);
+    final mtimeNs = mtimNow ? now : (mtimSet ? WasmI64.signed(mtim).toInt() : null);
     return (atimeNs, mtimeNs);
   }
 
@@ -1949,10 +1951,13 @@ final class WasiPreview1 {
       throw StateError('Missing WASI argument: $name');
     }
     final value = args[index];
-    if (value is! int) {
-      throw StateError('WASI argument `$name` must be i64/int.');
+    if (value is int) {
+      return WasmI64.signed(value).toInt();
     }
-    return WasmI64.signed(value);
+    if (value is BigInt) {
+      return WasmI64.signed(value).toInt();
+    }
+    throw StateError('WASI argument `$name` must be i64/int-or-bigint.');
   }
 
   static int _fsErrno(WasiFsError error) {

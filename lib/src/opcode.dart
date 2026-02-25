@@ -203,6 +203,10 @@ abstract final class Opcodes {
   static const int refNull = 0xd0;
   static const int refIsNull = 0xd1;
   static const int refFunc = 0xd2;
+  static const int refEq = 0xd3;
+  static const int refAsNonNull = 0xd4;
+  static const int brOnNull = 0xd5;
+  static const int brOnNonNull = 0xd6;
 
   // 0xFC prefixed pseudo-opcodes encoded as (0xFC00 | subopcode)
   static const int i32TruncSatF32S = 0xfc00;
@@ -229,10 +233,35 @@ abstract final class Opcodes {
   static const int i64MulWideU = 0xfc16;
 
   // 0xFB prefixed pseudo-opcodes encoded as (0xFB00 | subopcode)
+  static const int structNew = 0xfb00;
+  static const int structNewDefault = 0xfb01;
+  static const int structGetU = 0xfb02;
+  static const int structGetS = 0xfb03;
+  static const int arrayNew = 0xfb06;
+  static const int arrayNewDefault = 0xfb07;
+  static const int arrayNewFixed = 0xfb08;
+  static const int arrayNewData = 0xfb09;
+  static const int arrayNewElem = 0xfb0a;
+  static const int arrayGetS = 0xfb0c;
+  static const int arrayGetU = 0xfb0d;
+  static const int arrayLen = 0xfb0f;
   static const int refTest = 0xfb14;
+  static const int refTestNullable = 0xfb15;
   static const int refCast = 0xfb16;
+  static const int refCastNullable = 0xfb17;
   static const int brOnCast = 0xfb18;
   static const int brOnCastFail = 0xfb19;
+  static const int anyConvertExtern = 0xfb1a;
+  static const int refI31 = 0xfb1c;
+  static const int i31GetS = 0xfb1d;
+  static const int i31GetU = 0xfb1e;
+  static const int structNewDesc = 0xfb20;
+  static const int structNewDefaultDesc = 0xfb21;
+  static const int refGetDesc = 0xfb22;
+  static const int refCastDesc = 0xfb23;
+  static const int refCastDescEq = 0xfb24;
+  static const int brOnCastDescEq = 0xfb25;
+  static const int brOnCastDescEqFail = 0xfb26;
 
   // 0xFE prefixed pseudo-opcodes encoded as (0xFE00 | subopcode)
   static const int memoryAtomicNotify = 0xfe00;

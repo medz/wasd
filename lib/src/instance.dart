@@ -492,10 +492,10 @@ final class WasmInstance {
 
   int invokeI64(String exportName, [List<Object?> args = const []]) {
     final result = invoke(exportName, args);
-    if (result is! int) {
+    if (result is! int && result is! BigInt) {
       throw StateError('Export `$exportName` does not return an i64 value.');
     }
-    return WasmI64.signed(result);
+    return WasmI64.signed(result as Object).toInt();
   }
 
   Future<int> invokeI64Async(
@@ -503,10 +503,10 @@ final class WasmInstance {
     List<Object?> args = const [],
   ]) async {
     final result = await invokeAsync(exportName, args);
-    if (result is! int) {
+    if (result is! int && result is! BigInt) {
       throw StateError('Export `$exportName` does not return an i64 value.');
     }
-    return WasmI64.signed(result);
+    return WasmI64.signed(result as Object).toInt();
   }
 
   double invokeF32(String exportName, [List<Object?> args = const []]) {
@@ -569,10 +569,10 @@ final class WasmInstance {
 
   int readGlobalI64(String exportName) {
     final value = readGlobal(exportName);
-    if (value is! int) {
+    if (value is! int && value is! BigInt) {
       throw StateError('Global `$exportName` is not i64.');
     }
-    return WasmI64.signed(value);
+    return WasmI64.signed(value).toInt();
   }
 
   double readGlobalF32(String exportName) {
@@ -735,7 +735,7 @@ final class WasmInstance {
     }
 
     int popI32() => pop().castTo(WasmValueType.i32).asI32();
-    int popI64() => pop().castTo(WasmValueType.i64).asI64();
+    BigInt popI64() => pop().castTo(WasmValueType.i64).asI64();
     double popF32() => pop().castTo(WasmValueType.f32).asF32();
     double popF64() => pop().castTo(WasmValueType.f64).asF64();
 

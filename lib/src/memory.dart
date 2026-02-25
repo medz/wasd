@@ -63,14 +63,14 @@ final class WasmMemory {
     return _view.getUint32(address, Endian.little);
   }
 
-  int loadI64(int address) {
+  BigInt loadI64(int address) {
     _checkBounds(address, 8);
     final low = _view.getUint32(address, Endian.little);
     final high = _view.getUint32(address + 4, Endian.little);
     return WasmI64.fromU32PairSigned(low: low, high: high);
   }
 
-  int loadU64(int address) {
+  BigInt loadU64(int address) {
     _checkBounds(address, 8);
     final low = _view.getUint32(address, Endian.little);
     final high = _view.getUint32(address + 4, Endian.little);
@@ -102,7 +102,7 @@ final class WasmMemory {
     _view.setInt32(address, value.toSigned(32), Endian.little);
   }
 
-  void storeI64(int address, int value) {
+  void storeI64(int address, Object value) {
     _checkBounds(address, 8);
     final normalized = WasmI64.signed(value);
     final low = WasmI64.lowU32(normalized);

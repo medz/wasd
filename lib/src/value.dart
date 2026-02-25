@@ -13,7 +13,7 @@ final class WasmValue {
     return WasmValue._(WasmValueType.i32, value.toSigned(32));
   }
 
-  factory WasmValue.i64(int value) {
+  factory WasmValue.i64(Object value) {
     return WasmValue._(WasmValueType.i64, WasmI64.signed(value));
   }
 
@@ -46,8 +46,11 @@ final class WasmValue {
         }
         return WasmValue.i32(value);
       case WasmValueType.i64:
-        if (value is! int) {
-          throw StateError('Expected i64 value (int), got `$value`.');
+        if (value is! int && value is! BigInt && value is! String) {
+          throw StateError('Expected i64 value (int/BigInt/string), got `$value`.');
+        }
+        if (value == null) {
+          throw StateError('Expected non-null i64 value.');
         }
         return WasmValue.i64(value);
       case WasmValueType.f32:
@@ -68,9 +71,9 @@ final class WasmValue {
     return (raw as int).toSigned(32);
   }
 
-  int asI64() {
+  BigInt asI64() {
     _expectType(WasmValueType.i64);
-    return WasmI64.signed(raw as int);
+    return WasmI64.signed(raw);
   }
 
   double asF32() {
@@ -86,8 +89,10 @@ final class WasmValue {
   Object toExternal() {
     switch (type) {
       case WasmValueType.i32:
-      case WasmValueType.i64:
         return raw as int;
+      case WasmValueType.i64:
+        final value = WasmI64.signed(raw);
+        return WasmI64.fitsInInt(value) ? value.toInt() : value;
       case WasmValueType.f32:
       case WasmValueType.f64:
         return raw as double;
@@ -149,7 +154,7 @@ final class WasmValue {
     return data.getFloat32(0, Endian.little);
   }
 
-  static double fromF64Bits(int bits) {
+  static double fromF64Bits(Object bits) {
     final normalized = WasmI64.unsigned(bits);
     final data = ByteData(8)
       ..setUint32(0, WasmI64.lowU32(normalized), Endian.little)
@@ -162,7 +167,7 @@ final class WasmValue {
     return data.getUint32(0, Endian.little);
   }
 
-  static int toF64Bits(double value) {
+  static BigInt toF64Bits(double value) {
     final data = ByteData(8)..setFloat64(0, value, Endian.little);
     final low = data.getUint32(0, Endian.little);
     final high = data.getUint32(4, Endian.little);

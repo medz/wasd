@@ -4,20 +4,30 @@ abstract final class WasmI64 {
   static final BigInt _signBit = BigInt.one << 63;
   static final BigInt _u32Mask = (BigInt.one << 32) - BigInt.one;
 
-  static final int maxSigned = BigInt.parse(
-    '7fffffffffffffff',
-    radix: 16,
-  ).toInt();
-  static final int minSigned = -maxSigned - 1;
-  static final int magnitudeMask = maxSigned;
-  static final int signBitMask = minSigned;
-  static const int allOnesMask = -1;
+  static final BigInt maxSigned = BigInt.parse('7fffffffffffffff', radix: 16);
+  static final BigInt minSigned = -maxSigned - BigInt.one;
+  static final BigInt magnitudeMask = maxSigned;
+  static final BigInt signBitMask = minSigned;
+  static final BigInt allOnesMask = -BigInt.one;
 
-  static BigInt _toUnsignedBigInt(int value) {
-    return BigInt.from(value) & _mask;
+  static BigInt _toBigInt(Object value) {
+    if (value is BigInt) {
+      return value;
+    }
+    if (value is int) {
+      return BigInt.from(value);
+    }
+    if (value is String) {
+      return BigInt.parse(value);
+    }
+    throw ArgumentError('Unsupported i64 value type: ${value.runtimeType}');
   }
 
-  static BigInt _toSignedBigInt(int value) {
+  static BigInt _toUnsignedBigInt(Object value) {
+    return _toBigInt(value) & _mask;
+  }
+
+  static BigInt _toSignedBigInt(Object value) {
     var v = _toUnsignedBigInt(value);
     if ((v & _signBit) != BigInt.zero) {
       v -= _modulus;
@@ -25,89 +35,87 @@ abstract final class WasmI64 {
     return v;
   }
 
-  static int _signedFromBigInt(BigInt value) {
+  static BigInt _signedFromBigInt(BigInt value) {
     var v = value & _mask;
     if ((v & _signBit) != BigInt.zero) {
       v -= _modulus;
     }
-    return v.toInt();
+    return v;
   }
 
-  static int _bitPatternFromBigInt(BigInt value) {
-    // Dart `int` cannot represent unsigned 64-bit values >= 2^63 as positive
-    // integers, so keep the canonical two's-complement bit pattern instead.
-    return _signedFromBigInt(value);
+  static BigInt _bitPatternFromBigInt(BigInt value) {
+    return value & _mask;
   }
 
-  static int signed(int value) {
-    return _signedFromBigInt(BigInt.from(value));
+  static BigInt signed(Object value) {
+    return _signedFromBigInt(_toBigInt(value));
   }
 
-  static int unsigned(int value) {
-    return _bitPatternFromBigInt(BigInt.from(value));
+  static BigInt unsigned(Object value) {
+    return _bitPatternFromBigInt(_toBigInt(value));
   }
 
-  static int compareUnsigned(int lhs, int rhs) {
+  static int compareUnsigned(Object lhs, Object rhs) {
     return _toUnsignedBigInt(lhs).compareTo(_toUnsignedBigInt(rhs));
   }
 
-  static int add(int lhs, int rhs) {
+  static BigInt add(Object lhs, Object rhs) {
     return _signedFromBigInt(_toUnsignedBigInt(lhs) + _toUnsignedBigInt(rhs));
   }
 
-  static int sub(int lhs, int rhs) {
+  static BigInt sub(Object lhs, Object rhs) {
     return _signedFromBigInt(_toUnsignedBigInt(lhs) - _toUnsignedBigInt(rhs));
   }
 
-  static int mul(int lhs, int rhs) {
+  static BigInt mul(Object lhs, Object rhs) {
     return _signedFromBigInt(_toUnsignedBigInt(lhs) * _toUnsignedBigInt(rhs));
   }
 
-  static int divS(int lhs, int rhs) {
+  static BigInt divS(Object lhs, Object rhs) {
     final quotient = _toSignedBigInt(lhs) ~/ _toSignedBigInt(rhs);
     return _signedFromBigInt(quotient);
   }
 
-  static int divU(int lhs, int rhs) {
+  static BigInt divU(Object lhs, Object rhs) {
     final quotient = _toUnsignedBigInt(lhs) ~/ _toUnsignedBigInt(rhs);
     return _signedFromBigInt(quotient);
   }
 
-  static int remS(int lhs, int rhs) {
+  static BigInt remS(Object lhs, Object rhs) {
     final remainder = _toSignedBigInt(lhs).remainder(_toSignedBigInt(rhs));
     return _signedFromBigInt(remainder);
   }
 
-  static int remU(int lhs, int rhs) {
+  static BigInt remU(Object lhs, Object rhs) {
     final remainder = _toUnsignedBigInt(lhs).remainder(_toUnsignedBigInt(rhs));
     return _signedFromBigInt(remainder);
   }
 
-  static int and(int lhs, int rhs) {
+  static BigInt and(Object lhs, Object rhs) {
     return _signedFromBigInt(_toUnsignedBigInt(lhs) & _toUnsignedBigInt(rhs));
   }
 
-  static int or(int lhs, int rhs) {
+  static BigInt or(Object lhs, Object rhs) {
     return _signedFromBigInt(_toUnsignedBigInt(lhs) | _toUnsignedBigInt(rhs));
   }
 
-  static int xor(int lhs, int rhs) {
+  static BigInt xor(Object lhs, Object rhs) {
     return _signedFromBigInt(_toUnsignedBigInt(lhs) ^ _toUnsignedBigInt(rhs));
   }
 
-  static int shl(int value, int shift) {
+  static BigInt shl(Object value, int shift) {
     return _signedFromBigInt(_toUnsignedBigInt(value) << shift);
   }
 
-  static int shrS(int value, int shift) {
+  static BigInt shrS(Object value, int shift) {
     return _signedFromBigInt(_toSignedBigInt(value) >> shift);
   }
 
-  static int shrU(int value, int shift) {
+  static BigInt shrU(Object value, int shift) {
     return _signedFromBigInt(_toUnsignedBigInt(value) >> shift);
   }
 
-  static int rotl(int value, int shift) {
+  static BigInt rotl(Object value, int shift) {
     final normalizedShift = shift & 63;
     if (normalizedShift == 0) {
       return signed(value);
@@ -120,7 +128,7 @@ abstract final class WasmI64 {
     return _signedFromBigInt(rotated);
   }
 
-  static int rotr(int value, int shift) {
+  static BigInt rotr(Object value, int shift) {
     final normalizedShift = shift & 63;
     if (normalizedShift == 0) {
       return signed(value);
@@ -133,72 +141,78 @@ abstract final class WasmI64 {
     return _signedFromBigInt(rotated);
   }
 
-  static int clz(int value) {
+  static BigInt clz(Object value) {
     final normalized = _toUnsignedBigInt(value);
     if (normalized == BigInt.zero) {
-      return 64;
+      return BigInt.from(64);
     }
-    return 64 - normalized.bitLength;
+    return BigInt.from(64 - normalized.bitLength);
   }
 
-  static int ctz(int value) {
+  static BigInt ctz(Object value) {
     var normalized = _toUnsignedBigInt(value);
     if (normalized == BigInt.zero) {
-      return 64;
+      return BigInt.from(64);
     }
     var count = 0;
     while ((normalized & BigInt.one) == BigInt.zero) {
       count++;
       normalized >>= 1;
     }
-    return count;
+    return BigInt.from(count);
   }
 
-  static int popcnt(int value) {
+  static BigInt popcnt(Object value) {
     var normalized = _toUnsignedBigInt(value);
     var count = 0;
     while (normalized != BigInt.zero) {
       normalized &= normalized - BigInt.one;
       count++;
     }
-    return count;
+    return BigInt.from(count);
   }
 
-  static double unsignedToDouble(int value) {
+  static double unsignedToDouble(Object value) {
     return _toUnsignedBigInt(value).toDouble();
   }
 
-  static int signExtend(int value, int bits) {
+  static BigInt signExtend(Object value, int bits) {
     if (bits <= 0 || bits > 64) {
       throw ArgumentError.value(bits, 'bits', 'must be in 1..64');
     }
     final width = BigInt.one << bits;
     final mask = width - BigInt.one;
-    var v = BigInt.from(value) & mask;
+    var v = _toBigInt(value) & mask;
     final sign = BigInt.one << (bits - 1);
     if ((v & sign) != BigInt.zero) {
       v -= width;
     }
-    return signed(v.toInt());
+    return signed(v);
   }
 
-  static int lowU32(int value) {
+  static int lowU32(Object value) {
     return (_toUnsignedBigInt(value) & _u32Mask).toInt();
   }
 
-  static int highU32(int value) {
+  static int highU32(Object value) {
     return ((_toUnsignedBigInt(value) >> 32) & _u32Mask).toInt();
   }
 
-  static int fromU32PairSigned({required int low, required int high}) {
+  static BigInt fromU32PairSigned({required int low, required int high}) {
     final lo = BigInt.from(low) & _u32Mask;
     final hi = BigInt.from(high) & _u32Mask;
     return _signedFromBigInt((hi << 32) | lo);
   }
 
-  static int fromU32PairUnsigned({required int low, required int high}) {
+  static BigInt fromU32PairUnsigned({required int low, required int high}) {
     final lo = BigInt.from(low) & _u32Mask;
     final hi = BigInt.from(high) & _u32Mask;
     return _bitPatternFromBigInt((hi << 32) | lo);
+  }
+
+  static bool fitsInInt(BigInt value) {
+    const maxSafe = 9007199254740991;
+    const minSafe = -9007199254740991;
+    return value >= BigInt.from(minSafe) && value <= BigInt.from(maxSafe);
   }
 }

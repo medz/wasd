@@ -151,6 +151,8 @@ git clone --depth 1 https://github.com/WebAssembly/testsuite.git third_party/was
 dart run tool/spec_runner.dart --target=vm --suite=all
 dart run tool/spec_runner.dart --target=js --suite=all
 dart run tool/spec_runner.dart --target=wasm --suite=all
+# core-only run
+dart run tool/spec_runner.dart --target=vm --suite=core
 # proposal-only run (non-gating by default)
 dart run tool/spec_runner.dart --target=vm --suite=proposal
 ```
@@ -159,6 +161,8 @@ Artifacts:
 
 - Markdown report: [doc/wasm_conformance_matrix.md](doc/wasm_conformance_matrix.md)
 - JSON report: `.dart_tool/spec_runner/latest.json`
+- Core failure board: [doc/wasm_core_failures.md](doc/wasm_core_failures.md)
+- Core JSON report: `.dart_tool/spec_runner/core_latest.json`
 - Proposal failure board: [doc/wasm_proposal_failures.md](doc/wasm_proposal_failures.md)
 - Proposal JSON report: `.dart_tool/spec_runner/proposal_latest.json`
 - Spec update tracker: `dart run tool/spec_sync.dart`
