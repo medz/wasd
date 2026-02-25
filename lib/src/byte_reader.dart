@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'int64.dart';
-
 final class ByteReader {
   ByteReader(Uint8List bytes) : _bytes = bytes, offset = 0;
 
@@ -119,9 +117,11 @@ final class ByteReader {
     var result = BigInt.zero;
     var shift = 0;
     var byte = 0;
+    var byteCount = 0;
 
     while (true) {
       byte = readByte();
+      byteCount++;
       result |= BigInt.from(byte & 0x7f) << shift;
       shift += 7;
 
@@ -129,16 +129,27 @@ final class ByteReader {
         break;
       }
 
-      if (shift > 70) {
+      if (byteCount >= 10 || shift > 70) {
         throw const FormatException('Invalid varint64 encoding.');
       }
+    }
+
+    if (byteCount > 10) {
+      throw const FormatException('Invalid varint64 encoding.');
     }
 
     if (shift < 64 && (byte & 0x40) != 0) {
       result |= (-BigInt.one) << shift;
     }
 
-    return WasmI64.signed(result.toInt());
+    // Canonicalize to 64-bit two's-complement first, then map to signed.
+    // This avoids `BigInt.toInt()` saturation for values with bit 63 set.
+    final normalized = result & ((BigInt.one << 64) - BigInt.one);
+    var signed = normalized;
+    if ((normalized & (BigInt.one << 63)) != BigInt.zero) {
+      signed -= BigInt.one << 64;
+    }
+    return signed.toInt();
   }
 
   void expectEof() {

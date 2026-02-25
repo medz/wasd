@@ -442,6 +442,587 @@ final class WasmVm {
           _storeI32(stack, instruction, _popI64(stack));
           pc++;
 
+        case Opcodes.memoryAtomicNotify:
+          _memoryAtomicNotify(stack, instruction);
+          pc++;
+
+        case Opcodes.memoryAtomicWait32:
+          _memoryAtomicWait32(stack, instruction);
+          pc++;
+
+        case Opcodes.memoryAtomicWait64:
+          _memoryAtomicWait64(stack, instruction);
+          pc++;
+
+        case Opcodes.atomicFence:
+          pc++;
+
+        case Opcodes.i32AtomicLoad:
+          stack.add(WasmValue.i32(_atomicLoadI32(stack, instruction)));
+          pc++;
+
+        case Opcodes.i64AtomicLoad:
+          stack.add(WasmValue.i64(_atomicLoadI64(stack, instruction)));
+          pc++;
+
+        case Opcodes.i32AtomicLoad8U:
+          stack.add(WasmValue.i32(_atomicLoadU8(stack, instruction)));
+          pc++;
+
+        case Opcodes.i32AtomicLoad16U:
+          stack.add(WasmValue.i32(_atomicLoadU16(stack, instruction)));
+          pc++;
+
+        case Opcodes.i64AtomicLoad8U:
+          stack.add(WasmValue.i64(_atomicLoadU8(stack, instruction)));
+          pc++;
+
+        case Opcodes.i64AtomicLoad16U:
+          stack.add(WasmValue.i64(_atomicLoadU16(stack, instruction)));
+          pc++;
+
+        case Opcodes.i64AtomicLoad32U:
+          stack.add(WasmValue.i64(_atomicLoadU32(stack, instruction)));
+          pc++;
+
+        case Opcodes.i32AtomicStore:
+          _atomicStoreI32(stack, instruction, _popI32(stack));
+          pc++;
+
+        case Opcodes.i64AtomicStore:
+          _atomicStoreI64(stack, instruction, _popI64(stack));
+          pc++;
+
+        case Opcodes.i32AtomicStore8:
+          _atomicStoreI8(stack, instruction, _popI32(stack));
+          pc++;
+
+        case Opcodes.i32AtomicStore16:
+          _atomicStoreI16(stack, instruction, _popI32(stack));
+          pc++;
+
+        case Opcodes.i64AtomicStore8:
+          _atomicStoreI8(stack, instruction, _popI64(stack));
+          pc++;
+
+        case Opcodes.i64AtomicStore16:
+          _atomicStoreI16(stack, instruction, _popI64(stack));
+          pc++;
+
+        case Opcodes.i64AtomicStore32:
+          _atomicStoreI32(stack, instruction, _popI64(stack));
+          pc++;
+
+        case Opcodes.i32AtomicRmwAdd:
+          stack.add(
+            WasmValue.i32(_atomicRmwI32(stack, instruction, (a, b) => a + b)),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmwAdd:
+          stack.add(
+            WasmValue.i64(_atomicRmwI64(stack, instruction, (a, b) => a + b)),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmw8AddU:
+          stack.add(
+            WasmValue.i32(
+              _atomicRmwI32Narrow(
+                stack,
+                instruction,
+                widthBytes: 1,
+                operation: (a, b) => a + b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmw16AddU:
+          stack.add(
+            WasmValue.i32(
+              _atomicRmwI32Narrow(
+                stack,
+                instruction,
+                widthBytes: 2,
+                operation: (a, b) => a + b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw8AddU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 1,
+                operation: (a, b) => a + b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw16AddU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 2,
+                operation: (a, b) => a + b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw32AddU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 4,
+                operation: (a, b) => a + b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmwSub:
+          stack.add(
+            WasmValue.i32(_atomicRmwI32(stack, instruction, (a, b) => a - b)),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmwSub:
+          stack.add(
+            WasmValue.i64(_atomicRmwI64(stack, instruction, (a, b) => a - b)),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmw8SubU:
+          stack.add(
+            WasmValue.i32(
+              _atomicRmwI32Narrow(
+                stack,
+                instruction,
+                widthBytes: 1,
+                operation: (a, b) => a - b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmw16SubU:
+          stack.add(
+            WasmValue.i32(
+              _atomicRmwI32Narrow(
+                stack,
+                instruction,
+                widthBytes: 2,
+                operation: (a, b) => a - b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw8SubU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 1,
+                operation: (a, b) => a - b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw16SubU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 2,
+                operation: (a, b) => a - b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw32SubU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 4,
+                operation: (a, b) => a - b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmwAnd:
+          stack.add(
+            WasmValue.i32(_atomicRmwI32(stack, instruction, (a, b) => a & b)),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmwAnd:
+          stack.add(
+            WasmValue.i64(_atomicRmwI64(stack, instruction, (a, b) => a & b)),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmw8AndU:
+          stack.add(
+            WasmValue.i32(
+              _atomicRmwI32Narrow(
+                stack,
+                instruction,
+                widthBytes: 1,
+                operation: (a, b) => a & b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmw16AndU:
+          stack.add(
+            WasmValue.i32(
+              _atomicRmwI32Narrow(
+                stack,
+                instruction,
+                widthBytes: 2,
+                operation: (a, b) => a & b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw8AndU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 1,
+                operation: (a, b) => a & b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw16AndU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 2,
+                operation: (a, b) => a & b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw32AndU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 4,
+                operation: (a, b) => a & b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmwOr:
+          stack.add(
+            WasmValue.i32(_atomicRmwI32(stack, instruction, (a, b) => a | b)),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmwOr:
+          stack.add(
+            WasmValue.i64(_atomicRmwI64(stack, instruction, (a, b) => a | b)),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmw8OrU:
+          stack.add(
+            WasmValue.i32(
+              _atomicRmwI32Narrow(
+                stack,
+                instruction,
+                widthBytes: 1,
+                operation: (a, b) => a | b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmw16OrU:
+          stack.add(
+            WasmValue.i32(
+              _atomicRmwI32Narrow(
+                stack,
+                instruction,
+                widthBytes: 2,
+                operation: (a, b) => a | b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw8OrU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 1,
+                operation: (a, b) => a | b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw16OrU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 2,
+                operation: (a, b) => a | b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw32OrU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 4,
+                operation: (a, b) => a | b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmwXor:
+          stack.add(
+            WasmValue.i32(_atomicRmwI32(stack, instruction, (a, b) => a ^ b)),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmwXor:
+          stack.add(
+            WasmValue.i64(_atomicRmwI64(stack, instruction, (a, b) => a ^ b)),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmw8XorU:
+          stack.add(
+            WasmValue.i32(
+              _atomicRmwI32Narrow(
+                stack,
+                instruction,
+                widthBytes: 1,
+                operation: (a, b) => a ^ b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmw16XorU:
+          stack.add(
+            WasmValue.i32(
+              _atomicRmwI32Narrow(
+                stack,
+                instruction,
+                widthBytes: 2,
+                operation: (a, b) => a ^ b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw8XorU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 1,
+                operation: (a, b) => a ^ b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw16XorU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 2,
+                operation: (a, b) => a ^ b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw32XorU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 4,
+                operation: (a, b) => a ^ b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmwXchg:
+          stack.add(
+            WasmValue.i32(_atomicRmwI32(stack, instruction, (_, b) => b)),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmwXchg:
+          stack.add(
+            WasmValue.i64(_atomicRmwI64(stack, instruction, (_, b) => b)),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmw8XchgU:
+          stack.add(
+            WasmValue.i32(
+              _atomicRmwI32Narrow(
+                stack,
+                instruction,
+                widthBytes: 1,
+                operation: (_, b) => b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmw16XchgU:
+          stack.add(
+            WasmValue.i32(
+              _atomicRmwI32Narrow(
+                stack,
+                instruction,
+                widthBytes: 2,
+                operation: (_, b) => b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw8XchgU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 1,
+                operation: (_, b) => b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw16XchgU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 2,
+                operation: (_, b) => b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw32XchgU:
+          stack.add(
+            WasmValue.i64(
+              _atomicRmwI64Narrow(
+                stack,
+                instruction,
+                widthBytes: 4,
+                operation: (_, b) => b,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmwCmpxchg:
+          stack.add(WasmValue.i32(_atomicCmpxchgI32(stack, instruction)));
+          pc++;
+
+        case Opcodes.i64AtomicRmwCmpxchg:
+          stack.add(WasmValue.i64(_atomicCmpxchgI64(stack, instruction)));
+          pc++;
+
+        case Opcodes.i32AtomicRmw8CmpxchgU:
+          stack.add(
+            WasmValue.i32(
+              _atomicCmpxchgI32Narrow(stack, instruction, widthBytes: 1),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32AtomicRmw16CmpxchgU:
+          stack.add(
+            WasmValue.i32(
+              _atomicCmpxchgI32Narrow(stack, instruction, widthBytes: 2),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw8CmpxchgU:
+          stack.add(
+            WasmValue.i64(
+              _atomicCmpxchgI64Narrow(stack, instruction, widthBytes: 1),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw16CmpxchgU:
+          stack.add(
+            WasmValue.i64(
+              _atomicCmpxchgI64Narrow(stack, instruction, widthBytes: 2),
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64AtomicRmw32CmpxchgU:
+          stack.add(
+            WasmValue.i64(
+              _atomicCmpxchgI64Narrow(stack, instruction, widthBytes: 4),
+            ),
+          );
+          pc++;
+
         case Opcodes.memorySize:
           _requireMemoryIndexZero(instruction.immediate!);
           stack.add(WasmValue.i32(_requireMemory().pageCount));
@@ -1513,6 +2094,278 @@ final class WasmVm {
   void _storeF64(List<WasmValue> stack, Instruction instruction, double value) {
     final address = _addressFromStack(stack, instruction.memArg!.offset);
     _requireMemory().storeF64(address, value);
+  }
+
+  int _atomicAddressFromStack(
+    List<WasmValue> stack,
+    Instruction instruction, {
+    required int widthBytes,
+  }) {
+    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    if (widthBytes > 1 && address % widthBytes != 0) {
+      throw StateError('unaligned atomic');
+    }
+    return address;
+  }
+
+  int _atomicLoadU8(List<WasmValue> stack, Instruction instruction) {
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 1);
+    return _requireMemory().loadU8(address);
+  }
+
+  int _atomicLoadU16(List<WasmValue> stack, Instruction instruction) {
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 2);
+    return _requireMemory().loadU16(address);
+  }
+
+  int _atomicLoadU32(List<WasmValue> stack, Instruction instruction) {
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 4);
+    return _requireMemory().loadU32(address);
+  }
+
+  int _atomicLoadI32(List<WasmValue> stack, Instruction instruction) {
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 4);
+    return _requireMemory().loadI32(address);
+  }
+
+  int _atomicLoadI64(List<WasmValue> stack, Instruction instruction) {
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 8);
+    return _requireMemory().loadI64(address);
+  }
+
+  void _atomicStoreI8(
+    List<WasmValue> stack,
+    Instruction instruction,
+    int value,
+  ) {
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 1);
+    _requireMemory().storeI8(address, value);
+  }
+
+  void _atomicStoreI16(
+    List<WasmValue> stack,
+    Instruction instruction,
+    int value,
+  ) {
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 2);
+    _requireMemory().storeI16(address, value);
+  }
+
+  void _atomicStoreI32(
+    List<WasmValue> stack,
+    Instruction instruction,
+    int value,
+  ) {
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 4);
+    _requireMemory().storeI32(address, value);
+  }
+
+  void _atomicStoreI64(
+    List<WasmValue> stack,
+    Instruction instruction,
+    int value,
+  ) {
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 8);
+    _requireMemory().storeI64(address, value);
+  }
+
+  void _memoryAtomicNotify(List<WasmValue> stack, Instruction instruction) {
+    _popI32(stack); // count
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 4);
+    _requireMemory().loadU32(address); // bounds check
+    stack.add(WasmValue.i32(0));
+  }
+
+  void _memoryAtomicWait32(List<WasmValue> stack, Instruction instruction) {
+    _popI64(stack); // timeout
+    final expected = _toU32(_popI32(stack));
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 4);
+    final actual = _requireMemory().loadU32(address);
+    stack.add(WasmValue.i32(actual == expected ? 2 : 1));
+  }
+
+  void _memoryAtomicWait64(List<WasmValue> stack, Instruction instruction) {
+    _popI64(stack); // timeout
+    final expected = _toU64(_popI64(stack));
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 8);
+    final actual = _toU64(_requireMemory().loadI64(address));
+    stack.add(WasmValue.i32(actual == expected ? 2 : 1));
+  }
+
+  int _atomicRmwI32(
+    List<WasmValue> stack,
+    Instruction instruction,
+    int Function(int current, int operand) operation,
+  ) {
+    final operand = _toU32(_popI32(stack));
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 4);
+    final memory = _requireMemory();
+    final current = _toU32(memory.loadI32(address));
+    final next = _toU32(operation(current, operand));
+    memory.storeI32(address, next);
+    return current;
+  }
+
+  int _atomicRmwI64(
+    List<WasmValue> stack,
+    Instruction instruction,
+    int Function(int current, int operand) operation,
+  ) {
+    final operand = _toU64(_popI64(stack));
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 8);
+    final memory = _requireMemory();
+    final current = _toU64(memory.loadI64(address));
+    final next = _toU64(operation(current, operand));
+    memory.storeI64(address, next);
+    return current;
+  }
+
+  int _atomicRmwI32Narrow(
+    List<WasmValue> stack,
+    Instruction instruction, {
+    required int widthBytes,
+    required int Function(int current, int operand) operation,
+  }) {
+    final bits = widthBytes * 8;
+    final operand = _popI32(stack).toUnsigned(bits);
+    final address = _atomicAddressFromStack(
+      stack,
+      instruction,
+      widthBytes: widthBytes,
+    );
+    final memory = _requireMemory();
+    final current = switch (widthBytes) {
+      1 => memory.loadU8(address),
+      2 => memory.loadU16(address),
+      _ => throw StateError('Unsupported i32 atomic narrow width: $widthBytes'),
+    };
+    final next = operation(current, operand).toUnsigned(bits);
+    switch (widthBytes) {
+      case 1:
+        memory.storeI8(address, next);
+      case 2:
+        memory.storeI16(address, next);
+    }
+    return current;
+  }
+
+  int _atomicRmwI64Narrow(
+    List<WasmValue> stack,
+    Instruction instruction, {
+    required int widthBytes,
+    required int Function(int current, int operand) operation,
+  }) {
+    final bits = widthBytes * 8;
+    final operand = _toU64(_popI64(stack)).toUnsigned(bits);
+    final address = _atomicAddressFromStack(
+      stack,
+      instruction,
+      widthBytes: widthBytes,
+    );
+    final memory = _requireMemory();
+    final current = switch (widthBytes) {
+      1 => memory.loadU8(address),
+      2 => memory.loadU16(address),
+      4 => memory.loadU32(address),
+      _ => throw StateError('Unsupported i64 atomic narrow width: $widthBytes'),
+    };
+    final next = operation(current, operand).toUnsigned(bits);
+    switch (widthBytes) {
+      case 1:
+        memory.storeI8(address, next);
+      case 2:
+        memory.storeI16(address, next);
+      case 4:
+        memory.storeI32(address, next);
+    }
+    return current;
+  }
+
+  int _atomicCmpxchgI32(List<WasmValue> stack, Instruction instruction) {
+    final replacement = _toU32(_popI32(stack));
+    final expected = _toU32(_popI32(stack));
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 4);
+    final memory = _requireMemory();
+    final current = _toU32(memory.loadI32(address));
+    if (current == expected) {
+      memory.storeI32(address, replacement);
+    }
+    return current;
+  }
+
+  int _atomicCmpxchgI64(List<WasmValue> stack, Instruction instruction) {
+    final replacement = _toU64(_popI64(stack));
+    final expected = _toU64(_popI64(stack));
+    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 8);
+    final memory = _requireMemory();
+    final current = _toU64(memory.loadI64(address));
+    if (current == expected) {
+      memory.storeI64(address, replacement);
+    }
+    return current;
+  }
+
+  int _atomicCmpxchgI32Narrow(
+    List<WasmValue> stack,
+    Instruction instruction, {
+    required int widthBytes,
+  }) {
+    final bits = widthBytes * 8;
+    final replacement = _popI32(stack).toUnsigned(bits);
+    final expected = _popI32(stack).toUnsigned(bits);
+    final address = _atomicAddressFromStack(
+      stack,
+      instruction,
+      widthBytes: widthBytes,
+    );
+    final memory = _requireMemory();
+    final current = switch (widthBytes) {
+      1 => memory.loadU8(address),
+      2 => memory.loadU16(address),
+      _ => throw StateError('Unsupported i32 atomic narrow width: $widthBytes'),
+    };
+    if (current == expected) {
+      switch (widthBytes) {
+        case 1:
+          memory.storeI8(address, replacement);
+        case 2:
+          memory.storeI16(address, replacement);
+      }
+    }
+    return current;
+  }
+
+  int _atomicCmpxchgI64Narrow(
+    List<WasmValue> stack,
+    Instruction instruction, {
+    required int widthBytes,
+  }) {
+    final bits = widthBytes * 8;
+    final replacement = _toU64(_popI64(stack)).toUnsigned(bits);
+    final expected = _toU64(_popI64(stack)).toUnsigned(bits);
+    final address = _atomicAddressFromStack(
+      stack,
+      instruction,
+      widthBytes: widthBytes,
+    );
+    final memory = _requireMemory();
+    final current = switch (widthBytes) {
+      1 => memory.loadU8(address),
+      2 => memory.loadU16(address),
+      4 => memory.loadU32(address),
+      _ => throw StateError('Unsupported i64 atomic narrow width: $widthBytes'),
+    };
+    if (current == expected) {
+      switch (widthBytes) {
+        case 1:
+          memory.storeI8(address, replacement);
+        case 2:
+          memory.storeI16(address, replacement);
+        case 4:
+          memory.storeI32(address, replacement);
+      }
+    }
+    return current;
   }
 
   void _memoryInit(Instruction instruction, List<WasmValue> stack) {

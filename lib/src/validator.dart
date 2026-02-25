@@ -235,6 +235,11 @@ abstract final class WasmValidator {
       final controlStack = <int>[];
       for (var pc = 0; pc < predecoded.instructions.length; pc++) {
         final instruction = predecoded.instructions[pc];
+        if (_isAtomicMemoryOpcode(instruction.opcode) && memoryCount == 0) {
+          throw const FormatException(
+            'Validation failed: memory instruction used without memory.',
+          );
+        }
         switch (instruction.opcode) {
           case Opcodes.block:
           case Opcodes.loop:
@@ -253,7 +258,7 @@ abstract final class WasmValidator {
           case Opcodes.br:
           case Opcodes.brIf:
             final depth = instruction.immediate!;
-            if (depth < 0 || depth >= controlStack.length) {
+            if (depth < 0 || depth > controlStack.length) {
               throw FormatException(
                 'Validation failed: branch depth out of range: $depth.',
               );
@@ -261,7 +266,7 @@ abstract final class WasmValidator {
           case Opcodes.brTable:
             final targets = instruction.tableDepths ?? const <int>[];
             for (final depth in targets) {
-              if (depth < 0 || depth >= controlStack.length) {
+              if (depth < 0 || depth > controlStack.length) {
                 throw FormatException(
                   'Validation failed: br_table depth out of range: $depth.',
                 );
@@ -561,6 +566,80 @@ abstract final class WasmValidator {
       throw FormatException(
         'Validation failed: invalid $what index $index (count=$count).',
       );
+    }
+  }
+
+  static bool _isAtomicMemoryOpcode(int opcode) {
+    switch (opcode) {
+      case Opcodes.memoryAtomicNotify:
+      case Opcodes.memoryAtomicWait32:
+      case Opcodes.memoryAtomicWait64:
+      case Opcodes.i32AtomicLoad:
+      case Opcodes.i64AtomicLoad:
+      case Opcodes.i32AtomicLoad8U:
+      case Opcodes.i32AtomicLoad16U:
+      case Opcodes.i64AtomicLoad8U:
+      case Opcodes.i64AtomicLoad16U:
+      case Opcodes.i64AtomicLoad32U:
+      case Opcodes.i32AtomicStore:
+      case Opcodes.i64AtomicStore:
+      case Opcodes.i32AtomicStore8:
+      case Opcodes.i32AtomicStore16:
+      case Opcodes.i64AtomicStore8:
+      case Opcodes.i64AtomicStore16:
+      case Opcodes.i64AtomicStore32:
+      case Opcodes.i32AtomicRmwAdd:
+      case Opcodes.i64AtomicRmwAdd:
+      case Opcodes.i32AtomicRmw8AddU:
+      case Opcodes.i32AtomicRmw16AddU:
+      case Opcodes.i64AtomicRmw8AddU:
+      case Opcodes.i64AtomicRmw16AddU:
+      case Opcodes.i64AtomicRmw32AddU:
+      case Opcodes.i32AtomicRmwSub:
+      case Opcodes.i64AtomicRmwSub:
+      case Opcodes.i32AtomicRmw8SubU:
+      case Opcodes.i32AtomicRmw16SubU:
+      case Opcodes.i64AtomicRmw8SubU:
+      case Opcodes.i64AtomicRmw16SubU:
+      case Opcodes.i64AtomicRmw32SubU:
+      case Opcodes.i32AtomicRmwAnd:
+      case Opcodes.i64AtomicRmwAnd:
+      case Opcodes.i32AtomicRmw8AndU:
+      case Opcodes.i32AtomicRmw16AndU:
+      case Opcodes.i64AtomicRmw8AndU:
+      case Opcodes.i64AtomicRmw16AndU:
+      case Opcodes.i64AtomicRmw32AndU:
+      case Opcodes.i32AtomicRmwOr:
+      case Opcodes.i64AtomicRmwOr:
+      case Opcodes.i32AtomicRmw8OrU:
+      case Opcodes.i32AtomicRmw16OrU:
+      case Opcodes.i64AtomicRmw8OrU:
+      case Opcodes.i64AtomicRmw16OrU:
+      case Opcodes.i64AtomicRmw32OrU:
+      case Opcodes.i32AtomicRmwXor:
+      case Opcodes.i64AtomicRmwXor:
+      case Opcodes.i32AtomicRmw8XorU:
+      case Opcodes.i32AtomicRmw16XorU:
+      case Opcodes.i64AtomicRmw8XorU:
+      case Opcodes.i64AtomicRmw16XorU:
+      case Opcodes.i64AtomicRmw32XorU:
+      case Opcodes.i32AtomicRmwXchg:
+      case Opcodes.i64AtomicRmwXchg:
+      case Opcodes.i32AtomicRmw8XchgU:
+      case Opcodes.i32AtomicRmw16XchgU:
+      case Opcodes.i64AtomicRmw8XchgU:
+      case Opcodes.i64AtomicRmw16XchgU:
+      case Opcodes.i64AtomicRmw32XchgU:
+      case Opcodes.i32AtomicRmwCmpxchg:
+      case Opcodes.i64AtomicRmwCmpxchg:
+      case Opcodes.i32AtomicRmw8CmpxchgU:
+      case Opcodes.i32AtomicRmw16CmpxchgU:
+      case Opcodes.i64AtomicRmw8CmpxchgU:
+      case Opcodes.i64AtomicRmw16CmpxchgU:
+      case Opcodes.i64AtomicRmw32CmpxchgU:
+        return true;
+      default:
+        return false;
     }
   }
 }

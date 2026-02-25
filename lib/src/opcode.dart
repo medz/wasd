@@ -223,4 +223,82 @@ abstract final class Opcodes {
   static const int tableGrow = 0xfc0f;
   static const int tableSize = 0xfc10;
   static const int tableFill = 0xfc11;
+
+  // 0xFE prefixed pseudo-opcodes encoded as (0xFE00 | subopcode)
+  static const int memoryAtomicNotify = 0xfe00;
+  static const int memoryAtomicWait32 = 0xfe01;
+  static const int memoryAtomicWait64 = 0xfe02;
+  static const int atomicFence = 0xfe03;
+
+  static const int i32AtomicLoad = 0xfe10;
+  static const int i64AtomicLoad = 0xfe11;
+  static const int i32AtomicLoad8U = 0xfe12;
+  static const int i32AtomicLoad16U = 0xfe13;
+  static const int i64AtomicLoad8U = 0xfe14;
+  static const int i64AtomicLoad16U = 0xfe15;
+  static const int i64AtomicLoad32U = 0xfe16;
+
+  static const int i32AtomicStore = 0xfe17;
+  static const int i64AtomicStore = 0xfe18;
+  static const int i32AtomicStore8 = 0xfe19;
+  static const int i32AtomicStore16 = 0xfe1a;
+  static const int i64AtomicStore8 = 0xfe1b;
+  static const int i64AtomicStore16 = 0xfe1c;
+  static const int i64AtomicStore32 = 0xfe1d;
+
+  static const int i32AtomicRmwAdd = 0xfe1e;
+  static const int i64AtomicRmwAdd = 0xfe1f;
+  static const int i32AtomicRmw8AddU = 0xfe20;
+  static const int i32AtomicRmw16AddU = 0xfe21;
+  static const int i64AtomicRmw8AddU = 0xfe22;
+  static const int i64AtomicRmw16AddU = 0xfe23;
+  static const int i64AtomicRmw32AddU = 0xfe24;
+
+  static const int i32AtomicRmwSub = 0xfe25;
+  static const int i64AtomicRmwSub = 0xfe26;
+  static const int i32AtomicRmw8SubU = 0xfe27;
+  static const int i32AtomicRmw16SubU = 0xfe28;
+  static const int i64AtomicRmw8SubU = 0xfe29;
+  static const int i64AtomicRmw16SubU = 0xfe2a;
+  static const int i64AtomicRmw32SubU = 0xfe2b;
+
+  static const int i32AtomicRmwAnd = 0xfe2c;
+  static const int i64AtomicRmwAnd = 0xfe2d;
+  static const int i32AtomicRmw8AndU = 0xfe2e;
+  static const int i32AtomicRmw16AndU = 0xfe2f;
+  static const int i64AtomicRmw8AndU = 0xfe30;
+  static const int i64AtomicRmw16AndU = 0xfe31;
+  static const int i64AtomicRmw32AndU = 0xfe32;
+
+  static const int i32AtomicRmwOr = 0xfe33;
+  static const int i64AtomicRmwOr = 0xfe34;
+  static const int i32AtomicRmw8OrU = 0xfe35;
+  static const int i32AtomicRmw16OrU = 0xfe36;
+  static const int i64AtomicRmw8OrU = 0xfe37;
+  static const int i64AtomicRmw16OrU = 0xfe38;
+  static const int i64AtomicRmw32OrU = 0xfe39;
+
+  static const int i32AtomicRmwXor = 0xfe3a;
+  static const int i64AtomicRmwXor = 0xfe3b;
+  static const int i32AtomicRmw8XorU = 0xfe3c;
+  static const int i32AtomicRmw16XorU = 0xfe3d;
+  static const int i64AtomicRmw8XorU = 0xfe3e;
+  static const int i64AtomicRmw16XorU = 0xfe3f;
+  static const int i64AtomicRmw32XorU = 0xfe40;
+
+  static const int i32AtomicRmwXchg = 0xfe41;
+  static const int i64AtomicRmwXchg = 0xfe42;
+  static const int i32AtomicRmw8XchgU = 0xfe43;
+  static const int i32AtomicRmw16XchgU = 0xfe44;
+  static const int i64AtomicRmw8XchgU = 0xfe45;
+  static const int i64AtomicRmw16XchgU = 0xfe46;
+  static const int i64AtomicRmw32XchgU = 0xfe47;
+
+  static const int i32AtomicRmwCmpxchg = 0xfe48;
+  static const int i64AtomicRmwCmpxchg = 0xfe49;
+  static const int i32AtomicRmw8CmpxchgU = 0xfe4a;
+  static const int i32AtomicRmw16CmpxchgU = 0xfe4b;
+  static const int i64AtomicRmw8CmpxchgU = 0xfe4c;
+  static const int i64AtomicRmw16CmpxchgU = 0xfe4d;
+  static const int i64AtomicRmw32CmpxchgU = 0xfe4e;
 }

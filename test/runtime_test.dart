@@ -671,6 +671,7 @@ void main() {
           _funcType([], [0x7f]),
         ],
         functionTypeIndices: [0],
+        dataCount: 0,
         functionBodies: [
           _FunctionBodySpec(instructions: [..._i32Const(7), Opcodes.end]),
         ],
@@ -682,7 +683,6 @@ void main() {
       final withSections = Uint8List.fromList([
         ...base.sublist(0, 8),
         ..._section(0, [..._name('test'), 0x01, 0x02]),
-        ..._section(12, _u32Leb(0)),
         ...base.sublist(8),
       ]);
 
@@ -780,7 +780,7 @@ void main() {
         types: [_funcType([], [])],
         functionTypeIndices: [0],
         functionBodies: [
-          _FunctionBodySpec(instructions: [..._br(0), Opcodes.end]),
+          _FunctionBodySpec(instructions: [..._br(1), Opcodes.end]),
         ],
       );
 
@@ -1130,6 +1130,10 @@ Uint8List _buildModule({
     bytes.addAll(_section(9, payload));
   }
 
+  if (dataCount != null) {
+    bytes.addAll(_section(12, _u32Leb(dataCount)));
+  }
+
   final codePayload = <int>[..._u32Leb(functionBodies.length)];
   for (final body in functionBodies) {
     if (body.instructions.isEmpty || body.instructions.last != Opcodes.end) {
@@ -1149,10 +1153,6 @@ Uint8List _buildModule({
       ..addAll(functionBody);
   }
   bytes.addAll(_section(10, codePayload));
-
-  if (dataCount != null) {
-    bytes.addAll(_section(12, _u32Leb(dataCount)));
-  }
 
   if (dataSegments.isNotEmpty) {
     final payload = <int>[..._u32Leb(dataSegments.length)];

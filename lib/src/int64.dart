@@ -10,14 +10,8 @@ abstract final class WasmI64 {
   ).toInt();
   static final int minSigned = -maxSigned - 1;
   static final int magnitudeMask = maxSigned;
-  static final int signBitMask = BigInt.parse(
-    '8000000000000000',
-    radix: 16,
-  ).toInt();
-  static final int allOnesMask = BigInt.parse(
-    'ffffffffffffffff',
-    radix: 16,
-  ).toInt();
+  static final int signBitMask = minSigned;
+  static const int allOnesMask = -1;
 
   static BigInt _toUnsignedBigInt(int value) {
     return BigInt.from(value) & _mask;
@@ -39,8 +33,10 @@ abstract final class WasmI64 {
     return v.toInt();
   }
 
-  static int _unsignedFromBigInt(BigInt value) {
-    return (value & _mask).toInt();
+  static int _bitPatternFromBigInt(BigInt value) {
+    // Dart `int` cannot represent unsigned 64-bit values >= 2^63 as positive
+    // integers, so keep the canonical two's-complement bit pattern instead.
+    return _signedFromBigInt(value);
   }
 
   static int signed(int value) {
@@ -48,7 +44,7 @@ abstract final class WasmI64 {
   }
 
   static int unsigned(int value) {
-    return _unsignedFromBigInt(BigInt.from(value));
+    return _bitPatternFromBigInt(BigInt.from(value));
   }
 
   static int compareUnsigned(int lhs, int rhs) {
@@ -203,6 +199,6 @@ abstract final class WasmI64 {
   static int fromU32PairUnsigned({required int low, required int high}) {
     final lo = BigInt.from(low) & _u32Mask;
     final hi = BigInt.from(high) & _u32Mask;
-    return _unsignedFromBigInt((hi << 32) | lo);
+    return _bitPatternFromBigInt((hi << 32) | lo);
   }
 }

@@ -293,11 +293,28 @@ final class WasmModule {
     var importedGlobalCount = 0;
     int? startFunctionIndex;
     int? dataCount;
+    final seenStandardSections = <int>{};
+    var lastSectionOrder = 0;
 
     while (!reader.isEOF) {
       final sectionId = reader.readByte();
       final sectionSize = reader.readVarUint32();
       final sectionReader = reader.readSubReader(sectionSize);
+
+      if (sectionId != 0) {
+        if (!seenStandardSections.add(sectionId)) {
+          throw const FormatException(
+            'Unexpected content after last section.',
+          );
+        }
+        final sectionOrder = _sectionOrder(sectionId);
+        if (sectionOrder < lastSectionOrder) {
+          throw const FormatException(
+            'Unexpected content after last section.',
+          );
+        }
+        lastSectionOrder = sectionOrder;
+      }
 
       switch (sectionId) {
         case 0:
@@ -863,7 +880,7 @@ final class WasmModule {
     ByteReader reader, {
     bool allowExtendedMemoryFlags = false,
   }) {
-    final flags = reader.readVarUint32();
+    final flags = reader.readByte();
     if (!allowExtendedMemoryFlags) {
       switch (flags) {
         case 0x00:
@@ -941,5 +958,24 @@ final class WasmModule {
         );
       }
     }
+  }
+
+  static int _sectionOrder(int sectionId) {
+    // Data count section (id=12) is validated before code (id=10) and data (id=11).
+    return switch (sectionId) {
+      1 => 1,
+      2 => 2,
+      3 => 3,
+      4 => 4,
+      5 => 5,
+      6 => 6,
+      7 => 7,
+      8 => 8,
+      9 => 9,
+      12 => 10,
+      10 => 11,
+      11 => 12,
+      _ => sectionId + 100,
+    };
   }
 }
