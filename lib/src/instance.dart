@@ -154,6 +154,36 @@ final class WasmInstance {
           if (expected == null) {
             throw FormatException('Malformed memory import `${import.key}`.');
           }
+          _validateSupportedMemoryType(
+            expected,
+            features: features,
+            context: 'memory import `${import.key}`',
+          );
+
+          if (importedMemory.shared != expected.shared) {
+            throw StateError(
+              'Imported memory `${import.key}` shared flag mismatch: '
+              'expected=${expected.shared} actual=${importedMemory.shared}.',
+            );
+          }
+
+          if (importedMemory.minPages < expected.minPages) {
+            throw StateError(
+              'Imported memory `${import.key}` has min ${importedMemory.minPages} pages '
+              'but requires at least ${expected.minPages}.',
+            );
+          }
+
+          final expectedMax = expected.maxPages;
+          if (expectedMax != null) {
+            final importedMax = importedMemory.maxPages;
+            if (importedMax == null || importedMax > expectedMax) {
+              throw StateError(
+                'Imported memory `${import.key}` max pages mismatch: '
+                'expected <= $expectedMax, actual=${importedMax ?? 'unbounded'}.',
+              );
+            }
+          }
 
           if (importedMemory.pageCount < expected.minPages) {
             throw StateError(
@@ -199,9 +229,15 @@ final class WasmInstance {
       }
 
       final memoryType = module.memories.first;
+      _validateSupportedMemoryType(
+        memoryType,
+        features: features,
+        context: 'defined memory',
+      );
       memory = WasmMemory(
         minPages: memoryType.minPages,
         maxPages: memoryType.maxPages,
+        shared: memoryType.shared,
       );
     }
 
@@ -332,6 +368,18 @@ final class WasmInstance {
       _memoryExports.keys.toList(growable: false);
 
   List<String> get exportedTables => _tableExports.keys.toList(growable: false);
+
+  WasmFunctionType exportedFunctionType(String exportName) {
+    final functionIndex = _functionExports[exportName];
+    if (functionIndex == null) {
+      throw ArgumentError.value(
+        exportName,
+        'exportName',
+        'Function export not found',
+      );
+    }
+    return functions[functionIndex].type;
+  }
 
   Object? invoke(String exportName, [List<Object?> args = const []]) {
     final functionIndex = _functionExports[exportName];
@@ -790,6 +838,29 @@ final class WasmInstance {
     }
 
     throw const FormatException('Const expr missing end opcode.');
+  }
+
+  static void _validateSupportedMemoryType(
+    WasmMemoryType memoryType, {
+    required WasmFeatureSet features,
+    required String context,
+  }) {
+    if (memoryType.isMemory64) {
+      throw UnsupportedError(
+        '$context requires memory64, which is not yet supported.',
+      );
+    }
+    if (memoryType.pageSizeLog2 != 16) {
+      throw UnsupportedError(
+        '$context uses custom page size log2=${memoryType.pageSizeLog2}, '
+        'but only 64KiB pages (log2=16) are supported.',
+      );
+    }
+    if (memoryType.shared && !features.threads) {
+      throw UnsupportedError(
+        '$context uses shared memory, but threads feature is disabled.',
+      );
+    }
   }
 
   static Object? _externalizeResults(List<WasmValue> results) {

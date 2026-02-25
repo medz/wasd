@@ -1,21 +1,19 @@
 # WASM Conformance Matrix
 
-- Started at (UTC): `2026-02-25T02:00:58.516695Z`
-- Ended at (UTC): `2026-02-25T02:02:30.224583Z`
-- Target: `js`
-- Suite: `all`
+- Started at (UTC): `2026-02-25T02:17:56.501607Z`
+- Ended at (UTC): `2026-02-25T02:19:25.198978Z`
+- Target: `vm`
+- Suite: `proposal`
 - Status: `passed`
 
 ## Step Results
 
 | Step | Status | Duration (ms) | Command |
 | --- | --- | ---: | --- |
-| toolchain-check | passed | 21 | `bash tool/ensure_toolchains.sh --check` |
-| analyze | passed | 509 | `dart analyze lib test tool example` |
-| node-check | passed | 17 | `node --version` |
-| js-tests | passed | 2955 | `dart test -p node` |
-| proposal-testsuite | optional-failed | 86894 | `dart run tool/spec_testsuite_runner.dart --suite=proposal` |
-| spec-sync-check | passed | 1307 | `dart run tool/spec_sync.dart` |
+| toolchain-check | passed | 22 | `bash tool/ensure_toolchains.sh --check` |
+| analyze | passed | 528 | `dart analyze lib test tool example` |
+| proposal-testsuite | optional-failed | 86434 | `dart run tool/spec_testsuite_runner.dart --suite=proposal` |
+| spec-sync-check | passed | 1711 | `dart run tool/spec_sync.dart` |
 
 ## Notes
 

@@ -189,9 +189,10 @@ final class _ScriptExecutionState {
     }
 
     final moduleBytes = _readBinaryModule(filename);
-    final instance = WasmInstance.fromBytes(
-      moduleBytes,
-      imports: _buildImports(),
+    final module = WasmModule.decode(moduleBytes, features: _features);
+    final instance = WasmInstance.fromModule(
+      module,
+      imports: _buildImports(module),
       features: _features,
     );
     _currentInstance = instance;
@@ -294,9 +295,10 @@ final class _ScriptExecutionState {
 
     try {
       final moduleBytes = _readBinaryModule(filename);
-      WasmInstance.fromBytes(
-        moduleBytes,
-        imports: _buildImports(),
+      final module = WasmModule.decode(moduleBytes, features: _features);
+      WasmInstance.fromModule(
+        module,
+        imports: _buildImports(module),
         features: _features,
       );
       return _CommandResult.fail(
@@ -401,7 +403,21 @@ final class _ScriptExecutionState {
     return current;
   }
 
-  WasmImports _buildImports() {
+  WasmImports _buildImports(WasmModule targetModule) {
+    final expectedFunctionImports = <String, WasmFunctionType>{};
+    for (final import in targetModule.imports) {
+      if (import.kind != WasmImportKind.function) {
+        continue;
+      }
+      final typeIndex = import.functionTypeIndex;
+      if (typeIndex == null ||
+          typeIndex < 0 ||
+          typeIndex >= targetModule.types.length) {
+        continue;
+      }
+      expectedFunctionImports[import.key] = targetModule.types[typeIndex];
+    }
+
     final functions = <String, WasmHostFunction>{
       WasmImports.key('spectest', 'print'): (_) => null,
       WasmImports.key('spectest', 'print_i32'): (_) => null,
@@ -431,6 +447,14 @@ final class _ScriptExecutionState {
       final instance = entry.value;
       for (final export in instance.exportedFunctions) {
         final key = WasmImports.key(alias, export);
+        final expectedType = expectedFunctionImports[key];
+        if (expectedType == null) {
+          continue;
+        }
+        final actualType = instance.exportedFunctionType(export);
+        if (!_functionTypesEqual(expectedType, actualType)) {
+          continue;
+        }
         functions[key] = (args) => instance.invoke(export, args);
       }
       for (final export in instance.exportedGlobals) {
@@ -599,6 +623,24 @@ final class _ScriptExecutionState {
       return '${expected.type}(${expected.value})';
     }
     return '${expected.type}(${expected.floatValue})';
+  }
+
+  static bool _functionTypesEqual(WasmFunctionType lhs, WasmFunctionType rhs) {
+    if (lhs.params.length != rhs.params.length ||
+        lhs.results.length != rhs.results.length) {
+      return false;
+    }
+    for (var i = 0; i < lhs.params.length; i++) {
+      if (lhs.params[i] != rhs.params[i]) {
+        return false;
+      }
+    }
+    for (var i = 0; i < lhs.results.length; i++) {
+      if (lhs.results[i] != rhs.results[i]) {
+        return false;
+      }
+    }
+    return true;
   }
 }
 

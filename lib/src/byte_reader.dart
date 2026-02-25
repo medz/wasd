@@ -65,6 +65,25 @@ final class ByteReader {
     }
   }
 
+  int readVarUint64() {
+    var result = BigInt.zero;
+    var shift = 0;
+
+    while (true) {
+      final byte = readByte();
+      result |= BigInt.from(byte & 0x7f) << shift;
+
+      if ((byte & 0x80) == 0) {
+        return result.toInt();
+      }
+
+      shift += 7;
+      if (shift > 70) {
+        throw const FormatException('Invalid varuint64 encoding.');
+      }
+    }
+  }
+
   int readVarInt32() {
     var result = 0;
     var shift = 0;

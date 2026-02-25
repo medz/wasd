@@ -6,7 +6,7 @@ const int wasmPageSize = 64 * 1024;
 const int wasmMaxPages = 65536;
 
 final class WasmMemory {
-  WasmMemory({required this.minPages, this.maxPages})
+  WasmMemory({required this.minPages, this.maxPages, this.shared = false})
     : _buffer = Uint8List(
         _validatedInitialPageCount(minPages, maxPages) * wasmPageSize,
       ) {
@@ -15,6 +15,7 @@ final class WasmMemory {
 
   final int minPages;
   final int? maxPages;
+  final bool shared;
   Uint8List _buffer;
   late ByteData _view;
 

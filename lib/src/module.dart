@@ -59,10 +59,19 @@ abstract final class WasmExportKind {
 }
 
 final class WasmLimits {
-  const WasmLimits({required this.min, this.max});
+  const WasmLimits({
+    required this.min,
+    this.max,
+    this.shared = false,
+    this.memory64 = false,
+    this.pageSizeLog2 = 16,
+  });
 
   final int min;
   final int? max;
+  final bool shared;
+  final bool memory64;
+  final int pageSizeLog2;
 }
 
 final class WasmFunctionType {
@@ -73,10 +82,19 @@ final class WasmFunctionType {
 }
 
 final class WasmMemoryType {
-  const WasmMemoryType({required this.minPages, this.maxPages});
+  const WasmMemoryType({
+    required this.minPages,
+    this.maxPages,
+    this.shared = false,
+    this.isMemory64 = false,
+    this.pageSizeLog2 = 16,
+  });
 
   final int minPages;
   final int? maxPages;
+  final bool shared;
+  final bool isMemory64;
+  final int pageSizeLog2;
 }
 
 final class WasmTableType {
@@ -797,9 +815,38 @@ final class WasmModule {
   }
 
   static WasmMemoryType _readMemoryType(ByteReader reader) {
-    final limits = _readLimits(reader);
-    _validateLimits(limits, context: 'memory', maxAllowed: 65536);
-    return WasmMemoryType(minPages: limits.min, maxPages: limits.max);
+    final limits = _readLimits(reader, allowExtendedMemoryFlags: true);
+    _validateLimits(limits, context: 'memory');
+
+    if (!limits.memory64) {
+      final pagesBitWidth = 32 - limits.pageSizeLog2;
+      if (pagesBitWidth < 0) {
+        throw FormatException(
+          'Invalid memory page size log2 ${limits.pageSizeLog2}: exceeds i32 memory address space.',
+        );
+      }
+      final maxAllowedPages = BigInt.one << pagesBitWidth;
+      final minPages = BigInt.from(limits.min);
+      if (minPages > maxAllowedPages) {
+        throw FormatException(
+          'Invalid memory min limit: ${limits.min} > $maxAllowedPages for page size log2 ${limits.pageSizeLog2}.',
+        );
+      }
+      final max = limits.max;
+      if (max != null && BigInt.from(max) > maxAllowedPages) {
+        throw FormatException(
+          'Invalid memory max limit: $max > $maxAllowedPages for page size log2 ${limits.pageSizeLog2}.',
+        );
+      }
+    }
+
+    return WasmMemoryType(
+      minPages: limits.min,
+      maxPages: limits.max,
+      shared: limits.shared,
+      isMemory64: limits.memory64,
+      pageSizeLog2: limits.pageSizeLog2,
+    );
   }
 
   static WasmGlobalType _readGlobalType(ByteReader reader) {
@@ -812,20 +859,51 @@ final class WasmModule {
     return WasmGlobalType(valueType: valueType, mutable: mutability == 1);
   }
 
-  static WasmLimits _readLimits(ByteReader reader) {
-    final flags = reader.readByte();
-    final min = reader.readVarUint32();
-
-    switch (flags) {
-      case 0x00:
-        return WasmLimits(min: min);
-      case 0x01:
-        return WasmLimits(min: min, max: reader.readVarUint32());
-      default:
-        throw UnsupportedError(
-          'Unsupported limits flags: 0x${flags.toRadixString(16)}',
-        );
+  static WasmLimits _readLimits(
+    ByteReader reader, {
+    bool allowExtendedMemoryFlags = false,
+  }) {
+    final flags = reader.readVarUint32();
+    if (!allowExtendedMemoryFlags) {
+      switch (flags) {
+        case 0x00:
+          return WasmLimits(min: reader.readVarUint32());
+        case 0x01:
+          return WasmLimits(
+            min: reader.readVarUint32(),
+            max: reader.readVarUint32(),
+          );
+        default:
+          throw UnsupportedError(
+            'Unsupported limits flags: 0x${flags.toRadixString(16)}',
+          );
+      }
     }
+
+    if ((flags & ~0x0f) != 0) {
+      throw UnsupportedError(
+        'Unsupported memory limits flags: 0x${flags.toRadixString(16)}',
+      );
+    }
+
+    final hasMax = (flags & 0x01) != 0;
+    final shared = (flags & 0x02) != 0;
+    final memory64 = (flags & 0x04) != 0;
+    final hasPageSize = (flags & 0x08) != 0;
+
+    final min = memory64 ? reader.readVarUint64() : reader.readVarUint32();
+    final max = hasMax
+        ? (memory64 ? reader.readVarUint64() : reader.readVarUint32())
+        : null;
+    final pageSizeLog2 = hasPageSize ? reader.readVarUint32() : 16;
+
+    return WasmLimits(
+      min: min,
+      max: max,
+      shared: shared,
+      memory64: memory64,
+      pageSizeLog2: pageSizeLog2,
+    );
   }
 
   static void _validateLimits(
@@ -838,6 +916,18 @@ final class WasmModule {
       throw FormatException(
         'Invalid $context limits: max($max) < min(${limits.min}).',
       );
+    }
+    if (context == 'memory') {
+      if (limits.shared && max == null) {
+        throw const FormatException(
+          'Invalid memory limits: shared memory requires a maximum.',
+        );
+      }
+      if (limits.pageSizeLog2 < 0 || limits.pageSizeLog2 > 16) {
+        throw FormatException(
+          'Invalid memory page size log2: ${limits.pageSizeLog2}.',
+        );
+      }
     }
     if (maxAllowed != null) {
       if (limits.min > maxAllowed) {
