@@ -25,6 +25,8 @@ final class Instruction {
     this.floatImmediate,
     this.memArg,
     this.tableDepths,
+    this.blockParameterTypes,
+    this.blockParameterTypeSignatures,
     this.blockResultTypes,
     this.blockResultTypeSignatures,
     this.gcRefType,
@@ -39,6 +41,8 @@ final class Instruction {
   double? floatImmediate;
   MemArg? memArg;
   List<int>? tableDepths;
+  List<WasmValueType>? blockParameterTypes;
+  List<String>? blockParameterTypeSignatures;
   List<WasmValueType>? blockResultTypes;
   List<String>? blockResultTypeSignatures;
   GcRefTypeImmediate? gcRefType;
@@ -254,12 +258,14 @@ abstract final class WasmPredecoder {
           instructions.add(Instruction(opcode: opcode));
 
         case Opcodes.block:
-          final blockType = _readBlockResultTypeInfo(reader, moduleTypes);
+          final blockType = _readBlockTypeInfo(reader, moduleTypes);
           instructions.add(
             Instruction(
               opcode: opcode,
-              blockResultTypes: blockType.types,
-              blockResultTypeSignatures: blockType.signatures,
+              blockParameterTypes: blockType.paramTypes,
+              blockParameterTypeSignatures: blockType.paramSignatures,
+              blockResultTypes: blockType.resultTypes,
+              blockResultTypeSignatures: blockType.resultSignatures,
             ),
           );
           controlStack.add(
@@ -270,12 +276,14 @@ abstract final class WasmPredecoder {
           );
 
         case Opcodes.loop:
-          final blockType = _readBlockResultTypeInfo(reader, moduleTypes);
+          final blockType = _readBlockTypeInfo(reader, moduleTypes);
           instructions.add(
             Instruction(
               opcode: opcode,
-              blockResultTypes: blockType.types,
-              blockResultTypeSignatures: blockType.signatures,
+              blockParameterTypes: blockType.paramTypes,
+              blockParameterTypeSignatures: blockType.paramSignatures,
+              blockResultTypes: blockType.resultTypes,
+              blockResultTypeSignatures: blockType.resultSignatures,
             ),
           );
           controlStack.add(
@@ -286,12 +294,14 @@ abstract final class WasmPredecoder {
           );
 
         case Opcodes.if_:
-          final blockType = _readBlockResultTypeInfo(reader, moduleTypes);
+          final blockType = _readBlockTypeInfo(reader, moduleTypes);
           instructions.add(
             Instruction(
               opcode: opcode,
-              blockResultTypes: blockType.types,
-              blockResultTypeSignatures: blockType.signatures,
+              blockParameterTypes: blockType.paramTypes,
+              blockParameterTypeSignatures: blockType.paramSignatures,
+              blockResultTypes: blockType.resultTypes,
+              blockResultTypeSignatures: blockType.resultSignatures,
             ),
           );
           controlStack.add(
@@ -340,7 +350,9 @@ abstract final class WasmPredecoder {
         case Opcodes.brOnNull:
         case Opcodes.brOnNonNull:
         case Opcodes.call:
+        case Opcodes.callRef:
         case Opcodes.returnCall:
+        case Opcodes.returnCallRef:
         case Opcodes.localGet:
         case Opcodes.localSet:
         case Opcodes.localTee:
@@ -833,22 +845,34 @@ abstract final class WasmPredecoder {
     );
   }
 
-  static ({List<WasmValueType> types, List<String> signatures})
-  _readBlockResultTypeInfo(
+  static ({
+    List<WasmValueType> paramTypes,
+    List<String> paramSignatures,
+    List<WasmValueType> resultTypes,
+    List<String> resultSignatures,
+  })
+  _readBlockTypeInfo(
     ByteReader reader,
     List<WasmFunctionType> moduleTypes,
   ) {
     final first = reader.readByte();
 
     if (first == 0x40) {
-      return (types: const <WasmValueType>[], signatures: const <String>[]);
+      return (
+        paramTypes: const <WasmValueType>[],
+        paramSignatures: const <String>[],
+        resultTypes: const <WasmValueType>[],
+        resultSignatures: const <String>[],
+      );
     }
 
     if (_isInlineBlockValueType(first)) {
       final inlineType = _readInlineBlockValueTypeWithSignature(reader, first);
       return (
-        types: <WasmValueType>[inlineType.type],
-        signatures: <String>[inlineType.signature],
+        paramTypes: const <WasmValueType>[],
+        paramSignatures: const <String>[],
+        resultTypes: <WasmValueType>[inlineType.type],
+        resultSignatures: <String>[inlineType.signature],
       );
     }
 
@@ -863,15 +887,22 @@ abstract final class WasmPredecoder {
     }
 
     final functionType = moduleTypes[typeIndex];
-    final signatures = functionType.resultTypeSignatures.isNotEmpty
+    final resultSignatures = functionType.resultTypeSignatures.isNotEmpty
         ? List<String>.from(functionType.resultTypeSignatures)
         : functionType.results
               .map(_signatureForValueType)
               .toList(growable: false);
+    final paramSignatures = functionType.paramTypeSignatures.isNotEmpty
+        ? List<String>.from(functionType.paramTypeSignatures)
+        : functionType.params
+              .map(_signatureForValueType)
+              .toList(growable: false);
 
     return (
-      types: List<WasmValueType>.from(functionType.results),
-      signatures: signatures,
+      paramTypes: List<WasmValueType>.from(functionType.params),
+      paramSignatures: paramSignatures,
+      resultTypes: List<WasmValueType>.from(functionType.results),
+      resultSignatures: resultSignatures,
     );
   }
 

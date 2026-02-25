@@ -165,18 +165,29 @@ final class WasmMemoryType {
 }
 
 final class WasmTableType {
-  const WasmTableType({required this.refType, required this.min, this.max});
+  const WasmTableType({
+    required this.refType,
+    required this.min,
+    this.max,
+    this.isTable64 = false,
+  });
 
   final WasmRefType refType;
   final int min;
   final int? max;
+  final bool isTable64;
 }
 
 final class WasmGlobalType {
-  const WasmGlobalType({required this.valueType, required this.mutable});
+  const WasmGlobalType({
+    required this.valueType,
+    required this.mutable,
+    this.valueTypeSignature,
+  });
 
   final WasmValueType valueType;
   final bool mutable;
+  final String? valueTypeSignature;
 }
 
 final class WasmImport {
@@ -204,10 +215,15 @@ final class WasmImport {
 }
 
 final class WasmLocalDecl {
-  const WasmLocalDecl({required this.count, required this.type});
+  const WasmLocalDecl({
+    required this.count,
+    required this.type,
+    this.typeSignature,
+  });
 
   final int count;
   final WasmValueType type;
+  final String? typeSignature;
 }
 
 final class WasmCodeBody {
@@ -1089,10 +1105,16 @@ final class WasmModule {
       final localDeclCount = bodyReader.readVarUint32();
       final locals = <WasmLocalDecl>[];
       for (var j = 0; j < localDeclCount; j++) {
+        final localCount = bodyReader.readVarUint32();
+        final typeStart = bodyReader.offset;
+        final decodedType = _readValueType(bodyReader);
         locals.add(
           WasmLocalDecl(
-            count: bodyReader.readVarUint32(),
-            type: _readValueType(bodyReader).valueType,
+            count: localCount,
+            type: decodedType.valueType,
+            typeSignature: _typeEncodingSignature(
+              bodyReader.bytes.sublist(typeStart, bodyReader.offset),
+            ),
           ),
         );
       }
@@ -1201,6 +1223,7 @@ final class WasmModule {
         case Opcodes.f64Sub:
         case Opcodes.f64Mul:
         case Opcodes.f64Div:
+          continue;
         default:
           throw UnsupportedError(
             'Unsupported init expression opcode: 0x${opcode.toRadixString(16)}',
@@ -1643,9 +1666,19 @@ final class WasmModule {
 
   static WasmTableType _readTableType(ByteReader reader) {
     final refType = _readReferenceType(reader);
-    final limits = _readLimits(reader);
+    final limits = _readLimits(reader, allowExtendedMemoryFlags: true);
     _validateLimits(limits, context: 'table');
-    return WasmTableType(refType: refType, min: limits.min, max: limits.max);
+    if (limits.shared || limits.pageSizeLog2 != 16) {
+      throw const FormatException(
+        'Invalid table limits: unsupported flag combination.',
+      );
+    }
+    return WasmTableType(
+      refType: refType,
+      min: limits.min,
+      max: limits.max,
+      isTable64: limits.memory64,
+    );
   }
 
   static WasmRefType _readReferenceType(ByteReader reader) {
@@ -1762,13 +1795,22 @@ final class WasmModule {
   }
 
   static WasmGlobalType _readGlobalType(ByteReader reader) {
-    final valueType = _readValueType(reader).valueType;
+    final typeStart = reader.offset;
+    final decodedValueType = _readValueType(reader);
+    final valueTypeSignature = _typeEncodingSignature(
+      reader.bytes.sublist(typeStart, reader.offset),
+    );
+    final valueType = decodedValueType.valueType;
     final mutability = reader.readByte();
     if (mutability != 0 && mutability != 1) {
       throw UnsupportedError('Invalid global mutability: $mutability');
     }
 
-    return WasmGlobalType(valueType: valueType, mutable: mutability == 1);
+    return WasmGlobalType(
+      valueType: valueType,
+      mutable: mutability == 1,
+      valueTypeSignature: valueTypeSignature,
+    );
   }
 
   static WasmLimits _readLimits(
