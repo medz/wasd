@@ -809,6 +809,9 @@ abstract final class WasmPredecoder {
 
   static MemArg _readMemArg(ByteReader reader, List<bool> memory64ByIndex) {
     final encodedAlign = reader.readVarUint32();
+    if ((encodedAlign & ~0x7f) != 0) {
+      throw const FormatException('Malformed memop flags.');
+    }
     // Multi-memory encodes a memory-index-present flag in bit 6.
     final align = encodedAlign & 0x3f;
     final hasMemoryIndex = (encodedAlign & 0x40) != 0;

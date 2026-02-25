@@ -281,6 +281,11 @@ abstract final class WasmValidator {
         functionType: functionType,
         instructions: predecoded.instructions,
       );
+      _validateSimpleStackDiscipline(
+        functionType: functionType,
+        instructions: predecoded.instructions,
+        memory64ByIndex: memory64ByIndex,
+      );
       if (_containsWideArithmetic(predecoded.instructions)) {
         _validateWideArithmeticStack(
           functionType: functionType,
@@ -793,6 +798,163 @@ abstract final class WasmValidator {
       }
     }
     return false;
+  }
+
+  static void _validateSimpleStackDiscipline({
+    required WasmFunctionType functionType,
+    required List<Instruction> instructions,
+    required List<bool> memory64ByIndex,
+  }) {
+    final stack = <WasmValueType>[];
+    var analyzable = true;
+
+    WasmValueType addressTypeForMemArg(MemArg? memArg) {
+      final memoryIndex = memArg?.memoryIndex ?? 0;
+      final isMemory64 =
+          memoryIndex >= 0 &&
+          memoryIndex < memory64ByIndex.length &&
+          memory64ByIndex[memoryIndex];
+      return isMemory64 ? WasmValueType.i64 : WasmValueType.i32;
+    }
+
+    WasmValueType addressTypeForMemoryIndex(int memoryIndex) {
+      final isMemory64 =
+          memoryIndex >= 0 &&
+          memoryIndex < memory64ByIndex.length &&
+          memory64ByIndex[memoryIndex];
+      return isMemory64 ? WasmValueType.i64 : WasmValueType.i32;
+    }
+
+    bool popType(WasmValueType expectedType) {
+      if (stack.isEmpty) {
+        return false;
+      }
+      final actual = stack.removeLast();
+      return actual == expectedType;
+    }
+
+    bool popAny() {
+      if (stack.isEmpty) {
+        return false;
+      }
+      stack.removeLast();
+      return true;
+    }
+
+    for (final instruction in instructions) {
+      switch (instruction.opcode) {
+        case Opcodes.i32Const:
+          stack.add(WasmValueType.i32);
+        case Opcodes.i64Const:
+          stack.add(WasmValueType.i64);
+        case Opcodes.f32Const:
+          stack.add(WasmValueType.f32);
+        case Opcodes.f64Const:
+          stack.add(WasmValueType.f64);
+
+        case Opcodes.drop:
+          if (!popAny()) {
+            throw const FormatException('Validation failed: type mismatch.');
+          }
+
+        case Opcodes.i32Load:
+        case Opcodes.i32Load8S:
+        case Opcodes.i32Load8U:
+        case Opcodes.i32Load16S:
+        case Opcodes.i32Load16U:
+          if (!popType(addressTypeForMemArg(instruction.memArg))) {
+            throw const FormatException('Validation failed: type mismatch.');
+          }
+          stack.add(WasmValueType.i32);
+
+        case Opcodes.i64Load:
+        case Opcodes.i64Load8S:
+        case Opcodes.i64Load8U:
+        case Opcodes.i64Load16S:
+        case Opcodes.i64Load16U:
+        case Opcodes.i64Load32S:
+        case Opcodes.i64Load32U:
+          if (!popType(addressTypeForMemArg(instruction.memArg))) {
+            throw const FormatException('Validation failed: type mismatch.');
+          }
+          stack.add(WasmValueType.i64);
+
+        case Opcodes.f32Load:
+          if (!popType(addressTypeForMemArg(instruction.memArg))) {
+            throw const FormatException('Validation failed: type mismatch.');
+          }
+          stack.add(WasmValueType.f32);
+
+        case Opcodes.f64Load:
+          if (!popType(addressTypeForMemArg(instruction.memArg))) {
+            throw const FormatException('Validation failed: type mismatch.');
+          }
+          stack.add(WasmValueType.f64);
+
+        case Opcodes.i32Store:
+        case Opcodes.i32Store8:
+        case Opcodes.i32Store16:
+          if (!popType(WasmValueType.i32) ||
+              !popType(addressTypeForMemArg(instruction.memArg))) {
+            throw const FormatException('Validation failed: type mismatch.');
+          }
+
+        case Opcodes.i64Store:
+        case Opcodes.i64Store8:
+        case Opcodes.i64Store16:
+        case Opcodes.i64Store32:
+          if (!popType(WasmValueType.i64) ||
+              !popType(addressTypeForMemArg(instruction.memArg))) {
+            throw const FormatException('Validation failed: type mismatch.');
+          }
+
+        case Opcodes.f32Store:
+          if (!popType(WasmValueType.f32) ||
+              !popType(addressTypeForMemArg(instruction.memArg))) {
+            throw const FormatException('Validation failed: type mismatch.');
+          }
+
+        case Opcodes.f64Store:
+          if (!popType(WasmValueType.f64) ||
+              !popType(addressTypeForMemArg(instruction.memArg))) {
+            throw const FormatException('Validation failed: type mismatch.');
+          }
+
+        case Opcodes.memorySize:
+          stack.add(addressTypeForMemoryIndex(instruction.immediate ?? 0));
+
+        case Opcodes.memoryGrow:
+          final addrType = addressTypeForMemoryIndex(instruction.immediate ?? 0);
+          if (!popType(addrType)) {
+            throw const FormatException('Validation failed: type mismatch.');
+          }
+          stack.add(addrType);
+
+        case Opcodes.nop:
+          // No stack effect.
+          break;
+
+        case Opcodes.end:
+          analyzable = true;
+          break;
+
+        default:
+          analyzable = false;
+          break;
+      }
+      if (!analyzable) {
+        return;
+      }
+    }
+
+    if (stack.length != functionType.results.length) {
+      throw const FormatException('Validation failed: type mismatch.');
+    }
+    for (var i = 0; i < functionType.results.length; i++) {
+      if (stack[i] != functionType.results[i]) {
+        throw const FormatException('Validation failed: type mismatch.');
+      }
+    }
   }
 
   static void _validateWideArithmeticStack({
