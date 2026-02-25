@@ -1,0 +1,6 @@
+# Flutter desktop demo app (not required for package consumers)
+doom_window/
+
+# Large sample assets
+example/doom/doom.wasm
+example/doom/doom1.wad

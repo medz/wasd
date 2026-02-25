@@ -1,11 +1,11 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:pure_wasm_runtime/pure_wasm_runtime.dart';
+import 'package:wasd/wasd.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('pure_wasm_runtime', () {
+  group('wasd', () {
     test('executes exported add(i32, i32) -> i32', () {
       final wasm = _buildModule(
         types: [

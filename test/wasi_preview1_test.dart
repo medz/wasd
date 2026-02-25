@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:pure_wasm_runtime/pure_wasm_runtime.dart';
+import 'package:wasd/wasd.dart';
 import 'package:test/test.dart';
 
 void main() {

@@ -1,7 +1,7 @@
-name: pure_wasm_runtime
-description: Experimental pure Dart WebAssembly runtime (MVP interpreter).
-version: 0.1.0
-publish_to: none
+name: wasd
+description: "WASD: Wasm And Dart System / WebAssembly System for Dart."
+version: 0.0.1
+repository: https://github.com/medz/wasd
 
 environment:
   sdk: ^3.10.0

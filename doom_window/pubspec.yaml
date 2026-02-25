@@ -31,7 +31,7 @@ dependencies:
   flutter:
     sdk: flutter
 
-  pure_wasm_runtime:
+  wasd:
     path: ..
 
   # The following adds the Cupertino Icons font to your application.

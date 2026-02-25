@@ -6,7 +6,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:pure_wasm_runtime/pure_wasm_runtime.dart';
+import 'package:wasd/wasd.dart';
 
 const String _doomWasmAssetPath = 'assets/doom/doom.wasm';
 const String _doomIwadAssetPath = 'assets/doom/doom1.wad';

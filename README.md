@@ -1,6 +1,6 @@
-# pure_wasm_runtime
+# WASD
 
-A pure Dart WebAssembly runtime experiment inspired by zwasm's layered design,
+WASD (Wasm And Dart System / WebAssembly System for Dart) is a pure Dart WebAssembly runtime inspired by zwasm's layered design,
 implemented as a cross-target interpreter that works on Dart native, JS, and
 Wasm compile targets.
 
@@ -62,9 +62,9 @@ Wasm compile targets.
   - host-io path sandbox checks (canonical root boundary enforcement)
   - proposal feature gates: `WasmFeatureSet(simd/threads/exceptionHandling/gc/componentModel)`
   - helper runner: `WasiRunner` (instantiate + bind memory + invoke `_start`)
-  - runtime adapter: [lib/src/wasi_preview1.dart](/Users/seven/workspace/osrv/wasm/lib/src/wasi_preview1.dart)
-  - filesystem abstractions: [lib/src/wasi_filesystem.dart](/Users/seven/workspace/osrv/wasm/lib/src/wasi_filesystem.dart)
-  - conditional backend selector: [lib/src/wasi_fs_auto.dart](/Users/seven/workspace/osrv/wasm/lib/src/wasi_fs_auto.dart)
+  - runtime adapter: [lib/src/wasi_preview1.dart](lib/src/wasi_preview1.dart)
+  - filesystem abstractions: [lib/src/wasi_filesystem.dart](lib/src/wasi_filesystem.dart)
+  - conditional backend selector: [lib/src/wasi_fs_auto.dart](lib/src/wasi_fs_auto.dart)
 
 ## Not implemented yet
 
@@ -77,17 +77,17 @@ Wasm compile targets.
 
 ## Examples
 
-- Basic invocation: [example/invoke.dart](/Users/seven/workspace/osrv/wasm/example/invoke.dart)
-- Load various wasm modules: [example/load_various_wasm.dart](/Users/seven/workspace/osrv/wasm/example/load_various_wasm.dart)
-- Load `.wasm` from file: [example/load_from_file.dart](/Users/seven/workspace/osrv/wasm/example/load_from_file.dart)
-- Batch-load all `.wasm` files under a directory: [example/load_wasm_suite.dart](/Users/seven/workspace/osrv/wasm/example/load_wasm_suite.dart)
-- Minimal WASI hello example: [example/wasi_hello.dart](/Users/seven/workspace/osrv/wasm/example/wasi_hello.dart)
-- WASI file-write example (via in-memory FS): [example/wasi_write_file.dart](/Users/seven/workspace/osrv/wasm/example/wasi_write_file.dart)
-- WASI seek/stat example: [example/wasi_seek_stat.dart](/Users/seven/workspace/osrv/wasm/example/wasi_seek_stat.dart)
-- WASI runner example (`_start` + proc_exit): [example/wasi_runner.dart](/Users/seven/workspace/osrv/wasm/example/wasi_runner.dart)
-- Doom wasm headless runner: [example/run_doom_wasm.dart](/Users/seven/workspace/osrv/wasm/example/run_doom_wasm.dart)
-- Doom wasm terminal playable runner: [example/play_doom_terminal.dart](/Users/seven/workspace/osrv/wasm/example/play_doom_terminal.dart)
-- Doom asset bootstrap script: [example/doom/setup_assets.sh](/Users/seven/workspace/osrv/wasm/example/doom/setup_assets.sh)
+- Basic invocation: [example/invoke.dart](example/invoke.dart)
+- Load various wasm modules: [example/load_various_wasm.dart](example/load_various_wasm.dart)
+- Load `.wasm` from file: [example/load_from_file.dart](example/load_from_file.dart)
+- Batch-load all `.wasm` files under a directory: [example/load_wasm_suite.dart](example/load_wasm_suite.dart)
+- Minimal WASI hello example: [example/wasi_hello.dart](example/wasi_hello.dart)
+- WASI file-write example (via in-memory FS): [example/wasi_write_file.dart](example/wasi_write_file.dart)
+- WASI seek/stat example: [example/wasi_seek_stat.dart](example/wasi_seek_stat.dart)
+- WASI runner example (`_start` + proc_exit): [example/wasi_runner.dart](example/wasi_runner.dart)
+- Doom wasm headless runner: [example/run_doom_wasm.dart](example/run_doom_wasm.dart)
+- Doom wasm terminal playable runner: [example/play_doom_terminal.dart](example/play_doom_terminal.dart)
+- Doom asset bootstrap script: [example/doom/setup_assets.sh](example/doom/setup_assets.sh)
 
 Run:
 
@@ -144,11 +144,11 @@ strafe, `Shift` run, `Enter` use, `Esc` menu.
 
 Copied from `zwasm/examples/wat` into:
 
-- [example/wat](/Users/seven/workspace/osrv/wasm/example/wat)
+- [example/wat](example/wat)
 
 These are source `.wat` samples for reference and conversion workflows.
 
-## Why pure Dart
+## Why WASD
 
 No FFI, no native code, and no runtime-specific APIs. This keeps the runtime
 portable across all Dart compile targets.

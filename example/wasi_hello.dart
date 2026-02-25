@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:pure_wasm_runtime/pure_wasm_runtime.dart';
+import 'package:wasd/wasd.dart';
 
 void main() {
   final out = BytesBuilder(copy: false);

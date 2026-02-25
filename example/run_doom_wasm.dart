@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:pure_wasm_runtime/pure_wasm_runtime.dart';
+import 'package:wasd/wasd.dart';
 
 const String _defaultWasmPath = 'example/doom/doom.wasm';
 const String _defaultIwadPath = 'example/doom/doom1.wad';

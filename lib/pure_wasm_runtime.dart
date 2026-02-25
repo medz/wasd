@@ -1,18 +1,2 @@
-library;
-
-export 'src/imports.dart';
-export 'src/instance.dart';
-export 'src/memory.dart';
-export 'src/module.dart';
-export 'src/opcode.dart';
-export 'src/predecode.dart';
-export 'src/features.dart';
-export 'src/runtime_function.dart';
-export 'src/runtime_global.dart';
-export 'src/table.dart';
-export 'src/validator.dart';
-export 'src/value.dart';
-export 'src/vm.dart';
-export 'src/wasi_preview1.dart';
-export 'src/wasi_runner.dart';
-export 'src/wasi_filesystem.dart';
+// Backward-compatible alias for the previous entrypoint.
+export 'wasd.dart';
