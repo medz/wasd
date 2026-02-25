@@ -5,6 +5,7 @@
 build/
 coverage/
 .toolchains/
+third_party/wasm-spec-tests/
 
 # IDE / OS
 .DS_Store

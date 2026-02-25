@@ -46,6 +46,8 @@ Future<void> main(List<String> args) async {
 
   final target = _parseTarget(_argValue(args, '--target') ?? 'vm');
   final suite = _parseSuite(_argValue(args, '--suite') ?? 'all');
+  final testsuiteDir = _argValue(args, '--testsuite-dir');
+  final strictProposals = args.contains('--strict-proposals');
   final reportPath =
       _argValue(args, '--report') ?? 'doc/wasm_conformance_matrix.md';
   final jsonPath =
@@ -70,11 +72,29 @@ Future<void> main(List<String> args) async {
 
   switch (target) {
     case RunnerTarget.vm:
-      steps.addAll(await _runVmSuite(suite));
+      steps.addAll(
+        await _runVmSuite(
+          suite,
+          testsuiteDir: testsuiteDir,
+          strictProposals: strictProposals,
+        ),
+      );
     case RunnerTarget.js:
-      steps.addAll(await _runJsSuite(suite));
+      steps.addAll(
+        await _runJsSuite(
+          suite,
+          testsuiteDir: testsuiteDir,
+          strictProposals: strictProposals,
+        ),
+      );
     case RunnerTarget.wasm:
-      steps.addAll(await _runWasmSuite(suite));
+      steps.addAll(
+        await _runWasmSuite(
+          suite,
+          testsuiteDir: testsuiteDir,
+          strictProposals: strictProposals,
+        ),
+      );
   }
 
   final endedAt = DateTime.now().toUtc();
@@ -86,6 +106,8 @@ Future<void> main(List<String> args) async {
     'ended_at_utc': endedAt.toIso8601String(),
     'target': target.name,
     'suite': suite.name,
+    'testsuite_dir': testsuiteDir,
+    'strict_proposals': strictProposals,
     'status': status,
     'steps': steps.map((s) => s.toJson()).toList(growable: false),
   };
@@ -111,10 +133,23 @@ Future<void> main(List<String> args) async {
   }
 }
 
-Future<List<StepResult>> _runVmSuite(RunnerSuite suite) async {
+Future<List<StepResult>> _runVmSuite(
+  RunnerSuite suite, {
+  required String? testsuiteDir,
+  required bool strictProposals,
+}) async {
   final steps = <StepResult>[];
-  steps.add(await _runStep(name: 'vm-tests', command: ['dart', 'test']));
+  if (suite != RunnerSuite.proposal) {
+    steps.add(await _runStep(name: 'vm-tests', command: ['dart', 'test']));
+  }
   if (suite != RunnerSuite.core) {
+    steps.add(
+      await _runStep(
+        name: 'proposal-testsuite',
+        command: _proposalRunnerCommand(testsuiteDir),
+        optional: !strictProposals,
+      ),
+    );
     steps.add(
       await _runStep(
         name: 'spec-sync-check',
@@ -126,33 +161,46 @@ Future<List<StepResult>> _runVmSuite(RunnerSuite suite) async {
   return steps;
 }
 
-Future<List<StepResult>> _runJsSuite(RunnerSuite suite) async {
+Future<List<StepResult>> _runJsSuite(
+  RunnerSuite suite, {
+  required String? testsuiteDir,
+  required bool strictProposals,
+}) async {
   final steps = <StepResult>[];
-  final nodeCheck = await _runStep(
-    name: 'node-check',
-    command: ['node', '--version'],
-    optional: true,
-  );
-  steps.add(nodeCheck);
+  if (suite != RunnerSuite.proposal) {
+    final nodeCheck = await _runStep(
+      name: 'node-check',
+      command: ['node', '--version'],
+      optional: true,
+    );
+    steps.add(nodeCheck);
 
-  if (!nodeCheck.success) {
+    if (!nodeCheck.success) {
+      steps.add(
+        StepResult(
+          name: 'js-tests',
+          command: const ['dart', 'test', '-p', 'node'],
+          exitCode: 1,
+          durationMs: 0,
+          stdout: '',
+          stderr: 'Node.js is required for --target=js.',
+        ),
+      );
+      return steps;
+    }
+
     steps.add(
-      StepResult(
-        name: 'js-tests',
-        command: const ['dart', 'test', '-p', 'node'],
-        exitCode: 1,
-        durationMs: 0,
-        stdout: '',
-        stderr: 'Node.js is required for --target=js.',
+      await _runStep(name: 'js-tests', command: ['dart', 'test', '-p', 'node']),
+    );
+  }
+  if (suite != RunnerSuite.core) {
+    steps.add(
+      await _runStep(
+        name: 'proposal-testsuite',
+        command: _proposalRunnerCommand(testsuiteDir),
+        optional: !strictProposals,
       ),
     );
-    return steps;
-  }
-
-  steps.add(
-    await _runStep(name: 'js-tests', command: ['dart', 'test', '-p', 'node']),
-  );
-  if (suite != RunnerSuite.core) {
     steps.add(
       await _runStep(
         name: 'spec-sync-check',
@@ -164,28 +212,41 @@ Future<List<StepResult>> _runJsSuite(RunnerSuite suite) async {
   return steps;
 }
 
-Future<List<StepResult>> _runWasmSuite(RunnerSuite suite) async {
+Future<List<StepResult>> _runWasmSuite(
+  RunnerSuite suite, {
+  required String? testsuiteDir,
+  required bool strictProposals,
+}) async {
   final steps = <StepResult>[];
-  steps.add(
-    await _runStep(
-      name: 'wasm-compile-smoke',
-      command: [
-        'dart',
-        'compile',
-        'wasm',
-        'example/invoke.dart',
-        '-o',
-        '.dart_tool/spec_runner/invoke.wasm',
-      ],
-    ),
-  );
-  steps.add(
-    await _runStep(
-      name: 'vm-regression-after-wasm-compile',
-      command: ['dart', 'test'],
-    ),
-  );
+  if (suite != RunnerSuite.proposal) {
+    steps.add(
+      await _runStep(
+        name: 'wasm-compile-smoke',
+        command: [
+          'dart',
+          'compile',
+          'wasm',
+          'example/invoke.dart',
+          '-o',
+          '.dart_tool/spec_runner/invoke.wasm',
+        ],
+      ),
+    );
+    steps.add(
+      await _runStep(
+        name: 'vm-regression-after-wasm-compile',
+        command: ['dart', 'test'],
+      ),
+    );
+  }
   if (suite != RunnerSuite.core) {
+    steps.add(
+      await _runStep(
+        name: 'proposal-testsuite',
+        command: _proposalRunnerCommand(testsuiteDir),
+        optional: !strictProposals,
+      ),
+    );
     steps.add(
       await _runStep(
         name: 'spec-sync-check',
@@ -257,6 +318,17 @@ Future<StepResult> _runStep({
   );
 }
 
+List<String> _proposalRunnerCommand(String? testsuiteDir) {
+  return <String>[
+    'dart',
+    'run',
+    'tool/spec_testsuite_runner.dart',
+    '--suite=proposal',
+    if (testsuiteDir != null && testsuiteDir.trim().isNotEmpty)
+      '--testsuite-dir=${testsuiteDir.trim()}',
+  ];
+}
+
 String _renderMarkdownReport({
   required Map<String, Object?> payload,
   required List<StepResult> steps,
@@ -288,8 +360,13 @@ String _renderMarkdownReport({
   b.writeln('## Notes');
   b.writeln();
   b.writeln(
-    '- `proposal` and `all` currently share the same local regression flow while official proposal testsuite wiring is being expanded.',
+    '- Proposal testsuite summary is written to `doc/wasm_proposal_failures.md`.',
   );
+  if (payload['strict_proposals'] != true) {
+    b.writeln(
+      '- Proposal failures are non-gating by default; pass `--strict-proposals` to enforce them.',
+    );
+  }
   b.writeln(
     '- Raw run payload is written to `.dart_tool/spec_runner/latest.json`.',
   );
@@ -301,5 +378,7 @@ void _printUsage() {
   stdout.writeln(
     'Usage: dart run tool/spec_runner.dart --target=<vm|js|wasm> --suite=<core|proposal|all>',
   );
-  stdout.writeln('Optional: --report=<path> --json=<path>');
+  stdout.writeln(
+    'Optional: --report=<path> --json=<path> --testsuite-dir=<path> --strict-proposals',
+  );
 }

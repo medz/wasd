@@ -48,7 +48,9 @@ platform_key() {
 }
 
 is_ready() {
-  [[ -x "$BIN_DIR/wasm-interp" ]] && [[ -x "$BIN_DIR/wasm-tools" ]]
+  [[ -x "$BIN_DIR/wasm-interp" ]] &&
+    [[ -x "$BIN_DIR/wast2json" ]] &&
+    [[ -x "$BIN_DIR/wasm-tools" ]]
 }
 
 if [[ "$MODE" == "check" ]]; then
@@ -113,6 +115,7 @@ if [[ -n "$WABT_URL" ]]; then
   ln -sf "$WABT_EXTRACT_DIR/bin/wasm-interp" "$BIN_DIR/wasm-interp"
   ln -sf "$WABT_EXTRACT_DIR/bin/wasm-validate" "$BIN_DIR/wasm-validate"
   ln -sf "$WABT_EXTRACT_DIR/bin/wat2wasm" "$BIN_DIR/wat2wasm"
+  ln -sf "$WABT_EXTRACT_DIR/bin/wast2json" "$BIN_DIR/wast2json"
 fi
 
 if [[ -n "$WASM_TOOLS_URL" ]]; then

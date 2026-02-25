@@ -1,7 +1,7 @@
 # WASM Conformance Matrix
 
-- Started at (UTC): `2026-02-25T01:46:51.087142Z`
-- Ended at (UTC): `2026-02-25T01:46:54.808010Z`
+- Started at (UTC): `2026-02-25T02:00:58.516695Z`
+- Ended at (UTC): `2026-02-25T02:02:30.224583Z`
 - Target: `js`
 - Suite: `all`
 - Status: `passed`
@@ -10,13 +10,15 @@
 
 | Step | Status | Duration (ms) | Command |
 | --- | --- | ---: | --- |
-| toolchain-check | passed | 24 | `bash tool/ensure_toolchains.sh --check` |
-| analyze | passed | 529 | `dart analyze lib test tool example` |
-| node-check | passed | 18 | `node --version` |
-| js-tests | passed | 2962 | `dart test -p node` |
-| spec-sync-check | passed | 183 | `dart run tool/spec_sync.dart` |
+| toolchain-check | passed | 21 | `bash tool/ensure_toolchains.sh --check` |
+| analyze | passed | 509 | `dart analyze lib test tool example` |
+| node-check | passed | 17 | `node --version` |
+| js-tests | passed | 2955 | `dart test -p node` |
+| proposal-testsuite | optional-failed | 86894 | `dart run tool/spec_testsuite_runner.dart --suite=proposal` |
+| spec-sync-check | passed | 1307 | `dart run tool/spec_sync.dart` |
 
 ## Notes
 
-- `proposal` and `all` currently share the same local regression flow while official proposal testsuite wiring is being expanded.
+- Proposal testsuite summary is written to `doc/wasm_proposal_failures.md`.
+- Proposal failures are non-gating by default; pass `--strict-proposals` to enforce them.
 - Raw run payload is written to `.dart_tool/spec_runner/latest.json`.

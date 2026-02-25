@@ -1,10 +1,10 @@
 # WASM Spec Update Report
 
-- Generated at (UTC): 2026-02-25T01:46:54.790188Z
+- Generated at (UTC): 2026-02-25T02:02:29.094951Z
 - Testsuite dir: `/Users/seven/workspace/wasd/third_party/wasm-spec-tests`
-- Local HEAD: `not-found`
-- Remote HEAD: `unknown`
-- Status: testsuite directory not available
+- Local HEAD: `c337f0da6477acd40fbcab98671a68f59106ad86`
+- Remote HEAD: `c337f0da6477acd40fbcab98671a68f59106ad86`
+- Status: up-to-date
 
 ## Next Actions
 
