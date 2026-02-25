@@ -138,6 +138,17 @@ final class WasmInstance {
             );
           }
 
+          final expectedMax = expected.max;
+          if (expectedMax != null) {
+            final importedMax = importedTable.max;
+            if (importedMax == null || importedMax > expectedMax) {
+              throw StateError(
+                'Imported table `${import.key}` max mismatch: '
+                'expected <= $expectedMax, actual=${importedMax ?? 'unbounded'}.',
+              );
+            }
+          }
+
           tables.add(importedTable);
 
         case WasmImportKind.memory:

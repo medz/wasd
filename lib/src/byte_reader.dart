@@ -48,37 +48,42 @@ final class ByteReader {
 
   int readVarUint32() {
     var result = 0;
-    var shift = 0;
 
-    while (true) {
+    for (var i = 0; i < 5; i++) {
       final byte = readByte();
-      result |= (byte & 0x7f) << shift;
+      result |= (byte & 0x7f) << (i * 7);
 
       if ((byte & 0x80) == 0) {
+        if (i == 4 && (byte & 0xf0) != 0) {
+          throw const FormatException('Invalid varuint32 encoding.');
+        }
         return result;
       }
-
-      shift += 7;
-      if (shift > 35) {
-        throw const FormatException('Invalid varuint32 encoding.');
-      }
     }
+
+    throw const FormatException('Invalid varuint32 encoding.');
   }
 
   int readVarUint64() {
     var result = BigInt.zero;
     var shift = 0;
+    var byteCount = 0;
+    final max = (BigInt.one << 64) - BigInt.one;
 
     while (true) {
       final byte = readByte();
+      byteCount++;
       result |= BigInt.from(byte & 0x7f) << shift;
 
       if ((byte & 0x80) == 0) {
+        if (byteCount > 10 || result > max) {
+          throw const FormatException('Invalid varuint64 encoding.');
+        }
         return result.toInt();
       }
 
       shift += 7;
-      if (shift > 70) {
+      if (byteCount >= 10 || shift > 70) {
         throw const FormatException('Invalid varuint64 encoding.');
       }
     }

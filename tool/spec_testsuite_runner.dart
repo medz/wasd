@@ -53,28 +53,28 @@ final class _ExpectedValue {
   const _ExpectedValue.i32(this.value)
     : type = 'i32',
       isNaN = false,
-      floatValue = null;
+      floatBits = null;
   const _ExpectedValue.i64(this.value)
     : type = 'i64',
       isNaN = false,
-      floatValue = null;
-  const _ExpectedValue.f32(this.floatValue)
+      floatBits = null;
+  const _ExpectedValue.f32(this.floatBits)
     : type = 'f32',
       isNaN = false,
       value = null;
-  const _ExpectedValue.f64(this.floatValue)
+  const _ExpectedValue.f64(this.floatBits)
     : type = 'f64',
       isNaN = false,
       value = null;
   const _ExpectedValue.nan(this.type)
     : isNaN = true,
       value = null,
-      floatValue = null;
+      floatBits = null;
 
   final String type;
   final bool isNaN;
   final int? value;
-  final double? floatValue;
+  final int? floatBits;
 }
 
 final class _FileResult {
@@ -130,6 +130,11 @@ final class _ScriptExecutionState {
   final Map<String, WasmInstance> _namedModules = <String, WasmInstance>{};
   final Map<String, WasmInstance> _registeredModules = <String, WasmInstance>{};
   final WasmMemory _spectestMemory = WasmMemory(minPages: 1, maxPages: 2);
+  final WasmMemory _spectestSharedMemory = WasmMemory(
+    minPages: 1,
+    maxPages: 2,
+    shared: true,
+  );
   final WasmTable _spectestTable = WasmTable(
     refType: WasmRefType.funcref,
     min: 10,
@@ -437,6 +442,7 @@ final class _ScriptExecutionState {
     };
     final memories = <String, WasmMemory>{
       WasmImports.key('spectest', 'memory'): _spectestMemory,
+      WasmImports.key('spectest', 'shared_memory'): _spectestSharedMemory,
     };
     final tables = <String, WasmTable>{
       WasmImports.key('spectest', 'table'): _spectestTable,
@@ -495,9 +501,9 @@ final class _ScriptExecutionState {
       case 'i64':
         return _signedBits(BigInt.parse(value), 64);
       case 'f32':
-        return _parseFloating(value);
+        return _f32FromBits(_parseFloatBits(value, 32));
       case 'f64':
-        return _parseFloating(value);
+        return _f64FromBits(_parseFloatBits(value, 64));
       default:
         throw _SpecRunnerFailure(
           'unsupported-arg-type',
@@ -525,12 +531,12 @@ final class _ScriptExecutionState {
         if (value.startsWith('nan:')) {
           return const _ExpectedValue.nan('f32');
         }
-        return _ExpectedValue.f32(_parseFloating(value));
+        return _ExpectedValue.f32(_parseFloatBits(value, 32));
       case 'f64':
         if (value.startsWith('nan:')) {
           return const _ExpectedValue.nan('f64');
         }
-        return _ExpectedValue.f64(_parseFloating(value));
+        return _ExpectedValue.f64(_parseFloatBits(value, 64));
       default:
         throw _SpecRunnerFailure(
           'unsupported-expected-type',
@@ -553,10 +559,10 @@ final class _ScriptExecutionState {
         if (expected.isNaN) {
           return actual.isNaN;
         }
-        if (expected.floatValue == null) {
+        if (expected.floatBits == null) {
           return false;
         }
-        return _f32Bits(actual) == _f32Bits(expected.floatValue!);
+        return _f32Bits(actual) == expected.floatBits;
       case 'f64':
         if (actual is! double) {
           return false;
@@ -564,13 +570,37 @@ final class _ScriptExecutionState {
         if (expected.isNaN) {
           return actual.isNaN;
         }
-        if (expected.floatValue == null) {
+        if (expected.floatBits == null) {
           return false;
         }
-        return _f64Bits(actual) == _f64Bits(expected.floatValue!);
+        return _f64Bits(actual) == expected.floatBits;
       default:
         return false;
     }
+  }
+
+  static int _parseFloatBits(String value, int bits) {
+    final integer = _tryParseInteger(value);
+    if (integer != null) {
+      return _unsignedBits(integer, bits);
+    }
+
+    final parsed = _parseFloating(value);
+    return bits == 32 ? _f32Bits(parsed) : _f64Bits(parsed);
+  }
+
+  static BigInt? _tryParseInteger(String value) {
+    try {
+      return BigInt.parse(value);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static int _unsignedBits(BigInt value, int bits) {
+    final width = BigInt.one << bits;
+    final mask = width - BigInt.one;
+    return (value & mask).toInt();
   }
 
   static int _signedBits(BigInt value, int bits) {
@@ -608,11 +638,26 @@ final class _ScriptExecutionState {
     return data.getUint32(0, Endian.little);
   }
 
+  static double _f32FromBits(int bits) {
+    final data = ByteData(4)..setUint32(0, bits.toUnsigned(32), Endian.little);
+    return data.getFloat32(0, Endian.little);
+  }
+
   static int _f64Bits(double value) {
     final data = ByteData(8)..setFloat64(0, value, Endian.little);
     final low = data.getUint32(0, Endian.little);
     final high = data.getUint32(4, Endian.little);
     return (BigInt.from(high) << 32 | BigInt.from(low)).toInt();
+  }
+
+  static double _f64FromBits(int bits) {
+    final normalized = BigInt.from(bits) & ((BigInt.one << 64) - BigInt.one);
+    final low = (normalized & BigInt.from(0xffffffff)).toInt();
+    final high = ((normalized >> 32) & BigInt.from(0xffffffff)).toInt();
+    final data = ByteData(8)
+      ..setUint32(0, low, Endian.little)
+      ..setUint32(4, high, Endian.little);
+    return data.getFloat64(0, Endian.little);
   }
 
   static String _expectedToString(_ExpectedValue expected) {
@@ -622,7 +667,7 @@ final class _ScriptExecutionState {
     if (expected.value != null) {
       return '${expected.type}(${expected.value})';
     }
-    return '${expected.type}(${expected.floatValue})';
+    return '${expected.type}(bits=${expected.floatBits})';
   }
 
   static bool _functionTypesEqual(WasmFunctionType lhs, WasmFunctionType rhs) {

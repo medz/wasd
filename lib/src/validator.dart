@@ -11,6 +11,7 @@ abstract final class WasmValidator {
     WasmModule module, {
     WasmFeatureSet features = const WasmFeatureSet(),
   }) {
+    _validateTableArity(module, features: features);
     _validateImportTypes(module);
     _validateExportBindings(module);
     _validateStartFunction(module);
@@ -18,6 +19,18 @@ abstract final class WasmValidator {
     _validateElements(module);
     _validateDataSegments(module);
     _validateFunctions(module, features: features);
+  }
+
+  static void _validateTableArity(
+    WasmModule module, {
+    required WasmFeatureSet features,
+  }) {
+    final tableCount = module.importedTableCount + module.tables.length;
+    if (tableCount > 1 && !features.isEnabled('multi-table')) {
+      throw const FormatException(
+        'Validation failed: multiple tables are not enabled.',
+      );
+    }
   }
 
   static void _validateImportTypes(WasmModule module) {
@@ -205,19 +218,19 @@ abstract final class WasmValidator {
     final tableCount = module.importedTableCount + module.tables.length;
     final memoryCount = module.importedMemoryCount + module.memories.length;
     final globalCount = module.importedGlobalCount + module.globals.length;
+    var requiresDataCount = false;
 
     for (var i = 0; i < module.functionTypeIndices.length; i++) {
       final typeIndex = module.functionTypeIndices[i];
       _checkIndex(typeIndex, module.types.length, 'function type');
       final functionType = module.types[typeIndex];
       final body = module.codes[i];
+      final localsCount = _validatedLocalsCount(functionType, body);
       final predecoded = WasmPredecoder.decode(
         body,
         module.types,
         features: features,
       );
-      final localsCount =
-          functionType.params.length + predecoded.localTypes.length;
 
       final controlStack = <int>[];
       for (var pc = 0; pc < predecoded.instructions.length; pc++) {
@@ -280,6 +293,34 @@ abstract final class WasmValidator {
           case Opcodes.tableGet:
           case Opcodes.tableSet:
             _checkIndex(instruction.immediate!, tableCount, 'table');
+          case Opcodes.i32Load:
+          case Opcodes.i64Load:
+          case Opcodes.f32Load:
+          case Opcodes.f64Load:
+          case Opcodes.i32Load8S:
+          case Opcodes.i32Load8U:
+          case Opcodes.i32Load16S:
+          case Opcodes.i32Load16U:
+          case Opcodes.i64Load8S:
+          case Opcodes.i64Load8U:
+          case Opcodes.i64Load16S:
+          case Opcodes.i64Load16U:
+          case Opcodes.i64Load32S:
+          case Opcodes.i64Load32U:
+          case Opcodes.i32Store:
+          case Opcodes.i64Store:
+          case Opcodes.f32Store:
+          case Opcodes.f64Store:
+          case Opcodes.i32Store8:
+          case Opcodes.i32Store16:
+          case Opcodes.i64Store8:
+          case Opcodes.i64Store16:
+          case Opcodes.i64Store32:
+            if (memoryCount == 0) {
+              throw const FormatException(
+                'Validation failed: memory instruction used without memory.',
+              );
+            }
           case Opcodes.memorySize:
           case Opcodes.memoryGrow:
             if (memoryCount == 0) {
@@ -293,6 +334,7 @@ abstract final class WasmValidator {
               );
             }
           case Opcodes.memoryInit:
+            requiresDataCount = true;
             if (memoryCount == 0) {
               throw const FormatException(
                 'Validation failed: memory.init used without memory.',
@@ -309,6 +351,7 @@ abstract final class WasmValidator {
               );
             }
           case Opcodes.dataDrop:
+            requiresDataCount = true;
             _checkIndex(
               instruction.immediate!,
               module.dataSegments.length,
@@ -363,6 +406,12 @@ abstract final class WasmValidator {
         }
       }
     }
+
+    if (requiresDataCount && module.dataCount == null) {
+      throw const FormatException(
+        'Validation failed: data_count section required when using memory.init/data.drop.',
+      );
+    }
   }
 
   static WasmFunctionType _functionTypeForIndex(WasmModule module, int index) {
@@ -392,6 +441,21 @@ abstract final class WasmValidator {
     final typeIndex = module.functionTypeIndices[definedIndex];
     _checkIndex(typeIndex, module.types.length, 'function type');
     return module.types[typeIndex];
+  }
+
+  static int _validatedLocalsCount(
+    WasmFunctionType functionType,
+    WasmCodeBody body,
+  ) {
+    final maxLocals = BigInt.from(0xffffffff);
+    var total = BigInt.from(functionType.params.length);
+    for (final local in body.locals) {
+      total += BigInt.from(local.count);
+      if (total > maxLocals) {
+        throw const FormatException('Validation failed: too many locals.');
+      }
+    }
+    return total.toInt();
   }
 
   static WasmValueType _validateConstExpr({

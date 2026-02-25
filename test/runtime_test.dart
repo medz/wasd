@@ -590,6 +590,7 @@ void main() {
           ),
         ],
         memoryMinPages: 1,
+        dataCount: 1,
         dataSegments: [
           const _DataSegmentSpec.passive(bytes: [1, 2, 3, 4]),
         ],
@@ -993,6 +994,7 @@ Uint8List _buildModule({
   List<_ExportSpec> exports = const [],
   List<_ElementSegmentSpec> elements = const [],
   List<_DataSegmentSpec> dataSegments = const [],
+  int? dataCount,
   int? memoryMinPages,
   int? memoryMaxPages,
   int? startFunctionIndex,
@@ -1147,6 +1149,10 @@ Uint8List _buildModule({
       ..addAll(functionBody);
   }
   bytes.addAll(_section(10, codePayload));
+
+  if (dataCount != null) {
+    bytes.addAll(_section(12, _u32Leb(dataCount)));
+  }
 
   if (dataSegments.isNotEmpty) {
     final payload = <int>[..._u32Leb(dataSegments.length)];
