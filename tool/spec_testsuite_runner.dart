@@ -123,9 +123,10 @@ final class _FileResult {
 }
 
 final class _ScriptExecutionState {
-  _ScriptExecutionState(this.workDir);
+  _ScriptExecutionState(this.workDir, this._features);
 
   final Directory workDir;
+  final WasmFeatureSet _features;
 
   final Map<String, WasmInstance> _namedModules = <String, WasmInstance>{};
   final Map<String, WasmInstance> _registeredModules = <String, WasmInstance>{};
@@ -142,9 +143,6 @@ final class _ScriptExecutionState {
   );
 
   WasmInstance? _currentInstance;
-
-  WasmFeatureSet get _features =>
-      WasmFeatureSet.layeredDefaults(profile: WasmFeatureProfile.full);
 
   _CommandResult executeCommand(Map<String, Object?> command) {
     final type = command['type'];
@@ -890,7 +888,7 @@ Future<_FileResult> _runWastFile({
     String? firstFailureReason;
     String? firstFailureDetails;
 
-    final state = _ScriptExecutionState(tempDir);
+    final state = _ScriptExecutionState(tempDir, _featuresForGroup(group));
     for (final raw in commandsRaw) {
       if (raw is! Map) {
         commandsSeen++;
@@ -993,6 +991,17 @@ String _groupForFile(String file, String testsuiteDir) {
     return parts[1];
   }
   return 'core';
+}
+
+WasmFeatureSet _featuresForGroup(String group) {
+  final base = WasmFeatureSet.layeredDefaults(profile: WasmFeatureProfile.full);
+  final additionalEnabled = <String>{...base.additionalEnabled};
+  switch (group) {
+    case 'custom-page-sizes':
+      additionalEnabled.add('multi-memory');
+      break;
+  }
+  return base.copyWith(additionalEnabled: additionalEnabled);
 }
 
 String _renderMarkdown({

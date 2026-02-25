@@ -35,20 +35,35 @@ void main() {
   });
 
   group('memory type instantiation', () {
-    test('rejects custom page sizes at instantiation', () {
+    test('accepts supported custom page sizes at instantiation', () {
+      final wasm = _moduleWithDefinedMemory(
+        flags: 0x08,
+        min: 3,
+        pageSizeLog2: 0,
+      );
+
+      final instance = WasmInstance.fromBytes(wasm);
+      final memory = instance.memory;
+      expect(memory, isNotNull);
+      expect(memory!.pageSizeBytes, 1);
+      expect(memory.pageCount, 3);
+      expect(memory.lengthInBytes, 3);
+    });
+
+    test('rejects unsupported custom page sizes at instantiation', () {
       final wasm = _moduleWithDefinedMemory(
         flags: 0x08,
         min: 1,
-        pageSizeLog2: 0,
+        pageSizeLog2: 12,
       );
 
       expect(
         () => WasmInstance.fromBytes(wasm),
         throwsA(
-          isA<UnsupportedError>().having(
+          isA<FormatException>().having(
             (error) => error.message,
             'message',
-            contains('custom page size'),
+            contains('Invalid custom page size'),
           ),
         ),
       );
@@ -113,7 +128,75 @@ void main() {
       );
       expect(instance.exportedMemory('mem').shared, isTrue);
     });
+
+    test('rejects import when page size does not match', () {
+      final wasm = _moduleWithImportedMemory(
+        flags: 0x09,
+        min: 1,
+        max: 2,
+        pageSizeLog2: 0,
+      );
+
+      final imports = WasmImports(
+        memories: {
+          WasmImports.key('env', 'mem'): WasmMemory(
+            minPages: 1,
+            maxPages: 2,
+            shared: false,
+          ),
+        },
+      );
+
+      expect(
+        () => WasmInstance.fromBytes(wasm, imports: imports),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('pageSize'),
+          ),
+        ),
+      );
+    });
+
+    test('requires multi-memory feature to instantiate multiple memories', () {
+      final wasm = _moduleWithDefinedMemories([
+        const _MemoryDef(flags: 0x00, min: 1),
+        const _MemoryDef(flags: 0x00, min: 1),
+      ]);
+
+      expect(
+        () => WasmInstance.fromBytes(wasm),
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'message',
+            contains('multiple memories'),
+          ),
+        ),
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(additionalEnabled: {'multi-memory'}),
+      );
+      expect(instance.memories, hasLength(2));
+    });
   });
+}
+
+final class _MemoryDef {
+  const _MemoryDef({
+    required this.flags,
+    required this.min,
+    this.max,
+    this.pageSizeLog2,
+  });
+
+  final int flags;
+  final int min;
+  final int? max;
+  final int? pageSizeLog2;
 }
 
 Uint8List _moduleWithDefinedMemory({
@@ -122,13 +205,29 @@ Uint8List _moduleWithDefinedMemory({
   int? max,
   int? pageSizeLog2,
 }) {
-  final limits = _limits(
-    flags: flags,
-    min: min,
-    max: max,
-    pageSizeLog2: pageSizeLog2,
-  );
-  final memorySection = _section(5, <int>[..._u32Leb(1), ...limits]);
+  return _moduleWithDefinedMemories([
+    _MemoryDef(flags: flags, min: min, max: max, pageSizeLog2: pageSizeLog2),
+  ]);
+}
+
+Uint8List _moduleWithDefinedMemories(List<_MemoryDef> memories) {
+  if (memories.isEmpty) {
+    throw ArgumentError('memories must not be empty.');
+  }
+
+  final memoryPayload = <int>[..._u32Leb(memories.length)];
+  for (final memory in memories) {
+    memoryPayload.addAll(
+      _limits(
+        flags: memory.flags,
+        min: memory.min,
+        max: memory.max,
+        pageSizeLog2: memory.pageSizeLog2,
+      ),
+    );
+  }
+
+  final memorySection = _section(5, memoryPayload);
   return Uint8List.fromList(<int>[..._wasmHeader, ...memorySection]);
 }
 

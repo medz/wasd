@@ -12,6 +12,7 @@ abstract final class WasmValidator {
     WasmFeatureSet features = const WasmFeatureSet(),
   }) {
     _validateTableArity(module, features: features);
+    _validateMemoryArity(module, features: features);
     _validateImportTypes(module);
     _validateExportBindings(module);
     _validateStartFunction(module);
@@ -29,6 +30,18 @@ abstract final class WasmValidator {
     if (tableCount > 1 && !features.isEnabled('multi-table')) {
       throw const FormatException(
         'Validation failed: multiple tables are not enabled.',
+      );
+    }
+  }
+
+  static void _validateMemoryArity(
+    WasmModule module, {
+    required WasmFeatureSet features,
+  }) {
+    final memoryCount = module.importedMemoryCount + module.memories.length;
+    if (memoryCount > 1 && !features.isEnabled('multi-memory')) {
+      throw const FormatException(
+        'Validation failed: multiple memories are not enabled.',
       );
     }
   }
@@ -240,6 +253,15 @@ abstract final class WasmValidator {
             'Validation failed: memory instruction used without memory.',
           );
         }
+        if (_isAtomicMemoryOpcode(instruction.opcode)) {
+          final memoryIndex = instruction.memArg?.memoryIndex;
+          if (memoryIndex == null) {
+            throw const FormatException(
+              'Validation failed: atomic memory instruction missing memarg.',
+            );
+          }
+          _checkIndex(memoryIndex, memoryCount, 'memory');
+        }
         switch (instruction.opcode) {
           case Opcodes.block:
           case Opcodes.loop:
@@ -326,6 +348,13 @@ abstract final class WasmValidator {
                 'Validation failed: memory instruction used without memory.',
               );
             }
+            final memoryIndex = instruction.memArg?.memoryIndex;
+            if (memoryIndex == null) {
+              throw const FormatException(
+                'Validation failed: memory instruction missing memarg.',
+              );
+            }
+            _checkIndex(memoryIndex, memoryCount, 'memory');
           case Opcodes.memorySize:
           case Opcodes.memoryGrow:
             if (memoryCount == 0) {
@@ -333,11 +362,7 @@ abstract final class WasmValidator {
                 'Validation failed: memory instruction used without memory.',
               );
             }
-            if (instruction.immediate != 0) {
-              throw const FormatException(
-                'Validation failed: only memory index 0 is supported.',
-              );
-            }
+            _checkIndex(instruction.immediate!, memoryCount, 'memory');
           case Opcodes.memoryInit:
             requiresDataCount = true;
             if (memoryCount == 0) {
@@ -350,11 +375,7 @@ abstract final class WasmValidator {
               module.dataSegments.length,
               'data segment',
             );
-            if (instruction.secondaryImmediate != 0) {
-              throw const FormatException(
-                'Validation failed: only memory index 0 is supported.',
-              );
-            }
+            _checkIndex(instruction.secondaryImmediate!, memoryCount, 'memory');
           case Opcodes.dataDrop:
             requiresDataCount = true;
             _checkIndex(
@@ -368,23 +389,15 @@ abstract final class WasmValidator {
                 'Validation failed: memory.copy used without memory.',
               );
             }
-            if (instruction.immediate != 0 ||
-                instruction.secondaryImmediate != 0) {
-              throw const FormatException(
-                'Validation failed: only memory index 0 is supported.',
-              );
-            }
+            _checkIndex(instruction.immediate!, memoryCount, 'memory');
+            _checkIndex(instruction.secondaryImmediate!, memoryCount, 'memory');
           case Opcodes.memoryFill:
             if (memoryCount == 0) {
               throw const FormatException(
                 'Validation failed: memory.fill used without memory.',
               );
             }
-            if (instruction.immediate != 0) {
-              throw const FormatException(
-                'Validation failed: only memory index 0 is supported.',
-              );
-            }
+            _checkIndex(instruction.immediate!, memoryCount, 'memory');
           case Opcodes.tableInit:
             _checkIndex(
               instruction.immediate!,

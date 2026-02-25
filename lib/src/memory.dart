@@ -4,23 +4,34 @@ import 'int64.dart';
 
 const int wasmPageSize = 64 * 1024;
 const int wasmMaxPages = 65536;
+const int wasmAddressSpaceBytes = 4294967296; // 2^32
 
 final class WasmMemory {
-  WasmMemory({required this.minPages, this.maxPages, this.shared = false})
-    : _buffer = Uint8List(
-        _validatedInitialPageCount(minPages, maxPages) * wasmPageSize,
-      ) {
+  WasmMemory({
+    required this.minPages,
+    this.maxPages,
+    this.shared = false,
+    this.pageSizeBytes = wasmPageSize,
+  }) : _buffer = Uint8List(
+         _validatedInitialPageCount(
+               minPages: minPages,
+               maxPages: maxPages,
+               pageSizeBytes: pageSizeBytes,
+             ) *
+             pageSizeBytes,
+       ) {
     _view = ByteData.sublistView(_buffer);
   }
 
   final int minPages;
   final int? maxPages;
   final bool shared;
+  final int pageSizeBytes;
   Uint8List _buffer;
   late ByteData _view;
 
   int get lengthInBytes => _buffer.length;
-  int get pageCount => _buffer.length ~/ wasmPageSize;
+  int get pageCount => _buffer.length ~/ pageSizeBytes;
 
   int loadI8(int address) {
     _checkBounds(address, 1);
@@ -138,13 +149,13 @@ final class WasmMemory {
 
     final oldPages = pageCount;
     final newPages = oldPages + additionalPages;
-    final maxLimit = maxPages ?? wasmMaxPages;
+    final maxLimit = maxPages ?? _maxPagesForPageSize(pageSizeBytes);
 
     if (newPages > maxLimit) {
       return -1;
     }
 
-    final grown = Uint8List(newPages * wasmPageSize);
+    final grown = Uint8List(newPages * pageSizeBytes);
     grown.setRange(0, _buffer.length, _buffer);
     _buffer = grown;
     _view = ByteData.sublistView(_buffer);
@@ -163,16 +174,25 @@ final class WasmMemory {
     }
   }
 
-  static int _validatedInitialPageCount(int minPages, int? maxPages) {
+  static int _validatedInitialPageCount({
+    required int minPages,
+    required int? maxPages,
+    required int pageSizeBytes,
+  }) {
+    if (pageSizeBytes <= 0 || (pageSizeBytes & (pageSizeBytes - 1)) != 0) {
+      throw ArgumentError.value(
+        pageSizeBytes,
+        'pageSizeBytes',
+        'must be a positive power of two',
+      );
+    }
+
+    final maxAllowed = _maxPagesForPageSize(pageSizeBytes);
     if (minPages < 0) {
       throw ArgumentError.value(minPages, 'minPages');
     }
-    if (minPages > wasmMaxPages) {
-      throw ArgumentError.value(
-        minPages,
-        'minPages',
-        'must be <= $wasmMaxPages',
-      );
+    if (minPages > maxAllowed) {
+      throw ArgumentError.value(minPages, 'minPages', 'must be <= $maxAllowed');
     }
     if (maxPages != null) {
       if (maxPages < minPages) {
@@ -182,14 +202,18 @@ final class WasmMemory {
           'must be >= minPages ($minPages)',
         );
       }
-      if (maxPages > wasmMaxPages) {
+      if (maxPages > maxAllowed) {
         throw ArgumentError.value(
           maxPages,
           'maxPages',
-          'must be <= $wasmMaxPages',
+          'must be <= $maxAllowed',
         );
       }
     }
     return minPages;
+  }
+
+  static int _maxPagesForPageSize(int pageSizeBytes) {
+    return wasmAddressSpaceBytes ~/ pageSizeBytes;
   }
 }

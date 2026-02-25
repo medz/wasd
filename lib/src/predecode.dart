@@ -6,10 +6,15 @@ import 'module.dart';
 import 'opcode.dart';
 
 final class MemArg {
-  const MemArg({required this.align, required this.offset});
+  const MemArg({
+    required this.align,
+    required this.offset,
+    this.memoryIndex = 0,
+  });
 
   final int align;
   final int offset;
+  final int memoryIndex;
 }
 
 final class Instruction {
@@ -597,9 +602,15 @@ abstract final class WasmPredecoder {
   }
 
   static MemArg _readMemArg(ByteReader reader) {
+    final encodedAlign = reader.readVarUint32();
+    // Multi-memory encodes a memory-index-present flag in bit 6.
+    final align = encodedAlign & 0x3f;
+    final hasMemoryIndex = (encodedAlign & 0x40) != 0;
+    final memoryIndex = hasMemoryIndex ? reader.readVarUint32() : 0;
     return MemArg(
-      align: reader.readVarUint32(),
+      align: align,
       offset: reader.readVarUint32(),
+      memoryIndex: memoryIndex,
     );
   }
 

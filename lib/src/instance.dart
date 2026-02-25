@@ -18,7 +18,7 @@ import 'vm.dart';
 final class WasmInstance {
   WasmInstance._({
     required this.module,
-    required this.memory,
+    required this.memories,
     required this.tables,
     required this.functions,
     required this.globals,
@@ -28,7 +28,8 @@ final class WasmInstance {
     required Map<String, int> globalExports,
     required Map<String, WasmMemory> memoryExports,
     required Map<String, WasmTable> tableExports,
-  }) : _functionExports = functionExports,
+  }) : memory = memories.isEmpty ? null : memories.first,
+       _functionExports = functionExports,
        _globalExports = globalExports,
        _memoryExports = memoryExports,
        _tableExports = tableExports,
@@ -36,7 +37,7 @@ final class WasmInstance {
          functions: functions,
          types: module.types,
          tables: tables,
-         memory: memory,
+         memories: memories,
          globals: globals,
          dataSegments: dataSegments,
          elementSegments: elementSegments,
@@ -44,6 +45,7 @@ final class WasmInstance {
 
   final WasmModule module;
   final WasmMemory? memory;
+  final List<WasmMemory> memories;
   final List<WasmTable> tables;
   final List<RuntimeFunction> functions;
   final List<RuntimeGlobal> globals;
@@ -73,16 +75,10 @@ final class WasmInstance {
   }) {
     WasmValidator.validateModule(module, features: features);
 
-    if (module.importedMemoryCount + module.memories.length > 1) {
-      throw UnsupportedError(
-        'This runtime currently supports at most one linear memory.',
-      );
-    }
-
     final functions = <RuntimeFunction>[];
     final globals = <RuntimeGlobal>[];
     final tables = <WasmTable>[];
-    WasmMemory? memory;
+    final memories = <WasmMemory>[];
 
     for (final import in module.imports) {
       switch (import.kind) {
@@ -152,10 +148,6 @@ final class WasmInstance {
           tables.add(importedTable);
 
         case WasmImportKind.memory:
-          if (memory != null) {
-            throw UnsupportedError('Only one memory import is supported.');
-          }
-
           final importedMemory = imports.memories[import.key];
           if (importedMemory == null) {
             throw StateError('Missing memory import `${import.key}`.');
@@ -170,11 +162,19 @@ final class WasmInstance {
             features: features,
             context: 'memory import `${import.key}`',
           );
+          final expectedPageSize = 1 << expected.pageSizeLog2;
 
           if (importedMemory.shared != expected.shared) {
             throw StateError(
               'Imported memory `${import.key}` shared flag mismatch: '
               'expected=${expected.shared} actual=${importedMemory.shared}.',
+            );
+          }
+          if (importedMemory.pageSizeBytes != expectedPageSize) {
+            throw StateError(
+              'Imported memory `${import.key}` memory types incompatible: '
+              'expected pageSize=$expectedPageSize '
+              'actual=${importedMemory.pageSizeBytes}.',
             );
           }
 
@@ -203,7 +203,7 @@ final class WasmInstance {
             );
           }
 
-          memory = importedMemory;
+          memories.add(importedMemory);
 
         case WasmImportKind.global:
           final globalType = import.globalType;
@@ -229,26 +229,19 @@ final class WasmInstance {
       }
     }
 
-    if (module.memories.isNotEmpty) {
-      if (memory != null) {
-        throw UnsupportedError(
-          'A module cannot have both imported and defined memory.',
-        );
-      }
-      if (module.memories.length > 1) {
-        throw UnsupportedError('Only one defined memory is supported.');
-      }
-
-      final memoryType = module.memories.first;
+    for (final memoryType in module.memories) {
       _validateSupportedMemoryType(
         memoryType,
         features: features,
         context: 'defined memory',
       );
-      memory = WasmMemory(
-        minPages: memoryType.minPages,
-        maxPages: memoryType.maxPages,
-        shared: memoryType.shared,
+      memories.add(
+        WasmMemory(
+          minPages: memoryType.minPages,
+          maxPages: memoryType.maxPages,
+          shared: memoryType.shared,
+          pageSizeBytes: 1 << memoryType.pageSizeLog2,
+        ),
       );
     }
 
@@ -328,15 +321,12 @@ final class WasmInstance {
           globalExports[export.name] = export.index;
 
         case WasmExportKind.memory:
-          if (memory == null) {
+          if (export.index < 0 || export.index >= memories.length) {
             throw FormatException(
-              'Export `${export.name}` references memory but module has none.',
+              'Export `${export.name}` has invalid memory index ${export.index}.',
             );
           }
-          if (export.index != 0) {
-            throw UnsupportedError('Only memory index 0 is supported.');
-          }
-          memoryExports[export.name] = memory;
+          memoryExports[export.name] = memories[export.index];
 
         case WasmExportKind.table:
           if (export.index < 0 || export.index >= tables.length) {
@@ -350,7 +340,7 @@ final class WasmInstance {
 
     final instance = WasmInstance._(
       module: module,
-      memory: memory,
+      memories: List.unmodifiable(memories),
       tables: List.unmodifiable(tables),
       functions: List.unmodifiable(functions),
       globals: globals,
@@ -656,21 +646,17 @@ final class WasmInstance {
       return;
     }
 
-    final mem = memory;
     for (final data in module.dataSegments) {
       if (data.isPassive) {
         continue;
       }
 
-      if (data.memoryIndex != 0) {
-        throw UnsupportedError(
-          'Only memory index 0 is supported for data init.',
+      if (data.memoryIndex < 0 || data.memoryIndex >= memories.length) {
+        throw FormatException(
+          'Invalid memory index in data segment: ${data.memoryIndex}.',
         );
       }
-
-      if (mem == null) {
-        throw StateError('Module has active data segments but no memory.');
-      }
+      final mem = memories[data.memoryIndex];
 
       final offset = _evaluateConstExpr(
         data.offsetExpr!,
@@ -861,10 +847,10 @@ final class WasmInstance {
         '$context requires memory64, which is not yet supported.',
       );
     }
-    if (memoryType.pageSizeLog2 != 16) {
-      throw UnsupportedError(
-        '$context uses custom page size log2=${memoryType.pageSizeLog2}, '
-        'but only 64KiB pages (log2=16) are supported.',
+    if (memoryType.pageSizeLog2 != 0 && memoryType.pageSizeLog2 != 16) {
+      throw FormatException(
+        'Invalid custom page size for $context: '
+        'log2=${memoryType.pageSizeLog2} (only log2=0 or log2=16 are supported).',
       );
     }
     if (memoryType.shared && !features.threads) {
