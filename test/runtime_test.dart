@@ -775,6 +775,74 @@ void main() {
       expect(instance.invokeI32('pick', [11, 22, 0]), 22);
     });
 
+    test('supports i64 wide-arithmetic proposal opcodes', () {
+      final wasm = _buildModule(
+        types: [
+          _funcType([0x7e, 0x7e, 0x7e, 0x7e], [0x7e, 0x7e]),
+          _funcType([0x7e, 0x7e], [0x7e, 0x7e]),
+        ],
+        functionTypeIndices: [0, 0, 1, 1],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._localGet(1),
+              ..._localGet(2),
+              ..._localGet(3),
+              ..._fc0(Opcodes.i64Add128),
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._localGet(1),
+              ..._localGet(2),
+              ..._localGet(3),
+              ..._fc0(Opcodes.i64Sub128),
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._localGet(1),
+              ..._fc0(Opcodes.i64MulWideS),
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._localGet(1),
+              ..._fc0(Opcodes.i64MulWideU),
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: [
+          _ExportSpec(name: 'add128', kind: WasmExportKind.function, index: 0),
+          _ExportSpec(name: 'sub128', kind: WasmExportKind.function, index: 1),
+          _ExportSpec(
+            name: 'mulWideS',
+            kind: WasmExportKind.function,
+            index: 2,
+          ),
+          _ExportSpec(
+            name: 'mulWideU',
+            kind: WasmExportKind.function,
+            index: 3,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(wasm);
+      expect(instance.invokeMulti('add128', [0, 1, 1, 0]), [1, 1]);
+      expect(instance.invokeMulti('sub128', [0, 0, 1, 1]), [-1, -2]);
+      expect(instance.invokeMulti('mulWideS', [-1, 1]), [-1, -1]);
+      expect(instance.invokeMulti('mulWideU', [-1, 1]), [-1, 0]);
+    });
+
     test('validation rejects invalid branch depth before execution', () {
       final wasm = _buildModule(
         types: [_funcType([], [])],
@@ -1239,6 +1307,10 @@ List<int> _memInstr(int opcode, {int align = 0, int offset = 0}) => <int>[
   opcode,
   ..._u32Leb(align),
   ..._u32Leb(offset),
+];
+List<int> _fc0(int pseudoOpcode) => <int>[
+  0xfc,
+  ..._u32Leb(pseudoOpcode & 0xff),
 ];
 List<int> _fc1(int pseudoOpcode, int immediate) => <int>[
   0xfc,

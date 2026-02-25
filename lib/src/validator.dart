@@ -244,6 +244,13 @@ abstract final class WasmValidator {
         module.types,
         features: features,
       );
+      if (_containsWideArithmetic(predecoded.instructions)) {
+        _validateWideArithmeticStack(
+          functionType: functionType,
+          body: body,
+          instructions: predecoded.instructions,
+        );
+      }
 
       final controlStack = <int>[];
       for (var pc = 0; pc < predecoded.instructions.length; pc++) {
@@ -572,6 +579,96 @@ abstract final class WasmValidator {
     }
 
     throw const FormatException('Validation failed: const expr missing end.');
+  }
+
+  static bool _containsWideArithmetic(List<Instruction> instructions) {
+    for (final instruction in instructions) {
+      switch (instruction.opcode) {
+        case Opcodes.i64Add128:
+        case Opcodes.i64Sub128:
+        case Opcodes.i64MulWideS:
+        case Opcodes.i64MulWideU:
+          return true;
+      }
+    }
+    return false;
+  }
+
+  static void _validateWideArithmeticStack({
+    required WasmFunctionType functionType,
+    required WasmCodeBody body,
+    required List<Instruction> instructions,
+  }) {
+    final locals = <WasmValueType>[...functionType.params];
+    for (final local in body.locals) {
+      final localType = local.type;
+      for (var i = 0; i < local.count; i++) {
+        locals.add(localType);
+      }
+    }
+
+    final stack = <WasmValueType>[];
+
+    void popI64(String context, int count) {
+      for (var i = 0; i < count; i++) {
+        if (stack.isEmpty) {
+          throw FormatException('Validation failed: type mismatch ($context).');
+        }
+        final type = stack.removeLast();
+        if (type != WasmValueType.i64) {
+          throw FormatException('Validation failed: type mismatch ($context).');
+        }
+      }
+    }
+
+    for (final instruction in instructions) {
+      switch (instruction.opcode) {
+        case Opcodes.localGet:
+          final index = instruction.immediate!;
+          _checkIndex(index, locals.length, 'local');
+          stack.add(locals[index]);
+
+        case Opcodes.i64Const:
+          stack.add(WasmValueType.i64);
+
+        case Opcodes.drop:
+          if (stack.isEmpty) {
+            throw const FormatException('Validation failed: drop underflow.');
+          }
+          stack.removeLast();
+
+        case Opcodes.i64Add128:
+        case Opcodes.i64Sub128:
+          popI64('i64.add128/i64.sub128', 4);
+          stack
+            ..add(WasmValueType.i64)
+            ..add(WasmValueType.i64);
+
+        case Opcodes.i64MulWideS:
+        case Opcodes.i64MulWideU:
+          popI64('i64.mul_wide_*', 2);
+          stack
+            ..add(WasmValueType.i64)
+            ..add(WasmValueType.i64);
+
+        case Opcodes.end:
+          // End has no stack effect for this lightweight pass.
+          break;
+
+        default:
+          // Skip full type-checking when this function uses unsupported forms.
+          return;
+      }
+    }
+
+    if (stack.length != functionType.results.length) {
+      throw const FormatException('Validation failed: type mismatch.');
+    }
+    for (var i = 0; i < functionType.results.length; i++) {
+      if (stack[i] != functionType.results[i]) {
+        throw const FormatException('Validation failed: type mismatch.');
+      }
+    }
   }
 
   static void _checkIndex(int index, int count, String what) {

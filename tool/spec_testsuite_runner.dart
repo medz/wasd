@@ -6,6 +6,41 @@ import 'package:wasd/wasd.dart';
 
 enum _SpecSuite { core, proposal, all }
 
+enum _WastConverterKind { wasmToolsJsonFromWast, wabtWast2json }
+
+final class _WastConverter {
+  const _WastConverter({required this.kind, required this.binary});
+
+  final _WastConverterKind kind;
+  final String binary;
+
+  String get label => switch (kind) {
+    _WastConverterKind.wasmToolsJsonFromWast => 'wasm-tools json-from-wast',
+    _WastConverterKind.wabtWast2json => 'wabt wast2json',
+  };
+
+  List<String> command({
+    required String wastFile,
+    required String outputJsonPath,
+    required String wasmDir,
+  }) => switch (kind) {
+    _WastConverterKind.wasmToolsJsonFromWast => <String>[
+      'json-from-wast',
+      wastFile,
+      '-o',
+      outputJsonPath,
+      '--wasm-dir',
+      wasmDir,
+    ],
+    _WastConverterKind.wabtWast2json => <String>[
+      '--enable-all',
+      wastFile,
+      '-o',
+      outputJsonPath,
+    ],
+  };
+}
+
 final class _SpecRunnerFailure implements Exception {
   _SpecRunnerFailure(this.reason, this.details);
 
@@ -705,8 +740,9 @@ Future<void> main(List<String> args) async {
   final maxFilesRaw = _argValue(args, '--max-files');
   final maxFiles = maxFilesRaw == null ? null : int.tryParse(maxFilesRaw);
 
-  final wast2jsonBinary = await _resolveWast2Json(
-    _argValue(args, '--wast2json'),
+  final converter = await _resolveWastConverter(
+    jsonFromWast: _argValue(args, '--json-from-wast'),
+    wast2json: _argValue(args, '--wast2json'),
   );
   final testsuite = Directory(testsuiteDir);
   if (!testsuite.existsSync()) {
@@ -730,7 +766,7 @@ Future<void> main(List<String> args) async {
     final result = await _runWastFile(
       file: file,
       group: group,
-      wast2jsonBinary: wast2jsonBinary,
+      converter: converter,
     );
     results.add(result);
 
@@ -779,7 +815,9 @@ Future<void> main(List<String> args) async {
     'suite': suite.name,
     'testsuite_dir': testsuite.path,
     'testsuite_revision': revision,
-    'wast2json': wast2jsonBinary,
+    'wast_converter': converter.label,
+    'wast_converter_binary': converter.binary,
+    'wast2json': converter.binary,
     'totals': <String, Object?>{
       'files_total': results.length,
       'files_passed': filesPassed,
@@ -820,17 +858,19 @@ Future<void> main(List<String> args) async {
 Future<_FileResult> _runWastFile({
   required String file,
   required String group,
-  required String wast2jsonBinary,
+  required _WastConverter converter,
 }) async {
   final tempDir = await Directory.systemTemp.createTemp('wasd-spec-');
   try {
     final jsonPath = '${tempDir.path}/script.json';
-    final conversion = await Process.run(wast2jsonBinary, [
-      '--enable-all',
-      file,
-      '-o',
-      jsonPath,
-    ]);
+    final conversion = await Process.run(
+      converter.binary,
+      converter.command(
+        wastFile: file,
+        outputJsonPath: jsonPath,
+        wasmDir: tempDir.path,
+      ),
+    );
     if (conversion.exitCode != 0) {
       return _FileResult(
         path: file,
@@ -840,7 +880,7 @@ Future<_FileResult> _runWastFile({
         commandsFailed: 1,
         commandsSkipped: 0,
         passed: false,
-        firstFailureReason: 'wast2json-failed',
+        firstFailureReason: 'wast-convert-failed',
         firstFailureDetails:
             ((conversion.stderr as String?) ?? '').trim().isEmpty
             ? ((conversion.stdout as String?) ?? '').trim()
@@ -862,7 +902,7 @@ Future<_FileResult> _runWastFile({
         commandsSkipped: 0,
         passed: false,
         firstFailureReason: 'invalid-json-root',
-        firstFailureDetails: 'wast2json output root is not an object',
+        firstFailureDetails: 'converter output root is not an object',
       );
     }
     final commandsRaw = decoded['commands'];
@@ -876,7 +916,7 @@ Future<_FileResult> _runWastFile({
         commandsSkipped: 0,
         passed: false,
         firstFailureReason: 'invalid-commands',
-        firstFailureDetails: 'wast2json output does not contain command list',
+        firstFailureDetails: 'converter output does not contain command list',
       );
     }
 
@@ -1023,7 +1063,9 @@ String _renderMarkdown({
     ..writeln(
       '- Testsuite revision: `${payload['testsuite_revision'] ?? 'unknown'}`',
     )
-    ..writeln('- wast2json: `${payload['wast2json']}`')
+    ..writeln(
+      '- Wast converter: `${payload['wast_converter']}` (`${payload['wast_converter_binary']}`)',
+    )
     ..writeln()
     ..writeln('## Totals')
     ..writeln()
@@ -1103,14 +1145,80 @@ String? _argValue(List<String> args, String key) {
   return null;
 }
 
-Future<String> _resolveWast2Json(String? explicit) async {
-  final candidates = <String>[
-    if (explicit != null && explicit.isNotEmpty) explicit,
+Future<_WastConverter> _resolveWastConverter({
+  required String? jsonFromWast,
+  required String? wast2json,
+}) async {
+  if ((jsonFromWast?.isNotEmpty ?? false) && (wast2json?.isNotEmpty ?? false)) {
+    throw ArgumentError('Use only one of `--json-from-wast` or `--wast2json`.');
+  }
+
+  if (jsonFromWast != null && jsonFromWast.isNotEmpty) {
+    final binary = await _resolveBinaryCandidates(
+      <String>[jsonFromWast],
+      missingMessage:
+          'Unable to locate `--json-from-wast` binary: $jsonFromWast',
+    );
+    return _WastConverter(
+      kind: _WastConverterKind.wasmToolsJsonFromWast,
+      binary: binary,
+    );
+  }
+
+  if (wast2json != null && wast2json.isNotEmpty) {
+    final binary = await _resolveBinaryCandidates(<String>[
+      wast2json,
+    ], missingMessage: 'Unable to locate `--wast2json` binary: $wast2json');
+    return _WastConverter(
+      kind: _WastConverterKind.wabtWast2json,
+      binary: binary,
+    );
+  }
+
+  final wasmTools = await _tryResolveBinaryCandidates(<String>[
+    '${Directory.current.path}/.toolchains/bin/wasm-tools',
+    '${Directory.current.path}/.toolchains/wasm-tools-1.245.1/wasm-tools-1.245.1-aarch64-macos/wasm-tools',
+    '${Directory.current.path}/.toolchains/wasm-tools-1.226.0/wasm-tools-1.226.0-aarch64-macos/wasm-tools',
+    'wasm-tools',
+  ]);
+  if (wasmTools != null) {
+    return _WastConverter(
+      kind: _WastConverterKind.wasmToolsJsonFromWast,
+      binary: wasmTools,
+    );
+  }
+
+  final wast2jsonBinary = await _tryResolveBinaryCandidates(<String>[
     '${Directory.current.path}/.toolchains/bin/wast2json',
+    '${Directory.current.path}/.toolchains/wabt-1.0.39/bin/wast2json',
     '${Directory.current.path}/.toolchains/wabt-1.0.37/bin/wast2json',
     'wast2json',
-  ];
+  ]);
+  if (wast2jsonBinary != null) {
+    return _WastConverter(
+      kind: _WastConverterKind.wabtWast2json,
+      binary: wast2jsonBinary,
+    );
+  }
 
+  throw StateError(
+    'Unable to locate wast converter (`wasm-tools` or `wast2json`). '
+    'Run `bash tool/ensure_toolchains.sh` first.',
+  );
+}
+
+Future<String> _resolveBinaryCandidates(
+  List<String> candidates, {
+  required String missingMessage,
+}) async {
+  final resolved = await _tryResolveBinaryCandidates(candidates);
+  if (resolved != null) {
+    return resolved;
+  }
+  throw StateError(missingMessage);
+}
+
+Future<String?> _tryResolveBinaryCandidates(List<String> candidates) async {
   for (final candidate in candidates) {
     if (candidate.contains('/')) {
       final file = File(candidate);
@@ -1128,10 +1236,7 @@ Future<String> _resolveWast2Json(String? explicit) async {
       }
     }
   }
-
-  throw StateError(
-    'Unable to locate `wast2json`. Run `bash tool/ensure_toolchains.sh` first.',
-  );
+  return null;
 }
 
 Future<String?> _git(List<String> args) async {
@@ -1151,6 +1256,7 @@ void _printUsage() {
     '[--output-json=<path>] '
     '[--output-md=<path>] '
     '[--max-files=<n>] '
+    '[--json-from-wast=<path>] '
     '[--wast2json=<path>]',
   );
 }

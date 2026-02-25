@@ -1766,6 +1766,22 @@ final class WasmVm {
           );
           pc++;
 
+        case Opcodes.i64Add128:
+          _i64Add128(stack);
+          pc++;
+
+        case Opcodes.i64Sub128:
+          _i64Sub128(stack);
+          pc++;
+
+        case Opcodes.i64MulWideS:
+          _i64MulWideS(stack);
+          pc++;
+
+        case Opcodes.i64MulWideU:
+          _i64MulWideU(stack);
+          pc++;
+
         case Opcodes.memoryInit:
           _memoryInit(instruction, stack);
           pc++;
@@ -2503,6 +2519,49 @@ final class WasmVm {
     _tables[tableIndex].initialize(destinationOffset, fillValues);
   }
 
+  void _i64Add128(List<WasmValue> stack) {
+    final rhsHigh = _u64ToBigInt(_popI64(stack));
+    final rhsLow = _u64ToBigInt(_popI64(stack));
+    final lhsHigh = _u64ToBigInt(_popI64(stack));
+    final lhsLow = _u64ToBigInt(_popI64(stack));
+
+    final lhs = (lhsHigh << 64) | lhsLow;
+    final rhs = (rhsHigh << 64) | rhsLow;
+    _pushI128Result(stack, lhs + rhs);
+  }
+
+  void _i64Sub128(List<WasmValue> stack) {
+    final rhsHigh = _u64ToBigInt(_popI64(stack));
+    final rhsLow = _u64ToBigInt(_popI64(stack));
+    final lhsHigh = _u64ToBigInt(_popI64(stack));
+    final lhsLow = _u64ToBigInt(_popI64(stack));
+
+    final lhs = (lhsHigh << 64) | lhsLow;
+    final rhs = (rhsHigh << 64) | rhsLow;
+    _pushI128Result(stack, lhs - rhs);
+  }
+
+  void _i64MulWideS(List<WasmValue> stack) {
+    final rhs = BigInt.from(_popI64(stack));
+    final lhs = BigInt.from(_popI64(stack));
+    _pushI128Result(stack, lhs * rhs);
+  }
+
+  void _i64MulWideU(List<WasmValue> stack) {
+    final rhs = _u64ToBigInt(_popI64(stack));
+    final lhs = _u64ToBigInt(_popI64(stack));
+    _pushI128Result(stack, lhs * rhs);
+  }
+
+  void _pushI128Result(List<WasmValue> stack, BigInt value) {
+    final normalized = value & _u128BigMask;
+    final low = _unsignedBigIntToSignedI64(normalized & _u64BigMask);
+    final high = _unsignedBigIntToSignedI64((normalized >> 64) & _u64BigMask);
+    stack
+      ..add(WasmValue.i64(low))
+      ..add(WasmValue.i64(high));
+  }
+
   int _popLength(List<WasmValue> stack) {
     final value = _popI32(stack);
     if (value < 0) {
@@ -2521,6 +2580,15 @@ final class WasmVm {
   static int _toU32(int value) => value.toUnsigned(32);
   static int _toU64(int value) => WasmI64.unsigned(value);
   static int _toSignedI64(int value) => WasmI64.signed(value);
+  static BigInt _u64ToBigInt(int value) => BigInt.from(value) & _u64BigMask;
+
+  static int _unsignedBigIntToSignedI64(BigInt value) {
+    final normalized = value & _u64BigMask;
+    final signed = normalized >= _i64SignBitBig
+        ? normalized - _u64BigMod
+        : normalized;
+    return signed.toInt();
+  }
 
   static int _i32Clz(int value) {
     final v = _toU32(value);
@@ -2747,6 +2815,10 @@ final class WasmVm {
   static final int _i64MagnitudeMask = WasmI64.magnitudeMask;
   static final int _i64SignBitMask = WasmI64.signBitMask;
   static final int _u64Mask = WasmI64.allOnesMask;
+  static final BigInt _u64BigMod = BigInt.one << 64;
+  static final BigInt _u64BigMask = _u64BigMod - BigInt.one;
+  static final BigInt _i64SignBitBig = BigInt.one << 63;
+  static final BigInt _u128BigMask = (BigInt.one << 128) - BigInt.one;
 
   static const double _i32Min = -2147483648.0;
   static const double _i32Max = 2147483647.0;

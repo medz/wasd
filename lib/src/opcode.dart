@@ -223,6 +223,10 @@ abstract final class Opcodes {
   static const int tableGrow = 0xfc0f;
   static const int tableSize = 0xfc10;
   static const int tableFill = 0xfc11;
+  static const int i64Add128 = 0xfc13;
+  static const int i64Sub128 = 0xfc14;
+  static const int i64MulWideS = 0xfc15;
+  static const int i64MulWideU = 0xfc16;
 
   // 0xFE prefixed pseudo-opcodes encoded as (0xFE00 | subopcode)
   static const int memoryAtomicNotify = 0xfe00;

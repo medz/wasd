@@ -472,6 +472,10 @@ abstract final class WasmPredecoder {
       case Opcodes.i64TruncSatF32U:
       case Opcodes.i64TruncSatF64S:
       case Opcodes.i64TruncSatF64U:
+      case Opcodes.i64Add128:
+      case Opcodes.i64Sub128:
+      case Opcodes.i64MulWideS:
+      case Opcodes.i64MulWideU:
         instructions.add(Instruction(opcode: pseudoOpcode));
 
       case Opcodes.dataDrop:
