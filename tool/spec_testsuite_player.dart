@@ -1072,6 +1072,7 @@ WasmFeatureSet _featuresForGroup(String group) {
   final base = WasmFeatureSet.layeredDefaults(profile: WasmFeatureProfile.full);
   final additionalEnabled = <String>{...base.additionalEnabled};
   switch (group) {
+    case 'core':
     case 'custom-page-sizes':
       additionalEnabled.add('multi-memory');
       break;

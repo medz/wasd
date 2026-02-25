@@ -277,6 +277,7 @@ final class WasmInstance {
       );
     }
 
+    final memory64ByIndex = _memory64ByIndex(module);
     for (var i = 0; i < module.codes.length; i++) {
       final typeIndex = module.functionTypeIndices[i];
       if (typeIndex < 0 ||
@@ -289,6 +290,7 @@ final class WasmInstance {
         module.codes[i],
         module.types,
         features: features,
+        memory64ByIndex: memory64ByIndex,
       );
       functions.add(
         DefinedRuntimeFunction(
@@ -1132,6 +1134,19 @@ final class WasmInstance {
       }
     }
     return maxDepth + 1;
+  }
+
+  static List<bool> _memory64ByIndex(WasmModule module) {
+    final list = <bool>[];
+    for (final import in module.imports) {
+      if (import.kind == WasmImportKind.memory) {
+        list.add(import.memoryType?.isMemory64 ?? false);
+      }
+    }
+    for (final memory in module.memories) {
+      list.add(memory.isMemory64);
+    }
+    return List<bool>.unmodifiable(list);
   }
 
   static void _consumeHeapType(ByteReader reader) {

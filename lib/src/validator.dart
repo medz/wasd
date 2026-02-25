@@ -244,6 +244,7 @@ abstract final class WasmValidator {
     final tableCount = module.importedTableCount + module.tables.length;
     final memoryCount = module.importedMemoryCount + module.memories.length;
     final globalCount = module.importedGlobalCount + module.globals.length;
+    final memory64ByIndex = _memory64ByIndex(module);
     var requiresDataCount = false;
 
     for (var i = 0; i < module.functionTypeIndices.length; i++) {
@@ -261,6 +262,7 @@ abstract final class WasmValidator {
         body,
         module.types,
         features: features,
+        memory64ByIndex: memory64ByIndex,
       );
       _validateBrOnCastTyping(
         module: module,
@@ -297,6 +299,7 @@ abstract final class WasmValidator {
             );
           }
           _checkIndex(memoryIndex, memoryCount, 'memory');
+          _validateMemArgAlignment(instruction);
         }
         switch (instruction.opcode) {
           case Opcodes.block:
@@ -434,6 +437,7 @@ abstract final class WasmValidator {
               );
             }
             _checkIndex(memoryIndex, memoryCount, 'memory');
+            _validateMemArgAlignment(instruction);
           case Opcodes.memorySize:
           case Opcodes.memoryGrow:
             if (memoryCount == 0) {
@@ -2153,6 +2157,19 @@ abstract final class WasmValidator {
     }
   }
 
+  static List<bool> _memory64ByIndex(WasmModule module) {
+    final list = <bool>[];
+    for (final import in module.imports) {
+      if (import.kind == WasmImportKind.memory) {
+        list.add(import.memoryType?.isMemory64 ?? false);
+      }
+    }
+    for (final memory in module.memories) {
+      list.add(memory.isMemory64);
+    }
+    return List<bool>.unmodifiable(list);
+  }
+
   static bool _isAtomicMemoryOpcode(int opcode) {
     switch (opcode) {
       case Opcodes.memoryAtomicNotify:
@@ -2224,6 +2241,134 @@ abstract final class WasmValidator {
         return true;
       default:
         return false;
+    }
+  }
+
+  static void _validateMemArgAlignment(Instruction instruction) {
+    final memArg = instruction.memArg;
+    if (memArg == null) {
+      return;
+    }
+    final naturalAlign = _naturalMemArgAlignment(instruction.opcode);
+    if (naturalAlign == null) {
+      return;
+    }
+
+    if (_isAtomicMemoryOpcode(instruction.opcode)) {
+      if (memArg.align != naturalAlign) {
+        throw const FormatException(
+          'Validation failed: atomic memory alignment must be natural.',
+        );
+      }
+      return;
+    }
+
+    if (memArg.align > naturalAlign) {
+      throw const FormatException(
+        'Validation failed: alignment must not be larger than natural.',
+      );
+    }
+  }
+
+  static int? _naturalMemArgAlignment(int opcode) {
+    switch (opcode) {
+      case Opcodes.i32Load:
+      case Opcodes.f32Load:
+      case Opcodes.i32Store:
+      case Opcodes.f32Store:
+        return 2;
+      case Opcodes.i64Load:
+      case Opcodes.f64Load:
+      case Opcodes.i64Store:
+      case Opcodes.f64Store:
+        return 3;
+      case Opcodes.i32Load8S:
+      case Opcodes.i32Load8U:
+      case Opcodes.i64Load8S:
+      case Opcodes.i64Load8U:
+      case Opcodes.i32Store8:
+      case Opcodes.i64Store8:
+      case Opcodes.i32AtomicLoad8U:
+      case Opcodes.i64AtomicLoad8U:
+      case Opcodes.i32AtomicStore8:
+      case Opcodes.i64AtomicStore8:
+      case Opcodes.i32AtomicRmw8AddU:
+      case Opcodes.i64AtomicRmw8AddU:
+      case Opcodes.i32AtomicRmw8SubU:
+      case Opcodes.i64AtomicRmw8SubU:
+      case Opcodes.i32AtomicRmw8AndU:
+      case Opcodes.i64AtomicRmw8AndU:
+      case Opcodes.i32AtomicRmw8OrU:
+      case Opcodes.i64AtomicRmw8OrU:
+      case Opcodes.i32AtomicRmw8XorU:
+      case Opcodes.i64AtomicRmw8XorU:
+      case Opcodes.i32AtomicRmw8XchgU:
+      case Opcodes.i64AtomicRmw8XchgU:
+      case Opcodes.i32AtomicRmw8CmpxchgU:
+      case Opcodes.i64AtomicRmw8CmpxchgU:
+        return 0;
+      case Opcodes.i32Load16S:
+      case Opcodes.i32Load16U:
+      case Opcodes.i64Load16S:
+      case Opcodes.i64Load16U:
+      case Opcodes.i32Store16:
+      case Opcodes.i64Store16:
+      case Opcodes.i32AtomicLoad16U:
+      case Opcodes.i64AtomicLoad16U:
+      case Opcodes.i32AtomicStore16:
+      case Opcodes.i64AtomicStore16:
+      case Opcodes.i32AtomicRmw16AddU:
+      case Opcodes.i64AtomicRmw16AddU:
+      case Opcodes.i32AtomicRmw16SubU:
+      case Opcodes.i64AtomicRmw16SubU:
+      case Opcodes.i32AtomicRmw16AndU:
+      case Opcodes.i64AtomicRmw16AndU:
+      case Opcodes.i32AtomicRmw16OrU:
+      case Opcodes.i64AtomicRmw16OrU:
+      case Opcodes.i32AtomicRmw16XorU:
+      case Opcodes.i64AtomicRmw16XorU:
+      case Opcodes.i32AtomicRmw16XchgU:
+      case Opcodes.i64AtomicRmw16XchgU:
+      case Opcodes.i32AtomicRmw16CmpxchgU:
+      case Opcodes.i64AtomicRmw16CmpxchgU:
+        return 1;
+      case Opcodes.i64Load32S:
+      case Opcodes.i64Load32U:
+      case Opcodes.i64Store32:
+      case Opcodes.memoryAtomicNotify:
+      case Opcodes.memoryAtomicWait32:
+      case Opcodes.i32AtomicLoad:
+      case Opcodes.i32AtomicStore:
+      case Opcodes.i64AtomicLoad32U:
+      case Opcodes.i64AtomicStore32:
+      case Opcodes.i32AtomicRmwAdd:
+      case Opcodes.i32AtomicRmwSub:
+      case Opcodes.i32AtomicRmwAnd:
+      case Opcodes.i32AtomicRmwOr:
+      case Opcodes.i32AtomicRmwXor:
+      case Opcodes.i32AtomicRmwXchg:
+      case Opcodes.i32AtomicRmwCmpxchg:
+      case Opcodes.i64AtomicRmw32AddU:
+      case Opcodes.i64AtomicRmw32SubU:
+      case Opcodes.i64AtomicRmw32AndU:
+      case Opcodes.i64AtomicRmw32OrU:
+      case Opcodes.i64AtomicRmw32XorU:
+      case Opcodes.i64AtomicRmw32XchgU:
+      case Opcodes.i64AtomicRmw32CmpxchgU:
+        return 2;
+      case Opcodes.memoryAtomicWait64:
+      case Opcodes.i64AtomicLoad:
+      case Opcodes.i64AtomicStore:
+      case Opcodes.i64AtomicRmwAdd:
+      case Opcodes.i64AtomicRmwSub:
+      case Opcodes.i64AtomicRmwAnd:
+      case Opcodes.i64AtomicRmwOr:
+      case Opcodes.i64AtomicRmwXor:
+      case Opcodes.i64AtomicRmwXchg:
+      case Opcodes.i64AtomicRmwCmpxchg:
+        return 3;
+      default:
+        return null;
     }
   }
 

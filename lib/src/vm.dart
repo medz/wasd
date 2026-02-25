@@ -3285,7 +3285,8 @@ final class WasmVm {
   }
 
   int _addressFromStack(List<WasmValue> stack, int offset) {
-    return _toAddress(_popI32(stack) + offset);
+    final base = _popI32(stack).toUnsigned(32);
+    return _toAddress(base + offset);
   }
 
   int _loadI8(List<WasmValue> stack, Instruction instruction) {

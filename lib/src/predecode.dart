@@ -98,6 +98,7 @@ abstract final class WasmPredecoder {
     WasmCodeBody body,
     List<WasmFunctionType> moduleTypes, {
     WasmFeatureSet features = const WasmFeatureSet(),
+    List<bool> memory64ByIndex = const <bool>[],
   }) {
     final localTypes = <WasmValueType>[];
     for (final local in body.locals) {
@@ -452,7 +453,10 @@ abstract final class WasmPredecoder {
         case Opcodes.i64Store16:
         case Opcodes.i64Store32:
           instructions.add(
-            Instruction(opcode: opcode, memArg: _readMemArg(reader)),
+            Instruction(
+              opcode: opcode,
+              memArg: _readMemArg(reader, memory64ByIndex),
+            ),
           );
 
         case 0xfc:
@@ -474,7 +478,7 @@ abstract final class WasmPredecoder {
               'Threads/atomics opcode prefix (0xFE) encountered but `threads` feature is disabled.',
             );
           }
-          _decodeThreadInstruction(reader, instructions);
+          _decodeThreadInstruction(reader, instructions, memory64ByIndex);
 
         case 0xfb:
           if (!features.gc) {
@@ -666,6 +670,7 @@ abstract final class WasmPredecoder {
   static void _decodeThreadInstruction(
     ByteReader reader,
     List<Instruction> instructions,
+    List<bool> memory64ByIndex,
   ) {
     final subOpcode = reader.readVarUint32();
     final pseudoOpcode = 0xfe00 | subOpcode;
@@ -738,7 +743,10 @@ abstract final class WasmPredecoder {
       case Opcodes.i64AtomicRmw16CmpxchgU:
       case Opcodes.i64AtomicRmw32CmpxchgU:
         instructions.add(
-          Instruction(opcode: pseudoOpcode, memArg: _readMemArg(reader)),
+          Instruction(
+            opcode: pseudoOpcode,
+            memArg: _readMemArg(reader, memory64ByIndex),
+          ),
         );
 
       case Opcodes.atomicFence:
@@ -799,15 +807,19 @@ abstract final class WasmPredecoder {
     }
   }
 
-  static MemArg _readMemArg(ByteReader reader) {
+  static MemArg _readMemArg(ByteReader reader, List<bool> memory64ByIndex) {
     final encodedAlign = reader.readVarUint32();
     // Multi-memory encodes a memory-index-present flag in bit 6.
     final align = encodedAlign & 0x3f;
     final hasMemoryIndex = (encodedAlign & 0x40) != 0;
     final memoryIndex = hasMemoryIndex ? reader.readVarUint32() : 0;
+    final isMemory64 =
+        memoryIndex >= 0 &&
+        memoryIndex < memory64ByIndex.length &&
+        memory64ByIndex[memoryIndex];
     return MemArg(
       align: align,
-      offset: reader.readVarUint32(),
+      offset: isMemory64 ? reader.readVarUint64() : reader.readVarUint32(),
       memoryIndex: memoryIndex,
     );
   }

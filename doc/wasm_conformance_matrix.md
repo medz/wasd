@@ -1,8 +1,8 @@
 # WASM Conformance Matrix
 
-- Started at (UTC): `2026-02-25T12:06:20.486294Z`
-- Ended at (UTC): `2026-02-25T12:06:23.253960Z`
-- Target: `vm`
+- Started at (UTC): `2026-02-25T12:59:59.267850Z`
+- Ended at (UTC): `2026-02-25T13:00:07.237430Z`
+- Target: `js`
 - Suite: `proposal`
 - Status: `passed`
 
@@ -10,10 +10,15 @@
 
 | Step | Status | Duration (ms) | Command |
 | --- | --- | ---: | --- |
-| toolchain-check | passed | 28 | `bash tool/ensure_toolchains.sh --check` |
-| analyze | passed | 544 | `dart analyze lib test tool example` |
-| proposal-testsuite | passed | 960 | `dart run tool/spec_testsuite_runner.dart --suite=proposal --output-json=.dart_tool/spec_runner/proposal_latest.json --output-md=doc/wasm_proposal_failures.md` |
-| spec-sync-check | passed | 1231 | `dart run tool/spec_sync.dart` |
+| toolchain-check | passed | 49 | `bash tool/ensure_toolchains.sh --check` |
+| analyze | passed | 567 | `dart analyze lib test tool example` |
+| node-check | passed | 19 | `node --version` |
+| js-threads-portable | passed | 3271 | `dart test -p node test/threads_portable_test.dart` |
+| proposal-prepare-manifest | passed | 666 | `dart run tool/spec_testsuite_runner.dart --suite=proposal --prepare-manifest=.dart_tool/spec_runner/proposal_manifest.json --prepare-root=.dart_tool/spec_runner/proposal_bundle` |
+| proposal-player-js-compile | passed | 1640 | `dart compile js tool/spec_testsuite_player.dart -o .dart_tool/spec_runner/spec_testsuite_player.js` |
+| proposal-player-js-run | passed | 260 | `node tool/run_spec_player_js.mjs .dart_tool/spec_runner/spec_testsuite_player.js .dart_tool/spec_runner/proposal_manifest.json .dart_tool/spec_runner/proposal_latest.json` |
+| proposal-report | passed | 227 | `dart run tool/spec_result_report.dart --input-json=.dart_tool/spec_runner/proposal_latest.json --output-md=doc/wasm_proposal_failures.md` |
+| spec-sync-check | passed | 1264 | `dart run tool/spec_sync.dart` |
 
 ## Notes
 

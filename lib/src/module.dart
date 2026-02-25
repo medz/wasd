@@ -379,8 +379,7 @@ final class WasmModule {
 
       switch (sectionId) {
         case 0:
-          // Custom section.
-          sectionReader.readRemainingBytes();
+          _parseCustomSection(sectionReader);
         case 1:
           _parseTypeSection(sectionReader, types);
         case 2:
@@ -457,6 +456,13 @@ final class WasmModule {
       importedMemoryCount: importedMemoryCount,
       importedGlobalCount: importedGlobalCount,
     );
+  }
+
+  static void _parseCustomSection(ByteReader reader) {
+    // Custom section payload begins with a name string. Decoding the name
+    // ensures malformed LEB lengths are rejected instead of silently ignored.
+    reader.readName();
+    reader.readRemainingBytes();
   }
 
   static void _parseTypeSection(
