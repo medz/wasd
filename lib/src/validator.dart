@@ -23,6 +23,7 @@ abstract final class WasmValidator {
     WasmModule module, {
     WasmFeatureSet features = const WasmFeatureSet(),
   }) {
+    _validateTypeReferences(module);
     _validateTableArity(module, features: features);
     _validateMemoryArity(module, features: features);
     _validateImportTypes(module);
@@ -32,6 +33,74 @@ abstract final class WasmValidator {
     _validateElements(module);
     _validateDataSegments(module);
     _validateFunctions(module, features: features);
+  }
+
+  static void _validateTypeReferences(WasmModule module) {
+    for (var typeIndex = 0; typeIndex < module.types.length; typeIndex++) {
+      final type = module.types[typeIndex];
+      for (final superTypeIndex in type.superTypeIndices) {
+        _checkIndex(superTypeIndex, module.types.length, 'type');
+      }
+      final descriptorType = type.descriptorTypeIndex;
+      if (descriptorType != null) {
+        _checkIndex(descriptorType, module.types.length, 'type');
+      }
+      final describesType = type.describesTypeIndex;
+      if (describesType != null) {
+        _checkIndex(describesType, module.types.length, 'type');
+      }
+
+      if (type.isFunctionType) {
+        for (final signature in type.paramTypeSignatures) {
+          _validateValueSignatureTypeReference(module, signature);
+        }
+        for (final signature in type.resultTypeSignatures) {
+          _validateValueSignatureTypeReference(module, signature);
+        }
+        continue;
+      }
+
+      for (final fieldSignature in type.fieldSignatures) {
+        final parsedField = _parseFieldSignature(fieldSignature);
+        if (parsedField == null) {
+          throw const FormatException('Validation failed: type mismatch.');
+        }
+        _validateValueSignatureTypeReference(module, parsedField.valueSignature);
+      }
+    }
+  }
+
+  static void _validateValueSignatureTypeReference(
+    WasmModule module,
+    String signature,
+  ) {
+    final bytes = _signatureToBytes(signature);
+    if (bytes.isEmpty) {
+      return;
+    }
+    final lead = bytes.first;
+    if (lead == 0x7f || // i32
+        lead == 0x7e || // i64
+        lead == 0x7d || // f32
+        lead == 0x7c || // f64
+        lead == 0x7b || // v128
+        lead == 0x78 || // i8
+        lead == 0x77) {
+      // i16
+      return;
+    }
+    final parsedRef = _parseRefSignature(signature);
+    if (parsedRef == null) {
+      return;
+    }
+    final heapType = parsedRef.heapType;
+    if (heapType >= 0) {
+      _checkIndex(heapType, module.types.length, 'type');
+      return;
+    }
+    if (!_isKnownAbstractHeapType(heapType)) {
+      throw const FormatException('Validation failed: type mismatch.');
+    }
   }
 
   static void _validateTableArity(
@@ -195,11 +264,14 @@ abstract final class WasmValidator {
           );
         }
       }
-      for (final functionIndex in element.functionIndices) {
-        if (functionIndex == null) {
-          continue;
+      final carriesFunctionRefs = element.refTypeCode == 0x70;
+      if (carriesFunctionRefs) {
+        for (final functionIndex in element.functionIndices) {
+          if (functionIndex == null) {
+            continue;
+          }
+          _checkIndex(functionIndex, functionCount, 'element function');
         }
-        _checkIndex(functionIndex, functionCount, 'element function');
       }
     }
   }
@@ -285,6 +357,12 @@ abstract final class WasmValidator {
         functionType: functionType,
         instructions: predecoded.instructions,
         memory64ByIndex: memory64ByIndex,
+      );
+      _validateArrayInstructionTyping(
+        module: module,
+        functionType: functionType,
+        body: body,
+        instructions: predecoded.instructions,
       );
       if (_containsWideArithmetic(predecoded.instructions)) {
         _validateWideArithmeticStack(
@@ -399,6 +477,102 @@ abstract final class WasmValidator {
             if ((instruction.opcode == Opcodes.structNewDesc ||
                     instruction.opcode == Opcodes.structNewDefaultDesc) &&
                 !hasDescriptor) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
+          case Opcodes.arrayNew:
+          case Opcodes.arrayNewDefault:
+          case Opcodes.arrayNewFixed:
+          case Opcodes.arrayNewData:
+          case Opcodes.arrayNewElem:
+          case Opcodes.arrayGet:
+          case Opcodes.arrayGetS:
+          case Opcodes.arrayGetU:
+          case Opcodes.arraySet:
+          case Opcodes.arrayInitData:
+          case Opcodes.arrayInitElem:
+          case Opcodes.arrayFill:
+            final typeIndex = instruction.immediate!;
+            _checkIndex(typeIndex, module.types.length, 'type');
+            final type = module.types[typeIndex];
+            if (type.kind != WasmCompositeTypeKind.array) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
+            final arrayField = _arrayFieldInfo(type);
+            if (arrayField == null) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
+            if ((instruction.opcode == Opcodes.arraySet ||
+                    instruction.opcode == Opcodes.arrayFill ||
+                    instruction.opcode == Opcodes.arrayInitData ||
+                    instruction.opcode == Opcodes.arrayInitElem) &&
+                arrayField.mutability == 0) {
+              throw const FormatException('Validation failed: immutable array.');
+            }
+            if (instruction.opcode == Opcodes.arrayGet &&
+                _isPackedStorageSignature(arrayField.valueSignature)) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
+            if ((instruction.opcode == Opcodes.arrayGetS ||
+                    instruction.opcode == Opcodes.arrayGetU) &&
+                !_isPackedStorageSignature(arrayField.valueSignature)) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
+            if (instruction.opcode == Opcodes.arrayNewData ||
+                instruction.opcode == Opcodes.arrayInitData) {
+              requiresDataCount = true;
+              final dataIndex = instruction.secondaryImmediate!;
+              _checkIndex(dataIndex, module.dataSegments.length, 'data segment');
+              if (!_isNumericOrVectorValueSignature(arrayField.valueSignature)) {
+                throw const FormatException(
+                  'Validation failed: type mismatch.',
+                );
+              }
+            }
+            if (instruction.opcode == Opcodes.arrayNewElem ||
+                instruction.opcode == Opcodes.arrayInitElem) {
+              final elementIndex = instruction.secondaryImmediate!;
+              _checkIndex(elementIndex, module.elements.length, 'element segment');
+              if (!_isReferenceValueSignature(arrayField.valueSignature)) {
+                throw const FormatException(
+                  'Validation failed: type mismatch.',
+                );
+              }
+              final segment = module.elements[elementIndex];
+              if (!_isElementSegmentRefCompatible(
+                module: module,
+                segmentRefTypeCode: segment.refTypeCode,
+                targetValueSignature: arrayField.valueSignature,
+              )) {
+                throw const FormatException(
+                  'Validation failed: type mismatch.',
+                );
+              }
+            }
+          case Opcodes.arrayCopy:
+            final destinationTypeIndex = instruction.immediate!;
+            final sourceTypeIndex = instruction.secondaryImmediate!;
+            _checkIndex(destinationTypeIndex, module.types.length, 'type');
+            _checkIndex(sourceTypeIndex, module.types.length, 'type');
+            final destinationType = module.types[destinationTypeIndex];
+            final sourceType = module.types[sourceTypeIndex];
+            if (destinationType.kind != WasmCompositeTypeKind.array ||
+                sourceType.kind != WasmCompositeTypeKind.array) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
+            final destinationField = _arrayFieldInfo(destinationType);
+            final sourceField = _arrayFieldInfo(sourceType);
+            if (destinationField == null || sourceField == null) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
+            if (destinationField.mutability == 0) {
+              throw const FormatException('Validation failed: immutable array.');
+            }
+            if (!_areValueTypeSignaturesEquivalent(
+              module,
+              sourceField.valueSignature,
+              destinationField.valueSignature,
+              <String>{},
+            )) {
               throw const FormatException('Validation failed: type mismatch.');
             }
           case Opcodes.refCastDesc:
@@ -952,6 +1126,285 @@ abstract final class WasmValidator {
     }
     for (var i = 0; i < functionType.results.length; i++) {
       if (stack[i] != functionType.results[i]) {
+        throw const FormatException('Validation failed: type mismatch.');
+      }
+    }
+  }
+
+  static void _validateArrayInstructionTyping({
+    required WasmModule module,
+    required WasmFunctionType functionType,
+    required WasmCodeBody body,
+    required List<Instruction> instructions,
+  }) {
+    var hasArrayOps = false;
+    for (final instruction in instructions) {
+      switch (instruction.opcode) {
+        case Opcodes.arrayNew:
+        case Opcodes.arrayNewDefault:
+        case Opcodes.arrayNewFixed:
+        case Opcodes.arrayNewData:
+        case Opcodes.arrayNewElem:
+        case Opcodes.arrayGet:
+        case Opcodes.arrayGetS:
+        case Opcodes.arrayGetU:
+        case Opcodes.arraySet:
+        case Opcodes.arrayInitData:
+        case Opcodes.arrayInitElem:
+        case Opcodes.arrayCopy:
+        case Opcodes.arrayFill:
+          hasArrayOps = true;
+          break;
+      }
+      if (hasArrayOps) {
+        break;
+      }
+    }
+    if (!hasArrayOps) {
+      return;
+    }
+
+    Never mismatch([String? reason]) {
+      assert(reason == null || reason.isNotEmpty);
+      if (reason == null || reason.isEmpty) {
+        throw const FormatException('Validation failed: type mismatch.');
+      }
+      throw FormatException('Validation failed: type mismatch ($reason).');
+    }
+
+    String arrayRefResult(int typeIndex) {
+      return _encodeRefSignature(
+        nullable: false,
+        exact: false,
+        heapType: typeIndex,
+      );
+    }
+
+    String arrayRefOperand(int typeIndex) {
+      return _encodeRefSignature(
+        nullable: true,
+        exact: false,
+        heapType: typeIndex,
+      );
+    }
+
+    String fieldValueStackSignature(String fieldSignature) {
+      final parsed = _parseFieldSignature(fieldSignature);
+      if (parsed == null) {
+        mismatch('invalid field signature: $fieldSignature');
+      }
+      final value = parsed.valueSignature;
+      if (value == '78' || value == '77') {
+        return '7f';
+      }
+      return value;
+    }
+
+    void requirePopSubtype(List<String> stack, String expected, String label) {
+      if (stack.isEmpty) {
+        mismatch('$label stack underflow');
+      }
+      final actual = stack.removeLast();
+      if (_parseRefSignature(expected) != null &&
+          actual == '7f' &&
+          label.endsWith(' array')) {
+        // Local signatures in this lightweight pass are i32-only and can lose
+        // precise ref-nullability/type-index information.
+        return;
+      }
+      if (!_isValueSignatureSubtype(module, actual, expected)) {
+        mismatch('$label expected=$expected actual=$actual');
+      }
+    }
+
+    final locals = <String>[
+      ..._functionParamSignatures(functionType),
+      ..._localSignatures(body),
+    ];
+    final stack = <String>[];
+
+    for (final instruction in instructions) {
+      switch (instruction.opcode) {
+        case Opcodes.localGet:
+          final localIndex = instruction.immediate!;
+          if (localIndex < 0 || localIndex >= locals.length) {
+            mismatch('local.get index out of range: $localIndex');
+          }
+          stack.add(locals[localIndex]);
+
+        case Opcodes.i32Const:
+          stack.add('7f');
+
+        case Opcodes.i64Const:
+          stack.add('7e');
+
+        case Opcodes.f32Const:
+          stack.add('7d');
+
+        case Opcodes.f64Const:
+          stack.add('7c');
+
+        case Opcodes.refNull:
+          final gcRefType = instruction.gcRefType;
+          if (gcRefType != null) {
+            stack.add(_gcRefTypeToSignature(gcRefType));
+          } else {
+            stack.add(_refNullSignature(instruction.immediate!));
+          }
+
+        case Opcodes.drop:
+          if (stack.isEmpty) {
+            mismatch('drop stack underflow');
+          }
+          stack.removeLast();
+
+        case Opcodes.arrayNew:
+          final typeIndex = instruction.immediate!;
+          final type = module.types[typeIndex];
+          requirePopSubtype(
+            stack,
+            fieldValueStackSignature(type.fieldSignatures.single),
+            'array.new value',
+          );
+          requirePopSubtype(stack, '7f', 'array.new length');
+          stack.add(arrayRefResult(typeIndex));
+
+        case Opcodes.arrayNewDefault:
+          final typeIndex = instruction.immediate!;
+          requirePopSubtype(stack, '7f', 'array.new_default length');
+          stack.add(arrayRefResult(typeIndex));
+
+        case Opcodes.arrayNewFixed:
+          final typeIndex = instruction.immediate!;
+          final type = module.types[typeIndex];
+          final fieldSig = fieldValueStackSignature(type.fieldSignatures.single);
+          final count = instruction.secondaryImmediate!;
+          for (var i = 0; i < count; i++) {
+            requirePopSubtype(
+              stack,
+              fieldSig,
+              'array.new_fixed value[$i]',
+            );
+          }
+          stack.add(arrayRefResult(typeIndex));
+
+        case Opcodes.arrayNewData:
+          final typeIndex = instruction.immediate!;
+          requirePopSubtype(stack, '7f', 'array.new_data length');
+          requirePopSubtype(stack, '7f', 'array.new_data source offset');
+          stack.add(arrayRefResult(typeIndex));
+
+        case Opcodes.arrayNewElem:
+          final typeIndex = instruction.immediate!;
+          requirePopSubtype(stack, '7f', 'array.new_elem length');
+          requirePopSubtype(stack, '7f', 'array.new_elem source offset');
+          stack.add(arrayRefResult(typeIndex));
+
+        case Opcodes.arrayGet:
+          final typeIndex = instruction.immediate!;
+          final type = module.types[typeIndex];
+          final parsed = _parseFieldSignature(type.fieldSignatures.single);
+          if (parsed == null) {
+            mismatch('array.get invalid field signature');
+          }
+          requirePopSubtype(stack, '7f', 'array.get index');
+          requirePopSubtype(stack, arrayRefOperand(typeIndex), 'array.get array');
+          stack.add(parsed.valueSignature);
+
+        case Opcodes.arrayGetS:
+        case Opcodes.arrayGetU:
+          final typeIndex = instruction.immediate!;
+          requirePopSubtype(stack, '7f', 'array.get_* index');
+          requirePopSubtype(
+            stack,
+            arrayRefOperand(typeIndex),
+            'array.get_* array',
+          );
+          stack.add('7f');
+
+        case Opcodes.arraySet:
+          final typeIndex = instruction.immediate!;
+          final type = module.types[typeIndex];
+          requirePopSubtype(
+            stack,
+            fieldValueStackSignature(type.fieldSignatures.single),
+            'array.set value',
+          );
+          requirePopSubtype(stack, '7f', 'array.set index');
+          requirePopSubtype(stack, arrayRefOperand(typeIndex), 'array.set array');
+
+        case Opcodes.arrayInitData:
+          final typeIndex = instruction.immediate!;
+          requirePopSubtype(stack, '7f', 'array.init_data length');
+          requirePopSubtype(stack, '7f', 'array.init_data source offset');
+          requirePopSubtype(stack, '7f', 'array.init_data destination offset');
+          requirePopSubtype(
+            stack,
+            arrayRefOperand(typeIndex),
+            'array.init_data array',
+          );
+
+        case Opcodes.arrayInitElem:
+          final typeIndex = instruction.immediate!;
+          requirePopSubtype(stack, '7f', 'array.init_elem length');
+          requirePopSubtype(stack, '7f', 'array.init_elem source offset');
+          requirePopSubtype(stack, '7f', 'array.init_elem destination offset');
+          requirePopSubtype(
+            stack,
+            arrayRefOperand(typeIndex),
+            'array.init_elem array',
+          );
+
+        case Opcodes.arrayCopy:
+          final destinationTypeIndex = instruction.immediate!;
+          final sourceTypeIndex = instruction.secondaryImmediate!;
+          requirePopSubtype(stack, '7f', 'array.copy length');
+          requirePopSubtype(stack, '7f', 'array.copy source offset');
+          requirePopSubtype(
+            stack,
+            arrayRefOperand(sourceTypeIndex),
+            'array.copy source array',
+          );
+          requirePopSubtype(stack, '7f', 'array.copy destination offset');
+          requirePopSubtype(
+            stack,
+            arrayRefOperand(destinationTypeIndex),
+            'array.copy destination array',
+          );
+
+        case Opcodes.arrayFill:
+          final typeIndex = instruction.immediate!;
+          final type = module.types[typeIndex];
+          requirePopSubtype(stack, '7f', 'array.fill length');
+          requirePopSubtype(
+            stack,
+            fieldValueStackSignature(type.fieldSignatures.single),
+            'array.fill value',
+          );
+          requirePopSubtype(stack, '7f', 'array.fill destination offset');
+          requirePopSubtype(
+            stack,
+            arrayRefOperand(typeIndex),
+            'array.fill array',
+          );
+
+        case Opcodes.end:
+          break;
+
+        default:
+          return;
+      }
+    }
+
+    final expectedResults = _functionResultSignatures(functionType);
+    if (expectedResults.any((signature) => _parseRefSignature(signature) != null)) {
+      return;
+    }
+    if (stack.length != functionType.results.length) {
+      throw const FormatException('Validation failed: type mismatch.');
+    }
+    for (var i = 0; i < expectedResults.length; i++) {
+      if (!_isValueSignatureSubtype(module, stack[i], expectedResults[i])) {
         throw const FormatException('Validation failed: type mismatch.');
       }
     }
@@ -1768,6 +2221,19 @@ abstract final class WasmValidator {
     };
   }
 
+  static bool _isKnownAbstractHeapType(int heapType) {
+    return heapType == _heapAny ||
+        heapType == _heapEq ||
+        heapType == _heapI31 ||
+        heapType == _heapStruct ||
+        heapType == _heapArray ||
+        heapType == _heapFunc ||
+        heapType == _heapExtern ||
+        heapType == _heapNone ||
+        heapType == _heapNofunc ||
+        heapType == _heapNoextern;
+  }
+
   static const int _heapAny = -18;
   static const int _heapEq = -19;
   static const int _heapI31 = -20;
@@ -2279,6 +2745,82 @@ abstract final class WasmValidator {
       result -= multiplier;
     }
     return (_normalizeSignedLeb33(result), index);
+  }
+
+  static ({String valueSignature, int mutability})? _arrayFieldInfo(
+    WasmFunctionType type,
+  ) {
+    if (type.kind != WasmCompositeTypeKind.array ||
+        type.fieldSignatures.length != 1) {
+      return null;
+    }
+    return _parseFieldSignature(type.fieldSignatures.single);
+  }
+
+  static bool _isPackedStorageSignature(String signature) {
+    final bytes = _signatureToBytes(signature);
+    if (bytes.isEmpty) {
+      return false;
+    }
+    return bytes.first == 0x78 || bytes.first == 0x77;
+  }
+
+  static bool _isNumericOrVectorValueSignature(String signature) {
+    final bytes = _signatureToBytes(signature);
+    if (bytes.isEmpty) {
+      return false;
+    }
+    return switch (bytes.first) {
+      0x78 || // i8
+      0x77 || // i16
+      0x7f || // i32
+      0x7e || // i64
+      0x7d || // f32
+      0x7c || // f64
+      0x7b => true, // v128
+      _ => false,
+    };
+  }
+
+  static bool _isReferenceValueSignature(String signature) {
+    return _parseRefSignature(signature) != null;
+  }
+
+  static bool _isElementSegmentRefCompatible({
+    required WasmModule module,
+    required int segmentRefTypeCode,
+    required String targetValueSignature,
+  }) {
+    final target = _parseRefSignature(targetValueSignature);
+    if (target == null) {
+      return false;
+    }
+    final heapType = target.heapType;
+
+    switch (segmentRefTypeCode) {
+      case 0x70: // funcref
+        if (heapType >= 0) {
+          return heapType < module.types.length &&
+              module.types[heapType].isFunctionType;
+        }
+        return heapType == _heapFunc;
+      case 0x6f: // externref
+        return heapType == _heapExtern;
+      case 0x69: // i31ref (legacy codepoint)
+      case 0x6c: // i31ref (current codepoint)
+        return heapType == _heapI31 ||
+            heapType == _heapEq ||
+            heapType == _heapAny;
+      case 0x63: // (ref null ht)
+      case 0x64: // (ref ht)
+      case 0x61: // exact heap type prefix
+      case 0x62:
+        // Segment heap detail is not retained in the compact element model yet.
+        return true;
+      default:
+        final targetBytes = _signatureToBytes(targetValueSignature);
+        return targetBytes.isNotEmpty && targetBytes.first == segmentRefTypeCode;
+    }
   }
 
   static ({String valueSignature, int mutability})? _parseFieldSignature(

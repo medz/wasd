@@ -1,7 +1,7 @@
 # WASM Proposal Failure Board
 
-- Started at (UTC): `2026-02-25T13:22:41.546Z`
-- Ended at (UTC): `2026-02-25T13:22:41.606Z`
+- Started at (UTC): `2026-02-25T14:06:48.484Z`
+- Ended at (UTC): `2026-02-25T14:06:48.542Z`
 - Suite: `proposal`
 - Testsuite dir: `/Users/seven/workspace/wasd/third_party/wasm-spec-tests`
 - Testsuite revision: `c337f0d`

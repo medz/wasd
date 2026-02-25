@@ -576,8 +576,11 @@ abstract final class WasmPredecoder {
       case Opcodes.structNewDefaultDesc:
       case Opcodes.arrayNew:
       case Opcodes.arrayNewDefault:
+      case Opcodes.arrayGet:
       case Opcodes.arrayGetS:
       case Opcodes.arrayGetU:
+      case Opcodes.arraySet:
+      case Opcodes.arrayFill:
       case Opcodes.refGetDesc:
         instructions.add(
           Instruction(opcode: pseudoOpcode, immediate: reader.readVarUint32()),
@@ -586,6 +589,9 @@ abstract final class WasmPredecoder {
       case Opcodes.structGetS:
       case Opcodes.arrayNewData:
       case Opcodes.arrayNewElem:
+      case Opcodes.arrayInitElem:
+      case Opcodes.arrayInitData:
+      case Opcodes.arrayCopy:
         instructions.add(
           Instruction(
             opcode: pseudoOpcode,

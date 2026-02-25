@@ -242,9 +242,15 @@ abstract final class Opcodes {
   static const int arrayNewFixed = 0xfb08;
   static const int arrayNewData = 0xfb09;
   static const int arrayNewElem = 0xfb0a;
+  static const int arrayGet = 0xfb0b;
   static const int arrayGetS = 0xfb0c;
   static const int arrayGetU = 0xfb0d;
+  static const int arraySet = 0xfb0e;
   static const int arrayLen = 0xfb0f;
+  static const int arrayFill = 0xfb10;
+  static const int arrayCopy = 0xfb11;
+  static const int arrayInitData = 0xfb12;
+  static const int arrayInitElem = 0xfb13;
   static const int refTest = 0xfb14;
   static const int refTestNullable = 0xfb15;
   static const int refCast = 0xfb16;

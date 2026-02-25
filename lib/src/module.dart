@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'byte_reader.dart';
 import 'features.dart';
 import 'opcode.dart';
+import 'value.dart';
+import 'vm.dart';
 
 enum WasmValueType { i32, i64, f32, f64 }
 
@@ -48,6 +50,8 @@ extension WasmRefTypeCodec on WasmRefType {
         return WasmRefType.funcref;
       case 0x6f:
       case 0x71:
+      case 0x72:
+      case 0x73:
       case 0x6e:
       case 0x6d:
       case 0x6c:
@@ -255,14 +259,21 @@ final class WasmElementSegment {
     required this.tableIndex,
     required this.offsetExpr,
     required this.functionIndices,
+    this.refTypeCode = 0x70,
   }) : mode = WasmElementMode.active;
 
-  const WasmElementSegment.passive({required this.functionIndices})
+  const WasmElementSegment.passive({
+    required this.functionIndices,
+    this.refTypeCode = 0x70,
+  })
     : mode = WasmElementMode.passive,
       tableIndex = 0,
       offsetExpr = null;
 
-  const WasmElementSegment.declarative({required this.functionIndices})
+  const WasmElementSegment.declarative({
+    required this.functionIndices,
+    this.refTypeCode = 0x70,
+  })
     : mode = WasmElementMode.declarative,
       tableIndex = 0,
       offsetExpr = null;
@@ -271,6 +282,7 @@ final class WasmElementSegment {
   final int tableIndex;
   final Uint8List? offsetExpr;
   final List<int?> functionIndices;
+  final int refTypeCode;
 
   bool get isActive => mode == WasmElementMode.active;
   bool get isPassive => mode == WasmElementMode.passive;
@@ -404,7 +416,7 @@ final class WasmModule {
           }
           startFunctionIndex = sectionReader.readVarUint32();
         case 9:
-          _parseElementSection(sectionReader, elements);
+          _parseElementSection(sectionReader, elements, types);
         case 10:
           _parseCodeSection(sectionReader, codes);
         case 11:
@@ -970,6 +982,7 @@ final class WasmModule {
   static void _parseElementSection(
     ByteReader reader,
     List<WasmElementSegment> sink,
+    List<WasmFunctionType> types,
   ) {
     final count = reader.readVarUint32();
     for (var i = 0; i < count; i++) {
@@ -984,6 +997,7 @@ final class WasmModule {
               tableIndex: 0,
               offsetExpr: offsetExpr,
               functionIndices: functionIndices,
+              refTypeCode: 0x70,
             ),
           );
 
@@ -992,6 +1006,7 @@ final class WasmModule {
           sink.add(
             WasmElementSegment.passive(
               functionIndices: _readFunctionIndexVector(reader),
+              refTypeCode: 0x70,
             ),
           );
 
@@ -1004,6 +1019,7 @@ final class WasmModule {
               tableIndex: tableIndex,
               offsetExpr: offsetExpr,
               functionIndices: _readFunctionIndexVector(reader),
+              refTypeCode: 0x70,
             ),
           );
 
@@ -1012,6 +1028,7 @@ final class WasmModule {
           sink.add(
             WasmElementSegment.declarative(
               functionIndices: _readFunctionIndexVector(reader),
+              refTypeCode: 0x70,
             ),
           );
 
@@ -1021,35 +1038,39 @@ final class WasmModule {
             WasmElementSegment.active(
               tableIndex: 0,
               offsetExpr: offsetExpr,
-              functionIndices: _readElementExprFunctionIndices(reader),
+              functionIndices: _readElementExprFunctionIndices(reader, types),
+              refTypeCode: 0x70,
             ),
           );
 
         case 5:
-          _readReferenceType(reader);
+          final refTypeCode = _readReferenceTypeCode(reader);
           sink.add(
             WasmElementSegment.passive(
-              functionIndices: _readElementExprFunctionIndices(reader),
+              functionIndices: _readElementExprFunctionIndices(reader, types),
+              refTypeCode: refTypeCode,
             ),
           );
 
         case 6:
           final tableIndex = reader.readVarUint32();
           final offsetExpr = _readInitExpression(reader);
-          _readReferenceType(reader);
+          final refTypeCode = _readReferenceTypeCode(reader);
           sink.add(
             WasmElementSegment.active(
               tableIndex: tableIndex,
               offsetExpr: offsetExpr,
-              functionIndices: _readElementExprFunctionIndices(reader),
+              functionIndices: _readElementExprFunctionIndices(reader, types),
+              refTypeCode: refTypeCode,
             ),
           );
 
         case 7:
-          _readReferenceType(reader);
+          final refTypeCode = _readReferenceTypeCode(reader);
           sink.add(
             WasmElementSegment.declarative(
-              functionIndices: _readElementExprFunctionIndices(reader),
+              functionIndices: _readElementExprFunctionIndices(reader, types),
+              refTypeCode: refTypeCode,
             ),
           );
 
@@ -1312,41 +1333,257 @@ final class WasmModule {
     return result;
   }
 
-  static List<int?> _readElementExprFunctionIndices(ByteReader reader) {
+  static List<int?> _readElementExprFunctionIndices(
+    ByteReader reader,
+    List<WasmFunctionType> types,
+  ) {
     final count = reader.readVarUint32();
     final result = <int?>[];
     for (var i = 0; i < count; i++) {
-      result.add(_readElementExprFunctionIndex(reader));
+      result.add(_readElementExprFunctionIndex(reader, types));
     }
     return result;
   }
 
-  static int? _readElementExprFunctionIndex(ByteReader reader) {
-    final opcode = reader.readByte();
-    switch (opcode) {
-      case Opcodes.refNull:
-        _consumeHeapType(reader);
-        if (reader.readByte() != Opcodes.end) {
-          throw const FormatException(
-            'Malformed ref.null init expr in element.',
-          );
-        }
-        return null;
+  static int? _readElementExprFunctionIndex(
+    ByteReader reader,
+    List<WasmFunctionType> types,
+  ) {
+    final stack = <WasmValue>[];
+    while (true) {
+      final opcode = reader.readByte();
+      switch (opcode) {
+        case Opcodes.i32Const:
+          stack.add(WasmValue.i32(reader.readVarInt32()));
 
-      case Opcodes.refFunc:
-        final functionIndex = reader.readVarUint32();
-        if (reader.readByte() != Opcodes.end) {
-          throw const FormatException(
-            'Malformed ref.func init expr in element.',
-          );
-        }
-        return functionIndex;
+        case Opcodes.refNull:
+          _consumeHeapType(reader);
+          stack.add(WasmValue.i32(-1));
 
-      default:
-        throw UnsupportedError(
-          'Unsupported element init expr opcode: 0x${opcode.toRadixString(16)}',
-        );
+        case Opcodes.refFunc:
+          stack.add(WasmValue.i32(reader.readVarUint32()));
+
+        case 0xfb:
+          final subOpcode = reader.readVarUint32();
+          final pseudoOpcode = 0xfb00 | subOpcode;
+          switch (pseudoOpcode) {
+            case Opcodes.refI31:
+              if (stack.isEmpty) {
+                throw const FormatException(
+                  'Malformed ref.i31 init expr in element.',
+                );
+              }
+              final payload =
+                  stack.removeLast().castTo(WasmValueType.i32).asI32() &
+                  0x7fffffff;
+              stack.add(WasmValue.i32(WasmVm.allocateConstI31Ref(payload)));
+
+            case Opcodes.arrayNew:
+              final typeIndex = reader.readVarUint32();
+              if (typeIndex < 0 || typeIndex >= types.length) {
+                throw FormatException(
+                  'Invalid type index in element init expr: $typeIndex',
+                );
+              }
+              final type = types[typeIndex];
+              if (type.kind != WasmCompositeTypeKind.array) {
+                throw const FormatException(
+                  'Element init expr type mismatch.',
+                );
+              }
+              if (stack.length < 2) {
+                throw const FormatException(
+                  'Malformed array.new init expr in element.',
+                );
+              }
+              final length =
+                  stack.removeLast().castTo(WasmValueType.i32).asI32();
+              final seed = _coerceConstFieldValue(
+                type.fieldSignatures.single,
+                stack.removeLast(),
+              );
+              if (length < 0) {
+                throw RangeError('Array length out of bounds: $length');
+              }
+              final elements = List<WasmValue>.filled(
+                length,
+                seed,
+                growable: false,
+              );
+              stack.add(
+                WasmValue.i32(
+                  WasmVm.allocateConstArrayRef(
+                    typeIndex: typeIndex,
+                    elements: elements,
+                  ),
+                ),
+              );
+
+            case Opcodes.arrayNewDefault:
+              final typeIndex = reader.readVarUint32();
+              if (typeIndex < 0 || typeIndex >= types.length) {
+                throw FormatException(
+                  'Invalid type index in element init expr: $typeIndex',
+                );
+              }
+              final type = types[typeIndex];
+              if (type.kind != WasmCompositeTypeKind.array || stack.isEmpty) {
+                throw const FormatException(
+                  'Element init expr type mismatch.',
+                );
+              }
+              final length =
+                  stack.removeLast().castTo(WasmValueType.i32).asI32();
+              if (length < 0) {
+                throw RangeError('Array length out of bounds: $length');
+              }
+              final defaultValue = _defaultConstFieldValue(
+                type.fieldSignatures.single,
+              );
+              final elements = List<WasmValue>.filled(
+                length,
+                defaultValue,
+                growable: false,
+              );
+              stack.add(
+                WasmValue.i32(
+                  WasmVm.allocateConstArrayRef(
+                    typeIndex: typeIndex,
+                    elements: elements,
+                  ),
+                ),
+              );
+
+            case Opcodes.arrayNewFixed:
+              final typeIndex = reader.readVarUint32();
+              final elementCount = reader.readVarUint32();
+              if (typeIndex < 0 || typeIndex >= types.length) {
+                throw FormatException(
+                  'Invalid type index in element init expr: $typeIndex',
+                );
+              }
+              final type = types[typeIndex];
+              if (type.kind != WasmCompositeTypeKind.array ||
+                  stack.length < elementCount) {
+                throw const FormatException(
+                  'Element init expr type mismatch.',
+                );
+              }
+              final elements = List<WasmValue>.filled(
+                elementCount,
+                WasmValue.i32(0),
+                growable: false,
+              );
+              for (var i = elementCount - 1; i >= 0; i--) {
+                elements[i] = _coerceConstFieldValue(
+                  type.fieldSignatures.single,
+                  stack.removeLast(),
+                );
+              }
+              stack.add(
+                WasmValue.i32(
+                  WasmVm.allocateConstArrayRef(
+                    typeIndex: typeIndex,
+                    elements: elements,
+                  ),
+                ),
+              );
+
+            default:
+              throw UnsupportedError(
+                'Unsupported 0xFB sub-opcode in element init expr: '
+                '0x${subOpcode.toRadixString(16)}',
+              );
+          }
+
+        case Opcodes.end:
+          if (stack.length != 1) {
+            throw const FormatException('Malformed element init expr.');
+          }
+          final reference = stack.single.castTo(WasmValueType.i32).asI32();
+          return reference == -1 ? null : reference;
+
+        default:
+          throw UnsupportedError(
+            'Unsupported element init expr opcode: 0x${opcode.toRadixString(16)}',
+          );
+      }
     }
+  }
+
+  static WasmValue _coerceConstFieldValue(String fieldSignature, WasmValue input) {
+    final bytes = _fieldSignatureBytes(fieldSignature);
+    final typeCode = bytes.first;
+    switch (typeCode) {
+      case 0x78:
+        return WasmValue.i32(input.castTo(WasmValueType.i32).asI32() & 0xff);
+      case 0x77:
+        return WasmValue.i32(input.castTo(WasmValueType.i32).asI32() & 0xffff);
+      case 0x7f:
+      case 0x63:
+      case 0x64:
+        return WasmValue.i32(input.castTo(WasmValueType.i32).asI32());
+      case 0x7e:
+        return WasmValue.i64(input.castTo(WasmValueType.i64).asI64());
+      case 0x7d:
+        return WasmValue.f32(input.castTo(WasmValueType.f32).asF32());
+      case 0x7c:
+        return WasmValue.f64(input.castTo(WasmValueType.f64).asF64());
+      default:
+        return input;
+    }
+  }
+
+  static WasmValue _defaultConstFieldValue(String fieldSignature) {
+    final bytes = _fieldSignatureBytes(fieldSignature);
+    final typeCode = bytes.first;
+    switch (typeCode) {
+      case 0x7f:
+      case 0x78:
+      case 0x77:
+        return WasmValue.i32(0);
+      case 0x63:
+      case 0x64:
+      case 0x70:
+      case 0x6f:
+      case 0x6e:
+      case 0x6d:
+      case 0x6c:
+      case 0x6b:
+      case 0x6a:
+      case 0x69:
+      case 0x68:
+      case 0x67:
+      case 0x66:
+      case 0x65:
+      case 0x71:
+      case 0x72:
+      case 0x73:
+        return WasmValue.i32(-1);
+      case 0x7e:
+        return WasmValue.i64(0);
+      case 0x7d:
+        return WasmValue.f32(0);
+      case 0x7c:
+        return WasmValue.f64(0);
+      default:
+        return WasmValue.i32(0);
+    }
+  }
+
+  static List<int> _fieldSignatureBytes(String fieldSignature) {
+    if (fieldSignature.length < 4 || fieldSignature.length.isOdd) {
+      throw StateError('Invalid field signature: $fieldSignature');
+    }
+    final bytes = <int>[];
+    for (var i = 0; i < fieldSignature.length; i += 2) {
+      bytes.add(int.parse(fieldSignature.substring(i, i + 2), radix: 16));
+    }
+    if (bytes.length < 2) {
+      throw StateError('Invalid field signature: $fieldSignature');
+    }
+    bytes.removeLast(); // mutability
+    return bytes;
   }
 
   static void _consumeHeapType(ByteReader reader) {
@@ -1412,12 +1649,14 @@ final class WasmModule {
   }
 
   static WasmRefType _readReferenceType(ByteReader reader) {
-    final lead = reader.readByte();
+    final lead = _readReferenceTypeCode(reader);
     switch (lead) {
       case 0x70:
         return WasmRefType.funcref;
       case 0x6f:
       case 0x71:
+      case 0x72:
+      case 0x73:
       case 0x6e:
       case 0x6d:
       case 0x6c:
@@ -1431,12 +1670,59 @@ final class WasmModule {
         return WasmRefType.externref;
       case 0x63:
       case 0x64:
-        _consumeHeapType(reader);
+      case 0x62:
+      case 0x61:
         return WasmRefType.externref;
       default:
         throw UnsupportedError(
           'Unsupported ref type: 0x${lead.toRadixString(16)}',
         );
+    }
+  }
+
+  static int _readReferenceTypeCode(ByteReader reader) {
+    final lead = reader.readByte();
+    if (_isLegacyHeapTypeCode(lead)) {
+      return lead;
+    }
+    if (lead == 0x63 || lead == 0x64 || lead == 0x62 || lead == 0x61) {
+      var heapLead = reader.readByte();
+      if (heapLead == 0x62 || heapLead == 0x61) {
+        heapLead = reader.readByte();
+      }
+      if (_isLegacyHeapTypeCode(heapLead)) {
+        return heapLead;
+      }
+      _readSignedLeb33WithFirst(reader, heapLead);
+      return lead;
+    }
+    if (lead <= 0x60 || lead >= 0x80) {
+      _readSignedLeb33WithFirst(reader, lead);
+      return lead;
+    }
+    throw UnsupportedError('Unsupported ref type: 0x${lead.toRadixString(16)}');
+  }
+
+  static bool _isLegacyHeapTypeCode(int code) {
+    switch (code & 0xff) {
+      case 0x65:
+      case 0x66:
+      case 0x67:
+      case 0x68:
+      case 0x6c:
+      case 0x70: // funcref
+      case 0x6f: // externref
+      case 0x6e: // anyref
+      case 0x6d: // eqref
+      case 0x6b: // structref
+      case 0x6a: // arrayref
+      case 0x69: // i31ref
+      case 0x71: // nullref
+      case 0x72: // nullexternref
+      case 0x73: // nullfuncref
+        return true;
+      default:
+        return false;
     }
   }
 

@@ -59,7 +59,7 @@ final class _GcRefObject {
        i31Value = null,
        descriptorRef = null,
        fields = null,
-       elements = List<WasmValue>.unmodifiable(elements),
+       elements = List<WasmValue>.from(elements),
        externValue = null;
 
   _GcRefObject.extern(this.externValue)
@@ -89,6 +89,7 @@ final class WasmVm {
     required List<bool> memory64ByIndex,
     required List<Uint8List?> dataSegments,
     required List<List<int?>?> elementSegments,
+    required List<int> elementSegmentRefTypeCodes,
     this.maxCallDepth = 1024,
   }) : _functions = functions,
        _types = types,
@@ -97,11 +98,18 @@ final class WasmVm {
        _globals = globals,
        _memory64ByIndex = memory64ByIndex,
        _dataSegments = dataSegments,
-       _elementSegments = elementSegments {
+       _elementSegments = elementSegments,
+       _elementSegmentRefTypeCodes = elementSegmentRefTypeCodes {
     if (_memory64ByIndex.length != _memories.length) {
       throw ArgumentError(
         'memory64ByIndex length ${_memory64ByIndex.length} does not match '
         'memory count ${_memories.length}.',
+      );
+    }
+    if (_elementSegmentRefTypeCodes.length != _elementSegments.length) {
+      throw ArgumentError(
+        'elementSegmentRefTypeCodes length ${_elementSegmentRefTypeCodes.length} '
+        'does not match element segment count ${_elementSegments.length}.',
       );
     }
   }
@@ -114,6 +122,7 @@ final class WasmVm {
   final List<bool> _memory64ByIndex;
   final List<Uint8List?> _dataSegments;
   final List<List<int?>?> _elementSegments;
+  final List<int> _elementSegmentRefTypeCodes;
   final int maxCallDepth;
 
   static const int _nullRef = -1;
@@ -1300,10 +1309,39 @@ final class WasmVm {
           _gcArrayNew(stack, instruction);
           pc++;
 
+        case Opcodes.arrayNewDefault:
+          _gcArrayNewDefault(stack, instruction);
+          pc++;
+
         case Opcodes.arrayNewFixed:
           _gcArrayNewFixed(stack, instruction);
           pc++;
 
+        case Opcodes.arrayNewData:
+          _gcArrayNewData(stack, instruction);
+          pc++;
+
+        case Opcodes.arrayNewElem:
+          _gcArrayNewElem(stack, instruction);
+          pc++;
+
+        case Opcodes.arrayInitData:
+          _gcArrayInitData(stack, instruction);
+          pc++;
+
+        case Opcodes.arrayInitElem:
+          _gcArrayInitElem(stack, instruction);
+          pc++;
+
+        case Opcodes.arrayCopy:
+          _gcArrayCopy(stack, instruction);
+          pc++;
+
+        case Opcodes.arrayFill:
+          _gcArrayFill(stack, instruction);
+          pc++;
+
+        case Opcodes.arrayGet:
         case Opcodes.arrayGetS:
         case Opcodes.arrayGetU:
           _gcArrayGet(
@@ -1311,6 +1349,10 @@ final class WasmVm {
             instruction,
             signed: instruction.opcode == Opcodes.arrayGetS,
           );
+          pc++;
+
+        case Opcodes.arraySet:
+          _gcArraySet(stack, instruction);
           pc++;
 
         case Opcodes.arrayLen:
@@ -3091,6 +3133,23 @@ final class WasmVm {
     );
   }
 
+  void _gcArrayNewDefault(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkTypeIndex(instruction.immediate!);
+    final type = _types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.new_default requires an array type.');
+    }
+    final length = _popLength(stack);
+    final seed = _defaultValueForFieldSignature(type.fieldSignatures.single);
+    final elements = List<WasmValue>.filled(length, seed, growable: false);
+    _pushRef(
+      stack,
+      _allocateGcObject(
+        _GcRefObject.array(typeIndex: typeIndex, elements: elements),
+      ),
+    );
+  }
+
   void _gcArrayNewFixed(List<WasmValue> stack, Instruction instruction) {
     final typeIndex = _checkTypeIndex(instruction.immediate!);
     final type = _types[typeIndex];
@@ -3117,6 +3176,368 @@ final class WasmVm {
     );
   }
 
+  void _gcArrayNewData(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkTypeIndex(instruction.immediate!);
+    final dataIndex = _checkDataSegmentIndex(instruction.secondaryImmediate!);
+    final type = _types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.new_data requires an array type.');
+    }
+    final fieldSignature = type.fieldSignatures.single;
+    final fieldBytes = _fieldSignatureBytes(fieldSignature);
+    final valueTypeCode = fieldBytes.first;
+
+    final length = _popLength(stack);
+    final sourceOffset = _popLength(stack);
+    final data = _dataSegments[dataIndex];
+    if (data == null) {
+      if (length == 0) {
+        _pushRef(
+          stack,
+          _allocateGcObject(
+            _GcRefObject.array(typeIndex: typeIndex, elements: const []),
+          ),
+        );
+        return;
+      }
+      throw StateError('out of bounds memory access');
+    }
+
+    final elements = _readNumericArrayElementsFromData(
+      data: data,
+      sourceOffset: sourceOffset,
+      length: length,
+      valueTypeCode: valueTypeCode,
+    );
+    _pushRef(
+      stack,
+      _allocateGcObject(
+        _GcRefObject.array(typeIndex: typeIndex, elements: elements),
+      ),
+    );
+  }
+
+  void _gcArrayNewElem(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkTypeIndex(instruction.immediate!);
+    final elementIndex = _checkElementSegmentIndex(instruction.secondaryImmediate!);
+    final type = _types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.new_elem requires an array type.');
+    }
+    final fieldSignature = type.fieldSignatures.single;
+    final valueSignature =
+        _parseFieldTypeForEquivalence(fieldSignature)?.valueSignature;
+    if (valueSignature == null || _parseRefSignature(valueSignature) == null) {
+      throw StateError('type mismatch');
+    }
+
+    final length = _popLength(stack);
+    final sourceOffset = _popLength(stack);
+    final segmentValues = _sliceElementSegment(
+      elementIndex: elementIndex,
+      sourceOffset: sourceOffset,
+      length: length,
+    );
+    final segmentRefTypeCode = _elementSegmentRefTypeCodes[elementIndex];
+    final elements = List<WasmValue>.generate(
+      length,
+      (index) => _coerceArrayElementFromSegment(
+        segmentRefTypeCode: segmentRefTypeCode,
+        segmentValue: segmentValues[index],
+      ),
+      growable: false,
+    );
+    _pushRef(
+      stack,
+      _allocateGcObject(
+        _GcRefObject.array(typeIndex: typeIndex, elements: elements),
+      ),
+    );
+  }
+
+  void _gcArrayInitData(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkTypeIndex(instruction.immediate!);
+    final dataIndex = _checkDataSegmentIndex(instruction.secondaryImmediate!);
+    final type = _types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.init_data requires an array type.');
+    }
+    final parsedField = _parseFieldTypeForEquivalence(type.fieldSignatures.single);
+    if (parsedField == null || parsedField.mutability == 0) {
+      throw StateError('immutable array');
+    }
+    final valueTypeBytes = _signatureToBytes(parsedField.valueSignature);
+    if (valueTypeBytes.isEmpty) {
+      throw StateError('type mismatch');
+    }
+
+    final length = _popLength(stack);
+    final sourceOffset = _popLength(stack);
+    final destinationOffset = _popLength(stack);
+    final reference = _popRef(stack);
+    if (reference == null) {
+      throw StateError('null array reference');
+    }
+    final object = _requireGcObject(reference);
+    if (object.kind != _GcRefKind.array ||
+        !_isTypeSubtype(object.typeIndex!, typeIndex)) {
+      throw StateError('array.init_data on incompatible reference.');
+    }
+
+    final elements = object.elements!;
+    if (destinationOffset > elements.length ||
+        length > elements.length - destinationOffset) {
+      throw StateError('out of bounds array access');
+    }
+
+    final data = _dataSegments[dataIndex];
+    if (data == null) {
+      if (length == 0) {
+        return;
+      }
+      throw StateError('out of bounds memory access');
+    }
+    final loaded = _readNumericArrayElementsFromData(
+      data: data,
+      sourceOffset: sourceOffset,
+      length: length,
+      valueTypeCode: valueTypeBytes.first,
+    );
+    for (var i = 0; i < length; i++) {
+      elements[destinationOffset + i] = loaded[i];
+    }
+  }
+
+  void _gcArrayInitElem(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkTypeIndex(instruction.immediate!);
+    final elementIndex = _checkElementSegmentIndex(instruction.secondaryImmediate!);
+    final type = _types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.init_elem requires an array type.');
+    }
+    final parsedField = _parseFieldTypeForEquivalence(type.fieldSignatures.single);
+    if (parsedField == null || parsedField.mutability == 0) {
+      throw StateError('immutable array');
+    }
+    if (_parseRefSignature(parsedField.valueSignature) == null) {
+      throw StateError('type mismatch');
+    }
+
+    final length = _popLength(stack);
+    final sourceOffset = _popLength(stack);
+    final destinationOffset = _popLength(stack);
+    final reference = _popRef(stack);
+    if (reference == null) {
+      throw StateError('null array reference');
+    }
+    final object = _requireGcObject(reference);
+    if (object.kind != _GcRefKind.array ||
+        !_isTypeSubtype(object.typeIndex!, typeIndex)) {
+      throw StateError('array.init_elem on incompatible reference.');
+    }
+    final elements = object.elements!;
+    if (destinationOffset > elements.length ||
+        length > elements.length - destinationOffset) {
+      throw StateError('out of bounds array access');
+    }
+
+    final segmentValues = _sliceElementSegment(
+      elementIndex: elementIndex,
+      sourceOffset: sourceOffset,
+      length: length,
+    );
+    final segmentRefTypeCode = _elementSegmentRefTypeCodes[elementIndex];
+    for (var i = 0; i < length; i++) {
+      elements[destinationOffset + i] = _coerceArrayElementFromSegment(
+        segmentRefTypeCode: segmentRefTypeCode,
+        segmentValue: segmentValues[i],
+      );
+    }
+  }
+
+  void _gcArrayCopy(List<WasmValue> stack, Instruction instruction) {
+    final destinationTypeIndex = _checkTypeIndex(instruction.immediate!);
+    final sourceTypeIndex = _checkTypeIndex(instruction.secondaryImmediate!);
+
+    final length = _popLength(stack);
+    final sourceOffset = _popLength(stack);
+    final sourceReference = _popRef(stack);
+    final destinationOffset = _popLength(stack);
+    final destinationReference = _popRef(stack);
+
+    if (destinationReference == null || sourceReference == null) {
+      throw StateError('null array reference');
+    }
+
+    final destinationObject = _requireGcObject(destinationReference);
+    final sourceObject = _requireGcObject(sourceReference);
+    if (destinationObject.kind != _GcRefKind.array ||
+        !_isTypeSubtype(destinationObject.typeIndex!, destinationTypeIndex)) {
+      throw StateError('array.copy destination type mismatch');
+    }
+    if (sourceObject.kind != _GcRefKind.array ||
+        !_isTypeSubtype(sourceObject.typeIndex!, sourceTypeIndex)) {
+      throw StateError('array.copy source type mismatch');
+    }
+
+    final destinationType = _types[destinationTypeIndex];
+    final destinationField = _parseFieldTypeForEquivalence(
+      destinationType.fieldSignatures.single,
+    );
+    if (destinationField == null || destinationField.mutability == 0) {
+      throw StateError('immutable array');
+    }
+
+    final destinationElements = destinationObject.elements!;
+    final sourceElements = sourceObject.elements!;
+    if (destinationOffset > destinationElements.length ||
+        length > destinationElements.length - destinationOffset ||
+        sourceOffset > sourceElements.length ||
+        length > sourceElements.length - sourceOffset) {
+      throw StateError('out of bounds array access');
+    }
+
+    final copied = List<WasmValue>.from(
+      sourceElements.sublist(sourceOffset, sourceOffset + length),
+      growable: false,
+    );
+    for (var i = 0; i < length; i++) {
+      destinationElements[destinationOffset + i] = _coerceFieldValue(
+        destinationType.fieldSignatures.single,
+        copied[i],
+      );
+    }
+  }
+
+  void _gcArrayFill(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkTypeIndex(instruction.immediate!);
+    final type = _types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.fill requires an array type.');
+    }
+    final parsedField = _parseFieldTypeForEquivalence(type.fieldSignatures.single);
+    if (parsedField == null || parsedField.mutability == 0) {
+      throw StateError('immutable array');
+    }
+
+    final length = _popLength(stack);
+    final fillValue = _coerceFieldValue(type.fieldSignatures.single, _pop(stack));
+    final destinationOffset = _popLength(stack);
+    final reference = _popRef(stack);
+    if (reference == null) {
+      throw StateError('null array reference');
+    }
+    final object = _requireGcObject(reference);
+    if (object.kind != _GcRefKind.array ||
+        !_isTypeSubtype(object.typeIndex!, typeIndex)) {
+      throw StateError('array.fill on incompatible reference.');
+    }
+    final elements = object.elements!;
+    if (destinationOffset > elements.length ||
+        length > elements.length - destinationOffset) {
+      throw StateError('out of bounds array access');
+    }
+    for (var i = 0; i < length; i++) {
+      elements[destinationOffset + i] = fillValue;
+    }
+  }
+
+  List<int?> _sliceElementSegment({
+    required int elementIndex,
+    required int sourceOffset,
+    required int length,
+  }) {
+    final segment = _elementSegments[elementIndex];
+    if (segment == null) {
+      if (length == 0) {
+        return const <int?>[];
+      }
+      throw StateError('out of bounds table access');
+    }
+    if (sourceOffset > segment.length || length > segment.length - sourceOffset) {
+      throw StateError('out of bounds table access');
+    }
+    return List<int?>.from(
+      segment.sublist(sourceOffset, sourceOffset + length),
+      growable: false,
+    );
+  }
+
+  List<WasmValue> _readNumericArrayElementsFromData({
+    required Uint8List data,
+    required int sourceOffset,
+    required int length,
+    required int valueTypeCode,
+  }) {
+    final elementSize = _numericArrayElementSize(valueTypeCode);
+    final totalBytes = length * elementSize;
+    if (sourceOffset > data.length || totalBytes > data.length - sourceOffset) {
+      throw StateError('out of bounds memory access');
+    }
+    final view = ByteData.sublistView(data);
+    return List<WasmValue>.generate(length, (index) {
+      final byteOffset = sourceOffset + (index * elementSize);
+      return _readNumericArrayElement(
+        view: view,
+        byteOffset: byteOffset,
+        valueTypeCode: valueTypeCode,
+      );
+    }, growable: false);
+  }
+
+  WasmValue _coerceArrayElementFromSegment({
+    required int segmentRefTypeCode,
+    required int? segmentValue,
+  }) {
+    if (segmentValue == null) {
+      return WasmValue.i32(_nullRef);
+    }
+    if (segmentRefTypeCode == 0x69 || segmentRefTypeCode == 0x6c) {
+      if (segmentValue < 0) {
+        return WasmValue.i32(segmentValue);
+      }
+      return WasmValue.i32(
+        _allocateGcObject(_GcRefObject.i31(segmentValue & 0x7fffffff)),
+      );
+    }
+    return WasmValue.i32(segmentValue);
+  }
+
+  int _numericArrayElementSize(int valueTypeCode) {
+    return switch (valueTypeCode) {
+      0x78 => 1, // i8
+      0x77 => 2, // i16
+      0x7f || 0x7d => 4, // i32/f32
+      0x7e || 0x7c => 8, // i64/f64
+      0x7b => 16, // v128
+      _ => throw StateError('array type is not numeric or vector'),
+    };
+  }
+
+  WasmValue _readNumericArrayElement({
+    required ByteData view,
+    required int byteOffset,
+    required int valueTypeCode,
+  }) {
+    return switch (valueTypeCode) {
+      0x78 => WasmValue.i32(view.getUint8(byteOffset)),
+      0x77 => WasmValue.i32(view.getUint16(byteOffset, Endian.little)),
+      0x7f => WasmValue.i32(view.getInt32(byteOffset, Endian.little)),
+      0x7d => WasmValue.f32(view.getFloat32(byteOffset, Endian.little)),
+      0x7e => WasmValue.i64(
+        WasmI64.fromU32PairSigned(
+          low: view.getUint32(byteOffset, Endian.little),
+          high: view.getUint32(byteOffset + 4, Endian.little),
+        ),
+      ),
+      0x7c => WasmValue.f64(view.getFloat64(byteOffset, Endian.little)),
+      0x7b => throw UnsupportedError(
+        'array data initialization for v128 is not supported yet.',
+      ),
+      _ => throw StateError('array type is not numeric or vector'),
+    };
+  }
+
   void _gcArrayGet(
     List<WasmValue> stack,
     Instruction instruction, {
@@ -3141,6 +3562,31 @@ final class WasmVm {
     stack.add(
       _coerceLoadedFieldValue(fieldSignature, elements[index], signed: signed),
     );
+  }
+
+  void _gcArraySet(List<WasmValue> stack, Instruction instruction) {
+    final expectedTypeIndex = _checkTypeIndex(instruction.immediate!);
+    final value = _pop(stack);
+    final index = _popLength(stack);
+    final reference = _popRef(stack);
+    if (reference == null) {
+      throw StateError('null array reference');
+    }
+    final object = _requireGcObject(reference);
+    if (object.kind != _GcRefKind.array ||
+        !_isTypeSubtype(object.typeIndex!, expectedTypeIndex)) {
+      throw StateError('array.set on incompatible reference.');
+    }
+    final type = _types[object.typeIndex!];
+    final parsedField = _parseFieldTypeForEquivalence(type.fieldSignatures.single);
+    if (parsedField == null || parsedField.mutability == 0) {
+      throw StateError('immutable array');
+    }
+    final elements = object.elements!;
+    if (index < 0 || index >= elements.length) {
+      throw StateError('out of bounds array access');
+    }
+    elements[index] = _coerceFieldValue(type.fieldSignatures.single, value);
   }
 
   void _gcArrayLen(List<WasmValue> stack) {
@@ -3237,9 +3683,25 @@ final class WasmVm {
       case 0x7f:
       case 0x78:
       case 0x77:
+        return WasmValue.i32(0);
       case 0x63:
       case 0x64:
-        return WasmValue.i32(typeCode == 0x64 ? _nullRef : 0);
+      case 0x70:
+      case 0x6f:
+      case 0x6e:
+      case 0x6d:
+      case 0x6c:
+      case 0x6b:
+      case 0x6a:
+      case 0x69:
+      case 0x68:
+      case 0x67:
+      case 0x66:
+      case 0x65:
+      case 0x71:
+      case 0x72:
+      case 0x73:
+        return WasmValue.i32(_nullRef);
       case 0x7e:
         return WasmValue.i64(0);
       case 0x7d:

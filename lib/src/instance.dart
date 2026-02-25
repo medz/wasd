@@ -25,6 +25,7 @@ final class WasmInstance {
     required List<bool> memory64ByIndex,
     required List<Uint8List?> dataSegments,
     required List<List<int?>?> elementSegments,
+    required List<int> elementSegmentRefTypeCodes,
     required Map<String, int> functionExports,
     required Map<String, int> globalExports,
     required Map<String, WasmMemory> memoryExports,
@@ -43,6 +44,7 @@ final class WasmInstance {
          memory64ByIndex: memory64ByIndex,
          dataSegments: dataSegments,
          elementSegments: elementSegments,
+         elementSegmentRefTypeCodes: elementSegmentRefTypeCodes,
        );
 
   final WasmModule module;
@@ -315,6 +317,11 @@ final class WasmInstance {
       (index) => List<int?>.from(module.elements[index].functionIndices),
       growable: false,
     );
+    final elementSegmentRefTypeCodes = List<int>.generate(
+      module.elements.length,
+      (index) => module.elements[index].refTypeCode,
+      growable: false,
+    );
 
     final functionExports = <String, int>{};
     final globalExports = <String, int>{};
@@ -366,6 +373,7 @@ final class WasmInstance {
       memory64ByIndex: memory64ByIndex,
       dataSegments: dataSegments,
       elementSegments: elementSegments,
+      elementSegmentRefTypeCodes: elementSegmentRefTypeCodes,
       functionExports: Map.unmodifiable(functionExports),
       globalExports: Map.unmodifiable(globalExports),
       memoryExports: Map.unmodifiable(memoryExports),
@@ -662,14 +670,17 @@ final class WasmInstance {
       );
       final offset = offsetValue.castTo(WasmValueType.i32).asI32();
 
-      for (final functionIndex in element.functionIndices) {
-        if (functionIndex == null) {
-          continue;
-        }
-        if (functionIndex < 0 || functionIndex >= functions.length) {
-          throw FormatException(
-            'Invalid function index in element: $functionIndex',
-          );
+      final carriesFunctionRefs = element.refTypeCode == 0x70;
+      if (carriesFunctionRefs) {
+        for (final functionIndex in element.functionIndices) {
+          if (functionIndex == null) {
+            continue;
+          }
+          if (functionIndex < 0 || functionIndex >= functions.length) {
+            throw FormatException(
+              'Invalid function index in element: $functionIndex',
+            );
+          }
         }
       }
 
@@ -757,7 +768,23 @@ final class WasmInstance {
         0x7e => WasmValue.i64(0),
         0x7d => WasmValue.f32(0),
         0x7c => WasmValue.f64(0),
-        0x64 => WasmValue.i32(-1),
+        0x63 ||
+        0x64 ||
+        0x70 ||
+        0x6f ||
+        0x6e ||
+        0x6d ||
+        0x6c ||
+        0x6b ||
+        0x6a ||
+        0x69 ||
+        0x68 ||
+        0x67 ||
+        0x66 ||
+        0x65 ||
+        0x71 ||
+        0x72 ||
+        0x73 => WasmValue.i32(-1),
         _ => WasmValue.i32(0),
       };
     }

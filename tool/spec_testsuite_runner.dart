@@ -265,8 +265,11 @@ final class _ScriptExecutionState {
       }
     } on _SpecRunnerFailure catch (error) {
       return _CommandResult.fail(error.reason, error.details);
-    } catch (error) {
-      return _CommandResult.fail('unhandled-exception', '$error');
+    } catch (error, stackTrace) {
+      return _CommandResult.fail(
+        'unhandled-exception',
+        '$error\n$stackTrace',
+      );
     }
   }
 
@@ -275,8 +278,28 @@ final class _ScriptExecutionState {
     if (filename is! String || filename.isEmpty) {
       return _CommandResult.fail('module-missing-filename', '$command');
     }
+    final moduleType = command['module_type'];
+    var resolvedFilename = filename;
+    if (moduleType is String && moduleType != 'binary') {
+      if (moduleType == 'text') {
+        final binaryFilename = command['binary_filename'];
+        if (binaryFilename is String && binaryFilename.isNotEmpty) {
+          resolvedFilename = binaryFilename;
+        } else {
+          return _CommandResult.skip(
+            'unsupported-module-type',
+            'module_type `$moduleType` has no binary translation.',
+          );
+        }
+      } else {
+        return _CommandResult.skip(
+          'unsupported-module-type',
+          'module_type `$moduleType` is not supported.',
+        );
+      }
+    }
 
-    final moduleBytes = _readBinaryModule(filename);
+    final moduleBytes = _readBinaryModule(resolvedFilename);
     final module = WasmModule.decode(moduleBytes, features: _features);
     final instance = WasmInstance.fromModule(
       module,
@@ -621,6 +644,9 @@ final class _ScriptExecutionState {
       case 'funcref':
       case 'structref':
       case 'arrayref':
+      case 'eqref':
+      case 'i31ref':
+      case 'anyref':
         final valueString = value as String;
         return _signedBits(BigInt.parse(valueString), 32);
       case 'nullref':
@@ -647,6 +673,9 @@ final class _ScriptExecutionState {
         type != 'externref' &&
         type != 'structref' &&
         type != 'arrayref' &&
+        type != 'eqref' &&
+        type != 'i31ref' &&
+        type != 'anyref' &&
         type != 'nullref' &&
         type != 'nullfuncref' &&
         type != 'nullstructref' &&
@@ -679,6 +708,9 @@ final class _ScriptExecutionState {
       case 'externref':
       case 'structref':
       case 'arrayref':
+      case 'eqref':
+      case 'i31ref':
+      case 'anyref':
         return _ExpectedValue.ref(type, expectsNullRef: false);
       case 'nullref':
       case 'nullfuncref':
