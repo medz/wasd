@@ -23,6 +23,7 @@ final class WasmInstance {
     required this.functions,
     required this.globals,
     required List<bool> memory64ByIndex,
+    required List<bool> table64ByIndex,
     required List<Uint8List?> dataSegments,
     required List<List<int?>?> elementSegments,
     required List<int> elementSegmentRefTypeCodes,
@@ -42,6 +43,7 @@ final class WasmInstance {
          memories: memories,
          globals: globals,
          memory64ByIndex: memory64ByIndex,
+         table64ByIndex: table64ByIndex,
          dataSegments: dataSegments,
          elementSegments: elementSegments,
          elementSegmentRefTypeCodes: elementSegmentRefTypeCodes,
@@ -135,6 +137,13 @@ final class WasmInstance {
             throw StateError(
               'Imported table `${import.key}` ref type mismatch: '
               'expected=${expected.refType} actual=${importedTable.refType}.',
+            );
+          }
+          if (importedTable.isTable64 != expected.isTable64) {
+            throw StateError(
+              'Imported table `${import.key}` index type mismatch: '
+              'expected table64=${expected.isTable64} '
+              'actual=${importedTable.isTable64}.',
             );
           }
 
@@ -262,6 +271,7 @@ final class WasmInstance {
           refType: tableType.refType,
           min: tableType.min,
           max: tableType.max,
+          isTable64: tableType.isTable64,
         ),
       );
     }
@@ -282,6 +292,7 @@ final class WasmInstance {
     }
 
     final memory64ByIndex = _memory64ByIndex(module);
+    final table64ByIndex = _table64ByIndex(module);
     for (var i = 0; i < module.codes.length; i++) {
       final typeIndex = module.functionTypeIndices[i];
       if (typeIndex < 0 ||
@@ -371,6 +382,7 @@ final class WasmInstance {
       functions: List.unmodifiable(functions),
       globals: globals,
       memory64ByIndex: memory64ByIndex,
+      table64ByIndex: table64ByIndex,
       dataSegments: dataSegments,
       elementSegments: elementSegments,
       elementSegmentRefTypeCodes: elementSegmentRefTypeCodes,
@@ -650,6 +662,7 @@ final class WasmInstance {
     if (module.elements.isEmpty) {
       return;
     }
+    final table64ByIndex = _table64ByIndex(module);
 
     for (final element in module.elements) {
       if (!element.isActive) {
@@ -668,7 +681,11 @@ final class WasmInstance {
         globals,
         module.types,
       );
-      final offset = offsetValue.castTo(WasmValueType.i32).asI32();
+      final isTable64 =
+          element.tableIndex >= 0 &&
+          element.tableIndex < table64ByIndex.length &&
+          table64ByIndex[element.tableIndex];
+      final offset = _constExprTableOffset(offsetValue, isTable64: isTable64);
 
       final carriesFunctionRefs = element.refTypeCode == 0x70;
       if (carriesFunctionRefs) {
@@ -1164,6 +1181,23 @@ final class WasmInstance {
     return offset.toInt();
   }
 
+  static int _constExprTableOffset(
+    WasmValue value, {
+    required bool isTable64,
+  }) {
+    final offset = isTable64
+        ? WasmI64.unsigned(value.castTo(WasmValueType.i64).asI64())
+        : BigInt.from(value.castTo(WasmValueType.i32).asI32().toUnsigned(32));
+    final maxSupported = BigInt.from(wasmAddressSpaceBytes);
+    if (offset > maxSupported) {
+      throw RangeError(
+        'Element segment offset exceeds supported table range: '
+        '$offset > $wasmAddressSpaceBytes.',
+      );
+    }
+    return offset.toInt();
+  }
+
   static int _functionTypeDepth(WasmModule module, int typeIndex) {
     return _functionTypeDepthInternal(module, typeIndex, <int>{});
   }
@@ -1206,6 +1240,19 @@ final class WasmInstance {
     }
     for (final memory in module.memories) {
       list.add(memory.isMemory64);
+    }
+    return List<bool>.unmodifiable(list);
+  }
+
+  static List<bool> _table64ByIndex(WasmModule module) {
+    final list = <bool>[];
+    for (final import in module.imports) {
+      if (import.kind == WasmImportKind.table) {
+        list.add(import.tableType?.isTable64 ?? false);
+      }
+    }
+    for (final table in module.tables) {
+      list.add(table.isTable64);
     }
     return List<bool>.unmodifiable(list);
   }

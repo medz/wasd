@@ -87,6 +87,7 @@ final class WasmVm {
     required List<WasmMemory> memories,
     required List<RuntimeGlobal> globals,
     required List<bool> memory64ByIndex,
+    required List<bool> table64ByIndex,
     required List<Uint8List?> dataSegments,
     required List<List<int?>?> elementSegments,
     required List<int> elementSegmentRefTypeCodes,
@@ -97,6 +98,7 @@ final class WasmVm {
        _memories = memories,
        _globals = globals,
        _memory64ByIndex = memory64ByIndex,
+       _table64ByIndex = table64ByIndex,
        _dataSegments = dataSegments,
        _elementSegments = elementSegments,
        _elementSegmentRefTypeCodes = elementSegmentRefTypeCodes {
@@ -104,6 +106,12 @@ final class WasmVm {
       throw ArgumentError(
         'memory64ByIndex length ${_memory64ByIndex.length} does not match '
         'memory count ${_memories.length}.',
+      );
+    }
+    if (_table64ByIndex.length != _tables.length) {
+      throw ArgumentError(
+        'table64ByIndex length ${_table64ByIndex.length} does not match '
+        'table count ${_tables.length}.',
       );
     }
     if (_elementSegmentRefTypeCodes.length != _elementSegments.length) {
@@ -120,6 +128,7 @@ final class WasmVm {
   final List<WasmMemory> _memories;
   final List<RuntimeGlobal> _globals;
   final List<bool> _memory64ByIndex;
+  final List<bool> _table64ByIndex;
   final List<Uint8List?> _dataSegments;
   final List<List<int?>?> _elementSegments;
   final List<int> _elementSegmentRefTypeCodes;
@@ -270,10 +279,16 @@ final class WasmVm {
           pc++;
 
         case Opcodes.block:
+          final paramTypes = instruction.blockParameterTypes ?? const [];
+          final entryStackHeight = _consumeBlockParameters(
+            stack,
+            paramTypes,
+            context: 'block',
+          );
           labels.add(
             _LabelFrame(
               kind: _LabelKind.block,
-              stackHeight: stack.length,
+              stackHeight: entryStackHeight,
               branchTypes: instruction.blockResultTypes ?? const [],
               endTypes: instruction.blockResultTypes ?? const [],
               endIndex: _requireJumpIndex(instruction.endIndex, 'block'),
@@ -283,13 +298,17 @@ final class WasmVm {
           pc++;
 
         case Opcodes.loop:
+          final paramTypes = instruction.blockParameterTypes ?? const [];
+          final entryStackHeight = _consumeBlockParameters(
+            stack,
+            paramTypes,
+            context: 'loop',
+          );
           labels.add(
             _LabelFrame(
               kind: _LabelKind.loop,
-              stackHeight: stack.length,
-              // In core MVP and current decoder support, loops have no
-              // parameter types, so `br` to loop carries zero values.
-              branchTypes: const [],
+              stackHeight: entryStackHeight,
+              branchTypes: paramTypes,
               endTypes: instruction.blockResultTypes ?? const [],
               endIndex: _requireJumpIndex(instruction.endIndex, 'loop'),
               loopStartIndex: pc + 1,
@@ -299,9 +318,15 @@ final class WasmVm {
 
         case Opcodes.if_:
           final condition = _popI32(stack);
+          final paramTypes = instruction.blockParameterTypes ?? const [];
+          final entryStackHeight = _consumeBlockParameters(
+            stack,
+            paramTypes,
+            context: 'if',
+          );
           final label = _LabelFrame(
             kind: _LabelKind.if_,
-            stackHeight: stack.length,
+            stackHeight: entryStackHeight,
             branchTypes: instruction.blockResultTypes ?? const [],
             endTypes: instruction.blockResultTypes ?? const [],
             endIndex: _requireJumpIndex(instruction.endIndex, 'if'),
@@ -366,7 +391,6 @@ final class WasmVm {
             _pushRef(stack, value);
             pc = _branch(instruction.immediate!, labels, stack);
           } else {
-            _pushRef(stack, null);
             pc++;
           }
 
@@ -396,6 +420,30 @@ final class WasmVm {
           stack.addAll(callResults);
           pc++;
 
+        case Opcodes.callRef:
+          final typeIndex = _checkTypeIndex(instruction.immediate!);
+          final expectedType = _types[typeIndex];
+          if (!expectedType.isFunctionType) {
+            throw StateError('call_ref expected non-function type $typeIndex.');
+          }
+          final functionReference = _popRef(stack);
+          if (functionReference == null) {
+            throw StateError('call_ref to null function reference.');
+          }
+          _checkFunctionIndex(functionReference);
+          final target = _functions[functionReference];
+          if (!_functionTypeEquals(target.type, expectedType)) {
+            throw StateError('call_ref signature mismatch trap');
+          }
+          final callArgs = _popArgs(stack, expectedType.params);
+          final callResults = _execute(
+            functionReference,
+            callArgs,
+            depth: depth + 1,
+          );
+          stack.addAll(callResults);
+          pc++;
+
         case Opcodes.returnCall:
           final targetIndex = instruction.immediate!;
           _checkFunctionIndex(targetIndex);
@@ -403,10 +451,32 @@ final class WasmVm {
           final callArgs = _popArgs(stack, target.type.params);
           return _execute(targetIndex, callArgs, depth: depth + 1);
 
+        case Opcodes.returnCallRef:
+          final typeIndex = _checkTypeIndex(instruction.immediate!);
+          final expectedType = _types[typeIndex];
+          if (!expectedType.isFunctionType) {
+            throw StateError('call_ref expected non-function type $typeIndex.');
+          }
+          final functionReference = _popRef(stack);
+          if (functionReference == null) {
+            throw StateError('call_ref to null function reference.');
+          }
+          _checkFunctionIndex(functionReference);
+          final target = _functions[functionReference];
+          if (!_functionTypeEquals(target.type, expectedType)) {
+            throw StateError('call_ref signature mismatch trap');
+          }
+          final callArgs = _popArgs(stack, expectedType.params);
+          return _execute(functionReference, callArgs, depth: depth + 1);
+
         case Opcodes.callIndirect:
           final typeIndex = _checkTypeIndex(instruction.immediate!);
           final tableIndex = _checkTableIndex(instruction.secondaryImmediate!);
-          final tableElementIndex = _popI32(stack);
+          final tableElementIndex = _popTableOperand(
+            stack,
+            tableIndex: tableIndex,
+            label: 'call_indirect table index',
+          );
           final targetFunctionIndex = _tables[tableIndex][tableElementIndex];
           if (targetFunctionIndex == null) {
             throw StateError('call_indirect to null table element.');
@@ -437,7 +507,11 @@ final class WasmVm {
         case Opcodes.returnCallIndirect:
           final typeIndex = _checkTypeIndex(instruction.immediate!);
           final tableIndex = _checkTableIndex(instruction.secondaryImmediate!);
-          final tableElementIndex = _popI32(stack);
+          final tableElementIndex = _popTableOperand(
+            stack,
+            tableIndex: tableIndex,
+            label: 'return_call_indirect table index',
+          );
           final targetFunctionIndex = _tables[tableIndex][tableElementIndex];
           if (targetFunctionIndex == null) {
             throw StateError('call_indirect to null table element.');
@@ -527,14 +601,22 @@ final class WasmVm {
 
         case Opcodes.tableGet:
           final tableIndex = _checkTableIndex(instruction.immediate!);
-          final elementIndex = _popI32(stack);
+          final elementIndex = _popTableOperand(
+            stack,
+            tableIndex: tableIndex,
+            label: 'table.get index',
+          );
           _pushRef(stack, _tables[tableIndex][elementIndex]);
           pc++;
 
         case Opcodes.tableSet:
           final tableIndex = _checkTableIndex(instruction.immediate!);
           final value = _popRef(stack);
-          final elementIndex = _popI32(stack);
+          final elementIndex = _popTableOperand(
+            stack,
+            tableIndex: tableIndex,
+            label: 'table.set index',
+          );
           _tables[tableIndex][elementIndex] = value;
           pc++;
 
@@ -2051,11 +2133,11 @@ final class WasmVm {
           pc++;
 
         case Opcodes.f32ConvertI64S:
-          stack.add(WasmValue.f32(_popI64(stack).toDouble()));
+          stack.add(WasmValue.f32(_f32FromInteger(_popI64(stack))));
           pc++;
 
         case Opcodes.f32ConvertI64U:
-          stack.add(WasmValue.f32(WasmI64.unsignedToDouble(_popI64(stack))));
+          stack.add(WasmValue.f32(_f32FromInteger(_toU64(_popI64(stack)))));
           pc++;
 
         case Opcodes.f32DemoteF64:
@@ -2083,22 +2165,30 @@ final class WasmVm {
           pc++;
 
         case Opcodes.i32ReinterpretF32:
-          stack.add(WasmValue.i32(WasmValue.toF32Bits(_popF32(stack))));
+          stack.add(
+            WasmValue.i32(
+              _pop(stack).castTo(WasmValueType.f32).asF32Bits(),
+            ),
+          );
           pc++;
 
         case Opcodes.i64ReinterpretF64:
-          stack.add(WasmValue.i64(WasmValue.toF64Bits(_popF64(stack))));
+          stack.add(
+            WasmValue.i64(
+              _pop(stack).castTo(WasmValueType.f64).asF64Bits(),
+            ),
+          );
           pc++;
 
         case Opcodes.f32ReinterpretI32:
           stack.add(
-            WasmValue.f32(WasmValue.fromF32Bits(_toU32(_popI32(stack)))),
+            WasmValue.f32Bits(_toU32(_popI32(stack))),
           );
           pc++;
 
         case Opcodes.f64ReinterpretI64:
           stack.add(
-            WasmValue.f64(WasmValue.fromF64Bits(_toU64(_popI64(stack)))),
+            WasmValue.f64Bits(_toU64(_popI64(stack))),
           );
           pc++;
 
@@ -2235,7 +2325,11 @@ final class WasmVm {
     final target = labels[targetPosition];
 
     final results = _takeTopValues(stack, target.branchTypes);
-    stack.length = target.stackHeight;
+    _truncateStackToHeight(
+      stack,
+      target.stackHeight,
+      context: 'branch',
+    );
     stack.addAll(results);
 
     if (target.kind == _LabelKind.loop) {
@@ -2258,8 +2352,45 @@ final class WasmVm {
 
   void _exitLabel(_LabelFrame label, List<WasmValue> stack) {
     final results = _takeTopValues(stack, label.endTypes);
-    stack.length = label.stackHeight;
+    _truncateStackToHeight(
+      stack,
+      label.stackHeight,
+      context: 'end',
+    );
     stack.addAll(results);
+  }
+
+  void _truncateStackToHeight(
+    List<WasmValue> stack,
+    int height, {
+    required String context,
+  }) {
+    if (stack.length < height) {
+      throw StateError(
+        'Operand stack underflow while restoring $context frame: '
+        'stack=${stack.length}, height=$height.',
+      );
+    }
+    stack.length = height;
+  }
+
+  int _consumeBlockParameters(
+    List<WasmValue> stack,
+    List<WasmValueType> paramTypes, {
+    required String context,
+  }) {
+    if (paramTypes.isEmpty) {
+      return stack.length;
+    }
+    final params = _takeTopValues(stack, paramTypes);
+    final entryStackHeight = stack.length - paramTypes.length;
+    _truncateStackToHeight(
+      stack,
+      entryStackHeight,
+      context: '$context parameters',
+    );
+    stack.addAll(params);
+    return entryStackHeight;
   }
 
   List<WasmValue> _takeTopValues(
@@ -2385,6 +2516,15 @@ final class WasmVm {
     return _memory64ByIndex[memoryIndex];
   }
 
+  bool _isTable64(int tableIndex) {
+    if (tableIndex < 0 || tableIndex >= _table64ByIndex.length) {
+      throw RangeError(
+        'Invalid table index: $tableIndex (count=${_table64ByIndex.length}).',
+      );
+    }
+    return _table64ByIndex[tableIndex];
+  }
+
   BigInt _popUnsignedMemoryOperand(
     List<WasmValue> stack, {
     required int memoryIndex,
@@ -2402,6 +2542,61 @@ final class WasmVm {
   }) {
     final operand = _popUnsignedMemoryOperand(stack, memoryIndex: memoryIndex);
     return _toLinearMemoryValue(operand, label: label);
+  }
+
+  int _popUnsignedI32Operand(
+    List<WasmValue> stack, {
+    required String label,
+  }) {
+    final value = _pop(stack);
+    if (value.type != WasmValueType.i32) {
+      throw StateError(
+        'Type mismatch: expected i32 for $label, got ${value.type}.',
+      );
+    }
+    return _toLinearMemoryValue(BigInt.from(_toU32(value.asI32())), label: label);
+  }
+
+  int _popMemoryOperationLength(
+    List<WasmValue> stack, {
+    required String label,
+  }) {
+    final value = _pop(stack);
+    final unsigned = switch (value.type) {
+      WasmValueType.i32 => BigInt.from(_toU32(value.asI32())),
+      WasmValueType.i64 => _toU64(value.asI64()),
+      _ => throw StateError(
+        'Type mismatch: expected i32/i64 length for $label, got ${value.type}.',
+      ),
+    };
+    return _toLinearMemoryValue(unsigned, label: label);
+  }
+
+  BigInt _popUnsignedTableOperand(
+    List<WasmValue> stack, {
+    required int tableIndex,
+  }) {
+    if (_isTable64(tableIndex)) {
+      return _toU64(_popI64(stack));
+    }
+    return BigInt.from(_toU32(_popI32(stack)));
+  }
+
+  int _popTableOperand(
+    List<WasmValue> stack, {
+    required int tableIndex,
+    required String label,
+  }) {
+    final operand = _popUnsignedTableOperand(stack, tableIndex: tableIndex);
+    return _toLinearMemoryValue(operand, label: label);
+  }
+
+  WasmValue _tableIndexValue(int tableIndex, int value) {
+    if (_isTable64(tableIndex)) {
+      final i64 = value < 0 ? WasmI64.signed(value) : WasmI64.unsigned(value);
+      return WasmValue.i64(i64);
+    }
+    return WasmValue.i32(value);
   }
 
   int _requireJumpIndex(int? index, String context) {
@@ -4166,14 +4361,12 @@ final class WasmVm {
     final memoryIndex = instruction.secondaryImmediate!;
     final memory = _requireMemory(memoryIndex);
 
-    final length = _popMemoryOperand(
+    final length = _popUnsignedI32Operand(
       stack,
-      memoryIndex: memoryIndex,
       label: 'memory.init length',
     );
-    final sourceOffset = _popMemoryOperand(
+    final sourceOffset = _popUnsignedI32Operand(
       stack,
-      memoryIndex: memoryIndex,
       label: 'memory.init source offset',
     );
     final destinationOffset = _popMemoryOperand(
@@ -4184,6 +4377,9 @@ final class WasmVm {
 
     final data = _dataSegments[dataIndex];
     if (data == null) {
+      if (length == 0) {
+        return;
+      }
       throw StateError('memory.init on dropped data segment $dataIndex.');
     }
 
@@ -4215,9 +4411,8 @@ final class WasmVm {
       );
     }
 
-    final length = _popMemoryOperand(
+    final length = _popMemoryOperationLength(
       stack,
-      memoryIndex: destinationMemoryIndex,
       label: 'memory.copy length',
     );
     final sourceOffset = _popMemoryOperand(
@@ -4242,9 +4437,8 @@ final class WasmVm {
 
   void _memoryFill(Instruction instruction, List<WasmValue> stack) {
     final memoryIndex = instruction.immediate!;
-    final length = _popMemoryOperand(
+    final length = _popMemoryOperationLength(
       stack,
-      memoryIndex: memoryIndex,
       label: 'memory.fill length',
     );
     final fillValue = _popI32(stack);
@@ -4261,12 +4455,25 @@ final class WasmVm {
     final elementIndex = _checkElementSegmentIndex(instruction.immediate!);
     final tableIndex = _checkTableIndex(instruction.secondaryImmediate!);
 
-    final length = _popLength(stack);
-    final sourceOffset = _popLength(stack);
-    final destinationOffset = _popLength(stack);
+    final length = _popUnsignedI32Operand(
+      stack,
+      label: 'table.init length',
+    );
+    final sourceOffset = _popUnsignedI32Operand(
+      stack,
+      label: 'table.init source offset',
+    );
+    final destinationOffset = _popTableOperand(
+      stack,
+      tableIndex: tableIndex,
+      label: 'table.init destination offset',
+    );
 
     final segment = _elementSegments[elementIndex];
     if (segment == null) {
+      if (length == 0) {
+        return;
+      }
       throw StateError('table.init on dropped element segment $elementIndex.');
     }
 
@@ -4288,13 +4495,41 @@ final class WasmVm {
   void _tableCopy(Instruction instruction, List<WasmValue> stack) {
     final destinationTableIndex = _checkTableIndex(instruction.immediate!);
     final sourceTableIndex = _checkTableIndex(instruction.secondaryImmediate!);
+    final destinationIs64 = _isTable64(destinationTableIndex);
+    final sourceIs64 = _isTable64(sourceTableIndex);
+    if (destinationIs64 != sourceIs64) {
+      throw StateError(
+        'table.copy source and destination tables must have matching '
+        'index types.',
+      );
+    }
 
-    final length = _popLength(stack);
-    final sourceOffset = _popLength(stack);
-    final destinationOffset = _popLength(stack);
+    final length = _popTableOperand(
+      stack,
+      tableIndex: destinationTableIndex,
+      label: 'table.copy length',
+    );
+    final sourceOffset = _popTableOperand(
+      stack,
+      tableIndex: sourceTableIndex,
+      label: 'table.copy source offset',
+    );
+    final destinationOffset = _popTableOperand(
+      stack,
+      tableIndex: destinationTableIndex,
+      label: 'table.copy destination offset',
+    );
 
     final sourceTable = _tables[sourceTableIndex];
     final destinationTable = _tables[destinationTableIndex];
+    if (sourceOffset > sourceTable.length ||
+        length > sourceTable.length - sourceOffset) {
+      throw StateError('table.copy source out of bounds.');
+    }
+    if (destinationOffset > destinationTable.length ||
+        length > destinationTable.length - destinationOffset) {
+      throw StateError('table.copy destination out of bounds.');
+    }
 
     final temp = <int?>[];
     for (var i = 0; i < length; i++) {
@@ -4306,31 +4541,42 @@ final class WasmVm {
 
   void _tableGrow(Instruction instruction, List<WasmValue> stack) {
     final tableIndex = _checkTableIndex(instruction.immediate!);
-    final delta = _popI32(stack);
+    final delta = _popTableOperand(
+      stack,
+      tableIndex: tableIndex,
+      label: 'table.grow delta',
+    );
     final value = _popRef(stack);
 
-    if (delta < 0) {
-      stack.add(WasmValue.i32(-1));
-      return;
-    }
-
     final previous = _tables[tableIndex].grow(delta, value);
-    stack.add(WasmValue.i32(previous));
+    stack.add(_tableIndexValue(tableIndex, previous));
   }
 
   void _tableSize(Instruction instruction, List<WasmValue> stack) {
     final tableIndex = _checkTableIndex(instruction.immediate!);
-    stack.add(WasmValue.i32(_tables[tableIndex].length));
+    stack.add(_tableIndexValue(tableIndex, _tables[tableIndex].length));
   }
 
   void _tableFill(Instruction instruction, List<WasmValue> stack) {
     final tableIndex = _checkTableIndex(instruction.immediate!);
-    final length = _popLength(stack);
+    final length = _popTableOperand(
+      stack,
+      tableIndex: tableIndex,
+      label: 'table.fill length',
+    );
     final value = _popRef(stack);
-    final destinationOffset = _popLength(stack);
+    final destinationOffset = _popTableOperand(
+      stack,
+      tableIndex: tableIndex,
+      label: 'table.fill destination offset',
+    );
 
+    final table = _tables[tableIndex];
+    if (destinationOffset > table.length || length > table.length - destinationOffset) {
+      throw StateError('table.fill destination out of bounds.');
+    }
     final fillValues = List<int?>.filled(length, value);
-    _tables[tableIndex].initialize(destinationOffset, fillValues);
+    table.initialize(destinationOffset, fillValues);
   }
 
   void _i64Add128(List<WasmValue> stack) {
@@ -4545,20 +4791,68 @@ final class WasmVm {
     return WasmI64.signExtend(value, bits);
   }
 
+  static double _f32FromInteger(Object value) {
+    return WasmValue.fromF32Bits(_f32BitsFromInteger(value));
+  }
+
+  static int _f32BitsFromInteger(Object value) {
+    var integer = value is BigInt ? value : BigInt.from(value as int);
+    if (integer == BigInt.zero) {
+      return 0;
+    }
+
+    var signBit = 0;
+    if (integer < BigInt.zero) {
+      signBit = 1;
+      integer = -integer;
+    }
+
+    const significandBits = 24; // includes implicit leading bit
+    final bitLength = integer.bitLength;
+    var exponent = bitLength - 1;
+    BigInt significand;
+
+    if (bitLength <= significandBits) {
+      significand = integer << (significandBits - bitLength);
+    } else {
+      final shift = bitLength - significandBits;
+      significand = integer >> shift;
+      final remainderMask = (BigInt.one << shift) - BigInt.one;
+      final remainder = integer & remainderMask;
+      final halfway = BigInt.one << (shift - 1);
+      final shouldRoundUp =
+          remainder > halfway ||
+          (remainder == halfway && (significand & BigInt.one) == BigInt.one);
+      if (shouldRoundUp) {
+        significand += BigInt.one;
+        if (significand == (BigInt.one << significandBits)) {
+          significand >>= 1;
+          exponent++;
+        }
+      }
+    }
+
+    final exponentBits = exponent + 127;
+    final fractionBits = (significand & BigInt.from(0x7fffff)).toInt();
+    return (signBit << 31) | (exponentBits << 23) | fractionBits;
+  }
+
   static int _truncToI32S(double value) {
     _assertFinite(value);
-    if (value < _i32Min || value >= _i32MaxPlusOne) {
+    final truncated = value.truncate();
+    if (truncated < _i32MinValueInt || truncated > _i32MaxValueInt) {
       throw StateError('i32.trunc_*_s overflow trap');
     }
-    return value.truncate().toSigned(32);
+    return truncated.toSigned(32);
   }
 
   static int _truncToI32U(double value) {
     _assertFinite(value);
-    if (value < 0 || value >= _u32MaxPlusOne) {
+    final truncated = value.truncate();
+    if (truncated < 0 || truncated > _u32MaxValueInt) {
       throw StateError('i32.trunc_*_u overflow trap');
     }
-    return value.truncate().toUnsigned(32).toSigned(32);
+    return truncated.toUnsigned(32).toSigned(32);
   }
 
   static BigInt _truncToI64S(double value) {
@@ -4566,15 +4860,17 @@ final class WasmVm {
     if (value < _i64Min || value >= _i64MaxPlusOne) {
       throw StateError('i64.trunc_*_s overflow trap');
     }
-    return WasmI64.signed(value.truncate());
+    final truncated = BigInt.from(value);
+    return WasmI64.signed(truncated);
   }
 
   static BigInt _truncToI64U(double value) {
     _assertFinite(value);
-    if (value < 0 || value >= _u64MaxPlusOne) {
+    if (value <= -1.0 || value >= _u64MaxPlusOne) {
       throw StateError('i64.trunc_*_u overflow trap');
     }
-    return WasmI64.unsigned(value.truncate());
+    final truncated = BigInt.from(value);
+    return WasmI64.unsigned(truncated);
   }
 
   static int _truncSatToI32S(double value) {
@@ -4610,7 +4906,7 @@ final class WasmVm {
     if (value >= _i64Max) {
       return _i64MaxValue;
     }
-    return WasmI64.signed(value.truncate());
+    return WasmI64.signed(BigInt.from(value));
   }
 
   static BigInt _truncSatToI64U(double value) {
@@ -4620,7 +4916,7 @@ final class WasmVm {
     if (value >= _u64Max) {
       return _u64Mask;
     }
-    return WasmI64.unsigned(value.truncate());
+    return WasmI64.unsigned(BigInt.from(value));
   }
 
   static void _assertFinite(double value) {
@@ -4631,6 +4927,9 @@ final class WasmVm {
 
   static final BigInt _i64MinValue = WasmI64.minSigned;
   static final BigInt _i64MaxValue = WasmI64.maxSigned;
+  static const int _i32MinValueInt = -2147483648;
+  static const int _i32MaxValueInt = 2147483647;
+  static const int _u32MaxValueInt = 0xffffffff;
   static final BigInt _i64MagnitudeMask = WasmI64.magnitudeMask;
   static final BigInt _i64SignBitMask = WasmI64.signBitMask;
   static final BigInt _u64Mask = WasmI64.allOnesMask;
@@ -4640,10 +4939,8 @@ final class WasmVm {
 
   static const double _i32Min = -2147483648.0;
   static const double _i32Max = 2147483647.0;
-  static const double _i32MaxPlusOne = 2147483648.0;
 
   static const double _u32Max = 4294967295.0;
-  static const double _u32MaxPlusOne = 4294967296.0;
 
   static const double _i64Min = -9223372036854775808.0;
   static const double _i64Max = 9223372036854775807.0;

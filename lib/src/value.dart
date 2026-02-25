@@ -3,6 +3,18 @@ import 'dart:typed_data';
 import 'int64.dart';
 import 'module.dart';
 
+final class WasmF32Bits {
+  const WasmF32Bits(this.bits);
+
+  final int bits;
+}
+
+final class WasmF64Bits {
+  const WasmF64Bits(this.bits);
+
+  final Object bits;
+}
+
 final class WasmValue {
   const WasmValue._(this.type, this.raw);
 
@@ -18,11 +30,19 @@ final class WasmValue {
   }
 
   factory WasmValue.f32(double value) {
-    return WasmValue._(WasmValueType.f32, _toF32(value));
+    return WasmValue._(WasmValueType.f32, toF32Bits(value));
   }
 
   factory WasmValue.f64(double value) {
-    return WasmValue._(WasmValueType.f64, value);
+    return WasmValue._(WasmValueType.f64, toF64Bits(value));
+  }
+
+  factory WasmValue.f32Bits(int bits) {
+    return WasmValue._(WasmValueType.f32, bits.toUnsigned(32));
+  }
+
+  factory WasmValue.f64Bits(Object bits) {
+    return WasmValue._(WasmValueType.f64, WasmI64.unsigned(bits));
   }
 
   factory WasmValue.zeroForType(WasmValueType type) {
@@ -54,13 +74,23 @@ final class WasmValue {
         }
         return WasmValue.i64(value);
       case WasmValueType.f32:
+        if (value is WasmF32Bits) {
+          return WasmValue.f32Bits(value.bits);
+        }
         if (value is! num) {
-          throw StateError('Expected f32 value (num), got `$value`.');
+          throw StateError(
+            'Expected f32 value (num/$WasmF32Bits), got `$value`.',
+          );
         }
         return WasmValue.f32(value.toDouble());
       case WasmValueType.f64:
+        if (value is WasmF64Bits) {
+          return WasmValue.f64Bits(value.bits);
+        }
         if (value is! num) {
-          throw StateError('Expected f64 value (num), got `$value`.');
+          throw StateError(
+            'Expected f64 value (num/$WasmF64Bits), got `$value`.',
+          );
         }
         return WasmValue.f64(value.toDouble());
     }
@@ -78,12 +108,22 @@ final class WasmValue {
 
   double asF32() {
     _expectType(WasmValueType.f32);
-    return raw as double;
+    return fromF32Bits(raw as int);
+  }
+
+  int asF32Bits() {
+    _expectType(WasmValueType.f32);
+    return (raw as int).toUnsigned(32);
   }
 
   double asF64() {
     _expectType(WasmValueType.f64);
-    return raw as double;
+    return fromF64Bits(raw);
+  }
+
+  BigInt asF64Bits() {
+    _expectType(WasmValueType.f64);
+    return WasmI64.unsigned(raw);
   }
 
   Object toExternal() {
@@ -95,7 +135,7 @@ final class WasmValue {
         return WasmI64.fitsInInt(value) ? value.toInt() : value;
       case WasmValueType.f32:
       case WasmValueType.f64:
-        return raw as double;
+        return type == WasmValueType.f32 ? asF32() : asF64();
     }
   }
 
@@ -172,10 +212,5 @@ final class WasmValue {
     final low = data.getUint32(0, Endian.little);
     final high = data.getUint32(4, Endian.little);
     return WasmI64.fromU32PairUnsigned(low: low, high: high);
-  }
-
-  static double _toF32(double value) {
-    final data = ByteData(4)..setFloat32(0, value, Endian.little);
-    return data.getFloat32(0, Endian.little);
   }
 }

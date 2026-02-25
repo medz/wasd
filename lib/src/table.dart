@@ -1,7 +1,12 @@
 import 'module.dart';
 
 final class WasmTable {
-  WasmTable({required this.refType, required this.min, this.max})
+  WasmTable({
+    required this.refType,
+    required this.min,
+    this.max,
+    this.isTable64 = false,
+  })
     : _entries = List<int?>.filled(
         _validatedMin(min, max),
         null,
@@ -11,6 +16,7 @@ final class WasmTable {
   final WasmRefType refType;
   final int min;
   final int? max;
+  final bool isTable64;
   final List<int?> _entries;
 
   int get length => _entries.length;
@@ -32,6 +38,9 @@ final class WasmTable {
 
     final oldLength = _entries.length;
     final newLength = oldLength + delta;
+    if (newLength > 0x7fffffff) {
+      return -1;
+    }
     if (max != null && newLength > max!) {
       return -1;
     }

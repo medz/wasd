@@ -17,6 +17,8 @@ abstract final class Opcodes {
   static const int callIndirect = 0x11;
   static const int returnCall = 0x12;
   static const int returnCallIndirect = 0x13;
+  static const int callRef = 0x14;
+  static const int returnCallRef = 0x15;
 
   static const int drop = 0x1a;
   static const int select = 0x1b;
