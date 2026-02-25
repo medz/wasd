@@ -86,6 +86,7 @@ final class WasmVm {
     required List<WasmTable> tables,
     required List<WasmMemory> memories,
     required List<RuntimeGlobal> globals,
+    required List<bool> memory64ByIndex,
     required List<Uint8List?> dataSegments,
     required List<List<int?>?> elementSegments,
     this.maxCallDepth = 1024,
@@ -94,14 +95,23 @@ final class WasmVm {
        _tables = tables,
        _memories = memories,
        _globals = globals,
+       _memory64ByIndex = memory64ByIndex,
        _dataSegments = dataSegments,
-       _elementSegments = elementSegments;
+       _elementSegments = elementSegments {
+    if (_memory64ByIndex.length != _memories.length) {
+      throw ArgumentError(
+        'memory64ByIndex length ${_memory64ByIndex.length} does not match '
+        'memory count ${_memories.length}.',
+      );
+    }
+  }
 
   final List<RuntimeFunction> _functions;
   final List<WasmFunctionType> _types;
   final List<WasmTable> _tables;
   final List<WasmMemory> _memories;
   final List<RuntimeGlobal> _globals;
+  final List<bool> _memory64ByIndex;
   final List<Uint8List?> _dataSegments;
   final List<List<int?>?> _elementSegments;
   final int maxCallDepth;
@@ -1193,18 +1203,28 @@ final class WasmVm {
           pc++;
 
         case Opcodes.memorySize:
-          stack.add(
-            WasmValue.i32(_requireMemory(instruction.immediate!).pageCount),
-          );
+          final memoryIndex = instruction.immediate!;
+          final pageCount = _requireMemory(memoryIndex).pageCount;
+          if (_isMemory64(memoryIndex)) {
+            stack.add(WasmValue.i64(pageCount));
+          } else {
+            stack.add(WasmValue.i32(pageCount));
+          }
           pc++;
 
         case Opcodes.memoryGrow:
-          final memory = _requireMemory(instruction.immediate!);
-          final deltaPages = _popI32(stack);
-          if (deltaPages < 0) {
-            stack.add(WasmValue.i32(-1));
+          final memoryIndex = instruction.immediate!;
+          final memory = _requireMemory(memoryIndex);
+          final deltaPages = _popMemoryOperand(
+            stack,
+            memoryIndex: memoryIndex,
+            label: 'memory.grow delta',
+          );
+          final previous = memory.grow(deltaPages);
+          if (_isMemory64(memoryIndex)) {
+            stack.add(WasmValue.i64(previous));
           } else {
-            stack.add(WasmValue.i32(memory.grow(deltaPages)));
+            stack.add(WasmValue.i32(previous));
           }
           pc++;
 
@@ -2314,6 +2334,34 @@ final class WasmVm {
     return _memories[memoryIndex];
   }
 
+  bool _isMemory64(int memoryIndex) {
+    if (memoryIndex < 0 || memoryIndex >= _memory64ByIndex.length) {
+      throw RangeError(
+        'Invalid memory index: $memoryIndex (count=${_memory64ByIndex.length}).',
+      );
+    }
+    return _memory64ByIndex[memoryIndex];
+  }
+
+  BigInt _popUnsignedMemoryOperand(
+    List<WasmValue> stack, {
+    required int memoryIndex,
+  }) {
+    if (_isMemory64(memoryIndex)) {
+      return _toU64(_popI64(stack));
+    }
+    return BigInt.from(_toU32(_popI32(stack)));
+  }
+
+  int _popMemoryOperand(
+    List<WasmValue> stack, {
+    required int memoryIndex,
+    required String label,
+  }) {
+    final operand = _popUnsignedMemoryOperand(stack, memoryIndex: memoryIndex);
+    return _toLinearMemoryValue(operand, label: label);
+  }
+
   int _requireJumpIndex(int? index, String context) {
     if (index == null) {
       throw StateError('Missing jump index for `$context`.');
@@ -3284,68 +3332,76 @@ final class WasmVm {
     stack.add(WasmValue.i32(value ?? _nullRef));
   }
 
-  int _addressFromStack(List<WasmValue> stack, int offset) {
-    final base = _popI32(stack).toUnsigned(32);
-    return _toAddress(base + offset);
+  int _addressFromStack(List<WasmValue> stack, Instruction instruction) {
+    final memArg = instruction.memArg;
+    if (memArg == null) {
+      throw StateError('Missing memarg for opcode 0x${instruction.opcode}.');
+    }
+    final base = _popUnsignedMemoryOperand(
+      stack,
+      memoryIndex: memArg.memoryIndex,
+    );
+    final address = base + BigInt.from(memArg.offset);
+    return _toLinearMemoryValue(address, label: 'memory address');
   }
 
   int _loadI8(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     return _memoryForMemArg(instruction).loadI8(address);
   }
 
   int _loadU8(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     return _memoryForMemArg(instruction).loadU8(address);
   }
 
   int _loadI16(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     return _memoryForMemArg(instruction).loadI16(address);
   }
 
   int _loadU16(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     return _memoryForMemArg(instruction).loadU16(address);
   }
 
   int _loadI32(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     return _memoryForMemArg(instruction).loadI32(address);
   }
 
   int _loadU32(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     return _memoryForMemArg(instruction).loadU32(address);
   }
 
   BigInt _loadI64(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     return _memoryForMemArg(instruction).loadI64(address);
   }
 
   double _loadF32(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     return _memoryForMemArg(instruction).loadF32(address);
   }
 
   double _loadF64(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     return _memoryForMemArg(instruction).loadF64(address);
   }
 
   void _storeI8(List<WasmValue> stack, Instruction instruction, int value) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     _memoryForMemArg(instruction).storeI8(address, value);
   }
 
   void _storeI16(List<WasmValue> stack, Instruction instruction, int value) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     _memoryForMemArg(instruction).storeI16(address, value);
   }
 
   void _storeI32(List<WasmValue> stack, Instruction instruction, int value) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     _memoryForMemArg(instruction).storeI32(address, value);
   }
 
@@ -3354,17 +3410,17 @@ final class WasmVm {
     Instruction instruction,
     BigInt value,
   ) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     _memoryForMemArg(instruction).storeI64(address, value);
   }
 
   void _storeF32(List<WasmValue> stack, Instruction instruction, double value) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     _memoryForMemArg(instruction).storeF32(address, value);
   }
 
   void _storeF64(List<WasmValue> stack, Instruction instruction, double value) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     _memoryForMemArg(instruction).storeF64(address, value);
   }
 
@@ -3373,7 +3429,7 @@ final class WasmVm {
     Instruction instruction, {
     required int widthBytes,
   }) {
-    final address = _addressFromStack(stack, instruction.memArg!.offset);
+    final address = _addressFromStack(stack, instruction);
     if (widthBytes > 1 && address % widthBytes != 0) {
       throw StateError('unaligned atomic');
     }
@@ -3645,11 +3701,24 @@ final class WasmVm {
 
   void _memoryInit(Instruction instruction, List<WasmValue> stack) {
     final dataIndex = _checkDataSegmentIndex(instruction.immediate!);
-    final memory = _requireMemory(instruction.secondaryImmediate!);
+    final memoryIndex = instruction.secondaryImmediate!;
+    final memory = _requireMemory(memoryIndex);
 
-    final length = _popLength(stack);
-    final sourceOffset = _popLength(stack);
-    final destinationOffset = _popLength(stack);
+    final length = _popMemoryOperand(
+      stack,
+      memoryIndex: memoryIndex,
+      label: 'memory.init length',
+    );
+    final sourceOffset = _popMemoryOperand(
+      stack,
+      memoryIndex: memoryIndex,
+      label: 'memory.init source offset',
+    );
+    final destinationOffset = _popMemoryOperand(
+      stack,
+      memoryIndex: memoryIndex,
+      label: 'memory.init destination offset',
+    );
 
     final data = _dataSegments[dataIndex];
     if (data == null) {
@@ -3671,12 +3740,34 @@ final class WasmVm {
   }
 
   void _memoryCopy(Instruction instruction, List<WasmValue> stack) {
-    final destinationMemory = _requireMemory(instruction.immediate!);
-    final sourceMemory = _requireMemory(instruction.secondaryImmediate!);
+    final destinationMemoryIndex = instruction.immediate!;
+    final sourceMemoryIndex = instruction.secondaryImmediate!;
+    final destinationMemory = _requireMemory(destinationMemoryIndex);
+    final sourceMemory = _requireMemory(sourceMemoryIndex);
+    final destinationMemory64 = _isMemory64(destinationMemoryIndex);
+    final sourceMemory64 = _isMemory64(sourceMemoryIndex);
+    if (destinationMemory64 != sourceMemory64) {
+      throw StateError(
+        'memory.copy source and destination memories must have matching '
+        'index types.',
+      );
+    }
 
-    final length = _popLength(stack);
-    final sourceOffset = _popLength(stack);
-    final destinationOffset = _popLength(stack);
+    final length = _popMemoryOperand(
+      stack,
+      memoryIndex: destinationMemoryIndex,
+      label: 'memory.copy length',
+    );
+    final sourceOffset = _popMemoryOperand(
+      stack,
+      memoryIndex: sourceMemoryIndex,
+      label: 'memory.copy source offset',
+    );
+    final destinationOffset = _popMemoryOperand(
+      stack,
+      memoryIndex: destinationMemoryIndex,
+      label: 'memory.copy destination offset',
+    );
 
     if (identical(destinationMemory, sourceMemory)) {
       destinationMemory.copyBytes(destinationOffset, sourceOffset, length);
@@ -3688,13 +3779,20 @@ final class WasmVm {
   }
 
   void _memoryFill(Instruction instruction, List<WasmValue> stack) {
-    final length = _popLength(stack);
+    final memoryIndex = instruction.immediate!;
+    final length = _popMemoryOperand(
+      stack,
+      memoryIndex: memoryIndex,
+      label: 'memory.fill length',
+    );
     final fillValue = _popI32(stack);
-    final destinationOffset = _popLength(stack);
+    final destinationOffset = _popMemoryOperand(
+      stack,
+      memoryIndex: memoryIndex,
+      label: 'memory.fill destination offset',
+    );
 
-    _requireMemory(
-      instruction.immediate!,
-    ).fillBytes(destinationOffset, fillValue, length);
+    _requireMemory(memoryIndex).fillBytes(destinationOffset, fillValue, length);
   }
 
   void _tableInit(Instruction instruction, List<WasmValue> stack) {
@@ -3824,11 +3922,21 @@ final class WasmVm {
     return value;
   }
 
-  int _toAddress(int value) {
-    if (value < 0) {
-      throw RangeError('Negative memory address: $value.');
+  int _toLinearMemoryValue(
+    BigInt value, {
+    required String label,
+  }) {
+    if (value < BigInt.zero) {
+      throw RangeError('Negative $label: $value.');
     }
-    return value;
+    final maxSupported = BigInt.from(wasmAddressSpaceBytes);
+    if (value > maxSupported) {
+      throw RangeError(
+        '$label exceeds supported linear-memory range: '
+        '$value > $wasmAddressSpaceBytes.',
+      );
+    }
+    return value.toInt();
   }
 
   static int _toU32(int value) => value.toUnsigned(32);

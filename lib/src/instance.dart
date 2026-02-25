@@ -22,6 +22,7 @@ final class WasmInstance {
     required this.tables,
     required this.functions,
     required this.globals,
+    required List<bool> memory64ByIndex,
     required List<Uint8List?> dataSegments,
     required List<List<int?>?> elementSegments,
     required Map<String, int> functionExports,
@@ -39,6 +40,7 @@ final class WasmInstance {
          tables: tables,
          memories: memories,
          globals: globals,
+         memory64ByIndex: memory64ByIndex,
          dataSegments: dataSegments,
          elementSegments: elementSegments,
        );
@@ -361,6 +363,7 @@ final class WasmInstance {
       tables: List.unmodifiable(tables),
       functions: List.unmodifiable(functions),
       globals: globals,
+      memory64ByIndex: memory64ByIndex,
       dataSegments: dataSegments,
       elementSegments: elementSegments,
       functionExports: Map.unmodifiable(functionExports),
@@ -678,6 +681,7 @@ final class WasmInstance {
     if (module.dataSegments.isEmpty) {
       return;
     }
+    final memory64ByIndex = _memory64ByIndex(module);
 
     for (final data in module.dataSegments) {
       if (data.isPassive) {
@@ -691,11 +695,14 @@ final class WasmInstance {
       }
       final mem = memories[data.memoryIndex];
 
-      final offset = _evaluateConstExpr(
-        data.offsetExpr!,
-        globals,
-        module.types,
-      ).castTo(WasmValueType.i32).asI32();
+      final isMemory64 =
+          data.memoryIndex >= 0 &&
+          data.memoryIndex < memory64ByIndex.length &&
+          memory64ByIndex[data.memoryIndex];
+      final offset = _constExprMemoryOffset(
+        _evaluateConstExpr(data.offsetExpr!, globals, module.types),
+        isMemory64: isMemory64,
+      );
       mem.writeBytes(offset, data.bytes);
     }
   }
@@ -1085,15 +1092,25 @@ final class WasmInstance {
     required WasmFeatureSet features,
     required String context,
   }) {
-    if (memoryType.isMemory64) {
-      throw UnsupportedError(
-        '$context requires memory64, which is not yet supported.',
-      );
-    }
     if (memoryType.pageSizeLog2 != 0 && memoryType.pageSizeLog2 != 16) {
       throw FormatException(
         'Invalid custom page size for $context: '
         'log2=${memoryType.pageSizeLog2} (only log2=0 or log2=16 are supported).',
+      );
+    }
+    final pageSizeBytes = 1 << memoryType.pageSizeLog2;
+    final maxPagesSupported = wasmAddressSpaceBytes ~/ pageSizeBytes;
+    if (memoryType.minPages > maxPagesSupported) {
+      throw UnsupportedError(
+        '$context exceeds runtime memory capacity: minPages=${memoryType.minPages}, '
+        'maxSupportedPages=$maxPagesSupported.',
+      );
+    }
+    final declaredMax = memoryType.maxPages;
+    if (declaredMax != null && declaredMax > maxPagesSupported) {
+      throw UnsupportedError(
+        '$context exceeds runtime memory capacity: maxPages=$declaredMax, '
+        'maxSupportedPages=$maxPagesSupported.',
       );
     }
     if (memoryType.shared && !features.threads) {
@@ -1101,6 +1118,23 @@ final class WasmInstance {
         '$context uses shared memory, but threads feature is disabled.',
       );
     }
+  }
+
+  static int _constExprMemoryOffset(
+    WasmValue value, {
+    required bool isMemory64,
+  }) {
+    final offset = isMemory64
+        ? WasmI64.unsigned(value.castTo(WasmValueType.i64).asI64())
+        : BigInt.from(value.castTo(WasmValueType.i32).asI32().toUnsigned(32));
+    final maxSupported = BigInt.from(wasmAddressSpaceBytes);
+    if (offset > maxSupported) {
+      throw RangeError(
+        'Data segment offset exceeds supported linear-memory range: '
+        '$offset > $wasmAddressSpaceBytes.',
+      );
+    }
+    return offset.toInt();
   }
 
   static int _functionTypeDepth(WasmModule module, int typeIndex) {

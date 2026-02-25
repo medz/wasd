@@ -93,29 +93,32 @@ final class ByteReader {
   int readVarInt32() {
     var result = 0;
     var shift = 0;
-    var byte = 0;
-    var multiplier = 1;
 
-    while (true) {
-      byte = readByte();
-      result += (byte & 0x7f) * multiplier;
+    for (var i = 0; i < 5; i++) {
+      final byte = readByte();
+      result += (byte & 0x7f) << shift;
       shift += 7;
-      multiplier *= 128;
 
       if ((byte & 0x80) == 0) {
-        break;
+        if (i == 4) {
+          final payload = byte & 0x7f;
+          if (payload > 0x07 && payload < 0x78) {
+            throw const FormatException('Invalid varint32 encoding.');
+          }
+        }
+
+        if (shift < 32 && (byte & 0x40) != 0) {
+          result -= 1 << shift;
+        }
+        return result.toSigned(32);
       }
 
-      if (shift > 35) {
+      if (i == 4) {
         throw const FormatException('Invalid varint32 encoding.');
       }
     }
 
-    if (shift < 32 && (byte & 0x40) != 0) {
-      result -= multiplier;
-    }
-
-    return result.toSigned(32);
+    throw const FormatException('Invalid varint32 encoding.');
   }
 
   int readVarInt64() {
@@ -123,6 +126,9 @@ final class ByteReader {
     var shift = 0;
     var byte = 0;
     var byteCount = 0;
+    const maxBytes = 10;
+    final min = -(BigInt.one << 63);
+    final max = (BigInt.one << 63) - BigInt.one;
 
     while (true) {
       byte = readByte();
@@ -134,13 +140,19 @@ final class ByteReader {
         break;
       }
 
-      if (byteCount >= 10 || shift > 70) {
+      if (byteCount >= maxBytes) {
         throw const FormatException('Invalid varint64 encoding.');
       }
     }
 
-    if (byteCount > 10) {
+    if (byteCount > maxBytes) {
       throw const FormatException('Invalid varint64 encoding.');
+    }
+    if (byteCount == maxBytes) {
+      final payload = byte & 0x7f;
+      if (payload != 0x00 && payload != 0x7f) {
+        throw const FormatException('Invalid varint64 encoding.');
+      }
     }
 
     if (shift < 64 && (byte & 0x40) != 0) {
@@ -153,6 +165,9 @@ final class ByteReader {
     var signed = normalized;
     if ((normalized & (BigInt.one << 63)) != BigInt.zero) {
       signed -= BigInt.one << 64;
+    }
+    if (signed < min || signed > max) {
+      throw const FormatException('Invalid varint64 encoding.');
     }
     return signed.toInt();
   }

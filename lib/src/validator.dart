@@ -206,6 +206,7 @@ abstract final class WasmValidator {
 
   static void _validateDataSegments(WasmModule module) {
     final memoryCount = module.importedMemoryCount + module.memories.length;
+    final memory64ByIndex = _memory64ByIndex(module);
     final importedGlobals = module.imports
         .where((i) => i.kind == WasmImportKind.global)
         .map((i) => i.globalType!)
@@ -216,6 +217,11 @@ abstract final class WasmValidator {
         continue;
       }
       _checkIndex(data.memoryIndex, memoryCount, 'data memory');
+      final isMemory64 =
+          data.memoryIndex >= 0 &&
+          data.memoryIndex < memory64ByIndex.length &&
+          memory64ByIndex[data.memoryIndex];
+      final expectedType = isMemory64 ? WasmValueType.i64 : WasmValueType.i32;
       final exprType = _validateConstExpr(
         module: module,
         expr: data.offsetExpr!,
@@ -227,9 +233,9 @@ abstract final class WasmValidator {
           return !available[index].mutable;
         },
       );
-      if (exprType != WasmValueType.i32) {
+      if (exprType != expectedType) {
         throw FormatException(
-          'Validation failed: data offset expr must produce i32, got $exprType.',
+          'Validation failed: data offset expr must produce $expectedType, got $exprType.',
         );
       }
     }
