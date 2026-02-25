@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'imports.dart';
 import 'instance.dart';
+import 'hash.dart';
+import 'int64.dart';
 import 'memory.dart';
 import 'wasi_filesystem.dart';
 import 'wasi_fs_auto.dart' as auto_fs;
@@ -704,12 +706,10 @@ final class WasiPreview1 {
 
   Object? _fdFdstatSetRights(List<Object?> args) {
     final fd = _asI32(args, 0, 'fd');
-    final rightsBase = _asI64(args, 1, 'rights_base').toUnsigned(64);
-    final rightsInheriting = _asI64(
-      args,
-      2,
-      'rights_inheriting',
-    ).toUnsigned(64);
+    final rightsBase = WasmI64.unsigned(_asI64(args, 1, 'rights_base'));
+    final rightsInheriting = WasmI64.unsigned(
+      _asI64(args, 2, 'rights_inheriting'),
+    );
 
     final entry = _fdTable[fd];
     if (entry == null) {
@@ -993,12 +993,10 @@ final class WasiPreview1 {
     final pathPtr = _asI32(args, 2, 'path_ptr');
     final pathLen = _asI32(args, 3, 'path_len');
     final oflags = _asI32(args, 4, 'oflags');
-    final rightsBase = _asI64(args, 5, 'rights_base').toUnsigned(64);
-    final rightsInheriting = _asI64(
-      args,
-      6,
-      'rights_inheriting',
-    ).toUnsigned(64);
+    final rightsBase = WasmI64.unsigned(_asI64(args, 5, 'rights_base'));
+    final rightsInheriting = WasmI64.unsigned(
+      _asI64(args, 6, 'rights_inheriting'),
+    );
     final fdFlags = _asI32(args, 7, 'fdflags').toUnsigned(16);
     final fdOutPtr = _asI32(args, 8, 'fd_out_ptr');
 
@@ -1838,12 +1836,8 @@ final class WasiPreview1 {
     }
 
     final now = DateTime.now().microsecondsSinceEpoch * 1000;
-    final atimeNs = atimNow
-        ? now
-        : (atimSet ? atim.toUnsigned(64).toSigned(64) : null);
-    final mtimeNs = mtimNow
-        ? now
-        : (mtimSet ? mtim.toUnsigned(64).toSigned(64) : null);
+    final atimeNs = atimNow ? now : (atimSet ? WasmI64.signed(atim) : null);
+    final mtimeNs = mtimNow ? now : (mtimSet ? WasmI64.signed(mtim) : null);
     return (atimeNs, mtimeNs);
   }
 
@@ -1873,8 +1867,10 @@ final class WasiPreview1 {
     final totalLength = 24 + nameBytes.length;
     final bytes = Uint8List(totalLength);
     final view = ByteData.sublistView(bytes);
-    view.setUint64(0, nextCookie, Endian.little);
-    view.setUint64(8, inode, Endian.little);
+    view.setUint32(0, WasmI64.lowU32(nextCookie), Endian.little);
+    view.setUint32(4, WasmI64.highU32(nextCookie), Endian.little);
+    view.setUint32(8, WasmI64.lowU32(inode), Endian.little);
+    view.setUint32(12, WasmI64.highU32(inode), Endian.little);
     view.setUint32(16, nameBytes.length, Endian.little);
     view.setUint8(20, fileType);
     bytes.setRange(24, totalLength, nameBytes);
@@ -1956,7 +1952,7 @@ final class WasiPreview1 {
     if (value is! int) {
       throw StateError('WASI argument `$name` must be i64/int.');
     }
-    return value.toSigned(64);
+    return WasmI64.signed(value);
   }
 
   static int _fsErrno(WasiFsError error) {
@@ -1981,12 +1977,7 @@ final class WasiPreview1 {
   }
 
   static int _inodeFromPath(String path) {
-    var hash = 1469598103934665603;
-    for (final codeUnit in path.codeUnits) {
-      hash ^= codeUnit;
-      hash = (hash * 1099511628211) & 0x7fffffffffffffff;
-    }
-    return hash;
+    return WasmHash.fnv1a64Positive(path);
   }
 
   static int _fileTypeForFdKind(_FdKind kind) {

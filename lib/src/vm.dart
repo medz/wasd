@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'dart:math' as math;
 
+import 'int64.dart';
 import 'memory.dart';
 import 'module.dart';
 import 'opcode.dart';
@@ -564,9 +565,11 @@ final class WasmVm {
           pc++;
 
         case Opcodes.i64LtU:
-          final rhs = _toU64(_popI64(stack));
-          final lhs = _toU64(_popI64(stack));
-          stack.add(WasmValue.i32(lhs < rhs ? 1 : 0));
+          final rhs = _popI64(stack);
+          final lhs = _popI64(stack);
+          stack.add(
+            WasmValue.i32(WasmI64.compareUnsigned(lhs, rhs) < 0 ? 1 : 0),
+          );
           pc++;
 
         case Opcodes.i64GtS:
@@ -576,9 +579,11 @@ final class WasmVm {
           pc++;
 
         case Opcodes.i64GtU:
-          final rhs = _toU64(_popI64(stack));
-          final lhs = _toU64(_popI64(stack));
-          stack.add(WasmValue.i32(lhs > rhs ? 1 : 0));
+          final rhs = _popI64(stack);
+          final lhs = _popI64(stack);
+          stack.add(
+            WasmValue.i32(WasmI64.compareUnsigned(lhs, rhs) > 0 ? 1 : 0),
+          );
           pc++;
 
         case Opcodes.i64LeS:
@@ -588,9 +593,11 @@ final class WasmVm {
           pc++;
 
         case Opcodes.i64LeU:
-          final rhs = _toU64(_popI64(stack));
-          final lhs = _toU64(_popI64(stack));
-          stack.add(WasmValue.i32(lhs <= rhs ? 1 : 0));
+          final rhs = _popI64(stack);
+          final lhs = _popI64(stack);
+          stack.add(
+            WasmValue.i32(WasmI64.compareUnsigned(lhs, rhs) <= 0 ? 1 : 0),
+          );
           pc++;
 
         case Opcodes.i64GeS:
@@ -600,9 +607,11 @@ final class WasmVm {
           pc++;
 
         case Opcodes.i64GeU:
-          final rhs = _toU64(_popI64(stack));
-          final lhs = _toU64(_popI64(stack));
-          stack.add(WasmValue.i32(lhs >= rhs ? 1 : 0));
+          final rhs = _popI64(stack);
+          final lhs = _popI64(stack);
+          stack.add(
+            WasmValue.i32(WasmI64.compareUnsigned(lhs, rhs) >= 0 ? 1 : 0),
+          );
           pc++;
 
         case Opcodes.f32Eq:
@@ -784,17 +793,21 @@ final class WasmVm {
           pc++;
 
         case Opcodes.i64Add:
-          stack.add(WasmValue.i64(_popI64(stack) + _popI64(stack)));
+          final rhs = _popI64(stack);
+          final lhs = _popI64(stack);
+          stack.add(WasmValue.i64(WasmI64.add(lhs, rhs)));
           pc++;
 
         case Opcodes.i64Sub:
           final rhs = _popI64(stack);
           final lhs = _popI64(stack);
-          stack.add(WasmValue.i64(lhs - rhs));
+          stack.add(WasmValue.i64(WasmI64.sub(lhs, rhs)));
           pc++;
 
         case Opcodes.i64Mul:
-          stack.add(WasmValue.i64(_popI64(stack) * _popI64(stack)));
+          final rhs = _popI64(stack);
+          final lhs = _popI64(stack);
+          stack.add(WasmValue.i64(WasmI64.mul(lhs, rhs)));
           pc++;
 
         case Opcodes.i64DivS:
@@ -806,16 +819,16 @@ final class WasmVm {
           if (lhs == _i64MinValue && rhs == -1) {
             throw StateError('i64.div_s overflow trap');
           }
-          stack.add(WasmValue.i64(lhs ~/ rhs));
+          stack.add(WasmValue.i64(WasmI64.divS(lhs, rhs)));
           pc++;
 
         case Opcodes.i64DivU:
-          final rhs = _toU64(_popI64(stack));
-          final lhs = _toU64(_popI64(stack));
+          final rhs = _popI64(stack);
+          final lhs = _popI64(stack);
           if (rhs == 0) {
             throw StateError('i64.div_u division by zero trap');
           }
-          stack.add(WasmValue.i64(lhs ~/ rhs));
+          stack.add(WasmValue.i64(WasmI64.divU(lhs, rhs)));
           pc++;
 
         case Opcodes.i64RemS:
@@ -824,53 +837,59 @@ final class WasmVm {
           if (rhs == 0) {
             throw StateError('i64.rem_s division by zero trap');
           }
-          stack.add(WasmValue.i64(lhs.remainder(rhs)));
+          stack.add(WasmValue.i64(WasmI64.remS(lhs, rhs)));
           pc++;
 
         case Opcodes.i64RemU:
-          final rhs = _toU64(_popI64(stack));
-          final lhs = _toU64(_popI64(stack));
+          final rhs = _popI64(stack);
+          final lhs = _popI64(stack);
           if (rhs == 0) {
             throw StateError('i64.rem_u division by zero trap');
           }
-          stack.add(WasmValue.i64(lhs % rhs));
+          stack.add(WasmValue.i64(WasmI64.remU(lhs, rhs)));
           pc++;
 
         case Opcodes.i64And:
-          stack.add(WasmValue.i64(_popI64(stack) & _popI64(stack)));
+          final rhs = _popI64(stack);
+          final lhs = _popI64(stack);
+          stack.add(WasmValue.i64(WasmI64.and(lhs, rhs)));
           pc++;
 
         case Opcodes.i64Or:
-          stack.add(WasmValue.i64(_popI64(stack) | _popI64(stack)));
+          final rhs = _popI64(stack);
+          final lhs = _popI64(stack);
+          stack.add(WasmValue.i64(WasmI64.or(lhs, rhs)));
           pc++;
 
         case Opcodes.i64Xor:
-          stack.add(WasmValue.i64(_popI64(stack) ^ _popI64(stack)));
+          final rhs = _popI64(stack);
+          final lhs = _popI64(stack);
+          stack.add(WasmValue.i64(WasmI64.xor(lhs, rhs)));
           pc++;
 
         case Opcodes.i64Shl:
           final rhs = _popI64(stack) & 63;
-          stack.add(WasmValue.i64(_popI64(stack) << rhs));
+          stack.add(WasmValue.i64(WasmI64.shl(_popI64(stack), rhs)));
           pc++;
 
         case Opcodes.i64ShrS:
           final rhs = _popI64(stack) & 63;
-          stack.add(WasmValue.i64(_popI64(stack) >> rhs));
+          stack.add(WasmValue.i64(WasmI64.shrS(_popI64(stack), rhs)));
           pc++;
 
         case Opcodes.i64ShrU:
           final rhs = _popI64(stack) & 63;
-          stack.add(WasmValue.i64(_toU64(_popI64(stack)) >> rhs));
+          stack.add(WasmValue.i64(WasmI64.shrU(_popI64(stack), rhs)));
           pc++;
 
         case Opcodes.i64Rotl:
           final rhs = _popI64(stack) & 63;
-          stack.add(WasmValue.i64(_rotl64(_toU64(_popI64(stack)), rhs)));
+          stack.add(WasmValue.i64(_rotl64(_popI64(stack), rhs)));
           pc++;
 
         case Opcodes.i64Rotr:
           final rhs = _popI64(stack) & 63;
-          stack.add(WasmValue.i64(_rotr64(_toU64(_popI64(stack)), rhs)));
+          stack.add(WasmValue.i64(_rotr64(_popI64(stack), rhs)));
           pc++;
 
         case Opcodes.f32Abs:
@@ -1062,7 +1081,7 @@ final class WasmVm {
           pc++;
 
         case Opcodes.f32ConvertI64U:
-          stack.add(WasmValue.f32(_toU64(_popI64(stack)).toDouble()));
+          stack.add(WasmValue.f32(WasmI64.unsignedToDouble(_popI64(stack))));
           pc++;
 
         case Opcodes.f32DemoteF64:
@@ -1082,7 +1101,7 @@ final class WasmVm {
           pc++;
 
         case Opcodes.f64ConvertI64U:
-          stack.add(WasmValue.f64(_toU64(_popI64(stack)).toDouble()));
+          stack.add(WasmValue.f64(WasmI64.unsignedToDouble(_popI64(stack))));
           pc++;
 
         case Opcodes.f64PromoteF32:
@@ -1636,8 +1655,8 @@ final class WasmVm {
   }
 
   static int _toU32(int value) => value.toUnsigned(32);
-  static int _toU64(int value) => value.toUnsigned(64);
-  static int _toSignedI64(int value) => value.toUnsigned(64).toSigned(64);
+  static int _toU64(int value) => WasmI64.unsigned(value);
+  static int _toSignedI64(int value) => WasmI64.signed(value);
 
   static int _i32Clz(int value) {
     final v = _toU32(value);
@@ -1672,35 +1691,15 @@ final class WasmVm {
   }
 
   static int _i64Clz(int value) {
-    final v = _toU64(value);
-    if (v == 0) {
-      return 64;
-    }
-    return 64 - v.bitLength;
+    return WasmI64.clz(value);
   }
 
   static int _i64Ctz(int value) {
-    var v = _toU64(value);
-    if (v == 0) {
-      return 64;
-    }
-
-    var count = 0;
-    while ((v & 1) == 0) {
-      count++;
-      v >>= 1;
-    }
-    return count;
+    return WasmI64.ctz(value);
   }
 
   static int _i64Popcnt(int value) {
-    var v = _toU64(value);
-    var count = 0;
-    while (v != 0) {
-      v &= v - 1;
-      count++;
-    }
-    return count;
+    return WasmI64.popcnt(value);
   }
 
   static int _rotl32(int value, int shift) {
@@ -1718,17 +1717,11 @@ final class WasmVm {
   }
 
   static int _rotl64(int value, int shift) {
-    if (shift == 0) {
-      return value.toUnsigned(64);
-    }
-    return ((value << shift) | (value >> (64 - shift))).toUnsigned(64);
+    return WasmI64.rotl(value, shift);
   }
 
   static int _rotr64(int value, int shift) {
-    if (shift == 0) {
-      return value.toUnsigned(64);
-    }
-    return ((value >> shift) | (value << (64 - shift))).toUnsigned(64);
+    return WasmI64.rotr(value, shift);
   }
 
   static double _fMin(double a, double b) {
@@ -1767,7 +1760,10 @@ final class WasmVm {
   static double _copySignF64(double magnitude, double sign) {
     final m = WasmValue.toF64Bits(magnitude);
     final s = WasmValue.toF64Bits(sign);
-    final bits = (m & 0x7fffffffffffffff) | (s & 0x8000000000000000);
+    final bits = WasmI64.or(
+      WasmI64.and(m, _i64MagnitudeMask),
+      WasmI64.and(s, _i64SignBitMask),
+    );
     return WasmValue.fromF64Bits(bits);
   }
 
@@ -1795,8 +1791,7 @@ final class WasmVm {
   }
 
   static int _signExtend64(int value, int bits) {
-    final shift = 64 - bits;
-    return (value << shift >> shift).toSigned(64);
+    return WasmI64.signExtend(value, bits);
   }
 
   static int _truncToI32S(double value) {
@@ -1820,7 +1815,7 @@ final class WasmVm {
     if (value < _i64Min || value >= _i64MaxPlusOne) {
       throw StateError('i64.trunc_*_s overflow trap');
     }
-    return value.truncate().toSigned(64);
+    return WasmI64.signed(value.truncate());
   }
 
   static int _truncToI64U(double value) {
@@ -1828,7 +1823,7 @@ final class WasmVm {
     if (value < 0 || value >= _u64MaxPlusOne) {
       throw StateError('i64.trunc_*_u overflow trap');
     }
-    return value.truncate();
+    return WasmI64.unsigned(value.truncate());
   }
 
   static int _truncSatToI32S(double value) {
@@ -1859,12 +1854,12 @@ final class WasmVm {
       return 0;
     }
     if (value <= _i64Min) {
-      return _i64Min.toInt();
+      return _i64MinValue;
     }
     if (value >= _i64Max) {
-      return 0x7fffffffffffffff;
+      return _i64MaxValue;
     }
-    return value.truncate().toSigned(64);
+    return WasmI64.signed(value.truncate());
   }
 
   static int _truncSatToI64U(double value) {
@@ -1872,9 +1867,9 @@ final class WasmVm {
       return 0;
     }
     if (value >= _u64Max) {
-      return 0xffffffffffffffff;
+      return _u64Mask;
     }
-    return value.truncate();
+    return WasmI64.unsigned(value.truncate());
   }
 
   static void _assertFinite(double value) {
@@ -1883,7 +1878,11 @@ final class WasmVm {
     }
   }
 
-  static const int _i64MinValue = -0x8000000000000000;
+  static final int _i64MinValue = WasmI64.minSigned;
+  static final int _i64MaxValue = WasmI64.maxSigned;
+  static final int _i64MagnitudeMask = WasmI64.magnitudeMask;
+  static final int _i64SignBitMask = WasmI64.signBitMask;
+  static final int _u64Mask = WasmI64.allOnesMask;
 
   static const double _i32Min = -2147483648.0;
   static const double _i32Max = 2147483647.0;

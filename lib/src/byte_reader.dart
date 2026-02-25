@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'int64.dart';
+
 final class ByteReader {
   ByteReader(Uint8List bytes) : _bytes = bytes, offset = 0;
 
@@ -90,13 +92,13 @@ final class ByteReader {
   }
 
   int readVarInt64() {
-    var result = 0;
+    var result = BigInt.zero;
     var shift = 0;
     var byte = 0;
 
     while (true) {
       byte = readByte();
-      result |= (byte & 0x7f) << shift;
+      result |= BigInt.from(byte & 0x7f) << shift;
       shift += 7;
 
       if ((byte & 0x80) == 0) {
@@ -109,10 +111,10 @@ final class ByteReader {
     }
 
     if (shift < 64 && (byte & 0x40) != 0) {
-      result |= -1 << shift;
+      result |= (-BigInt.one) << shift;
     }
 
-    return result.toSigned(64);
+    return WasmI64.signed(result.toInt());
   }
 
   void expectEof() {

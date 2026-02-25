@@ -140,6 +140,24 @@ On Linux/Windows, replace `-d macos` with your desktop target.
 Controls in window mode: arrows/WASD move, `Ctrl` (and `Space`) fire, `Alt`
 strafe, `Shift` run, `Enter` use, `Esc` menu.
 
+## Conformance Tooling
+
+The repository includes a first-pass conformance runner and pinned toolchain
+bootstrap scripts:
+
+```bash
+tool/ensure_toolchains.sh
+dart run tool/spec_runner.dart --target=vm --suite=all
+dart run tool/spec_runner.dart --target=js --suite=all
+dart run tool/spec_runner.dart --target=wasm --suite=all
+```
+
+Artifacts:
+
+- Markdown report: [doc/wasm_conformance_matrix.md](doc/wasm_conformance_matrix.md)
+- JSON report: `.dart_tool/spec_runner/latest.json`
+- Spec update tracker: `dart run tool/spec_sync.dart`
+
 ## zwasm WAT samples
 
 Copied from `zwasm/examples/wat` into:

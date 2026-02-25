@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'int64.dart';
+
 const int wasmPageSize = 64 * 1024;
 const int wasmMaxPages = 65536;
 
@@ -51,12 +53,16 @@ final class WasmMemory {
 
   int loadI64(int address) {
     _checkBounds(address, 8);
-    return _view.getInt64(address, Endian.little);
+    final low = _view.getUint32(address, Endian.little);
+    final high = _view.getUint32(address + 4, Endian.little);
+    return WasmI64.fromU32PairSigned(low: low, high: high);
   }
 
   int loadU64(int address) {
     _checkBounds(address, 8);
-    return _view.getUint64(address, Endian.little);
+    final low = _view.getUint32(address, Endian.little);
+    final high = _view.getUint32(address + 4, Endian.little);
+    return WasmI64.fromU32PairUnsigned(low: low, high: high);
   }
 
   double loadF32(int address) {
@@ -86,7 +92,11 @@ final class WasmMemory {
 
   void storeI64(int address, int value) {
     _checkBounds(address, 8);
-    _view.setInt64(address, value.toSigned(64), Endian.little);
+    final normalized = WasmI64.signed(value);
+    final low = WasmI64.lowU32(normalized);
+    final high = WasmI64.highU32(normalized);
+    _view.setUint32(address, low, Endian.little);
+    _view.setUint32(address + 4, high, Endian.little);
   }
 
   void storeF32(int address, double value) {

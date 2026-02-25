@@ -847,6 +847,45 @@ void main() {
         throwsA(isA<UnsupportedError>()),
       );
     });
+
+    test('supports async invoke wrappers', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([0x7f, 0x7f], [0x7f]),
+        ],
+        functionTypeIndices: [0],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._localGet(1),
+              Opcodes.i32Add,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: [
+          _ExportSpec(name: 'add', kind: WasmExportKind.function, index: 0),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(wasm);
+      expect(await instance.invokeI32Async('add', [40, 2]), 42);
+      expect(await instance.invokeMultiAsync('add', [1, 2]), [3]);
+    });
+
+    test('supports layered feature defaults and extension query', () {
+      final features = WasmFeatureSet.layeredDefaults(
+        profile: WasmFeatureProfile.stable,
+        additionalEnabled: const {'memory64'},
+        additionalDisabled: const {'exception_handling'},
+      );
+
+      expect(features.simd, isTrue);
+      expect(features.exceptionHandling, isFalse);
+      expect(features.isEnabled('memory64'), isTrue);
+      expect(features.isEnabled('threads'), isFalse);
+    });
   });
 }
 

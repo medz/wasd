@@ -4,6 +4,7 @@
 .pub/
 build/
 coverage/
+.toolchains/
 
 # IDE / OS
 .DS_Store

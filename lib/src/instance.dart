@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'byte_reader.dart';
 import 'features.dart';
+import 'int64.dart';
 import 'imports.dart';
 import 'memory.dart';
 import 'module.dart';
@@ -94,14 +95,21 @@ final class WasmInstance {
           }
 
           final callback = imports.functions[import.key];
-          if (callback == null) {
+          final asyncCallback = imports.asyncFunctions[import.key];
+          if (callback == null && asyncCallback == null) {
             throw StateError('Missing function import `${import.key}`.');
+          }
+          if (callback == null && asyncCallback != null) {
+            throw UnsupportedError(
+              'Async-only host import `${import.key}` is not available in the '
+              'synchronous VM pipeline yet. Provide a sync callback for now.',
+            );
           }
 
           functions.add(
             HostRuntimeFunction(
               type: module.types[typeIndex],
-              callback: callback,
+              callback: callback!,
             ),
           );
 
@@ -352,11 +360,32 @@ final class WasmInstance {
     return _externalizeResults(results);
   }
 
+  Future<Object?> invokeAsync(
+    String exportName, [
+    List<Object?> args = const [],
+  ]) async {
+    return invoke(exportName, args);
+  }
+
   List<Object?> invokeMulti(
     String exportName, [
     List<Object?> args = const [],
   ]) {
     final result = invoke(exportName, args);
+    if (result == null) {
+      return const [];
+    }
+    if (result is List<Object?>) {
+      return result;
+    }
+    return [result];
+  }
+
+  Future<List<Object?>> invokeMultiAsync(
+    String exportName, [
+    List<Object?> args = const [],
+  ]) async {
+    final result = await invokeAsync(exportName, args);
     if (result == null) {
       return const [];
     }
@@ -374,12 +403,34 @@ final class WasmInstance {
     return result.toSigned(32);
   }
 
+  Future<int> invokeI32Async(
+    String exportName, [
+    List<Object?> args = const [],
+  ]) async {
+    final result = await invokeAsync(exportName, args);
+    if (result is! int) {
+      throw StateError('Export `$exportName` does not return an i32 value.');
+    }
+    return result.toSigned(32);
+  }
+
   int invokeI64(String exportName, [List<Object?> args = const []]) {
     final result = invoke(exportName, args);
     if (result is! int) {
       throw StateError('Export `$exportName` does not return an i64 value.');
     }
-    return result.toSigned(64);
+    return WasmI64.signed(result);
+  }
+
+  Future<int> invokeI64Async(
+    String exportName, [
+    List<Object?> args = const [],
+  ]) async {
+    final result = await invokeAsync(exportName, args);
+    if (result is! int) {
+      throw StateError('Export `$exportName` does not return an i64 value.');
+    }
+    return WasmI64.signed(result);
   }
 
   double invokeF32(String exportName, [List<Object?> args = const []]) {
@@ -390,8 +441,30 @@ final class WasmInstance {
     return result;
   }
 
+  Future<double> invokeF32Async(
+    String exportName, [
+    List<Object?> args = const [],
+  ]) async {
+    final result = await invokeAsync(exportName, args);
+    if (result is! double) {
+      throw StateError('Export `$exportName` does not return an f32 value.');
+    }
+    return result;
+  }
+
   double invokeF64(String exportName, [List<Object?> args = const []]) {
     final result = invoke(exportName, args);
+    if (result is! double) {
+      throw StateError('Export `$exportName` does not return an f64 value.');
+    }
+    return result;
+  }
+
+  Future<double> invokeF64Async(
+    String exportName, [
+    List<Object?> args = const [],
+  ]) async {
+    final result = await invokeAsync(exportName, args);
     if (result is! double) {
       throw StateError('Export `$exportName` does not return an f64 value.');
     }
@@ -423,7 +496,7 @@ final class WasmInstance {
     if (value is! int) {
       throw StateError('Global `$exportName` is not i64.');
     }
-    return value.toSigned(64);
+    return WasmI64.signed(value);
   }
 
   double readGlobalF32(String exportName) {
@@ -604,9 +677,12 @@ final class WasmInstance {
           stack.add(WasmValue.f32(WasmValue.fromF32Bits(bits)));
 
         case Opcodes.f64Const:
-          final bits = ByteData.sublistView(
-            reader.readBytes(8),
-          ).getUint64(0, Endian.little);
+          final bytes = reader.readBytes(8);
+          final data = ByteData.sublistView(bytes);
+          final bits = WasmI64.fromU32PairUnsigned(
+            low: data.getUint32(0, Endian.little),
+            high: data.getUint32(4, Endian.little),
+          );
           stack.add(WasmValue.f64(WasmValue.fromF64Bits(bits)));
 
         case Opcodes.globalGet:

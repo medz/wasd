@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'int64.dart';
 import 'module.dart';
 
 final class WasmValue {
@@ -13,7 +14,7 @@ final class WasmValue {
   }
 
   factory WasmValue.i64(int value) {
-    return WasmValue._(WasmValueType.i64, value.toSigned(64));
+    return WasmValue._(WasmValueType.i64, WasmI64.signed(value));
   }
 
   factory WasmValue.f32(double value) {
@@ -69,7 +70,7 @@ final class WasmValue {
 
   int asI64() {
     _expectType(WasmValueType.i64);
-    return (raw as int).toSigned(64);
+    return WasmI64.signed(raw as int);
   }
 
   double asF32() {
@@ -149,7 +150,10 @@ final class WasmValue {
   }
 
   static double fromF64Bits(int bits) {
-    final data = ByteData(8)..setUint64(0, bits.toUnsigned(64), Endian.little);
+    final normalized = WasmI64.unsigned(bits);
+    final data = ByteData(8)
+      ..setUint32(0, WasmI64.lowU32(normalized), Endian.little)
+      ..setUint32(4, WasmI64.highU32(normalized), Endian.little);
     return data.getFloat64(0, Endian.little);
   }
 
@@ -160,7 +164,9 @@ final class WasmValue {
 
   static int toF64Bits(double value) {
     final data = ByteData(8)..setFloat64(0, value, Endian.little);
-    return data.getUint64(0, Endian.little);
+    final low = data.getUint32(0, Endian.little);
+    final high = data.getUint32(4, Endian.little);
+    return WasmI64.fromU32PairUnsigned(low: low, high: high);
   }
 
   static double _toF32(double value) {

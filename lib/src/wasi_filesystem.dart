@@ -2,6 +2,8 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'hash.dart';
+
 abstract interface class WasiFileDescriptor {
   bool get readable;
   bool get writable;
@@ -679,12 +681,7 @@ final class WasiInMemoryFileSystem
   }
 
   static int _inodeFromPath(String path) {
-    var hash = 1469598103934665603;
-    for (final codeUnit in path.codeUnits) {
-      hash ^= codeUnit;
-      hash = (hash * 1099511628211) & 0x7fffffffffffffff;
-    }
-    return hash;
+    return WasmHash.fnv1a64Positive(path);
   }
 }
 
