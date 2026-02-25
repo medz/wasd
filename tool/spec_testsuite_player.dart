@@ -1,49 +1,20 @@
 import 'dart:convert';
-import 'dart:io';
+import 'dart:js_interop';
 import 'dart:typed_data';
 
-import 'src/spec_player_bridge_io.dart'
-    if (dart.library.js_interop) 'src/spec_player_bridge_web.dart'
-    as player_bridge;
 import 'package:wasd/wasd.dart';
 
-enum _SpecSuite { core, proposal, all }
+@JS('globalThis.wasdSpecReadText')
+external JSString _jsSpecReadText(JSString path);
 
-enum _WastConverterKind { wasmToolsJsonFromWast, wabtWast2json }
+@JS('globalThis.wasdSpecReadBinary')
+external JSUint8Array _jsSpecReadBinary(JSString path);
 
-final class _WastConverter {
-  const _WastConverter({required this.kind, required this.binary});
+@JS('globalThis.wasdSpecSetResult')
+external void _jsSpecSetResult(JSString payloadJson);
 
-  final _WastConverterKind kind;
-  final String binary;
-
-  String get label => switch (kind) {
-    _WastConverterKind.wasmToolsJsonFromWast => 'wasm-tools json-from-wast',
-    _WastConverterKind.wabtWast2json => 'wabt wast2json',
-  };
-
-  List<String> command({
-    required String wastFile,
-    required String outputJsonPath,
-    required String wasmDir,
-  }) => switch (kind) {
-    _WastConverterKind.wasmToolsJsonFromWast => <String>[
-      'json-from-wast',
-      wastFile,
-      '-o',
-      outputJsonPath,
-      '--wasm-dir',
-      wasmDir,
-    ],
-    _WastConverterKind.wabtWast2json => <String>[
-      '--enable-all',
-      wastFile,
-      '-o',
-      outputJsonPath,
-    ],
-  };
-}
-
+@JS('globalThis.wasdSpecSetError')
+external void _jsSpecSetError(JSString payloadJson);
 final class _SpecRunnerFailure implements Exception {
   _SpecRunnerFailure(this.reason, this.details);
 
@@ -144,8 +115,6 @@ final class _FileResult {
     this.firstFailureLine,
     this.firstFailureReason,
     this.firstFailureDetails,
-    this.wast2jsonStdout,
-    this.wast2jsonStderr,
   });
 
   final String path;
@@ -158,8 +127,6 @@ final class _FileResult {
   final int? firstFailureLine;
   final String? firstFailureReason;
   final String? firstFailureDetails;
-  final String? wast2jsonStdout;
-  final String? wast2jsonStderr;
 
   Map<String, Object?> toJson() => {
     'path': path,
@@ -172,46 +139,20 @@ final class _FileResult {
     'first_failure_line': firstFailureLine,
     'first_failure_reason': firstFailureReason,
     'first_failure_details': firstFailureDetails,
-    'wast2json_stdout': wast2jsonStdout,
-    'wast2json_stderr': wast2jsonStderr,
-  };
-}
-
-final class _PreparedManifestEntry {
-  const _PreparedManifestEntry({
-    required this.path,
-    required this.group,
-    required this.workDirPath,
-    required this.scriptJsonPath,
-    required this.wasmDirPath,
-  });
-
-  final String path;
-  final String group;
-  final String workDirPath;
-  final String scriptJsonPath;
-  final String wasmDirPath;
-
-  Map<String, Object?> toJson() => {
-    'path': path,
-    'group': group,
-    'work_dir': workDirPath,
-    'script_json_path': scriptJsonPath,
-    'wasm_dir': wasmDirPath,
+    'wast2json_stdout': null,
+    'wast2json_stderr': null,
   };
 }
 
 final class _ScriptExecutionState {
   _ScriptExecutionState({
-    required this.workDirPath,
     required WasmFeatureSet features,
-    Uint8List Function(String filename)? moduleLoader,
+    required Uint8List Function(String filename) moduleLoader,
   }) : _features = features,
        _moduleLoader = moduleLoader;
 
-  final String workDirPath;
   final WasmFeatureSet _features;
-  final Uint8List Function(String filename)? _moduleLoader;
+  final Uint8List Function(String filename) _moduleLoader;
 
   final Map<String, WasmInstance> _namedModules = <String, WasmInstance>{};
   final Map<String, WasmInstance> _registeredModules = <String, WasmInstance>{};
@@ -420,19 +361,14 @@ final class _ScriptExecutionState {
   }
 
   Uint8List _readBinaryModule(String filename) {
-    final loader = _moduleLoader;
-    if (loader != null) {
-      return loader(filename);
-    }
-
-    final file = File('$workDirPath/$filename');
-    if (!file.existsSync()) {
+    try {
+      return _moduleLoader(filename);
+    } catch (_) {
       throw _SpecRunnerFailure(
         'module-file-missing',
-        'Generated file not found: ${file.path}',
+        'Generated file not found: $filename',
       );
     }
-    return file.readAsBytesSync();
   }
 
   List<Object?> _runAction(Map<String, Object?> action) {
@@ -890,223 +826,15 @@ final class _ScriptExecutionState {
 }
 
 Future<void> main(List<String> args) async {
-  if (args.contains('--help') || args.contains('-h')) {
-    _printUsage();
-    return;
+  final manifestPath = _argValue(args, '--player-manifest');
+  if (manifestPath == null || manifestPath.isEmpty) {
+    final message = 'Missing required --player-manifest=<path>.';
+    _jsSpecSetError(jsonEncode(<String, Object?>{'error': message}).toJS);
+    throw ArgumentError(message);
   }
 
-  final prepareManifest = _argValue(args, '--prepare-manifest');
-  final playerManifest = _argValue(args, '--player-manifest');
-  if (prepareManifest != null && playerManifest != null) {
-    stderr.writeln(
-      'Use only one mode: --prepare-manifest or --player-manifest.',
-    );
-    exitCode = 2;
-    return;
-  }
-
-  if (prepareManifest != null) {
-    await _runPrepareManifestMode(args, prepareManifest);
-    return;
-  }
-  if (playerManifest != null) {
-    await _runPlayerMode(playerManifest);
-    return;
-  }
-
-  await _runVmMode(args);
-}
-
-Future<void> _runVmMode(List<String> args) async {
-  final suite = _parseSuite(_argValue(args, '--suite') ?? 'proposal');
-  final testsuiteDir =
-      _argValue(args, '--testsuite-dir') ??
-      '${Directory.current.path}/third_party/wasm-spec-tests';
-  final outputJson =
-      _argValue(args, '--output-json') ??
-      '.dart_tool/spec_runner/proposal_latest.json';
-  final outputMarkdown =
-      _argValue(args, '--output-md') ?? 'doc/wasm_proposal_failures.md';
-  final maxFilesRaw = _argValue(args, '--max-files');
-  final maxFiles = maxFilesRaw == null ? null : int.tryParse(maxFilesRaw);
-
-  final converter = await _resolveWastConverter(
-    jsonFromWast: _argValue(args, '--json-from-wast'),
-    wast2json: _argValue(args, '--wast2json'),
-  );
-  final testsuite = Directory(testsuiteDir);
-  if (!testsuite.existsSync()) {
-    stderr.writeln('testsuite directory does not exist: ${testsuite.path}');
-    exitCode = 2;
-    return;
-  }
-
-  final startedAt = DateTime.now().toUtc();
-  final files = _collectSuiteFiles(testsuite.path, suite);
-  final selectedFiles = maxFiles == null
-      ? files
-      : files.take(maxFiles).toList();
-
-  final results = <_FileResult>[];
-  final reasonCounts = <String, int>{};
-  final groupStats = <String, Map<String, int>>{};
-
-  for (final file in selectedFiles) {
-    final group = _groupForFile(file, testsuite.path);
-    final result = await _runWastFile(
-      file: file,
-      group: group,
-      converter: converter,
-    );
-    results.add(result);
-    _accumulateStats(result, groupStats: groupStats, reasonCounts: reasonCounts);
-  }
-
-  final endedAt = DateTime.now().toUtc();
-  final revision = await _git([
-    '-C',
-    testsuite.path,
-    'rev-parse',
-    '--short',
-    'HEAD',
-  ]);
-
-  final payload = _buildPayload(
-    startedAt: startedAt,
-    endedAt: endedAt,
-    suiteName: suite.name,
-    testsuiteDir: testsuite.path,
-    testsuiteRevision: revision,
-    converterLabel: converter.label,
-    converterBinary: converter.binary,
-    results: results,
-    groupStats: groupStats,
-    reasonCounts: reasonCounts,
-  );
-
-  final jsonFile = File(outputJson);
-  await jsonFile.parent.create(recursive: true);
-  await jsonFile.writeAsString(
-    const JsonEncoder.withIndent('  ').convert(payload),
-  );
-
-  final markdownFile = File(outputMarkdown);
-  await markdownFile.parent.create(recursive: true);
-  await markdownFile.writeAsString(
-    _renderMarkdown(payload: payload, results: results, groupStats: groupStats),
-  );
-
-  final filesFailed = (payload['totals'] as Map<String, Object?>)['files_failed'] as int;
-  stdout.writeln(
-    'spec-testsuite status: ${filesFailed == 0 ? 'passed' : 'failed'}',
-  );
-  stdout.writeln('json report: ${jsonFile.path}');
-  stdout.writeln('markdown report: ${markdownFile.path}');
-
-  if (filesFailed > 0) {
-    exitCode = 1;
-  }
-}
-
-Future<void> _runPrepareManifestMode(
-  List<String> args,
-  String manifestPath,
-) async {
-  final suite = _parseSuite(_argValue(args, '--suite') ?? 'proposal');
-  final testsuiteDir =
-      _argValue(args, '--testsuite-dir') ??
-      '${Directory.current.path}/third_party/wasm-spec-tests';
-  final maxFilesRaw = _argValue(args, '--max-files');
-  final maxFiles = maxFilesRaw == null ? null : int.tryParse(maxFilesRaw);
-  final prepareRoot =
-      _argValue(args, '--prepare-root') ?? '.dart_tool/spec_runner/proposal_bundle';
-
-  final converter = await _resolveWastConverter(
-    jsonFromWast: _argValue(args, '--json-from-wast'),
-    wast2json: _argValue(args, '--wast2json'),
-  );
-  final testsuite = Directory(testsuiteDir);
-  if (!testsuite.existsSync()) {
-    stderr.writeln('testsuite directory does not exist: ${testsuite.path}');
-    exitCode = 2;
-    return;
-  }
-
-  final files = _collectSuiteFiles(testsuite.path, suite);
-  final selectedFiles = maxFiles == null
-      ? files
-      : files.take(maxFiles).toList();
-
-  final rootDir = Directory(prepareRoot);
-  if (rootDir.existsSync()) {
-    await rootDir.delete(recursive: true);
-  }
-  await rootDir.create(recursive: true);
-
-  final startedAt = DateTime.now().toUtc();
-  final entries = <_PreparedManifestEntry>[];
-  for (var i = 0; i < selectedFiles.length; i++) {
-    final file = selectedFiles[i];
-    final group = _groupForFile(file, testsuite.path);
-    final slot = Directory('${rootDir.path}/f${i.toString().padLeft(4, '0')}');
-    await slot.create(recursive: true);
-    final jsonPath = '${slot.path}/script.json';
-    final conversion = await Process.run(
-      converter.binary,
-      converter.command(
-        wastFile: file,
-        outputJsonPath: jsonPath,
-        wasmDir: slot.path,
-      ),
-    );
-    if (conversion.exitCode != 0) {
-      stderr.writeln('failed to convert: $file');
-      stderr.writeln(((conversion.stderr as String?) ?? '').trim());
-      exitCode = 1;
-      return;
-    }
-    entries.add(
-      _PreparedManifestEntry(
-        path: file,
-        group: group,
-        workDirPath: slot.path,
-        scriptJsonPath: jsonPath,
-        wasmDirPath: slot.path,
-      ),
-    );
-  }
-
-  final endedAt = DateTime.now().toUtc();
-  final revision = await _git([
-    '-C',
-    testsuite.path,
-    'rev-parse',
-    '--short',
-    'HEAD',
-  ]);
-  final payload = <String, Object?>{
-    'started_at_utc': startedAt.toIso8601String(),
-    'ended_at_utc': endedAt.toIso8601String(),
-    'suite': suite.name,
-    'testsuite_dir': testsuite.path,
-    'testsuite_revision': revision,
-    'wast_converter': converter.label,
-    'wast_converter_binary': converter.binary,
-    'entries': entries.map((e) => e.toJson()).toList(growable: false),
-  };
-
-  final manifestFile = File(manifestPath);
-  await manifestFile.parent.create(recursive: true);
-  await manifestFile.writeAsString(
-    const JsonEncoder.withIndent('  ').convert(payload),
-  );
-  stdout.writeln('prepared manifest: ${manifestFile.path}');
-  stdout.writeln('prepared entries: ${entries.length}');
-}
-
-Future<void> _runPlayerMode(String manifestPath) async {
   try {
-    final manifestText = player_bridge.specReadText(manifestPath);
+    final manifestText = _jsSpecReadText(manifestPath.toJS).toDart;
     final manifestDecoded = json.decode(manifestText);
     if (manifestDecoded is! Map) {
       throw StateError('player manifest root is not an object');
@@ -1138,7 +866,7 @@ Future<void> _runPlayerMode(String manifestPath) async {
         throw StateError('player entry missing required fields: $entry');
       }
 
-      final scriptJsonText = player_bridge.specReadText(scriptJsonPath);
+      final scriptJsonText = _jsSpecReadText(scriptJsonPath.toJS).toDart;
       final scriptDecoded = json.decode(scriptJsonText);
       if (scriptDecoded is! Map) {
         throw StateError('script root is not object: $scriptJsonPath');
@@ -1150,10 +878,9 @@ Future<void> _runPlayerMode(String manifestPath) async {
       }
 
       final state = _ScriptExecutionState(
-        workDirPath: wasmDirPath,
         features: _featuresForGroup(group),
         moduleLoader: (filename) =>
-            player_bridge.specReadBinary('$wasmDirPath/$filename'),
+            _jsSpecReadBinary('$wasmDirPath/$filename'.toJS).toDart,
       );
       final result = _executeCommands(
         path: file,
@@ -1185,99 +912,15 @@ Future<void> _runPlayerMode(String manifestPath) async {
       reasonCounts: reasonCounts,
     );
 
-    player_bridge.specSetResult(
-      const JsonEncoder.withIndent('  ').convert(payload),
-    );
+    _jsSpecSetResult(const JsonEncoder.withIndent('  ').convert(payload).toJS);
     final filesFailed =
         (payload['totals'] as Map<String, Object?>)['files_failed'] as int;
     if (filesFailed > 0) {
       throw StateError('spec-testsuite failed: files_failed=$filesFailed');
     }
   } catch (error) {
-    player_bridge.specSetError(
-      jsonEncode(<String, Object?>{'error': '$error'}),
-    );
+    _jsSpecSetError(jsonEncode(<String, Object?>{'error': '$error'}).toJS);
     rethrow;
-  }
-}
-
-Future<_FileResult> _runWastFile({
-  required String file,
-  required String group,
-  required _WastConverter converter,
-}) async {
-  final tempDir = await Directory.systemTemp.createTemp('wasd-spec-');
-  try {
-    final jsonPath = '${tempDir.path}/script.json';
-    final conversion = await Process.run(
-      converter.binary,
-      converter.command(
-        wastFile: file,
-        outputJsonPath: jsonPath,
-        wasmDir: tempDir.path,
-      ),
-    );
-    if (conversion.exitCode != 0) {
-      return _FileResult(
-        path: file,
-        group: group,
-        commandsSeen: 0,
-        commandsPassed: 0,
-        commandsFailed: 1,
-        commandsSkipped: 0,
-        passed: false,
-        firstFailureReason: 'wast-convert-failed',
-        firstFailureDetails:
-            ((conversion.stderr as String?) ?? '').trim().isEmpty
-            ? ((conversion.stdout as String?) ?? '').trim()
-            : ((conversion.stderr as String?) ?? '').trim(),
-        wast2jsonStdout: (conversion.stdout as String?) ?? '',
-        wast2jsonStderr: (conversion.stderr as String?) ?? '',
-      );
-    }
-
-    final scriptJson = File(jsonPath);
-    final decoded = json.decode(await scriptJson.readAsString());
-    if (decoded is! Map) {
-      return _FileResult(
-        path: file,
-        group: group,
-        commandsSeen: 0,
-        commandsPassed: 0,
-        commandsFailed: 1,
-        commandsSkipped: 0,
-        passed: false,
-        firstFailureReason: 'invalid-json-root',
-        firstFailureDetails: 'converter output root is not an object',
-      );
-    }
-    final commandsRaw = decoded['commands'];
-    if (commandsRaw is! List) {
-      return _FileResult(
-        path: file,
-        group: group,
-        commandsSeen: 0,
-        commandsPassed: 0,
-        commandsFailed: 1,
-        commandsSkipped: 0,
-        passed: false,
-        firstFailureReason: 'invalid-commands',
-        firstFailureDetails: 'converter output does not contain command list',
-      );
-    }
-
-    final state = _ScriptExecutionState(
-      workDirPath: tempDir.path,
-      features: _featuresForGroup(group),
-    );
-    return _executeCommands(
-      path: file,
-      group: group,
-      commandsRaw: commandsRaw,
-      state: state,
-    );
-  } finally {
-    await tempDir.delete(recursive: true);
   }
 }
 
@@ -1407,63 +1050,6 @@ Map<String, Object?> _buildPayload({
     'files': results.map((r) => r.toJson()).toList(growable: false),
   };
 }
-
-_SpecSuite _parseSuite(String raw) {
-  final normalized = raw.trim().toLowerCase();
-  switch (normalized) {
-    case 'core':
-      return _SpecSuite.core;
-    case 'proposal':
-      return _SpecSuite.proposal;
-    case 'all':
-      return _SpecSuite.all;
-    default:
-      throw ArgumentError('Unsupported --suite value: $raw');
-  }
-}
-
-List<String> _collectSuiteFiles(String testsuiteDir, _SpecSuite suite) {
-  final files = <String>[];
-  for (final entity in Directory(testsuiteDir).listSync(recursive: true)) {
-    if (entity is! File || !entity.path.endsWith('.wast')) {
-      continue;
-    }
-    final normalized = entity.path.replaceAll('\\', '/');
-    final inProposal = normalized.contains('/proposals/');
-    final inLegacy = normalized.contains('/legacy/');
-    if (inLegacy) {
-      continue;
-    }
-    switch (suite) {
-      case _SpecSuite.core:
-        if (!inProposal) {
-          files.add(entity.path);
-        }
-      case _SpecSuite.proposal:
-        if (inProposal) {
-          files.add(entity.path);
-        }
-      case _SpecSuite.all:
-        files.add(entity.path);
-    }
-  }
-  files.sort();
-  return files;
-}
-
-String _groupForFile(String file, String testsuiteDir) {
-  final normalizedFile = file.replaceAll('\\', '/');
-  final normalizedRoot = testsuiteDir.replaceAll('\\', '/');
-  final relative = normalizedFile.startsWith('$normalizedRoot/')
-      ? normalizedFile.substring(normalizedRoot.length + 1)
-      : normalizedFile;
-  final parts = relative.split('/');
-  if (parts.length >= 3 && parts[0] == 'proposals') {
-    return parts[1];
-  }
-  return 'core';
-}
-
 WasmFeatureSet _featuresForGroup(String group) {
   final base = WasmFeatureSet.layeredDefaults(profile: WasmFeatureProfile.full);
   final additionalEnabled = <String>{...base.additionalEnabled};
@@ -1473,94 +1059,6 @@ WasmFeatureSet _featuresForGroup(String group) {
       break;
   }
   return base.copyWith(additionalEnabled: additionalEnabled);
-}
-
-String _renderMarkdown({
-  required Map<String, Object?> payload,
-  required List<_FileResult> results,
-  required Map<String, Map<String, int>> groupStats,
-}) {
-  final totals = payload['totals'] as Map<String, Object?>;
-  final reasonCounts = (payload['reason_counts'] as Map)
-      .cast<String, Object?>();
-
-  final b = StringBuffer()
-    ..writeln('# WASM Proposal Failure Board')
-    ..writeln()
-    ..writeln('- Started at (UTC): `${payload['started_at_utc']}`')
-    ..writeln('- Ended at (UTC): `${payload['ended_at_utc']}`')
-    ..writeln('- Suite: `${payload['suite']}`')
-    ..writeln('- Testsuite dir: `${payload['testsuite_dir']}`')
-    ..writeln(
-      '- Testsuite revision: `${payload['testsuite_revision'] ?? 'unknown'}`',
-    )
-    ..writeln(
-      '- Wast converter: `${payload['wast_converter']}` (`${payload['wast_converter_binary']}`)',
-    )
-    ..writeln()
-    ..writeln('## Totals')
-    ..writeln()
-    ..writeln('- Files: ${totals['files_total']}')
-    ..writeln('- Passed files: ${totals['files_passed']}')
-    ..writeln('- Failed files: ${totals['files_failed']}')
-    ..writeln('- Commands seen: ${totals['commands_seen']}')
-    ..writeln('- Commands passed: ${totals['commands_passed']}')
-    ..writeln('- Commands failed: ${totals['commands_failed']}')
-    ..writeln('- Commands skipped: ${totals['commands_skipped']}')
-    ..writeln()
-    ..writeln('## Groups')
-    ..writeln()
-    ..writeln('| Group | Files | Passed | Failed |')
-    ..writeln('| --- | ---: | ---: | ---: |');
-
-  final sortedGroups = groupStats.keys.toList()..sort();
-  for (final group in sortedGroups) {
-    final stats = groupStats[group]!;
-    b.writeln(
-      '| $group | ${stats['total'] ?? 0} | ${stats['passed'] ?? 0} | ${stats['failed'] ?? 0} |',
-    );
-  }
-
-  if (reasonCounts.isNotEmpty) {
-    b.writeln();
-    b.writeln('## Top Failure Reasons');
-    b.writeln();
-    b.writeln('| Reason | Count |');
-    b.writeln('| --- | ---: |');
-    final sorted = reasonCounts.entries.toList()
-      ..sort((a, b) => (b.value as int).compareTo(a.value as int));
-    for (final entry in sorted) {
-      b.writeln('| ${entry.key} | ${entry.value} |');
-    }
-  }
-
-  final failed = results.where((r) => !r.passed).toList(growable: false);
-  if (failed.isNotEmpty) {
-    b.writeln();
-    b.writeln('## Failed Files');
-    b.writeln();
-    b.writeln('| Group | File | Line | Reason | Details |');
-    b.writeln('| --- | --- | ---: | --- | --- |');
-    for (final file in failed) {
-      final details = _markdownEscape(_shorten(file.firstFailureDetails ?? ''));
-      b.writeln(
-        '| ${file.group} | `${_markdownEscape(file.path)}` | ${file.firstFailureLine ?? 0} | ${file.firstFailureReason ?? 'unknown'} | $details |',
-      );
-    }
-  }
-
-  return b.toString();
-}
-
-String _markdownEscape(String input) {
-  return input.replaceAll('|', '\\|').replaceAll('\n', '<br>');
-}
-
-String _shorten(String input, {int max = 240}) {
-  if (input.length <= max) {
-    return input;
-  }
-  return '${input.substring(0, max - 3)}...';
 }
 
 String? _argValue(List<String> args, String key) {
@@ -1574,123 +1072,4 @@ String? _argValue(List<String> args, String key) {
     }
   }
   return null;
-}
-
-Future<_WastConverter> _resolveWastConverter({
-  required String? jsonFromWast,
-  required String? wast2json,
-}) async {
-  if ((jsonFromWast?.isNotEmpty ?? false) && (wast2json?.isNotEmpty ?? false)) {
-    throw ArgumentError('Use only one of `--json-from-wast` or `--wast2json`.');
-  }
-
-  if (jsonFromWast != null && jsonFromWast.isNotEmpty) {
-    final binary = await _resolveBinaryCandidates(
-      <String>[jsonFromWast],
-      missingMessage:
-          'Unable to locate `--json-from-wast` binary: $jsonFromWast',
-    );
-    return _WastConverter(
-      kind: _WastConverterKind.wasmToolsJsonFromWast,
-      binary: binary,
-    );
-  }
-
-  if (wast2json != null && wast2json.isNotEmpty) {
-    final binary = await _resolveBinaryCandidates(<String>[
-      wast2json,
-    ], missingMessage: 'Unable to locate `--wast2json` binary: $wast2json');
-    return _WastConverter(
-      kind: _WastConverterKind.wabtWast2json,
-      binary: binary,
-    );
-  }
-
-  final wasmTools = await _tryResolveBinaryCandidates(<String>[
-    '${Directory.current.path}/.toolchains/bin/wasm-tools',
-    '${Directory.current.path}/.toolchains/wasm-tools-1.245.1/wasm-tools-1.245.1-aarch64-macos/wasm-tools',
-    '${Directory.current.path}/.toolchains/wasm-tools-1.226.0/wasm-tools-1.226.0-aarch64-macos/wasm-tools',
-    'wasm-tools',
-  ]);
-  if (wasmTools != null) {
-    return _WastConverter(
-      kind: _WastConverterKind.wasmToolsJsonFromWast,
-      binary: wasmTools,
-    );
-  }
-
-  final wast2jsonBinary = await _tryResolveBinaryCandidates(<String>[
-    '${Directory.current.path}/.toolchains/bin/wast2json',
-    '${Directory.current.path}/.toolchains/wabt-1.0.39/bin/wast2json',
-    '${Directory.current.path}/.toolchains/wabt-1.0.37/bin/wast2json',
-    'wast2json',
-  ]);
-  if (wast2jsonBinary != null) {
-    return _WastConverter(
-      kind: _WastConverterKind.wabtWast2json,
-      binary: wast2jsonBinary,
-    );
-  }
-
-  throw StateError(
-    'Unable to locate wast converter (`wasm-tools` or `wast2json`). '
-    'Run `bash tool/ensure_toolchains.sh` first.',
-  );
-}
-
-Future<String> _resolveBinaryCandidates(
-  List<String> candidates, {
-  required String missingMessage,
-}) async {
-  final resolved = await _tryResolveBinaryCandidates(candidates);
-  if (resolved != null) {
-    return resolved;
-  }
-  throw StateError(missingMessage);
-}
-
-Future<String?> _tryResolveBinaryCandidates(List<String> candidates) async {
-  for (final candidate in candidates) {
-    if (candidate.contains('/')) {
-      final file = File(candidate);
-      if (file.existsSync()) {
-        return candidate;
-      }
-      continue;
-    }
-
-    final result = await Process.run('which', [candidate]);
-    if (result.exitCode == 0) {
-      final resolved = ((result.stdout as String?) ?? '').trim();
-      if (resolved.isNotEmpty) {
-        return resolved;
-      }
-    }
-  }
-  return null;
-}
-
-Future<String?> _git(List<String> args) async {
-  final result = await Process.run('git', args);
-  if (result.exitCode != 0) {
-    return null;
-  }
-  final output = ((result.stdout as String?) ?? '').trim();
-  return output.isEmpty ? null : output;
-}
-
-void _printUsage() {
-  stdout.writeln(
-    'Usage: dart run tool/spec_testsuite_runner.dart '
-    '--suite=<core|proposal|all> '
-    '[--testsuite-dir=<path>] '
-    '[--output-json=<path>] '
-    '[--output-md=<path>] '
-    '[--max-files=<n>] '
-    '[--json-from-wast=<path>] '
-    '[--wast2json=<path>] '
-    '[--prepare-manifest=<path>] '
-    '[--prepare-root=<path>] '
-    '[--player-manifest=<path>]',
-  );
 }

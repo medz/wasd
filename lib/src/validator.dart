@@ -6,6 +6,18 @@ import 'module.dart';
 import 'opcode.dart';
 import 'predecode.dart';
 
+final class _ReferenceControlFrame {
+  _ReferenceControlFrame({
+    required this.stackHeight,
+    required this.resultSignatures,
+    this.polymorphic = false,
+  });
+
+  final int stackHeight;
+  final List<String> resultSignatures;
+  bool polymorphic;
+}
+
 abstract final class WasmValidator {
   static void validateModule(
     WasmModule module, {
@@ -142,8 +154,7 @@ abstract final class WasmValidator {
           if (index < 0 || index >= available.length) {
             return false;
           }
-          // Const expressions can reference imported immutable globals.
-          return index < importedGlobals.length && !available[index].mutable;
+          return !available[index].mutable;
         },
       );
       if (exprType != global.type.valueType) {
@@ -251,6 +262,17 @@ abstract final class WasmValidator {
         module.types,
         features: features,
       );
+      _validateBrOnCastTyping(
+        module: module,
+        functionType: functionType,
+        body: body,
+        instructions: predecoded.instructions,
+      );
+      _validateSimpleReferenceReturnCompatibility(
+        module: module,
+        functionType: functionType,
+        instructions: predecoded.instructions,
+      );
       if (_containsWideArithmetic(predecoded.instructions)) {
         _validateWideArithmeticStack(
           functionType: functionType,
@@ -293,6 +315,8 @@ abstract final class WasmValidator {
             }
           case Opcodes.br:
           case Opcodes.brIf:
+          case Opcodes.brOnNull:
+          case Opcodes.brOnNonNull:
             final depth = instruction.immediate!;
             if (depth < 0 || depth > controlStack.length) {
               throw FormatException(
@@ -333,6 +357,45 @@ abstract final class WasmValidator {
           case Opcodes.globalGet:
           case Opcodes.globalSet:
             _checkIndex(instruction.immediate!, globalCount, 'global');
+          case Opcodes.structNew:
+          case Opcodes.structNewDefault:
+          case Opcodes.structNewDesc:
+          case Opcodes.structNewDefaultDesc:
+          case Opcodes.refGetDesc:
+            final typeIndex = instruction.immediate!;
+            _checkIndex(typeIndex, module.types.length, 'type');
+            final type = module.types[typeIndex];
+            if (instruction.opcode == Opcodes.refGetDesc) {
+              if (type.descriptorTypeIndex == null) {
+                throw const FormatException(
+                  'Validation failed: type mismatch.',
+                );
+              }
+              break;
+            }
+            if (type.kind != WasmCompositeTypeKind.struct) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
+            final hasDescriptor = type.descriptorTypeIndex != null;
+            if ((instruction.opcode == Opcodes.structNew ||
+                    instruction.opcode == Opcodes.structNewDefault) &&
+                hasDescriptor) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
+            if ((instruction.opcode == Opcodes.structNewDesc ||
+                    instruction.opcode == Opcodes.structNewDefaultDesc) &&
+                !hasDescriptor) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
+          case Opcodes.refCastDesc:
+          case Opcodes.refCastDescEq:
+            final target = instruction.gcRefType;
+            if (target == null ||
+                target.heapType < 0 ||
+                target.heapType >= module.types.length ||
+                module.types[target.heapType].descriptorTypeIndex == null) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
           case Opcodes.tableGet:
           case Opcodes.tableSet:
             _checkIndex(instruction.immediate!, tableCount, 'table');
@@ -531,6 +594,15 @@ abstract final class WasmValidator {
       stack.add(type);
     }
 
+    void popAny(int count, int opcode) {
+      if (stack.length < count) {
+        throw FormatException(
+          'Validation failed: const expr stack underflow at 0x${opcode.toRadixString(16)}.',
+        );
+      }
+      stack.removeRange(stack.length - count, stack.length);
+    }
+
     while (!reader.isEOF) {
       final opcode = reader.readByte();
       switch (opcode) {
@@ -555,7 +627,7 @@ abstract final class WasmValidator {
           }
           stack.add(availableGlobals[index].valueType);
         case Opcodes.refNull:
-          reader.readByte();
+          _consumeHeapType(reader);
           stack.add(WasmValueType.i32);
         case Opcodes.refFunc:
           final functionIndex = reader.readVarUint32();
@@ -563,6 +635,103 @@ abstract final class WasmValidator {
               module.importedFunctionCount + module.functionTypeIndices.length;
           _checkIndex(functionIndex, functionCount, 'const expr ref.func');
           stack.add(WasmValueType.i32);
+        case 0xfb:
+          final subOpcode = reader.readVarUint32();
+          final pseudoOpcode = 0xfb00 | subOpcode;
+          switch (pseudoOpcode) {
+            case Opcodes.structNew:
+            case Opcodes.structNewDefault:
+            case Opcodes.structNewDesc:
+            case Opcodes.structNewDefaultDesc:
+            case Opcodes.arrayNew:
+            case Opcodes.arrayNewDefault:
+            case Opcodes.arrayNewFixed:
+              final typeIndex = reader.readVarUint32();
+              _checkIndex(typeIndex, module.types.length, 'const expr type');
+              final type = module.types[typeIndex];
+              switch (pseudoOpcode) {
+                case Opcodes.structNew:
+                  if (type.kind != WasmCompositeTypeKind.struct) {
+                    throw const FormatException(
+                      'Validation failed: type mismatch.',
+                    );
+                  }
+                  if (type.descriptorTypeIndex != null) {
+                    throw const FormatException(
+                      'Validation failed: type mismatch.',
+                    );
+                  }
+                  popAny(type.fieldSignatures.length, pseudoOpcode);
+                case Opcodes.structNewDefault:
+                  if (type.kind != WasmCompositeTypeKind.struct) {
+                    throw const FormatException(
+                      'Validation failed: type mismatch.',
+                    );
+                  }
+                  if (type.descriptorTypeIndex != null) {
+                    throw const FormatException(
+                      'Validation failed: type mismatch.',
+                    );
+                  }
+                case Opcodes.structNewDesc:
+                  if (type.kind != WasmCompositeTypeKind.struct ||
+                      type.descriptorTypeIndex == null) {
+                    throw const FormatException(
+                      'Validation failed: type mismatch.',
+                    );
+                  }
+                  popAny(1, pseudoOpcode);
+                  popAny(type.fieldSignatures.length, pseudoOpcode);
+                case Opcodes.structNewDefaultDesc:
+                  if (type.kind != WasmCompositeTypeKind.struct ||
+                      type.descriptorTypeIndex == null) {
+                    throw const FormatException(
+                      'Validation failed: type mismatch.',
+                    );
+                  }
+                  popAny(1, pseudoOpcode);
+                case Opcodes.arrayNew:
+                  if (type.kind != WasmCompositeTypeKind.array) {
+                    throw const FormatException(
+                      'Validation failed: type mismatch.',
+                    );
+                  }
+                  popAny(2, pseudoOpcode);
+                case Opcodes.arrayNewDefault:
+                  if (type.kind != WasmCompositeTypeKind.array) {
+                    throw const FormatException(
+                      'Validation failed: type mismatch.',
+                    );
+                  }
+                  popAny(1, pseudoOpcode);
+                case Opcodes.arrayNewFixed:
+                  if (type.kind != WasmCompositeTypeKind.array) {
+                    throw const FormatException(
+                      'Validation failed: type mismatch.',
+                    );
+                  }
+                  final count = reader.readVarUint32();
+                  popAny(count, pseudoOpcode);
+                default:
+                  throw UnsupportedError(
+                    'Validation failed: unsupported const expr opcode 0x${pseudoOpcode.toRadixString(16)}',
+                  );
+              }
+              stack.add(WasmValueType.i32);
+            case Opcodes.refI31:
+              if (stack.isEmpty || stack.last != WasmValueType.i32) {
+                throw FormatException(
+                  'Validation failed: const expr type mismatch at 0x${pseudoOpcode.toRadixString(16)}.',
+                );
+              }
+              stack
+                ..removeLast()
+                ..add(WasmValueType.i32);
+            default:
+              throw UnsupportedError(
+                'Validation failed: unsupported const expr opcode 0x${pseudoOpcode.toRadixString(16)}',
+              );
+          }
         case Opcodes.i32Add:
         case Opcodes.i32Sub:
         case Opcodes.i32Mul:
@@ -693,6 +862,1289 @@ abstract final class WasmValidator {
     }
   }
 
+  static void _validateBrOnCastTyping({
+    required WasmModule module,
+    required WasmFunctionType functionType,
+    required WasmCodeBody body,
+    required List<Instruction> instructions,
+  }) {
+    var hasReferenceTypingOps = false;
+    for (final instruction in instructions) {
+      switch (instruction.opcode) {
+        case Opcodes.brOnCast:
+        case Opcodes.brOnCastFail:
+        case Opcodes.brOnCastDescEq:
+        case Opcodes.brOnCastDescEqFail:
+        case Opcodes.refAsNonNull:
+        case Opcodes.refGetDesc:
+        case Opcodes.refCastDesc:
+        case Opcodes.refCastDescEq:
+        case Opcodes.structNew:
+        case Opcodes.structNewDefault:
+        case Opcodes.structNewDesc:
+        case Opcodes.structNewDefaultDesc:
+          hasReferenceTypingOps = true;
+          break;
+      }
+      if (hasReferenceTypingOps) {
+        break;
+      }
+    }
+    if (!hasReferenceTypingOps) {
+      return;
+    }
+
+    Never mismatch([String? reason]) {
+      assert(reason == null || reason.isNotEmpty);
+      if (reason == null || reason.isEmpty) {
+        throw const FormatException('Validation failed: type mismatch.');
+      }
+      throw FormatException('Validation failed: type mismatch ($reason).');
+    }
+
+    String fieldValueStackSignature(String fieldSignature) {
+      final parsed = _parseFieldSignature(fieldSignature);
+      if (parsed == null) {
+        mismatch('invalid field signature: $fieldSignature');
+      }
+      final value = parsed.valueSignature;
+      if (value == '78' || value == '77') {
+        return '7f';
+      }
+      return value;
+    }
+
+    ({int typeIndex, int descriptorTypeIndex}) requireDescriptorTargetHeap(
+      int heapType,
+    ) {
+      if (heapType < 0 || heapType >= module.types.length) {
+        mismatch('descriptor target heap must be concrete type: $heapType');
+      }
+      final targetType = module.types[heapType];
+      final descriptorTypeIndex = targetType.descriptorTypeIndex;
+      if (descriptorTypeIndex == null) {
+        mismatch('target type without descriptor: $heapType');
+      }
+      return (typeIndex: heapType, descriptorTypeIndex: descriptorTypeIndex);
+    }
+
+    String brOnCastFailureSignature(
+      String sourceSignature,
+      GcRefTypeImmediate targetType,
+    ) {
+      final sourceRef = _parseRefSignature(sourceSignature);
+      if (sourceRef == null) {
+        return sourceSignature;
+      }
+      if (sourceRef.nullable && targetType.nullable) {
+        return _encodeRefSignature(
+          nullable: false,
+          exact: sourceRef.exact,
+          heapType: sourceRef.heapType,
+        );
+      }
+      return sourceSignature;
+    }
+
+    final locals = <String>[
+      ..._functionParamSignatures(functionType),
+      ..._localSignatures(body),
+    ];
+    final stack = <String>[];
+    final controlStack = <_ReferenceControlFrame>[
+      _ReferenceControlFrame(
+        stackHeight: 0,
+        resultSignatures: _functionResultSignatures(functionType),
+      ),
+    ];
+
+    for (final instruction in instructions) {
+      final currentFrame = controlStack.last;
+      final inPolymorphicContext = currentFrame.polymorphic;
+      switch (instruction.opcode) {
+        case Opcodes.localGet:
+          if (inPolymorphicContext) {
+            break;
+          }
+          final localIndex = instruction.immediate!;
+          if (localIndex < 0 || localIndex >= locals.length) {
+            mismatch('local.get index out of range: $localIndex');
+          }
+          stack.add(locals[localIndex]);
+
+        case Opcodes.refNull:
+          if (inPolymorphicContext) {
+            break;
+          }
+          final gcRefType = instruction.gcRefType;
+          if (gcRefType != null) {
+            stack.add(_gcRefTypeToSignature(gcRefType));
+          } else {
+            stack.add(_refNullSignature(instruction.immediate!));
+          }
+
+        case Opcodes.i32Const:
+          if (inPolymorphicContext) {
+            break;
+          }
+          stack.add('7f');
+
+        case Opcodes.i64Const:
+          if (inPolymorphicContext) {
+            break;
+          }
+          stack.add('7e');
+
+        case Opcodes.f32Const:
+          if (inPolymorphicContext) {
+            break;
+          }
+          stack.add('7d');
+
+        case Opcodes.f64Const:
+          if (inPolymorphicContext) {
+            break;
+          }
+          stack.add('7c');
+
+        case Opcodes.block:
+        case Opcodes.loop:
+        case Opcodes.if_:
+          final signatures = instruction.blockResultTypeSignatures;
+          if (signatures == null) {
+            return;
+          }
+          controlStack.add(
+            _ReferenceControlFrame(
+              stackHeight: stack.length,
+              resultSignatures: List<String>.from(signatures),
+              polymorphic: inPolymorphicContext,
+            ),
+          );
+
+        case Opcodes.brOnCast:
+        case Opcodes.brOnCastFail:
+          final brOnCast = instruction.gcBrOnCast;
+          if (brOnCast == null) {
+            mismatch('missing br_on_cast immediate');
+          }
+          final sourceSignature = _gcRefTypeToSignature(brOnCast.sourceType);
+          late final String operandSignature;
+          if (inPolymorphicContext) {
+            operandSignature = sourceSignature;
+          } else {
+            if (stack.isEmpty) {
+              mismatch('br_on_cast stack underflow');
+            }
+            operandSignature = stack.removeLast();
+          }
+          final targetSignature = _gcRefTypeToSignature(brOnCast.targetType);
+          final failureSignature = brOnCastFailureSignature(
+            sourceSignature,
+            brOnCast.targetType,
+          );
+
+          if (!inPolymorphicContext &&
+              !_isValueSignatureSubtype(
+                module,
+                operandSignature,
+                sourceSignature,
+              )) {
+            mismatch(
+              'operand/source mismatch: operand=$operandSignature source=$sourceSignature',
+            );
+          }
+
+          if (!_isHeapCastCompatible(
+            module,
+            brOnCast.sourceType.heapType,
+            brOnCast.targetType.heapType,
+          )) {
+            mismatch(
+              'heap mismatch: target=${brOnCast.targetType.heapType} source=${brOnCast.sourceType.heapType}',
+            );
+          }
+
+          final depth = brOnCast.depth;
+          if (depth < 0 || depth >= controlStack.length) {
+            mismatch('branch depth out of range: $depth');
+          }
+          final labelFrame = controlStack[controlStack.length - 1 - depth];
+          final branchSignature = instruction.opcode == Opcodes.brOnCast
+              ? targetSignature
+              : failureSignature;
+          if (!_matchesSingleLabelResult(
+            module,
+            labelFrame.resultSignatures,
+            branchSignature,
+          )) {
+            mismatch(
+              'label result mismatch: label=${labelFrame.resultSignatures} branch=$branchSignature',
+            );
+          }
+
+          final fallthroughSignature = instruction.opcode == Opcodes.brOnCast
+              ? failureSignature
+              : targetSignature;
+          if (!inPolymorphicContext) {
+            stack.add(fallthroughSignature);
+          }
+
+        case Opcodes.brOnCastDescEq:
+        case Opcodes.brOnCastDescEqFail:
+          final brOnCast = instruction.gcBrOnCast;
+          if (brOnCast == null) {
+            mismatch('missing br_on_cast_desc_eq immediate');
+          }
+          final descriptorTarget = requireDescriptorTargetHeap(
+            brOnCast.targetType.heapType,
+          );
+          final expectedDescriptorSignature = _encodeRefSignature(
+            nullable: true,
+            exact: brOnCast.targetType.exact,
+            heapType: descriptorTarget.descriptorTypeIndex,
+          );
+          final sourceSignature = _gcRefTypeToSignature(brOnCast.sourceType);
+          final targetSignature = _gcRefTypeToSignature(brOnCast.targetType);
+          final failureSignature = brOnCastFailureSignature(
+            sourceSignature,
+            brOnCast.targetType,
+          );
+          late final String descriptorSignature;
+          late final String operandSignature;
+          if (inPolymorphicContext) {
+            descriptorSignature = expectedDescriptorSignature;
+            operandSignature = sourceSignature;
+          } else {
+            if (stack.length < 2) {
+              mismatch('br_on_cast_desc_eq stack underflow');
+            }
+            descriptorSignature = stack.removeLast();
+            operandSignature = stack.removeLast();
+          }
+
+          if (!inPolymorphicContext &&
+              !_isValueSignatureSubtype(
+                module,
+                descriptorSignature,
+                expectedDescriptorSignature,
+              )) {
+            mismatch(
+              'descriptor mismatch: descriptor=$descriptorSignature expected=$expectedDescriptorSignature',
+            );
+          }
+          if (!inPolymorphicContext &&
+              !_isValueSignatureSubtype(
+                module,
+                operandSignature,
+                sourceSignature,
+              )) {
+            mismatch(
+              'operand/source mismatch: operand=$operandSignature source=$sourceSignature',
+            );
+          }
+          if (!_isHeapCastCompatible(
+            module,
+            brOnCast.sourceType.heapType,
+            brOnCast.targetType.heapType,
+          )) {
+            mismatch(
+              'heap mismatch: target=${brOnCast.targetType.heapType} source=${brOnCast.sourceType.heapType}',
+            );
+          }
+
+          final depth = brOnCast.depth;
+          if (depth < 0 || depth >= controlStack.length) {
+            mismatch('branch depth out of range: $depth');
+          }
+          final labelFrame = controlStack[controlStack.length - 1 - depth];
+          final branchSignature =
+              instruction.opcode == Opcodes.brOnCastDescEq
+              ? targetSignature
+              : failureSignature;
+          if (!_matchesLabelResultWithBranchValue(
+            module: module,
+            stack: stack,
+            labelResultSignatures: labelFrame.resultSignatures,
+            branchSignature: branchSignature,
+            allowUnknownPrefix: inPolymorphicContext,
+          )) {
+            mismatch(
+              'label result mismatch: label=${labelFrame.resultSignatures} branch=$branchSignature',
+            );
+          }
+
+          final fallthroughSignature =
+              instruction.opcode == Opcodes.brOnCastDescEq
+              ? failureSignature
+              : targetSignature;
+          stack.add(fallthroughSignature);
+
+        case Opcodes.refEq:
+          if (stack.length >= 2) {
+            final rhs = stack.removeLast();
+            final lhs = stack.removeLast();
+            if (_parseRefSignature(lhs) == null || _parseRefSignature(rhs) == null) {
+              mismatch('ref.eq requires reference operands');
+            }
+          } else if (!inPolymorphicContext) {
+            mismatch('ref.eq stack underflow');
+          }
+          stack.add('7f');
+
+        case Opcodes.structNew:
+        case Opcodes.structNewDefault:
+        case Opcodes.structNewDesc:
+        case Opcodes.structNewDefaultDesc:
+          final typeIndex = instruction.immediate;
+          if (typeIndex == null ||
+              typeIndex < 0 ||
+              typeIndex >= module.types.length) {
+            mismatch('invalid struct type index for allocation: $typeIndex');
+          }
+          final type = module.types[typeIndex];
+          if (type.kind != WasmCompositeTypeKind.struct) {
+            mismatch('allocation target must be struct type: $typeIndex');
+          }
+          final hasDescriptor = type.descriptorTypeIndex != null;
+          final usesDescriptorAllocation =
+              instruction.opcode == Opcodes.structNewDesc ||
+              instruction.opcode == Opcodes.structNewDefaultDesc;
+          if (hasDescriptor != usesDescriptorAllocation) {
+            mismatch('descriptor allocation form mismatch');
+          }
+          if (inPolymorphicContext) {
+            break;
+          }
+          if (usesDescriptorAllocation) {
+            final expectedDescriptorSignature = _encodeRefSignature(
+              nullable: true,
+              exact: true,
+              heapType: type.descriptorTypeIndex!,
+            );
+            if (stack.isEmpty) {
+              mismatch('struct.new_desc descriptor underflow');
+            }
+            final descriptorSignature = stack.removeLast();
+            if (!_isValueSignatureSubtype(
+              module,
+              descriptorSignature,
+              expectedDescriptorSignature,
+            )) {
+              mismatch(
+                'struct descriptor mismatch: descriptor=$descriptorSignature expected=$expectedDescriptorSignature',
+              );
+            }
+          }
+          if (instruction.opcode == Opcodes.structNew ||
+              instruction.opcode == Opcodes.structNewDesc) {
+            for (var fieldIndex = type.fieldSignatures.length - 1;
+                fieldIndex >= 0;
+                fieldIndex--) {
+              if (stack.isEmpty) {
+                mismatch('struct.new field underflow');
+              }
+              final expectedField = fieldValueStackSignature(
+                type.fieldSignatures[fieldIndex],
+              );
+              final actualField = stack.removeLast();
+              if (!_isValueSignatureSubtype(
+                module,
+                actualField,
+                expectedField,
+              )) {
+                mismatch(
+                  'struct.new field mismatch: actual=$actualField expected=$expectedField',
+                );
+              }
+            }
+          }
+          stack.add(
+            _encodeRefSignature(
+              nullable: false,
+              exact: true,
+              heapType: typeIndex,
+            ),
+          );
+
+        case Opcodes.refGetDesc:
+          final typeIndex = instruction.immediate;
+          if (typeIndex == null ||
+              typeIndex < 0 ||
+              typeIndex >= module.types.length) {
+            mismatch('invalid ref.get_desc type index: $typeIndex');
+          }
+          final targetType = module.types[typeIndex];
+          final descriptorTypeIndex = targetType.descriptorTypeIndex;
+          if (descriptorTypeIndex == null) {
+            mismatch('ref.get_desc target type has no descriptor');
+          }
+          if (inPolymorphicContext) {
+            break;
+          }
+          if (stack.isEmpty) {
+            mismatch('ref.get_desc stack underflow');
+          }
+          final inputSignature = stack.removeLast();
+          final expectedInput = _encodeRefSignature(
+            nullable: true,
+            exact: false,
+            heapType: typeIndex,
+          );
+          if (!_isValueSignatureSubtype(module, inputSignature, expectedInput)) {
+            mismatch(
+              'ref.get_desc input mismatch: input=$inputSignature expected=$expectedInput',
+            );
+          }
+          final inputRef = _parseRefSignature(inputSignature);
+          if (inputRef == null) {
+            mismatch('ref.get_desc input must be ref: $inputSignature');
+          }
+          final exactOutput =
+              inputRef.heapType == _heapNone ||
+              (inputRef.exact && inputRef.heapType == typeIndex);
+          stack.add(
+            _encodeRefSignature(
+              nullable: false,
+              exact: exactOutput,
+              heapType: descriptorTypeIndex,
+            ),
+          );
+
+        case Opcodes.refCastDesc:
+        case Opcodes.refCastDescEq:
+          final targetType = instruction.gcRefType;
+          if (targetType == null) {
+            mismatch('missing ref.cast_desc_eq immediate');
+          }
+          final descriptorTarget = requireDescriptorTargetHeap(
+            targetType.heapType,
+          );
+          final targetSignature = _gcRefTypeToSignature(targetType);
+          final expectedDescriptorSignature = _encodeRefSignature(
+            nullable: true,
+            exact: targetType.exact,
+            heapType: descriptorTarget.descriptorTypeIndex,
+          );
+          String descriptorSignature;
+          String inputSignature;
+          if (stack.length >= 2) {
+            descriptorSignature = stack.removeLast();
+            inputSignature = stack.removeLast();
+          } else if (inPolymorphicContext) {
+            descriptorSignature = expectedDescriptorSignature;
+            inputSignature = targetSignature;
+          } else {
+            mismatch('ref.cast_desc_eq stack underflow');
+          }
+          if (!_isValueSignatureSubtype(
+            module,
+            descriptorSignature,
+            expectedDescriptorSignature,
+          )) {
+            mismatch(
+              'ref.cast_desc_eq descriptor mismatch: descriptor=$descriptorSignature expected=$expectedDescriptorSignature',
+            );
+          }
+          final inputRef = _parseRefSignature(inputSignature);
+          if (inputRef == null) {
+            mismatch('ref.cast_desc_eq input must be reference');
+          }
+          if (!_isHeapCastCompatible(
+            module,
+            inputRef.heapType,
+            targetType.heapType,
+          )) {
+            mismatch(
+              'ref.cast_desc_eq source/target mismatch: source=$inputSignature target=$targetSignature',
+            );
+          }
+          stack.add(targetSignature);
+
+        case Opcodes.refAsNonNull:
+          if (inPolymorphicContext) {
+            break;
+          }
+          if (stack.isEmpty) {
+            mismatch('ref.as_non_null stack underflow');
+          }
+          final signature = stack.removeLast();
+          final ref = _parseRefSignature(signature);
+          if (ref == null || !ref.nullable) {
+            mismatch('ref.as_non_null requires nullable ref, got $signature');
+          }
+          stack.add(
+            _encodeRefSignature(
+              nullable: false,
+              exact: ref.exact,
+              heapType: ref.heapType,
+            ),
+          );
+
+        case Opcodes.drop:
+          if (inPolymorphicContext) {
+            break;
+          }
+          if (stack.isEmpty) {
+            mismatch('drop stack underflow');
+          }
+          stack.removeLast();
+
+        case Opcodes.end:
+          if (controlStack.isEmpty) {
+            return;
+          }
+          final frame = controlStack.removeLast();
+          final resultLength = frame.resultSignatures.length;
+          final hasConcreteStack = stack.length > frame.stackHeight;
+          final enforceStackCheck = !frame.polymorphic || hasConcreteStack;
+          if (enforceStackCheck &&
+              stack.length != frame.stackHeight + resultLength) {
+            mismatch(
+              'end stack height mismatch: stack=${stack.length} frameBase=${frame.stackHeight} resultLen=$resultLength',
+            );
+          }
+          if (enforceStackCheck) {
+            for (var i = 0; i < resultLength; i++) {
+              final actual = stack[stack.length - resultLength + i];
+              final expected = frame.resultSignatures[i];
+              if (!_isValueSignatureSubtype(module, actual, expected)) {
+                mismatch(
+                  'end result mismatch: actual=$actual expected=$expected index=$i',
+                );
+              }
+            }
+          }
+          stack.length = frame.stackHeight;
+          stack.addAll(frame.resultSignatures);
+          if (controlStack.isEmpty) {
+            return;
+          }
+
+        case Opcodes.unreachable:
+          stack.length = currentFrame.stackHeight;
+          currentFrame.polymorphic = true;
+
+        case Opcodes.nop:
+          break;
+
+        default:
+          // Keep this pass narrow. Fall back to the main validator for
+          // functions using instructions not modeled here.
+          return;
+      }
+    }
+  }
+
+  static bool _matchesLabelResultWithBranchValue({
+    required WasmModule module,
+    required List<String> stack,
+    required List<String> labelResultSignatures,
+    required String branchSignature,
+    required bool allowUnknownPrefix,
+  }) {
+    if (labelResultSignatures.isEmpty) {
+      return false;
+    }
+    final lastExpected = labelResultSignatures.last;
+    if (!_isValueSignatureSubtype(module, branchSignature, lastExpected)) {
+      return false;
+    }
+
+    final requiredPrefix = labelResultSignatures.length - 1;
+    final availablePrefix = stack.length;
+    if (!allowUnknownPrefix && availablePrefix < requiredPrefix) {
+      return false;
+    }
+
+    final compareCount = availablePrefix < requiredPrefix
+        ? availablePrefix
+        : requiredPrefix;
+    final stackStart = availablePrefix - compareCount;
+    final labelStart = requiredPrefix - compareCount;
+    for (var i = 0; i < compareCount; i++) {
+      final actual = stack[stackStart + i];
+      final expected = labelResultSignatures[labelStart + i];
+      if (!_isValueSignatureSubtype(module, actual, expected)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static bool _matchesSingleLabelResult(
+    WasmModule module,
+    List<String> labelResultSignatures,
+    String branchSignature,
+  ) {
+    if (labelResultSignatures.length != 1) {
+      return false;
+    }
+    return _isValueSignatureSubtype(
+      module,
+      branchSignature,
+      labelResultSignatures.single,
+    );
+  }
+
+  static List<String> _functionParamSignatures(WasmFunctionType functionType) {
+    if (functionType.paramTypeSignatures.length == functionType.params.length) {
+      return List<String>.from(functionType.paramTypeSignatures);
+    }
+    return functionType.params
+        .map(_signatureForValueType)
+        .toList(growable: false);
+  }
+
+  static List<String> _functionResultSignatures(WasmFunctionType functionType) {
+    if (functionType.resultTypeSignatures.length ==
+        functionType.results.length) {
+      return List<String>.from(functionType.resultTypeSignatures);
+    }
+    return functionType.results
+        .map(_signatureForValueType)
+        .toList(growable: false);
+  }
+
+  static List<String> _localSignatures(WasmCodeBody body) {
+    final signatures = <String>[];
+    for (final local in body.locals) {
+      final signature = _signatureForValueType(local.type);
+      for (var i = 0; i < local.count; i++) {
+        signatures.add(signature);
+      }
+    }
+    return signatures;
+  }
+
+  static String _signatureForValueType(WasmValueType type) {
+    return switch (type) {
+      WasmValueType.i32 => '7f',
+      WasmValueType.i64 => '7e',
+      WasmValueType.f32 => '7d',
+      WasmValueType.f64 => '7c',
+    };
+  }
+
+  static String _refNullSignature(int encodedHeapTypeLead) {
+    final heapType = _legacyHeapTypeFromRefTypeCode(encodedHeapTypeLead);
+    if (heapType != null) {
+      return _encodeRefSignature(
+        nullable: true,
+        exact: false,
+        heapType: heapType,
+      );
+    }
+    return _bytesToSignature(<int>[encodedHeapTypeLead & 0xff]);
+  }
+
+  static String _gcRefTypeToSignature(GcRefTypeImmediate refType) {
+    return _encodeRefSignature(
+      nullable: refType.nullable,
+      exact: refType.exact,
+      heapType: refType.heapType,
+    );
+  }
+
+  static String _encodeRefSignature({
+    required bool nullable,
+    required bool exact,
+    required int heapType,
+  }) {
+    final bytes = <int>[nullable ? 0x63 : 0x64];
+    if (exact) {
+      bytes.add(0x62);
+    }
+    bytes.addAll(_encodeSignedLeb33(heapType));
+    return _bytesToSignature(bytes);
+  }
+
+  static List<int> _encodeSignedLeb33(int value) {
+    final bytes = <int>[];
+    var remaining = BigInt.from(value);
+    while (true) {
+      var byte = (remaining & BigInt.from(0x7f)).toInt();
+      remaining >>= 7;
+      final signBitSet = (byte & 0x40) != 0;
+      final done =
+          (remaining == BigInt.zero && !signBitSet) ||
+          (remaining == -BigInt.one && signBitSet);
+      if (!done) {
+        byte += 0x80;
+      }
+      bytes.add(byte);
+      if (done) {
+        break;
+      }
+    }
+    return bytes;
+  }
+
+  static int? _legacyHeapTypeFromRefTypeCode(int code) {
+    return switch (code & 0xff) {
+      0x70 => _heapFunc, // funcref
+      0x6f => _heapExtern, // externref
+      0x6e => _heapAny, // anyref
+      0x6d => _heapEq, // eqref
+      0x6b => _heapStruct, // structref
+      0x6a => _heapArray, // arrayref
+      0x69 => _heapI31, // i31ref
+      0x71 => _heapNone, // nullref
+      0x72 => _heapNoextern, // nullexternref
+      0x73 => _heapNofunc, // nullfuncref
+      _ => null,
+    };
+  }
+
+  static const int _heapAny = -18;
+  static const int _heapEq = -19;
+  static const int _heapI31 = -20;
+  static const int _heapStruct = -21;
+  static const int _heapArray = -22;
+  static const int _heapFunc = -16;
+  static const int _heapExtern = -17;
+  static const int _heapNone = -15;
+  static const int _heapNofunc = -13;
+  static const int _heapNoextern = -14;
+
+  static void _validateSimpleReferenceReturnCompatibility({
+    required WasmModule module,
+    required WasmFunctionType functionType,
+    required List<Instruction> instructions,
+  }) {
+    if (functionType.resultTypeSignatures.length != 1 ||
+        instructions.length != 2 ||
+        instructions[0].opcode != Opcodes.localGet ||
+        instructions[1].opcode != Opcodes.end) {
+      return;
+    }
+    final localIndex = instructions[0].immediate!;
+    if (localIndex < 0 ||
+        localIndex >= functionType.params.length ||
+        localIndex >= functionType.paramTypeSignatures.length) {
+      return;
+    }
+    final sourceSignature = functionType.paramTypeSignatures[localIndex];
+    final targetSignature = functionType.resultTypeSignatures.single;
+    if (!_isValueSignatureSubtype(module, sourceSignature, targetSignature)) {
+      throw const FormatException('Validation failed: type mismatch.');
+    }
+  }
+
+  static bool _isValueSignatureSubtype(
+    WasmModule module,
+    String sourceSignature,
+    String targetSignature,
+  ) {
+    if (sourceSignature == targetSignature) {
+      return true;
+    }
+    final sourceRef = _parseRefSignature(sourceSignature);
+    final targetRef = _parseRefSignature(targetSignature);
+    if (sourceRef == null || targetRef == null) {
+      return false;
+    }
+    if (sourceRef.nullable && !targetRef.nullable) {
+      return false;
+    }
+    if (targetRef.exact) {
+      if (!sourceRef.exact) {
+        return _isBottomHeapForExactTarget(
+          module,
+          sourceRef.heapType,
+          targetRef.heapType,
+        );
+      }
+      return _isExactHeapCompatible(
+        module,
+        sourceRef.heapType,
+        targetRef.heapType,
+        <String>{},
+      );
+    }
+    return _isHeapSubtype(module, sourceRef.heapType, targetRef.heapType);
+  }
+
+  static bool _isBottomHeapForExactTarget(
+    WasmModule module,
+    int sourceHeapType,
+    int targetHeapType,
+  ) {
+    if (sourceHeapType == _heapNofunc) {
+      return _isFuncLikeHeap(module, targetHeapType);
+    }
+    if (sourceHeapType == _heapNone) {
+      return _isEqLikeHeap(module, targetHeapType);
+    }
+    if (sourceHeapType == _heapNoextern) {
+      return targetHeapType == _heapExtern;
+    }
+    return false;
+  }
+
+  static bool _isExactHeapCompatible(
+    WasmModule module,
+    int sourceHeapType,
+    int targetHeapType,
+    Set<String> seenPairs,
+  ) {
+    if (sourceHeapType == targetHeapType) {
+      return true;
+    }
+    if (sourceHeapType < 0 || targetHeapType < 0) {
+      return false;
+    }
+    if (_isConcreteSubType(module, sourceHeapType, targetHeapType) ||
+        _isConcreteSubType(module, targetHeapType, sourceHeapType)) {
+      return false;
+    }
+    return _areConcreteTypesEquivalent(
+      module,
+      sourceHeapType,
+      targetHeapType,
+      seenPairs,
+    );
+  }
+
+  static bool _isHeapSubtype(WasmModule module, int subHeap, int superHeap) {
+    if (subHeap == superHeap) {
+      return true;
+    }
+    if (superHeap >= 0) {
+      if (subHeap >= 0) {
+        return _isConcreteSubType(module, subHeap, superHeap);
+      }
+      return _isAbstractToConcreteSubtype(module, subHeap, superHeap);
+    }
+    if (subHeap >= 0) {
+      return _isConcreteToAbstractSubtype(module, subHeap, superHeap);
+    }
+    return _isAbstractSubtype(subHeap, superHeap);
+  }
+
+  static bool _isHeapCastCompatible(
+    WasmModule module,
+    int sourceHeap,
+    int targetHeap,
+  ) {
+    if (_isHeapSubtype(module, targetHeap, sourceHeap) ||
+        _isHeapSubtype(module, sourceHeap, targetHeap)) {
+      return true;
+    }
+    if (_isEqLikeHeap(module, sourceHeap) && _isEqLikeHeap(module, targetHeap)) {
+      return true;
+    }
+    if (_isFuncLikeHeap(module, sourceHeap) &&
+        _isFuncLikeHeap(module, targetHeap)) {
+      return true;
+    }
+    if (_isExternLikeHeap(sourceHeap) && _isExternLikeHeap(targetHeap)) {
+      return true;
+    }
+    return false;
+  }
+
+  static bool _isExternLikeHeap(int heapType) {
+    return heapType == _heapExtern || heapType == _heapNoextern;
+  }
+
+  static bool _isConcreteSubType(
+    WasmModule module,
+    int subType,
+    int superType,
+  ) {
+    if (subType == superType) {
+      return true;
+    }
+    if (subType < 0 ||
+        subType >= module.types.length ||
+        superType < 0 ||
+        superType >= module.types.length) {
+      return false;
+    }
+    final visiting = <int>{subType};
+    final pending = <int>[subType];
+    while (pending.isNotEmpty) {
+      final current = pending.removeLast();
+      for (final parent in module.types[current].superTypeIndices) {
+        if (parent == superType) {
+          return true;
+        }
+        if (parent < 0 || parent >= module.types.length) {
+          continue;
+        }
+        if (visiting.add(parent)) {
+          pending.add(parent);
+        }
+      }
+    }
+    return false;
+  }
+
+  static bool _isConcreteToAbstractSubtype(
+    WasmModule module,
+    int concreteHeap,
+    int abstractHeap,
+  ) {
+    if (concreteHeap < 0 || concreteHeap >= module.types.length) {
+      return false;
+    }
+    final kind = module.types[concreteHeap].kind;
+    switch (abstractHeap) {
+      case _heapStruct:
+        return kind == WasmCompositeTypeKind.struct;
+      case _heapArray:
+        return kind == WasmCompositeTypeKind.array;
+      case _heapFunc:
+        return kind == WasmCompositeTypeKind.function;
+      case _heapEq:
+        return kind == WasmCompositeTypeKind.struct ||
+            kind == WasmCompositeTypeKind.array;
+      case _heapAny:
+        return kind == WasmCompositeTypeKind.struct ||
+            kind == WasmCompositeTypeKind.array;
+      default:
+        return false;
+    }
+  }
+
+  static bool _isAbstractToConcreteSubtype(
+    WasmModule module,
+    int abstractHeap,
+    int concreteHeap,
+  ) {
+    if (concreteHeap < 0 || concreteHeap >= module.types.length) {
+      return false;
+    }
+    final kind = module.types[concreteHeap].kind;
+    switch (abstractHeap) {
+      case _heapNone:
+        return kind == WasmCompositeTypeKind.struct ||
+            kind == WasmCompositeTypeKind.array;
+      case _heapNofunc:
+        return kind == WasmCompositeTypeKind.function;
+      default:
+        return false;
+    }
+  }
+
+  static bool _isAbstractSubtype(int subHeap, int superHeap) {
+    if (subHeap == superHeap) {
+      return true;
+    }
+    switch (subHeap) {
+      case _heapNone:
+        return superHeap == _heapStruct ||
+            superHeap == _heapArray ||
+            superHeap == _heapEq ||
+            superHeap == _heapAny;
+      case _heapStruct:
+      case _heapArray:
+      case _heapI31:
+      case _heapEq:
+        return superHeap == _heapEq || superHeap == _heapAny;
+      case _heapNofunc:
+        return superHeap == _heapFunc;
+      case _heapNoextern:
+        return superHeap == _heapExtern;
+      default:
+        return false;
+    }
+  }
+
+  static bool _isFuncLikeHeap(WasmModule module, int heapType) {
+    if (heapType == _heapFunc || heapType == _heapNofunc) {
+      return true;
+    }
+    if (heapType < 0 || heapType >= module.types.length) {
+      return false;
+    }
+    return module.types[heapType].kind == WasmCompositeTypeKind.function;
+  }
+
+  static bool _isEqLikeHeap(WasmModule module, int heapType) {
+    if (heapType == _heapEq ||
+        heapType == _heapStruct ||
+        heapType == _heapArray ||
+        heapType == _heapI31 ||
+        heapType == _heapNone ||
+        heapType == _heapAny) {
+      return true;
+    }
+    if (heapType < 0 || heapType >= module.types.length) {
+      return false;
+    }
+    final kind = module.types[heapType].kind;
+    return kind == WasmCompositeTypeKind.struct ||
+        kind == WasmCompositeTypeKind.array;
+  }
+
+  static bool _areConcreteTypesEquivalent(
+    WasmModule module,
+    int lhs,
+    int rhs,
+    Set<String> seenPairs,
+  ) {
+    if (lhs == rhs) {
+      return true;
+    }
+    if (lhs < 0 ||
+        lhs >= module.types.length ||
+        rhs < 0 ||
+        rhs >= module.types.length) {
+      return false;
+    }
+    final pairKey = lhs < rhs ? '$lhs:$rhs' : '$rhs:$lhs';
+    if (!seenPairs.add(pairKey)) {
+      return true;
+    }
+    final left = module.types[lhs];
+    final right = module.types[rhs];
+    if (left.kind != right.kind) {
+      return false;
+    }
+    if (left.isFunctionType != right.isFunctionType) {
+      return false;
+    }
+    if (left.superTypeIndices.length != right.superTypeIndices.length) {
+      return false;
+    }
+    for (var i = 0; i < left.superTypeIndices.length; i++) {
+      if (!_areConcreteTypesEquivalent(
+        module,
+        left.superTypeIndices[i],
+        right.superTypeIndices[i],
+        seenPairs,
+      )) {
+        return false;
+      }
+    }
+    final leftDescriptor = left.descriptorTypeIndex;
+    final rightDescriptor = right.descriptorTypeIndex;
+    if ((leftDescriptor == null) != (rightDescriptor == null)) {
+      return false;
+    }
+    if (leftDescriptor != null &&
+        !_areConcreteTypesEquivalent(
+          module,
+          leftDescriptor,
+          rightDescriptor!,
+          seenPairs,
+        )) {
+      return false;
+    }
+    final leftDescribes = left.describesTypeIndex;
+    final rightDescribes = right.describesTypeIndex;
+    if ((leftDescribes == null) != (rightDescribes == null)) {
+      return false;
+    }
+    if (leftDescribes != null &&
+        !_areConcreteTypesEquivalent(
+          module,
+          leftDescribes,
+          rightDescribes!,
+          seenPairs,
+        )) {
+      return false;
+    }
+    if (left.isFunctionType) {
+      if (left.paramTypeSignatures.length != right.paramTypeSignatures.length ||
+          left.resultTypeSignatures.length !=
+              right.resultTypeSignatures.length) {
+        return false;
+      }
+      for (var i = 0; i < left.paramTypeSignatures.length; i++) {
+        if (!_areValueTypeSignaturesEquivalent(
+          module,
+          left.paramTypeSignatures[i],
+          right.paramTypeSignatures[i],
+          seenPairs,
+        )) {
+          return false;
+        }
+      }
+      for (var i = 0; i < left.resultTypeSignatures.length; i++) {
+        if (!_areValueTypeSignaturesEquivalent(
+          module,
+          left.resultTypeSignatures[i],
+          right.resultTypeSignatures[i],
+          seenPairs,
+        )) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    if (left.fieldSignatures.length != right.fieldSignatures.length) {
+      return false;
+    }
+    for (var i = 0; i < left.fieldSignatures.length; i++) {
+      final leftField = _parseFieldSignature(left.fieldSignatures[i]);
+      final rightField = _parseFieldSignature(right.fieldSignatures[i]);
+      if (leftField == null || rightField == null) {
+        return false;
+      }
+      if (leftField.mutability != rightField.mutability) {
+        return false;
+      }
+      if (!_areValueTypeSignaturesEquivalent(
+        module,
+        leftField.valueSignature,
+        rightField.valueSignature,
+        seenPairs,
+      )) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static bool _areValueTypeSignaturesEquivalent(
+    WasmModule module,
+    String lhs,
+    String rhs,
+    Set<String> seenPairs,
+  ) {
+    if (lhs == rhs) {
+      return true;
+    }
+    final leftRef = _parseRefSignature(lhs);
+    final rightRef = _parseRefSignature(rhs);
+    if (leftRef == null || rightRef == null) {
+      return false;
+    }
+    if (leftRef.nullable != rightRef.nullable ||
+        leftRef.exact != rightRef.exact) {
+      return false;
+    }
+    if (leftRef.heapType == rightRef.heapType) {
+      return true;
+    }
+    if (leftRef.heapType >= 0 && rightRef.heapType >= 0) {
+      return _areConcreteTypesEquivalent(
+        module,
+        leftRef.heapType,
+        rightRef.heapType,
+        seenPairs,
+      );
+    }
+    return false;
+  }
+
+  static ({bool nullable, bool exact, int heapType})? _parseRefSignature(
+    String signature,
+  ) {
+    final bytes = _signatureToBytes(signature);
+    if (bytes.isEmpty) {
+      return null;
+    }
+    if (bytes.length == 1) {
+      final heapType = _legacyHeapTypeFromRefTypeCode(bytes.single);
+      if (heapType == null) {
+        final decoded = _readSignedLeb33FromBytes(bytes, 0);
+        if (decoded == null || decoded.$2 != bytes.length) {
+          return null;
+        }
+        return (nullable: true, exact: false, heapType: decoded.$1);
+      }
+      return (nullable: true, exact: false, heapType: heapType);
+    }
+    if (bytes.length < 2) {
+      return null;
+    }
+    final refPrefix = bytes[0];
+    if (refPrefix != 0x63 && refPrefix != 0x64) {
+      final decoded = _readSignedLeb33FromBytes(bytes, 0);
+      if (decoded == null || decoded.$2 != bytes.length) {
+        return null;
+      }
+      return (nullable: true, exact: false, heapType: decoded.$1);
+    }
+    var offset = 1;
+    var exact = false;
+    if (bytes[offset] == 0x62 || bytes[offset] == 0x61) {
+      exact = bytes[offset] == 0x62;
+      offset++;
+      if (offset >= bytes.length) {
+        return null;
+      }
+    }
+    final decodedHeap = _readSignedLeb33FromBytes(bytes, offset);
+    if (decodedHeap == null || decodedHeap.$2 != bytes.length) {
+      return null;
+    }
+    return (
+      nullable: refPrefix == 0x63,
+      exact: exact,
+      heapType: decodedHeap.$1,
+    );
+  }
+
+  static (int, int)? _readSignedLeb33FromBytes(List<int> bytes, int offset) {
+    if (offset >= bytes.length) {
+      return null;
+    }
+    final firstByte = bytes[offset];
+    var result = firstByte & 0x7f;
+    var shift = 7;
+    var byte = firstByte;
+    var multiplier = 128;
+    var index = offset + 1;
+    while ((byte & 0x80) != 0) {
+      if (index >= bytes.length) {
+        return null;
+      }
+      byte = bytes[index++];
+      result += (byte & 0x7f) * multiplier;
+      multiplier *= 128;
+      shift += 7;
+      if (shift > 35) {
+        return null;
+      }
+    }
+    if (shift < 33 && (byte & 0x40) != 0) {
+      result -= multiplier;
+    }
+    return (_normalizeSignedLeb33(result), index);
+  }
+
+  static ({String valueSignature, int mutability})? _parseFieldSignature(
+    String signature,
+  ) {
+    final bytes = _signatureToBytes(signature);
+    if (bytes.length < 2) {
+      return null;
+    }
+    final mutability = bytes.last;
+    if (mutability != 0 && mutability != 1) {
+      return null;
+    }
+    return (
+      valueSignature: _bytesToSignature(bytes.sublist(0, bytes.length - 1)),
+      mutability: mutability,
+    );
+  }
+
+  static List<int> _signatureToBytes(String signature) {
+    if (signature.isEmpty || signature.length.isOdd) {
+      return const <int>[];
+    }
+    final bytes = <int>[];
+    for (var i = 0; i < signature.length; i += 2) {
+      bytes.add(int.parse(signature.substring(i, i + 2), radix: 16));
+    }
+    return bytes;
+  }
+
+  static String _bytesToSignature(List<int> bytes) {
+    final buffer = StringBuffer();
+    for (final byte in bytes) {
+      buffer.write((byte & 0xff).toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
+  }
+
   static void _checkIndex(int index, int count, String what) {
     if (index < 0 || index >= count) {
       throw FormatException(
@@ -773,5 +2225,53 @@ abstract final class WasmValidator {
       default:
         return false;
     }
+  }
+
+  static void _consumeHeapType(ByteReader reader) {
+    _consumeHeapTypeWithLeadingByte(reader, reader.readByte());
+  }
+
+  static void _consumeHeapTypeWithLeadingByte(ByteReader reader, int lead) {
+    if (lead == 0x62 || lead == 0x61) {
+      _consumeHeapType(reader);
+      return;
+    }
+    if (lead >= 0x65 && lead <= 0x71) {
+      return;
+    }
+    _readSignedLeb33WithFirst(reader, lead);
+  }
+
+  static int _readSignedLeb33WithFirst(ByteReader reader, int firstByte) {
+    var result = firstByte & 0x7f;
+    var shift = 7;
+    var byte = firstByte;
+    var multiplier = 128;
+    while ((byte & 0x80) != 0) {
+      byte = reader.readByte();
+      result += (byte & 0x7f) * multiplier;
+      multiplier *= 128;
+      shift += 7;
+      if (shift > 35) {
+        throw const FormatException('Invalid signed LEB33 encoding.');
+      }
+    }
+    if (shift < 33 && (byte & 0x40) != 0) {
+      result -= multiplier;
+    }
+    return _normalizeSignedLeb33(result);
+  }
+
+  static int _normalizeSignedLeb33(int value) {
+    const signBit33 = 0x100000000;
+    const width33 = 0x200000000;
+    var normalized = value % width33;
+    if (normalized < 0) {
+      normalized += width33;
+    }
+    if (normalized >= signBit33) {
+      normalized -= width33;
+    }
+    return normalized;
   }
 }

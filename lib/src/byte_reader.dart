@@ -46,10 +46,11 @@ final class ByteReader {
 
   int readVarUint32() {
     var result = 0;
+    var multiplier = 1;
 
     for (var i = 0; i < 5; i++) {
       final byte = readByte();
-      result |= (byte & 0x7f) << (i * 7);
+      result += (byte & 0x7f) * multiplier;
 
       if ((byte & 0x80) == 0) {
         if (i == 4 && (byte & 0xf0) != 0) {
@@ -57,6 +58,8 @@ final class ByteReader {
         }
         return result;
       }
+
+      multiplier *= 128;
     }
 
     throw const FormatException('Invalid varuint32 encoding.');
@@ -91,11 +94,13 @@ final class ByteReader {
     var result = 0;
     var shift = 0;
     var byte = 0;
+    var multiplier = 1;
 
     while (true) {
       byte = readByte();
-      result |= (byte & 0x7f) << shift;
+      result += (byte & 0x7f) * multiplier;
       shift += 7;
+      multiplier *= 128;
 
       if ((byte & 0x80) == 0) {
         break;
@@ -107,7 +112,7 @@ final class ByteReader {
     }
 
     if (shift < 32 && (byte & 0x40) != 0) {
-      result |= -1 << shift;
+      result -= multiplier;
     }
 
     return result.toSigned(32);

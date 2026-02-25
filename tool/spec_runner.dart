@@ -194,6 +194,7 @@ Future<List<StepResult>> _runJsSuite(
     );
   }
   if (suite != RunnerSuite.core) {
+    final proposalOptional = !strictProposals;
     steps.add(
       await _runStep(
         name: 'js-threads-portable',
@@ -208,9 +209,49 @@ Future<List<StepResult>> _runJsSuite(
     );
     steps.add(
       await _runStep(
-        name: 'proposal-testsuite-vm-fallback',
-        command: _proposalRunnerCommand(testsuiteDir),
-        optional: !strictProposals,
+        name: 'proposal-prepare-manifest',
+        command: _proposalPrepareManifestCommand(testsuiteDir),
+        optional: proposalOptional,
+      ),
+    );
+    steps.add(
+      await _runStep(
+        name: 'proposal-player-js-compile',
+        command: const [
+          'dart',
+          'compile',
+          'js',
+          'tool/spec_testsuite_player.dart',
+          '-o',
+          '.dart_tool/spec_runner/spec_testsuite_player.js',
+        ],
+        optional: proposalOptional,
+      ),
+    );
+    steps.add(
+      await _runStep(
+        name: 'proposal-player-js-run',
+        command: const [
+          'node',
+          'tool/run_spec_player_js.mjs',
+          '.dart_tool/spec_runner/spec_testsuite_player.js',
+          '.dart_tool/spec_runner/proposal_manifest.json',
+          '.dart_tool/spec_runner/proposal_latest.json',
+        ],
+        optional: proposalOptional,
+      ),
+    );
+    steps.add(
+      await _runStep(
+        name: 'proposal-report',
+        command: const [
+          'dart',
+          'run',
+          'tool/spec_result_report.dart',
+          '--input-json=.dart_tool/spec_runner/proposal_latest.json',
+          '--output-md=doc/wasm_proposal_failures.md',
+        ],
+        optional: proposalOptional,
       ),
     );
     steps.add(
@@ -297,11 +338,53 @@ Future<List<StepResult>> _runWasmSuite(
         ],
       ),
     );
+    final proposalOptional = !strictProposals;
     steps.add(
       await _runStep(
-        name: 'proposal-testsuite-vm-fallback',
-        command: _proposalRunnerCommand(testsuiteDir),
-        optional: !strictProposals,
+        name: 'proposal-prepare-manifest',
+        command: _proposalPrepareManifestCommand(testsuiteDir),
+        optional: proposalOptional,
+      ),
+    );
+    steps.add(
+      await _runStep(
+        name: 'proposal-player-wasm-compile',
+        command: const [
+          'dart',
+          'compile',
+          'wasm',
+          'tool/spec_testsuite_player.dart',
+          '-o',
+          '.dart_tool/spec_runner/spec_testsuite_player.wasm',
+        ],
+        optional: proposalOptional,
+      ),
+    );
+    steps.add(
+      await _runStep(
+        name: 'proposal-player-wasm-run',
+        command: const [
+          'node',
+          'tool/run_spec_player_wasm.mjs',
+          '.dart_tool/spec_runner/spec_testsuite_player.mjs',
+          '.dart_tool/spec_runner/spec_testsuite_player.wasm',
+          '.dart_tool/spec_runner/proposal_manifest.json',
+          '.dart_tool/spec_runner/proposal_latest.json',
+        ],
+        optional: proposalOptional,
+      ),
+    );
+    steps.add(
+      await _runStep(
+        name: 'proposal-report',
+        command: const [
+          'dart',
+          'run',
+          'tool/spec_result_report.dart',
+          '--input-json=.dart_tool/spec_runner/proposal_latest.json',
+          '--output-md=doc/wasm_proposal_failures.md',
+        ],
+        optional: proposalOptional,
       ),
     );
     steps.add(
@@ -381,6 +464,19 @@ List<String> _proposalRunnerCommand(String? testsuiteDir) {
     'run',
     'tool/spec_testsuite_runner.dart',
     '--suite=proposal',
+    if (testsuiteDir != null && testsuiteDir.trim().isNotEmpty)
+      '--testsuite-dir=${testsuiteDir.trim()}',
+  ];
+}
+
+List<String> _proposalPrepareManifestCommand(String? testsuiteDir) {
+  return <String>[
+    'dart',
+    'run',
+    'tool/spec_testsuite_runner.dart',
+    '--suite=proposal',
+    '--prepare-manifest=.dart_tool/spec_runner/proposal_manifest.json',
+    '--prepare-root=.dart_tool/spec_runner/proposal_bundle',
     if (testsuiteDir != null && testsuiteDir.trim().isNotEmpty)
       '--testsuite-dir=${testsuiteDir.trim()}',
   ];

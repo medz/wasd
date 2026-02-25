@@ -263,7 +263,11 @@ final class WasmInstance {
     }
 
     for (final globalDef in module.globals) {
-      final value = _evaluateConstExpr(globalDef.initExpr, globals);
+      final value = _evaluateConstExpr(
+        globalDef.initExpr,
+        globals,
+        module.types,
+      );
       globals.add(
         RuntimeGlobal(
           valueType: globalDef.type.valueType,
@@ -646,7 +650,11 @@ final class WasmInstance {
       }
 
       final table = tables[element.tableIndex];
-      final offsetValue = _evaluateConstExpr(element.offsetExpr!, globals);
+      final offsetValue = _evaluateConstExpr(
+        element.offsetExpr!,
+        globals,
+        module.types,
+      );
       final offset = offsetValue.castTo(WasmValueType.i32).asI32();
 
       for (final functionIndex in element.functionIndices) {
@@ -684,6 +692,7 @@ final class WasmInstance {
       final offset = _evaluateConstExpr(
         data.offsetExpr!,
         globals,
+        module.types,
       ).castTo(WasmValueType.i32).asI32();
       mem.writeBytes(offset, data.bytes);
     }
@@ -713,6 +722,7 @@ final class WasmInstance {
   static WasmValue _evaluateConstExpr(
     Uint8List expr,
     List<RuntimeGlobal> globals,
+    List<WasmFunctionType> types,
   ) {
     final reader = ByteReader(expr);
     final stack = <WasmValue>[];
@@ -728,6 +738,20 @@ final class WasmInstance {
     int popI64() => pop().castTo(WasmValueType.i64).asI64();
     double popF32() => pop().castTo(WasmValueType.f32).asF32();
     double popF64() => pop().castTo(WasmValueType.f64).asF64();
+
+    WasmValue defaultValueForFieldSignature(String fieldSignature) {
+      if (fieldSignature.length < 2 || fieldSignature.length.isOdd) {
+        return WasmValue.i32(0);
+      }
+      final typeCode = int.parse(fieldSignature.substring(0, 2), radix: 16);
+      return switch (typeCode) {
+        0x7e => WasmValue.i64(0),
+        0x7d => WasmValue.f32(0),
+        0x7c => WasmValue.f64(0),
+        0x64 => WasmValue.i32(-1),
+        _ => WasmValue.i32(0),
+      };
+    }
 
     while (!reader.isEOF) {
       final opcode = reader.readByte();
@@ -768,6 +792,200 @@ final class WasmInstance {
 
         case Opcodes.refFunc:
           stack.add(WasmValue.i32(reader.readVarUint32()));
+
+        case 0xfb:
+          final subOpcode = reader.readVarUint32();
+          final pseudoOpcode = 0xfb00 | subOpcode;
+          switch (pseudoOpcode) {
+            case Opcodes.structNew:
+            case Opcodes.structNewDefault:
+            case Opcodes.structNewDesc:
+            case Opcodes.structNewDefaultDesc:
+            case Opcodes.arrayNew:
+            case Opcodes.arrayNewDefault:
+            case Opcodes.arrayNewFixed:
+              final typeIndex = reader.readVarUint32();
+              if (typeIndex < 0 || typeIndex >= types.length) {
+                throw FormatException(
+                  'Invalid type index in const expr: $typeIndex',
+                );
+              }
+              final type = types[typeIndex];
+              switch (pseudoOpcode) {
+                case Opcodes.structNew:
+                  if (type.kind != WasmCompositeTypeKind.struct) {
+                    throw const FormatException('Const expr type mismatch.');
+                  }
+                  if (type.descriptorTypeIndex != null) {
+                    throw const FormatException('Const expr type mismatch.');
+                  }
+                  final fields = List<WasmValue>.filled(
+                    type.fieldSignatures.length,
+                    WasmValue.i32(0),
+                    growable: false,
+                  );
+                  for (var fieldIndex = fields.length - 1;
+                      fieldIndex >= 0;
+                      fieldIndex--) {
+                    fields[fieldIndex] = pop();
+                  }
+                  stack.add(
+                    WasmValue.i32(
+                      WasmVm.allocateConstStructRef(
+                        typeIndex: typeIndex,
+                        fields: fields,
+                      ),
+                    ),
+                  );
+                case Opcodes.structNewDefault:
+                  if (type.kind != WasmCompositeTypeKind.struct) {
+                    throw const FormatException('Const expr type mismatch.');
+                  }
+                  if (type.descriptorTypeIndex != null) {
+                    throw const FormatException('Const expr type mismatch.');
+                  }
+                  final fields = type.fieldSignatures
+                      .map(defaultValueForFieldSignature)
+                      .toList(growable: false);
+                  stack.add(
+                    WasmValue.i32(
+                      WasmVm.allocateConstStructRef(
+                        typeIndex: typeIndex,
+                        fields: fields,
+                      ),
+                    ),
+                  );
+                case Opcodes.structNewDesc:
+                  if (type.kind != WasmCompositeTypeKind.struct ||
+                      type.descriptorTypeIndex == null) {
+                    throw const FormatException('Const expr type mismatch.');
+                  }
+                  final descriptor = pop().castTo(WasmValueType.i32).asI32();
+                  if (descriptor == -1) {
+                    throw StateError('null descriptor reference');
+                  }
+                  final fields = List<WasmValue>.filled(
+                    type.fieldSignatures.length,
+                    WasmValue.i32(0),
+                    growable: false,
+                  );
+                  for (var fieldIndex = fields.length - 1;
+                      fieldIndex >= 0;
+                      fieldIndex--) {
+                    fields[fieldIndex] = pop();
+                  }
+                  stack.add(
+                    WasmValue.i32(
+                      WasmVm.allocateConstStructRef(
+                        typeIndex: typeIndex,
+                        descriptorRef: descriptor,
+                        fields: fields,
+                      ),
+                    ),
+                  );
+                case Opcodes.structNewDefaultDesc:
+                  if (type.kind != WasmCompositeTypeKind.struct ||
+                      type.descriptorTypeIndex == null) {
+                    throw const FormatException('Const expr type mismatch.');
+                  }
+                  final descriptor = pop().castTo(WasmValueType.i32).asI32();
+                  if (descriptor == -1) {
+                    throw StateError('null descriptor reference');
+                  }
+                  final fields = type.fieldSignatures
+                      .map(defaultValueForFieldSignature)
+                      .toList(growable: false);
+                  stack.add(
+                    WasmValue.i32(
+                      WasmVm.allocateConstStructRef(
+                        typeIndex: typeIndex,
+                        descriptorRef: descriptor,
+                        fields: fields,
+                      ),
+                    ),
+                  );
+                case Opcodes.arrayNew:
+                  if (type.kind != WasmCompositeTypeKind.array) {
+                    throw const FormatException('Const expr type mismatch.');
+                  }
+                  final length = pop().castTo(WasmValueType.i32).asI32();
+                  final value = pop();
+                  if (length < 0) {
+                    throw RangeError('Array length out of bounds: $length');
+                  }
+                  final elements = List<WasmValue>.filled(
+                    length,
+                    value,
+                    growable: false,
+                  );
+                  stack.add(
+                    WasmValue.i32(
+                      WasmVm.allocateConstArrayRef(
+                        typeIndex: typeIndex,
+                        elements: elements,
+                      ),
+                    ),
+                  );
+                case Opcodes.arrayNewDefault:
+                  if (type.kind != WasmCompositeTypeKind.array) {
+                    throw const FormatException('Const expr type mismatch.');
+                  }
+                  final length = pop().castTo(WasmValueType.i32).asI32();
+                  if (length < 0) {
+                    throw RangeError('Array length out of bounds: $length');
+                  }
+                  final defaultValue = defaultValueForFieldSignature(
+                    type.fieldSignatures.single,
+                  );
+                  final elements = List<WasmValue>.filled(
+                    length,
+                    defaultValue,
+                    growable: false,
+                  );
+                  stack.add(
+                    WasmValue.i32(
+                      WasmVm.allocateConstArrayRef(
+                        typeIndex: typeIndex,
+                        elements: elements,
+                      ),
+                    ),
+                  );
+                case Opcodes.arrayNewFixed:
+                  if (type.kind != WasmCompositeTypeKind.array) {
+                    throw const FormatException('Const expr type mismatch.');
+                  }
+                  final elementCount = reader.readVarUint32();
+                  final elements = List<WasmValue>.filled(
+                    elementCount,
+                    WasmValue.i32(0),
+                    growable: false,
+                  );
+                  for (var elementIndex = elementCount - 1;
+                      elementIndex >= 0;
+                      elementIndex--) {
+                    elements[elementIndex] = pop();
+                  }
+                  stack.add(
+                    WasmValue.i32(
+                      WasmVm.allocateConstArrayRef(
+                        typeIndex: typeIndex,
+                        elements: elements,
+                      ),
+                    ),
+                  );
+                default:
+                  throw UnsupportedError(
+                    'Unsupported const expr opcode: 0x${pseudoOpcode.toRadixString(16)}',
+                  );
+              }
+            case Opcodes.refI31:
+              final value = pop().castTo(WasmValueType.i32).asI32() & 0x7fffffff;
+              stack.add(WasmValue.i32(WasmVm.allocateConstI31Ref(value)));
+            default:
+              throw UnsupportedError(
+                'Unsupported const expr opcode: 0x${pseudoOpcode.toRadixString(16)}',
+              );
+          }
 
         case Opcodes.i32Add:
           final rhs = popI32();
@@ -904,7 +1122,11 @@ final class WasmInstance {
     }
     var maxDepth = 0;
     for (final superTypeIndex in type.superTypeIndices) {
-      final superDepth = _functionTypeDepthInternal(module, superTypeIndex, seen);
+      final superDepth = _functionTypeDepthInternal(
+        module,
+        superTypeIndex,
+        seen,
+      );
       if (superDepth > maxDepth) {
         maxDepth = superDepth;
       }
@@ -931,18 +1153,33 @@ final class WasmInstance {
     var result = firstByte & 0x7f;
     var shift = 7;
     var byte = firstByte;
+    var multiplier = 128;
     while ((byte & 0x80) != 0) {
       byte = reader.readByte();
-      result |= (byte & 0x7f) << shift;
+      result += (byte & 0x7f) * multiplier;
+      multiplier *= 128;
       shift += 7;
       if (shift > 35) {
         throw const FormatException('Invalid signed LEB33 encoding.');
       }
     }
     if (shift < 33 && (byte & 0x40) != 0) {
-      result |= -1 << shift;
+      result -= multiplier;
     }
-    return result;
+    return _normalizeSignedLeb33(result);
+  }
+
+  static int _normalizeSignedLeb33(int value) {
+    const signBit33 = 0x100000000;
+    const width33 = 0x200000000;
+    var normalized = value % width33;
+    if (normalized < 0) {
+      normalized += width33;
+    }
+    if (normalized >= signBit33) {
+      normalized -= width33;
+    }
+    return normalized;
   }
 
   static Object? _externalizeResults(List<WasmValue> results) {

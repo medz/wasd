@@ -31,6 +31,54 @@ final class _LabelFrame {
   final int loopStartIndex;
 }
 
+enum _GcRefKind { i31, struct, array, extern }
+
+final class _GcRefObject {
+  _GcRefObject.i31(this.i31Value)
+    : kind = _GcRefKind.i31,
+      typeIndex = null,
+      descriptorRef = null,
+      fields = null,
+      elements = null,
+      externValue = null;
+
+  _GcRefObject.struct({
+    required this.typeIndex,
+    this.descriptorRef,
+    required List<WasmValue> fields,
+  }) : kind = _GcRefKind.struct,
+       i31Value = null,
+       fields = List<WasmValue>.unmodifiable(fields),
+       elements = null,
+       externValue = null;
+
+  _GcRefObject.array({
+    required this.typeIndex,
+    required List<WasmValue> elements,
+  }) : kind = _GcRefKind.array,
+       i31Value = null,
+       descriptorRef = null,
+       fields = null,
+       elements = List<WasmValue>.unmodifiable(elements),
+       externValue = null;
+
+  _GcRefObject.extern(this.externValue)
+    : kind = _GcRefKind.extern,
+      i31Value = null,
+      typeIndex = null,
+      descriptorRef = null,
+      fields = null,
+      elements = null;
+
+  final _GcRefKind kind;
+  final int? i31Value;
+  final int? typeIndex;
+  final int? descriptorRef;
+  final List<WasmValue>? fields;
+  final List<WasmValue>? elements;
+  final int? externValue;
+}
+
 final class WasmVm {
   WasmVm({
     required List<RuntimeFunction> functions,
@@ -57,6 +105,82 @@ final class WasmVm {
   final List<Uint8List?> _dataSegments;
   final List<List<int?>?> _elementSegments;
   final int maxCallDepth;
+
+  static const int _nullRef = -1;
+  static const int _heapAny = -18;
+  static const int _heapEq = -19;
+  static const int _heapI31 = -20;
+  static const int _heapStruct = -21;
+  static const int _heapArray = -22;
+  static const int _heapFunc = -16;
+  static const int _heapExtern = -17;
+  static const int _heapNone = -15;
+  static const int _heapNofunc = -13;
+  static const int _heapNoextern = -14;
+  static const int constGcRefKindStruct = 1;
+  static const int constGcRefKindArray = 2;
+  static const int constGcRefKindI31 = 3;
+  static const int _constGcRefBase = -0x40000000;
+  static int _nextConstGcRefId = 0;
+  static final Map<int, ({int kind, int typeIndex, int? descriptorRef})>
+  _constGcRefs =
+      <int, ({int kind, int typeIndex, int? descriptorRef})>{};
+  static int _nextGcObjectId = 0;
+  static final Map<int, _GcRefObject> _sharedGcObjects = <int, _GcRefObject>{};
+
+  static int encodeConstGcRef({
+    required int kind,
+    required int typeIndex,
+    int? descriptorRef,
+  }) {
+    if (kind <= 0 || kind > 0x3ff) {
+      throw RangeError.range(kind, 1, 0x3ff, 'kind');
+    }
+    if (typeIndex < 0) {
+      throw RangeError.value(typeIndex, 'typeIndex', 'must be >= 0');
+    }
+    final id = _nextConstGcRefId++;
+    final reference = _constGcRefBase - id;
+    _constGcRefs[reference] = (
+      kind: kind,
+      typeIndex: typeIndex,
+      descriptorRef: descriptorRef,
+    );
+    return reference;
+  }
+
+  static ({int kind, int typeIndex, int? descriptorRef})? decodeConstGcRef(
+    int reference,
+  ) {
+    return _constGcRefs[reference];
+  }
+
+  static int allocateConstStructRef({
+    required int typeIndex,
+    int? descriptorRef,
+    required List<WasmValue> fields,
+  }) {
+    return _allocateSharedGcObject(
+      _GcRefObject.struct(
+        typeIndex: typeIndex,
+        descriptorRef: descriptorRef,
+        fields: fields,
+      ),
+    );
+  }
+
+  static int allocateConstArrayRef({
+    required int typeIndex,
+    required List<WasmValue> elements,
+  }) {
+    return _allocateSharedGcObject(
+      _GcRefObject.array(typeIndex: typeIndex, elements: elements),
+    );
+  }
+
+  static int allocateConstI31Ref(int value) {
+    return _allocateSharedGcObject(_GcRefObject.i31(value & 0x7fffffff));
+  }
 
   List<WasmValue> invokeFunction(int functionIndex, List<WasmValue> args) {
     return _execute(functionIndex, args, depth: 0);
@@ -208,6 +332,25 @@ final class WasmVm {
             pc++;
           }
 
+        case Opcodes.brOnNull:
+          final value = _popRef(stack);
+          if (value == null) {
+            pc = _branch(instruction.immediate!, labels, stack);
+          } else {
+            _pushRef(stack, value);
+            pc++;
+          }
+
+        case Opcodes.brOnNonNull:
+          final value = _popRef(stack);
+          if (value != null) {
+            _pushRef(stack, value);
+            pc = _branch(instruction.immediate!, labels, stack);
+          } else {
+            _pushRef(stack, null);
+            pc++;
+          }
+
         case Opcodes.brTable:
           final selector = _popI32(stack);
           final targets = instruction.tableDepths;
@@ -254,7 +397,9 @@ final class WasmVm {
           final target = _functions[targetFunctionIndex];
           final expectedType = _types[typeIndex];
           if (!expectedType.isFunctionType) {
-            throw StateError('call_indirect expected non-function type $typeIndex.');
+            throw StateError(
+              'call_indirect expected non-function type $typeIndex.',
+            );
           }
 
           if (!_functionTypeEquals(target.type, expectedType)) {
@@ -283,7 +428,9 @@ final class WasmVm {
           final target = _functions[targetFunctionIndex];
           final expectedType = _types[typeIndex];
           if (!expectedType.isFunctionType) {
-            throw StateError('call_indirect expected non-function type $typeIndex.');
+            throw StateError(
+              'call_indirect expected non-function type $typeIndex.',
+            );
           }
 
           if (!_functionTypeEquals(target.type, expectedType)) {
@@ -362,12 +509,12 @@ final class WasmVm {
         case Opcodes.tableGet:
           final tableIndex = _checkTableIndex(instruction.immediate!);
           final elementIndex = _popI32(stack);
-          _pushFuncRef(stack, _tables[tableIndex][elementIndex]);
+          _pushRef(stack, _tables[tableIndex][elementIndex]);
           pc++;
 
         case Opcodes.tableSet:
           final tableIndex = _checkTableIndex(instruction.immediate!);
-          final value = _popFuncRef(stack);
+          final value = _popRef(stack);
           final elementIndex = _popI32(stack);
           _tables[tableIndex][elementIndex] = value;
           pc++;
@@ -1078,7 +1225,7 @@ final class WasmVm {
           pc++;
 
         case Opcodes.refNull:
-          stack.add(WasmValue.i32(-1));
+          stack.add(WasmValue.i32(_nullRef));
           pc++;
 
         case Opcodes.refFunc:
@@ -1087,15 +1234,99 @@ final class WasmVm {
           pc++;
 
         case Opcodes.refIsNull:
-          stack.add(WasmValue.i32(_popFuncRef(stack) == null ? 1 : 0));
+          stack.add(WasmValue.i32(_popRef(stack) == null ? 1 : 0));
+          pc++;
+
+        case Opcodes.refEq:
+          final rhs = _popRef(stack);
+          final lhs = _popRef(stack);
+          stack.add(WasmValue.i32(lhs == rhs ? 1 : 0));
+          pc++;
+
+        case Opcodes.refAsNonNull:
+          final value = _popRef(stack);
+          if (value == null) {
+            throw StateError('null reference');
+          }
+          _pushRef(stack, value);
+          pc++;
+
+        case Opcodes.structNew:
+          _gcStructNew(stack, instruction);
+          pc++;
+
+        case Opcodes.structNewDefault:
+          _gcStructNewDefault(stack, instruction);
+          pc++;
+
+        case Opcodes.structNewDesc:
+          _gcStructNewDesc(stack, instruction);
+          pc++;
+
+        case Opcodes.structNewDefaultDesc:
+          _gcStructNewDefaultDesc(stack, instruction);
+          pc++;
+
+        case Opcodes.structGetU:
+        case Opcodes.structGetS:
+          _gcStructGet(
+            stack,
+            instruction,
+            signed: instruction.opcode == Opcodes.structGetS,
+          );
+          pc++;
+
+        case Opcodes.arrayNew:
+          _gcArrayNew(stack, instruction);
+          pc++;
+
+        case Opcodes.arrayNewFixed:
+          _gcArrayNewFixed(stack, instruction);
+          pc++;
+
+        case Opcodes.arrayGetS:
+        case Opcodes.arrayGetU:
+          _gcArrayGet(
+            stack,
+            instruction,
+            signed: instruction.opcode == Opcodes.arrayGetS,
+          );
+          pc++;
+
+        case Opcodes.arrayLen:
+          _gcArrayLen(stack);
+          pc++;
+
+        case Opcodes.anyConvertExtern:
+          _gcAnyConvertExtern(stack);
+          pc++;
+
+        case Opcodes.refI31:
+          _gcRefI31(stack);
+          pc++;
+
+        case Opcodes.i31GetS:
+        case Opcodes.i31GetU:
+          _gcI31Get(stack, signed: instruction.opcode == Opcodes.i31GetS);
           pc++;
 
         case Opcodes.refTest:
+        case Opcodes.refTestNullable:
           stack.add(WasmValue.i32(_gcRefTest(stack, instruction) ? 1 : 0));
           pc++;
 
         case Opcodes.refCast:
+        case Opcodes.refCastNullable:
           _gcRefCast(stack, instruction);
+          pc++;
+
+        case Opcodes.refGetDesc:
+          _gcRefGetDesc(stack, instruction);
+          pc++;
+
+        case Opcodes.refCastDesc:
+        case Opcodes.refCastDescEq:
+          _gcRefCastDescEq(stack, instruction);
           pc++;
 
         case Opcodes.brOnCast:
@@ -1103,12 +1334,12 @@ final class WasmVm {
           if (brOnCast == null) {
             throw StateError('Missing br_on_cast immediate.');
           }
-          final value = _popFuncRef(stack);
+          final value = _popRef(stack);
           if (_gcRefMatches(value, brOnCast.targetType)) {
-            _pushFuncRef(stack, value);
+            _pushRef(stack, value);
             pc = _branch(brOnCast.depth, labels, stack);
           } else {
-            _pushFuncRef(stack, value);
+            _pushRef(stack, value);
             pc++;
           }
 
@@ -1117,12 +1348,53 @@ final class WasmVm {
           if (brOnCast == null) {
             throw StateError('Missing br_on_cast_fail immediate.');
           }
-          final value = _popFuncRef(stack);
-          if (!_gcRefMatches(value, brOnCast.targetType)) {
-            _pushFuncRef(stack, value);
+          final value = _popRef(stack);
+          final matches = _gcRefMatches(value, brOnCast.targetType);
+          if (!matches) {
+            _pushRef(stack, value);
             pc = _branch(brOnCast.depth, labels, stack);
           } else {
-            _pushFuncRef(stack, value);
+            _pushRef(stack, value);
+            pc++;
+          }
+
+        case Opcodes.brOnCastDescEq:
+          final brOnCast = instruction.gcBrOnCast;
+          if (brOnCast == null) {
+            throw StateError('Missing br_on_cast_desc_eq immediate.');
+          }
+          final descriptor = _popRef(stack);
+          final value = _popRef(stack);
+          final matches = _gcRefMatchesWithDescriptor(
+            value: value,
+            descriptor: descriptor,
+            targetType: brOnCast.targetType,
+          );
+          if (matches) {
+            _pushRef(stack, value);
+            pc = _branch(brOnCast.depth, labels, stack);
+          } else {
+            _pushRef(stack, value);
+            pc++;
+          }
+
+        case Opcodes.brOnCastDescEqFail:
+          final brOnCast = instruction.gcBrOnCast;
+          if (brOnCast == null) {
+            throw StateError('Missing br_on_cast_desc_eq_fail immediate.');
+          }
+          final descriptor = _popRef(stack);
+          final value = _popRef(stack);
+          final matches = _gcRefMatchesWithDescriptor(
+            value: value,
+            descriptor: descriptor,
+            targetType: brOnCast.targetType,
+          );
+          if (!matches) {
+            _pushRef(stack, value);
+            pc = _branch(brOnCast.depth, labels, stack);
+          } else {
+            _pushRef(stack, value);
             pc++;
           }
 
@@ -2083,7 +2355,7 @@ final class WasmVm {
     if (gcRefType == null) {
       throw StateError('Missing ref.test immediate.');
     }
-    final value = _popFuncRef(stack);
+    final value = _popRef(stack);
     return _gcRefMatches(value, gcRefType);
   }
 
@@ -2092,36 +2364,858 @@ final class WasmVm {
     if (gcRefType == null) {
       throw StateError('Missing ref.cast immediate.');
     }
-    final value = _popFuncRef(stack);
+    final value = _popRef(stack);
     if (!_gcRefMatches(value, gcRefType)) {
       throw StateError('cast failure');
     }
-    _pushFuncRef(stack, value);
+    _pushRef(stack, value);
   }
 
-  bool _gcRefMatches(int? functionIndex, GcRefTypeImmediate refType) {
-    if (functionIndex == null) {
-      return refType.nullable;
+  void _gcRefGetDesc(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = instruction.immediate;
+    if (typeIndex == null) {
+      throw StateError('Missing ref.get_desc immediate.');
     }
-    if (refType.anyFunc) {
-      return true;
+    final expectedType = _types[_checkTypeIndex(typeIndex)];
+    if (expectedType.descriptorTypeIndex == null) {
+      throw StateError('type without descriptor');
     }
-    final targetTypeIndex = refType.typeIndex;
-    if (targetTypeIndex == null) {
-      return true;
+    final value = _popRef(stack);
+    if (value == null) {
+      throw StateError('null reference');
     }
-    final actualTypeIndex = _functions[_checkFunctionIndex(
-      functionIndex,
-    )].declaredTypeIndex;
-    if (!_functionTypeMatchesByDepth(
-      actualTypeIndex: actualTypeIndex,
-      targetTypeIndex: targetTypeIndex,
-      exact: refType.exact,
-      actualDepthOverride: _functions[functionIndex].runtimeTypeDepth,
+    final descriptor = _gcDescriptorForRef(value);
+    if (descriptor == null) {
+      throw StateError('descriptor not available');
+    }
+    _pushRef(stack, descriptor);
+  }
+
+  void _gcRefCastDescEq(List<WasmValue> stack, Instruction instruction) {
+    final gcRefType = instruction.gcRefType;
+    if (gcRefType == null) {
+      throw StateError('Missing ref.cast_desc_eq immediate.');
+    }
+    final descriptor = _popRef(stack);
+    final value = _popRef(stack);
+    if (!_gcRefMatchesWithDescriptor(
+      value: value,
+      descriptor: descriptor,
+      targetType: gcRefType,
     )) {
+      throw StateError('descriptor cast failure');
+    }
+    _pushRef(stack, value);
+  }
+
+  bool _gcRefMatchesWithDescriptor({
+    required int? value,
+    required int? descriptor,
+    required GcRefTypeImmediate targetType,
+  }) {
+    if (descriptor == null) {
+      throw StateError('null descriptor reference');
+    }
+    if (!_gcRefMatches(value, targetType)) {
       return false;
     }
+    if (value == null) {
+      return true;
+    }
+    final valueDescriptor = _gcDescriptorForRef(value);
+    return valueDescriptor == descriptor;
+  }
+
+  int? _gcDescriptorForRef(int reference) {
+    if (reference >= 0) {
+      return null;
+    }
+    final constRef = decodeConstGcRef(reference);
+    if (constRef != null) {
+      return constRef.descriptorRef;
+    }
+    final object = _requireGcObject(reference);
+    return object.descriptorRef;
+  }
+
+  bool _gcRefMatches(int? reference, GcRefTypeImmediate refType) {
+    if (reference == null) {
+      return refType.nullable;
+    }
+    final targetHeapType = refType.heapType;
+    if (reference >= 0) {
+      if (targetHeapType < 0) {
+        return _functionRefMatchesAbstract(
+          targetHeapType,
+          exact: refType.exact,
+        );
+      }
+      final actualTypeIndex =
+          _functions[_checkFunctionIndex(reference)].declaredTypeIndex;
+      return _functionTypeMatchesByDepth(
+        actualTypeIndex: actualTypeIndex,
+        targetTypeIndex: targetHeapType,
+        exact: refType.exact,
+        actualDepthOverride: _functions[reference].runtimeTypeDepth,
+      );
+    }
+
+    final constRef = decodeConstGcRef(reference);
+    if (constRef != null) {
+      switch (constRef.kind) {
+        case constGcRefKindI31:
+          return _i31RefMatches(targetHeapType, exact: refType.exact);
+        case constGcRefKindStruct:
+        case constGcRefKindArray:
+          return _typedGcRefMatches(
+            constRef.typeIndex,
+            targetHeapType,
+            exact: refType.exact,
+          );
+        default:
+          return false;
+      }
+    }
+
+    final object = _requireGcObject(reference);
+    switch (object.kind) {
+      case _GcRefKind.i31:
+        return _i31RefMatches(targetHeapType, exact: refType.exact);
+      case _GcRefKind.struct:
+      case _GcRefKind.array:
+        return _typedGcRefMatches(
+          object.typeIndex!,
+          targetHeapType,
+          exact: refType.exact,
+        );
+      case _GcRefKind.extern:
+        return _externRefMatches(targetHeapType, exact: refType.exact);
+    }
+  }
+
+  bool _functionRefMatchesAbstract(int heapType, {required bool exact}) {
+    if (exact) {
+      return false;
+    }
+    return heapType == _heapFunc;
+  }
+
+  bool _i31RefMatches(int heapType, {required bool exact}) {
+    if (heapType >= 0) {
+      return false;
+    }
+    if (exact) {
+      return heapType == _heapI31;
+    }
+    return heapType == _heapI31 || heapType == _heapEq || heapType == _heapAny;
+  }
+
+  bool _typedGcRefMatches(
+    int actualTypeIndex,
+    int targetHeapType, {
+    required bool exact,
+  }) {
+    if (targetHeapType >= 0) {
+      if (exact) {
+        return actualTypeIndex == targetHeapType;
+      }
+      return _isTypeSubtype(actualTypeIndex, targetHeapType) ||
+          _areTypesEquivalent(actualTypeIndex, targetHeapType, <String>{});
+    }
+    if (actualTypeIndex < 0 || actualTypeIndex >= _types.length) {
+      return false;
+    }
+    final actualType = _types[actualTypeIndex];
+    if (exact) {
+      switch (targetHeapType) {
+        case _heapStruct:
+          return actualType.kind == WasmCompositeTypeKind.struct;
+        case _heapArray:
+          return actualType.kind == WasmCompositeTypeKind.array;
+        default:
+          return false;
+      }
+    }
+    switch (targetHeapType) {
+      case _heapAny:
+        return actualType.kind == WasmCompositeTypeKind.struct ||
+            actualType.kind == WasmCompositeTypeKind.array;
+      case _heapEq:
+        return actualType.kind == WasmCompositeTypeKind.struct ||
+            actualType.kind == WasmCompositeTypeKind.array;
+      case _heapStruct:
+        return actualType.kind == WasmCompositeTypeKind.struct;
+      case _heapArray:
+        return actualType.kind == WasmCompositeTypeKind.array;
+      default:
+        return false;
+    }
+  }
+
+  bool _externRefMatches(int heapType, {required bool exact}) {
+    if (heapType >= 0 || exact) {
+      return false;
+    }
+    return heapType == _heapExtern;
+  }
+
+  bool _isTypeSubtype(int subTypeIndex, int superTypeIndex) {
+    if (subTypeIndex == superTypeIndex) {
+      return true;
+    }
+    if (subTypeIndex < 0 ||
+        subTypeIndex >= _types.length ||
+        superTypeIndex < 0 ||
+        superTypeIndex >= _types.length) {
+      return false;
+    }
+    final visited = <int>{subTypeIndex};
+    final pending = <int>[subTypeIndex];
+    while (pending.isNotEmpty) {
+      final current = pending.removeLast();
+      if (current == superTypeIndex ||
+          _areTypesEquivalent(current, superTypeIndex, <String>{})) {
+        return true;
+      }
+      for (final parent in _types[current].superTypeIndices) {
+        if (parent == superTypeIndex ||
+            _areTypesEquivalent(parent, superTypeIndex, <String>{})) {
+          return true;
+        }
+        if (parent < 0 || parent >= _types.length) {
+          continue;
+        }
+        if (visited.add(parent)) {
+          pending.add(parent);
+        }
+      }
+    }
+    return false;
+  }
+
+  bool _areTypesEquivalent(int lhs, int rhs, Set<String> seenPairs) {
+    if (lhs == rhs) {
+      return true;
+    }
+    if (lhs < 0 || lhs >= _types.length || rhs < 0 || rhs >= _types.length) {
+      return false;
+    }
+    final pairKey = lhs < rhs ? '$lhs:$rhs' : '$rhs:$lhs';
+    if (!seenPairs.add(pairKey)) {
+      return true;
+    }
+    final left = _types[lhs];
+    final right = _types[rhs];
+    if (left.kind != right.kind ||
+        left.isFunctionType != right.isFunctionType) {
+      return false;
+    }
+    if (left.superTypeIndices.length != right.superTypeIndices.length) {
+      return false;
+    }
+    for (var i = 0; i < left.superTypeIndices.length; i++) {
+      if (!_areTypesEquivalent(
+        left.superTypeIndices[i],
+        right.superTypeIndices[i],
+        seenPairs,
+      )) {
+        return false;
+      }
+    }
+    final leftDescriptor = left.descriptorTypeIndex;
+    final rightDescriptor = right.descriptorTypeIndex;
+    if ((leftDescriptor == null) != (rightDescriptor == null)) {
+      return false;
+    }
+    if (leftDescriptor != null &&
+        !_areTypesEquivalent(
+          leftDescriptor,
+          rightDescriptor!,
+          seenPairs,
+        )) {
+      return false;
+    }
+    final leftDescribes = left.describesTypeIndex;
+    final rightDescribes = right.describesTypeIndex;
+    if ((leftDescribes == null) != (rightDescribes == null)) {
+      return false;
+    }
+    if (leftDescribes != null &&
+        !_areTypesEquivalent(
+          leftDescribes,
+          rightDescribes!,
+          seenPairs,
+        )) {
+      return false;
+    }
+    if (left.isFunctionType) {
+      if (left.paramTypeSignatures.length != right.paramTypeSignatures.length ||
+          left.resultTypeSignatures.length !=
+              right.resultTypeSignatures.length) {
+        return false;
+      }
+      for (var i = 0; i < left.paramTypeSignatures.length; i++) {
+        if (!_areValueTypeSignaturesEquivalent(
+          left.paramTypeSignatures[i],
+          right.paramTypeSignatures[i],
+          seenPairs,
+        )) {
+          return false;
+        }
+      }
+      for (var i = 0; i < left.resultTypeSignatures.length; i++) {
+        if (!_areValueTypeSignaturesEquivalent(
+          left.resultTypeSignatures[i],
+          right.resultTypeSignatures[i],
+          seenPairs,
+        )) {
+          return false;
+        }
+      }
+      return true;
+    }
+    if (left.fieldSignatures.length != right.fieldSignatures.length) {
+      return false;
+    }
+    for (var i = 0; i < left.fieldSignatures.length; i++) {
+      final leftField = _parseFieldTypeForEquivalence(left.fieldSignatures[i]);
+      final rightField = _parseFieldTypeForEquivalence(
+        right.fieldSignatures[i],
+      );
+      if (leftField == null || rightField == null) {
+        return false;
+      }
+      if (leftField.mutability != rightField.mutability ||
+          !_areValueTypeSignaturesEquivalent(
+            leftField.valueSignature,
+            rightField.valueSignature,
+            seenPairs,
+          )) {
+        return false;
+      }
+    }
     return true;
+  }
+
+  bool _areValueTypeSignaturesEquivalent(
+    String lhs,
+    String rhs,
+    Set<String> seenPairs,
+  ) {
+    if (lhs == rhs) {
+      return true;
+    }
+    final leftRef = _parseRefSignature(lhs);
+    final rightRef = _parseRefSignature(rhs);
+    if (leftRef == null || rightRef == null) {
+      return false;
+    }
+    if (leftRef.nullable != rightRef.nullable ||
+        leftRef.exact != rightRef.exact) {
+      return false;
+    }
+    if (leftRef.heapType == rightRef.heapType) {
+      return true;
+    }
+    if (leftRef.heapType >= 0 && rightRef.heapType >= 0) {
+      return _areTypesEquivalent(
+        leftRef.heapType,
+        rightRef.heapType,
+        seenPairs,
+      );
+    }
+    return false;
+  }
+
+  ({String valueSignature, int mutability})? _parseFieldTypeForEquivalence(
+    String signature,
+  ) {
+    final bytes = _signatureToBytes(signature);
+    if (bytes.length < 2) {
+      return null;
+    }
+    final mutability = bytes.last;
+    if (mutability != 0 && mutability != 1) {
+      return null;
+    }
+    return (
+      valueSignature: _bytesToSignature(bytes.sublist(0, bytes.length - 1)),
+      mutability: mutability,
+    );
+  }
+
+  ({bool nullable, bool exact, int heapType})? _parseRefSignature(
+    String signature,
+  ) {
+    final bytes = _signatureToBytes(signature);
+    if (bytes.isEmpty) {
+      return null;
+    }
+    if (bytes.length == 1) {
+      final legacyHeap = _legacyHeapTypeFromRefTypeCode(bytes.single);
+      if (legacyHeap != null) {
+        return (nullable: true, exact: false, heapType: legacyHeap);
+      }
+      final decoded = _readSignedLeb33FromBytes(bytes, 0);
+      if (decoded == null || decoded.$2 != bytes.length) {
+        return null;
+      }
+      return (nullable: true, exact: false, heapType: decoded.$1);
+    }
+    if (bytes.length < 2) {
+      return null;
+    }
+    final prefix = bytes[0];
+    if (prefix != 0x63 && prefix != 0x64) {
+      final decoded = _readSignedLeb33FromBytes(bytes, 0);
+      if (decoded == null || decoded.$2 != bytes.length) {
+        return null;
+      }
+      return (nullable: true, exact: false, heapType: decoded.$1);
+    }
+    var offset = 1;
+    var exact = false;
+    if (bytes[offset] == 0x62 || bytes[offset] == 0x61) {
+      exact = bytes[offset] == 0x62;
+      offset++;
+      if (offset >= bytes.length) {
+        return null;
+      }
+    }
+    final decoded = _readSignedLeb33FromBytes(bytes, offset);
+    if (decoded == null || decoded.$2 != bytes.length) {
+      return null;
+    }
+    return (nullable: prefix == 0x63, exact: exact, heapType: decoded.$1);
+  }
+
+  (int, int)? _readSignedLeb33FromBytes(List<int> bytes, int offset) {
+    if (offset >= bytes.length) {
+      return null;
+    }
+    final firstByte = bytes[offset];
+    var result = firstByte & 0x7f;
+    var shift = 7;
+    var byte = firstByte;
+    var multiplier = 128;
+    var index = offset + 1;
+    while ((byte & 0x80) != 0) {
+      if (index >= bytes.length) {
+        return null;
+      }
+      byte = bytes[index++];
+      result += (byte & 0x7f) * multiplier;
+      multiplier *= 128;
+      shift += 7;
+      if (shift > 35) {
+        return null;
+      }
+    }
+    if (shift < 33 && (byte & 0x40) != 0) {
+      result -= multiplier;
+    }
+    return (_normalizeSignedLeb33(result), index);
+  }
+
+  int _normalizeSignedLeb33(int value) {
+    const signBit33 = 0x100000000;
+    const width33 = 0x200000000;
+    var normalized = value % width33;
+    if (normalized < 0) {
+      normalized += width33;
+    }
+    if (normalized >= signBit33) {
+      normalized -= width33;
+    }
+    return normalized;
+  }
+
+  int? _legacyHeapTypeFromRefTypeCode(int code) {
+    return switch (code & 0xff) {
+      0x70 => _heapFunc,
+      0x6f => _heapExtern,
+      0x6e => _heapAny,
+      0x6d => _heapEq,
+      0x6b => _heapStruct,
+      0x6a => _heapArray,
+      0x69 => _heapI31,
+      0x71 => _heapNone,
+      0x72 => _heapNoextern,
+      0x73 => _heapNofunc,
+      _ => null,
+    };
+  }
+
+  List<int> _signatureToBytes(String signature) {
+    if (signature.isEmpty || signature.length.isOdd) {
+      return const <int>[];
+    }
+    final bytes = <int>[];
+    for (var i = 0; i < signature.length; i += 2) {
+      bytes.add(int.parse(signature.substring(i, i + 2), radix: 16));
+    }
+    return bytes;
+  }
+
+  String _bytesToSignature(List<int> bytes) {
+    final buffer = StringBuffer();
+    for (final byte in bytes) {
+      buffer.write((byte & 0xff).toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
+  }
+
+  static int _allocateSharedGcObject(_GcRefObject object) {
+    final reference = -(_nextGcObjectId + 2);
+    _nextGcObjectId++;
+    _sharedGcObjects[reference] = object;
+    return reference;
+  }
+
+  int _allocateGcObject(_GcRefObject object) {
+    return _allocateSharedGcObject(object);
+  }
+
+  _GcRefObject _requireGcObject(int reference) {
+    final cached = _sharedGcObjects[reference];
+    if (cached != null) {
+      return cached;
+    }
+    final constRef = decodeConstGcRef(reference);
+    if (constRef != null && constRef.kind == constGcRefKindI31) {
+      final materialized = _GcRefObject.i31(constRef.typeIndex & 0x7fffffff);
+      _sharedGcObjects[reference] = materialized;
+      return materialized;
+    }
+    throw StateError('Invalid GC reference: $reference');
+  }
+
+  void _gcStructNew(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkTypeIndex(instruction.immediate!);
+    final type = _types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.struct) {
+      throw StateError('struct.new requires a struct type.');
+    }
+    if (type.descriptorTypeIndex != null) {
+      throw StateError('type with descriptor requires descriptor allocation');
+    }
+    final fields = List<WasmValue>.filled(
+      type.fieldSignatures.length,
+      WasmValue.i32(0),
+      growable: false,
+    );
+    for (var i = type.fieldSignatures.length - 1; i >= 0; i--) {
+      fields[i] = _coerceFieldValue(type.fieldSignatures[i], _pop(stack));
+    }
+    _pushRef(
+      stack,
+      _allocateGcObject(
+        _GcRefObject.struct(typeIndex: typeIndex, fields: fields),
+      ),
+    );
+  }
+
+  void _gcStructNewDefault(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkTypeIndex(instruction.immediate!);
+    final type = _types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.struct) {
+      throw StateError('struct.new_default requires a struct type.');
+    }
+    if (type.descriptorTypeIndex != null) {
+      throw StateError('type with descriptor requires descriptor allocation');
+    }
+    final fields = type.fieldSignatures
+        .map(_defaultValueForFieldSignature)
+        .toList(growable: false);
+    _pushRef(
+      stack,
+      _allocateGcObject(
+        _GcRefObject.struct(typeIndex: typeIndex, fields: fields),
+      ),
+    );
+  }
+
+  void _gcStructNewDesc(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkTypeIndex(instruction.immediate!);
+    final type = _types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.struct) {
+      throw StateError('struct.new_desc requires a struct type.');
+    }
+    if (type.descriptorTypeIndex == null) {
+      throw StateError('type without descriptor requires non-descriptor allocation');
+    }
+    final descriptor = _popRef(stack);
+    if (descriptor == null) {
+      throw StateError('null descriptor reference');
+    }
+    final fields = List<WasmValue>.filled(
+      type.fieldSignatures.length,
+      WasmValue.i32(0),
+      growable: false,
+    );
+    for (var i = type.fieldSignatures.length - 1; i >= 0; i--) {
+      fields[i] = _coerceFieldValue(type.fieldSignatures[i], _pop(stack));
+    }
+    _pushRef(
+      stack,
+      _allocateGcObject(
+        _GcRefObject.struct(
+          typeIndex: typeIndex,
+          descriptorRef: descriptor,
+          fields: fields,
+        ),
+      ),
+    );
+  }
+
+  void _gcStructNewDefaultDesc(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkTypeIndex(instruction.immediate!);
+    final type = _types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.struct) {
+      throw StateError('struct.new_default_desc requires a struct type.');
+    }
+    if (type.descriptorTypeIndex == null) {
+      throw StateError('type without descriptor requires non-descriptor allocation');
+    }
+    final descriptor = _popRef(stack);
+    if (descriptor == null) {
+      throw StateError('null descriptor reference');
+    }
+    final fields = type.fieldSignatures
+        .map(_defaultValueForFieldSignature)
+        .toList(growable: false);
+    _pushRef(
+      stack,
+      _allocateGcObject(
+        _GcRefObject.struct(
+          typeIndex: typeIndex,
+          descriptorRef: descriptor,
+          fields: fields,
+        ),
+      ),
+    );
+  }
+
+  void _gcStructGet(
+    List<WasmValue> stack,
+    Instruction instruction, {
+    required bool signed,
+  }) {
+    final expectedTypeIndex = _checkTypeIndex(instruction.immediate!);
+    final fieldIndex = instruction.secondaryImmediate!;
+    final reference = _popRef(stack);
+    if (reference == null) {
+      throw StateError('null reference');
+    }
+    final object = _requireGcObject(reference);
+    if (object.kind != _GcRefKind.struct ||
+        !_isTypeSubtype(object.typeIndex!, expectedTypeIndex)) {
+      throw StateError('struct.get on incompatible reference.');
+    }
+    final fields = object.fields!;
+    if (fieldIndex < 0 || fieldIndex >= fields.length) {
+      throw StateError('Invalid struct field index: $fieldIndex');
+    }
+    final fieldSignature =
+        _types[object.typeIndex!].fieldSignatures[fieldIndex];
+    final value = fields[fieldIndex];
+    stack.add(_coerceLoadedFieldValue(fieldSignature, value, signed: signed));
+  }
+
+  void _gcArrayNew(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkTypeIndex(instruction.immediate!);
+    final type = _types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.new requires an array type.');
+    }
+    final length = _popLength(stack);
+    final seed = _coerceFieldValue(type.fieldSignatures.single, _pop(stack));
+    final elements = List<WasmValue>.generate(
+      length,
+      (_) => seed,
+      growable: false,
+    );
+    _pushRef(
+      stack,
+      _allocateGcObject(
+        _GcRefObject.array(typeIndex: typeIndex, elements: elements),
+      ),
+    );
+  }
+
+  void _gcArrayNewFixed(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkTypeIndex(instruction.immediate!);
+    final type = _types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.new_fixed requires an array type.');
+    }
+    final length = instruction.secondaryImmediate!;
+    if (length < 0) {
+      throw StateError('Invalid array.new_fixed length: $length');
+    }
+    final elements = List<WasmValue>.filled(
+      length,
+      WasmValue.i32(0),
+      growable: false,
+    );
+    for (var i = length - 1; i >= 0; i--) {
+      elements[i] = _coerceFieldValue(type.fieldSignatures.single, _pop(stack));
+    }
+    _pushRef(
+      stack,
+      _allocateGcObject(
+        _GcRefObject.array(typeIndex: typeIndex, elements: elements),
+      ),
+    );
+  }
+
+  void _gcArrayGet(
+    List<WasmValue> stack,
+    Instruction instruction, {
+    required bool signed,
+  }) {
+    final expectedTypeIndex = _checkTypeIndex(instruction.immediate!);
+    final index = _popLength(stack);
+    final reference = _popRef(stack);
+    if (reference == null) {
+      throw StateError('null reference');
+    }
+    final object = _requireGcObject(reference);
+    if (object.kind != _GcRefKind.array ||
+        !_isTypeSubtype(object.typeIndex!, expectedTypeIndex)) {
+      throw StateError('array.get on incompatible reference.');
+    }
+    final elements = object.elements!;
+    if (index < 0 || index >= elements.length) {
+      throw RangeError('Array index out of bounds: $index');
+    }
+    final fieldSignature = _types[object.typeIndex!].fieldSignatures.single;
+    stack.add(
+      _coerceLoadedFieldValue(fieldSignature, elements[index], signed: signed),
+    );
+  }
+
+  void _gcArrayLen(List<WasmValue> stack) {
+    final reference = _popRef(stack);
+    if (reference == null) {
+      throw StateError('null reference');
+    }
+    final object = _requireGcObject(reference);
+    if (object.kind != _GcRefKind.array) {
+      throw StateError('array.len expects an array reference.');
+    }
+    stack.add(WasmValue.i32(object.elements!.length));
+  }
+
+  void _gcAnyConvertExtern(List<WasmValue> stack) {
+    final externReference = _popRef(stack);
+    if (externReference == null) {
+      _pushRef(stack, null);
+      return;
+    }
+    _pushRef(stack, _allocateGcObject(_GcRefObject.extern(externReference)));
+  }
+
+  void _gcRefI31(List<WasmValue> stack) {
+    final value = _popI32(stack) & 0x7fffffff;
+    _pushRef(stack, _allocateGcObject(_GcRefObject.i31(value)));
+  }
+
+  void _gcI31Get(List<WasmValue> stack, {required bool signed}) {
+    final reference = _popRef(stack);
+    if (reference == null) {
+      throw StateError('null reference');
+    }
+    final object = _requireGcObject(reference);
+    if (object.kind != _GcRefKind.i31) {
+      throw StateError('i31.get expects an i31 reference.');
+    }
+    final value = object.i31Value!;
+    if (signed) {
+      final signedValue = (value & 0x40000000) != 0
+          ? value | ~0x7fffffff
+          : value;
+      stack.add(WasmValue.i32(signedValue));
+    } else {
+      stack.add(WasmValue.i32(value & 0x7fffffff));
+    }
+  }
+
+  WasmValue _coerceFieldValue(String fieldSignature, WasmValue input) {
+    final bytes = _fieldSignatureBytes(fieldSignature);
+    final typeCode = bytes[0];
+    switch (typeCode) {
+      case 0x78:
+        return WasmValue.i32(input.castTo(WasmValueType.i32).asI32() & 0xff);
+      case 0x77:
+        return WasmValue.i32(input.castTo(WasmValueType.i32).asI32() & 0xffff);
+      case 0x7f:
+      case 0x63:
+      case 0x64:
+        return WasmValue.i32(input.castTo(WasmValueType.i32).asI32());
+      case 0x7e:
+        return WasmValue.i64(input.castTo(WasmValueType.i64).asI64());
+      case 0x7d:
+        return WasmValue.f32(input.castTo(WasmValueType.f32).asF32());
+      case 0x7c:
+        return WasmValue.f64(input.castTo(WasmValueType.f64).asF64());
+      default:
+        return input;
+    }
+  }
+
+  WasmValue _coerceLoadedFieldValue(
+    String fieldSignature,
+    WasmValue value, {
+    required bool signed,
+  }) {
+    final bytes = _fieldSignatureBytes(fieldSignature);
+    final typeCode = bytes[0];
+    if (typeCode == 0x78) {
+      final raw = value.castTo(WasmValueType.i32).asI32() & 0xff;
+      return WasmValue.i32(signed ? raw.toSigned(8) : raw);
+    }
+    if (typeCode == 0x77) {
+      final raw = value.castTo(WasmValueType.i32).asI32() & 0xffff;
+      return WasmValue.i32(signed ? raw.toSigned(16) : raw);
+    }
+    return value;
+  }
+
+  WasmValue _defaultValueForFieldSignature(String fieldSignature) {
+    final bytes = _fieldSignatureBytes(fieldSignature);
+    final typeCode = bytes[0];
+    switch (typeCode) {
+      case 0x7f:
+      case 0x78:
+      case 0x77:
+      case 0x63:
+      case 0x64:
+        return WasmValue.i32(typeCode == 0x64 ? _nullRef : 0);
+      case 0x7e:
+        return WasmValue.i64(0);
+      case 0x7d:
+        return WasmValue.f32(0);
+      case 0x7c:
+        return WasmValue.f64(0);
+      default:
+        return WasmValue.i32(0);
+    }
+  }
+
+  List<int> _fieldSignatureBytes(String fieldSignature) {
+    if (fieldSignature.length < 4 || fieldSignature.length.isOdd) {
+      throw StateError('Invalid field signature: $fieldSignature');
+    }
+    final bytes = <int>[];
+    for (var i = 0; i < fieldSignature.length; i += 2) {
+      bytes.add(int.parse(fieldSignature.substring(i, i + 2), radix: 16));
+    }
+    if (bytes.length < 2) {
+      throw StateError('Invalid field signature: $fieldSignature');
+    }
+    bytes.removeLast(); // mutability
+    return bytes;
   }
 
   bool _functionTypeMatchesByDepth({
@@ -2181,13 +3275,13 @@ final class WasmVm {
   double _popF64(List<WasmValue> stack) =>
       _pop(stack).castTo(WasmValueType.f64).asF64();
 
-  int? _popFuncRef(List<WasmValue> stack) {
+  int? _popRef(List<WasmValue> stack) {
     final raw = _popI32(stack);
-    return raw == -1 ? null : _checkFunctionIndex(raw);
+    return raw == _nullRef ? null : raw;
   }
 
-  void _pushFuncRef(List<WasmValue> stack, int? functionIndex) {
-    stack.add(WasmValue.i32(functionIndex ?? -1));
+  void _pushRef(List<WasmValue> stack, int? value) {
+    stack.add(WasmValue.i32(value ?? _nullRef));
   }
 
   int _addressFromStack(List<WasmValue> stack, int offset) {
@@ -2645,7 +3739,7 @@ final class WasmVm {
   void _tableGrow(Instruction instruction, List<WasmValue> stack) {
     final tableIndex = _checkTableIndex(instruction.immediate!);
     final delta = _popI32(stack);
-    final value = _popFuncRef(stack);
+    final value = _popRef(stack);
 
     if (delta < 0) {
       stack.add(WasmValue.i32(-1));
@@ -2664,7 +3758,7 @@ final class WasmVm {
   void _tableFill(Instruction instruction, List<WasmValue> stack) {
     final tableIndex = _checkTableIndex(instruction.immediate!);
     final length = _popLength(stack);
-    final value = _popFuncRef(stack);
+    final value = _popRef(stack);
     final destinationOffset = _popLength(stack);
 
     final fillValues = List<int?>.filled(length, value);

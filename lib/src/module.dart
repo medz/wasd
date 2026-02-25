@@ -10,6 +10,8 @@ enum WasmRefType { funcref, externref }
 
 enum WasmElementMode { active, passive, declarative }
 
+enum WasmCompositeTypeKind { function, struct, array }
+
 final class _DecodedValueType {
   const _DecodedValueType({
     required this.valueType,
@@ -105,21 +107,39 @@ final class WasmFunctionType {
   const WasmFunctionType({
     required this.params,
     required this.results,
+    required this.kind,
+    this.paramTypeSignatures = const <String>[],
+    this.resultTypeSignatures = const <String>[],
+    this.fieldSignatures = const <String>[],
     this.superTypeIndices = const <int>[],
+    this.descriptorTypeIndex,
+    this.describesTypeIndex,
     this.isFunctionType = true,
     this.runtimeSupported = true,
   });
 
   const WasmFunctionType.nonFunction({
+    required this.kind,
+    required this.fieldSignatures,
     this.superTypeIndices = const <int>[],
+    this.descriptorTypeIndex,
+    this.describesTypeIndex,
     this.runtimeSupported = false,
   }) : params = const <WasmValueType>[],
        results = const <WasmValueType>[],
+       paramTypeSignatures = const <String>[],
+       resultTypeSignatures = const <String>[],
        isFunctionType = false;
 
   final List<WasmValueType> params;
   final List<WasmValueType> results;
+  final WasmCompositeTypeKind kind;
+  final List<String> paramTypeSignatures;
+  final List<String> resultTypeSignatures;
+  final List<String> fieldSignatures;
   final List<int> superTypeIndices;
+  final int? descriptorTypeIndex;
+  final int? describesTypeIndex;
   final bool isFunctionType;
   final bool runtimeSupported;
 }
@@ -348,15 +368,11 @@ final class WasmModule {
 
       if (sectionId != 0) {
         if (!seenStandardSections.add(sectionId)) {
-          throw const FormatException(
-            'Unexpected content after last section.',
-          );
+          throw const FormatException('Unexpected content after last section.');
         }
         final sectionOrder = _sectionOrder(sectionId);
         if (sectionOrder < lastSectionOrder) {
-          throw const FormatException(
-            'Unexpected content after last section.',
-          );
+          throw const FormatException('Unexpected content after last section.');
         }
         lastSectionOrder = sectionOrder;
       }
@@ -421,6 +437,7 @@ final class WasmModule {
         'data_segments=${dataSegments.length}.',
       );
     }
+    _validateSuperTypeCompatibility(types);
 
     return WasmModule(
       types: List.unmodifiable(types),
@@ -458,21 +475,29 @@ final class WasmModule {
   ) {
     final form = reader.readByte();
     if (form == 0x4e) {
+      final groupStart = sink.length;
       final subgroupCount = reader.readVarUint32();
       for (var i = 0; i < subgroupCount; i++) {
         _parseSubTypeWithLeadingForm(
           reader.readByte(),
           reader,
           sink,
+          currentTypeIndex: sink.length,
           insideRecGroup: true,
         );
       }
+      _validateRecGroupDescriptorLinks(
+        sink,
+        groupStart: groupStart,
+        groupLength: subgroupCount,
+      );
       return;
     }
     _parseSubTypeWithLeadingForm(
       form,
       reader,
       sink,
+      currentTypeIndex: sink.length,
       insideRecGroup: false,
     );
   }
@@ -480,13 +505,16 @@ final class WasmModule {
   static void _parseSubTypeWithLeadingForm(
     int leadingForm,
     ByteReader reader,
-    List<WasmFunctionType> sink,
-    {required bool insideRecGroup}
-  ) {
+    List<WasmFunctionType> sink, {
+    required int currentTypeIndex,
+    required bool insideRecGroup,
+  }) {
     final superTypeIndices = <int>[];
     var form = leadingForm;
     var hasDescribes = false;
     var hasDescriptor = false;
+    int? descriptorTypeIndex;
+    int? describesTypeIndex;
 
     while (true) {
       switch (form) {
@@ -499,11 +527,14 @@ final class WasmModule {
           form = reader.readByte();
           continue;
         case 0x4c:
-          if (!insideRecGroup || hasDescribes) {
+          if (!insideRecGroup || hasDescribes || hasDescriptor) {
             throw const FormatException('Malformed type descriptor wrapper.');
           }
           hasDescribes = true;
-          reader.readVarUint32();
+          describesTypeIndex = reader.readVarUint32();
+          if (describesTypeIndex >= currentTypeIndex) {
+            throw const FormatException('Forward use of described type.');
+          }
           form = reader.readByte();
           continue;
         case 0x4d:
@@ -511,7 +542,7 @@ final class WasmModule {
             throw const FormatException('Malformed type descriptor wrapper.');
           }
           hasDescriptor = true;
-          reader.readVarUint32();
+          descriptorTypeIndex = reader.readVarUint32();
           form = reader.readByte();
           continue;
         default:
@@ -520,6 +551,8 @@ final class WasmModule {
             reader: reader,
             sink: sink,
             superTypeIndices: superTypeIndices,
+            descriptorTypeIndex: descriptorTypeIndex,
+            describesTypeIndex: describesTypeIndex,
           );
           return;
       }
@@ -531,33 +564,53 @@ final class WasmModule {
     required ByteReader reader,
     required List<WasmFunctionType> sink,
     required List<int> superTypeIndices,
+    required int? descriptorTypeIndex,
+    required int? describesTypeIndex,
   }) {
+    if ((descriptorTypeIndex != null || describesTypeIndex != null) &&
+        form != 0x5f) {
+      throw const FormatException('Descriptor type must be a struct.');
+    }
     switch (form) {
       case 0x60:
         final functionType = _readFunctionType(reader);
         sink.add(
           WasmFunctionType(
             params: functionType.$1,
-            results: functionType.$2,
+            paramTypeSignatures: functionType.$2,
+            results: functionType.$3,
+            resultTypeSignatures: functionType.$4,
+            kind: WasmCompositeTypeKind.function,
             superTypeIndices: List.unmodifiable(superTypeIndices),
-            runtimeSupported: functionType.$3,
+            descriptorTypeIndex: descriptorTypeIndex,
+            describesTypeIndex: describesTypeIndex,
+            runtimeSupported: functionType.$5,
           ),
         );
       case 0x5e:
-        _readFieldType(reader);
+        final fieldSignature = _readFieldType(reader);
         sink.add(
           WasmFunctionType.nonFunction(
+            kind: WasmCompositeTypeKind.array,
+            fieldSignatures: List.unmodifiable(<String>[fieldSignature]),
             superTypeIndices: List.unmodifiable(superTypeIndices),
+            descriptorTypeIndex: descriptorTypeIndex,
+            describesTypeIndex: describesTypeIndex,
           ),
         );
       case 0x5f:
         final fieldCount = reader.readVarUint32();
+        final fieldSignatures = <String>[];
         for (var i = 0; i < fieldCount; i++) {
-          _readFieldType(reader);
+          fieldSignatures.add(_readFieldType(reader));
         }
         sink.add(
           WasmFunctionType.nonFunction(
+            kind: WasmCompositeTypeKind.struct,
+            fieldSignatures: List.unmodifiable(fieldSignatures),
             superTypeIndices: List.unmodifiable(superTypeIndices),
+            descriptorTypeIndex: descriptorTypeIndex,
+            describesTypeIndex: describesTypeIndex,
           ),
         );
       default:
@@ -567,7 +620,199 @@ final class WasmModule {
     }
   }
 
-  static void _readFieldType(ByteReader reader) {
+  static void _validateRecGroupDescriptorLinks(
+    List<WasmFunctionType> types, {
+    required int groupStart,
+    required int groupLength,
+  }) {
+    final groupEnd = groupStart + groupLength;
+    bool inGroup(int index) => index >= groupStart && index < groupEnd;
+
+    for (var i = groupStart; i < groupEnd; i++) {
+      final type = types[i];
+      final descriptor = type.descriptorTypeIndex;
+      final describes = type.describesTypeIndex;
+
+      if (descriptor != null && !inGroup(descriptor)) {
+        throw const FormatException('Descriptor type is outside rec group.');
+      }
+      if (describes != null && !inGroup(describes)) {
+        throw const FormatException('Described type is outside rec group.');
+      }
+    }
+
+    for (var i = groupStart; i < groupEnd; i++) {
+      final type = types[i];
+      final descriptor = type.descriptorTypeIndex;
+      final describes = type.describesTypeIndex;
+
+      if (descriptor != null && types[descriptor].describesTypeIndex != i) {
+        throw const FormatException('Type is not described by its descriptor.');
+      }
+      if (describes != null && types[describes].descriptorTypeIndex != i) {
+        throw const FormatException(
+          'Described type is not described by descriptor.',
+        );
+      }
+    }
+  }
+
+  static void _validateSuperTypeCompatibility(List<WasmFunctionType> types) {
+    for (var i = 0; i < types.length; i++) {
+      final subType = types[i];
+      for (final superTypeIndex in subType.superTypeIndices) {
+        if (superTypeIndex < 0 || superTypeIndex >= types.length) {
+          throw FormatException('Invalid super type index: $superTypeIndex');
+        }
+        final superType = types[superTypeIndex];
+        if (subType.kind != superType.kind) {
+          throw FormatException(
+            'Sub type $i does not match super type $superTypeIndex',
+          );
+        }
+        if (subType.isFunctionType &&
+            !_functionSignaturesEqual(subType, superType)) {
+          throw FormatException(
+            'Sub type $i does not match super type $superTypeIndex',
+          );
+        }
+        if (!subType.isFunctionType) {
+          switch (subType.kind) {
+            case WasmCompositeTypeKind.array:
+              if (subType.fieldSignatures.length !=
+                  superType.fieldSignatures.length) {
+                throw FormatException(
+                  'Sub type $i does not match super type $superTypeIndex',
+                );
+              }
+              for (
+                var fieldIndex = 0;
+                fieldIndex < subType.fieldSignatures.length;
+                fieldIndex++
+              ) {
+                if (subType.fieldSignatures[fieldIndex] !=
+                    superType.fieldSignatures[fieldIndex]) {
+                  throw FormatException(
+                    'Sub type $i does not match super type $superTypeIndex',
+                  );
+                }
+              }
+            case WasmCompositeTypeKind.struct:
+              if (subType.fieldSignatures.length <
+                  superType.fieldSignatures.length) {
+                throw FormatException(
+                  'Sub type $i does not match super type $superTypeIndex',
+                );
+              }
+              for (
+                var fieldIndex = 0;
+                fieldIndex < superType.fieldSignatures.length;
+                fieldIndex++
+              ) {
+                if (subType.fieldSignatures[fieldIndex] !=
+                    superType.fieldSignatures[fieldIndex]) {
+                  throw FormatException(
+                    'Sub type $i does not match super type $superTypeIndex',
+                  );
+                }
+              }
+            case WasmCompositeTypeKind.function:
+              break;
+          }
+        }
+        final superHasDescriptor = superType.descriptorTypeIndex != null;
+        final subHasDescriptor = subType.descriptorTypeIndex != null;
+        if (superHasDescriptor && !subHasDescriptor) {
+          throw FormatException(
+            'Sub type $i does not match super type $superTypeIndex',
+          );
+        }
+        final superHasDescribes = superType.describesTypeIndex != null;
+        final subHasDescribes = subType.describesTypeIndex != null;
+        if (superHasDescribes != subHasDescribes) {
+          throw FormatException(
+            'Sub type $i does not match super type $superTypeIndex',
+          );
+        }
+        if (superHasDescriptor &&
+            !_isSubType(
+              types,
+              subType.descriptorTypeIndex!,
+              superType.descriptorTypeIndex!,
+            )) {
+          throw FormatException(
+            'Descriptor type ${subType.descriptorTypeIndex} does not match',
+          );
+        }
+        if (superHasDescribes &&
+            !_isSubType(
+              types,
+              subType.describesTypeIndex!,
+              superType.describesTypeIndex!,
+            )) {
+          throw FormatException(
+            'Described type ${subType.describesTypeIndex} does not match',
+          );
+        }
+      }
+    }
+  }
+
+  static bool _isSubType(
+    List<WasmFunctionType> types,
+    int subTypeIndex,
+    int superTypeIndex,
+  ) {
+    if (subTypeIndex == superTypeIndex) {
+      return true;
+    }
+    return _isSubTypeRecursive(types, subTypeIndex, superTypeIndex, <int>{});
+  }
+
+  static bool _isSubTypeRecursive(
+    List<WasmFunctionType> types,
+    int subTypeIndex,
+    int superTypeIndex,
+    Set<int> visiting,
+  ) {
+    if (!visiting.add(subTypeIndex)) {
+      return false;
+    }
+    if (subTypeIndex < 0 || subTypeIndex >= types.length) {
+      return false;
+    }
+    final subType = types[subTypeIndex];
+    for (final parent in subType.superTypeIndices) {
+      if (parent == superTypeIndex) {
+        return true;
+      }
+      if (_isSubTypeRecursive(types, parent, superTypeIndex, visiting)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static bool _functionSignaturesEqual(WasmFunctionType a, WasmFunctionType b) {
+    if (a.params.length != b.params.length ||
+        a.results.length != b.results.length) {
+      return false;
+    }
+    for (var i = 0; i < a.params.length; i++) {
+      if (a.params[i] != b.params[i]) {
+        return false;
+      }
+    }
+    for (var i = 0; i < a.results.length; i++) {
+      if (a.results[i] != b.results[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static String _readFieldType(ByteReader reader) {
+    final startOffset = reader.offset;
     final typeByte = reader.readByte();
     if (typeByte == 0x78 || typeByte == 0x77) {
       // Packed i8/i16 storage types.
@@ -578,6 +823,16 @@ final class WasmModule {
     if (mutability != 0 && mutability != 1) {
       throw FormatException('Invalid field mutability: $mutability');
     }
+    final encoded = reader.bytes.sublist(startOffset, reader.offset);
+    return _typeEncodingSignature(encoded);
+  }
+
+  static String _typeEncodingSignature(List<int> bytes) {
+    final buffer = StringBuffer();
+    for (final byte in bytes) {
+      buffer.write((byte & 0xff).toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
   }
 
   static (int, int, int, int) _parseImportSection(
@@ -884,6 +1139,27 @@ final class WasmModule {
           _consumeHeapType(reader);
         case Opcodes.refFunc:
           reader.readVarUint32();
+        case 0xfb:
+          final subOpcode = reader.readVarUint32();
+          final pseudoOpcode = 0xfb00 | subOpcode;
+          switch (pseudoOpcode) {
+            case Opcodes.structNew:
+            case Opcodes.structNewDefault:
+            case Opcodes.structNewDesc:
+            case Opcodes.structNewDefaultDesc:
+            case Opcodes.arrayNew:
+            case Opcodes.arrayNewDefault:
+              reader.readVarUint32();
+            case Opcodes.arrayNewFixed:
+              reader.readVarUint32();
+              reader.readVarUint32();
+            case Opcodes.refI31:
+              break;
+            default:
+              throw UnsupportedError(
+                'Unsupported init expression opcode: 0xFB${subOpcode.toRadixString(16).padLeft(2, '0')}',
+              );
+          }
         case Opcodes.i32Add:
         case Opcodes.i32Sub:
         case Opcodes.i32Mul:
@@ -906,28 +1182,48 @@ final class WasmModule {
     }
   }
 
-  static (List<WasmValueType>, List<WasmValueType>, bool) _readFunctionType(
-    ByteReader reader,
-  ) {
+  static (
+    List<WasmValueType>,
+    List<String>,
+    List<WasmValueType>,
+    List<String>,
+    bool,
+  )
+  _readFunctionType(ByteReader reader) {
     final params = _readValueTypeVector(reader);
     final results = _readValueTypeVector(reader);
     return (
       params.$1,
+      params.$2,
       results.$1,
-      params.$2 && results.$2,
+      results.$2,
+      params.$3 && results.$3,
     );
   }
 
-  static (List<WasmValueType>, bool) _readValueTypeVector(ByteReader reader) {
+  static (List<WasmValueType>, List<String>, bool) _readValueTypeVector(
+    ByteReader reader,
+  ) {
     final count = reader.readVarUint32();
-    final result = <WasmValueType>[];
+    final valueTypes = <WasmValueType>[];
+    final signatures = <String>[];
     var allSupported = true;
     for (var i = 0; i < count; i++) {
+      final startOffset = reader.offset;
       final decoded = _readValueType(reader);
-      result.add(decoded.valueType);
+      valueTypes.add(decoded.valueType);
+      signatures.add(
+        _typeEncodingSignature(
+          reader.bytes.sublist(startOffset, reader.offset),
+        ),
+      );
       allSupported = allSupported && decoded.runtimeSupported;
     }
-    return (result, allSupported);
+    return (
+      List.unmodifiable(valueTypes),
+      List.unmodifiable(signatures),
+      allSupported,
+    );
   }
 
   static _DecodedValueType _readValueType(ByteReader reader) {
@@ -1053,7 +1349,14 @@ final class WasmModule {
 
   static void _consumeHeapTypeWithLeadingByte(ByteReader reader, int lead) {
     if (lead == 0x62 || lead == 0x61) {
-      _consumeHeapType(reader);
+      final nested = reader.readByte();
+      if (nested == 0x62 || nested == 0x61) {
+        throw const FormatException('Malformed storage type.');
+      }
+      if (nested >= 0x65 && nested <= 0x71) {
+        throw const FormatException('Malformed storage type.');
+      }
+      _readSignedLeb33WithFirst(reader, nested);
       return;
     }
     if (lead >= 0x65 && lead <= 0x71) {
@@ -1066,18 +1369,33 @@ final class WasmModule {
     var result = firstByte & 0x7f;
     var shift = 7;
     var byte = firstByte;
+    var multiplier = 128;
     while ((byte & 0x80) != 0) {
       byte = reader.readByte();
-      result |= (byte & 0x7f) << shift;
+      result += (byte & 0x7f) * multiplier;
+      multiplier *= 128;
       shift += 7;
       if (shift > 35) {
         throw const FormatException('Invalid signed LEB33 encoding.');
       }
     }
     if (shift < 33 && (byte & 0x40) != 0) {
-      result |= -1 << shift;
+      result -= multiplier;
     }
-    return result;
+    return _normalizeSignedLeb33(result);
+  }
+
+  static int _normalizeSignedLeb33(int value) {
+    const signBit33 = 0x100000000;
+    const width33 = 0x200000000;
+    var normalized = value % width33;
+    if (normalized < 0) {
+      normalized += width33;
+    }
+    if (normalized >= signBit33) {
+      normalized -= width33;
+    }
+    return normalized;
   }
 
   static WasmTableType _readTableType(ByteReader reader) {

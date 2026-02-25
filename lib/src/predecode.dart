@@ -26,6 +26,7 @@ final class Instruction {
     this.memArg,
     this.tableDepths,
     this.blockResultTypes,
+    this.blockResultTypeSignatures,
     this.gcRefType,
     this.gcBrOnCast,
     this.endIndex,
@@ -39,6 +40,7 @@ final class Instruction {
   MemArg? memArg;
   List<int>? tableDepths;
   List<WasmValueType>? blockResultTypes;
+  List<String>? blockResultTypeSignatures;
   GcRefTypeImmediate? gcRefType;
   GcBrOnCastImmediate? gcBrOnCast;
   int? endIndex;
@@ -49,14 +51,12 @@ final class GcRefTypeImmediate {
   const GcRefTypeImmediate({
     required this.nullable,
     required this.exact,
-    this.typeIndex,
-    this.anyFunc = false,
+    required this.heapType,
   });
 
   final bool nullable;
   final bool exact;
-  final int? typeIndex;
-  final bool anyFunc;
+  final int heapType;
 }
 
 final class GcBrOnCastImmediate {
@@ -120,6 +120,8 @@ abstract final class WasmPredecoder {
         case Opcodes.drop:
         case Opcodes.select:
         case Opcodes.refIsNull:
+        case Opcodes.refEq:
+        case Opcodes.refAsNonNull:
         case Opcodes.i32Eqz:
         case Opcodes.i32Eq:
         case Opcodes.i32Ne:
@@ -251,10 +253,12 @@ abstract final class WasmPredecoder {
           instructions.add(Instruction(opcode: opcode));
 
         case Opcodes.block:
+          final blockType = _readBlockResultTypeInfo(reader, moduleTypes);
           instructions.add(
             Instruction(
               opcode: opcode,
-              blockResultTypes: _readBlockResultTypes(reader, moduleTypes),
+              blockResultTypes: blockType.types,
+              blockResultTypeSignatures: blockType.signatures,
             ),
           );
           controlStack.add(
@@ -265,10 +269,12 @@ abstract final class WasmPredecoder {
           );
 
         case Opcodes.loop:
+          final blockType = _readBlockResultTypeInfo(reader, moduleTypes);
           instructions.add(
             Instruction(
               opcode: opcode,
-              blockResultTypes: _readBlockResultTypes(reader, moduleTypes),
+              blockResultTypes: blockType.types,
+              blockResultTypeSignatures: blockType.signatures,
             ),
           );
           controlStack.add(
@@ -279,10 +285,12 @@ abstract final class WasmPredecoder {
           );
 
         case Opcodes.if_:
+          final blockType = _readBlockResultTypeInfo(reader, moduleTypes);
           instructions.add(
             Instruction(
               opcode: opcode,
-              blockResultTypes: _readBlockResultTypes(reader, moduleTypes),
+              blockResultTypes: blockType.types,
+              blockResultTypeSignatures: blockType.signatures,
             ),
           );
           controlStack.add(
@@ -328,6 +336,8 @@ abstract final class WasmPredecoder {
 
         case Opcodes.br:
         case Opcodes.brIf:
+        case Opcodes.brOnNull:
+        case Opcodes.brOnNonNull:
         case Opcodes.call:
         case Opcodes.returnCall:
         case Opcodes.localGet:
@@ -406,8 +416,16 @@ abstract final class WasmPredecoder {
           );
 
         case Opcodes.refNull:
+          final heapType = _readHeapType(reader);
           instructions.add(
-            Instruction(opcode: opcode, immediate: reader.readByte()),
+            Instruction(
+              opcode: opcode,
+              gcRefType: GcRefTypeImmediate(
+                nullable: true,
+                exact: heapType.$2,
+                heapType: heapType.$1,
+              ),
+            ),
           );
 
         case Opcodes.i32Load:
@@ -538,7 +556,7 @@ abstract final class WasmPredecoder {
         throw UnsupportedError(
           'Unsupported 0xFC sub-opcode: 0x${subOpcode.toRadixString(16)}',
         );
-      }
+    }
   }
 
   static void _decodeGcInstruction(
@@ -548,20 +566,85 @@ abstract final class WasmPredecoder {
     final subOpcode = reader.readVarUint32();
     final pseudoOpcode = 0xfb00 | subOpcode;
     switch (pseudoOpcode) {
-      case Opcodes.refTest:
-      case Opcodes.refCast:
+      case Opcodes.structNew:
+      case Opcodes.structNewDefault:
+      case Opcodes.structNewDesc:
+      case Opcodes.structNewDefaultDesc:
+      case Opcodes.arrayNew:
+      case Opcodes.arrayNewDefault:
+      case Opcodes.arrayGetS:
+      case Opcodes.arrayGetU:
+      case Opcodes.refGetDesc:
+        instructions.add(
+          Instruction(opcode: pseudoOpcode, immediate: reader.readVarUint32()),
+        );
+      case Opcodes.structGetU:
+      case Opcodes.structGetS:
+      case Opcodes.arrayNewData:
+      case Opcodes.arrayNewElem:
         instructions.add(
           Instruction(
             opcode: pseudoOpcode,
-            gcRefType: _readGcRefType(reader),
+            immediate: reader.readVarUint32(),
+            secondaryImmediate: reader.readVarUint32(),
+          ),
+        );
+      case Opcodes.arrayNewFixed:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            immediate: reader.readVarUint32(),
+            secondaryImmediate: reader.readVarUint32(),
+          ),
+        );
+      case Opcodes.arrayLen:
+      case Opcodes.anyConvertExtern:
+      case Opcodes.refI31:
+      case Opcodes.i31GetS:
+      case Opcodes.i31GetU:
+        instructions.add(Instruction(opcode: pseudoOpcode));
+      case Opcodes.refTest:
+      case Opcodes.refTestNullable:
+      case Opcodes.refCast:
+      case Opcodes.refCastNullable:
+      case Opcodes.refCastDesc:
+      case Opcodes.refCastDescEq:
+        final baseRefType = _readGcRefType(reader);
+        final nullable = switch (pseudoOpcode) {
+          Opcodes.refTestNullable => true,
+          Opcodes.refCastNullable => true,
+          Opcodes.refCastDesc => false,
+          Opcodes.refCastDescEq => true,
+          _ => baseRefType.nullable,
+        };
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            gcRefType: GcRefTypeImmediate(
+              nullable: nullable,
+              exact: baseRefType.exact,
+              heapType: baseRefType.heapType,
+            ),
           ),
         );
       case Opcodes.brOnCast:
       case Opcodes.brOnCastFail:
+      case Opcodes.brOnCastDescEq:
+      case Opcodes.brOnCastDescEqFail:
         final flags = reader.readVarUint32();
         final depth = reader.readVarUint32();
-        final sourceType = _readGcRefType(reader);
-        final targetType = _readGcRefType(reader);
+        final sourceBase = _readGcRefType(reader);
+        final targetBase = _readGcRefType(reader);
+        final sourceType = GcRefTypeImmediate(
+          nullable: (flags & 0x01) != 0,
+          exact: sourceBase.exact,
+          heapType: sourceBase.heapType,
+        );
+        final targetType = GcRefTypeImmediate(
+          nullable: (flags & 0x02) != 0,
+          exact: targetBase.exact,
+          heapType: targetBase.heapType,
+        );
         instructions.add(
           Instruction(
             opcode: pseudoOpcode,
@@ -671,31 +754,12 @@ abstract final class WasmPredecoder {
         throw UnsupportedError(
           'Unsupported 0xFE sub-opcode: 0x${subOpcode.toRadixString(16)}',
         );
-      }
+    }
   }
 
   static GcRefTypeImmediate _readGcRefType(ByteReader reader) {
     final lead = reader.readByte();
     switch (lead) {
-      case 0x70:
-        return const GcRefTypeImmediate(
-          nullable: true,
-          exact: false,
-          anyFunc: true,
-        );
-      case 0x6f:
-      case 0x71:
-      case 0x6e:
-      case 0x6d:
-      case 0x6c:
-      case 0x6b:
-      case 0x6a:
-      case 0x69:
-      case 0x68:
-      case 0x67:
-      case 0x66:
-      case 0x65:
-        return const GcRefTypeImmediate(nullable: true, exact: false);
       case 0x63:
       case 0x64:
         final nullable = lead == 0x63;
@@ -703,50 +767,35 @@ abstract final class WasmPredecoder {
         return GcRefTypeImmediate(
           nullable: nullable,
           exact: heapType.$2,
-          typeIndex: heapType.$1,
-          anyFunc: heapType.$3,
+          heapType: heapType.$1,
         );
       case 0x62:
       case 0x61:
-        final typeIndex = reader.readVarUint32();
+        final nested = reader.readByte();
         return GcRefTypeImmediate(
           nullable: false,
           exact: lead == 0x62,
-          typeIndex: typeIndex,
+          heapType: _readSignedLeb33WithFirst(reader, nested),
         );
       default:
-        final typeIndex = _readSignedLeb33WithFirst(reader, lead);
+        final heapType = _readSignedLeb33WithFirst(reader, lead);
         return GcRefTypeImmediate(
-          nullable: false,
+          nullable: true,
           exact: false,
-          typeIndex: typeIndex >= 0 ? typeIndex : null,
+          heapType: heapType,
         );
     }
   }
 
-  static (int?, bool, bool) _readHeapType(ByteReader reader) {
+  static (int, bool) _readHeapType(ByteReader reader) {
     final lead = reader.readByte();
     switch (lead) {
-      case 0x70:
-        return (null, false, true);
-      case 0x6f:
-      case 0x71:
-      case 0x6e:
-      case 0x6d:
-      case 0x6c:
-      case 0x6b:
-      case 0x6a:
-      case 0x69:
-      case 0x68:
-      case 0x67:
-      case 0x66:
-      case 0x65:
-        return (null, false, false);
       case 0x62:
       case 0x61:
-        return (reader.readVarUint32(), lead == 0x62, false);
+        final nested = reader.readByte();
+        return (_readSignedLeb33WithFirst(reader, nested), lead == 0x62);
       default:
-        return (_readSignedLeb33WithFirst(reader, lead), false, false);
+        return (_readSignedLeb33WithFirst(reader, lead), false);
     }
   }
 
@@ -763,18 +812,23 @@ abstract final class WasmPredecoder {
     );
   }
 
-  static List<WasmValueType> _readBlockResultTypes(
+  static ({List<WasmValueType> types, List<String> signatures})
+  _readBlockResultTypeInfo(
     ByteReader reader,
     List<WasmFunctionType> moduleTypes,
   ) {
     final first = reader.readByte();
 
     if (first == 0x40) {
-      return const [];
+      return (types: const <WasmValueType>[], signatures: const <String>[]);
     }
 
     if (_isInlineBlockValueType(first)) {
-      return [_readInlineBlockValueType(reader, first)];
+      final inlineType = _readInlineBlockValueTypeWithSignature(reader, first);
+      return (
+        types: <WasmValueType>[inlineType.type],
+        signatures: <String>[inlineType.signature],
+      );
     }
 
     final typeIndex = _readSignedLeb33WithFirst(reader, first);
@@ -782,16 +836,28 @@ abstract final class WasmPredecoder {
       throw FormatException('Invalid block type index: $typeIndex');
     }
     if (!moduleTypes[typeIndex].isFunctionType) {
-      throw FormatException('Block type index is not a function type: $typeIndex');
+      throw FormatException(
+        'Block type index is not a function type: $typeIndex',
+      );
     }
 
-    return List<WasmValueType>.from(moduleTypes[typeIndex].results);
+    final functionType = moduleTypes[typeIndex];
+    final signatures = functionType.resultTypeSignatures.isNotEmpty
+        ? List<String>.from(functionType.resultTypeSignatures)
+        : functionType.results
+              .map(_signatureForValueType)
+              .toList(growable: false);
+
+    return (
+      types: List<WasmValueType>.from(functionType.results),
+      signatures: signatures,
+    );
   }
 
   static void _readSelectValueType(ByteReader reader) {
     final typeByte = reader.readByte();
     if (_isInlineBlockValueType(typeByte)) {
-      _readInlineBlockValueType(reader, typeByte);
+      _readInlineBlockValueTypeWithSignature(reader, typeByte);
       return;
     }
     throw UnsupportedError(
@@ -830,20 +896,24 @@ abstract final class WasmPredecoder {
     }
   }
 
-  static WasmValueType _readInlineBlockValueType(ByteReader reader, int first) {
+  static ({WasmValueType type, String signature})
+  _readInlineBlockValueTypeWithSignature(ByteReader reader, int first) {
     switch (first) {
       case 0x7f:
-        return WasmValueType.i32;
+        return (type: WasmValueType.i32, signature: '7f');
       case 0x7e:
-        return WasmValueType.i64;
+        return (type: WasmValueType.i64, signature: '7e');
       case 0x7d:
-        return WasmValueType.f32;
+        return (type: WasmValueType.f32, signature: '7d');
       case 0x7c:
-        return WasmValueType.f64;
+        return (type: WasmValueType.f64, signature: '7c');
       case 0x63:
       case 0x64:
-        _readHeapType(reader);
-        return WasmValueType.i32;
+        final heap = _readHeapTypeWithBytes(reader);
+        return (
+          type: WasmValueType.i32,
+          signature: _bytesToSignature(<int>[first, ...heap.bytes]),
+        );
       case 0x7b:
       case 0x70:
       case 0x71:
@@ -861,7 +931,10 @@ abstract final class WasmPredecoder {
       case 0x62:
       case 0x61:
       case 0x60:
-        return WasmValueType.i32;
+        return (
+          type: WasmValueType.i32,
+          signature: _bytesToSignature(<int>[first]),
+        );
       default:
         throw UnsupportedError(
           'Unsupported inline block type: 0x${first.toRadixString(16)}',
@@ -869,14 +942,38 @@ abstract final class WasmPredecoder {
     }
   }
 
-  static int _readSignedLeb33WithFirst(ByteReader reader, int firstByte) {
+  static ({int value, bool exact, List<int> bytes}) _readHeapTypeWithBytes(
+    ByteReader reader,
+  ) {
+    final lead = reader.readByte();
+    if (lead == 0x62 || lead == 0x61) {
+      final nested = reader.readByte();
+      final decoded = _readSignedLeb33WithFirstAndBytes(reader, nested);
+      return (
+        value: decoded.value,
+        exact: lead == 0x62,
+        bytes: <int>[lead, ...decoded.bytes],
+      );
+    }
+    final decoded = _readSignedLeb33WithFirstAndBytes(reader, lead);
+    return (value: decoded.value, exact: false, bytes: decoded.bytes);
+  }
+
+  static ({int value, List<int> bytes}) _readSignedLeb33WithFirstAndBytes(
+    ByteReader reader,
+    int firstByte,
+  ) {
+    final bytes = <int>[firstByte];
     var result = firstByte & 0x7f;
     var shift = 7;
     var byte = firstByte;
+    var multiplier = 128;
 
     while ((byte & 0x80) != 0) {
       byte = reader.readByte();
-      result |= (byte & 0x7f) << shift;
+      bytes.add(byte);
+      result += (byte & 0x7f) * multiplier;
+      multiplier *= 128;
       shift += 7;
       if (shift > 35) {
         throw const FormatException('Invalid blocktype LEB encoding.');
@@ -884,10 +981,61 @@ abstract final class WasmPredecoder {
     }
 
     if (shift < 33 && (byte & 0x40) != 0) {
-      result |= -1 << shift;
+      result -= multiplier;
+    }
+    return (value: _normalizeSignedLeb33(result), bytes: bytes);
+  }
+
+  static String _signatureForValueType(WasmValueType type) {
+    return switch (type) {
+      WasmValueType.i32 => '7f',
+      WasmValueType.i64 => '7e',
+      WasmValueType.f32 => '7d',
+      WasmValueType.f64 => '7c',
+    };
+  }
+
+  static String _bytesToSignature(List<int> bytes) {
+    final buffer = StringBuffer();
+    for (final byte in bytes) {
+      buffer.write((byte & 0xff).toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
+  }
+
+  static int _readSignedLeb33WithFirst(ByteReader reader, int firstByte) {
+    var result = firstByte & 0x7f;
+    var shift = 7;
+    var byte = firstByte;
+    var multiplier = 128;
+
+    while ((byte & 0x80) != 0) {
+      byte = reader.readByte();
+      result += (byte & 0x7f) * multiplier;
+      multiplier *= 128;
+      shift += 7;
+      if (shift > 35) {
+        throw const FormatException('Invalid blocktype LEB encoding.');
+      }
     }
 
-    return result;
+    if (shift < 33 && (byte & 0x40) != 0) {
+      result -= multiplier;
+    }
+    return _normalizeSignedLeb33(result);
+  }
+
+  static int _normalizeSignedLeb33(int value) {
+    const signBit33 = 0x100000000;
+    const width33 = 0x200000000;
+    var normalized = value % width33;
+    if (normalized < 0) {
+      normalized += width33;
+    }
+    if (normalized >= signBit33) {
+      normalized -= width33;
+    }
+    return normalized;
   }
 
   static double _decodeF32(Uint8List bytes) {

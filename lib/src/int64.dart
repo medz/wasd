@@ -183,11 +183,11 @@ abstract final class WasmI64 {
   }
 
   static int lowU32(int value) {
-    return unsigned(value) & 0xffffffff;
+    return (_toUnsignedBigInt(value) & _u32Mask).toInt();
   }
 
   static int highU32(int value) {
-    return (unsigned(value) >> 32) & 0xffffffff;
+    return ((_toUnsignedBigInt(value) >> 32) & _u32Mask).toInt();
   }
 
   static int fromU32PairSigned({required int low, required int high}) {
