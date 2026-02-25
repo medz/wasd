@@ -636,10 +636,10 @@ final class _ScriptExecutionState {
         return _signedBitsBigInt(BigInt.parse(valueString), 64);
       case 'f32':
         final valueString = value as String;
-        return _f32FromBits(_parseFloatBits(valueString, 32));
+        return WasmF32Bits(_parseFloatBits(valueString, 32));
       case 'f64':
         final valueString = value as String;
-        return _f64FromBits(_parseFloatBits(valueString, 64));
+        return WasmF64Bits(_parseFloatBits(valueString, 64));
       case 'externref':
       case 'funcref':
       case 'structref':
@@ -760,6 +760,9 @@ final class _ScriptExecutionState {
         if (expected.floatBits == null) {
           return false;
         }
+        if (_isF32NaNBits(expected.floatBits!)) {
+          return actual.isNaN;
+        }
         return _f32Bits(actual) == expected.floatBits;
       case 'f64':
         if (actual is! double) {
@@ -771,6 +774,9 @@ final class _ScriptExecutionState {
         if (expected.floatBits == null) {
           return false;
         }
+        if (_isF64NaNBits(expected.floatBits!)) {
+          return actual.isNaN;
+        }
         return _f64Bits(actual) == expected.floatBits;
       default:
         return false;
@@ -780,6 +786,9 @@ final class _ScriptExecutionState {
   static int _parseFloatBits(String value, int bits) {
     final integer = _tryParseInteger(value);
     if (integer != null) {
+      if (bits == 64) {
+        return _signedBits(integer, 64);
+      }
       return _unsignedBits(integer, bits);
     }
 
@@ -840,26 +849,24 @@ final class _ScriptExecutionState {
     return data.getUint32(0, Endian.little);
   }
 
-  static double _f32FromBits(int bits) {
-    final data = ByteData(4)..setUint32(0, bits.toUnsigned(32), Endian.little);
-    return data.getFloat32(0, Endian.little);
-  }
-
   static int _f64Bits(double value) {
     final data = ByteData(8)..setFloat64(0, value, Endian.little);
     final low = data.getUint32(0, Endian.little);
     final high = data.getUint32(4, Endian.little);
-    return (BigInt.from(high) << 32 | BigInt.from(low)).toInt();
+    return _signedBits((BigInt.from(high) << 32) | BigInt.from(low), 64);
   }
 
-  static double _f64FromBits(int bits) {
+  static bool _isF32NaNBits(int bits) {
+    final normalized = bits.toUnsigned(32);
+    return (normalized & 0x7f800000) == 0x7f800000 &&
+        (normalized & 0x007fffff) != 0;
+  }
+
+  static bool _isF64NaNBits(int bits) {
     final normalized = BigInt.from(bits) & ((BigInt.one << 64) - BigInt.one);
-    final low = (normalized & BigInt.from(0xffffffff)).toInt();
-    final high = ((normalized >> 32) & BigInt.from(0xffffffff)).toInt();
-    final data = ByteData(8)
-      ..setUint32(0, low, Endian.little)
-      ..setUint32(4, high, Endian.little);
-    return data.getFloat64(0, Endian.little);
+    final exponent = (normalized >> 52) & BigInt.from(0x7ff);
+    final fraction = normalized & BigInt.parse('fffffffffffff', radix: 16);
+    return exponent == BigInt.from(0x7ff) && fraction != BigInt.zero;
   }
 
   static String _expectedToString(_ExpectedValue expected) {
@@ -1554,6 +1561,7 @@ WasmFeatureSet _featuresForGroup(String group) {
     case 'core':
     case 'custom-page-sizes':
       additionalEnabled.add('multi-memory');
+      additionalEnabled.add('multi-table');
       break;
   }
   return base.copyWith(additionalEnabled: additionalEnabled);
