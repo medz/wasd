@@ -101,6 +101,19 @@ final class WasmVm {
     final stack = <WasmValue>[];
     final labels = <_LabelFrame>[];
     final instructions = defined.instructions;
+    if (instructions.isEmpty) {
+      throw StateError('Function body has no instructions.');
+    }
+    labels.add(
+      _LabelFrame(
+        kind: _LabelKind.block,
+        stackHeight: 0,
+        branchTypes: function.type.results,
+        endTypes: function.type.results,
+        endIndex: instructions.length - 1,
+        loopStartIndex: -1,
+      ),
+    );
     var pc = 0;
 
     while (pc < instructions.length) {
@@ -175,6 +188,9 @@ final class WasmVm {
           if (labels.isNotEmpty && labels.last.endIndex == pc) {
             final label = labels.removeLast();
             _exitLabel(label, stack);
+            if (labels.isEmpty) {
+              return _collectResults(function.type.results, stack);
+            }
             pc++;
             continue;
           }
@@ -237,6 +253,9 @@ final class WasmVm {
           _checkFunctionIndex(targetFunctionIndex);
           final target = _functions[targetFunctionIndex];
           final expectedType = _types[typeIndex];
+          if (!expectedType.isFunctionType) {
+            throw StateError('call_indirect expected non-function type $typeIndex.');
+          }
 
           if (!_functionTypeEquals(target.type, expectedType)) {
             throw StateError('call_indirect signature mismatch trap');
@@ -263,6 +282,9 @@ final class WasmVm {
           _checkFunctionIndex(targetFunctionIndex);
           final target = _functions[targetFunctionIndex];
           final expectedType = _types[typeIndex];
+          if (!expectedType.isFunctionType) {
+            throw StateError('call_indirect expected non-function type $typeIndex.');
+          }
 
           if (!_functionTypeEquals(target.type, expectedType)) {
             throw StateError('call_indirect signature mismatch trap');
@@ -1068,6 +1090,42 @@ final class WasmVm {
           stack.add(WasmValue.i32(_popFuncRef(stack) == null ? 1 : 0));
           pc++;
 
+        case Opcodes.refTest:
+          stack.add(WasmValue.i32(_gcRefTest(stack, instruction) ? 1 : 0));
+          pc++;
+
+        case Opcodes.refCast:
+          _gcRefCast(stack, instruction);
+          pc++;
+
+        case Opcodes.brOnCast:
+          final brOnCast = instruction.gcBrOnCast;
+          if (brOnCast == null) {
+            throw StateError('Missing br_on_cast immediate.');
+          }
+          final value = _popFuncRef(stack);
+          if (_gcRefMatches(value, brOnCast.targetType)) {
+            _pushFuncRef(stack, value);
+            pc = _branch(brOnCast.depth, labels, stack);
+          } else {
+            _pushFuncRef(stack, value);
+            pc++;
+          }
+
+        case Opcodes.brOnCastFail:
+          final brOnCast = instruction.gcBrOnCast;
+          if (brOnCast == null) {
+            throw StateError('Missing br_on_cast_fail immediate.');
+          }
+          final value = _popFuncRef(stack);
+          if (!_gcRefMatches(value, brOnCast.targetType)) {
+            _pushFuncRef(stack, value);
+            pc = _branch(brOnCast.depth, labels, stack);
+          } else {
+            _pushFuncRef(stack, value);
+            pc++;
+          }
+
         case Opcodes.i32Eqz:
           stack.add(WasmValue.i32(_popI32(stack) == 0 ? 1 : 0));
           pc++;
@@ -1853,6 +1911,13 @@ final class WasmVm {
       return target.loopStartIndex;
     }
 
+    if (targetPosition == 0) {
+      if (labels.length > 1) {
+        labels.removeRange(1, labels.length);
+      }
+      return target.endIndex;
+    }
+
     labels.removeRange(targetPosition, labels.length);
     return target.endIndex + 1;
   }
@@ -2011,6 +2076,93 @@ final class WasmVm {
     }
 
     return true;
+  }
+
+  bool _gcRefTest(List<WasmValue> stack, Instruction instruction) {
+    final gcRefType = instruction.gcRefType;
+    if (gcRefType == null) {
+      throw StateError('Missing ref.test immediate.');
+    }
+    final value = _popFuncRef(stack);
+    return _gcRefMatches(value, gcRefType);
+  }
+
+  void _gcRefCast(List<WasmValue> stack, Instruction instruction) {
+    final gcRefType = instruction.gcRefType;
+    if (gcRefType == null) {
+      throw StateError('Missing ref.cast immediate.');
+    }
+    final value = _popFuncRef(stack);
+    if (!_gcRefMatches(value, gcRefType)) {
+      throw StateError('cast failure');
+    }
+    _pushFuncRef(stack, value);
+  }
+
+  bool _gcRefMatches(int? functionIndex, GcRefTypeImmediate refType) {
+    if (functionIndex == null) {
+      return refType.nullable;
+    }
+    if (refType.anyFunc) {
+      return true;
+    }
+    final targetTypeIndex = refType.typeIndex;
+    if (targetTypeIndex == null) {
+      return true;
+    }
+    final actualTypeIndex = _functions[_checkFunctionIndex(
+      functionIndex,
+    )].declaredTypeIndex;
+    if (!_functionTypeMatchesByDepth(
+      actualTypeIndex: actualTypeIndex,
+      targetTypeIndex: targetTypeIndex,
+      exact: refType.exact,
+      actualDepthOverride: _functions[functionIndex].runtimeTypeDepth,
+    )) {
+      return false;
+    }
+    return true;
+  }
+
+  bool _functionTypeMatchesByDepth({
+    required int actualTypeIndex,
+    required int targetTypeIndex,
+    required bool exact,
+    int? actualDepthOverride,
+  }) {
+    final actualType = _types[_checkTypeIndex(actualTypeIndex)];
+    final targetType = _types[_checkTypeIndex(targetTypeIndex)];
+    if (!actualType.isFunctionType || !targetType.isFunctionType) {
+      return false;
+    }
+    if (!_functionTypeEquals(actualType, targetType)) {
+      return false;
+    }
+    final actualDepth =
+        actualDepthOverride ?? _typeDepth(actualTypeIndex, <int>{});
+    final targetDepth = _typeDepth(targetTypeIndex, <int>{});
+    if (exact) {
+      return actualDepth == targetDepth;
+    }
+    return actualDepth >= targetDepth;
+  }
+
+  int _typeDepth(int typeIndex, Set<int> seen) {
+    if (!seen.add(typeIndex)) {
+      return 0;
+    }
+    final type = _types[_checkTypeIndex(typeIndex)];
+    if (!type.isFunctionType || type.superTypeIndices.isEmpty) {
+      return 0;
+    }
+    var maxDepth = 0;
+    for (final superTypeIndex in type.superTypeIndices) {
+      final depth = _typeDepth(superTypeIndex, seen);
+      if (depth > maxDepth) {
+        maxDepth = depth;
+      }
+    }
+    return maxDepth + 1;
   }
 
   WasmValue _pop(List<WasmValue> stack) {

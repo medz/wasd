@@ -3,15 +3,23 @@ import 'module.dart';
 import 'predecode.dart';
 
 sealed class RuntimeFunction {
-  const RuntimeFunction({required this.type});
+  const RuntimeFunction({
+    required this.type,
+    required this.declaredTypeIndex,
+    required this.runtimeTypeDepth,
+  });
 
   final WasmFunctionType type;
+  final int declaredTypeIndex;
+  final int runtimeTypeDepth;
   bool get isHost;
 }
 
 final class DefinedRuntimeFunction extends RuntimeFunction {
   const DefinedRuntimeFunction({
     required super.type,
+    required super.declaredTypeIndex,
+    required super.runtimeTypeDepth,
     required this.localTypes,
     required this.instructions,
   });
@@ -24,7 +32,12 @@ final class DefinedRuntimeFunction extends RuntimeFunction {
 }
 
 final class HostRuntimeFunction extends RuntimeFunction {
-  const HostRuntimeFunction({required super.type, required this.callback});
+  const HostRuntimeFunction({
+    required super.type,
+    required super.declaredTypeIndex,
+    required super.runtimeTypeDepth,
+    required this.callback,
+  });
 
   final WasmHostFunction callback;
 

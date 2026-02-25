@@ -83,8 +83,11 @@ final class WasmInstance {
     for (final import in module.imports) {
       switch (import.kind) {
         case WasmImportKind.function:
+        case WasmImportKind.exactFunction:
           final typeIndex = import.functionTypeIndex;
-          if (typeIndex == null || typeIndex >= module.types.length) {
+          if (typeIndex == null ||
+              typeIndex >= module.types.length ||
+              !module.types[typeIndex].isFunctionType) {
             throw FormatException(
               'Invalid function import type index: $typeIndex',
             );
@@ -105,6 +108,10 @@ final class WasmInstance {
           functions.add(
             HostRuntimeFunction(
               type: module.types[typeIndex],
+              declaredTypeIndex: typeIndex,
+              runtimeTypeDepth:
+                  imports.functionTypeDepths[import.key] ??
+                  _functionTypeDepth(module, typeIndex),
               callback: callback!,
             ),
           );
@@ -268,7 +275,9 @@ final class WasmInstance {
 
     for (var i = 0; i < module.codes.length; i++) {
       final typeIndex = module.functionTypeIndices[i];
-      if (typeIndex < 0 || typeIndex >= module.types.length) {
+      if (typeIndex < 0 ||
+          typeIndex >= module.types.length ||
+          !module.types[typeIndex].isFunctionType) {
         throw FormatException('Function $i has invalid type index $typeIndex.');
       }
 
@@ -280,6 +289,8 @@ final class WasmInstance {
       functions.add(
         DefinedRuntimeFunction(
           type: module.types[typeIndex],
+          declaredTypeIndex: typeIndex,
+          runtimeTypeDepth: _functionTypeDepth(module, typeIndex),
           localTypes: predecoded.localTypes,
           instructions: predecoded.instructions,
         ),
@@ -380,6 +391,18 @@ final class WasmInstance {
       );
     }
     return functions[functionIndex].type;
+  }
+
+  int exportedFunctionTypeDepth(String exportName) {
+    final functionIndex = _functionExports[exportName];
+    if (functionIndex == null) {
+      throw ArgumentError.value(
+        exportName,
+        'exportName',
+        'Function export not found',
+      );
+    }
+    return functions[functionIndex].runtimeTypeDepth;
   }
 
   Object? invoke(String exportName, [List<Object?> args = const []]) {
@@ -740,7 +763,7 @@ final class WasmInstance {
           stack.add(globals[globalIndex].value);
 
         case Opcodes.refNull:
-          WasmRefTypeCodec.fromByte(reader.readByte());
+          _consumeHeapType(reader);
           stack.add(WasmValue.i32(-1));
 
         case Opcodes.refFunc:
@@ -858,6 +881,68 @@ final class WasmInstance {
         '$context uses shared memory, but threads feature is disabled.',
       );
     }
+  }
+
+  static int _functionTypeDepth(WasmModule module, int typeIndex) {
+    return _functionTypeDepthInternal(module, typeIndex, <int>{});
+  }
+
+  static int _functionTypeDepthInternal(
+    WasmModule module,
+    int typeIndex,
+    Set<int> seen,
+  ) {
+    if (!seen.add(typeIndex)) {
+      return 0;
+    }
+    if (typeIndex < 0 || typeIndex >= module.types.length) {
+      return 0;
+    }
+    final type = module.types[typeIndex];
+    if (!type.isFunctionType || type.superTypeIndices.isEmpty) {
+      return 0;
+    }
+    var maxDepth = 0;
+    for (final superTypeIndex in type.superTypeIndices) {
+      final superDepth = _functionTypeDepthInternal(module, superTypeIndex, seen);
+      if (superDepth > maxDepth) {
+        maxDepth = superDepth;
+      }
+    }
+    return maxDepth + 1;
+  }
+
+  static void _consumeHeapType(ByteReader reader) {
+    _consumeHeapTypeWithLeadingByte(reader, reader.readByte());
+  }
+
+  static void _consumeHeapTypeWithLeadingByte(ByteReader reader, int lead) {
+    if (lead == 0x62 || lead == 0x61) {
+      _consumeHeapType(reader);
+      return;
+    }
+    if (lead >= 0x65 && lead <= 0x71) {
+      return;
+    }
+    _readSignedLeb33WithFirst(reader, lead);
+  }
+
+  static int _readSignedLeb33WithFirst(ByteReader reader, int firstByte) {
+    var result = firstByte & 0x7f;
+    var shift = 7;
+    var byte = firstByte;
+    while ((byte & 0x80) != 0) {
+      byte = reader.readByte();
+      result |= (byte & 0x7f) << shift;
+      shift += 7;
+      if (shift > 35) {
+        throw const FormatException('Invalid signed LEB33 encoding.');
+      }
+    }
+    if (shift < 33 && (byte & 0x40) != 0) {
+      result |= -1 << shift;
+    }
+    return result;
   }
 
   static Object? _externalizeResults(List<WasmValue> results) {

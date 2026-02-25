@@ -50,10 +50,12 @@ abstract final class WasmValidator {
     for (final import in module.imports) {
       switch (import.kind) {
         case WasmImportKind.function:
+        case WasmImportKind.exactFunction:
           final typeIndex = import.functionTypeIndex;
           if (typeIndex == null ||
               typeIndex < 0 ||
-              typeIndex >= module.types.length) {
+              typeIndex >= module.types.length ||
+              !module.types[typeIndex].isFunctionType) {
             throw FormatException(
               'Validation failed: invalid function import type index: $typeIndex',
             );
@@ -236,6 +238,11 @@ abstract final class WasmValidator {
     for (var i = 0; i < module.functionTypeIndices.length; i++) {
       final typeIndex = module.functionTypeIndices[i];
       _checkIndex(typeIndex, module.types.length, 'function type');
+      if (!module.types[typeIndex].isFunctionType) {
+        throw FormatException(
+          'Validation failed: type index $typeIndex is not a function type.',
+        );
+      }
       final functionType = module.types[typeIndex];
       final body = module.codes[i];
       final localsCount = _validatedLocalsCount(functionType, body);
@@ -307,11 +314,13 @@ abstract final class WasmValidator {
             _checkIndex(instruction.immediate!, functionCount, 'function ref');
           case Opcodes.callIndirect:
           case Opcodes.returnCallIndirect:
-            _checkIndex(
-              instruction.immediate!,
-              module.types.length,
-              'type ref',
-            );
+            final typeRef = instruction.immediate!;
+            _checkIndex(typeRef, module.types.length, 'type ref');
+            if (!module.types[typeRef].isFunctionType) {
+              throw FormatException(
+                'Validation failed: call_indirect type $typeRef is not a function type.',
+              );
+            }
             _checkIndex(
               instruction.secondaryImmediate!,
               tableCount,
@@ -448,11 +457,18 @@ abstract final class WasmValidator {
 
     var importFuncOrdinal = 0;
     for (final import in module.imports) {
-      if (import.kind != WasmImportKind.function) {
+      if (import.kind != WasmImportKind.function &&
+          import.kind != WasmImportKind.exactFunction) {
         continue;
       }
       if (importFuncOrdinal == index) {
-        return module.types[import.functionTypeIndex!];
+        final type = module.types[import.functionTypeIndex!];
+        if (!type.isFunctionType) {
+          throw FormatException(
+            'Validation failed: type ${import.functionTypeIndex} is not a function type.',
+          );
+        }
+        return type;
       }
       importFuncOrdinal++;
     }
@@ -465,7 +481,13 @@ abstract final class WasmValidator {
     }
     final typeIndex = module.functionTypeIndices[definedIndex];
     _checkIndex(typeIndex, module.types.length, 'function type');
-    return module.types[typeIndex];
+    final type = module.types[typeIndex];
+    if (!type.isFunctionType) {
+      throw FormatException(
+        'Validation failed: type index $typeIndex is not a function type.',
+      );
+    }
+    return type;
   }
 
   static int _validatedLocalsCount(

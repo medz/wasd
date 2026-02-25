@@ -10,6 +10,16 @@ enum WasmRefType { funcref, externref }
 
 enum WasmElementMode { active, passive, declarative }
 
+final class _DecodedValueType {
+  const _DecodedValueType({
+    required this.valueType,
+    required this.runtimeSupported,
+  });
+
+  final WasmValueType valueType;
+  final bool runtimeSupported;
+}
+
 extension WasmValueTypeCodec on WasmValueType {
   static WasmValueType fromByte(int value) {
     switch (value) {
@@ -35,6 +45,22 @@ extension WasmRefTypeCodec on WasmRefType {
       case 0x70:
         return WasmRefType.funcref;
       case 0x6f:
+      case 0x71:
+      case 0x6e:
+      case 0x6d:
+      case 0x6c:
+      case 0x6b:
+      case 0x6a:
+      case 0x69:
+      case 0x68:
+      case 0x67:
+      case 0x66:
+      case 0x65:
+      case 0x64:
+      case 0x63:
+      case 0x62:
+      case 0x61:
+      case 0x60:
         return WasmRefType.externref;
       default:
         throw UnsupportedError(
@@ -49,6 +75,7 @@ abstract final class WasmImportKind {
   static const int table = 0x01;
   static const int memory = 0x02;
   static const int global = 0x03;
+  static const int exactFunction = 0x20;
 }
 
 abstract final class WasmExportKind {
@@ -75,10 +102,26 @@ final class WasmLimits {
 }
 
 final class WasmFunctionType {
-  const WasmFunctionType({required this.params, required this.results});
+  const WasmFunctionType({
+    required this.params,
+    required this.results,
+    this.superTypeIndices = const <int>[],
+    this.isFunctionType = true,
+    this.runtimeSupported = true,
+  });
+
+  const WasmFunctionType.nonFunction({
+    this.superTypeIndices = const <int>[],
+    this.runtimeSupported = false,
+  }) : params = const <WasmValueType>[],
+       results = const <WasmValueType>[],
+       isFunctionType = false;
 
   final List<WasmValueType> params;
   final List<WasmValueType> results;
+  final List<int> superTypeIndices;
+  final bool isFunctionType;
+  final bool runtimeSupported;
 }
 
 final class WasmMemoryType {
@@ -118,6 +161,7 @@ final class WasmImport {
     required this.name,
     required this.kind,
     this.functionTypeIndex,
+    this.isExactFunction = false,
     this.tableType,
     this.memoryType,
     this.globalType,
@@ -127,6 +171,7 @@ final class WasmImport {
   final String name;
   final int kind;
   final int? functionTypeIndex;
+  final bool isExactFunction;
   final WasmTableType? tableType;
   final WasmMemoryType? memoryType;
   final WasmGlobalType? globalType;
@@ -403,19 +448,135 @@ final class WasmModule {
   ) {
     final count = reader.readVarUint32();
     for (var i = 0; i < count; i++) {
-      final form = reader.readByte();
-      if (form != 0x60) {
+      _parseRecursiveTypeEntry(reader, sink);
+    }
+  }
+
+  static void _parseRecursiveTypeEntry(
+    ByteReader reader,
+    List<WasmFunctionType> sink,
+  ) {
+    final form = reader.readByte();
+    if (form == 0x4e) {
+      final subgroupCount = reader.readVarUint32();
+      for (var i = 0; i < subgroupCount; i++) {
+        _parseSubTypeWithLeadingForm(
+          reader.readByte(),
+          reader,
+          sink,
+          insideRecGroup: true,
+        );
+      }
+      return;
+    }
+    _parseSubTypeWithLeadingForm(
+      form,
+      reader,
+      sink,
+      insideRecGroup: false,
+    );
+  }
+
+  static void _parseSubTypeWithLeadingForm(
+    int leadingForm,
+    ByteReader reader,
+    List<WasmFunctionType> sink,
+    {required bool insideRecGroup}
+  ) {
+    final superTypeIndices = <int>[];
+    var form = leadingForm;
+    var hasDescribes = false;
+    var hasDescriptor = false;
+
+    while (true) {
+      switch (form) {
+        case 0x50:
+        case 0x4f:
+          final superCount = reader.readVarUint32();
+          for (var i = 0; i < superCount; i++) {
+            superTypeIndices.add(reader.readVarUint32());
+          }
+          form = reader.readByte();
+          continue;
+        case 0x4c:
+          if (!insideRecGroup || hasDescribes) {
+            throw const FormatException('Malformed type descriptor wrapper.');
+          }
+          hasDescribes = true;
+          reader.readVarUint32();
+          form = reader.readByte();
+          continue;
+        case 0x4d:
+          if (!insideRecGroup || hasDescriptor) {
+            throw const FormatException('Malformed type descriptor wrapper.');
+          }
+          hasDescriptor = true;
+          reader.readVarUint32();
+          form = reader.readByte();
+          continue;
+        default:
+          _parseCompositeType(
+            form: form,
+            reader: reader,
+            sink: sink,
+            superTypeIndices: superTypeIndices,
+          );
+          return;
+      }
+    }
+  }
+
+  static void _parseCompositeType({
+    required int form,
+    required ByteReader reader,
+    required List<WasmFunctionType> sink,
+    required List<int> superTypeIndices,
+  }) {
+    switch (form) {
+      case 0x60:
+        final functionType = _readFunctionType(reader);
+        sink.add(
+          WasmFunctionType(
+            params: functionType.$1,
+            results: functionType.$2,
+            superTypeIndices: List.unmodifiable(superTypeIndices),
+            runtimeSupported: functionType.$3,
+          ),
+        );
+      case 0x5e:
+        _readFieldType(reader);
+        sink.add(
+          WasmFunctionType.nonFunction(
+            superTypeIndices: List.unmodifiable(superTypeIndices),
+          ),
+        );
+      case 0x5f:
+        final fieldCount = reader.readVarUint32();
+        for (var i = 0; i < fieldCount; i++) {
+          _readFieldType(reader);
+        }
+        sink.add(
+          WasmFunctionType.nonFunction(
+            superTypeIndices: List.unmodifiable(superTypeIndices),
+          ),
+        );
+      default:
         throw UnsupportedError(
           'Unsupported type form: 0x${form.toRadixString(16)}',
         );
-      }
+    }
+  }
 
-      sink.add(
-        WasmFunctionType(
-          params: _readValueTypeVector(reader),
-          results: _readValueTypeVector(reader),
-        ),
-      );
+  static void _readFieldType(ByteReader reader) {
+    final typeByte = reader.readByte();
+    if (typeByte == 0x78 || typeByte == 0x77) {
+      // Packed i8/i16 storage types.
+    } else {
+      _readValueTypeWithLeadingByte(reader, typeByte);
+    }
+    final mutability = reader.readByte();
+    if (mutability != 0 && mutability != 1) {
+      throw FormatException('Invalid field mutability: $mutability');
     }
   }
 
@@ -436,6 +597,7 @@ final class WasmModule {
 
       switch (kind) {
         case WasmImportKind.function:
+        case WasmImportKind.exactFunction:
           importedFunctions++;
           sink.add(
             WasmImport(
@@ -443,6 +605,7 @@ final class WasmModule {
               name: fieldName,
               kind: kind,
               functionTypeIndex: reader.readVarUint32(),
+              isExactFunction: kind == WasmImportKind.exactFunction,
             ),
           );
 
@@ -602,12 +765,7 @@ final class WasmModule {
           );
 
         case 5:
-          final refType = WasmRefTypeCodec.fromByte(reader.readByte());
-          if (refType != WasmRefType.funcref) {
-            throw UnsupportedError(
-              'Only funcref element segments are supported.',
-            );
-          }
+          _readReferenceType(reader);
           sink.add(
             WasmElementSegment.passive(
               functionIndices: _readElementExprFunctionIndices(reader),
@@ -617,12 +775,7 @@ final class WasmModule {
         case 6:
           final tableIndex = reader.readVarUint32();
           final offsetExpr = _readInitExpression(reader);
-          final refType = WasmRefTypeCodec.fromByte(reader.readByte());
-          if (refType != WasmRefType.funcref) {
-            throw UnsupportedError(
-              'Only funcref element segments are supported.',
-            );
-          }
+          _readReferenceType(reader);
           sink.add(
             WasmElementSegment.active(
               tableIndex: tableIndex,
@@ -632,12 +785,7 @@ final class WasmModule {
           );
 
         case 7:
-          final refType = WasmRefTypeCodec.fromByte(reader.readByte());
-          if (refType != WasmRefType.funcref) {
-            throw UnsupportedError(
-              'Only funcref element segments are supported.',
-            );
-          }
+          _readReferenceType(reader);
           sink.add(
             WasmElementSegment.declarative(
               functionIndices: _readElementExprFunctionIndices(reader),
@@ -662,7 +810,7 @@ final class WasmModule {
         locals.add(
           WasmLocalDecl(
             count: bodyReader.readVarUint32(),
-            type: _readValueType(bodyReader),
+            type: _readValueType(bodyReader).valueType,
           ),
         );
       }
@@ -733,7 +881,7 @@ final class WasmModule {
         case Opcodes.globalGet:
           reader.readVarUint32();
         case Opcodes.refNull:
-          reader.readByte();
+          _consumeHeapType(reader);
         case Opcodes.refFunc:
           reader.readVarUint32();
         case Opcodes.i32Add:
@@ -758,17 +906,92 @@ final class WasmModule {
     }
   }
 
-  static List<WasmValueType> _readValueTypeVector(ByteReader reader) {
-    final count = reader.readVarUint32();
-    final result = <WasmValueType>[];
-    for (var i = 0; i < count; i++) {
-      result.add(_readValueType(reader));
-    }
-    return result;
+  static (List<WasmValueType>, List<WasmValueType>, bool) _readFunctionType(
+    ByteReader reader,
+  ) {
+    final params = _readValueTypeVector(reader);
+    final results = _readValueTypeVector(reader);
+    return (
+      params.$1,
+      results.$1,
+      params.$2 && results.$2,
+    );
   }
 
-  static WasmValueType _readValueType(ByteReader reader) {
-    return WasmValueTypeCodec.fromByte(reader.readByte());
+  static (List<WasmValueType>, bool) _readValueTypeVector(ByteReader reader) {
+    final count = reader.readVarUint32();
+    final result = <WasmValueType>[];
+    var allSupported = true;
+    for (var i = 0; i < count; i++) {
+      final decoded = _readValueType(reader);
+      result.add(decoded.valueType);
+      allSupported = allSupported && decoded.runtimeSupported;
+    }
+    return (result, allSupported);
+  }
+
+  static _DecodedValueType _readValueType(ByteReader reader) {
+    return _readValueTypeWithLeadingByte(reader, reader.readByte());
+  }
+
+  static _DecodedValueType _readValueTypeWithLeadingByte(
+    ByteReader reader,
+    int leadingByte,
+  ) {
+    switch (leadingByte) {
+      case 0x7f:
+        return _DecodedValueType(
+          valueType: WasmValueType.i32,
+          runtimeSupported: true,
+        );
+      case 0x7e:
+        return _DecodedValueType(
+          valueType: WasmValueType.i64,
+          runtimeSupported: true,
+        );
+      case 0x7d:
+        return _DecodedValueType(
+          valueType: WasmValueType.f32,
+          runtimeSupported: true,
+        );
+      case 0x7c:
+        return _DecodedValueType(
+          valueType: WasmValueType.f64,
+          runtimeSupported: true,
+        );
+      case 0x63:
+      case 0x64:
+        _consumeHeapType(reader);
+        return _DecodedValueType(
+          valueType: WasmValueType.i32,
+          runtimeSupported: false,
+        );
+      case 0x7b:
+      case 0x70:
+      case 0x71:
+      case 0x6f:
+      case 0x6e:
+      case 0x6d:
+      case 0x6c:
+      case 0x6b:
+      case 0x6a:
+      case 0x69:
+      case 0x68:
+      case 0x67:
+      case 0x66:
+      case 0x65:
+      case 0x62:
+      case 0x61:
+      case 0x60:
+        return _DecodedValueType(
+          valueType: WasmValueType.i32,
+          runtimeSupported: false,
+        );
+      default:
+        throw UnsupportedError(
+          'Unsupported value type: 0x${leadingByte.toRadixString(16)}',
+        );
+    }
   }
 
   static void _readElemKind(ByteReader reader) {
@@ -800,7 +1023,7 @@ final class WasmModule {
     final opcode = reader.readByte();
     switch (opcode) {
       case Opcodes.refNull:
-        WasmRefTypeCodec.fromByte(reader.readByte());
+        _consumeHeapType(reader);
         if (reader.readByte() != Opcodes.end) {
           throw const FormatException(
             'Malformed ref.null init expr in element.',
@@ -824,11 +1047,73 @@ final class WasmModule {
     }
   }
 
+  static void _consumeHeapType(ByteReader reader) {
+    _consumeHeapTypeWithLeadingByte(reader, reader.readByte());
+  }
+
+  static void _consumeHeapTypeWithLeadingByte(ByteReader reader, int lead) {
+    if (lead == 0x62 || lead == 0x61) {
+      _consumeHeapType(reader);
+      return;
+    }
+    if (lead >= 0x65 && lead <= 0x71) {
+      return;
+    }
+    _readSignedLeb33WithFirst(reader, lead);
+  }
+
+  static int _readSignedLeb33WithFirst(ByteReader reader, int firstByte) {
+    var result = firstByte & 0x7f;
+    var shift = 7;
+    var byte = firstByte;
+    while ((byte & 0x80) != 0) {
+      byte = reader.readByte();
+      result |= (byte & 0x7f) << shift;
+      shift += 7;
+      if (shift > 35) {
+        throw const FormatException('Invalid signed LEB33 encoding.');
+      }
+    }
+    if (shift < 33 && (byte & 0x40) != 0) {
+      result |= -1 << shift;
+    }
+    return result;
+  }
+
   static WasmTableType _readTableType(ByteReader reader) {
-    final refType = WasmRefTypeCodec.fromByte(reader.readByte());
+    final refType = _readReferenceType(reader);
     final limits = _readLimits(reader);
     _validateLimits(limits, context: 'table');
     return WasmTableType(refType: refType, min: limits.min, max: limits.max);
+  }
+
+  static WasmRefType _readReferenceType(ByteReader reader) {
+    final lead = reader.readByte();
+    switch (lead) {
+      case 0x70:
+        return WasmRefType.funcref;
+      case 0x6f:
+      case 0x71:
+      case 0x6e:
+      case 0x6d:
+      case 0x6c:
+      case 0x6b:
+      case 0x6a:
+      case 0x69:
+      case 0x68:
+      case 0x67:
+      case 0x66:
+      case 0x65:
+        return WasmRefType.externref;
+      case 0x63:
+      case 0x64:
+        _consumeHeapType(reader);
+        return WasmRefType.externref;
+      default:
+        throw UnsupportedError(
+          'Unsupported ref type: 0x${lead.toRadixString(16)}',
+        );
+    }
   }
 
   static WasmMemoryType _readMemoryType(ByteReader reader) {
@@ -867,7 +1152,7 @@ final class WasmModule {
   }
 
   static WasmGlobalType _readGlobalType(ByteReader reader) {
-    final valueType = _readValueType(reader);
+    final valueType = _readValueType(reader).valueType;
     final mutability = reader.readByte();
     if (mutability != 0 && mutability != 1) {
       throw UnsupportedError('Invalid global mutability: $mutability');

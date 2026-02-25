@@ -26,6 +26,8 @@ final class Instruction {
     this.memArg,
     this.tableDepths,
     this.blockResultTypes,
+    this.gcRefType,
+    this.gcBrOnCast,
     this.endIndex,
     this.elseIndex,
   });
@@ -37,8 +39,38 @@ final class Instruction {
   MemArg? memArg;
   List<int>? tableDepths;
   List<WasmValueType>? blockResultTypes;
+  GcRefTypeImmediate? gcRefType;
+  GcBrOnCastImmediate? gcBrOnCast;
   int? endIndex;
   int? elseIndex;
+}
+
+final class GcRefTypeImmediate {
+  const GcRefTypeImmediate({
+    required this.nullable,
+    required this.exact,
+    this.typeIndex,
+    this.anyFunc = false,
+  });
+
+  final bool nullable;
+  final bool exact;
+  final int? typeIndex;
+  final bool anyFunc;
+}
+
+final class GcBrOnCastImmediate {
+  const GcBrOnCastImmediate({
+    required this.flags,
+    required this.depth,
+    required this.sourceType,
+    required this.targetType,
+  });
+
+  final int flags;
+  final int depth;
+  final GcRefTypeImmediate sourceType;
+  final GcRefTypeImmediate targetType;
 }
 
 final class PredecodedFunction {
@@ -432,9 +464,7 @@ abstract final class WasmPredecoder {
               'GC opcode prefix (0xFB) encountered but `gc` feature is disabled.',
             );
           }
-          throw UnsupportedError(
-            'GC feature gate is enabled, but GC execution is not implemented yet.',
-          );
+          _decodeGcInstruction(reader, instructions);
 
         default:
           if (_isExceptionHandlingOpcode(opcode)) {
@@ -507,6 +537,45 @@ abstract final class WasmPredecoder {
       default:
         throw UnsupportedError(
           'Unsupported 0xFC sub-opcode: 0x${subOpcode.toRadixString(16)}',
+        );
+      }
+  }
+
+  static void _decodeGcInstruction(
+    ByteReader reader,
+    List<Instruction> instructions,
+  ) {
+    final subOpcode = reader.readVarUint32();
+    final pseudoOpcode = 0xfb00 | subOpcode;
+    switch (pseudoOpcode) {
+      case Opcodes.refTest:
+      case Opcodes.refCast:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            gcRefType: _readGcRefType(reader),
+          ),
+        );
+      case Opcodes.brOnCast:
+      case Opcodes.brOnCastFail:
+        final flags = reader.readVarUint32();
+        final depth = reader.readVarUint32();
+        final sourceType = _readGcRefType(reader);
+        final targetType = _readGcRefType(reader);
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            gcBrOnCast: GcBrOnCastImmediate(
+              flags: flags,
+              depth: depth,
+              sourceType: sourceType,
+              targetType: targetType,
+            ),
+          ),
+        );
+      default:
+        throw UnsupportedError(
+          'Unsupported 0xFB sub-opcode: 0x${subOpcode.toRadixString(16)}',
         );
     }
   }
@@ -602,6 +671,82 @@ abstract final class WasmPredecoder {
         throw UnsupportedError(
           'Unsupported 0xFE sub-opcode: 0x${subOpcode.toRadixString(16)}',
         );
+      }
+  }
+
+  static GcRefTypeImmediate _readGcRefType(ByteReader reader) {
+    final lead = reader.readByte();
+    switch (lead) {
+      case 0x70:
+        return const GcRefTypeImmediate(
+          nullable: true,
+          exact: false,
+          anyFunc: true,
+        );
+      case 0x6f:
+      case 0x71:
+      case 0x6e:
+      case 0x6d:
+      case 0x6c:
+      case 0x6b:
+      case 0x6a:
+      case 0x69:
+      case 0x68:
+      case 0x67:
+      case 0x66:
+      case 0x65:
+        return const GcRefTypeImmediate(nullable: true, exact: false);
+      case 0x63:
+      case 0x64:
+        final nullable = lead == 0x63;
+        final heapType = _readHeapType(reader);
+        return GcRefTypeImmediate(
+          nullable: nullable,
+          exact: heapType.$2,
+          typeIndex: heapType.$1,
+          anyFunc: heapType.$3,
+        );
+      case 0x62:
+      case 0x61:
+        final typeIndex = reader.readVarUint32();
+        return GcRefTypeImmediate(
+          nullable: false,
+          exact: lead == 0x62,
+          typeIndex: typeIndex,
+        );
+      default:
+        final typeIndex = _readSignedLeb33WithFirst(reader, lead);
+        return GcRefTypeImmediate(
+          nullable: false,
+          exact: false,
+          typeIndex: typeIndex >= 0 ? typeIndex : null,
+        );
+    }
+  }
+
+  static (int?, bool, bool) _readHeapType(ByteReader reader) {
+    final lead = reader.readByte();
+    switch (lead) {
+      case 0x70:
+        return (null, false, true);
+      case 0x6f:
+      case 0x71:
+      case 0x6e:
+      case 0x6d:
+      case 0x6c:
+      case 0x6b:
+      case 0x6a:
+      case 0x69:
+      case 0x68:
+      case 0x67:
+      case 0x66:
+      case 0x65:
+        return (null, false, false);
+      case 0x62:
+      case 0x61:
+        return (reader.readVarUint32(), lead == 0x62, false);
+      default:
+        return (_readSignedLeb33WithFirst(reader, lead), false, false);
     }
   }
 
@@ -628,13 +773,16 @@ abstract final class WasmPredecoder {
       return const [];
     }
 
-    if (first == 0x7f || first == 0x7e || first == 0x7d || first == 0x7c) {
-      return [WasmValueTypeCodec.fromByte(first)];
+    if (_isInlineBlockValueType(first)) {
+      return [_readInlineBlockValueType(reader, first)];
     }
 
     final typeIndex = _readSignedLeb33WithFirst(reader, first);
     if (typeIndex < 0 || typeIndex >= moduleTypes.length) {
       throw FormatException('Invalid block type index: $typeIndex');
+    }
+    if (!moduleTypes[typeIndex].isFunctionType) {
+      throw FormatException('Block type index is not a function type: $typeIndex');
     }
 
     return List<WasmValueType>.from(moduleTypes[typeIndex].results);
@@ -642,17 +790,81 @@ abstract final class WasmPredecoder {
 
   static void _readSelectValueType(ByteReader reader) {
     final typeByte = reader.readByte();
-    switch (typeByte) {
-      case 0x7f: // i32
-      case 0x7e: // i64
-      case 0x7d: // f32
-      case 0x7c: // f64
-      case 0x70: // funcref
-      case 0x6f: // externref
-        return;
+    if (_isInlineBlockValueType(typeByte)) {
+      _readInlineBlockValueType(reader, typeByte);
+      return;
+    }
+    throw UnsupportedError(
+      'Unsupported select type: 0x${typeByte.toRadixString(16)}',
+    );
+  }
+
+  static bool _isInlineBlockValueType(int value) {
+    switch (value) {
+      case 0x7f:
+      case 0x7e:
+      case 0x7d:
+      case 0x7c:
+      case 0x7b:
+      case 0x70:
+      case 0x71:
+      case 0x6f:
+      case 0x6e:
+      case 0x6d:
+      case 0x6c:
+      case 0x6b:
+      case 0x6a:
+      case 0x69:
+      case 0x68:
+      case 0x67:
+      case 0x66:
+      case 0x65:
+      case 0x64:
+      case 0x63:
+      case 0x62:
+      case 0x61:
+      case 0x60:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  static WasmValueType _readInlineBlockValueType(ByteReader reader, int first) {
+    switch (first) {
+      case 0x7f:
+        return WasmValueType.i32;
+      case 0x7e:
+        return WasmValueType.i64;
+      case 0x7d:
+        return WasmValueType.f32;
+      case 0x7c:
+        return WasmValueType.f64;
+      case 0x63:
+      case 0x64:
+        _readHeapType(reader);
+        return WasmValueType.i32;
+      case 0x7b:
+      case 0x70:
+      case 0x71:
+      case 0x6f:
+      case 0x6e:
+      case 0x6d:
+      case 0x6c:
+      case 0x6b:
+      case 0x6a:
+      case 0x69:
+      case 0x68:
+      case 0x67:
+      case 0x66:
+      case 0x65:
+      case 0x62:
+      case 0x61:
+      case 0x60:
+        return WasmValueType.i32;
       default:
         throw UnsupportedError(
-          'Unsupported select type: 0x${typeByte.toRadixString(16)}',
+          'Unsupported inline block type: 0x${first.toRadixString(16)}',
         );
     }
   }

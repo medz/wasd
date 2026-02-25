@@ -228,6 +228,12 @@ abstract final class Opcodes {
   static const int i64MulWideS = 0xfc15;
   static const int i64MulWideU = 0xfc16;
 
+  // 0xFB prefixed pseudo-opcodes encoded as (0xFB00 | subopcode)
+  static const int refTest = 0xfb14;
+  static const int refCast = 0xfb16;
+  static const int brOnCast = 0xfb18;
+  static const int brOnCastFail = 0xfb19;
+
   // 0xFE prefixed pseudo-opcodes encoded as (0xFE00 | subopcode)
   static const int memoryAtomicNotify = 0xfe00;
   static const int memoryAtomicWait32 = 0xfe01;

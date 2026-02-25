@@ -88,28 +88,45 @@ final class _ExpectedValue {
   const _ExpectedValue.i32(this.value)
     : type = 'i32',
       isNaN = false,
-      floatBits = null;
+      floatBits = null,
+      expectsRef = false,
+      expectsNullRef = false;
   const _ExpectedValue.i64(this.value)
     : type = 'i64',
       isNaN = false,
-      floatBits = null;
+      floatBits = null,
+      expectsRef = false,
+      expectsNullRef = false;
   const _ExpectedValue.f32(this.floatBits)
     : type = 'f32',
       isNaN = false,
-      value = null;
+      value = null,
+      expectsRef = false,
+      expectsNullRef = false;
   const _ExpectedValue.f64(this.floatBits)
     : type = 'f64',
       isNaN = false,
-      value = null;
+      value = null,
+      expectsRef = false,
+      expectsNullRef = false;
   const _ExpectedValue.nan(this.type)
     : isNaN = true,
       value = null,
-      floatBits = null;
+      floatBits = null,
+      expectsRef = false,
+      expectsNullRef = false;
+  const _ExpectedValue.ref(this.type, {required this.expectsNullRef})
+    : isNaN = false,
+      value = null,
+      floatBits = null,
+      expectsRef = true;
 
   final String type;
   final bool isNaN;
   final int? value;
   final int? floatBits;
+  final bool expectsRef;
+  final bool expectsNullRef;
 }
 
 final class _FileResult {
@@ -442,18 +459,20 @@ final class _ScriptExecutionState {
   }
 
   WasmImports _buildImports(WasmModule targetModule) {
-    final expectedFunctionImports = <String, WasmFunctionType>{};
+    final expectedFunctionImports = <String, WasmImport>{};
     for (final import in targetModule.imports) {
-      if (import.kind != WasmImportKind.function) {
+      if (import.kind != WasmImportKind.function &&
+          import.kind != WasmImportKind.exactFunction) {
         continue;
       }
       final typeIndex = import.functionTypeIndex;
       if (typeIndex == null ||
           typeIndex < 0 ||
-          typeIndex >= targetModule.types.length) {
+          typeIndex >= targetModule.types.length ||
+          !targetModule.types[typeIndex].isFunctionType) {
         continue;
       }
-      expectedFunctionImports[import.key] = targetModule.types[typeIndex];
+      expectedFunctionImports[import.key] = import;
     }
 
     final functions = <String, WasmHostFunction>{
@@ -467,6 +486,7 @@ final class _ScriptExecutionState {
       WasmImports.key('spectest', 'print_f32_f32'): (_) => null,
       WasmImports.key('spectest', 'print_i32_i32'): (_) => null,
     };
+    final functionTypeDepths = <String, int>{};
     final globals = <String, Object?>{
       WasmImports.key('spectest', 'global_i32'): 666,
       WasmImports.key('spectest', 'global_i64'): 666,
@@ -486,15 +506,28 @@ final class _ScriptExecutionState {
       final instance = entry.value;
       for (final export in instance.exportedFunctions) {
         final key = WasmImports.key(alias, export);
-        final expectedType = expectedFunctionImports[key];
-        if (expectedType == null) {
+        final expectedImport = expectedFunctionImports[key];
+        if (expectedImport == null) {
           continue;
         }
+        final expectedType = targetModule.types[expectedImport.functionTypeIndex!];
+        final expectedDepth = _functionTypeDepth(
+          targetModule,
+          expectedImport.functionTypeIndex!,
+        );
         final actualType = instance.exportedFunctionType(export);
-        if (!_functionTypesEqual(expectedType, actualType)) {
+        final actualDepth = instance.exportedFunctionTypeDepth(export);
+        if (!_functionTypeCompatibleForImport(
+          expectedType: expectedType,
+          expectedDepth: expectedDepth,
+          isExactImport: expectedImport.isExactFunction,
+          actualType: actualType,
+          actualDepth: actualDepth,
+        )) {
           continue;
         }
         functions[key] = (args) => instance.invoke(export, args);
+        functionTypeDepths[key] = actualDepth;
       }
       for (final export in instance.exportedGlobals) {
         final key = WasmImports.key(alias, export);
@@ -512,6 +545,7 @@ final class _ScriptExecutionState {
 
     return WasmImports(
       functions: functions,
+      functionTypeDepths: functionTypeDepths,
       globals: globals,
       memories: memories,
       tables: tables,
@@ -524,19 +558,38 @@ final class _ScriptExecutionState {
     if (type is! String) {
       throw _SpecRunnerFailure('invalid-arg-type', '$raw');
     }
-    if (value is! String) {
+    if (value is! String &&
+        type != 'nullref' &&
+        type != 'nullfuncref' &&
+        type != 'nullstructref' &&
+        type != 'nullarrayref') {
       throw _SpecRunnerFailure('invalid-arg-value', '$raw');
     }
 
     switch (type) {
       case 'i32':
-        return _signedBits(BigInt.parse(value), 32);
+        final valueString = value as String;
+        return _signedBits(BigInt.parse(valueString), 32);
       case 'i64':
-        return _signedBits(BigInt.parse(value), 64);
+        final valueString = value as String;
+        return _signedBits(BigInt.parse(valueString), 64);
       case 'f32':
-        return _f32FromBits(_parseFloatBits(value, 32));
+        final valueString = value as String;
+        return _f32FromBits(_parseFloatBits(valueString, 32));
       case 'f64':
-        return _f64FromBits(_parseFloatBits(value, 64));
+        final valueString = value as String;
+        return _f64FromBits(_parseFloatBits(valueString, 64));
+      case 'externref':
+      case 'funcref':
+      case 'structref':
+      case 'arrayref':
+        final valueString = value as String;
+        return _signedBits(BigInt.parse(valueString), 32);
+      case 'nullref':
+      case 'nullfuncref':
+      case 'nullstructref':
+      case 'nullarrayref':
+        return -1;
       default:
         throw _SpecRunnerFailure(
           'unsupported-arg-type',
@@ -551,25 +604,47 @@ final class _ScriptExecutionState {
     if (type is! String) {
       throw _SpecRunnerFailure('invalid-expected-type', '$raw');
     }
-    if (value is! String) {
+    if (value is! String &&
+        type != 'funcref' &&
+        type != 'externref' &&
+        type != 'structref' &&
+        type != 'arrayref' &&
+        type != 'nullref' &&
+        type != 'nullfuncref' &&
+        type != 'nullstructref' &&
+        type != 'nullarrayref') {
       throw _SpecRunnerFailure('invalid-expected-value', '$raw');
     }
 
     switch (type) {
       case 'i32':
-        return _ExpectedValue.i32(_signedBits(BigInt.parse(value), 32));
+        final valueString = value as String;
+        return _ExpectedValue.i32(_signedBits(BigInt.parse(valueString), 32));
       case 'i64':
-        return _ExpectedValue.i64(_signedBits(BigInt.parse(value), 64));
+        final valueString = value as String;
+        return _ExpectedValue.i64(_signedBits(BigInt.parse(valueString), 64));
       case 'f32':
-        if (value.startsWith('nan:')) {
+        final valueString = value as String;
+        if (valueString.startsWith('nan:')) {
           return const _ExpectedValue.nan('f32');
         }
-        return _ExpectedValue.f32(_parseFloatBits(value, 32));
+        return _ExpectedValue.f32(_parseFloatBits(valueString, 32));
       case 'f64':
-        if (value.startsWith('nan:')) {
+        final valueString = value as String;
+        if (valueString.startsWith('nan:')) {
           return const _ExpectedValue.nan('f64');
         }
-        return _ExpectedValue.f64(_parseFloatBits(value, 64));
+        return _ExpectedValue.f64(_parseFloatBits(valueString, 64));
+      case 'funcref':
+      case 'externref':
+      case 'structref':
+      case 'arrayref':
+        return _ExpectedValue.ref(type, expectsNullRef: false);
+      case 'nullref':
+      case 'nullfuncref':
+      case 'nullstructref':
+      case 'nullarrayref':
+        return _ExpectedValue.ref(type, expectsNullRef: true);
       default:
         throw _SpecRunnerFailure(
           'unsupported-expected-type',
@@ -579,6 +654,12 @@ final class _ScriptExecutionState {
   }
 
   static bool _matchExpected(Object? actual, _ExpectedValue expected) {
+    if (expected.expectsRef) {
+      if (expected.expectsNullRef) {
+        return actual == null || (actual is int && actual == -1);
+      }
+      return actual is int && actual != -1;
+    }
     switch (expected.type) {
       case 'i32':
         return actual is int && actual.toSigned(32) == expected.value;
@@ -694,6 +775,9 @@ final class _ScriptExecutionState {
   }
 
   static String _expectedToString(_ExpectedValue expected) {
+    if (expected.expectsRef) {
+      return expected.expectsNullRef ? '${expected.type}(null)' : expected.type;
+    }
     if (expected.isNaN) {
       return '${expected.type}(nan)';
     }
@@ -719,6 +803,51 @@ final class _ScriptExecutionState {
       }
     }
     return true;
+  }
+
+  static bool _functionTypeCompatibleForImport({
+    required WasmFunctionType expectedType,
+    required int expectedDepth,
+    required bool isExactImport,
+    required WasmFunctionType actualType,
+    required int actualDepth,
+  }) {
+    if (!_functionTypesEqual(expectedType, actualType)) {
+      return false;
+    }
+    if (isExactImport) {
+      return actualDepth == expectedDepth;
+    }
+    return actualDepth >= expectedDepth;
+  }
+
+  static int _functionTypeDepth(WasmModule module, int typeIndex) {
+    return _functionTypeDepthInternal(module, typeIndex, <int>{});
+  }
+
+  static int _functionTypeDepthInternal(
+    WasmModule module,
+    int typeIndex,
+    Set<int> seen,
+  ) {
+    if (!seen.add(typeIndex)) {
+      return 0;
+    }
+    if (typeIndex < 0 || typeIndex >= module.types.length) {
+      return 0;
+    }
+    final type = module.types[typeIndex];
+    if (!type.isFunctionType || type.superTypeIndices.isEmpty) {
+      return 0;
+    }
+    var maxDepth = 0;
+    for (final superTypeIndex in type.superTypeIndices) {
+      final superDepth = _functionTypeDepthInternal(module, superTypeIndex, seen);
+      if (superDepth > maxDepth) {
+        maxDepth = superDepth;
+      }
+    }
+    return maxDepth + 1;
   }
 }
 
