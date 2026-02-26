@@ -1892,6 +1892,108 @@ void main() {
       );
     });
 
+    test(
+      'supports atomic load/store opcodes in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+            _funcType([], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [1],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._i32Const(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._i32Const(0),
+                ..._i32Const(0x10203040),
+                ..._feMem(Opcodes.i32AtomicStore, align: 2),
+                ..._i32Const(0),
+                ..._feMem(Opcodes.i32AtomicLoad, align: 2),
+                ..._i32Const(0x10203040),
+                Opcodes.i32Eq,
+                ..._i32Const(4),
+                ..._i32Const(0xAB),
+                ..._feMem(Opcodes.i32AtomicStore8, align: 0),
+                ..._i32Const(4),
+                ..._feMem(Opcodes.i32AtomicLoad8U, align: 0),
+                ..._i32Const(0xAB),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._i32Const(6),
+                ..._i32Const(0xCDEF),
+                ..._feMem(Opcodes.i32AtomicStore16, align: 1),
+                ..._i32Const(6),
+                ..._feMem(Opcodes.i32AtomicLoad16U, align: 1),
+                ..._i32Const(0xCDEF),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._i32Const(8),
+                ..._i64Const(305419896),
+                ..._feMem(Opcodes.i64AtomicStore, align: 3),
+                ..._i32Const(8),
+                ..._feMem(Opcodes.i64AtomicLoad, align: 3),
+                ..._i64Const(305419896),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._i32Const(16),
+                ..._i64Const(254),
+                ..._feMem(Opcodes.i64AtomicStore8, align: 0),
+                ..._i32Const(16),
+                ..._feMem(Opcodes.i64AtomicLoad8U, align: 0),
+                ..._i64Const(254),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._i32Const(18),
+                ..._i64Const(0xBEEF),
+                ..._feMem(Opcodes.i64AtomicStore16, align: 1),
+                ..._i32Const(18),
+                ..._feMem(Opcodes.i64AtomicLoad16U, align: 1),
+                ..._i64Const(0xBEEF),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._i32Const(20),
+                ..._i64Const(0x89ABCDEF),
+                ..._feMem(Opcodes.i64AtomicStore32, align: 2),
+                ..._i32Const(20),
+                ..._feMem(Opcodes.i64AtomicLoad32U, align: 2),
+                ..._i64Const(0x89ABCDEF),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          memoryMinPages: 1,
+          exports: const [
+            _ExportSpec(
+              name: 'wrapAtomicLoadStore',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          features: const WasmFeatureSet(threads: true),
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('wrapAtomicLoadStore'), 7);
+      },
+    );
+
     test('supports i32 bitwise opcodes in async import call chains', () async {
       final wasm = _buildModule(
         types: [

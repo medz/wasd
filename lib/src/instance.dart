@@ -2363,38 +2363,22 @@ final class WasmInstance {
           pc++;
 
         case Opcodes.memoryAtomicNotify:
-          final memArg = instruction.memArg;
-          if (memArg == null) {
-            throw StateError('Malformed memory.atomic.notify memarg.');
-          }
           _popValue(
             stack,
             'memory.atomic.notify count',
           ).castTo(WasmValueType.i32);
-          final target = _resolveAsyncSubsetMemoryTarget(
-            memArg: memArg,
+          final access = _resolveAsyncSubsetAtomicMemoryAccess(
+            stack,
+            instruction: instruction,
             memory64ByIndex: memory64ByIndex,
+            widthBytes: 4,
             context: 'memory.atomic.notify',
           );
-          final addressValue = _popValue(stack, 'memory.atomic.notify address');
-          final address = _resolveAsyncSubsetMemoryAddress(
-            memArg: memArg,
-            baseAddressValue: addressValue,
-            isMemory64: target.isMemory64,
-            context: 'memory.atomic.notify',
-          );
-          if (address % 4 != 0) {
-            throw StateError('unaligned atomic');
-          }
-          target.memory.loadU32(address);
+          access.memory.loadU32(access.address);
           stack.add(WasmValue.i32(0));
           pc++;
 
         case Opcodes.memoryAtomicWait32:
-          final memArg = instruction.memArg;
-          if (memArg == null) {
-            throw StateError('Malformed memory.atomic.wait32 memarg.');
-          }
           _popValue(
             stack,
             'memory.atomic.wait32 timeout',
@@ -2403,30 +2387,18 @@ final class WasmInstance {
             stack,
             'memory.atomic.wait32 expected',
           ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
-          final target = _resolveAsyncSubsetMemoryTarget(
-            memArg: memArg,
+          final access = _resolveAsyncSubsetAtomicMemoryAccess(
+            stack,
+            instruction: instruction,
             memory64ByIndex: memory64ByIndex,
+            widthBytes: 4,
             context: 'memory.atomic.wait32',
           );
-          final addressValue = _popValue(stack, 'memory.atomic.wait32 address');
-          final address = _resolveAsyncSubsetMemoryAddress(
-            memArg: memArg,
-            baseAddressValue: addressValue,
-            isMemory64: target.isMemory64,
-            context: 'memory.atomic.wait32',
-          );
-          if (address % 4 != 0) {
-            throw StateError('unaligned atomic');
-          }
-          final actual = target.memory.loadU32(address);
+          final actual = access.memory.loadU32(access.address);
           stack.add(WasmValue.i32(actual == expected ? 2 : 1));
           pc++;
 
         case Opcodes.memoryAtomicWait64:
-          final memArg = instruction.memArg;
-          if (memArg == null) {
-            throw StateError('Malformed memory.atomic.wait64 memarg.');
-          }
           _popValue(
             stack,
             'memory.atomic.wait64 timeout',
@@ -2437,26 +2409,136 @@ final class WasmInstance {
               'memory.atomic.wait64 expected',
             ).castTo(WasmValueType.i64).asI64(),
           );
-          final target = _resolveAsyncSubsetMemoryTarget(
-            memArg: memArg,
+          final access = _resolveAsyncSubsetAtomicMemoryAccess(
+            stack,
+            instruction: instruction,
             memory64ByIndex: memory64ByIndex,
+            widthBytes: 8,
             context: 'memory.atomic.wait64',
           );
-          final addressValue = _popValue(stack, 'memory.atomic.wait64 address');
-          final address = _resolveAsyncSubsetMemoryAddress(
-            memArg: memArg,
-            baseAddressValue: addressValue,
-            isMemory64: target.isMemory64,
-            context: 'memory.atomic.wait64',
+          final actual = WasmI64.unsigned(
+            access.memory.loadI64(access.address),
           );
-          if (address % 8 != 0) {
-            throw StateError('unaligned atomic');
-          }
-          final actual = WasmI64.unsigned(target.memory.loadI64(address));
           stack.add(WasmValue.i32(actual == expected ? 2 : 1));
           pc++;
 
         case Opcodes.atomicFence:
+          pc++;
+
+        case Opcodes.i32AtomicLoad:
+        case Opcodes.i64AtomicLoad:
+        case Opcodes.i32AtomicLoad8U:
+        case Opcodes.i32AtomicLoad16U:
+        case Opcodes.i64AtomicLoad8U:
+        case Opcodes.i64AtomicLoad16U:
+        case Opcodes.i64AtomicLoad32U:
+          final widthBytes = switch (instruction.opcode) {
+            Opcodes.i32AtomicLoad => 4,
+            Opcodes.i64AtomicLoad => 8,
+            Opcodes.i32AtomicLoad8U => 1,
+            Opcodes.i32AtomicLoad16U => 2,
+            Opcodes.i64AtomicLoad8U => 1,
+            Opcodes.i64AtomicLoad16U => 2,
+            Opcodes.i64AtomicLoad32U => 4,
+            _ => throw StateError('Unexpected atomic load width resolution.'),
+          };
+          final access = _resolveAsyncSubsetAtomicMemoryAccess(
+            stack,
+            instruction: instruction,
+            memory64ByIndex: memory64ByIndex,
+            widthBytes: widthBytes,
+            context: 'atomic.load',
+          );
+          switch (instruction.opcode) {
+            case Opcodes.i32AtomicLoad:
+              stack.add(WasmValue.i32(access.memory.loadI32(access.address)));
+            case Opcodes.i64AtomicLoad:
+              stack.add(WasmValue.i64(access.memory.loadI64(access.address)));
+            case Opcodes.i32AtomicLoad8U:
+              stack.add(WasmValue.i32(access.memory.loadU8(access.address)));
+            case Opcodes.i32AtomicLoad16U:
+              stack.add(WasmValue.i32(access.memory.loadU16(access.address)));
+            case Opcodes.i64AtomicLoad8U:
+              stack.add(WasmValue.i64(access.memory.loadU8(access.address)));
+            case Opcodes.i64AtomicLoad16U:
+              stack.add(WasmValue.i64(access.memory.loadU16(access.address)));
+            case Opcodes.i64AtomicLoad32U:
+              stack.add(WasmValue.i64(access.memory.loadU32(access.address)));
+            default:
+              throw StateError(
+                'Unexpected atomic load opcode in async subset: '
+                '0x${instruction.opcode.toRadixString(16)}',
+              );
+          }
+          pc++;
+
+        case Opcodes.i32AtomicStore:
+        case Opcodes.i64AtomicStore:
+        case Opcodes.i32AtomicStore8:
+        case Opcodes.i32AtomicStore16:
+        case Opcodes.i64AtomicStore8:
+        case Opcodes.i64AtomicStore16:
+        case Opcodes.i64AtomicStore32:
+          final rawValue = _popValue(stack, 'atomic.store value');
+          final widthBytes = switch (instruction.opcode) {
+            Opcodes.i32AtomicStore => 4,
+            Opcodes.i64AtomicStore => 8,
+            Opcodes.i32AtomicStore8 => 1,
+            Opcodes.i32AtomicStore16 => 2,
+            Opcodes.i64AtomicStore8 => 1,
+            Opcodes.i64AtomicStore16 => 2,
+            Opcodes.i64AtomicStore32 => 4,
+            _ => throw StateError('Unexpected atomic store width resolution.'),
+          };
+          final access = _resolveAsyncSubsetAtomicMemoryAccess(
+            stack,
+            instruction: instruction,
+            memory64ByIndex: memory64ByIndex,
+            widthBytes: widthBytes,
+            context: 'atomic.store',
+          );
+          switch (instruction.opcode) {
+            case Opcodes.i32AtomicStore:
+              access.memory.storeI32(
+                access.address,
+                rawValue.castTo(WasmValueType.i32).asI32(),
+              );
+            case Opcodes.i64AtomicStore:
+              access.memory.storeI64(
+                access.address,
+                rawValue.castTo(WasmValueType.i64).asI64(),
+              );
+            case Opcodes.i32AtomicStore8:
+              access.memory.storeI8(
+                access.address,
+                rawValue.castTo(WasmValueType.i32).asI32(),
+              );
+            case Opcodes.i32AtomicStore16:
+              access.memory.storeI16(
+                access.address,
+                rawValue.castTo(WasmValueType.i32).asI32(),
+              );
+            case Opcodes.i64AtomicStore8:
+              access.memory.storeI8(
+                access.address,
+                WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
+              );
+            case Opcodes.i64AtomicStore16:
+              access.memory.storeI16(
+                access.address,
+                WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
+              );
+            case Opcodes.i64AtomicStore32:
+              access.memory.storeI32(
+                access.address,
+                WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
+              );
+            default:
+              throw StateError(
+                'Unexpected atomic store opcode in async subset: '
+                '0x${instruction.opcode.toRadixString(16)}',
+              );
+          }
           pc++;
 
         case Opcodes.memoryInit:
@@ -3585,6 +3667,35 @@ final class WasmInstance {
       throw RangeError('$context address exceeds 32-bit memory: $address');
     }
     return address.toInt();
+  }
+
+  ({WasmMemory memory, int address}) _resolveAsyncSubsetAtomicMemoryAccess(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required int widthBytes,
+    required String context,
+  }) {
+    final memArg = instruction.memArg;
+    if (memArg == null) {
+      throw StateError('Malformed $context memarg.');
+    }
+    final target = _resolveAsyncSubsetMemoryTarget(
+      memArg: memArg,
+      memory64ByIndex: memory64ByIndex,
+      context: context,
+    );
+    final addressValue = _popValue(stack, '$context address');
+    final address = _resolveAsyncSubsetMemoryAddress(
+      memArg: memArg,
+      baseAddressValue: addressValue,
+      isMemory64: target.isMemory64,
+      context: context,
+    );
+    if (widthBytes > 1 && address % widthBytes != 0) {
+      throw StateError('unaligned atomic');
+    }
+    return (memory: target.memory, address: address);
   }
 
   static int _i32Clz(int value) {
