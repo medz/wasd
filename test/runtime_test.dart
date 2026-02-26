@@ -2501,6 +2501,103 @@ void main() {
       },
     );
 
+    test(
+      'supports br_on_null and br_on_non_null in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+            _funcType([], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [1],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._i32Const(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._i32Const(0),
+
+                Opcodes.block,
+                0x70,
+                Opcodes.refFunc,
+                ..._u32Leb(1),
+                Opcodes.refNull,
+                0x70,
+                ..._brOnNull(0),
+                Opcodes.drop,
+                Opcodes.end,
+                Opcodes.drop,
+                ..._i32Const(1),
+                Opcodes.i32Add,
+
+                Opcodes.block,
+                0x70,
+                Opcodes.refFunc,
+                ..._u32Leb(1),
+                ..._brOnNonNull(0),
+                Opcodes.refNull,
+                0x70,
+                Opcodes.end,
+                Opcodes.drop,
+                ..._i32Const(2),
+                Opcodes.i32Add,
+
+                Opcodes.block,
+                0x70,
+                Opcodes.refNull,
+                0x70,
+                Opcodes.refFunc,
+                ..._u32Leb(1),
+                ..._brOnNull(0),
+                Opcodes.drop,
+                Opcodes.end,
+                Opcodes.drop,
+                ..._i32Const(4),
+                Opcodes.i32Add,
+
+                Opcodes.block,
+                0x70,
+                Opcodes.refFunc,
+                ..._u32Leb(1),
+                Opcodes.refNull,
+                0x70,
+                ..._brOnNonNull(0),
+                Opcodes.end,
+                Opcodes.drop,
+                ..._i32Const(8),
+                Opcodes.i32Add,
+
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'wrapBrOnNullNonNull',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('wrapBrOnNullNonNull'), 15);
+      },
+    );
+
     test('supports i32 bitwise opcodes in async import call chains', () async {
       final wasm = _buildModule(
         types: [
@@ -4066,6 +4163,11 @@ List<int> _tableSet(int tableIndex) => <int>[
 ];
 List<int> _br(int depth) => <int>[Opcodes.br, ..._u32Leb(depth)];
 List<int> _brIf(int depth) => <int>[Opcodes.brIf, ..._u32Leb(depth)];
+List<int> _brOnNull(int depth) => <int>[Opcodes.brOnNull, ..._u32Leb(depth)];
+List<int> _brOnNonNull(int depth) => <int>[
+  Opcodes.brOnNonNull,
+  ..._u32Leb(depth),
+];
 List<int> _memorySize() => <int>[Opcodes.memorySize, ..._u32Leb(0)];
 List<int> _memoryGrow() => <int>[Opcodes.memoryGrow, ..._u32Leb(0)];
 List<int> _i32Const(int value) => <int>[Opcodes.i32Const, ..._i32Leb(value)];
