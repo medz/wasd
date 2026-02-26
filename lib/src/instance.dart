@@ -2541,6 +2541,200 @@ final class WasmInstance {
           }
           pc++;
 
+        case Opcodes.i32AtomicRmwAdd:
+        case Opcodes.i32AtomicRmwSub:
+        case Opcodes.i32AtomicRmwAnd:
+        case Opcodes.i32AtomicRmwOr:
+        case Opcodes.i32AtomicRmwXor:
+        case Opcodes.i32AtomicRmwXchg:
+          final operation = switch (instruction.opcode) {
+            Opcodes.i32AtomicRmwAdd => (int a, int b) => a + b,
+            Opcodes.i32AtomicRmwSub => (int a, int b) => a - b,
+            Opcodes.i32AtomicRmwAnd => (int a, int b) => a & b,
+            Opcodes.i32AtomicRmwOr => (int a, int b) => a | b,
+            Opcodes.i32AtomicRmwXor => (int a, int b) => a ^ b,
+            Opcodes.i32AtomicRmwXchg => (int _, int b) => b,
+            _ => throw StateError('Unexpected i32 atomic rmw opcode.'),
+          };
+          final previous = _executeAsyncSubsetAtomicRmwI32(
+            stack,
+            instruction: instruction,
+            memory64ByIndex: memory64ByIndex,
+            operation: operation,
+            context: 'i32.atomic.rmw',
+          );
+          stack.add(WasmValue.i32(previous));
+          pc++;
+
+        case Opcodes.i64AtomicRmwAdd:
+        case Opcodes.i64AtomicRmwSub:
+        case Opcodes.i64AtomicRmwAnd:
+        case Opcodes.i64AtomicRmwOr:
+        case Opcodes.i64AtomicRmwXor:
+        case Opcodes.i64AtomicRmwXchg:
+          final operation = switch (instruction.opcode) {
+            Opcodes.i64AtomicRmwAdd => (BigInt a, BigInt b) => a + b,
+            Opcodes.i64AtomicRmwSub => (BigInt a, BigInt b) => a - b,
+            Opcodes.i64AtomicRmwAnd => (BigInt a, BigInt b) => a & b,
+            Opcodes.i64AtomicRmwOr => (BigInt a, BigInt b) => a | b,
+            Opcodes.i64AtomicRmwXor => (BigInt a, BigInt b) => a ^ b,
+            Opcodes.i64AtomicRmwXchg => (BigInt _, BigInt b) => b,
+            _ => throw StateError('Unexpected i64 atomic rmw opcode.'),
+          };
+          final previous = _executeAsyncSubsetAtomicRmwI64(
+            stack,
+            instruction: instruction,
+            memory64ByIndex: memory64ByIndex,
+            operation: operation,
+            context: 'i64.atomic.rmw',
+          );
+          stack.add(WasmValue.i64(previous));
+          pc++;
+
+        case Opcodes.i32AtomicRmw8AddU:
+        case Opcodes.i32AtomicRmw16AddU:
+        case Opcodes.i32AtomicRmw8SubU:
+        case Opcodes.i32AtomicRmw16SubU:
+        case Opcodes.i32AtomicRmw8AndU:
+        case Opcodes.i32AtomicRmw16AndU:
+        case Opcodes.i32AtomicRmw8OrU:
+        case Opcodes.i32AtomicRmw16OrU:
+        case Opcodes.i32AtomicRmw8XorU:
+        case Opcodes.i32AtomicRmw16XorU:
+        case Opcodes.i32AtomicRmw8XchgU:
+        case Opcodes.i32AtomicRmw16XchgU:
+          final descriptor = switch (instruction.opcode) {
+            Opcodes.i32AtomicRmw8AddU => (1, (int a, int b) => a + b),
+            Opcodes.i32AtomicRmw16AddU => (2, (int a, int b) => a + b),
+            Opcodes.i32AtomicRmw8SubU => (1, (int a, int b) => a - b),
+            Opcodes.i32AtomicRmw16SubU => (2, (int a, int b) => a - b),
+            Opcodes.i32AtomicRmw8AndU => (1, (int a, int b) => a & b),
+            Opcodes.i32AtomicRmw16AndU => (2, (int a, int b) => a & b),
+            Opcodes.i32AtomicRmw8OrU => (1, (int a, int b) => a | b),
+            Opcodes.i32AtomicRmw16OrU => (2, (int a, int b) => a | b),
+            Opcodes.i32AtomicRmw8XorU => (1, (int a, int b) => a ^ b),
+            Opcodes.i32AtomicRmw16XorU => (2, (int a, int b) => a ^ b),
+            Opcodes.i32AtomicRmw8XchgU => (1, (int _, int b) => b),
+            Opcodes.i32AtomicRmw16XchgU => (2, (int _, int b) => b),
+            _ => throw StateError('Unexpected i32 narrow atomic rmw opcode.'),
+          };
+          final previous = _executeAsyncSubsetAtomicRmwI32Narrow(
+            stack,
+            instruction: instruction,
+            memory64ByIndex: memory64ByIndex,
+            widthBytes: descriptor.$1,
+            operation: descriptor.$2,
+            context: 'i32.atomic.rmw.narrow',
+          );
+          stack.add(WasmValue.i32(previous));
+          pc++;
+
+        case Opcodes.i64AtomicRmw8AddU:
+        case Opcodes.i64AtomicRmw16AddU:
+        case Opcodes.i64AtomicRmw32AddU:
+        case Opcodes.i64AtomicRmw8SubU:
+        case Opcodes.i64AtomicRmw16SubU:
+        case Opcodes.i64AtomicRmw32SubU:
+        case Opcodes.i64AtomicRmw8AndU:
+        case Opcodes.i64AtomicRmw16AndU:
+        case Opcodes.i64AtomicRmw32AndU:
+        case Opcodes.i64AtomicRmw8OrU:
+        case Opcodes.i64AtomicRmw16OrU:
+        case Opcodes.i64AtomicRmw32OrU:
+        case Opcodes.i64AtomicRmw8XorU:
+        case Opcodes.i64AtomicRmw16XorU:
+        case Opcodes.i64AtomicRmw32XorU:
+        case Opcodes.i64AtomicRmw8XchgU:
+        case Opcodes.i64AtomicRmw16XchgU:
+        case Opcodes.i64AtomicRmw32XchgU:
+          final descriptor = switch (instruction.opcode) {
+            Opcodes.i64AtomicRmw8AddU => (1, (int a, int b) => a + b),
+            Opcodes.i64AtomicRmw16AddU => (2, (int a, int b) => a + b),
+            Opcodes.i64AtomicRmw32AddU => (4, (int a, int b) => a + b),
+            Opcodes.i64AtomicRmw8SubU => (1, (int a, int b) => a - b),
+            Opcodes.i64AtomicRmw16SubU => (2, (int a, int b) => a - b),
+            Opcodes.i64AtomicRmw32SubU => (4, (int a, int b) => a - b),
+            Opcodes.i64AtomicRmw8AndU => (1, (int a, int b) => a & b),
+            Opcodes.i64AtomicRmw16AndU => (2, (int a, int b) => a & b),
+            Opcodes.i64AtomicRmw32AndU => (4, (int a, int b) => a & b),
+            Opcodes.i64AtomicRmw8OrU => (1, (int a, int b) => a | b),
+            Opcodes.i64AtomicRmw16OrU => (2, (int a, int b) => a | b),
+            Opcodes.i64AtomicRmw32OrU => (4, (int a, int b) => a | b),
+            Opcodes.i64AtomicRmw8XorU => (1, (int a, int b) => a ^ b),
+            Opcodes.i64AtomicRmw16XorU => (2, (int a, int b) => a ^ b),
+            Opcodes.i64AtomicRmw32XorU => (4, (int a, int b) => a ^ b),
+            Opcodes.i64AtomicRmw8XchgU => (1, (int _, int b) => b),
+            Opcodes.i64AtomicRmw16XchgU => (2, (int _, int b) => b),
+            Opcodes.i64AtomicRmw32XchgU => (4, (int _, int b) => b),
+            _ => throw StateError('Unexpected i64 narrow atomic rmw opcode.'),
+          };
+          final previous = _executeAsyncSubsetAtomicRmwI64Narrow(
+            stack,
+            instruction: instruction,
+            memory64ByIndex: memory64ByIndex,
+            widthBytes: descriptor.$1,
+            operation: descriptor.$2,
+            context: 'i64.atomic.rmw.narrow',
+          );
+          stack.add(WasmValue.i64(previous));
+          pc++;
+
+        case Opcodes.i32AtomicRmwCmpxchg:
+          final previous = _executeAsyncSubsetAtomicCmpxchgI32(
+            stack,
+            instruction: instruction,
+            memory64ByIndex: memory64ByIndex,
+            context: 'i32.atomic.cmpxchg',
+          );
+          stack.add(WasmValue.i32(previous));
+          pc++;
+
+        case Opcodes.i64AtomicRmwCmpxchg:
+          final previous = _executeAsyncSubsetAtomicCmpxchgI64(
+            stack,
+            instruction: instruction,
+            memory64ByIndex: memory64ByIndex,
+            context: 'i64.atomic.cmpxchg',
+          );
+          stack.add(WasmValue.i64(previous));
+          pc++;
+
+        case Opcodes.i32AtomicRmw8CmpxchgU:
+        case Opcodes.i32AtomicRmw16CmpxchgU:
+          final widthBytes = switch (instruction.opcode) {
+            Opcodes.i32AtomicRmw8CmpxchgU => 1,
+            Opcodes.i32AtomicRmw16CmpxchgU => 2,
+            _ => throw StateError('Unexpected i32 narrow cmpxchg opcode.'),
+          };
+          final previous = _executeAsyncSubsetAtomicCmpxchgI32Narrow(
+            stack,
+            instruction: instruction,
+            memory64ByIndex: memory64ByIndex,
+            widthBytes: widthBytes,
+            context: 'i32.atomic.cmpxchg.narrow',
+          );
+          stack.add(WasmValue.i32(previous));
+          pc++;
+
+        case Opcodes.i64AtomicRmw8CmpxchgU:
+        case Opcodes.i64AtomicRmw16CmpxchgU:
+        case Opcodes.i64AtomicRmw32CmpxchgU:
+          final widthBytes = switch (instruction.opcode) {
+            Opcodes.i64AtomicRmw8CmpxchgU => 1,
+            Opcodes.i64AtomicRmw16CmpxchgU => 2,
+            Opcodes.i64AtomicRmw32CmpxchgU => 4,
+            _ => throw StateError('Unexpected i64 narrow cmpxchg opcode.'),
+          };
+          final previous = _executeAsyncSubsetAtomicCmpxchgI64Narrow(
+            stack,
+            instruction: instruction,
+            memory64ByIndex: memory64ByIndex,
+            widthBytes: widthBytes,
+            context: 'i64.atomic.cmpxchg.narrow',
+          );
+          stack.add(WasmValue.i64(previous));
+          pc++;
+
         case Opcodes.memoryInit:
           final dataIndex = instruction.immediate!;
           final memoryIndex = instruction.secondaryImmediate!;
@@ -3696,6 +3890,316 @@ final class WasmInstance {
       throw StateError('unaligned atomic');
     }
     return (memory: target.memory, address: address);
+  }
+
+  int _executeAsyncSubsetAtomicRmwI32(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required int Function(int current, int operand) operation,
+    required String context,
+  }) {
+    final operand = _popValue(
+      stack,
+      '$context operand',
+    ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+    final access = _resolveAsyncSubsetAtomicMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      widthBytes: 4,
+      context: context,
+    );
+    final current = access.memory.loadI32(access.address).toUnsigned(32);
+    final next = operation(current, operand).toUnsigned(32);
+    access.memory.storeI32(access.address, next);
+    return current;
+  }
+
+  BigInt _executeAsyncSubsetAtomicRmwI64(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required BigInt Function(BigInt current, BigInt operand) operation,
+    required String context,
+  }) {
+    final operand = WasmI64.unsigned(
+      _popValue(stack, '$context operand').castTo(WasmValueType.i64).asI64(),
+    );
+    final access = _resolveAsyncSubsetAtomicMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      widthBytes: 8,
+      context: context,
+    );
+    final current = WasmI64.unsigned(access.memory.loadI64(access.address));
+    final next = WasmI64.unsigned(operation(current, operand));
+    access.memory.storeI64(access.address, next);
+    return current;
+  }
+
+  int _executeAsyncSubsetAtomicRmwI32Narrow(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required int widthBytes,
+    required int Function(int current, int operand) operation,
+    required String context,
+  }) {
+    final bits = widthBytes * 8;
+    final operand = _popValue(
+      stack,
+      '$context operand',
+    ).castTo(WasmValueType.i32).asI32().toUnsigned(bits);
+    final access = _resolveAsyncSubsetAtomicMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      widthBytes: widthBytes,
+      context: context,
+    );
+    final current = _loadAsyncSubsetAtomicNarrowUnsigned(
+      access.memory,
+      access.address,
+      widthBytes: widthBytes,
+      context: context,
+    );
+    final next = operation(current, operand).toUnsigned(bits);
+    _storeAsyncSubsetAtomicNarrowUnsigned(
+      access.memory,
+      access.address,
+      widthBytes: widthBytes,
+      value: next,
+      context: context,
+    );
+    return current;
+  }
+
+  int _executeAsyncSubsetAtomicRmwI64Narrow(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required int widthBytes,
+    required int Function(int current, int operand) operation,
+    required String context,
+  }) {
+    final bits = widthBytes * 8;
+    final mask = (BigInt.one << bits) - BigInt.one;
+    final operand =
+        (WasmI64.unsigned(
+                  _popValue(
+                    stack,
+                    '$context operand',
+                  ).castTo(WasmValueType.i64).asI64(),
+                ) &
+                mask)
+            .toInt();
+    final access = _resolveAsyncSubsetAtomicMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      widthBytes: widthBytes,
+      context: context,
+    );
+    final current = _loadAsyncSubsetAtomicNarrowUnsigned(
+      access.memory,
+      access.address,
+      widthBytes: widthBytes,
+      context: context,
+    );
+    final next = operation(current, operand).toUnsigned(bits);
+    _storeAsyncSubsetAtomicNarrowUnsigned(
+      access.memory,
+      access.address,
+      widthBytes: widthBytes,
+      value: next,
+      context: context,
+    );
+    return current;
+  }
+
+  int _executeAsyncSubsetAtomicCmpxchgI32(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required String context,
+  }) {
+    final replacement = _popValue(
+      stack,
+      '$context replacement',
+    ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+    final expected = _popValue(
+      stack,
+      '$context expected',
+    ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+    final access = _resolveAsyncSubsetAtomicMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      widthBytes: 4,
+      context: context,
+    );
+    final current = access.memory.loadI32(access.address).toUnsigned(32);
+    if (current == expected) {
+      access.memory.storeI32(access.address, replacement);
+    }
+    return current;
+  }
+
+  BigInt _executeAsyncSubsetAtomicCmpxchgI64(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required String context,
+  }) {
+    final replacement = WasmI64.unsigned(
+      _popValue(
+        stack,
+        '$context replacement',
+      ).castTo(WasmValueType.i64).asI64(),
+    );
+    final expected = WasmI64.unsigned(
+      _popValue(stack, '$context expected').castTo(WasmValueType.i64).asI64(),
+    );
+    final access = _resolveAsyncSubsetAtomicMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      widthBytes: 8,
+      context: context,
+    );
+    final current = WasmI64.unsigned(access.memory.loadI64(access.address));
+    if (current == expected) {
+      access.memory.storeI64(access.address, replacement);
+    }
+    return current;
+  }
+
+  int _executeAsyncSubsetAtomicCmpxchgI32Narrow(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required int widthBytes,
+    required String context,
+  }) {
+    final bits = widthBytes * 8;
+    final replacement = _popValue(
+      stack,
+      '$context replacement',
+    ).castTo(WasmValueType.i32).asI32().toUnsigned(bits);
+    final expected = _popValue(
+      stack,
+      '$context expected',
+    ).castTo(WasmValueType.i32).asI32().toUnsigned(bits);
+    final access = _resolveAsyncSubsetAtomicMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      widthBytes: widthBytes,
+      context: context,
+    );
+    final current = _loadAsyncSubsetAtomicNarrowUnsigned(
+      access.memory,
+      access.address,
+      widthBytes: widthBytes,
+      context: context,
+    );
+    if (current == expected) {
+      _storeAsyncSubsetAtomicNarrowUnsigned(
+        access.memory,
+        access.address,
+        widthBytes: widthBytes,
+        value: replacement,
+        context: context,
+      );
+    }
+    return current;
+  }
+
+  int _executeAsyncSubsetAtomicCmpxchgI64Narrow(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required int widthBytes,
+    required String context,
+  }) {
+    final bits = widthBytes * 8;
+    final mask = (BigInt.one << bits) - BigInt.one;
+    final replacement =
+        (WasmI64.unsigned(
+                  _popValue(
+                    stack,
+                    '$context replacement',
+                  ).castTo(WasmValueType.i64).asI64(),
+                ) &
+                mask)
+            .toInt();
+    final expected =
+        (WasmI64.unsigned(
+                  _popValue(
+                    stack,
+                    '$context expected',
+                  ).castTo(WasmValueType.i64).asI64(),
+                ) &
+                mask)
+            .toInt();
+    final access = _resolveAsyncSubsetAtomicMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      widthBytes: widthBytes,
+      context: context,
+    );
+    final current = _loadAsyncSubsetAtomicNarrowUnsigned(
+      access.memory,
+      access.address,
+      widthBytes: widthBytes,
+      context: context,
+    );
+    if (current == expected) {
+      _storeAsyncSubsetAtomicNarrowUnsigned(
+        access.memory,
+        access.address,
+        widthBytes: widthBytes,
+        value: replacement,
+        context: context,
+      );
+    }
+    return current;
+  }
+
+  int _loadAsyncSubsetAtomicNarrowUnsigned(
+    WasmMemory memory,
+    int address, {
+    required int widthBytes,
+    required String context,
+  }) {
+    return switch (widthBytes) {
+      1 => memory.loadU8(address),
+      2 => memory.loadU16(address),
+      4 => memory.loadU32(address),
+      _ => throw StateError('Unsupported $context width: $widthBytes'),
+    };
+  }
+
+  void _storeAsyncSubsetAtomicNarrowUnsigned(
+    WasmMemory memory,
+    int address, {
+    required int widthBytes,
+    required int value,
+    required String context,
+  }) {
+    switch (widthBytes) {
+      case 1:
+        memory.storeI8(address, value);
+      case 2:
+        memory.storeI16(address, value);
+      case 4:
+        memory.storeI32(address, value);
+      default:
+        throw StateError('Unsupported $context width: $widthBytes');
+    }
   }
 
   static int _i32Clz(int value) {
