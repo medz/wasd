@@ -5637,7 +5637,7 @@ void main() {
         imports: const [
           _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
         ],
-        functionTypeIndices: const [0, 0, 0, 0, 0, 0, 0, 0],
+        functionTypeIndices: const [0, 0, 0, 0, 0, 0, 0, 0, 0],
         functionBodies: [
           _FunctionBodySpec(
             instructions: [
@@ -5767,6 +5767,45 @@ void main() {
               Opcodes.end,
             ],
           ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(1.25)),
+              ..._fdBytes(Opcodes.f64x2Ceil, []),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(2.0)),
+              ..._fdBytes(Opcodes.f64x2Eq, []),
+              ..._fdBytes(Opcodes.i64x2AllTrue, []),
+              ..._i32Const(1),
+              Opcodes.i32Eq,
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(1.75)),
+              ..._fdBytes(Opcodes.f64x2Floor, []),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(1.0)),
+              ..._fdBytes(Opcodes.f64x2Eq, []),
+              ..._fdBytes(Opcodes.i64x2AllTrue, []),
+              ..._i32Const(1),
+              Opcodes.i32Eq,
+              Opcodes.i32And,
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(1.75)),
+              ..._fdBytes(Opcodes.f64x2Trunc, []),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(1.0)),
+              ..._fdBytes(Opcodes.f64x2Eq, []),
+              ..._fdBytes(Opcodes.i64x2AllTrue, []),
+              ..._i32Const(1),
+              Opcodes.i32Eq,
+              Opcodes.i32And,
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(2.5)),
+              ..._fdBytes(Opcodes.f64x2Nearest, []),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(2.0)),
+              ..._fdBytes(Opcodes.f64x2Eq, []),
+              ..._fdBytes(Opcodes.i64x2AllTrue, []),
+              ..._i32Const(1),
+              Opcodes.i32Eq,
+              Opcodes.i32And,
+              Opcodes.end,
+            ],
+          ),
         ],
         exports: const [
           _ExportSpec(
@@ -5809,6 +5848,11 @@ void main() {
             kind: WasmExportKind.function,
             index: 8,
           ),
+          _ExportSpec(
+            name: 'supportsF64x2RoundOps',
+            kind: WasmExportKind.function,
+            index: 9,
+          ),
         ],
       );
 
@@ -5834,6 +5878,7 @@ void main() {
       expect(await instance.invokeI32Async('supportsF64x2MinMax', [41]), 1);
       expect(await instance.invokeI32Async('supportsF64x2Ne', [41]), 1);
       expect(await instance.invokeI32Async('supportsF64x2Ge', [41]), 1);
+      expect(await instance.invokeI32Async('supportsF64x2RoundOps', [41]), 1);
     });
 
     test(
@@ -5987,7 +6032,8 @@ void main() {
                 ..._call(0),
                 Opcodes.drop,
                 ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
-                ..._fdBytes(Opcodes.f64x2Ceil, []),
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
+                ..._fdBytes(Opcodes.i8x16Swizzle, []),
                 Opcodes.drop,
                 ..._i32Const(0),
                 Opcodes.end,

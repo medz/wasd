@@ -1477,6 +1477,22 @@ final class WasmInstance {
             _simdF64x2Div(stack);
             pc++;
 
+          case Opcodes.f64x2Ceil:
+            _simdF64x2Ceil(stack);
+            pc++;
+
+          case Opcodes.f64x2Floor:
+            _simdF64x2Floor(stack);
+            pc++;
+
+          case Opcodes.f64x2Trunc:
+            _simdF64x2Trunc(stack);
+            pc++;
+
+          case Opcodes.f64x2Nearest:
+            _simdF64x2Nearest(stack);
+            pc++;
+
           case Opcodes.f64x2Abs:
             _simdF64x2Abs(stack);
             pc++;
@@ -6656,6 +6672,70 @@ final class WasmInstance {
         offset,
         lhsData.getFloat64(offset, Endian.little) /
             rhsData.getFloat64(offset, Endian.little),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Ceil(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'f64x2.ceil');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _setAsyncSubsetF64LaneCanonical(
+        resultData,
+        offset,
+        valueData.getFloat64(offset, Endian.little).ceilToDouble(),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Floor(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'f64x2.floor');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _setAsyncSubsetF64LaneCanonical(
+        resultData,
+        offset,
+        valueData.getFloat64(offset, Endian.little).floorToDouble(),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Trunc(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'f64x2.trunc');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _setAsyncSubsetF64LaneCanonical(
+        resultData,
+        offset,
+        valueData.getFloat64(offset, Endian.little).truncateToDouble(),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Nearest(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'f64x2.nearest');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _setAsyncSubsetF64LaneCanonical(
+        resultData,
+        offset,
+        _nearest(valueData.getFloat64(offset, Endian.little)),
       );
     }
     _pushAsyncSubsetV128(stack, result);
