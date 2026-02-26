@@ -31,11 +31,13 @@ final class WasmInstance {
     required Map<String, int> globalExports,
     required Map<String, WasmMemory> memoryExports,
     required Map<String, WasmTable> tableExports,
+    required Map<String, WasmTagImport> tagExports,
   }) : memory = memories.isEmpty ? null : memories.first,
        _functionExports = functionExports,
        _globalExports = globalExports,
        _memoryExports = memoryExports,
        _tableExports = tableExports,
+       _tagExports = tagExports,
        _vm = WasmVm(
          functions: functions,
          types: module.types,
@@ -60,6 +62,7 @@ final class WasmInstance {
   final Map<String, int> _globalExports;
   final Map<String, WasmMemory> _memoryExports;
   final Map<String, WasmTable> _tableExports;
+  final Map<String, WasmTagImport> _tagExports;
   final WasmVm _vm;
 
   factory WasmInstance.fromBytes(
@@ -85,6 +88,7 @@ final class WasmInstance {
     final globals = <RuntimeGlobal>[];
     final tables = <WasmTable>[];
     final memories = <WasmMemory>[];
+    final tagTypes = <WasmTagImport>[];
 
     for (final import in module.imports) {
       switch (import.kind) {
@@ -183,6 +187,13 @@ final class WasmInstance {
             context: 'memory import `${import.key}`',
           );
           final expectedPageSize = 1 << expected.pageSizeLog2;
+          if (importedMemory.isMemory64 != expected.isMemory64) {
+            throw StateError(
+              'Imported memory `${import.key}` index type mismatch: '
+              'expected memory64=${expected.isMemory64} '
+              'actual=${importedMemory.isMemory64}.',
+            );
+          }
 
           if (importedMemory.shared != expected.shared) {
             throw StateError(
@@ -246,6 +257,28 @@ final class WasmInstance {
               ),
             ),
           );
+
+        case WasmImportKind.tag:
+          final tagType = import.tagType;
+          if (tagType == null ||
+              tagType.typeIndex < 0 ||
+              tagType.typeIndex >= module.types.length ||
+              !module.types[tagType.typeIndex].isFunctionType) {
+            throw FormatException('Malformed tag import `${import.key}`.');
+          }
+          final importedTagType = imports.tags[import.key];
+          if (importedTagType == null) {
+            throw StateError('Missing tag import `${import.key}`.');
+          }
+          final expectedTagType = module.types[tagType.typeIndex];
+          if (!_sameFunctionSignature(importedTagType.type, expectedTagType) ||
+              importedTagType.nominalTypeKey !=
+                  _tagNominalTypeKey(module, tagType.typeIndex)) {
+            throw StateError(
+              'Imported tag `${import.key}` has incompatible type.',
+            );
+          }
+          tagTypes.add(importedTagType);
       }
     }
 
@@ -260,6 +293,7 @@ final class WasmInstance {
           minPages: memoryType.minPages,
           maxPages: memoryType.maxPages,
           shared: memoryType.shared,
+          isMemory64: memoryType.isMemory64,
           pageSizeBytes: 1 << memoryType.pageSizeLog2,
         ),
       );
@@ -289,6 +323,40 @@ final class WasmInstance {
           value: value,
         ),
       );
+    }
+    for (final tag in module.tags) {
+      if (tag.typeIndex < 0 ||
+          tag.typeIndex >= module.types.length ||
+          !module.types[tag.typeIndex].isFunctionType) {
+        throw FormatException('Invalid tag type index: ${tag.typeIndex}');
+      }
+      tagTypes.add(
+        WasmTagImport(
+          type: module.types[tag.typeIndex],
+          nominalTypeKey: _tagNominalTypeKey(module, tag.typeIndex),
+        ),
+      );
+    }
+    for (var i = 0; i < module.tables.length; i++) {
+      final initExpr = module.tables[i].initExpr;
+      if (initExpr == null) {
+        continue;
+      }
+      final tableIndex = module.importedTableCount + i;
+      if (tableIndex < 0 || tableIndex >= tables.length) {
+        throw FormatException(
+          'Invalid table index for table initializer: $tableIndex',
+        );
+      }
+      final initValue = _evaluateConstExpr(
+        initExpr,
+        globals,
+        module.types,
+      ).castTo(WasmValueType.i32).asI32();
+      final refValue = initValue == -1 ? null : initValue;
+      final table = tables[tableIndex];
+      final fill = List<int?>.filled(table.length, refValue, growable: false);
+      table.initialize(0, fill);
     }
 
     final memory64ByIndex = _memory64ByIndex(module);
@@ -338,6 +406,7 @@ final class WasmInstance {
     final globalExports = <String, int>{};
     final memoryExports = <String, WasmMemory>{};
     final tableExports = <String, WasmTable>{};
+    final tagExports = <String, WasmTagImport>{};
 
     for (final export in module.exports) {
       switch (export.kind) {
@@ -372,6 +441,14 @@ final class WasmInstance {
             );
           }
           tableExports[export.name] = tables[export.index];
+
+        case WasmExportKind.tag:
+          if (export.index < 0 || export.index >= tagTypes.length) {
+            throw FormatException(
+              'Export `${export.name}` has invalid tag index ${export.index}.',
+            );
+          }
+          tagExports[export.name] = tagTypes[export.index];
       }
     }
 
@@ -390,6 +467,7 @@ final class WasmInstance {
       globalExports: Map.unmodifiable(globalExports),
       memoryExports: Map.unmodifiable(memoryExports),
       tableExports: Map.unmodifiable(tableExports),
+      tagExports: Map.unmodifiable(tagExports),
     );
 
     instance._initializeActiveElements();
@@ -409,6 +487,8 @@ final class WasmInstance {
       _memoryExports.keys.toList(growable: false);
 
   List<String> get exportedTables => _tableExports.keys.toList(growable: false);
+
+  List<String> get exportedTags => _tagExports.keys.toList(growable: false);
 
   WasmFunctionType exportedFunctionType(String exportName) {
     final functionIndex = _functionExports[exportName];
@@ -432,6 +512,30 @@ final class WasmInstance {
       );
     }
     return functions[functionIndex].runtimeTypeDepth;
+  }
+
+  WasmFunctionType exportedTagType(String exportName) {
+    final tagType = _tagExports[exportName];
+    if (tagType == null) {
+      throw ArgumentError.value(
+        exportName,
+        'exportName',
+        'Tag export not found',
+      );
+    }
+    return tagType.type;
+  }
+
+  WasmTagImport exportedTagImport(String exportName) {
+    final tagImport = _tagExports[exportName];
+    if (tagImport == null) {
+      throw ArgumentError.value(
+        exportName,
+        'exportName',
+        'Tag export not found',
+      );
+    }
+    return tagImport;
   }
 
   Object? invoke(String exportName, [List<Object?> args = const []]) {
@@ -877,9 +981,11 @@ final class WasmInstance {
                     WasmValue.i32(0),
                     growable: false,
                   );
-                  for (var fieldIndex = fields.length - 1;
-                      fieldIndex >= 0;
-                      fieldIndex--) {
+                  for (
+                    var fieldIndex = fields.length - 1;
+                    fieldIndex >= 0;
+                    fieldIndex--
+                  ) {
                     fields[fieldIndex] = pop();
                   }
                   stack.add(
@@ -922,9 +1028,11 @@ final class WasmInstance {
                     WasmValue.i32(0),
                     growable: false,
                   );
-                  for (var fieldIndex = fields.length - 1;
-                      fieldIndex >= 0;
-                      fieldIndex--) {
+                  for (
+                    var fieldIndex = fields.length - 1;
+                    fieldIndex >= 0;
+                    fieldIndex--
+                  ) {
                     fields[fieldIndex] = pop();
                   }
                   stack.add(
@@ -1013,9 +1121,11 @@ final class WasmInstance {
                     WasmValue.i32(0),
                     growable: false,
                   );
-                  for (var elementIndex = elementCount - 1;
-                      elementIndex >= 0;
-                      elementIndex--) {
+                  for (
+                    var elementIndex = elementCount - 1;
+                    elementIndex >= 0;
+                    elementIndex--
+                  ) {
                     elements[elementIndex] = pop();
                   }
                   stack.add(
@@ -1032,8 +1142,13 @@ final class WasmInstance {
                   );
               }
             case Opcodes.refI31:
-              final value = pop().castTo(WasmValueType.i32).asI32() & 0x7fffffff;
+              final value =
+                  pop().castTo(WasmValueType.i32).asI32() & 0x7fffffff;
               stack.add(WasmValue.i32(WasmVm.allocateConstI31Ref(value)));
+            case Opcodes.anyConvertExtern:
+            case Opcodes.externConvertAny:
+              final reference = pop().castTo(WasmValueType.i32).asI32();
+              stack.add(WasmValue.i32(reference));
             default:
               throw UnsupportedError(
                 'Unsupported const expr opcode: 0x${pseudoOpcode.toRadixString(16)}',
@@ -1181,10 +1296,7 @@ final class WasmInstance {
     return offset.toInt();
   }
 
-  static int _constExprTableOffset(
-    WasmValue value, {
-    required bool isTable64,
-  }) {
+  static int _constExprTableOffset(WasmValue value, {required bool isTable64}) {
     final offset = isTable64
         ? WasmI64.unsigned(value.castTo(WasmValueType.i64).asI64())
         : BigInt.from(value.castTo(WasmValueType.i32).asI32().toUnsigned(32));
@@ -1229,6 +1341,41 @@ final class WasmInstance {
       }
     }
     return maxDepth + 1;
+  }
+
+  static bool _sameFunctionSignature(WasmFunctionType a, WasmFunctionType b) {
+    if (a.params.length != b.params.length ||
+        a.results.length != b.results.length) {
+      return false;
+    }
+    for (var i = 0; i < a.params.length; i++) {
+      if (a.params[i] != b.params[i]) {
+        return false;
+      }
+    }
+    for (var i = 0; i < a.results.length; i++) {
+      if (a.results[i] != b.results[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static String _tagNominalTypeKey(WasmModule module, int typeIndex) {
+    if (typeIndex < 0 || typeIndex >= module.types.length) {
+      return 'invalid';
+    }
+    final type = module.types[typeIndex];
+    if (!type.isFunctionType) {
+      return 'invalid';
+    }
+    final paramsKey = type.params.map((value) => value.index).join(',');
+    final resultsKey = type.results.map((value) => value.index).join(',');
+    final shape = '$paramsKey->$resultsKey';
+    if (type.recGroupSize > 1) {
+      return '$shape@${type.recGroupPosition}/${type.recGroupSize}';
+    }
+    return shape;
   }
 
   static List<bool> _memory64ByIndex(WasmModule module) {

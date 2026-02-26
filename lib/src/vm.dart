@@ -151,8 +151,7 @@ final class WasmVm {
   static const int _constGcRefBase = -0x40000000;
   static int _nextConstGcRefId = 0;
   static final Map<int, ({int kind, int typeIndex, int? descriptorRef})>
-  _constGcRefs =
-      <int, ({int kind, int typeIndex, int? descriptorRef})>{};
+  _constGcRefs = <int, ({int kind, int typeIndex, int? descriptorRef})>{};
   static int _nextGcObjectId = 0;
   static final Map<int, _GcRefObject> _sharedGcObjects = <int, _GcRefObject>{};
 
@@ -1445,6 +1444,10 @@ final class WasmVm {
           _gcAnyConvertExtern(stack);
           pc++;
 
+        case Opcodes.externConvertAny:
+          _gcExternConvertAny(stack);
+          pc++;
+
         case Opcodes.refI31:
           _gcRefI31(stack);
           pc++;
@@ -2166,30 +2169,22 @@ final class WasmVm {
 
         case Opcodes.i32ReinterpretF32:
           stack.add(
-            WasmValue.i32(
-              _pop(stack).castTo(WasmValueType.f32).asF32Bits(),
-            ),
+            WasmValue.i32(_pop(stack).castTo(WasmValueType.f32).asF32Bits()),
           );
           pc++;
 
         case Opcodes.i64ReinterpretF64:
           stack.add(
-            WasmValue.i64(
-              _pop(stack).castTo(WasmValueType.f64).asF64Bits(),
-            ),
+            WasmValue.i64(_pop(stack).castTo(WasmValueType.f64).asF64Bits()),
           );
           pc++;
 
         case Opcodes.f32ReinterpretI32:
-          stack.add(
-            WasmValue.f32Bits(_toU32(_popI32(stack))),
-          );
+          stack.add(WasmValue.f32Bits(_toU32(_popI32(stack))));
           pc++;
 
         case Opcodes.f64ReinterpretI64:
-          stack.add(
-            WasmValue.f64Bits(_toU64(_popI64(stack))),
-          );
+          stack.add(WasmValue.f64Bits(_toU64(_popI64(stack))));
           pc++;
 
         case Opcodes.i32Extend8S:
@@ -2325,11 +2320,7 @@ final class WasmVm {
     final target = labels[targetPosition];
 
     final results = _takeTopValues(stack, target.branchTypes);
-    _truncateStackToHeight(
-      stack,
-      target.stackHeight,
-      context: 'branch',
-    );
+    _truncateStackToHeight(stack, target.stackHeight, context: 'branch');
     stack.addAll(results);
 
     if (target.kind == _LabelKind.loop) {
@@ -2352,11 +2343,7 @@ final class WasmVm {
 
   void _exitLabel(_LabelFrame label, List<WasmValue> stack) {
     final results = _takeTopValues(stack, label.endTypes);
-    _truncateStackToHeight(
-      stack,
-      label.stackHeight,
-      context: 'end',
-    );
+    _truncateStackToHeight(stack, label.stackHeight, context: 'end');
     stack.addAll(results);
   }
 
@@ -2544,17 +2531,17 @@ final class WasmVm {
     return _toLinearMemoryValue(operand, label: label);
   }
 
-  int _popUnsignedI32Operand(
-    List<WasmValue> stack, {
-    required String label,
-  }) {
+  int _popUnsignedI32Operand(List<WasmValue> stack, {required String label}) {
     final value = _pop(stack);
     if (value.type != WasmValueType.i32) {
       throw StateError(
         'Type mismatch: expected i32 for $label, got ${value.type}.',
       );
     }
-    return _toLinearMemoryValue(BigInt.from(_toU32(value.asI32())), label: label);
+    return _toLinearMemoryValue(
+      BigInt.from(_toU32(value.asI32())),
+      label: label,
+    );
   }
 
   int _popMemoryOperationLength(
@@ -2913,11 +2900,7 @@ final class WasmVm {
       return false;
     }
     if (leftDescriptor != null &&
-        !_areTypesEquivalent(
-          leftDescriptor,
-          rightDescriptor!,
-          seenPairs,
-        )) {
+        !_areTypesEquivalent(leftDescriptor, rightDescriptor!, seenPairs)) {
       return false;
     }
     final leftDescribes = left.describesTypeIndex;
@@ -2926,11 +2909,7 @@ final class WasmVm {
       return false;
     }
     if (leftDescribes != null &&
-        !_areTypesEquivalent(
-          leftDescribes,
-          rightDescribes!,
-          seenPairs,
-        )) {
+        !_areTypesEquivalent(leftDescribes, rightDescribes!, seenPairs)) {
       return false;
     }
     if (left.isFunctionType) {
@@ -3227,7 +3206,9 @@ final class WasmVm {
       throw StateError('struct.new_desc requires a struct type.');
     }
     if (type.descriptorTypeIndex == null) {
-      throw StateError('type without descriptor requires non-descriptor allocation');
+      throw StateError(
+        'type without descriptor requires non-descriptor allocation',
+      );
     }
     final descriptor = _popRef(stack);
     if (descriptor == null) {
@@ -3260,7 +3241,9 @@ final class WasmVm {
       throw StateError('struct.new_default_desc requires a struct type.');
     }
     if (type.descriptorTypeIndex == null) {
-      throw StateError('type without descriptor requires non-descriptor allocation');
+      throw StateError(
+        'type without descriptor requires non-descriptor allocation',
+      );
     }
     final descriptor = _popRef(stack);
     if (descriptor == null) {
@@ -3414,14 +3397,17 @@ final class WasmVm {
 
   void _gcArrayNewElem(List<WasmValue> stack, Instruction instruction) {
     final typeIndex = _checkTypeIndex(instruction.immediate!);
-    final elementIndex = _checkElementSegmentIndex(instruction.secondaryImmediate!);
+    final elementIndex = _checkElementSegmentIndex(
+      instruction.secondaryImmediate!,
+    );
     final type = _types[typeIndex];
     if (type.kind != WasmCompositeTypeKind.array) {
       throw StateError('array.new_elem requires an array type.');
     }
     final fieldSignature = type.fieldSignatures.single;
-    final valueSignature =
-        _parseFieldTypeForEquivalence(fieldSignature)?.valueSignature;
+    final valueSignature = _parseFieldTypeForEquivalence(
+      fieldSignature,
+    )?.valueSignature;
     if (valueSignature == null || _parseRefSignature(valueSignature) == null) {
       throw StateError('type mismatch');
     }
@@ -3457,7 +3443,9 @@ final class WasmVm {
     if (type.kind != WasmCompositeTypeKind.array) {
       throw StateError('array.init_data requires an array type.');
     }
-    final parsedField = _parseFieldTypeForEquivalence(type.fieldSignatures.single);
+    final parsedField = _parseFieldTypeForEquivalence(
+      type.fieldSignatures.single,
+    );
     if (parsedField == null || parsedField.mutability == 0) {
       throw StateError('immutable array');
     }
@@ -3505,12 +3493,16 @@ final class WasmVm {
 
   void _gcArrayInitElem(List<WasmValue> stack, Instruction instruction) {
     final typeIndex = _checkTypeIndex(instruction.immediate!);
-    final elementIndex = _checkElementSegmentIndex(instruction.secondaryImmediate!);
+    final elementIndex = _checkElementSegmentIndex(
+      instruction.secondaryImmediate!,
+    );
     final type = _types[typeIndex];
     if (type.kind != WasmCompositeTypeKind.array) {
       throw StateError('array.init_elem requires an array type.');
     }
-    final parsedField = _parseFieldTypeForEquivalence(type.fieldSignatures.single);
+    final parsedField = _parseFieldTypeForEquivalence(
+      type.fieldSignatures.single,
+    );
     if (parsedField == null || parsedField.mutability == 0) {
       throw StateError('immutable array');
     }
@@ -3610,13 +3602,18 @@ final class WasmVm {
     if (type.kind != WasmCompositeTypeKind.array) {
       throw StateError('array.fill requires an array type.');
     }
-    final parsedField = _parseFieldTypeForEquivalence(type.fieldSignatures.single);
+    final parsedField = _parseFieldTypeForEquivalence(
+      type.fieldSignatures.single,
+    );
     if (parsedField == null || parsedField.mutability == 0) {
       throw StateError('immutable array');
     }
 
     final length = _popLength(stack);
-    final fillValue = _coerceFieldValue(type.fieldSignatures.single, _pop(stack));
+    final fillValue = _coerceFieldValue(
+      type.fieldSignatures.single,
+      _pop(stack),
+    );
     final destinationOffset = _popLength(stack);
     final reference = _popRef(stack);
     if (reference == null) {
@@ -3649,7 +3646,8 @@ final class WasmVm {
       }
       throw StateError('out of bounds table access');
     }
-    if (sourceOffset > segment.length || length > segment.length - sourceOffset) {
+    if (sourceOffset > segment.length ||
+        length > segment.length - sourceOffset) {
       throw StateError('out of bounds table access');
     }
     return List<int?>.from(
@@ -3773,7 +3771,9 @@ final class WasmVm {
       throw StateError('array.set on incompatible reference.');
     }
     final type = _types[object.typeIndex!];
-    final parsedField = _parseFieldTypeForEquivalence(type.fieldSignatures.single);
+    final parsedField = _parseFieldTypeForEquivalence(
+      type.fieldSignatures.single,
+    );
     if (parsedField == null || parsedField.mutability == 0) {
       throw StateError('immutable array');
     }
@@ -3802,7 +3802,26 @@ final class WasmVm {
       _pushRef(stack, null);
       return;
     }
+    final existing = _sharedGcObjects[externReference];
+    if (existing != null && existing.kind == _GcRefKind.extern) {
+      _pushRef(stack, existing.externValue);
+      return;
+    }
     _pushRef(stack, _allocateGcObject(_GcRefObject.extern(externReference)));
+  }
+
+  void _gcExternConvertAny(List<WasmValue> stack) {
+    final anyReference = _popRef(stack);
+    if (anyReference == null) {
+      _pushRef(stack, null);
+      return;
+    }
+    final existing = _sharedGcObjects[anyReference];
+    if (existing != null && existing.kind == _GcRefKind.extern) {
+      _pushRef(stack, existing.externValue);
+      return;
+    }
+    _pushRef(stack, _allocateGcObject(_GcRefObject.extern(anyReference)));
   }
 
   void _gcRefI31(List<WasmValue> stack) {
@@ -4062,11 +4081,7 @@ final class WasmVm {
     _memoryForMemArg(instruction).storeI32(address, value);
   }
 
-  void _storeI64(
-    List<WasmValue> stack,
-    Instruction instruction,
-    BigInt value,
-  ) {
+  void _storeI64(List<WasmValue> stack, Instruction instruction, BigInt value) {
     final address = _addressFromStack(stack, instruction);
     _memoryForMemArg(instruction).storeI64(address, value);
   }
@@ -4361,10 +4376,7 @@ final class WasmVm {
     final memoryIndex = instruction.secondaryImmediate!;
     final memory = _requireMemory(memoryIndex);
 
-    final length = _popUnsignedI32Operand(
-      stack,
-      label: 'memory.init length',
-    );
+    final length = _popUnsignedI32Operand(stack, label: 'memory.init length');
     final sourceOffset = _popUnsignedI32Operand(
       stack,
       label: 'memory.init source offset',
@@ -4455,10 +4467,7 @@ final class WasmVm {
     final elementIndex = _checkElementSegmentIndex(instruction.immediate!);
     final tableIndex = _checkTableIndex(instruction.secondaryImmediate!);
 
-    final length = _popUnsignedI32Operand(
-      stack,
-      label: 'table.init length',
-    );
+    final length = _popUnsignedI32Operand(stack, label: 'table.init length');
     final sourceOffset = _popUnsignedI32Operand(
       stack,
       label: 'table.init source offset',
@@ -4572,7 +4581,8 @@ final class WasmVm {
     );
 
     final table = _tables[tableIndex];
-    if (destinationOffset > table.length || length > table.length - destinationOffset) {
+    if (destinationOffset > table.length ||
+        length > table.length - destinationOffset) {
       throw StateError('table.fill destination out of bounds.');
     }
     final fillValues = List<int?>.filled(length, value);
@@ -4630,10 +4640,7 @@ final class WasmVm {
     return value;
   }
 
-  int _toLinearMemoryValue(
-    BigInt value, {
-    required String label,
-  }) {
+  int _toLinearMemoryValue(BigInt value, {required String label}) {
     if (value < BigInt.zero) {
       throw RangeError('Negative $label: $value.');
     }

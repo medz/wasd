@@ -81,6 +81,7 @@ abstract final class WasmImportKind {
   static const int table = 0x01;
   static const int memory = 0x02;
   static const int global = 0x03;
+  static const int tag = 0x04;
   static const int exactFunction = 0x20;
 }
 
@@ -89,6 +90,7 @@ abstract final class WasmExportKind {
   static const int table = 0x01;
   static const int memory = 0x02;
   static const int global = 0x03;
+  static const int tag = 0x04;
 }
 
 final class WasmLimits {
@@ -120,6 +122,8 @@ final class WasmFunctionType {
     this.describesTypeIndex,
     this.isFunctionType = true,
     this.runtimeSupported = true,
+    this.recGroupSize = 1,
+    this.recGroupPosition = 0,
   });
 
   const WasmFunctionType.nonFunction({
@@ -133,7 +137,9 @@ final class WasmFunctionType {
        results = const <WasmValueType>[],
        paramTypeSignatures = const <String>[],
        resultTypeSignatures = const <String>[],
-       isFunctionType = false;
+       isFunctionType = false,
+       recGroupSize = 1,
+       recGroupPosition = 0;
 
   final List<WasmValueType> params;
   final List<WasmValueType> results;
@@ -146,6 +152,8 @@ final class WasmFunctionType {
   final int? describesTypeIndex;
   final bool isFunctionType;
   final bool runtimeSupported;
+  final int recGroupSize;
+  final int recGroupPosition;
 }
 
 final class WasmMemoryType {
@@ -171,6 +179,7 @@ final class WasmTableType {
     this.max,
     this.isTable64 = false,
     this.refTypeSignature,
+    this.initExpr,
   });
 
   final WasmRefType refType;
@@ -178,6 +187,7 @@ final class WasmTableType {
   final int? max;
   final bool isTable64;
   final String? refTypeSignature;
+  final Uint8List? initExpr;
 }
 
 final class WasmGlobalType {
@@ -192,6 +202,13 @@ final class WasmGlobalType {
   final String? valueTypeSignature;
 }
 
+final class WasmTagType {
+  const WasmTagType({required this.attribute, required this.typeIndex});
+
+  final int attribute;
+  final int typeIndex;
+}
+
 final class WasmImport {
   const WasmImport({
     required this.module,
@@ -202,6 +219,7 @@ final class WasmImport {
     this.tableType,
     this.memoryType,
     this.globalType,
+    this.tagType,
   });
 
   final String module;
@@ -212,6 +230,7 @@ final class WasmImport {
   final WasmTableType? tableType;
   final WasmMemoryType? memoryType;
   final WasmGlobalType? globalType;
+  final WasmTagType? tagType;
 
   String get key => '$module::$name';
 }
@@ -316,6 +335,7 @@ final class WasmModule {
     required this.functionTypeIndices,
     required this.codes,
     required this.tables,
+    required this.tags,
     required this.globals,
     required this.exports,
     required this.memories,
@@ -327,6 +347,7 @@ final class WasmModule {
     required this.importedTableCount,
     required this.importedMemoryCount,
     required this.importedGlobalCount,
+    required this.importedTagCount,
   });
 
   final List<WasmFunctionType> types;
@@ -334,6 +355,7 @@ final class WasmModule {
   final List<int> functionTypeIndices;
   final List<WasmCodeBody> codes;
   final List<WasmTableType> tables;
+  final List<WasmTagType> tags;
   final List<WasmGlobalDef> globals;
   final List<WasmExport> exports;
   final List<WasmMemoryType> memories;
@@ -345,6 +367,7 @@ final class WasmModule {
   final int importedTableCount;
   final int importedMemoryCount;
   final int importedGlobalCount;
+  final int importedTagCount;
 
   static WasmModule decode(
     Uint8List wasmBytes, {
@@ -378,6 +401,7 @@ final class WasmModule {
     final functionTypeIndices = <int>[];
     final codes = <WasmCodeBody>[];
     final tables = <WasmTableType>[];
+    final tags = <WasmTagType>[];
     final globals = <WasmGlobalDef>[];
     final exports = <WasmExport>[];
     final memories = <WasmMemoryType>[];
@@ -388,6 +412,7 @@ final class WasmModule {
     var importedTableCount = 0;
     var importedMemoryCount = 0;
     var importedGlobalCount = 0;
+    var importedTagCount = 0;
     int? startFunctionIndex;
     int? dataCount;
     final seenStandardSections = <int>{};
@@ -420,12 +445,15 @@ final class WasmModule {
           importedTableCount += counts.$2;
           importedMemoryCount += counts.$3;
           importedGlobalCount += counts.$4;
+          importedTagCount += counts.$5;
         case 3:
           _parseFunctionSection(sectionReader, functionTypeIndices);
         case 4:
           _parseTableSection(sectionReader, tables);
         case 5:
           _parseMemorySection(sectionReader, memories);
+        case 13:
+          _parseTagSection(sectionReader, tags);
         case 6:
           _parseGlobalSection(sectionReader, globals);
         case 7:
@@ -476,6 +504,7 @@ final class WasmModule {
       functionTypeIndices: List.unmodifiable(functionTypeIndices),
       codes: List.unmodifiable(codes),
       tables: List.unmodifiable(tables),
+      tags: List.unmodifiable(tags),
       globals: List.unmodifiable(globals),
       exports: List.unmodifiable(exports),
       memories: List.unmodifiable(memories),
@@ -487,6 +516,7 @@ final class WasmModule {
       importedTableCount: importedTableCount,
       importedMemoryCount: importedMemoryCount,
       importedGlobalCount: importedGlobalCount,
+      importedTagCount: importedTagCount,
     );
   }
 
@@ -522,6 +552,8 @@ final class WasmModule {
           sink,
           currentTypeIndex: sink.length,
           insideRecGroup: true,
+          recGroupSize: subgroupCount,
+          recGroupPosition: i,
         );
       }
       _validateRecGroupDescriptorLinks(
@@ -537,6 +569,8 @@ final class WasmModule {
       sink,
       currentTypeIndex: sink.length,
       insideRecGroup: false,
+      recGroupSize: 1,
+      recGroupPosition: 0,
     );
   }
 
@@ -546,6 +580,8 @@ final class WasmModule {
     List<WasmFunctionType> sink, {
     required int currentTypeIndex,
     required bool insideRecGroup,
+    required int recGroupSize,
+    required int recGroupPosition,
   }) {
     final superTypeIndices = <int>[];
     var form = leadingForm;
@@ -591,7 +627,15 @@ final class WasmModule {
             superTypeIndices: superTypeIndices,
             descriptorTypeIndex: descriptorTypeIndex,
             describesTypeIndex: describesTypeIndex,
+            recGroupSize: recGroupSize,
+            recGroupPosition: recGroupPosition,
           );
+          if (!insideRecGroup) {
+            _validateImplicitRecTypeScoping(
+              sink.last,
+              currentTypeIndex: currentTypeIndex,
+            );
+          }
           return;
       }
     }
@@ -604,6 +648,8 @@ final class WasmModule {
     required List<int> superTypeIndices,
     required int? descriptorTypeIndex,
     required int? describesTypeIndex,
+    required int recGroupSize,
+    required int recGroupPosition,
   }) {
     if ((descriptorTypeIndex != null || describesTypeIndex != null) &&
         form != 0x5f) {
@@ -623,6 +669,8 @@ final class WasmModule {
             descriptorTypeIndex: descriptorTypeIndex,
             describesTypeIndex: describesTypeIndex,
             runtimeSupported: functionType.$5,
+            recGroupSize: recGroupSize,
+            recGroupPosition: recGroupPosition,
           ),
         );
       case 0x5e:
@@ -666,6 +714,13 @@ final class WasmModule {
     final groupEnd = groupStart + groupLength;
     bool inGroup(int index) => index >= groupStart && index < groupEnd;
 
+    void validateSignatureScope(String signature) {
+      final heapType = _concreteHeapTypeFromSignature(signature);
+      if (heapType != null && heapType >= groupEnd) {
+        throw const FormatException('Unknown type.');
+      }
+    }
+
     for (var i = groupStart; i < groupEnd; i++) {
       final type = types[i];
       final descriptor = type.descriptorTypeIndex;
@@ -676,6 +731,17 @@ final class WasmModule {
       }
       if (describes != null && !inGroup(describes)) {
         throw const FormatException('Described type is outside rec group.');
+      }
+      for (final signature in type.paramTypeSignatures) {
+        validateSignatureScope(signature);
+      }
+      for (final signature in type.resultTypeSignatures) {
+        validateSignatureScope(signature);
+      }
+      for (final fieldSignature in type.fieldSignatures) {
+        final bytes = _fieldSignatureBytes(fieldSignature);
+        final valueBytes = bytes.sublist(0, bytes.length - 1);
+        validateSignatureScope(_typeEncodingSignature(valueBytes));
       }
     }
 
@@ -692,6 +758,30 @@ final class WasmModule {
           'Described type is not described by descriptor.',
         );
       }
+    }
+  }
+
+  static void _validateImplicitRecTypeScoping(
+    WasmFunctionType type, {
+    required int currentTypeIndex,
+  }) {
+    void validateSignature(String signature) {
+      final heapType = _concreteHeapTypeFromSignature(signature);
+      if (heapType != null && heapType > currentTypeIndex) {
+        throw const FormatException('Unknown type.');
+      }
+    }
+
+    for (final signature in type.paramTypeSignatures) {
+      validateSignature(signature);
+    }
+    for (final signature in type.resultTypeSignatures) {
+      validateSignature(signature);
+    }
+    for (final fieldSignature in type.fieldSignatures) {
+      final bytes = _fieldSignatureBytes(fieldSignature);
+      final valueBytes = bytes.sublist(0, bytes.length - 1);
+      validateSignature(_typeEncodingSignature(valueBytes));
     }
   }
 
@@ -873,7 +963,7 @@ final class WasmModule {
     return buffer.toString();
   }
 
-  static (int, int, int, int) _parseImportSection(
+  static (int, int, int, int, int) _parseImportSection(
     ByteReader reader,
     List<WasmImport> sink,
   ) {
@@ -881,6 +971,7 @@ final class WasmModule {
     var importedTables = 0;
     var importedMemories = 0;
     var importedGlobals = 0;
+    var importedTags = 0;
 
     final count = reader.readVarUint32();
     for (var i = 0; i < count; i++) {
@@ -909,7 +1000,7 @@ final class WasmModule {
               module: moduleName,
               name: fieldName,
               kind: kind,
-              tableType: _readTableType(reader),
+              tableType: _readTableType(reader, allowInitExpression: false),
             ),
           );
 
@@ -935,6 +1026,17 @@ final class WasmModule {
             ),
           );
 
+        case WasmImportKind.tag:
+          importedTags++;
+          sink.add(
+            WasmImport(
+              module: moduleName,
+              name: fieldName,
+              kind: kind,
+              tagType: _readTagType(reader),
+            ),
+          );
+
         default:
           throw UnsupportedError(
             'Unsupported import kind: 0x${kind.toRadixString(16)}',
@@ -947,6 +1049,7 @@ final class WasmModule {
       importedTables,
       importedMemories,
       importedGlobals,
+      importedTags,
     );
   }
 
@@ -960,7 +1063,7 @@ final class WasmModule {
   static void _parseTableSection(ByteReader reader, List<WasmTableType> sink) {
     final count = reader.readVarUint32();
     for (var i = 0; i < count; i++) {
-      sink.add(_readTableType(reader));
+      sink.add(_readTableType(reader, allowInitExpression: true));
     }
   }
 
@@ -971,6 +1074,13 @@ final class WasmModule {
     final count = reader.readVarUint32();
     for (var i = 0; i < count; i++) {
       sink.add(_readMemoryType(reader));
+    }
+  }
+
+  static void _parseTagSection(ByteReader reader, List<WasmTagType> sink) {
+    final count = reader.readVarUint32();
+    for (var i = 0; i < count; i++) {
+      sink.add(_readTagType(reader));
     }
   }
 
@@ -1221,6 +1331,8 @@ final class WasmModule {
             case Opcodes.arrayNewFixed:
               reader.readVarUint32();
               reader.readVarUint32();
+            case Opcodes.anyConvertExtern:
+            case Opcodes.externConvertAny:
             case Opcodes.refI31:
               break;
             default:
@@ -1684,7 +1796,113 @@ final class WasmModule {
     return normalized;
   }
 
-  static WasmTableType _readTableType(ByteReader reader) {
+  static int? _concreteHeapTypeFromSignature(String signature) {
+    if (signature.isEmpty || signature.length.isOdd) {
+      return null;
+    }
+    final bytes = <int>[];
+    for (var i = 0; i < signature.length; i += 2) {
+      bytes.add(int.parse(signature.substring(i, i + 2), radix: 16));
+    }
+    if (bytes.isEmpty) {
+      return null;
+    }
+    final lead = bytes.first;
+    switch (lead) {
+      case 0x7f:
+      case 0x7e:
+      case 0x7d:
+      case 0x7c:
+      case 0x7b:
+      case 0x78:
+      case 0x77:
+        return null;
+    }
+    if (lead == 0x63 || lead == 0x64) {
+      var offset = 1;
+      if (offset < bytes.length &&
+          (bytes[offset] == 0x62 || bytes[offset] == 0x61)) {
+        offset++;
+      }
+      final decoded = _readSignedLeb33FromBytes(bytes, offset);
+      if (decoded == null || decoded.$2 != bytes.length) {
+        return null;
+      }
+      return decoded.$1 >= 0 ? decoded.$1 : null;
+    }
+    if (_isLegacyHeapTypeCode(lead)) {
+      return null;
+    }
+    final decoded = _readSignedLeb33FromBytes(bytes, 0);
+    if (decoded == null || decoded.$2 != bytes.length) {
+      return null;
+    }
+    return decoded.$1 >= 0 ? decoded.$1 : null;
+  }
+
+  static (int, int)? _readSignedLeb33FromBytes(List<int> bytes, int offset) {
+    if (offset < 0 || offset >= bytes.length) {
+      return null;
+    }
+    var result = bytes[offset] & 0x7f;
+    var shift = 7;
+    var byte = bytes[offset];
+    var multiplier = 128;
+    var index = offset + 1;
+    while ((byte & 0x80) != 0) {
+      if (index >= bytes.length) {
+        return null;
+      }
+      byte = bytes[index++];
+      result += (byte & 0x7f) * multiplier;
+      multiplier *= 128;
+      shift += 7;
+      if (shift > 35) {
+        return null;
+      }
+    }
+    if (shift < 33 && (byte & 0x40) != 0) {
+      result -= multiplier;
+    }
+    return (_normalizeSignedLeb33(result), index);
+  }
+
+  static WasmTableType _readTableType(
+    ByteReader reader, {
+    required bool allowInitExpression,
+  }) {
+    final tableTypeStart = reader.offset;
+    final lead = reader.readByte();
+    if (allowInitExpression && lead == 0x40) {
+      final tableFlags = reader.readByte();
+      if (tableFlags != 0x00) {
+        throw UnsupportedError(
+          'Unsupported table init flags: 0x${tableFlags.toRadixString(16)}',
+        );
+      }
+      final refTypeStart = reader.offset;
+      final refType = _readReferenceType(reader);
+      final refTypeSignature = _typeEncodingSignature(
+        reader.bytes.sublist(refTypeStart, reader.offset),
+      );
+      final limits = _readLimits(reader, allowExtendedMemoryFlags: true);
+      _validateLimits(limits, context: 'table');
+      if (limits.shared || limits.pageSizeLog2 != 16) {
+        throw const FormatException(
+          'Invalid table limits: unsupported flag combination.',
+        );
+      }
+      return WasmTableType(
+        refType: refType,
+        min: limits.min,
+        max: limits.max,
+        isTable64: limits.memory64,
+        refTypeSignature: refTypeSignature,
+        initExpr: _readInitExpression(reader),
+      );
+    }
+
+    reader.offset = tableTypeStart;
     final refTypeStart = reader.offset;
     final refType = _readReferenceType(reader);
     final refTypeSignature = _typeEncodingSignature(
@@ -1819,6 +2037,16 @@ final class WasmModule {
     );
   }
 
+  static WasmTagType _readTagType(ByteReader reader) {
+    final attribute = reader.readByte();
+    if (attribute != 0x00) {
+      throw UnsupportedError(
+        'Unsupported tag attribute: 0x${attribute.toRadixString(16)}',
+      );
+    }
+    return WasmTagType(attribute: attribute, typeIndex: reader.readVarUint32());
+  }
+
   static WasmGlobalType _readGlobalType(ByteReader reader) {
     final typeStart = reader.offset;
     final decodedValueType = _readValueType(reader);
@@ -1930,13 +2158,14 @@ final class WasmModule {
       3 => 3,
       4 => 4,
       5 => 5,
-      6 => 6,
-      7 => 7,
-      8 => 8,
-      9 => 9,
-      12 => 10,
-      10 => 11,
-      11 => 12,
+      13 => 6,
+      6 => 7,
+      7 => 8,
+      8 => 9,
+      9 => 10,
+      12 => 11,
+      10 => 12,
+      11 => 13,
       _ => sectionId + 100,
     };
   }

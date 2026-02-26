@@ -266,10 +266,7 @@ final class _ScriptExecutionState {
     } on _SpecRunnerFailure catch (error) {
       return _CommandResult.fail(error.reason, error.details);
     } catch (error, stackTrace) {
-      return _CommandResult.fail(
-        'unhandled-exception',
-        '$error\n$stackTrace',
-      );
+      return _CommandResult.fail('unhandled-exception', '$error\n$stackTrace');
     }
   }
 
@@ -561,6 +558,7 @@ final class _ScriptExecutionState {
     final tables = <String, WasmTable>{
       WasmImports.key('spectest', 'table'): _spectestTable,
     };
+    final tags = <String, WasmTagImport>{};
 
     for (final entry in _registeredModules.entries) {
       final alias = entry.key;
@@ -571,7 +569,8 @@ final class _ScriptExecutionState {
         if (expectedImport == null) {
           continue;
         }
-        final expectedType = targetModule.types[expectedImport.functionTypeIndex!];
+        final expectedType =
+            targetModule.types[expectedImport.functionTypeIndex!];
         final expectedDepth = _functionTypeDepth(
           targetModule,
           expectedImport.functionTypeIndex!,
@@ -602,6 +601,10 @@ final class _ScriptExecutionState {
         final key = WasmImports.key(alias, export);
         tables[key] = instance.exportedTable(export);
       }
+      for (final export in instance.exportedTags) {
+        final key = WasmImports.key(alias, export);
+        tags[key] = instance.exportedTagImport(export);
+      }
     }
 
     return WasmImports(
@@ -610,6 +613,7 @@ final class _ScriptExecutionState {
       globals: globals,
       memories: memories,
       tables: tables,
+      tags: tags,
     );
   }
 
@@ -619,11 +623,20 @@ final class _ScriptExecutionState {
     if (type is! String) {
       throw _SpecRunnerFailure('invalid-arg-type', '$raw');
     }
-    if (value is! String &&
-        type != 'nullref' &&
-        type != 'nullfuncref' &&
-        type != 'nullstructref' &&
-        type != 'nullarrayref') {
+    final isReferenceArg =
+        type == 'externref' ||
+        type == 'funcref' ||
+        type == 'structref' ||
+        type == 'arrayref' ||
+        type == 'eqref' ||
+        type == 'i31ref' ||
+        type == 'anyref' ||
+        type == 'refnull' ||
+        type == 'nullref' ||
+        type == 'nullfuncref' ||
+        type == 'nullstructref' ||
+        type == 'nullarrayref';
+    if (value is! String && !isReferenceArg) {
       throw _SpecRunnerFailure('invalid-arg-value', '$raw');
     }
 
@@ -647,9 +660,13 @@ final class _ScriptExecutionState {
       case 'eqref':
       case 'i31ref':
       case 'anyref':
+        if (value == null || value == 'null') {
+          return -1;
+        }
         final valueString = value as String;
         return _signedBits(BigInt.parse(valueString), 32);
       case 'nullref':
+      case 'refnull':
       case 'nullfuncref':
       case 'nullstructref':
       case 'nullarrayref':
@@ -677,6 +694,7 @@ final class _ScriptExecutionState {
         type != 'i31ref' &&
         type != 'anyref' &&
         type != 'nullref' &&
+        type != 'refnull' &&
         type != 'nullfuncref' &&
         type != 'nullstructref' &&
         type != 'nullarrayref') {
@@ -711,8 +729,12 @@ final class _ScriptExecutionState {
       case 'eqref':
       case 'i31ref':
       case 'anyref':
-        return _ExpectedValue.ref(type, expectsNullRef: false);
+        return _ExpectedValue.ref(
+          type,
+          expectsNullRef: value == null || value == 'null',
+        );
       case 'nullref':
+      case 'refnull':
       case 'nullfuncref':
       case 'nullstructref':
       case 'nullarrayref':
@@ -937,7 +959,11 @@ final class _ScriptExecutionState {
     }
     var maxDepth = 0;
     for (final superTypeIndex in type.superTypeIndices) {
-      final superDepth = _functionTypeDepthInternal(module, superTypeIndex, seen);
+      final superDepth = _functionTypeDepthInternal(
+        module,
+        superTypeIndex,
+        seen,
+      );
       if (superDepth > maxDepth) {
         maxDepth = superDepth;
       }
@@ -981,9 +1007,9 @@ Future<void> _runVmMode(List<String> args) async {
   final testsuiteDir =
       _argValue(args, '--testsuite-dir') ??
       '${Directory.current.path}/third_party/wasm-spec-tests';
-  final outputJson =
-      _argValue(args, '--output-json') ?? defaultOutputJson;
-  final outputMarkdown = _argValue(args, '--output-md') ?? defaultOutputMarkdown;
+  final outputJson = _argValue(args, '--output-json') ?? defaultOutputJson;
+  final outputMarkdown =
+      _argValue(args, '--output-md') ?? defaultOutputMarkdown;
   final maxFilesRaw = _argValue(args, '--max-files');
   final maxFiles = maxFilesRaw == null ? null : int.tryParse(maxFilesRaw);
 
@@ -1016,7 +1042,11 @@ Future<void> _runVmMode(List<String> args) async {
       converter: converter,
     );
     results.add(result);
-    _accumulateStats(result, groupStats: groupStats, reasonCounts: reasonCounts);
+    _accumulateStats(
+      result,
+      groupStats: groupStats,
+      reasonCounts: reasonCounts,
+    );
   }
 
   final endedAt = DateTime.now().toUtc();
@@ -1053,7 +1083,8 @@ Future<void> _runVmMode(List<String> args) async {
     _renderMarkdown(payload: payload, results: results, groupStats: groupStats),
   );
 
-  final filesFailed = (payload['totals'] as Map<String, Object?>)['files_failed'] as int;
+  final filesFailed =
+      (payload['totals'] as Map<String, Object?>)['files_failed'] as int;
   stdout.writeln(
     'spec-testsuite status: ${filesFailed == 0 ? 'passed' : 'failed'}',
   );

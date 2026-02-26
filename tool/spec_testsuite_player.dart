@@ -15,6 +15,7 @@ external void _jsSpecSetResult(JSString payloadJson);
 
 @JS('globalThis.wasdSpecSetError')
 external void _jsSpecSetError(JSString payloadJson);
+
 final class _SpecRunnerFailure implements Exception {
   _SpecRunnerFailure(this.reason, this.details);
 
@@ -474,6 +475,7 @@ final class _ScriptExecutionState {
     final tables = <String, WasmTable>{
       WasmImports.key('spectest', 'table'): _spectestTable,
     };
+    final tags = <String, WasmTagImport>{};
 
     for (final entry in _registeredModules.entries) {
       final alias = entry.key;
@@ -484,7 +486,8 @@ final class _ScriptExecutionState {
         if (expectedImport == null) {
           continue;
         }
-        final expectedType = targetModule.types[expectedImport.functionTypeIndex!];
+        final expectedType =
+            targetModule.types[expectedImport.functionTypeIndex!];
         final expectedDepth = _functionTypeDepth(
           targetModule,
           expectedImport.functionTypeIndex!,
@@ -515,6 +518,10 @@ final class _ScriptExecutionState {
         final key = WasmImports.key(alias, export);
         tables[key] = instance.exportedTable(export);
       }
+      for (final export in instance.exportedTags) {
+        final key = WasmImports.key(alias, export);
+        tags[key] = instance.exportedTagImport(export);
+      }
     }
 
     return WasmImports(
@@ -523,6 +530,7 @@ final class _ScriptExecutionState {
       globals: globals,
       memories: memories,
       tables: tables,
+      tags: tags,
     );
   }
 
@@ -532,11 +540,20 @@ final class _ScriptExecutionState {
     if (type is! String) {
       throw _SpecRunnerFailure('invalid-arg-type', '$raw');
     }
-    if (value is! String &&
-        type != 'nullref' &&
-        type != 'nullfuncref' &&
-        type != 'nullstructref' &&
-        type != 'nullarrayref') {
+    final isReferenceArg =
+        type == 'externref' ||
+        type == 'funcref' ||
+        type == 'structref' ||
+        type == 'arrayref' ||
+        type == 'eqref' ||
+        type == 'i31ref' ||
+        type == 'anyref' ||
+        type == 'refnull' ||
+        type == 'nullref' ||
+        type == 'nullfuncref' ||
+        type == 'nullstructref' ||
+        type == 'nullarrayref';
+    if (value is! String && !isReferenceArg) {
       throw _SpecRunnerFailure('invalid-arg-value', '$raw');
     }
 
@@ -557,9 +574,16 @@ final class _ScriptExecutionState {
       case 'funcref':
       case 'structref':
       case 'arrayref':
+      case 'eqref':
+      case 'i31ref':
+      case 'anyref':
+        if (value == null || value == 'null') {
+          return -1;
+        }
         final valueString = value as String;
         return _signedBits(BigInt.parse(valueString), 32);
       case 'nullref':
+      case 'refnull':
       case 'nullfuncref':
       case 'nullstructref':
       case 'nullarrayref':
@@ -583,7 +607,11 @@ final class _ScriptExecutionState {
         type != 'externref' &&
         type != 'structref' &&
         type != 'arrayref' &&
+        type != 'eqref' &&
+        type != 'i31ref' &&
+        type != 'anyref' &&
         type != 'nullref' &&
+        type != 'refnull' &&
         type != 'nullfuncref' &&
         type != 'nullstructref' &&
         type != 'nullarrayref') {
@@ -615,8 +643,15 @@ final class _ScriptExecutionState {
       case 'externref':
       case 'structref':
       case 'arrayref':
-        return _ExpectedValue.ref(type, expectsNullRef: false);
+      case 'eqref':
+      case 'i31ref':
+      case 'anyref':
+        return _ExpectedValue.ref(
+          type,
+          expectsNullRef: value == null || value == 'null',
+        );
       case 'nullref':
+      case 'refnull':
       case 'nullfuncref':
       case 'nullstructref':
       case 'nullarrayref':
@@ -841,7 +876,11 @@ final class _ScriptExecutionState {
     }
     var maxDepth = 0;
     for (final superTypeIndex in type.superTypeIndices) {
-      final superDepth = _functionTypeDepthInternal(module, superTypeIndex, seen);
+      final superDepth = _functionTypeDepthInternal(
+        module,
+        superTypeIndex,
+        seen,
+      );
       if (superDepth > maxDepth) {
         maxDepth = superDepth;
       }
@@ -1075,6 +1114,7 @@ Map<String, Object?> _buildPayload({
     'files': results.map((r) => r.toJson()).toList(growable: false),
   };
 }
+
 WasmFeatureSet _featuresForGroup(String group) {
   final base = WasmFeatureSet.layeredDefaults(profile: WasmFeatureProfile.full);
   final additionalEnabled = <String>{...base.additionalEnabled};

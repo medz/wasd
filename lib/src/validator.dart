@@ -52,6 +52,7 @@ abstract final class WasmValidator {
     _validateExportBindings(module);
     _validateStartFunction(module);
     _validateGlobals(module);
+    _validateTableInitializers(module);
     _validateElements(module);
     _validateDataSegments(module);
     _validateFunctions(module, features: features);
@@ -106,6 +107,15 @@ abstract final class WasmValidator {
           if (signature != null && signature.isNotEmpty) {
             _validateValueSignatureTypeReference(module, signature);
           }
+        case WasmImportKind.tag:
+          final typeIndex = import.tagType?.typeIndex;
+          if (typeIndex != null) {
+            _checkIndex(typeIndex, module.types.length, 'type');
+            final tagType = module.types[typeIndex];
+            if (!tagType.isFunctionType || tagType.results.isNotEmpty) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
+          }
         default:
           break;
       }
@@ -129,6 +139,14 @@ abstract final class WasmValidator {
       final signature = element.refTypeSignature;
       if (signature != null && signature.isNotEmpty) {
         _validateValueSignatureTypeReference(module, signature);
+      }
+    }
+
+    for (final tag in module.tags) {
+      _checkIndex(tag.typeIndex, module.types.length, 'type');
+      final tagType = module.types[tag.typeIndex];
+      if (!tagType.isFunctionType || tagType.results.isNotEmpty) {
+        throw const FormatException('Validation failed: type mismatch.');
       }
     }
   }
@@ -222,6 +240,17 @@ abstract final class WasmValidator {
               'Validation failed: malformed global import `${import.key}`.',
             );
           }
+        case WasmImportKind.tag:
+          final tagType = import.tagType;
+          if (tagType == null ||
+              tagType.typeIndex < 0 ||
+              tagType.typeIndex >= module.types.length ||
+              !module.types[tagType.typeIndex].isFunctionType ||
+              module.types[tagType.typeIndex].results.isNotEmpty) {
+            throw FormatException(
+              'Validation failed: malformed tag import `${import.key}`.',
+            );
+          }
       }
     }
   }
@@ -232,6 +261,7 @@ abstract final class WasmValidator {
     final tableCount = module.importedTableCount + module.tables.length;
     final memoryCount = module.importedMemoryCount + module.memories.length;
     final globalCount = module.importedGlobalCount + module.globals.length;
+    final tagCount = module.importedTagCount + module.tags.length;
 
     final seenNames = <String>{};
     for (final export in module.exports) {
@@ -249,6 +279,8 @@ abstract final class WasmValidator {
           _checkIndex(export.index, memoryCount, 'export memory');
         case WasmExportKind.global:
           _checkIndex(export.index, globalCount, 'export global');
+        case WasmExportKind.tag:
+          _checkIndex(export.index, tagCount, 'export tag');
         default:
           throw FormatException(
             'Validation failed: invalid export kind ${export.kind}.',
@@ -294,8 +326,233 @@ abstract final class WasmValidator {
           'Validation failed: global init type mismatch. expected=${global.type.valueType} actual=$exprType',
         );
       }
+      _validateGlobalRefFuncInitialization(module, global);
       availableGlobals.add(global.type);
     }
+  }
+
+  static void _validateGlobalRefFuncInitialization(
+    WasmModule module,
+    WasmGlobalDef global,
+  ) {
+    final signature = global.type.valueTypeSignature;
+    if (signature == null || signature.isEmpty) {
+      return;
+    }
+    final expectedRef = _parseRefSignature(signature);
+    if (expectedRef == null || expectedRef.heapType < 0) {
+      return;
+    }
+    final reader = ByteReader(global.initExpr);
+    if (reader.isEOF || reader.readByte() != Opcodes.refFunc) {
+      return;
+    }
+    final functionIndex = reader.readVarUint32();
+    if (reader.isEOF || reader.readByte() != Opcodes.end || !reader.isEOF) {
+      return;
+    }
+    final functionTypeIndex = _functionTypeIndexForFunction(module, functionIndex);
+    if (functionTypeIndex != expectedRef.heapType) {
+      throw const FormatException('Validation failed: type mismatch.');
+    }
+  }
+
+  static void _validateTableInitializers(WasmModule module) {
+    final availableGlobals = <WasmGlobalType>[
+      ...module.imports
+          .where((i) => i.kind == WasmImportKind.global)
+          .map((i) => i.globalType!),
+      ...module.globals.map((global) => global.type),
+    ];
+    for (final table in module.tables) {
+      final initExpr = table.initExpr;
+      final expectedSignature = _tableValueSignature(table);
+      final expectedRef = _parseRefSignature(expectedSignature);
+      if (initExpr == null) {
+        if (expectedRef != null && !expectedRef.nullable) {
+          throw const FormatException('Validation failed: type mismatch.');
+        }
+        continue;
+      }
+      _validateConstExpr(
+        module: module,
+        expr: initExpr,
+        availableGlobals: availableGlobals,
+        allowGlobalGet: (index, available) {
+          if (index < 0 || index >= available.length) {
+            return false;
+          }
+          return !available[index].mutable;
+        },
+      );
+      final initSignature = _constExprResultSignatureForTableInit(
+        module: module,
+        expr: initExpr,
+        availableGlobals: availableGlobals,
+      );
+      if (!_isValueSignatureSubtype(module, initSignature, expectedSignature)) {
+        throw const FormatException('Validation failed: type mismatch.');
+      }
+    }
+  }
+
+  static String _constExprResultSignatureForTableInit({
+    required WasmModule module,
+    required Uint8List expr,
+    required List<WasmGlobalType> availableGlobals,
+  }) {
+    final reader = ByteReader(expr);
+    final stack = <String>[];
+
+    String globalSignature(int index) {
+      if (index < 0 || index >= availableGlobals.length) {
+        return '7f';
+      }
+      final global = availableGlobals[index];
+      final explicit = global.valueTypeSignature;
+      if (explicit != null && explicit.isNotEmpty) {
+        return explicit;
+      }
+      return _signatureForValueType(global.valueType);
+    }
+
+    bool popTwoAndPush(String signature) {
+      if (stack.length < 2) {
+        return false;
+      }
+      stack.removeLast();
+      stack.removeLast();
+      stack.add(signature);
+      return true;
+    }
+
+    while (!reader.isEOF) {
+      final opcode = reader.readByte();
+      switch (opcode) {
+        case Opcodes.i32Const:
+          reader.readVarInt32();
+          stack.add('7f');
+        case Opcodes.i64Const:
+          reader.readVarInt64();
+          stack.add('7e');
+        case Opcodes.f32Const:
+          reader.readBytes(4);
+          stack.add('7d');
+        case Opcodes.f64Const:
+          reader.readBytes(8);
+          stack.add('7c');
+        case Opcodes.globalGet:
+          stack.add(globalSignature(reader.readVarUint32()));
+        case Opcodes.refNull:
+          final heapType = _readHeapTypeForValidation(reader);
+          if (heapType == null) {
+            return '7f';
+          }
+          stack.add(
+            _encodeRefSignature(
+              nullable: true,
+              exact: false,
+              heapType: heapType,
+            ),
+          );
+        case Opcodes.refFunc:
+          final functionIndex = reader.readVarUint32();
+          final functionCount =
+              module.importedFunctionCount + module.functionTypeIndices.length;
+          if (functionIndex < 0 || functionIndex >= functionCount) {
+            return '7f';
+          }
+          final typeIndex = _functionTypeIndexForFunction(
+            module,
+            functionIndex,
+          );
+          stack.add(
+            _encodeRefSignature(
+              nullable: false,
+              exact: true,
+              heapType: typeIndex,
+            ),
+          );
+        case 0xfb:
+          final subOpcode = reader.readVarUint32();
+          final pseudoOpcode = 0xfb00 | subOpcode;
+          switch (pseudoOpcode) {
+            case Opcodes.refI31:
+              if (stack.isEmpty) {
+                return '7f';
+              }
+              stack.removeLast();
+              stack.add(
+                _encodeRefSignature(
+                  nullable: false,
+                  exact: false,
+                  heapType: _heapI31,
+                ),
+              );
+            case Opcodes.anyConvertExtern:
+              if (stack.isEmpty) {
+                return '7f';
+              }
+              stack.removeLast();
+              stack.add(
+                _encodeRefSignature(
+                  nullable: true,
+                  exact: false,
+                  heapType: _heapAny,
+                ),
+              );
+            case Opcodes.externConvertAny:
+              if (stack.isEmpty) {
+                return '7f';
+              }
+              stack.removeLast();
+              stack.add(
+                _encodeRefSignature(
+                  nullable: true,
+                  exact: false,
+                  heapType: _heapExtern,
+                ),
+              );
+            default:
+              return '7f';
+          }
+        case Opcodes.i32Add:
+        case Opcodes.i32Sub:
+        case Opcodes.i32Mul:
+          if (!popTwoAndPush('7f')) {
+            return '7f';
+          }
+        case Opcodes.i64Add:
+        case Opcodes.i64Sub:
+        case Opcodes.i64Mul:
+          if (!popTwoAndPush('7e')) {
+            return '7f';
+          }
+        case Opcodes.f32Add:
+        case Opcodes.f32Sub:
+        case Opcodes.f32Mul:
+        case Opcodes.f32Div:
+          if (!popTwoAndPush('7d')) {
+            return '7f';
+          }
+        case Opcodes.f64Add:
+        case Opcodes.f64Sub:
+        case Opcodes.f64Mul:
+        case Opcodes.f64Div:
+          if (!popTwoAndPush('7c')) {
+            return '7f';
+          }
+        case Opcodes.end:
+          if (!reader.isEOF || stack.length != 1) {
+            return '7f';
+          }
+          return stack.single;
+        default:
+          return '7f';
+      }
+    }
+
+    return '7f';
   }
 
   static void _validateElements(WasmModule module) {
@@ -1138,6 +1395,16 @@ abstract final class WasmValidator {
               stack
                 ..removeLast()
                 ..add(WasmValueType.i32);
+            case Opcodes.anyConvertExtern:
+            case Opcodes.externConvertAny:
+              if (stack.isEmpty || stack.last != WasmValueType.i32) {
+                throw FormatException(
+                  'Validation failed: const expr type mismatch at 0x${pseudoOpcode.toRadixString(16)}.',
+                );
+              }
+              stack
+                ..removeLast()
+                ..add(WasmValueType.i32);
             default:
               throw UnsupportedError(
                 'Validation failed: unsupported const expr opcode 0x${pseudoOpcode.toRadixString(16)}',
@@ -1907,6 +2174,9 @@ abstract final class WasmValidator {
             if (type == null) {
               mismatch('global.set malformed import');
             }
+            if (!type.mutable) {
+              mismatch('global.set requires mutable global');
+            }
             popExpected(
               type.valueTypeSignature != null &&
                       type.valueTypeSignature!.isNotEmpty
@@ -1918,6 +2188,9 @@ abstract final class WasmValidator {
             final localGlobal =
                 module.globals[globalIndex - importedGlobals.length];
             final type = localGlobal.type;
+            if (!type.mutable) {
+              mismatch('global.set requires mutable global');
+            }
             popExpected(
               type.valueTypeSignature != null &&
                       type.valueTypeSignature!.isNotEmpty
@@ -1999,6 +2272,10 @@ abstract final class WasmValidator {
               'ref.as_non_null input',
             ),
           );
+
+        case Opcodes.anyConvertExtern:
+        case Opcodes.externConvertAny:
+          stack.add(popReference('ref conversion input'));
 
         case Opcodes.drop:
           popAny('drop');

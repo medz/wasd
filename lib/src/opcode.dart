@@ -260,6 +260,7 @@ abstract final class Opcodes {
   static const int brOnCast = 0xfb18;
   static const int brOnCastFail = 0xfb19;
   static const int anyConvertExtern = 0xfb1a;
+  static const int externConvertAny = 0xfb1b;
   static const int refI31 = 0xfb1c;
   static const int i31GetS = 0xfb1d;
   static const int i31GetU = 0xfb1e;

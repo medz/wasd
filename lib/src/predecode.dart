@@ -621,6 +621,7 @@ abstract final class WasmPredecoder {
         );
       case Opcodes.arrayLen:
       case Opcodes.anyConvertExtern:
+      case Opcodes.externConvertAny:
       case Opcodes.refI31:
       case Opcodes.i31GetS:
       case Opcodes.i31GetU:

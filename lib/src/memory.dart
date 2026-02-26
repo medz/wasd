@@ -11,6 +11,7 @@ final class WasmMemory {
     required this.minPages,
     this.maxPages,
     this.shared = false,
+    this.isMemory64 = false,
     this.pageSizeBytes = wasmPageSize,
   }) : _buffer = Uint8List(
          _validatedInitialPageCount(
@@ -26,6 +27,7 @@ final class WasmMemory {
   final int minPages;
   final int? maxPages;
   final bool shared;
+  final bool isMemory64;
   final int pageSizeBytes;
   Uint8List _buffer;
   late ByteData _view;
