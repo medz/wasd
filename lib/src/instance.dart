@@ -1026,6 +1026,14 @@ final class WasmInstance {
             }
             pc++;
 
+          case Opcodes.v128Const:
+            final laneBytes = instruction.floatBytesImmediate;
+            if (laneBytes == null || laneBytes.length != 16) {
+              throw StateError('Malformed v128.const immediate.');
+            }
+            stack.add(WasmValue.i32(WasmVm.internV128Bytes(laneBytes)));
+            pc++;
+
           case Opcodes.i32Eqz:
             final value = _popValue(stack, 'i32.eqz').castTo(WasmValueType.i32);
             stack.add(WasmValue.i32(value.asI32() == 0 ? 1 : 0));

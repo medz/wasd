@@ -4306,6 +4306,49 @@ void main() {
       },
     );
 
+    test('supports v128.const in async import call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+        ],
+        functionTypeIndices: const [0],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0x00)),
+              Opcodes.drop,
+              ..._call(0),
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'supportsV128Const',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(simd: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('supportsV128Const', [41]), 42);
+    });
+
     test(
       'reports explicit boundary for unsupported async call chains',
       () async {
@@ -4324,6 +4367,7 @@ void main() {
                 ..._call(0),
                 Opcodes.drop,
                 ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
+                ..._fdBytes(Opcodes.i8x16Abs, []),
                 Opcodes.drop,
                 ..._i32Const(0),
                 Opcodes.end,
