@@ -1417,6 +1417,70 @@ final class WasmInstance {
             _simdF32x4Max(stack);
             pc++;
 
+          case Opcodes.f64x2Splat:
+            _simdF64x2Splat(stack);
+            pc++;
+
+          case Opcodes.f64x2Eq:
+            _simdF64x2Eq(stack);
+            pc++;
+
+          case Opcodes.f64x2Ne:
+            _simdF64x2Ne(stack);
+            pc++;
+
+          case Opcodes.f64x2Lt:
+            _simdF64x2Compare(stack, opcode: Opcodes.f64x2Lt);
+            pc++;
+
+          case Opcodes.f64x2Gt:
+            _simdF64x2Compare(stack, opcode: Opcodes.f64x2Gt);
+            pc++;
+
+          case Opcodes.f64x2Le:
+            _simdF64x2Compare(stack, opcode: Opcodes.f64x2Le);
+            pc++;
+
+          case Opcodes.f64x2Ge:
+            _simdF64x2Compare(stack, opcode: Opcodes.f64x2Ge);
+            pc++;
+
+          case Opcodes.f64x2Add:
+            _simdF64x2Add(stack);
+            pc++;
+
+          case Opcodes.f64x2Sub:
+            _simdF64x2Sub(stack);
+            pc++;
+
+          case Opcodes.f64x2Mul:
+            _simdF64x2Mul(stack);
+            pc++;
+
+          case Opcodes.f64x2Div:
+            _simdF64x2Div(stack);
+            pc++;
+
+          case Opcodes.f64x2Abs:
+            _simdF64x2Abs(stack);
+            pc++;
+
+          case Opcodes.f64x2Neg:
+            _simdF64x2Neg(stack);
+            pc++;
+
+          case Opcodes.f64x2Sqrt:
+            _simdF64x2Sqrt(stack);
+            pc++;
+
+          case Opcodes.f64x2Min:
+            _simdF64x2Min(stack);
+            pc++;
+
+          case Opcodes.f64x2Max:
+            _simdF64x2Max(stack);
+            pc++;
+
           case Opcodes.i32Eqz:
             final value = _popValue(stack, 'i32.eqz').castTo(WasmValueType.i32);
             stack.add(WasmValue.i32(value.asI32() == 0 ? 1 : 0));
@@ -6351,6 +6415,253 @@ final class WasmInstance {
     _pushAsyncSubsetV128(stack, result);
   }
 
+  void _simdF64x2Splat(List<WasmValue> stack) {
+    final laneBits = _popValue(
+      stack,
+      'f64x2.splat',
+    ).castTo(WasmValueType.f64).asF64Bits();
+    final result = Uint8List(16);
+    final data = ByteData.sublistView(result);
+    for (var i = 0; i < 2; i++) {
+      _writeAsyncSubsetLaneU64(data, i * 8, laneBits);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Eq(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f64x2.eq rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f64x2.eq lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      final laneEqual =
+          lhsData.getFloat64(offset, Endian.little) ==
+          rhsData.getFloat64(offset, Endian.little);
+      _writeAsyncSubsetLaneU64(
+        resultData,
+        offset,
+        laneEqual ? _u64BigMask : BigInt.zero,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Ne(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f64x2.ne rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f64x2.ne lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      final laneNe =
+          lhsData.getFloat64(offset, Endian.little) !=
+          rhsData.getFloat64(offset, Endian.little);
+      _writeAsyncSubsetLaneU64(
+        resultData,
+        offset,
+        laneNe ? _u64BigMask : BigInt.zero,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Compare(List<WasmValue> stack, {required int opcode}) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f64x2.compare rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f64x2.compare lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      final a = lhsData.getFloat64(offset, Endian.little);
+      final b = rhsData.getFloat64(offset, Endian.little);
+      final matches = switch (opcode) {
+        Opcodes.f64x2Lt => a < b,
+        Opcodes.f64x2Gt => a > b,
+        Opcodes.f64x2Le => a <= b,
+        Opcodes.f64x2Ge => a >= b,
+        _ => throw StateError('Unsupported f64x2 compare opcode: $opcode'),
+      };
+      _writeAsyncSubsetLaneU64(
+        resultData,
+        offset,
+        matches ? _u64BigMask : BigInt.zero,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Add(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f64x2.add rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f64x2.add lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _setAsyncSubsetF64LaneCanonical(
+        resultData,
+        offset,
+        lhsData.getFloat64(offset, Endian.little) +
+            rhsData.getFloat64(offset, Endian.little),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Sub(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f64x2.sub rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f64x2.sub lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _setAsyncSubsetF64LaneCanonical(
+        resultData,
+        offset,
+        lhsData.getFloat64(offset, Endian.little) -
+            rhsData.getFloat64(offset, Endian.little),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Mul(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f64x2.mul rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f64x2.mul lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _setAsyncSubsetF64LaneCanonical(
+        resultData,
+        offset,
+        lhsData.getFloat64(offset, Endian.little) *
+            rhsData.getFloat64(offset, Endian.little),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Div(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f64x2.div rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f64x2.div lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _setAsyncSubsetF64LaneCanonical(
+        resultData,
+        offset,
+        lhsData.getFloat64(offset, Endian.little) /
+            rhsData.getFloat64(offset, Endian.little),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Abs(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'f64x2.abs');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      final bits =
+          _readAsyncSubsetLaneU64(valueData, offset) & (_u64BigMask >> 1);
+      _writeAsyncSubsetLaneU64(resultData, offset, bits);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Neg(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'f64x2.neg');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    final signBit = BigInt.one << 63;
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _writeAsyncSubsetLaneU64(
+        resultData,
+        offset,
+        _readAsyncSubsetLaneU64(valueData, offset) ^ signBit,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Sqrt(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'f64x2.sqrt');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _setAsyncSubsetF64LaneCanonical(
+        resultData,
+        offset,
+        math.sqrt(valueData.getFloat64(offset, Endian.little)),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Min(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f64x2.min rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f64x2.min lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _setAsyncSubsetF64LaneCanonical(
+        resultData,
+        offset,
+        _fMin(
+          lhsData.getFloat64(offset, Endian.little),
+          rhsData.getFloat64(offset, Endian.little),
+        ),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Max(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f64x2.max rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f64x2.max lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _setAsyncSubsetF64LaneCanonical(
+        resultData,
+        offset,
+        _fMax(
+          lhsData.getFloat64(offset, Endian.little),
+          rhsData.getFloat64(offset, Endian.little),
+        ),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
   void _setAsyncSubsetF32LaneCanonical(
     ByteData data,
     int offset,
@@ -6358,6 +6669,15 @@ final class WasmInstance {
   ) {
     final bits = WasmValue.toF32Bits(value);
     data.setUint32(offset, _canonicalizeF32NaNBits(bits), Endian.little);
+  }
+
+  void _setAsyncSubsetF64LaneCanonical(
+    ByteData data,
+    int offset,
+    double value,
+  ) {
+    final bits = WasmValue.toF64Bits(value);
+    _writeAsyncSubsetLaneU64(data, offset, _canonicalizeF64NaNBits(bits));
   }
 
   BigInt _readAsyncSubsetLaneU64(ByteData data, int offset) {
@@ -6484,6 +6804,17 @@ final class WasmInstance {
   static int _canonicalizeF32NaNBits(int bits) {
     final normalized = bits.toUnsigned(32);
     return _isF32NaNBits(normalized) ? 0x7fc00000 : normalized;
+  }
+
+  static bool _isF64NaNBits(BigInt bits) {
+    final normalized = WasmI64.unsigned(bits);
+    return (normalized & _f64ExponentMask) == _f64ExponentMask &&
+        (normalized & _f64FractionMask) != BigInt.zero;
+  }
+
+  static BigInt _canonicalizeF64NaNBits(BigInt bits) {
+    final normalized = WasmI64.unsigned(bits);
+    return _isF64NaNBits(normalized) ? _f64CanonicalNan : normalized;
   }
 
   static int _truncToI32S(double value) {
@@ -6635,6 +6966,18 @@ final class WasmInstance {
   static final BigInt _u64BigMod = BigInt.one << 64;
   static final BigInt _u64BigMask = _u64BigMod - BigInt.one;
   static final BigInt _u128BigMask = (BigInt.one << 128) - BigInt.one;
+  static final BigInt _f64ExponentMask = BigInt.parse(
+    '7ff0000000000000',
+    radix: 16,
+  );
+  static final BigInt _f64FractionMask = BigInt.parse(
+    '000fffffffffffff',
+    radix: 16,
+  );
+  static final BigInt _f64CanonicalNan = BigInt.parse(
+    '7ff8000000000000',
+    radix: 16,
+  );
 
   static const double _i32Min = -2147483648.0;
   static const double _i32Max = 2147483647.0;

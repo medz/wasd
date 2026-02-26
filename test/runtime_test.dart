@@ -5622,6 +5622,220 @@ void main() {
       expect(await instance.invokeI32Async('supportsF32x4Ge', [41]), 1);
     });
 
+    test('supports f64x2 SIMD opcodes in async import call chains', () async {
+      List<int> f64x2SplatBytes(double value) {
+        final lane = ByteData(8);
+        lane.setFloat64(0, value, Endian.little);
+        final bytes = lane.buffer.asUint8List();
+        return List<int>.generate(16, (index) => bytes[index % 8]);
+      }
+
+      final wasm = _buildModule(
+        types: [
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+        ],
+        functionTypeIndices: const [0, 0, 0, 0, 0, 0, 0, 0],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._f64Const(2.0),
+              ..._fdBytes(Opcodes.f64x2Splat, []),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(2.0)),
+              ..._fdBytes(Opcodes.f64x2Eq, []),
+              ..._fdBytes(Opcodes.i64x2AllTrue, []),
+              ..._i32Const(1),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(1.0)),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(2.0)),
+              ..._fdBytes(Opcodes.f64x2Lt, []),
+              ..._fdBytes(Opcodes.i64x2AllTrue, []),
+              ..._i32Const(1),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(6.0)),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(2.0)),
+              ..._fdBytes(Opcodes.f64x2Add, []),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(4.0)),
+              ..._fdBytes(Opcodes.f64x2Sub, []),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(3.0)),
+              ..._fdBytes(Opcodes.f64x2Mul, []),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(2.0)),
+              ..._fdBytes(Opcodes.f64x2Div, []),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(6.0)),
+              ..._fdBytes(Opcodes.f64x2Eq, []),
+              ..._fdBytes(Opcodes.i64x2AllTrue, []),
+              ..._i32Const(1),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(5.0)),
+              ..._fdBytes(Opcodes.f64x2Neg, []),
+              ..._fdBytes(Opcodes.f64x2Abs, []),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(5.0)),
+              ..._fdBytes(Opcodes.f64x2Eq, []),
+              ..._fdBytes(Opcodes.i64x2AllTrue, []),
+              ..._i32Const(1),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(9.0)),
+              ..._fdBytes(Opcodes.f64x2Sqrt, []),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(3.0)),
+              ..._fdBytes(Opcodes.f64x2Eq, []),
+              ..._fdBytes(Opcodes.i64x2AllTrue, []),
+              ..._i32Const(1),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(3.0)),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(5.0)),
+              ..._fdBytes(Opcodes.f64x2Min, []),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(7.0)),
+              ..._fdBytes(Opcodes.f64x2Max, []),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(7.0)),
+              ..._fdBytes(Opcodes.f64x2Eq, []),
+              ..._fdBytes(Opcodes.i64x2AllTrue, []),
+              ..._i32Const(1),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(1.0)),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(2.0)),
+              ..._fdBytes(Opcodes.f64x2Ne, []),
+              ..._fdBytes(Opcodes.i64x2AllTrue, []),
+              ..._i32Const(1),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(2.0)),
+              ..._fdBytes(Opcodes.v128Const, f64x2SplatBytes(1.0)),
+              ..._fdBytes(Opcodes.f64x2Ge, []),
+              ..._fdBytes(Opcodes.i64x2AllTrue, []),
+              ..._i32Const(1),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'supportsF64x2Splat',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+          _ExportSpec(
+            name: 'supportsF64x2Lt',
+            kind: WasmExportKind.function,
+            index: 2,
+          ),
+          _ExportSpec(
+            name: 'supportsF64x2AddSubMulDiv',
+            kind: WasmExportKind.function,
+            index: 3,
+          ),
+          _ExportSpec(
+            name: 'supportsF64x2NegAbs',
+            kind: WasmExportKind.function,
+            index: 4,
+          ),
+          _ExportSpec(
+            name: 'supportsF64x2Sqrt',
+            kind: WasmExportKind.function,
+            index: 5,
+          ),
+          _ExportSpec(
+            name: 'supportsF64x2MinMax',
+            kind: WasmExportKind.function,
+            index: 6,
+          ),
+          _ExportSpec(
+            name: 'supportsF64x2Ne',
+            kind: WasmExportKind.function,
+            index: 7,
+          ),
+          _ExportSpec(
+            name: 'supportsF64x2Ge',
+            kind: WasmExportKind.function,
+            index: 8,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(simd: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('supportsF64x2Splat', [41]), 1);
+      expect(await instance.invokeI32Async('supportsF64x2Lt', [41]), 1);
+      expect(
+        await instance.invokeI32Async('supportsF64x2AddSubMulDiv', [41]),
+        1,
+      );
+      expect(await instance.invokeI32Async('supportsF64x2NegAbs', [41]), 1);
+      expect(await instance.invokeI32Async('supportsF64x2Sqrt', [41]), 1);
+      expect(await instance.invokeI32Async('supportsF64x2MinMax', [41]), 1);
+      expect(await instance.invokeI32Async('supportsF64x2Ne', [41]), 1);
+      expect(await instance.invokeI32Async('supportsF64x2Ge', [41]), 1);
+    });
+
     test(
       'reports explicit boundary for unsupported async call chains',
       () async {
@@ -5641,7 +5855,7 @@ void main() {
                 Opcodes.drop,
                 ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
                 ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
-                ..._fdBytes(Opcodes.f64x2Eq, []),
+                ..._fdBytes(Opcodes.f64x2Pmin, []),
                 Opcodes.drop,
                 ..._i32Const(0),
                 Opcodes.end,
