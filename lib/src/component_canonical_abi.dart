@@ -4,7 +4,17 @@ import 'dart:typed_data';
 import 'int64.dart';
 import 'memory.dart';
 
-enum WasmCanonicalAbiType { s32, u32, s64, u64, f32, f64, boolI32, stringUtf8 }
+enum WasmCanonicalAbiType {
+  s32,
+  u32,
+  s64,
+  u64,
+  f32,
+  f64,
+  boolI32,
+  stringUtf8,
+  bytes,
+}
 
 final class WasmCanonicalAbiAllocator {
   WasmCanonicalAbiAllocator({this.cursor = 0, this.maxOffset});
@@ -79,6 +89,13 @@ abstract final class WasmCanonicalAbi {
             );
           }
           final bytes = Uint8List.fromList(utf8.encode(value));
+          final pointer = allocator.allocate(bytes.length, alignment: 1);
+          memory.writeBytes(pointer, bytes);
+          flat
+            ..add(pointer.toUnsigned(32))
+            ..add(bytes.length.toUnsigned(32));
+        case WasmCanonicalAbiType.bytes:
+          final bytes = _coerceBytes(value);
           final pointer = allocator.allocate(bytes.length, alignment: 1);
           memory.writeBytes(pointer, bytes);
           flat
@@ -162,6 +179,10 @@ abstract final class WasmCanonicalAbi {
           final length = readUint32();
           final bytes = memory.readBytes(pointer, length);
           values.add(utf8.decode(bytes));
+        case WasmCanonicalAbiType.bytes:
+          final pointer = readUint32();
+          final length = readUint32();
+          values.add(memory.readBytes(pointer, length));
       }
     }
 
@@ -214,5 +235,15 @@ abstract final class WasmCanonicalAbi {
       return value.toInt() == 0 ? 0 : 1;
     }
     throw ArgumentError('Expected bool-compatible value for canonical ABI.');
+  }
+
+  static Uint8List _coerceBytes(Object? value) {
+    if (value is Uint8List) {
+      return Uint8List.fromList(value);
+    }
+    if (value is List<int>) {
+      return Uint8List.fromList(value);
+    }
+    throw ArgumentError('Expected bytes-compatible value for canonical ABI.');
   }
 }

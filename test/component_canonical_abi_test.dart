@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:test/test.dart';
 import 'package:wasd/wasd.dart';
 
@@ -67,6 +69,28 @@ void main() {
         ),
         throwsA(isA<FormatException>()),
       );
+    });
+
+    test('lowers and lifts bytes through pointer-length ABI pair', () {
+      final memory = WasmMemory(minPages: 1);
+      final allocator = WasmCanonicalAbiAllocator(cursor: 64);
+      final payload = Uint8List.fromList(<int>[1, 2, 3, 4, 5]);
+
+      final flat = WasmCanonicalAbi.lowerValues(
+        types: const [WasmCanonicalAbiType.bytes],
+        values: [payload],
+        memory: memory,
+        allocator: allocator,
+      );
+      expect(flat, hasLength(2));
+
+      final lifted = WasmCanonicalAbi.liftValues(
+        types: const [WasmCanonicalAbiType.bytes],
+        flatValues: flat,
+        memory: memory,
+      );
+      expect(lifted.single, isA<Uint8List>());
+      expect((lifted.single as Uint8List), orderedEquals(payload));
     });
   });
 }
