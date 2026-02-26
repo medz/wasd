@@ -20,14 +20,17 @@ final class WasmComponentInstance {
     required this.imports,
     required this.features,
     required this.coreInstances,
+    required Map<String, int> coreInstanceAliases,
     required Map<String, ({int instanceIndex, String coreExportName})>
     coreExportAliases,
-  }) : _coreExportAliases = coreExportAliases;
+  }) : _coreInstanceAliases = coreInstanceAliases,
+       _coreExportAliases = coreExportAliases;
 
   final WasmComponent component;
   final WasmImports imports;
   final WasmFeatureSet features;
   final List<WasmInstance> coreInstances;
+  final Map<String, int> _coreInstanceAliases;
   final Map<String, ({int instanceIndex, String coreExportName})>
   _coreExportAliases;
 
@@ -94,6 +97,18 @@ final class WasmComponentInstance {
         'Component does not define any instantiable core instance.',
       );
     }
+    final instanceAliasMap = <String, int>{};
+    for (final alias in component.coreInstanceAliases) {
+      final instanceIndex = alias.instanceIndex;
+      if (instanceIndex < 0 || instanceIndex >= coreInstances.length) {
+        throw FormatException(
+          'Component core-instance alias `${alias.aliasName}` references '
+          'invalid core instance index $instanceIndex '
+          '(count=${coreInstances.length}).',
+        );
+      }
+      instanceAliasMap[alias.aliasName] = instanceIndex;
+    }
     final aliasMap = <String, ({int instanceIndex, String coreExportName})>{};
     for (final alias in component.coreExportAliases) {
       final instanceIndex = alias.instanceIndex;
@@ -114,6 +129,7 @@ final class WasmComponentInstance {
       imports: imports,
       features: features,
       coreInstances: List<WasmInstance>.unmodifiable(coreInstances),
+      coreInstanceAliases: Map<String, int>.unmodifiable(instanceAliasMap),
       coreExportAliases:
           Map<
             String,
@@ -125,6 +141,18 @@ final class WasmComponentInstance {
   WasmInstance coreInstance([int moduleIndex = 0]) {
     _checkModuleIndex(moduleIndex);
     return coreInstances[moduleIndex];
+  }
+
+  WasmInstance coreInstanceByAlias(String aliasName) {
+    final index = _coreInstanceAliases[aliasName];
+    if (index == null) {
+      throw ArgumentError.value(
+        aliasName,
+        'aliasName',
+        'Core instance alias not found',
+      );
+    }
+    return coreInstance(index);
   }
 
   Object? invokeCore(

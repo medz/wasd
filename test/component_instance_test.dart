@@ -107,6 +107,38 @@ void main() {
       expect(satisfied.invokeCore('one'), 1);
     });
 
+    test('resolves core instances by alias from section 0x05', () {
+      final componentBytes = _componentWithCoreModules(
+        <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+        coreInstanceAliases: const [
+          _ComponentInstanceAliasSpec(aliasName: 'main', instanceIndex: 0),
+        ],
+      );
+
+      final instance = WasmComponentInstance.fromBytes(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+      expect(instance.coreInstanceByAlias('main').invoke('one'), 1);
+    });
+
+    test('rejects out-of-range core instance alias bindings', () {
+      final componentBytes = _componentWithCoreModules(
+        <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+        coreInstanceAliases: const [
+          _ComponentInstanceAliasSpec(aliasName: 'bad', instanceIndex: 1),
+        ],
+      );
+
+      expect(
+        () => WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+    });
+
     test('bridges canonical ABI through core export calls', () {
       final componentBytes = _componentWithCoreModules(<Uint8List>[
         _coreModuleEchoUtf8PointerLength(name: 'echo'),
@@ -160,6 +192,7 @@ Uint8List _componentWithCoreModules(
   List<int>? instantiateModuleIndices,
   List<_ComponentAliasSpec>? exportAliases,
   List<_ComponentImportRequirementSpec>? importRequirements,
+  List<_ComponentInstanceAliasSpec>? coreInstanceAliases,
 }) {
   final bytes = <int>[0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00];
   for (final module in modules) {
@@ -210,6 +243,19 @@ Uint8List _componentWithCoreModules(
       ..addAll(_u32Leb(payload.length))
       ..addAll(payload);
   }
+  final instanceAliases = coreInstanceAliases;
+  if (instanceAliases != null && instanceAliases.isNotEmpty) {
+    final payload = <int>[..._u32Leb(instanceAliases.length)];
+    for (final alias in instanceAliases) {
+      payload
+        ..addAll(_name(alias.aliasName))
+        ..addAll(_u32Leb(alias.instanceIndex));
+    }
+    bytes
+      ..add(0x05)
+      ..addAll(_u32Leb(payload.length))
+      ..addAll(payload);
+  }
   return Uint8List.fromList(bytes);
 }
 
@@ -237,6 +283,16 @@ final class _ComponentImportRequirementSpec {
   final String moduleName;
   final String fieldName;
   final int kind;
+}
+
+final class _ComponentInstanceAliasSpec {
+  const _ComponentInstanceAliasSpec({
+    required this.aliasName,
+    required this.instanceIndex,
+  });
+
+  final String aliasName;
+  final int instanceIndex;
 }
 
 Uint8List _coreModuleConstI32({required String name, required int value}) {

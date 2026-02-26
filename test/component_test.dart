@@ -358,6 +358,49 @@ void main() {
       );
     });
 
+    test('decodes core instance aliases from section 0x05', () {
+      final componentBytes = Uint8List.fromList(<int>[
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x0d,
+        0x00,
+        0x01,
+        0x00,
+        // section 1: one core module payload
+        0x01,
+        0x08,
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        // section 5: one instance alias `main` -> 0
+        0x05,
+        0x07,
+        0x01,
+        0x04,
+        0x6d,
+        0x61,
+        0x69,
+        0x6e,
+        0x00,
+      ]);
+
+      final component = WasmComponent.decode(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
+      expect(component.coreInstanceAliases, hasLength(1));
+      expect(component.coreInstanceAliases.single.aliasName, 'main');
+      expect(component.coreInstanceAliases.single.instanceIndex, 0);
+    });
+
     test('rejects unsupported component version', () {
       final componentBytes = Uint8List.fromList(<int>[
         0x00,

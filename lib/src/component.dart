@@ -50,6 +50,17 @@ final class WasmComponentImportRequirement {
   final WasmComponentImportKind kind;
 }
 
+/// Alias binding for a core instance index, decoded from section `0x05`.
+final class WasmComponentCoreInstanceAlias {
+  const WasmComponentCoreInstanceAlias({
+    required this.aliasName,
+    required this.instanceIndex,
+  });
+
+  final String aliasName;
+  final int instanceIndex;
+}
+
 /// Minimal component binary decoder.
 ///
 /// This currently validates the component header and collects raw sections.
@@ -61,6 +72,7 @@ final class WasmComponent {
     required this.coreInstances,
     required this.coreExportAliases,
     required this.importRequirements,
+    required this.coreInstanceAliases,
   });
 
   static const List<int> _magic = <int>[0x00, 0x61, 0x73, 0x6d];
@@ -71,6 +83,7 @@ final class WasmComponent {
   final List<WasmComponentCoreInstance> coreInstances;
   final List<WasmComponentCoreExportAlias> coreExportAliases;
   final List<WasmComponentImportRequirement> importRequirements;
+  final List<WasmComponentCoreInstanceAlias> coreInstanceAliases;
 
   static WasmComponent decode(
     Uint8List componentBytes, {
@@ -98,6 +111,7 @@ final class WasmComponent {
     final coreInstances = <WasmComponentCoreInstance>[];
     final coreExportAliases = <WasmComponentCoreExportAlias>[];
     final importRequirements = <WasmComponentImportRequirement>[];
+    final coreInstanceAliases = <WasmComponentCoreInstanceAlias>[];
     while (!reader.isEOF) {
       final id = reader.readByte();
       final sectionSize = reader.readVarUint32();
@@ -112,6 +126,10 @@ final class WasmComponent {
         coreExportAliases.addAll(_decodeCoreExportAliasSectionPayload(payload));
       } else if (id == 0x04) {
         importRequirements.addAll(_decodeImportSectionPayload(payload));
+      } else if (id == 0x05) {
+        coreInstanceAliases.addAll(
+          _decodeCoreInstanceAliasSectionPayload(payload),
+        );
       }
     }
 
@@ -126,6 +144,9 @@ final class WasmComponent {
       ),
       importRequirements: List<WasmComponentImportRequirement>.unmodifiable(
         importRequirements,
+      ),
+      coreInstanceAliases: List<WasmComponentCoreInstanceAlias>.unmodifiable(
+        coreInstanceAliases,
       ),
     );
   }
@@ -246,6 +267,33 @@ final class WasmComponent {
           'Unsupported component import kind: 0x${raw.toRadixString(16)}',
         );
     }
+  }
+
+  static List<WasmComponentCoreInstanceAlias>
+  _decodeCoreInstanceAliasSectionPayload(Uint8List payload) {
+    final reader = ByteReader(payload);
+    final count = reader.readVarUint32();
+    final aliases = <WasmComponentCoreInstanceAlias>[];
+    final names = <String>{};
+    for (var i = 0; i < count; i++) {
+      final aliasName = _readName(reader);
+      final instanceIndex = reader.readVarUint32();
+      if (!names.add(aliasName)) {
+        throw FormatException('Duplicate core instance alias: $aliasName');
+      }
+      aliases.add(
+        WasmComponentCoreInstanceAlias(
+          aliasName: aliasName,
+          instanceIndex: instanceIndex,
+        ),
+      );
+    }
+    if (!reader.isEOF) {
+      throw const FormatException(
+        'Trailing bytes in component core-instance alias section payload.',
+      );
+    }
+    return aliases;
   }
 
   static String _readName(ByteReader reader) {
