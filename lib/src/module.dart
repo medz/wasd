@@ -170,12 +170,14 @@ final class WasmTableType {
     required this.min,
     this.max,
     this.isTable64 = false,
+    this.refTypeSignature,
   });
 
   final WasmRefType refType;
   final int min;
   final int? max;
   final bool isTable64;
+  final String? refTypeSignature;
 }
 
 final class WasmGlobalType {
@@ -281,18 +283,16 @@ final class WasmElementSegment {
   const WasmElementSegment.passive({
     required this.functionIndices,
     this.refTypeCode = 0x70,
-  })
-    : mode = WasmElementMode.passive,
-      tableIndex = 0,
-      offsetExpr = null;
+  }) : mode = WasmElementMode.passive,
+       tableIndex = 0,
+       offsetExpr = null;
 
   const WasmElementSegment.declarative({
     required this.functionIndices,
     this.refTypeCode = 0x70,
-  })
-    : mode = WasmElementMode.declarative,
-      tableIndex = 0,
-      offsetExpr = null;
+  }) : mode = WasmElementMode.declarative,
+       tableIndex = 0,
+       offsetExpr = null;
 
   final WasmElementMode mode;
   final int tableIndex;
@@ -1410,17 +1410,17 @@ final class WasmModule {
               }
               final type = types[typeIndex];
               if (type.kind != WasmCompositeTypeKind.array) {
-                throw const FormatException(
-                  'Element init expr type mismatch.',
-                );
+                throw const FormatException('Element init expr type mismatch.');
               }
               if (stack.length < 2) {
                 throw const FormatException(
                   'Malformed array.new init expr in element.',
                 );
               }
-              final length =
-                  stack.removeLast().castTo(WasmValueType.i32).asI32();
+              final length = stack
+                  .removeLast()
+                  .castTo(WasmValueType.i32)
+                  .asI32();
               final seed = _coerceConstFieldValue(
                 type.fieldSignatures.single,
                 stack.removeLast(),
@@ -1451,12 +1451,12 @@ final class WasmModule {
               }
               final type = types[typeIndex];
               if (type.kind != WasmCompositeTypeKind.array || stack.isEmpty) {
-                throw const FormatException(
-                  'Element init expr type mismatch.',
-                );
+                throw const FormatException('Element init expr type mismatch.');
               }
-              final length =
-                  stack.removeLast().castTo(WasmValueType.i32).asI32();
+              final length = stack
+                  .removeLast()
+                  .castTo(WasmValueType.i32)
+                  .asI32();
               if (length < 0) {
                 throw RangeError('Array length out of bounds: $length');
               }
@@ -1488,9 +1488,7 @@ final class WasmModule {
               final type = types[typeIndex];
               if (type.kind != WasmCompositeTypeKind.array ||
                   stack.length < elementCount) {
-                throw const FormatException(
-                  'Element init expr type mismatch.',
-                );
+                throw const FormatException('Element init expr type mismatch.');
               }
               final elements = List<WasmValue>.filled(
                 elementCount,
@@ -1534,7 +1532,10 @@ final class WasmModule {
     }
   }
 
-  static WasmValue _coerceConstFieldValue(String fieldSignature, WasmValue input) {
+  static WasmValue _coerceConstFieldValue(
+    String fieldSignature,
+    WasmValue input,
+  ) {
     final bytes = _fieldSignatureBytes(fieldSignature);
     final typeCode = bytes.first;
     switch (typeCode) {
@@ -1665,7 +1666,11 @@ final class WasmModule {
   }
 
   static WasmTableType _readTableType(ByteReader reader) {
+    final refTypeStart = reader.offset;
     final refType = _readReferenceType(reader);
+    final refTypeSignature = _typeEncodingSignature(
+      reader.bytes.sublist(refTypeStart, reader.offset),
+    );
     final limits = _readLimits(reader, allowExtendedMemoryFlags: true);
     _validateLimits(limits, context: 'table');
     if (limits.shared || limits.pageSizeLog2 != 16) {
@@ -1678,6 +1683,7 @@ final class WasmModule {
       min: limits.min,
       max: limits.max,
       isTable64: limits.memory64,
+      refTypeSignature: refTypeSignature,
     );
   }
 

@@ -37,6 +37,7 @@ final class _SimpleControlFrame {
   final bool isIf;
   bool seenElse = false;
   bool hasEndReachability = false;
+  bool propagatePolymorphicToParent = false;
 }
 
 abstract final class WasmValidator {
@@ -86,7 +87,10 @@ abstract final class WasmValidator {
         if (parsedField == null) {
           throw const FormatException('Validation failed: type mismatch.');
         }
-        _validateValueSignatureTypeReference(module, parsedField.valueSignature);
+        _validateValueSignatureTypeReference(
+          module,
+          parsedField.valueSignature,
+        );
       }
     }
   }
@@ -309,8 +313,8 @@ abstract final class WasmValidator {
     final memory64ByIndex = _memory64ByIndex(module);
     final availableGlobals = <WasmGlobalType>[
       ...module.imports
-        .where((i) => i.kind == WasmImportKind.global)
-        .map((i) => i.globalType!),
+          .where((i) => i.kind == WasmImportKind.global)
+          .map((i) => i.globalType!),
       ...module.globals.map((global) => global.type),
     ];
 
@@ -494,9 +498,7 @@ abstract final class WasmValidator {
             final tableIndex = instruction.secondaryImmediate!;
             final tableType = tableTypes[tableIndex];
             if (tableType.refType != WasmRefType.funcref) {
-              throw const FormatException(
-                'Validation failed: type mismatch.',
-              );
+              throw const FormatException('Validation failed: type mismatch.');
             }
           case Opcodes.localGet:
           case Opcodes.localSet:
@@ -562,7 +564,9 @@ abstract final class WasmValidator {
                     instruction.opcode == Opcodes.arrayInitData ||
                     instruction.opcode == Opcodes.arrayInitElem) &&
                 arrayField.mutability == 0) {
-              throw const FormatException('Validation failed: immutable array.');
+              throw const FormatException(
+                'Validation failed: immutable array.',
+              );
             }
             if (instruction.opcode == Opcodes.arrayGet &&
                 _isPackedStorageSignature(arrayField.valueSignature)) {
@@ -577,8 +581,14 @@ abstract final class WasmValidator {
                 instruction.opcode == Opcodes.arrayInitData) {
               requiresDataCount = true;
               final dataIndex = instruction.secondaryImmediate!;
-              _checkIndex(dataIndex, module.dataSegments.length, 'data segment');
-              if (!_isNumericOrVectorValueSignature(arrayField.valueSignature)) {
+              _checkIndex(
+                dataIndex,
+                module.dataSegments.length,
+                'data segment',
+              );
+              if (!_isNumericOrVectorValueSignature(
+                arrayField.valueSignature,
+              )) {
                 throw const FormatException(
                   'Validation failed: type mismatch.',
                 );
@@ -587,7 +597,11 @@ abstract final class WasmValidator {
             if (instruction.opcode == Opcodes.arrayNewElem ||
                 instruction.opcode == Opcodes.arrayInitElem) {
               final elementIndex = instruction.secondaryImmediate!;
-              _checkIndex(elementIndex, module.elements.length, 'element segment');
+              _checkIndex(
+                elementIndex,
+                module.elements.length,
+                'element segment',
+              );
               if (!_isReferenceValueSignature(arrayField.valueSignature)) {
                 throw const FormatException(
                   'Validation failed: type mismatch.',
@@ -621,7 +635,9 @@ abstract final class WasmValidator {
               throw const FormatException('Validation failed: type mismatch.');
             }
             if (destinationField.mutability == 0) {
-              throw const FormatException('Validation failed: immutable array.');
+              throw const FormatException(
+                'Validation failed: immutable array.',
+              );
             }
             if (!_areValueTypeSignaturesEquivalent(
               module,
@@ -723,12 +739,23 @@ abstract final class WasmValidator {
             }
             _checkIndex(instruction.immediate!, memoryCount, 'memory');
           case Opcodes.tableInit:
+            final elementIndex = instruction.immediate!;
+            final tableIndex = instruction.secondaryImmediate!;
             _checkIndex(
-              instruction.immediate!,
+              elementIndex,
               module.elements.length,
               'element segment',
             );
-            _checkIndex(instruction.secondaryImmediate!, tableCount, 'table');
+            _checkIndex(tableIndex, tableCount, 'table');
+            final tableSignature = _tableValueSignature(tableTypes[tableIndex]);
+            final elementSegment = module.elements[elementIndex];
+            if (!_isElementSegmentRefCompatible(
+              module: module,
+              segmentRefTypeCode: elementSegment.refTypeCode,
+              targetValueSignature: tableSignature,
+            )) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
           case Opcodes.elemDrop:
             _checkIndex(
               instruction.immediate!,
@@ -736,8 +763,23 @@ abstract final class WasmValidator {
               'element segment',
             );
           case Opcodes.tableCopy:
-            _checkIndex(instruction.immediate!, tableCount, 'table');
-            _checkIndex(instruction.secondaryImmediate!, tableCount, 'table');
+            final destinationTableIndex = instruction.immediate!;
+            final sourceTableIndex = instruction.secondaryImmediate!;
+            _checkIndex(destinationTableIndex, tableCount, 'table');
+            _checkIndex(sourceTableIndex, tableCount, 'table');
+            final destinationSignature = _tableValueSignature(
+              tableTypes[destinationTableIndex],
+            );
+            final sourceSignature = _tableValueSignature(
+              tableTypes[sourceTableIndex],
+            );
+            if (!_isValueSignatureSubtype(
+              module,
+              sourceSignature,
+              destinationSignature,
+            )) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
           case Opcodes.tableGrow:
           case Opcodes.tableSize:
           case Opcodes.tableFill:
@@ -1093,6 +1135,13 @@ abstract final class WasmValidator {
       throw FormatException('Validation failed: type mismatch ($reason).');
     }
 
+    final tableTypes = <WasmTableType>[
+      ...module.imports
+          .where((import) => import.kind == WasmImportKind.table)
+          .map((import) => import.tableType!),
+      ...module.tables,
+    ];
+
     String addressSignatureForMemArg(MemArg? memArg) {
       final memoryIndex = memArg?.memoryIndex ?? 0;
       final isMemory64 =
@@ -1116,6 +1165,13 @@ abstract final class WasmValidator {
           tableIndex < table64ByIndex.length &&
           table64ByIndex[tableIndex];
       return isTable64 ? '7e' : '7f';
+    }
+
+    String tableElementSignature(int tableIndex) {
+      if (tableIndex < 0 || tableIndex >= tableTypes.length) {
+        mismatch('table index out of range: $tableIndex');
+      }
+      return _tableValueSignature(tableTypes[tableIndex]);
     }
 
     List<String> blockParamSignatures(Instruction instruction) {
@@ -1208,7 +1264,8 @@ abstract final class WasmValidator {
         return false;
       }
       final actualUnknownHeap =
-          actualRef.heapType < 0 && !_isKnownAbstractHeapType(actualRef.heapType);
+          actualRef.heapType < 0 &&
+          !_isKnownAbstractHeapType(actualRef.heapType);
       final expectedUnknownHeap =
           expectedRef.heapType < 0 &&
           !_isKnownAbstractHeapType(expectedRef.heapType);
@@ -1279,10 +1336,13 @@ abstract final class WasmValidator {
       );
     }
 
-    void markPolymorphic() {
+    void markPolymorphic({bool propagateToParent = false}) {
       final frame = controlStack.last;
       stack.length = frame.stackHeight;
       frame.polymorphic = true;
+      if (propagateToParent) {
+        frame.propagatePolymorphicToParent = true;
+      }
     }
 
     _SimpleControlFrame frameForDepth(int depth, String label) {
@@ -1334,10 +1394,7 @@ abstract final class WasmValidator {
       stack.addAll(_functionResultSignatures(targetType));
     }
 
-    void requireReturnCompatibility(
-      WasmFunctionType targetType,
-      String label,
-    ) {
+    void requireReturnCompatibility(WasmFunctionType targetType, String label) {
       final targetResults = _functionResultSignatures(targetType);
       if (targetResults.length != functionResultSignatures.length) {
         mismatch(
@@ -1440,10 +1497,14 @@ abstract final class WasmValidator {
           if (!frame.isIf || frame.seenElse) {
             mismatch('else without matching if');
           }
-          validateFrameEnd(frame, 'if-then');
+          final thenHasConcreteResult = validateFrameEnd(frame, 'if-then');
+          if (thenHasConcreteResult) {
+            frame.hasEndReachability = true;
+          }
           stack.length = frame.stackHeight;
           stack.addAll(frame.parameterSignatures);
           frame.polymorphic = false;
+          frame.propagatePolymorphicToParent = false;
           frame.seenElse = true;
 
         case Opcodes.end:
@@ -1451,6 +1512,11 @@ abstract final class WasmValidator {
             mismatch('end without control frame');
           }
           final frame = controlStack.removeLast();
+          if (frame.isIf &&
+              !frame.seenElse &&
+              frame.resultSignatures.isNotEmpty) {
+            mismatch('if without else cannot produce a result');
+          }
           final hasConcreteResult = validateFrameEnd(frame, 'end');
           stack.length = frame.stackHeight;
           if (hasConcreteResult || frame.hasEndReachability) {
@@ -1458,6 +1524,7 @@ abstract final class WasmValidator {
           }
           if (!hasConcreteResult &&
               !frame.hasEndReachability &&
+              frame.propagatePolymorphicToParent &&
               controlStack.isNotEmpty) {
             controlStack.last.polymorphic = true;
           }
@@ -1475,7 +1542,7 @@ abstract final class WasmValidator {
             labelFrame.hasEndReachability = true;
           }
           popLabelValues(labelFrame.labelSignatures, 'br operand');
-          markPolymorphic();
+          markPolymorphic(propagateToParent: true);
 
         case Opcodes.brIf:
           final depth = instruction.immediate!;
@@ -1484,10 +1551,7 @@ abstract final class WasmValidator {
             labelFrame.hasEndReachability = true;
           }
           popExpected('7f', 'br_if condition');
-          popLabelValues(
-            labelFrame.labelSignatures,
-            'br_if operand',
-          );
+          popLabelValues(labelFrame.labelSignatures, 'br_if operand');
           stack.addAll(labelFrame.labelSignatures);
 
         case Opcodes.brTable:
@@ -1512,7 +1576,7 @@ abstract final class WasmValidator {
             }
           }
           popLabelValues(commonSignatures!, 'br_table operand');
-          markPolymorphic();
+          markPolymorphic(propagateToParent: true);
 
         case Opcodes.brOnNull:
           final depth = instruction.immediate!;
@@ -1524,10 +1588,7 @@ abstract final class WasmValidator {
           final operandFromPolymorphicBottom =
               stack.length <= frame.stackHeight && frame.polymorphic;
           final operand = popReference('br_on_null operand');
-          popLabelValues(
-            labelFrame.labelSignatures,
-            'br_on_null operand',
-          );
+          popLabelValues(labelFrame.labelSignatures, 'br_on_null operand');
           stack.addAll(labelFrame.labelSignatures);
           if (!operandFromPolymorphicBottom) {
             stack.add(makeNonNullableReference(operand, 'br_on_null operand'));
@@ -1569,7 +1630,7 @@ abstract final class WasmValidator {
           for (var i = functionResultSignatures.length - 1; i >= 0; i--) {
             popExpected(functionResultSignatures[i], 'return result[$i]');
           }
-          markPolymorphic();
+          markPolymorphic(propagateToParent: true);
 
         case Opcodes.call:
           final functionIndex = instruction.immediate!;
@@ -1582,7 +1643,7 @@ abstract final class WasmValidator {
           final targetType = _functionTypeForIndex(module, functionIndex);
           popCallArgs(targetType, 'return_call');
           requireReturnCompatibility(targetType, 'return_call');
-          markPolymorphic();
+          markPolymorphic(propagateToParent: true);
 
         case Opcodes.callIndirect:
           final typeIndex = instruction.immediate!;
@@ -1602,7 +1663,7 @@ abstract final class WasmValidator {
           );
           popCallArgs(targetType, 'return_call_indirect');
           requireReturnCompatibility(targetType, 'return_call_indirect');
-          markPolymorphic();
+          markPolymorphic(propagateToParent: true);
 
         case Opcodes.callRef:
           final typeIndex = instruction.immediate!;
@@ -1617,7 +1678,7 @@ abstract final class WasmValidator {
           popCallRefCallee(typeIndex, 'return_call_ref callee');
           popCallArgs(targetType, 'return_call_ref');
           requireReturnCompatibility(targetType, 'return_call_ref');
-          markPolymorphic();
+          markPolymorphic(propagateToParent: true);
 
         case Opcodes.localGet:
           final localIndex = instruction.immediate!;
@@ -1638,8 +1699,8 @@ abstract final class WasmValidator {
           if (localIndex < 0 || localIndex >= locals.length) {
             mismatch('local.tee index out of range: $localIndex');
           }
-          final actual = popExpected(locals[localIndex], 'local.tee value');
-          stack.add(actual);
+          popExpected(locals[localIndex], 'local.tee value');
+          stack.add(locals[localIndex]);
 
         case Opcodes.globalGet:
           final globalIndex = instruction.immediate!;
@@ -1662,7 +1723,8 @@ abstract final class WasmValidator {
                   : _signatureForValueType(type.valueType),
             );
           } else {
-            final localGlobal = module.globals[globalIndex - importedGlobals.length];
+            final localGlobal =
+                module.globals[globalIndex - importedGlobals.length];
             final type = localGlobal.type;
             stack.add(
               type.valueTypeSignature != null &&
@@ -1694,15 +1756,51 @@ abstract final class WasmValidator {
               'global.set value',
             );
           } else {
-            final localGlobal = module.globals[globalIndex - importedGlobals.length];
+            final localGlobal =
+                module.globals[globalIndex - importedGlobals.length];
             final type = localGlobal.type;
             popExpected(
-              type.valueTypeSignature != null && type.valueTypeSignature!.isNotEmpty
+              type.valueTypeSignature != null &&
+                      type.valueTypeSignature!.isNotEmpty
                   ? type.valueTypeSignature!
                   : _signatureForValueType(type.valueType),
               'global.set value',
             );
           }
+
+        case Opcodes.structGetU:
+        case Opcodes.structGetS:
+          final typeIndex = instruction.immediate!;
+          if (typeIndex < 0 || typeIndex >= module.types.length) {
+            mismatch('struct.get type index out of range: $typeIndex');
+          }
+          final type = module.types[typeIndex];
+          if (type.kind != WasmCompositeTypeKind.struct) {
+            mismatch('struct.get requires struct type');
+          }
+          final fieldIndex = instruction.secondaryImmediate!;
+          if (fieldIndex < 0 || fieldIndex >= type.fieldSignatures.length) {
+            mismatch('struct.get field index out of range: $fieldIndex');
+          }
+          final parsedField = _parseFieldSignature(
+            type.fieldSignatures[fieldIndex],
+          );
+          if (parsedField == null) {
+            mismatch('struct.get invalid field signature');
+          }
+          popExpected(
+            _encodeRefSignature(
+              nullable: true,
+              exact: false,
+              heapType: typeIndex,
+            ),
+            'struct.get object',
+          );
+          stack.add(
+            _isPackedStorageSignature(parsedField.valueSignature)
+                ? '7f'
+                : parsedField.valueSignature,
+          );
 
         case Opcodes.refNull:
           final gcRefType = instruction.gcRefType;
@@ -1714,7 +1812,10 @@ abstract final class WasmValidator {
 
         case Opcodes.refFunc:
           final functionIndex = instruction.immediate!;
-          final typeIndex = _functionTypeIndexForFunction(module, functionIndex);
+          final typeIndex = _functionTypeIndexForFunction(
+            module,
+            functionIndex,
+          );
           stack.add(
             _encodeRefSignature(
               nullable: false,
@@ -1723,9 +1824,21 @@ abstract final class WasmValidator {
             ),
           );
 
+        case Opcodes.refIsNull:
+          popReference('ref.is_null input');
+          stack.add('7f');
+
+        case Opcodes.refEq:
+          popReference('ref.eq rhs');
+          popReference('ref.eq lhs');
+          stack.add('7f');
+
         case Opcodes.refAsNonNull:
           stack.add(
-            makeNonNullableReference(popReference('ref.as_non_null input'), 'ref.as_non_null input'),
+            makeNonNullableReference(
+              popReference('ref.as_non_null input'),
+              'ref.as_non_null input',
+            ),
           );
 
         case Opcodes.drop:
@@ -1740,9 +1853,7 @@ abstract final class WasmValidator {
               !_isValueSignatureSubtype(module, rhs, lhs)) {
             mismatch('select operand type mismatch: lhs=$lhs rhs=$rhs');
           }
-          stack.add(
-            _isValueSignatureSubtype(module, lhs, rhs) ? rhs : lhs,
-          );
+          stack.add(_isValueSignatureSubtype(module, lhs, rhs) ? rhs : lhs);
 
         case Opcodes.i32Const:
           stack.add('7f');
@@ -1758,7 +1869,10 @@ abstract final class WasmValidator {
         case Opcodes.i32Load8U:
         case Opcodes.i32Load16S:
         case Opcodes.i32Load16U:
-          popExpected(addressSignatureForMemArg(instruction.memArg), 'i32.load');
+          popExpected(
+            addressSignatureForMemArg(instruction.memArg),
+            'i32.load',
+          );
           stack.add('7f');
         case Opcodes.i64Load:
         case Opcodes.i64Load8S:
@@ -1767,39 +1881,157 @@ abstract final class WasmValidator {
         case Opcodes.i64Load16U:
         case Opcodes.i64Load32S:
         case Opcodes.i64Load32U:
-          popExpected(addressSignatureForMemArg(instruction.memArg), 'i64.load');
+          popExpected(
+            addressSignatureForMemArg(instruction.memArg),
+            'i64.load',
+          );
           stack.add('7e');
         case Opcodes.f32Load:
-          popExpected(addressSignatureForMemArg(instruction.memArg), 'f32.load');
+          popExpected(
+            addressSignatureForMemArg(instruction.memArg),
+            'f32.load',
+          );
           stack.add('7d');
         case Opcodes.f64Load:
-          popExpected(addressSignatureForMemArg(instruction.memArg), 'f64.load');
+          popExpected(
+            addressSignatureForMemArg(instruction.memArg),
+            'f64.load',
+          );
           stack.add('7c');
 
         case Opcodes.i32Store:
         case Opcodes.i32Store8:
         case Opcodes.i32Store16:
           popExpected('7f', 'i32.store value');
-          popExpected(addressSignatureForMemArg(instruction.memArg), 'i32.store address');
+          popExpected(
+            addressSignatureForMemArg(instruction.memArg),
+            'i32.store address',
+          );
         case Opcodes.i64Store:
         case Opcodes.i64Store8:
         case Opcodes.i64Store16:
         case Opcodes.i64Store32:
           popExpected('7e', 'i64.store value');
-          popExpected(addressSignatureForMemArg(instruction.memArg), 'i64.store address');
+          popExpected(
+            addressSignatureForMemArg(instruction.memArg),
+            'i64.store address',
+          );
         case Opcodes.f32Store:
           popExpected('7d', 'f32.store value');
-          popExpected(addressSignatureForMemArg(instruction.memArg), 'f32.store address');
+          popExpected(
+            addressSignatureForMemArg(instruction.memArg),
+            'f32.store address',
+          );
         case Opcodes.f64Store:
           popExpected('7c', 'f64.store value');
-          popExpected(addressSignatureForMemArg(instruction.memArg), 'f64.store address');
+          popExpected(
+            addressSignatureForMemArg(instruction.memArg),
+            'f64.store address',
+          );
 
         case Opcodes.memorySize:
           stack.add(addressSignatureForMemoryIndex(instruction.immediate ?? 0));
         case Opcodes.memoryGrow:
-          final address = addressSignatureForMemoryIndex(instruction.immediate ?? 0);
+          final address = addressSignatureForMemoryIndex(
+            instruction.immediate ?? 0,
+          );
           popExpected(address, 'memory.grow delta');
           stack.add(address);
+        case Opcodes.memoryInit:
+          final memoryIndex = instruction.secondaryImmediate!;
+          popExpected('7f', 'memory.init length');
+          popExpected('7f', 'memory.init source offset');
+          popExpected(
+            addressSignatureForMemoryIndex(memoryIndex),
+            'memory.init destination offset',
+          );
+        case Opcodes.dataDrop:
+          break;
+        case Opcodes.memoryCopy:
+          final destinationMemoryIndex = instruction.immediate!;
+          final sourceMemoryIndex = instruction.secondaryImmediate!;
+          final destinationAddressSignature = addressSignatureForMemoryIndex(
+            destinationMemoryIndex,
+          );
+          final sourceAddressSignature = addressSignatureForMemoryIndex(
+            sourceMemoryIndex,
+          );
+          popExpected(destinationAddressSignature, 'memory.copy length');
+          popExpected(sourceAddressSignature, 'memory.copy source offset');
+          popExpected(
+            destinationAddressSignature,
+            'memory.copy destination offset',
+          );
+        case Opcodes.memoryFill:
+          final memoryIndex = instruction.immediate!;
+          final addressSignature = addressSignatureForMemoryIndex(memoryIndex);
+          popExpected(addressSignature, 'memory.fill length');
+          popExpected('7f', 'memory.fill value');
+          popExpected(addressSignature, 'memory.fill destination offset');
+        case Opcodes.tableGet:
+          final tableIndex = instruction.immediate!;
+          popExpected(tableIndexSignature(tableIndex), 'table.get index');
+          stack.add(tableElementSignature(tableIndex));
+        case Opcodes.tableSet:
+          final tableIndex = instruction.immediate!;
+          popExpected(tableElementSignature(tableIndex), 'table.set value');
+          popExpected(tableIndexSignature(tableIndex), 'table.set index');
+        case Opcodes.tableInit:
+          final elementIndex = instruction.immediate!;
+          final tableIndex = instruction.secondaryImmediate!;
+          popExpected('7f', 'table.init length');
+          popExpected('7f', 'table.init source offset');
+          popExpected(
+            tableIndexSignature(tableIndex),
+            'table.init destination offset',
+          );
+          if (elementIndex >= 0 && elementIndex < module.elements.length) {
+            final segment = module.elements[elementIndex];
+            if (!_isElementSegmentRefCompatible(
+              module: module,
+              segmentRefTypeCode: segment.refTypeCode,
+              targetValueSignature: tableElementSignature(tableIndex),
+            )) {
+              mismatch('table.init element/table type mismatch');
+            }
+          }
+        case Opcodes.elemDrop:
+          break;
+        case Opcodes.tableCopy:
+          final destinationTableIndex = instruction.immediate!;
+          final sourceTableIndex = instruction.secondaryImmediate!;
+          final destinationIndexSignature = tableIndexSignature(
+            destinationTableIndex,
+          );
+          final sourceIndexSignature = tableIndexSignature(sourceTableIndex);
+          if (!_isValueSignatureSubtype(
+            module,
+            tableElementSignature(sourceTableIndex),
+            tableElementSignature(destinationTableIndex),
+          )) {
+            mismatch('table.copy table type mismatch');
+          }
+          popExpected(destinationIndexSignature, 'table.copy length');
+          popExpected(sourceIndexSignature, 'table.copy source offset');
+          popExpected(
+            destinationIndexSignature,
+            'table.copy destination offset',
+          );
+        case Opcodes.tableGrow:
+          final tableIndex = instruction.immediate!;
+          final indexSignature = tableIndexSignature(tableIndex);
+          popExpected(indexSignature, 'table.grow delta');
+          popExpected(tableElementSignature(tableIndex), 'table.grow value');
+          stack.add(indexSignature);
+        case Opcodes.tableSize:
+          final tableIndex = instruction.immediate!;
+          stack.add(tableIndexSignature(tableIndex));
+        case Opcodes.tableFill:
+          final tableIndex = instruction.immediate!;
+          final indexSignature = tableIndexSignature(tableIndex);
+          popExpected(indexSignature, 'table.fill length');
+          popExpected(tableElementSignature(tableIndex), 'table.fill value');
+          popExpected(indexSignature, 'table.fill destination offset');
 
         case Opcodes.i32Eqz:
           unary('7f', '7f', 'i32.eqz');
@@ -2140,14 +2372,12 @@ abstract final class WasmValidator {
         case Opcodes.arrayNewFixed:
           final typeIndex = instruction.immediate!;
           final type = module.types[typeIndex];
-          final fieldSig = fieldValueStackSignature(type.fieldSignatures.single);
+          final fieldSig = fieldValueStackSignature(
+            type.fieldSignatures.single,
+          );
           final count = instruction.secondaryImmediate!;
           for (var i = 0; i < count; i++) {
-            requirePopSubtype(
-              stack,
-              fieldSig,
-              'array.new_fixed value[$i]',
-            );
+            requirePopSubtype(stack, fieldSig, 'array.new_fixed value[$i]');
           }
           stack.add(arrayRefResult(typeIndex));
 
@@ -2171,7 +2401,11 @@ abstract final class WasmValidator {
             mismatch('array.get invalid field signature');
           }
           requirePopSubtype(stack, '7f', 'array.get index');
-          requirePopSubtype(stack, arrayRefOperand(typeIndex), 'array.get array');
+          requirePopSubtype(
+            stack,
+            arrayRefOperand(typeIndex),
+            'array.get array',
+          );
           stack.add(parsed.valueSignature);
 
         case Opcodes.arrayGetS:
@@ -2194,7 +2428,11 @@ abstract final class WasmValidator {
             'array.set value',
           );
           requirePopSubtype(stack, '7f', 'array.set index');
-          requirePopSubtype(stack, arrayRefOperand(typeIndex), 'array.set array');
+          requirePopSubtype(
+            stack,
+            arrayRefOperand(typeIndex),
+            'array.set array',
+          );
 
         case Opcodes.arrayInitData:
           final typeIndex = instruction.immediate!;
@@ -2260,7 +2498,9 @@ abstract final class WasmValidator {
     }
 
     final expectedResults = _functionResultSignatures(functionType);
-    if (expectedResults.any((signature) => _parseRefSignature(signature) != null)) {
+    if (expectedResults.any(
+      (signature) => _parseRefSignature(signature) != null,
+    )) {
       return;
     }
     if (stack.length != functionType.results.length) {
@@ -2670,8 +2910,7 @@ abstract final class WasmValidator {
             mismatch('branch depth out of range: $depth');
           }
           final labelFrame = controlStack[controlStack.length - 1 - depth];
-          final branchSignature =
-              instruction.opcode == Opcodes.brOnCastDescEq
+          final branchSignature = instruction.opcode == Opcodes.brOnCastDescEq
               ? targetSignature
               : failureSignature;
           if (!_matchesLabelResultWithBranchValue(
@@ -2708,7 +2947,8 @@ abstract final class WasmValidator {
           if (stack.length >= 2) {
             final rhs = stack.removeLast();
             final lhs = stack.removeLast();
-            if (_parseRefSignature(lhs) == null || _parseRefSignature(rhs) == null) {
+            if (_parseRefSignature(lhs) == null ||
+                _parseRefSignature(rhs) == null) {
               mismatch('ref.eq requires reference operands');
             }
           } else if (!inPolymorphicContext) {
@@ -2762,9 +3002,11 @@ abstract final class WasmValidator {
           }
           if (instruction.opcode == Opcodes.structNew ||
               instruction.opcode == Opcodes.structNewDesc) {
-            for (var fieldIndex = type.fieldSignatures.length - 1;
-                fieldIndex >= 0;
-                fieldIndex--) {
+            for (
+              var fieldIndex = type.fieldSignatures.length - 1;
+              fieldIndex >= 0;
+              fieldIndex--
+            ) {
               if (stack.isEmpty) {
                 mismatch('struct.new field underflow');
               }
@@ -2815,7 +3057,11 @@ abstract final class WasmValidator {
             exact: false,
             heapType: typeIndex,
           );
-          if (!_isValueSignatureSubtype(module, inputSignature, expectedInput)) {
+          if (!_isValueSignatureSubtype(
+            module,
+            inputSignature,
+            expectedInput,
+          )) {
             mismatch(
               'ref.get_desc input mismatch: input=$inputSignature expected=$expectedInput',
             );
@@ -2931,7 +3177,9 @@ abstract final class WasmValidator {
             final actual = stack.removeLast();
             final expected = params[i];
             if (!_isValueSignatureSubtype(module, actual, expected)) {
-              mismatch('call arg mismatch[$i]: actual=$actual expected=$expected');
+              mismatch(
+                'call arg mismatch[$i]: actual=$actual expected=$expected',
+              );
             }
           }
           stack.addAll(_functionResultSignatures(targetType));
@@ -3278,7 +3526,8 @@ abstract final class WasmValidator {
         _isHeapSubtype(module, sourceHeap, targetHeap)) {
       return true;
     }
-    if (_isEqLikeHeap(module, sourceHeap) && _isEqLikeHeap(module, targetHeap)) {
+    if (_isEqLikeHeap(module, sourceHeap) &&
+        _isEqLikeHeap(module, targetHeap)) {
       return true;
     }
     if (_isFuncLikeHeap(module, sourceHeap) &&
@@ -3695,6 +3944,27 @@ abstract final class WasmValidator {
     return _parseRefSignature(signature) != null;
   }
 
+  static String _tableValueSignature(WasmTableType tableType) {
+    final explicitSignature = tableType.refTypeSignature;
+    if (explicitSignature != null &&
+        explicitSignature.isNotEmpty &&
+        _parseRefSignature(explicitSignature) != null) {
+      return explicitSignature;
+    }
+    return switch (tableType.refType) {
+      WasmRefType.funcref => _encodeRefSignature(
+        nullable: true,
+        exact: false,
+        heapType: _heapFunc,
+      ),
+      WasmRefType.externref => _encodeRefSignature(
+        nullable: true,
+        exact: false,
+        heapType: _heapExtern,
+      ),
+    };
+  }
+
   static bool _isElementSegmentRefCompatible({
     required WasmModule module,
     required int segmentRefTypeCode,
@@ -3728,7 +3998,8 @@ abstract final class WasmValidator {
         return true;
       default:
         final targetBytes = _signatureToBytes(targetValueSignature);
-        return targetBytes.isNotEmpty && targetBytes.first == segmentRefTypeCode;
+        return targetBytes.isNotEmpty &&
+            targetBytes.first == segmentRefTypeCode;
     }
   }
 
