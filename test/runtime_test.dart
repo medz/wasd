@@ -1175,7 +1175,17 @@ void main() {
           functionTypeIndices: const [0],
           functionBodies: [
             _FunctionBodySpec(
-              instructions: [..._localGet(0), ..._call(0), Opcodes.end],
+              instructions: [
+                ..._localGet(0),
+                Opcodes.if_,
+                0x7f,
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.else_,
+                ..._i32Const(0),
+                Opcodes.end,
+                Opcodes.end,
+              ],
             ),
           ],
           exports: const [
@@ -1194,6 +1204,7 @@ void main() {
         );
 
         expect(await instance.invokeI32Async('wrap', [41]), 42);
+        expect(await instance.invokeI32Async('wrap', [0]), 0);
       },
     );
 
@@ -1211,11 +1222,10 @@ void main() {
           functionBodies: [
             _FunctionBodySpec(
               instructions: [
-                Opcodes.block,
-                0x7f,
                 ..._localGet(0),
+                ..._i32Const(1),
+                Opcodes.i32And,
                 ..._call(0),
-                Opcodes.end,
                 Opcodes.end,
               ],
             ),

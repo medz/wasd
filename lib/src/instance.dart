@@ -16,6 +16,29 @@ import 'validator.dart';
 import 'value.dart';
 import 'vm.dart';
 
+enum _AsyncSubsetControlKind { block, loop, if_ }
+
+final class _AsyncSubsetControlFrame {
+  const _AsyncSubsetControlFrame({
+    required this.kind,
+    required this.stackBaseHeight,
+    required this.startIndex,
+    required this.endIndex,
+    required this.parameterTypes,
+    required this.resultTypes,
+  });
+
+  final _AsyncSubsetControlKind kind;
+  final int stackBaseHeight;
+  final int startIndex;
+  final int endIndex;
+  final List<WasmValueType> parameterTypes;
+  final List<WasmValueType> resultTypes;
+
+  List<WasmValueType> get branchTypes =>
+      kind == _AsyncSubsetControlKind.loop ? parameterTypes : resultTypes;
+}
+
 final class WasmInstance {
   WasmInstance._({
     required this.module,
@@ -772,16 +795,21 @@ final class WasmInstance {
     }
     final stack = <WasmValue>[];
     final instructions = defined.instructions;
-
-    for (var pc = 0; pc < instructions.length; pc++) {
+    final controlStack = <_AsyncSubsetControlFrame>[];
+    var pc = 0;
+    while (pc < instructions.length) {
       final instruction = instructions[pc];
       switch (instruction.opcode) {
+        case Opcodes.nop:
+          pc++;
+
         case Opcodes.localGet:
           final index = instruction.immediate!;
           if (index < 0 || index >= locals.length) {
             throw RangeError('local.get index out of range: $index');
           }
           stack.add(locals[index]);
+          pc++;
 
         case Opcodes.localSet:
           final index = instruction.immediate!;
@@ -790,6 +818,7 @@ final class WasmInstance {
           }
           final value = _popValue(stack, 'local.set');
           locals[index] = value.castTo(locals[index].type);
+          pc++;
 
         case Opcodes.localTee:
           final index = instruction.immediate!;
@@ -800,12 +829,15 @@ final class WasmInstance {
           final cast = value.castTo(locals[index].type);
           locals[index] = cast;
           stack.add(cast);
+          pc++;
 
         case Opcodes.drop:
           _popValue(stack, 'drop');
+          pc++;
 
         case Opcodes.i32Const:
           stack.add(WasmValue.i32(instruction.immediate!));
+          pc++;
 
         case Opcodes.i64Const:
           final wideImmediate = instruction.wideImmediate;
@@ -813,6 +845,7 @@ final class WasmInstance {
             throw StateError('Malformed i64.const immediate.');
           }
           stack.add(WasmValue.i64(wideImmediate));
+          pc++;
 
         case Opcodes.f32Const:
           final floatBytes = instruction.floatBytesImmediate;
@@ -824,6 +857,7 @@ final class WasmInstance {
           } else {
             stack.add(WasmValue.f32(instruction.floatImmediate!));
           }
+          pc++;
 
         case Opcodes.f64Const:
           final floatBytes = instruction.floatBytesImmediate;
@@ -839,76 +873,248 @@ final class WasmInstance {
           } else {
             stack.add(WasmValue.f64(instruction.floatImmediate!));
           }
+          pc++;
+
+        case Opcodes.i32Eqz:
+          final value = _popValue(stack, 'i32.eqz').castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(value.asI32() == 0 ? 1 : 0));
+          pc++;
+
+        case Opcodes.i32Eq:
+          final rhs = _popValue(stack, 'i32.eq rhs').castTo(WasmValueType.i32);
+          final lhs = _popValue(stack, 'i32.eq lhs').castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(lhs.asI32() == rhs.asI32() ? 1 : 0));
+          pc++;
+
+        case Opcodes.i32Ne:
+          final rhs = _popValue(stack, 'i32.ne rhs').castTo(WasmValueType.i32);
+          final lhs = _popValue(stack, 'i32.ne lhs').castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(lhs.asI32() != rhs.asI32() ? 1 : 0));
+          pc++;
 
         case Opcodes.i32Add:
           final rhs = _popValue(stack, 'i32.add rhs').castTo(WasmValueType.i32);
           final lhs = _popValue(stack, 'i32.add lhs').castTo(WasmValueType.i32);
           stack.add(WasmValue.i32(lhs.asI32() + rhs.asI32()));
+          pc++;
 
         case Opcodes.i32Sub:
           final rhs = _popValue(stack, 'i32.sub rhs').castTo(WasmValueType.i32);
           final lhs = _popValue(stack, 'i32.sub lhs').castTo(WasmValueType.i32);
           stack.add(WasmValue.i32(lhs.asI32() - rhs.asI32()));
+          pc++;
 
         case Opcodes.i32Mul:
           final rhs = _popValue(stack, 'i32.mul rhs').castTo(WasmValueType.i32);
           final lhs = _popValue(stack, 'i32.mul lhs').castTo(WasmValueType.i32);
           stack.add(WasmValue.i32(lhs.asI32() * rhs.asI32()));
+          pc++;
 
         case Opcodes.i64Add:
           final rhs = _popValue(stack, 'i64.add rhs').castTo(WasmValueType.i64);
           final lhs = _popValue(stack, 'i64.add lhs').castTo(WasmValueType.i64);
           stack.add(WasmValue.i64(lhs.asI64() + rhs.asI64()));
+          pc++;
 
         case Opcodes.i64Sub:
           final rhs = _popValue(stack, 'i64.sub rhs').castTo(WasmValueType.i64);
           final lhs = _popValue(stack, 'i64.sub lhs').castTo(WasmValueType.i64);
           stack.add(WasmValue.i64(lhs.asI64() - rhs.asI64()));
+          pc++;
 
         case Opcodes.i64Mul:
           final rhs = _popValue(stack, 'i64.mul rhs').castTo(WasmValueType.i64);
           final lhs = _popValue(stack, 'i64.mul lhs').castTo(WasmValueType.i64);
           stack.add(WasmValue.i64(lhs.asI64() * rhs.asI64()));
+          pc++;
 
         case Opcodes.f32Add:
           final rhs = _popValue(stack, 'f32.add rhs').castTo(WasmValueType.f32);
           final lhs = _popValue(stack, 'f32.add lhs').castTo(WasmValueType.f32);
           stack.add(WasmValue.f32(lhs.asF32() + rhs.asF32()));
+          pc++;
 
         case Opcodes.f32Sub:
           final rhs = _popValue(stack, 'f32.sub rhs').castTo(WasmValueType.f32);
           final lhs = _popValue(stack, 'f32.sub lhs').castTo(WasmValueType.f32);
           stack.add(WasmValue.f32(lhs.asF32() - rhs.asF32()));
+          pc++;
 
         case Opcodes.f32Mul:
           final rhs = _popValue(stack, 'f32.mul rhs').castTo(WasmValueType.f32);
           final lhs = _popValue(stack, 'f32.mul lhs').castTo(WasmValueType.f32);
           stack.add(WasmValue.f32(lhs.asF32() * rhs.asF32()));
+          pc++;
 
         case Opcodes.f32Div:
           final rhs = _popValue(stack, 'f32.div rhs').castTo(WasmValueType.f32);
           final lhs = _popValue(stack, 'f32.div lhs').castTo(WasmValueType.f32);
           stack.add(WasmValue.f32(lhs.asF32() / rhs.asF32()));
+          pc++;
 
         case Opcodes.f64Add:
           final rhs = _popValue(stack, 'f64.add rhs').castTo(WasmValueType.f64);
           final lhs = _popValue(stack, 'f64.add lhs').castTo(WasmValueType.f64);
           stack.add(WasmValue.f64(lhs.asF64() + rhs.asF64()));
+          pc++;
 
         case Opcodes.f64Sub:
           final rhs = _popValue(stack, 'f64.sub rhs').castTo(WasmValueType.f64);
           final lhs = _popValue(stack, 'f64.sub lhs').castTo(WasmValueType.f64);
           stack.add(WasmValue.f64(lhs.asF64() - rhs.asF64()));
+          pc++;
 
         case Opcodes.f64Mul:
           final rhs = _popValue(stack, 'f64.mul rhs').castTo(WasmValueType.f64);
           final lhs = _popValue(stack, 'f64.mul lhs').castTo(WasmValueType.f64);
           stack.add(WasmValue.f64(lhs.asF64() * rhs.asF64()));
+          pc++;
 
         case Opcodes.f64Div:
           final rhs = _popValue(stack, 'f64.div rhs').castTo(WasmValueType.f64);
           final lhs = _popValue(stack, 'f64.div lhs').castTo(WasmValueType.f64);
           stack.add(WasmValue.f64(lhs.asF64() / rhs.asF64()));
+          pc++;
+
+        case Opcodes.block:
+          final endIndex = instruction.endIndex;
+          if (endIndex == null) {
+            throw StateError('Malformed block without end index.');
+          }
+          final parameterTypes =
+              instruction.blockParameterTypes ?? const <WasmValueType>[];
+          final params = _popArgsForTypes(
+            stack,
+            parameterTypes,
+            context: 'block',
+          );
+          final baseHeight = stack.length;
+          stack.addAll(params);
+          controlStack.add(
+            _AsyncSubsetControlFrame(
+              kind: _AsyncSubsetControlKind.block,
+              stackBaseHeight: baseHeight,
+              startIndex: pc,
+              endIndex: endIndex,
+              parameterTypes: parameterTypes,
+              resultTypes:
+                  instruction.blockResultTypes ?? const <WasmValueType>[],
+            ),
+          );
+          pc++;
+
+        case Opcodes.loop:
+          final endIndex = instruction.endIndex;
+          if (endIndex == null) {
+            throw StateError('Malformed loop without end index.');
+          }
+          final parameterTypes =
+              instruction.blockParameterTypes ?? const <WasmValueType>[];
+          final params = _popArgsForTypes(
+            stack,
+            parameterTypes,
+            context: 'loop',
+          );
+          final baseHeight = stack.length;
+          stack.addAll(params);
+          controlStack.add(
+            _AsyncSubsetControlFrame(
+              kind: _AsyncSubsetControlKind.loop,
+              stackBaseHeight: baseHeight,
+              startIndex: pc,
+              endIndex: endIndex,
+              parameterTypes: parameterTypes,
+              resultTypes:
+                  instruction.blockResultTypes ?? const <WasmValueType>[],
+            ),
+          );
+          pc++;
+
+        case Opcodes.if_:
+          final endIndex = instruction.endIndex;
+          if (endIndex == null) {
+            throw StateError('Malformed if without end index.');
+          }
+          final condition = _popValue(
+            stack,
+            'if condition',
+          ).castTo(WasmValueType.i32).asI32();
+          final parameterTypes =
+              instruction.blockParameterTypes ?? const <WasmValueType>[];
+          final params = _popArgsForTypes(stack, parameterTypes, context: 'if');
+          final baseHeight = stack.length;
+          stack.addAll(params);
+          final frame = _AsyncSubsetControlFrame(
+            kind: _AsyncSubsetControlKind.if_,
+            stackBaseHeight: baseHeight,
+            startIndex: pc,
+            endIndex: endIndex,
+            parameterTypes: parameterTypes,
+            resultTypes:
+                instruction.blockResultTypes ?? const <WasmValueType>[],
+          );
+          controlStack.add(frame);
+          if (condition == 0) {
+            stack.length = baseHeight;
+            final elseIndex = instruction.elseIndex;
+            if (elseIndex != null) {
+              pc = elseIndex + 1;
+            } else {
+              controlStack.removeLast();
+              pc = endIndex + 1;
+            }
+          } else {
+            pc++;
+          }
+
+        case Opcodes.else_:
+          if (controlStack.isEmpty ||
+              controlStack.last.kind != _AsyncSubsetControlKind.if_) {
+            throw const FormatException('`else` without matching `if`.');
+          }
+          final frame = controlStack.removeLast();
+          _leaveAsyncSubsetControlFrame(stack, frame, context: 'else');
+          final endIndex = instruction.endIndex;
+          if (endIndex == null) {
+            throw StateError('Malformed else without end index.');
+          }
+          pc = endIndex + 1;
+
+        case Opcodes.end:
+          if (controlStack.isEmpty) {
+            return _collectAsyncSubsetResults(
+              stack,
+              function.type.results,
+              context: 'end',
+            );
+          }
+          final frame = controlStack.removeLast();
+          _leaveAsyncSubsetControlFrame(stack, frame, context: 'end');
+          pc++;
+
+        case Opcodes.br:
+          pc = _branchInAsyncSubset(
+            depth: instruction.immediate!,
+            stack: stack,
+            controlStack: controlStack,
+            context: 'br',
+          );
+
+        case Opcodes.brIf:
+          final condition = _popValue(
+            stack,
+            'br_if condition',
+          ).castTo(WasmValueType.i32).asI32();
+          if (condition != 0) {
+            pc = _branchInAsyncSubset(
+              depth: instruction.immediate!,
+              stack: stack,
+              controlStack: controlStack,
+              context: 'br_if',
+            );
+          } else {
+            pc++;
+          }
 
         case Opcodes.call:
           final targetIndex = instruction.immediate!;
@@ -927,6 +1133,7 @@ final class WasmInstance {
             depth: depth + 1,
           );
           stack.addAll(callResults);
+          pc++;
 
         case Opcodes.returnCall:
           final targetIndex = instruction.immediate!;
@@ -952,13 +1159,6 @@ final class WasmInstance {
             context: 'return',
           );
 
-        case Opcodes.end:
-          return _collectAsyncSubsetResults(
-            stack,
-            function.type.results,
-            context: 'end',
-          );
-
         default:
           throw UnsupportedError(
             'invokeAsync subset does not support opcode '
@@ -970,6 +1170,62 @@ final class WasmInstance {
     throw StateError(
       'Function execution ended without `end` in invokeAsync subset.',
     );
+  }
+
+  void _leaveAsyncSubsetControlFrame(
+    List<WasmValue> stack,
+    _AsyncSubsetControlFrame frame, {
+    required String context,
+  }) {
+    final results = _popArgsForTypes(
+      stack,
+      frame.resultTypes,
+      context: '$context control-result',
+    );
+    if (stack.length != frame.stackBaseHeight) {
+      throw StateError(
+        '$context stack height mismatch: expected ${frame.stackBaseHeight}, '
+        'has ${stack.length}.',
+      );
+    }
+    stack.addAll(results);
+  }
+
+  int _branchInAsyncSubset({
+    required int depth,
+    required List<WasmValue> stack,
+    required List<_AsyncSubsetControlFrame> controlStack,
+    required String context,
+  }) {
+    if (depth < 0 || depth >= controlStack.length) {
+      throw RangeError(
+        '$context depth out of range: $depth (labels=${controlStack.length})',
+      );
+    }
+
+    final targetIndex = controlStack.length - 1 - depth;
+    final target = controlStack[targetIndex];
+    final branchValues = _popArgsForTypes(
+      stack,
+      target.branchTypes,
+      context: '$context depth=$depth',
+    );
+    if (stack.length < target.stackBaseHeight) {
+      throw StateError(
+        '$context stack height underflow for target depth $depth: '
+        'base=${target.stackBaseHeight}, has=${stack.length}.',
+      );
+    }
+    stack.length = target.stackBaseHeight;
+    stack.addAll(branchValues);
+
+    if (target.kind == _AsyncSubsetControlKind.loop) {
+      controlStack.removeRange(targetIndex + 1, controlStack.length);
+      return target.startIndex + 1;
+    }
+
+    controlStack.removeRange(targetIndex, controlStack.length);
+    return target.endIndex + 1;
   }
 
   List<WasmValue> _normalizeArgsForType(
