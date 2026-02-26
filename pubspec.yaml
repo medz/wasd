@@ -4,7 +4,7 @@ version: 0.0.1
 repository: https://github.com/medz/wasd
 
 environment:
-  sdk: ^3.10.0
+  sdk: ^3.11.0
 
 dev_dependencies:
   lints: ^6.0.0
