@@ -1856,25 +1856,25 @@ void main() {
           functionBodies: [
             _FunctionBodySpec(
               instructions: [
-              ..._i32Const(0),
-              ..._call(0),
-              Opcodes.drop,
-              Opcodes.tryLegacy,
-              0x7f,
-              Opcodes.block,
-              0x64, // (ref non-null exn)
-              0x74,
-              Opcodes.tryTable,
-              0x64, // (ref non-null exn)
-              0x74,
-              ..._u32Leb(1),
-              0x01, // catch_ref
-              ..._u32Leb(0), // tag index
-              ..._u32Leb(0), // label depth
-              Opcodes.throwTag,
-              ..._u32Leb(0),
-              Opcodes.unreachable,
-              Opcodes.end, // end try_table
+                ..._i32Const(0),
+                ..._call(0),
+                Opcodes.drop,
+                Opcodes.tryLegacy,
+                0x7f,
+                Opcodes.block,
+                0x64, // (ref non-null exn)
+                0x74,
+                Opcodes.tryTable,
+                0x64, // (ref non-null exn)
+                0x74,
+                ..._u32Leb(1),
+                0x01, // catch_ref
+                ..._u32Leb(0), // tag index
+                ..._u32Leb(0), // label depth
+                Opcodes.throwTag,
+                ..._u32Leb(0),
+                Opcodes.unreachable,
+                Opcodes.end, // end try_table
                 Opcodes.end, // end block
                 Opcodes.throwRef,
                 Opcodes.catchAll,
@@ -1907,6 +1907,188 @@ void main() {
         expect(await instance.invokeI32Async('wrapTryTableThrowRef'), 77);
       },
     );
+
+    test('supports try_table catch_tag in async call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([], []),
+          _funcType([], [0x7f]),
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 2),
+        ],
+        tagTypeIndices: const [0],
+        functionTypeIndices: const [1],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._i32Const(0),
+              ..._call(0),
+              Opcodes.drop,
+              Opcodes.block,
+              0x40,
+              Opcodes.tryTable,
+              0x40,
+              ..._u32Leb(1),
+              0x00, // catch_tag
+              ..._u32Leb(0), // tag index
+              ..._u32Leb(0), // label depth
+              Opcodes.throwTag,
+              ..._u32Leb(0),
+              Opcodes.unreachable,
+              Opcodes.end,
+              Opcodes.end,
+              ..._i32Const(11),
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'wrapTryTableCatchTag',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(exceptionHandling: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('wrapTryTableCatchTag'), 11);
+    });
+
+    test('supports try_table catch_all in async call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([], []),
+          _funcType([], [0x7f]),
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 2),
+        ],
+        tagTypeIndices: const [0],
+        functionTypeIndices: const [1],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._i32Const(0),
+              ..._call(0),
+              Opcodes.drop,
+              Opcodes.block,
+              0x40,
+              Opcodes.tryTable,
+              0x40,
+              ..._u32Leb(1),
+              0x02, // catch_all
+              ..._u32Leb(0), // label depth
+              Opcodes.throwTag,
+              ..._u32Leb(0),
+              Opcodes.unreachable,
+              Opcodes.end,
+              Opcodes.end,
+              ..._i32Const(22),
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'wrapTryTableCatchAll',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(exceptionHandling: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('wrapTryTableCatchAll'), 22);
+    });
+
+    test('supports try_table catch_all_ref in async call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([], []),
+          _funcType([], [0x7f]),
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 2),
+        ],
+        tagTypeIndices: const [0],
+        functionTypeIndices: const [1],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._i32Const(0),
+              ..._call(0),
+              Opcodes.drop,
+              Opcodes.tryLegacy,
+              0x7f,
+              Opcodes.block,
+              0x64,
+              0x74,
+              Opcodes.tryTable,
+              0x64,
+              0x74,
+              ..._u32Leb(1),
+              0x03, // catch_all_ref
+              ..._u32Leb(0), // label depth
+              Opcodes.throwTag,
+              ..._u32Leb(0),
+              Opcodes.unreachable,
+              Opcodes.end,
+              Opcodes.end,
+              Opcodes.throwRef,
+              Opcodes.catchAll,
+              ..._i32Const(55),
+              Opcodes.end,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'wrapTryTableCatchAllRef',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(exceptionHandling: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('wrapTryTableCatchAllRef'), 55);
+    });
 
     test('supports atomic.fence in async import call chains', () async {
       final wasm = _buildModule(
