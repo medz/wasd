@@ -54,20 +54,45 @@ final class WasmComponentInstance {
         'Component does not contain embedded core modules.',
       );
     }
-    final coreInstances = component.coreModules
-        .map(
+    final coreInstances = <WasmInstance>[];
+    if (component.coreInstances.isEmpty) {
+      coreInstances.addAll(
+        component.coreModules.map(
           (moduleBytes) => WasmInstance.fromBytes(
             moduleBytes,
             imports: imports,
             features: features,
           ),
-        )
-        .toList(growable: false);
+        ),
+      );
+    } else {
+      for (final declaration in component.coreInstances) {
+        final moduleIndex = declaration.moduleIndex;
+        if (moduleIndex < 0 || moduleIndex >= component.coreModules.length) {
+          throw FormatException(
+            'Component core-instance module index out of range: $moduleIndex '
+            '(count=${component.coreModules.length}).',
+          );
+        }
+        coreInstances.add(
+          WasmInstance.fromBytes(
+            component.coreModules[moduleIndex],
+            imports: imports,
+            features: features,
+          ),
+        );
+      }
+    }
+    if (coreInstances.isEmpty) {
+      throw const FormatException(
+        'Component does not define any instantiable core instance.',
+      );
+    }
     return WasmComponentInstance._(
       component: component,
       imports: imports,
       features: features,
-      coreInstances: coreInstances,
+      coreInstances: List<WasmInstance>.unmodifiable(coreInstances),
     );
   }
 

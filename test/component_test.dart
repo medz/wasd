@@ -59,6 +59,8 @@ void main() {
 
       expect(component.sections, hasLength(2));
       expect(component.coreModules, hasLength(1));
+      expect(component.coreInstances, hasLength(1));
+      expect(component.coreInstances.single.moduleIndex, 0);
       expect(
         component.coreModules.single,
         orderedEquals(const <int>[
@@ -76,6 +78,46 @@ void main() {
       expect(component.sections.first.payload, hasLength(8));
       expect(component.sections[1].id, 0x02);
       expect(component.sections[1].payload, hasLength(4));
+    });
+
+    test('rejects unsupported core-instance instantiate args', () {
+      final componentBytes = Uint8List.fromList(<int>[
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x0d,
+        0x00,
+        0x01,
+        0x00,
+        // section 1: one core module payload
+        0x01,
+        0x08,
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        // section 2: one core instance with arg_count=1 (unsupported)
+        0x02,
+        0x05,
+        0x01,
+        0x00,
+        0x00,
+        0x01,
+        0x00,
+      ]);
+
+      expect(
+        () => WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsA(isA<UnsupportedError>()),
+      );
     });
 
     test('rejects unsupported component version', () {

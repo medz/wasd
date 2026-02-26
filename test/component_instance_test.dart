@@ -33,6 +33,25 @@ void main() {
       expect(instance.invokeCore('one'), 7);
     });
 
+    test('uses core-instance declarations when section 0x02 is present', () {
+      final componentBytes = _componentWithCoreModules(
+        <Uint8List>[
+          _coreModuleConstI32(name: 'one', value: 1),
+          _coreModuleConstI32(name: 'two', value: 2),
+        ],
+        instantiateModuleIndices: const [1],
+      );
+
+      final instance = WasmComponentInstance.fromBytes(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
+      expect(instance.coreInstances, hasLength(1));
+      expect(instance.invokeCore('two'), 2);
+      expect(() => instance.invokeCore('one'), throwsA(isA<ArgumentError>()));
+    });
+
     test('bridges canonical ABI through core export calls', () {
       final componentBytes = _componentWithCoreModules(<Uint8List>[
         _coreModuleEchoUtf8PointerLength(name: 'echo'),
@@ -81,12 +100,29 @@ void main() {
   });
 }
 
-Uint8List _componentWithCoreModules(List<Uint8List> modules) {
+Uint8List _componentWithCoreModules(
+  List<Uint8List> modules, {
+  List<int>? instantiateModuleIndices,
+}) {
   final bytes = <int>[0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00];
   for (final module in modules) {
     bytes.add(0x01);
     bytes.addAll(_u32Leb(module.length));
     bytes.addAll(module);
+  }
+  final declarations = instantiateModuleIndices;
+  if (declarations != null) {
+    final payload = <int>[..._u32Leb(declarations.length)];
+    for (final moduleIndex in declarations) {
+      payload
+        ..add(0x00)
+        ..addAll(_u32Leb(moduleIndex))
+        ..add(0x00);
+    }
+    bytes
+      ..add(0x02)
+      ..addAll(_u32Leb(payload.length))
+      ..addAll(payload);
   }
   return Uint8List.fromList(bytes);
 }

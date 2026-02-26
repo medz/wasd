@@ -11,18 +11,30 @@ final class WasmComponentSection {
   final Uint8List payload;
 }
 
+/// Decoded core instance declaration from component section `0x02`.
+final class WasmComponentCoreInstance {
+  const WasmComponentCoreInstance.instantiate({required this.moduleIndex});
+
+  final int moduleIndex;
+}
+
 /// Minimal component binary decoder.
 ///
 /// This currently validates the component header and collects raw sections.
 /// Full canonical ABI/lowering/lifting semantics are implemented separately.
 final class WasmComponent {
-  const WasmComponent._({required this.sections, required this.coreModules});
+  const WasmComponent._({
+    required this.sections,
+    required this.coreModules,
+    required this.coreInstances,
+  });
 
   static const List<int> _magic = <int>[0x00, 0x61, 0x73, 0x6d];
   static const List<int> _componentVersion = <int>[0x0d, 0x00, 0x01, 0x00];
 
   final List<WasmComponentSection> sections;
   final List<Uint8List> coreModules;
+  final List<WasmComponentCoreInstance> coreInstances;
 
   static WasmComponent decode(
     Uint8List componentBytes, {
@@ -47,6 +59,7 @@ final class WasmComponent {
 
     final sections = <WasmComponentSection>[];
     final coreModules = <Uint8List>[];
+    final coreInstances = <WasmComponentCoreInstance>[];
     while (!reader.isEOF) {
       final id = reader.readByte();
       final sectionSize = reader.readVarUint32();
@@ -55,13 +68,52 @@ final class WasmComponent {
       sections.add(WasmComponentSection(id: id, payload: payload));
       if (id == 0x01 && _isCoreModulePayload(payload)) {
         coreModules.add(Uint8List.fromList(payload));
+      } else if (id == 0x02) {
+        coreInstances.addAll(_decodeCoreInstanceSectionPayload(payload));
       }
     }
 
     return WasmComponent._(
       sections: List<WasmComponentSection>.unmodifiable(sections),
       coreModules: List<Uint8List>.unmodifiable(coreModules),
+      coreInstances: List<WasmComponentCoreInstance>.unmodifiable(
+        coreInstances,
+      ),
     );
+  }
+
+  static List<WasmComponentCoreInstance> _decodeCoreInstanceSectionPayload(
+    Uint8List payload,
+  ) {
+    final reader = ByteReader(payload);
+    final count = reader.readVarUint32();
+    final instances = <WasmComponentCoreInstance>[];
+    for (var i = 0; i < count; i++) {
+      final kind = reader.readByte();
+      switch (kind) {
+        case 0x00:
+          final moduleIndex = reader.readVarUint32();
+          final argCount = reader.readVarUint32();
+          if (argCount != 0) {
+            throw UnsupportedError(
+              'Component core-instance instantiate args are not implemented yet.',
+            );
+          }
+          instances.add(
+            WasmComponentCoreInstance.instantiate(moduleIndex: moduleIndex),
+          );
+        default:
+          throw UnsupportedError(
+            'Unsupported component core-instance kind: 0x${kind.toRadixString(16)}',
+          );
+      }
+    }
+    if (!reader.isEOF) {
+      throw const FormatException(
+        'Trailing bytes in component core-instance section payload.',
+      );
+    }
+    return instances;
   }
 
   static bool _isCoreModulePayload(Uint8List payload) {
