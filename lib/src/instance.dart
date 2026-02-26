@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'byte_reader.dart';
@@ -121,12 +122,13 @@ final class WasmInstance {
           if (callback == null && asyncCallback == null) {
             throw StateError('Missing function import `${import.key}`.');
           }
-          if (callback == null && asyncCallback != null) {
-            throw UnsupportedError(
-              'Async-only host import `${import.key}` is not available in the '
-              'synchronous VM pipeline yet. Provide a sync callback for now.',
-            );
-          }
+          final syncCallback =
+              callback ??
+              (List<Object?> _) => throw UnsupportedError(
+                'Async-only host import `${import.key}` is not available in '
+                'the synchronous VM pipeline. Use invokeAsync on direct '
+                'exported host functions.',
+              );
 
           functions.add(
             HostRuntimeFunction(
@@ -135,7 +137,8 @@ final class WasmInstance {
               runtimeTypeDepth:
                   imports.functionTypeDepths[import.key] ??
                   _functionTypeDepth(module, typeIndex),
-              callback: callback!,
+              callback: syncCallback,
+              asyncCallback: asyncCallback,
             ),
           );
 
@@ -652,6 +655,40 @@ final class WasmInstance {
   }
 
   Object? invoke(String exportName, [List<Object?> args = const []]) {
+    final prepared = _prepareInvoke(exportName, args);
+    final results = _vm.invokeFunction(
+      prepared.functionIndex,
+      prepared.typedArgs,
+    );
+    return _externalizeResults(results);
+  }
+
+  Future<Object?> invokeAsync(
+    String exportName, [
+    List<Object?> args = const [],
+  ]) async {
+    final prepared = _prepareInvoke(exportName, args);
+    final function = functions[prepared.functionIndex];
+    if (function is HostRuntimeFunction && function.asyncCallback != null) {
+      final externalArgs = prepared.typedArgs
+          .map((value) => value.toExternal())
+          .toList(growable: false);
+      final hostResult = await Future<Object?>.sync(
+        () => function.asyncCallback!(externalArgs),
+      );
+      final results = WasmValue.decodeResults(
+        function.type.results,
+        hostResult,
+      );
+      return _externalizeResults(results);
+    }
+    return invoke(exportName, args);
+  }
+
+  ({int functionIndex, List<WasmValue> typedArgs}) _prepareInvoke(
+    String exportName,
+    List<Object?> args,
+  ) {
     final functionIndex = _functionExports[exportName];
     if (functionIndex == null) {
       throw ArgumentError.value(
@@ -673,16 +710,7 @@ final class WasmInstance {
     for (var i = 0; i < functionType.params.length; i++) {
       typedArgs.add(WasmValue.fromExternal(functionType.params[i], args[i]));
     }
-
-    final results = _vm.invokeFunction(functionIndex, typedArgs);
-    return _externalizeResults(results);
-  }
-
-  Future<Object?> invokeAsync(
-    String exportName, [
-    List<Object?> args = const [],
-  ]) async {
-    return invoke(exportName, args);
+    return (functionIndex: functionIndex, typedArgs: typedArgs);
   }
 
   List<Object?> invokeMulti(

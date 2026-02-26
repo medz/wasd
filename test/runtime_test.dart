@@ -1119,6 +1119,49 @@ void main() {
       expect(await instance.invokeMultiAsync('add', [1, 2]), [3]);
     });
 
+    test(
+      'supports async-only imported host functions via invokeAsync',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [],
+          functionBodies: const [],
+          exports: const [
+            _ExportSpec(name: 'inc', kind: WasmExportKind.function, index: 0),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async {
+                await Future<void>.delayed(Duration.zero);
+                return (args.single as int) + 1;
+              },
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('inc', [41]), 42);
+        expect(
+          () => instance.invokeI32('inc', [41]),
+          throwsA(
+            isA<UnsupportedError>().having(
+              (e) => e.message,
+              'message',
+              contains('Async-only host import'),
+            ),
+          ),
+        );
+      },
+    );
+
     test('supports layered feature defaults and extension query', () {
       final features = WasmFeatureSet.layeredDefaults(
         profile: WasmFeatureProfile.stable,

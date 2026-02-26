@@ -37,9 +37,11 @@ final class HostRuntimeFunction extends RuntimeFunction {
     required super.declaredTypeIndex,
     required super.runtimeTypeDepth,
     required this.callback,
+    this.asyncCallback,
   });
 
   final WasmHostFunction callback;
+  final WasmAsyncHostFunction? asyncCallback;
 
   @override
   bool get isHost => true;
