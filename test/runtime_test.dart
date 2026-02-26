@@ -1254,6 +1254,93 @@ void main() {
       expect(await instance.invokeI32Async('wrapMem', [41]), 42);
     });
 
+    test(
+      'supports memory.copy and memory.fill in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [0],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+
+                ..._i32Const(0),
+                ..._i32Const(0x11),
+                ..._i32Const(4),
+                ..._fc1(Opcodes.memoryFill, 0),
+
+                ..._i32Const(8),
+                ..._i32Const(0x22),
+                ..._memInstr(Opcodes.i32Store8),
+                ..._i32Const(9),
+                ..._i32Const(0x33),
+                ..._memInstr(Opcodes.i32Store8),
+
+                ..._i32Const(1),
+                ..._i32Const(8),
+                ..._i32Const(2),
+                ..._fc2(Opcodes.memoryCopy, 0, 0),
+
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._memInstr(Opcodes.i32Load8U),
+                ..._i32Const(0x11),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+
+                ..._i32Const(1),
+                ..._memInstr(Opcodes.i32Load8U),
+                ..._i32Const(0x22),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+
+                ..._i32Const(2),
+                ..._memInstr(Opcodes.i32Load8U),
+                ..._i32Const(0x33),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+
+                ..._i32Const(3),
+                ..._memInstr(Opcodes.i32Load8U),
+                ..._i32Const(0x11),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          memoryMinPages: 1,
+          exports: const [
+            _ExportSpec(
+              name: 'wrapMemBulk',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('wrapMemBulk', [41]), 4);
+      },
+    );
+
     test('supports i32 bitwise opcodes in async import call chains', () async {
       final wasm = _buildModule(
         types: [

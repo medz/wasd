@@ -2187,6 +2187,100 @@ final class WasmInstance {
           );
           pc++;
 
+        case Opcodes.memoryCopy:
+          final destinationMemoryIndex = instruction.immediate!;
+          final sourceMemoryIndex = instruction.secondaryImmediate!;
+          if (destinationMemoryIndex < 0 ||
+              destinationMemoryIndex >= memories.length) {
+            throw RangeError(
+              'memory.copy destination memory index out of range: '
+              '$destinationMemoryIndex',
+            );
+          }
+          if (sourceMemoryIndex < 0 || sourceMemoryIndex >= memories.length) {
+            throw RangeError(
+              'memory.copy source memory index out of range: '
+              '$sourceMemoryIndex',
+            );
+          }
+          final destinationIs64 =
+              destinationMemoryIndex >= 0 &&
+              destinationMemoryIndex < memory64ByIndex.length &&
+              memory64ByIndex[destinationMemoryIndex];
+          final sourceIs64 =
+              sourceMemoryIndex >= 0 &&
+              sourceMemoryIndex < memory64ByIndex.length &&
+              memory64ByIndex[sourceMemoryIndex];
+          final length = destinationIs64 && sourceIs64
+              ? _popAsyncSubsetLinearValue(
+                  stack,
+                  context: 'memory.copy length',
+                  expectedType: WasmValueType.i64,
+                )
+              : _popAsyncSubsetLinearValue(
+                  stack,
+                  context: 'memory.copy length',
+                  expectedType: WasmValueType.i32,
+                );
+          final sourceOffset = _popAsyncSubsetMemoryOperand(
+            stack,
+            memoryIndex: sourceMemoryIndex,
+            memory64ByIndex: memory64ByIndex,
+            context: 'memory.copy source offset',
+          );
+          final destinationOffset = _popAsyncSubsetMemoryOperand(
+            stack,
+            memoryIndex: destinationMemoryIndex,
+            memory64ByIndex: memory64ByIndex,
+            context: 'memory.copy destination offset',
+          );
+          final sourceMemory = memories[sourceMemoryIndex];
+          final destinationMemory = memories[destinationMemoryIndex];
+          if (sourceOffset > sourceMemory.lengthInBytes ||
+              length > sourceMemory.lengthInBytes - sourceOffset) {
+            throw StateError('memory.copy source out of bounds.');
+          }
+          if (destinationOffset > destinationMemory.lengthInBytes ||
+              length > destinationMemory.lengthInBytes - destinationOffset) {
+            throw StateError('memory.copy destination out of bounds.');
+          }
+          if (length != 0) {
+            final copied = sourceMemory.readBytes(sourceOffset, length);
+            destinationMemory.writeBytes(destinationOffset, copied);
+          }
+          pc++;
+
+        case Opcodes.memoryFill:
+          final memoryIndex = instruction.immediate!;
+          if (memoryIndex < 0 || memoryIndex >= memories.length) {
+            throw RangeError(
+              'memory.fill memory index out of range: $memoryIndex',
+            );
+          }
+          final length = _popAsyncSubsetMemoryOperationLength(
+            stack,
+            context: 'memory.fill length',
+          );
+          final value = _popValue(
+            stack,
+            'memory.fill value',
+          ).castTo(WasmValueType.i32).asI32();
+          final destinationOffset = _popAsyncSubsetMemoryOperand(
+            stack,
+            memoryIndex: memoryIndex,
+            memory64ByIndex: memory64ByIndex,
+            context: 'memory.fill destination offset',
+          );
+          final memory = memories[memoryIndex];
+          if (destinationOffset > memory.lengthInBytes ||
+              length > memory.lengthInBytes - destinationOffset) {
+            throw StateError('memory.fill out of bounds.');
+          }
+          if (length != 0) {
+            memory.fillBytes(destinationOffset, value, length);
+          }
+          pc++;
+
         case Opcodes.i32Load:
         case Opcodes.i64Load:
         case Opcodes.f32Load:
@@ -2814,6 +2908,72 @@ final class WasmInstance {
         memoryIndex < memory64ByIndex.length &&
         memory64ByIndex[memoryIndex];
     return (memory: memories[memoryIndex], isMemory64: isMemory64);
+  }
+
+  int _popAsyncSubsetLinearValue(
+    List<WasmValue> stack, {
+    required String context,
+    required WasmValueType expectedType,
+  }) {
+    final rawValue = _popValue(stack, context).castTo(expectedType);
+    final unsigned = expectedType == WasmValueType.i64
+        ? WasmI64.unsigned(rawValue.asI64())
+        : BigInt.from(rawValue.asI32().toUnsigned(32));
+    if (unsigned < BigInt.zero) {
+      throw RangeError('$context underflow: $unsigned');
+    }
+    final maxSupported = BigInt.from(wasmAddressSpaceBytes);
+    if (unsigned > maxSupported) {
+      throw RangeError(
+        '$context exceeds supported linear range: '
+        '$unsigned > $wasmAddressSpaceBytes.',
+      );
+    }
+    return unsigned.toInt();
+  }
+
+  int _popAsyncSubsetMemoryOperand(
+    List<WasmValue> stack, {
+    required int memoryIndex,
+    required List<bool> memory64ByIndex,
+    required String context,
+  }) {
+    if (memoryIndex < 0 || memoryIndex >= memories.length) {
+      throw RangeError(
+        'Invalid memory index: $memoryIndex (count=${memories.length}).',
+      );
+    }
+    final isMemory64 =
+        memoryIndex >= 0 &&
+        memoryIndex < memory64ByIndex.length &&
+        memory64ByIndex[memoryIndex];
+    return _popAsyncSubsetLinearValue(
+      stack,
+      context: context,
+      expectedType: isMemory64 ? WasmValueType.i64 : WasmValueType.i32,
+    );
+  }
+
+  int _popAsyncSubsetMemoryOperationLength(
+    List<WasmValue> stack, {
+    required String context,
+  }) {
+    final value = _popValue(stack, context);
+    return switch (value.type) {
+      WasmValueType.i32 => _popAsyncSubsetLinearValue(
+        <WasmValue>[value],
+        context: context,
+        expectedType: WasmValueType.i32,
+      ),
+      WasmValueType.i64 => _popAsyncSubsetLinearValue(
+        <WasmValue>[value],
+        context: context,
+        expectedType: WasmValueType.i64,
+      ),
+      _ => throw StateError(
+        'Type mismatch: expected i32/i64 length for $context, got ${value.type}.',
+      ),
+    };
   }
 
   int _resolveAsyncSubsetMemoryAddress({
