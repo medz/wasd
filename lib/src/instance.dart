@@ -10,8 +10,11 @@ import 'memory.dart';
 import 'module.dart';
 import 'opcode.dart';
 import 'predecode.dart';
+import 'runtime_control_ops.dart';
 import 'runtime_function.dart';
 import 'runtime_global.dart';
+import 'runtime_ops.dart';
+import 'runtime_stack_ops.dart';
 import 'table.dart';
 import 'validator.dart';
 import 'value.dart';
@@ -1070,6 +1073,10 @@ final class WasmInstance {
             _simdI16x8Abs(stack);
             pc++;
 
+          case Opcodes.i16x8Splat:
+            _simdI16x8Splat(stack);
+            pc++;
+
           case Opcodes.i16x8Eq:
             _simdI16x8Eq(stack);
             pc++;
@@ -1078,8 +1085,272 @@ final class WasmInstance {
             _simdI16x8Ne(stack);
             pc++;
 
+          case Opcodes.i16x8LtS:
+            _simdI16x8Compare(stack, opcode: Opcodes.i16x8LtS);
+            pc++;
+
+          case Opcodes.i16x8LtU:
+            _simdI16x8Compare(stack, opcode: Opcodes.i16x8LtU);
+            pc++;
+
+          case Opcodes.i16x8GtS:
+            _simdI16x8Compare(stack, opcode: Opcodes.i16x8GtS);
+            pc++;
+
+          case Opcodes.i16x8GtU:
+            _simdI16x8Compare(stack, opcode: Opcodes.i16x8GtU);
+            pc++;
+
+          case Opcodes.i16x8LeS:
+            _simdI16x8Compare(stack, opcode: Opcodes.i16x8LeS);
+            pc++;
+
+          case Opcodes.i16x8LeU:
+            _simdI16x8Compare(stack, opcode: Opcodes.i16x8LeU);
+            pc++;
+
+          case Opcodes.i16x8GeS:
+            _simdI16x8Compare(stack, opcode: Opcodes.i16x8GeS);
+            pc++;
+
+          case Opcodes.i16x8GeU:
+            _simdI16x8Compare(stack, opcode: Opcodes.i16x8GeU);
+            pc++;
+
+          case Opcodes.i16x8Add:
+            _simdI16x8Add(stack);
+            pc++;
+
+          case Opcodes.i16x8AddSatS:
+            _simdI16x8AddSatS(stack);
+            pc++;
+
+          case Opcodes.i16x8AddSatU:
+            _simdI16x8AddSatU(stack);
+            pc++;
+
+          case Opcodes.i16x8Sub:
+            _simdI16x8Sub(stack);
+            pc++;
+
+          case Opcodes.i16x8SubSatS:
+            _simdI16x8SubSatS(stack);
+            pc++;
+
+          case Opcodes.i16x8SubSatU:
+            _simdI16x8SubSatU(stack);
+            pc++;
+
+          case Opcodes.i16x8Shl:
+            _simdI16x8Shl(stack);
+            pc++;
+
+          case Opcodes.i16x8ShrS:
+            _simdI16x8ShrS(stack);
+            pc++;
+
+          case Opcodes.i16x8ShrU:
+            _simdI16x8ShrU(stack);
+            pc++;
+
+          case Opcodes.i16x8Neg:
+            _simdI16x8Neg(stack);
+            pc++;
+
+          case Opcodes.i16x8Mul:
+            _simdI16x8Mul(stack);
+            pc++;
+
+          case Opcodes.i16x8MinS:
+            _simdI16x8MinS(stack);
+            pc++;
+
+          case Opcodes.i16x8MinU:
+            _simdI16x8MinU(stack);
+            pc++;
+
+          case Opcodes.i16x8MaxS:
+            _simdI16x8MaxS(stack);
+            pc++;
+
+          case Opcodes.i16x8MaxU:
+            _simdI16x8MaxU(stack);
+            pc++;
+
+          case Opcodes.i16x8AvgrU:
+            _simdI16x8AvgrU(stack);
+            pc++;
+
           case Opcodes.i16x8Bitmask:
             _simdI16x8Bitmask(stack);
+            pc++;
+
+          case Opcodes.i32x4Splat:
+            _simdI32x4Splat(stack);
+            pc++;
+
+          case Opcodes.i32x4Eq:
+            _simdI32x4Eq(stack);
+            pc++;
+
+          case Opcodes.i32x4Ne:
+            _simdI32x4Ne(stack);
+            pc++;
+
+          case Opcodes.i32x4LtS:
+            _simdI32x4Compare(stack, opcode: Opcodes.i32x4LtS);
+            pc++;
+
+          case Opcodes.i32x4LtU:
+            _simdI32x4Compare(stack, opcode: Opcodes.i32x4LtU);
+            pc++;
+
+          case Opcodes.i32x4GtS:
+            _simdI32x4Compare(stack, opcode: Opcodes.i32x4GtS);
+            pc++;
+
+          case Opcodes.i32x4GtU:
+            _simdI32x4Compare(stack, opcode: Opcodes.i32x4GtU);
+            pc++;
+
+          case Opcodes.i32x4LeS:
+            _simdI32x4Compare(stack, opcode: Opcodes.i32x4LeS);
+            pc++;
+
+          case Opcodes.i32x4LeU:
+            _simdI32x4Compare(stack, opcode: Opcodes.i32x4LeU);
+            pc++;
+
+          case Opcodes.i32x4GeS:
+            _simdI32x4Compare(stack, opcode: Opcodes.i32x4GeS);
+            pc++;
+
+          case Opcodes.i32x4GeU:
+            _simdI32x4Compare(stack, opcode: Opcodes.i32x4GeU);
+            pc++;
+
+          case Opcodes.i32x4Add:
+            _simdI32x4Add(stack);
+            pc++;
+
+          case Opcodes.i32x4Sub:
+            _simdI32x4Sub(stack);
+            pc++;
+
+          case Opcodes.i32x4Mul:
+            _simdI32x4Mul(stack);
+            pc++;
+
+          case Opcodes.i32x4Shl:
+            _simdI32x4Shl(stack);
+            pc++;
+
+          case Opcodes.i32x4ShrS:
+            _simdI32x4ShrS(stack);
+            pc++;
+
+          case Opcodes.i32x4ShrU:
+            _simdI32x4ShrU(stack);
+            pc++;
+
+          case Opcodes.i32x4Abs:
+            _simdI32x4Abs(stack);
+            pc++;
+
+          case Opcodes.i32x4Neg:
+            _simdI32x4Neg(stack);
+            pc++;
+
+          case Opcodes.i32x4MinS:
+            _simdI32x4MinS(stack);
+            pc++;
+
+          case Opcodes.i32x4MinU:
+            _simdI32x4MinU(stack);
+            pc++;
+
+          case Opcodes.i32x4MaxS:
+            _simdI32x4MaxS(stack);
+            pc++;
+
+          case Opcodes.i32x4MaxU:
+            _simdI32x4MaxU(stack);
+            pc++;
+
+          case Opcodes.i32x4Bitmask:
+            _simdI32x4Bitmask(stack);
+            pc++;
+
+          case Opcodes.i32x4AllTrue:
+            _simdI32x4AllTrue(stack);
+            pc++;
+
+          case Opcodes.i64x2Splat:
+            _simdI64x2Splat(stack);
+            pc++;
+
+          case Opcodes.i64x2Eq:
+            _simdI64x2Eq(stack);
+            pc++;
+
+          case Opcodes.i64x2Ne:
+            _simdI64x2Compare(stack, opcode: Opcodes.i64x2Ne);
+            pc++;
+
+          case Opcodes.i64x2LtS:
+            _simdI64x2Compare(stack, opcode: Opcodes.i64x2LtS);
+            pc++;
+
+          case Opcodes.i64x2GtS:
+            _simdI64x2Compare(stack, opcode: Opcodes.i64x2GtS);
+            pc++;
+
+          case Opcodes.i64x2LeS:
+            _simdI64x2Compare(stack, opcode: Opcodes.i64x2LeS);
+            pc++;
+
+          case Opcodes.i64x2GeS:
+            _simdI64x2Compare(stack, opcode: Opcodes.i64x2GeS);
+            pc++;
+
+          case Opcodes.i64x2Shl:
+            _simdI64x2Shl(stack);
+            pc++;
+
+          case Opcodes.i64x2ShrS:
+            _simdI64x2ShrS(stack);
+            pc++;
+
+          case Opcodes.i64x2ShrU:
+            _simdI64x2ShrU(stack);
+            pc++;
+
+          case Opcodes.i64x2Add:
+            _simdI64x2Add(stack);
+            pc++;
+
+          case Opcodes.i64x2Sub:
+            _simdI64x2Sub(stack);
+            pc++;
+
+          case Opcodes.i64x2Mul:
+            _simdI64x2Mul(stack);
+            pc++;
+
+          case Opcodes.i64x2Abs:
+            _simdI64x2Abs(stack);
+            pc++;
+
+          case Opcodes.i64x2Neg:
+            _simdI64x2Neg(stack);
+            pc++;
+
+          case Opcodes.i64x2Bitmask:
+            _simdI64x2Bitmask(stack);
+            pc++;
+
+          case Opcodes.i64x2AllTrue:
+            _simdI64x2AllTrue(stack);
             pc++;
 
           case Opcodes.i32Eqz:
@@ -2744,20 +3015,13 @@ final class WasmInstance {
               memory64ByIndex: memory64ByIndex,
               context: 'memory.copy destination offset',
             );
-            final sourceMemory = memories[sourceMemoryIndex];
-            final destinationMemory = memories[destinationMemoryIndex];
-            if (sourceOffset > sourceMemory.lengthInBytes ||
-                length > sourceMemory.lengthInBytes - sourceOffset) {
-              throw StateError('memory.copy source out of bounds.');
-            }
-            if (destinationOffset > destinationMemory.lengthInBytes ||
-                length > destinationMemory.lengthInBytes - destinationOffset) {
-              throw StateError('memory.copy destination out of bounds.');
-            }
-            if (length != 0) {
-              final copied = sourceMemory.readBytes(sourceOffset, length);
-              destinationMemory.writeBytes(destinationOffset, copied);
-            }
+            RuntimeMemoryOps.copy(
+              sourceMemory: memories[sourceMemoryIndex],
+              destinationMemory: memories[destinationMemoryIndex],
+              sourceOffset: sourceOffset,
+              destinationOffset: destinationOffset,
+              length: length,
+            );
             pc++;
 
           case Opcodes.memoryFill:
@@ -2781,14 +3045,12 @@ final class WasmInstance {
               memory64ByIndex: memory64ByIndex,
               context: 'memory.fill destination offset',
             );
-            final memory = memories[memoryIndex];
-            if (destinationOffset > memory.lengthInBytes ||
-                length > memory.lengthInBytes - destinationOffset) {
-              throw StateError('memory.fill out of bounds.');
-            }
-            if (length != 0) {
-              memory.fillBytes(destinationOffset, value, length);
-            }
+            RuntimeMemoryOps.fill(
+              memory: memories[memoryIndex],
+              destinationOffset: destinationOffset,
+              value: value,
+              length: length,
+            );
             pc++;
 
           case Opcodes.memoryAtomicNotify:
@@ -2803,8 +3065,14 @@ final class WasmInstance {
               widthBytes: 4,
               context: 'memory.atomic.notify',
             );
-            access.memory.loadU32(access.address);
-            stack.add(WasmValue.i32(0));
+            stack.add(
+              WasmValue.i32(
+                RuntimeMemoryOps.atomicNotify(
+                  memory: access.memory,
+                  address: access.address,
+                ),
+              ),
+            );
             pc++;
 
           case Opcodes.memoryAtomicWait32:
@@ -2823,8 +3091,15 @@ final class WasmInstance {
               widthBytes: 4,
               context: 'memory.atomic.wait32',
             );
-            final actual = access.memory.loadU32(access.address);
-            stack.add(WasmValue.i32(actual == expected ? 2 : 1));
+            stack.add(
+              WasmValue.i32(
+                RuntimeMemoryOps.atomicWait32(
+                  memory: access.memory,
+                  address: access.address,
+                  expected: expected,
+                ),
+              ),
+            );
             pc++;
 
           case Opcodes.memoryAtomicWait64:
@@ -2845,10 +3120,15 @@ final class WasmInstance {
               widthBytes: 8,
               context: 'memory.atomic.wait64',
             );
-            final actual = WasmI64.unsigned(
-              access.memory.loadI64(access.address),
+            stack.add(
+              WasmValue.i32(
+                RuntimeMemoryOps.atomicWait64(
+                  memory: access.memory,
+                  address: access.address,
+                  expected: expected,
+                ),
+              ),
             );
-            stack.add(WasmValue.i32(actual == expected ? 2 : 1));
             pc++;
 
           case Opcodes.atomicFence:
@@ -2861,16 +3141,10 @@ final class WasmInstance {
           case Opcodes.i64AtomicLoad8U:
           case Opcodes.i64AtomicLoad16U:
           case Opcodes.i64AtomicLoad32U:
-            final widthBytes = switch (instruction.opcode) {
-              Opcodes.i32AtomicLoad => 4,
-              Opcodes.i64AtomicLoad => 8,
-              Opcodes.i32AtomicLoad8U => 1,
-              Opcodes.i32AtomicLoad16U => 2,
-              Opcodes.i64AtomicLoad8U => 1,
-              Opcodes.i64AtomicLoad16U => 2,
-              Opcodes.i64AtomicLoad32U => 4,
-              _ => throw StateError('Unexpected atomic load width resolution.'),
-            };
+            final widthBytes = RuntimeMemoryOps.atomicLoadWidthByOpcode(
+              instruction.opcode,
+              context: 'async subset',
+            );
             final access = _resolveAsyncSubsetAtomicMemoryAccess(
               stack,
               instruction: instruction,
@@ -2878,27 +3152,14 @@ final class WasmInstance {
               widthBytes: widthBytes,
               context: 'atomic.load',
             );
-            switch (instruction.opcode) {
-              case Opcodes.i32AtomicLoad:
-                stack.add(WasmValue.i32(access.memory.loadI32(access.address)));
-              case Opcodes.i64AtomicLoad:
-                stack.add(WasmValue.i64(access.memory.loadI64(access.address)));
-              case Opcodes.i32AtomicLoad8U:
-                stack.add(WasmValue.i32(access.memory.loadU8(access.address)));
-              case Opcodes.i32AtomicLoad16U:
-                stack.add(WasmValue.i32(access.memory.loadU16(access.address)));
-              case Opcodes.i64AtomicLoad8U:
-                stack.add(WasmValue.i64(access.memory.loadU8(access.address)));
-              case Opcodes.i64AtomicLoad16U:
-                stack.add(WasmValue.i64(access.memory.loadU16(access.address)));
-              case Opcodes.i64AtomicLoad32U:
-                stack.add(WasmValue.i64(access.memory.loadU32(access.address)));
-              default:
-                throw StateError(
-                  'Unexpected atomic load opcode in async subset: '
-                  '0x${instruction.opcode.toRadixString(16)}',
-                );
-            }
+            stack.add(
+              RuntimeMemoryOps.atomicLoadByOpcode(
+                memory: access.memory,
+                address: access.address,
+                opcode: instruction.opcode,
+                context: 'async subset',
+              ),
+            );
             pc++;
 
           case Opcodes.i32AtomicStore:
@@ -2909,18 +3170,10 @@ final class WasmInstance {
           case Opcodes.i64AtomicStore16:
           case Opcodes.i64AtomicStore32:
             final rawValue = _popValue(stack, 'atomic.store value');
-            final widthBytes = switch (instruction.opcode) {
-              Opcodes.i32AtomicStore => 4,
-              Opcodes.i64AtomicStore => 8,
-              Opcodes.i32AtomicStore8 => 1,
-              Opcodes.i32AtomicStore16 => 2,
-              Opcodes.i64AtomicStore8 => 1,
-              Opcodes.i64AtomicStore16 => 2,
-              Opcodes.i64AtomicStore32 => 4,
-              _ => throw StateError(
-                'Unexpected atomic store width resolution.',
-              ),
-            };
+            final widthBytes = RuntimeMemoryOps.atomicStoreWidthByOpcode(
+              instruction.opcode,
+              context: 'async subset',
+            );
             final access = _resolveAsyncSubsetAtomicMemoryAccess(
               stack,
               instruction: instruction,
@@ -2928,48 +3181,13 @@ final class WasmInstance {
               widthBytes: widthBytes,
               context: 'atomic.store',
             );
-            switch (instruction.opcode) {
-              case Opcodes.i32AtomicStore:
-                access.memory.storeI32(
-                  access.address,
-                  rawValue.castTo(WasmValueType.i32).asI32(),
-                );
-              case Opcodes.i64AtomicStore:
-                access.memory.storeI64(
-                  access.address,
-                  rawValue.castTo(WasmValueType.i64).asI64(),
-                );
-              case Opcodes.i32AtomicStore8:
-                access.memory.storeI8(
-                  access.address,
-                  rawValue.castTo(WasmValueType.i32).asI32(),
-                );
-              case Opcodes.i32AtomicStore16:
-                access.memory.storeI16(
-                  access.address,
-                  rawValue.castTo(WasmValueType.i32).asI32(),
-                );
-              case Opcodes.i64AtomicStore8:
-                access.memory.storeI8(
-                  access.address,
-                  WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
-                );
-              case Opcodes.i64AtomicStore16:
-                access.memory.storeI16(
-                  access.address,
-                  WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
-                );
-              case Opcodes.i64AtomicStore32:
-                access.memory.storeI32(
-                  access.address,
-                  WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
-                );
-              default:
-                throw StateError(
-                  'Unexpected atomic store opcode in async subset: '
-                  '0x${instruction.opcode.toRadixString(16)}',
-                );
-            }
+            RuntimeMemoryOps.atomicStoreByOpcode(
+              memory: access.memory,
+              address: access.address,
+              opcode: instruction.opcode,
+              value: rawValue,
+              context: 'async subset',
+            );
             pc++;
 
           case Opcodes.i32AtomicRmwAdd:
@@ -3195,33 +3413,14 @@ final class WasmInstance {
               memory64ByIndex: memory64ByIndex,
               context: 'memory.init destination offset',
             );
-            final data = _asyncDataSegments[dataIndex];
-            if (data == null) {
-              if (length == 0) {
-                pc++;
-                continue;
-              }
-              throw StateError(
-                'memory.init on dropped data segment $dataIndex.',
-              );
-            }
-            if (sourceOffset > data.length ||
-                length > data.length - sourceOffset) {
-              throw StateError('memory.init source out of bounds.');
-            }
-            final memory = memories[memoryIndex];
-            if (destinationOffset > memory.lengthInBytes ||
-                length > memory.lengthInBytes - destinationOffset) {
-              throw StateError('memory.init destination out of bounds.');
-            }
-            if (length != 0) {
-              memory.writeBytes(
-                destinationOffset,
-                Uint8List.fromList(
-                  data.sublist(sourceOffset, sourceOffset + length),
-                ),
-              );
-            }
+            RuntimeMemoryOps.initFromDataSegment(
+              segment: _asyncDataSegments[dataIndex],
+              segmentIndex: dataIndex,
+              memory: memories[memoryIndex],
+              sourceOffset: sourceOffset,
+              destinationOffset: destinationOffset,
+              length: length,
+            );
             pc++;
 
           case Opcodes.dataDrop:
@@ -3264,31 +3463,14 @@ final class WasmInstance {
               table64ByIndex: table64ByIndex,
               context: 'table.init destination offset',
             );
-            final segment = _asyncElementSegments[elementIndex];
-            if (segment == null) {
-              if (length == 0) {
-                pc++;
-                continue;
-              }
-              throw StateError(
-                'table.init on dropped element segment $elementIndex.',
-              );
-            }
-            if (sourceOffset > segment.length ||
-                length > segment.length - sourceOffset) {
-              throw StateError('table.init source out of bounds.');
-            }
-            final table = tables[tableIndex];
-            if (destinationOffset > table.length ||
-                length > table.length - destinationOffset) {
-              throw StateError('table.init destination out of bounds.');
-            }
-            if (length != 0) {
-              table.initialize(
-                destinationOffset,
-                segment.sublist(sourceOffset, sourceOffset + length),
-              );
-            }
+            RuntimeTableOps.initFromElementSegment(
+              segment: _asyncElementSegments[elementIndex],
+              segmentIndex: elementIndex,
+              table: tables[tableIndex],
+              sourceOffset: sourceOffset,
+              destinationOffset: destinationOffset,
+              length: length,
+            );
             pc++;
 
           case Opcodes.elemDrop:
@@ -3348,24 +3530,13 @@ final class WasmInstance {
               table64ByIndex: table64ByIndex,
               context: 'table.copy destination offset',
             );
-            final sourceTable = tables[sourceTableIndex];
-            final destinationTable = tables[destinationTableIndex];
-            if (sourceOffset > sourceTable.length ||
-                length > sourceTable.length - sourceOffset) {
-              throw StateError('table.copy source out of bounds.');
-            }
-            if (destinationOffset > destinationTable.length ||
-                length > destinationTable.length - destinationOffset) {
-              throw StateError('table.copy destination out of bounds.');
-            }
-            if (length != 0) {
-              final copied = List<int?>.generate(
-                length,
-                (index) => sourceTable[sourceOffset + index],
-                growable: false,
-              );
-              destinationTable.initialize(destinationOffset, copied);
-            }
+            RuntimeTableOps.copy(
+              sourceTable: tables[sourceTableIndex],
+              destinationTable: tables[destinationTableIndex],
+              sourceOffset: sourceOffset,
+              destinationOffset: destinationOffset,
+              length: length,
+            );
             pc++;
 
           case Opcodes.tableGrow:
@@ -3434,17 +3605,12 @@ final class WasmInstance {
               table64ByIndex: table64ByIndex,
               context: 'table.fill destination offset',
             );
-            final table = tables[tableIndex];
-            if (destinationOffset > table.length ||
-                length > table.length - destinationOffset) {
-              throw StateError('table.fill destination out of bounds.');
-            }
-            if (length != 0) {
-              table.initialize(
-                destinationOffset,
-                List<int?>.filled(length, fillValue, growable: false),
-              );
-            }
+            RuntimeTableOps.fill(
+              table: tables[tableIndex],
+              destinationOffset: destinationOffset,
+              value: fillValue,
+              length: length,
+            );
             pc++;
 
           case Opcodes.i32Load:
@@ -3477,41 +3643,14 @@ final class WasmInstance {
               isMemory64: target.isMemory64,
               context: 'memory.load',
             );
-            switch (instruction.opcode) {
-              case Opcodes.i32Load:
-                stack.add(WasmValue.i32(target.memory.loadI32(address)));
-              case Opcodes.i64Load:
-                stack.add(WasmValue.i64(target.memory.loadI64(address)));
-              case Opcodes.f32Load:
-                stack.add(WasmValue.f32(target.memory.loadF32(address)));
-              case Opcodes.f64Load:
-                stack.add(WasmValue.f64(target.memory.loadF64(address)));
-              case Opcodes.i32Load8S:
-                stack.add(WasmValue.i32(target.memory.loadI8(address)));
-              case Opcodes.i32Load8U:
-                stack.add(WasmValue.i32(target.memory.loadU8(address)));
-              case Opcodes.i32Load16S:
-                stack.add(WasmValue.i32(target.memory.loadI16(address)));
-              case Opcodes.i32Load16U:
-                stack.add(WasmValue.i32(target.memory.loadU16(address)));
-              case Opcodes.i64Load8S:
-                stack.add(WasmValue.i64(target.memory.loadI8(address)));
-              case Opcodes.i64Load8U:
-                stack.add(WasmValue.i64(target.memory.loadU8(address)));
-              case Opcodes.i64Load16S:
-                stack.add(WasmValue.i64(target.memory.loadI16(address)));
-              case Opcodes.i64Load16U:
-                stack.add(WasmValue.i64(target.memory.loadU16(address)));
-              case Opcodes.i64Load32S:
-                stack.add(WasmValue.i64(target.memory.loadI32(address)));
-              case Opcodes.i64Load32U:
-                stack.add(WasmValue.i64(target.memory.loadU32(address)));
-              default:
-                throw StateError(
-                  'Unexpected load opcode in async subset: '
-                  '0x${instruction.opcode.toRadixString(16)}',
-                );
-            }
+            stack.add(
+              RuntimeMemoryOps.loadByOpcode(
+                memory: target.memory,
+                address: address,
+                opcode: instruction.opcode,
+                context: 'async subset',
+              ),
+            );
             pc++;
 
           case Opcodes.i32Store:
@@ -3540,58 +3679,13 @@ final class WasmInstance {
               isMemory64: target.isMemory64,
               context: 'memory.store',
             );
-            switch (instruction.opcode) {
-              case Opcodes.i32Store:
-                target.memory.storeI32(
-                  address,
-                  rawValue.castTo(WasmValueType.i32).asI32(),
-                );
-              case Opcodes.i64Store:
-                target.memory.storeI64(
-                  address,
-                  rawValue.castTo(WasmValueType.i64).asI64(),
-                );
-              case Opcodes.f32Store:
-                target.memory.storeF32(
-                  address,
-                  rawValue.castTo(WasmValueType.f32).asF32(),
-                );
-              case Opcodes.f64Store:
-                target.memory.storeF64(
-                  address,
-                  rawValue.castTo(WasmValueType.f64).asF64(),
-                );
-              case Opcodes.i32Store8:
-                target.memory.storeI8(
-                  address,
-                  rawValue.castTo(WasmValueType.i32).asI32(),
-                );
-              case Opcodes.i32Store16:
-                target.memory.storeI16(
-                  address,
-                  rawValue.castTo(WasmValueType.i32).asI32(),
-                );
-              case Opcodes.i64Store8:
-                target.memory.storeI8(
-                  address,
-                  WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
-                );
-              case Opcodes.i64Store16:
-                target.memory.storeI16(
-                  address,
-                  WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
-                );
-              case Opcodes.i64Store32:
-                target.memory.storeI32(
-                  address,
-                  WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
-                );
-              default:
-                throw StateError(
-                  'Unexpected store opcode in async subset: '
-                  '0x${instruction.opcode.toRadixString(16)}',
-                );
-            }
+            RuntimeMemoryOps.storeByOpcode(
+              memory: target.memory,
+              address: address,
+              opcode: instruction.opcode,
+              value: rawValue,
+              context: 'async subset',
+            );
             pc++;
 
           case Opcodes.block:
@@ -4119,18 +4213,12 @@ final class WasmInstance {
     _AsyncSubsetControlFrame frame, {
     required String context,
   }) {
-    final results = _popArgsForTypes(
-      stack,
-      frame.resultTypes,
-      context: '$context control-result',
+    RuntimeControlOps.leaveFrameExact(
+      stack: stack,
+      stackBaseHeight: frame.stackBaseHeight,
+      resultTypes: frame.resultTypes,
+      context: context,
     );
-    if (stack.length != frame.stackBaseHeight) {
-      throw StateError(
-        '$context stack height mismatch: expected ${frame.stackBaseHeight}, '
-        'has ${stack.length}.',
-      );
-    }
-    stack.addAll(results);
   }
 
   int _handleLegacyCatchBoundaryInAsyncSubset({
@@ -4302,13 +4390,7 @@ final class WasmInstance {
     int height, {
     required String context,
   }) {
-    if (stack.length < height) {
-      throw StateError(
-        '$context stack underflow while restoring control frame: '
-        'stack=${stack.length}, height=$height.',
-      );
-    }
-    stack.length = height;
+    RuntimeStackOps.truncateToHeight(stack, height, context: context);
   }
 
   Never _throwTagInAsyncSubset(List<WasmValue> stack, Instruction instruction) {
@@ -4370,27 +4452,19 @@ final class WasmInstance {
     required List<_AsyncSubsetControlFrame> controlStack,
     required String context,
   }) {
-    if (depth < 0 || depth >= controlStack.length) {
-      throw RangeError(
-        '$context depth out of range: $depth (labels=${controlStack.length})',
-      );
-    }
-
-    final targetIndex = controlStack.length - 1 - depth;
+    final targetIndex = RuntimeControlOps.targetIndexForDepth(
+      depth,
+      controlStack.length,
+      context: context,
+    );
     final target = controlStack[targetIndex];
-    final branchValues = _popArgsForTypes(
-      stack,
-      target.branchTypes,
+
+    RuntimeControlOps.rebaseStackForBranch(
+      stack: stack,
+      branchTypes: target.branchTypes,
+      stackBaseHeight: target.stackBaseHeight,
       context: '$context depth=$depth',
     );
-    if (stack.length < target.stackBaseHeight) {
-      throw StateError(
-        '$context stack height underflow for target depth $depth: '
-        'base=${target.stackBaseHeight}, has=${stack.length}.',
-      );
-    }
-    stack.length = target.stackBaseHeight;
-    stack.addAll(branchValues);
 
     if (target.kind == _AsyncSubsetControlKind.loop) {
       controlStack.removeRange(targetIndex + 1, controlStack.length);
@@ -4658,9 +4732,11 @@ final class WasmInstance {
       isMemory64: target.isMemory64,
       context: context,
     );
-    if (widthBytes > 1 && address % widthBytes != 0) {
-      throw StateError('unaligned atomic');
-    }
+    RuntimeMemoryOps.requireAtomicAlignment(
+      address,
+      widthBytes: widthBytes,
+      context: context,
+    );
     return (memory: target.memory, address: address);
   }
 
@@ -4682,10 +4758,12 @@ final class WasmInstance {
       widthBytes: 4,
       context: context,
     );
-    final current = access.memory.loadI32(access.address).toUnsigned(32);
-    final next = operation(current, operand).toUnsigned(32);
-    access.memory.storeI32(access.address, next);
-    return current;
+    return RuntimeMemoryOps.atomicRmwI32(
+      memory: access.memory,
+      address: access.address,
+      operand: operand,
+      operation: operation,
+    );
   }
 
   BigInt _executeAsyncSubsetAtomicRmwI64(
@@ -4705,10 +4783,12 @@ final class WasmInstance {
       widthBytes: 8,
       context: context,
     );
-    final current = WasmI64.unsigned(access.memory.loadI64(access.address));
-    final next = WasmI64.unsigned(operation(current, operand));
-    access.memory.storeI64(access.address, next);
-    return current;
+    return RuntimeMemoryOps.atomicRmwI64(
+      memory: access.memory,
+      address: access.address,
+      operand: operand,
+      operation: operation,
+    );
   }
 
   int _executeAsyncSubsetAtomicRmwI32Narrow(
@@ -4731,21 +4811,14 @@ final class WasmInstance {
       widthBytes: widthBytes,
       context: context,
     );
-    final current = _loadAsyncSubsetAtomicNarrowUnsigned(
-      access.memory,
-      access.address,
+    return RuntimeMemoryOps.atomicRmwNarrowUnsigned(
+      memory: access.memory,
+      address: access.address,
       widthBytes: widthBytes,
+      operand: operand,
+      operation: operation,
       context: context,
     );
-    final next = operation(current, operand).toUnsigned(bits);
-    _storeAsyncSubsetAtomicNarrowUnsigned(
-      access.memory,
-      access.address,
-      widthBytes: widthBytes,
-      value: next,
-      context: context,
-    );
-    return current;
   }
 
   int _executeAsyncSubsetAtomicRmwI64Narrow(
@@ -4774,21 +4847,14 @@ final class WasmInstance {
       widthBytes: widthBytes,
       context: context,
     );
-    final current = _loadAsyncSubsetAtomicNarrowUnsigned(
-      access.memory,
-      access.address,
+    return RuntimeMemoryOps.atomicRmwNarrowUnsigned(
+      memory: access.memory,
+      address: access.address,
       widthBytes: widthBytes,
+      operand: operand,
+      operation: operation,
       context: context,
     );
-    final next = operation(current, operand).toUnsigned(bits);
-    _storeAsyncSubsetAtomicNarrowUnsigned(
-      access.memory,
-      access.address,
-      widthBytes: widthBytes,
-      value: next,
-      context: context,
-    );
-    return current;
   }
 
   int _executeAsyncSubsetAtomicCmpxchgI32(
@@ -4812,11 +4878,12 @@ final class WasmInstance {
       widthBytes: 4,
       context: context,
     );
-    final current = access.memory.loadI32(access.address).toUnsigned(32);
-    if (current == expected) {
-      access.memory.storeI32(access.address, replacement);
-    }
-    return current;
+    return RuntimeMemoryOps.atomicCmpxchgI32(
+      memory: access.memory,
+      address: access.address,
+      expected: expected,
+      replacement: replacement,
+    );
   }
 
   BigInt _executeAsyncSubsetAtomicCmpxchgI64(
@@ -4841,11 +4908,12 @@ final class WasmInstance {
       widthBytes: 8,
       context: context,
     );
-    final current = WasmI64.unsigned(access.memory.loadI64(access.address));
-    if (current == expected) {
-      access.memory.storeI64(access.address, replacement);
-    }
-    return current;
+    return RuntimeMemoryOps.atomicCmpxchgI64(
+      memory: access.memory,
+      address: access.address,
+      expected: expected,
+      replacement: replacement,
+    );
   }
 
   int _executeAsyncSubsetAtomicCmpxchgI32Narrow(
@@ -4871,22 +4939,14 @@ final class WasmInstance {
       widthBytes: widthBytes,
       context: context,
     );
-    final current = _loadAsyncSubsetAtomicNarrowUnsigned(
-      access.memory,
-      access.address,
+    return RuntimeMemoryOps.atomicCmpxchgNarrowUnsigned(
+      memory: access.memory,
+      address: access.address,
       widthBytes: widthBytes,
+      expected: expected,
+      replacement: replacement,
       context: context,
     );
-    if (current == expected) {
-      _storeAsyncSubsetAtomicNarrowUnsigned(
-        access.memory,
-        access.address,
-        widthBytes: widthBytes,
-        value: replacement,
-        context: context,
-      );
-    }
-    return current;
   }
 
   int _executeAsyncSubsetAtomicCmpxchgI64Narrow(
@@ -4923,55 +4983,14 @@ final class WasmInstance {
       widthBytes: widthBytes,
       context: context,
     );
-    final current = _loadAsyncSubsetAtomicNarrowUnsigned(
-      access.memory,
-      access.address,
+    return RuntimeMemoryOps.atomicCmpxchgNarrowUnsigned(
+      memory: access.memory,
+      address: access.address,
       widthBytes: widthBytes,
+      expected: expected,
+      replacement: replacement,
       context: context,
     );
-    if (current == expected) {
-      _storeAsyncSubsetAtomicNarrowUnsigned(
-        access.memory,
-        access.address,
-        widthBytes: widthBytes,
-        value: replacement,
-        context: context,
-      );
-    }
-    return current;
-  }
-
-  int _loadAsyncSubsetAtomicNarrowUnsigned(
-    WasmMemory memory,
-    int address, {
-    required int widthBytes,
-    required String context,
-  }) {
-    return switch (widthBytes) {
-      1 => memory.loadU8(address),
-      2 => memory.loadU16(address),
-      4 => memory.loadU32(address),
-      _ => throw StateError('Unsupported $context width: $widthBytes'),
-    };
-  }
-
-  void _storeAsyncSubsetAtomicNarrowUnsigned(
-    WasmMemory memory,
-    int address, {
-    required int widthBytes,
-    required int value,
-    required String context,
-  }) {
-    switch (widthBytes) {
-      case 1:
-        memory.storeI8(address, value);
-      case 2:
-        memory.storeI16(address, value);
-      case 4:
-        memory.storeI32(address, value);
-      default:
-        throw StateError('Unsupported $context width: $widthBytes');
-    }
   }
 
   void _pushAsyncSubsetI128Result(List<WasmValue> stack, BigInt value) {
@@ -5081,6 +5100,19 @@ final class WasmInstance {
     _pushAsyncSubsetV128(stack, result);
   }
 
+  void _simdI16x8Splat(List<WasmValue> stack) {
+    final lane = _popValue(
+      stack,
+      'i16x8.splat',
+    ).castTo(WasmValueType.i32).asI32();
+    final data = ByteData(2);
+    data.setUint16(0, lane & 0xffff, Endian.little);
+    final result = Uint8List.fromList(
+      List<int>.generate(16, (index) => data.buffer.asUint8List()[index % 2]),
+    );
+    _pushAsyncSubsetV128(stack, result);
+  }
+
   void _simdI16x8Eq(List<WasmValue> stack) {
     final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.eq rhs');
     final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.eq lhs');
@@ -5094,6 +5126,324 @@ final class WasmInstance {
           lhsData.getUint16(offset, Endian.little) ==
           rhsData.getUint16(offset, Endian.little);
       resultData.setUint16(offset, laneEqual ? 0xffff : 0x0000, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8Compare(List<WasmValue> stack, {required int opcode}) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.compare rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.compare lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final aS = lhsData.getInt16(offset, Endian.little);
+      final bS = rhsData.getInt16(offset, Endian.little);
+      final aU = lhsData.getUint16(offset, Endian.little);
+      final bU = rhsData.getUint16(offset, Endian.little);
+      final matches = switch (opcode) {
+        Opcodes.i16x8LtS => aS < bS,
+        Opcodes.i16x8LtU => aU < bU,
+        Opcodes.i16x8GtS => aS > bS,
+        Opcodes.i16x8GtU => aU > bU,
+        Opcodes.i16x8LeS => aS <= bS,
+        Opcodes.i16x8LeU => aU <= bU,
+        Opcodes.i16x8GeS => aS >= bS,
+        Opcodes.i16x8GeU => aU >= bU,
+        _ => throw StateError('Unsupported i16x8 compare opcode: $opcode'),
+      };
+      resultData.setUint16(offset, matches ? 0xffff : 0x0000, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8Add(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.add rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.add lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final sum =
+          (lhsData.getInt16(offset, Endian.little) +
+                  rhsData.getInt16(offset, Endian.little))
+              .toSigned(16);
+      resultData.setUint16(offset, sum & 0xffff, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8AddSatS(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.add_sat_s rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.add_sat_s lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final sum =
+          lhsData.getInt16(offset, Endian.little) +
+          rhsData.getInt16(offset, Endian.little);
+      final clamped = sum.clamp(-32768, 32767);
+      resultData.setUint16(offset, clamped & 0xffff, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8AddSatU(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.add_sat_u rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.add_sat_u lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final sum =
+          lhsData.getUint16(offset, Endian.little) +
+          rhsData.getUint16(offset, Endian.little);
+      final clamped = sum.clamp(0, 0xffff);
+      resultData.setUint16(offset, clamped, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8Sub(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.sub rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.sub lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final difference =
+          lhsData.getUint16(offset, Endian.little) -
+          rhsData.getUint16(offset, Endian.little);
+      resultData.setUint16(offset, difference & 0xffff, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8SubSatS(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.sub_sat_s rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.sub_sat_s lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final difference =
+          lhsData.getInt16(offset, Endian.little) -
+          rhsData.getInt16(offset, Endian.little);
+      final clamped = difference.clamp(-32768, 32767);
+      resultData.setUint16(offset, clamped & 0xffff, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8SubSatU(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.sub_sat_u rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.sub_sat_u lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final lhsValue = lhsData.getUint16(offset, Endian.little);
+      final rhsValue = rhsData.getUint16(offset, Endian.little);
+      final difference = lhsValue - rhsValue;
+      resultData.setUint16(
+        offset,
+        difference < 0 ? 0 : difference & 0xffff,
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8Shl(List<WasmValue> stack) {
+    final shift =
+        _popValue(stack, 'i16x8.shl shift').castTo(WasmValueType.i32).asI32() &
+        15;
+    final value = _popAsyncSubsetV128(stack, opName: 'i16x8.shl');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      resultData.setUint16(
+        offset,
+        (valueData.getUint16(offset, Endian.little) << shift) & 0xffff,
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8ShrS(List<WasmValue> stack) {
+    final shift =
+        _popValue(
+          stack,
+          'i16x8.shr_s shift',
+        ).castTo(WasmValueType.i32).asI32() &
+        15;
+    final value = _popAsyncSubsetV128(stack, opName: 'i16x8.shr_s');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final laneValue = valueData.getInt16(offset, Endian.little);
+      resultData.setUint16(
+        offset,
+        (laneValue >> shift) & 0xffff,
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8ShrU(List<WasmValue> stack) {
+    final shift =
+        _popValue(
+          stack,
+          'i16x8.shr_u shift',
+        ).castTo(WasmValueType.i32).asI32() &
+        15;
+    final value = _popAsyncSubsetV128(stack, opName: 'i16x8.shr_u');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      resultData.setUint16(
+        offset,
+        valueData.getUint16(offset, Endian.little) >> shift,
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8Neg(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i16x8.neg');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      resultData.setInt16(
+        offset,
+        -valueData.getInt16(offset, Endian.little),
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8Mul(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.mul rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.mul lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final product =
+          lhsData.getInt16(offset, Endian.little) *
+          rhsData.getInt16(offset, Endian.little);
+      resultData.setUint16(offset, product & 0xffff, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8MinS(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.min_s rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.min_s lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final a = lhsData.getInt16(offset, Endian.little);
+      final b = rhsData.getInt16(offset, Endian.little);
+      resultData.setUint16(offset, (a < b ? a : b) & 0xffff, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8MinU(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.min_u rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.min_u lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final a = lhsData.getUint16(offset, Endian.little);
+      final b = rhsData.getUint16(offset, Endian.little);
+      resultData.setUint16(offset, a < b ? a : b, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8MaxS(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.max_s rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.max_s lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final a = lhsData.getInt16(offset, Endian.little);
+      final b = rhsData.getInt16(offset, Endian.little);
+      resultData.setUint16(offset, (a > b ? a : b) & 0xffff, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8MaxU(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.max_u rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.max_u lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final a = lhsData.getUint16(offset, Endian.little);
+      final b = rhsData.getUint16(offset, Endian.little);
+      resultData.setUint16(offset, a > b ? a : b, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8AvgrU(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.avgr_u rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.avgr_u lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final avg =
+          lhsData.getUint16(offset, Endian.little) +
+          rhsData.getUint16(offset, Endian.little) +
+          1;
+      resultData.setUint16(offset, avg >> 1, Endian.little);
     }
     _pushAsyncSubsetV128(stack, result);
   }
@@ -5129,6 +5479,583 @@ final class WasmInstance {
       }
     }
     stack.add(WasmValue.i32(mask));
+  }
+
+  void _simdI32x4Splat(List<WasmValue> stack) {
+    final lane = _popValue(
+      stack,
+      'i32x4.splat',
+    ).castTo(WasmValueType.i32).asI32();
+    final result = Uint8List(16);
+    final data = ByteData.sublistView(result);
+    final laneBits = lane.toUnsigned(32);
+    for (var i = 0; i < 4; i++) {
+      data.setUint32(i * 4, laneBits, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4Eq(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i32x4.eq rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i32x4.eq lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final laneEqual =
+          lhsData.getUint32(offset, Endian.little) ==
+          rhsData.getUint32(offset, Endian.little);
+      resultData.setUint32(
+        offset,
+        laneEqual ? 0xffffffff : 0x00000000,
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4Ne(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i32x4.ne rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i32x4.ne lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final laneNe =
+          lhsData.getUint32(offset, Endian.little) !=
+          rhsData.getUint32(offset, Endian.little);
+      resultData.setUint32(
+        offset,
+        laneNe ? 0xffffffff : 0x00000000,
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4Compare(List<WasmValue> stack, {required int opcode}) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i32x4.compare rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i32x4.compare lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final aS = lhsData.getInt32(offset, Endian.little);
+      final bS = rhsData.getInt32(offset, Endian.little);
+      final aU = lhsData.getUint32(offset, Endian.little);
+      final bU = rhsData.getUint32(offset, Endian.little);
+      final matches = switch (opcode) {
+        Opcodes.i32x4LtS => aS < bS,
+        Opcodes.i32x4LtU => aU < bU,
+        Opcodes.i32x4GtS => aS > bS,
+        Opcodes.i32x4GtU => aU > bU,
+        Opcodes.i32x4LeS => aS <= bS,
+        Opcodes.i32x4LeU => aU <= bU,
+        Opcodes.i32x4GeS => aS >= bS,
+        Opcodes.i32x4GeU => aU >= bU,
+        _ => throw StateError('Unsupported i32x4 compare opcode: $opcode'),
+      };
+      resultData.setUint32(
+        offset,
+        matches ? 0xffffffff : 0x00000000,
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4Add(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i32x4.add rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i32x4.add lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final sum =
+          lhsData.getUint32(offset, Endian.little) +
+          rhsData.getUint32(offset, Endian.little);
+      resultData.setUint32(offset, sum & 0xffffffff, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4Sub(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i32x4.sub rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i32x4.sub lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final difference =
+          lhsData.getUint32(offset, Endian.little) -
+          rhsData.getUint32(offset, Endian.little);
+      resultData.setUint32(offset, difference & 0xffffffff, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4Mul(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i32x4.mul rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i32x4.mul lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final product =
+          lhsData.getUint32(offset, Endian.little) *
+          rhsData.getUint32(offset, Endian.little);
+      resultData.setUint32(offset, product & 0xffffffff, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4Shl(List<WasmValue> stack) {
+    final shift =
+        _popValue(stack, 'i32x4.shl shift').castTo(WasmValueType.i32).asI32() &
+        31;
+    final value = _popAsyncSubsetV128(stack, opName: 'i32x4.shl');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      resultData.setUint32(
+        offset,
+        (valueData.getUint32(offset, Endian.little) << shift) & 0xffffffff,
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4ShrS(List<WasmValue> stack) {
+    final shift =
+        _popValue(
+          stack,
+          'i32x4.shr_s shift',
+        ).castTo(WasmValueType.i32).asI32() &
+        31;
+    final value = _popAsyncSubsetV128(stack, opName: 'i32x4.shr_s');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final laneValue = valueData.getInt32(offset, Endian.little);
+      resultData.setUint32(
+        offset,
+        (laneValue >> shift) & 0xffffffff,
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4ShrU(List<WasmValue> stack) {
+    final shift =
+        _popValue(
+          stack,
+          'i32x4.shr_u shift',
+        ).castTo(WasmValueType.i32).asI32() &
+        31;
+    final value = _popAsyncSubsetV128(stack, opName: 'i32x4.shr_u');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      resultData.setUint32(
+        offset,
+        valueData.getUint32(offset, Endian.little) >> shift,
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4Abs(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i32x4.abs');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final laneValue = valueData.getInt32(lane * 4, Endian.little).abs();
+      resultData.setUint32(lane * 4, laneValue.toUnsigned(32), Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4Neg(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i32x4.neg');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final laneValue = -valueData.getInt32(lane * 4, Endian.little);
+      resultData.setUint32(lane * 4, laneValue.toUnsigned(32), Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4MinS(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i32x4.min_s rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i32x4.min_s lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final a = lhsData.getInt32(offset, Endian.little);
+      final b = rhsData.getInt32(offset, Endian.little);
+      resultData.setUint32(
+        offset,
+        (a < b ? a : b).toUnsigned(32),
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4MinU(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i32x4.min_u rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i32x4.min_u lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final a = lhsData.getUint32(offset, Endian.little);
+      final b = rhsData.getUint32(offset, Endian.little);
+      resultData.setUint32(offset, a < b ? a : b, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4MaxS(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i32x4.max_s rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i32x4.max_s lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final a = lhsData.getInt32(offset, Endian.little);
+      final b = rhsData.getInt32(offset, Endian.little);
+      resultData.setUint32(
+        offset,
+        (a > b ? a : b).toUnsigned(32),
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4MaxU(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i32x4.max_u rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i32x4.max_u lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final a = lhsData.getUint32(offset, Endian.little);
+      final b = rhsData.getUint32(offset, Endian.little);
+      resultData.setUint32(offset, a > b ? a : b, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4Bitmask(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i32x4.bitmask');
+    final data = ByteData.sublistView(value);
+    var mask = 0;
+    for (var lane = 0; lane < 4; lane++) {
+      if ((data.getUint32(lane * 4, Endian.little) & 0x80000000) != 0) {
+        mask |= (1 << lane);
+      }
+    }
+    stack.add(WasmValue.i32(mask));
+  }
+
+  void _simdI32x4AllTrue(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i32x4.all_true');
+    final data = ByteData.sublistView(value);
+    var allTrue = 1;
+    for (var lane = 0; lane < 4; lane++) {
+      if (data.getUint32(lane * 4, Endian.little) == 0) {
+        allTrue = 0;
+        break;
+      }
+    }
+    stack.add(WasmValue.i32(allTrue));
+  }
+
+  void _simdI64x2Splat(List<WasmValue> stack) {
+    final lane = _popValue(
+      stack,
+      'i64x2.splat',
+    ).castTo(WasmValueType.i64).asI64();
+    final result = Uint8List(16);
+    final data = ByteData.sublistView(result);
+    final laneBits = WasmI64.unsigned(lane);
+    for (var i = 0; i < 2; i++) {
+      _writeAsyncSubsetLaneU64(data, i * 8, laneBits);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI64x2Eq(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i64x2.eq rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i64x2.eq lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _writeAsyncSubsetLaneU64(
+        resultData,
+        offset,
+        _readAsyncSubsetLaneU64(lhsData, offset) ==
+                _readAsyncSubsetLaneU64(rhsData, offset)
+            ? _u64BigMask
+            : BigInt.zero,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI64x2Compare(List<WasmValue> stack, {required int opcode}) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i64x2.compare rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i64x2.compare lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      final a = WasmI64.signed(_readAsyncSubsetLaneU64(lhsData, offset));
+      final b = WasmI64.signed(_readAsyncSubsetLaneU64(rhsData, offset));
+      final matches = switch (opcode) {
+        Opcodes.i64x2Ne => a != b,
+        Opcodes.i64x2LtS => a < b,
+        Opcodes.i64x2GtS => a > b,
+        Opcodes.i64x2LeS => a <= b,
+        Opcodes.i64x2GeS => a >= b,
+        _ => throw StateError('Unsupported i64x2 compare opcode: $opcode'),
+      };
+      _writeAsyncSubsetLaneU64(
+        resultData,
+        offset,
+        matches ? _u64BigMask : BigInt.zero,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI64x2Shl(List<WasmValue> stack) {
+    final shift =
+        _popValue(stack, 'i64x2.shl shift').castTo(WasmValueType.i32).asI32() &
+        63;
+    final value = _popAsyncSubsetV128(stack, opName: 'i64x2.shl');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _writeAsyncSubsetLaneU64(
+        resultData,
+        offset,
+        _readAsyncSubsetLaneU64(valueData, offset) << shift,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI64x2ShrS(List<WasmValue> stack) {
+    final shift =
+        _popValue(
+          stack,
+          'i64x2.shr_s shift',
+        ).castTo(WasmValueType.i32).asI32() &
+        63;
+    final value = _popAsyncSubsetV128(stack, opName: 'i64x2.shr_s');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      final laneValue = WasmI64.signed(
+        _readAsyncSubsetLaneU64(valueData, offset),
+      );
+      _writeAsyncSubsetLaneU64(resultData, offset, laneValue >> shift);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI64x2ShrU(List<WasmValue> stack) {
+    final shift =
+        _popValue(
+          stack,
+          'i64x2.shr_u shift',
+        ).castTo(WasmValueType.i32).asI32() &
+        63;
+    final value = _popAsyncSubsetV128(stack, opName: 'i64x2.shr_u');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _writeAsyncSubsetLaneU64(
+        resultData,
+        offset,
+        _readAsyncSubsetLaneU64(valueData, offset) >> shift,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI64x2Add(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i64x2.add rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i64x2.add lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _writeAsyncSubsetLaneU64(
+        resultData,
+        offset,
+        _readAsyncSubsetLaneU64(lhsData, offset) +
+            _readAsyncSubsetLaneU64(rhsData, offset),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI64x2Sub(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i64x2.sub rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i64x2.sub lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _writeAsyncSubsetLaneU64(
+        resultData,
+        offset,
+        _readAsyncSubsetLaneU64(lhsData, offset) -
+            _readAsyncSubsetLaneU64(rhsData, offset),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI64x2Mul(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i64x2.mul rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i64x2.mul lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      _writeAsyncSubsetLaneU64(
+        resultData,
+        offset,
+        _readAsyncSubsetLaneU64(lhsData, offset) *
+            _readAsyncSubsetLaneU64(rhsData, offset),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI64x2Abs(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i64x2.abs');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      final laneValue = WasmI64.signed(
+        _readAsyncSubsetLaneU64(valueData, offset),
+      );
+      _writeAsyncSubsetLaneU64(resultData, offset, laneValue.abs());
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI64x2Neg(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i64x2.neg');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      final laneValue = WasmI64.signed(
+        _readAsyncSubsetLaneU64(valueData, offset),
+      );
+      _writeAsyncSubsetLaneU64(resultData, offset, -laneValue);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI64x2Bitmask(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i64x2.bitmask');
+    final data = ByteData.sublistView(value);
+    var mask = 0;
+    final signBit = BigInt.one << 63;
+    for (var lane = 0; lane < 2; lane++) {
+      if ((_readAsyncSubsetLaneU64(data, lane * 8) & signBit) != BigInt.zero) {
+        mask |= (1 << lane);
+      }
+    }
+    stack.add(WasmValue.i32(mask));
+  }
+
+  void _simdI64x2AllTrue(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i64x2.all_true');
+    final data = ByteData.sublistView(value);
+    var allTrue = 1;
+    for (var lane = 0; lane < 2; lane++) {
+      if (_readAsyncSubsetLaneU64(data, lane * 8) == BigInt.zero) {
+        allTrue = 0;
+        break;
+      }
+    }
+    stack.add(WasmValue.i32(allTrue));
+  }
+
+  BigInt _readAsyncSubsetLaneU64(ByteData data, int offset) {
+    final low = BigInt.from(data.getUint32(offset, Endian.little));
+    final high = BigInt.from(data.getUint32(offset + 4, Endian.little));
+    return low | (high << 32);
+  }
+
+  void _writeAsyncSubsetLaneU64(ByteData data, int offset, BigInt value) {
+    final normalized = value & _u64BigMask;
+    final low = (normalized & BigInt.from(0xffffffff)).toInt();
+    final high = ((normalized >> 32) & BigInt.from(0xffffffff)).toInt();
+    data.setUint32(offset, low, Endian.little);
+    data.setUint32(offset + 4, high, Endian.little);
   }
 
   void _pushAsyncSubsetV128(List<WasmValue> stack, Uint8List bytes) {
@@ -5426,21 +6353,7 @@ final class WasmInstance {
     List<WasmValueType> paramTypes, {
     required String context,
   }) {
-    if (stack.length < paramTypes.length) {
-      throw StateError(
-        '$context stack underflow: needs ${paramTypes.length}, '
-        'has ${stack.length}.',
-      );
-    }
-    final args = List<WasmValue>.filled(
-      paramTypes.length,
-      WasmValue.i32(0),
-      growable: false,
-    );
-    for (var i = paramTypes.length - 1; i >= 0; i--) {
-      args[i] = _popValue(stack, '$context arg[$i]').castTo(paramTypes[i]);
-    }
-    return args;
+    return RuntimeStackOps.popTyped(stack, paramTypes, context: context);
   }
 
   WasmValue _popValue(List<WasmValue> stack, String context) {
@@ -5455,23 +6368,11 @@ final class WasmInstance {
     List<WasmValueType> resultTypes, {
     required String context,
   }) {
-    if (stack.length < resultTypes.length) {
-      throw StateError(
-        '$context result underflow: needs ${resultTypes.length}, '
-        'has ${stack.length}.',
-      );
-    }
-    if (stack.length != resultTypes.length) {
-      throw StateError(
-        '$context stack height mismatch: expected ${resultTypes.length}, '
-        'has ${stack.length}.',
-      );
-    }
-    final results = <WasmValue>[];
-    for (var i = 0; i < resultTypes.length; i++) {
-      results.add(stack[i].castTo(resultTypes[i]));
-    }
-    return results;
+    return RuntimeStackOps.collectResultsAtExactHeight(
+      stack,
+      resultTypes,
+      context: context,
+    );
   }
 
   List<Object?> invokeMulti(
