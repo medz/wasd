@@ -2925,6 +2925,40 @@ final class WasmInstance {
             pc++;
           }
 
+        case Opcodes.brOnNull:
+          final value = _popAsyncSubsetRef(
+            stack,
+            context: 'br_on_null operand',
+          );
+          if (value == null) {
+            pc = _branchInAsyncSubset(
+              depth: instruction.immediate!,
+              stack: stack,
+              controlStack: controlStack,
+              context: 'br_on_null',
+            );
+          } else {
+            stack.add(WasmValue.i32(value));
+            pc++;
+          }
+
+        case Opcodes.brOnNonNull:
+          final value = _popAsyncSubsetRef(
+            stack,
+            context: 'br_on_non_null operand',
+          );
+          if (value != null) {
+            stack.add(WasmValue.i32(value));
+            pc = _branchInAsyncSubset(
+              depth: instruction.immediate!,
+              stack: stack,
+              controlStack: controlStack,
+              context: 'br_on_non_null',
+            );
+          } else {
+            pc++;
+          }
+
         case Opcodes.brTable:
           final selector = _popValue(
             stack,
