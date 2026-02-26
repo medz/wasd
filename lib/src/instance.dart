@@ -1038,6 +1038,153 @@ final class WasmInstance {
           );
           pc++;
 
+        case Opcodes.i32Load:
+        case Opcodes.i64Load:
+        case Opcodes.f32Load:
+        case Opcodes.f64Load:
+        case Opcodes.i32Load8S:
+        case Opcodes.i32Load8U:
+        case Opcodes.i32Load16S:
+        case Opcodes.i32Load16U:
+        case Opcodes.i64Load8S:
+        case Opcodes.i64Load8U:
+        case Opcodes.i64Load16S:
+        case Opcodes.i64Load16U:
+        case Opcodes.i64Load32S:
+        case Opcodes.i64Load32U:
+          final memArg = instruction.memArg;
+          if (memArg == null) {
+            throw StateError('Malformed memory load instruction memarg.');
+          }
+          final target = _resolveAsyncSubsetMemoryTarget(
+            memArg: memArg,
+            memory64ByIndex: memory64ByIndex,
+            context: 'load',
+          );
+          final addressValue = _popValue(stack, 'memory.load address');
+          final address = _resolveAsyncSubsetMemoryAddress(
+            memArg: memArg,
+            baseAddressValue: addressValue,
+            isMemory64: target.isMemory64,
+            context: 'memory.load',
+          );
+          switch (instruction.opcode) {
+            case Opcodes.i32Load:
+              stack.add(WasmValue.i32(target.memory.loadI32(address)));
+            case Opcodes.i64Load:
+              stack.add(WasmValue.i64(target.memory.loadI64(address)));
+            case Opcodes.f32Load:
+              stack.add(WasmValue.f32(target.memory.loadF32(address)));
+            case Opcodes.f64Load:
+              stack.add(WasmValue.f64(target.memory.loadF64(address)));
+            case Opcodes.i32Load8S:
+              stack.add(WasmValue.i32(target.memory.loadI8(address)));
+            case Opcodes.i32Load8U:
+              stack.add(WasmValue.i32(target.memory.loadU8(address)));
+            case Opcodes.i32Load16S:
+              stack.add(WasmValue.i32(target.memory.loadI16(address)));
+            case Opcodes.i32Load16U:
+              stack.add(WasmValue.i32(target.memory.loadU16(address)));
+            case Opcodes.i64Load8S:
+              stack.add(WasmValue.i64(target.memory.loadI8(address)));
+            case Opcodes.i64Load8U:
+              stack.add(WasmValue.i64(target.memory.loadU8(address)));
+            case Opcodes.i64Load16S:
+              stack.add(WasmValue.i64(target.memory.loadI16(address)));
+            case Opcodes.i64Load16U:
+              stack.add(WasmValue.i64(target.memory.loadU16(address)));
+            case Opcodes.i64Load32S:
+              stack.add(WasmValue.i64(target.memory.loadI32(address)));
+            case Opcodes.i64Load32U:
+              stack.add(WasmValue.i64(target.memory.loadU32(address)));
+            default:
+              throw StateError(
+                'Unexpected load opcode in async subset: '
+                '0x${instruction.opcode.toRadixString(16)}',
+              );
+          }
+          pc++;
+
+        case Opcodes.i32Store:
+        case Opcodes.i64Store:
+        case Opcodes.f32Store:
+        case Opcodes.f64Store:
+        case Opcodes.i32Store8:
+        case Opcodes.i32Store16:
+        case Opcodes.i64Store8:
+        case Opcodes.i64Store16:
+        case Opcodes.i64Store32:
+          final memArg = instruction.memArg;
+          if (memArg == null) {
+            throw StateError('Malformed memory store instruction memarg.');
+          }
+          final target = _resolveAsyncSubsetMemoryTarget(
+            memArg: memArg,
+            memory64ByIndex: memory64ByIndex,
+            context: 'store',
+          );
+          final rawValue = _popValue(stack, 'memory.store value');
+          final addressValue = _popValue(stack, 'memory.store address');
+          final address = _resolveAsyncSubsetMemoryAddress(
+            memArg: memArg,
+            baseAddressValue: addressValue,
+            isMemory64: target.isMemory64,
+            context: 'memory.store',
+          );
+          switch (instruction.opcode) {
+            case Opcodes.i32Store:
+              target.memory.storeI32(
+                address,
+                rawValue.castTo(WasmValueType.i32).asI32(),
+              );
+            case Opcodes.i64Store:
+              target.memory.storeI64(
+                address,
+                rawValue.castTo(WasmValueType.i64).asI64(),
+              );
+            case Opcodes.f32Store:
+              target.memory.storeF32(
+                address,
+                rawValue.castTo(WasmValueType.f32).asF32(),
+              );
+            case Opcodes.f64Store:
+              target.memory.storeF64(
+                address,
+                rawValue.castTo(WasmValueType.f64).asF64(),
+              );
+            case Opcodes.i32Store8:
+              target.memory.storeI8(
+                address,
+                rawValue.castTo(WasmValueType.i32).asI32(),
+              );
+            case Opcodes.i32Store16:
+              target.memory.storeI16(
+                address,
+                rawValue.castTo(WasmValueType.i32).asI32(),
+              );
+            case Opcodes.i64Store8:
+              target.memory.storeI8(
+                address,
+                WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
+              );
+            case Opcodes.i64Store16:
+              target.memory.storeI16(
+                address,
+                WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
+              );
+            case Opcodes.i64Store32:
+              target.memory.storeI32(
+                address,
+                WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
+              );
+            default:
+              throw StateError(
+                'Unexpected store opcode in async subset: '
+                '0x${instruction.opcode.toRadixString(16)}',
+              );
+          }
+          pc++;
+
         case Opcodes.block:
           final endIndex = instruction.endIndex;
           if (endIndex == null) {
@@ -1288,6 +1435,48 @@ final class WasmInstance {
 
     controlStack.removeRange(targetIndex, controlStack.length);
     return target.endIndex + 1;
+  }
+
+  ({WasmMemory memory, bool isMemory64}) _resolveAsyncSubsetMemoryTarget({
+    required MemArg memArg,
+    required List<bool> memory64ByIndex,
+    required String context,
+  }) {
+    final memoryIndex = memArg.memoryIndex;
+    if (memoryIndex < 0 || memoryIndex >= memories.length) {
+      throw RangeError(
+        '$context memory index out of range: $memoryIndex '
+        '(count=${memories.length}).',
+      );
+    }
+    final isMemory64 =
+        memoryIndex >= 0 &&
+        memoryIndex < memory64ByIndex.length &&
+        memory64ByIndex[memoryIndex];
+    return (memory: memories[memoryIndex], isMemory64: isMemory64);
+  }
+
+  int _resolveAsyncSubsetMemoryAddress({
+    required MemArg memArg,
+    required WasmValue baseAddressValue,
+    required bool isMemory64,
+    required String context,
+  }) {
+    final base = isMemory64
+        ? baseAddressValue.castTo(WasmValueType.i64).asI64().toUnsigned(64)
+        : BigInt.from(
+            baseAddressValue.castTo(WasmValueType.i32).asI32().toUnsigned(32),
+          );
+    final offset = BigInt.from(memArg.offset);
+    final address = base + offset;
+    if (address < BigInt.zero) {
+      throw RangeError('$context address underflow: $address');
+    }
+    final maxAddress = BigInt.from(wasmAddressSpaceBytes - 1);
+    if (address > maxAddress) {
+      throw RangeError('$context address exceeds 32-bit memory: $address');
+    }
+    return address.toInt();
   }
 
   int _coerceAsyncSubsetPageDelta(BigInt value, {required String context}) {

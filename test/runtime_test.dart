@@ -1213,6 +1213,47 @@ void main() {
       },
     );
 
+    test('supports memory load/store in async import call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+        ],
+        functionTypeIndices: const [0],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._i32Const(0),
+              ..._localGet(0),
+              ..._memInstr(Opcodes.i32Store),
+              ..._i32Const(0),
+              ..._memInstr(Opcodes.i32Load),
+              ..._call(0),
+              Opcodes.end,
+            ],
+          ),
+        ],
+        memoryMinPages: 1,
+        exports: const [
+          _ExportSpec(name: 'wrapMem', kind: WasmExportKind.function, index: 1),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('wrapMem', [41]), 42);
+    });
+
     test(
       'reports explicit boundary for unsupported async call chains',
       () async {
@@ -1227,16 +1268,13 @@ void main() {
           functionBodies: [
             _FunctionBodySpec(
               instructions: [
-                ..._i32Const(0),
-                ..._memInstr(Opcodes.i32Load),
-                Opcodes.drop,
                 ..._localGet(0),
                 ..._call(0),
+                Opcodes.i32Clz,
                 Opcodes.end,
               ],
             ),
           ],
-          memoryMinPages: 1,
           exports: const [
             _ExportSpec(
               name: 'unsupportedWrap',
