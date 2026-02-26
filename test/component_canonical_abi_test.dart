@@ -92,5 +92,145 @@ void main() {
       expect(lifted.single, isA<Uint8List>());
       expect((lifted.single as Uint8List), orderedEquals(payload));
     });
+
+    test('lowers and lifts canonical list values', () {
+      final memory = WasmMemory(minPages: 1);
+      final allocator = WasmCanonicalAbiAllocator(cursor: 0);
+      final listType = WasmCanonicalAbiType.list(WasmCanonicalAbiType.u32);
+
+      final flat = WasmCanonicalAbi.lowerValues(
+        types: [listType],
+        values: const [
+          [1, 2, 3, 4],
+        ],
+        memory: memory,
+        allocator: allocator,
+      );
+      final lifted = WasmCanonicalAbi.liftValues(
+        types: [listType],
+        flatValues: flat,
+        memory: memory,
+      );
+
+      expect(lifted.single, orderedEquals([1, 2, 3, 4]));
+    });
+
+    test('lowers and lifts canonical records', () {
+      final memory = WasmMemory(minPages: 1);
+      final allocator = WasmCanonicalAbiAllocator(cursor: 32);
+      final recordType = WasmCanonicalAbiType.record([
+        const WasmCanonicalAbiRecordField(
+          name: 'id',
+          type: WasmCanonicalAbiType.u32,
+        ),
+        const WasmCanonicalAbiRecordField(
+          name: 'name',
+          type: WasmCanonicalAbiType.stringUtf8,
+        ),
+      ]);
+
+      final flat = WasmCanonicalAbi.lowerValues(
+        types: [recordType],
+        values: const [
+          {'id': 7, 'name': 'wasd'},
+        ],
+        memory: memory,
+        allocator: allocator,
+      );
+      final lifted = WasmCanonicalAbi.liftValues(
+        types: [recordType],
+        flatValues: flat,
+        memory: memory,
+      );
+
+      expect(lifted.single, equals(<String, Object?>{'id': 7, 'name': 'wasd'}));
+    });
+
+    test('lowers and lifts canonical variants', () {
+      final memory = WasmMemory(minPages: 1);
+      final allocator = WasmCanonicalAbiAllocator(cursor: 16);
+      final variantType = WasmCanonicalAbiType.variant([
+        const WasmCanonicalAbiVariantCase(name: 'none'),
+        const WasmCanonicalAbiVariantCase(
+          name: 'some',
+          payloadType: WasmCanonicalAbiType.s32,
+        ),
+      ]);
+
+      final flat = WasmCanonicalAbi.lowerValues(
+        types: [variantType],
+        values: const [
+          WasmCanonicalAbiVariantValue(caseName: 'some', payload: -9),
+        ],
+        memory: memory,
+        allocator: allocator,
+      );
+      final lifted = WasmCanonicalAbi.liftValues(
+        types: [variantType],
+        flatValues: flat,
+        memory: memory,
+      );
+
+      expect(
+        lifted.single,
+        const WasmCanonicalAbiVariantValue(caseName: 'some', payload: -9),
+      );
+    });
+
+    test('lowers and lifts canonical result values', () {
+      final memory = WasmMemory(minPages: 1);
+      final allocator = WasmCanonicalAbiAllocator(cursor: 24);
+      final resultType = WasmCanonicalAbiType.result(
+        ok: WasmCanonicalAbiType.u32,
+        error: WasmCanonicalAbiType.stringUtf8,
+      );
+
+      final okFlat = WasmCanonicalAbi.lowerValues(
+        types: [resultType],
+        values: [WasmCanonicalAbiResultValue.ok(11)],
+        memory: memory,
+        allocator: allocator,
+      );
+      final okLifted = WasmCanonicalAbi.liftValues(
+        types: [resultType],
+        flatValues: okFlat,
+        memory: memory,
+      );
+      expect(okLifted.single, WasmCanonicalAbiResultValue.ok(11));
+
+      final errorFlat = WasmCanonicalAbi.lowerValues(
+        types: [resultType],
+        values: [WasmCanonicalAbiResultValue.error('boom')],
+        memory: memory,
+        allocator: allocator,
+      );
+      final errorLifted = WasmCanonicalAbi.liftValues(
+        types: [resultType],
+        flatValues: errorFlat,
+        memory: memory,
+      );
+      expect(errorLifted.single, WasmCanonicalAbiResultValue.error('boom'));
+    });
+
+    test('lowers and lifts resource handles', () {
+      final memory = WasmMemory(minPages: 1);
+      final allocator = WasmCanonicalAbiAllocator(cursor: 0);
+      final resourceType = WasmCanonicalAbiType.resource(name: 'file');
+
+      final flat = WasmCanonicalAbi.lowerValues(
+        types: [resourceType],
+        values: const [WasmCanonicalAbiResourceHandle(42)],
+        memory: memory,
+        allocator: allocator,
+      );
+      expect(flat.single, 42);
+
+      final lifted = WasmCanonicalAbi.liftValues(
+        types: [resourceType],
+        flatValues: flat,
+        memory: memory,
+      );
+      expect(lifted.single, const WasmCanonicalAbiResourceHandle(42));
+    });
   });
 }
