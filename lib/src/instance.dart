@@ -68,6 +68,8 @@ final class WasmInstance {
        _tableExports = tableExports,
        _tagExports = tagExports,
        _globalTypes = globalTypes,
+       _asyncDataSegments = dataSegments,
+       _asyncElementSegments = elementSegments,
        _functionRefNamespace = functionRefNamespace,
        _vm = WasmVm(
          functions: functions,
@@ -98,6 +100,8 @@ final class WasmInstance {
   final Map<String, WasmTable> _tableExports;
   final Map<String, WasmTagImport> _tagExports;
   final List<WasmGlobalType> _globalTypes;
+  final List<Uint8List?> _asyncDataSegments;
+  final List<List<int?>?> _asyncElementSegments;
   final int _functionRefNamespace;
   final WasmVm _vm;
   late final Map<int, int> _functionRefIdToIndex = _buildFunctionRefIdToIndex();
@@ -884,6 +888,33 @@ final class WasmInstance {
             throw StateError('Malformed i64.const immediate.');
           }
           stack.add(WasmValue.i64(wideImmediate));
+          pc++;
+
+        case Opcodes.refNull:
+          stack.add(WasmValue.i32(-1));
+          pc++;
+
+        case Opcodes.refFunc:
+          final targetIndex = instruction.immediate!;
+          if (targetIndex < 0 || targetIndex >= functions.length) {
+            throw RangeError('ref.func target out of range: $targetIndex');
+          }
+          stack.add(
+            WasmValue.i32(
+              WasmVm.functionRefIdFor(
+                namespace: _functionRefNamespace,
+                functionIndex: targetIndex,
+              ),
+            ),
+          );
+          pc++;
+
+        case Opcodes.refIsNull:
+          final reference = _popAsyncSubsetRef(
+            stack,
+            context: 'ref.is_null operand',
+          );
+          stack.add(WasmValue.i32(reference == null ? 1 : 0));
           pc++;
 
         case Opcodes.f32Const:
@@ -2281,6 +2312,285 @@ final class WasmInstance {
           }
           pc++;
 
+        case Opcodes.memoryInit:
+          final dataIndex = instruction.immediate!;
+          final memoryIndex = instruction.secondaryImmediate!;
+          if (dataIndex < 0 || dataIndex >= _asyncDataSegments.length) {
+            throw RangeError(
+              'memory.init data segment index out of range: $dataIndex',
+            );
+          }
+          if (memoryIndex < 0 || memoryIndex >= memories.length) {
+            throw RangeError(
+              'memory.init memory index out of range: $memoryIndex',
+            );
+          }
+          final length = _popAsyncSubsetLinearValue(
+            stack,
+            context: 'memory.init length',
+            expectedType: WasmValueType.i32,
+          );
+          final sourceOffset = _popAsyncSubsetLinearValue(
+            stack,
+            context: 'memory.init source offset',
+            expectedType: WasmValueType.i32,
+          );
+          final destinationOffset = _popAsyncSubsetMemoryOperand(
+            stack,
+            memoryIndex: memoryIndex,
+            memory64ByIndex: memory64ByIndex,
+            context: 'memory.init destination offset',
+          );
+          final data = _asyncDataSegments[dataIndex];
+          if (data == null) {
+            if (length == 0) {
+              pc++;
+              continue;
+            }
+            throw StateError('memory.init on dropped data segment $dataIndex.');
+          }
+          if (sourceOffset > data.length ||
+              length > data.length - sourceOffset) {
+            throw StateError('memory.init source out of bounds.');
+          }
+          final memory = memories[memoryIndex];
+          if (destinationOffset > memory.lengthInBytes ||
+              length > memory.lengthInBytes - destinationOffset) {
+            throw StateError('memory.init destination out of bounds.');
+          }
+          if (length != 0) {
+            memory.writeBytes(
+              destinationOffset,
+              Uint8List.fromList(
+                data.sublist(sourceOffset, sourceOffset + length),
+              ),
+            );
+          }
+          pc++;
+
+        case Opcodes.dataDrop:
+          final dataIndex = instruction.immediate!;
+          if (dataIndex < 0 || dataIndex >= _asyncDataSegments.length) {
+            throw RangeError(
+              'data.drop segment index out of range: $dataIndex',
+            );
+          }
+          _asyncDataSegments[dataIndex] = null;
+          pc++;
+
+        case Opcodes.tableInit:
+          final elementIndex = instruction.immediate!;
+          final tableIndex = instruction.secondaryImmediate!;
+          if (elementIndex < 0 ||
+              elementIndex >= _asyncElementSegments.length) {
+            throw RangeError(
+              'table.init element segment index out of range: $elementIndex',
+            );
+          }
+          if (tableIndex < 0 || tableIndex >= tables.length) {
+            throw RangeError(
+              'table.init table index out of range: $tableIndex',
+            );
+          }
+          final length = _popAsyncSubsetLinearValue(
+            stack,
+            context: 'table.init length',
+            expectedType: WasmValueType.i32,
+          );
+          final sourceOffset = _popAsyncSubsetLinearValue(
+            stack,
+            context: 'table.init source offset',
+            expectedType: WasmValueType.i32,
+          );
+          final destinationOffset = _popAsyncSubsetTableOperand(
+            stack,
+            tableIndex: tableIndex,
+            table64ByIndex: table64ByIndex,
+            context: 'table.init destination offset',
+          );
+          final segment = _asyncElementSegments[elementIndex];
+          if (segment == null) {
+            if (length == 0) {
+              pc++;
+              continue;
+            }
+            throw StateError(
+              'table.init on dropped element segment $elementIndex.',
+            );
+          }
+          if (sourceOffset > segment.length ||
+              length > segment.length - sourceOffset) {
+            throw StateError('table.init source out of bounds.');
+          }
+          final table = tables[tableIndex];
+          if (destinationOffset > table.length ||
+              length > table.length - destinationOffset) {
+            throw StateError('table.init destination out of bounds.');
+          }
+          if (length != 0) {
+            table.initialize(
+              destinationOffset,
+              segment.sublist(sourceOffset, sourceOffset + length),
+            );
+          }
+          pc++;
+
+        case Opcodes.elemDrop:
+          final elementIndex = instruction.immediate!;
+          if (elementIndex < 0 ||
+              elementIndex >= _asyncElementSegments.length) {
+            throw RangeError(
+              'elem.drop segment index out of range: $elementIndex',
+            );
+          }
+          _asyncElementSegments[elementIndex] = null;
+          pc++;
+
+        case Opcodes.tableCopy:
+          final destinationTableIndex = instruction.immediate!;
+          final sourceTableIndex = instruction.secondaryImmediate!;
+          if (destinationTableIndex < 0 ||
+              destinationTableIndex >= tables.length) {
+            throw RangeError(
+              'table.copy destination table index out of range: '
+              '$destinationTableIndex',
+            );
+          }
+          if (sourceTableIndex < 0 || sourceTableIndex >= tables.length) {
+            throw RangeError(
+              'table.copy source table index out of range: $sourceTableIndex',
+            );
+          }
+          final destinationIs64 =
+              destinationTableIndex >= 0 &&
+              destinationTableIndex < table64ByIndex.length &&
+              table64ByIndex[destinationTableIndex];
+          final sourceIs64 =
+              sourceTableIndex >= 0 &&
+              sourceTableIndex < table64ByIndex.length &&
+              table64ByIndex[sourceTableIndex];
+          final length = destinationIs64 && sourceIs64
+              ? _popAsyncSubsetLinearValue(
+                  stack,
+                  context: 'table.copy length',
+                  expectedType: WasmValueType.i64,
+                )
+              : _popAsyncSubsetLinearValue(
+                  stack,
+                  context: 'table.copy length',
+                  expectedType: WasmValueType.i32,
+                );
+          final sourceOffset = _popAsyncSubsetTableOperand(
+            stack,
+            tableIndex: sourceTableIndex,
+            table64ByIndex: table64ByIndex,
+            context: 'table.copy source offset',
+          );
+          final destinationOffset = _popAsyncSubsetTableOperand(
+            stack,
+            tableIndex: destinationTableIndex,
+            table64ByIndex: table64ByIndex,
+            context: 'table.copy destination offset',
+          );
+          final sourceTable = tables[sourceTableIndex];
+          final destinationTable = tables[destinationTableIndex];
+          if (sourceOffset > sourceTable.length ||
+              length > sourceTable.length - sourceOffset) {
+            throw StateError('table.copy source out of bounds.');
+          }
+          if (destinationOffset > destinationTable.length ||
+              length > destinationTable.length - destinationOffset) {
+            throw StateError('table.copy destination out of bounds.');
+          }
+          if (length != 0) {
+            final copied = List<int?>.generate(
+              length,
+              (index) => sourceTable[sourceOffset + index],
+              growable: false,
+            );
+            destinationTable.initialize(destinationOffset, copied);
+          }
+          pc++;
+
+        case Opcodes.tableGrow:
+          final tableIndex = instruction.immediate!;
+          if (tableIndex < 0 || tableIndex >= tables.length) {
+            throw RangeError(
+              'table.grow table index out of range: $tableIndex',
+            );
+          }
+          final delta = _popAsyncSubsetTableOperand(
+            stack,
+            tableIndex: tableIndex,
+            table64ByIndex: table64ByIndex,
+            context: 'table.grow delta',
+          );
+          final fillValue = _popAsyncSubsetRef(
+            stack,
+            context: 'table.grow fill value',
+          );
+          final previousLength = tables[tableIndex].grow(delta, fillValue);
+          stack.add(
+            _asyncSubsetTableIndexValue(
+              tableIndex: tableIndex,
+              table64ByIndex: table64ByIndex,
+              value: previousLength,
+            ),
+          );
+          pc++;
+
+        case Opcodes.tableSize:
+          final tableIndex = instruction.immediate!;
+          if (tableIndex < 0 || tableIndex >= tables.length) {
+            throw RangeError(
+              'table.size table index out of range: $tableIndex',
+            );
+          }
+          stack.add(
+            _asyncSubsetTableIndexValue(
+              tableIndex: tableIndex,
+              table64ByIndex: table64ByIndex,
+              value: tables[tableIndex].length,
+            ),
+          );
+          pc++;
+
+        case Opcodes.tableFill:
+          final tableIndex = instruction.immediate!;
+          if (tableIndex < 0 || tableIndex >= tables.length) {
+            throw RangeError(
+              'table.fill table index out of range: $tableIndex',
+            );
+          }
+          final length = _popAsyncSubsetTableOperand(
+            stack,
+            tableIndex: tableIndex,
+            table64ByIndex: table64ByIndex,
+            context: 'table.fill length',
+          );
+          final fillValue = _popAsyncSubsetRef(
+            stack,
+            context: 'table.fill value',
+          );
+          final destinationOffset = _popAsyncSubsetTableOperand(
+            stack,
+            tableIndex: tableIndex,
+            table64ByIndex: table64ByIndex,
+            context: 'table.fill destination offset',
+          );
+          final table = tables[tableIndex];
+          if (destinationOffset > table.length ||
+              length > table.length - destinationOffset) {
+            throw StateError('table.fill destination out of bounds.');
+          }
+          if (length != 0) {
+            table.initialize(
+              destinationOffset,
+              List<int?>.filled(length, fillValue, growable: false),
+            );
+          }
+          pc++;
+
         case Opcodes.i32Load:
         case Opcodes.i64Load:
         case Opcodes.f32Load:
@@ -2819,6 +3129,29 @@ final class WasmInstance {
       );
     }
     return operand.toInt();
+  }
+
+  int? _popAsyncSubsetRef(List<WasmValue> stack, {required String context}) {
+    final rawRef = _popValue(stack, context).castTo(WasmValueType.i32).asI32();
+    return rawRef == -1 ? null : rawRef;
+  }
+
+  WasmValue _asyncSubsetTableIndexValue({
+    required int tableIndex,
+    required List<bool> table64ByIndex,
+    required int value,
+  }) {
+    final isTable64 =
+        tableIndex >= 0 &&
+        tableIndex < table64ByIndex.length &&
+        table64ByIndex[tableIndex];
+    if (isTable64) {
+      final i64Value = value < 0
+          ? WasmI64.signed(value)
+          : WasmI64.unsigned(value);
+      return WasmValue.i64(i64Value);
+    }
+    return WasmValue.i32(value);
   }
 
   Map<int, int> _buildFunctionRefIdToIndex() {

@@ -1341,6 +1341,160 @@ void main() {
       },
     );
 
+    test(
+      'supports memory.init and data.drop in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [0],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._i32Const(4),
+                ..._fc2(Opcodes.memoryInit, 0, 0),
+                ..._fc1(Opcodes.dataDrop, 0),
+
+                ..._i32Const(0),
+                ..._memInstr(Opcodes.i32Load8U),
+                ..._i32Const(1),
+                ..._memInstr(Opcodes.i32Load8U),
+                Opcodes.i32Add,
+                ..._i32Const(2),
+                ..._memInstr(Opcodes.i32Load8U),
+                Opcodes.i32Add,
+                ..._i32Const(3),
+                ..._memInstr(Opcodes.i32Load8U),
+                Opcodes.i32Add,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          memoryMinPages: 1,
+          dataCount: 1,
+          dataSegments: [
+            const _DataSegmentSpec.passive(bytes: [1, 2, 3, 4]),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'wrapMemInit',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('wrapMemInit', [41]), 10);
+        await expectLater(
+          () async => instance.invokeI32Async('wrapMemInit', [41]),
+          throwsA(isA<StateError>()),
+        );
+      },
+    );
+
+    test(
+      'supports table bulk operations in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+            _funcType([], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [1, 1, 1, 1],
+          tables: const [_TableSpec(refType: 0x70, min: 6, max: 8)],
+          elements: [
+            const _ElementSegmentSpec.passive(functionIndices: [1, 2]),
+            const _ElementSegmentSpec.passive(functionIndices: [3]),
+          ],
+          functionBodies: [
+            _FunctionBodySpec(instructions: [..._i32Const(10), Opcodes.end]),
+            _FunctionBodySpec(instructions: [..._i32Const(20), Opcodes.end]),
+            _FunctionBodySpec(instructions: [..._i32Const(30), Opcodes.end]),
+            _FunctionBodySpec(
+              instructions: [
+                ..._i32Const(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._i32Const(2),
+                ..._fc2(Opcodes.tableInit, 0, 0),
+                ..._fc1(Opcodes.elemDrop, 0),
+                ..._i32Const(3),
+                ..._i32Const(0),
+                ..._i32Const(2),
+                ..._fc2(Opcodes.tableCopy, 0, 0),
+                Opcodes.refNull,
+                0x70,
+                ..._i32Const(1),
+                ..._fc1(Opcodes.tableGrow, 0),
+                Opcodes.drop,
+                ..._i32Const(5),
+                Opcodes.refFunc,
+                ..._u32Leb(3),
+                ..._i32Const(1),
+                ..._fc1(Opcodes.tableFill, 0),
+                ..._fc1(Opcodes.tableSize, 0),
+                ..._i32Const(4),
+                ..._callIndirect(1, 0),
+                Opcodes.i32Add,
+                ..._i32Const(5),
+                ..._callIndirect(1, 0),
+                Opcodes.i32Add,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'wrapTableOps',
+              kind: WasmExportKind.function,
+              index: 4,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('wrapTableOps'), 57);
+        await expectLater(
+          () async => instance.invokeI32Async('wrapTableOps'),
+          throwsA(isA<StateError>()),
+        );
+      },
+    );
+
     test('supports i32 bitwise opcodes in async import call chains', () async {
       final wasm = _buildModule(
         types: [
