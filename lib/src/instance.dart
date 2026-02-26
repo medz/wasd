@@ -1049,6 +1049,29 @@ final class WasmInstance {
             _simdI8x16Ne(stack);
             pc++;
 
+          case Opcodes.i8x16LtS:
+          case Opcodes.i8x16LtU:
+          case Opcodes.i8x16GtS:
+          case Opcodes.i8x16GtU:
+          case Opcodes.i8x16LeS:
+          case Opcodes.i8x16LeU:
+          case Opcodes.i8x16GeS:
+          case Opcodes.i8x16GeU:
+            _simdI8x16Compare(stack, opcode: instruction.opcode);
+            pc++;
+
+          case Opcodes.i8x16Shl:
+            _simdI8x16Shl(stack);
+            pc++;
+
+          case Opcodes.i8x16ShrS:
+            _simdI8x16ShrS(stack);
+            pc++;
+
+          case Opcodes.i8x16ShrU:
+            _simdI8x16ShrU(stack);
+            pc++;
+
           case Opcodes.i8x16Abs:
             _simdI8x16Abs(stack);
             pc++;
@@ -1059,6 +1082,54 @@ final class WasmInstance {
 
           case Opcodes.i8x16Popcnt:
             _simdI8x16Popcnt(stack);
+            pc++;
+
+          case Opcodes.i8x16Add:
+            _simdI8x16Add(stack);
+            pc++;
+
+          case Opcodes.i8x16AddSatS:
+            _simdI8x16AddSatS(stack);
+            pc++;
+
+          case Opcodes.i8x16AddSatU:
+            _simdI8x16AddSatU(stack);
+            pc++;
+
+          case Opcodes.i8x16Sub:
+            _simdI8x16Sub(stack);
+            pc++;
+
+          case Opcodes.i8x16SubSatS:
+            _simdI8x16SubSatS(stack);
+            pc++;
+
+          case Opcodes.i8x16SubSatU:
+            _simdI8x16SubSatU(stack);
+            pc++;
+
+          case Opcodes.i8x16MinS:
+            _simdI8x16MinS(stack);
+            pc++;
+
+          case Opcodes.i8x16MinU:
+            _simdI8x16MinU(stack);
+            pc++;
+
+          case Opcodes.i8x16MaxS:
+            _simdI8x16MaxS(stack);
+            pc++;
+
+          case Opcodes.i8x16MaxU:
+            _simdI8x16MaxU(stack);
+            pc++;
+
+          case Opcodes.i8x16AvgrU:
+            _simdI8x16AvgrU(stack);
+            pc++;
+
+          case Opcodes.i8x16AllTrue:
+            _simdI8x16AllTrue(stack);
             pc++;
 
           case Opcodes.i8x16Bitmask:
@@ -5208,6 +5279,73 @@ final class WasmInstance {
     _pushAsyncSubsetV128(stack, result);
   }
 
+  void _simdI8x16Compare(List<WasmValue> stack, {required int opcode}) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i8x16.compare rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i8x16.compare lhs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      final aS = lhs[lane].toSigned(8);
+      final bS = rhs[lane].toSigned(8);
+      final aU = lhs[lane];
+      final bU = rhs[lane];
+      final matches = switch (opcode) {
+        Opcodes.i8x16LtS => aS < bS,
+        Opcodes.i8x16LtU => aU < bU,
+        Opcodes.i8x16GtS => aS > bS,
+        Opcodes.i8x16GtU => aU > bU,
+        Opcodes.i8x16LeS => aS <= bS,
+        Opcodes.i8x16LeU => aU <= bU,
+        Opcodes.i8x16GeS => aS >= bS,
+        Opcodes.i8x16GeU => aU >= bU,
+        _ => throw StateError('Unsupported i8x16 compare opcode: $opcode'),
+      };
+      result[lane] = matches ? 0xff : 0x00;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16Shl(List<WasmValue> stack) {
+    final shift =
+        _popValue(stack, 'i8x16.shl shift').castTo(WasmValueType.i32).asI32() &
+        7;
+    final value = _popAsyncSubsetV128(stack, opName: 'i8x16.shl');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      result[lane] = (value[lane] << shift) & 0xff;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16ShrS(List<WasmValue> stack) {
+    final shift =
+        _popValue(
+          stack,
+          'i8x16.shr_s shift',
+        ).castTo(WasmValueType.i32).asI32() &
+        7;
+    final value = _popAsyncSubsetV128(stack, opName: 'i8x16.shr_s');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      result[lane] = (value[lane].toSigned(8) >> shift) & 0xff;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16ShrU(List<WasmValue> stack) {
+    final shift =
+        _popValue(
+          stack,
+          'i8x16.shr_u shift',
+        ).castTo(WasmValueType.i32).asI32() &
+        7;
+    final value = _popAsyncSubsetV128(stack, opName: 'i8x16.shr_u');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      result[lane] = (value[lane] >> shift) & 0xff;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
   void _simdI8x16Abs(List<WasmValue> stack) {
     final value = _popAsyncSubsetV128(stack, opName: 'i8x16.abs');
     final result = Uint8List(16);
@@ -5239,6 +5377,136 @@ final class WasmInstance {
       result[lane] = count;
     }
     _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16Add(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i8x16.add rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i8x16.add lhs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      result[lane] = (lhs[lane] + rhs[lane]) & 0xff;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16AddSatS(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i8x16.add_sat_s rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i8x16.add_sat_s lhs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      final sum = lhs[lane].toSigned(8) + rhs[lane].toSigned(8);
+      result[lane] = sum.clamp(-128, 127) & 0xff;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16AddSatU(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i8x16.add_sat_u rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i8x16.add_sat_u lhs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      final sum = lhs[lane] + rhs[lane];
+      result[lane] = sum > 255 ? 255 : sum;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16Sub(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i8x16.sub rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i8x16.sub lhs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      result[lane] = (lhs[lane] - rhs[lane]) & 0xff;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16SubSatS(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i8x16.sub_sat_s rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i8x16.sub_sat_s lhs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      final diff = lhs[lane].toSigned(8) - rhs[lane].toSigned(8);
+      result[lane] = diff.clamp(-128, 127) & 0xff;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16SubSatU(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i8x16.sub_sat_u rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i8x16.sub_sat_u lhs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      final diff = lhs[lane] - rhs[lane];
+      result[lane] = diff < 0 ? 0 : diff;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16MinS(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i8x16.min_s rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i8x16.min_s lhs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      final a = lhs[lane].toSigned(8);
+      final b = rhs[lane].toSigned(8);
+      result[lane] = (a < b ? a : b) & 0xff;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16MinU(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i8x16.min_u rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i8x16.min_u lhs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      result[lane] = lhs[lane] < rhs[lane] ? lhs[lane] : rhs[lane];
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16MaxS(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i8x16.max_s rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i8x16.max_s lhs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      final a = lhs[lane].toSigned(8);
+      final b = rhs[lane].toSigned(8);
+      result[lane] = (a > b ? a : b) & 0xff;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16MaxU(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i8x16.max_u rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i8x16.max_u lhs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      result[lane] = lhs[lane] > rhs[lane] ? lhs[lane] : rhs[lane];
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16AvgrU(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i8x16.avgr_u rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i8x16.avgr_u lhs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      result[lane] = (lhs[lane] + rhs[lane] + 1) >> 1;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16AllTrue(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i8x16.all_true');
+    var allTrue = 1;
+    for (final lane in value) {
+      if (lane == 0) {
+        allTrue = 0;
+        break;
+      }
+    }
+    stack.add(WasmValue.i32(allTrue));
   }
 
   void _simdI8x16Bitmask(List<WasmValue> stack) {
