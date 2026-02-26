@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'byte_reader.dart';
@@ -1363,6 +1364,78 @@ final class WasmInstance {
           );
           pc++;
 
+        case Opcodes.f32Eq:
+          final rhs = _popValue(stack, 'f32.eq rhs').castTo(WasmValueType.f32);
+          final lhs = _popValue(stack, 'f32.eq lhs').castTo(WasmValueType.f32);
+          stack.add(WasmValue.i32(lhs.asF32() == rhs.asF32() ? 1 : 0));
+          pc++;
+
+        case Opcodes.f32Ne:
+          final rhs = _popValue(stack, 'f32.ne rhs').castTo(WasmValueType.f32);
+          final lhs = _popValue(stack, 'f32.ne lhs').castTo(WasmValueType.f32);
+          stack.add(WasmValue.i32(lhs.asF32() != rhs.asF32() ? 1 : 0));
+          pc++;
+
+        case Opcodes.f32Lt:
+          final rhs = _popValue(stack, 'f32.lt rhs').castTo(WasmValueType.f32);
+          final lhs = _popValue(stack, 'f32.lt lhs').castTo(WasmValueType.f32);
+          stack.add(WasmValue.i32(lhs.asF32() < rhs.asF32() ? 1 : 0));
+          pc++;
+
+        case Opcodes.f32Gt:
+          final rhs = _popValue(stack, 'f32.gt rhs').castTo(WasmValueType.f32);
+          final lhs = _popValue(stack, 'f32.gt lhs').castTo(WasmValueType.f32);
+          stack.add(WasmValue.i32(lhs.asF32() > rhs.asF32() ? 1 : 0));
+          pc++;
+
+        case Opcodes.f32Le:
+          final rhs = _popValue(stack, 'f32.le rhs').castTo(WasmValueType.f32);
+          final lhs = _popValue(stack, 'f32.le lhs').castTo(WasmValueType.f32);
+          stack.add(WasmValue.i32(lhs.asF32() <= rhs.asF32() ? 1 : 0));
+          pc++;
+
+        case Opcodes.f32Ge:
+          final rhs = _popValue(stack, 'f32.ge rhs').castTo(WasmValueType.f32);
+          final lhs = _popValue(stack, 'f32.ge lhs').castTo(WasmValueType.f32);
+          stack.add(WasmValue.i32(lhs.asF32() >= rhs.asF32() ? 1 : 0));
+          pc++;
+
+        case Opcodes.f64Eq:
+          final rhs = _popValue(stack, 'f64.eq rhs').castTo(WasmValueType.f64);
+          final lhs = _popValue(stack, 'f64.eq lhs').castTo(WasmValueType.f64);
+          stack.add(WasmValue.i32(lhs.asF64() == rhs.asF64() ? 1 : 0));
+          pc++;
+
+        case Opcodes.f64Ne:
+          final rhs = _popValue(stack, 'f64.ne rhs').castTo(WasmValueType.f64);
+          final lhs = _popValue(stack, 'f64.ne lhs').castTo(WasmValueType.f64);
+          stack.add(WasmValue.i32(lhs.asF64() != rhs.asF64() ? 1 : 0));
+          pc++;
+
+        case Opcodes.f64Lt:
+          final rhs = _popValue(stack, 'f64.lt rhs').castTo(WasmValueType.f64);
+          final lhs = _popValue(stack, 'f64.lt lhs').castTo(WasmValueType.f64);
+          stack.add(WasmValue.i32(lhs.asF64() < rhs.asF64() ? 1 : 0));
+          pc++;
+
+        case Opcodes.f64Gt:
+          final rhs = _popValue(stack, 'f64.gt rhs').castTo(WasmValueType.f64);
+          final lhs = _popValue(stack, 'f64.gt lhs').castTo(WasmValueType.f64);
+          stack.add(WasmValue.i32(lhs.asF64() > rhs.asF64() ? 1 : 0));
+          pc++;
+
+        case Opcodes.f64Le:
+          final rhs = _popValue(stack, 'f64.le rhs').castTo(WasmValueType.f64);
+          final lhs = _popValue(stack, 'f64.le lhs').castTo(WasmValueType.f64);
+          stack.add(WasmValue.i32(lhs.asF64() <= rhs.asF64() ? 1 : 0));
+          pc++;
+
+        case Opcodes.f64Ge:
+          final rhs = _popValue(stack, 'f64.ge rhs').castTo(WasmValueType.f64);
+          final lhs = _popValue(stack, 'f64.ge lhs').castTo(WasmValueType.f64);
+          stack.add(WasmValue.i32(lhs.asF64() >= rhs.asF64() ? 1 : 0));
+          pc++;
+
         case Opcodes.i64Clz:
           final value = _popValue(stack, 'i64.clz').castTo(WasmValueType.i64);
           stack.add(WasmValue.i64(WasmI64.clz(value.asI64())));
@@ -1785,6 +1858,62 @@ final class WasmInstance {
           stack.add(WasmValue.f64(value));
           pc++;
 
+        case Opcodes.f32Abs:
+          final bits = _popValue(
+            stack,
+            'f32.abs',
+          ).castTo(WasmValueType.f32).asF32Bits();
+          stack.add(WasmValue.f32Bits(bits & 0x7fffffff));
+          pc++;
+
+        case Opcodes.f32Neg:
+          final bits = _popValue(
+            stack,
+            'f32.neg',
+          ).castTo(WasmValueType.f32).asF32Bits();
+          stack.add(WasmValue.f32Bits(bits ^ 0x80000000));
+          pc++;
+
+        case Opcodes.f32Ceil:
+          final value = _popValue(
+            stack,
+            'f32.ceil',
+          ).castTo(WasmValueType.f32).asF32();
+          stack.add(WasmValue.f32(value.ceilToDouble()));
+          pc++;
+
+        case Opcodes.f32Floor:
+          final value = _popValue(
+            stack,
+            'f32.floor',
+          ).castTo(WasmValueType.f32).asF32();
+          stack.add(WasmValue.f32(value.floorToDouble()));
+          pc++;
+
+        case Opcodes.f32Trunc:
+          final value = _popValue(
+            stack,
+            'f32.trunc',
+          ).castTo(WasmValueType.f32).asF32();
+          stack.add(WasmValue.f32(value.truncateToDouble()));
+          pc++;
+
+        case Opcodes.f32Nearest:
+          final value = _popValue(
+            stack,
+            'f32.nearest',
+          ).castTo(WasmValueType.f32).asF32();
+          stack.add(WasmValue.f32(_nearest(value)));
+          pc++;
+
+        case Opcodes.f32Sqrt:
+          final value = _popValue(
+            stack,
+            'f32.sqrt',
+          ).castTo(WasmValueType.f32).asF32();
+          stack.add(WasmValue.f32(math.sqrt(value)));
+          pc++;
+
         case Opcodes.f32Add:
           final rhs = _popValue(stack, 'f32.add rhs').castTo(WasmValueType.f32);
           final lhs = _popValue(stack, 'f32.add lhs').castTo(WasmValueType.f32);
@@ -1809,6 +1938,96 @@ final class WasmInstance {
           stack.add(WasmValue.f32(lhs.asF32() / rhs.asF32()));
           pc++;
 
+        case Opcodes.f32Min:
+          final rhs = _popValue(stack, 'f32.min rhs').castTo(WasmValueType.f32);
+          final lhs = _popValue(stack, 'f32.min lhs').castTo(WasmValueType.f32);
+          stack.add(WasmValue.f32(_fMin(lhs.asF32(), rhs.asF32())));
+          pc++;
+
+        case Opcodes.f32Max:
+          final rhs = _popValue(stack, 'f32.max rhs').castTo(WasmValueType.f32);
+          final lhs = _popValue(stack, 'f32.max lhs').castTo(WasmValueType.f32);
+          stack.add(WasmValue.f32(_fMax(lhs.asF32(), rhs.asF32())));
+          pc++;
+
+        case Opcodes.f32CopySign:
+          final rhsBits = _popValue(
+            stack,
+            'f32.copysign rhs',
+          ).castTo(WasmValueType.f32).asF32Bits();
+          final lhsBits = _popValue(
+            stack,
+            'f32.copysign lhs',
+          ).castTo(WasmValueType.f32).asF32Bits();
+          stack.add(
+            WasmValue.f32Bits((lhsBits & 0x7fffffff) | (rhsBits & 0x80000000)),
+          );
+          pc++;
+
+        case Opcodes.f64Abs:
+          final bits = _popValue(
+            stack,
+            'f64.abs',
+          ).castTo(WasmValueType.f64).asF64Bits();
+          stack.add(
+            WasmValue.f64Bits(
+              bits & BigInt.parse('7fffffffffffffff', radix: 16),
+            ),
+          );
+          pc++;
+
+        case Opcodes.f64Neg:
+          final bits = _popValue(
+            stack,
+            'f64.neg',
+          ).castTo(WasmValueType.f64).asF64Bits();
+          stack.add(
+            WasmValue.f64Bits(
+              bits ^ BigInt.parse('8000000000000000', radix: 16),
+            ),
+          );
+          pc++;
+
+        case Opcodes.f64Ceil:
+          final value = _popValue(
+            stack,
+            'f64.ceil',
+          ).castTo(WasmValueType.f64).asF64();
+          stack.add(WasmValue.f64(value.ceilToDouble()));
+          pc++;
+
+        case Opcodes.f64Floor:
+          final value = _popValue(
+            stack,
+            'f64.floor',
+          ).castTo(WasmValueType.f64).asF64();
+          stack.add(WasmValue.f64(value.floorToDouble()));
+          pc++;
+
+        case Opcodes.f64Trunc:
+          final value = _popValue(
+            stack,
+            'f64.trunc',
+          ).castTo(WasmValueType.f64).asF64();
+          stack.add(WasmValue.f64(value.truncateToDouble()));
+          pc++;
+
+        case Opcodes.f64Nearest:
+          final value = _popValue(
+            stack,
+            'f64.nearest',
+          ).castTo(WasmValueType.f64).asF64();
+          stack.add(WasmValue.f64(_nearest(value)));
+          pc++;
+
+        case Opcodes.f64Sqrt:
+          final value = _popValue(
+            stack,
+            'f64.sqrt',
+          ).castTo(WasmValueType.f64).asF64();
+          stack.add(WasmValue.f64(math.sqrt(value)));
+          pc++;
+
         case Opcodes.f64Add:
           final rhs = _popValue(stack, 'f64.add rhs').castTo(WasmValueType.f64);
           final lhs = _popValue(stack, 'f64.add lhs').castTo(WasmValueType.f64);
@@ -1831,6 +2050,34 @@ final class WasmInstance {
           final rhs = _popValue(stack, 'f64.div rhs').castTo(WasmValueType.f64);
           final lhs = _popValue(stack, 'f64.div lhs').castTo(WasmValueType.f64);
           stack.add(WasmValue.f64(lhs.asF64() / rhs.asF64()));
+          pc++;
+
+        case Opcodes.f64Min:
+          final rhs = _popValue(stack, 'f64.min rhs').castTo(WasmValueType.f64);
+          final lhs = _popValue(stack, 'f64.min lhs').castTo(WasmValueType.f64);
+          stack.add(WasmValue.f64(_fMin(lhs.asF64(), rhs.asF64())));
+          pc++;
+
+        case Opcodes.f64Max:
+          final rhs = _popValue(stack, 'f64.max rhs').castTo(WasmValueType.f64);
+          final lhs = _popValue(stack, 'f64.max lhs').castTo(WasmValueType.f64);
+          stack.add(WasmValue.f64(_fMax(lhs.asF64(), rhs.asF64())));
+          pc++;
+
+        case Opcodes.f64CopySign:
+          final rhsBits = _popValue(
+            stack,
+            'f64.copysign rhs',
+          ).castTo(WasmValueType.f64).asF64Bits();
+          final lhsBits = _popValue(
+            stack,
+            'f64.copysign lhs',
+          ).castTo(WasmValueType.f64).asF64Bits();
+          final signMask = BigInt.parse('8000000000000000', radix: 16);
+          final magnitudeMask = BigInt.parse('7fffffffffffffff', radix: 16);
+          stack.add(
+            WasmValue.f64Bits((lhsBits & magnitudeMask) | (rhsBits & signMask)),
+          );
           pc++;
 
         case Opcodes.memorySize:
@@ -2645,6 +2892,57 @@ final class WasmInstance {
     if (value.isNaN || value.isInfinite) {
       throw StateError('Invalid conversion trap: NaN or infinite value');
     }
+  }
+
+  static double _nearest(double value) {
+    if (value.isNaN || value.isInfinite || value == 0.0) {
+      return value;
+    }
+    final lower = value.floorToDouble();
+    final upper = value.ceilToDouble();
+    final lowerDistance = (value - lower).abs();
+    final upperDistance = (upper - value).abs();
+
+    double result;
+    if (lowerDistance < upperDistance) {
+      result = lower;
+    } else if (upperDistance < lowerDistance) {
+      result = upper;
+    } else {
+      final lowerEven = lower.toInt().isEven;
+      result = lowerEven ? lower : upper;
+    }
+
+    if (result == 0.0) {
+      return value.isNegative ? -0.0 : 0.0;
+    }
+    return result;
+  }
+
+  static double _fMin(double a, double b) {
+    if (a.isNaN || b.isNaN) {
+      return double.nan;
+    }
+    if (a == 0.0 && b == 0.0) {
+      if (a.isNegative || b.isNegative) {
+        return -0.0;
+      }
+      return 0.0;
+    }
+    return a < b ? a : b;
+  }
+
+  static double _fMax(double a, double b) {
+    if (a.isNaN || b.isNaN) {
+      return double.nan;
+    }
+    if (a == 0.0 && b == 0.0) {
+      if (!a.isNegative || !b.isNegative) {
+        return 0.0;
+      }
+      return -0.0;
+    }
+    return a > b ? a : b;
   }
 
   static const int _i32MinValueInt = -2147483648;
