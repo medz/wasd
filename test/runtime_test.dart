@@ -2263,6 +2263,139 @@ void main() {
     );
 
     test(
+      'supports trunc_sat conversions in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [0],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._i32Const(0),
+
+                ..._f64Const(double.nan),
+                ..._fc0(Opcodes.i32TruncSatF64S),
+                ..._i32Const(0),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._f64Const(1e20),
+                ..._fc0(Opcodes.i32TruncSatF64S),
+                ..._i32Const(2147483647),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._f64Const(-1e20),
+                ..._fc0(Opcodes.i32TruncSatF64S),
+                ..._i32Const(-2147483648),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._f64Const(-1.0),
+                ..._fc0(Opcodes.i32TruncSatF64U),
+                ..._i32Const(0),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._f64Const(1e20),
+                ..._fc0(Opcodes.i32TruncSatF64U),
+                ..._i32Const(-1),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._f64Const(42.9),
+                ..._fc0(Opcodes.i32TruncSatF64U),
+                ..._i32Const(42),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+
+                ..._f64Const(double.nan),
+                ..._fc0(Opcodes.i64TruncSatF64S),
+                ..._i64Const(0),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._f64Const(1e30),
+                ..._fc0(Opcodes.i64TruncSatF64S),
+                ..._i64Const(9223372036854775807),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._f64Const(-1e30),
+                ..._fc0(Opcodes.i64TruncSatF64S),
+                ..._i64Const(-9223372036854775808),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._f64Const(-1.0),
+                ..._fc0(Opcodes.i64TruncSatF64U),
+                ..._i64Const(0),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._f64Const(1e30),
+                ..._fc0(Opcodes.i64TruncSatF64U),
+                ..._i64Const(-1),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._f64Const(42.9),
+                ..._fc0(Opcodes.i64TruncSatF64U),
+                ..._i64Const(42),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+
+                ..._f64Const(42.9),
+                Opcodes.f32DemoteF64,
+                ..._fc0(Opcodes.i32TruncSatF32S),
+                ..._i32Const(42),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._f64Const(42.9),
+                Opcodes.f32DemoteF64,
+                ..._fc0(Opcodes.i32TruncSatF32U),
+                ..._i32Const(42),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._f64Const(42.9),
+                Opcodes.f32DemoteF64,
+                ..._fc0(Opcodes.i64TruncSatF32S),
+                ..._i64Const(42),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._f64Const(42.9),
+                Opcodes.f32DemoteF64,
+                ..._fc0(Opcodes.i64TruncSatF32U),
+                ..._i64Const(42),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'wrapTruncSat',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('wrapTruncSat', [41]), 16);
+      },
+    );
+
+    test(
       'reports explicit boundary for unsupported async call chains',
       () async {
         final wasm = _buildModule(
@@ -2279,8 +2412,7 @@ void main() {
                 ..._localGet(0),
                 ..._call(0),
                 Opcodes.drop,
-                ..._f64Const(1.25),
-                ..._fc0(Opcodes.i32TruncSatF64S),
+                Opcodes.unreachable,
                 Opcodes.drop,
                 ..._i32Const(0),
                 Opcodes.end,

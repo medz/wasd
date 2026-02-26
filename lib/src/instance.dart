@@ -1778,6 +1778,70 @@ final class WasmInstance {
           stack.add(WasmValue.i64(WasmI64.signed(_truncToI64U(value))));
           pc++;
 
+        case Opcodes.i32TruncSatF32S:
+          final value = _popValue(
+            stack,
+            'i32.trunc_sat_f32_s',
+          ).castTo(WasmValueType.f32).asF32();
+          stack.add(WasmValue.i32(_truncSatToI32S(value)));
+          pc++;
+
+        case Opcodes.i32TruncSatF32U:
+          final value = _popValue(
+            stack,
+            'i32.trunc_sat_f32_u',
+          ).castTo(WasmValueType.f32).asF32();
+          stack.add(WasmValue.i32(_truncSatToI32U(value)));
+          pc++;
+
+        case Opcodes.i32TruncSatF64S:
+          final value = _popValue(
+            stack,
+            'i32.trunc_sat_f64_s',
+          ).castTo(WasmValueType.f64).asF64();
+          stack.add(WasmValue.i32(_truncSatToI32S(value)));
+          pc++;
+
+        case Opcodes.i32TruncSatF64U:
+          final value = _popValue(
+            stack,
+            'i32.trunc_sat_f64_u',
+          ).castTo(WasmValueType.f64).asF64();
+          stack.add(WasmValue.i32(_truncSatToI32U(value)));
+          pc++;
+
+        case Opcodes.i64TruncSatF32S:
+          final value = _popValue(
+            stack,
+            'i64.trunc_sat_f32_s',
+          ).castTo(WasmValueType.f32).asF32();
+          stack.add(WasmValue.i64(_truncSatToI64S(value)));
+          pc++;
+
+        case Opcodes.i64TruncSatF32U:
+          final value = _popValue(
+            stack,
+            'i64.trunc_sat_f32_u',
+          ).castTo(WasmValueType.f32).asF32();
+          stack.add(WasmValue.i64(_truncSatToI64U(value)));
+          pc++;
+
+        case Opcodes.i64TruncSatF64S:
+          final value = _popValue(
+            stack,
+            'i64.trunc_sat_f64_s',
+          ).castTo(WasmValueType.f64).asF64();
+          stack.add(WasmValue.i64(_truncSatToI64S(value)));
+          pc++;
+
+        case Opcodes.i64TruncSatF64U:
+          final value = _popValue(
+            stack,
+            'i64.trunc_sat_f64_u',
+          ).castTo(WasmValueType.f64).asF64();
+          stack.add(WasmValue.i64(_truncSatToI64U(value)));
+          pc++;
+
         case Opcodes.f32ConvertI32S:
           final value = _popValue(
             stack,
@@ -2894,6 +2958,52 @@ final class WasmInstance {
     }
   }
 
+  static int _truncSatToI32S(double value) {
+    if (value.isNaN) {
+      return 0;
+    }
+    if (value <= _i32Min) {
+      return _i32Min.toInt();
+    }
+    if (value >= _i32Max) {
+      return 0x7fffffff;
+    }
+    return value.truncate().toSigned(32);
+  }
+
+  static int _truncSatToI32U(double value) {
+    if (value.isNaN || value <= 0) {
+      return 0;
+    }
+    if (value >= _u32Max) {
+      return 0xffffffff.toSigned(32);
+    }
+    return value.truncate().toUnsigned(32).toSigned(32);
+  }
+
+  static BigInt _truncSatToI64S(double value) {
+    if (value.isNaN) {
+      return BigInt.zero;
+    }
+    if (value <= _i64Min) {
+      return _i64MinValue;
+    }
+    if (value >= _i64Max) {
+      return _i64MaxValue;
+    }
+    return WasmI64.signed(BigInt.from(value));
+  }
+
+  static BigInt _truncSatToI64U(double value) {
+    if (value.isNaN || value <= 0) {
+      return BigInt.zero;
+    }
+    if (value >= _u64Max) {
+      return _u64Mask;
+    }
+    return WasmI64.unsigned(BigInt.from(value));
+  }
+
   static double _nearest(double value) {
     if (value.isNaN || value.isInfinite || value == 0.0) {
       return value;
@@ -2949,8 +3059,18 @@ final class WasmInstance {
   static const int _i32MaxValueInt = 2147483647;
   static const int _u32MaxValueInt = 0xffffffff;
 
+  static final BigInt _i64MinValue = WasmI64.minSigned;
+  static final BigInt _i64MaxValue = WasmI64.maxSigned;
+  static final BigInt _u64Mask = WasmI64.allOnesMask;
+
+  static const double _i32Min = -2147483648.0;
+  static const double _i32Max = 2147483647.0;
+  static const double _u32Max = 4294967295.0;
+
   static const double _i64Min = -9223372036854775808.0;
+  static const double _i64Max = 9223372036854775807.0;
   static const double _i64MaxPlusOne = 9223372036854775808.0;
+  static const double _u64Max = 18446744073709551615.0;
   static const double _u64MaxPlusOne = 18446744073709551616.0;
 
   int _coerceAsyncSubsetPageDelta(BigInt value, {required String context}) {
