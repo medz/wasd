@@ -1162,6 +1162,47 @@ void main() {
       },
     );
 
+    test('reports explicit boundary for async import call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+        ],
+        functionTypeIndices: const [0],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [..._localGet(0), ..._call(0), Opcodes.end],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(name: 'wrap', kind: WasmExportKind.function, index: 1),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      await expectLater(
+        () async => instance.invokeI32Async('wrap', [41]),
+        throwsA(
+          isA<UnsupportedError>().having(
+            (e) => e.message,
+            'message',
+            contains('wasm-defined functions'),
+          ),
+        ),
+      );
+    });
+
     test('supports layered feature defaults and extension query', () {
       final features = WasmFeatureSet.layeredDefaults(
         profile: WasmFeatureProfile.stable,

@@ -682,7 +682,18 @@ final class WasmInstance {
       );
       return _externalizeResults(results);
     }
-    return invoke(exportName, args);
+    try {
+      return invoke(exportName, args);
+    } on UnsupportedError catch (error) {
+      final message = error.message?.toString() ?? '';
+      if (message.contains('Async-only host import')) {
+        throw UnsupportedError(
+          'invokeAsync for wasm-defined functions that call async-only host '
+          'imports is not implemented yet.',
+        );
+      }
+      rethrow;
+    }
   }
 
   ({int functionIndex, List<WasmValue> typedArgs}) _prepareInvoke(
