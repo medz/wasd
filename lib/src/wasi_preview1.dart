@@ -1498,7 +1498,8 @@ final class WasiPreview1 {
       for (var i = 0; i < encodedArgs.length; i++) {
         final encoded = encodedArgs[i];
         memory.storeI32(argvPtr + (i * 4), cursor);
-        memory.writeBytes(cursor, Uint8List.fromList([...encoded, 0]));
+        memory.writeBytesFromList(cursor, encoded);
+        memory.storeI8(cursor + encoded.length, 0);
         cursor += encoded.length + 1;
       }
     } on RangeError {
@@ -1535,7 +1536,8 @@ final class WasiPreview1 {
       for (var i = 0; i < encodedEnvironment.length; i++) {
         final encoded = encodedEnvironment[i];
         memory.storeI32(environPtr + (i * 4), cursor);
-        memory.writeBytes(cursor, Uint8List.fromList([...encoded, 0]));
+        memory.writeBytesFromList(cursor, encoded);
+        memory.storeI8(cursor + encoded.length, 0);
         cursor += encoded.length + 1;
       }
       return _errnoSuccess;
@@ -1838,8 +1840,12 @@ final class WasiPreview1 {
     }
 
     final now = DateTime.now().microsecondsSinceEpoch * 1000;
-    final atimeNs = atimNow ? now : (atimSet ? WasmI64.signed(atim).toInt() : null);
-    final mtimeNs = mtimNow ? now : (mtimSet ? WasmI64.signed(mtim).toInt() : null);
+    final atimeNs = atimNow
+        ? now
+        : (atimSet ? WasmI64.signed(atim).toInt() : null);
+    final mtimeNs = mtimNow
+        ? now
+        : (mtimSet ? WasmI64.signed(mtim).toInt() : null);
     return (atimeNs, mtimeNs);
   }
 

@@ -6,8 +6,11 @@ import 'memory.dart';
 import 'module.dart';
 import 'opcode.dart';
 import 'predecode.dart';
+import 'runtime_control_ops.dart';
 import 'runtime_function.dart';
 import 'runtime_global.dart';
+import 'runtime_ops.dart';
+import 'runtime_stack_ops.dart';
 import 'table.dart';
 import 'value.dart';
 
@@ -916,177 +919,163 @@ final class WasmVm {
               pc++;
 
             case Opcodes.i32Load:
-              stack.add(WasmValue.i32(_loadI32(stack, instruction)));
-              pc++;
-
             case Opcodes.i64Load:
-              stack.add(WasmValue.i64(_loadI64(stack, instruction)));
-              pc++;
-
             case Opcodes.f32Load:
-              stack.add(WasmValue.f32(_loadF32(stack, instruction)));
-              pc++;
-
             case Opcodes.f64Load:
-              stack.add(WasmValue.f64(_loadF64(stack, instruction)));
-              pc++;
-
             case Opcodes.i32Load8S:
-              stack.add(WasmValue.i32(_loadI8(stack, instruction)));
-              pc++;
-
             case Opcodes.i32Load8U:
-              stack.add(WasmValue.i32(_loadU8(stack, instruction)));
-              pc++;
-
             case Opcodes.i32Load16S:
-              stack.add(WasmValue.i32(_loadI16(stack, instruction)));
-              pc++;
-
             case Opcodes.i32Load16U:
-              stack.add(WasmValue.i32(_loadU16(stack, instruction)));
-              pc++;
-
             case Opcodes.i64Load8S:
-              stack.add(WasmValue.i64(_loadI8(stack, instruction)));
-              pc++;
-
             case Opcodes.i64Load8U:
-              stack.add(WasmValue.i64(_loadU8(stack, instruction)));
-              pc++;
-
             case Opcodes.i64Load16S:
-              stack.add(WasmValue.i64(_loadI16(stack, instruction)));
-              pc++;
-
             case Opcodes.i64Load16U:
-              stack.add(WasmValue.i64(_loadU16(stack, instruction)));
-              pc++;
-
             case Opcodes.i64Load32S:
-              stack.add(WasmValue.i64(_loadI32(stack, instruction)));
-              pc++;
-
             case Opcodes.i64Load32U:
-              stack.add(WasmValue.i64(_loadU32(stack, instruction)));
+              stack.add(
+                RuntimeMemoryOps.loadByOpcode(
+                  memory: _memoryForMemArg(instruction),
+                  address: _addressFromStack(stack, instruction),
+                  opcode: instruction.opcode,
+                  context: 'vm',
+                ),
+              );
               pc++;
 
             case Opcodes.i32Store:
-              _storeI32(stack, instruction, _popI32(stack));
-              pc++;
-
             case Opcodes.i64Store:
-              _storeI64(stack, instruction, _popI64(stack));
-              pc++;
-
             case Opcodes.f32Store:
-              _storeF32Bits(stack, instruction, _popF32Bits(stack));
-              pc++;
-
             case Opcodes.f64Store:
-              _storeF64Bits(stack, instruction, _popF64Bits(stack));
-              pc++;
-
             case Opcodes.i32Store8:
-              _storeI8(stack, instruction, _popI32(stack));
-              pc++;
-
             case Opcodes.i32Store16:
-              _storeI16(stack, instruction, _popI32(stack));
-              pc++;
-
             case Opcodes.i64Store8:
-              _storeI8(stack, instruction, WasmI64.lowU32(_popI64(stack)));
-              pc++;
-
             case Opcodes.i64Store16:
-              _storeI16(stack, instruction, WasmI64.lowU32(_popI64(stack)));
-              pc++;
-
             case Opcodes.i64Store32:
-              _storeI32(stack, instruction, WasmI64.lowU32(_popI64(stack)));
+              final value = _pop(stack);
+              RuntimeMemoryOps.storeByOpcode(
+                memory: _memoryForMemArg(instruction),
+                address: _addressFromStack(stack, instruction),
+                opcode: instruction.opcode,
+                value: value,
+                context: 'vm',
+              );
               pc++;
 
             case Opcodes.memoryAtomicNotify:
-              _memoryAtomicNotify(stack, instruction);
+              _popI32(stack); // count
+              final memory = _memoryForMemArg(instruction);
+              final address = _addressFromStack(stack, instruction);
+              RuntimeMemoryOps.requireAtomicAlignment(
+                address,
+                widthBytes: 4,
+                context: 'vm',
+              );
+              stack.add(
+                WasmValue.i32(
+                  RuntimeMemoryOps.atomicNotify(
+                    memory: memory,
+                    address: address,
+                  ),
+                ),
+              );
               pc++;
 
             case Opcodes.memoryAtomicWait32:
-              _memoryAtomicWait32(stack, instruction);
+              _popI64(stack); // timeout
+              final expected = _toU32(_popI32(stack));
+              final memory = _memoryForMemArg(instruction);
+              final address = _addressFromStack(stack, instruction);
+              RuntimeMemoryOps.requireAtomicAlignment(
+                address,
+                widthBytes: 4,
+                context: 'vm',
+              );
+              stack.add(
+                WasmValue.i32(
+                  RuntimeMemoryOps.atomicWait32(
+                    memory: memory,
+                    address: address,
+                    expected: expected,
+                  ),
+                ),
+              );
               pc++;
 
             case Opcodes.memoryAtomicWait64:
-              _memoryAtomicWait64(stack, instruction);
+              _popI64(stack); // timeout
+              final expected = _toU64(_popI64(stack));
+              final memory = _memoryForMemArg(instruction);
+              final address = _addressFromStack(stack, instruction);
+              RuntimeMemoryOps.requireAtomicAlignment(
+                address,
+                widthBytes: 8,
+                context: 'vm',
+              );
+              stack.add(
+                WasmValue.i32(
+                  RuntimeMemoryOps.atomicWait64(
+                    memory: memory,
+                    address: address,
+                    expected: expected,
+                  ),
+                ),
+              );
               pc++;
 
             case Opcodes.atomicFence:
               pc++;
 
             case Opcodes.i32AtomicLoad:
-              stack.add(WasmValue.i32(_atomicLoadI32(stack, instruction)));
-              pc++;
-
             case Opcodes.i64AtomicLoad:
-              stack.add(WasmValue.i64(_atomicLoadI64(stack, instruction)));
-              pc++;
-
             case Opcodes.i32AtomicLoad8U:
-              stack.add(WasmValue.i32(_atomicLoadU8(stack, instruction)));
-              pc++;
-
             case Opcodes.i32AtomicLoad16U:
-              stack.add(WasmValue.i32(_atomicLoadU16(stack, instruction)));
-              pc++;
-
             case Opcodes.i64AtomicLoad8U:
-              stack.add(WasmValue.i64(_atomicLoadU8(stack, instruction)));
-              pc++;
-
             case Opcodes.i64AtomicLoad16U:
-              stack.add(WasmValue.i64(_atomicLoadU16(stack, instruction)));
-              pc++;
-
             case Opcodes.i64AtomicLoad32U:
-              stack.add(WasmValue.i64(_atomicLoadU32(stack, instruction)));
+              final memory = _memoryForMemArg(instruction);
+              final address = _addressFromStack(stack, instruction);
+              RuntimeMemoryOps.requireAtomicAlignment(
+                address,
+                widthBytes: RuntimeMemoryOps.atomicLoadWidthByOpcode(
+                  instruction.opcode,
+                  context: 'vm',
+                ),
+                context: 'vm',
+              );
+              stack.add(
+                RuntimeMemoryOps.atomicLoadByOpcode(
+                  memory: memory,
+                  address: address,
+                  opcode: instruction.opcode,
+                  context: 'vm',
+                ),
+              );
               pc++;
 
             case Opcodes.i32AtomicStore:
-              _atomicStoreI32(stack, instruction, _popI32(stack));
-              pc++;
-
             case Opcodes.i64AtomicStore:
-              _atomicStoreI64(stack, instruction, _popI64(stack));
-              pc++;
-
             case Opcodes.i32AtomicStore8:
-              _atomicStoreI8(stack, instruction, _popI32(stack));
-              pc++;
-
             case Opcodes.i32AtomicStore16:
-              _atomicStoreI16(stack, instruction, _popI32(stack));
-              pc++;
-
             case Opcodes.i64AtomicStore8:
-              _atomicStoreI8(
-                stack,
-                instruction,
-                WasmI64.lowU32(_popI64(stack)),
-              );
-              pc++;
-
             case Opcodes.i64AtomicStore16:
-              _atomicStoreI16(
-                stack,
-                instruction,
-                WasmI64.lowU32(_popI64(stack)),
-              );
-              pc++;
-
             case Opcodes.i64AtomicStore32:
-              _atomicStoreI32(
-                stack,
-                instruction,
-                WasmI64.lowU32(_popI64(stack)),
+              final value = _pop(stack);
+              final memory = _memoryForMemArg(instruction);
+              final address = _addressFromStack(stack, instruction);
+              RuntimeMemoryOps.requireAtomicAlignment(
+                address,
+                widthBytes: RuntimeMemoryOps.atomicStoreWidthByOpcode(
+                  instruction.opcode,
+                  context: 'vm',
+                ),
+                context: 'vm',
+              );
+              RuntimeMemoryOps.atomicStoreByOpcode(
+                memory: memory,
+                address: address,
+                opcode: instruction.opcode,
+                value: value,
+                context: 'vm',
               );
               pc++;
 
@@ -3724,18 +3713,19 @@ final class WasmVm {
   }
 
   int _branch(int depth, List<_LabelFrame> labels, List<WasmValue> stack) {
-    if (depth < 0 || depth >= labels.length) {
-      throw RangeError(
-        'Invalid label depth: $depth (labels=${labels.length}).',
-      );
-    }
-
-    final targetPosition = labels.length - 1 - depth;
+    final targetPosition = RuntimeControlOps.targetIndexForDepth(
+      depth,
+      labels.length,
+      context: 'Invalid label',
+    );
     final target = labels[targetPosition];
 
-    final results = _takeTopValues(stack, target.branchTypes);
-    _truncateStackToHeight(stack, target.stackHeight, context: 'branch');
-    stack.addAll(results);
+    RuntimeControlOps.rebaseStackForBranch(
+      stack: stack,
+      branchTypes: target.branchTypes,
+      stackBaseHeight: target.stackHeight,
+      context: 'branch',
+    );
 
     if (target.kind == _LabelKind.loop) {
       if (targetPosition + 1 < labels.length) {
@@ -3756,9 +3746,12 @@ final class WasmVm {
   }
 
   void _exitLabel(_LabelFrame label, List<WasmValue> stack) {
-    final results = _takeTopValues(stack, label.endTypes);
-    _truncateStackToHeight(stack, label.stackHeight, context: 'end');
-    stack.addAll(results);
+    RuntimeControlOps.leaveFrameDropExtra(
+      stack: stack,
+      stackBaseHeight: label.stackHeight,
+      resultTypes: label.endTypes,
+      context: 'end',
+    );
   }
 
   void _throwTag(List<WasmValue> stack, Instruction instruction) {
@@ -3965,13 +3958,11 @@ final class WasmVm {
     int height, {
     required String context,
   }) {
-    if (stack.length < height) {
-      throw StateError(
-        'Operand stack underflow while restoring $context frame: '
-        'stack=${stack.length}, height=$height.',
-      );
-    }
-    stack.length = height;
+    RuntimeStackOps.truncateToHeight(
+      stack,
+      height,
+      context: 'Operand stack while restoring $context frame',
+    );
   }
 
   int _consumeBlockParameters(
@@ -3997,67 +3988,33 @@ final class WasmVm {
     List<WasmValue> stack,
     List<WasmValueType> resultTypes,
   ) {
-    if (resultTypes.isEmpty) {
-      return const [];
-    }
-
-    if (stack.length < resultTypes.length) {
-      throw StateError(
-        'Operand stack underflow for arity ${resultTypes.length}.',
-      );
-    }
-
-    final start = stack.length - resultTypes.length;
-    final results = <WasmValue>[];
-    for (var i = 0; i < resultTypes.length; i++) {
-      results.add(stack[start + i].castTo(resultTypes[i]));
-    }
-    return results;
+    return RuntimeStackOps.takeTopTyped(
+      stack,
+      resultTypes,
+      context: 'Operand stack',
+    );
   }
 
   List<WasmValue> _popArgs(
     List<WasmValue> stack,
     List<WasmValueType> paramTypes,
   ) {
-    if (paramTypes.isEmpty) {
-      return const [];
-    }
-
-    if (stack.length < paramTypes.length) {
-      throw StateError('Operand stack underflow while preparing call args.');
-    }
-
-    final args = List<WasmValue>.generate(
-      paramTypes.length,
-      (index) => WasmValue.zeroForType(paramTypes[index]),
-      growable: false,
+    return RuntimeStackOps.popTyped(
+      stack,
+      paramTypes,
+      context: 'Operand stack while preparing call args',
     );
-
-    for (var i = paramTypes.length - 1; i >= 0; i--) {
-      args[i] = _pop(stack).castTo(paramTypes[i]);
-    }
-
-    return args;
   }
 
   List<WasmValue> _collectResults(
     List<WasmValueType> resultTypes,
     List<WasmValue> stack,
   ) {
-    if (resultTypes.isEmpty) {
-      return const [];
-    }
-
-    if (stack.length < resultTypes.length) {
-      throw StateError('Not enough values on stack for function result.');
-    }
-
-    final start = stack.length - resultTypes.length;
-    final results = <WasmValue>[];
-    for (var i = 0; i < resultTypes.length; i++) {
-      results.add(stack[start + i].castTo(resultTypes[i]));
-    }
-    return results;
+    return RuntimeStackOps.collectResultsFromTop(
+      stack,
+      resultTypes,
+      context: 'Function result',
+    );
   }
 
   List<WasmValue> _normalizeValues(
@@ -5770,7 +5727,7 @@ final class WasmVm {
     }
     final memory = _memoryForMemArg(instruction);
     final address = _addressFromStack(stack, instruction);
-    return _internV128(memory.readBytes(address, 16));
+    return _internV128(memory.viewBytes(address, 16));
   }
 
   void _storeV128(List<WasmValue> stack, Instruction instruction) {
@@ -5844,7 +5801,7 @@ final class WasmVm {
   }) {
     final memory = _memoryForMemArg(instruction);
     final address = _addressFromStack(stack, instruction);
-    final laneBytes = memory.readBytes(address, laneWidth);
+    final laneBytes = memory.viewBytes(address, laneWidth);
     final result = Uint8List(16);
     for (var offset = 0; offset < 16; offset += laneWidth) {
       result.setRange(offset, offset + laneWidth, laneBytes);
@@ -5860,7 +5817,7 @@ final class WasmVm {
     final memory = _memoryForMemArg(instruction);
     final address = _addressFromStack(stack, instruction);
     final result = Uint8List(16);
-    result.setRange(0, laneWidth, memory.readBytes(address, laneWidth));
+    result.setRange(0, laneWidth, memory.viewBytes(address, laneWidth));
     return result;
   }
 
@@ -5883,7 +5840,7 @@ final class WasmVm {
     result.setRange(
       laneOffset,
       laneOffset + laneWidth,
-      memory.readBytes(address, laneWidth),
+      memory.viewBytes(address, laneWidth),
     );
     return result;
   }
@@ -5903,9 +5860,11 @@ final class WasmVm {
     final memory = _memoryForMemArg(instruction);
     final address = _addressFromStack(stack, instruction);
     final laneOffset = lane * laneWidth;
-    memory.writeBytes(
+    memory.writeBytesFromList(
       address,
-      Uint8List.fromList(vector.sublist(laneOffset, laneOffset + laneWidth)),
+      vector,
+      sourceOffset: laneOffset,
+      length: laneWidth,
     );
   }
 
@@ -8930,179 +8889,18 @@ final class WasmVm {
     return _toLinearMemoryValue(address, label: 'memory address');
   }
 
-  int _loadI8(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction);
-    return _memoryForMemArg(instruction).loadI8(address);
-  }
-
-  int _loadU8(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction);
-    return _memoryForMemArg(instruction).loadU8(address);
-  }
-
-  int _loadI16(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction);
-    return _memoryForMemArg(instruction).loadI16(address);
-  }
-
-  int _loadU16(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction);
-    return _memoryForMemArg(instruction).loadU16(address);
-  }
-
-  int _loadI32(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction);
-    return _memoryForMemArg(instruction).loadI32(address);
-  }
-
-  int _loadU32(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction);
-    return _memoryForMemArg(instruction).loadU32(address);
-  }
-
-  BigInt _loadI64(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction);
-    return _memoryForMemArg(instruction).loadI64(address);
-  }
-
-  double _loadF32(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction);
-    return _memoryForMemArg(instruction).loadF32(address);
-  }
-
-  double _loadF64(List<WasmValue> stack, Instruction instruction) {
-    final address = _addressFromStack(stack, instruction);
-    return _memoryForMemArg(instruction).loadF64(address);
-  }
-
-  void _storeI8(List<WasmValue> stack, Instruction instruction, int value) {
-    final address = _addressFromStack(stack, instruction);
-    _memoryForMemArg(instruction).storeI8(address, value);
-  }
-
-  void _storeI16(List<WasmValue> stack, Instruction instruction, int value) {
-    final address = _addressFromStack(stack, instruction);
-    _memoryForMemArg(instruction).storeI16(address, value);
-  }
-
-  void _storeI32(List<WasmValue> stack, Instruction instruction, int value) {
-    final address = _addressFromStack(stack, instruction);
-    _memoryForMemArg(instruction).storeI32(address, value);
-  }
-
-  void _storeI64(List<WasmValue> stack, Instruction instruction, BigInt value) {
-    final address = _addressFromStack(stack, instruction);
-    _memoryForMemArg(instruction).storeI64(address, value);
-  }
-
-  void _storeF32Bits(List<WasmValue> stack, Instruction instruction, int bits) {
-    final address = _addressFromStack(stack, instruction);
-    _memoryForMemArg(instruction).storeI32(address, bits);
-  }
-
-  void _storeF64Bits(
-    List<WasmValue> stack,
-    Instruction instruction,
-    BigInt bits,
-  ) {
-    final address = _addressFromStack(stack, instruction);
-    _memoryForMemArg(instruction).storeI64(address, bits);
-  }
-
   int _atomicAddressFromStack(
     List<WasmValue> stack,
     Instruction instruction, {
     required int widthBytes,
   }) {
     final address = _addressFromStack(stack, instruction);
-    if (widthBytes > 1 && address % widthBytes != 0) {
-      throw StateError('unaligned atomic');
-    }
+    RuntimeMemoryOps.requireAtomicAlignment(
+      address,
+      widthBytes: widthBytes,
+      context: 'vm',
+    );
     return address;
-  }
-
-  int _atomicLoadU8(List<WasmValue> stack, Instruction instruction) {
-    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 1);
-    return _memoryForMemArg(instruction).loadU8(address);
-  }
-
-  int _atomicLoadU16(List<WasmValue> stack, Instruction instruction) {
-    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 2);
-    return _memoryForMemArg(instruction).loadU16(address);
-  }
-
-  int _atomicLoadU32(List<WasmValue> stack, Instruction instruction) {
-    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 4);
-    return _memoryForMemArg(instruction).loadU32(address);
-  }
-
-  int _atomicLoadI32(List<WasmValue> stack, Instruction instruction) {
-    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 4);
-    return _memoryForMemArg(instruction).loadI32(address);
-  }
-
-  BigInt _atomicLoadI64(List<WasmValue> stack, Instruction instruction) {
-    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 8);
-    return _memoryForMemArg(instruction).loadI64(address);
-  }
-
-  void _atomicStoreI8(
-    List<WasmValue> stack,
-    Instruction instruction,
-    int value,
-  ) {
-    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 1);
-    _memoryForMemArg(instruction).storeI8(address, value);
-  }
-
-  void _atomicStoreI16(
-    List<WasmValue> stack,
-    Instruction instruction,
-    int value,
-  ) {
-    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 2);
-    _memoryForMemArg(instruction).storeI16(address, value);
-  }
-
-  void _atomicStoreI32(
-    List<WasmValue> stack,
-    Instruction instruction,
-    int value,
-  ) {
-    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 4);
-    _memoryForMemArg(instruction).storeI32(address, value);
-  }
-
-  void _atomicStoreI64(
-    List<WasmValue> stack,
-    Instruction instruction,
-    BigInt value,
-  ) {
-    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 8);
-    _memoryForMemArg(instruction).storeI64(address, value);
-  }
-
-  void _memoryAtomicNotify(List<WasmValue> stack, Instruction instruction) {
-    _popI32(stack); // count
-    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 4);
-    _memoryForMemArg(instruction).loadU32(address); // bounds check
-    stack.add(WasmValue.i32(0));
-  }
-
-  void _memoryAtomicWait32(List<WasmValue> stack, Instruction instruction) {
-    _popI64(stack); // timeout
-    final expected = _toU32(_popI32(stack));
-    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 4);
-    final actual = _memoryForMemArg(instruction).loadU32(address);
-    stack.add(WasmValue.i32(actual == expected ? 2 : 1));
-  }
-
-  void _memoryAtomicWait64(List<WasmValue> stack, Instruction instruction) {
-    _popI64(stack); // timeout
-    final expected = _toU64(_popI64(stack));
-    final address = _atomicAddressFromStack(stack, instruction, widthBytes: 8);
-    final actual = _toU64(_memoryForMemArg(instruction).loadI64(address));
-    stack.add(WasmValue.i32(actual == expected ? 2 : 1));
   }
 
   int _atomicRmwI32(
@@ -9112,11 +8910,12 @@ final class WasmVm {
   ) {
     final operand = _toU32(_popI32(stack));
     final address = _atomicAddressFromStack(stack, instruction, widthBytes: 4);
-    final memory = _memoryForMemArg(instruction);
-    final current = _toU32(memory.loadI32(address));
-    final next = _toU32(operation(current, operand));
-    memory.storeI32(address, next);
-    return current;
+    return RuntimeMemoryOps.atomicRmwI32(
+      memory: _memoryForMemArg(instruction),
+      address: address,
+      operand: operand,
+      operation: operation,
+    );
   }
 
   BigInt _atomicRmwI64(
@@ -9126,11 +8925,12 @@ final class WasmVm {
   ) {
     final operand = _toU64(_popI64(stack));
     final address = _atomicAddressFromStack(stack, instruction, widthBytes: 8);
-    final memory = _memoryForMemArg(instruction);
-    final current = _toU64(memory.loadI64(address));
-    final next = _toU64(operation(current, operand));
-    memory.storeI64(address, next);
-    return current;
+    return RuntimeMemoryOps.atomicRmwI64(
+      memory: _memoryForMemArg(instruction),
+      address: address,
+      operand: operand,
+      operation: operation,
+    );
   }
 
   int _atomicRmwI32Narrow(
@@ -9146,20 +8946,14 @@ final class WasmVm {
       instruction,
       widthBytes: widthBytes,
     );
-    final memory = _memoryForMemArg(instruction);
-    final current = switch (widthBytes) {
-      1 => memory.loadU8(address),
-      2 => memory.loadU16(address),
-      _ => throw StateError('Unsupported i32 atomic narrow width: $widthBytes'),
-    };
-    final next = operation(current, operand).toUnsigned(bits);
-    switch (widthBytes) {
-      case 1:
-        memory.storeI8(address, next);
-      case 2:
-        memory.storeI16(address, next);
-    }
-    return current;
+    return RuntimeMemoryOps.atomicRmwNarrowUnsigned(
+      memory: _memoryForMemArg(instruction),
+      address: address,
+      widthBytes: widthBytes,
+      operand: operand,
+      operation: operation,
+      context: 'i32 atomic rmw narrow',
+    );
   }
 
   int _atomicRmwI64Narrow(
@@ -9176,47 +8970,38 @@ final class WasmVm {
       instruction,
       widthBytes: widthBytes,
     );
-    final memory = _memoryForMemArg(instruction);
-    final current = switch (widthBytes) {
-      1 => memory.loadU8(address),
-      2 => memory.loadU16(address),
-      4 => memory.loadU32(address),
-      _ => throw StateError('Unsupported i64 atomic narrow width: $widthBytes'),
-    };
-    final next = operation(current, operand).toUnsigned(bits);
-    switch (widthBytes) {
-      case 1:
-        memory.storeI8(address, next);
-      case 2:
-        memory.storeI16(address, next);
-      case 4:
-        memory.storeI32(address, next);
-    }
-    return current;
+    return RuntimeMemoryOps.atomicRmwNarrowUnsigned(
+      memory: _memoryForMemArg(instruction),
+      address: address,
+      widthBytes: widthBytes,
+      operand: operand,
+      operation: operation,
+      context: 'i64 atomic rmw narrow',
+    );
   }
 
   int _atomicCmpxchgI32(List<WasmValue> stack, Instruction instruction) {
     final replacement = _toU32(_popI32(stack));
     final expected = _toU32(_popI32(stack));
     final address = _atomicAddressFromStack(stack, instruction, widthBytes: 4);
-    final memory = _memoryForMemArg(instruction);
-    final current = _toU32(memory.loadI32(address));
-    if (current == expected) {
-      memory.storeI32(address, replacement);
-    }
-    return current;
+    return RuntimeMemoryOps.atomicCmpxchgI32(
+      memory: _memoryForMemArg(instruction),
+      address: address,
+      expected: expected,
+      replacement: replacement,
+    );
   }
 
   BigInt _atomicCmpxchgI64(List<WasmValue> stack, Instruction instruction) {
     final replacement = _toU64(_popI64(stack));
     final expected = _toU64(_popI64(stack));
     final address = _atomicAddressFromStack(stack, instruction, widthBytes: 8);
-    final memory = _memoryForMemArg(instruction);
-    final current = _toU64(memory.loadI64(address));
-    if (current == expected) {
-      memory.storeI64(address, replacement);
-    }
-    return current;
+    return RuntimeMemoryOps.atomicCmpxchgI64(
+      memory: _memoryForMemArg(instruction),
+      address: address,
+      expected: expected,
+      replacement: replacement,
+    );
   }
 
   int _atomicCmpxchgI32Narrow(
@@ -9232,21 +9017,14 @@ final class WasmVm {
       instruction,
       widthBytes: widthBytes,
     );
-    final memory = _memoryForMemArg(instruction);
-    final current = switch (widthBytes) {
-      1 => memory.loadU8(address),
-      2 => memory.loadU16(address),
-      _ => throw StateError('Unsupported i32 atomic narrow width: $widthBytes'),
-    };
-    if (current == expected) {
-      switch (widthBytes) {
-        case 1:
-          memory.storeI8(address, replacement);
-        case 2:
-          memory.storeI16(address, replacement);
-      }
-    }
-    return current;
+    return RuntimeMemoryOps.atomicCmpxchgNarrowUnsigned(
+      memory: _memoryForMemArg(instruction),
+      address: address,
+      widthBytes: widthBytes,
+      expected: expected,
+      replacement: replacement,
+      context: 'i32 atomic cmpxchg narrow',
+    );
   }
 
   int _atomicCmpxchgI64Narrow(
@@ -9264,24 +9042,14 @@ final class WasmVm {
       instruction,
       widthBytes: widthBytes,
     );
-    final memory = _memoryForMemArg(instruction);
-    final current = switch (widthBytes) {
-      1 => memory.loadU8(address),
-      2 => memory.loadU16(address),
-      4 => memory.loadU32(address),
-      _ => throw StateError('Unsupported i64 atomic narrow width: $widthBytes'),
-    };
-    if (current == expected) {
-      switch (widthBytes) {
-        case 1:
-          memory.storeI8(address, replacement);
-        case 2:
-          memory.storeI16(address, replacement);
-        case 4:
-          memory.storeI32(address, replacement);
-      }
-    }
-    return current;
+    return RuntimeMemoryOps.atomicCmpxchgNarrowUnsigned(
+      memory: _memoryForMemArg(instruction),
+      address: address,
+      widthBytes: widthBytes,
+      expected: expected,
+      replacement: replacement,
+      context: 'i64 atomic cmpxchg narrow',
+    );
   }
 
   void _memoryInit(Instruction instruction, List<WasmValue> stack) {
@@ -9300,22 +9068,14 @@ final class WasmVm {
       label: 'memory.init destination offset',
     );
 
-    final data = _dataSegments[dataIndex];
-    if (data == null) {
-      if (length == 0) {
-        return;
-      }
-      throw StateError('memory.init on dropped data segment $dataIndex.');
-    }
-
-    if (sourceOffset + length > data.length) {
-      throw StateError('memory.init source out of bounds.');
-    }
-
-    final chunk = Uint8List.fromList(
-      data.sublist(sourceOffset, sourceOffset + length),
+    RuntimeMemoryOps.initFromDataSegment(
+      segment: _dataSegments[dataIndex],
+      segmentIndex: dataIndex,
+      memory: memory,
+      sourceOffset: sourceOffset,
+      destinationOffset: destinationOffset,
+      length: length,
     );
-    memory.writeBytes(destinationOffset, chunk);
   }
 
   void _dataDrop(int dataIndex) {
@@ -9351,13 +9111,13 @@ final class WasmVm {
       label: 'memory.copy destination offset',
     );
 
-    if (identical(destinationMemory, sourceMemory)) {
-      destinationMemory.copyBytes(destinationOffset, sourceOffset, length);
-      return;
-    }
-
-    final bytes = sourceMemory.readBytes(sourceOffset, length);
-    destinationMemory.writeBytes(destinationOffset, bytes);
+    RuntimeMemoryOps.copy(
+      sourceMemory: sourceMemory,
+      destinationMemory: destinationMemory,
+      sourceOffset: sourceOffset,
+      destinationOffset: destinationOffset,
+      length: length,
+    );
   }
 
   void _memoryFill(Instruction instruction, List<WasmValue> stack) {
@@ -9373,7 +9133,12 @@ final class WasmVm {
       label: 'memory.fill destination offset',
     );
 
-    _requireMemory(memoryIndex).fillBytes(destinationOffset, fillValue, length);
+    RuntimeMemoryOps.fill(
+      memory: _requireMemory(memoryIndex),
+      destinationOffset: destinationOffset,
+      value: fillValue,
+      length: length,
+    );
   }
 
   void _tableInit(Instruction instruction, List<WasmValue> stack) {
@@ -9391,22 +9156,13 @@ final class WasmVm {
       label: 'table.init destination offset',
     );
 
-    final segment = _elementSegments[elementIndex];
-    if (segment == null) {
-      if (length == 0) {
-        return;
-      }
-      throw StateError('table.init on dropped element segment $elementIndex.');
-    }
-
-    if (sourceOffset + length > segment.length) {
-      throw StateError('table.init source out of bounds.');
-    }
-
-    final table = _tables[tableIndex];
-    table.initialize(
-      destinationOffset,
-      segment.sublist(sourceOffset, sourceOffset + length),
+    RuntimeTableOps.initFromElementSegment(
+      segment: _elementSegments[elementIndex],
+      segmentIndex: elementIndex,
+      table: _tables[tableIndex],
+      sourceOffset: sourceOffset,
+      destinationOffset: destinationOffset,
+      length: length,
     );
   }
 
@@ -9433,23 +9189,13 @@ final class WasmVm {
       label: 'table.copy destination offset',
     );
 
-    final sourceTable = _tables[sourceTableIndex];
-    final destinationTable = _tables[destinationTableIndex];
-    if (sourceOffset > sourceTable.length ||
-        length > sourceTable.length - sourceOffset) {
-      throw StateError('table.copy source out of bounds.');
-    }
-    if (destinationOffset > destinationTable.length ||
-        length > destinationTable.length - destinationOffset) {
-      throw StateError('table.copy destination out of bounds.');
-    }
-
-    final temp = <int?>[];
-    for (var i = 0; i < length; i++) {
-      temp.add(sourceTable[sourceOffset + i]);
-    }
-
-    destinationTable.initialize(destinationOffset, temp);
+    RuntimeTableOps.copy(
+      sourceTable: _tables[sourceTableIndex],
+      destinationTable: _tables[destinationTableIndex],
+      sourceOffset: sourceOffset,
+      destinationOffset: destinationOffset,
+      length: length,
+    );
   }
 
   void _tableGrow(Instruction instruction, List<WasmValue> stack) {
@@ -9484,13 +9230,12 @@ final class WasmVm {
       label: 'table.fill destination offset',
     );
 
-    final table = _tables[tableIndex];
-    if (destinationOffset > table.length ||
-        length > table.length - destinationOffset) {
-      throw StateError('table.fill destination out of bounds.');
-    }
-    final fillValues = List<int?>.filled(length, value);
-    table.initialize(destinationOffset, fillValues);
+    RuntimeTableOps.fill(
+      table: _tables[tableIndex],
+      destinationOffset: destinationOffset,
+      value: value,
+      length: length,
+    );
   }
 
   void _i64Add128(List<WasmValue> stack) {

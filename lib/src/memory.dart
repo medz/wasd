@@ -128,9 +128,57 @@ final class WasmMemory {
     return Uint8List.fromList(_buffer.sublist(address, address + length));
   }
 
+  Uint8List viewBytes(int address, int length) {
+    _checkBounds(address, length);
+    return Uint8List.sublistView(_buffer, address, address + length);
+  }
+
   void writeBytes(int address, Uint8List bytes) {
     _checkBounds(address, bytes.length);
     _buffer.setRange(address, address + bytes.length, bytes);
+  }
+
+  void writeBytesFromList(
+    int address,
+    List<int> bytes, {
+    int sourceOffset = 0,
+    int? length,
+  }) {
+    final writeLength = length ?? (bytes.length - sourceOffset);
+    if (sourceOffset < 0 ||
+        writeLength < 0 ||
+        sourceOffset > bytes.length ||
+        writeLength > bytes.length - sourceOffset) {
+      throw RangeError('Invalid source range for writeBytesFromList.');
+    }
+    _checkBounds(address, writeLength);
+    _buffer.setRange(address, address + writeLength, bytes, sourceOffset);
+  }
+
+  void copyFromMemory({
+    required WasmMemory source,
+    required int destinationOffset,
+    required int sourceOffset,
+    required int length,
+  }) {
+    if (length < 0) {
+      throw ArgumentError.value(length, 'length');
+    }
+    source._checkBounds(sourceOffset, length);
+    _checkBounds(destinationOffset, length);
+    if (length == 0) {
+      return;
+    }
+    if (identical(this, source)) {
+      copyBytes(destinationOffset, sourceOffset, length);
+      return;
+    }
+    _buffer.setRange(
+      destinationOffset,
+      destinationOffset + length,
+      source._buffer,
+      sourceOffset,
+    );
   }
 
   void copyBytes(int destination, int source, int length) {

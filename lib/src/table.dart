@@ -55,16 +55,85 @@ final class WasmTable {
   }
 
   void initialize(int offset, List<int?> functionIndices) {
-    if (offset < 0 || offset + functionIndices.length > _entries.length) {
+    initializeRange(
+      offset,
+      functionIndices,
+      sourceOffset: 0,
+      length: functionIndices.length,
+    );
+  }
+
+  void initializeRange(
+    int offset,
+    List<int?> functionIndices, {
+    int sourceOffset = 0,
+    int? length,
+  }) {
+    final writeLength = length ?? (functionIndices.length - sourceOffset);
+    if (sourceOffset < 0 ||
+        writeLength < 0 ||
+        sourceOffset > functionIndices.length ||
+        writeLength > functionIndices.length - sourceOffset) {
+      throw RangeError('Invalid source range for table initialization.');
+    }
+    if (offset < 0 || offset + writeLength > _entries.length) {
       throw RangeError(
         'Element initialization out of bounds: offset=$offset, '
-        'length=${functionIndices.length}, table=${_entries.length}.',
+        'length=$writeLength, table=${_entries.length}.',
       );
     }
 
-    for (var i = 0; i < functionIndices.length; i++) {
-      _entries[offset + i] = functionIndices[i];
+    for (var i = 0; i < writeLength; i++) {
+      _entries[offset + i] = functionIndices[sourceOffset + i];
     }
+  }
+
+  void copyEntries({
+    required WasmTable source,
+    required int destinationOffset,
+    required int sourceOffset,
+    required int length,
+  }) {
+    if (length < 0) {
+      throw ArgumentError.value(length, 'length');
+    }
+    if (sourceOffset < 0 || sourceOffset + length > source._entries.length) {
+      throw RangeError(
+        'Table copy source out of bounds: offset=$sourceOffset, '
+        'length=$length, table=${source._entries.length}.',
+      );
+    }
+    if (destinationOffset < 0 || destinationOffset + length > _entries.length) {
+      throw RangeError(
+        'Table copy destination out of bounds: offset=$destinationOffset, '
+        'length=$length, table=${_entries.length}.',
+      );
+    }
+    if (length == 0) {
+      return;
+    }
+    if (identical(this, source) && destinationOffset > sourceOffset) {
+      for (var i = length - 1; i >= 0; i--) {
+        _entries[destinationOffset + i] = _entries[sourceOffset + i];
+      }
+      return;
+    }
+    for (var i = 0; i < length; i++) {
+      _entries[destinationOffset + i] = source._entries[sourceOffset + i];
+    }
+  }
+
+  void fillRange(int offset, int length, int? value) {
+    if (length < 0) {
+      throw ArgumentError.value(length, 'length');
+    }
+    if (offset < 0 || offset + length > _entries.length) {
+      throw RangeError(
+        'Table fill out of bounds: offset=$offset, length=$length, '
+        'table=${_entries.length}.',
+      );
+    }
+    _entries.fillRange(offset, offset + length, value);
   }
 
   List<int?> snapshot() => List<int?>.unmodifiable(_entries);
