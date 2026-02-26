@@ -10,6 +10,8 @@ import 'module.dart';
 import 'runtime_global.dart';
 import 'table.dart';
 
+typedef _CoreImportBindingAttempt = ({bool bound, String? incompatibility});
+
 /// Component-level runtime that instantiates embedded core modules.
 ///
 /// Current scope:
@@ -299,12 +301,16 @@ final class WasmComponentInstance {
         continue;
       }
 
+      var bound = false;
+      String? incompatibility;
       for (final argumentIndex in declaration.argumentInstanceIndices) {
         final sourceInstance = instantiatedCoreInstances[argumentIndex];
-        if (_tryBindImportFromCoreInstance(
+        final attempt = _tryBindImportFromCoreInstance(
           imported: imported,
           key: key,
+          importingModule: module,
           sourceInstance: sourceInstance,
+          sourceInstanceIndex: argumentIndex,
           functions: functions,
           asyncFunctions: asyncFunctions,
           functionTypeDepths: functionTypeDepths,
@@ -314,10 +320,16 @@ final class WasmComponentInstance {
           globalTypes: globalTypes,
           globalBindings: globalBindings,
           tags: tags,
-        )) {
+        );
+        if (attempt.bound) {
+          bound = true;
           changed = true;
           break;
         }
+        incompatibility ??= attempt.incompatibility;
+      }
+      if (!bound && incompatibility != null) {
+        throw FormatException(incompatibility);
       }
     }
 
@@ -360,10 +372,12 @@ final class WasmComponentInstance {
     };
   }
 
-  static bool _tryBindImportFromCoreInstance({
+  static _CoreImportBindingAttempt _tryBindImportFromCoreInstance({
     required WasmImport imported,
     required String key,
+    required WasmModule importingModule,
     required WasmInstance sourceInstance,
+    required int sourceInstanceIndex,
     required Map<String, WasmHostFunction> functions,
     required Map<String, WasmAsyncHostFunction> asyncFunctions,
     required Map<String, int> functionTypeDepths,
@@ -379,7 +393,18 @@ final class WasmComponentInstance {
       case WasmImportKind.function:
       case WasmImportKind.exactFunction:
         if (!sourceInstance.exportedFunctions.contains(exportName)) {
-          return false;
+          return (bound: false, incompatibility: null);
+        }
+        final compatibility = _isFunctionImportCompatibleWithExport(
+          imported: imported,
+          importKey: key,
+          importingModule: importingModule,
+          sourceInstance: sourceInstance,
+          sourceInstanceIndex: sourceInstanceIndex,
+          sourceExportName: exportName,
+        );
+        if (compatibility != null) {
+          return (bound: false, incompatibility: compatibility);
         }
         functions[key] = (args) => sourceInstance.invoke(exportName, args);
         asyncFunctions[key] = (args) =>
@@ -387,36 +412,142 @@ final class WasmComponentInstance {
         functionTypeDepths[key] = sourceInstance.exportedFunctionTypeDepth(
           exportName,
         );
-        return true;
+        return (bound: true, incompatibility: null);
       case WasmImportKind.memory:
         if (!sourceInstance.exportedMemories.contains(exportName)) {
-          return false;
+          return (bound: false, incompatibility: null);
         }
         memories[key] = sourceInstance.exportedMemory(exportName);
-        return true;
+        return (bound: true, incompatibility: null);
       case WasmImportKind.table:
         if (!sourceInstance.exportedTables.contains(exportName)) {
-          return false;
+          return (bound: false, incompatibility: null);
         }
         tables[key] = sourceInstance.exportedTable(exportName);
-        return true;
+        return (bound: true, incompatibility: null);
       case WasmImportKind.global:
         if (!sourceInstance.exportedGlobals.contains(exportName)) {
-          return false;
+          return (bound: false, incompatibility: null);
         }
         globals[key] = sourceInstance.readGlobal(exportName);
         globalTypes[key] = sourceInstance.exportedGlobalType(exportName);
         globalBindings[key] = sourceInstance.exportedGlobalBinding(exportName);
-        return true;
+        return (bound: true, incompatibility: null);
       case WasmImportKind.tag:
         if (!sourceInstance.exportedTags.contains(exportName)) {
-          return false;
+          return (bound: false, incompatibility: null);
         }
         tags[key] = sourceInstance.exportedTagImport(exportName);
-        return true;
+        return (bound: true, incompatibility: null);
       default:
-        return false;
+        return (bound: false, incompatibility: null);
     }
+  }
+
+  static String? _isFunctionImportCompatibleWithExport({
+    required WasmImport imported,
+    required String importKey,
+    required WasmModule importingModule,
+    required WasmInstance sourceInstance,
+    required int sourceInstanceIndex,
+    required String sourceExportName,
+  }) {
+    final expectedTypeIndex = imported.functionTypeIndex;
+    if (expectedTypeIndex == null ||
+        expectedTypeIndex < 0 ||
+        expectedTypeIndex >= importingModule.types.length) {
+      return 'Malformed function import `$importKey`: invalid type index '
+          '$expectedTypeIndex.';
+    }
+    final expectedType = importingModule.types[expectedTypeIndex];
+    if (!expectedType.isFunctionType) {
+      return 'Malformed function import `$importKey`: type index '
+          '$expectedTypeIndex is not a function type.';
+    }
+    final actualType = sourceInstance.exportedFunctionType(sourceExportName);
+    if (!_sameFunctionSignature(expectedType, actualType)) {
+      return 'Component core-instance argument #$sourceInstanceIndex '
+          'export `$sourceExportName` has incompatible function signature '
+          'for import `$importKey`: expected '
+          '${_formatFunctionType(expectedType)} but got '
+          '${_formatFunctionType(actualType)}.';
+    }
+    return null;
+  }
+
+  static bool _sameFunctionSignature(
+    WasmFunctionType expected,
+    WasmFunctionType actual,
+  ) {
+    if (expected.params.length != actual.params.length ||
+        expected.results.length != actual.results.length) {
+      return false;
+    }
+    for (var i = 0; i < expected.params.length; i++) {
+      if (expected.params[i] != actual.params[i]) {
+        return false;
+      }
+    }
+    for (var i = 0; i < expected.results.length; i++) {
+      if (expected.results[i] != actual.results[i]) {
+        return false;
+      }
+    }
+
+    final expectedHasParamSignatures =
+        expected.paramTypeSignatures.length == expected.params.length;
+    final actualHasParamSignatures =
+        actual.paramTypeSignatures.length == actual.params.length;
+    if (expectedHasParamSignatures || actualHasParamSignatures) {
+      if (!expectedHasParamSignatures || !actualHasParamSignatures) {
+        return false;
+      }
+      for (var i = 0; i < expected.paramTypeSignatures.length; i++) {
+        if (expected.paramTypeSignatures[i] != actual.paramTypeSignatures[i]) {
+          return false;
+        }
+      }
+    }
+
+    final expectedHasResultSignatures =
+        expected.resultTypeSignatures.length == expected.results.length;
+    final actualHasResultSignatures =
+        actual.resultTypeSignatures.length == actual.results.length;
+    if (expectedHasResultSignatures || actualHasResultSignatures) {
+      if (!expectedHasResultSignatures || !actualHasResultSignatures) {
+        return false;
+      }
+      for (var i = 0; i < expected.resultTypeSignatures.length; i++) {
+        if (expected.resultTypeSignatures[i] !=
+            actual.resultTypeSignatures[i]) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  static String _formatFunctionType(WasmFunctionType type) {
+    List<String> formatTypes(
+      List<WasmValueType> types,
+      List<String> signatures,
+    ) {
+      if (signatures.length == types.length) {
+        return signatures;
+      }
+      return types.map((type) => type.name).toList(growable: false);
+    }
+
+    final params = formatTypes(
+      type.params,
+      type.paramTypeSignatures,
+    ).join(', ');
+    final results = formatTypes(
+      type.results,
+      type.resultTypeSignatures,
+    ).join(', ');
+    return '($params) -> ($results)';
   }
 
   List<Object?> invokeCanonical({

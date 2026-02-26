@@ -118,6 +118,35 @@ void main() {
       expect(instance.invokeCore('run', moduleIndex: 1), 42);
     });
 
+    test(
+      'rejects function imports wired from core-instance args with mismatched signatures',
+      () {
+        final componentBytes = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleConstI64(name: 'inc', value: 42),
+            _coreModuleCallImportedNullary(
+              importModule: 'host',
+              importName: 'inc',
+              exportName: 'run',
+            ),
+          ],
+          instantiateModuleIndices: const [0, 1],
+          instantiateArgumentInstanceIndices: const [
+            <int>[],
+            <int>[0],
+          ],
+        );
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
     test('invokes component export aliases from section 0x03', () async {
       final componentBytes = _componentWithCoreModules(
         <Uint8List>[_coreModuleConstI32(name: 'one', value: 9)],
@@ -414,6 +443,50 @@ Uint8List _coreModuleConstI32({required String name, required int value}) {
     0x04,
     0x00,
     0x41,
+    ..._u32Leb(value),
+    0x0b,
+  ]);
+}
+
+Uint8List _coreModuleConstI64({required String name, required int value}) {
+  final nameBytes = name.codeUnits;
+  return Uint8List.fromList(<int>[
+    0x00,
+    0x61,
+    0x73,
+    0x6d,
+    0x01,
+    0x00,
+    0x00,
+    0x00,
+    // type section
+    0x01,
+    0x05,
+    0x01,
+    0x60,
+    0x00,
+    0x01,
+    0x7e,
+    // function section
+    0x03,
+    0x02,
+    0x01,
+    0x00,
+    // export section
+    0x07,
+    0x04 + nameBytes.length,
+    0x01,
+    nameBytes.length,
+    ...nameBytes,
+    0x00,
+    0x00,
+    // code section
+    0x0a,
+    0x06,
+    0x01,
+    0x04,
+    0x00,
+    0x42,
     ..._u32Leb(value),
     0x0b,
   ]);
