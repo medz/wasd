@@ -5,6 +5,7 @@ export 'src/instance.dart';
 export 'src/memory.dart';
 export 'src/module.dart';
 export 'src/component.dart';
+export 'src/component_instance.dart';
 export 'src/component_canonical_abi.dart';
 export 'src/opcode.dart';
 export 'src/predecode.dart';

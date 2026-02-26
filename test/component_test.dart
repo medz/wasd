@@ -58,6 +58,20 @@ void main() {
       );
 
       expect(component.sections, hasLength(2));
+      expect(component.coreModules, hasLength(1));
+      expect(
+        component.coreModules.single,
+        orderedEquals(const <int>[
+          0x00,
+          0x61,
+          0x73,
+          0x6d,
+          0x01,
+          0x00,
+          0x00,
+          0x00,
+        ]),
+      );
       expect(component.sections.first.id, 0x01);
       expect(component.sections.first.payload, hasLength(8));
       expect(component.sections[1].id, 0x02);
