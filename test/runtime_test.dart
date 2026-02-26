@@ -2598,6 +2598,154 @@ void main() {
       },
     );
 
+    test(
+      'supports i64 wide-arithmetic proposal opcodes in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+            _funcType([0x7e, 0x7e, 0x7e, 0x7e], [0x7e, 0x7e]),
+            _funcType([0x7e, 0x7e], [0x7e, 0x7e]),
+            _funcType([], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [1, 1, 2, 2, 3],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._localGet(1),
+                ..._localGet(2),
+                ..._localGet(3),
+                ..._fc0(Opcodes.i64Add128),
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._localGet(1),
+                ..._localGet(2),
+                ..._localGet(3),
+                ..._fc0(Opcodes.i64Sub128),
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._localGet(1),
+                ..._fc0(Opcodes.i64MulWideS),
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._localGet(1),
+                ..._fc0(Opcodes.i64MulWideU),
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              locals: const [_LocalDeclSpec(1, 0x7f)],
+              instructions: [
+                ..._i32Const(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._i32Const(0),
+                ..._localSet(0),
+
+                ..._i64Const(0),
+                ..._i64Const(1),
+                ..._i64Const(1),
+                ..._i64Const(0),
+                ..._call(1),
+                ..._i64Const(1),
+                Opcodes.i64Eq,
+                ..._localGet(0),
+                Opcodes.i32Add,
+                ..._localSet(0),
+                ..._i64Const(1),
+                Opcodes.i64Eq,
+                ..._localGet(0),
+                Opcodes.i32Add,
+                ..._localSet(0),
+
+                ..._i64Const(0),
+                ..._i64Const(0),
+                ..._i64Const(1),
+                ..._i64Const(1),
+                ..._call(2),
+                ..._i64Const(-2),
+                Opcodes.i64Eq,
+                ..._localGet(0),
+                Opcodes.i32Add,
+                ..._localSet(0),
+                ..._i64Const(-1),
+                Opcodes.i64Eq,
+                ..._localGet(0),
+                Opcodes.i32Add,
+                ..._localSet(0),
+
+                ..._i64Const(-1),
+                ..._i64Const(1),
+                ..._call(3),
+                ..._i64Const(-1),
+                Opcodes.i64Eq,
+                ..._localGet(0),
+                Opcodes.i32Add,
+                ..._localSet(0),
+                ..._i64Const(-1),
+                Opcodes.i64Eq,
+                ..._localGet(0),
+                Opcodes.i32Add,
+                ..._localSet(0),
+
+                ..._i64Const(-1),
+                ..._i64Const(1),
+                ..._call(4),
+                ..._i64Const(0),
+                Opcodes.i64Eq,
+                ..._localGet(0),
+                Opcodes.i32Add,
+                ..._localSet(0),
+                ..._i64Const(-1),
+                Opcodes.i64Eq,
+                ..._localGet(0),
+                Opcodes.i32Add,
+                ..._localSet(0),
+
+                ..._localGet(0),
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'wrapI64WideOps',
+              kind: WasmExportKind.function,
+              index: 5,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('wrapI64WideOps'), 8);
+      },
+    );
+
     test('supports i32 bitwise opcodes in async import call chains', () async {
       final wasm = _buildModule(
         types: [

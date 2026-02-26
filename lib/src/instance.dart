@@ -1923,6 +1923,94 @@ final class WasmInstance {
           stack.add(WasmValue.i64(_truncSatToI64U(value)));
           pc++;
 
+        case Opcodes.i64Add128:
+          final rhsHigh = WasmI64.unsigned(
+            _popValue(
+              stack,
+              'i64.add128 rhs high',
+            ).castTo(WasmValueType.i64).asI64(),
+          );
+          final rhsLow = WasmI64.unsigned(
+            _popValue(
+              stack,
+              'i64.add128 rhs low',
+            ).castTo(WasmValueType.i64).asI64(),
+          );
+          final lhsHigh = WasmI64.unsigned(
+            _popValue(
+              stack,
+              'i64.add128 lhs high',
+            ).castTo(WasmValueType.i64).asI64(),
+          );
+          final lhsLow = WasmI64.unsigned(
+            _popValue(
+              stack,
+              'i64.add128 lhs low',
+            ).castTo(WasmValueType.i64).asI64(),
+          );
+          final lhs = (lhsHigh << 64) | lhsLow;
+          final rhs = (rhsHigh << 64) | rhsLow;
+          _pushAsyncSubsetI128Result(stack, lhs + rhs);
+          pc++;
+
+        case Opcodes.i64Sub128:
+          final rhsHigh = WasmI64.unsigned(
+            _popValue(
+              stack,
+              'i64.sub128 rhs high',
+            ).castTo(WasmValueType.i64).asI64(),
+          );
+          final rhsLow = WasmI64.unsigned(
+            _popValue(
+              stack,
+              'i64.sub128 rhs low',
+            ).castTo(WasmValueType.i64).asI64(),
+          );
+          final lhsHigh = WasmI64.unsigned(
+            _popValue(
+              stack,
+              'i64.sub128 lhs high',
+            ).castTo(WasmValueType.i64).asI64(),
+          );
+          final lhsLow = WasmI64.unsigned(
+            _popValue(
+              stack,
+              'i64.sub128 lhs low',
+            ).castTo(WasmValueType.i64).asI64(),
+          );
+          final lhs = (lhsHigh << 64) | lhsLow;
+          final rhs = (rhsHigh << 64) | rhsLow;
+          _pushAsyncSubsetI128Result(stack, lhs - rhs);
+          pc++;
+
+        case Opcodes.i64MulWideS:
+          final rhs = _popValue(
+            stack,
+            'i64.mul_wide_s rhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final lhs = _popValue(
+            stack,
+            'i64.mul_wide_s lhs',
+          ).castTo(WasmValueType.i64).asI64();
+          _pushAsyncSubsetI128Result(stack, lhs * rhs);
+          pc++;
+
+        case Opcodes.i64MulWideU:
+          final rhs = WasmI64.unsigned(
+            _popValue(
+              stack,
+              'i64.mul_wide_u rhs',
+            ).castTo(WasmValueType.i64).asI64(),
+          );
+          final lhs = WasmI64.unsigned(
+            _popValue(
+              stack,
+              'i64.mul_wide_u lhs',
+            ).castTo(WasmValueType.i64).asI64(),
+          );
+          _pushAsyncSubsetI128Result(stack, lhs * rhs);
+          pc++;
+
         case Opcodes.f32ConvertI32S:
           final value = _popValue(
             stack,
@@ -4202,6 +4290,23 @@ final class WasmInstance {
     }
   }
 
+  void _pushAsyncSubsetI128Result(List<WasmValue> stack, BigInt value) {
+    final normalized = value & _u128BigMask;
+    final low = _unsignedBigIntToSignedI64(normalized & _u64BigMask);
+    final high = _unsignedBigIntToSignedI64((normalized >> 64) & _u64BigMask);
+    stack
+      ..add(WasmValue.i64(low))
+      ..add(WasmValue.i64(high));
+  }
+
+  static BigInt _unsignedBigIntToSignedI64(BigInt value) {
+    final normalized = value & _u64BigMask;
+    if ((normalized & (_u64BigMod >> 1)) != BigInt.zero) {
+      return normalized - _u64BigMod;
+    }
+    return normalized;
+  }
+
   static int _i32Clz(int value) {
     final unsigned = value.toUnsigned(32);
     if (unsigned == 0) {
@@ -4425,6 +4530,9 @@ final class WasmInstance {
   static final BigInt _i64MinValue = WasmI64.minSigned;
   static final BigInt _i64MaxValue = WasmI64.maxSigned;
   static final BigInt _u64Mask = WasmI64.allOnesMask;
+  static final BigInt _u64BigMod = BigInt.one << 64;
+  static final BigInt _u64BigMask = _u64BigMod - BigInt.one;
+  static final BigInt _u128BigMask = (BigInt.one << 128) - BigInt.one;
 
   static const double _i32Min = -2147483648.0;
   static const double _i32Max = 2147483647.0;
