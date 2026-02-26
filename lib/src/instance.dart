@@ -893,6 +893,118 @@ final class WasmInstance {
           stack.add(WasmValue.i32(lhs.asI32() != rhs.asI32() ? 1 : 0));
           pc++;
 
+        case Opcodes.i32LtS:
+          final rhs = _popValue(
+            stack,
+            'i32.lt_s rhs',
+          ).castTo(WasmValueType.i32);
+          final lhs = _popValue(
+            stack,
+            'i32.lt_s lhs',
+          ).castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(lhs.asI32() < rhs.asI32() ? 1 : 0));
+          pc++;
+
+        case Opcodes.i32LtU:
+          final rhs = _popValue(
+            stack,
+            'i32.lt_u rhs',
+          ).castTo(WasmValueType.i32);
+          final lhs = _popValue(
+            stack,
+            'i32.lt_u lhs',
+          ).castTo(WasmValueType.i32);
+          stack.add(
+            WasmValue.i32(
+              lhs.asI32().toUnsigned(32) < rhs.asI32().toUnsigned(32) ? 1 : 0,
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32GtS:
+          final rhs = _popValue(
+            stack,
+            'i32.gt_s rhs',
+          ).castTo(WasmValueType.i32);
+          final lhs = _popValue(
+            stack,
+            'i32.gt_s lhs',
+          ).castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(lhs.asI32() > rhs.asI32() ? 1 : 0));
+          pc++;
+
+        case Opcodes.i32GtU:
+          final rhs = _popValue(
+            stack,
+            'i32.gt_u rhs',
+          ).castTo(WasmValueType.i32);
+          final lhs = _popValue(
+            stack,
+            'i32.gt_u lhs',
+          ).castTo(WasmValueType.i32);
+          stack.add(
+            WasmValue.i32(
+              lhs.asI32().toUnsigned(32) > rhs.asI32().toUnsigned(32) ? 1 : 0,
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32LeS:
+          final rhs = _popValue(
+            stack,
+            'i32.le_s rhs',
+          ).castTo(WasmValueType.i32);
+          final lhs = _popValue(
+            stack,
+            'i32.le_s lhs',
+          ).castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(lhs.asI32() <= rhs.asI32() ? 1 : 0));
+          pc++;
+
+        case Opcodes.i32LeU:
+          final rhs = _popValue(
+            stack,
+            'i32.le_u rhs',
+          ).castTo(WasmValueType.i32);
+          final lhs = _popValue(
+            stack,
+            'i32.le_u lhs',
+          ).castTo(WasmValueType.i32);
+          stack.add(
+            WasmValue.i32(
+              lhs.asI32().toUnsigned(32) <= rhs.asI32().toUnsigned(32) ? 1 : 0,
+            ),
+          );
+          pc++;
+
+        case Opcodes.i32GeS:
+          final rhs = _popValue(
+            stack,
+            'i32.ge_s rhs',
+          ).castTo(WasmValueType.i32);
+          final lhs = _popValue(
+            stack,
+            'i32.ge_s lhs',
+          ).castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(lhs.asI32() >= rhs.asI32() ? 1 : 0));
+          pc++;
+
+        case Opcodes.i32GeU:
+          final rhs = _popValue(
+            stack,
+            'i32.ge_u rhs',
+          ).castTo(WasmValueType.i32);
+          final lhs = _popValue(
+            stack,
+            'i32.ge_u lhs',
+          ).castTo(WasmValueType.i32);
+          stack.add(
+            WasmValue.i32(
+              lhs.asI32().toUnsigned(32) >= rhs.asI32().toUnsigned(32) ? 1 : 0,
+            ),
+          );
+          pc++;
+
         case Opcodes.i32Add:
           final rhs = _popValue(stack, 'i32.add rhs').castTo(WasmValueType.i32);
           final lhs = _popValue(stack, 'i32.add lhs').castTo(WasmValueType.i32);
@@ -909,6 +1021,69 @@ final class WasmInstance {
           final rhs = _popValue(stack, 'i32.mul rhs').castTo(WasmValueType.i32);
           final lhs = _popValue(stack, 'i32.mul lhs').castTo(WasmValueType.i32);
           stack.add(WasmValue.i32(lhs.asI32() * rhs.asI32()));
+          pc++;
+
+        case Opcodes.i32DivS:
+          final rhs = _popValue(
+            stack,
+            'i32.div_s rhs',
+          ).castTo(WasmValueType.i32).asI32();
+          final lhs = _popValue(
+            stack,
+            'i32.div_s lhs',
+          ).castTo(WasmValueType.i32).asI32();
+          if (rhs == 0) {
+            throw StateError('i32.div_s division by zero trap');
+          }
+          if (lhs == -2147483648 && rhs == -1) {
+            throw StateError('i32.div_s overflow trap');
+          }
+          stack.add(WasmValue.i32(lhs ~/ rhs));
+          pc++;
+
+        case Opcodes.i32DivU:
+          final rhs = _popValue(
+            stack,
+            'i32.div_u rhs',
+          ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+          final lhs = _popValue(
+            stack,
+            'i32.div_u lhs',
+          ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+          if (rhs == 0) {
+            throw StateError('i32.div_u division by zero trap');
+          }
+          stack.add(WasmValue.i32(lhs ~/ rhs));
+          pc++;
+
+        case Opcodes.i32RemS:
+          final rhs = _popValue(
+            stack,
+            'i32.rem_s rhs',
+          ).castTo(WasmValueType.i32).asI32();
+          final lhs = _popValue(
+            stack,
+            'i32.rem_s lhs',
+          ).castTo(WasmValueType.i32).asI32();
+          if (rhs == 0) {
+            throw StateError('i32.rem_s division by zero trap');
+          }
+          stack.add(WasmValue.i32(lhs.remainder(rhs)));
+          pc++;
+
+        case Opcodes.i32RemU:
+          final rhs = _popValue(
+            stack,
+            'i32.rem_u rhs',
+          ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+          final lhs = _popValue(
+            stack,
+            'i32.rem_u lhs',
+          ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+          if (rhs == 0) {
+            throw StateError('i32.rem_u division by zero trap');
+          }
+          stack.add(WasmValue.i32(lhs % rhs));
           pc++;
 
         case Opcodes.i32Clz:
@@ -1014,6 +1189,161 @@ final class WasmInstance {
           stack.add(WasmValue.i32(rotated));
           pc++;
 
+        case Opcodes.i64Eqz:
+          final value = _popValue(stack, 'i64.eqz').castTo(WasmValueType.i64);
+          stack.add(WasmValue.i32(value.asI64() == BigInt.zero ? 1 : 0));
+          pc++;
+
+        case Opcodes.i64Eq:
+          final rhs = _popValue(stack, 'i64.eq rhs').castTo(WasmValueType.i64);
+          final lhs = _popValue(stack, 'i64.eq lhs').castTo(WasmValueType.i64);
+          stack.add(WasmValue.i32(lhs.asI64() == rhs.asI64() ? 1 : 0));
+          pc++;
+
+        case Opcodes.i64Ne:
+          final rhs = _popValue(stack, 'i64.ne rhs').castTo(WasmValueType.i64);
+          final lhs = _popValue(stack, 'i64.ne lhs').castTo(WasmValueType.i64);
+          stack.add(WasmValue.i32(lhs.asI64() != rhs.asI64() ? 1 : 0));
+          pc++;
+
+        case Opcodes.i64LtS:
+          final rhs = _popValue(
+            stack,
+            'i64.lt_s rhs',
+          ).castTo(WasmValueType.i64);
+          final lhs = _popValue(
+            stack,
+            'i64.lt_s lhs',
+          ).castTo(WasmValueType.i64);
+          stack.add(
+            WasmValue.i32(lhs.asI64().compareTo(rhs.asI64()) < 0 ? 1 : 0),
+          );
+          pc++;
+
+        case Opcodes.i64LtU:
+          final rhs = _popValue(
+            stack,
+            'i64.lt_u rhs',
+          ).castTo(WasmValueType.i64);
+          final lhs = _popValue(
+            stack,
+            'i64.lt_u lhs',
+          ).castTo(WasmValueType.i64);
+          stack.add(
+            WasmValue.i32(
+              WasmI64.compareUnsigned(lhs.asI64(), rhs.asI64()) < 0 ? 1 : 0,
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64GtS:
+          final rhs = _popValue(
+            stack,
+            'i64.gt_s rhs',
+          ).castTo(WasmValueType.i64);
+          final lhs = _popValue(
+            stack,
+            'i64.gt_s lhs',
+          ).castTo(WasmValueType.i64);
+          stack.add(
+            WasmValue.i32(lhs.asI64().compareTo(rhs.asI64()) > 0 ? 1 : 0),
+          );
+          pc++;
+
+        case Opcodes.i64GtU:
+          final rhs = _popValue(
+            stack,
+            'i64.gt_u rhs',
+          ).castTo(WasmValueType.i64);
+          final lhs = _popValue(
+            stack,
+            'i64.gt_u lhs',
+          ).castTo(WasmValueType.i64);
+          stack.add(
+            WasmValue.i32(
+              WasmI64.compareUnsigned(lhs.asI64(), rhs.asI64()) > 0 ? 1 : 0,
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64LeS:
+          final rhs = _popValue(
+            stack,
+            'i64.le_s rhs',
+          ).castTo(WasmValueType.i64);
+          final lhs = _popValue(
+            stack,
+            'i64.le_s lhs',
+          ).castTo(WasmValueType.i64);
+          stack.add(
+            WasmValue.i32(lhs.asI64().compareTo(rhs.asI64()) <= 0 ? 1 : 0),
+          );
+          pc++;
+
+        case Opcodes.i64LeU:
+          final rhs = _popValue(
+            stack,
+            'i64.le_u rhs',
+          ).castTo(WasmValueType.i64);
+          final lhs = _popValue(
+            stack,
+            'i64.le_u lhs',
+          ).castTo(WasmValueType.i64);
+          stack.add(
+            WasmValue.i32(
+              WasmI64.compareUnsigned(lhs.asI64(), rhs.asI64()) <= 0 ? 1 : 0,
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64GeS:
+          final rhs = _popValue(
+            stack,
+            'i64.ge_s rhs',
+          ).castTo(WasmValueType.i64);
+          final lhs = _popValue(
+            stack,
+            'i64.ge_s lhs',
+          ).castTo(WasmValueType.i64);
+          stack.add(
+            WasmValue.i32(lhs.asI64().compareTo(rhs.asI64()) >= 0 ? 1 : 0),
+          );
+          pc++;
+
+        case Opcodes.i64GeU:
+          final rhs = _popValue(
+            stack,
+            'i64.ge_u rhs',
+          ).castTo(WasmValueType.i64);
+          final lhs = _popValue(
+            stack,
+            'i64.ge_u lhs',
+          ).castTo(WasmValueType.i64);
+          stack.add(
+            WasmValue.i32(
+              WasmI64.compareUnsigned(lhs.asI64(), rhs.asI64()) >= 0 ? 1 : 0,
+            ),
+          );
+          pc++;
+
+        case Opcodes.i64Clz:
+          final value = _popValue(stack, 'i64.clz').castTo(WasmValueType.i64);
+          stack.add(WasmValue.i64(WasmI64.clz(value.asI64())));
+          pc++;
+
+        case Opcodes.i64Ctz:
+          final value = _popValue(stack, 'i64.ctz').castTo(WasmValueType.i64);
+          stack.add(WasmValue.i64(WasmI64.ctz(value.asI64())));
+          pc++;
+
+        case Opcodes.i64Popcnt:
+          final value = _popValue(
+            stack,
+            'i64.popcnt',
+          ).castTo(WasmValueType.i64);
+          stack.add(WasmValue.i64(WasmI64.popcnt(value.asI64())));
+          pc++;
+
         case Opcodes.i64Add:
           final rhs = _popValue(stack, 'i64.add rhs').castTo(WasmValueType.i64);
           final lhs = _popValue(stack, 'i64.add lhs').castTo(WasmValueType.i64);
@@ -1030,6 +1360,152 @@ final class WasmInstance {
           final rhs = _popValue(stack, 'i64.mul rhs').castTo(WasmValueType.i64);
           final lhs = _popValue(stack, 'i64.mul lhs').castTo(WasmValueType.i64);
           stack.add(WasmValue.i64(lhs.asI64() * rhs.asI64()));
+          pc++;
+
+        case Opcodes.i64DivS:
+          final rhs = _popValue(
+            stack,
+            'i64.div_s rhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final lhs = _popValue(
+            stack,
+            'i64.div_s lhs',
+          ).castTo(WasmValueType.i64).asI64();
+          if (rhs == BigInt.zero) {
+            throw StateError('i64.div_s division by zero trap');
+          }
+          if (lhs == WasmI64.minSigned && rhs == -BigInt.one) {
+            throw StateError('i64.div_s overflow trap');
+          }
+          stack.add(WasmValue.i64(WasmI64.divS(lhs, rhs)));
+          pc++;
+
+        case Opcodes.i64DivU:
+          final rhs = _popValue(
+            stack,
+            'i64.div_u rhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final lhs = _popValue(
+            stack,
+            'i64.div_u lhs',
+          ).castTo(WasmValueType.i64).asI64();
+          if (rhs == BigInt.zero) {
+            throw StateError('i64.div_u division by zero trap');
+          }
+          stack.add(WasmValue.i64(WasmI64.divU(lhs, rhs)));
+          pc++;
+
+        case Opcodes.i64RemS:
+          final rhs = _popValue(
+            stack,
+            'i64.rem_s rhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final lhs = _popValue(
+            stack,
+            'i64.rem_s lhs',
+          ).castTo(WasmValueType.i64).asI64();
+          if (rhs == BigInt.zero) {
+            throw StateError('i64.rem_s division by zero trap');
+          }
+          stack.add(WasmValue.i64(WasmI64.remS(lhs, rhs)));
+          pc++;
+
+        case Opcodes.i64RemU:
+          final rhs = _popValue(
+            stack,
+            'i64.rem_u rhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final lhs = _popValue(
+            stack,
+            'i64.rem_u lhs',
+          ).castTo(WasmValueType.i64).asI64();
+          if (rhs == BigInt.zero) {
+            throw StateError('i64.rem_u division by zero trap');
+          }
+          stack.add(WasmValue.i64(WasmI64.remU(lhs, rhs)));
+          pc++;
+
+        case Opcodes.i64And:
+          final rhs = _popValue(stack, 'i64.and rhs').castTo(WasmValueType.i64);
+          final lhs = _popValue(stack, 'i64.and lhs').castTo(WasmValueType.i64);
+          stack.add(WasmValue.i64(WasmI64.and(lhs.asI64(), rhs.asI64())));
+          pc++;
+
+        case Opcodes.i64Or:
+          final rhs = _popValue(stack, 'i64.or rhs').castTo(WasmValueType.i64);
+          final lhs = _popValue(stack, 'i64.or lhs').castTo(WasmValueType.i64);
+          stack.add(WasmValue.i64(WasmI64.or(lhs.asI64(), rhs.asI64())));
+          pc++;
+
+        case Opcodes.i64Xor:
+          final rhs = _popValue(stack, 'i64.xor rhs').castTo(WasmValueType.i64);
+          final lhs = _popValue(stack, 'i64.xor lhs').castTo(WasmValueType.i64);
+          stack.add(WasmValue.i64(WasmI64.xor(lhs.asI64(), rhs.asI64())));
+          pc++;
+
+        case Opcodes.i64Shl:
+          final rhs = _popValue(
+            stack,
+            'i64.shl rhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final lhs = _popValue(
+            stack,
+            'i64.shl lhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final shift = (rhs & BigInt.from(63)).toInt();
+          stack.add(WasmValue.i64(WasmI64.shl(lhs, shift)));
+          pc++;
+
+        case Opcodes.i64ShrS:
+          final rhs = _popValue(
+            stack,
+            'i64.shr_s rhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final lhs = _popValue(
+            stack,
+            'i64.shr_s lhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final shift = (rhs & BigInt.from(63)).toInt();
+          stack.add(WasmValue.i64(WasmI64.shrS(lhs, shift)));
+          pc++;
+
+        case Opcodes.i64ShrU:
+          final rhs = _popValue(
+            stack,
+            'i64.shr_u rhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final lhs = _popValue(
+            stack,
+            'i64.shr_u lhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final shift = (rhs & BigInt.from(63)).toInt();
+          stack.add(WasmValue.i64(WasmI64.shrU(lhs, shift)));
+          pc++;
+
+        case Opcodes.i64Rotl:
+          final rhs = _popValue(
+            stack,
+            'i64.rotl rhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final lhs = _popValue(
+            stack,
+            'i64.rotl lhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final shift = (rhs & BigInt.from(63)).toInt();
+          stack.add(WasmValue.i64(WasmI64.rotl(lhs, shift)));
+          pc++;
+
+        case Opcodes.i64Rotr:
+          final rhs = _popValue(
+            stack,
+            'i64.rotr rhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final lhs = _popValue(
+            stack,
+            'i64.rotr lhs',
+          ).castTo(WasmValueType.i64).asI64();
+          final shift = (rhs & BigInt.from(63)).toInt();
+          stack.add(WasmValue.i64(WasmI64.rotr(lhs, shift)));
           pc++;
 
         case Opcodes.f32Add:
