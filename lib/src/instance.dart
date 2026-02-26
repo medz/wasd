@@ -687,6 +687,21 @@ final class WasmInstance {
     } on UnsupportedError catch (error) {
       final message = error.message?.toString() ?? '';
       if (message.contains('Async-only host import')) {
+        if (function is DefinedRuntimeFunction) {
+          try {
+            final results = await _invokeFunctionAsyncSubset(
+              prepared.functionIndex,
+              prepared.typedArgs,
+              depth: 0,
+            );
+            return _externalizeResults(results);
+          } on UnsupportedError {
+            throw UnsupportedError(
+              'invokeAsync for wasm-defined functions that call async-only '
+              'host imports is not implemented yet.',
+            );
+          }
+        }
         throw UnsupportedError(
           'invokeAsync for wasm-defined functions that call async-only host '
           'imports is not implemented yet.',
@@ -722,6 +737,308 @@ final class WasmInstance {
       typedArgs.add(WasmValue.fromExternal(functionType.params[i], args[i]));
     }
     return (functionIndex: functionIndex, typedArgs: typedArgs);
+  }
+
+  Future<List<WasmValue>> _invokeFunctionAsyncSubset(
+    int functionIndex,
+    List<WasmValue> args, {
+    required int depth,
+  }) async {
+    if (depth > _vm.maxCallDepth) {
+      throw StateError('Call stack overflow (depth > ${_vm.maxCallDepth}).');
+    }
+    if (functionIndex < 0 || functionIndex >= functions.length) {
+      throw RangeError('Invalid function index: $functionIndex');
+    }
+
+    final function = functions[functionIndex];
+    final normalizedArgs = _normalizeArgsForType(args, function.type.params);
+    if (function is HostRuntimeFunction) {
+      final externalArgs = normalizedArgs
+          .map((value) => value.toExternal())
+          .toList(growable: false);
+      final hostResult = function.asyncCallback != null
+          ? await Future<Object?>.sync(
+              () => function.asyncCallback!(externalArgs),
+            )
+          : function.callback(externalArgs);
+      return WasmValue.decodeResults(function.type.results, hostResult);
+    }
+
+    final defined = function as DefinedRuntimeFunction;
+    final locals = <WasmValue>[...normalizedArgs];
+    for (final localType in defined.localTypes) {
+      locals.add(WasmValue.zeroForType(localType));
+    }
+    final stack = <WasmValue>[];
+    final instructions = defined.instructions;
+
+    for (var pc = 0; pc < instructions.length; pc++) {
+      final instruction = instructions[pc];
+      switch (instruction.opcode) {
+        case Opcodes.localGet:
+          final index = instruction.immediate!;
+          if (index < 0 || index >= locals.length) {
+            throw RangeError('local.get index out of range: $index');
+          }
+          stack.add(locals[index]);
+
+        case Opcodes.localSet:
+          final index = instruction.immediate!;
+          if (index < 0 || index >= locals.length) {
+            throw RangeError('local.set index out of range: $index');
+          }
+          final value = _popValue(stack, 'local.set');
+          locals[index] = value.castTo(locals[index].type);
+
+        case Opcodes.localTee:
+          final index = instruction.immediate!;
+          if (index < 0 || index >= locals.length) {
+            throw RangeError('local.tee index out of range: $index');
+          }
+          final value = _popValue(stack, 'local.tee');
+          final cast = value.castTo(locals[index].type);
+          locals[index] = cast;
+          stack.add(cast);
+
+        case Opcodes.drop:
+          _popValue(stack, 'drop');
+
+        case Opcodes.i32Const:
+          stack.add(WasmValue.i32(instruction.immediate!));
+
+        case Opcodes.i64Const:
+          final wideImmediate = instruction.wideImmediate;
+          if (wideImmediate == null) {
+            throw StateError('Malformed i64.const immediate.');
+          }
+          stack.add(WasmValue.i64(wideImmediate));
+
+        case Opcodes.f32Const:
+          final floatBytes = instruction.floatBytesImmediate;
+          if (floatBytes != null && floatBytes.length == 4) {
+            final bits = ByteData.sublistView(
+              floatBytes,
+            ).getUint32(0, Endian.little);
+            stack.add(WasmValue.f32Bits(bits));
+          } else {
+            stack.add(WasmValue.f32(instruction.floatImmediate!));
+          }
+
+        case Opcodes.f64Const:
+          final floatBytes = instruction.floatBytesImmediate;
+          if (floatBytes != null && floatBytes.length == 8) {
+            final data = ByteData.sublistView(floatBytes);
+            final low = data.getUint32(0, Endian.little);
+            final high = data.getUint32(4, Endian.little);
+            stack.add(
+              WasmValue.f64Bits(
+                WasmI64.fromU32PairUnsigned(low: low, high: high),
+              ),
+            );
+          } else {
+            stack.add(WasmValue.f64(instruction.floatImmediate!));
+          }
+
+        case Opcodes.i32Add:
+          final rhs = _popValue(stack, 'i32.add rhs').castTo(WasmValueType.i32);
+          final lhs = _popValue(stack, 'i32.add lhs').castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(lhs.asI32() + rhs.asI32()));
+
+        case Opcodes.i32Sub:
+          final rhs = _popValue(stack, 'i32.sub rhs').castTo(WasmValueType.i32);
+          final lhs = _popValue(stack, 'i32.sub lhs').castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(lhs.asI32() - rhs.asI32()));
+
+        case Opcodes.i32Mul:
+          final rhs = _popValue(stack, 'i32.mul rhs').castTo(WasmValueType.i32);
+          final lhs = _popValue(stack, 'i32.mul lhs').castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(lhs.asI32() * rhs.asI32()));
+
+        case Opcodes.i64Add:
+          final rhs = _popValue(stack, 'i64.add rhs').castTo(WasmValueType.i64);
+          final lhs = _popValue(stack, 'i64.add lhs').castTo(WasmValueType.i64);
+          stack.add(WasmValue.i64(lhs.asI64() + rhs.asI64()));
+
+        case Opcodes.i64Sub:
+          final rhs = _popValue(stack, 'i64.sub rhs').castTo(WasmValueType.i64);
+          final lhs = _popValue(stack, 'i64.sub lhs').castTo(WasmValueType.i64);
+          stack.add(WasmValue.i64(lhs.asI64() - rhs.asI64()));
+
+        case Opcodes.i64Mul:
+          final rhs = _popValue(stack, 'i64.mul rhs').castTo(WasmValueType.i64);
+          final lhs = _popValue(stack, 'i64.mul lhs').castTo(WasmValueType.i64);
+          stack.add(WasmValue.i64(lhs.asI64() * rhs.asI64()));
+
+        case Opcodes.f32Add:
+          final rhs = _popValue(stack, 'f32.add rhs').castTo(WasmValueType.f32);
+          final lhs = _popValue(stack, 'f32.add lhs').castTo(WasmValueType.f32);
+          stack.add(WasmValue.f32(lhs.asF32() + rhs.asF32()));
+
+        case Opcodes.f32Sub:
+          final rhs = _popValue(stack, 'f32.sub rhs').castTo(WasmValueType.f32);
+          final lhs = _popValue(stack, 'f32.sub lhs').castTo(WasmValueType.f32);
+          stack.add(WasmValue.f32(lhs.asF32() - rhs.asF32()));
+
+        case Opcodes.f32Mul:
+          final rhs = _popValue(stack, 'f32.mul rhs').castTo(WasmValueType.f32);
+          final lhs = _popValue(stack, 'f32.mul lhs').castTo(WasmValueType.f32);
+          stack.add(WasmValue.f32(lhs.asF32() * rhs.asF32()));
+
+        case Opcodes.f32Div:
+          final rhs = _popValue(stack, 'f32.div rhs').castTo(WasmValueType.f32);
+          final lhs = _popValue(stack, 'f32.div lhs').castTo(WasmValueType.f32);
+          stack.add(WasmValue.f32(lhs.asF32() / rhs.asF32()));
+
+        case Opcodes.f64Add:
+          final rhs = _popValue(stack, 'f64.add rhs').castTo(WasmValueType.f64);
+          final lhs = _popValue(stack, 'f64.add lhs').castTo(WasmValueType.f64);
+          stack.add(WasmValue.f64(lhs.asF64() + rhs.asF64()));
+
+        case Opcodes.f64Sub:
+          final rhs = _popValue(stack, 'f64.sub rhs').castTo(WasmValueType.f64);
+          final lhs = _popValue(stack, 'f64.sub lhs').castTo(WasmValueType.f64);
+          stack.add(WasmValue.f64(lhs.asF64() - rhs.asF64()));
+
+        case Opcodes.f64Mul:
+          final rhs = _popValue(stack, 'f64.mul rhs').castTo(WasmValueType.f64);
+          final lhs = _popValue(stack, 'f64.mul lhs').castTo(WasmValueType.f64);
+          stack.add(WasmValue.f64(lhs.asF64() * rhs.asF64()));
+
+        case Opcodes.f64Div:
+          final rhs = _popValue(stack, 'f64.div rhs').castTo(WasmValueType.f64);
+          final lhs = _popValue(stack, 'f64.div lhs').castTo(WasmValueType.f64);
+          stack.add(WasmValue.f64(lhs.asF64() / rhs.asF64()));
+
+        case Opcodes.call:
+          final targetIndex = instruction.immediate!;
+          if (targetIndex < 0 || targetIndex >= functions.length) {
+            throw RangeError('call target out of range: $targetIndex');
+          }
+          final target = functions[targetIndex];
+          final callArgs = _popArgsForTypes(
+            stack,
+            target.type.params,
+            context: 'call',
+          );
+          final callResults = await _invokeFunctionAsyncSubset(
+            targetIndex,
+            callArgs,
+            depth: depth + 1,
+          );
+          stack.addAll(callResults);
+
+        case Opcodes.returnCall:
+          final targetIndex = instruction.immediate!;
+          if (targetIndex < 0 || targetIndex >= functions.length) {
+            throw RangeError('return_call target out of range: $targetIndex');
+          }
+          final target = functions[targetIndex];
+          final callArgs = _popArgsForTypes(
+            stack,
+            target.type.params,
+            context: 'return_call',
+          );
+          return _invokeFunctionAsyncSubset(
+            targetIndex,
+            callArgs,
+            depth: depth + 1,
+          );
+
+        case Opcodes.return_:
+          return _collectAsyncSubsetResults(
+            stack,
+            function.type.results,
+            context: 'return',
+          );
+
+        case Opcodes.end:
+          return _collectAsyncSubsetResults(
+            stack,
+            function.type.results,
+            context: 'end',
+          );
+
+        default:
+          throw UnsupportedError(
+            'invokeAsync subset does not support opcode '
+            '0x${instruction.opcode.toRadixString(16)}',
+          );
+      }
+    }
+
+    throw StateError(
+      'Function execution ended without `end` in invokeAsync subset.',
+    );
+  }
+
+  List<WasmValue> _normalizeArgsForType(
+    List<WasmValue> args,
+    List<WasmValueType> paramTypes,
+  ) {
+    if (args.length != paramTypes.length) {
+      throw ArgumentError(
+        'Function expects ${paramTypes.length} args, got ${args.length}.',
+      );
+    }
+    final normalized = <WasmValue>[];
+    for (var i = 0; i < paramTypes.length; i++) {
+      normalized.add(args[i].castTo(paramTypes[i]));
+    }
+    return normalized;
+  }
+
+  List<WasmValue> _popArgsForTypes(
+    List<WasmValue> stack,
+    List<WasmValueType> paramTypes, {
+    required String context,
+  }) {
+    if (stack.length < paramTypes.length) {
+      throw StateError(
+        '$context stack underflow: needs ${paramTypes.length}, '
+        'has ${stack.length}.',
+      );
+    }
+    final args = List<WasmValue>.filled(
+      paramTypes.length,
+      WasmValue.i32(0),
+      growable: false,
+    );
+    for (var i = paramTypes.length - 1; i >= 0; i--) {
+      args[i] = _popValue(stack, '$context arg[$i]').castTo(paramTypes[i]);
+    }
+    return args;
+  }
+
+  WasmValue _popValue(List<WasmValue> stack, String context) {
+    if (stack.isEmpty) {
+      throw StateError('$context stack underflow.');
+    }
+    return stack.removeLast();
+  }
+
+  List<WasmValue> _collectAsyncSubsetResults(
+    List<WasmValue> stack,
+    List<WasmValueType> resultTypes, {
+    required String context,
+  }) {
+    if (stack.length < resultTypes.length) {
+      throw StateError(
+        '$context result underflow: needs ${resultTypes.length}, '
+        'has ${stack.length}.',
+      );
+    }
+    if (stack.length != resultTypes.length) {
+      throw StateError(
+        '$context stack height mismatch: expected ${resultTypes.length}, '
+        'has ${stack.length}.',
+      );
+    }
+    final results = <WasmValue>[];
+    for (var i = 0; i < resultTypes.length; i++) {
+      results.add(stack[i].castTo(resultTypes[i]));
+    }
+    return results;
   }
 
   List<Object?> invokeMulti(
