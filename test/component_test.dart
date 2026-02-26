@@ -628,6 +628,46 @@ void main() {
       );
     });
 
+    test(
+      'rejects core export alias type binding to non-function declaration',
+      () {
+        final instanceSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final exportAliasSection = <int>[
+          ..._u32Leb(1),
+          ..._u32Leb(0),
+          ..._name('one'),
+          ..._name('apiOne'),
+        ];
+        final typeSection = <int>[..._u32Leb(1), ..._name('i32_t'), 0x00, 0x7f];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x01,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ..._componentHeaderWithOneCoreModule(),
+          ..._section(0x02, instanceSection),
+          ..._section(0x03, exportAliasSection),
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponent.decode(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
     test('rejects type bindings with out-of-range indexes', () {
       final typeSection = <int>[..._u32Leb(1), ..._name('i32_t'), 0x00, 0x7f];
       final typeBindingSection = <int>[

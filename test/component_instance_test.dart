@@ -169,6 +169,31 @@ void main() {
       expect(await instance.invokeComponentExportAsync('apiOne'), 9);
     });
 
+    test(
+      'rejects component export alias pointing to missing function export',
+      () {
+        final componentBytes = _componentWithCoreModules(
+          <Uint8List>[_coreModuleConstI32(name: 'one', value: 9)],
+          instantiateModuleIndices: const [0],
+          exportAliases: const [
+            _ComponentAliasSpec(
+              instanceIndex: 0,
+              coreExportName: 'missing',
+              componentExportName: 'apiMissing',
+            ),
+          ],
+        );
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
     test('validates component import requirements before instantiation', () {
       final componentBytes = _componentWithCoreModules(
         <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],

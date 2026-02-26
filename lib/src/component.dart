@@ -596,6 +596,16 @@ final class WasmComponent {
               'imports is not implemented yet.',
             );
         }
+      } else if (binding.targetKind ==
+          WasmComponentTypeBindingTargetKind.coreExportAlias) {
+        if (resolvedDeclaration.kind != WasmComponentTypeKind.function) {
+          final alias = coreExportAliases[binding.targetIndex];
+          throw FormatException(
+            'Component type binding for core export alias '
+            '`${alias.componentExportName}` must reference '
+            'a function type declaration.',
+          );
+        }
       }
     }
   }

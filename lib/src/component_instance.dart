@@ -139,6 +139,14 @@ final class WasmComponentInstance {
           '(count=${coreInstances.length}).',
         );
       }
+      final sourceInstance = coreInstances[instanceIndex];
+      if (!sourceInstance.exportedFunctions.contains(alias.coreExportName)) {
+        throw FormatException(
+          'Component export alias `${alias.componentExportName}` references '
+          'missing core function export `${alias.coreExportName}` in '
+          'instance $instanceIndex.',
+        );
+      }
       aliasMap[alias.componentExportName] = (
         instanceIndex: instanceIndex,
         coreExportName: alias.coreExportName,
