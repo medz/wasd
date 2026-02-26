@@ -37,7 +37,7 @@ final class _SimpleControlFrame {
   final bool isIf;
   bool seenElse = false;
   bool hasEndReachability = false;
-  bool propagatePolymorphicToParent = false;
+  bool loopBackUnreachable = false;
 }
 
 abstract final class WasmValidator {
@@ -664,6 +664,7 @@ abstract final class WasmValidator {
 
     for (var i = 0; i < module.functionTypeIndices.length; i++) {
       final typeIndex = module.functionTypeIndices[i];
+      final functionIndex = module.importedFunctionCount + i;
       _checkIndex(typeIndex, module.types.length, 'function type');
       if (!module.types[typeIndex].isFunctionType) {
         throw FormatException(
@@ -701,14 +702,20 @@ abstract final class WasmValidator {
         body: body,
         instructions: predecoded.instructions,
       );
-      _validateSimpleStackDiscipline(
-        module: module,
-        functionType: functionType,
-        body: body,
-        instructions: predecoded.instructions,
-        memory64ByIndex: memory64ByIndex,
-        table64ByIndex: table64ByIndex,
-      );
+      try {
+        _validateSimpleStackDiscipline(
+          module: module,
+          functionType: functionType,
+          body: body,
+          instructions: predecoded.instructions,
+          memory64ByIndex: memory64ByIndex,
+          table64ByIndex: table64ByIndex,
+        );
+      } on FormatException catch (error) {
+        throw FormatException(
+          'Validation failed in function $functionIndex: ${error.message}',
+        );
+      }
       _validateArrayInstructionTyping(
         module: module,
         functionType: functionType,
@@ -1762,13 +1769,11 @@ abstract final class WasmValidator {
       );
     }
 
-    void markPolymorphic({bool propagateToParent = false}) {
+    void markPolymorphic({bool loopBack = false}) {
       final frame = controlStack.last;
       stack.length = frame.stackHeight;
       frame.polymorphic = true;
-      if (propagateToParent) {
-        frame.propagatePolymorphicToParent = true;
-      }
+      frame.loopBackUnreachable = frame.loopBackUnreachable || loopBack;
     }
 
     _SimpleControlFrame frameForDepth(int depth, String label) {
@@ -1776,6 +1781,18 @@ abstract final class WasmValidator {
         mismatch('$label depth out of range: $depth');
       }
       return controlStack[controlStack.length - 1 - depth];
+    }
+
+    bool crossesLoopFrame(int depth) {
+      if (depth <= 0) {
+        return false;
+      }
+      for (var i = 0; i < depth; i++) {
+        if (controlStack[controlStack.length - 1 - i].isLoop) {
+          return true;
+        }
+      }
+      return false;
     }
 
     List<String> popLabelValues(List<String> signatures, String label) {
@@ -1789,7 +1806,8 @@ abstract final class WasmValidator {
     bool validateFrameEnd(_SimpleControlFrame frame, String label) {
       final resultLength = frame.resultSignatures.length;
       final hasConcreteStack = stack.length > frame.stackHeight;
-      final enforce = !frame.polymorphic || hasConcreteStack;
+      final enforce =
+          (!frame.polymorphic && !frame.hasEndReachability) || hasConcreteStack;
       if (!enforce) {
         return false;
       }
@@ -1930,7 +1948,6 @@ abstract final class WasmValidator {
           stack.length = frame.stackHeight;
           stack.addAll(frame.parameterSignatures);
           frame.polymorphic = false;
-          frame.propagatePolymorphicToParent = false;
           frame.seenElse = true;
 
         case Opcodes.end:
@@ -1945,14 +1962,12 @@ abstract final class WasmValidator {
           }
           final hasConcreteResult = validateFrameEnd(frame, 'end');
           stack.length = frame.stackHeight;
-          if (hasConcreteResult || frame.hasEndReachability) {
+          final canMaterializePolymorphicResults =
+              frame.polymorphic && (!frame.isLoop || !frame.loopBackUnreachable);
+          if (hasConcreteResult ||
+              frame.hasEndReachability ||
+              canMaterializePolymorphicResults) {
             stack.addAll(frame.resultSignatures);
-          }
-          if (!hasConcreteResult &&
-              !frame.hasEndReachability &&
-              frame.propagatePolymorphicToParent &&
-              controlStack.isNotEmpty) {
-            controlStack.last.polymorphic = true;
           }
           if (controlStack.isEmpty) {
             return;
@@ -1964,16 +1979,16 @@ abstract final class WasmValidator {
         case Opcodes.br:
           final depth = instruction.immediate!;
           final labelFrame = frameForDepth(depth, 'br');
-          if (!labelFrame.isLoop) {
+          if (!labelFrame.isLoop && (depth == 0 || crossesLoopFrame(depth))) {
             labelFrame.hasEndReachability = true;
           }
           popLabelValues(labelFrame.labelSignatures, 'br operand');
-          markPolymorphic(propagateToParent: true);
+          markPolymorphic(loopBack: depth == 0 && labelFrame.isLoop);
 
         case Opcodes.brIf:
           final depth = instruction.immediate!;
           final labelFrame = frameForDepth(depth, 'br_if');
-          if (!labelFrame.isLoop) {
+          if (!labelFrame.isLoop && (depth == 0 || crossesLoopFrame(depth))) {
             labelFrame.hasEndReachability = true;
           }
           popExpected('7f', 'br_if condition');
@@ -1987,9 +2002,14 @@ abstract final class WasmValidator {
             mismatch('br_table requires at least default depth');
           }
           List<String>? commonSignatures;
+          final enforceTargetTypes = !controlStack.last.polymorphic;
+          final currentFrame = controlStack.last;
+          final loopBackOnly =
+              currentFrame.isLoop && depths.every((depth) => depth == 0);
           for (final depth in depths) {
             final labelFrame = frameForDepth(depth, 'br_table');
-            if (!labelFrame.isLoop) {
+            if (!labelFrame.isLoop &&
+                (depth == 0 || crossesLoopFrame(depth))) {
               labelFrame.hasEndReachability = true;
             }
             final labelSignatures = labelFrame.labelSignatures;
@@ -2000,14 +2020,45 @@ abstract final class WasmValidator {
             if (labelSignatures.length != commonSignatures.length) {
               mismatch('br_table target arity mismatch');
             }
+            for (var i = 0; i < labelSignatures.length; i++) {
+              final expected = commonSignatures[i];
+              final actual = labelSignatures[i];
+              final expectedRef = _parseRefSignature(expected);
+              final actualRef = _parseRefSignature(actual);
+              if (expectedRef == null && actualRef == null) {
+                continue;
+              }
+              if (expectedRef == null || actualRef == null) {
+                if (enforceTargetTypes) {
+                  mismatch(
+                    'br_table target type mismatch: '
+                    'target[$i]=$actual expected=$expected',
+                  );
+                }
+                continue;
+              }
+              if (_isValueSignatureSubtype(module, actual, expected)) {
+                continue;
+              }
+              if (_isValueSignatureSubtype(module, expected, actual)) {
+                commonSignatures[i] = actual;
+                continue;
+              }
+              if (enforceTargetTypes) {
+                mismatch(
+                  'br_table target type mismatch: '
+                  'target[$i]=$actual expected=$expected',
+                );
+              }
+            }
           }
           popLabelValues(commonSignatures!, 'br_table operand');
-          markPolymorphic(propagateToParent: true);
+          markPolymorphic(loopBack: loopBackOnly);
 
         case Opcodes.brOnNull:
           final depth = instruction.immediate!;
           final labelFrame = frameForDepth(depth, 'br_on_null');
-          if (!labelFrame.isLoop) {
+          if (!labelFrame.isLoop && (depth == 0 || crossesLoopFrame(depth))) {
             labelFrame.hasEndReachability = true;
           }
           final frame = controlStack.last;
@@ -2023,7 +2074,7 @@ abstract final class WasmValidator {
         case Opcodes.brOnNonNull:
           final depth = instruction.immediate!;
           final labelFrame = frameForDepth(depth, 'br_on_non_null');
-          if (!labelFrame.isLoop) {
+          if (!labelFrame.isLoop && (depth == 0 || crossesLoopFrame(depth))) {
             labelFrame.hasEndReachability = true;
           }
           final frame = controlStack.last;
@@ -2056,7 +2107,7 @@ abstract final class WasmValidator {
           for (var i = functionResultSignatures.length - 1; i >= 0; i--) {
             popExpected(functionResultSignatures[i], 'return result[$i]');
           }
-          markPolymorphic(propagateToParent: true);
+          markPolymorphic();
 
         case Opcodes.call:
           final functionIndex = instruction.immediate!;
@@ -2069,7 +2120,7 @@ abstract final class WasmValidator {
           final targetType = _functionTypeForIndex(module, functionIndex);
           popCallArgs(targetType, 'return_call');
           requireReturnCompatibility(targetType, 'return_call');
-          markPolymorphic(propagateToParent: true);
+          markPolymorphic();
 
         case Opcodes.callIndirect:
           final typeIndex = instruction.immediate!;
@@ -2089,7 +2140,7 @@ abstract final class WasmValidator {
           );
           popCallArgs(targetType, 'return_call_indirect');
           requireReturnCompatibility(targetType, 'return_call_indirect');
-          markPolymorphic(propagateToParent: true);
+          markPolymorphic();
 
         case Opcodes.callRef:
           final typeIndex = instruction.immediate!;
@@ -2104,7 +2155,7 @@ abstract final class WasmValidator {
           popCallRefCallee(typeIndex, 'return_call_ref callee');
           popCallArgs(targetType, 'return_call_ref');
           requireReturnCompatibility(targetType, 'return_call_ref');
-          markPolymorphic(propagateToParent: true);
+          markPolymorphic();
 
         case Opcodes.localGet:
           final localIndex = instruction.immediate!;
