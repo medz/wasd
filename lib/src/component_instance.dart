@@ -83,6 +83,14 @@ final class WasmComponentInstance {
             '(count=${component.coreModules.length}).',
           );
         }
+        for (final argumentIndex in declaration.argumentInstanceIndices) {
+          if (argumentIndex < 0 || argumentIndex >= coreInstances.length) {
+            throw FormatException(
+              'Component core-instance argument index out of range: '
+              '$argumentIndex (instantiated=${coreInstances.length}).',
+            );
+          }
+        }
         coreInstances.add(
           WasmInstance.fromBytes(
             component.coreModules[moduleIndex],

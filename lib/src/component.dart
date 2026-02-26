@@ -13,9 +13,15 @@ final class WasmComponentSection {
 
 /// Decoded core instance declaration from component section `0x02`.
 final class WasmComponentCoreInstance {
-  const WasmComponentCoreInstance.instantiate({required this.moduleIndex});
+  WasmComponentCoreInstance.instantiate({
+    required this.moduleIndex,
+    List<int> argumentInstanceIndices = const <int>[],
+  }) : argumentInstanceIndices = List<int>.unmodifiable(
+         argumentInstanceIndices,
+       );
 
   final int moduleIndex;
+  final List<int> argumentInstanceIndices;
 }
 
 /// Component-level exported core function alias.
@@ -234,13 +240,16 @@ final class WasmComponent {
         case 0x00:
           final moduleIndex = reader.readVarUint32();
           final argCount = reader.readVarUint32();
-          if (argCount != 0) {
-            throw UnsupportedError(
-              'Component core-instance instantiate args are not implemented yet.',
-            );
-          }
+          final argumentInstanceIndices = List<int>.generate(
+            argCount,
+            (_) => reader.readVarUint32(),
+            growable: false,
+          );
           instances.add(
-            WasmComponentCoreInstance.instantiate(moduleIndex: moduleIndex),
+            WasmComponentCoreInstance.instantiate(
+              moduleIndex: moduleIndex,
+              argumentInstanceIndices: argumentInstanceIndices,
+            ),
           );
         default:
           throw UnsupportedError(

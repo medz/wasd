@@ -52,6 +52,47 @@ void main() {
       expect(() => instance.invokeCore('one'), throwsA(isA<ArgumentError>()));
     });
 
+    test('accepts declared core-instance argument dependency indexes', () {
+      final componentBytes = _componentWithCoreModules(
+        <Uint8List>[
+          _coreModuleConstI32(name: 'one', value: 1),
+          _coreModuleConstI32(name: 'two', value: 2),
+        ],
+        instantiateModuleIndices: const [0, 1],
+        instantiateArgumentInstanceIndices: const [
+          <int>[],
+          <int>[0],
+        ],
+      );
+
+      final instance = WasmComponentInstance.fromBytes(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
+      expect(instance.coreInstances, hasLength(2));
+      expect(instance.invokeCore('one', moduleIndex: 0), 1);
+      expect(instance.invokeCore('two', moduleIndex: 1), 2);
+    });
+
+    test('rejects out-of-range core-instance argument dependency indexes', () {
+      final componentBytes = _componentWithCoreModules(
+        <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+        instantiateModuleIndices: const [0],
+        instantiateArgumentInstanceIndices: const [
+          <int>[1],
+        ],
+      );
+
+      expect(
+        () => WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+    });
+
     test('invokes component export aliases from section 0x03', () async {
       final componentBytes = _componentWithCoreModules(
         <Uint8List>[_coreModuleConstI32(name: 'one', value: 9)],
@@ -190,6 +231,7 @@ void main() {
 Uint8List _componentWithCoreModules(
   List<Uint8List> modules, {
   List<int>? instantiateModuleIndices,
+  List<List<int>>? instantiateArgumentInstanceIndices,
   List<_ComponentAliasSpec>? exportAliases,
   List<_ComponentImportRequirementSpec>? importRequirements,
   List<_ComponentInstanceAliasSpec>? coreInstanceAliases,
@@ -203,11 +245,24 @@ Uint8List _componentWithCoreModules(
   final declarations = instantiateModuleIndices;
   if (declarations != null) {
     final payload = <int>[..._u32Leb(declarations.length)];
-    for (final moduleIndex in declarations) {
+    for (
+      var declarationIndex = 0;
+      declarationIndex < declarations.length;
+      declarationIndex++
+    ) {
+      final moduleIndex = declarations[declarationIndex];
+      final argumentIndexes =
+          instantiateArgumentInstanceIndices != null &&
+              declarationIndex < instantiateArgumentInstanceIndices.length
+          ? instantiateArgumentInstanceIndices[declarationIndex]
+          : const <int>[];
       payload
         ..add(0x00)
         ..addAll(_u32Leb(moduleIndex))
-        ..add(0x00);
+        ..addAll(_u32Leb(argumentIndexes.length));
+      for (final argumentIndex in argumentIndexes) {
+        payload.addAll(_u32Leb(argumentIndex));
+      }
     }
     bytes
       ..add(0x02)

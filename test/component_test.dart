@@ -80,7 +80,7 @@ void main() {
       expect(component.sections[1].payload, hasLength(4));
     });
 
-    test('rejects unsupported core-instance instantiate args', () {
+    test('decodes core-instance instantiate args', () {
       final componentBytes = Uint8List.fromList(<int>[
         0x00,
         0x61,
@@ -101,7 +101,7 @@ void main() {
         0x00,
         0x00,
         0x00,
-        // section 2: one core instance with arg_count=1 (unsupported)
+        // section 2: one core instance with arg_count=1
         0x02,
         0x05,
         0x01,
@@ -111,12 +111,16 @@ void main() {
         0x00,
       ]);
 
+      final component = WasmComponent.decode(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
+      expect(component.coreInstances, hasLength(1));
+      expect(component.coreInstances.single.moduleIndex, 0);
       expect(
-        () => WasmComponent.decode(
-          componentBytes,
-          features: const WasmFeatureSet(componentModel: true),
-        ),
-        throwsA(isA<UnsupportedError>()),
+        component.coreInstances.single.argumentInstanceIndices,
+        orderedEquals(const <int>[0]),
       );
     });
 
