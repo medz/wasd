@@ -2362,6 +2362,9 @@ final class WasmInstance {
           }
           pc++;
 
+        case Opcodes.atomicFence:
+          pc++;
+
         case Opcodes.memoryInit:
           final dataIndex = instruction.immediate!;
           final memoryIndex = instruction.secondaryImmediate!;

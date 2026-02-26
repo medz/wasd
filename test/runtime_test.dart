@@ -1671,6 +1671,51 @@ void main() {
       expect(await instance.invokeI32Async('wrapReturnCallRef'), 9);
     });
 
+    test('supports atomic.fence in async import call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([0x7f], [0x7f]),
+          _funcType([], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+        ],
+        functionTypeIndices: const [1],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._i32Const(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._fe0(Opcodes.atomicFence),
+              ..._i32Const(7),
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'wrapAtomicFence',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(threads: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('wrapAtomicFence'), 7);
+    });
+
     test('supports i32 bitwise opcodes in async import call chains', () async {
       final wasm = _buildModule(
         types: [
@@ -3272,6 +3317,11 @@ List<int> _fdBytes(int pseudoOpcode, List<int> payload) => <int>[
   0xfd,
   ..._u32Leb(pseudoOpcode & 0xff),
   ...payload,
+];
+List<int> _fe0(int pseudoOpcode, [int immediate = 0]) => <int>[
+  0xfe,
+  ..._u32Leb(pseudoOpcode & 0xff),
+  ..._u32Leb(immediate),
 ];
 
 List<int> _u32Leb(int value) {
