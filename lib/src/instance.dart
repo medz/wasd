@@ -808,6 +808,9 @@ final class WasmInstance {
     while (pc < instructions.length) {
       final instruction = instructions[pc];
       switch (instruction.opcode) {
+        case Opcodes.unreachable:
+          throw StateError('unreachable trap');
+
         case Opcodes.nop:
           pc++;
 

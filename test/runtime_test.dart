@@ -2829,7 +2829,7 @@ void main() {
                 ..._localGet(0),
                 ..._call(0),
                 Opcodes.drop,
-                Opcodes.unreachable,
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
                 Opcodes.drop,
                 ..._i32Const(0),
                 Opcodes.end,
@@ -2847,6 +2847,7 @@ void main() {
 
         final instance = WasmInstance.fromBytes(
           wasm,
+          features: const WasmFeatureSet(simd: true),
           imports: WasmImports(
             asyncFunctions: {
               WasmImports.key('host', 'inc'): (args) async =>
@@ -3266,6 +3267,11 @@ List<int> _fc2(int pseudoOpcode, int immediate0, int immediate1) => <int>[
   ..._u32Leb(pseudoOpcode & 0xff),
   ..._u32Leb(immediate0),
   ..._u32Leb(immediate1),
+];
+List<int> _fdBytes(int pseudoOpcode, List<int> payload) => <int>[
+  0xfd,
+  ..._u32Leb(pseudoOpcode & 0xff),
+  ...payload,
 ];
 
 List<int> _u32Leb(int value) {
