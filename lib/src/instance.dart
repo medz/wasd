@@ -2362,6 +2362,100 @@ final class WasmInstance {
           }
           pc++;
 
+        case Opcodes.memoryAtomicNotify:
+          final memArg = instruction.memArg;
+          if (memArg == null) {
+            throw StateError('Malformed memory.atomic.notify memarg.');
+          }
+          _popValue(
+            stack,
+            'memory.atomic.notify count',
+          ).castTo(WasmValueType.i32);
+          final target = _resolveAsyncSubsetMemoryTarget(
+            memArg: memArg,
+            memory64ByIndex: memory64ByIndex,
+            context: 'memory.atomic.notify',
+          );
+          final addressValue = _popValue(stack, 'memory.atomic.notify address');
+          final address = _resolveAsyncSubsetMemoryAddress(
+            memArg: memArg,
+            baseAddressValue: addressValue,
+            isMemory64: target.isMemory64,
+            context: 'memory.atomic.notify',
+          );
+          if (address % 4 != 0) {
+            throw StateError('unaligned atomic');
+          }
+          target.memory.loadU32(address);
+          stack.add(WasmValue.i32(0));
+          pc++;
+
+        case Opcodes.memoryAtomicWait32:
+          final memArg = instruction.memArg;
+          if (memArg == null) {
+            throw StateError('Malformed memory.atomic.wait32 memarg.');
+          }
+          _popValue(
+            stack,
+            'memory.atomic.wait32 timeout',
+          ).castTo(WasmValueType.i64);
+          final expected = _popValue(
+            stack,
+            'memory.atomic.wait32 expected',
+          ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+          final target = _resolveAsyncSubsetMemoryTarget(
+            memArg: memArg,
+            memory64ByIndex: memory64ByIndex,
+            context: 'memory.atomic.wait32',
+          );
+          final addressValue = _popValue(stack, 'memory.atomic.wait32 address');
+          final address = _resolveAsyncSubsetMemoryAddress(
+            memArg: memArg,
+            baseAddressValue: addressValue,
+            isMemory64: target.isMemory64,
+            context: 'memory.atomic.wait32',
+          );
+          if (address % 4 != 0) {
+            throw StateError('unaligned atomic');
+          }
+          final actual = target.memory.loadU32(address);
+          stack.add(WasmValue.i32(actual == expected ? 2 : 1));
+          pc++;
+
+        case Opcodes.memoryAtomicWait64:
+          final memArg = instruction.memArg;
+          if (memArg == null) {
+            throw StateError('Malformed memory.atomic.wait64 memarg.');
+          }
+          _popValue(
+            stack,
+            'memory.atomic.wait64 timeout',
+          ).castTo(WasmValueType.i64);
+          final expected = WasmI64.unsigned(
+            _popValue(
+              stack,
+              'memory.atomic.wait64 expected',
+            ).castTo(WasmValueType.i64).asI64(),
+          );
+          final target = _resolveAsyncSubsetMemoryTarget(
+            memArg: memArg,
+            memory64ByIndex: memory64ByIndex,
+            context: 'memory.atomic.wait64',
+          );
+          final addressValue = _popValue(stack, 'memory.atomic.wait64 address');
+          final address = _resolveAsyncSubsetMemoryAddress(
+            memArg: memArg,
+            baseAddressValue: addressValue,
+            isMemory64: target.isMemory64,
+            context: 'memory.atomic.wait64',
+          );
+          if (address % 8 != 0) {
+            throw StateError('unaligned atomic');
+          }
+          final actual = WasmI64.unsigned(target.memory.loadI64(address));
+          stack.add(WasmValue.i32(actual == expected ? 2 : 1));
+          pc++;
+
         case Opcodes.atomicFence:
           pc++;
 

@@ -1716,6 +1716,182 @@ void main() {
       expect(await instance.invokeI32Async('wrapAtomicFence'), 7);
     });
 
+    test(
+      'supports memory.atomic.notify/wait32 in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+            _funcType([], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [1],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._i32Const(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._i32Const(0),
+                ..._i32Const(7),
+                ..._memInstr(Opcodes.i32Store, align: 2),
+                ..._i32Const(0),
+                ..._i32Const(8),
+                ..._i64Const(0),
+                ..._feMem(Opcodes.memoryAtomicWait32, align: 2),
+                ..._i32Const(0),
+                ..._i32Const(7),
+                ..._i64Const(0),
+                ..._feMem(Opcodes.memoryAtomicWait32, align: 2),
+                Opcodes.i32Add,
+                ..._i32Const(0),
+                ..._i32Const(1),
+                ..._feMem(Opcodes.memoryAtomicNotify, align: 2),
+                Opcodes.i32Add,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          memoryMinPages: 1,
+          exports: const [
+            _ExportSpec(
+              name: 'wrapAtomicWaitNotify32',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          features: const WasmFeatureSet(threads: true),
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('wrapAtomicWaitNotify32'), 3);
+      },
+    );
+
+    test('supports memory.atomic.wait64 in async import call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([0x7f], [0x7f]),
+          _funcType([], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+        ],
+        functionTypeIndices: const [1],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._i32Const(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._i32Const(8),
+              ..._i64Const(42),
+              ..._memInstr(Opcodes.i64Store, align: 3),
+              ..._i32Const(8),
+              ..._i64Const(41),
+              ..._i64Const(0),
+              ..._feMem(Opcodes.memoryAtomicWait64, align: 3),
+              ..._i32Const(8),
+              ..._i64Const(42),
+              ..._i64Const(0),
+              ..._feMem(Opcodes.memoryAtomicWait64, align: 3),
+              Opcodes.i32Add,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        memoryMinPages: 1,
+        exports: const [
+          _ExportSpec(
+            name: 'wrapAtomicWait64',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(threads: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('wrapAtomicWait64'), 3);
+    });
+
+    test('traps unaligned atomic wait32 in async import call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([0x7f], [0x7f]),
+          _funcType([], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+        ],
+        functionTypeIndices: const [1],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._i32Const(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._i32Const(2),
+              ..._i32Const(0),
+              ..._i64Const(0),
+              ..._feMem(Opcodes.memoryAtomicWait32, align: 2),
+              Opcodes.end,
+            ],
+          ),
+        ],
+        memoryMinPages: 1,
+        exports: const [
+          _ExportSpec(
+            name: 'wrapAtomicWait32Unaligned',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(threads: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      await expectLater(
+        () async => instance.invokeI32Async('wrapAtomicWait32Unaligned'),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('unaligned atomic'),
+          ),
+        ),
+      );
+    });
+
     test('supports i32 bitwise opcodes in async import call chains', () async {
       final wasm = _buildModule(
         types: [
@@ -3317,6 +3493,12 @@ List<int> _fdBytes(int pseudoOpcode, List<int> payload) => <int>[
   0xfd,
   ..._u32Leb(pseudoOpcode & 0xff),
   ...payload,
+];
+List<int> _feMem(int pseudoOpcode, {int align = 0, int offset = 0}) => <int>[
+  0xfe,
+  ..._u32Leb(pseudoOpcode & 0xff),
+  ..._u32Leb(align),
+  ..._u32Leb(offset),
 ];
 List<int> _fe0(int pseudoOpcode, [int immediate = 0]) => <int>[
   0xfe,
