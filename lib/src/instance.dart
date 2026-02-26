@@ -1417,6 +1417,22 @@ final class WasmInstance {
             _simdF32x4Max(stack);
             pc++;
 
+          case Opcodes.f32x4Pmin:
+            _simdF32x4Pmin(stack);
+            pc++;
+
+          case Opcodes.f32x4Pmax:
+            _simdF32x4Pmax(stack);
+            pc++;
+
+          case Opcodes.f32x4RelaxedMin:
+            _simdF32x4Min(stack);
+            pc++;
+
+          case Opcodes.f32x4RelaxedMax:
+            _simdF32x4Max(stack);
+            pc++;
+
           case Opcodes.f64x2Splat:
             _simdF64x2Splat(stack);
             pc++;
@@ -1478,6 +1494,22 @@ final class WasmInstance {
             pc++;
 
           case Opcodes.f64x2Max:
+            _simdF64x2Max(stack);
+            pc++;
+
+          case Opcodes.f64x2Pmin:
+            _simdF64x2Pmin(stack);
+            pc++;
+
+          case Opcodes.f64x2Pmax:
+            _simdF64x2Pmax(stack);
+            pc++;
+
+          case Opcodes.f64x2RelaxedMin:
+            _simdF64x2Min(stack);
+            pc++;
+
+          case Opcodes.f64x2RelaxedMax:
             _simdF64x2Max(stack);
             pc++;
 
@@ -6415,6 +6447,62 @@ final class WasmInstance {
     _pushAsyncSubsetV128(stack, result);
   }
 
+  void _simdF32x4Pmin(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f32x4.pmin rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f32x4.pmin lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final lhsBits = lhsData.getUint32(offset, Endian.little);
+      final rhsBits = rhsData.getUint32(offset, Endian.little);
+      if (_isF32NaNBits(lhsBits) || _isF32NaNBits(rhsBits)) {
+        resultData.setUint32(offset, lhsBits, Endian.little);
+        continue;
+      }
+      final lhsLane = lhsData.getFloat32(offset, Endian.little);
+      final rhsLane = rhsData.getFloat32(offset, Endian.little);
+      if (lhsLane < rhsLane) {
+        resultData.setUint32(offset, lhsBits, Endian.little);
+      } else if (lhsLane > rhsLane) {
+        resultData.setUint32(offset, rhsBits, Endian.little);
+      } else {
+        resultData.setUint32(offset, lhsBits, Endian.little);
+      }
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF32x4Pmax(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f32x4.pmax rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f32x4.pmax lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final lhsBits = lhsData.getUint32(offset, Endian.little);
+      final rhsBits = rhsData.getUint32(offset, Endian.little);
+      if (_isF32NaNBits(lhsBits) || _isF32NaNBits(rhsBits)) {
+        resultData.setUint32(offset, lhsBits, Endian.little);
+        continue;
+      }
+      final lhsLane = lhsData.getFloat32(offset, Endian.little);
+      final rhsLane = rhsData.getFloat32(offset, Endian.little);
+      if (lhsLane > rhsLane) {
+        resultData.setUint32(offset, lhsBits, Endian.little);
+      } else if (lhsLane < rhsLane) {
+        resultData.setUint32(offset, rhsBits, Endian.little);
+      } else {
+        resultData.setUint32(offset, lhsBits, Endian.little);
+      }
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
   void _simdF64x2Splat(List<WasmValue> stack) {
     final laneBits = _popValue(
       stack,
@@ -6658,6 +6746,62 @@ final class WasmInstance {
           rhsData.getFloat64(offset, Endian.little),
         ),
       );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Pmin(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f64x2.pmin rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f64x2.pmin lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      final lhsBits = _readAsyncSubsetLaneU64(lhsData, offset);
+      final rhsBits = _readAsyncSubsetLaneU64(rhsData, offset);
+      if (_isF64NaNBits(lhsBits) || _isF64NaNBits(rhsBits)) {
+        _writeAsyncSubsetLaneU64(resultData, offset, lhsBits);
+        continue;
+      }
+      final lhsLane = lhsData.getFloat64(offset, Endian.little);
+      final rhsLane = rhsData.getFloat64(offset, Endian.little);
+      if (lhsLane < rhsLane) {
+        _writeAsyncSubsetLaneU64(resultData, offset, lhsBits);
+      } else if (lhsLane > rhsLane) {
+        _writeAsyncSubsetLaneU64(resultData, offset, rhsBits);
+      } else {
+        _writeAsyncSubsetLaneU64(resultData, offset, lhsBits);
+      }
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2Pmax(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f64x2.pmax rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f64x2.pmax lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      final lhsBits = _readAsyncSubsetLaneU64(lhsData, offset);
+      final rhsBits = _readAsyncSubsetLaneU64(rhsData, offset);
+      if (_isF64NaNBits(lhsBits) || _isF64NaNBits(rhsBits)) {
+        _writeAsyncSubsetLaneU64(resultData, offset, lhsBits);
+        continue;
+      }
+      final lhsLane = lhsData.getFloat64(offset, Endian.little);
+      final rhsLane = rhsData.getFloat64(offset, Endian.little);
+      if (lhsLane > rhsLane) {
+        _writeAsyncSubsetLaneU64(resultData, offset, lhsBits);
+      } else if (lhsLane < rhsLane) {
+        _writeAsyncSubsetLaneU64(resultData, offset, rhsBits);
+      } else {
+        _writeAsyncSubsetLaneU64(resultData, offset, lhsBits);
+      }
     }
     _pushAsyncSubsetV128(stack, result);
   }
