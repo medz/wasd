@@ -170,6 +170,7 @@ final class _FileResult {
     required this.commandsPassed,
     required this.commandsFailed,
     required this.commandsSkipped,
+    required this.skipReasonCounts,
     required this.passed,
     this.firstFailureLine,
     this.firstFailureReason,
@@ -184,6 +185,7 @@ final class _FileResult {
   final int commandsPassed;
   final int commandsFailed;
   final int commandsSkipped;
+  final Map<String, int> skipReasonCounts;
   final bool passed;
   final int? firstFailureLine;
   final String? firstFailureReason;
@@ -199,6 +201,7 @@ final class _FileResult {
     'commands_passed': commandsPassed,
     'commands_failed': commandsFailed,
     'commands_skipped': commandsSkipped,
+    'skip_reason_counts': skipReasonCounts,
     'first_failure_line': firstFailureLine,
     'first_failure_reason': firstFailureReason,
     'first_failure_details': firstFailureDetails,
@@ -295,6 +298,10 @@ final class _ScriptExecutionState {
           return _handleAssertReturn(command);
         case 'assert_trap':
           return _handleAssertTrap(command);
+        case 'assert_exhaustion':
+          return _handleAssertExhaustion(command);
+        case 'assert_exception':
+          return _handleAssertException(command);
         case 'assert_invalid':
         case 'assert_unlinkable':
         case 'assert_uninstantiable':
@@ -477,17 +484,40 @@ final class _ScriptExecutionState {
     }
   }
 
-  _CommandResult _handleAssertModuleFails(Map<String, Object?> command) {
-    final moduleType = command['module_type'];
-    if (moduleType is String && moduleType != 'binary') {
-      return _CommandResult.skip(
-        'unsupported-module-type',
-        'module_type `$moduleType` is not binary.',
-      );
+  _CommandResult _handleAssertExhaustion(Map<String, Object?> command) {
+    final action = _readAction(command);
+    try {
+      _runAction(action);
+      return _CommandResult.fail('assert-exhaustion-not-trapped', '$command');
+    } on _SpecRunnerFailure catch (error) {
+      return _CommandResult.fail(error.reason, error.details);
+    } catch (_) {
+      return _CommandResult.pass();
     }
+  }
 
-    final filename = command['filename'];
-    if (filename is! String || filename.isEmpty) {
+  _CommandResult _handleAssertException(Map<String, Object?> command) {
+    final action = _readAction(command);
+    try {
+      _runAction(action);
+      return _CommandResult.fail('assert-exception-not-thrown', '$command');
+    } on _SpecRunnerFailure catch (error) {
+      return _CommandResult.fail(error.reason, error.details);
+    } catch (_) {
+      return _CommandResult.pass();
+    }
+  }
+
+  _CommandResult _handleAssertModuleFails(Map<String, Object?> command) {
+    final filename = _resolveModuleFilename(command);
+    if (filename == null) {
+      final moduleType = command['module_type'];
+      if (moduleType is String && moduleType != 'binary') {
+        return _CommandResult.skip(
+          'unsupported-module-type',
+          'module_type `$moduleType` is not binary.',
+        );
+      }
       return _CommandResult.fail('assert-module-missing-filename', '$command');
     }
 
@@ -863,7 +893,9 @@ final class _ScriptExecutionState {
           if (candidate is! Map) {
             throw _SpecRunnerFailure('invalid-expected-value', '$raw');
           }
-          alternatives.add(_parseExpectedValue(candidate.cast<String, Object?>()));
+          alternatives.add(
+            _parseExpectedValue(candidate.cast<String, Object?>()),
+          );
         }
         return _ExpectedValue.either(alternatives);
       case 'i32':
@@ -1239,7 +1271,10 @@ final class _ScriptExecutionState {
     '000fffffffffffff',
     radix: 16,
   );
-  static final BigInt _f64QuietBit = BigInt.parse('0008000000000000', radix: 16);
+  static final BigInt _f64QuietBit = BigInt.parse(
+    '0008000000000000',
+    radix: 16,
+  );
 
   static bool _isF32NaNBits(int bits) {
     final normalized = bits.toUnsigned(32);
@@ -1864,6 +1899,7 @@ Future<void> _runVmMode(List<String> args) async {
 
   final results = <_FileResult>[];
   final reasonCounts = <String, int>{};
+  final skipReasonCounts = <String, int>{};
   final groupStats = <String, Map<String, int>>{};
 
   for (final file in selectedFiles) {
@@ -1878,6 +1914,7 @@ Future<void> _runVmMode(List<String> args) async {
       result,
       groupStats: groupStats,
       reasonCounts: reasonCounts,
+      skipReasonCounts: skipReasonCounts,
     );
   }
 
@@ -1901,6 +1938,7 @@ Future<void> _runVmMode(List<String> args) async {
     results: results,
     groupStats: groupStats,
     reasonCounts: reasonCounts,
+    skipReasonCounts: skipReasonCounts,
   );
 
   final jsonFile = File(outputJson);
@@ -2040,6 +2078,7 @@ Future<void> _runPlayerMode(String manifestPath) async {
     final startedAt = DateTime.now().toUtc();
     final results = <_FileResult>[];
     final reasonCounts = <String, int>{};
+    final skipReasonCounts = <String, int>{};
     final groupStats = <String, Map<String, int>>{};
 
     for (final rawEntry in entriesRaw) {
@@ -2086,6 +2125,7 @@ Future<void> _runPlayerMode(String manifestPath) async {
         result,
         groupStats: groupStats,
         reasonCounts: reasonCounts,
+        skipReasonCounts: skipReasonCounts,
       );
     }
 
@@ -2103,6 +2143,7 @@ Future<void> _runPlayerMode(String manifestPath) async {
       results: results,
       groupStats: groupStats,
       reasonCounts: reasonCounts,
+      skipReasonCounts: skipReasonCounts,
     );
 
     player_bridge.specSetResult(
@@ -2145,6 +2186,7 @@ Future<_FileResult> _runWastFile({
         commandsPassed: 0,
         commandsFailed: 1,
         commandsSkipped: 0,
+        skipReasonCounts: const <String, int>{},
         passed: false,
         firstFailureReason: 'wast-convert-failed',
         firstFailureDetails:
@@ -2166,6 +2208,7 @@ Future<_FileResult> _runWastFile({
         commandsPassed: 0,
         commandsFailed: 1,
         commandsSkipped: 0,
+        skipReasonCounts: const <String, int>{},
         passed: false,
         firstFailureReason: 'invalid-json-root',
         firstFailureDetails: 'converter output root is not an object',
@@ -2180,6 +2223,7 @@ Future<_FileResult> _runWastFile({
         commandsPassed: 0,
         commandsFailed: 1,
         commandsSkipped: 0,
+        skipReasonCounts: const <String, int>{},
         passed: false,
         firstFailureReason: 'invalid-commands',
         firstFailureDetails: 'converter output does not contain command list',
@@ -2211,6 +2255,7 @@ _FileResult _executeCommands({
   var commandsPassed = 0;
   var commandsFailed = 0;
   var commandsSkipped = 0;
+  final skipReasonCounts = <String, int>{};
   int? firstFailureLine;
   String? firstFailureReason;
   String? firstFailureDetails;
@@ -2229,6 +2274,8 @@ _FileResult _executeCommands({
     final outcome = state.executeCommand(command);
     if (outcome.skipped) {
       commandsSkipped++;
+      final reason = outcome.reason ?? 'unknown-skip';
+      skipReasonCounts[reason] = (skipReasonCounts[reason] ?? 0) + 1;
       continue;
     }
     if (outcome.passed) {
@@ -2250,6 +2297,7 @@ _FileResult _executeCommands({
     commandsPassed: commandsPassed,
     commandsFailed: commandsFailed,
     commandsSkipped: commandsSkipped,
+    skipReasonCounts: skipReasonCounts,
     passed: commandsFailed == 0,
     firstFailureLine: firstFailureLine,
     firstFailureReason: firstFailureReason,
@@ -2261,7 +2309,12 @@ void _accumulateStats(
   _FileResult result, {
   required Map<String, Map<String, int>> groupStats,
   required Map<String, int> reasonCounts,
+  required Map<String, int> skipReasonCounts,
 }) {
+  for (final entry in result.skipReasonCounts.entries) {
+    skipReasonCounts[entry.key] =
+        (skipReasonCounts[entry.key] ?? 0) + entry.value;
+  }
   final groupCounter = groupStats.putIfAbsent(
     result.group,
     () => <String, int>{'total': 0, 'passed': 0, 'failed': 0},
@@ -2287,6 +2340,7 @@ Map<String, Object?> _buildPayload({
   required List<_FileResult> results,
   required Map<String, Map<String, int>> groupStats,
   required Map<String, int> reasonCounts,
+  required Map<String, int> skipReasonCounts,
 }) {
   final filesPassed = results.where((r) => r.passed).length;
   final filesFailed = results.length - filesPassed;
@@ -2324,6 +2378,7 @@ Map<String, Object?> _buildPayload({
     },
     'group_stats': groupStats,
     'reason_counts': reasonCounts,
+    'skip_reason_counts': skipReasonCounts,
     'files': results.map((r) => r.toJson()).toList(growable: false),
   };
 }
@@ -2441,6 +2496,8 @@ String _renderMarkdown({
   final totals = payload['totals'] as Map<String, Object?>;
   final reasonCounts = (payload['reason_counts'] as Map)
       .cast<String, Object?>();
+  final skipReasonCounts = (payload['skip_reason_counts'] as Map)
+      .cast<String, Object?>();
   final suiteLabel = _suiteLabel(payload['suite'] as String?);
 
   final b = StringBuffer()
@@ -2487,6 +2544,19 @@ String _renderMarkdown({
     b.writeln('| Reason | Count |');
     b.writeln('| --- | ---: |');
     final sorted = reasonCounts.entries.toList()
+      ..sort((a, b) => (b.value as int).compareTo(a.value as int));
+    for (final entry in sorted) {
+      b.writeln('| ${entry.key} | ${entry.value} |');
+    }
+  }
+
+  if (skipReasonCounts.isNotEmpty) {
+    b.writeln();
+    b.writeln('## Top Skip Reasons');
+    b.writeln();
+    b.writeln('| Reason | Count |');
+    b.writeln('| --- | ---: |');
+    final sorted = skipReasonCounts.entries.toList()
       ..sort((a, b) => (b.value as int).compareTo(a.value as int));
     for (final entry in sorted) {
       b.writeln('| ${entry.key} | ${entry.value} |');

@@ -1,6 +1,6 @@
 # WASM Spec Update Report
 
-- Generated at (UTC): 2026-02-26T11:19:02.782646Z
+- Generated at (UTC): 2026-02-26T11:48:09.123564Z
 - Testsuite dir: `/Users/seven/workspace/wasd/third_party/wasm-spec-tests`
 - Local HEAD: `c337f0da6477acd40fbcab98671a68f59106ad86`
 - Remote HEAD: `c337f0da6477acd40fbcab98671a68f59106ad86`
