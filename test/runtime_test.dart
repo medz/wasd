@@ -1671,6 +1671,174 @@ void main() {
       expect(await instance.invokeI32Async('wrapReturnCallRef'), 9);
     });
 
+    test('supports legacy try/catch in async import call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([], []),
+          _funcType([], [0x7f]),
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 2),
+        ],
+        tagTypeIndices: const [0],
+        functionTypeIndices: const [1],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._i32Const(0),
+              ..._call(0),
+              Opcodes.drop,
+              Opcodes.tryLegacy,
+              0x7f,
+              Opcodes.throwTag,
+              ..._u32Leb(0),
+              Opcodes.catchTag,
+              ..._u32Leb(0),
+              ..._i32Const(23),
+              Opcodes.end,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'wrapLegacyCatch',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(exceptionHandling: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('wrapLegacyCatch'), 23);
+    });
+
+    test('supports legacy rethrow in async import call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([], []),
+          _funcType([], [0x7f]),
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 2),
+        ],
+        tagTypeIndices: const [0],
+        functionTypeIndices: const [1],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._i32Const(0),
+              ..._call(0),
+              Opcodes.drop,
+              Opcodes.tryLegacy,
+              0x7f,
+              Opcodes.tryLegacy,
+              0x7f,
+              Opcodes.throwTag,
+              ..._u32Leb(0),
+              Opcodes.catchTag,
+              ..._u32Leb(0),
+              Opcodes.rethrowTag,
+              ..._u32Leb(0),
+              Opcodes.end,
+              Opcodes.catchAll,
+              ..._i32Const(99),
+              Opcodes.end,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'wrapLegacyRethrow',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(exceptionHandling: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('wrapLegacyRethrow'), 99);
+    });
+
+    test('supports legacy delegate in async import call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([], []),
+          _funcType([], [0x7f]),
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 2),
+        ],
+        tagTypeIndices: const [0],
+        functionTypeIndices: const [1],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._i32Const(0),
+              ..._call(0),
+              Opcodes.drop,
+              Opcodes.tryLegacy,
+              0x7f,
+              Opcodes.tryLegacy,
+              0x7f,
+              Opcodes.throwTag,
+              ..._u32Leb(0),
+              Opcodes.delegate,
+              ..._u32Leb(0),
+              Opcodes.catchAll,
+              ..._i32Const(7),
+              Opcodes.end,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'wrapLegacyDelegate',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(exceptionHandling: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('wrapLegacyDelegate'), 7);
+    });
+
     test('supports atomic.fence in async import call chains', () async {
       final wasm = _buildModule(
         types: [

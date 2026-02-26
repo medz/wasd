@@ -17,16 +17,28 @@ import 'validator.dart';
 import 'value.dart';
 import 'vm.dart';
 
-enum _AsyncSubsetControlKind { block, loop, if_ }
+enum _AsyncSubsetControlKind { block, loop, if_, tryLegacy }
+
+final class _AsyncSubsetThrownException implements Exception {
+  _AsyncSubsetThrownException({
+    required this.nominalTypeKey,
+    required this.values,
+  });
+
+  final String nominalTypeKey;
+  final List<WasmValue> values;
+}
 
 final class _AsyncSubsetControlFrame {
-  const _AsyncSubsetControlFrame({
+  _AsyncSubsetControlFrame({
     required this.kind,
     required this.stackBaseHeight,
     required this.startIndex,
     required this.endIndex,
     required this.parameterTypes,
     required this.resultTypes,
+    this.legacyCatches,
+    this.delegateDepth,
   });
 
   final _AsyncSubsetControlKind kind;
@@ -35,6 +47,10 @@ final class _AsyncSubsetControlFrame {
   final int endIndex;
   final List<WasmValueType> parameterTypes;
   final List<WasmValueType> resultTypes;
+  final List<LegacyCatchClause>? legacyCatches;
+  final int? delegateDepth;
+  _AsyncSubsetThrownException? activeException;
+  int? activeCatchInstructionIndex;
 
   List<WasmValueType> get branchTypes =>
       kind == _AsyncSubsetControlKind.loop ? parameterTypes : resultTypes;
@@ -67,6 +83,8 @@ final class WasmInstance {
        _memoryExports = memoryExports,
        _tableExports = tableExports,
        _tagExports = tagExports,
+       _tagTypes = tagTypes,
+       _tagNominalTypeKeys = tagNominalTypeKeys,
        _globalTypes = globalTypes,
        _asyncDataSegments = dataSegments,
        _asyncElementSegments = elementSegments,
@@ -99,6 +117,8 @@ final class WasmInstance {
   final Map<String, WasmMemory> _memoryExports;
   final Map<String, WasmTable> _tableExports;
   final Map<String, WasmTagImport> _tagExports;
+  final List<WasmFunctionType> _tagTypes;
+  final List<String> _tagNominalTypeKeys;
   final List<WasmGlobalType> _globalTypes;
   final List<Uint8List?> _asyncDataSegments;
   final List<List<int?>?> _asyncElementSegments;
@@ -807,2852 +827,3193 @@ final class WasmInstance {
     var pc = 0;
     while (pc < instructions.length) {
       final instruction = instructions[pc];
-      switch (instruction.opcode) {
-        case Opcodes.unreachable:
-          throw StateError('unreachable trap');
+      try {
+        switch (instruction.opcode) {
+          case Opcodes.unreachable:
+            throw StateError('unreachable trap');
 
-        case Opcodes.nop:
-          pc++;
+          case Opcodes.nop:
+            pc++;
 
-        case Opcodes.localGet:
-          final index = instruction.immediate!;
-          if (index < 0 || index >= locals.length) {
-            throw RangeError('local.get index out of range: $index');
-          }
-          stack.add(locals[index]);
-          pc++;
+          case Opcodes.localGet:
+            final index = instruction.immediate!;
+            if (index < 0 || index >= locals.length) {
+              throw RangeError('local.get index out of range: $index');
+            }
+            stack.add(locals[index]);
+            pc++;
 
-        case Opcodes.localSet:
-          final index = instruction.immediate!;
-          if (index < 0 || index >= locals.length) {
-            throw RangeError('local.set index out of range: $index');
-          }
-          final value = _popValue(stack, 'local.set');
-          locals[index] = value.castTo(locals[index].type);
-          pc++;
+          case Opcodes.localSet:
+            final index = instruction.immediate!;
+            if (index < 0 || index >= locals.length) {
+              throw RangeError('local.set index out of range: $index');
+            }
+            final value = _popValue(stack, 'local.set');
+            locals[index] = value.castTo(locals[index].type);
+            pc++;
 
-        case Opcodes.localTee:
-          final index = instruction.immediate!;
-          if (index < 0 || index >= locals.length) {
-            throw RangeError('local.tee index out of range: $index');
-          }
-          final value = _popValue(stack, 'local.tee');
-          final cast = value.castTo(locals[index].type);
-          locals[index] = cast;
-          stack.add(cast);
-          pc++;
+          case Opcodes.localTee:
+            final index = instruction.immediate!;
+            if (index < 0 || index >= locals.length) {
+              throw RangeError('local.tee index out of range: $index');
+            }
+            final value = _popValue(stack, 'local.tee');
+            final cast = value.castTo(locals[index].type);
+            locals[index] = cast;
+            stack.add(cast);
+            pc++;
 
-        case Opcodes.globalGet:
-          final index = instruction.immediate!;
-          if (index < 0 || index >= globals.length) {
-            throw RangeError('global.get index out of range: $index');
-          }
-          stack.add(globals[index].value);
-          pc++;
+          case Opcodes.globalGet:
+            final index = instruction.immediate!;
+            if (index < 0 || index >= globals.length) {
+              throw RangeError('global.get index out of range: $index');
+            }
+            stack.add(globals[index].value);
+            pc++;
 
-        case Opcodes.globalSet:
-          final index = instruction.immediate!;
-          if (index < 0 || index >= globals.length) {
-            throw RangeError('global.set index out of range: $index');
-          }
-          final global = globals[index];
-          if (!global.mutable) {
-            throw StateError('Cannot mutate immutable global $index.');
-          }
-          final value = _popValue(stack, 'global.set').castTo(global.valueType);
-          global.setValue(value);
-          pc++;
+          case Opcodes.globalSet:
+            final index = instruction.immediate!;
+            if (index < 0 || index >= globals.length) {
+              throw RangeError('global.set index out of range: $index');
+            }
+            final global = globals[index];
+            if (!global.mutable) {
+              throw StateError('Cannot mutate immutable global $index.');
+            }
+            final value = _popValue(
+              stack,
+              'global.set',
+            ).castTo(global.valueType);
+            global.setValue(value);
+            pc++;
 
-        case Opcodes.tableGet:
-          final tableIndex = instruction.immediate!;
-          if (tableIndex < 0 || tableIndex >= tables.length) {
-            throw RangeError('table.get index out of range: $tableIndex');
-          }
-          final elementIndex = _popAsyncSubsetTableOperand(
-            stack,
-            tableIndex: tableIndex,
-            table64ByIndex: table64ByIndex,
-            context: 'table.get index',
-          );
-          final value = tables[tableIndex][elementIndex];
-          stack.add(WasmValue.i32(value ?? -1));
-          pc++;
+          case Opcodes.tableGet:
+            final tableIndex = instruction.immediate!;
+            if (tableIndex < 0 || tableIndex >= tables.length) {
+              throw RangeError('table.get index out of range: $tableIndex');
+            }
+            final elementIndex = _popAsyncSubsetTableOperand(
+              stack,
+              tableIndex: tableIndex,
+              table64ByIndex: table64ByIndex,
+              context: 'table.get index',
+            );
+            final value = tables[tableIndex][elementIndex];
+            stack.add(WasmValue.i32(value ?? -1));
+            pc++;
 
-        case Opcodes.tableSet:
-          final tableIndex = instruction.immediate!;
-          if (tableIndex < 0 || tableIndex >= tables.length) {
-            throw RangeError('table.set index out of range: $tableIndex');
-          }
-          final value = _popAsyncSubsetRef(stack, context: 'table.set value');
-          final elementIndex = _popAsyncSubsetTableOperand(
-            stack,
-            tableIndex: tableIndex,
-            table64ByIndex: table64ByIndex,
-            context: 'table.set index',
-          );
-          tables[tableIndex][elementIndex] = value;
-          pc++;
+          case Opcodes.tableSet:
+            final tableIndex = instruction.immediate!;
+            if (tableIndex < 0 || tableIndex >= tables.length) {
+              throw RangeError('table.set index out of range: $tableIndex');
+            }
+            final value = _popAsyncSubsetRef(stack, context: 'table.set value');
+            final elementIndex = _popAsyncSubsetTableOperand(
+              stack,
+              tableIndex: tableIndex,
+              table64ByIndex: table64ByIndex,
+              context: 'table.set index',
+            );
+            tables[tableIndex][elementIndex] = value;
+            pc++;
 
-        case Opcodes.drop:
-          _popValue(stack, 'drop');
-          pc++;
+          case Opcodes.drop:
+            _popValue(stack, 'drop');
+            pc++;
 
-        case Opcodes.select:
-        case Opcodes.selectT:
-          final condition = _popValue(
-            stack,
-            'select condition',
-          ).castTo(WasmValueType.i32).asI32();
-          final falseValue = _popValue(stack, 'select false');
-          final trueValue = _popValue(stack, 'select true');
-          if (falseValue.type != trueValue.type) {
-            throw StateError('select operands must have the same value type.');
-          }
-          stack.add(condition != 0 ? trueValue : falseValue);
-          pc++;
+          case Opcodes.select:
+          case Opcodes.selectT:
+            final condition = _popValue(
+              stack,
+              'select condition',
+            ).castTo(WasmValueType.i32).asI32();
+            final falseValue = _popValue(stack, 'select false');
+            final trueValue = _popValue(stack, 'select true');
+            if (falseValue.type != trueValue.type) {
+              throw StateError(
+                'select operands must have the same value type.',
+              );
+            }
+            stack.add(condition != 0 ? trueValue : falseValue);
+            pc++;
 
-        case Opcodes.i32Const:
-          stack.add(WasmValue.i32(instruction.immediate!));
-          pc++;
+          case Opcodes.i32Const:
+            stack.add(WasmValue.i32(instruction.immediate!));
+            pc++;
 
-        case Opcodes.i64Const:
-          final wideImmediate = instruction.wideImmediate;
-          if (wideImmediate == null) {
-            throw StateError('Malformed i64.const immediate.');
-          }
-          stack.add(WasmValue.i64(wideImmediate));
-          pc++;
+          case Opcodes.i64Const:
+            final wideImmediate = instruction.wideImmediate;
+            if (wideImmediate == null) {
+              throw StateError('Malformed i64.const immediate.');
+            }
+            stack.add(WasmValue.i64(wideImmediate));
+            pc++;
 
-        case Opcodes.refNull:
-          stack.add(WasmValue.i32(-1));
-          pc++;
+          case Opcodes.refNull:
+            stack.add(WasmValue.i32(-1));
+            pc++;
 
-        case Opcodes.refFunc:
-          final targetIndex = instruction.immediate!;
-          if (targetIndex < 0 || targetIndex >= functions.length) {
-            throw RangeError('ref.func target out of range: $targetIndex');
-          }
-          stack.add(
-            WasmValue.i32(
-              WasmVm.functionRefIdFor(
-                namespace: _functionRefNamespace,
-                functionIndex: targetIndex,
+          case Opcodes.refFunc:
+            final targetIndex = instruction.immediate!;
+            if (targetIndex < 0 || targetIndex >= functions.length) {
+              throw RangeError('ref.func target out of range: $targetIndex');
+            }
+            stack.add(
+              WasmValue.i32(
+                WasmVm.functionRefIdFor(
+                  namespace: _functionRefNamespace,
+                  functionIndex: targetIndex,
+                ),
               ),
-            ),
-          );
-          pc++;
+            );
+            pc++;
 
-        case Opcodes.refIsNull:
-          final reference = _popAsyncSubsetRef(
-            stack,
-            context: 'ref.is_null operand',
-          );
-          stack.add(WasmValue.i32(reference == null ? 1 : 0));
-          pc++;
+          case Opcodes.refIsNull:
+            final reference = _popAsyncSubsetRef(
+              stack,
+              context: 'ref.is_null operand',
+            );
+            stack.add(WasmValue.i32(reference == null ? 1 : 0));
+            pc++;
 
-        case Opcodes.refEq:
-          final rhs = _popAsyncSubsetRef(stack, context: 'ref.eq rhs');
-          final lhs = _popAsyncSubsetRef(stack, context: 'ref.eq lhs');
-          stack.add(WasmValue.i32(lhs == rhs ? 1 : 0));
-          pc++;
+          case Opcodes.refEq:
+            final rhs = _popAsyncSubsetRef(stack, context: 'ref.eq rhs');
+            final lhs = _popAsyncSubsetRef(stack, context: 'ref.eq lhs');
+            stack.add(WasmValue.i32(lhs == rhs ? 1 : 0));
+            pc++;
 
-        case Opcodes.refAsNonNull:
-          final reference = _popAsyncSubsetRef(
-            stack,
-            context: 'ref.as_non_null operand',
-          );
-          if (reference == null) {
-            throw StateError('null reference');
-          }
-          stack.add(WasmValue.i32(reference));
-          pc++;
+          case Opcodes.refAsNonNull:
+            final reference = _popAsyncSubsetRef(
+              stack,
+              context: 'ref.as_non_null operand',
+            );
+            if (reference == null) {
+              throw StateError('null reference');
+            }
+            stack.add(WasmValue.i32(reference));
+            pc++;
 
-        case Opcodes.f32Const:
-          final floatBytes = instruction.floatBytesImmediate;
-          if (floatBytes != null && floatBytes.length == 4) {
-            final bits = ByteData.sublistView(
-              floatBytes,
-            ).getUint32(0, Endian.little);
-            stack.add(WasmValue.f32Bits(bits));
-          } else {
-            stack.add(WasmValue.f32(instruction.floatImmediate!));
-          }
-          pc++;
+          case Opcodes.f32Const:
+            final floatBytes = instruction.floatBytesImmediate;
+            if (floatBytes != null && floatBytes.length == 4) {
+              final bits = ByteData.sublistView(
+                floatBytes,
+              ).getUint32(0, Endian.little);
+              stack.add(WasmValue.f32Bits(bits));
+            } else {
+              stack.add(WasmValue.f32(instruction.floatImmediate!));
+            }
+            pc++;
 
-        case Opcodes.f64Const:
-          final floatBytes = instruction.floatBytesImmediate;
-          if (floatBytes != null && floatBytes.length == 8) {
-            final data = ByteData.sublistView(floatBytes);
-            final low = data.getUint32(0, Endian.little);
-            final high = data.getUint32(4, Endian.little);
+          case Opcodes.f64Const:
+            final floatBytes = instruction.floatBytesImmediate;
+            if (floatBytes != null && floatBytes.length == 8) {
+              final data = ByteData.sublistView(floatBytes);
+              final low = data.getUint32(0, Endian.little);
+              final high = data.getUint32(4, Endian.little);
+              stack.add(
+                WasmValue.f64Bits(
+                  WasmI64.fromU32PairUnsigned(low: low, high: high),
+                ),
+              );
+            } else {
+              stack.add(WasmValue.f64(instruction.floatImmediate!));
+            }
+            pc++;
+
+          case Opcodes.i32Eqz:
+            final value = _popValue(stack, 'i32.eqz').castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(value.asI32() == 0 ? 1 : 0));
+            pc++;
+
+          case Opcodes.i32Eq:
+            final rhs = _popValue(
+              stack,
+              'i32.eq rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.eq lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(lhs.asI32() == rhs.asI32() ? 1 : 0));
+            pc++;
+
+          case Opcodes.i32Ne:
+            final rhs = _popValue(
+              stack,
+              'i32.ne rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.ne lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(lhs.asI32() != rhs.asI32() ? 1 : 0));
+            pc++;
+
+          case Opcodes.i32LtS:
+            final rhs = _popValue(
+              stack,
+              'i32.lt_s rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.lt_s lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(lhs.asI32() < rhs.asI32() ? 1 : 0));
+            pc++;
+
+          case Opcodes.i32LtU:
+            final rhs = _popValue(
+              stack,
+              'i32.lt_u rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.lt_u lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(
+              WasmValue.i32(
+                lhs.asI32().toUnsigned(32) < rhs.asI32().toUnsigned(32) ? 1 : 0,
+              ),
+            );
+            pc++;
+
+          case Opcodes.i32GtS:
+            final rhs = _popValue(
+              stack,
+              'i32.gt_s rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.gt_s lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(lhs.asI32() > rhs.asI32() ? 1 : 0));
+            pc++;
+
+          case Opcodes.i32GtU:
+            final rhs = _popValue(
+              stack,
+              'i32.gt_u rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.gt_u lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(
+              WasmValue.i32(
+                lhs.asI32().toUnsigned(32) > rhs.asI32().toUnsigned(32) ? 1 : 0,
+              ),
+            );
+            pc++;
+
+          case Opcodes.i32LeS:
+            final rhs = _popValue(
+              stack,
+              'i32.le_s rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.le_s lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(lhs.asI32() <= rhs.asI32() ? 1 : 0));
+            pc++;
+
+          case Opcodes.i32LeU:
+            final rhs = _popValue(
+              stack,
+              'i32.le_u rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.le_u lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(
+              WasmValue.i32(
+                lhs.asI32().toUnsigned(32) <= rhs.asI32().toUnsigned(32)
+                    ? 1
+                    : 0,
+              ),
+            );
+            pc++;
+
+          case Opcodes.i32GeS:
+            final rhs = _popValue(
+              stack,
+              'i32.ge_s rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.ge_s lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(lhs.asI32() >= rhs.asI32() ? 1 : 0));
+            pc++;
+
+          case Opcodes.i32GeU:
+            final rhs = _popValue(
+              stack,
+              'i32.ge_u rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.ge_u lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(
+              WasmValue.i32(
+                lhs.asI32().toUnsigned(32) >= rhs.asI32().toUnsigned(32)
+                    ? 1
+                    : 0,
+              ),
+            );
+            pc++;
+
+          case Opcodes.i32Add:
+            final rhs = _popValue(
+              stack,
+              'i32.add rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.add lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(lhs.asI32() + rhs.asI32()));
+            pc++;
+
+          case Opcodes.i32Sub:
+            final rhs = _popValue(
+              stack,
+              'i32.sub rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.sub lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(lhs.asI32() - rhs.asI32()));
+            pc++;
+
+          case Opcodes.i32Mul:
+            final rhs = _popValue(
+              stack,
+              'i32.mul rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.mul lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(lhs.asI32() * rhs.asI32()));
+            pc++;
+
+          case Opcodes.i32DivS:
+            final rhs = _popValue(
+              stack,
+              'i32.div_s rhs',
+            ).castTo(WasmValueType.i32).asI32();
+            final lhs = _popValue(
+              stack,
+              'i32.div_s lhs',
+            ).castTo(WasmValueType.i32).asI32();
+            if (rhs == 0) {
+              throw StateError('i32.div_s division by zero trap');
+            }
+            if (lhs == -2147483648 && rhs == -1) {
+              throw StateError('i32.div_s overflow trap');
+            }
+            stack.add(WasmValue.i32(lhs ~/ rhs));
+            pc++;
+
+          case Opcodes.i32DivU:
+            final rhs = _popValue(
+              stack,
+              'i32.div_u rhs',
+            ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+            final lhs = _popValue(
+              stack,
+              'i32.div_u lhs',
+            ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+            if (rhs == 0) {
+              throw StateError('i32.div_u division by zero trap');
+            }
+            stack.add(WasmValue.i32(lhs ~/ rhs));
+            pc++;
+
+          case Opcodes.i32RemS:
+            final rhs = _popValue(
+              stack,
+              'i32.rem_s rhs',
+            ).castTo(WasmValueType.i32).asI32();
+            final lhs = _popValue(
+              stack,
+              'i32.rem_s lhs',
+            ).castTo(WasmValueType.i32).asI32();
+            if (rhs == 0) {
+              throw StateError('i32.rem_s division by zero trap');
+            }
+            stack.add(WasmValue.i32(lhs.remainder(rhs)));
+            pc++;
+
+          case Opcodes.i32RemU:
+            final rhs = _popValue(
+              stack,
+              'i32.rem_u rhs',
+            ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+            final lhs = _popValue(
+              stack,
+              'i32.rem_u lhs',
+            ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+            if (rhs == 0) {
+              throw StateError('i32.rem_u division by zero trap');
+            }
+            stack.add(WasmValue.i32(lhs % rhs));
+            pc++;
+
+          case Opcodes.i32Clz:
+            final value = _popValue(stack, 'i32.clz').castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(_i32Clz(value.asI32())));
+            pc++;
+
+          case Opcodes.i32Ctz:
+            final value = _popValue(stack, 'i32.ctz').castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(_i32Ctz(value.asI32())));
+            pc++;
+
+          case Opcodes.i32Popcnt:
+            final value = _popValue(
+              stack,
+              'i32.popcnt',
+            ).castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(_i32Popcnt(value.asI32())));
+            pc++;
+
+          case Opcodes.i32And:
+            final rhs = _popValue(
+              stack,
+              'i32.and rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.and lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(lhs.asI32() & rhs.asI32()));
+            pc++;
+
+          case Opcodes.i32Or:
+            final rhs = _popValue(
+              stack,
+              'i32.or rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.or lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(lhs.asI32() | rhs.asI32()));
+            pc++;
+
+          case Opcodes.i32Xor:
+            final rhs = _popValue(
+              stack,
+              'i32.xor rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.xor lhs',
+            ).castTo(WasmValueType.i32);
+            stack.add(WasmValue.i32(lhs.asI32() ^ rhs.asI32()));
+            pc++;
+
+          case Opcodes.i32Shl:
+            final rhs = _popValue(
+              stack,
+              'i32.shl rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.shl lhs',
+            ).castTo(WasmValueType.i32);
+            final shift = rhs.asI32() & 31;
+            stack.add(WasmValue.i32(lhs.asI32() << shift));
+            pc++;
+
+          case Opcodes.i32ShrS:
+            final rhs = _popValue(
+              stack,
+              'i32.shr_s rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.shr_s lhs',
+            ).castTo(WasmValueType.i32);
+            final shift = rhs.asI32() & 31;
+            stack.add(WasmValue.i32(lhs.asI32() >> shift));
+            pc++;
+
+          case Opcodes.i32ShrU:
+            final rhs = _popValue(
+              stack,
+              'i32.shr_u rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.shr_u lhs',
+            ).castTo(WasmValueType.i32);
+            final shift = rhs.asI32() & 31;
+            stack.add(WasmValue.i32(lhs.asI32().toUnsigned(32) >> shift));
+            pc++;
+
+          case Opcodes.i32Rotl:
+            final rhs = _popValue(
+              stack,
+              'i32.rotl rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.rotl lhs',
+            ).castTo(WasmValueType.i32);
+            final shift = rhs.asI32() & 31;
+            final value = lhs.asI32().toUnsigned(32);
+            final rotated = shift == 0
+                ? value
+                : ((value << shift) | (value >> (32 - shift))).toUnsigned(32);
+            stack.add(WasmValue.i32(rotated));
+            pc++;
+
+          case Opcodes.i32Rotr:
+            final rhs = _popValue(
+              stack,
+              'i32.rotr rhs',
+            ).castTo(WasmValueType.i32);
+            final lhs = _popValue(
+              stack,
+              'i32.rotr lhs',
+            ).castTo(WasmValueType.i32);
+            final shift = rhs.asI32() & 31;
+            final value = lhs.asI32().toUnsigned(32);
+            final rotated = shift == 0
+                ? value
+                : ((value >> shift) | (value << (32 - shift))).toUnsigned(32);
+            stack.add(WasmValue.i32(rotated));
+            pc++;
+
+          case Opcodes.i64Eqz:
+            final value = _popValue(stack, 'i64.eqz').castTo(WasmValueType.i64);
+            stack.add(WasmValue.i32(value.asI64() == BigInt.zero ? 1 : 0));
+            pc++;
+
+          case Opcodes.i64Eq:
+            final rhs = _popValue(
+              stack,
+              'i64.eq rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.eq lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(WasmValue.i32(lhs.asI64() == rhs.asI64() ? 1 : 0));
+            pc++;
+
+          case Opcodes.i64Ne:
+            final rhs = _popValue(
+              stack,
+              'i64.ne rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.ne lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(WasmValue.i32(lhs.asI64() != rhs.asI64() ? 1 : 0));
+            pc++;
+
+          case Opcodes.i64LtS:
+            final rhs = _popValue(
+              stack,
+              'i64.lt_s rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.lt_s lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(
+              WasmValue.i32(lhs.asI64().compareTo(rhs.asI64()) < 0 ? 1 : 0),
+            );
+            pc++;
+
+          case Opcodes.i64LtU:
+            final rhs = _popValue(
+              stack,
+              'i64.lt_u rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.lt_u lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(
+              WasmValue.i32(
+                WasmI64.compareUnsigned(lhs.asI64(), rhs.asI64()) < 0 ? 1 : 0,
+              ),
+            );
+            pc++;
+
+          case Opcodes.i64GtS:
+            final rhs = _popValue(
+              stack,
+              'i64.gt_s rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.gt_s lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(
+              WasmValue.i32(lhs.asI64().compareTo(rhs.asI64()) > 0 ? 1 : 0),
+            );
+            pc++;
+
+          case Opcodes.i64GtU:
+            final rhs = _popValue(
+              stack,
+              'i64.gt_u rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.gt_u lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(
+              WasmValue.i32(
+                WasmI64.compareUnsigned(lhs.asI64(), rhs.asI64()) > 0 ? 1 : 0,
+              ),
+            );
+            pc++;
+
+          case Opcodes.i64LeS:
+            final rhs = _popValue(
+              stack,
+              'i64.le_s rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.le_s lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(
+              WasmValue.i32(lhs.asI64().compareTo(rhs.asI64()) <= 0 ? 1 : 0),
+            );
+            pc++;
+
+          case Opcodes.i64LeU:
+            final rhs = _popValue(
+              stack,
+              'i64.le_u rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.le_u lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(
+              WasmValue.i32(
+                WasmI64.compareUnsigned(lhs.asI64(), rhs.asI64()) <= 0 ? 1 : 0,
+              ),
+            );
+            pc++;
+
+          case Opcodes.i64GeS:
+            final rhs = _popValue(
+              stack,
+              'i64.ge_s rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.ge_s lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(
+              WasmValue.i32(lhs.asI64().compareTo(rhs.asI64()) >= 0 ? 1 : 0),
+            );
+            pc++;
+
+          case Opcodes.i64GeU:
+            final rhs = _popValue(
+              stack,
+              'i64.ge_u rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.ge_u lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(
+              WasmValue.i32(
+                WasmI64.compareUnsigned(lhs.asI64(), rhs.asI64()) >= 0 ? 1 : 0,
+              ),
+            );
+            pc++;
+
+          case Opcodes.f32Eq:
+            final rhs = _popValue(
+              stack,
+              'f32.eq rhs',
+            ).castTo(WasmValueType.f32);
+            final lhs = _popValue(
+              stack,
+              'f32.eq lhs',
+            ).castTo(WasmValueType.f32);
+            stack.add(WasmValue.i32(lhs.asF32() == rhs.asF32() ? 1 : 0));
+            pc++;
+
+          case Opcodes.f32Ne:
+            final rhs = _popValue(
+              stack,
+              'f32.ne rhs',
+            ).castTo(WasmValueType.f32);
+            final lhs = _popValue(
+              stack,
+              'f32.ne lhs',
+            ).castTo(WasmValueType.f32);
+            stack.add(WasmValue.i32(lhs.asF32() != rhs.asF32() ? 1 : 0));
+            pc++;
+
+          case Opcodes.f32Lt:
+            final rhs = _popValue(
+              stack,
+              'f32.lt rhs',
+            ).castTo(WasmValueType.f32);
+            final lhs = _popValue(
+              stack,
+              'f32.lt lhs',
+            ).castTo(WasmValueType.f32);
+            stack.add(WasmValue.i32(lhs.asF32() < rhs.asF32() ? 1 : 0));
+            pc++;
+
+          case Opcodes.f32Gt:
+            final rhs = _popValue(
+              stack,
+              'f32.gt rhs',
+            ).castTo(WasmValueType.f32);
+            final lhs = _popValue(
+              stack,
+              'f32.gt lhs',
+            ).castTo(WasmValueType.f32);
+            stack.add(WasmValue.i32(lhs.asF32() > rhs.asF32() ? 1 : 0));
+            pc++;
+
+          case Opcodes.f32Le:
+            final rhs = _popValue(
+              stack,
+              'f32.le rhs',
+            ).castTo(WasmValueType.f32);
+            final lhs = _popValue(
+              stack,
+              'f32.le lhs',
+            ).castTo(WasmValueType.f32);
+            stack.add(WasmValue.i32(lhs.asF32() <= rhs.asF32() ? 1 : 0));
+            pc++;
+
+          case Opcodes.f32Ge:
+            final rhs = _popValue(
+              stack,
+              'f32.ge rhs',
+            ).castTo(WasmValueType.f32);
+            final lhs = _popValue(
+              stack,
+              'f32.ge lhs',
+            ).castTo(WasmValueType.f32);
+            stack.add(WasmValue.i32(lhs.asF32() >= rhs.asF32() ? 1 : 0));
+            pc++;
+
+          case Opcodes.f64Eq:
+            final rhs = _popValue(
+              stack,
+              'f64.eq rhs',
+            ).castTo(WasmValueType.f64);
+            final lhs = _popValue(
+              stack,
+              'f64.eq lhs',
+            ).castTo(WasmValueType.f64);
+            stack.add(WasmValue.i32(lhs.asF64() == rhs.asF64() ? 1 : 0));
+            pc++;
+
+          case Opcodes.f64Ne:
+            final rhs = _popValue(
+              stack,
+              'f64.ne rhs',
+            ).castTo(WasmValueType.f64);
+            final lhs = _popValue(
+              stack,
+              'f64.ne lhs',
+            ).castTo(WasmValueType.f64);
+            stack.add(WasmValue.i32(lhs.asF64() != rhs.asF64() ? 1 : 0));
+            pc++;
+
+          case Opcodes.f64Lt:
+            final rhs = _popValue(
+              stack,
+              'f64.lt rhs',
+            ).castTo(WasmValueType.f64);
+            final lhs = _popValue(
+              stack,
+              'f64.lt lhs',
+            ).castTo(WasmValueType.f64);
+            stack.add(WasmValue.i32(lhs.asF64() < rhs.asF64() ? 1 : 0));
+            pc++;
+
+          case Opcodes.f64Gt:
+            final rhs = _popValue(
+              stack,
+              'f64.gt rhs',
+            ).castTo(WasmValueType.f64);
+            final lhs = _popValue(
+              stack,
+              'f64.gt lhs',
+            ).castTo(WasmValueType.f64);
+            stack.add(WasmValue.i32(lhs.asF64() > rhs.asF64() ? 1 : 0));
+            pc++;
+
+          case Opcodes.f64Le:
+            final rhs = _popValue(
+              stack,
+              'f64.le rhs',
+            ).castTo(WasmValueType.f64);
+            final lhs = _popValue(
+              stack,
+              'f64.le lhs',
+            ).castTo(WasmValueType.f64);
+            stack.add(WasmValue.i32(lhs.asF64() <= rhs.asF64() ? 1 : 0));
+            pc++;
+
+          case Opcodes.f64Ge:
+            final rhs = _popValue(
+              stack,
+              'f64.ge rhs',
+            ).castTo(WasmValueType.f64);
+            final lhs = _popValue(
+              stack,
+              'f64.ge lhs',
+            ).castTo(WasmValueType.f64);
+            stack.add(WasmValue.i32(lhs.asF64() >= rhs.asF64() ? 1 : 0));
+            pc++;
+
+          case Opcodes.i64Clz:
+            final value = _popValue(stack, 'i64.clz').castTo(WasmValueType.i64);
+            stack.add(WasmValue.i64(WasmI64.clz(value.asI64())));
+            pc++;
+
+          case Opcodes.i64Ctz:
+            final value = _popValue(stack, 'i64.ctz').castTo(WasmValueType.i64);
+            stack.add(WasmValue.i64(WasmI64.ctz(value.asI64())));
+            pc++;
+
+          case Opcodes.i64Popcnt:
+            final value = _popValue(
+              stack,
+              'i64.popcnt',
+            ).castTo(WasmValueType.i64);
+            stack.add(WasmValue.i64(WasmI64.popcnt(value.asI64())));
+            pc++;
+
+          case Opcodes.i64Add:
+            final rhs = _popValue(
+              stack,
+              'i64.add rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.add lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(WasmValue.i64(lhs.asI64() + rhs.asI64()));
+            pc++;
+
+          case Opcodes.i64Sub:
+            final rhs = _popValue(
+              stack,
+              'i64.sub rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.sub lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(WasmValue.i64(lhs.asI64() - rhs.asI64()));
+            pc++;
+
+          case Opcodes.i64Mul:
+            final rhs = _popValue(
+              stack,
+              'i64.mul rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.mul lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(WasmValue.i64(lhs.asI64() * rhs.asI64()));
+            pc++;
+
+          case Opcodes.i64DivS:
+            final rhs = _popValue(
+              stack,
+              'i64.div_s rhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final lhs = _popValue(
+              stack,
+              'i64.div_s lhs',
+            ).castTo(WasmValueType.i64).asI64();
+            if (rhs == BigInt.zero) {
+              throw StateError('i64.div_s division by zero trap');
+            }
+            if (lhs == WasmI64.minSigned && rhs == -BigInt.one) {
+              throw StateError('i64.div_s overflow trap');
+            }
+            stack.add(WasmValue.i64(WasmI64.divS(lhs, rhs)));
+            pc++;
+
+          case Opcodes.i64DivU:
+            final rhs = _popValue(
+              stack,
+              'i64.div_u rhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final lhs = _popValue(
+              stack,
+              'i64.div_u lhs',
+            ).castTo(WasmValueType.i64).asI64();
+            if (rhs == BigInt.zero) {
+              throw StateError('i64.div_u division by zero trap');
+            }
+            stack.add(WasmValue.i64(WasmI64.divU(lhs, rhs)));
+            pc++;
+
+          case Opcodes.i64RemS:
+            final rhs = _popValue(
+              stack,
+              'i64.rem_s rhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final lhs = _popValue(
+              stack,
+              'i64.rem_s lhs',
+            ).castTo(WasmValueType.i64).asI64();
+            if (rhs == BigInt.zero) {
+              throw StateError('i64.rem_s division by zero trap');
+            }
+            stack.add(WasmValue.i64(WasmI64.remS(lhs, rhs)));
+            pc++;
+
+          case Opcodes.i64RemU:
+            final rhs = _popValue(
+              stack,
+              'i64.rem_u rhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final lhs = _popValue(
+              stack,
+              'i64.rem_u lhs',
+            ).castTo(WasmValueType.i64).asI64();
+            if (rhs == BigInt.zero) {
+              throw StateError('i64.rem_u division by zero trap');
+            }
+            stack.add(WasmValue.i64(WasmI64.remU(lhs, rhs)));
+            pc++;
+
+          case Opcodes.i64And:
+            final rhs = _popValue(
+              stack,
+              'i64.and rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.and lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(WasmValue.i64(WasmI64.and(lhs.asI64(), rhs.asI64())));
+            pc++;
+
+          case Opcodes.i64Or:
+            final rhs = _popValue(
+              stack,
+              'i64.or rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.or lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(WasmValue.i64(WasmI64.or(lhs.asI64(), rhs.asI64())));
+            pc++;
+
+          case Opcodes.i64Xor:
+            final rhs = _popValue(
+              stack,
+              'i64.xor rhs',
+            ).castTo(WasmValueType.i64);
+            final lhs = _popValue(
+              stack,
+              'i64.xor lhs',
+            ).castTo(WasmValueType.i64);
+            stack.add(WasmValue.i64(WasmI64.xor(lhs.asI64(), rhs.asI64())));
+            pc++;
+
+          case Opcodes.i64Shl:
+            final rhs = _popValue(
+              stack,
+              'i64.shl rhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final lhs = _popValue(
+              stack,
+              'i64.shl lhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final shift = (rhs & BigInt.from(63)).toInt();
+            stack.add(WasmValue.i64(WasmI64.shl(lhs, shift)));
+            pc++;
+
+          case Opcodes.i64ShrS:
+            final rhs = _popValue(
+              stack,
+              'i64.shr_s rhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final lhs = _popValue(
+              stack,
+              'i64.shr_s lhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final shift = (rhs & BigInt.from(63)).toInt();
+            stack.add(WasmValue.i64(WasmI64.shrS(lhs, shift)));
+            pc++;
+
+          case Opcodes.i64ShrU:
+            final rhs = _popValue(
+              stack,
+              'i64.shr_u rhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final lhs = _popValue(
+              stack,
+              'i64.shr_u lhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final shift = (rhs & BigInt.from(63)).toInt();
+            stack.add(WasmValue.i64(WasmI64.shrU(lhs, shift)));
+            pc++;
+
+          case Opcodes.i64Rotl:
+            final rhs = _popValue(
+              stack,
+              'i64.rotl rhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final lhs = _popValue(
+              stack,
+              'i64.rotl lhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final shift = (rhs & BigInt.from(63)).toInt();
+            stack.add(WasmValue.i64(WasmI64.rotl(lhs, shift)));
+            pc++;
+
+          case Opcodes.i64Rotr:
+            final rhs = _popValue(
+              stack,
+              'i64.rotr rhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final lhs = _popValue(
+              stack,
+              'i64.rotr lhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final shift = (rhs & BigInt.from(63)).toInt();
+            stack.add(WasmValue.i64(WasmI64.rotr(lhs, shift)));
+            pc++;
+
+          case Opcodes.i32WrapI64:
+            final value = _popValue(
+              stack,
+              'i32.wrap_i64',
+            ).castTo(WasmValueType.i64).asI64();
+            stack.add(WasmValue.i32(WasmI64.lowU32(value).toSigned(32)));
+            pc++;
+
+          case Opcodes.i64ExtendI32S:
+            final value = _popValue(
+              stack,
+              'i64.extend_i32_s',
+            ).castTo(WasmValueType.i32).asI32();
+            stack.add(WasmValue.i64(value));
+            pc++;
+
+          case Opcodes.i64ExtendI32U:
+            final value = _popValue(
+              stack,
+              'i64.extend_i32_u',
+            ).castTo(WasmValueType.i32).asI32();
+            stack.add(WasmValue.i64(value.toUnsigned(32)));
+            pc++;
+
+          case Opcodes.i32ReinterpretF32:
+            final value = _popValue(
+              stack,
+              'i32.reinterpret_f32',
+            ).castTo(WasmValueType.f32).asF32Bits();
+            stack.add(WasmValue.i32(value));
+            pc++;
+
+          case Opcodes.i64ReinterpretF64:
+            final value = _popValue(
+              stack,
+              'i64.reinterpret_f64',
+            ).castTo(WasmValueType.f64).asF64Bits();
+            stack.add(WasmValue.i64(value));
+            pc++;
+
+          case Opcodes.f32ReinterpretI32:
+            final value = _popValue(
+              stack,
+              'f32.reinterpret_i32',
+            ).castTo(WasmValueType.i32).asI32();
+            stack.add(WasmValue.f32Bits(value.toUnsigned(32)));
+            pc++;
+
+          case Opcodes.f64ReinterpretI64:
+            final value = _popValue(
+              stack,
+              'f64.reinterpret_i64',
+            ).castTo(WasmValueType.i64).asI64();
+            stack.add(WasmValue.f64Bits(WasmI64.unsigned(value)));
+            pc++;
+
+          case Opcodes.i32Extend8S:
+            final value = _popValue(
+              stack,
+              'i32.extend8_s',
+            ).castTo(WasmValueType.i32).asI32();
+            stack.add(WasmValue.i32(value.toUnsigned(8).toSigned(8)));
+            pc++;
+
+          case Opcodes.i32Extend16S:
+            final value = _popValue(
+              stack,
+              'i32.extend16_s',
+            ).castTo(WasmValueType.i32).asI32();
+            stack.add(WasmValue.i32(value.toUnsigned(16).toSigned(16)));
+            pc++;
+
+          case Opcodes.i64Extend8S:
+            final value = _popValue(
+              stack,
+              'i64.extend8_s',
+            ).castTo(WasmValueType.i64).asI64();
+            stack.add(WasmValue.i64(WasmI64.signExtend(value, 8)));
+            pc++;
+
+          case Opcodes.i64Extend16S:
+            final value = _popValue(
+              stack,
+              'i64.extend16_s',
+            ).castTo(WasmValueType.i64).asI64();
+            stack.add(WasmValue.i64(WasmI64.signExtend(value, 16)));
+            pc++;
+
+          case Opcodes.i64Extend32S:
+            final value = _popValue(
+              stack,
+              'i64.extend32_s',
+            ).castTo(WasmValueType.i64).asI64();
+            stack.add(WasmValue.i64(WasmI64.signExtend(value, 32)));
+            pc++;
+
+          case Opcodes.i32TruncF32S:
+            final value = _popValue(
+              stack,
+              'i32.trunc_f32_s',
+            ).castTo(WasmValueType.f32).asF32();
+            stack.add(WasmValue.i32(_truncToI32S(value)));
+            pc++;
+
+          case Opcodes.i32TruncF32U:
+            final value = _popValue(
+              stack,
+              'i32.trunc_f32_u',
+            ).castTo(WasmValueType.f32).asF32();
+            stack.add(WasmValue.i32(_truncToI32U(value)));
+            pc++;
+
+          case Opcodes.i32TruncF64S:
+            final value = _popValue(
+              stack,
+              'i32.trunc_f64_s',
+            ).castTo(WasmValueType.f64).asF64();
+            stack.add(WasmValue.i32(_truncToI32S(value)));
+            pc++;
+
+          case Opcodes.i32TruncF64U:
+            final value = _popValue(
+              stack,
+              'i32.trunc_f64_u',
+            ).castTo(WasmValueType.f64).asF64();
+            stack.add(WasmValue.i32(_truncToI32U(value)));
+            pc++;
+
+          case Opcodes.i64TruncF32S:
+            final value = _popValue(
+              stack,
+              'i64.trunc_f32_s',
+            ).castTo(WasmValueType.f32).asF32();
+            stack.add(WasmValue.i64(_truncToI64S(value)));
+            pc++;
+
+          case Opcodes.i64TruncF32U:
+            final value = _popValue(
+              stack,
+              'i64.trunc_f32_u',
+            ).castTo(WasmValueType.f32).asF32();
+            stack.add(WasmValue.i64(WasmI64.signed(_truncToI64U(value))));
+            pc++;
+
+          case Opcodes.i64TruncF64S:
+            final value = _popValue(
+              stack,
+              'i64.trunc_f64_s',
+            ).castTo(WasmValueType.f64).asF64();
+            stack.add(WasmValue.i64(_truncToI64S(value)));
+            pc++;
+
+          case Opcodes.i64TruncF64U:
+            final value = _popValue(
+              stack,
+              'i64.trunc_f64_u',
+            ).castTo(WasmValueType.f64).asF64();
+            stack.add(WasmValue.i64(WasmI64.signed(_truncToI64U(value))));
+            pc++;
+
+          case Opcodes.i32TruncSatF32S:
+            final value = _popValue(
+              stack,
+              'i32.trunc_sat_f32_s',
+            ).castTo(WasmValueType.f32).asF32();
+            stack.add(WasmValue.i32(_truncSatToI32S(value)));
+            pc++;
+
+          case Opcodes.i32TruncSatF32U:
+            final value = _popValue(
+              stack,
+              'i32.trunc_sat_f32_u',
+            ).castTo(WasmValueType.f32).asF32();
+            stack.add(WasmValue.i32(_truncSatToI32U(value)));
+            pc++;
+
+          case Opcodes.i32TruncSatF64S:
+            final value = _popValue(
+              stack,
+              'i32.trunc_sat_f64_s',
+            ).castTo(WasmValueType.f64).asF64();
+            stack.add(WasmValue.i32(_truncSatToI32S(value)));
+            pc++;
+
+          case Opcodes.i32TruncSatF64U:
+            final value = _popValue(
+              stack,
+              'i32.trunc_sat_f64_u',
+            ).castTo(WasmValueType.f64).asF64();
+            stack.add(WasmValue.i32(_truncSatToI32U(value)));
+            pc++;
+
+          case Opcodes.i64TruncSatF32S:
+            final value = _popValue(
+              stack,
+              'i64.trunc_sat_f32_s',
+            ).castTo(WasmValueType.f32).asF32();
+            stack.add(WasmValue.i64(_truncSatToI64S(value)));
+            pc++;
+
+          case Opcodes.i64TruncSatF32U:
+            final value = _popValue(
+              stack,
+              'i64.trunc_sat_f32_u',
+            ).castTo(WasmValueType.f32).asF32();
+            stack.add(WasmValue.i64(_truncSatToI64U(value)));
+            pc++;
+
+          case Opcodes.i64TruncSatF64S:
+            final value = _popValue(
+              stack,
+              'i64.trunc_sat_f64_s',
+            ).castTo(WasmValueType.f64).asF64();
+            stack.add(WasmValue.i64(_truncSatToI64S(value)));
+            pc++;
+
+          case Opcodes.i64TruncSatF64U:
+            final value = _popValue(
+              stack,
+              'i64.trunc_sat_f64_u',
+            ).castTo(WasmValueType.f64).asF64();
+            stack.add(WasmValue.i64(_truncSatToI64U(value)));
+            pc++;
+
+          case Opcodes.i64Add128:
+            final rhsHigh = WasmI64.unsigned(
+              _popValue(
+                stack,
+                'i64.add128 rhs high',
+              ).castTo(WasmValueType.i64).asI64(),
+            );
+            final rhsLow = WasmI64.unsigned(
+              _popValue(
+                stack,
+                'i64.add128 rhs low',
+              ).castTo(WasmValueType.i64).asI64(),
+            );
+            final lhsHigh = WasmI64.unsigned(
+              _popValue(
+                stack,
+                'i64.add128 lhs high',
+              ).castTo(WasmValueType.i64).asI64(),
+            );
+            final lhsLow = WasmI64.unsigned(
+              _popValue(
+                stack,
+                'i64.add128 lhs low',
+              ).castTo(WasmValueType.i64).asI64(),
+            );
+            final lhs = (lhsHigh << 64) | lhsLow;
+            final rhs = (rhsHigh << 64) | rhsLow;
+            _pushAsyncSubsetI128Result(stack, lhs + rhs);
+            pc++;
+
+          case Opcodes.i64Sub128:
+            final rhsHigh = WasmI64.unsigned(
+              _popValue(
+                stack,
+                'i64.sub128 rhs high',
+              ).castTo(WasmValueType.i64).asI64(),
+            );
+            final rhsLow = WasmI64.unsigned(
+              _popValue(
+                stack,
+                'i64.sub128 rhs low',
+              ).castTo(WasmValueType.i64).asI64(),
+            );
+            final lhsHigh = WasmI64.unsigned(
+              _popValue(
+                stack,
+                'i64.sub128 lhs high',
+              ).castTo(WasmValueType.i64).asI64(),
+            );
+            final lhsLow = WasmI64.unsigned(
+              _popValue(
+                stack,
+                'i64.sub128 lhs low',
+              ).castTo(WasmValueType.i64).asI64(),
+            );
+            final lhs = (lhsHigh << 64) | lhsLow;
+            final rhs = (rhsHigh << 64) | rhsLow;
+            _pushAsyncSubsetI128Result(stack, lhs - rhs);
+            pc++;
+
+          case Opcodes.i64MulWideS:
+            final rhs = _popValue(
+              stack,
+              'i64.mul_wide_s rhs',
+            ).castTo(WasmValueType.i64).asI64();
+            final lhs = _popValue(
+              stack,
+              'i64.mul_wide_s lhs',
+            ).castTo(WasmValueType.i64).asI64();
+            _pushAsyncSubsetI128Result(stack, lhs * rhs);
+            pc++;
+
+          case Opcodes.i64MulWideU:
+            final rhs = WasmI64.unsigned(
+              _popValue(
+                stack,
+                'i64.mul_wide_u rhs',
+              ).castTo(WasmValueType.i64).asI64(),
+            );
+            final lhs = WasmI64.unsigned(
+              _popValue(
+                stack,
+                'i64.mul_wide_u lhs',
+              ).castTo(WasmValueType.i64).asI64(),
+            );
+            _pushAsyncSubsetI128Result(stack, lhs * rhs);
+            pc++;
+
+          case Opcodes.f32ConvertI32S:
+            final value = _popValue(
+              stack,
+              'f32.convert_i32_s',
+            ).castTo(WasmValueType.i32).asI32();
+            stack.add(WasmValue.f32(value.toDouble()));
+            pc++;
+
+          case Opcodes.f32ConvertI32U:
+            final value = _popValue(
+              stack,
+              'f32.convert_i32_u',
+            ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+            stack.add(WasmValue.f32(value.toDouble()));
+            pc++;
+
+          case Opcodes.f32ConvertI64S:
+            final value = _popValue(
+              stack,
+              'f32.convert_i64_s',
+            ).castTo(WasmValueType.i64).asI64();
+            stack.add(WasmValue.f32(_f32FromInteger(value)));
+            pc++;
+
+          case Opcodes.f32ConvertI64U:
+            final value = _popValue(
+              stack,
+              'f32.convert_i64_u',
+            ).castTo(WasmValueType.i64).asI64();
+            stack.add(WasmValue.f32(_f32FromInteger(WasmI64.unsigned(value))));
+            pc++;
+
+          case Opcodes.f32DemoteF64:
+            final value = _popValue(
+              stack,
+              'f32.demote_f64',
+            ).castTo(WasmValueType.f64).asF64();
+            stack.add(WasmValue.f32(value));
+            pc++;
+
+          case Opcodes.f64ConvertI32S:
+            final value = _popValue(
+              stack,
+              'f64.convert_i32_s',
+            ).castTo(WasmValueType.i32).asI32();
+            stack.add(WasmValue.f64(value.toDouble()));
+            pc++;
+
+          case Opcodes.f64ConvertI32U:
+            final value = _popValue(
+              stack,
+              'f64.convert_i32_u',
+            ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+            stack.add(WasmValue.f64(value.toDouble()));
+            pc++;
+
+          case Opcodes.f64ConvertI64S:
+            final value = _popValue(
+              stack,
+              'f64.convert_i64_s',
+            ).castTo(WasmValueType.i64).asI64();
+            stack.add(WasmValue.f64(value.toDouble()));
+            pc++;
+
+          case Opcodes.f64ConvertI64U:
+            final value = _popValue(
+              stack,
+              'f64.convert_i64_u',
+            ).castTo(WasmValueType.i64).asI64();
+            stack.add(WasmValue.f64(WasmI64.unsignedToDouble(value)));
+            pc++;
+
+          case Opcodes.f64PromoteF32:
+            final value = _popValue(
+              stack,
+              'f64.promote_f32',
+            ).castTo(WasmValueType.f32).asF32();
+            stack.add(WasmValue.f64(value));
+            pc++;
+
+          case Opcodes.f32Abs:
+            final bits = _popValue(
+              stack,
+              'f32.abs',
+            ).castTo(WasmValueType.f32).asF32Bits();
+            stack.add(WasmValue.f32Bits(bits & 0x7fffffff));
+            pc++;
+
+          case Opcodes.f32Neg:
+            final bits = _popValue(
+              stack,
+              'f32.neg',
+            ).castTo(WasmValueType.f32).asF32Bits();
+            stack.add(WasmValue.f32Bits(bits ^ 0x80000000));
+            pc++;
+
+          case Opcodes.f32Ceil:
+            final value = _popValue(
+              stack,
+              'f32.ceil',
+            ).castTo(WasmValueType.f32).asF32();
+            stack.add(WasmValue.f32(value.ceilToDouble()));
+            pc++;
+
+          case Opcodes.f32Floor:
+            final value = _popValue(
+              stack,
+              'f32.floor',
+            ).castTo(WasmValueType.f32).asF32();
+            stack.add(WasmValue.f32(value.floorToDouble()));
+            pc++;
+
+          case Opcodes.f32Trunc:
+            final value = _popValue(
+              stack,
+              'f32.trunc',
+            ).castTo(WasmValueType.f32).asF32();
+            stack.add(WasmValue.f32(value.truncateToDouble()));
+            pc++;
+
+          case Opcodes.f32Nearest:
+            final value = _popValue(
+              stack,
+              'f32.nearest',
+            ).castTo(WasmValueType.f32).asF32();
+            stack.add(WasmValue.f32(_nearest(value)));
+            pc++;
+
+          case Opcodes.f32Sqrt:
+            final value = _popValue(
+              stack,
+              'f32.sqrt',
+            ).castTo(WasmValueType.f32).asF32();
+            stack.add(WasmValue.f32(math.sqrt(value)));
+            pc++;
+
+          case Opcodes.f32Add:
+            final rhs = _popValue(
+              stack,
+              'f32.add rhs',
+            ).castTo(WasmValueType.f32);
+            final lhs = _popValue(
+              stack,
+              'f32.add lhs',
+            ).castTo(WasmValueType.f32);
+            stack.add(WasmValue.f32(lhs.asF32() + rhs.asF32()));
+            pc++;
+
+          case Opcodes.f32Sub:
+            final rhs = _popValue(
+              stack,
+              'f32.sub rhs',
+            ).castTo(WasmValueType.f32);
+            final lhs = _popValue(
+              stack,
+              'f32.sub lhs',
+            ).castTo(WasmValueType.f32);
+            stack.add(WasmValue.f32(lhs.asF32() - rhs.asF32()));
+            pc++;
+
+          case Opcodes.f32Mul:
+            final rhs = _popValue(
+              stack,
+              'f32.mul rhs',
+            ).castTo(WasmValueType.f32);
+            final lhs = _popValue(
+              stack,
+              'f32.mul lhs',
+            ).castTo(WasmValueType.f32);
+            stack.add(WasmValue.f32(lhs.asF32() * rhs.asF32()));
+            pc++;
+
+          case Opcodes.f32Div:
+            final rhs = _popValue(
+              stack,
+              'f32.div rhs',
+            ).castTo(WasmValueType.f32);
+            final lhs = _popValue(
+              stack,
+              'f32.div lhs',
+            ).castTo(WasmValueType.f32);
+            stack.add(WasmValue.f32(lhs.asF32() / rhs.asF32()));
+            pc++;
+
+          case Opcodes.f32Min:
+            final rhs = _popValue(
+              stack,
+              'f32.min rhs',
+            ).castTo(WasmValueType.f32);
+            final lhs = _popValue(
+              stack,
+              'f32.min lhs',
+            ).castTo(WasmValueType.f32);
+            stack.add(WasmValue.f32(_fMin(lhs.asF32(), rhs.asF32())));
+            pc++;
+
+          case Opcodes.f32Max:
+            final rhs = _popValue(
+              stack,
+              'f32.max rhs',
+            ).castTo(WasmValueType.f32);
+            final lhs = _popValue(
+              stack,
+              'f32.max lhs',
+            ).castTo(WasmValueType.f32);
+            stack.add(WasmValue.f32(_fMax(lhs.asF32(), rhs.asF32())));
+            pc++;
+
+          case Opcodes.f32CopySign:
+            final rhsBits = _popValue(
+              stack,
+              'f32.copysign rhs',
+            ).castTo(WasmValueType.f32).asF32Bits();
+            final lhsBits = _popValue(
+              stack,
+              'f32.copysign lhs',
+            ).castTo(WasmValueType.f32).asF32Bits();
+            stack.add(
+              WasmValue.f32Bits(
+                (lhsBits & 0x7fffffff) | (rhsBits & 0x80000000),
+              ),
+            );
+            pc++;
+
+          case Opcodes.f64Abs:
+            final bits = _popValue(
+              stack,
+              'f64.abs',
+            ).castTo(WasmValueType.f64).asF64Bits();
             stack.add(
               WasmValue.f64Bits(
-                WasmI64.fromU32PairUnsigned(low: low, high: high),
+                bits & BigInt.parse('7fffffffffffffff', radix: 16),
               ),
             );
-          } else {
-            stack.add(WasmValue.f64(instruction.floatImmediate!));
-          }
-          pc++;
+            pc++;
 
-        case Opcodes.i32Eqz:
-          final value = _popValue(stack, 'i32.eqz').castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(value.asI32() == 0 ? 1 : 0));
-          pc++;
-
-        case Opcodes.i32Eq:
-          final rhs = _popValue(stack, 'i32.eq rhs').castTo(WasmValueType.i32);
-          final lhs = _popValue(stack, 'i32.eq lhs').castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(lhs.asI32() == rhs.asI32() ? 1 : 0));
-          pc++;
-
-        case Opcodes.i32Ne:
-          final rhs = _popValue(stack, 'i32.ne rhs').castTo(WasmValueType.i32);
-          final lhs = _popValue(stack, 'i32.ne lhs').castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(lhs.asI32() != rhs.asI32() ? 1 : 0));
-          pc++;
-
-        case Opcodes.i32LtS:
-          final rhs = _popValue(
-            stack,
-            'i32.lt_s rhs',
-          ).castTo(WasmValueType.i32);
-          final lhs = _popValue(
-            stack,
-            'i32.lt_s lhs',
-          ).castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(lhs.asI32() < rhs.asI32() ? 1 : 0));
-          pc++;
-
-        case Opcodes.i32LtU:
-          final rhs = _popValue(
-            stack,
-            'i32.lt_u rhs',
-          ).castTo(WasmValueType.i32);
-          final lhs = _popValue(
-            stack,
-            'i32.lt_u lhs',
-          ).castTo(WasmValueType.i32);
-          stack.add(
-            WasmValue.i32(
-              lhs.asI32().toUnsigned(32) < rhs.asI32().toUnsigned(32) ? 1 : 0,
-            ),
-          );
-          pc++;
-
-        case Opcodes.i32GtS:
-          final rhs = _popValue(
-            stack,
-            'i32.gt_s rhs',
-          ).castTo(WasmValueType.i32);
-          final lhs = _popValue(
-            stack,
-            'i32.gt_s lhs',
-          ).castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(lhs.asI32() > rhs.asI32() ? 1 : 0));
-          pc++;
-
-        case Opcodes.i32GtU:
-          final rhs = _popValue(
-            stack,
-            'i32.gt_u rhs',
-          ).castTo(WasmValueType.i32);
-          final lhs = _popValue(
-            stack,
-            'i32.gt_u lhs',
-          ).castTo(WasmValueType.i32);
-          stack.add(
-            WasmValue.i32(
-              lhs.asI32().toUnsigned(32) > rhs.asI32().toUnsigned(32) ? 1 : 0,
-            ),
-          );
-          pc++;
-
-        case Opcodes.i32LeS:
-          final rhs = _popValue(
-            stack,
-            'i32.le_s rhs',
-          ).castTo(WasmValueType.i32);
-          final lhs = _popValue(
-            stack,
-            'i32.le_s lhs',
-          ).castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(lhs.asI32() <= rhs.asI32() ? 1 : 0));
-          pc++;
-
-        case Opcodes.i32LeU:
-          final rhs = _popValue(
-            stack,
-            'i32.le_u rhs',
-          ).castTo(WasmValueType.i32);
-          final lhs = _popValue(
-            stack,
-            'i32.le_u lhs',
-          ).castTo(WasmValueType.i32);
-          stack.add(
-            WasmValue.i32(
-              lhs.asI32().toUnsigned(32) <= rhs.asI32().toUnsigned(32) ? 1 : 0,
-            ),
-          );
-          pc++;
-
-        case Opcodes.i32GeS:
-          final rhs = _popValue(
-            stack,
-            'i32.ge_s rhs',
-          ).castTo(WasmValueType.i32);
-          final lhs = _popValue(
-            stack,
-            'i32.ge_s lhs',
-          ).castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(lhs.asI32() >= rhs.asI32() ? 1 : 0));
-          pc++;
-
-        case Opcodes.i32GeU:
-          final rhs = _popValue(
-            stack,
-            'i32.ge_u rhs',
-          ).castTo(WasmValueType.i32);
-          final lhs = _popValue(
-            stack,
-            'i32.ge_u lhs',
-          ).castTo(WasmValueType.i32);
-          stack.add(
-            WasmValue.i32(
-              lhs.asI32().toUnsigned(32) >= rhs.asI32().toUnsigned(32) ? 1 : 0,
-            ),
-          );
-          pc++;
-
-        case Opcodes.i32Add:
-          final rhs = _popValue(stack, 'i32.add rhs').castTo(WasmValueType.i32);
-          final lhs = _popValue(stack, 'i32.add lhs').castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(lhs.asI32() + rhs.asI32()));
-          pc++;
-
-        case Opcodes.i32Sub:
-          final rhs = _popValue(stack, 'i32.sub rhs').castTo(WasmValueType.i32);
-          final lhs = _popValue(stack, 'i32.sub lhs').castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(lhs.asI32() - rhs.asI32()));
-          pc++;
-
-        case Opcodes.i32Mul:
-          final rhs = _popValue(stack, 'i32.mul rhs').castTo(WasmValueType.i32);
-          final lhs = _popValue(stack, 'i32.mul lhs').castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(lhs.asI32() * rhs.asI32()));
-          pc++;
-
-        case Opcodes.i32DivS:
-          final rhs = _popValue(
-            stack,
-            'i32.div_s rhs',
-          ).castTo(WasmValueType.i32).asI32();
-          final lhs = _popValue(
-            stack,
-            'i32.div_s lhs',
-          ).castTo(WasmValueType.i32).asI32();
-          if (rhs == 0) {
-            throw StateError('i32.div_s division by zero trap');
-          }
-          if (lhs == -2147483648 && rhs == -1) {
-            throw StateError('i32.div_s overflow trap');
-          }
-          stack.add(WasmValue.i32(lhs ~/ rhs));
-          pc++;
-
-        case Opcodes.i32DivU:
-          final rhs = _popValue(
-            stack,
-            'i32.div_u rhs',
-          ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
-          final lhs = _popValue(
-            stack,
-            'i32.div_u lhs',
-          ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
-          if (rhs == 0) {
-            throw StateError('i32.div_u division by zero trap');
-          }
-          stack.add(WasmValue.i32(lhs ~/ rhs));
-          pc++;
-
-        case Opcodes.i32RemS:
-          final rhs = _popValue(
-            stack,
-            'i32.rem_s rhs',
-          ).castTo(WasmValueType.i32).asI32();
-          final lhs = _popValue(
-            stack,
-            'i32.rem_s lhs',
-          ).castTo(WasmValueType.i32).asI32();
-          if (rhs == 0) {
-            throw StateError('i32.rem_s division by zero trap');
-          }
-          stack.add(WasmValue.i32(lhs.remainder(rhs)));
-          pc++;
-
-        case Opcodes.i32RemU:
-          final rhs = _popValue(
-            stack,
-            'i32.rem_u rhs',
-          ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
-          final lhs = _popValue(
-            stack,
-            'i32.rem_u lhs',
-          ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
-          if (rhs == 0) {
-            throw StateError('i32.rem_u division by zero trap');
-          }
-          stack.add(WasmValue.i32(lhs % rhs));
-          pc++;
-
-        case Opcodes.i32Clz:
-          final value = _popValue(stack, 'i32.clz').castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(_i32Clz(value.asI32())));
-          pc++;
-
-        case Opcodes.i32Ctz:
-          final value = _popValue(stack, 'i32.ctz').castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(_i32Ctz(value.asI32())));
-          pc++;
-
-        case Opcodes.i32Popcnt:
-          final value = _popValue(
-            stack,
-            'i32.popcnt',
-          ).castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(_i32Popcnt(value.asI32())));
-          pc++;
-
-        case Opcodes.i32And:
-          final rhs = _popValue(stack, 'i32.and rhs').castTo(WasmValueType.i32);
-          final lhs = _popValue(stack, 'i32.and lhs').castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(lhs.asI32() & rhs.asI32()));
-          pc++;
-
-        case Opcodes.i32Or:
-          final rhs = _popValue(stack, 'i32.or rhs').castTo(WasmValueType.i32);
-          final lhs = _popValue(stack, 'i32.or lhs').castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(lhs.asI32() | rhs.asI32()));
-          pc++;
-
-        case Opcodes.i32Xor:
-          final rhs = _popValue(stack, 'i32.xor rhs').castTo(WasmValueType.i32);
-          final lhs = _popValue(stack, 'i32.xor lhs').castTo(WasmValueType.i32);
-          stack.add(WasmValue.i32(lhs.asI32() ^ rhs.asI32()));
-          pc++;
-
-        case Opcodes.i32Shl:
-          final rhs = _popValue(stack, 'i32.shl rhs').castTo(WasmValueType.i32);
-          final lhs = _popValue(stack, 'i32.shl lhs').castTo(WasmValueType.i32);
-          final shift = rhs.asI32() & 31;
-          stack.add(WasmValue.i32(lhs.asI32() << shift));
-          pc++;
-
-        case Opcodes.i32ShrS:
-          final rhs = _popValue(
-            stack,
-            'i32.shr_s rhs',
-          ).castTo(WasmValueType.i32);
-          final lhs = _popValue(
-            stack,
-            'i32.shr_s lhs',
-          ).castTo(WasmValueType.i32);
-          final shift = rhs.asI32() & 31;
-          stack.add(WasmValue.i32(lhs.asI32() >> shift));
-          pc++;
-
-        case Opcodes.i32ShrU:
-          final rhs = _popValue(
-            stack,
-            'i32.shr_u rhs',
-          ).castTo(WasmValueType.i32);
-          final lhs = _popValue(
-            stack,
-            'i32.shr_u lhs',
-          ).castTo(WasmValueType.i32);
-          final shift = rhs.asI32() & 31;
-          stack.add(WasmValue.i32(lhs.asI32().toUnsigned(32) >> shift));
-          pc++;
-
-        case Opcodes.i32Rotl:
-          final rhs = _popValue(
-            stack,
-            'i32.rotl rhs',
-          ).castTo(WasmValueType.i32);
-          final lhs = _popValue(
-            stack,
-            'i32.rotl lhs',
-          ).castTo(WasmValueType.i32);
-          final shift = rhs.asI32() & 31;
-          final value = lhs.asI32().toUnsigned(32);
-          final rotated = shift == 0
-              ? value
-              : ((value << shift) | (value >> (32 - shift))).toUnsigned(32);
-          stack.add(WasmValue.i32(rotated));
-          pc++;
-
-        case Opcodes.i32Rotr:
-          final rhs = _popValue(
-            stack,
-            'i32.rotr rhs',
-          ).castTo(WasmValueType.i32);
-          final lhs = _popValue(
-            stack,
-            'i32.rotr lhs',
-          ).castTo(WasmValueType.i32);
-          final shift = rhs.asI32() & 31;
-          final value = lhs.asI32().toUnsigned(32);
-          final rotated = shift == 0
-              ? value
-              : ((value >> shift) | (value << (32 - shift))).toUnsigned(32);
-          stack.add(WasmValue.i32(rotated));
-          pc++;
-
-        case Opcodes.i64Eqz:
-          final value = _popValue(stack, 'i64.eqz').castTo(WasmValueType.i64);
-          stack.add(WasmValue.i32(value.asI64() == BigInt.zero ? 1 : 0));
-          pc++;
-
-        case Opcodes.i64Eq:
-          final rhs = _popValue(stack, 'i64.eq rhs').castTo(WasmValueType.i64);
-          final lhs = _popValue(stack, 'i64.eq lhs').castTo(WasmValueType.i64);
-          stack.add(WasmValue.i32(lhs.asI64() == rhs.asI64() ? 1 : 0));
-          pc++;
-
-        case Opcodes.i64Ne:
-          final rhs = _popValue(stack, 'i64.ne rhs').castTo(WasmValueType.i64);
-          final lhs = _popValue(stack, 'i64.ne lhs').castTo(WasmValueType.i64);
-          stack.add(WasmValue.i32(lhs.asI64() != rhs.asI64() ? 1 : 0));
-          pc++;
-
-        case Opcodes.i64LtS:
-          final rhs = _popValue(
-            stack,
-            'i64.lt_s rhs',
-          ).castTo(WasmValueType.i64);
-          final lhs = _popValue(
-            stack,
-            'i64.lt_s lhs',
-          ).castTo(WasmValueType.i64);
-          stack.add(
-            WasmValue.i32(lhs.asI64().compareTo(rhs.asI64()) < 0 ? 1 : 0),
-          );
-          pc++;
-
-        case Opcodes.i64LtU:
-          final rhs = _popValue(
-            stack,
-            'i64.lt_u rhs',
-          ).castTo(WasmValueType.i64);
-          final lhs = _popValue(
-            stack,
-            'i64.lt_u lhs',
-          ).castTo(WasmValueType.i64);
-          stack.add(
-            WasmValue.i32(
-              WasmI64.compareUnsigned(lhs.asI64(), rhs.asI64()) < 0 ? 1 : 0,
-            ),
-          );
-          pc++;
-
-        case Opcodes.i64GtS:
-          final rhs = _popValue(
-            stack,
-            'i64.gt_s rhs',
-          ).castTo(WasmValueType.i64);
-          final lhs = _popValue(
-            stack,
-            'i64.gt_s lhs',
-          ).castTo(WasmValueType.i64);
-          stack.add(
-            WasmValue.i32(lhs.asI64().compareTo(rhs.asI64()) > 0 ? 1 : 0),
-          );
-          pc++;
-
-        case Opcodes.i64GtU:
-          final rhs = _popValue(
-            stack,
-            'i64.gt_u rhs',
-          ).castTo(WasmValueType.i64);
-          final lhs = _popValue(
-            stack,
-            'i64.gt_u lhs',
-          ).castTo(WasmValueType.i64);
-          stack.add(
-            WasmValue.i32(
-              WasmI64.compareUnsigned(lhs.asI64(), rhs.asI64()) > 0 ? 1 : 0,
-            ),
-          );
-          pc++;
-
-        case Opcodes.i64LeS:
-          final rhs = _popValue(
-            stack,
-            'i64.le_s rhs',
-          ).castTo(WasmValueType.i64);
-          final lhs = _popValue(
-            stack,
-            'i64.le_s lhs',
-          ).castTo(WasmValueType.i64);
-          stack.add(
-            WasmValue.i32(lhs.asI64().compareTo(rhs.asI64()) <= 0 ? 1 : 0),
-          );
-          pc++;
-
-        case Opcodes.i64LeU:
-          final rhs = _popValue(
-            stack,
-            'i64.le_u rhs',
-          ).castTo(WasmValueType.i64);
-          final lhs = _popValue(
-            stack,
-            'i64.le_u lhs',
-          ).castTo(WasmValueType.i64);
-          stack.add(
-            WasmValue.i32(
-              WasmI64.compareUnsigned(lhs.asI64(), rhs.asI64()) <= 0 ? 1 : 0,
-            ),
-          );
-          pc++;
-
-        case Opcodes.i64GeS:
-          final rhs = _popValue(
-            stack,
-            'i64.ge_s rhs',
-          ).castTo(WasmValueType.i64);
-          final lhs = _popValue(
-            stack,
-            'i64.ge_s lhs',
-          ).castTo(WasmValueType.i64);
-          stack.add(
-            WasmValue.i32(lhs.asI64().compareTo(rhs.asI64()) >= 0 ? 1 : 0),
-          );
-          pc++;
-
-        case Opcodes.i64GeU:
-          final rhs = _popValue(
-            stack,
-            'i64.ge_u rhs',
-          ).castTo(WasmValueType.i64);
-          final lhs = _popValue(
-            stack,
-            'i64.ge_u lhs',
-          ).castTo(WasmValueType.i64);
-          stack.add(
-            WasmValue.i32(
-              WasmI64.compareUnsigned(lhs.asI64(), rhs.asI64()) >= 0 ? 1 : 0,
-            ),
-          );
-          pc++;
-
-        case Opcodes.f32Eq:
-          final rhs = _popValue(stack, 'f32.eq rhs').castTo(WasmValueType.f32);
-          final lhs = _popValue(stack, 'f32.eq lhs').castTo(WasmValueType.f32);
-          stack.add(WasmValue.i32(lhs.asF32() == rhs.asF32() ? 1 : 0));
-          pc++;
-
-        case Opcodes.f32Ne:
-          final rhs = _popValue(stack, 'f32.ne rhs').castTo(WasmValueType.f32);
-          final lhs = _popValue(stack, 'f32.ne lhs').castTo(WasmValueType.f32);
-          stack.add(WasmValue.i32(lhs.asF32() != rhs.asF32() ? 1 : 0));
-          pc++;
-
-        case Opcodes.f32Lt:
-          final rhs = _popValue(stack, 'f32.lt rhs').castTo(WasmValueType.f32);
-          final lhs = _popValue(stack, 'f32.lt lhs').castTo(WasmValueType.f32);
-          stack.add(WasmValue.i32(lhs.asF32() < rhs.asF32() ? 1 : 0));
-          pc++;
-
-        case Opcodes.f32Gt:
-          final rhs = _popValue(stack, 'f32.gt rhs').castTo(WasmValueType.f32);
-          final lhs = _popValue(stack, 'f32.gt lhs').castTo(WasmValueType.f32);
-          stack.add(WasmValue.i32(lhs.asF32() > rhs.asF32() ? 1 : 0));
-          pc++;
-
-        case Opcodes.f32Le:
-          final rhs = _popValue(stack, 'f32.le rhs').castTo(WasmValueType.f32);
-          final lhs = _popValue(stack, 'f32.le lhs').castTo(WasmValueType.f32);
-          stack.add(WasmValue.i32(lhs.asF32() <= rhs.asF32() ? 1 : 0));
-          pc++;
-
-        case Opcodes.f32Ge:
-          final rhs = _popValue(stack, 'f32.ge rhs').castTo(WasmValueType.f32);
-          final lhs = _popValue(stack, 'f32.ge lhs').castTo(WasmValueType.f32);
-          stack.add(WasmValue.i32(lhs.asF32() >= rhs.asF32() ? 1 : 0));
-          pc++;
-
-        case Opcodes.f64Eq:
-          final rhs = _popValue(stack, 'f64.eq rhs').castTo(WasmValueType.f64);
-          final lhs = _popValue(stack, 'f64.eq lhs').castTo(WasmValueType.f64);
-          stack.add(WasmValue.i32(lhs.asF64() == rhs.asF64() ? 1 : 0));
-          pc++;
-
-        case Opcodes.f64Ne:
-          final rhs = _popValue(stack, 'f64.ne rhs').castTo(WasmValueType.f64);
-          final lhs = _popValue(stack, 'f64.ne lhs').castTo(WasmValueType.f64);
-          stack.add(WasmValue.i32(lhs.asF64() != rhs.asF64() ? 1 : 0));
-          pc++;
-
-        case Opcodes.f64Lt:
-          final rhs = _popValue(stack, 'f64.lt rhs').castTo(WasmValueType.f64);
-          final lhs = _popValue(stack, 'f64.lt lhs').castTo(WasmValueType.f64);
-          stack.add(WasmValue.i32(lhs.asF64() < rhs.asF64() ? 1 : 0));
-          pc++;
-
-        case Opcodes.f64Gt:
-          final rhs = _popValue(stack, 'f64.gt rhs').castTo(WasmValueType.f64);
-          final lhs = _popValue(stack, 'f64.gt lhs').castTo(WasmValueType.f64);
-          stack.add(WasmValue.i32(lhs.asF64() > rhs.asF64() ? 1 : 0));
-          pc++;
-
-        case Opcodes.f64Le:
-          final rhs = _popValue(stack, 'f64.le rhs').castTo(WasmValueType.f64);
-          final lhs = _popValue(stack, 'f64.le lhs').castTo(WasmValueType.f64);
-          stack.add(WasmValue.i32(lhs.asF64() <= rhs.asF64() ? 1 : 0));
-          pc++;
-
-        case Opcodes.f64Ge:
-          final rhs = _popValue(stack, 'f64.ge rhs').castTo(WasmValueType.f64);
-          final lhs = _popValue(stack, 'f64.ge lhs').castTo(WasmValueType.f64);
-          stack.add(WasmValue.i32(lhs.asF64() >= rhs.asF64() ? 1 : 0));
-          pc++;
-
-        case Opcodes.i64Clz:
-          final value = _popValue(stack, 'i64.clz').castTo(WasmValueType.i64);
-          stack.add(WasmValue.i64(WasmI64.clz(value.asI64())));
-          pc++;
-
-        case Opcodes.i64Ctz:
-          final value = _popValue(stack, 'i64.ctz').castTo(WasmValueType.i64);
-          stack.add(WasmValue.i64(WasmI64.ctz(value.asI64())));
-          pc++;
-
-        case Opcodes.i64Popcnt:
-          final value = _popValue(
-            stack,
-            'i64.popcnt',
-          ).castTo(WasmValueType.i64);
-          stack.add(WasmValue.i64(WasmI64.popcnt(value.asI64())));
-          pc++;
-
-        case Opcodes.i64Add:
-          final rhs = _popValue(stack, 'i64.add rhs').castTo(WasmValueType.i64);
-          final lhs = _popValue(stack, 'i64.add lhs').castTo(WasmValueType.i64);
-          stack.add(WasmValue.i64(lhs.asI64() + rhs.asI64()));
-          pc++;
-
-        case Opcodes.i64Sub:
-          final rhs = _popValue(stack, 'i64.sub rhs').castTo(WasmValueType.i64);
-          final lhs = _popValue(stack, 'i64.sub lhs').castTo(WasmValueType.i64);
-          stack.add(WasmValue.i64(lhs.asI64() - rhs.asI64()));
-          pc++;
-
-        case Opcodes.i64Mul:
-          final rhs = _popValue(stack, 'i64.mul rhs').castTo(WasmValueType.i64);
-          final lhs = _popValue(stack, 'i64.mul lhs').castTo(WasmValueType.i64);
-          stack.add(WasmValue.i64(lhs.asI64() * rhs.asI64()));
-          pc++;
-
-        case Opcodes.i64DivS:
-          final rhs = _popValue(
-            stack,
-            'i64.div_s rhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final lhs = _popValue(
-            stack,
-            'i64.div_s lhs',
-          ).castTo(WasmValueType.i64).asI64();
-          if (rhs == BigInt.zero) {
-            throw StateError('i64.div_s division by zero trap');
-          }
-          if (lhs == WasmI64.minSigned && rhs == -BigInt.one) {
-            throw StateError('i64.div_s overflow trap');
-          }
-          stack.add(WasmValue.i64(WasmI64.divS(lhs, rhs)));
-          pc++;
-
-        case Opcodes.i64DivU:
-          final rhs = _popValue(
-            stack,
-            'i64.div_u rhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final lhs = _popValue(
-            stack,
-            'i64.div_u lhs',
-          ).castTo(WasmValueType.i64).asI64();
-          if (rhs == BigInt.zero) {
-            throw StateError('i64.div_u division by zero trap');
-          }
-          stack.add(WasmValue.i64(WasmI64.divU(lhs, rhs)));
-          pc++;
-
-        case Opcodes.i64RemS:
-          final rhs = _popValue(
-            stack,
-            'i64.rem_s rhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final lhs = _popValue(
-            stack,
-            'i64.rem_s lhs',
-          ).castTo(WasmValueType.i64).asI64();
-          if (rhs == BigInt.zero) {
-            throw StateError('i64.rem_s division by zero trap');
-          }
-          stack.add(WasmValue.i64(WasmI64.remS(lhs, rhs)));
-          pc++;
-
-        case Opcodes.i64RemU:
-          final rhs = _popValue(
-            stack,
-            'i64.rem_u rhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final lhs = _popValue(
-            stack,
-            'i64.rem_u lhs',
-          ).castTo(WasmValueType.i64).asI64();
-          if (rhs == BigInt.zero) {
-            throw StateError('i64.rem_u division by zero trap');
-          }
-          stack.add(WasmValue.i64(WasmI64.remU(lhs, rhs)));
-          pc++;
-
-        case Opcodes.i64And:
-          final rhs = _popValue(stack, 'i64.and rhs').castTo(WasmValueType.i64);
-          final lhs = _popValue(stack, 'i64.and lhs').castTo(WasmValueType.i64);
-          stack.add(WasmValue.i64(WasmI64.and(lhs.asI64(), rhs.asI64())));
-          pc++;
-
-        case Opcodes.i64Or:
-          final rhs = _popValue(stack, 'i64.or rhs').castTo(WasmValueType.i64);
-          final lhs = _popValue(stack, 'i64.or lhs').castTo(WasmValueType.i64);
-          stack.add(WasmValue.i64(WasmI64.or(lhs.asI64(), rhs.asI64())));
-          pc++;
-
-        case Opcodes.i64Xor:
-          final rhs = _popValue(stack, 'i64.xor rhs').castTo(WasmValueType.i64);
-          final lhs = _popValue(stack, 'i64.xor lhs').castTo(WasmValueType.i64);
-          stack.add(WasmValue.i64(WasmI64.xor(lhs.asI64(), rhs.asI64())));
-          pc++;
-
-        case Opcodes.i64Shl:
-          final rhs = _popValue(
-            stack,
-            'i64.shl rhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final lhs = _popValue(
-            stack,
-            'i64.shl lhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final shift = (rhs & BigInt.from(63)).toInt();
-          stack.add(WasmValue.i64(WasmI64.shl(lhs, shift)));
-          pc++;
-
-        case Opcodes.i64ShrS:
-          final rhs = _popValue(
-            stack,
-            'i64.shr_s rhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final lhs = _popValue(
-            stack,
-            'i64.shr_s lhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final shift = (rhs & BigInt.from(63)).toInt();
-          stack.add(WasmValue.i64(WasmI64.shrS(lhs, shift)));
-          pc++;
-
-        case Opcodes.i64ShrU:
-          final rhs = _popValue(
-            stack,
-            'i64.shr_u rhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final lhs = _popValue(
-            stack,
-            'i64.shr_u lhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final shift = (rhs & BigInt.from(63)).toInt();
-          stack.add(WasmValue.i64(WasmI64.shrU(lhs, shift)));
-          pc++;
-
-        case Opcodes.i64Rotl:
-          final rhs = _popValue(
-            stack,
-            'i64.rotl rhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final lhs = _popValue(
-            stack,
-            'i64.rotl lhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final shift = (rhs & BigInt.from(63)).toInt();
-          stack.add(WasmValue.i64(WasmI64.rotl(lhs, shift)));
-          pc++;
-
-        case Opcodes.i64Rotr:
-          final rhs = _popValue(
-            stack,
-            'i64.rotr rhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final lhs = _popValue(
-            stack,
-            'i64.rotr lhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final shift = (rhs & BigInt.from(63)).toInt();
-          stack.add(WasmValue.i64(WasmI64.rotr(lhs, shift)));
-          pc++;
-
-        case Opcodes.i32WrapI64:
-          final value = _popValue(
-            stack,
-            'i32.wrap_i64',
-          ).castTo(WasmValueType.i64).asI64();
-          stack.add(WasmValue.i32(WasmI64.lowU32(value).toSigned(32)));
-          pc++;
-
-        case Opcodes.i64ExtendI32S:
-          final value = _popValue(
-            stack,
-            'i64.extend_i32_s',
-          ).castTo(WasmValueType.i32).asI32();
-          stack.add(WasmValue.i64(value));
-          pc++;
-
-        case Opcodes.i64ExtendI32U:
-          final value = _popValue(
-            stack,
-            'i64.extend_i32_u',
-          ).castTo(WasmValueType.i32).asI32();
-          stack.add(WasmValue.i64(value.toUnsigned(32)));
-          pc++;
-
-        case Opcodes.i32ReinterpretF32:
-          final value = _popValue(
-            stack,
-            'i32.reinterpret_f32',
-          ).castTo(WasmValueType.f32).asF32Bits();
-          stack.add(WasmValue.i32(value));
-          pc++;
-
-        case Opcodes.i64ReinterpretF64:
-          final value = _popValue(
-            stack,
-            'i64.reinterpret_f64',
-          ).castTo(WasmValueType.f64).asF64Bits();
-          stack.add(WasmValue.i64(value));
-          pc++;
-
-        case Opcodes.f32ReinterpretI32:
-          final value = _popValue(
-            stack,
-            'f32.reinterpret_i32',
-          ).castTo(WasmValueType.i32).asI32();
-          stack.add(WasmValue.f32Bits(value.toUnsigned(32)));
-          pc++;
-
-        case Opcodes.f64ReinterpretI64:
-          final value = _popValue(
-            stack,
-            'f64.reinterpret_i64',
-          ).castTo(WasmValueType.i64).asI64();
-          stack.add(WasmValue.f64Bits(WasmI64.unsigned(value)));
-          pc++;
-
-        case Opcodes.i32Extend8S:
-          final value = _popValue(
-            stack,
-            'i32.extend8_s',
-          ).castTo(WasmValueType.i32).asI32();
-          stack.add(WasmValue.i32(value.toUnsigned(8).toSigned(8)));
-          pc++;
-
-        case Opcodes.i32Extend16S:
-          final value = _popValue(
-            stack,
-            'i32.extend16_s',
-          ).castTo(WasmValueType.i32).asI32();
-          stack.add(WasmValue.i32(value.toUnsigned(16).toSigned(16)));
-          pc++;
-
-        case Opcodes.i64Extend8S:
-          final value = _popValue(
-            stack,
-            'i64.extend8_s',
-          ).castTo(WasmValueType.i64).asI64();
-          stack.add(WasmValue.i64(WasmI64.signExtend(value, 8)));
-          pc++;
-
-        case Opcodes.i64Extend16S:
-          final value = _popValue(
-            stack,
-            'i64.extend16_s',
-          ).castTo(WasmValueType.i64).asI64();
-          stack.add(WasmValue.i64(WasmI64.signExtend(value, 16)));
-          pc++;
-
-        case Opcodes.i64Extend32S:
-          final value = _popValue(
-            stack,
-            'i64.extend32_s',
-          ).castTo(WasmValueType.i64).asI64();
-          stack.add(WasmValue.i64(WasmI64.signExtend(value, 32)));
-          pc++;
-
-        case Opcodes.i32TruncF32S:
-          final value = _popValue(
-            stack,
-            'i32.trunc_f32_s',
-          ).castTo(WasmValueType.f32).asF32();
-          stack.add(WasmValue.i32(_truncToI32S(value)));
-          pc++;
-
-        case Opcodes.i32TruncF32U:
-          final value = _popValue(
-            stack,
-            'i32.trunc_f32_u',
-          ).castTo(WasmValueType.f32).asF32();
-          stack.add(WasmValue.i32(_truncToI32U(value)));
-          pc++;
-
-        case Opcodes.i32TruncF64S:
-          final value = _popValue(
-            stack,
-            'i32.trunc_f64_s',
-          ).castTo(WasmValueType.f64).asF64();
-          stack.add(WasmValue.i32(_truncToI32S(value)));
-          pc++;
-
-        case Opcodes.i32TruncF64U:
-          final value = _popValue(
-            stack,
-            'i32.trunc_f64_u',
-          ).castTo(WasmValueType.f64).asF64();
-          stack.add(WasmValue.i32(_truncToI32U(value)));
-          pc++;
-
-        case Opcodes.i64TruncF32S:
-          final value = _popValue(
-            stack,
-            'i64.trunc_f32_s',
-          ).castTo(WasmValueType.f32).asF32();
-          stack.add(WasmValue.i64(_truncToI64S(value)));
-          pc++;
-
-        case Opcodes.i64TruncF32U:
-          final value = _popValue(
-            stack,
-            'i64.trunc_f32_u',
-          ).castTo(WasmValueType.f32).asF32();
-          stack.add(WasmValue.i64(WasmI64.signed(_truncToI64U(value))));
-          pc++;
-
-        case Opcodes.i64TruncF64S:
-          final value = _popValue(
-            stack,
-            'i64.trunc_f64_s',
-          ).castTo(WasmValueType.f64).asF64();
-          stack.add(WasmValue.i64(_truncToI64S(value)));
-          pc++;
-
-        case Opcodes.i64TruncF64U:
-          final value = _popValue(
-            stack,
-            'i64.trunc_f64_u',
-          ).castTo(WasmValueType.f64).asF64();
-          stack.add(WasmValue.i64(WasmI64.signed(_truncToI64U(value))));
-          pc++;
-
-        case Opcodes.i32TruncSatF32S:
-          final value = _popValue(
-            stack,
-            'i32.trunc_sat_f32_s',
-          ).castTo(WasmValueType.f32).asF32();
-          stack.add(WasmValue.i32(_truncSatToI32S(value)));
-          pc++;
-
-        case Opcodes.i32TruncSatF32U:
-          final value = _popValue(
-            stack,
-            'i32.trunc_sat_f32_u',
-          ).castTo(WasmValueType.f32).asF32();
-          stack.add(WasmValue.i32(_truncSatToI32U(value)));
-          pc++;
-
-        case Opcodes.i32TruncSatF64S:
-          final value = _popValue(
-            stack,
-            'i32.trunc_sat_f64_s',
-          ).castTo(WasmValueType.f64).asF64();
-          stack.add(WasmValue.i32(_truncSatToI32S(value)));
-          pc++;
-
-        case Opcodes.i32TruncSatF64U:
-          final value = _popValue(
-            stack,
-            'i32.trunc_sat_f64_u',
-          ).castTo(WasmValueType.f64).asF64();
-          stack.add(WasmValue.i32(_truncSatToI32U(value)));
-          pc++;
-
-        case Opcodes.i64TruncSatF32S:
-          final value = _popValue(
-            stack,
-            'i64.trunc_sat_f32_s',
-          ).castTo(WasmValueType.f32).asF32();
-          stack.add(WasmValue.i64(_truncSatToI64S(value)));
-          pc++;
-
-        case Opcodes.i64TruncSatF32U:
-          final value = _popValue(
-            stack,
-            'i64.trunc_sat_f32_u',
-          ).castTo(WasmValueType.f32).asF32();
-          stack.add(WasmValue.i64(_truncSatToI64U(value)));
-          pc++;
-
-        case Opcodes.i64TruncSatF64S:
-          final value = _popValue(
-            stack,
-            'i64.trunc_sat_f64_s',
-          ).castTo(WasmValueType.f64).asF64();
-          stack.add(WasmValue.i64(_truncSatToI64S(value)));
-          pc++;
-
-        case Opcodes.i64TruncSatF64U:
-          final value = _popValue(
-            stack,
-            'i64.trunc_sat_f64_u',
-          ).castTo(WasmValueType.f64).asF64();
-          stack.add(WasmValue.i64(_truncSatToI64U(value)));
-          pc++;
-
-        case Opcodes.i64Add128:
-          final rhsHigh = WasmI64.unsigned(
-            _popValue(
+          case Opcodes.f64Neg:
+            final bits = _popValue(
               stack,
-              'i64.add128 rhs high',
-            ).castTo(WasmValueType.i64).asI64(),
-          );
-          final rhsLow = WasmI64.unsigned(
-            _popValue(
+              'f64.neg',
+            ).castTo(WasmValueType.f64).asF64Bits();
+            stack.add(
+              WasmValue.f64Bits(
+                bits ^ BigInt.parse('8000000000000000', radix: 16),
+              ),
+            );
+            pc++;
+
+          case Opcodes.f64Ceil:
+            final value = _popValue(
               stack,
-              'i64.add128 rhs low',
-            ).castTo(WasmValueType.i64).asI64(),
-          );
-          final lhsHigh = WasmI64.unsigned(
-            _popValue(
+              'f64.ceil',
+            ).castTo(WasmValueType.f64).asF64();
+            stack.add(WasmValue.f64(value.ceilToDouble()));
+            pc++;
+
+          case Opcodes.f64Floor:
+            final value = _popValue(
               stack,
-              'i64.add128 lhs high',
-            ).castTo(WasmValueType.i64).asI64(),
-          );
-          final lhsLow = WasmI64.unsigned(
-            _popValue(
+              'f64.floor',
+            ).castTo(WasmValueType.f64).asF64();
+            stack.add(WasmValue.f64(value.floorToDouble()));
+            pc++;
+
+          case Opcodes.f64Trunc:
+            final value = _popValue(
               stack,
-              'i64.add128 lhs low',
-            ).castTo(WasmValueType.i64).asI64(),
-          );
-          final lhs = (lhsHigh << 64) | lhsLow;
-          final rhs = (rhsHigh << 64) | rhsLow;
-          _pushAsyncSubsetI128Result(stack, lhs + rhs);
-          pc++;
+              'f64.trunc',
+            ).castTo(WasmValueType.f64).asF64();
+            stack.add(WasmValue.f64(value.truncateToDouble()));
+            pc++;
 
-        case Opcodes.i64Sub128:
-          final rhsHigh = WasmI64.unsigned(
-            _popValue(
+          case Opcodes.f64Nearest:
+            final value = _popValue(
               stack,
-              'i64.sub128 rhs high',
-            ).castTo(WasmValueType.i64).asI64(),
-          );
-          final rhsLow = WasmI64.unsigned(
-            _popValue(
+              'f64.nearest',
+            ).castTo(WasmValueType.f64).asF64();
+            stack.add(WasmValue.f64(_nearest(value)));
+            pc++;
+
+          case Opcodes.f64Sqrt:
+            final value = _popValue(
               stack,
-              'i64.sub128 rhs low',
-            ).castTo(WasmValueType.i64).asI64(),
-          );
-          final lhsHigh = WasmI64.unsigned(
-            _popValue(
+              'f64.sqrt',
+            ).castTo(WasmValueType.f64).asF64();
+            stack.add(WasmValue.f64(math.sqrt(value)));
+            pc++;
+
+          case Opcodes.f64Add:
+            final rhs = _popValue(
               stack,
-              'i64.sub128 lhs high',
-            ).castTo(WasmValueType.i64).asI64(),
-          );
-          final lhsLow = WasmI64.unsigned(
-            _popValue(
+              'f64.add rhs',
+            ).castTo(WasmValueType.f64);
+            final lhs = _popValue(
               stack,
-              'i64.sub128 lhs low',
-            ).castTo(WasmValueType.i64).asI64(),
-          );
-          final lhs = (lhsHigh << 64) | lhsLow;
-          final rhs = (rhsHigh << 64) | rhsLow;
-          _pushAsyncSubsetI128Result(stack, lhs - rhs);
-          pc++;
+              'f64.add lhs',
+            ).castTo(WasmValueType.f64);
+            stack.add(WasmValue.f64(lhs.asF64() + rhs.asF64()));
+            pc++;
 
-        case Opcodes.i64MulWideS:
-          final rhs = _popValue(
-            stack,
-            'i64.mul_wide_s rhs',
-          ).castTo(WasmValueType.i64).asI64();
-          final lhs = _popValue(
-            stack,
-            'i64.mul_wide_s lhs',
-          ).castTo(WasmValueType.i64).asI64();
-          _pushAsyncSubsetI128Result(stack, lhs * rhs);
-          pc++;
-
-        case Opcodes.i64MulWideU:
-          final rhs = WasmI64.unsigned(
-            _popValue(
+          case Opcodes.f64Sub:
+            final rhs = _popValue(
               stack,
-              'i64.mul_wide_u rhs',
-            ).castTo(WasmValueType.i64).asI64(),
-          );
-          final lhs = WasmI64.unsigned(
-            _popValue(
+              'f64.sub rhs',
+            ).castTo(WasmValueType.f64);
+            final lhs = _popValue(
               stack,
-              'i64.mul_wide_u lhs',
-            ).castTo(WasmValueType.i64).asI64(),
-          );
-          _pushAsyncSubsetI128Result(stack, lhs * rhs);
-          pc++;
+              'f64.sub lhs',
+            ).castTo(WasmValueType.f64);
+            stack.add(WasmValue.f64(lhs.asF64() - rhs.asF64()));
+            pc++;
 
-        case Opcodes.f32ConvertI32S:
-          final value = _popValue(
-            stack,
-            'f32.convert_i32_s',
-          ).castTo(WasmValueType.i32).asI32();
-          stack.add(WasmValue.f32(value.toDouble()));
-          pc++;
+          case Opcodes.f64Mul:
+            final rhs = _popValue(
+              stack,
+              'f64.mul rhs',
+            ).castTo(WasmValueType.f64);
+            final lhs = _popValue(
+              stack,
+              'f64.mul lhs',
+            ).castTo(WasmValueType.f64);
+            stack.add(WasmValue.f64(lhs.asF64() * rhs.asF64()));
+            pc++;
 
-        case Opcodes.f32ConvertI32U:
-          final value = _popValue(
-            stack,
-            'f32.convert_i32_u',
-          ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
-          stack.add(WasmValue.f32(value.toDouble()));
-          pc++;
+          case Opcodes.f64Div:
+            final rhs = _popValue(
+              stack,
+              'f64.div rhs',
+            ).castTo(WasmValueType.f64);
+            final lhs = _popValue(
+              stack,
+              'f64.div lhs',
+            ).castTo(WasmValueType.f64);
+            stack.add(WasmValue.f64(lhs.asF64() / rhs.asF64()));
+            pc++;
 
-        case Opcodes.f32ConvertI64S:
-          final value = _popValue(
-            stack,
-            'f32.convert_i64_s',
-          ).castTo(WasmValueType.i64).asI64();
-          stack.add(WasmValue.f32(_f32FromInteger(value)));
-          pc++;
+          case Opcodes.f64Min:
+            final rhs = _popValue(
+              stack,
+              'f64.min rhs',
+            ).castTo(WasmValueType.f64);
+            final lhs = _popValue(
+              stack,
+              'f64.min lhs',
+            ).castTo(WasmValueType.f64);
+            stack.add(WasmValue.f64(_fMin(lhs.asF64(), rhs.asF64())));
+            pc++;
 
-        case Opcodes.f32ConvertI64U:
-          final value = _popValue(
-            stack,
-            'f32.convert_i64_u',
-          ).castTo(WasmValueType.i64).asI64();
-          stack.add(WasmValue.f32(_f32FromInteger(WasmI64.unsigned(value))));
-          pc++;
+          case Opcodes.f64Max:
+            final rhs = _popValue(
+              stack,
+              'f64.max rhs',
+            ).castTo(WasmValueType.f64);
+            final lhs = _popValue(
+              stack,
+              'f64.max lhs',
+            ).castTo(WasmValueType.f64);
+            stack.add(WasmValue.f64(_fMax(lhs.asF64(), rhs.asF64())));
+            pc++;
 
-        case Opcodes.f32DemoteF64:
-          final value = _popValue(
-            stack,
-            'f32.demote_f64',
-          ).castTo(WasmValueType.f64).asF64();
-          stack.add(WasmValue.f32(value));
-          pc++;
+          case Opcodes.f64CopySign:
+            final rhsBits = _popValue(
+              stack,
+              'f64.copysign rhs',
+            ).castTo(WasmValueType.f64).asF64Bits();
+            final lhsBits = _popValue(
+              stack,
+              'f64.copysign lhs',
+            ).castTo(WasmValueType.f64).asF64Bits();
+            final signMask = BigInt.parse('8000000000000000', radix: 16);
+            final magnitudeMask = BigInt.parse('7fffffffffffffff', radix: 16);
+            stack.add(
+              WasmValue.f64Bits(
+                (lhsBits & magnitudeMask) | (rhsBits & signMask),
+              ),
+            );
+            pc++;
 
-        case Opcodes.f64ConvertI32S:
-          final value = _popValue(
-            stack,
-            'f64.convert_i32_s',
-          ).castTo(WasmValueType.i32).asI32();
-          stack.add(WasmValue.f64(value.toDouble()));
-          pc++;
+          case Opcodes.memorySize:
+            final memoryIndex = instruction.immediate ?? 0;
+            if (memoryIndex < 0 || memoryIndex >= memories.length) {
+              throw RangeError('memory.size index out of range: $memoryIndex');
+            }
+            final isMemory64 =
+                memoryIndex >= 0 &&
+                memoryIndex < memory64ByIndex.length &&
+                memory64ByIndex[memoryIndex];
+            final pages = memories[memoryIndex].pageCount;
+            stack.add(isMemory64 ? WasmValue.i64(pages) : WasmValue.i32(pages));
+            pc++;
 
-        case Opcodes.f64ConvertI32U:
-          final value = _popValue(
-            stack,
-            'f64.convert_i32_u',
-          ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
-          stack.add(WasmValue.f64(value.toDouble()));
-          pc++;
-
-        case Opcodes.f64ConvertI64S:
-          final value = _popValue(
-            stack,
-            'f64.convert_i64_s',
-          ).castTo(WasmValueType.i64).asI64();
-          stack.add(WasmValue.f64(value.toDouble()));
-          pc++;
-
-        case Opcodes.f64ConvertI64U:
-          final value = _popValue(
-            stack,
-            'f64.convert_i64_u',
-          ).castTo(WasmValueType.i64).asI64();
-          stack.add(WasmValue.f64(WasmI64.unsignedToDouble(value)));
-          pc++;
-
-        case Opcodes.f64PromoteF32:
-          final value = _popValue(
-            stack,
-            'f64.promote_f32',
-          ).castTo(WasmValueType.f32).asF32();
-          stack.add(WasmValue.f64(value));
-          pc++;
-
-        case Opcodes.f32Abs:
-          final bits = _popValue(
-            stack,
-            'f32.abs',
-          ).castTo(WasmValueType.f32).asF32Bits();
-          stack.add(WasmValue.f32Bits(bits & 0x7fffffff));
-          pc++;
-
-        case Opcodes.f32Neg:
-          final bits = _popValue(
-            stack,
-            'f32.neg',
-          ).castTo(WasmValueType.f32).asF32Bits();
-          stack.add(WasmValue.f32Bits(bits ^ 0x80000000));
-          pc++;
-
-        case Opcodes.f32Ceil:
-          final value = _popValue(
-            stack,
-            'f32.ceil',
-          ).castTo(WasmValueType.f32).asF32();
-          stack.add(WasmValue.f32(value.ceilToDouble()));
-          pc++;
-
-        case Opcodes.f32Floor:
-          final value = _popValue(
-            stack,
-            'f32.floor',
-          ).castTo(WasmValueType.f32).asF32();
-          stack.add(WasmValue.f32(value.floorToDouble()));
-          pc++;
-
-        case Opcodes.f32Trunc:
-          final value = _popValue(
-            stack,
-            'f32.trunc',
-          ).castTo(WasmValueType.f32).asF32();
-          stack.add(WasmValue.f32(value.truncateToDouble()));
-          pc++;
-
-        case Opcodes.f32Nearest:
-          final value = _popValue(
-            stack,
-            'f32.nearest',
-          ).castTo(WasmValueType.f32).asF32();
-          stack.add(WasmValue.f32(_nearest(value)));
-          pc++;
-
-        case Opcodes.f32Sqrt:
-          final value = _popValue(
-            stack,
-            'f32.sqrt',
-          ).castTo(WasmValueType.f32).asF32();
-          stack.add(WasmValue.f32(math.sqrt(value)));
-          pc++;
-
-        case Opcodes.f32Add:
-          final rhs = _popValue(stack, 'f32.add rhs').castTo(WasmValueType.f32);
-          final lhs = _popValue(stack, 'f32.add lhs').castTo(WasmValueType.f32);
-          stack.add(WasmValue.f32(lhs.asF32() + rhs.asF32()));
-          pc++;
-
-        case Opcodes.f32Sub:
-          final rhs = _popValue(stack, 'f32.sub rhs').castTo(WasmValueType.f32);
-          final lhs = _popValue(stack, 'f32.sub lhs').castTo(WasmValueType.f32);
-          stack.add(WasmValue.f32(lhs.asF32() - rhs.asF32()));
-          pc++;
-
-        case Opcodes.f32Mul:
-          final rhs = _popValue(stack, 'f32.mul rhs').castTo(WasmValueType.f32);
-          final lhs = _popValue(stack, 'f32.mul lhs').castTo(WasmValueType.f32);
-          stack.add(WasmValue.f32(lhs.asF32() * rhs.asF32()));
-          pc++;
-
-        case Opcodes.f32Div:
-          final rhs = _popValue(stack, 'f32.div rhs').castTo(WasmValueType.f32);
-          final lhs = _popValue(stack, 'f32.div lhs').castTo(WasmValueType.f32);
-          stack.add(WasmValue.f32(lhs.asF32() / rhs.asF32()));
-          pc++;
-
-        case Opcodes.f32Min:
-          final rhs = _popValue(stack, 'f32.min rhs').castTo(WasmValueType.f32);
-          final lhs = _popValue(stack, 'f32.min lhs').castTo(WasmValueType.f32);
-          stack.add(WasmValue.f32(_fMin(lhs.asF32(), rhs.asF32())));
-          pc++;
-
-        case Opcodes.f32Max:
-          final rhs = _popValue(stack, 'f32.max rhs').castTo(WasmValueType.f32);
-          final lhs = _popValue(stack, 'f32.max lhs').castTo(WasmValueType.f32);
-          stack.add(WasmValue.f32(_fMax(lhs.asF32(), rhs.asF32())));
-          pc++;
-
-        case Opcodes.f32CopySign:
-          final rhsBits = _popValue(
-            stack,
-            'f32.copysign rhs',
-          ).castTo(WasmValueType.f32).asF32Bits();
-          final lhsBits = _popValue(
-            stack,
-            'f32.copysign lhs',
-          ).castTo(WasmValueType.f32).asF32Bits();
-          stack.add(
-            WasmValue.f32Bits((lhsBits & 0x7fffffff) | (rhsBits & 0x80000000)),
-          );
-          pc++;
-
-        case Opcodes.f64Abs:
-          final bits = _popValue(
-            stack,
-            'f64.abs',
-          ).castTo(WasmValueType.f64).asF64Bits();
-          stack.add(
-            WasmValue.f64Bits(
-              bits & BigInt.parse('7fffffffffffffff', radix: 16),
-            ),
-          );
-          pc++;
-
-        case Opcodes.f64Neg:
-          final bits = _popValue(
-            stack,
-            'f64.neg',
-          ).castTo(WasmValueType.f64).asF64Bits();
-          stack.add(
-            WasmValue.f64Bits(
-              bits ^ BigInt.parse('8000000000000000', radix: 16),
-            ),
-          );
-          pc++;
-
-        case Opcodes.f64Ceil:
-          final value = _popValue(
-            stack,
-            'f64.ceil',
-          ).castTo(WasmValueType.f64).asF64();
-          stack.add(WasmValue.f64(value.ceilToDouble()));
-          pc++;
-
-        case Opcodes.f64Floor:
-          final value = _popValue(
-            stack,
-            'f64.floor',
-          ).castTo(WasmValueType.f64).asF64();
-          stack.add(WasmValue.f64(value.floorToDouble()));
-          pc++;
-
-        case Opcodes.f64Trunc:
-          final value = _popValue(
-            stack,
-            'f64.trunc',
-          ).castTo(WasmValueType.f64).asF64();
-          stack.add(WasmValue.f64(value.truncateToDouble()));
-          pc++;
-
-        case Opcodes.f64Nearest:
-          final value = _popValue(
-            stack,
-            'f64.nearest',
-          ).castTo(WasmValueType.f64).asF64();
-          stack.add(WasmValue.f64(_nearest(value)));
-          pc++;
-
-        case Opcodes.f64Sqrt:
-          final value = _popValue(
-            stack,
-            'f64.sqrt',
-          ).castTo(WasmValueType.f64).asF64();
-          stack.add(WasmValue.f64(math.sqrt(value)));
-          pc++;
-
-        case Opcodes.f64Add:
-          final rhs = _popValue(stack, 'f64.add rhs').castTo(WasmValueType.f64);
-          final lhs = _popValue(stack, 'f64.add lhs').castTo(WasmValueType.f64);
-          stack.add(WasmValue.f64(lhs.asF64() + rhs.asF64()));
-          pc++;
-
-        case Opcodes.f64Sub:
-          final rhs = _popValue(stack, 'f64.sub rhs').castTo(WasmValueType.f64);
-          final lhs = _popValue(stack, 'f64.sub lhs').castTo(WasmValueType.f64);
-          stack.add(WasmValue.f64(lhs.asF64() - rhs.asF64()));
-          pc++;
-
-        case Opcodes.f64Mul:
-          final rhs = _popValue(stack, 'f64.mul rhs').castTo(WasmValueType.f64);
-          final lhs = _popValue(stack, 'f64.mul lhs').castTo(WasmValueType.f64);
-          stack.add(WasmValue.f64(lhs.asF64() * rhs.asF64()));
-          pc++;
-
-        case Opcodes.f64Div:
-          final rhs = _popValue(stack, 'f64.div rhs').castTo(WasmValueType.f64);
-          final lhs = _popValue(stack, 'f64.div lhs').castTo(WasmValueType.f64);
-          stack.add(WasmValue.f64(lhs.asF64() / rhs.asF64()));
-          pc++;
-
-        case Opcodes.f64Min:
-          final rhs = _popValue(stack, 'f64.min rhs').castTo(WasmValueType.f64);
-          final lhs = _popValue(stack, 'f64.min lhs').castTo(WasmValueType.f64);
-          stack.add(WasmValue.f64(_fMin(lhs.asF64(), rhs.asF64())));
-          pc++;
-
-        case Opcodes.f64Max:
-          final rhs = _popValue(stack, 'f64.max rhs').castTo(WasmValueType.f64);
-          final lhs = _popValue(stack, 'f64.max lhs').castTo(WasmValueType.f64);
-          stack.add(WasmValue.f64(_fMax(lhs.asF64(), rhs.asF64())));
-          pc++;
-
-        case Opcodes.f64CopySign:
-          final rhsBits = _popValue(
-            stack,
-            'f64.copysign rhs',
-          ).castTo(WasmValueType.f64).asF64Bits();
-          final lhsBits = _popValue(
-            stack,
-            'f64.copysign lhs',
-          ).castTo(WasmValueType.f64).asF64Bits();
-          final signMask = BigInt.parse('8000000000000000', radix: 16);
-          final magnitudeMask = BigInt.parse('7fffffffffffffff', radix: 16);
-          stack.add(
-            WasmValue.f64Bits((lhsBits & magnitudeMask) | (rhsBits & signMask)),
-          );
-          pc++;
-
-        case Opcodes.memorySize:
-          final memoryIndex = instruction.immediate ?? 0;
-          if (memoryIndex < 0 || memoryIndex >= memories.length) {
-            throw RangeError('memory.size index out of range: $memoryIndex');
-          }
-          final isMemory64 =
-              memoryIndex >= 0 &&
-              memoryIndex < memory64ByIndex.length &&
-              memory64ByIndex[memoryIndex];
-          final pages = memories[memoryIndex].pageCount;
-          stack.add(isMemory64 ? WasmValue.i64(pages) : WasmValue.i32(pages));
-          pc++;
-
-        case Opcodes.memoryGrow:
-          final memoryIndex = instruction.immediate ?? 0;
-          if (memoryIndex < 0 || memoryIndex >= memories.length) {
-            throw RangeError('memory.grow index out of range: $memoryIndex');
-          }
-          final isMemory64 =
-              memoryIndex >= 0 &&
-              memoryIndex < memory64ByIndex.length &&
-              memory64ByIndex[memoryIndex];
-          final deltaValue = isMemory64
-              ? _popValue(
-                  stack,
-                  'memory.grow delta',
-                ).castTo(WasmValueType.i64).asI64()
-              : BigInt.from(
-                  _popValue(
+          case Opcodes.memoryGrow:
+            final memoryIndex = instruction.immediate ?? 0;
+            if (memoryIndex < 0 || memoryIndex >= memories.length) {
+              throw RangeError('memory.grow index out of range: $memoryIndex');
+            }
+            final isMemory64 =
+                memoryIndex >= 0 &&
+                memoryIndex < memory64ByIndex.length &&
+                memory64ByIndex[memoryIndex];
+            final deltaValue = isMemory64
+                ? _popValue(
                     stack,
                     'memory.grow delta',
-                  ).castTo(WasmValueType.i32).asI32(),
-                );
-          final deltaPages = _coerceAsyncSubsetPageDelta(
-            deltaValue,
-            context: 'memory.grow',
-          );
-          final oldPages = memories[memoryIndex].grow(deltaPages);
-          stack.add(
-            isMemory64 ? WasmValue.i64(oldPages) : WasmValue.i32(oldPages),
-          );
-          pc++;
-
-        case Opcodes.memoryCopy:
-          final destinationMemoryIndex = instruction.immediate!;
-          final sourceMemoryIndex = instruction.secondaryImmediate!;
-          if (destinationMemoryIndex < 0 ||
-              destinationMemoryIndex >= memories.length) {
-            throw RangeError(
-              'memory.copy destination memory index out of range: '
-              '$destinationMemoryIndex',
+                  ).castTo(WasmValueType.i64).asI64()
+                : BigInt.from(
+                    _popValue(
+                      stack,
+                      'memory.grow delta',
+                    ).castTo(WasmValueType.i32).asI32(),
+                  );
+            final deltaPages = _coerceAsyncSubsetPageDelta(
+              deltaValue,
+              context: 'memory.grow',
             );
-          }
-          if (sourceMemoryIndex < 0 || sourceMemoryIndex >= memories.length) {
-            throw RangeError(
-              'memory.copy source memory index out of range: '
-              '$sourceMemoryIndex',
+            final oldPages = memories[memoryIndex].grow(deltaPages);
+            stack.add(
+              isMemory64 ? WasmValue.i64(oldPages) : WasmValue.i32(oldPages),
             );
-          }
-          final destinationIs64 =
-              destinationMemoryIndex >= 0 &&
-              destinationMemoryIndex < memory64ByIndex.length &&
-              memory64ByIndex[destinationMemoryIndex];
-          final sourceIs64 =
-              sourceMemoryIndex >= 0 &&
-              sourceMemoryIndex < memory64ByIndex.length &&
-              memory64ByIndex[sourceMemoryIndex];
-          final length = destinationIs64 && sourceIs64
-              ? _popAsyncSubsetLinearValue(
-                  stack,
-                  context: 'memory.copy length',
-                  expectedType: WasmValueType.i64,
-                )
-              : _popAsyncSubsetLinearValue(
-                  stack,
-                  context: 'memory.copy length',
-                  expectedType: WasmValueType.i32,
-                );
-          final sourceOffset = _popAsyncSubsetMemoryOperand(
-            stack,
-            memoryIndex: sourceMemoryIndex,
-            memory64ByIndex: memory64ByIndex,
-            context: 'memory.copy source offset',
-          );
-          final destinationOffset = _popAsyncSubsetMemoryOperand(
-            stack,
-            memoryIndex: destinationMemoryIndex,
-            memory64ByIndex: memory64ByIndex,
-            context: 'memory.copy destination offset',
-          );
-          final sourceMemory = memories[sourceMemoryIndex];
-          final destinationMemory = memories[destinationMemoryIndex];
-          if (sourceOffset > sourceMemory.lengthInBytes ||
-              length > sourceMemory.lengthInBytes - sourceOffset) {
-            throw StateError('memory.copy source out of bounds.');
-          }
-          if (destinationOffset > destinationMemory.lengthInBytes ||
-              length > destinationMemory.lengthInBytes - destinationOffset) {
-            throw StateError('memory.copy destination out of bounds.');
-          }
-          if (length != 0) {
-            final copied = sourceMemory.readBytes(sourceOffset, length);
-            destinationMemory.writeBytes(destinationOffset, copied);
-          }
-          pc++;
+            pc++;
 
-        case Opcodes.memoryFill:
-          final memoryIndex = instruction.immediate!;
-          if (memoryIndex < 0 || memoryIndex >= memories.length) {
-            throw RangeError(
-              'memory.fill memory index out of range: $memoryIndex',
+          case Opcodes.memoryCopy:
+            final destinationMemoryIndex = instruction.immediate!;
+            final sourceMemoryIndex = instruction.secondaryImmediate!;
+            if (destinationMemoryIndex < 0 ||
+                destinationMemoryIndex >= memories.length) {
+              throw RangeError(
+                'memory.copy destination memory index out of range: '
+                '$destinationMemoryIndex',
+              );
+            }
+            if (sourceMemoryIndex < 0 || sourceMemoryIndex >= memories.length) {
+              throw RangeError(
+                'memory.copy source memory index out of range: '
+                '$sourceMemoryIndex',
+              );
+            }
+            final destinationIs64 =
+                destinationMemoryIndex >= 0 &&
+                destinationMemoryIndex < memory64ByIndex.length &&
+                memory64ByIndex[destinationMemoryIndex];
+            final sourceIs64 =
+                sourceMemoryIndex >= 0 &&
+                sourceMemoryIndex < memory64ByIndex.length &&
+                memory64ByIndex[sourceMemoryIndex];
+            final length = destinationIs64 && sourceIs64
+                ? _popAsyncSubsetLinearValue(
+                    stack,
+                    context: 'memory.copy length',
+                    expectedType: WasmValueType.i64,
+                  )
+                : _popAsyncSubsetLinearValue(
+                    stack,
+                    context: 'memory.copy length',
+                    expectedType: WasmValueType.i32,
+                  );
+            final sourceOffset = _popAsyncSubsetMemoryOperand(
+              stack,
+              memoryIndex: sourceMemoryIndex,
+              memory64ByIndex: memory64ByIndex,
+              context: 'memory.copy source offset',
             );
-          }
-          final length = _popAsyncSubsetMemoryOperationLength(
-            stack,
-            context: 'memory.fill length',
-          );
-          final value = _popValue(
-            stack,
-            'memory.fill value',
-          ).castTo(WasmValueType.i32).asI32();
-          final destinationOffset = _popAsyncSubsetMemoryOperand(
-            stack,
-            memoryIndex: memoryIndex,
-            memory64ByIndex: memory64ByIndex,
-            context: 'memory.fill destination offset',
-          );
-          final memory = memories[memoryIndex];
-          if (destinationOffset > memory.lengthInBytes ||
-              length > memory.lengthInBytes - destinationOffset) {
-            throw StateError('memory.fill out of bounds.');
-          }
-          if (length != 0) {
-            memory.fillBytes(destinationOffset, value, length);
-          }
-          pc++;
+            final destinationOffset = _popAsyncSubsetMemoryOperand(
+              stack,
+              memoryIndex: destinationMemoryIndex,
+              memory64ByIndex: memory64ByIndex,
+              context: 'memory.copy destination offset',
+            );
+            final sourceMemory = memories[sourceMemoryIndex];
+            final destinationMemory = memories[destinationMemoryIndex];
+            if (sourceOffset > sourceMemory.lengthInBytes ||
+                length > sourceMemory.lengthInBytes - sourceOffset) {
+              throw StateError('memory.copy source out of bounds.');
+            }
+            if (destinationOffset > destinationMemory.lengthInBytes ||
+                length > destinationMemory.lengthInBytes - destinationOffset) {
+              throw StateError('memory.copy destination out of bounds.');
+            }
+            if (length != 0) {
+              final copied = sourceMemory.readBytes(sourceOffset, length);
+              destinationMemory.writeBytes(destinationOffset, copied);
+            }
+            pc++;
 
-        case Opcodes.memoryAtomicNotify:
-          _popValue(
-            stack,
-            'memory.atomic.notify count',
-          ).castTo(WasmValueType.i32);
-          final access = _resolveAsyncSubsetAtomicMemoryAccess(
-            stack,
-            instruction: instruction,
-            memory64ByIndex: memory64ByIndex,
-            widthBytes: 4,
-            context: 'memory.atomic.notify',
-          );
-          access.memory.loadU32(access.address);
-          stack.add(WasmValue.i32(0));
-          pc++;
+          case Opcodes.memoryFill:
+            final memoryIndex = instruction.immediate!;
+            if (memoryIndex < 0 || memoryIndex >= memories.length) {
+              throw RangeError(
+                'memory.fill memory index out of range: $memoryIndex',
+              );
+            }
+            final length = _popAsyncSubsetMemoryOperationLength(
+              stack,
+              context: 'memory.fill length',
+            );
+            final value = _popValue(
+              stack,
+              'memory.fill value',
+            ).castTo(WasmValueType.i32).asI32();
+            final destinationOffset = _popAsyncSubsetMemoryOperand(
+              stack,
+              memoryIndex: memoryIndex,
+              memory64ByIndex: memory64ByIndex,
+              context: 'memory.fill destination offset',
+            );
+            final memory = memories[memoryIndex];
+            if (destinationOffset > memory.lengthInBytes ||
+                length > memory.lengthInBytes - destinationOffset) {
+              throw StateError('memory.fill out of bounds.');
+            }
+            if (length != 0) {
+              memory.fillBytes(destinationOffset, value, length);
+            }
+            pc++;
 
-        case Opcodes.memoryAtomicWait32:
-          _popValue(
-            stack,
-            'memory.atomic.wait32 timeout',
-          ).castTo(WasmValueType.i64);
-          final expected = _popValue(
-            stack,
-            'memory.atomic.wait32 expected',
-          ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
-          final access = _resolveAsyncSubsetAtomicMemoryAccess(
-            stack,
-            instruction: instruction,
-            memory64ByIndex: memory64ByIndex,
-            widthBytes: 4,
-            context: 'memory.atomic.wait32',
-          );
-          final actual = access.memory.loadU32(access.address);
-          stack.add(WasmValue.i32(actual == expected ? 2 : 1));
-          pc++;
-
-        case Opcodes.memoryAtomicWait64:
-          _popValue(
-            stack,
-            'memory.atomic.wait64 timeout',
-          ).castTo(WasmValueType.i64);
-          final expected = WasmI64.unsigned(
+          case Opcodes.memoryAtomicNotify:
             _popValue(
               stack,
-              'memory.atomic.wait64 expected',
-            ).castTo(WasmValueType.i64).asI64(),
-          );
-          final access = _resolveAsyncSubsetAtomicMemoryAccess(
-            stack,
-            instruction: instruction,
-            memory64ByIndex: memory64ByIndex,
-            widthBytes: 8,
-            context: 'memory.atomic.wait64',
-          );
-          final actual = WasmI64.unsigned(
-            access.memory.loadI64(access.address),
-          );
-          stack.add(WasmValue.i32(actual == expected ? 2 : 1));
-          pc++;
-
-        case Opcodes.atomicFence:
-          pc++;
-
-        case Opcodes.i32AtomicLoad:
-        case Opcodes.i64AtomicLoad:
-        case Opcodes.i32AtomicLoad8U:
-        case Opcodes.i32AtomicLoad16U:
-        case Opcodes.i64AtomicLoad8U:
-        case Opcodes.i64AtomicLoad16U:
-        case Opcodes.i64AtomicLoad32U:
-          final widthBytes = switch (instruction.opcode) {
-            Opcodes.i32AtomicLoad => 4,
-            Opcodes.i64AtomicLoad => 8,
-            Opcodes.i32AtomicLoad8U => 1,
-            Opcodes.i32AtomicLoad16U => 2,
-            Opcodes.i64AtomicLoad8U => 1,
-            Opcodes.i64AtomicLoad16U => 2,
-            Opcodes.i64AtomicLoad32U => 4,
-            _ => throw StateError('Unexpected atomic load width resolution.'),
-          };
-          final access = _resolveAsyncSubsetAtomicMemoryAccess(
-            stack,
-            instruction: instruction,
-            memory64ByIndex: memory64ByIndex,
-            widthBytes: widthBytes,
-            context: 'atomic.load',
-          );
-          switch (instruction.opcode) {
-            case Opcodes.i32AtomicLoad:
-              stack.add(WasmValue.i32(access.memory.loadI32(access.address)));
-            case Opcodes.i64AtomicLoad:
-              stack.add(WasmValue.i64(access.memory.loadI64(access.address)));
-            case Opcodes.i32AtomicLoad8U:
-              stack.add(WasmValue.i32(access.memory.loadU8(access.address)));
-            case Opcodes.i32AtomicLoad16U:
-              stack.add(WasmValue.i32(access.memory.loadU16(access.address)));
-            case Opcodes.i64AtomicLoad8U:
-              stack.add(WasmValue.i64(access.memory.loadU8(access.address)));
-            case Opcodes.i64AtomicLoad16U:
-              stack.add(WasmValue.i64(access.memory.loadU16(access.address)));
-            case Opcodes.i64AtomicLoad32U:
-              stack.add(WasmValue.i64(access.memory.loadU32(access.address)));
-            default:
-              throw StateError(
-                'Unexpected atomic load opcode in async subset: '
-                '0x${instruction.opcode.toRadixString(16)}',
-              );
-          }
-          pc++;
-
-        case Opcodes.i32AtomicStore:
-        case Opcodes.i64AtomicStore:
-        case Opcodes.i32AtomicStore8:
-        case Opcodes.i32AtomicStore16:
-        case Opcodes.i64AtomicStore8:
-        case Opcodes.i64AtomicStore16:
-        case Opcodes.i64AtomicStore32:
-          final rawValue = _popValue(stack, 'atomic.store value');
-          final widthBytes = switch (instruction.opcode) {
-            Opcodes.i32AtomicStore => 4,
-            Opcodes.i64AtomicStore => 8,
-            Opcodes.i32AtomicStore8 => 1,
-            Opcodes.i32AtomicStore16 => 2,
-            Opcodes.i64AtomicStore8 => 1,
-            Opcodes.i64AtomicStore16 => 2,
-            Opcodes.i64AtomicStore32 => 4,
-            _ => throw StateError('Unexpected atomic store width resolution.'),
-          };
-          final access = _resolveAsyncSubsetAtomicMemoryAccess(
-            stack,
-            instruction: instruction,
-            memory64ByIndex: memory64ByIndex,
-            widthBytes: widthBytes,
-            context: 'atomic.store',
-          );
-          switch (instruction.opcode) {
-            case Opcodes.i32AtomicStore:
-              access.memory.storeI32(
-                access.address,
-                rawValue.castTo(WasmValueType.i32).asI32(),
-              );
-            case Opcodes.i64AtomicStore:
-              access.memory.storeI64(
-                access.address,
-                rawValue.castTo(WasmValueType.i64).asI64(),
-              );
-            case Opcodes.i32AtomicStore8:
-              access.memory.storeI8(
-                access.address,
-                rawValue.castTo(WasmValueType.i32).asI32(),
-              );
-            case Opcodes.i32AtomicStore16:
-              access.memory.storeI16(
-                access.address,
-                rawValue.castTo(WasmValueType.i32).asI32(),
-              );
-            case Opcodes.i64AtomicStore8:
-              access.memory.storeI8(
-                access.address,
-                WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
-              );
-            case Opcodes.i64AtomicStore16:
-              access.memory.storeI16(
-                access.address,
-                WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
-              );
-            case Opcodes.i64AtomicStore32:
-              access.memory.storeI32(
-                access.address,
-                WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
-              );
-            default:
-              throw StateError(
-                'Unexpected atomic store opcode in async subset: '
-                '0x${instruction.opcode.toRadixString(16)}',
-              );
-          }
-          pc++;
-
-        case Opcodes.i32AtomicRmwAdd:
-        case Opcodes.i32AtomicRmwSub:
-        case Opcodes.i32AtomicRmwAnd:
-        case Opcodes.i32AtomicRmwOr:
-        case Opcodes.i32AtomicRmwXor:
-        case Opcodes.i32AtomicRmwXchg:
-          final operation = switch (instruction.opcode) {
-            Opcodes.i32AtomicRmwAdd => (int a, int b) => a + b,
-            Opcodes.i32AtomicRmwSub => (int a, int b) => a - b,
-            Opcodes.i32AtomicRmwAnd => (int a, int b) => a & b,
-            Opcodes.i32AtomicRmwOr => (int a, int b) => a | b,
-            Opcodes.i32AtomicRmwXor => (int a, int b) => a ^ b,
-            Opcodes.i32AtomicRmwXchg => (int _, int b) => b,
-            _ => throw StateError('Unexpected i32 atomic rmw opcode.'),
-          };
-          final previous = _executeAsyncSubsetAtomicRmwI32(
-            stack,
-            instruction: instruction,
-            memory64ByIndex: memory64ByIndex,
-            operation: operation,
-            context: 'i32.atomic.rmw',
-          );
-          stack.add(WasmValue.i32(previous));
-          pc++;
-
-        case Opcodes.i64AtomicRmwAdd:
-        case Opcodes.i64AtomicRmwSub:
-        case Opcodes.i64AtomicRmwAnd:
-        case Opcodes.i64AtomicRmwOr:
-        case Opcodes.i64AtomicRmwXor:
-        case Opcodes.i64AtomicRmwXchg:
-          final operation = switch (instruction.opcode) {
-            Opcodes.i64AtomicRmwAdd => (BigInt a, BigInt b) => a + b,
-            Opcodes.i64AtomicRmwSub => (BigInt a, BigInt b) => a - b,
-            Opcodes.i64AtomicRmwAnd => (BigInt a, BigInt b) => a & b,
-            Opcodes.i64AtomicRmwOr => (BigInt a, BigInt b) => a | b,
-            Opcodes.i64AtomicRmwXor => (BigInt a, BigInt b) => a ^ b,
-            Opcodes.i64AtomicRmwXchg => (BigInt _, BigInt b) => b,
-            _ => throw StateError('Unexpected i64 atomic rmw opcode.'),
-          };
-          final previous = _executeAsyncSubsetAtomicRmwI64(
-            stack,
-            instruction: instruction,
-            memory64ByIndex: memory64ByIndex,
-            operation: operation,
-            context: 'i64.atomic.rmw',
-          );
-          stack.add(WasmValue.i64(previous));
-          pc++;
-
-        case Opcodes.i32AtomicRmw8AddU:
-        case Opcodes.i32AtomicRmw16AddU:
-        case Opcodes.i32AtomicRmw8SubU:
-        case Opcodes.i32AtomicRmw16SubU:
-        case Opcodes.i32AtomicRmw8AndU:
-        case Opcodes.i32AtomicRmw16AndU:
-        case Opcodes.i32AtomicRmw8OrU:
-        case Opcodes.i32AtomicRmw16OrU:
-        case Opcodes.i32AtomicRmw8XorU:
-        case Opcodes.i32AtomicRmw16XorU:
-        case Opcodes.i32AtomicRmw8XchgU:
-        case Opcodes.i32AtomicRmw16XchgU:
-          final descriptor = switch (instruction.opcode) {
-            Opcodes.i32AtomicRmw8AddU => (1, (int a, int b) => a + b),
-            Opcodes.i32AtomicRmw16AddU => (2, (int a, int b) => a + b),
-            Opcodes.i32AtomicRmw8SubU => (1, (int a, int b) => a - b),
-            Opcodes.i32AtomicRmw16SubU => (2, (int a, int b) => a - b),
-            Opcodes.i32AtomicRmw8AndU => (1, (int a, int b) => a & b),
-            Opcodes.i32AtomicRmw16AndU => (2, (int a, int b) => a & b),
-            Opcodes.i32AtomicRmw8OrU => (1, (int a, int b) => a | b),
-            Opcodes.i32AtomicRmw16OrU => (2, (int a, int b) => a | b),
-            Opcodes.i32AtomicRmw8XorU => (1, (int a, int b) => a ^ b),
-            Opcodes.i32AtomicRmw16XorU => (2, (int a, int b) => a ^ b),
-            Opcodes.i32AtomicRmw8XchgU => (1, (int _, int b) => b),
-            Opcodes.i32AtomicRmw16XchgU => (2, (int _, int b) => b),
-            _ => throw StateError('Unexpected i32 narrow atomic rmw opcode.'),
-          };
-          final previous = _executeAsyncSubsetAtomicRmwI32Narrow(
-            stack,
-            instruction: instruction,
-            memory64ByIndex: memory64ByIndex,
-            widthBytes: descriptor.$1,
-            operation: descriptor.$2,
-            context: 'i32.atomic.rmw.narrow',
-          );
-          stack.add(WasmValue.i32(previous));
-          pc++;
-
-        case Opcodes.i64AtomicRmw8AddU:
-        case Opcodes.i64AtomicRmw16AddU:
-        case Opcodes.i64AtomicRmw32AddU:
-        case Opcodes.i64AtomicRmw8SubU:
-        case Opcodes.i64AtomicRmw16SubU:
-        case Opcodes.i64AtomicRmw32SubU:
-        case Opcodes.i64AtomicRmw8AndU:
-        case Opcodes.i64AtomicRmw16AndU:
-        case Opcodes.i64AtomicRmw32AndU:
-        case Opcodes.i64AtomicRmw8OrU:
-        case Opcodes.i64AtomicRmw16OrU:
-        case Opcodes.i64AtomicRmw32OrU:
-        case Opcodes.i64AtomicRmw8XorU:
-        case Opcodes.i64AtomicRmw16XorU:
-        case Opcodes.i64AtomicRmw32XorU:
-        case Opcodes.i64AtomicRmw8XchgU:
-        case Opcodes.i64AtomicRmw16XchgU:
-        case Opcodes.i64AtomicRmw32XchgU:
-          final descriptor = switch (instruction.opcode) {
-            Opcodes.i64AtomicRmw8AddU => (1, (int a, int b) => a + b),
-            Opcodes.i64AtomicRmw16AddU => (2, (int a, int b) => a + b),
-            Opcodes.i64AtomicRmw32AddU => (4, (int a, int b) => a + b),
-            Opcodes.i64AtomicRmw8SubU => (1, (int a, int b) => a - b),
-            Opcodes.i64AtomicRmw16SubU => (2, (int a, int b) => a - b),
-            Opcodes.i64AtomicRmw32SubU => (4, (int a, int b) => a - b),
-            Opcodes.i64AtomicRmw8AndU => (1, (int a, int b) => a & b),
-            Opcodes.i64AtomicRmw16AndU => (2, (int a, int b) => a & b),
-            Opcodes.i64AtomicRmw32AndU => (4, (int a, int b) => a & b),
-            Opcodes.i64AtomicRmw8OrU => (1, (int a, int b) => a | b),
-            Opcodes.i64AtomicRmw16OrU => (2, (int a, int b) => a | b),
-            Opcodes.i64AtomicRmw32OrU => (4, (int a, int b) => a | b),
-            Opcodes.i64AtomicRmw8XorU => (1, (int a, int b) => a ^ b),
-            Opcodes.i64AtomicRmw16XorU => (2, (int a, int b) => a ^ b),
-            Opcodes.i64AtomicRmw32XorU => (4, (int a, int b) => a ^ b),
-            Opcodes.i64AtomicRmw8XchgU => (1, (int _, int b) => b),
-            Opcodes.i64AtomicRmw16XchgU => (2, (int _, int b) => b),
-            Opcodes.i64AtomicRmw32XchgU => (4, (int _, int b) => b),
-            _ => throw StateError('Unexpected i64 narrow atomic rmw opcode.'),
-          };
-          final previous = _executeAsyncSubsetAtomicRmwI64Narrow(
-            stack,
-            instruction: instruction,
-            memory64ByIndex: memory64ByIndex,
-            widthBytes: descriptor.$1,
-            operation: descriptor.$2,
-            context: 'i64.atomic.rmw.narrow',
-          );
-          stack.add(WasmValue.i64(previous));
-          pc++;
-
-        case Opcodes.i32AtomicRmwCmpxchg:
-          final previous = _executeAsyncSubsetAtomicCmpxchgI32(
-            stack,
-            instruction: instruction,
-            memory64ByIndex: memory64ByIndex,
-            context: 'i32.atomic.cmpxchg',
-          );
-          stack.add(WasmValue.i32(previous));
-          pc++;
-
-        case Opcodes.i64AtomicRmwCmpxchg:
-          final previous = _executeAsyncSubsetAtomicCmpxchgI64(
-            stack,
-            instruction: instruction,
-            memory64ByIndex: memory64ByIndex,
-            context: 'i64.atomic.cmpxchg',
-          );
-          stack.add(WasmValue.i64(previous));
-          pc++;
-
-        case Opcodes.i32AtomicRmw8CmpxchgU:
-        case Opcodes.i32AtomicRmw16CmpxchgU:
-          final widthBytes = switch (instruction.opcode) {
-            Opcodes.i32AtomicRmw8CmpxchgU => 1,
-            Opcodes.i32AtomicRmw16CmpxchgU => 2,
-            _ => throw StateError('Unexpected i32 narrow cmpxchg opcode.'),
-          };
-          final previous = _executeAsyncSubsetAtomicCmpxchgI32Narrow(
-            stack,
-            instruction: instruction,
-            memory64ByIndex: memory64ByIndex,
-            widthBytes: widthBytes,
-            context: 'i32.atomic.cmpxchg.narrow',
-          );
-          stack.add(WasmValue.i32(previous));
-          pc++;
-
-        case Opcodes.i64AtomicRmw8CmpxchgU:
-        case Opcodes.i64AtomicRmw16CmpxchgU:
-        case Opcodes.i64AtomicRmw32CmpxchgU:
-          final widthBytes = switch (instruction.opcode) {
-            Opcodes.i64AtomicRmw8CmpxchgU => 1,
-            Opcodes.i64AtomicRmw16CmpxchgU => 2,
-            Opcodes.i64AtomicRmw32CmpxchgU => 4,
-            _ => throw StateError('Unexpected i64 narrow cmpxchg opcode.'),
-          };
-          final previous = _executeAsyncSubsetAtomicCmpxchgI64Narrow(
-            stack,
-            instruction: instruction,
-            memory64ByIndex: memory64ByIndex,
-            widthBytes: widthBytes,
-            context: 'i64.atomic.cmpxchg.narrow',
-          );
-          stack.add(WasmValue.i64(previous));
-          pc++;
-
-        case Opcodes.memoryInit:
-          final dataIndex = instruction.immediate!;
-          final memoryIndex = instruction.secondaryImmediate!;
-          if (dataIndex < 0 || dataIndex >= _asyncDataSegments.length) {
-            throw RangeError(
-              'memory.init data segment index out of range: $dataIndex',
+              'memory.atomic.notify count',
+            ).castTo(WasmValueType.i32);
+            final access = _resolveAsyncSubsetAtomicMemoryAccess(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              widthBytes: 4,
+              context: 'memory.atomic.notify',
             );
-          }
-          if (memoryIndex < 0 || memoryIndex >= memories.length) {
-            throw RangeError(
-              'memory.init memory index out of range: $memoryIndex',
+            access.memory.loadU32(access.address);
+            stack.add(WasmValue.i32(0));
+            pc++;
+
+          case Opcodes.memoryAtomicWait32:
+            _popValue(
+              stack,
+              'memory.atomic.wait32 timeout',
+            ).castTo(WasmValueType.i64);
+            final expected = _popValue(
+              stack,
+              'memory.atomic.wait32 expected',
+            ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+            final access = _resolveAsyncSubsetAtomicMemoryAccess(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              widthBytes: 4,
+              context: 'memory.atomic.wait32',
             );
-          }
-          final length = _popAsyncSubsetLinearValue(
-            stack,
-            context: 'memory.init length',
-            expectedType: WasmValueType.i32,
-          );
-          final sourceOffset = _popAsyncSubsetLinearValue(
-            stack,
-            context: 'memory.init source offset',
-            expectedType: WasmValueType.i32,
-          );
-          final destinationOffset = _popAsyncSubsetMemoryOperand(
-            stack,
-            memoryIndex: memoryIndex,
-            memory64ByIndex: memory64ByIndex,
-            context: 'memory.init destination offset',
-          );
-          final data = _asyncDataSegments[dataIndex];
-          if (data == null) {
-            if (length == 0) {
-              pc++;
-              continue;
+            final actual = access.memory.loadU32(access.address);
+            stack.add(WasmValue.i32(actual == expected ? 2 : 1));
+            pc++;
+
+          case Opcodes.memoryAtomicWait64:
+            _popValue(
+              stack,
+              'memory.atomic.wait64 timeout',
+            ).castTo(WasmValueType.i64);
+            final expected = WasmI64.unsigned(
+              _popValue(
+                stack,
+                'memory.atomic.wait64 expected',
+              ).castTo(WasmValueType.i64).asI64(),
+            );
+            final access = _resolveAsyncSubsetAtomicMemoryAccess(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              widthBytes: 8,
+              context: 'memory.atomic.wait64',
+            );
+            final actual = WasmI64.unsigned(
+              access.memory.loadI64(access.address),
+            );
+            stack.add(WasmValue.i32(actual == expected ? 2 : 1));
+            pc++;
+
+          case Opcodes.atomicFence:
+            pc++;
+
+          case Opcodes.i32AtomicLoad:
+          case Opcodes.i64AtomicLoad:
+          case Opcodes.i32AtomicLoad8U:
+          case Opcodes.i32AtomicLoad16U:
+          case Opcodes.i64AtomicLoad8U:
+          case Opcodes.i64AtomicLoad16U:
+          case Opcodes.i64AtomicLoad32U:
+            final widthBytes = switch (instruction.opcode) {
+              Opcodes.i32AtomicLoad => 4,
+              Opcodes.i64AtomicLoad => 8,
+              Opcodes.i32AtomicLoad8U => 1,
+              Opcodes.i32AtomicLoad16U => 2,
+              Opcodes.i64AtomicLoad8U => 1,
+              Opcodes.i64AtomicLoad16U => 2,
+              Opcodes.i64AtomicLoad32U => 4,
+              _ => throw StateError('Unexpected atomic load width resolution.'),
+            };
+            final access = _resolveAsyncSubsetAtomicMemoryAccess(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              widthBytes: widthBytes,
+              context: 'atomic.load',
+            );
+            switch (instruction.opcode) {
+              case Opcodes.i32AtomicLoad:
+                stack.add(WasmValue.i32(access.memory.loadI32(access.address)));
+              case Opcodes.i64AtomicLoad:
+                stack.add(WasmValue.i64(access.memory.loadI64(access.address)));
+              case Opcodes.i32AtomicLoad8U:
+                stack.add(WasmValue.i32(access.memory.loadU8(access.address)));
+              case Opcodes.i32AtomicLoad16U:
+                stack.add(WasmValue.i32(access.memory.loadU16(access.address)));
+              case Opcodes.i64AtomicLoad8U:
+                stack.add(WasmValue.i64(access.memory.loadU8(access.address)));
+              case Opcodes.i64AtomicLoad16U:
+                stack.add(WasmValue.i64(access.memory.loadU16(access.address)));
+              case Opcodes.i64AtomicLoad32U:
+                stack.add(WasmValue.i64(access.memory.loadU32(access.address)));
+              default:
+                throw StateError(
+                  'Unexpected atomic load opcode in async subset: '
+                  '0x${instruction.opcode.toRadixString(16)}',
+                );
             }
-            throw StateError('memory.init on dropped data segment $dataIndex.');
-          }
-          if (sourceOffset > data.length ||
-              length > data.length - sourceOffset) {
-            throw StateError('memory.init source out of bounds.');
-          }
-          final memory = memories[memoryIndex];
-          if (destinationOffset > memory.lengthInBytes ||
-              length > memory.lengthInBytes - destinationOffset) {
-            throw StateError('memory.init destination out of bounds.');
-          }
-          if (length != 0) {
-            memory.writeBytes(
-              destinationOffset,
-              Uint8List.fromList(
-                data.sublist(sourceOffset, sourceOffset + length),
+            pc++;
+
+          case Opcodes.i32AtomicStore:
+          case Opcodes.i64AtomicStore:
+          case Opcodes.i32AtomicStore8:
+          case Opcodes.i32AtomicStore16:
+          case Opcodes.i64AtomicStore8:
+          case Opcodes.i64AtomicStore16:
+          case Opcodes.i64AtomicStore32:
+            final rawValue = _popValue(stack, 'atomic.store value');
+            final widthBytes = switch (instruction.opcode) {
+              Opcodes.i32AtomicStore => 4,
+              Opcodes.i64AtomicStore => 8,
+              Opcodes.i32AtomicStore8 => 1,
+              Opcodes.i32AtomicStore16 => 2,
+              Opcodes.i64AtomicStore8 => 1,
+              Opcodes.i64AtomicStore16 => 2,
+              Opcodes.i64AtomicStore32 => 4,
+              _ => throw StateError(
+                'Unexpected atomic store width resolution.',
+              ),
+            };
+            final access = _resolveAsyncSubsetAtomicMemoryAccess(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              widthBytes: widthBytes,
+              context: 'atomic.store',
+            );
+            switch (instruction.opcode) {
+              case Opcodes.i32AtomicStore:
+                access.memory.storeI32(
+                  access.address,
+                  rawValue.castTo(WasmValueType.i32).asI32(),
+                );
+              case Opcodes.i64AtomicStore:
+                access.memory.storeI64(
+                  access.address,
+                  rawValue.castTo(WasmValueType.i64).asI64(),
+                );
+              case Opcodes.i32AtomicStore8:
+                access.memory.storeI8(
+                  access.address,
+                  rawValue.castTo(WasmValueType.i32).asI32(),
+                );
+              case Opcodes.i32AtomicStore16:
+                access.memory.storeI16(
+                  access.address,
+                  rawValue.castTo(WasmValueType.i32).asI32(),
+                );
+              case Opcodes.i64AtomicStore8:
+                access.memory.storeI8(
+                  access.address,
+                  WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
+                );
+              case Opcodes.i64AtomicStore16:
+                access.memory.storeI16(
+                  access.address,
+                  WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
+                );
+              case Opcodes.i64AtomicStore32:
+                access.memory.storeI32(
+                  access.address,
+                  WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
+                );
+              default:
+                throw StateError(
+                  'Unexpected atomic store opcode in async subset: '
+                  '0x${instruction.opcode.toRadixString(16)}',
+                );
+            }
+            pc++;
+
+          case Opcodes.i32AtomicRmwAdd:
+          case Opcodes.i32AtomicRmwSub:
+          case Opcodes.i32AtomicRmwAnd:
+          case Opcodes.i32AtomicRmwOr:
+          case Opcodes.i32AtomicRmwXor:
+          case Opcodes.i32AtomicRmwXchg:
+            final operation = switch (instruction.opcode) {
+              Opcodes.i32AtomicRmwAdd => (int a, int b) => a + b,
+              Opcodes.i32AtomicRmwSub => (int a, int b) => a - b,
+              Opcodes.i32AtomicRmwAnd => (int a, int b) => a & b,
+              Opcodes.i32AtomicRmwOr => (int a, int b) => a | b,
+              Opcodes.i32AtomicRmwXor => (int a, int b) => a ^ b,
+              Opcodes.i32AtomicRmwXchg => (int _, int b) => b,
+              _ => throw StateError('Unexpected i32 atomic rmw opcode.'),
+            };
+            final previous = _executeAsyncSubsetAtomicRmwI32(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              operation: operation,
+              context: 'i32.atomic.rmw',
+            );
+            stack.add(WasmValue.i32(previous));
+            pc++;
+
+          case Opcodes.i64AtomicRmwAdd:
+          case Opcodes.i64AtomicRmwSub:
+          case Opcodes.i64AtomicRmwAnd:
+          case Opcodes.i64AtomicRmwOr:
+          case Opcodes.i64AtomicRmwXor:
+          case Opcodes.i64AtomicRmwXchg:
+            final operation = switch (instruction.opcode) {
+              Opcodes.i64AtomicRmwAdd => (BigInt a, BigInt b) => a + b,
+              Opcodes.i64AtomicRmwSub => (BigInt a, BigInt b) => a - b,
+              Opcodes.i64AtomicRmwAnd => (BigInt a, BigInt b) => a & b,
+              Opcodes.i64AtomicRmwOr => (BigInt a, BigInt b) => a | b,
+              Opcodes.i64AtomicRmwXor => (BigInt a, BigInt b) => a ^ b,
+              Opcodes.i64AtomicRmwXchg => (BigInt _, BigInt b) => b,
+              _ => throw StateError('Unexpected i64 atomic rmw opcode.'),
+            };
+            final previous = _executeAsyncSubsetAtomicRmwI64(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              operation: operation,
+              context: 'i64.atomic.rmw',
+            );
+            stack.add(WasmValue.i64(previous));
+            pc++;
+
+          case Opcodes.i32AtomicRmw8AddU:
+          case Opcodes.i32AtomicRmw16AddU:
+          case Opcodes.i32AtomicRmw8SubU:
+          case Opcodes.i32AtomicRmw16SubU:
+          case Opcodes.i32AtomicRmw8AndU:
+          case Opcodes.i32AtomicRmw16AndU:
+          case Opcodes.i32AtomicRmw8OrU:
+          case Opcodes.i32AtomicRmw16OrU:
+          case Opcodes.i32AtomicRmw8XorU:
+          case Opcodes.i32AtomicRmw16XorU:
+          case Opcodes.i32AtomicRmw8XchgU:
+          case Opcodes.i32AtomicRmw16XchgU:
+            final descriptor = switch (instruction.opcode) {
+              Opcodes.i32AtomicRmw8AddU => (1, (int a, int b) => a + b),
+              Opcodes.i32AtomicRmw16AddU => (2, (int a, int b) => a + b),
+              Opcodes.i32AtomicRmw8SubU => (1, (int a, int b) => a - b),
+              Opcodes.i32AtomicRmw16SubU => (2, (int a, int b) => a - b),
+              Opcodes.i32AtomicRmw8AndU => (1, (int a, int b) => a & b),
+              Opcodes.i32AtomicRmw16AndU => (2, (int a, int b) => a & b),
+              Opcodes.i32AtomicRmw8OrU => (1, (int a, int b) => a | b),
+              Opcodes.i32AtomicRmw16OrU => (2, (int a, int b) => a | b),
+              Opcodes.i32AtomicRmw8XorU => (1, (int a, int b) => a ^ b),
+              Opcodes.i32AtomicRmw16XorU => (2, (int a, int b) => a ^ b),
+              Opcodes.i32AtomicRmw8XchgU => (1, (int _, int b) => b),
+              Opcodes.i32AtomicRmw16XchgU => (2, (int _, int b) => b),
+              _ => throw StateError('Unexpected i32 narrow atomic rmw opcode.'),
+            };
+            final previous = _executeAsyncSubsetAtomicRmwI32Narrow(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              widthBytes: descriptor.$1,
+              operation: descriptor.$2,
+              context: 'i32.atomic.rmw.narrow',
+            );
+            stack.add(WasmValue.i32(previous));
+            pc++;
+
+          case Opcodes.i64AtomicRmw8AddU:
+          case Opcodes.i64AtomicRmw16AddU:
+          case Opcodes.i64AtomicRmw32AddU:
+          case Opcodes.i64AtomicRmw8SubU:
+          case Opcodes.i64AtomicRmw16SubU:
+          case Opcodes.i64AtomicRmw32SubU:
+          case Opcodes.i64AtomicRmw8AndU:
+          case Opcodes.i64AtomicRmw16AndU:
+          case Opcodes.i64AtomicRmw32AndU:
+          case Opcodes.i64AtomicRmw8OrU:
+          case Opcodes.i64AtomicRmw16OrU:
+          case Opcodes.i64AtomicRmw32OrU:
+          case Opcodes.i64AtomicRmw8XorU:
+          case Opcodes.i64AtomicRmw16XorU:
+          case Opcodes.i64AtomicRmw32XorU:
+          case Opcodes.i64AtomicRmw8XchgU:
+          case Opcodes.i64AtomicRmw16XchgU:
+          case Opcodes.i64AtomicRmw32XchgU:
+            final descriptor = switch (instruction.opcode) {
+              Opcodes.i64AtomicRmw8AddU => (1, (int a, int b) => a + b),
+              Opcodes.i64AtomicRmw16AddU => (2, (int a, int b) => a + b),
+              Opcodes.i64AtomicRmw32AddU => (4, (int a, int b) => a + b),
+              Opcodes.i64AtomicRmw8SubU => (1, (int a, int b) => a - b),
+              Opcodes.i64AtomicRmw16SubU => (2, (int a, int b) => a - b),
+              Opcodes.i64AtomicRmw32SubU => (4, (int a, int b) => a - b),
+              Opcodes.i64AtomicRmw8AndU => (1, (int a, int b) => a & b),
+              Opcodes.i64AtomicRmw16AndU => (2, (int a, int b) => a & b),
+              Opcodes.i64AtomicRmw32AndU => (4, (int a, int b) => a & b),
+              Opcodes.i64AtomicRmw8OrU => (1, (int a, int b) => a | b),
+              Opcodes.i64AtomicRmw16OrU => (2, (int a, int b) => a | b),
+              Opcodes.i64AtomicRmw32OrU => (4, (int a, int b) => a | b),
+              Opcodes.i64AtomicRmw8XorU => (1, (int a, int b) => a ^ b),
+              Opcodes.i64AtomicRmw16XorU => (2, (int a, int b) => a ^ b),
+              Opcodes.i64AtomicRmw32XorU => (4, (int a, int b) => a ^ b),
+              Opcodes.i64AtomicRmw8XchgU => (1, (int _, int b) => b),
+              Opcodes.i64AtomicRmw16XchgU => (2, (int _, int b) => b),
+              Opcodes.i64AtomicRmw32XchgU => (4, (int _, int b) => b),
+              _ => throw StateError('Unexpected i64 narrow atomic rmw opcode.'),
+            };
+            final previous = _executeAsyncSubsetAtomicRmwI64Narrow(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              widthBytes: descriptor.$1,
+              operation: descriptor.$2,
+              context: 'i64.atomic.rmw.narrow',
+            );
+            stack.add(WasmValue.i64(previous));
+            pc++;
+
+          case Opcodes.i32AtomicRmwCmpxchg:
+            final previous = _executeAsyncSubsetAtomicCmpxchgI32(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              context: 'i32.atomic.cmpxchg',
+            );
+            stack.add(WasmValue.i32(previous));
+            pc++;
+
+          case Opcodes.i64AtomicRmwCmpxchg:
+            final previous = _executeAsyncSubsetAtomicCmpxchgI64(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              context: 'i64.atomic.cmpxchg',
+            );
+            stack.add(WasmValue.i64(previous));
+            pc++;
+
+          case Opcodes.i32AtomicRmw8CmpxchgU:
+          case Opcodes.i32AtomicRmw16CmpxchgU:
+            final widthBytes = switch (instruction.opcode) {
+              Opcodes.i32AtomicRmw8CmpxchgU => 1,
+              Opcodes.i32AtomicRmw16CmpxchgU => 2,
+              _ => throw StateError('Unexpected i32 narrow cmpxchg opcode.'),
+            };
+            final previous = _executeAsyncSubsetAtomicCmpxchgI32Narrow(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              widthBytes: widthBytes,
+              context: 'i32.atomic.cmpxchg.narrow',
+            );
+            stack.add(WasmValue.i32(previous));
+            pc++;
+
+          case Opcodes.i64AtomicRmw8CmpxchgU:
+          case Opcodes.i64AtomicRmw16CmpxchgU:
+          case Opcodes.i64AtomicRmw32CmpxchgU:
+            final widthBytes = switch (instruction.opcode) {
+              Opcodes.i64AtomicRmw8CmpxchgU => 1,
+              Opcodes.i64AtomicRmw16CmpxchgU => 2,
+              Opcodes.i64AtomicRmw32CmpxchgU => 4,
+              _ => throw StateError('Unexpected i64 narrow cmpxchg opcode.'),
+            };
+            final previous = _executeAsyncSubsetAtomicCmpxchgI64Narrow(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              widthBytes: widthBytes,
+              context: 'i64.atomic.cmpxchg.narrow',
+            );
+            stack.add(WasmValue.i64(previous));
+            pc++;
+
+          case Opcodes.memoryInit:
+            final dataIndex = instruction.immediate!;
+            final memoryIndex = instruction.secondaryImmediate!;
+            if (dataIndex < 0 || dataIndex >= _asyncDataSegments.length) {
+              throw RangeError(
+                'memory.init data segment index out of range: $dataIndex',
+              );
+            }
+            if (memoryIndex < 0 || memoryIndex >= memories.length) {
+              throw RangeError(
+                'memory.init memory index out of range: $memoryIndex',
+              );
+            }
+            final length = _popAsyncSubsetLinearValue(
+              stack,
+              context: 'memory.init length',
+              expectedType: WasmValueType.i32,
+            );
+            final sourceOffset = _popAsyncSubsetLinearValue(
+              stack,
+              context: 'memory.init source offset',
+              expectedType: WasmValueType.i32,
+            );
+            final destinationOffset = _popAsyncSubsetMemoryOperand(
+              stack,
+              memoryIndex: memoryIndex,
+              memory64ByIndex: memory64ByIndex,
+              context: 'memory.init destination offset',
+            );
+            final data = _asyncDataSegments[dataIndex];
+            if (data == null) {
+              if (length == 0) {
+                pc++;
+                continue;
+              }
+              throw StateError(
+                'memory.init on dropped data segment $dataIndex.',
+              );
+            }
+            if (sourceOffset > data.length ||
+                length > data.length - sourceOffset) {
+              throw StateError('memory.init source out of bounds.');
+            }
+            final memory = memories[memoryIndex];
+            if (destinationOffset > memory.lengthInBytes ||
+                length > memory.lengthInBytes - destinationOffset) {
+              throw StateError('memory.init destination out of bounds.');
+            }
+            if (length != 0) {
+              memory.writeBytes(
+                destinationOffset,
+                Uint8List.fromList(
+                  data.sublist(sourceOffset, sourceOffset + length),
+                ),
+              );
+            }
+            pc++;
+
+          case Opcodes.dataDrop:
+            final dataIndex = instruction.immediate!;
+            if (dataIndex < 0 || dataIndex >= _asyncDataSegments.length) {
+              throw RangeError(
+                'data.drop segment index out of range: $dataIndex',
+              );
+            }
+            _asyncDataSegments[dataIndex] = null;
+            pc++;
+
+          case Opcodes.tableInit:
+            final elementIndex = instruction.immediate!;
+            final tableIndex = instruction.secondaryImmediate!;
+            if (elementIndex < 0 ||
+                elementIndex >= _asyncElementSegments.length) {
+              throw RangeError(
+                'table.init element segment index out of range: $elementIndex',
+              );
+            }
+            if (tableIndex < 0 || tableIndex >= tables.length) {
+              throw RangeError(
+                'table.init table index out of range: $tableIndex',
+              );
+            }
+            final length = _popAsyncSubsetLinearValue(
+              stack,
+              context: 'table.init length',
+              expectedType: WasmValueType.i32,
+            );
+            final sourceOffset = _popAsyncSubsetLinearValue(
+              stack,
+              context: 'table.init source offset',
+              expectedType: WasmValueType.i32,
+            );
+            final destinationOffset = _popAsyncSubsetTableOperand(
+              stack,
+              tableIndex: tableIndex,
+              table64ByIndex: table64ByIndex,
+              context: 'table.init destination offset',
+            );
+            final segment = _asyncElementSegments[elementIndex];
+            if (segment == null) {
+              if (length == 0) {
+                pc++;
+                continue;
+              }
+              throw StateError(
+                'table.init on dropped element segment $elementIndex.',
+              );
+            }
+            if (sourceOffset > segment.length ||
+                length > segment.length - sourceOffset) {
+              throw StateError('table.init source out of bounds.');
+            }
+            final table = tables[tableIndex];
+            if (destinationOffset > table.length ||
+                length > table.length - destinationOffset) {
+              throw StateError('table.init destination out of bounds.');
+            }
+            if (length != 0) {
+              table.initialize(
+                destinationOffset,
+                segment.sublist(sourceOffset, sourceOffset + length),
+              );
+            }
+            pc++;
+
+          case Opcodes.elemDrop:
+            final elementIndex = instruction.immediate!;
+            if (elementIndex < 0 ||
+                elementIndex >= _asyncElementSegments.length) {
+              throw RangeError(
+                'elem.drop segment index out of range: $elementIndex',
+              );
+            }
+            _asyncElementSegments[elementIndex] = null;
+            pc++;
+
+          case Opcodes.tableCopy:
+            final destinationTableIndex = instruction.immediate!;
+            final sourceTableIndex = instruction.secondaryImmediate!;
+            if (destinationTableIndex < 0 ||
+                destinationTableIndex >= tables.length) {
+              throw RangeError(
+                'table.copy destination table index out of range: '
+                '$destinationTableIndex',
+              );
+            }
+            if (sourceTableIndex < 0 || sourceTableIndex >= tables.length) {
+              throw RangeError(
+                'table.copy source table index out of range: $sourceTableIndex',
+              );
+            }
+            final destinationIs64 =
+                destinationTableIndex >= 0 &&
+                destinationTableIndex < table64ByIndex.length &&
+                table64ByIndex[destinationTableIndex];
+            final sourceIs64 =
+                sourceTableIndex >= 0 &&
+                sourceTableIndex < table64ByIndex.length &&
+                table64ByIndex[sourceTableIndex];
+            final length = destinationIs64 && sourceIs64
+                ? _popAsyncSubsetLinearValue(
+                    stack,
+                    context: 'table.copy length',
+                    expectedType: WasmValueType.i64,
+                  )
+                : _popAsyncSubsetLinearValue(
+                    stack,
+                    context: 'table.copy length',
+                    expectedType: WasmValueType.i32,
+                  );
+            final sourceOffset = _popAsyncSubsetTableOperand(
+              stack,
+              tableIndex: sourceTableIndex,
+              table64ByIndex: table64ByIndex,
+              context: 'table.copy source offset',
+            );
+            final destinationOffset = _popAsyncSubsetTableOperand(
+              stack,
+              tableIndex: destinationTableIndex,
+              table64ByIndex: table64ByIndex,
+              context: 'table.copy destination offset',
+            );
+            final sourceTable = tables[sourceTableIndex];
+            final destinationTable = tables[destinationTableIndex];
+            if (sourceOffset > sourceTable.length ||
+                length > sourceTable.length - sourceOffset) {
+              throw StateError('table.copy source out of bounds.');
+            }
+            if (destinationOffset > destinationTable.length ||
+                length > destinationTable.length - destinationOffset) {
+              throw StateError('table.copy destination out of bounds.');
+            }
+            if (length != 0) {
+              final copied = List<int?>.generate(
+                length,
+                (index) => sourceTable[sourceOffset + index],
+                growable: false,
+              );
+              destinationTable.initialize(destinationOffset, copied);
+            }
+            pc++;
+
+          case Opcodes.tableGrow:
+            final tableIndex = instruction.immediate!;
+            if (tableIndex < 0 || tableIndex >= tables.length) {
+              throw RangeError(
+                'table.grow table index out of range: $tableIndex',
+              );
+            }
+            final delta = _popAsyncSubsetTableOperand(
+              stack,
+              tableIndex: tableIndex,
+              table64ByIndex: table64ByIndex,
+              context: 'table.grow delta',
+            );
+            final fillValue = _popAsyncSubsetRef(
+              stack,
+              context: 'table.grow fill value',
+            );
+            final previousLength = tables[tableIndex].grow(delta, fillValue);
+            stack.add(
+              _asyncSubsetTableIndexValue(
+                tableIndex: tableIndex,
+                table64ByIndex: table64ByIndex,
+                value: previousLength,
               ),
             );
-          }
-          pc++;
-
-        case Opcodes.dataDrop:
-          final dataIndex = instruction.immediate!;
-          if (dataIndex < 0 || dataIndex >= _asyncDataSegments.length) {
-            throw RangeError(
-              'data.drop segment index out of range: $dataIndex',
-            );
-          }
-          _asyncDataSegments[dataIndex] = null;
-          pc++;
-
-        case Opcodes.tableInit:
-          final elementIndex = instruction.immediate!;
-          final tableIndex = instruction.secondaryImmediate!;
-          if (elementIndex < 0 ||
-              elementIndex >= _asyncElementSegments.length) {
-            throw RangeError(
-              'table.init element segment index out of range: $elementIndex',
-            );
-          }
-          if (tableIndex < 0 || tableIndex >= tables.length) {
-            throw RangeError(
-              'table.init table index out of range: $tableIndex',
-            );
-          }
-          final length = _popAsyncSubsetLinearValue(
-            stack,
-            context: 'table.init length',
-            expectedType: WasmValueType.i32,
-          );
-          final sourceOffset = _popAsyncSubsetLinearValue(
-            stack,
-            context: 'table.init source offset',
-            expectedType: WasmValueType.i32,
-          );
-          final destinationOffset = _popAsyncSubsetTableOperand(
-            stack,
-            tableIndex: tableIndex,
-            table64ByIndex: table64ByIndex,
-            context: 'table.init destination offset',
-          );
-          final segment = _asyncElementSegments[elementIndex];
-          if (segment == null) {
-            if (length == 0) {
-              pc++;
-              continue;
-            }
-            throw StateError(
-              'table.init on dropped element segment $elementIndex.',
-            );
-          }
-          if (sourceOffset > segment.length ||
-              length > segment.length - sourceOffset) {
-            throw StateError('table.init source out of bounds.');
-          }
-          final table = tables[tableIndex];
-          if (destinationOffset > table.length ||
-              length > table.length - destinationOffset) {
-            throw StateError('table.init destination out of bounds.');
-          }
-          if (length != 0) {
-            table.initialize(
-              destinationOffset,
-              segment.sublist(sourceOffset, sourceOffset + length),
-            );
-          }
-          pc++;
-
-        case Opcodes.elemDrop:
-          final elementIndex = instruction.immediate!;
-          if (elementIndex < 0 ||
-              elementIndex >= _asyncElementSegments.length) {
-            throw RangeError(
-              'elem.drop segment index out of range: $elementIndex',
-            );
-          }
-          _asyncElementSegments[elementIndex] = null;
-          pc++;
-
-        case Opcodes.tableCopy:
-          final destinationTableIndex = instruction.immediate!;
-          final sourceTableIndex = instruction.secondaryImmediate!;
-          if (destinationTableIndex < 0 ||
-              destinationTableIndex >= tables.length) {
-            throw RangeError(
-              'table.copy destination table index out of range: '
-              '$destinationTableIndex',
-            );
-          }
-          if (sourceTableIndex < 0 || sourceTableIndex >= tables.length) {
-            throw RangeError(
-              'table.copy source table index out of range: $sourceTableIndex',
-            );
-          }
-          final destinationIs64 =
-              destinationTableIndex >= 0 &&
-              destinationTableIndex < table64ByIndex.length &&
-              table64ByIndex[destinationTableIndex];
-          final sourceIs64 =
-              sourceTableIndex >= 0 &&
-              sourceTableIndex < table64ByIndex.length &&
-              table64ByIndex[sourceTableIndex];
-          final length = destinationIs64 && sourceIs64
-              ? _popAsyncSubsetLinearValue(
-                  stack,
-                  context: 'table.copy length',
-                  expectedType: WasmValueType.i64,
-                )
-              : _popAsyncSubsetLinearValue(
-                  stack,
-                  context: 'table.copy length',
-                  expectedType: WasmValueType.i32,
-                );
-          final sourceOffset = _popAsyncSubsetTableOperand(
-            stack,
-            tableIndex: sourceTableIndex,
-            table64ByIndex: table64ByIndex,
-            context: 'table.copy source offset',
-          );
-          final destinationOffset = _popAsyncSubsetTableOperand(
-            stack,
-            tableIndex: destinationTableIndex,
-            table64ByIndex: table64ByIndex,
-            context: 'table.copy destination offset',
-          );
-          final sourceTable = tables[sourceTableIndex];
-          final destinationTable = tables[destinationTableIndex];
-          if (sourceOffset > sourceTable.length ||
-              length > sourceTable.length - sourceOffset) {
-            throw StateError('table.copy source out of bounds.');
-          }
-          if (destinationOffset > destinationTable.length ||
-              length > destinationTable.length - destinationOffset) {
-            throw StateError('table.copy destination out of bounds.');
-          }
-          if (length != 0) {
-            final copied = List<int?>.generate(
-              length,
-              (index) => sourceTable[sourceOffset + index],
-              growable: false,
-            );
-            destinationTable.initialize(destinationOffset, copied);
-          }
-          pc++;
-
-        case Opcodes.tableGrow:
-          final tableIndex = instruction.immediate!;
-          if (tableIndex < 0 || tableIndex >= tables.length) {
-            throw RangeError(
-              'table.grow table index out of range: $tableIndex',
-            );
-          }
-          final delta = _popAsyncSubsetTableOperand(
-            stack,
-            tableIndex: tableIndex,
-            table64ByIndex: table64ByIndex,
-            context: 'table.grow delta',
-          );
-          final fillValue = _popAsyncSubsetRef(
-            stack,
-            context: 'table.grow fill value',
-          );
-          final previousLength = tables[tableIndex].grow(delta, fillValue);
-          stack.add(
-            _asyncSubsetTableIndexValue(
-              tableIndex: tableIndex,
-              table64ByIndex: table64ByIndex,
-              value: previousLength,
-            ),
-          );
-          pc++;
-
-        case Opcodes.tableSize:
-          final tableIndex = instruction.immediate!;
-          if (tableIndex < 0 || tableIndex >= tables.length) {
-            throw RangeError(
-              'table.size table index out of range: $tableIndex',
-            );
-          }
-          stack.add(
-            _asyncSubsetTableIndexValue(
-              tableIndex: tableIndex,
-              table64ByIndex: table64ByIndex,
-              value: tables[tableIndex].length,
-            ),
-          );
-          pc++;
-
-        case Opcodes.tableFill:
-          final tableIndex = instruction.immediate!;
-          if (tableIndex < 0 || tableIndex >= tables.length) {
-            throw RangeError(
-              'table.fill table index out of range: $tableIndex',
-            );
-          }
-          final length = _popAsyncSubsetTableOperand(
-            stack,
-            tableIndex: tableIndex,
-            table64ByIndex: table64ByIndex,
-            context: 'table.fill length',
-          );
-          final fillValue = _popAsyncSubsetRef(
-            stack,
-            context: 'table.fill value',
-          );
-          final destinationOffset = _popAsyncSubsetTableOperand(
-            stack,
-            tableIndex: tableIndex,
-            table64ByIndex: table64ByIndex,
-            context: 'table.fill destination offset',
-          );
-          final table = tables[tableIndex];
-          if (destinationOffset > table.length ||
-              length > table.length - destinationOffset) {
-            throw StateError('table.fill destination out of bounds.');
-          }
-          if (length != 0) {
-            table.initialize(
-              destinationOffset,
-              List<int?>.filled(length, fillValue, growable: false),
-            );
-          }
-          pc++;
-
-        case Opcodes.i32Load:
-        case Opcodes.i64Load:
-        case Opcodes.f32Load:
-        case Opcodes.f64Load:
-        case Opcodes.i32Load8S:
-        case Opcodes.i32Load8U:
-        case Opcodes.i32Load16S:
-        case Opcodes.i32Load16U:
-        case Opcodes.i64Load8S:
-        case Opcodes.i64Load8U:
-        case Opcodes.i64Load16S:
-        case Opcodes.i64Load16U:
-        case Opcodes.i64Load32S:
-        case Opcodes.i64Load32U:
-          final memArg = instruction.memArg;
-          if (memArg == null) {
-            throw StateError('Malformed memory load instruction memarg.');
-          }
-          final target = _resolveAsyncSubsetMemoryTarget(
-            memArg: memArg,
-            memory64ByIndex: memory64ByIndex,
-            context: 'load',
-          );
-          final addressValue = _popValue(stack, 'memory.load address');
-          final address = _resolveAsyncSubsetMemoryAddress(
-            memArg: memArg,
-            baseAddressValue: addressValue,
-            isMemory64: target.isMemory64,
-            context: 'memory.load',
-          );
-          switch (instruction.opcode) {
-            case Opcodes.i32Load:
-              stack.add(WasmValue.i32(target.memory.loadI32(address)));
-            case Opcodes.i64Load:
-              stack.add(WasmValue.i64(target.memory.loadI64(address)));
-            case Opcodes.f32Load:
-              stack.add(WasmValue.f32(target.memory.loadF32(address)));
-            case Opcodes.f64Load:
-              stack.add(WasmValue.f64(target.memory.loadF64(address)));
-            case Opcodes.i32Load8S:
-              stack.add(WasmValue.i32(target.memory.loadI8(address)));
-            case Opcodes.i32Load8U:
-              stack.add(WasmValue.i32(target.memory.loadU8(address)));
-            case Opcodes.i32Load16S:
-              stack.add(WasmValue.i32(target.memory.loadI16(address)));
-            case Opcodes.i32Load16U:
-              stack.add(WasmValue.i32(target.memory.loadU16(address)));
-            case Opcodes.i64Load8S:
-              stack.add(WasmValue.i64(target.memory.loadI8(address)));
-            case Opcodes.i64Load8U:
-              stack.add(WasmValue.i64(target.memory.loadU8(address)));
-            case Opcodes.i64Load16S:
-              stack.add(WasmValue.i64(target.memory.loadI16(address)));
-            case Opcodes.i64Load16U:
-              stack.add(WasmValue.i64(target.memory.loadU16(address)));
-            case Opcodes.i64Load32S:
-              stack.add(WasmValue.i64(target.memory.loadI32(address)));
-            case Opcodes.i64Load32U:
-              stack.add(WasmValue.i64(target.memory.loadU32(address)));
-            default:
-              throw StateError(
-                'Unexpected load opcode in async subset: '
-                '0x${instruction.opcode.toRadixString(16)}',
-              );
-          }
-          pc++;
-
-        case Opcodes.i32Store:
-        case Opcodes.i64Store:
-        case Opcodes.f32Store:
-        case Opcodes.f64Store:
-        case Opcodes.i32Store8:
-        case Opcodes.i32Store16:
-        case Opcodes.i64Store8:
-        case Opcodes.i64Store16:
-        case Opcodes.i64Store32:
-          final memArg = instruction.memArg;
-          if (memArg == null) {
-            throw StateError('Malformed memory store instruction memarg.');
-          }
-          final target = _resolveAsyncSubsetMemoryTarget(
-            memArg: memArg,
-            memory64ByIndex: memory64ByIndex,
-            context: 'store',
-          );
-          final rawValue = _popValue(stack, 'memory.store value');
-          final addressValue = _popValue(stack, 'memory.store address');
-          final address = _resolveAsyncSubsetMemoryAddress(
-            memArg: memArg,
-            baseAddressValue: addressValue,
-            isMemory64: target.isMemory64,
-            context: 'memory.store',
-          );
-          switch (instruction.opcode) {
-            case Opcodes.i32Store:
-              target.memory.storeI32(
-                address,
-                rawValue.castTo(WasmValueType.i32).asI32(),
-              );
-            case Opcodes.i64Store:
-              target.memory.storeI64(
-                address,
-                rawValue.castTo(WasmValueType.i64).asI64(),
-              );
-            case Opcodes.f32Store:
-              target.memory.storeF32(
-                address,
-                rawValue.castTo(WasmValueType.f32).asF32(),
-              );
-            case Opcodes.f64Store:
-              target.memory.storeF64(
-                address,
-                rawValue.castTo(WasmValueType.f64).asF64(),
-              );
-            case Opcodes.i32Store8:
-              target.memory.storeI8(
-                address,
-                rawValue.castTo(WasmValueType.i32).asI32(),
-              );
-            case Opcodes.i32Store16:
-              target.memory.storeI16(
-                address,
-                rawValue.castTo(WasmValueType.i32).asI32(),
-              );
-            case Opcodes.i64Store8:
-              target.memory.storeI8(
-                address,
-                WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
-              );
-            case Opcodes.i64Store16:
-              target.memory.storeI16(
-                address,
-                WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
-              );
-            case Opcodes.i64Store32:
-              target.memory.storeI32(
-                address,
-                WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
-              );
-            default:
-              throw StateError(
-                'Unexpected store opcode in async subset: '
-                '0x${instruction.opcode.toRadixString(16)}',
-              );
-          }
-          pc++;
-
-        case Opcodes.block:
-          final endIndex = instruction.endIndex;
-          if (endIndex == null) {
-            throw StateError('Malformed block without end index.');
-          }
-          final parameterTypes =
-              instruction.blockParameterTypes ?? const <WasmValueType>[];
-          final params = _popArgsForTypes(
-            stack,
-            parameterTypes,
-            context: 'block',
-          );
-          final baseHeight = stack.length;
-          stack.addAll(params);
-          controlStack.add(
-            _AsyncSubsetControlFrame(
-              kind: _AsyncSubsetControlKind.block,
-              stackBaseHeight: baseHeight,
-              startIndex: pc,
-              endIndex: endIndex,
-              parameterTypes: parameterTypes,
-              resultTypes:
-                  instruction.blockResultTypes ?? const <WasmValueType>[],
-            ),
-          );
-          pc++;
-
-        case Opcodes.loop:
-          final endIndex = instruction.endIndex;
-          if (endIndex == null) {
-            throw StateError('Malformed loop without end index.');
-          }
-          final parameterTypes =
-              instruction.blockParameterTypes ?? const <WasmValueType>[];
-          final params = _popArgsForTypes(
-            stack,
-            parameterTypes,
-            context: 'loop',
-          );
-          final baseHeight = stack.length;
-          stack.addAll(params);
-          controlStack.add(
-            _AsyncSubsetControlFrame(
-              kind: _AsyncSubsetControlKind.loop,
-              stackBaseHeight: baseHeight,
-              startIndex: pc,
-              endIndex: endIndex,
-              parameterTypes: parameterTypes,
-              resultTypes:
-                  instruction.blockResultTypes ?? const <WasmValueType>[],
-            ),
-          );
-          pc++;
-
-        case Opcodes.if_:
-          final endIndex = instruction.endIndex;
-          if (endIndex == null) {
-            throw StateError('Malformed if without end index.');
-          }
-          final condition = _popValue(
-            stack,
-            'if condition',
-          ).castTo(WasmValueType.i32).asI32();
-          final parameterTypes =
-              instruction.blockParameterTypes ?? const <WasmValueType>[];
-          final params = _popArgsForTypes(stack, parameterTypes, context: 'if');
-          final baseHeight = stack.length;
-          stack.addAll(params);
-          final frame = _AsyncSubsetControlFrame(
-            kind: _AsyncSubsetControlKind.if_,
-            stackBaseHeight: baseHeight,
-            startIndex: pc,
-            endIndex: endIndex,
-            parameterTypes: parameterTypes,
-            resultTypes:
-                instruction.blockResultTypes ?? const <WasmValueType>[],
-          );
-          controlStack.add(frame);
-          if (condition == 0) {
-            stack.length = baseHeight;
-            final elseIndex = instruction.elseIndex;
-            if (elseIndex != null) {
-              pc = elseIndex + 1;
-            } else {
-              controlStack.removeLast();
-              pc = endIndex + 1;
-            }
-          } else {
             pc++;
-          }
 
-        case Opcodes.else_:
-          if (controlStack.isEmpty ||
-              controlStack.last.kind != _AsyncSubsetControlKind.if_) {
-            throw const FormatException('`else` without matching `if`.');
-          }
-          final frame = controlStack.removeLast();
-          _leaveAsyncSubsetControlFrame(stack, frame, context: 'else');
-          final endIndex = instruction.endIndex;
-          if (endIndex == null) {
-            throw StateError('Malformed else without end index.');
-          }
-          pc = endIndex + 1;
+          case Opcodes.tableSize:
+            final tableIndex = instruction.immediate!;
+            if (tableIndex < 0 || tableIndex >= tables.length) {
+              throw RangeError(
+                'table.size table index out of range: $tableIndex',
+              );
+            }
+            stack.add(
+              _asyncSubsetTableIndexValue(
+                tableIndex: tableIndex,
+                table64ByIndex: table64ByIndex,
+                value: tables[tableIndex].length,
+              ),
+            );
+            pc++;
 
-        case Opcodes.end:
-          if (controlStack.isEmpty) {
+          case Opcodes.tableFill:
+            final tableIndex = instruction.immediate!;
+            if (tableIndex < 0 || tableIndex >= tables.length) {
+              throw RangeError(
+                'table.fill table index out of range: $tableIndex',
+              );
+            }
+            final length = _popAsyncSubsetTableOperand(
+              stack,
+              tableIndex: tableIndex,
+              table64ByIndex: table64ByIndex,
+              context: 'table.fill length',
+            );
+            final fillValue = _popAsyncSubsetRef(
+              stack,
+              context: 'table.fill value',
+            );
+            final destinationOffset = _popAsyncSubsetTableOperand(
+              stack,
+              tableIndex: tableIndex,
+              table64ByIndex: table64ByIndex,
+              context: 'table.fill destination offset',
+            );
+            final table = tables[tableIndex];
+            if (destinationOffset > table.length ||
+                length > table.length - destinationOffset) {
+              throw StateError('table.fill destination out of bounds.');
+            }
+            if (length != 0) {
+              table.initialize(
+                destinationOffset,
+                List<int?>.filled(length, fillValue, growable: false),
+              );
+            }
+            pc++;
+
+          case Opcodes.i32Load:
+          case Opcodes.i64Load:
+          case Opcodes.f32Load:
+          case Opcodes.f64Load:
+          case Opcodes.i32Load8S:
+          case Opcodes.i32Load8U:
+          case Opcodes.i32Load16S:
+          case Opcodes.i32Load16U:
+          case Opcodes.i64Load8S:
+          case Opcodes.i64Load8U:
+          case Opcodes.i64Load16S:
+          case Opcodes.i64Load16U:
+          case Opcodes.i64Load32S:
+          case Opcodes.i64Load32U:
+            final memArg = instruction.memArg;
+            if (memArg == null) {
+              throw StateError('Malformed memory load instruction memarg.');
+            }
+            final target = _resolveAsyncSubsetMemoryTarget(
+              memArg: memArg,
+              memory64ByIndex: memory64ByIndex,
+              context: 'load',
+            );
+            final addressValue = _popValue(stack, 'memory.load address');
+            final address = _resolveAsyncSubsetMemoryAddress(
+              memArg: memArg,
+              baseAddressValue: addressValue,
+              isMemory64: target.isMemory64,
+              context: 'memory.load',
+            );
+            switch (instruction.opcode) {
+              case Opcodes.i32Load:
+                stack.add(WasmValue.i32(target.memory.loadI32(address)));
+              case Opcodes.i64Load:
+                stack.add(WasmValue.i64(target.memory.loadI64(address)));
+              case Opcodes.f32Load:
+                stack.add(WasmValue.f32(target.memory.loadF32(address)));
+              case Opcodes.f64Load:
+                stack.add(WasmValue.f64(target.memory.loadF64(address)));
+              case Opcodes.i32Load8S:
+                stack.add(WasmValue.i32(target.memory.loadI8(address)));
+              case Opcodes.i32Load8U:
+                stack.add(WasmValue.i32(target.memory.loadU8(address)));
+              case Opcodes.i32Load16S:
+                stack.add(WasmValue.i32(target.memory.loadI16(address)));
+              case Opcodes.i32Load16U:
+                stack.add(WasmValue.i32(target.memory.loadU16(address)));
+              case Opcodes.i64Load8S:
+                stack.add(WasmValue.i64(target.memory.loadI8(address)));
+              case Opcodes.i64Load8U:
+                stack.add(WasmValue.i64(target.memory.loadU8(address)));
+              case Opcodes.i64Load16S:
+                stack.add(WasmValue.i64(target.memory.loadI16(address)));
+              case Opcodes.i64Load16U:
+                stack.add(WasmValue.i64(target.memory.loadU16(address)));
+              case Opcodes.i64Load32S:
+                stack.add(WasmValue.i64(target.memory.loadI32(address)));
+              case Opcodes.i64Load32U:
+                stack.add(WasmValue.i64(target.memory.loadU32(address)));
+              default:
+                throw StateError(
+                  'Unexpected load opcode in async subset: '
+                  '0x${instruction.opcode.toRadixString(16)}',
+                );
+            }
+            pc++;
+
+          case Opcodes.i32Store:
+          case Opcodes.i64Store:
+          case Opcodes.f32Store:
+          case Opcodes.f64Store:
+          case Opcodes.i32Store8:
+          case Opcodes.i32Store16:
+          case Opcodes.i64Store8:
+          case Opcodes.i64Store16:
+          case Opcodes.i64Store32:
+            final memArg = instruction.memArg;
+            if (memArg == null) {
+              throw StateError('Malformed memory store instruction memarg.');
+            }
+            final target = _resolveAsyncSubsetMemoryTarget(
+              memArg: memArg,
+              memory64ByIndex: memory64ByIndex,
+              context: 'store',
+            );
+            final rawValue = _popValue(stack, 'memory.store value');
+            final addressValue = _popValue(stack, 'memory.store address');
+            final address = _resolveAsyncSubsetMemoryAddress(
+              memArg: memArg,
+              baseAddressValue: addressValue,
+              isMemory64: target.isMemory64,
+              context: 'memory.store',
+            );
+            switch (instruction.opcode) {
+              case Opcodes.i32Store:
+                target.memory.storeI32(
+                  address,
+                  rawValue.castTo(WasmValueType.i32).asI32(),
+                );
+              case Opcodes.i64Store:
+                target.memory.storeI64(
+                  address,
+                  rawValue.castTo(WasmValueType.i64).asI64(),
+                );
+              case Opcodes.f32Store:
+                target.memory.storeF32(
+                  address,
+                  rawValue.castTo(WasmValueType.f32).asF32(),
+                );
+              case Opcodes.f64Store:
+                target.memory.storeF64(
+                  address,
+                  rawValue.castTo(WasmValueType.f64).asF64(),
+                );
+              case Opcodes.i32Store8:
+                target.memory.storeI8(
+                  address,
+                  rawValue.castTo(WasmValueType.i32).asI32(),
+                );
+              case Opcodes.i32Store16:
+                target.memory.storeI16(
+                  address,
+                  rawValue.castTo(WasmValueType.i32).asI32(),
+                );
+              case Opcodes.i64Store8:
+                target.memory.storeI8(
+                  address,
+                  WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
+                );
+              case Opcodes.i64Store16:
+                target.memory.storeI16(
+                  address,
+                  WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
+                );
+              case Opcodes.i64Store32:
+                target.memory.storeI32(
+                  address,
+                  WasmI64.lowU32(rawValue.castTo(WasmValueType.i64).asI64()),
+                );
+              default:
+                throw StateError(
+                  'Unexpected store opcode in async subset: '
+                  '0x${instruction.opcode.toRadixString(16)}',
+                );
+            }
+            pc++;
+
+          case Opcodes.block:
+            final endIndex = instruction.endIndex;
+            if (endIndex == null) {
+              throw StateError('Malformed block without end index.');
+            }
+            final parameterTypes =
+                instruction.blockParameterTypes ?? const <WasmValueType>[];
+            final params = _popArgsForTypes(
+              stack,
+              parameterTypes,
+              context: 'block',
+            );
+            final baseHeight = stack.length;
+            stack.addAll(params);
+            controlStack.add(
+              _AsyncSubsetControlFrame(
+                kind: _AsyncSubsetControlKind.block,
+                stackBaseHeight: baseHeight,
+                startIndex: pc,
+                endIndex: endIndex,
+                parameterTypes: parameterTypes,
+                resultTypes:
+                    instruction.blockResultTypes ?? const <WasmValueType>[],
+              ),
+            );
+            pc++;
+
+          case Opcodes.loop:
+            final endIndex = instruction.endIndex;
+            if (endIndex == null) {
+              throw StateError('Malformed loop without end index.');
+            }
+            final parameterTypes =
+                instruction.blockParameterTypes ?? const <WasmValueType>[];
+            final params = _popArgsForTypes(
+              stack,
+              parameterTypes,
+              context: 'loop',
+            );
+            final baseHeight = stack.length;
+            stack.addAll(params);
+            controlStack.add(
+              _AsyncSubsetControlFrame(
+                kind: _AsyncSubsetControlKind.loop,
+                stackBaseHeight: baseHeight,
+                startIndex: pc,
+                endIndex: endIndex,
+                parameterTypes: parameterTypes,
+                resultTypes:
+                    instruction.blockResultTypes ?? const <WasmValueType>[],
+              ),
+            );
+            pc++;
+
+          case Opcodes.if_:
+            final endIndex = instruction.endIndex;
+            if (endIndex == null) {
+              throw StateError('Malformed if without end index.');
+            }
+            final condition = _popValue(
+              stack,
+              'if condition',
+            ).castTo(WasmValueType.i32).asI32();
+            final parameterTypes =
+                instruction.blockParameterTypes ?? const <WasmValueType>[];
+            final params = _popArgsForTypes(
+              stack,
+              parameterTypes,
+              context: 'if',
+            );
+            final baseHeight = stack.length;
+            stack.addAll(params);
+            final frame = _AsyncSubsetControlFrame(
+              kind: _AsyncSubsetControlKind.if_,
+              stackBaseHeight: baseHeight,
+              startIndex: pc,
+              endIndex: endIndex,
+              parameterTypes: parameterTypes,
+              resultTypes:
+                  instruction.blockResultTypes ?? const <WasmValueType>[],
+            );
+            controlStack.add(frame);
+            if (condition == 0) {
+              stack.length = baseHeight;
+              final elseIndex = instruction.elseIndex;
+              if (elseIndex != null) {
+                pc = elseIndex + 1;
+              } else {
+                controlStack.removeLast();
+                pc = endIndex + 1;
+              }
+            } else {
+              pc++;
+            }
+
+          case Opcodes.tryLegacy:
+            final endIndex = instruction.endIndex;
+            if (endIndex == null) {
+              throw StateError('Malformed try without end index.');
+            }
+            final parameterTypes =
+                instruction.blockParameterTypes ?? const <WasmValueType>[];
+            final params = _popArgsForTypes(
+              stack,
+              parameterTypes,
+              context: 'try',
+            );
+            final baseHeight = stack.length;
+            stack.addAll(params);
+            controlStack.add(
+              _AsyncSubsetControlFrame(
+                kind: _AsyncSubsetControlKind.tryLegacy,
+                stackBaseHeight: baseHeight,
+                startIndex: pc,
+                endIndex: endIndex,
+                parameterTypes: parameterTypes,
+                resultTypes:
+                    instruction.blockResultTypes ?? const <WasmValueType>[],
+                legacyCatches: instruction.legacyCatches,
+                delegateDepth: instruction.delegateDepth,
+              ),
+            );
+            pc++;
+
+          case Opcodes.catchTag:
+          case Opcodes.catchAll:
+            pc = _handleLegacyCatchBoundaryInAsyncSubset(
+              stack: stack,
+              controlStack: controlStack,
+              pc: pc,
+            );
+
+          case Opcodes.delegate:
+            if (controlStack.isEmpty ||
+                controlStack.last.kind != _AsyncSubsetControlKind.tryLegacy) {
+              throw StateError('`delegate` without matching `try`.');
+            }
+            final frame = controlStack.removeLast();
+            frame
+              ..activeException = null
+              ..activeCatchInstructionIndex = null;
+            _leaveAsyncSubsetControlFrame(stack, frame, context: 'delegate');
+            pc++;
+
+          case Opcodes.else_:
+            if (controlStack.isEmpty ||
+                controlStack.last.kind != _AsyncSubsetControlKind.if_) {
+              throw const FormatException('`else` without matching `if`.');
+            }
+            final frame = controlStack.removeLast();
+            _leaveAsyncSubsetControlFrame(stack, frame, context: 'else');
+            final endIndex = instruction.endIndex;
+            if (endIndex == null) {
+              throw StateError('Malformed else without end index.');
+            }
+            pc = endIndex + 1;
+
+          case Opcodes.end:
+            if (controlStack.isEmpty) {
+              return _collectAsyncSubsetResults(
+                stack,
+                function.type.results,
+                context: 'end',
+              );
+            }
+            final frame = controlStack.removeLast();
+            _leaveAsyncSubsetControlFrame(stack, frame, context: 'end');
+            pc++;
+
+          case Opcodes.br:
+            pc = _branchInAsyncSubset(
+              depth: instruction.immediate!,
+              stack: stack,
+              controlStack: controlStack,
+              context: 'br',
+            );
+
+          case Opcodes.brIf:
+            final condition = _popValue(
+              stack,
+              'br_if condition',
+            ).castTo(WasmValueType.i32).asI32();
+            if (condition != 0) {
+              pc = _branchInAsyncSubset(
+                depth: instruction.immediate!,
+                stack: stack,
+                controlStack: controlStack,
+                context: 'br_if',
+              );
+            } else {
+              pc++;
+            }
+
+          case Opcodes.brOnNull:
+            final value = _popAsyncSubsetRef(
+              stack,
+              context: 'br_on_null operand',
+            );
+            if (value == null) {
+              pc = _branchInAsyncSubset(
+                depth: instruction.immediate!,
+                stack: stack,
+                controlStack: controlStack,
+                context: 'br_on_null',
+              );
+            } else {
+              stack.add(WasmValue.i32(value));
+              pc++;
+            }
+
+          case Opcodes.brOnNonNull:
+            final value = _popAsyncSubsetRef(
+              stack,
+              context: 'br_on_non_null operand',
+            );
+            if (value != null) {
+              stack.add(WasmValue.i32(value));
+              pc = _branchInAsyncSubset(
+                depth: instruction.immediate!,
+                stack: stack,
+                controlStack: controlStack,
+                context: 'br_on_non_null',
+              );
+            } else {
+              pc++;
+            }
+
+          case Opcodes.brTable:
+            final selector = _popValue(
+              stack,
+              'br_table selector',
+            ).castTo(WasmValueType.i32).asI32();
+            final targets = instruction.tableDepths;
+            if (targets == null || targets.isEmpty) {
+              throw StateError('Invalid br_table targets.');
+            }
+            final defaultDepth = targets.last;
+            final depth = selector >= 0 && selector < targets.length - 1
+                ? targets[selector]
+                : defaultDepth;
+            pc = _branchInAsyncSubset(
+              depth: depth,
+              stack: stack,
+              controlStack: controlStack,
+              context: 'br_table',
+            );
+
+          case Opcodes.throwTag:
+            _throwTagInAsyncSubset(stack, instruction);
+
+          case Opcodes.rethrowTag:
+            _rethrowLegacyInAsyncSubset(
+              controlStack: controlStack,
+              depth: instruction.immediate!,
+            );
+
+          case Opcodes.call:
+            final targetIndex = instruction.immediate!;
+            if (targetIndex < 0 || targetIndex >= functions.length) {
+              throw RangeError('call target out of range: $targetIndex');
+            }
+            final target = functions[targetIndex];
+            final callArgs = _popArgsForTypes(
+              stack,
+              target.type.params,
+              context: 'call',
+            );
+            final callResults = await _invokeFunctionAsyncSubset(
+              targetIndex,
+              callArgs,
+              depth: depth + 1,
+            );
+            stack.addAll(callResults);
+            pc++;
+
+          case Opcodes.callRef:
+            final typeIndex = instruction.immediate!;
+            if (typeIndex < 0 || typeIndex >= module.types.length) {
+              throw RangeError('call_ref type index out of range: $typeIndex');
+            }
+            final expectedType = module.types[typeIndex];
+            if (!expectedType.isFunctionType) {
+              throw StateError(
+                'call_ref expected non-function type $typeIndex.',
+              );
+            }
+            final functionReference = _popAsyncSubsetRef(
+              stack,
+              context: 'call_ref function reference',
+            );
+            if (functionReference == null) {
+              throw StateError('call_ref to null function reference.');
+            }
+            final targetIndex = _functionRefIdToIndex[functionReference];
+            if (targetIndex == null) {
+              throw StateError('call_ref to non-function reference.');
+            }
+            final target = functions[targetIndex];
+            if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
+              throw StateError('call_ref signature mismatch trap');
+            }
+            final callArgs = _popArgsForTypes(
+              stack,
+              expectedType.params,
+              context: 'call_ref',
+            );
+            final callResults = await _invokeFunctionAsyncSubset(
+              targetIndex,
+              callArgs,
+              depth: depth + 1,
+            );
+            stack.addAll(callResults);
+            pc++;
+
+          case Opcodes.callIndirect:
+            final typeIndex = instruction.immediate!;
+            if (typeIndex < 0 || typeIndex >= module.types.length) {
+              throw RangeError(
+                'call_indirect type index out of range: $typeIndex',
+              );
+            }
+            final tableIndex = instruction.secondaryImmediate!;
+            final tableElementIndex = _popAsyncSubsetTableOperand(
+              stack,
+              tableIndex: tableIndex,
+              table64ByIndex: table64ByIndex,
+              context: 'call_indirect table index',
+            );
+            final targetFunctionRef = tables[tableIndex][tableElementIndex];
+            if (targetFunctionRef == null) {
+              throw StateError('call_indirect to null table element.');
+            }
+            final targetIndex = _functionRefIdToIndex[targetFunctionRef];
+            if (targetIndex == null) {
+              throw StateError('call_indirect to non-function table element.');
+            }
+            final expectedType = module.types[typeIndex];
+            if (!expectedType.isFunctionType) {
+              throw StateError(
+                'call_indirect expected non-function type $typeIndex.',
+              );
+            }
+            final target = functions[targetIndex];
+            if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
+              throw StateError('call_indirect signature mismatch trap');
+            }
+            final callArgs = _popArgsForTypes(
+              stack,
+              expectedType.params,
+              context: 'call_indirect',
+            );
+            final callResults = await _invokeFunctionAsyncSubset(
+              targetIndex,
+              callArgs,
+              depth: depth + 1,
+            );
+            stack.addAll(callResults);
+            pc++;
+
+          case Opcodes.returnCall:
+            final targetIndex = instruction.immediate!;
+            if (targetIndex < 0 || targetIndex >= functions.length) {
+              throw RangeError('return_call target out of range: $targetIndex');
+            }
+            final target = functions[targetIndex];
+            final callArgs = _popArgsForTypes(
+              stack,
+              target.type.params,
+              context: 'return_call',
+            );
+            return _invokeFunctionAsyncSubset(
+              targetIndex,
+              callArgs,
+              depth: depth + 1,
+            );
+
+          case Opcodes.returnCallRef:
+            final typeIndex = instruction.immediate!;
+            if (typeIndex < 0 || typeIndex >= module.types.length) {
+              throw RangeError(
+                'return_call_ref type index out of range: $typeIndex',
+              );
+            }
+            final expectedType = module.types[typeIndex];
+            if (!expectedType.isFunctionType) {
+              throw StateError(
+                'call_ref expected non-function type $typeIndex.',
+              );
+            }
+            final functionReference = _popAsyncSubsetRef(
+              stack,
+              context: 'return_call_ref function reference',
+            );
+            if (functionReference == null) {
+              throw StateError('call_ref to null function reference.');
+            }
+            final targetIndex = _functionRefIdToIndex[functionReference];
+            if (targetIndex == null) {
+              throw StateError('call_ref to non-function reference.');
+            }
+            final target = functions[targetIndex];
+            if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
+              throw StateError('call_ref signature mismatch trap');
+            }
+            final callArgs = _popArgsForTypes(
+              stack,
+              expectedType.params,
+              context: 'return_call_ref',
+            );
+            return _invokeFunctionAsyncSubset(
+              targetIndex,
+              callArgs,
+              depth: depth + 1,
+            );
+
+          case Opcodes.returnCallIndirect:
+            final typeIndex = instruction.immediate!;
+            if (typeIndex < 0 || typeIndex >= module.types.length) {
+              throw RangeError(
+                'return_call_indirect type index out of range: $typeIndex',
+              );
+            }
+            final tableIndex = instruction.secondaryImmediate!;
+            final tableElementIndex = _popAsyncSubsetTableOperand(
+              stack,
+              tableIndex: tableIndex,
+              table64ByIndex: table64ByIndex,
+              context: 'return_call_indirect table index',
+            );
+            final targetFunctionRef = tables[tableIndex][tableElementIndex];
+            if (targetFunctionRef == null) {
+              throw StateError('call_indirect to null table element.');
+            }
+            final targetIndex = _functionRefIdToIndex[targetFunctionRef];
+            if (targetIndex == null) {
+              throw StateError('call_indirect to non-function table element.');
+            }
+            final expectedType = module.types[typeIndex];
+            if (!expectedType.isFunctionType) {
+              throw StateError(
+                'call_indirect expected non-function type $typeIndex.',
+              );
+            }
+            final target = functions[targetIndex];
+            if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
+              throw StateError('call_indirect signature mismatch trap');
+            }
+            final callArgs = _popArgsForTypes(
+              stack,
+              expectedType.params,
+              context: 'return_call_indirect',
+            );
+            return _invokeFunctionAsyncSubset(
+              targetIndex,
+              callArgs,
+              depth: depth + 1,
+            );
+
+          case Opcodes.return_:
             return _collectAsyncSubsetResults(
               stack,
               function.type.results,
-              context: 'end',
+              context: 'return',
             );
-          }
-          final frame = controlStack.removeLast();
-          _leaveAsyncSubsetControlFrame(stack, frame, context: 'end');
-          pc++;
 
-        case Opcodes.br:
-          pc = _branchInAsyncSubset(
-            depth: instruction.immediate!,
-            stack: stack,
-            controlStack: controlStack,
-            context: 'br',
-          );
-
-        case Opcodes.brIf:
-          final condition = _popValue(
-            stack,
-            'br_if condition',
-          ).castTo(WasmValueType.i32).asI32();
-          if (condition != 0) {
-            pc = _branchInAsyncSubset(
-              depth: instruction.immediate!,
-              stack: stack,
-              controlStack: controlStack,
-              context: 'br_if',
+          default:
+            throw UnsupportedError(
+              'invokeAsync subset does not support opcode '
+              '0x${instruction.opcode.toRadixString(16)}',
             );
-          } else {
-            pc++;
-          }
-
-        case Opcodes.brOnNull:
-          final value = _popAsyncSubsetRef(
-            stack,
-            context: 'br_on_null operand',
-          );
-          if (value == null) {
-            pc = _branchInAsyncSubset(
-              depth: instruction.immediate!,
-              stack: stack,
-              controlStack: controlStack,
-              context: 'br_on_null',
-            );
-          } else {
-            stack.add(WasmValue.i32(value));
-            pc++;
-          }
-
-        case Opcodes.brOnNonNull:
-          final value = _popAsyncSubsetRef(
-            stack,
-            context: 'br_on_non_null operand',
-          );
-          if (value != null) {
-            stack.add(WasmValue.i32(value));
-            pc = _branchInAsyncSubset(
-              depth: instruction.immediate!,
-              stack: stack,
-              controlStack: controlStack,
-              context: 'br_on_non_null',
-            );
-          } else {
-            pc++;
-          }
-
-        case Opcodes.brTable:
-          final selector = _popValue(
-            stack,
-            'br_table selector',
-          ).castTo(WasmValueType.i32).asI32();
-          final targets = instruction.tableDepths;
-          if (targets == null || targets.isEmpty) {
-            throw StateError('Invalid br_table targets.');
-          }
-          final defaultDepth = targets.last;
-          final depth = selector >= 0 && selector < targets.length - 1
-              ? targets[selector]
-              : defaultDepth;
-          pc = _branchInAsyncSubset(
-            depth: depth,
-            stack: stack,
-            controlStack: controlStack,
-            context: 'br_table',
-          );
-
-        case Opcodes.call:
-          final targetIndex = instruction.immediate!;
-          if (targetIndex < 0 || targetIndex >= functions.length) {
-            throw RangeError('call target out of range: $targetIndex');
-          }
-          final target = functions[targetIndex];
-          final callArgs = _popArgsForTypes(
-            stack,
-            target.type.params,
-            context: 'call',
-          );
-          final callResults = await _invokeFunctionAsyncSubset(
-            targetIndex,
-            callArgs,
-            depth: depth + 1,
-          );
-          stack.addAll(callResults);
-          pc++;
-
-        case Opcodes.callRef:
-          final typeIndex = instruction.immediate!;
-          if (typeIndex < 0 || typeIndex >= module.types.length) {
-            throw RangeError('call_ref type index out of range: $typeIndex');
-          }
-          final expectedType = module.types[typeIndex];
-          if (!expectedType.isFunctionType) {
-            throw StateError('call_ref expected non-function type $typeIndex.');
-          }
-          final functionReference = _popAsyncSubsetRef(
-            stack,
-            context: 'call_ref function reference',
-          );
-          if (functionReference == null) {
-            throw StateError('call_ref to null function reference.');
-          }
-          final targetIndex = _functionRefIdToIndex[functionReference];
-          if (targetIndex == null) {
-            throw StateError('call_ref to non-function reference.');
-          }
-          final target = functions[targetIndex];
-          if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
-            throw StateError('call_ref signature mismatch trap');
-          }
-          final callArgs = _popArgsForTypes(
-            stack,
-            expectedType.params,
-            context: 'call_ref',
-          );
-          final callResults = await _invokeFunctionAsyncSubset(
-            targetIndex,
-            callArgs,
-            depth: depth + 1,
-          );
-          stack.addAll(callResults);
-          pc++;
-
-        case Opcodes.callIndirect:
-          final typeIndex = instruction.immediate!;
-          if (typeIndex < 0 || typeIndex >= module.types.length) {
-            throw RangeError(
-              'call_indirect type index out of range: $typeIndex',
-            );
-          }
-          final tableIndex = instruction.secondaryImmediate!;
-          final tableElementIndex = _popAsyncSubsetTableOperand(
-            stack,
-            tableIndex: tableIndex,
-            table64ByIndex: table64ByIndex,
-            context: 'call_indirect table index',
-          );
-          final targetFunctionRef = tables[tableIndex][tableElementIndex];
-          if (targetFunctionRef == null) {
-            throw StateError('call_indirect to null table element.');
-          }
-          final targetIndex = _functionRefIdToIndex[targetFunctionRef];
-          if (targetIndex == null) {
-            throw StateError('call_indirect to non-function table element.');
-          }
-          final expectedType = module.types[typeIndex];
-          if (!expectedType.isFunctionType) {
-            throw StateError(
-              'call_indirect expected non-function type $typeIndex.',
-            );
-          }
-          final target = functions[targetIndex];
-          if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
-            throw StateError('call_indirect signature mismatch trap');
-          }
-          final callArgs = _popArgsForTypes(
-            stack,
-            expectedType.params,
-            context: 'call_indirect',
-          );
-          final callResults = await _invokeFunctionAsyncSubset(
-            targetIndex,
-            callArgs,
-            depth: depth + 1,
-          );
-          stack.addAll(callResults);
-          pc++;
-
-        case Opcodes.returnCall:
-          final targetIndex = instruction.immediate!;
-          if (targetIndex < 0 || targetIndex >= functions.length) {
-            throw RangeError('return_call target out of range: $targetIndex');
-          }
-          final target = functions[targetIndex];
-          final callArgs = _popArgsForTypes(
-            stack,
-            target.type.params,
-            context: 'return_call',
-          );
-          return _invokeFunctionAsyncSubset(
-            targetIndex,
-            callArgs,
-            depth: depth + 1,
-          );
-
-        case Opcodes.returnCallRef:
-          final typeIndex = instruction.immediate!;
-          if (typeIndex < 0 || typeIndex >= module.types.length) {
-            throw RangeError(
-              'return_call_ref type index out of range: $typeIndex',
-            );
-          }
-          final expectedType = module.types[typeIndex];
-          if (!expectedType.isFunctionType) {
-            throw StateError('call_ref expected non-function type $typeIndex.');
-          }
-          final functionReference = _popAsyncSubsetRef(
-            stack,
-            context: 'return_call_ref function reference',
-          );
-          if (functionReference == null) {
-            throw StateError('call_ref to null function reference.');
-          }
-          final targetIndex = _functionRefIdToIndex[functionReference];
-          if (targetIndex == null) {
-            throw StateError('call_ref to non-function reference.');
-          }
-          final target = functions[targetIndex];
-          if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
-            throw StateError('call_ref signature mismatch trap');
-          }
-          final callArgs = _popArgsForTypes(
-            stack,
-            expectedType.params,
-            context: 'return_call_ref',
-          );
-          return _invokeFunctionAsyncSubset(
-            targetIndex,
-            callArgs,
-            depth: depth + 1,
-          );
-
-        case Opcodes.returnCallIndirect:
-          final typeIndex = instruction.immediate!;
-          if (typeIndex < 0 || typeIndex >= module.types.length) {
-            throw RangeError(
-              'return_call_indirect type index out of range: $typeIndex',
-            );
-          }
-          final tableIndex = instruction.secondaryImmediate!;
-          final tableElementIndex = _popAsyncSubsetTableOperand(
-            stack,
-            tableIndex: tableIndex,
-            table64ByIndex: table64ByIndex,
-            context: 'return_call_indirect table index',
-          );
-          final targetFunctionRef = tables[tableIndex][tableElementIndex];
-          if (targetFunctionRef == null) {
-            throw StateError('call_indirect to null table element.');
-          }
-          final targetIndex = _functionRefIdToIndex[targetFunctionRef];
-          if (targetIndex == null) {
-            throw StateError('call_indirect to non-function table element.');
-          }
-          final expectedType = module.types[typeIndex];
-          if (!expectedType.isFunctionType) {
-            throw StateError(
-              'call_indirect expected non-function type $typeIndex.',
-            );
-          }
-          final target = functions[targetIndex];
-          if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
-            throw StateError('call_indirect signature mismatch trap');
-          }
-          final callArgs = _popArgsForTypes(
-            stack,
-            expectedType.params,
-            context: 'return_call_indirect',
-          );
-          return _invokeFunctionAsyncSubset(
-            targetIndex,
-            callArgs,
-            depth: depth + 1,
-          );
-
-        case Opcodes.return_:
-          return _collectAsyncSubsetResults(
-            stack,
-            function.type.results,
-            context: 'return',
-          );
-
-        default:
-          throw UnsupportedError(
-            'invokeAsync subset does not support opcode '
-            '0x${instruction.opcode.toRadixString(16)}',
-          );
+        }
+      } on _AsyncSubsetThrownException catch (thrown) {
+        final handledPc = _handleAsyncSubsetThrownException(
+          thrown,
+          stack: stack,
+          controlStack: controlStack,
+        );
+        if (handledPc == null) {
+          rethrow;
+        }
+        pc = handledPc;
       }
     }
 
@@ -3678,6 +4039,153 @@ final class WasmInstance {
       );
     }
     stack.addAll(results);
+  }
+
+  int _handleLegacyCatchBoundaryInAsyncSubset({
+    required List<WasmValue> stack,
+    required List<_AsyncSubsetControlFrame> controlStack,
+    required int pc,
+  }) {
+    if (controlStack.isEmpty ||
+        controlStack.last.kind != _AsyncSubsetControlKind.tryLegacy) {
+      throw StateError('`catch` without matching `try`.');
+    }
+    final frame = controlStack.last;
+    final activeCatchInstructionIndex = frame.activeCatchInstructionIndex;
+    if (frame.activeException != null) {
+      if (activeCatchInstructionIndex == pc) {
+        return pc + 1;
+      }
+      frame
+        ..activeException = null
+        ..activeCatchInstructionIndex = null;
+      controlStack.removeLast();
+      _leaveAsyncSubsetControlFrame(stack, frame, context: 'catch');
+      return frame.endIndex + 1;
+    }
+
+    controlStack.removeLast();
+    _leaveAsyncSubsetControlFrame(stack, frame, context: 'catch');
+    return frame.endIndex + 1;
+  }
+
+  int? _handleAsyncSubsetThrownException(
+    _AsyncSubsetThrownException thrown, {
+    required List<WasmValue> stack,
+    required List<_AsyncSubsetControlFrame> controlStack,
+  }) {
+    var i = controlStack.length - 1;
+    while (i >= 0) {
+      final frame = controlStack[i];
+      if (frame.kind != _AsyncSubsetControlKind.tryLegacy) {
+        i--;
+        continue;
+      }
+      if (frame.activeException != null) {
+        i--;
+        continue;
+      }
+
+      final legacyCatches = frame.legacyCatches ?? const <LegacyCatchClause>[];
+      LegacyCatchClause? matched;
+      for (final clause in legacyCatches) {
+        switch (clause.kind) {
+          case LegacyCatchKind.catchTag:
+            final tagIndex = clause.tagIndex;
+            if (tagIndex == null) {
+              continue;
+            }
+            final resolvedTagIndex = _checkAsyncSubsetTagIndex(tagIndex);
+            if (_tagNominalTypeKeys[resolvedTagIndex] ==
+                thrown.nominalTypeKey) {
+              matched = clause;
+            }
+          case LegacyCatchKind.catchAll:
+            matched = clause;
+          default:
+            continue;
+        }
+        if (matched != null) {
+          break;
+        }
+      }
+
+      if (matched != null) {
+        if (i + 1 < controlStack.length) {
+          controlStack.removeRange(i + 1, controlStack.length);
+        }
+        _truncateAsyncSubsetStackToHeight(
+          stack,
+          frame.stackBaseHeight,
+          context: 'exception unwind',
+        );
+        if (matched.kind == LegacyCatchKind.catchTag) {
+          stack.addAll(thrown.values);
+        }
+        frame
+          ..activeException = thrown
+          ..activeCatchInstructionIndex = matched.handlerIndex;
+        return matched.handlerIndex;
+      }
+
+      final delegateDepth = frame.delegateDepth;
+      if (delegateDepth != null) {
+        final delegatedIndex = i - delegateDepth - 1;
+        if (delegatedIndex < 0) {
+          return null;
+        }
+        i = delegatedIndex;
+        continue;
+      }
+      i--;
+    }
+    return null;
+  }
+
+  void _truncateAsyncSubsetStackToHeight(
+    List<WasmValue> stack,
+    int height, {
+    required String context,
+  }) {
+    if (stack.length < height) {
+      throw StateError(
+        '$context stack underflow while restoring control frame: '
+        'stack=${stack.length}, height=$height.',
+      );
+    }
+    stack.length = height;
+  }
+
+  Never _throwTagInAsyncSubset(List<WasmValue> stack, Instruction instruction) {
+    final tagIndex = _checkAsyncSubsetTagIndex(instruction.immediate!);
+    final tagType = _tagTypes[tagIndex];
+    final values = _popArgsForTypes(stack, tagType.params, context: 'throw');
+    throw _AsyncSubsetThrownException(
+      nominalTypeKey: _tagNominalTypeKeys[tagIndex],
+      values: values,
+    );
+  }
+
+  Never _rethrowLegacyInAsyncSubset({
+    required List<_AsyncSubsetControlFrame> controlStack,
+    required int depth,
+  }) {
+    if (depth < 0 || depth >= controlStack.length) {
+      throw StateError('invalid rethrow label');
+    }
+    final target = controlStack[controlStack.length - 1 - depth];
+    final activeException = target.activeException;
+    if (activeException == null) {
+      throw StateError('invalid rethrow label');
+    }
+    throw activeException;
+  }
+
+  int _checkAsyncSubsetTagIndex(int tagIndex) {
+    if (tagIndex < 0 || tagIndex >= _tagTypes.length) {
+      throw RangeError('Invalid tag index: $tagIndex');
+    }
+    return tagIndex;
   }
 
   int _branchInAsyncSubset({
