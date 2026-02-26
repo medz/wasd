@@ -3811,21 +3811,15 @@ final class WasmVm {
   }
 
   Never _rethrowLegacy(List<_LabelFrame> labels, int depth) {
-    if (depth < 0) {
+    if (depth < 0 || depth >= labels.length) {
       throw StateError('invalid rethrow label');
     }
-    var remaining = depth;
-    for (var i = labels.length - 1; i >= 0; i--) {
-      final activeExceptionRef = labels[i].activeExceptionRef;
-      if (activeExceptionRef == null) {
-        continue;
-      }
-      if (remaining == 0) {
-        throw _WasmThrownException(activeExceptionRef);
-      }
-      remaining--;
+    final target = labels[labels.length - 1 - depth];
+    final activeExceptionRef = target.activeExceptionRef;
+    if (activeExceptionRef == null) {
+      throw StateError('invalid rethrow label');
     }
-    throw StateError('invalid rethrow label');
+    throw _WasmThrownException(activeExceptionRef);
   }
 
   int? _handleThrownException(

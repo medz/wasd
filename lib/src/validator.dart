@@ -26,6 +26,7 @@ final class _SimpleControlFrame {
     required this.resultSignatures,
     this.isLoop = false,
     this.isIf = false,
+    this.isLegacyTry = false,
   });
 
   final int stackHeight;
@@ -35,7 +36,9 @@ final class _SimpleControlFrame {
   bool polymorphic = false;
   final bool isLoop;
   final bool isIf;
+  final bool isLegacyTry;
   bool seenElse = false;
+  bool inLegacyCatch = false;
   bool hasEndReachability = false;
   bool loopBackUnreachable = false;
 }
@@ -2095,6 +2098,7 @@ abstract final class WasmValidator {
         case Opcodes.block:
         case Opcodes.loop:
         case Opcodes.if_:
+        case Opcodes.tryLegacy:
         case Opcodes.tryTable:
           final parameterSignatures = blockParamSignatures(instruction);
           final resultSignatures = blockResultSignatures(instruction);
@@ -2116,6 +2120,7 @@ abstract final class WasmValidator {
               resultSignatures: resultSignatures,
               isLoop: instruction.opcode == Opcodes.loop,
               isIf: instruction.opcode == Opcodes.if_,
+              isLegacyTry: instruction.opcode == Opcodes.tryLegacy,
             ),
           );
           if (instruction.opcode == Opcodes.tryTable) {
@@ -2170,6 +2175,73 @@ abstract final class WasmValidator {
                 }
               }
             }
+          }
+
+        case Opcodes.catchTag:
+          if (controlStack.length <= 1) {
+            mismatch('catch without matching try');
+          }
+          final frame = controlStack.last;
+          if (!frame.isLegacyTry) {
+            mismatch('catch without matching try');
+          }
+          validateFrameEnd(
+            frame,
+            frame.inLegacyCatch ? 'catch body' : 'try body',
+          );
+          stack.length = frame.stackHeight;
+          final tagIndex = instruction.immediate;
+          if (tagIndex == null) {
+            mismatch('catch missing tag index');
+          }
+          stack.addAll(tagParamSignatures(tagIndex));
+          frame
+            ..polymorphic = false
+            ..loopBackUnreachable = false
+            ..inLegacyCatch = true;
+
+        case Opcodes.catchAll:
+          if (controlStack.length <= 1) {
+            mismatch('catch_all without matching try');
+          }
+          final frame = controlStack.last;
+          if (!frame.isLegacyTry) {
+            mismatch('catch_all without matching try');
+          }
+          validateFrameEnd(
+            frame,
+            frame.inLegacyCatch ? 'catch body' : 'try body',
+          );
+          stack.length = frame.stackHeight;
+          frame
+            ..polymorphic = false
+            ..loopBackUnreachable = false
+            ..inLegacyCatch = true;
+
+        case Opcodes.delegate:
+          if (controlStack.length <= 1) {
+            mismatch('delegate without matching try');
+          }
+          final frame = controlStack.last;
+          if (!frame.isLegacyTry) {
+            mismatch('delegate without matching try');
+          }
+          if (frame.inLegacyCatch) {
+            mismatch('delegate is only valid in try body');
+          }
+          final depth = instruction.immediate!;
+          // Delegate targets an outer label (outside the current try).
+          frameForDepth(depth + 1, 'delegate');
+          final hasConcreteResult = validateFrameEnd(frame, 'delegate');
+          controlStack.removeLast();
+          stack.length = frame.stackHeight;
+          if (hasConcreteResult ||
+              frame.hasEndReachability ||
+              frame.polymorphic) {
+            stack.addAll(frame.resultSignatures);
+          }
+          if (controlStack.isEmpty) {
+            return;
           }
 
         case Opcodes.else_:
@@ -2364,6 +2436,14 @@ abstract final class WasmValidator {
 
         case Opcodes.throwRef:
           popExpected(nullableExnRef, 'throw_ref operand');
+          markPolymorphic();
+
+        case Opcodes.rethrowTag:
+          final depth = instruction.immediate!;
+          final target = frameForDepth(depth, 'rethrow');
+          if (!target.isLegacyTry || !target.inLegacyCatch) {
+            mismatch('invalid rethrow label');
+          }
           markPolymorphic();
 
         case Opcodes.call:
