@@ -238,6 +238,126 @@ void main() {
       );
     });
 
+    test('decodes component import requirements from section 0x04', () {
+      final componentBytes = Uint8List.fromList(<int>[
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x0d,
+        0x00,
+        0x01,
+        0x00,
+        // section 1: one core module payload
+        0x01,
+        0x08,
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        // section 4: one function import requirement
+        0x04,
+        0x11,
+        0x01,
+        0x05,
+        0x69,
+        0x6e,
+        0x63,
+        0x46,
+        0x6e,
+        0x04,
+        0x68,
+        0x6f,
+        0x73,
+        0x74,
+        0x03,
+        0x69,
+        0x6e,
+        0x63,
+        0x00,
+      ]);
+
+      final component = WasmComponent.decode(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
+      expect(component.importRequirements, hasLength(1));
+      final requirement = component.importRequirements.single;
+      expect(requirement.componentImportName, 'incFn');
+      expect(requirement.moduleName, 'host');
+      expect(requirement.fieldName, 'inc');
+      expect(requirement.kind, WasmComponentImportKind.function);
+    });
+
+    test('rejects duplicate component import names in section 0x04', () {
+      final componentBytes = Uint8List.fromList(<int>[
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x0d,
+        0x00,
+        0x01,
+        0x00,
+        // section 1: one core module payload
+        0x01,
+        0x08,
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        // section 4: two imports with same component import name `dup`
+        0x04,
+        0x1f,
+        0x02,
+        0x03,
+        0x64,
+        0x75,
+        0x70,
+        0x04,
+        0x68,
+        0x6f,
+        0x73,
+        0x74,
+        0x03,
+        0x69,
+        0x6e,
+        0x63,
+        0x00,
+        0x03,
+        0x64,
+        0x75,
+        0x70,
+        0x04,
+        0x68,
+        0x6f,
+        0x73,
+        0x74,
+        0x03,
+        0x69,
+        0x6e,
+        0x63,
+        0x01,
+      ]);
+
+      expect(
+        () => WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+    });
+
     test('rejects unsupported component version', () {
       final componentBytes = Uint8List.fromList(<int>[
         0x00,

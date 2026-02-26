@@ -74,6 +74,39 @@ void main() {
       expect(await instance.invokeComponentExportAsync('apiOne'), 9);
     });
 
+    test('validates component import requirements before instantiation', () {
+      final componentBytes = _componentWithCoreModules(
+        <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+        importRequirements: const [
+          _ComponentImportRequirementSpec(
+            componentImportName: 'incFn',
+            moduleName: 'host',
+            fieldName: 'inc',
+            kind: 0x00,
+          ),
+        ],
+      );
+
+      expect(
+        () => WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+
+      final satisfied = WasmComponentInstance.fromBytes(
+        componentBytes,
+        imports: WasmImports(
+          functions: {
+            WasmImports.key('host', 'inc'): (args) => (args.single as int) + 1,
+          },
+        ),
+        features: const WasmFeatureSet(componentModel: true),
+      );
+      expect(satisfied.invokeCore('one'), 1);
+    });
+
     test('bridges canonical ABI through core export calls', () {
       final componentBytes = _componentWithCoreModules(<Uint8List>[
         _coreModuleEchoUtf8PointerLength(name: 'echo'),
@@ -126,6 +159,7 @@ Uint8List _componentWithCoreModules(
   List<Uint8List> modules, {
   List<int>? instantiateModuleIndices,
   List<_ComponentAliasSpec>? exportAliases,
+  List<_ComponentImportRequirementSpec>? importRequirements,
 }) {
   final bytes = <int>[0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00];
   for (final module in modules) {
@@ -161,6 +195,21 @@ Uint8List _componentWithCoreModules(
       ..addAll(_u32Leb(payload.length))
       ..addAll(payload);
   }
+  final requirements = importRequirements;
+  if (requirements != null && requirements.isNotEmpty) {
+    final payload = <int>[..._u32Leb(requirements.length)];
+    for (final requirement in requirements) {
+      payload
+        ..addAll(_name(requirement.componentImportName))
+        ..addAll(_name(requirement.moduleName))
+        ..addAll(_name(requirement.fieldName))
+        ..add(requirement.kind);
+    }
+    bytes
+      ..add(0x04)
+      ..addAll(_u32Leb(payload.length))
+      ..addAll(payload);
+  }
   return Uint8List.fromList(bytes);
 }
 
@@ -174,6 +223,20 @@ final class _ComponentAliasSpec {
   final int instanceIndex;
   final String coreExportName;
   final String componentExportName;
+}
+
+final class _ComponentImportRequirementSpec {
+  const _ComponentImportRequirementSpec({
+    required this.componentImportName,
+    required this.moduleName,
+    required this.fieldName,
+    required this.kind,
+  });
+
+  final String componentImportName;
+  final String moduleName;
+  final String fieldName;
+  final int kind;
 }
 
 Uint8List _coreModuleConstI32({required String name, required int value}) {

@@ -59,6 +59,7 @@ final class WasmComponentInstance {
         'Component does not contain embedded core modules.',
       );
     }
+    _validateComponentImportRequirements(component, imports);
     final coreInstances = <WasmInstance>[];
     if (component.coreInstances.isEmpty) {
       coreInstances.addAll(
@@ -174,6 +175,35 @@ final class WasmComponentInstance {
     return coreInstance(
       binding.instanceIndex,
     ).invokeAsync(binding.coreExportName, args);
+  }
+
+  static void _validateComponentImportRequirements(
+    WasmComponent component,
+    WasmImports imports,
+  ) {
+    for (final requirement in component.importRequirements) {
+      final key = WasmImports.key(
+        requirement.moduleName,
+        requirement.fieldName,
+      );
+      final satisfied = switch (requirement.kind) {
+        WasmComponentImportKind.function =>
+          imports.functions.containsKey(key) ||
+              imports.asyncFunctions.containsKey(key),
+        WasmComponentImportKind.memory => imports.memories.containsKey(key),
+        WasmComponentImportKind.table => imports.tables.containsKey(key),
+        WasmComponentImportKind.global =>
+          imports.globals.containsKey(key) ||
+              imports.globalBindings.containsKey(key),
+        WasmComponentImportKind.tag => imports.tags.containsKey(key),
+      };
+      if (!satisfied) {
+        throw FormatException(
+          'Missing component import `${requirement.componentImportName}` '
+          '($key, kind=${requirement.kind.name}).',
+        );
+      }
+    }
   }
 
   List<Object?> invokeCanonical({

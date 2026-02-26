@@ -33,6 +33,23 @@ final class WasmComponentCoreExportAlias {
   final String coreExportName;
 }
 
+enum WasmComponentImportKind { function, memory, table, global, tag }
+
+/// Component-level import requirement decoded from section `0x04`.
+final class WasmComponentImportRequirement {
+  const WasmComponentImportRequirement({
+    required this.componentImportName,
+    required this.moduleName,
+    required this.fieldName,
+    required this.kind,
+  });
+
+  final String componentImportName;
+  final String moduleName;
+  final String fieldName;
+  final WasmComponentImportKind kind;
+}
+
 /// Minimal component binary decoder.
 ///
 /// This currently validates the component header and collects raw sections.
@@ -43,6 +60,7 @@ final class WasmComponent {
     required this.coreModules,
     required this.coreInstances,
     required this.coreExportAliases,
+    required this.importRequirements,
   });
 
   static const List<int> _magic = <int>[0x00, 0x61, 0x73, 0x6d];
@@ -52,6 +70,7 @@ final class WasmComponent {
   final List<Uint8List> coreModules;
   final List<WasmComponentCoreInstance> coreInstances;
   final List<WasmComponentCoreExportAlias> coreExportAliases;
+  final List<WasmComponentImportRequirement> importRequirements;
 
   static WasmComponent decode(
     Uint8List componentBytes, {
@@ -78,6 +97,7 @@ final class WasmComponent {
     final coreModules = <Uint8List>[];
     final coreInstances = <WasmComponentCoreInstance>[];
     final coreExportAliases = <WasmComponentCoreExportAlias>[];
+    final importRequirements = <WasmComponentImportRequirement>[];
     while (!reader.isEOF) {
       final id = reader.readByte();
       final sectionSize = reader.readVarUint32();
@@ -90,6 +110,8 @@ final class WasmComponent {
         coreInstances.addAll(_decodeCoreInstanceSectionPayload(payload));
       } else if (id == 0x03) {
         coreExportAliases.addAll(_decodeCoreExportAliasSectionPayload(payload));
+      } else if (id == 0x04) {
+        importRequirements.addAll(_decodeImportSectionPayload(payload));
       }
     }
 
@@ -101,6 +123,9 @@ final class WasmComponent {
       ),
       coreExportAliases: List<WasmComponentCoreExportAlias>.unmodifiable(
         coreExportAliases,
+      ),
+      importRequirements: List<WasmComponentImportRequirement>.unmodifiable(
+        importRequirements,
       ),
     );
   }
@@ -168,6 +193,59 @@ final class WasmComponent {
       );
     }
     return aliases;
+  }
+
+  static List<WasmComponentImportRequirement> _decodeImportSectionPayload(
+    Uint8List payload,
+  ) {
+    final reader = ByteReader(payload);
+    final count = reader.readVarUint32();
+    final imports = <WasmComponentImportRequirement>[];
+    final names = <String>{};
+    for (var i = 0; i < count; i++) {
+      final componentImportName = _readName(reader);
+      final moduleName = _readName(reader);
+      final fieldName = _readName(reader);
+      final kind = _decodeImportKind(reader.readByte());
+      if (!names.add(componentImportName)) {
+        throw FormatException(
+          'Duplicate component import name: $componentImportName',
+        );
+      }
+      imports.add(
+        WasmComponentImportRequirement(
+          componentImportName: componentImportName,
+          moduleName: moduleName,
+          fieldName: fieldName,
+          kind: kind,
+        ),
+      );
+    }
+    if (!reader.isEOF) {
+      throw const FormatException(
+        'Trailing bytes in component import section payload.',
+      );
+    }
+    return imports;
+  }
+
+  static WasmComponentImportKind _decodeImportKind(int raw) {
+    switch (raw) {
+      case 0x00:
+        return WasmComponentImportKind.function;
+      case 0x01:
+        return WasmComponentImportKind.memory;
+      case 0x02:
+        return WasmComponentImportKind.table;
+      case 0x03:
+        return WasmComponentImportKind.global;
+      case 0x04:
+        return WasmComponentImportKind.tag;
+      default:
+        throw UnsupportedError(
+          'Unsupported component import kind: 0x${raw.toRadixString(16)}',
+        );
+    }
   }
 
   static String _readName(ByteReader reader) {
