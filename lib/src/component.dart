@@ -97,6 +97,21 @@ final class WasmComponentTypeDeclaration {
   final int? aliasTargetIndex;
 }
 
+enum WasmComponentTypeBindingTargetKind { importRequirement, coreExportAlias }
+
+/// Type binding edge decoded from section `0x07`.
+final class WasmComponentTypeBinding {
+  const WasmComponentTypeBinding({
+    required this.targetKind,
+    required this.targetIndex,
+    required this.typeDeclarationIndex,
+  });
+
+  final WasmComponentTypeBindingTargetKind targetKind;
+  final int targetIndex;
+  final int typeDeclarationIndex;
+}
+
 /// Minimal component binary decoder.
 ///
 /// This currently validates the component header and collects raw sections.
@@ -110,6 +125,7 @@ final class WasmComponent {
     required this.importRequirements,
     required this.coreInstanceAliases,
     required this.typeDeclarations,
+    required this.typeBindings,
   });
 
   static const List<int> _magic = <int>[0x00, 0x61, 0x73, 0x6d];
@@ -122,6 +138,7 @@ final class WasmComponent {
   final List<WasmComponentImportRequirement> importRequirements;
   final List<WasmComponentCoreInstanceAlias> coreInstanceAliases;
   final List<WasmComponentTypeDeclaration> typeDeclarations;
+  final List<WasmComponentTypeBinding> typeBindings;
 
   static WasmComponent decode(
     Uint8List componentBytes, {
@@ -151,6 +168,7 @@ final class WasmComponent {
     final importRequirements = <WasmComponentImportRequirement>[];
     final coreInstanceAliases = <WasmComponentCoreInstanceAlias>[];
     final typeDeclarations = <WasmComponentTypeDeclaration>[];
+    final typeBindings = <WasmComponentTypeBinding>[];
     while (!reader.isEOF) {
       final id = reader.readByte();
       final sectionSize = reader.readVarUint32();
@@ -171,8 +189,16 @@ final class WasmComponent {
         );
       } else if (id == 0x06) {
         typeDeclarations.addAll(_decodeTypeSectionPayload(payload));
+      } else if (id == 0x07) {
+        typeBindings.addAll(_decodeTypeBindingSectionPayload(payload));
       }
     }
+    _validateTypeBindings(
+      typeBindings: typeBindings,
+      typeDeclarations: typeDeclarations,
+      importRequirements: importRequirements,
+      coreExportAliases: coreExportAliases,
+    );
 
     return WasmComponent._(
       sections: List<WasmComponentSection>.unmodifiable(sections),
@@ -192,6 +218,7 @@ final class WasmComponent {
       typeDeclarations: List<WasmComponentTypeDeclaration>.unmodifiable(
         typeDeclarations,
       ),
+      typeBindings: List<WasmComponentTypeBinding>.unmodifiable(typeBindings),
     );
   }
 
@@ -447,6 +474,83 @@ final class WasmComponent {
     for (var i = 0; i < declarations.length; i++) {
       if (!visit(i)) {
         throw const FormatException('Component type alias cycle detected.');
+      }
+    }
+  }
+
+  static List<WasmComponentTypeBinding> _decodeTypeBindingSectionPayload(
+    Uint8List payload,
+  ) {
+    final reader = ByteReader(payload);
+    final count = reader.readVarUint32();
+    final bindings = <WasmComponentTypeBinding>[];
+    for (var i = 0; i < count; i++) {
+      final targetKind = _decodeTypeBindingTargetKind(reader.readByte());
+      final targetIndex = reader.readVarUint32();
+      final typeDeclarationIndex = reader.readVarUint32();
+      bindings.add(
+        WasmComponentTypeBinding(
+          targetKind: targetKind,
+          targetIndex: targetIndex,
+          typeDeclarationIndex: typeDeclarationIndex,
+        ),
+      );
+    }
+    if (!reader.isEOF) {
+      throw const FormatException(
+        'Trailing bytes in component type-binding section payload.',
+      );
+    }
+    return bindings;
+  }
+
+  static WasmComponentTypeBindingTargetKind _decodeTypeBindingTargetKind(
+    int raw,
+  ) {
+    switch (raw) {
+      case 0x00:
+        return WasmComponentTypeBindingTargetKind.importRequirement;
+      case 0x01:
+        return WasmComponentTypeBindingTargetKind.coreExportAlias;
+      default:
+        throw UnsupportedError(
+          'Unsupported component type-binding target kind: '
+          '0x${raw.toRadixString(16)}',
+        );
+    }
+  }
+
+  static void _validateTypeBindings({
+    required List<WasmComponentTypeBinding> typeBindings,
+    required List<WasmComponentTypeDeclaration> typeDeclarations,
+    required List<WasmComponentImportRequirement> importRequirements,
+    required List<WasmComponentCoreExportAlias> coreExportAliases,
+  }) {
+    for (final binding in typeBindings) {
+      if (binding.typeDeclarationIndex < 0 ||
+          binding.typeDeclarationIndex >= typeDeclarations.length) {
+        throw FormatException(
+          'Component type binding references invalid type index '
+          '${binding.typeDeclarationIndex} (count=${typeDeclarations.length}).',
+        );
+      }
+      switch (binding.targetKind) {
+        case WasmComponentTypeBindingTargetKind.importRequirement:
+          if (binding.targetIndex < 0 ||
+              binding.targetIndex >= importRequirements.length) {
+            throw FormatException(
+              'Component type binding references invalid import index '
+              '${binding.targetIndex} (count=${importRequirements.length}).',
+            );
+          }
+        case WasmComponentTypeBindingTargetKind.coreExportAlias:
+          if (binding.targetIndex < 0 ||
+              binding.targetIndex >= coreExportAliases.length) {
+            throw FormatException(
+              'Component type binding references invalid export-alias index '
+              '${binding.targetIndex} (count=${coreExportAliases.length}).',
+            );
+          }
       }
     }
   }

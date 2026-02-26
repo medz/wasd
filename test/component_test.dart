@@ -492,6 +492,103 @@ void main() {
       );
     });
 
+    test('decodes type bindings from section 0x07', () {
+      final importSection = <int>[
+        ..._u32Leb(1),
+        ..._name('incFn'),
+        ..._name('host'),
+        ..._name('inc'),
+        0x00,
+      ];
+      final instanceSection = <int>[
+        ..._u32Leb(1),
+        0x00,
+        ..._u32Leb(0),
+        ..._u32Leb(0),
+      ];
+      final exportAliasSection = <int>[
+        ..._u32Leb(1),
+        ..._u32Leb(0),
+        ..._name('one'),
+        ..._name('apiOne'),
+      ];
+      final typeSection = <int>[
+        ..._u32Leb(1),
+        ..._name('fn_t'),
+        0x01,
+        ..._u32Leb(1),
+        0x7f,
+        ..._u32Leb(1),
+        0x7f,
+      ];
+      final typeBindingSection = <int>[
+        ..._u32Leb(2),
+        0x00,
+        ..._u32Leb(0),
+        ..._u32Leb(0),
+        0x01,
+        ..._u32Leb(0),
+        ..._u32Leb(0),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ..._componentHeaderWithOneCoreModule(),
+        ..._section(0x02, instanceSection),
+        ..._section(0x03, exportAliasSection),
+        ..._section(0x04, importSection),
+        ..._section(0x06, typeSection),
+        ..._section(0x07, typeBindingSection),
+      ]);
+
+      final component = WasmComponent.decode(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
+      expect(component.typeBindings, hasLength(2));
+      expect(
+        component.typeBindings[0].targetKind,
+        WasmComponentTypeBindingTargetKind.importRequirement,
+      );
+      expect(component.typeBindings[0].targetIndex, 0);
+      expect(component.typeBindings[0].typeDeclarationIndex, 0);
+      expect(
+        component.typeBindings[1].targetKind,
+        WasmComponentTypeBindingTargetKind.coreExportAlias,
+      );
+      expect(component.typeBindings[1].targetIndex, 0);
+      expect(component.typeBindings[1].typeDeclarationIndex, 0);
+    });
+
+    test('rejects type bindings with out-of-range indexes', () {
+      final typeSection = <int>[..._u32Leb(1), ..._name('i32_t'), 0x00, 0x7f];
+      final typeBindingSection = <int>[
+        ..._u32Leb(1),
+        0x00,
+        ..._u32Leb(0),
+        ..._u32Leb(1),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ..._componentHeaderWithOneCoreModule(),
+        ..._section(0x04, <int>[
+          ..._u32Leb(1),
+          ..._name('x'),
+          ..._name('m'),
+          ..._name('n'),
+          0x00,
+        ]),
+        ..._section(0x06, typeSection),
+        ..._section(0x07, typeBindingSection),
+      ]);
+
+      expect(
+        () => WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+    });
+
     test('rejects unsupported component version', () {
       final componentBytes = Uint8List.fromList(<int>[
         0x00,
