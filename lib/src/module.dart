@@ -278,11 +278,13 @@ final class WasmElementSegment {
     required this.offsetExpr,
     required this.functionIndices,
     this.refTypeCode = 0x70,
+    this.refTypeSignature = '70',
   }) : mode = WasmElementMode.active;
 
   const WasmElementSegment.passive({
     required this.functionIndices,
     this.refTypeCode = 0x70,
+    this.refTypeSignature = '70',
   }) : mode = WasmElementMode.passive,
        tableIndex = 0,
        offsetExpr = null;
@@ -290,6 +292,7 @@ final class WasmElementSegment {
   const WasmElementSegment.declarative({
     required this.functionIndices,
     this.refTypeCode = 0x70,
+    this.refTypeSignature = '70',
   }) : mode = WasmElementMode.declarative,
        tableIndex = 0,
        offsetExpr = null;
@@ -299,6 +302,7 @@ final class WasmElementSegment {
   final Uint8List? offsetExpr;
   final List<int?> functionIndices;
   final int refTypeCode;
+  final String? refTypeSignature;
 
   bool get isActive => mode == WasmElementMode.active;
   bool get isPassive => mode == WasmElementMode.passive;
@@ -1060,33 +1064,48 @@ final class WasmModule {
           );
 
         case 5:
+          final refTypeStart = reader.offset;
           final refTypeCode = _readReferenceTypeCode(reader);
+          final refTypeSignature = _typeEncodingSignature(
+            reader.bytes.sublist(refTypeStart, reader.offset),
+          );
           sink.add(
             WasmElementSegment.passive(
               functionIndices: _readElementExprFunctionIndices(reader, types),
               refTypeCode: refTypeCode,
+              refTypeSignature: refTypeSignature,
             ),
           );
 
         case 6:
           final tableIndex = reader.readVarUint32();
           final offsetExpr = _readInitExpression(reader);
+          final refTypeStart = reader.offset;
           final refTypeCode = _readReferenceTypeCode(reader);
+          final refTypeSignature = _typeEncodingSignature(
+            reader.bytes.sublist(refTypeStart, reader.offset),
+          );
           sink.add(
             WasmElementSegment.active(
               tableIndex: tableIndex,
               offsetExpr: offsetExpr,
               functionIndices: _readElementExprFunctionIndices(reader, types),
               refTypeCode: refTypeCode,
+              refTypeSignature: refTypeSignature,
             ),
           );
 
         case 7:
+          final refTypeStart = reader.offset;
           final refTypeCode = _readReferenceTypeCode(reader);
+          final refTypeSignature = _typeEncodingSignature(
+            reader.bytes.sublist(refTypeStart, reader.offset),
+          );
           sink.add(
             WasmElementSegment.declarative(
               functionIndices: _readElementExprFunctionIndices(reader, types),
               refTypeCode: refTypeCode,
+              refTypeSignature: refTypeSignature,
             ),
           );
 

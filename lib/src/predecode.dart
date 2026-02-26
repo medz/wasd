@@ -388,7 +388,7 @@ abstract final class WasmPredecoder {
         case Opcodes.selectT:
           final arity = reader.readVarUint32();
           for (var i = 0; i < arity; i++) {
-            _readSelectValueType(reader);
+            _readSelectValueType(reader, moduleTypes);
           }
           instructions.add(Instruction(opcode: opcode, immediate: arity));
 
@@ -851,10 +851,7 @@ abstract final class WasmPredecoder {
     List<WasmValueType> resultTypes,
     List<String> resultSignatures,
   })
-  _readBlockTypeInfo(
-    ByteReader reader,
-    List<WasmFunctionType> moduleTypes,
-  ) {
+  _readBlockTypeInfo(ByteReader reader, List<WasmFunctionType> moduleTypes) {
     final first = reader.readByte();
 
     if (first == 0x40) {
@@ -906,8 +903,18 @@ abstract final class WasmPredecoder {
     );
   }
 
-  static void _readSelectValueType(ByteReader reader) {
+  static void _readSelectValueType(
+    ByteReader reader,
+    List<WasmFunctionType> moduleTypes,
+  ) {
     final typeByte = reader.readByte();
+    if (typeByte == 0x63 || typeByte == 0x64) {
+      final heapType = _readHeapTypeWithBytes(reader).value;
+      if (heapType >= moduleTypes.length) {
+        throw FormatException('Invalid select type index: $heapType');
+      }
+      return;
+    }
     if (_isInlineBlockValueType(typeByte)) {
       _readInlineBlockValueTypeWithSignature(reader, typeByte);
       return;

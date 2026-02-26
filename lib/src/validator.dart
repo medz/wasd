@@ -93,6 +93,44 @@ abstract final class WasmValidator {
         );
       }
     }
+
+    for (final import in module.imports) {
+      switch (import.kind) {
+        case WasmImportKind.table:
+          final signature = import.tableType?.refTypeSignature;
+          if (signature != null && signature.isNotEmpty) {
+            _validateValueSignatureTypeReference(module, signature);
+          }
+        case WasmImportKind.global:
+          final signature = import.globalType?.valueTypeSignature;
+          if (signature != null && signature.isNotEmpty) {
+            _validateValueSignatureTypeReference(module, signature);
+          }
+        default:
+          break;
+      }
+    }
+
+    for (final table in module.tables) {
+      final signature = table.refTypeSignature;
+      if (signature != null && signature.isNotEmpty) {
+        _validateValueSignatureTypeReference(module, signature);
+      }
+    }
+
+    for (final global in module.globals) {
+      final signature = global.type.valueTypeSignature;
+      if (signature != null && signature.isNotEmpty) {
+        _validateValueSignatureTypeReference(module, signature);
+      }
+    }
+
+    for (final element in module.elements) {
+      final signature = element.refTypeSignature;
+      if (signature != null && signature.isNotEmpty) {
+        _validateValueSignatureTypeReference(module, signature);
+      }
+    }
   }
 
   static void _validateValueSignatureTypeReference(
@@ -364,6 +402,7 @@ abstract final class WasmValidator {
           .map((i) => i.tableType!),
       ...module.tables,
     ];
+    final declaredFunctionRefs = _declaredFunctionReferences(module);
     var requiresDataCount = false;
 
     for (var i = 0; i < module.functionTypeIndices.length; i++) {
@@ -376,6 +415,12 @@ abstract final class WasmValidator {
       }
       final functionType = module.types[typeIndex];
       final body = module.codes[i];
+      for (final local in body.locals) {
+        final signature = local.typeSignature;
+        if (signature != null && signature.isNotEmpty) {
+          _validateValueSignatureTypeReference(module, signature);
+        }
+      }
       final localsCount = _validatedLocalsCount(functionType, body);
       final predecoded = WasmPredecoder.decode(
         body,
@@ -392,6 +437,11 @@ abstract final class WasmValidator {
       _validateSimpleReferenceReturnCompatibility(
         module: module,
         functionType: functionType,
+        instructions: predecoded.instructions,
+      );
+      _validateNonDefaultableLocalInitialization(
+        functionType: functionType,
+        body: body,
         instructions: predecoded.instructions,
       );
       _validateSimpleStackDiscipline(
@@ -419,6 +469,19 @@ abstract final class WasmValidator {
       final controlStack = <int>[];
       for (var pc = 0; pc < predecoded.instructions.length; pc++) {
         final instruction = predecoded.instructions[pc];
+        final blockParameterSignatures =
+            instruction.blockParameterTypeSignatures;
+        if (blockParameterSignatures != null) {
+          for (final signature in blockParameterSignatures) {
+            _validateValueSignatureTypeReference(module, signature);
+          }
+        }
+        final blockResultSignatures = instruction.blockResultTypeSignatures;
+        if (blockResultSignatures != null) {
+          for (final signature in blockResultSignatures) {
+            _validateValueSignatureTypeReference(module, signature);
+          }
+        }
         if (_isAtomicMemoryOpcode(instruction.opcode) && memoryCount == 0) {
           throw const FormatException(
             'Validation failed: memory instruction used without memory.',
@@ -470,8 +533,15 @@ abstract final class WasmValidator {
             }
           case Opcodes.call:
           case Opcodes.returnCall:
-          case Opcodes.refFunc:
             _checkIndex(instruction.immediate!, functionCount, 'function ref');
+          case Opcodes.refFunc:
+            final functionIndex = instruction.immediate!;
+            _checkIndex(functionIndex, functionCount, 'function ref');
+            if (!declaredFunctionRefs.contains(functionIndex)) {
+              throw const FormatException(
+                'Validation failed: undeclared function reference.',
+              );
+            }
           case Opcodes.callRef:
           case Opcodes.returnCallRef:
             final typeRef = instruction.immediate!;
@@ -961,7 +1031,14 @@ abstract final class WasmValidator {
           }
           stack.add(availableGlobals[index].valueType);
         case Opcodes.refNull:
-          _consumeHeapType(reader);
+          final heapType = _readHeapTypeForValidation(reader);
+          if (heapType != null) {
+            if (heapType >= 0) {
+              _checkIndex(heapType, module.types.length, 'type');
+            } else if (!_isKnownAbstractHeapType(heapType)) {
+              throw const FormatException('Validation failed: type mismatch.');
+            }
+          }
           stack.add(WasmValueType.i32);
         case Opcodes.refFunc:
           final functionIndex = reader.readVarUint32();
@@ -1117,6 +1194,88 @@ abstract final class WasmValidator {
       }
     }
     return false;
+  }
+
+  static void _validateNonDefaultableLocalInitialization({
+    required WasmFunctionType functionType,
+    required WasmCodeBody body,
+    required List<Instruction> instructions,
+  }) {
+    final paramSignatures = _functionParamSignatures(functionType);
+    final localSignatures = _localSignatures(body);
+    final signatures = <String>[...paramSignatures, ...localSignatures];
+    final tracked = List<bool>.filled(signatures.length, false);
+    for (var i = 0; i < signatures.length; i++) {
+      final parsed = _parseRefSignature(signatures[i]);
+      if (parsed != null && !parsed.nullable) {
+        tracked[i] = true;
+      }
+    }
+    if (!tracked.contains(true)) {
+      return;
+    }
+
+    final initialized = List<bool>.filled(
+      signatures.length,
+      true,
+      growable: true,
+    );
+    for (var i = paramSignatures.length; i < signatures.length; i++) {
+      if (tracked[i]) {
+        initialized[i] = false;
+      }
+    }
+
+    final controlStack = <List<bool>>[List<bool>.from(initialized)];
+    for (final instruction in instructions) {
+      switch (instruction.opcode) {
+        case Opcodes.block:
+        case Opcodes.loop:
+        case Opcodes.if_:
+          controlStack.add(List<bool>.from(initialized));
+
+        case Opcodes.else_:
+          if (controlStack.isEmpty) {
+            return;
+          }
+          initialized
+            ..clear()
+            ..addAll(controlStack.last);
+
+        case Opcodes.end:
+          if (controlStack.isEmpty) {
+            return;
+          }
+          final entry = controlStack.removeLast();
+          initialized
+            ..clear()
+            ..addAll(entry);
+          if (controlStack.isEmpty) {
+            return;
+          }
+
+        case Opcodes.localGet:
+          final index = instruction.immediate!;
+          if (index >= 0 &&
+              index < tracked.length &&
+              tracked[index] &&
+              !initialized[index]) {
+            throw const FormatException(
+              'Validation failed: uninitialized local.',
+            );
+          }
+
+        case Opcodes.localSet:
+        case Opcodes.localTee:
+          final index = instruction.immediate!;
+          if (index >= 0 && index < tracked.length && tracked[index]) {
+            initialized[index] = true;
+          }
+
+        default:
+          break;
+      }
+    }
   }
 
   static void _validateSimpleStackDiscipline({
@@ -4039,6 +4198,58 @@ abstract final class WasmValidator {
     return buffer.toString();
   }
 
+  static Set<int> _declaredFunctionReferences(WasmModule module) {
+    final declared = <int>{};
+    for (var i = 0; i < module.importedFunctionCount; i++) {
+      declared.add(i);
+    }
+    for (final export in module.exports) {
+      if (export.kind == WasmExportKind.function) {
+        declared.add(export.index);
+      }
+    }
+    for (final element in module.elements) {
+      for (final functionIndex in element.functionIndices) {
+        if (functionIndex != null) {
+          declared.add(functionIndex);
+        }
+      }
+    }
+    for (final global in module.globals) {
+      declared.addAll(_constExprFunctionRefs(global.initExpr));
+    }
+    return declared;
+  }
+
+  static Iterable<int> _constExprFunctionRefs(Uint8List expr) {
+    final reader = ByteReader(expr);
+    final refs = <int>[];
+    while (!reader.isEOF) {
+      final opcode = reader.readByte();
+      switch (opcode) {
+        case Opcodes.i32Const:
+          reader.readVarInt32();
+        case Opcodes.i64Const:
+          reader.readVarInt64();
+        case Opcodes.f32Const:
+          reader.readBytes(4);
+        case Opcodes.f64Const:
+          reader.readBytes(8);
+        case Opcodes.globalGet:
+          reader.readVarUint32();
+        case Opcodes.refNull:
+          _consumeHeapType(reader);
+        case Opcodes.refFunc:
+          refs.add(reader.readVarUint32());
+        case Opcodes.end:
+          return refs;
+        default:
+          return refs;
+      }
+    }
+    return refs;
+  }
+
   static void _checkIndex(int index, int count, String what) {
     if (index < 0 || index >= count) {
       throw FormatException(
@@ -4273,6 +4484,24 @@ abstract final class WasmValidator {
       default:
         return null;
     }
+  }
+
+  static int? _readHeapTypeForValidation(ByteReader reader) {
+    return _readHeapTypeForValidationWithLead(reader, reader.readByte());
+  }
+
+  static int? _readHeapTypeForValidationWithLead(ByteReader reader, int lead) {
+    if (lead == 0x62 || lead == 0x61) {
+      return _readHeapTypeForValidation(reader);
+    }
+    final legacyHeap = _legacyHeapTypeFromRefTypeCode(lead);
+    if (legacyHeap != null) {
+      return legacyHeap;
+    }
+    if (lead >= 0x65 && lead <= 0x71) {
+      return null;
+    }
+    return _readSignedLeb33WithFirst(reader, lead);
   }
 
   static void _consumeHeapType(ByteReader reader) {
