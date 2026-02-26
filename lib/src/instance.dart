@@ -1034,6 +1034,38 @@ final class WasmInstance {
             stack.add(WasmValue.i32(WasmVm.internV128Bytes(laneBytes)));
             pc++;
 
+          case Opcodes.i8x16Splat:
+            _simdI8x16Splat(stack);
+            pc++;
+
+          case Opcodes.i8x16Eq:
+            _simdI8x16Eq(stack);
+            pc++;
+
+          case Opcodes.i8x16Ne:
+            _simdI8x16Ne(stack);
+            pc++;
+
+          case Opcodes.i8x16Abs:
+            _simdI8x16Abs(stack);
+            pc++;
+
+          case Opcodes.i8x16Neg:
+            _simdI8x16Neg(stack);
+            pc++;
+
+          case Opcodes.i8x16Popcnt:
+            _simdI8x16Popcnt(stack);
+            pc++;
+
+          case Opcodes.i8x16Bitmask:
+            _simdI8x16Bitmask(stack);
+            pc++;
+
+          case Opcodes.v128AnyTrue:
+            _simdI8x16AnyTrue(stack);
+            pc++;
+
           case Opcodes.i32Eqz:
             final value = _popValue(stack, 'i32.eqz').castTo(WasmValueType.i32);
             stack.add(WasmValue.i32(value.asI32() == 0 ? 1 : 0));
@@ -4933,6 +4965,108 @@ final class WasmInstance {
     stack
       ..add(WasmValue.i64(low))
       ..add(WasmValue.i64(high));
+  }
+
+  void _simdI8x16Splat(List<WasmValue> stack) {
+    final lane = _popValue(
+      stack,
+      'i8x16.splat',
+    ).castTo(WasmValueType.i32).asI32();
+    final result = Uint8List(16);
+    result.fillRange(0, 16, lane & 0xff);
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16Eq(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i8x16.eq rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i8x16.eq lhs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      result[lane] = lhs[lane] == rhs[lane] ? 0xff : 0x00;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16Ne(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i8x16.ne rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i8x16.ne lhs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      result[lane] = lhs[lane] != rhs[lane] ? 0xff : 0x00;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16Abs(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i8x16.abs');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      result[lane] = value[lane].toSigned(8).abs() & 0xff;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16Neg(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i8x16.neg');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      result[lane] = (-value[lane].toSigned(8)) & 0xff;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16Popcnt(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i8x16.popcnt');
+    final result = Uint8List(16);
+    for (var lane = 0; lane < 16; lane++) {
+      var byte = value[lane];
+      var count = 0;
+      while (byte != 0) {
+        count += byte & 1;
+        byte >>= 1;
+      }
+      result[lane] = count;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI8x16Bitmask(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i8x16.bitmask');
+    var mask = 0;
+    for (var lane = 0; lane < 16; lane++) {
+      if (value[lane].toSigned(8) < 0) {
+        mask |= 1 << lane;
+      }
+    }
+    stack.add(WasmValue.i32(mask));
+  }
+
+  void _simdI8x16AnyTrue(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i8x16.any_true');
+    var anyTrue = 0;
+    for (final byte in value) {
+      if (byte != 0) {
+        anyTrue = 1;
+        break;
+      }
+    }
+    stack.add(WasmValue.i32(anyTrue));
+  }
+
+  void _pushAsyncSubsetV128(List<WasmValue> stack, Uint8List bytes) {
+    stack.add(WasmValue.i32(WasmVm.internV128Bytes(bytes)));
+  }
+
+  Uint8List _popAsyncSubsetV128(
+    List<WasmValue> stack, {
+    required String opName,
+  }) {
+    final token = _popValue(stack, opName).castTo(WasmValueType.i32).asI32();
+    final bytes = WasmVm.v128BytesForValue(token);
+    if (bytes == null) {
+      throw StateError('$opName expects v128 operand.');
+    }
+    return bytes;
   }
 
   static BigInt _unsignedBigIntToSignedI64(BigInt value) {

@@ -4349,6 +4349,147 @@ void main() {
       expect(await instance.invokeI32Async('supportsV128Const', [41]), 42);
     });
 
+    test('supports i8x16 SIMD opcodes in async import call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+        ],
+        functionTypeIndices: const [0, 0, 0, 0, 0],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._i32Const(0x7f),
+              ..._fdBytes(Opcodes.i8x16Splat, []),
+              ..._fdBytes(Opcodes.v128AnyTrue, []),
+              ..._i32Const(1),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._i32Const(0x55),
+              ..._fdBytes(Opcodes.i8x16Splat, []),
+              ..._i32Const(0x55),
+              ..._fdBytes(Opcodes.i8x16Splat, []),
+              ..._fdBytes(Opcodes.i8x16Eq, []),
+              ..._fdBytes(Opcodes.i8x16Bitmask, []),
+              ..._i32Const(0xffff),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._i32Const(0x80),
+              ..._fdBytes(Opcodes.i8x16Splat, []),
+              ..._fdBytes(Opcodes.i8x16Abs, []),
+              ..._i32Const(0x80),
+              ..._fdBytes(Opcodes.i8x16Splat, []),
+              ..._fdBytes(Opcodes.i8x16Eq, []),
+              ..._fdBytes(Opcodes.i8x16Bitmask, []),
+              ..._i32Const(0xffff),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._i32Const(0x0f),
+              ..._fdBytes(Opcodes.i8x16Splat, []),
+              ..._fdBytes(Opcodes.i8x16Neg, []),
+              ..._i32Const(0xf1),
+              ..._fdBytes(Opcodes.i8x16Splat, []),
+              ..._fdBytes(Opcodes.i8x16Eq, []),
+              ..._fdBytes(Opcodes.i8x16Bitmask, []),
+              ..._i32Const(0xffff),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._i32Const(0x0f),
+              ..._fdBytes(Opcodes.i8x16Splat, []),
+              ..._fdBytes(Opcodes.i8x16Popcnt, []),
+              ..._i32Const(4),
+              ..._fdBytes(Opcodes.i8x16Splat, []),
+              ..._fdBytes(Opcodes.i8x16Eq, []),
+              ..._fdBytes(Opcodes.i8x16Bitmask, []),
+              ..._i32Const(0xffff),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'supportsI8x16SplatAnyTrue',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+          _ExportSpec(
+            name: 'supportsI8x16Eq',
+            kind: WasmExportKind.function,
+            index: 2,
+          ),
+          _ExportSpec(
+            name: 'supportsI8x16Abs',
+            kind: WasmExportKind.function,
+            index: 3,
+          ),
+          _ExportSpec(
+            name: 'supportsI8x16Neg',
+            kind: WasmExportKind.function,
+            index: 4,
+          ),
+          _ExportSpec(
+            name: 'supportsI8x16Popcnt',
+            kind: WasmExportKind.function,
+            index: 5,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(simd: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(
+        await instance.invokeI32Async('supportsI8x16SplatAnyTrue', [41]),
+        1,
+      );
+      expect(await instance.invokeI32Async('supportsI8x16Eq', [41]), 1);
+      expect(await instance.invokeI32Async('supportsI8x16Abs', [41]), 1);
+      expect(await instance.invokeI32Async('supportsI8x16Neg', [41]), 1);
+      expect(await instance.invokeI32Async('supportsI8x16Popcnt', [41]), 1);
+    });
+
     test(
       'reports explicit boundary for unsupported async call chains',
       () async {
@@ -4367,7 +4508,7 @@ void main() {
                 ..._call(0),
                 Opcodes.drop,
                 ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
-                ..._fdBytes(Opcodes.i8x16Abs, []),
+                ..._fdBytes(Opcodes.i16x8Abs, []),
                 Opcodes.drop,
                 ..._i32Const(0),
                 Opcodes.end,
