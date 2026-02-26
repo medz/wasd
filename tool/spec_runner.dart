@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-enum RunnerTarget { vm, js, wasm }
+enum RunnerTarget { vm, js, wasm, all }
 
 enum RunnerSuite { core, proposal, all }
 
@@ -96,6 +96,7 @@ Future<void> main(List<String> args) async {
       steps.addAll(
         await _runVmSuite(
           suite,
+          target: target,
           testsuiteDir: testsuiteDir,
           strictProposals: strictProposals,
         ),
@@ -104,6 +105,7 @@ Future<void> main(List<String> args) async {
       steps.addAll(
         await _runJsSuite(
           suite,
+          target: target,
           testsuiteDir: testsuiteDir,
           strictProposals: strictProposals,
         ),
@@ -111,6 +113,15 @@ Future<void> main(List<String> args) async {
     case RunnerTarget.wasm:
       steps.addAll(
         await _runWasmSuite(
+          suite,
+          target: target,
+          testsuiteDir: testsuiteDir,
+          strictProposals: strictProposals,
+        ),
+      );
+    case RunnerTarget.all:
+      steps.addAll(
+        await _runAllTargetsSuite(
           suite,
           testsuiteDir: testsuiteDir,
           strictProposals: strictProposals,
@@ -156,6 +167,7 @@ Future<void> main(List<String> args) async {
 
 Future<List<StepResult>> _runVmSuite(
   RunnerSuite suite, {
+  required RunnerTarget target,
   required String? testsuiteDir,
   required bool strictProposals,
 }) async {
@@ -164,7 +176,7 @@ Future<List<StepResult>> _runVmSuite(
     steps.add(await _runStep(name: 'vm-tests', command: ['dart', 'test']));
   }
   for (final specSuite in _specSuitesForRunnerSuite(suite)) {
-    final artifacts = _artifactsForSuite(specSuite);
+    final artifacts = _artifactsForSuite(specSuite, target: target);
     final optional = specSuite == _SpecSuiteKind.proposal && !strictProposals;
     steps.add(
       await _runStep(
@@ -188,6 +200,7 @@ Future<List<StepResult>> _runVmSuite(
 
 Future<List<StepResult>> _runJsSuite(
   RunnerSuite suite, {
+  required RunnerTarget target,
   required String? testsuiteDir,
   required bool strictProposals,
 }) async {
@@ -219,7 +232,7 @@ Future<List<StepResult>> _runJsSuite(
     );
   }
   for (final specSuite in _specSuitesForRunnerSuite(suite)) {
-    final artifacts = _artifactsForSuite(specSuite);
+    final artifacts = _artifactsForSuite(specSuite, target: target);
     final optional = specSuite == _SpecSuiteKind.proposal && !strictProposals;
     if (specSuite == _SpecSuiteKind.proposal) {
       steps.add(
@@ -291,6 +304,7 @@ Future<List<StepResult>> _runJsSuite(
 
 Future<List<StepResult>> _runWasmSuite(
   RunnerSuite suite, {
+  required RunnerTarget target,
   required String? testsuiteDir,
   required bool strictProposals,
 }) async {
@@ -338,7 +352,7 @@ Future<List<StepResult>> _runWasmSuite(
   }
 
   for (final specSuite in _specSuitesForRunnerSuite(suite)) {
-    final artifacts = _artifactsForSuite(specSuite);
+    final artifacts = _artifactsForSuite(specSuite, target: target);
     final optional = specSuite == _SpecSuiteKind.proposal && !strictProposals;
     if (specSuite == _SpecSuiteKind.proposal) {
       steps.add(
@@ -419,6 +433,159 @@ Future<List<StepResult>> _runWasmSuite(
   return steps;
 }
 
+Future<List<StepResult>> _runAllTargetsSuite(
+  RunnerSuite suite, {
+  required String? testsuiteDir,
+  required bool strictProposals,
+}) async {
+  final steps = <StepResult>[];
+  steps.addAll(
+    _prefixTargetSteps(
+      RunnerTarget.vm,
+      await _runVmSuite(
+        suite,
+        target: RunnerTarget.vm,
+        testsuiteDir: testsuiteDir,
+        strictProposals: strictProposals,
+      ),
+    ),
+  );
+  steps.addAll(
+    _prefixTargetSteps(
+      RunnerTarget.js,
+      await _runJsSuite(
+        suite,
+        target: RunnerTarget.js,
+        testsuiteDir: testsuiteDir,
+        strictProposals: strictProposals,
+      ),
+    ),
+  );
+  steps.addAll(
+    _prefixTargetSteps(
+      RunnerTarget.wasm,
+      await _runWasmSuite(
+        suite,
+        target: RunnerTarget.wasm,
+        testsuiteDir: testsuiteDir,
+        strictProposals: strictProposals,
+      ),
+    ),
+  );
+  steps.add(await _runCrossTargetConsistencyStep(suite));
+  return steps;
+}
+
+List<StepResult> _prefixTargetSteps(
+  RunnerTarget target,
+  List<StepResult> steps,
+) {
+  return steps
+      .map(
+        (step) => StepResult(
+          name: '${target.name}:${step.name}',
+          command: step.command,
+          exitCode: step.exitCode,
+          durationMs: step.durationMs,
+          stdout: step.stdout,
+          stderr: step.stderr,
+          optional: step.optional,
+        ),
+      )
+      .toList(growable: false);
+}
+
+Future<StepResult> _runCrossTargetConsistencyStep(RunnerSuite suite) async {
+  final started = DateTime.now();
+  try {
+    final mismatches = <String>[];
+    for (final specSuite in _specSuitesForRunnerSuite(suite)) {
+      final totalsByTarget = <RunnerTarget, Map<String, Object?>>{};
+      for (final target in const <RunnerTarget>[
+        RunnerTarget.vm,
+        RunnerTarget.js,
+        RunnerTarget.wasm,
+      ]) {
+        final artifacts = _artifactsForSuite(specSuite, target: target);
+        final file = File(artifacts.resultJsonPath);
+        if (!file.existsSync()) {
+          mismatches.add(
+            '${specSuite.name}: missing ${target.name} result '
+            '${artifacts.resultJsonPath}',
+          );
+          continue;
+        }
+        final payload = jsonDecode(await file.readAsString());
+        if (payload is! Map<String, Object?>) {
+          mismatches.add('${specSuite.name}: invalid ${target.name} json');
+          continue;
+        }
+        final totals = payload['totals'];
+        if (totals is! Map) {
+          mismatches.add(
+            '${specSuite.name}: missing totals for ${target.name}',
+          );
+          continue;
+        }
+        totalsByTarget[target] = totals.cast<String, Object?>();
+      }
+      final vmTotals = totalsByTarget[RunnerTarget.vm];
+      final jsTotals = totalsByTarget[RunnerTarget.js];
+      final wasmTotals = totalsByTarget[RunnerTarget.wasm];
+      if (vmTotals == null || jsTotals == null || wasmTotals == null) {
+        continue;
+      }
+      for (final key in const <String>[
+        'files_total',
+        'files_passed',
+        'files_failed',
+        'commands_seen',
+        'commands_passed',
+        'commands_failed',
+      ]) {
+        final vmValue = vmTotals[key];
+        final jsValue = jsTotals[key];
+        final wasmValue = wasmTotals[key];
+        if (vmValue != jsValue || vmValue != wasmValue) {
+          mismatches.add(
+            '${specSuite.name}: `$key` mismatch '
+            '(vm=$vmValue js=$jsValue wasm=$wasmValue)',
+          );
+        }
+      }
+    }
+    final ended = DateTime.now();
+    if (mismatches.isNotEmpty) {
+      return StepResult(
+        name: 'cross-target-consistency',
+        command: const <String>['internal', 'cross-target-consistency'],
+        exitCode: 1,
+        durationMs: ended.difference(started).inMilliseconds,
+        stdout: '',
+        stderr: mismatches.join('\n'),
+      );
+    }
+    return StepResult(
+      name: 'cross-target-consistency',
+      command: const <String>['internal', 'cross-target-consistency'],
+      exitCode: 0,
+      durationMs: ended.difference(started).inMilliseconds,
+      stdout: 'VM/JS/Wasm totals match for requested suites.',
+      stderr: '',
+    );
+  } catch (error, stackTrace) {
+    final ended = DateTime.now();
+    return StepResult(
+      name: 'cross-target-consistency',
+      command: const <String>['internal', 'cross-target-consistency'],
+      exitCode: 1,
+      durationMs: ended.difference(started).inMilliseconds,
+      stdout: '',
+      stderr: '$error\n$stackTrace',
+    );
+  }
+}
+
 RunnerTarget _parseTarget(String raw) {
   final normalized = raw.trim().toLowerCase();
   switch (normalized) {
@@ -428,6 +595,8 @@ RunnerTarget _parseTarget(String raw) {
       return RunnerTarget.js;
     case 'wasm':
       return RunnerTarget.wasm;
+    case 'all':
+      return RunnerTarget.all;
     default:
       throw ArgumentError('Unsupported --target: $raw');
   }
@@ -493,25 +662,35 @@ List<_SpecSuiteKind> _specSuitesForRunnerSuite(RunnerSuite suite) {
   }
 }
 
-_SpecSuiteArtifacts _artifactsForSuite(_SpecSuiteKind suite) {
+_SpecSuiteArtifacts _artifactsForSuite(
+  _SpecSuiteKind suite, {
+  required RunnerTarget target,
+}) {
+  final targetPrefix = target.name;
   switch (suite) {
     case _SpecSuiteKind.core:
-      return const _SpecSuiteArtifacts(
+      return _SpecSuiteArtifacts(
         suite: _SpecSuiteKind.core,
         stepPrefix: 'core',
-        manifestPath: '.dart_tool/spec_runner/core_manifest.json',
-        bundlePath: '.dart_tool/spec_runner/core_bundle',
-        resultJsonPath: '.dart_tool/spec_runner/core_latest.json',
-        reportMarkdownPath: '.dart_tool/spec_runner/wasm_core_failures.md',
+        manifestPath:
+            '.dart_tool/spec_runner/${targetPrefix}_core_manifest.json',
+        bundlePath: '.dart_tool/spec_runner/${targetPrefix}_core_bundle',
+        resultJsonPath:
+            '.dart_tool/spec_runner/${targetPrefix}_core_latest.json',
+        reportMarkdownPath:
+            '.dart_tool/spec_runner/${targetPrefix}_wasm_core_failures.md',
       );
     case _SpecSuiteKind.proposal:
-      return const _SpecSuiteArtifacts(
+      return _SpecSuiteArtifacts(
         suite: _SpecSuiteKind.proposal,
         stepPrefix: 'proposal',
-        manifestPath: '.dart_tool/spec_runner/proposal_manifest.json',
-        bundlePath: '.dart_tool/spec_runner/proposal_bundle',
-        resultJsonPath: '.dart_tool/spec_runner/proposal_latest.json',
-        reportMarkdownPath: '.dart_tool/spec_runner/wasm_proposal_failures.md',
+        manifestPath:
+            '.dart_tool/spec_runner/${targetPrefix}_proposal_manifest.json',
+        bundlePath: '.dart_tool/spec_runner/${targetPrefix}_proposal_bundle',
+        resultJsonPath:
+            '.dart_tool/spec_runner/${targetPrefix}_proposal_latest.json',
+        reportMarkdownPath:
+            '.dart_tool/spec_runner/${targetPrefix}_wasm_proposal_failures.md',
       );
   }
 }
@@ -589,25 +768,30 @@ String _renderMarkdownReport({
   b.writeln('## Notes');
   b.writeln();
   final suite = payload['suite'] as String? ?? 'all';
+  final target = payload['target'] as String? ?? 'vm';
+  String corePath() => '.dart_tool/spec_runner/${target}_wasm_core_failures.md';
+  String proposalPath() =>
+      '.dart_tool/spec_runner/${target}_wasm_proposal_failures.md';
   if (suite == RunnerSuite.core.name) {
-    b.writeln(
-      '- Core testsuite summary is written to `.dart_tool/spec_runner/wasm_core_failures.md`.',
-    );
+    b.writeln('- Core testsuite summary is written to `${corePath()}`.');
   } else if (suite == RunnerSuite.proposal.name) {
     b.writeln(
-      '- Proposal testsuite summary is written to `.dart_tool/spec_runner/wasm_proposal_failures.md`.',
+      '- Proposal testsuite summary is written to `${proposalPath()}`.',
     );
   } else {
+    b.writeln('- Core testsuite summary is written to `${corePath()}`.');
     b.writeln(
-      '- Core testsuite summary is written to `.dart_tool/spec_runner/wasm_core_failures.md`.',
-    );
-    b.writeln(
-      '- Proposal testsuite summary is written to `.dart_tool/spec_runner/wasm_proposal_failures.md`.',
+      '- Proposal testsuite summary is written to `${proposalPath()}`.',
     );
   }
   if (payload['strict_proposals'] != true && suite != RunnerSuite.core.name) {
     b.writeln(
       '- Proposal failures are non-gating by default; pass `--strict-proposals` to enforce them.',
+    );
+  }
+  if (target == RunnerTarget.all.name) {
+    b.writeln(
+      '- Cross-target totals consistency is enforced by the `cross-target-consistency` step.',
     );
   }
   b.writeln(
@@ -619,7 +803,7 @@ String _renderMarkdownReport({
 
 void _printUsage() {
   stdout.writeln(
-    'Usage: dart run tool/spec_runner.dart --target=<vm|js|wasm> --suite=<core|proposal|all>',
+    'Usage: dart run tool/spec_runner.dart --target=<vm|js|wasm|all> --suite=<core|proposal|all>',
   );
   stdout.writeln(
     'Optional: --report=<path> --json=<path> --testsuite-dir=<path> --strict-proposals',
