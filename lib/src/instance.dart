@@ -37,6 +37,7 @@ final class _AsyncSubsetControlFrame {
     required this.endIndex,
     required this.parameterTypes,
     required this.resultTypes,
+    this.tryTableCatches,
     this.legacyCatches,
     this.delegateDepth,
   });
@@ -47,6 +48,7 @@ final class _AsyncSubsetControlFrame {
   final int endIndex;
   final List<WasmValueType> parameterTypes;
   final List<WasmValueType> resultTypes;
+  final List<TryTableCatchClause>? tryTableCatches;
   final List<LegacyCatchClause>? legacyCatches;
   final int? delegateDepth;
   _AsyncSubsetThrownException? activeException;
@@ -124,6 +126,9 @@ final class WasmInstance {
   final List<List<int?>?> _asyncElementSegments;
   final int _functionRefNamespace;
   final WasmVm _vm;
+  final Map<int, _AsyncSubsetThrownException> _asyncExceptionObjects =
+      <int, _AsyncSubsetThrownException>{};
+  int _nextAsyncExceptionRef = 1;
   late final Map<int, int> _functionRefIdToIndex = _buildFunctionRefIdToIndex();
 
   factory WasmInstance.fromBytes(
@@ -3657,6 +3662,34 @@ final class WasmInstance {
             );
             pc++;
 
+          case Opcodes.tryTable:
+            final endIndex = instruction.endIndex;
+            if (endIndex == null) {
+              throw StateError('Malformed try_table without end index.');
+            }
+            final parameterTypes =
+                instruction.blockParameterTypes ?? const <WasmValueType>[];
+            final params = _popArgsForTypes(
+              stack,
+              parameterTypes,
+              context: 'try_table',
+            );
+            final baseHeight = stack.length;
+            stack.addAll(params);
+            controlStack.add(
+              _AsyncSubsetControlFrame(
+                kind: _AsyncSubsetControlKind.block,
+                stackBaseHeight: baseHeight,
+                startIndex: pc,
+                endIndex: endIndex,
+                parameterTypes: parameterTypes,
+                resultTypes:
+                    instruction.blockResultTypes ?? const <WasmValueType>[],
+                tryTableCatches: instruction.tryTableCatches,
+              ),
+            );
+            pc++;
+
           case Opcodes.catchTag:
           case Opcodes.catchAll:
             pc = _handleLegacyCatchBoundaryInAsyncSubset(
@@ -3782,6 +3815,9 @@ final class WasmInstance {
 
           case Opcodes.throwTag:
             _throwTagInAsyncSubset(stack, instruction);
+
+          case Opcodes.throwRef:
+            _throwRefInAsyncSubset(stack);
 
           case Opcodes.rethrowTag:
             _rethrowLegacyInAsyncSubset(
@@ -4074,9 +4110,72 @@ final class WasmInstance {
     required List<WasmValue> stack,
     required List<_AsyncSubsetControlFrame> controlStack,
   }) {
+    final exceptionRef = _allocateAsyncSubsetExceptionRef(thrown);
     var i = controlStack.length - 1;
     while (i >= 0) {
       final frame = controlStack[i];
+      final tryTableCatches = frame.tryTableCatches;
+      if (tryTableCatches != null && tryTableCatches.isNotEmpty) {
+        TryTableCatchClause? matchedTryTableCatch;
+        for (final clause in tryTableCatches) {
+          switch (clause.kind) {
+            case TryTableCatchKind.catchTag:
+            case TryTableCatchKind.catchRef:
+              final tagIndex = clause.tagIndex;
+              if (tagIndex == null) {
+                continue;
+              }
+              final resolvedTagIndex = _checkAsyncSubsetTagIndex(tagIndex);
+              if (_tagNominalTypeKeys[resolvedTagIndex] ==
+                  thrown.nominalTypeKey) {
+                matchedTryTableCatch = clause;
+              }
+            case TryTableCatchKind.catchAll:
+            case TryTableCatchKind.catchAllRef:
+              matchedTryTableCatch = clause;
+            default:
+              continue;
+          }
+          if (matchedTryTableCatch != null) {
+            break;
+          }
+        }
+
+        if (matchedTryTableCatch != null) {
+          if (i + 1 < controlStack.length) {
+            controlStack.removeRange(i + 1, controlStack.length);
+          }
+          _truncateAsyncSubsetStackToHeight(
+            stack,
+            frame.stackBaseHeight,
+            context: 'exception unwind',
+          );
+          switch (matchedTryTableCatch.kind) {
+            case TryTableCatchKind.catchTag:
+              stack.addAll(thrown.values);
+            case TryTableCatchKind.catchRef:
+              stack
+                ..addAll(thrown.values)
+                ..add(WasmValue.i32(exceptionRef));
+            case TryTableCatchKind.catchAll:
+              break;
+            case TryTableCatchKind.catchAllRef:
+              stack.add(WasmValue.i32(exceptionRef));
+            default:
+              i--;
+              continue;
+          }
+          return _branchInAsyncSubset(
+            depth: matchedTryTableCatch.labelDepth + 1,
+            stack: stack,
+            controlStack: controlStack,
+            context: 'try_table catch',
+          );
+        }
+        i--;
+        continue;
+      }
+
       if (frame.kind != _AsyncSubsetControlKind.tryLegacy) {
         i--;
         continue;
@@ -4164,6 +4263,27 @@ final class WasmInstance {
       nominalTypeKey: _tagNominalTypeKeys[tagIndex],
       values: values,
     );
+  }
+
+  Never _throwRefInAsyncSubset(List<WasmValue> stack) {
+    final exceptionRef = _popAsyncSubsetRef(
+      stack,
+      context: 'throw_ref operand',
+    );
+    if (exceptionRef == null) {
+      throw StateError('null exception reference');
+    }
+    final exception = _asyncExceptionObjects[exceptionRef];
+    if (exception == null) {
+      throw StateError('unknown exception reference');
+    }
+    throw exception;
+  }
+
+  int _allocateAsyncSubsetExceptionRef(_AsyncSubsetThrownException exception) {
+    final reference = _nextAsyncExceptionRef++;
+    _asyncExceptionObjects[reference] = exception;
+    return reference;
   }
 
   Never _rethrowLegacyInAsyncSubset({
