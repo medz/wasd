@@ -61,6 +61,42 @@ final class WasmComponentCoreInstanceAlias {
   final int instanceIndex;
 }
 
+enum WasmComponentTypeKind { value, function, alias }
+
+/// Component type declaration decoded from section `0x06`.
+final class WasmComponentTypeDeclaration {
+  const WasmComponentTypeDeclaration.value({
+    required this.name,
+    required this.valueTypeCode,
+  }) : kind = WasmComponentTypeKind.value,
+       parameterTypeCodes = null,
+       resultTypeCodes = null,
+       aliasTargetIndex = null;
+
+  const WasmComponentTypeDeclaration.function({
+    required this.name,
+    required this.parameterTypeCodes,
+    required this.resultTypeCodes,
+  }) : kind = WasmComponentTypeKind.function,
+       valueTypeCode = null,
+       aliasTargetIndex = null;
+
+  const WasmComponentTypeDeclaration.alias({
+    required this.name,
+    required this.aliasTargetIndex,
+  }) : kind = WasmComponentTypeKind.alias,
+       valueTypeCode = null,
+       parameterTypeCodes = null,
+       resultTypeCodes = null;
+
+  final String name;
+  final WasmComponentTypeKind kind;
+  final int? valueTypeCode;
+  final List<int>? parameterTypeCodes;
+  final List<int>? resultTypeCodes;
+  final int? aliasTargetIndex;
+}
+
 /// Minimal component binary decoder.
 ///
 /// This currently validates the component header and collects raw sections.
@@ -73,6 +109,7 @@ final class WasmComponent {
     required this.coreExportAliases,
     required this.importRequirements,
     required this.coreInstanceAliases,
+    required this.typeDeclarations,
   });
 
   static const List<int> _magic = <int>[0x00, 0x61, 0x73, 0x6d];
@@ -84,6 +121,7 @@ final class WasmComponent {
   final List<WasmComponentCoreExportAlias> coreExportAliases;
   final List<WasmComponentImportRequirement> importRequirements;
   final List<WasmComponentCoreInstanceAlias> coreInstanceAliases;
+  final List<WasmComponentTypeDeclaration> typeDeclarations;
 
   static WasmComponent decode(
     Uint8List componentBytes, {
@@ -112,6 +150,7 @@ final class WasmComponent {
     final coreExportAliases = <WasmComponentCoreExportAlias>[];
     final importRequirements = <WasmComponentImportRequirement>[];
     final coreInstanceAliases = <WasmComponentCoreInstanceAlias>[];
+    final typeDeclarations = <WasmComponentTypeDeclaration>[];
     while (!reader.isEOF) {
       final id = reader.readByte();
       final sectionSize = reader.readVarUint32();
@@ -130,6 +169,8 @@ final class WasmComponent {
         coreInstanceAliases.addAll(
           _decodeCoreInstanceAliasSectionPayload(payload),
         );
+      } else if (id == 0x06) {
+        typeDeclarations.addAll(_decodeTypeSectionPayload(payload));
       }
     }
 
@@ -147,6 +188,9 @@ final class WasmComponent {
       ),
       coreInstanceAliases: List<WasmComponentCoreInstanceAlias>.unmodifiable(
         coreInstanceAliases,
+      ),
+      typeDeclarations: List<WasmComponentTypeDeclaration>.unmodifiable(
+        typeDeclarations,
       ),
     );
   }
@@ -294,6 +338,117 @@ final class WasmComponent {
       );
     }
     return aliases;
+  }
+
+  static List<WasmComponentTypeDeclaration> _decodeTypeSectionPayload(
+    Uint8List payload,
+  ) {
+    final reader = ByteReader(payload);
+    final count = reader.readVarUint32();
+    final declarations = <WasmComponentTypeDeclaration>[];
+    final names = <String>{};
+    for (var i = 0; i < count; i++) {
+      final name = _readName(reader);
+      if (!names.add(name)) {
+        throw FormatException(
+          'Duplicate component type declaration name: $name',
+        );
+      }
+      final kind = reader.readByte();
+      switch (kind) {
+        case 0x00:
+          declarations.add(
+            WasmComponentTypeDeclaration.value(
+              name: name,
+              valueTypeCode: reader.readByte(),
+            ),
+          );
+        case 0x01:
+          final paramCount = reader.readVarUint32();
+          final params = List<int>.generate(
+            paramCount,
+            (_) => reader.readByte(),
+            growable: false,
+          );
+          final resultCount = reader.readVarUint32();
+          final results = List<int>.generate(
+            resultCount,
+            (_) => reader.readByte(),
+            growable: false,
+          );
+          declarations.add(
+            WasmComponentTypeDeclaration.function(
+              name: name,
+              parameterTypeCodes: params,
+              resultTypeCodes: results,
+            ),
+          );
+        case 0x02:
+          declarations.add(
+            WasmComponentTypeDeclaration.alias(
+              name: name,
+              aliasTargetIndex: reader.readVarUint32(),
+            ),
+          );
+        default:
+          throw UnsupportedError(
+            'Unsupported component type declaration kind: '
+            '0x${kind.toRadixString(16)}',
+          );
+      }
+    }
+    if (!reader.isEOF) {
+      throw const FormatException(
+        'Trailing bytes in component type section payload.',
+      );
+    }
+    _validateTypeDeclarationGraph(declarations);
+    return declarations;
+  }
+
+  static void _validateTypeDeclarationGraph(
+    List<WasmComponentTypeDeclaration> declarations,
+  ) {
+    for (var i = 0; i < declarations.length; i++) {
+      final declaration = declarations[i];
+      final aliasTargetIndex = declaration.aliasTargetIndex;
+      if (declaration.kind == WasmComponentTypeKind.alias &&
+          (aliasTargetIndex == null ||
+              aliasTargetIndex < 0 ||
+              aliasTargetIndex >= declarations.length)) {
+        throw FormatException(
+          'Component type alias `${declaration.name}` target out of range: '
+          '$aliasTargetIndex (count=${declarations.length}).',
+        );
+      }
+    }
+
+    final visitState = List<int>.filled(declarations.length, 0);
+    bool visit(int index) {
+      final state = visitState[index];
+      if (state == 1) {
+        return false;
+      }
+      if (state == 2) {
+        return true;
+      }
+      visitState[index] = 1;
+      final declaration = declarations[index];
+      if (declaration.kind == WasmComponentTypeKind.alias) {
+        final target = declaration.aliasTargetIndex!;
+        if (!visit(target)) {
+          return false;
+        }
+      }
+      visitState[index] = 2;
+      return true;
+    }
+
+    for (var i = 0; i < declarations.length; i++) {
+      if (!visit(i)) {
+        throw const FormatException('Component type alias cycle detected.');
+      }
+    }
   }
 
   static String _readName(ByteReader reader) {

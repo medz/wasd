@@ -401,6 +401,97 @@ void main() {
       expect(component.coreInstanceAliases.single.instanceIndex, 0);
     });
 
+    test('decodes component type declarations from section 0x06', () {
+      final typeSection = <int>[
+        ..._u32Leb(3),
+        ..._name('i32_t'),
+        0x00,
+        0x7f,
+        ..._name('identity'),
+        0x01,
+        ..._u32Leb(1),
+        0x7f,
+        ..._u32Leb(1),
+        0x7f,
+        ..._name('i32_alias'),
+        0x02,
+        ..._u32Leb(0),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ..._componentHeaderWithOneCoreModule(),
+        ..._section(0x06, typeSection),
+      ]);
+
+      final component = WasmComponent.decode(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
+      expect(component.typeDeclarations, hasLength(3));
+      expect(component.typeDeclarations[0].name, 'i32_t');
+      expect(component.typeDeclarations[0].kind, WasmComponentTypeKind.value);
+      expect(component.typeDeclarations[0].valueTypeCode, 0x7f);
+      expect(
+        component.typeDeclarations[1].kind,
+        WasmComponentTypeKind.function,
+      );
+      expect(
+        component.typeDeclarations[1].parameterTypeCodes,
+        orderedEquals(const <int>[0x7f]),
+      );
+      expect(
+        component.typeDeclarations[1].resultTypeCodes,
+        orderedEquals(const <int>[0x7f]),
+      );
+      expect(component.typeDeclarations[2].kind, WasmComponentTypeKind.alias);
+      expect(component.typeDeclarations[2].aliasTargetIndex, 0);
+    });
+
+    test('rejects out-of-range type alias target in section 0x06', () {
+      final typeSection = <int>[
+        ..._u32Leb(1),
+        ..._name('bad_alias'),
+        0x02,
+        ..._u32Leb(1),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ..._componentHeaderWithOneCoreModule(),
+        ..._section(0x06, typeSection),
+      ]);
+
+      expect(
+        () => WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+    });
+
+    test('rejects type alias cycles in section 0x06', () {
+      final typeSection = <int>[
+        ..._u32Leb(2),
+        ..._name('a'),
+        0x02,
+        ..._u32Leb(1),
+        ..._name('b'),
+        0x02,
+        ..._u32Leb(0),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ..._componentHeaderWithOneCoreModule(),
+        ..._section(0x06, typeSection),
+      ]);
+
+      expect(
+        () => WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+    });
+
     test('rejects unsupported component version', () {
       final componentBytes = Uint8List.fromList(<int>[
         0x00,
@@ -422,4 +513,55 @@ void main() {
       );
     });
   });
+}
+
+List<int> _componentHeaderWithOneCoreModule() {
+  return <int>[
+    0x00,
+    0x61,
+    0x73,
+    0x6d,
+    0x0d,
+    0x00,
+    0x01,
+    0x00,
+    0x01,
+    0x08,
+    0x00,
+    0x61,
+    0x73,
+    0x6d,
+    0x01,
+    0x00,
+    0x00,
+    0x00,
+  ];
+}
+
+List<int> _section(int id, List<int> payload) => <int>[
+  id,
+  ..._u32Leb(payload.length),
+  ...payload,
+];
+
+List<int> _name(String value) => <int>[
+  ..._u32Leb(value.length),
+  ...value.codeUnits,
+];
+
+List<int> _u32Leb(int value) {
+  if (value < 0) {
+    throw ArgumentError.value(value, 'value', 'must be >= 0');
+  }
+  final out = <int>[];
+  var remaining = value;
+  do {
+    var byte = remaining & 0x7f;
+    remaining >>= 7;
+    if (remaining != 0) {
+      byte |= 0x80;
+    }
+    out.add(byte);
+  } while (remaining != 0);
+  return out;
 }
