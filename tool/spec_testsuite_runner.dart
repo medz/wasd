@@ -1921,7 +1921,7 @@ Future<void> _runVmMode(List<String> args) async {
     jsonFromWast: _argValue(args, '--json-from-wast'),
     wast2json: _argValue(args, '--wast2json'),
   );
-  final textModuleParser = await _resolveTextModuleParser(converter);
+  final textModuleParsers = await _resolveTextModuleParsers(converter);
   final testsuite = Directory(testsuiteDir);
   if (!testsuite.existsSync()) {
     stderr.writeln('testsuite directory does not exist: ${testsuite.path}');
@@ -1946,7 +1946,7 @@ Future<void> _runVmMode(List<String> args) async {
       file: file,
       group: group,
       converter: converter,
-      textModuleParser: textModuleParser,
+      textModuleParsers: textModuleParsers,
     );
     results.add(result);
     _accumulateStats(
@@ -2022,7 +2022,7 @@ Future<void> _runPrepareManifestMode(
     jsonFromWast: _argValue(args, '--json-from-wast'),
     wast2json: _argValue(args, '--wast2json'),
   );
-  final textModuleParser = await _resolveTextModuleParser(converter);
+  final textModuleParsers = await _resolveTextModuleParsers(converter);
   final testsuite = Directory(testsuiteDir);
   if (!testsuite.existsSync()) {
     stderr.writeln('testsuite directory does not exist: ${testsuite.path}');
@@ -2063,11 +2063,11 @@ Future<void> _runPrepareManifestMode(
       exitCode = 1;
       return;
     }
-    if (textModuleParser != null) {
+    if (textModuleParsers.isNotEmpty) {
       await _annotatePreparedScriptTextMalformedAssertions(
         scriptJsonPath: jsonPath,
         workDirPath: slot.path,
-        parser: textModuleParser,
+        parsers: textModuleParsers,
       );
     }
     entries.add(
@@ -2213,7 +2213,7 @@ Future<_FileResult> _runWastFile({
   required String file,
   required String group,
   required _WastConverter converter,
-  required _TextModuleParser? textModuleParser,
+  required List<_TextModuleParser> textModuleParsers,
 }) async {
   final tempDir = await Directory.systemTemp.createTemp('wasd-spec-');
   try {
@@ -2282,11 +2282,11 @@ Future<_FileResult> _runWastFile({
       workDirPath: tempDir.path,
       features: _featuresForGroup(group),
     );
-    if (textModuleParser != null) {
+    if (textModuleParsers.isNotEmpty) {
       await _annotateCommandsTextMalformedAssertions(
         commandsRaw: commandsRaw,
         workDirPath: tempDir.path,
-        parser: textModuleParser,
+        parsers: textModuleParsers,
       );
     }
     return _executeCommands(
@@ -2303,7 +2303,7 @@ Future<_FileResult> _runWastFile({
 Future<void> _annotatePreparedScriptTextMalformedAssertions({
   required String scriptJsonPath,
   required String workDirPath,
-  required _TextModuleParser parser,
+  required List<_TextModuleParser> parsers,
 }) async {
   final file = File(scriptJsonPath);
   final decoded = json.decode(await file.readAsString());
@@ -2318,7 +2318,7 @@ Future<void> _annotatePreparedScriptTextMalformedAssertions({
   await _annotateCommandsTextMalformedAssertions(
     commandsRaw: commandsRaw,
     workDirPath: workDirPath,
-    parser: parser,
+    parsers: parsers,
   );
   await file.writeAsString(const JsonEncoder.withIndent('  ').convert(root));
 }
@@ -2326,7 +2326,7 @@ Future<void> _annotatePreparedScriptTextMalformedAssertions({
 Future<void> _annotateCommandsTextMalformedAssertions({
   required List commandsRaw,
   required String workDirPath,
-  required _TextModuleParser parser,
+  required List<_TextModuleParser> parsers,
 }) async {
   final cache = <String, bool>{};
   for (final raw in commandsRaw) {
@@ -2348,7 +2348,7 @@ Future<void> _annotateCommandsTextMalformedAssertions({
       () => _isTextModuleMalformed(
         filename: filename,
         workDirPath: workDirPath,
-        parser: parser,
+        parsers: parsers,
       ),
     );
     command['wasd_text_malformed_validated'] = malformed;
@@ -2358,25 +2358,32 @@ Future<void> _annotateCommandsTextMalformedAssertions({
 bool _isTextModuleMalformed({
   required String filename,
   required String workDirPath,
-  required _TextModuleParser parser,
+  required List<_TextModuleParser> parsers,
 }) {
   final watPath = '$workDirPath/$filename';
   if (!File(watPath).existsSync()) {
     return false;
   }
-  final probeOutput = '$workDirPath/.wasd_text_probe.wasm';
-  final result = Process.runSync(
-    parser.binary,
-    parser.command(watFile: watPath, outputWasmPath: probeOutput),
-    stdoutEncoding: latin1,
-    stderrEncoding: latin1,
-  );
-  final outputFile = File(probeOutput);
-  if (outputFile.existsSync()) {
-    outputFile.deleteSync();
+  for (final parser in parsers) {
+    final probeOutput =
+        '$workDirPath/.wasd_text_probe_${parser.kind.name}.wasm';
+    final result = Process.runSync(
+      parser.binary,
+      parser.command(watFile: watPath, outputWasmPath: probeOutput),
+      stdoutEncoding: latin1,
+      stderrEncoding: latin1,
+    );
+    final outputFile = File(probeOutput);
+    if (outputFile.existsSync()) {
+      outputFile.deleteSync();
+    }
+    if (result.exitCode != 0) {
+      // assert_malformed(text) succeeds when at least one compliant text parser
+      // rejects the quoted module.
+      return true;
+    }
   }
-  // assert_malformed(text) succeeds when parsing/validation fails.
-  return result.exitCode != 0;
+  return false;
 }
 
 _FileResult _executeCommands({
@@ -2814,25 +2821,36 @@ Future<_WastConverter> _resolveWastConverter({
   );
 }
 
-Future<_TextModuleParser?> _resolveTextModuleParser(
+Future<List<_TextModuleParser>> _resolveTextModuleParsers(
   _WastConverter converter,
 ) async {
-  final directWat2Wasm = _siblingBinary(converter.binary, 'wat2wasm');
-  if (directWat2Wasm != null && File(directWat2Wasm).existsSync()) {
-    return _TextModuleParser(
-      kind: _TextModuleParserKind.wabtWat2Wasm,
-      binary: directWat2Wasm,
+  final parsers = <_TextModuleParser>[];
+  void addParser(_TextModuleParser parser) {
+    final duplicate = parsers.any(
+      (candidate) =>
+          candidate.kind == parser.kind && candidate.binary == parser.binary,
+    );
+    if (!duplicate) {
+      parsers.add(parser);
+    }
+  }
+
+  if (converter.kind == _WastConverterKind.wasmToolsJsonFromWast) {
+    addParser(
+      _TextModuleParser(
+        kind: _TextModuleParserKind.wasmToolsParse,
+        binary: converter.binary,
+      ),
     );
   }
 
-  final wasmTools = await _tryResolveBinaryCandidates(<String>[
-    '${Directory.current.path}/.toolchains/bin/wasm-tools',
-    'wasm-tools',
-  ]);
-  if (wasmTools != null) {
-    return _TextModuleParser(
-      kind: _TextModuleParserKind.wasmToolsParse,
-      binary: wasmTools,
+  final directWat2Wasm = _siblingBinary(converter.binary, 'wat2wasm');
+  if (directWat2Wasm != null && File(directWat2Wasm).existsSync()) {
+    addParser(
+      _TextModuleParser(
+        kind: _TextModuleParserKind.wabtWat2Wasm,
+        binary: directWat2Wasm,
+      ),
     );
   }
 
@@ -2843,20 +2861,51 @@ Future<_TextModuleParser?> _resolveTextModuleParser(
     'wat2wasm',
   ]);
   if (wat2wasm != null) {
-    return _TextModuleParser(
-      kind: _TextModuleParserKind.wabtWat2Wasm,
-      binary: wat2wasm,
+    addParser(
+      _TextModuleParser(
+        kind: _TextModuleParserKind.wabtWat2Wasm,
+        binary: wat2wasm,
+      ),
     );
   }
 
-  if (converter.kind == _WastConverterKind.wasmToolsJsonFromWast) {
-    return _TextModuleParser(
-      kind: _TextModuleParserKind.wasmToolsParse,
-      binary: converter.binary,
+  final wasmTools = await _tryResolveBinaryCandidates(<String>[
+    '${Directory.current.path}/.toolchains/bin/wasm-tools',
+    'wasm-tools',
+  ]);
+  if (wasmTools != null) {
+    addParser(
+      _TextModuleParser(
+        kind: _TextModuleParserKind.wasmToolsParse,
+        binary: wasmTools,
+      ),
     );
   }
 
-  return null;
+  if (converter.kind == _WastConverterKind.wabtWast2json) {
+    // If `wast2json` drove conversion, keep parser ordering stable by preferring
+    // wabt first and wasm-tools as fallback.
+    parsers.sort((left, right) {
+      final leftScore = left.kind == _TextModuleParserKind.wabtWat2Wasm ? 0 : 1;
+      final rightScore = right.kind == _TextModuleParserKind.wabtWat2Wasm
+          ? 0
+          : 1;
+      return leftScore.compareTo(rightScore);
+    });
+  } else {
+    // When wasm-tools drives conversion, prioritize wasm-tools parse first.
+    parsers.sort((left, right) {
+      final leftScore = left.kind == _TextModuleParserKind.wasmToolsParse
+          ? 0
+          : 1;
+      final rightScore = right.kind == _TextModuleParserKind.wasmToolsParse
+          ? 0
+          : 1;
+      return leftScore.compareTo(rightScore);
+    });
+  }
+
+  return parsers;
 }
 
 String? _siblingBinary(String binary, String siblingName) {
