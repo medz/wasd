@@ -1070,6 +1070,14 @@ final class WasmInstance {
             _simdI16x8Abs(stack);
             pc++;
 
+          case Opcodes.i16x8Eq:
+            _simdI16x8Eq(stack);
+            pc++;
+
+          case Opcodes.i16x8Ne:
+            _simdI16x8Ne(stack);
+            pc++;
+
           case Opcodes.i16x8Bitmask:
             _simdI16x8Bitmask(stack);
             pc++;
@@ -5069,6 +5077,44 @@ final class WasmInstance {
     for (var lane = 0; lane < 8; lane++) {
       final laneValue = valueData.getInt16(lane * 2, Endian.little).abs();
       resultData.setUint16(lane * 2, laneValue & 0xffff, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8Eq(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.eq rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.eq lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final laneEqual =
+          lhsData.getUint16(offset, Endian.little) ==
+          rhsData.getUint16(offset, Endian.little);
+      resultData.setUint16(offset, laneEqual ? 0xffff : 0x0000, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8Ne(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i16x8.ne rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i16x8.ne lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final offset = lane * 2;
+      final laneNotEqual =
+          lhsData.getUint16(offset, Endian.little) !=
+          rhsData.getUint16(offset, Endian.little);
+      resultData.setUint16(
+        offset,
+        laneNotEqual ? 0xffff : 0x0000,
+        Endian.little,
+      );
     }
     _pushAsyncSubsetV128(stack, result);
   }

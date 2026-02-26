@@ -4555,6 +4555,128 @@ void main() {
     });
 
     test(
+      'supports i16x8 compare SIMD opcodes in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [0, 0],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._fdBytes(Opcodes.v128Const, <int>[
+                  0x00,
+                  0x80,
+                  0x00,
+                  0x80,
+                  0x00,
+                  0x80,
+                  0x00,
+                  0x80,
+                  0x00,
+                  0x80,
+                  0x00,
+                  0x80,
+                  0x00,
+                  0x80,
+                  0x00,
+                  0x80,
+                ]),
+                ..._fdBytes(Opcodes.v128Const, <int>[
+                  0x00,
+                  0x80,
+                  0x00,
+                  0x80,
+                  0x00,
+                  0x80,
+                  0x00,
+                  0x80,
+                  0x00,
+                  0x80,
+                  0x00,
+                  0x80,
+                  0x00,
+                  0x80,
+                  0x00,
+                  0x80,
+                ]),
+                ..._fdBytes(Opcodes.i16x8Eq, []),
+                ..._fdBytes(Opcodes.i16x8Bitmask, []),
+                ..._i32Const(0xff),
+                Opcodes.i32Eq,
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
+                ..._fdBytes(Opcodes.v128Const, <int>[
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                ]),
+                ..._fdBytes(Opcodes.i16x8Ne, []),
+                ..._fdBytes(Opcodes.i16x8Bitmask, []),
+                ..._i32Const(0xff),
+                Opcodes.i32Eq,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'supportsI16x8Eq',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+            _ExportSpec(
+              name: 'supportsI16x8Ne',
+              kind: WasmExportKind.function,
+              index: 2,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          features: const WasmFeatureSet(simd: true),
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('supportsI16x8Eq', [41]), 1);
+        expect(await instance.invokeI32Async('supportsI16x8Ne', [41]), 1);
+      },
+    );
+
+    test(
       'reports explicit boundary for unsupported async call chains',
       () async {
         final wasm = _buildModule(
@@ -4573,7 +4695,7 @@ void main() {
                 Opcodes.drop,
                 ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
                 ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
-                ..._fdBytes(Opcodes.i16x8Ne, []),
+                ..._fdBytes(Opcodes.i16x8Add, []),
                 Opcodes.drop,
                 ..._i32Const(0),
                 Opcodes.end,
