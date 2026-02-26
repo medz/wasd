@@ -159,11 +159,11 @@ dart run tool/spec_runner.dart --target=vm --suite=proposal
 
 Artifacts:
 
-- Markdown report: [doc/wasm_conformance_matrix.md](doc/wasm_conformance_matrix.md)
+- Markdown report: `.dart_tool/spec_runner/wasm_conformance_matrix.md`
 - JSON report: `.dart_tool/spec_runner/latest.json`
-- Core failure board: [doc/wasm_core_failures.md](doc/wasm_core_failures.md)
+- Core failure board: `.dart_tool/spec_runner/wasm_core_failures.md`
 - Core JSON report: `.dart_tool/spec_runner/core_latest.json`
-- Proposal failure board: [doc/wasm_proposal_failures.md](doc/wasm_proposal_failures.md)
+- Proposal failure board: `.dart_tool/spec_runner/wasm_proposal_failures.md`
 - Proposal JSON report: `.dart_tool/spec_runner/proposal_latest.json`
 - Spec update tracker: `dart run tool/spec_sync.dart`
 
