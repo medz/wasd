@@ -1176,6 +1176,8 @@ void main() {
           functionBodies: [
             _FunctionBodySpec(
               instructions: [
+                ..._memorySize(),
+                Opcodes.drop,
                 ..._localGet(0),
                 ..._i32Const(1),
                 Opcodes.i32And,
@@ -1190,6 +1192,7 @@ void main() {
               ],
             ),
           ],
+          memoryMinPages: 1,
           exports: const [
             _ExportSpec(name: 'wrap', kind: WasmExportKind.function, index: 1),
           ],
@@ -1224,7 +1227,8 @@ void main() {
           functionBodies: [
             _FunctionBodySpec(
               instructions: [
-                ..._memorySize(),
+                ..._i32Const(0),
+                ..._memInstr(Opcodes.i32Load),
                 Opcodes.drop,
                 ..._localGet(0),
                 ..._call(0),

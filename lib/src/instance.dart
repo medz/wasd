@@ -795,6 +795,7 @@ final class WasmInstance {
     }
     final stack = <WasmValue>[];
     final instructions = defined.instructions;
+    final memory64ByIndex = _memory64ByIndex(module);
     final controlStack = <_AsyncSubsetControlFrame>[];
     var pc = 0;
     while (pc < instructions.length) {
@@ -992,6 +993,49 @@ final class WasmInstance {
           final rhs = _popValue(stack, 'f64.div rhs').castTo(WasmValueType.f64);
           final lhs = _popValue(stack, 'f64.div lhs').castTo(WasmValueType.f64);
           stack.add(WasmValue.f64(lhs.asF64() / rhs.asF64()));
+          pc++;
+
+        case Opcodes.memorySize:
+          final memoryIndex = instruction.immediate ?? 0;
+          if (memoryIndex < 0 || memoryIndex >= memories.length) {
+            throw RangeError('memory.size index out of range: $memoryIndex');
+          }
+          final isMemory64 =
+              memoryIndex >= 0 &&
+              memoryIndex < memory64ByIndex.length &&
+              memory64ByIndex[memoryIndex];
+          final pages = memories[memoryIndex].pageCount;
+          stack.add(isMemory64 ? WasmValue.i64(pages) : WasmValue.i32(pages));
+          pc++;
+
+        case Opcodes.memoryGrow:
+          final memoryIndex = instruction.immediate ?? 0;
+          if (memoryIndex < 0 || memoryIndex >= memories.length) {
+            throw RangeError('memory.grow index out of range: $memoryIndex');
+          }
+          final isMemory64 =
+              memoryIndex >= 0 &&
+              memoryIndex < memory64ByIndex.length &&
+              memory64ByIndex[memoryIndex];
+          final deltaValue = isMemory64
+              ? _popValue(
+                  stack,
+                  'memory.grow delta',
+                ).castTo(WasmValueType.i64).asI64()
+              : BigInt.from(
+                  _popValue(
+                    stack,
+                    'memory.grow delta',
+                  ).castTo(WasmValueType.i32).asI32(),
+                );
+          final deltaPages = _coerceAsyncSubsetPageDelta(
+            deltaValue,
+            context: 'memory.grow',
+          );
+          final oldPages = memories[memoryIndex].grow(deltaPages);
+          stack.add(
+            isMemory64 ? WasmValue.i64(oldPages) : WasmValue.i32(oldPages),
+          );
           pc++;
 
         case Opcodes.block:
@@ -1244,6 +1288,19 @@ final class WasmInstance {
 
     controlStack.removeRange(targetIndex, controlStack.length);
     return target.endIndex + 1;
+  }
+
+  int _coerceAsyncSubsetPageDelta(BigInt value, {required String context}) {
+    if (value < BigInt.zero) {
+      throw RangeError('$context expects non-negative page delta, got $value');
+    }
+    final max = BigInt.from(0x7fffffff);
+    if (value > max) {
+      throw RangeError(
+        '$context page delta too large for host memory API: $value',
+      );
+    }
+    return value.toInt();
   }
 
   List<WasmValue> _normalizeArgsForType(
