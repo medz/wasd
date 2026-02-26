@@ -860,6 +860,36 @@ final class WasmInstance {
           global.setValue(value);
           pc++;
 
+        case Opcodes.tableGet:
+          final tableIndex = instruction.immediate!;
+          if (tableIndex < 0 || tableIndex >= tables.length) {
+            throw RangeError('table.get index out of range: $tableIndex');
+          }
+          final elementIndex = _popAsyncSubsetTableOperand(
+            stack,
+            tableIndex: tableIndex,
+            table64ByIndex: table64ByIndex,
+            context: 'table.get index',
+          );
+          final value = tables[tableIndex][elementIndex];
+          stack.add(WasmValue.i32(value ?? -1));
+          pc++;
+
+        case Opcodes.tableSet:
+          final tableIndex = instruction.immediate!;
+          if (tableIndex < 0 || tableIndex >= tables.length) {
+            throw RangeError('table.set index out of range: $tableIndex');
+          }
+          final value = _popAsyncSubsetRef(stack, context: 'table.set value');
+          final elementIndex = _popAsyncSubsetTableOperand(
+            stack,
+            tableIndex: tableIndex,
+            table64ByIndex: table64ByIndex,
+            context: 'table.set index',
+          );
+          tables[tableIndex][elementIndex] = value;
+          pc++;
+
         case Opcodes.drop:
           _popValue(stack, 'drop');
           pc++;
@@ -915,6 +945,23 @@ final class WasmInstance {
             context: 'ref.is_null operand',
           );
           stack.add(WasmValue.i32(reference == null ? 1 : 0));
+          pc++;
+
+        case Opcodes.refEq:
+          final rhs = _popAsyncSubsetRef(stack, context: 'ref.eq rhs');
+          final lhs = _popAsyncSubsetRef(stack, context: 'ref.eq lhs');
+          stack.add(WasmValue.i32(lhs == rhs ? 1 : 0));
+          pc++;
+
+        case Opcodes.refAsNonNull:
+          final reference = _popAsyncSubsetRef(
+            stack,
+            context: 'ref.as_non_null operand',
+          );
+          if (reference == null) {
+            throw StateError('null reference');
+          }
+          stack.add(WasmValue.i32(reference));
           pc++;
 
         case Opcodes.f32Const:
@@ -2917,6 +2964,43 @@ final class WasmInstance {
           stack.addAll(callResults);
           pc++;
 
+        case Opcodes.callRef:
+          final typeIndex = instruction.immediate!;
+          if (typeIndex < 0 || typeIndex >= module.types.length) {
+            throw RangeError('call_ref type index out of range: $typeIndex');
+          }
+          final expectedType = module.types[typeIndex];
+          if (!expectedType.isFunctionType) {
+            throw StateError('call_ref expected non-function type $typeIndex.');
+          }
+          final functionReference = _popAsyncSubsetRef(
+            stack,
+            context: 'call_ref function reference',
+          );
+          if (functionReference == null) {
+            throw StateError('call_ref to null function reference.');
+          }
+          final targetIndex = _functionRefIdToIndex[functionReference];
+          if (targetIndex == null) {
+            throw StateError('call_ref to non-function reference.');
+          }
+          final target = functions[targetIndex];
+          if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
+            throw StateError('call_ref signature mismatch trap');
+          }
+          final callArgs = _popArgsForTypes(
+            stack,
+            expectedType.params,
+            context: 'call_ref',
+          );
+          final callResults = await _invokeFunctionAsyncSubset(
+            targetIndex,
+            callArgs,
+            depth: depth + 1,
+          );
+          stack.addAll(callResults);
+          pc++;
+
         case Opcodes.callIndirect:
           final typeIndex = instruction.immediate!;
           if (typeIndex < 0 || typeIndex >= module.types.length) {
@@ -2972,6 +3056,43 @@ final class WasmInstance {
             stack,
             target.type.params,
             context: 'return_call',
+          );
+          return _invokeFunctionAsyncSubset(
+            targetIndex,
+            callArgs,
+            depth: depth + 1,
+          );
+
+        case Opcodes.returnCallRef:
+          final typeIndex = instruction.immediate!;
+          if (typeIndex < 0 || typeIndex >= module.types.length) {
+            throw RangeError(
+              'return_call_ref type index out of range: $typeIndex',
+            );
+          }
+          final expectedType = module.types[typeIndex];
+          if (!expectedType.isFunctionType) {
+            throw StateError('call_ref expected non-function type $typeIndex.');
+          }
+          final functionReference = _popAsyncSubsetRef(
+            stack,
+            context: 'return_call_ref function reference',
+          );
+          if (functionReference == null) {
+            throw StateError('call_ref to null function reference.');
+          }
+          final targetIndex = _functionRefIdToIndex[functionReference];
+          if (targetIndex == null) {
+            throw StateError('call_ref to non-function reference.');
+          }
+          final target = functions[targetIndex];
+          if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
+            throw StateError('call_ref signature mismatch trap');
+          }
+          final callArgs = _popArgsForTypes(
+            stack,
+            expectedType.params,
+            context: 'return_call_ref',
           );
           return _invokeFunctionAsyncSubset(
             targetIndex,
