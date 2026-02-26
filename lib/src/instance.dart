@@ -911,6 +911,24 @@ final class WasmInstance {
           stack.add(WasmValue.i32(lhs.asI32() * rhs.asI32()));
           pc++;
 
+        case Opcodes.i32Clz:
+          final value = _popValue(stack, 'i32.clz').castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(_i32Clz(value.asI32())));
+          pc++;
+
+        case Opcodes.i32Ctz:
+          final value = _popValue(stack, 'i32.ctz').castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(_i32Ctz(value.asI32())));
+          pc++;
+
+        case Opcodes.i32Popcnt:
+          final value = _popValue(
+            stack,
+            'i32.popcnt',
+          ).castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(_i32Popcnt(value.asI32())));
+          pc++;
+
         case Opcodes.i32And:
           final rhs = _popValue(stack, 'i32.and rhs').castTo(WasmValueType.i32);
           final lhs = _popValue(stack, 'i32.and lhs').castTo(WasmValueType.i32);
@@ -927,6 +945,73 @@ final class WasmInstance {
           final rhs = _popValue(stack, 'i32.xor rhs').castTo(WasmValueType.i32);
           final lhs = _popValue(stack, 'i32.xor lhs').castTo(WasmValueType.i32);
           stack.add(WasmValue.i32(lhs.asI32() ^ rhs.asI32()));
+          pc++;
+
+        case Opcodes.i32Shl:
+          final rhs = _popValue(stack, 'i32.shl rhs').castTo(WasmValueType.i32);
+          final lhs = _popValue(stack, 'i32.shl lhs').castTo(WasmValueType.i32);
+          final shift = rhs.asI32() & 31;
+          stack.add(WasmValue.i32(lhs.asI32() << shift));
+          pc++;
+
+        case Opcodes.i32ShrS:
+          final rhs = _popValue(
+            stack,
+            'i32.shr_s rhs',
+          ).castTo(WasmValueType.i32);
+          final lhs = _popValue(
+            stack,
+            'i32.shr_s lhs',
+          ).castTo(WasmValueType.i32);
+          final shift = rhs.asI32() & 31;
+          stack.add(WasmValue.i32(lhs.asI32() >> shift));
+          pc++;
+
+        case Opcodes.i32ShrU:
+          final rhs = _popValue(
+            stack,
+            'i32.shr_u rhs',
+          ).castTo(WasmValueType.i32);
+          final lhs = _popValue(
+            stack,
+            'i32.shr_u lhs',
+          ).castTo(WasmValueType.i32);
+          final shift = rhs.asI32() & 31;
+          stack.add(WasmValue.i32(lhs.asI32().toUnsigned(32) >> shift));
+          pc++;
+
+        case Opcodes.i32Rotl:
+          final rhs = _popValue(
+            stack,
+            'i32.rotl rhs',
+          ).castTo(WasmValueType.i32);
+          final lhs = _popValue(
+            stack,
+            'i32.rotl lhs',
+          ).castTo(WasmValueType.i32);
+          final shift = rhs.asI32() & 31;
+          final value = lhs.asI32().toUnsigned(32);
+          final rotated = shift == 0
+              ? value
+              : ((value << shift) | (value >> (32 - shift))).toUnsigned(32);
+          stack.add(WasmValue.i32(rotated));
+          pc++;
+
+        case Opcodes.i32Rotr:
+          final rhs = _popValue(
+            stack,
+            'i32.rotr rhs',
+          ).castTo(WasmValueType.i32);
+          final lhs = _popValue(
+            stack,
+            'i32.rotr lhs',
+          ).castTo(WasmValueType.i32);
+          final shift = rhs.asI32() & 31;
+          final value = lhs.asI32().toUnsigned(32);
+          final rotated = shift == 0
+              ? value
+              : ((value >> shift) | (value << (32 - shift))).toUnsigned(32);
+          stack.add(WasmValue.i32(rotated));
           pc++;
 
         case Opcodes.i64Add:
@@ -1477,6 +1562,37 @@ final class WasmInstance {
       throw RangeError('$context address exceeds 32-bit memory: $address');
     }
     return address.toInt();
+  }
+
+  static int _i32Clz(int value) {
+    final unsigned = value.toUnsigned(32);
+    if (unsigned == 0) {
+      return 32;
+    }
+    return 32 - unsigned.bitLength;
+  }
+
+  static int _i32Ctz(int value) {
+    var unsigned = value.toUnsigned(32);
+    if (unsigned == 0) {
+      return 32;
+    }
+    var count = 0;
+    while ((unsigned & 1) == 0) {
+      count++;
+      unsigned >>= 1;
+    }
+    return count;
+  }
+
+  static int _i32Popcnt(int value) {
+    var unsigned = value.toUnsigned(32);
+    var count = 0;
+    while (unsigned != 0) {
+      unsigned &= unsigned - 1;
+      count++;
+    }
+    return count;
   }
 
   int _coerceAsyncSubsetPageDelta(BigInt value, {required String context}) {
