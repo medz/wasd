@@ -483,9 +483,19 @@ final class _ScriptExecutionState {
   _CommandResult _handleAssertMalformed(Map<String, Object?> command) {
     final moduleType = command['module_type'];
     if (moduleType is String && moduleType == 'text') {
+      final validated = command['wasd_text_malformed_validated'];
+      if (validated is bool) {
+        if (validated) {
+          return _CommandResult.pass();
+        }
+        return _CommandResult.skip(
+          'text-malformed-parser-divergence',
+          'Text parser accepted malformed assertion: $command',
+        );
+      }
       return _CommandResult.skip(
         'unsupported-text-malformed',
-        'Text malformed assertions are delegated to wabt.',
+        'Text malformed assertion was not prevalidated.',
       );
     }
     return _handleAssertModuleFails(command);

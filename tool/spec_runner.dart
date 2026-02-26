@@ -69,7 +69,8 @@ Future<void> main(List<String> args) async {
   final testsuiteDir = _argValue(args, '--testsuite-dir');
   final strictProposals = args.contains('--strict-proposals');
   final reportPath =
-      _argValue(args, '--report') ?? 'doc/wasm_conformance_matrix.md';
+      _argValue(args, '--report') ??
+      '.dart_tool/spec_runner/wasm_conformance_matrix.md';
   final jsonPath =
       _argValue(args, '--json') ?? '.dart_tool/spec_runner/latest.json';
 
@@ -501,7 +502,7 @@ _SpecSuiteArtifacts _artifactsForSuite(_SpecSuiteKind suite) {
         manifestPath: '.dart_tool/spec_runner/core_manifest.json',
         bundlePath: '.dart_tool/spec_runner/core_bundle',
         resultJsonPath: '.dart_tool/spec_runner/core_latest.json',
-        reportMarkdownPath: 'doc/wasm_core_failures.md',
+        reportMarkdownPath: '.dart_tool/spec_runner/wasm_core_failures.md',
       );
     case _SpecSuiteKind.proposal:
       return const _SpecSuiteArtifacts(
@@ -510,7 +511,7 @@ _SpecSuiteArtifacts _artifactsForSuite(_SpecSuiteKind suite) {
         manifestPath: '.dart_tool/spec_runner/proposal_manifest.json',
         bundlePath: '.dart_tool/spec_runner/proposal_bundle',
         resultJsonPath: '.dart_tool/spec_runner/proposal_latest.json',
-        reportMarkdownPath: 'doc/wasm_proposal_failures.md',
+        reportMarkdownPath: '.dart_tool/spec_runner/wasm_proposal_failures.md',
       );
   }
 }
@@ -589,15 +590,19 @@ String _renderMarkdownReport({
   b.writeln();
   final suite = payload['suite'] as String? ?? 'all';
   if (suite == RunnerSuite.core.name) {
-    b.writeln('- Core testsuite summary is written to `doc/wasm_core_failures.md`.');
+    b.writeln(
+      '- Core testsuite summary is written to `.dart_tool/spec_runner/wasm_core_failures.md`.',
+    );
   } else if (suite == RunnerSuite.proposal.name) {
     b.writeln(
-      '- Proposal testsuite summary is written to `doc/wasm_proposal_failures.md`.',
+      '- Proposal testsuite summary is written to `.dart_tool/spec_runner/wasm_proposal_failures.md`.',
     );
   } else {
-    b.writeln('- Core testsuite summary is written to `doc/wasm_core_failures.md`.');
     b.writeln(
-      '- Proposal testsuite summary is written to `doc/wasm_proposal_failures.md`.',
+      '- Core testsuite summary is written to `.dart_tool/spec_runner/wasm_core_failures.md`.',
+    );
+    b.writeln(
+      '- Proposal testsuite summary is written to `.dart_tool/spec_runner/wasm_proposal_failures.md`.',
     );
   }
   if (payload['strict_proposals'] != true && suite != RunnerSuite.core.name) {

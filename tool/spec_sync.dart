@@ -6,7 +6,8 @@ Future<void> main(List<String> args) async {
   final testsuiteDir =
       _readArg(args, '--testsuite-dir') ?? '$root/third_party/wasm-spec-tests';
   final outputPath =
-      _readArg(args, '--output') ?? '$root/doc/wasm_spec_updates.md';
+      _readArg(args, '--output') ??
+      '$root/.dart_tool/spec_runner/wasm_spec_updates.md';
 
   final dir = Directory(testsuiteDir);
   final now = DateTime.now().toUtc().toIso8601String();

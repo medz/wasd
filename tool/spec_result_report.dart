@@ -6,7 +6,8 @@ Future<void> main(List<String> args) async {
       _argValue(args, '--input-json') ??
       '.dart_tool/spec_runner/proposal_latest.json';
   final outputMarkdown =
-      _argValue(args, '--output-md') ?? 'doc/wasm_proposal_failures.md';
+      _argValue(args, '--output-md') ??
+      '.dart_tool/spec_runner/wasm_proposal_failures.md';
 
   final inputFile = File(inputJson);
   if (!inputFile.existsSync()) {
@@ -112,7 +113,8 @@ String _renderMarkdown({
   required List<_FileResult> results,
   required Map<String, Map<String, int>> groupStats,
 }) {
-  final totals = (payload['totals'] as Map?)?.cast<String, Object?>() ??
+  final totals =
+      (payload['totals'] as Map?)?.cast<String, Object?>() ??
       <String, Object?>{};
   final reasonCounts =
       (payload['reason_counts'] as Map?)?.cast<String, Object?>() ??
