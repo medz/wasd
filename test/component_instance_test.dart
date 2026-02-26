@@ -93,6 +93,31 @@ void main() {
       );
     });
 
+    test('wires function imports from core-instance argument exports', () {
+      final componentBytes = _componentWithCoreModules(
+        <Uint8List>[
+          _coreModuleConstI32(name: 'inc', value: 42),
+          _coreModuleCallImportedNullary(
+            importModule: 'host',
+            importName: 'inc',
+            exportName: 'run',
+          ),
+        ],
+        instantiateModuleIndices: const [0, 1],
+        instantiateArgumentInstanceIndices: const [
+          <int>[],
+          <int>[0],
+        ],
+      );
+
+      final instance = WasmComponentInstance.fromBytes(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
+      expect(instance.invokeCore('run', moduleIndex: 1), 42);
+    });
+
     test('invokes component export aliases from section 0x03', () async {
       final componentBytes = _componentWithCoreModules(
         <Uint8List>[_coreModuleConstI32(name: 'one', value: 9)],
@@ -394,6 +419,58 @@ Uint8List _coreModuleConstI32({required String name, required int value}) {
   ]);
 }
 
+Uint8List _coreModuleCallImportedNullary({
+  required String importModule,
+  required String importName,
+  required String exportName,
+}) {
+  final importSection = <int>[
+    ..._u32Leb(1),
+    ..._name(importModule),
+    ..._name(importName),
+    0x00, // function import
+    ..._u32Leb(0), // type index
+  ];
+  final exportSection = <int>[
+    ..._u32Leb(1),
+    ..._name(exportName),
+    0x00, // function export
+    ..._u32Leb(1), // function index (after one imported function)
+  ];
+  final codeBody = <int>[
+    0x00, // local decl count
+    0x10, // call
+    ..._u32Leb(0), // imported function index
+    0x0b, // end
+  ];
+  final codeSection = <int>[
+    ..._u32Leb(1),
+    ..._u32Leb(codeBody.length),
+    ...codeBody,
+  ];
+
+  return Uint8List.fromList(<int>[
+    0x00,
+    0x61,
+    0x73,
+    0x6d,
+    0x01,
+    0x00,
+    0x00,
+    0x00,
+    // type section: (func (result i32))
+    ..._section(0x01, <int>[0x01, 0x60, 0x00, 0x01, 0x7f]),
+    // import section
+    ..._section(0x02, importSection),
+    // function section: one defined func of type index 0
+    ..._section(0x03, <int>[..._u32Leb(1), ..._u32Leb(0)]),
+    // export section
+    ..._section(0x07, exportSection),
+    // code section
+    ..._section(0x0a, codeSection),
+  ]);
+}
+
 Uint8List _coreModuleEchoUtf8PointerLength({required String name}) {
   final nameBytes = name.codeUnits;
   return Uint8List.fromList(<int>[
@@ -465,6 +542,12 @@ List<int> _u32Leb(int value) {
   } while (remaining != 0);
   return out;
 }
+
+List<int> _section(int id, List<int> payload) => <int>[
+  id,
+  ..._u32Leb(payload.length),
+  ...payload,
+];
 
 List<int> _name(String value) => <int>[
   ..._u32Leb(value.length),

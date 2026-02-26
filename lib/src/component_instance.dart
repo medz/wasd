@@ -6,6 +6,9 @@ import 'features.dart';
 import 'imports.dart';
 import 'instance.dart';
 import 'memory.dart';
+import 'module.dart';
+import 'runtime_global.dart';
+import 'table.dart';
 
 /// Component-level runtime that instantiates embedded core modules.
 ///
@@ -91,10 +94,17 @@ final class WasmComponentInstance {
             );
           }
         }
+        final declarationImports = _composeCoreInstanceImports(
+          moduleBytes: component.coreModules[moduleIndex],
+          declaration: declaration,
+          baseImports: imports,
+          instantiatedCoreInstances: coreInstances,
+          features: features,
+        );
         coreInstances.add(
           WasmInstance.fromBytes(
             component.coreModules[moduleIndex],
-            imports: imports,
+            imports: declarationImports,
             features: features,
           ),
         );
@@ -239,6 +249,173 @@ final class WasmComponentInstance {
           '($key, kind=${requirement.kind.name}).',
         );
       }
+    }
+  }
+
+  static WasmImports _composeCoreInstanceImports({
+    required Uint8List moduleBytes,
+    required WasmComponentCoreInstance declaration,
+    required WasmImports baseImports,
+    required List<WasmInstance> instantiatedCoreInstances,
+    required WasmFeatureSet features,
+  }) {
+    if (declaration.argumentInstanceIndices.isEmpty) {
+      return baseImports;
+    }
+
+    final module = WasmModule.decode(moduleBytes, features: features);
+    final functions = Map<String, WasmHostFunction>.from(baseImports.functions);
+    final asyncFunctions = Map<String, WasmAsyncHostFunction>.from(
+      baseImports.asyncFunctions,
+    );
+    final functionTypeDepths = Map<String, int>.from(
+      baseImports.functionTypeDepths,
+    );
+    final memories = Map<String, WasmMemory>.from(baseImports.memories);
+    final tables = Map<String, WasmTable>.from(baseImports.tables);
+    final globals = Map<String, Object?>.from(baseImports.globals);
+    final globalTypes = Map<String, WasmGlobalType>.from(
+      baseImports.globalTypes,
+    );
+    final globalBindings = Map<String, RuntimeGlobal>.from(
+      baseImports.globalBindings,
+    );
+    final tags = Map<String, WasmTagImport>.from(baseImports.tags);
+    var changed = false;
+
+    for (final imported in module.imports) {
+      final key = imported.key;
+      if (_isImportSatisfied(
+        imported: imported,
+        key: key,
+        functions: functions,
+        asyncFunctions: asyncFunctions,
+        memories: memories,
+        tables: tables,
+        globals: globals,
+        globalBindings: globalBindings,
+        tags: tags,
+      )) {
+        continue;
+      }
+
+      for (final argumentIndex in declaration.argumentInstanceIndices) {
+        final sourceInstance = instantiatedCoreInstances[argumentIndex];
+        if (_tryBindImportFromCoreInstance(
+          imported: imported,
+          key: key,
+          sourceInstance: sourceInstance,
+          functions: functions,
+          asyncFunctions: asyncFunctions,
+          functionTypeDepths: functionTypeDepths,
+          memories: memories,
+          tables: tables,
+          globals: globals,
+          globalTypes: globalTypes,
+          globalBindings: globalBindings,
+          tags: tags,
+        )) {
+          changed = true;
+          break;
+        }
+      }
+    }
+
+    if (!changed) {
+      return baseImports;
+    }
+    return WasmImports(
+      functions: functions,
+      asyncFunctions: asyncFunctions,
+      functionTypeDepths: functionTypeDepths,
+      memories: memories,
+      tables: tables,
+      globals: globals,
+      globalTypes: globalTypes,
+      globalBindings: globalBindings,
+      tags: tags,
+    );
+  }
+
+  static bool _isImportSatisfied({
+    required WasmImport imported,
+    required String key,
+    required Map<String, WasmHostFunction> functions,
+    required Map<String, WasmAsyncHostFunction> asyncFunctions,
+    required Map<String, WasmMemory> memories,
+    required Map<String, WasmTable> tables,
+    required Map<String, Object?> globals,
+    required Map<String, RuntimeGlobal> globalBindings,
+    required Map<String, WasmTagImport> tags,
+  }) {
+    return switch (imported.kind) {
+      WasmImportKind.function || WasmImportKind.exactFunction =>
+        functions.containsKey(key) || asyncFunctions.containsKey(key),
+      WasmImportKind.memory => memories.containsKey(key),
+      WasmImportKind.table => tables.containsKey(key),
+      WasmImportKind.global =>
+        globals.containsKey(key) || globalBindings.containsKey(key),
+      WasmImportKind.tag => tags.containsKey(key),
+      _ => false,
+    };
+  }
+
+  static bool _tryBindImportFromCoreInstance({
+    required WasmImport imported,
+    required String key,
+    required WasmInstance sourceInstance,
+    required Map<String, WasmHostFunction> functions,
+    required Map<String, WasmAsyncHostFunction> asyncFunctions,
+    required Map<String, int> functionTypeDepths,
+    required Map<String, WasmMemory> memories,
+    required Map<String, WasmTable> tables,
+    required Map<String, Object?> globals,
+    required Map<String, WasmGlobalType> globalTypes,
+    required Map<String, RuntimeGlobal> globalBindings,
+    required Map<String, WasmTagImport> tags,
+  }) {
+    final exportName = imported.name;
+    switch (imported.kind) {
+      case WasmImportKind.function:
+      case WasmImportKind.exactFunction:
+        if (!sourceInstance.exportedFunctions.contains(exportName)) {
+          return false;
+        }
+        functions[key] = (args) => sourceInstance.invoke(exportName, args);
+        asyncFunctions[key] = (args) =>
+            sourceInstance.invokeAsync(exportName, args);
+        functionTypeDepths[key] = sourceInstance.exportedFunctionTypeDepth(
+          exportName,
+        );
+        return true;
+      case WasmImportKind.memory:
+        if (!sourceInstance.exportedMemories.contains(exportName)) {
+          return false;
+        }
+        memories[key] = sourceInstance.exportedMemory(exportName);
+        return true;
+      case WasmImportKind.table:
+        if (!sourceInstance.exportedTables.contains(exportName)) {
+          return false;
+        }
+        tables[key] = sourceInstance.exportedTable(exportName);
+        return true;
+      case WasmImportKind.global:
+        if (!sourceInstance.exportedGlobals.contains(exportName)) {
+          return false;
+        }
+        globals[key] = sourceInstance.readGlobal(exportName);
+        globalTypes[key] = sourceInstance.exportedGlobalType(exportName);
+        globalBindings[key] = sourceInstance.exportedGlobalBinding(exportName);
+        return true;
+      case WasmImportKind.tag:
+        if (!sourceInstance.exportedTags.contains(exportName)) {
+          return false;
+        }
+        tags[key] = sourceInstance.exportedTagImport(exportName);
+        return true;
+      default:
+        return false;
     }
   }
 
