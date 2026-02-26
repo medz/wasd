@@ -1177,6 +1177,8 @@ void main() {
             _FunctionBodySpec(
               instructions: [
                 ..._localGet(0),
+                ..._i32Const(1),
+                Opcodes.i32And,
                 Opcodes.if_,
                 0x7f,
                 ..._localGet(0),
@@ -1222,14 +1224,15 @@ void main() {
           functionBodies: [
             _FunctionBodySpec(
               instructions: [
+                ..._memorySize(),
+                Opcodes.drop,
                 ..._localGet(0),
-                ..._i32Const(1),
-                Opcodes.i32And,
                 ..._call(0),
                 Opcodes.end,
               ],
             ),
           ],
+          memoryMinPages: 1,
           exports: const [
             _ExportSpec(
               name: 'unsupportedWrap',

@@ -910,6 +910,24 @@ final class WasmInstance {
           stack.add(WasmValue.i32(lhs.asI32() * rhs.asI32()));
           pc++;
 
+        case Opcodes.i32And:
+          final rhs = _popValue(stack, 'i32.and rhs').castTo(WasmValueType.i32);
+          final lhs = _popValue(stack, 'i32.and lhs').castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(lhs.asI32() & rhs.asI32()));
+          pc++;
+
+        case Opcodes.i32Or:
+          final rhs = _popValue(stack, 'i32.or rhs').castTo(WasmValueType.i32);
+          final lhs = _popValue(stack, 'i32.or lhs').castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(lhs.asI32() | rhs.asI32()));
+          pc++;
+
+        case Opcodes.i32Xor:
+          final rhs = _popValue(stack, 'i32.xor rhs').castTo(WasmValueType.i32);
+          final lhs = _popValue(stack, 'i32.xor lhs').castTo(WasmValueType.i32);
+          stack.add(WasmValue.i32(lhs.asI32() ^ rhs.asI32()));
+          pc++;
+
         case Opcodes.i64Add:
           final rhs = _popValue(stack, 'i64.add rhs').castTo(WasmValueType.i64);
           final lhs = _popValue(stack, 'i64.add lhs').castTo(WasmValueType.i64);
