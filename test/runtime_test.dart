@@ -1791,6 +1791,73 @@ void main() {
     });
 
     test(
+      'supports reinterpret and sign-extension conversions in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [0],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+
+                ..._i32Const(-1),
+                Opcodes.i64ExtendI32U,
+                Opcodes.i64Extend32S,
+                Opcodes.i32WrapI64,
+                ..._i32Const(43),
+                Opcodes.i32Add,
+                Opcodes.i32Extend8S,
+                Opcodes.i32Extend16S,
+
+                Opcodes.i64ExtendI32S,
+                Opcodes.i64Extend8S,
+                Opcodes.i64Extend16S,
+                Opcodes.i64Extend32S,
+                Opcodes.i32WrapI64,
+
+                Opcodes.f32ReinterpretI32,
+                Opcodes.i32ReinterpretF32,
+
+                Opcodes.i64ExtendI32U,
+                Opcodes.f64ReinterpretI64,
+                Opcodes.i64ReinterpretF64,
+                Opcodes.i32WrapI64,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'wrapConvert',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('wrapConvert', [41]), 42);
+      },
+    );
+
+    test(
       'reports explicit boundary for unsupported async call chains',
       () async {
         final wasm = _buildModule(
@@ -1807,8 +1874,8 @@ void main() {
                 ..._localGet(0),
                 ..._call(0),
                 Opcodes.drop,
-                ..._i64Const(1),
-                Opcodes.i32WrapI64,
+                ..._f64Const(1.25),
+                Opcodes.i32TruncF64S,
                 Opcodes.drop,
                 ..._i32Const(0),
                 Opcodes.end,

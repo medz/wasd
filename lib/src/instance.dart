@@ -1545,6 +1545,102 @@ final class WasmInstance {
           stack.add(WasmValue.i64(WasmI64.rotr(lhs, shift)));
           pc++;
 
+        case Opcodes.i32WrapI64:
+          final value = _popValue(
+            stack,
+            'i32.wrap_i64',
+          ).castTo(WasmValueType.i64).asI64();
+          stack.add(WasmValue.i32(WasmI64.lowU32(value).toSigned(32)));
+          pc++;
+
+        case Opcodes.i64ExtendI32S:
+          final value = _popValue(
+            stack,
+            'i64.extend_i32_s',
+          ).castTo(WasmValueType.i32).asI32();
+          stack.add(WasmValue.i64(value));
+          pc++;
+
+        case Opcodes.i64ExtendI32U:
+          final value = _popValue(
+            stack,
+            'i64.extend_i32_u',
+          ).castTo(WasmValueType.i32).asI32();
+          stack.add(WasmValue.i64(value.toUnsigned(32)));
+          pc++;
+
+        case Opcodes.i32ReinterpretF32:
+          final value = _popValue(
+            stack,
+            'i32.reinterpret_f32',
+          ).castTo(WasmValueType.f32).asF32Bits();
+          stack.add(WasmValue.i32(value));
+          pc++;
+
+        case Opcodes.i64ReinterpretF64:
+          final value = _popValue(
+            stack,
+            'i64.reinterpret_f64',
+          ).castTo(WasmValueType.f64).asF64Bits();
+          stack.add(WasmValue.i64(value));
+          pc++;
+
+        case Opcodes.f32ReinterpretI32:
+          final value = _popValue(
+            stack,
+            'f32.reinterpret_i32',
+          ).castTo(WasmValueType.i32).asI32();
+          stack.add(WasmValue.f32Bits(value.toUnsigned(32)));
+          pc++;
+
+        case Opcodes.f64ReinterpretI64:
+          final value = _popValue(
+            stack,
+            'f64.reinterpret_i64',
+          ).castTo(WasmValueType.i64).asI64();
+          stack.add(WasmValue.f64Bits(WasmI64.unsigned(value)));
+          pc++;
+
+        case Opcodes.i32Extend8S:
+          final value = _popValue(
+            stack,
+            'i32.extend8_s',
+          ).castTo(WasmValueType.i32).asI32();
+          stack.add(WasmValue.i32(value.toUnsigned(8).toSigned(8)));
+          pc++;
+
+        case Opcodes.i32Extend16S:
+          final value = _popValue(
+            stack,
+            'i32.extend16_s',
+          ).castTo(WasmValueType.i32).asI32();
+          stack.add(WasmValue.i32(value.toUnsigned(16).toSigned(16)));
+          pc++;
+
+        case Opcodes.i64Extend8S:
+          final value = _popValue(
+            stack,
+            'i64.extend8_s',
+          ).castTo(WasmValueType.i64).asI64();
+          stack.add(WasmValue.i64(WasmI64.signExtend(value, 8)));
+          pc++;
+
+        case Opcodes.i64Extend16S:
+          final value = _popValue(
+            stack,
+            'i64.extend16_s',
+          ).castTo(WasmValueType.i64).asI64();
+          stack.add(WasmValue.i64(WasmI64.signExtend(value, 16)));
+          pc++;
+
+        case Opcodes.i64Extend32S:
+          final value = _popValue(
+            stack,
+            'i64.extend32_s',
+          ).castTo(WasmValueType.i64).asI64();
+          stack.add(WasmValue.i64(WasmI64.signExtend(value, 32)));
+          pc++;
+
         case Opcodes.f32Add:
           final rhs = _popValue(stack, 'f32.add rhs').castTo(WasmValueType.f32);
           final lhs = _popValue(stack, 'f32.add lhs').castTo(WasmValueType.f32);
