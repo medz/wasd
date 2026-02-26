@@ -6,6 +6,8 @@ abstract final class Opcodes {
   static const int loop = 0x03;
   static const int if_ = 0x04;
   static const int else_ = 0x05;
+  static const int tryLegacy = 0x06;
+  static const int catchTag = 0x07;
   static const int throwTag = 0x08;
   static const int rethrowTag = 0x09;
   static const int throwRef = 0x0a;
@@ -22,6 +24,8 @@ abstract final class Opcodes {
   static const int returnCallIndirect = 0x13;
   static const int callRef = 0x14;
   static const int returnCallRef = 0x15;
+  static const int delegate = 0x18;
+  static const int catchAll = 0x19;
 
   static const int drop = 0x1a;
   static const int select = 0x1b;

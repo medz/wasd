@@ -750,6 +750,170 @@ void main() {
       expect(instance.invokeI64('sum', [100]), 5050);
     });
 
+    test('supports legacy try/catch with tag matching', () {
+      final wasm = _buildModule(
+        types: [
+          _funcType([], []),
+          _funcType([], [0x7f]),
+        ],
+        tagTypeIndices: const [0],
+        functionTypeIndices: const [1],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              Opcodes.tryLegacy,
+              0x7f,
+              Opcodes.throwTag,
+              ..._u32Leb(0),
+              ..._i32Const(0),
+              Opcodes.catchTag,
+              ..._u32Leb(0),
+              ..._i32Const(23),
+              Opcodes.end,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: [
+          _ExportSpec(
+            name: 'legacyCatch',
+            kind: WasmExportKind.function,
+            index: 0,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(exceptionHandling: true),
+      );
+      expect(instance.invokeI32('legacyCatch'), 23);
+    });
+
+    test('legacy try skips catch handlers on normal flow', () {
+      final wasm = _buildModule(
+        types: [
+          _funcType([], [0x7f]),
+        ],
+        functionTypeIndices: const [0],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              Opcodes.tryLegacy,
+              0x7f,
+              ..._i32Const(5),
+              Opcodes.catchAll,
+              ..._i32Const(99),
+              Opcodes.end,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: [
+          _ExportSpec(
+            name: 'normalFlow',
+            kind: WasmExportKind.function,
+            index: 0,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(exceptionHandling: true),
+      );
+      expect(instance.invokeI32('normalFlow'), 5);
+    });
+
+    test('supports legacy rethrow from catch blocks', () {
+      final wasm = _buildModule(
+        types: [
+          _funcType([], []),
+          _funcType([], [0x7f]),
+        ],
+        tagTypeIndices: const [0],
+        functionTypeIndices: const [1],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              Opcodes.tryLegacy,
+              0x7f,
+              Opcodes.tryLegacy,
+              0x7f,
+              Opcodes.throwTag,
+              ..._u32Leb(0),
+              ..._i32Const(0),
+              Opcodes.catchTag,
+              ..._u32Leb(0),
+              Opcodes.rethrowTag,
+              ..._u32Leb(0),
+              Opcodes.end,
+              Opcodes.catchAll,
+              ..._i32Const(99),
+              Opcodes.end,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: [
+          _ExportSpec(
+            name: 'legacyRethrow',
+            kind: WasmExportKind.function,
+            index: 0,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(exceptionHandling: true),
+      );
+      expect(instance.invokeI32('legacyRethrow'), 99);
+    });
+
+    test('supports legacy delegate to outer handlers', () {
+      final wasm = _buildModule(
+        types: [
+          _funcType([], []),
+          _funcType([], [0x7f]),
+        ],
+        tagTypeIndices: const [0],
+        functionTypeIndices: const [1],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              Opcodes.tryLegacy,
+              0x7f,
+              Opcodes.tryLegacy,
+              0x7f,
+              Opcodes.throwTag,
+              ..._u32Leb(0),
+              ..._i32Const(0),
+              Opcodes.delegate,
+              ..._u32Leb(0),
+              Opcodes.catchAll,
+              ..._i32Const(7),
+              Opcodes.end,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: [
+          _ExportSpec(
+            name: 'legacyDelegate',
+            kind: WasmExportKind.function,
+            index: 0,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(exceptionHandling: true),
+      );
+      expect(instance.invokeI32('legacyDelegate'), 7);
+    });
+
     test('supports typed select instruction encoding', () {
       final wasm = _buildModule(
         types: [
@@ -921,8 +1085,10 @@ void main() {
         throwsA(isA<UnsupportedError>()),
       );
       expect(
-        () =>
-            WasmInstance.fromBytes(wasm, features: const WasmFeatureSet(simd: true)),
+        () => WasmInstance.fromBytes(
+          wasm,
+          features: const WasmFeatureSet(simd: true),
+        ),
         returnsNormally,
       );
     });
@@ -1067,6 +1233,7 @@ Uint8List _buildModule({
   required List<int> functionTypeIndices,
   required List<_FunctionBodySpec> functionBodies,
   List<_ImportFunctionSpec> imports = const [],
+  List<int> tagTypeIndices = const [],
   List<_TableSpec> tables = const [],
   List<_GlobalSpec> globals = const [],
   List<_ExportSpec> exports = const [],
@@ -1125,6 +1292,16 @@ Uint8List _buildModule({
         ..._limits(memoryMinPages, memoryMaxPages),
       ]),
     );
+  }
+
+  if (tagTypeIndices.isNotEmpty) {
+    final payload = <int>[..._u32Leb(tagTypeIndices.length)];
+    for (final typeIndex in tagTypeIndices) {
+      payload
+        ..add(0x00)
+        ..addAll(_u32Leb(typeIndex));
+    }
+    bytes.addAll(_section(13, payload));
   }
 
   if (globals.isNotEmpty) {

@@ -36,6 +36,23 @@ final class TryTableCatchClause {
   final int? tagIndex;
 }
 
+abstract final class LegacyCatchKind {
+  static const int catchTag = 0;
+  static const int catchAll = 1;
+}
+
+final class LegacyCatchClause {
+  const LegacyCatchClause({
+    required this.kind,
+    required this.handlerIndex,
+    this.tagIndex,
+  });
+
+  final int kind;
+  final int handlerIndex;
+  final int? tagIndex;
+}
+
 final class Instruction {
   Instruction({
     required this.opcode,
@@ -53,6 +70,8 @@ final class Instruction {
     this.gcRefType,
     this.gcBrOnCast,
     this.tryTableCatches,
+    this.legacyCatches,
+    this.delegateDepth,
     this.endIndex,
     this.elseIndex,
   });
@@ -72,6 +91,8 @@ final class Instruction {
   GcRefTypeImmediate? gcRefType;
   GcBrOnCastImmediate? gcBrOnCast;
   List<TryTableCatchClause>? tryTableCatches;
+  List<LegacyCatchClause>? legacyCatches;
+  int? delegateDepth;
   int? endIndex;
   int? elseIndex;
 }
@@ -112,7 +133,7 @@ final class PredecodedFunction {
   final List<Instruction> instructions;
 }
 
-enum _ControlKind { block, loop, if_, tryTable }
+enum _ControlKind { block, loop, if_, tryTable, tryLegacy }
 
 final class _ControlFrame {
   _ControlFrame({required this.kind, required this.startIndex});
@@ -120,6 +141,7 @@ final class _ControlFrame {
   final _ControlKind kind;
   final int startIndex;
   int? elseInstructionIndex;
+  bool hasCatchAll = false;
 }
 
 abstract final class WasmPredecoder {
@@ -142,6 +164,11 @@ abstract final class WasmPredecoder {
 
     while (!reader.isEOF) {
       final opcode = reader.readByte();
+      if (_isExceptionHandlingOpcode(opcode) && !features.exceptionHandling) {
+        throw UnsupportedError(
+          'Exception-handling opcode 0x${opcode.toRadixString(16)} encountered but `exceptionHandling` feature is disabled.',
+        );
+      }
 
       switch (opcode) {
         case Opcodes.unreachable:
@@ -337,6 +364,25 @@ abstract final class WasmPredecoder {
             ),
           );
 
+        case Opcodes.tryLegacy:
+          final blockType = _readBlockTypeInfo(reader, moduleTypes);
+          instructions.add(
+            Instruction(
+              opcode: opcode,
+              blockParameterTypes: blockType.paramTypes,
+              blockParameterTypeSignatures: blockType.paramSignatures,
+              blockResultTypes: blockType.resultTypes,
+              blockResultTypeSignatures: blockType.resultSignatures,
+              legacyCatches: <LegacyCatchClause>[],
+            ),
+          );
+          controlStack.add(
+            _ControlFrame(
+              kind: _ControlKind.tryLegacy,
+              startIndex: instructions.length - 1,
+            ),
+          );
+
         case Opcodes.tryTable:
           final blockType = _readBlockTypeInfo(reader, moduleTypes);
           final catchCount = reader.readVarUint32();
@@ -361,6 +407,74 @@ abstract final class WasmPredecoder {
               startIndex: instructions.length - 1,
             ),
           );
+
+        case Opcodes.catchTag:
+          if (controlStack.isEmpty ||
+              controlStack.last.kind != _ControlKind.tryLegacy) {
+            throw const FormatException('`catch` without matching `try`.');
+          }
+          final tagIndex = reader.readVarUint32();
+          instructions.add(Instruction(opcode: opcode, immediate: tagIndex));
+          final frame = controlStack.last;
+          final legacyTry = instructions[frame.startIndex];
+          final catches = legacyTry.legacyCatches;
+          if (catches == null) {
+            throw const FormatException('Malformed legacy try catch table.');
+          }
+          if (frame.hasCatchAll) {
+            throw const FormatException('`catch` cannot follow `catch_all`.');
+          }
+          catches.add(
+            LegacyCatchClause(
+              kind: LegacyCatchKind.catchTag,
+              handlerIndex: instructions.length - 1,
+              tagIndex: tagIndex,
+            ),
+          );
+
+        case Opcodes.catchAll:
+          if (controlStack.isEmpty ||
+              controlStack.last.kind != _ControlKind.tryLegacy) {
+            throw const FormatException('`catch_all` without matching `try`.');
+          }
+          instructions.add(Instruction(opcode: opcode));
+          final frame = controlStack.last;
+          final legacyTry = instructions[frame.startIndex];
+          final catches = legacyTry.legacyCatches;
+          if (catches == null) {
+            throw const FormatException('Malformed legacy try catch table.');
+          }
+          if (frame.hasCatchAll) {
+            throw const FormatException('duplicate `catch_all`.');
+          }
+          catches.add(
+            LegacyCatchClause(
+              kind: LegacyCatchKind.catchAll,
+              handlerIndex: instructions.length - 1,
+            ),
+          );
+          frame.hasCatchAll = true;
+
+        case Opcodes.delegate:
+          if (controlStack.isEmpty ||
+              controlStack.last.kind != _ControlKind.tryLegacy) {
+            throw const FormatException('`delegate` without matching `try`.');
+          }
+          final delegateDepth = reader.readVarUint32();
+          instructions.add(
+            Instruction(opcode: opcode, immediate: delegateDepth),
+          );
+          final frame = controlStack.removeLast();
+          final legacyTry = instructions[frame.startIndex];
+          final catches =
+              legacyTry.legacyCatches ?? const <LegacyCatchClause>[];
+          if (catches.isNotEmpty) {
+            throw const FormatException(
+              '`delegate` is not allowed after catch handlers.',
+            );
+          }
+          legacyTry.delegateDepth = delegateDepth;
+          legacyTry.endIndex = instructions.length - 1;
 
         case Opcodes.else_:
           if (controlStack.isEmpty ||
@@ -412,6 +526,7 @@ abstract final class WasmPredecoder {
         case Opcodes.tableGet:
         case Opcodes.tableSet:
         case Opcodes.throwTag:
+        case Opcodes.rethrowTag:
         case Opcodes.memorySize:
         case Opcodes.memoryGrow:
         case Opcodes.refFunc:
@@ -953,10 +1068,7 @@ abstract final class WasmPredecoder {
           }
         }
         instructions.add(
-          Instruction(
-            opcode: pseudoOpcode,
-            floatBytesImmediate: lanes,
-          ),
+          Instruction(opcode: pseudoOpcode, floatBytesImmediate: lanes),
         );
       case Opcodes.i8x16Splat:
       case Opcodes.i16x8Splat:
@@ -1703,14 +1815,14 @@ abstract final class WasmPredecoder {
 
   static bool _isExceptionHandlingOpcode(int opcode) {
     return switch (opcode) {
-      0x06 || // try
-      0x07 || // catch
-      0x08 || // throw
-      0x09 || // rethrow
-      0x0a || // throw_ref
-      0x18 || // delegate
-      0x19 || // catch_all
-      0x1f => true, // try_table
+      Opcodes.tryLegacy ||
+      Opcodes.catchTag ||
+      Opcodes.throwTag ||
+      Opcodes.rethrowTag ||
+      Opcodes.throwRef ||
+      Opcodes.delegate ||
+      Opcodes.catchAll ||
+      Opcodes.tryTable => true,
       _ => false,
     };
   }

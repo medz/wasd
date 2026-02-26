@@ -11,7 +11,7 @@ import 'runtime_global.dart';
 import 'table.dart';
 import 'value.dart';
 
-enum _LabelKind { block, loop, if_ }
+enum _LabelKind { block, loop, if_, tryLegacy }
 
 final class _LabelFrame {
   _LabelFrame({
@@ -22,6 +22,8 @@ final class _LabelFrame {
     required this.endIndex,
     required this.loopStartIndex,
     this.tryTableCatches,
+    this.legacyCatches,
+    this.delegateDepth,
   });
 
   final _LabelKind kind;
@@ -31,6 +33,10 @@ final class _LabelFrame {
   final int endIndex;
   final int loopStartIndex;
   final List<TryTableCatchClause>? tryTableCatches;
+  final List<LegacyCatchClause>? legacyCatches;
+  final int? delegateDepth;
+  int? activeExceptionRef;
+  int? activeCatchInstructionIndex;
 }
 
 enum _GcRefKind { i31, struct, array, extern, anyExtern }
@@ -339,9 +345,7 @@ final class WasmVm {
   }
 
   static String _v128BytesKey(Uint8List bytes) {
-    return bytes
-        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
-        .join();
+    return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
   }
 
   int _internV128(Uint8List bytes) {
@@ -505,6 +509,27 @@ final class WasmVm {
                 pc = label.endIndex + 1;
               }
 
+            case Opcodes.tryLegacy:
+              final paramTypes = instruction.blockParameterTypes ?? const [];
+              final entryStackHeight = _consumeBlockParameters(
+                stack,
+                paramTypes,
+                context: 'try',
+              );
+              labels.add(
+                _LabelFrame(
+                  kind: _LabelKind.tryLegacy,
+                  stackHeight: entryStackHeight,
+                  branchTypes: instruction.blockResultTypes ?? const [],
+                  endTypes: instruction.blockResultTypes ?? const [],
+                  endIndex: _requireJumpIndex(instruction.endIndex, 'try'),
+                  loopStartIndex: -1,
+                  legacyCatches: instruction.legacyCatches,
+                  delegateDepth: instruction.delegateDepth,
+                ),
+              );
+              pc++;
+
             case Opcodes.tryTable:
               final paramTypes = instruction.blockParameterTypes ?? const [];
               final entryStackHeight = _consumeBlockParameters(
@@ -526,6 +551,25 @@ final class WasmVm {
                   tryTableCatches: instruction.tryTableCatches,
                 ),
               );
+              pc++;
+
+            case Opcodes.catchTag:
+            case Opcodes.catchAll:
+              pc = _handleLegacyCatchBoundary(
+                labels: labels,
+                stack: stack,
+                pc: pc,
+              );
+
+            case Opcodes.delegate:
+              if (labels.isEmpty || labels.last.kind != _LabelKind.tryLegacy) {
+                throw StateError('`delegate` reached without matching `try`.');
+              }
+              final label = labels.removeLast();
+              label
+                ..activeExceptionRef = null
+                ..activeCatchInstructionIndex = null;
+              _exitLabel(label, stack);
               pc++;
 
             case Opcodes.else_:
@@ -600,6 +644,9 @@ final class WasmVm {
 
             case Opcodes.throwRef:
               _throwRef(stack);
+
+            case Opcodes.rethrowTag:
+              _rethrowLegacy(labels, instruction.immediate!);
 
             case Opcodes.call:
               final targetIndex = instruction.immediate!;
@@ -1652,11 +1699,17 @@ final class WasmVm {
               pc++;
 
             case Opcodes.v128Load8x8S:
-              _pushV128Bytes(stack, _simdLoad8x8(stack, instruction, signed: true));
+              _pushV128Bytes(
+                stack,
+                _simdLoad8x8(stack, instruction, signed: true),
+              );
               pc++;
 
             case Opcodes.v128Load8x8U:
-              _pushV128Bytes(stack, _simdLoad8x8(stack, instruction, signed: false));
+              _pushV128Bytes(
+                stack,
+                _simdLoad8x8(stack, instruction, signed: false),
+              );
               pc++;
 
             case Opcodes.v128Load16x4S:
@@ -1688,27 +1741,45 @@ final class WasmVm {
               pc++;
 
             case Opcodes.v128Load8Splat:
-              _pushV128Bytes(stack, _simdLoadSplat(stack, instruction, laneWidth: 1));
+              _pushV128Bytes(
+                stack,
+                _simdLoadSplat(stack, instruction, laneWidth: 1),
+              );
               pc++;
 
             case Opcodes.v128Load16Splat:
-              _pushV128Bytes(stack, _simdLoadSplat(stack, instruction, laneWidth: 2));
+              _pushV128Bytes(
+                stack,
+                _simdLoadSplat(stack, instruction, laneWidth: 2),
+              );
               pc++;
 
             case Opcodes.v128Load32Splat:
-              _pushV128Bytes(stack, _simdLoadSplat(stack, instruction, laneWidth: 4));
+              _pushV128Bytes(
+                stack,
+                _simdLoadSplat(stack, instruction, laneWidth: 4),
+              );
               pc++;
 
             case Opcodes.v128Load64Splat:
-              _pushV128Bytes(stack, _simdLoadSplat(stack, instruction, laneWidth: 8));
+              _pushV128Bytes(
+                stack,
+                _simdLoadSplat(stack, instruction, laneWidth: 8),
+              );
               pc++;
 
             case Opcodes.v128Load32Zero:
-              _pushV128Bytes(stack, _simdLoadZeroExtend(stack, instruction, laneWidth: 4));
+              _pushV128Bytes(
+                stack,
+                _simdLoadZeroExtend(stack, instruction, laneWidth: 4),
+              );
               pc++;
 
             case Opcodes.v128Load64Zero:
-              _pushV128Bytes(stack, _simdLoadZeroExtend(stack, instruction, laneWidth: 8));
+              _pushV128Bytes(
+                stack,
+                _simdLoadZeroExtend(stack, instruction, laneWidth: 8),
+              );
               pc++;
 
             case Opcodes.v128Store:
@@ -1804,7 +1875,11 @@ final class WasmVm {
               pc++;
 
             case Opcodes.i8x16ExtractLaneS:
-              _simdExtractLaneI8x16(stack, signed: true, instruction: instruction);
+              _simdExtractLaneI8x16(
+                stack,
+                signed: true,
+                instruction: instruction,
+              );
               pc++;
 
             case Opcodes.i8x16ExtractLaneU:
@@ -3708,16 +3783,126 @@ final class WasmVm {
     throw _WasmThrownException(exceptionRef);
   }
 
+  int _handleLegacyCatchBoundary({
+    required List<_LabelFrame> labels,
+    required List<WasmValue> stack,
+    required int pc,
+  }) {
+    if (labels.isEmpty || labels.last.kind != _LabelKind.tryLegacy) {
+      throw StateError('`catch` reached without matching `try`.');
+    }
+    final frame = labels.last;
+    final activeCatchInstructionIndex = frame.activeCatchInstructionIndex;
+    if (frame.activeExceptionRef != null) {
+      if (activeCatchInstructionIndex == pc) {
+        return pc + 1;
+      }
+      frame
+        ..activeExceptionRef = null
+        ..activeCatchInstructionIndex = null;
+      labels.removeLast();
+      _exitLabel(frame, stack);
+      return frame.endIndex + 1;
+    }
+
+    labels.removeLast();
+    _exitLabel(frame, stack);
+    return frame.endIndex + 1;
+  }
+
+  Never _rethrowLegacy(List<_LabelFrame> labels, int depth) {
+    if (depth < 0) {
+      throw StateError('invalid rethrow label');
+    }
+    var remaining = depth;
+    for (var i = labels.length - 1; i >= 0; i--) {
+      final activeExceptionRef = labels[i].activeExceptionRef;
+      if (activeExceptionRef == null) {
+        continue;
+      }
+      if (remaining == 0) {
+        throw _WasmThrownException(activeExceptionRef);
+      }
+      remaining--;
+    }
+    throw StateError('invalid rethrow label');
+  }
+
   int? _handleThrownException(
     _WasmThrownException thrown, {
     required List<_LabelFrame> labels,
     required List<WasmValue> stack,
   }) {
     final exception = _requireExceptionObject(thrown.exceptionRef);
-    for (var i = labels.length - 1; i >= 0; i--) {
+    var i = labels.length - 1;
+    while (i >= 0) {
       final frame = labels[i];
       final catches = frame.tryTableCatches;
       if (catches == null || catches.isEmpty) {
+        if (frame.kind == _LabelKind.tryLegacy) {
+          if (frame.activeExceptionRef != null) {
+            i--;
+            continue;
+          }
+          final legacyCatches =
+              frame.legacyCatches ?? const <LegacyCatchClause>[];
+          LegacyCatchClause? legacyMatched;
+          for (final clause in legacyCatches) {
+            switch (clause.kind) {
+              case LegacyCatchKind.catchTag:
+                final tagIndex = clause.tagIndex;
+                if (tagIndex == null) {
+                  continue;
+                }
+                final resolvedTagIndex = _checkTagIndex(tagIndex);
+                if (_tagNominalTypeKeys[resolvedTagIndex] ==
+                    exception.nominalTypeKey) {
+                  legacyMatched = clause;
+                }
+              case LegacyCatchKind.catchAll:
+                legacyMatched = clause;
+              default:
+                continue;
+            }
+            if (legacyMatched != null) {
+              break;
+            }
+          }
+
+          if (legacyMatched != null) {
+            if (i + 1 < labels.length) {
+              labels.removeRange(i + 1, labels.length);
+            }
+            _truncateStackToHeight(
+              stack,
+              frame.stackHeight,
+              context: 'exception unwind',
+            );
+            switch (legacyMatched.kind) {
+              case LegacyCatchKind.catchTag:
+                stack.addAll(exception.values);
+              case LegacyCatchKind.catchAll:
+                break;
+              default:
+                break;
+            }
+            frame
+              ..activeExceptionRef = thrown.exceptionRef
+              ..activeCatchInstructionIndex = legacyMatched.handlerIndex;
+            return legacyMatched.handlerIndex;
+          }
+
+          final delegateDepth = frame.delegateDepth;
+          if (delegateDepth != null) {
+            final delegatedIndex = i - delegateDepth - 1;
+            if (delegatedIndex < 0) {
+              return null;
+            }
+            i = delegatedIndex;
+            continue;
+          }
+        }
+        i--;
         continue;
       }
 
@@ -3747,6 +3932,7 @@ final class WasmVm {
       }
 
       if (matched == null) {
+        i--;
         continue;
       }
 
@@ -3771,6 +3957,7 @@ final class WasmVm {
         case TryTableCatchKind.catchAllRef:
           stack.add(WasmValue.i32(thrown.exceptionRef));
         default:
+          i--;
           continue;
       }
       return _branch(matched.labelDepth + 1, labels, stack);
@@ -5730,10 +5917,7 @@ final class WasmVm {
 
   void _simdSplatI8x16(List<WasmValue> stack) {
     final lane = _popI32(stack) & 0xff;
-    _pushV128Bytes(
-      stack,
-      Uint8List(16)..fillRange(0, 16, lane),
-    );
+    _pushV128Bytes(stack, Uint8List(16)..fillRange(0, 16, lane));
   }
 
   void _simdSplatI16x8(List<WasmValue> stack) {
@@ -5820,7 +6004,11 @@ final class WasmVm {
     required bool signed,
     required Instruction instruction,
   }) {
-    final lane = _requireSimdLane(instruction, laneCount: 16, opName: 'i8x16.extract_lane');
+    final lane = _requireSimdLane(
+      instruction,
+      laneCount: 16,
+      opName: 'i8x16.extract_lane',
+    );
     final value = _popV128Bytes(stack, opName: 'i8x16.extract_lane')[lane];
     stack.add(WasmValue.i32(signed ? value.toSigned(8) : value));
   }
@@ -5836,7 +6024,9 @@ final class WasmVm {
       opName: 'i16x8.extract_lane',
     );
     final bytes = _popV128Bytes(stack, opName: 'i16x8.extract_lane');
-    final value = ByteData.sublistView(bytes).getUint16(lane * 2, Endian.little);
+    final value = ByteData.sublistView(
+      bytes,
+    ).getUint16(lane * 2, Endian.little);
     stack.add(WasmValue.i32(signed ? value.toSigned(16) : value));
   }
 
@@ -5868,11 +6058,7 @@ final class WasmVm {
     final offset = lane * 8;
     final low = data.getUint32(offset, Endian.little);
     final high = data.getUint32(offset + 4, Endian.little);
-    stack.add(
-      WasmValue.i64(
-        WasmI64.fromU32PairSigned(low: low, high: high),
-      ),
-    );
+    stack.add(WasmValue.i64(WasmI64.fromU32PairSigned(low: low, high: high)));
   }
 
   void _simdExtractLaneF32x4(
@@ -5904,9 +6090,7 @@ final class WasmVm {
     final low = data.getUint32(offset, Endian.little);
     final high = data.getUint32(offset + 4, Endian.little);
     stack.add(
-      WasmValue.f64Bits(
-        WasmI64.fromU32PairUnsigned(low: low, high: high),
-      ),
+      WasmValue.f64Bits(WasmI64.fromU32PairUnsigned(low: low, high: high)),
     );
   }
 
@@ -5920,7 +6104,9 @@ final class WasmVm {
       opName: 'i8x16.replace_lane',
     );
     final value = _popI32(stack) & 0xff;
-    final bytes = Uint8List.fromList(_popV128Bytes(stack, opName: 'i8x16.replace_lane'));
+    final bytes = Uint8List.fromList(
+      _popV128Bytes(stack, opName: 'i8x16.replace_lane'),
+    );
     bytes[lane] = value;
     _pushV128Bytes(stack, bytes);
   }
@@ -5935,7 +6121,9 @@ final class WasmVm {
       opName: 'i16x8.replace_lane',
     );
     final value = _popI32(stack) & 0xffff;
-    final bytes = Uint8List.fromList(_popV128Bytes(stack, opName: 'i16x8.replace_lane'));
+    final bytes = Uint8List.fromList(
+      _popV128Bytes(stack, opName: 'i16x8.replace_lane'),
+    );
     ByteData.sublistView(bytes).setUint16(lane * 2, value, Endian.little);
     _pushV128Bytes(stack, bytes);
   }
@@ -5950,7 +6138,9 @@ final class WasmVm {
       opName: 'i32x4.replace_lane',
     );
     final value = _toU32(_popI32(stack));
-    final bytes = Uint8List.fromList(_popV128Bytes(stack, opName: 'i32x4.replace_lane'));
+    final bytes = Uint8List.fromList(
+      _popV128Bytes(stack, opName: 'i32x4.replace_lane'),
+    );
     ByteData.sublistView(bytes).setUint32(lane * 4, value, Endian.little);
     _pushV128Bytes(stack, bytes);
   }
@@ -5965,7 +6155,9 @@ final class WasmVm {
       opName: 'i64x2.replace_lane',
     );
     final value = _toU64(_popI64(stack));
-    final bytes = Uint8List.fromList(_popV128Bytes(stack, opName: 'i64x2.replace_lane'));
+    final bytes = Uint8List.fromList(
+      _popV128Bytes(stack, opName: 'i64x2.replace_lane'),
+    );
     final data = ByteData.sublistView(bytes);
     _writeLaneU64(data, lane * 8, value);
     _pushV128Bytes(stack, bytes);
@@ -5981,7 +6173,9 @@ final class WasmVm {
       opName: 'f32x4.replace_lane',
     );
     final value = _popF32Bits(stack) & 0xffffffff;
-    final bytes = Uint8List.fromList(_popV128Bytes(stack, opName: 'f32x4.replace_lane'));
+    final bytes = Uint8List.fromList(
+      _popV128Bytes(stack, opName: 'f32x4.replace_lane'),
+    );
     ByteData.sublistView(bytes).setUint32(lane * 4, value, Endian.little);
     _pushV128Bytes(stack, bytes);
   }
@@ -5996,7 +6190,9 @@ final class WasmVm {
       opName: 'f64x2.replace_lane',
     );
     final value = _popF64Bits(stack) & _u64MaskBigInt;
-    final bytes = Uint8List.fromList(_popV128Bytes(stack, opName: 'f64x2.replace_lane'));
+    final bytes = Uint8List.fromList(
+      _popV128Bytes(stack, opName: 'f64x2.replace_lane'),
+    );
     final data = ByteData.sublistView(bytes);
     _writeLaneU64(data, lane * 8, value);
     _pushV128Bytes(stack, bytes);
@@ -6485,11 +6681,7 @@ final class WasmVm {
         Opcodes.i64x2GeS => a >= b,
         _ => throw StateError('Unsupported i64x2 compare opcode: $opcode'),
       };
-      _writeLaneU64(
-        resultData,
-        offset,
-        matches ? _u64MaskBigInt : BigInt.zero,
-      );
+      _writeLaneU64(resultData, offset, matches ? _u64MaskBigInt : BigInt.zero);
     }
     _pushV128Bytes(stack, result);
   }
@@ -6539,11 +6731,7 @@ final class WasmVm {
         Opcodes.f64x2Ge => a >= b,
         _ => throw StateError('Unsupported f64x2 compare opcode: $opcode'),
       };
-      _writeLaneU64(
-        resultData,
-        offset,
-        matches ? _u64MaskBigInt : BigInt.zero,
-      );
+      _writeLaneU64(resultData, offset, matches ? _u64MaskBigInt : BigInt.zero);
     }
     _pushV128Bytes(stack, result);
   }
@@ -6567,7 +6755,11 @@ final class WasmVm {
     for (var lane = 0; lane < 8; lane++) {
       final offset = lane * 2;
       final laneValue = valueData.getInt16(offset, Endian.little);
-      resultData.setUint16(offset, (laneValue >> shift) & 0xffff, Endian.little);
+      resultData.setUint16(
+        offset,
+        (laneValue >> shift) & 0xffff,
+        Endian.little,
+      );
     }
     _pushV128Bytes(stack, result);
   }
@@ -6581,7 +6773,11 @@ final class WasmVm {
     for (var lane = 0; lane < 4; lane++) {
       final offset = lane * 4;
       final laneValue = valueData.getInt32(offset, Endian.little);
-      resultData.setUint32(offset, (laneValue >> shift) & 0xffffffff, Endian.little);
+      resultData.setUint32(
+        offset,
+        (laneValue >> shift) & 0xffffffff,
+        Endian.little,
+      );
     }
     _pushV128Bytes(stack, result);
   }
@@ -6634,8 +6830,12 @@ final class WasmVm {
     final result = Uint8List(16);
     final resultData = ByteData.sublistView(result);
     for (var lane = 0; lane < 4; lane++) {
-      final left = lhsData.getInt32(lane * 4, Endian.little).clamp(-32768, 32767);
-      final right = rhsData.getInt32(lane * 4, Endian.little).clamp(-32768, 32767);
+      final left = lhsData
+          .getInt32(lane * 4, Endian.little)
+          .clamp(-32768, 32767);
+      final right = rhsData
+          .getInt32(lane * 4, Endian.little)
+          .clamp(-32768, 32767);
       resultData.setUint16(lane * 2, left & 0xffff, Endian.little);
       resultData.setUint16((lane + 4) * 2, right & 0xffff, Endian.little);
     }
@@ -7086,7 +7286,9 @@ final class WasmVm {
     final resultData = ByteData.sublistView(result);
     for (var lane = 0; lane < 4; lane++) {
       final offset = lane * 4;
-      final laneValue = _truncSatToI32S(inputData.getFloat32(offset, Endian.little));
+      final laneValue = _truncSatToI32S(
+        inputData.getFloat32(offset, Endian.little),
+      );
       resultData.setUint32(offset, _toU32(laneValue), Endian.little);
     }
     _pushV128Bytes(stack, result);
@@ -7188,7 +7390,11 @@ final class WasmVm {
     final resultData = ByteData.sublistView(result);
     for (var lane = 0; lane < 2; lane++) {
       final offset = lane * 8;
-      _writeLaneU64(resultData, offset, _readLaneU64(valueData, offset) << shift);
+      _writeLaneU64(
+        resultData,
+        offset,
+        _readLaneU64(valueData, offset) << shift,
+      );
     }
     _pushV128Bytes(stack, result);
   }
@@ -7220,7 +7426,11 @@ final class WasmVm {
     final resultData = ByteData.sublistView(result);
     for (var lane = 0; lane < 2; lane++) {
       final offset = lane * 8;
-      _writeLaneU64(resultData, offset, _readLaneU64(valueData, offset) >> shift);
+      _writeLaneU64(
+        resultData,
+        offset,
+        _readLaneU64(valueData, offset) >> shift,
+      );
     }
     _pushV128Bytes(stack, result);
   }
@@ -7500,11 +7710,7 @@ final class WasmVm {
       } else if (clamped > max) {
         clamped = max;
       }
-      resultData.setUint16(
-        offset,
-        clamped.toInt() & 0xffff,
-        Endian.little,
-      );
+      resultData.setUint16(offset, clamped.toInt() & 0xffff, Endian.little);
     }
     _pushV128Bytes(stack, result);
   }
@@ -7840,8 +8046,14 @@ final class WasmVm {
       stack,
       opName: 'i32x4.relaxed_dot_i8x16_i7x16_add_s',
     );
-    final rhs = _popV128Bytes(stack, opName: 'i32x4.relaxed_dot_i8x16_i7x16_add_s');
-    final lhs = _popV128Bytes(stack, opName: 'i32x4.relaxed_dot_i8x16_i7x16_add_s');
+    final rhs = _popV128Bytes(
+      stack,
+      opName: 'i32x4.relaxed_dot_i8x16_i7x16_add_s',
+    );
+    final lhs = _popV128Bytes(
+      stack,
+      opName: 'i32x4.relaxed_dot_i8x16_i7x16_add_s',
+    );
     final addendData = ByteData.sublistView(addend);
     final result = Uint8List(16);
     final resultData = ByteData.sublistView(result);
@@ -7849,7 +8061,8 @@ final class WasmVm {
       final byteOffset = lane * 4;
       var dot = 0;
       for (var i = 0; i < 4; i++) {
-        dot += lhs[byteOffset + i].toSigned(8) * rhs[byteOffset + i].toSigned(8);
+        dot +=
+            lhs[byteOffset + i].toSigned(8) * rhs[byteOffset + i].toSigned(8);
       }
       final value = addendData.getInt32(lane * 4, Endian.little) + dot;
       resultData.setUint32(lane * 4, _toU32(value), Endian.little);
@@ -7995,7 +8208,9 @@ final class WasmVm {
     final result = Uint8List(16);
     final resultData = ByteData.sublistView(result);
     for (var lane = 0; lane < 2; lane++) {
-      final value = BigInt.from(inputData.getUint32((lane + 2) * 4, Endian.little));
+      final value = BigInt.from(
+        inputData.getUint32((lane + 2) * 4, Endian.little),
+      );
       _writeLaneU64(resultData, lane * 8, value);
     }
     _pushV128Bytes(stack, result);
@@ -8359,7 +8574,11 @@ final class WasmVm {
     final signBit = BigInt.one << 63;
     for (var lane = 0; lane < 2; lane++) {
       final offset = lane * 8;
-      _writeLaneU64(resultData, offset, _readLaneU64(inputData, offset) ^ signBit);
+      _writeLaneU64(
+        resultData,
+        offset,
+        _readLaneU64(inputData, offset) ^ signBit,
+      );
     }
     _pushV128Bytes(stack, result);
   }
@@ -8520,7 +8739,9 @@ final class WasmVm {
     final resultData = ByteData.sublistView(result);
     for (var lane = 0; lane < 4; lane++) {
       final offset = lane * 4;
-      final laneValue = _truncSatToI32U(inputData.getFloat32(offset, Endian.little));
+      final laneValue = _truncSatToI32U(
+        inputData.getFloat32(offset, Endian.little),
+      );
       resultData.setUint32(offset, _toU32(laneValue), Endian.little);
     }
     _pushV128Bytes(stack, result);
@@ -8533,7 +8754,9 @@ final class WasmVm {
     final resultData = ByteData.sublistView(result);
     for (var lane = 0; lane < 2; lane++) {
       final offset = lane * 8;
-      final laneValue = _truncSatToI32S(inputData.getFloat64(offset, Endian.little));
+      final laneValue = _truncSatToI32S(
+        inputData.getFloat64(offset, Endian.little),
+      );
       resultData.setUint32(lane * 4, _toU32(laneValue), Endian.little);
     }
     resultData.setUint32(8, 0, Endian.little);
@@ -8548,7 +8771,9 @@ final class WasmVm {
     final resultData = ByteData.sublistView(result);
     for (var lane = 0; lane < 2; lane++) {
       final offset = lane * 8;
-      final laneValue = _truncSatToI32U(inputData.getFloat64(offset, Endian.little));
+      final laneValue = _truncSatToI32U(
+        inputData.getFloat64(offset, Endian.little),
+      );
       resultData.setUint32(lane * 4, _toU32(laneValue), Endian.little);
     }
     resultData.setUint32(8, 0, Endian.little);

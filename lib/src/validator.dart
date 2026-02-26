@@ -827,6 +827,7 @@ abstract final class WasmValidator {
           case Opcodes.block:
           case Opcodes.loop:
           case Opcodes.if_:
+          case Opcodes.tryLegacy:
           case Opcodes.tryTable:
             controlStack.add(instruction.opcode);
             if (instruction.opcode == Opcodes.tryTable) {
@@ -850,6 +851,35 @@ abstract final class WasmValidator {
                 }
               }
             }
+          case Opcodes.catchTag:
+            if (controlStack.isEmpty ||
+                controlStack.last != Opcodes.tryLegacy) {
+              throw const FormatException(
+                'Validation failed: `catch` without matching `try`.',
+              );
+            }
+            _checkIndex(instruction.immediate!, tagTypes.length, 'tag');
+          case Opcodes.catchAll:
+            if (controlStack.isEmpty ||
+                controlStack.last != Opcodes.tryLegacy) {
+              throw const FormatException(
+                'Validation failed: `catch_all` without matching `try`.',
+              );
+            }
+          case Opcodes.delegate:
+            if (controlStack.isEmpty ||
+                controlStack.last != Opcodes.tryLegacy) {
+              throw const FormatException(
+                'Validation failed: `delegate` without matching `try`.',
+              );
+            }
+            final depth = instruction.immediate!;
+            if (depth < 0 || depth > controlStack.length) {
+              throw FormatException(
+                'Validation failed: delegate depth out of range: $depth.',
+              );
+            }
+            controlStack.removeLast();
           case Opcodes.else_:
             if (controlStack.isEmpty || controlStack.last != Opcodes.if_) {
               throw const FormatException(
@@ -886,6 +916,13 @@ abstract final class WasmValidator {
             _checkIndex(instruction.immediate!, tagTypes.length, 'tag');
           case Opcodes.throwRef:
             break;
+          case Opcodes.rethrowTag:
+            final depth = instruction.immediate!;
+            if (depth < 0 || depth > controlStack.length) {
+              throw FormatException(
+                'Validation failed: rethrow depth out of range: $depth.',
+              );
+            }
           case Opcodes.refFunc:
             final functionIndex = instruction.immediate!;
             _checkIndex(functionIndex, functionCount, 'function ref');
@@ -1613,8 +1650,18 @@ abstract final class WasmValidator {
         case Opcodes.block:
         case Opcodes.loop:
         case Opcodes.if_:
+        case Opcodes.tryLegacy:
         case Opcodes.tryTable:
           controlStack.add(List<bool>.from(initialized));
+
+        case Opcodes.catchTag:
+        case Opcodes.catchAll:
+          if (controlStack.isEmpty) {
+            return;
+          }
+          initialized
+            ..clear()
+            ..addAll(controlStack.last);
 
         case Opcodes.else_:
           if (controlStack.isEmpty) {
