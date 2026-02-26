@@ -227,6 +227,51 @@ void main() {
       expect(satisfied.invokeCore('one'), 1);
     });
 
+    test(
+      'validates typed global import requirements against provided values',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'globalI32',
+              moduleName: 'env',
+              fieldName: 'g',
+              kind: 0x03,
+            ),
+          ],
+        );
+        final typeSection = <int>[..._u32Leb(1), ..._name('i32_t'), 0x00, 0x7f];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: const WasmImports(globals: {'env::g': 'not-an-i32'}),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          imports: const WasmImports(globals: {'env::g': 7}),
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.invokeCore('one'), 1);
+      },
+    );
+
     test('resolves core instances by alias from section 0x05', () {
       final componentBytes = _componentWithCoreModules(
         <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],

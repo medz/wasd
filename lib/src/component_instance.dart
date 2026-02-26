@@ -9,6 +9,7 @@ import 'memory.dart';
 import 'module.dart';
 import 'runtime_global.dart';
 import 'table.dart';
+import 'value.dart';
 
 typedef _CoreImportBindingAttempt = ({bool bound, String? incompatibility});
 
@@ -260,6 +261,120 @@ final class WasmComponentInstance {
         );
       }
     }
+    _validateTypedComponentImportRequirements(component, imports);
+  }
+
+  static void _validateTypedComponentImportRequirements(
+    WasmComponent component,
+    WasmImports imports,
+  ) {
+    for (final binding in component.typeBindings) {
+      if (binding.targetKind !=
+          WasmComponentTypeBindingTargetKind.importRequirement) {
+        continue;
+      }
+      if (binding.targetIndex < 0 ||
+          binding.targetIndex >= component.importRequirements.length) {
+        continue;
+      }
+      final requirement = component.importRequirements[binding.targetIndex];
+      final declaration = _resolveComponentTypeDeclaration(
+        component.typeDeclarations,
+        binding.typeDeclarationIndex,
+      );
+      final key = WasmImports.key(
+        requirement.moduleName,
+        requirement.fieldName,
+      );
+      switch (requirement.kind) {
+        case WasmComponentImportKind.global:
+          final valueTypeCode = declaration.valueTypeCode;
+          if (declaration.kind != WasmComponentTypeKind.value ||
+              valueTypeCode == null) {
+            throw FormatException(
+              'Component global import `${requirement.componentImportName}` '
+              'must bind to a value type declaration.',
+            );
+          }
+          final expectedType = _decodeCoreValueTypeCode(valueTypeCode);
+          if (expectedType == null) {
+            throw UnsupportedError(
+              'Component global import `${requirement.componentImportName}` '
+              'uses unsupported value type code 0x${valueTypeCode.toRadixString(16)}.',
+            );
+          }
+
+          final bindingGlobal = imports.globalBindings[key];
+          if (bindingGlobal != null) {
+            if (bindingGlobal.valueType != expectedType) {
+              throw FormatException(
+                'Component global import `${requirement.componentImportName}` '
+                'type mismatch: expected ${expectedType.name}, '
+                'actual ${bindingGlobal.valueType.name}.',
+              );
+            }
+            break;
+          }
+          if (imports.globals.containsKey(key)) {
+            final value = imports.globals[key];
+            try {
+              WasmValue.fromExternal(expectedType, value);
+            } catch (_) {
+              throw FormatException(
+                'Component global import `${requirement.componentImportName}` '
+                'is not compatible with expected type ${expectedType.name}.',
+              );
+            }
+          }
+          break;
+        case WasmComponentImportKind.function:
+        case WasmComponentImportKind.memory:
+        case WasmComponentImportKind.table:
+        case WasmComponentImportKind.tag:
+          break;
+      }
+    }
+  }
+
+  static WasmComponentTypeDeclaration _resolveComponentTypeDeclaration(
+    List<WasmComponentTypeDeclaration> declarations,
+    int index,
+  ) {
+    if (index < 0 || index >= declarations.length) {
+      throw FormatException(
+        'Component type binding references invalid type index '
+        '$index (count=${declarations.length}).',
+      );
+    }
+    var current = index;
+    final seen = <int>{};
+    while (true) {
+      if (!seen.add(current)) {
+        throw const FormatException('Component type alias cycle detected.');
+      }
+      final declaration = declarations[current];
+      if (declaration.kind != WasmComponentTypeKind.alias) {
+        return declaration;
+      }
+      final target = declaration.aliasTargetIndex;
+      if (target == null || target < 0 || target >= declarations.length) {
+        throw FormatException(
+          'Component type alias `${declaration.name}` target out of range: '
+          '$target (count=${declarations.length}).',
+        );
+      }
+      current = target;
+    }
+  }
+
+  static WasmValueType? _decodeCoreValueTypeCode(int code) {
+    return switch (code) {
+      0x7f => WasmValueType.i32,
+      0x7e => WasmValueType.i64,
+      0x7d => WasmValueType.f32,
+      0x7c => WasmValueType.f64,
+      _ => null,
+    };
   }
 
   static WasmImports _composeCoreInstanceImports({
