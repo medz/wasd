@@ -1654,6 +1654,143 @@ void main() {
     );
 
     test(
+      'supports call_indirect and return_call_indirect in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          tables: const [_TableSpec(refType: 0x70, min: 1)],
+          functionTypeIndices: const [1, 1, 1],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [..._localGet(0), ..._call(0), Opcodes.end],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._i32Const(0),
+                ..._callIndirect(1, 0),
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._i32Const(0),
+                Opcodes.returnCallIndirect,
+                ..._u32Leb(1),
+                ..._u32Leb(0),
+                Opcodes.end,
+              ],
+            ),
+          ],
+          elements: [
+            _ElementSegmentSpec.active(
+              tableIndex: 0,
+              offsetExpr: [..._i32Const(0), Opcodes.end],
+              functionIndices: const [1],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'wrapIndirect',
+              kind: WasmExportKind.function,
+              index: 2,
+            ),
+            _ExportSpec(
+              name: 'wrapReturnIndirect',
+              kind: WasmExportKind.function,
+              index: 3,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('wrapIndirect', [41]), 42);
+        expect(await instance.invokeI32Async('wrapReturnIndirect', [41]), 42);
+      },
+    );
+
+    test('supports br_table in async import call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+        ],
+        functionTypeIndices: const [0],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+
+              Opcodes.block,
+              0x40,
+              Opcodes.block,
+              0x40,
+              Opcodes.block,
+              0x40,
+              ..._localGet(0),
+              Opcodes.brTable,
+              ..._u32Leb(2),
+              ..._u32Leb(0),
+              ..._u32Leb(1),
+              ..._u32Leb(2),
+              Opcodes.end,
+              ..._i32Const(10),
+              Opcodes.return_,
+              Opcodes.end,
+              ..._i32Const(20),
+              Opcodes.return_,
+              Opcodes.end,
+              ..._i32Const(30),
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'wrapBrTable',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('wrapBrTable', [0]), 10);
+      expect(await instance.invokeI32Async('wrapBrTable', [1]), 20);
+      expect(await instance.invokeI32Async('wrapBrTable', [2]), 30);
+      expect(await instance.invokeI32Async('wrapBrTable', [99]), 30);
+    });
+
+    test(
       'reports explicit boundary for unsupported async call chains',
       () async {
         final wasm = _buildModule(

@@ -99,6 +99,7 @@ final class WasmInstance {
   final List<WasmGlobalType> _globalTypes;
   final int _functionRefNamespace;
   final WasmVm _vm;
+  late final Map<int, int> _functionRefIdToIndex = _buildFunctionRefIdToIndex();
 
   factory WasmInstance.fromBytes(
     Uint8List wasmBytes, {
@@ -796,6 +797,7 @@ final class WasmInstance {
     final stack = <WasmValue>[];
     final instructions = defined.instructions;
     final memory64ByIndex = _memory64ByIndex(module);
+    final table64ByIndex = _table64ByIndex(module);
     final controlStack = <_AsyncSubsetControlFrame>[];
     var pc = 0;
     while (pc < instructions.length) {
@@ -1921,6 +1923,26 @@ final class WasmInstance {
             pc++;
           }
 
+        case Opcodes.brTable:
+          final selector = _popValue(
+            stack,
+            'br_table selector',
+          ).castTo(WasmValueType.i32).asI32();
+          final targets = instruction.tableDepths;
+          if (targets == null || targets.isEmpty) {
+            throw StateError('Invalid br_table targets.');
+          }
+          final defaultDepth = targets.last;
+          final depth = selector >= 0 && selector < targets.length - 1
+              ? targets[selector]
+              : defaultDepth;
+          pc = _branchInAsyncSubset(
+            depth: depth,
+            stack: stack,
+            controlStack: controlStack,
+            context: 'br_table',
+          );
+
         case Opcodes.call:
           final targetIndex = instruction.immediate!;
           if (targetIndex < 0 || targetIndex >= functions.length) {
@@ -1940,6 +1962,51 @@ final class WasmInstance {
           stack.addAll(callResults);
           pc++;
 
+        case Opcodes.callIndirect:
+          final typeIndex = instruction.immediate!;
+          if (typeIndex < 0 || typeIndex >= module.types.length) {
+            throw RangeError(
+              'call_indirect type index out of range: $typeIndex',
+            );
+          }
+          final tableIndex = instruction.secondaryImmediate!;
+          final tableElementIndex = _popAsyncSubsetTableOperand(
+            stack,
+            tableIndex: tableIndex,
+            table64ByIndex: table64ByIndex,
+            context: 'call_indirect table index',
+          );
+          final targetFunctionRef = tables[tableIndex][tableElementIndex];
+          if (targetFunctionRef == null) {
+            throw StateError('call_indirect to null table element.');
+          }
+          final targetIndex = _functionRefIdToIndex[targetFunctionRef];
+          if (targetIndex == null) {
+            throw StateError('call_indirect to non-function table element.');
+          }
+          final expectedType = module.types[typeIndex];
+          if (!expectedType.isFunctionType) {
+            throw StateError(
+              'call_indirect expected non-function type $typeIndex.',
+            );
+          }
+          final target = functions[targetIndex];
+          if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
+            throw StateError('call_indirect signature mismatch trap');
+          }
+          final callArgs = _popArgsForTypes(
+            stack,
+            expectedType.params,
+            context: 'call_indirect',
+          );
+          final callResults = await _invokeFunctionAsyncSubset(
+            targetIndex,
+            callArgs,
+            depth: depth + 1,
+          );
+          stack.addAll(callResults);
+          pc++;
+
         case Opcodes.returnCall:
           final targetIndex = instruction.immediate!;
           if (targetIndex < 0 || targetIndex >= functions.length) {
@@ -1950,6 +2017,49 @@ final class WasmInstance {
             stack,
             target.type.params,
             context: 'return_call',
+          );
+          return _invokeFunctionAsyncSubset(
+            targetIndex,
+            callArgs,
+            depth: depth + 1,
+          );
+
+        case Opcodes.returnCallIndirect:
+          final typeIndex = instruction.immediate!;
+          if (typeIndex < 0 || typeIndex >= module.types.length) {
+            throw RangeError(
+              'return_call_indirect type index out of range: $typeIndex',
+            );
+          }
+          final tableIndex = instruction.secondaryImmediate!;
+          final tableElementIndex = _popAsyncSubsetTableOperand(
+            stack,
+            tableIndex: tableIndex,
+            table64ByIndex: table64ByIndex,
+            context: 'return_call_indirect table index',
+          );
+          final targetFunctionRef = tables[tableIndex][tableElementIndex];
+          if (targetFunctionRef == null) {
+            throw StateError('call_indirect to null table element.');
+          }
+          final targetIndex = _functionRefIdToIndex[targetFunctionRef];
+          if (targetIndex == null) {
+            throw StateError('call_indirect to non-function table element.');
+          }
+          final expectedType = module.types[typeIndex];
+          if (!expectedType.isFunctionType) {
+            throw StateError(
+              'call_indirect expected non-function type $typeIndex.',
+            );
+          }
+          final target = functions[targetIndex];
+          if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
+            throw StateError('call_indirect signature mismatch trap');
+          }
+          final callArgs = _popArgsForTypes(
+            stack,
+            expectedType.params,
+            context: 'return_call_indirect',
           );
           return _invokeFunctionAsyncSubset(
             targetIndex,
@@ -2031,6 +2141,109 @@ final class WasmInstance {
 
     controlStack.removeRange(targetIndex, controlStack.length);
     return target.endIndex + 1;
+  }
+
+  int _popAsyncSubsetTableOperand(
+    List<WasmValue> stack, {
+    required int tableIndex,
+    required List<bool> table64ByIndex,
+    required String context,
+  }) {
+    if (tableIndex < 0 || tableIndex >= tables.length) {
+      throw RangeError(
+        'Invalid table index: $tableIndex (count=${tables.length}).',
+      );
+    }
+    final isTable64 =
+        tableIndex >= 0 &&
+        tableIndex < table64ByIndex.length &&
+        table64ByIndex[tableIndex];
+    final operand = isTable64
+        ? WasmI64.unsigned(
+            _popValue(stack, context).castTo(WasmValueType.i64).asI64(),
+          )
+        : BigInt.from(
+                _popValue(stack, context).castTo(WasmValueType.i32).asI32(),
+              ) &
+              BigInt.from(0xffffffff);
+    final maxSupported = BigInt.from(wasmAddressSpaceBytes);
+    if (operand > maxSupported) {
+      throw RangeError(
+        '$context exceeds supported linear range: '
+        '$operand > $wasmAddressSpaceBytes.',
+      );
+    }
+    return operand.toInt();
+  }
+
+  Map<int, int> _buildFunctionRefIdToIndex() {
+    final mapping = <int, int>{};
+    for (
+      var functionIndex = 0;
+      functionIndex < functions.length;
+      functionIndex++
+    ) {
+      final refId = WasmVm.functionRefIdFor(
+        namespace: _functionRefNamespace,
+        functionIndex: functionIndex,
+      );
+      mapping[refId] = functionIndex;
+    }
+    return mapping;
+  }
+
+  bool _asyncSubsetFunctionMatchesType(
+    RuntimeFunction function,
+    int targetTypeIndex,
+  ) {
+    if (targetTypeIndex < 0 || targetTypeIndex >= module.types.length) {
+      return false;
+    }
+    final targetType = module.types[targetTypeIndex];
+    if (!targetType.isFunctionType) {
+      return false;
+    }
+    if (!_sameFunctionSignature(function.type, targetType)) {
+      return false;
+    }
+    if (_isAsyncSubsetTypeSubtype(
+      function.declaredTypeIndex,
+      targetTypeIndex,
+    )) {
+      return true;
+    }
+    final expectedDepth = _functionTypeDepth(module, targetTypeIndex);
+    return function.runtimeTypeDepth >= expectedDepth;
+  }
+
+  bool _isAsyncSubsetTypeSubtype(int subTypeIndex, int superTypeIndex) {
+    if (subTypeIndex == superTypeIndex) {
+      return true;
+    }
+    if (subTypeIndex < 0 ||
+        subTypeIndex >= module.types.length ||
+        superTypeIndex < 0 ||
+        superTypeIndex >= module.types.length) {
+      return false;
+    }
+    final pending = <int>[subTypeIndex];
+    final seen = <int>{};
+    while (pending.isNotEmpty) {
+      final current = pending.removeLast();
+      if (!seen.add(current)) {
+        continue;
+      }
+      if (current < 0 || current >= module.types.length) {
+        continue;
+      }
+      for (final parent in module.types[current].superTypeIndices) {
+        if (parent == superTypeIndex) {
+          return true;
+        }
+        pending.add(parent);
+      }
+    }
+    return false;
   }
 
   ({WasmMemory memory, bool isMemory64}) _resolveAsyncSubsetMemoryTarget({
