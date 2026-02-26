@@ -1921,7 +1921,11 @@ Future<void> _runVmMode(List<String> args) async {
     jsonFromWast: _argValue(args, '--json-from-wast'),
     wast2json: _argValue(args, '--wast2json'),
   );
+  final legacyConverter = await _resolveLegacyWastConverter(converter);
   final textModuleParsers = await _resolveTextModuleParsers(converter);
+  final legacyTextModuleParsers = legacyConverter == null
+      ? const <_TextModuleParser>[]
+      : await _resolveTextModuleParsers(legacyConverter);
   final testsuite = Directory(testsuiteDir);
   if (!testsuite.existsSync()) {
     stderr.writeln('testsuite directory does not exist: ${testsuite.path}');
@@ -1945,8 +1949,16 @@ Future<void> _runVmMode(List<String> args) async {
     final result = await _runWastFile(
       file: file,
       group: group,
-      converter: converter,
-      textModuleParsers: textModuleParsers,
+      converter: _converterForFile(
+        file: file,
+        converter: converter,
+        legacyConverter: legacyConverter,
+      ),
+      textModuleParsers: _textModuleParsersForFile(
+        file: file,
+        textModuleParsers: textModuleParsers,
+        legacyTextModuleParsers: legacyTextModuleParsers,
+      ),
     );
     results.add(result);
     _accumulateStats(
@@ -2022,7 +2034,11 @@ Future<void> _runPrepareManifestMode(
     jsonFromWast: _argValue(args, '--json-from-wast'),
     wast2json: _argValue(args, '--wast2json'),
   );
+  final legacyConverter = await _resolveLegacyWastConverter(converter);
   final textModuleParsers = await _resolveTextModuleParsers(converter);
+  final legacyTextModuleParsers = legacyConverter == null
+      ? const <_TextModuleParser>[]
+      : await _resolveTextModuleParsers(legacyConverter);
   final testsuite = Directory(testsuiteDir);
   if (!testsuite.existsSync()) {
     stderr.writeln('testsuite directory does not exist: ${testsuite.path}');
@@ -2049,9 +2065,14 @@ Future<void> _runPrepareManifestMode(
     final slot = Directory('${rootDir.path}/f${i.toString().padLeft(4, '0')}');
     await slot.create(recursive: true);
     final jsonPath = '${slot.path}/script.json';
+    final fileConverter = _converterForFile(
+      file: file,
+      converter: converter,
+      legacyConverter: legacyConverter,
+    );
     final conversion = await Process.run(
-      converter.binary,
-      converter.command(
+      fileConverter.binary,
+      fileConverter.command(
         wastFile: file,
         outputJsonPath: jsonPath,
         wasmDir: slot.path,
@@ -2063,11 +2084,16 @@ Future<void> _runPrepareManifestMode(
       exitCode = 1;
       return;
     }
-    if (textModuleParsers.isNotEmpty) {
+    final fileTextParsers = _textModuleParsersForFile(
+      file: file,
+      textModuleParsers: textModuleParsers,
+      legacyTextModuleParsers: legacyTextModuleParsers,
+    );
+    if (fileTextParsers.isNotEmpty) {
       await _annotatePreparedScriptTextMalformedAssertions(
         scriptJsonPath: jsonPath,
         workDirPath: slot.path,
-        parsers: textModuleParsers,
+        parsers: fileTextParsers,
       );
     }
     entries.add(
@@ -2579,10 +2605,6 @@ List<String> _collectSuiteFiles(String testsuiteDir, _SpecSuite suite) {
     }
     final normalized = entity.path.replaceAll('\\', '/');
     final inProposal = normalized.contains('/proposals/');
-    final inLegacy = normalized.contains('/legacy/');
-    if (inLegacy) {
-      continue;
-    }
     switch (suite) {
       case _SpecSuite.core:
         if (!inProposal) {
@@ -2610,6 +2632,9 @@ String _groupForFile(String file, String testsuiteDir) {
   if (parts.length >= 3 && parts[0] == 'proposals') {
     return parts[1];
   }
+  if (parts.length >= 2 && parts[0] == 'legacy') {
+    return 'legacy';
+  }
   return 'core';
 }
 
@@ -2618,6 +2643,7 @@ WasmFeatureSet _featuresForGroup(String group) {
   final additionalEnabled = <String>{...base.additionalEnabled};
   switch (group) {
     case 'core':
+    case 'legacy':
     case 'custom-page-sizes':
       additionalEnabled.add('multi-memory');
       additionalEnabled.add('multi-table');
@@ -2819,6 +2845,54 @@ Future<_WastConverter> _resolveWastConverter({
     'Unable to locate wast converter (`wasm-tools` or `wast2json`). '
     'Run `bash tool/ensure_toolchains.sh` first.',
   );
+}
+
+Future<_WastConverter?> _resolveLegacyWastConverter(
+  _WastConverter primaryConverter,
+) async {
+  if (primaryConverter.kind == _WastConverterKind.wabtWast2json) {
+    return primaryConverter;
+  }
+  final wast2jsonBinary = await _tryResolveBinaryCandidates(<String>[
+    '${Directory.current.path}/.toolchains/bin/wast2json',
+    '${Directory.current.path}/.toolchains/wabt-1.0.39/bin/wast2json',
+    '${Directory.current.path}/.toolchains/wabt-1.0.37/bin/wast2json',
+    'wast2json',
+  ]);
+  if (wast2jsonBinary == null) {
+    return null;
+  }
+  return _WastConverter(
+    kind: _WastConverterKind.wabtWast2json,
+    binary: wast2jsonBinary,
+  );
+}
+
+_WastConverter _converterForFile({
+  required String file,
+  required _WastConverter converter,
+  required _WastConverter? legacyConverter,
+}) {
+  if (_isLegacyFilePath(file) && legacyConverter != null) {
+    return legacyConverter;
+  }
+  return converter;
+}
+
+List<_TextModuleParser> _textModuleParsersForFile({
+  required String file,
+  required List<_TextModuleParser> textModuleParsers,
+  required List<_TextModuleParser> legacyTextModuleParsers,
+}) {
+  if (_isLegacyFilePath(file) && legacyTextModuleParsers.isNotEmpty) {
+    return legacyTextModuleParsers;
+  }
+  return textModuleParsers;
+}
+
+bool _isLegacyFilePath(String filePath) {
+  final normalized = filePath.replaceAll('\\', '/');
+  return normalized.contains('/legacy/');
 }
 
 Future<List<_TextModuleParser>> _resolveTextModuleParsers(

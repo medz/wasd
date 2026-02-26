@@ -2056,6 +2056,7 @@ WasmFeatureSet _featuresForGroup(String group) {
   final additionalEnabled = <String>{...base.additionalEnabled};
   switch (group) {
     case 'core':
+    case 'legacy':
     case 'custom-page-sizes':
       additionalEnabled.add('multi-memory');
       additionalEnabled.add('multi-table');
