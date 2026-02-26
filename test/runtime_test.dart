@@ -4490,6 +4490,70 @@ void main() {
       expect(await instance.invokeI32Async('supportsI8x16Popcnt', [41]), 1);
     });
 
+    test('supports i16x8 SIMD opcodes in async import call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+        ],
+        functionTypeIndices: const [0],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._fdBytes(Opcodes.v128Const, <int>[
+                0x00,
+                0x80,
+                0x00,
+                0x80,
+                0x00,
+                0x80,
+                0x00,
+                0x80,
+                0x00,
+                0x80,
+                0x00,
+                0x80,
+                0x00,
+                0x80,
+                0x00,
+                0x80,
+              ]),
+              ..._fdBytes(Opcodes.i16x8Abs, []),
+              ..._fdBytes(Opcodes.i16x8Bitmask, []),
+              ..._i32Const(0xff),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'supportsI16x8AbsBitmask',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(simd: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('supportsI16x8AbsBitmask', [41]), 1);
+    });
+
     test(
       'reports explicit boundary for unsupported async call chains',
       () async {
@@ -4508,7 +4572,8 @@ void main() {
                 ..._call(0),
                 Opcodes.drop,
                 ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
-                ..._fdBytes(Opcodes.i16x8Abs, []),
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
+                ..._fdBytes(Opcodes.i16x8Ne, []),
                 Opcodes.drop,
                 ..._i32Const(0),
                 Opcodes.end,

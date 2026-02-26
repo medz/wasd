@@ -1066,6 +1066,14 @@ final class WasmInstance {
             _simdI8x16AnyTrue(stack);
             pc++;
 
+          case Opcodes.i16x8Abs:
+            _simdI16x8Abs(stack);
+            pc++;
+
+          case Opcodes.i16x8Bitmask:
+            _simdI16x8Bitmask(stack);
+            pc++;
+
           case Opcodes.i32Eqz:
             final value = _popValue(stack, 'i32.eqz').castTo(WasmValueType.i32);
             stack.add(WasmValue.i32(value.asI32() == 0 ? 1 : 0));
@@ -5051,6 +5059,30 @@ final class WasmInstance {
       }
     }
     stack.add(WasmValue.i32(anyTrue));
+  }
+
+  void _simdI16x8Abs(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i16x8.abs');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final laneValue = valueData.getInt16(lane * 2, Endian.little).abs();
+      resultData.setUint16(lane * 2, laneValue & 0xffff, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI16x8Bitmask(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'i16x8.bitmask');
+    final data = ByteData.sublistView(value);
+    var mask = 0;
+    for (var lane = 0; lane < 8; lane++) {
+      if ((data.getUint16(lane * 2, Endian.little) & 0x8000) != 0) {
+        mask |= (1 << lane);
+      }
+    }
+    stack.add(WasmValue.i32(mask));
   }
 
   void _pushAsyncSubsetV128(List<WasmValue> stack, Uint8List bytes) {
