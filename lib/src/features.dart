@@ -79,7 +79,9 @@ final class WasmFeatureSet {
   /// Feature names forcibly disabled after defaults + additions are applied.
   final Set<String> additionalDisabled;
 
-  Set<String> get enabledFeatures {
+  Set<String> get enabledFeatures => _computeEnabledFeatures();
+
+  Set<String> _computeEnabledFeatures() {
     final enabled = <String>{};
     if (simd) {
       enabled.add(_simdFeatureName);
