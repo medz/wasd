@@ -648,7 +648,7 @@ final class _ScriptExecutionState {
       case 'anyref':
         return _ExpectedValue.ref(
           type,
-          expectsNullRef: value == null || value == 'null',
+          expectsNullRef: value == 'null',
         );
       case 'nullref':
       case 'refnull':
