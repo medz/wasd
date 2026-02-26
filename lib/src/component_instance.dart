@@ -12,6 +12,7 @@ import 'memory.dart';
 /// Current scope:
 /// - Instantiates embedded core modules discovered in section `0x01`.
 /// - Exposes direct core export invocation.
+/// - Exposes component export aliases decoded from section `0x03`.
 /// - Provides canonical ABI lowering/lifting wrappers over a selected memory.
 final class WasmComponentInstance {
   WasmComponentInstance._({
@@ -19,12 +20,16 @@ final class WasmComponentInstance {
     required this.imports,
     required this.features,
     required this.coreInstances,
-  });
+    required Map<String, ({int instanceIndex, String coreExportName})>
+    coreExportAliases,
+  }) : _coreExportAliases = coreExportAliases;
 
   final WasmComponent component;
   final WasmImports imports;
   final WasmFeatureSet features;
   final List<WasmInstance> coreInstances;
+  final Map<String, ({int instanceIndex, String coreExportName})>
+  _coreExportAliases;
 
   factory WasmComponentInstance.fromBytes(
     Uint8List componentBytes, {
@@ -88,11 +93,31 @@ final class WasmComponentInstance {
         'Component does not define any instantiable core instance.',
       );
     }
+    final aliasMap = <String, ({int instanceIndex, String coreExportName})>{};
+    for (final alias in component.coreExportAliases) {
+      final instanceIndex = alias.instanceIndex;
+      if (instanceIndex < 0 || instanceIndex >= coreInstances.length) {
+        throw FormatException(
+          'Component export alias `${alias.componentExportName}` references '
+          'invalid core instance index $instanceIndex '
+          '(count=${coreInstances.length}).',
+        );
+      }
+      aliasMap[alias.componentExportName] = (
+        instanceIndex: instanceIndex,
+        coreExportName: alias.coreExportName,
+      );
+    }
     return WasmComponentInstance._(
       component: component,
       imports: imports,
       features: features,
       coreInstances: List<WasmInstance>.unmodifiable(coreInstances),
+      coreExportAliases:
+          Map<
+            String,
+            ({int instanceIndex, String coreExportName})
+          >.unmodifiable(aliasMap),
     );
   }
 
@@ -115,6 +140,40 @@ final class WasmComponentInstance {
     int moduleIndex = 0,
   }) {
     return coreInstance(moduleIndex).invokeAsync(exportName, args);
+  }
+
+  Object? invokeComponentExport(
+    String exportName, {
+    List<Object?> args = const [],
+  }) {
+    final binding = _coreExportAliases[exportName];
+    if (binding == null) {
+      throw ArgumentError.value(
+        exportName,
+        'exportName',
+        'Component export alias not found',
+      );
+    }
+    return coreInstance(
+      binding.instanceIndex,
+    ).invoke(binding.coreExportName, args);
+  }
+
+  Future<Object?> invokeComponentExportAsync(
+    String exportName, {
+    List<Object?> args = const [],
+  }) {
+    final binding = _coreExportAliases[exportName];
+    if (binding == null) {
+      throw ArgumentError.value(
+        exportName,
+        'exportName',
+        'Component export alias not found',
+      );
+    }
+    return coreInstance(
+      binding.instanceIndex,
+    ).invokeAsync(binding.coreExportName, args);
   }
 
   List<Object?> invokeCanonical({

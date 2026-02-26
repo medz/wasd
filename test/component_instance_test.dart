@@ -52,6 +52,28 @@ void main() {
       expect(() => instance.invokeCore('one'), throwsA(isA<ArgumentError>()));
     });
 
+    test('invokes component export aliases from section 0x03', () async {
+      final componentBytes = _componentWithCoreModules(
+        <Uint8List>[_coreModuleConstI32(name: 'one', value: 9)],
+        instantiateModuleIndices: const [0],
+        exportAliases: const [
+          _ComponentAliasSpec(
+            instanceIndex: 0,
+            coreExportName: 'one',
+            componentExportName: 'apiOne',
+          ),
+        ],
+      );
+
+      final instance = WasmComponentInstance.fromBytes(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
+      expect(instance.invokeComponentExport('apiOne'), 9);
+      expect(await instance.invokeComponentExportAsync('apiOne'), 9);
+    });
+
     test('bridges canonical ABI through core export calls', () {
       final componentBytes = _componentWithCoreModules(<Uint8List>[
         _coreModuleEchoUtf8PointerLength(name: 'echo'),
@@ -103,6 +125,7 @@ void main() {
 Uint8List _componentWithCoreModules(
   List<Uint8List> modules, {
   List<int>? instantiateModuleIndices,
+  List<_ComponentAliasSpec>? exportAliases,
 }) {
   final bytes = <int>[0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00];
   for (final module in modules) {
@@ -124,7 +147,33 @@ Uint8List _componentWithCoreModules(
       ..addAll(_u32Leb(payload.length))
       ..addAll(payload);
   }
+  final aliases = exportAliases;
+  if (aliases != null && aliases.isNotEmpty) {
+    final payload = <int>[..._u32Leb(aliases.length)];
+    for (final alias in aliases) {
+      payload
+        ..addAll(_u32Leb(alias.instanceIndex))
+        ..addAll(_name(alias.coreExportName))
+        ..addAll(_name(alias.componentExportName));
+    }
+    bytes
+      ..add(0x03)
+      ..addAll(_u32Leb(payload.length))
+      ..addAll(payload);
+  }
   return Uint8List.fromList(bytes);
+}
+
+final class _ComponentAliasSpec {
+  const _ComponentAliasSpec({
+    required this.instanceIndex,
+    required this.coreExportName,
+    required this.componentExportName,
+  });
+
+  final int instanceIndex;
+  final String coreExportName;
+  final String componentExportName;
 }
 
 Uint8List _coreModuleConstI32({required String name, required int value}) {
@@ -242,3 +291,8 @@ List<int> _u32Leb(int value) {
   } while (remaining != 0);
   return out;
 }
+
+List<int> _name(String value) => <int>[
+  ..._u32Leb(value.length),
+  ...value.codeUnits,
+];
