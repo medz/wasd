@@ -1583,6 +1583,77 @@ void main() {
     });
 
     test(
+      'supports global and select opcodes in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [0],
+          globals: [
+            _GlobalSpec(
+              valueType: 0x7f,
+              mutable: true,
+              initExpr: [..._i32Const(0), Opcodes.end],
+            ),
+          ],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                ..._globalSet(0),
+
+                ..._i32Const(100),
+                ..._i32Const(7),
+                ..._globalGet(0),
+                ..._i32Const(42),
+                Opcodes.i32Eq,
+                Opcodes.select,
+
+                ..._i32Const(30),
+                ..._i32Const(5),
+                ..._globalGet(0),
+                ..._i32Const(42),
+                Opcodes.i32Eq,
+                Opcodes.selectT,
+                ..._u32Leb(1),
+                0x7f,
+                Opcodes.i32Add,
+
+                ..._globalGet(0),
+                Opcodes.i32Add,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'wrapGlobalSelect',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('wrapGlobalSelect', [41]), 172);
+      },
+    );
+
+    test(
       'reports explicit boundary for unsupported async call chains',
       () async {
         final wasm = _buildModule(

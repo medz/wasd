@@ -832,8 +832,43 @@ final class WasmInstance {
           stack.add(cast);
           pc++;
 
+        case Opcodes.globalGet:
+          final index = instruction.immediate!;
+          if (index < 0 || index >= globals.length) {
+            throw RangeError('global.get index out of range: $index');
+          }
+          stack.add(globals[index].value);
+          pc++;
+
+        case Opcodes.globalSet:
+          final index = instruction.immediate!;
+          if (index < 0 || index >= globals.length) {
+            throw RangeError('global.set index out of range: $index');
+          }
+          final global = globals[index];
+          if (!global.mutable) {
+            throw StateError('Cannot mutate immutable global $index.');
+          }
+          final value = _popValue(stack, 'global.set').castTo(global.valueType);
+          global.setValue(value);
+          pc++;
+
         case Opcodes.drop:
           _popValue(stack, 'drop');
+          pc++;
+
+        case Opcodes.select:
+        case Opcodes.selectT:
+          final condition = _popValue(
+            stack,
+            'select condition',
+          ).castTo(WasmValueType.i32).asI32();
+          final falseValue = _popValue(stack, 'select false');
+          final trueValue = _popValue(stack, 'select true');
+          if (falseValue.type != trueValue.type) {
+            throw StateError('select operands must have the same value type.');
+          }
+          stack.add(condition != 0 ? trueValue : falseValue);
           pc++;
 
         case Opcodes.i32Const:
