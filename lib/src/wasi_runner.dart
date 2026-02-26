@@ -72,6 +72,16 @@ final class WasiRunner {
         extra.globals,
         label: 'global import',
       ),
+      globalTypes: _mergeMap(
+        wasi.globalTypes,
+        extra.globalTypes,
+        label: 'global type import',
+      ),
+      globalBindings: _mergeMap(
+        wasi.globalBindings,
+        extra.globalBindings,
+        label: 'global binding import',
+      ),
     );
   }
 

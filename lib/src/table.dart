@@ -6,17 +6,18 @@ final class WasmTable {
     required this.min,
     this.max,
     this.isTable64 = false,
-  })
-    : _entries = List<int?>.filled(
-        _validatedMin(min, max),
-        null,
-        growable: true,
-      );
+    this.refTypeSignature,
+  }) : _entries = List<int?>.filled(
+         _validatedMin(min, max),
+         null,
+         growable: true,
+       );
 
   final WasmRefType refType;
   final int min;
   final int? max;
   final bool isTable64;
+  final String? refTypeSignature;
   final List<int?> _entries;
 
   int get length => _entries.length;

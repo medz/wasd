@@ -1,7 +1,7 @@
 # WASM Proposal Failure Board
 
-- Started at (UTC): `2026-02-25T14:06:48.484Z`
-- Ended at (UTC): `2026-02-25T14:06:48.542Z`
+- Started at (UTC): `2026-02-26T11:19:01.686Z`
+- Ended at (UTC): `2026-02-26T11:19:01.765Z`
 - Suite: `proposal`
 - Testsuite dir: `/Users/seven/workspace/wasd/third_party/wasm-spec-tests`
 - Testsuite revision: `c337f0d`
@@ -13,9 +13,9 @@
 - Passed files: 23
 - Failed files: 0
 - Commands seen: 1684
-- Commands passed: 1639
+- Commands passed: 1642
 - Commands failed: 0
-- Commands skipped: 45
+- Commands skipped: 42
 
 ## Groups
 
