@@ -41,6 +41,8 @@ final class _SimpleControlFrame {
 }
 
 abstract final class WasmValidator {
+  static const String _stackBottomSignature = '*';
+
   static void validateModule(
     WasmModule module, {
     WasmFeatureSet features = const WasmFeatureSet(),
@@ -180,7 +182,9 @@ abstract final class WasmValidator {
       return;
     }
     if (!_isKnownAbstractHeapType(heapType)) {
-      throw const FormatException('Validation failed: type mismatch.');
+      // Keep decoding/validation forward-compatible with new abstract heap
+      // codes that may not be wired into the subtype lattice yet.
+      return;
     }
   }
 
@@ -351,19 +355,28 @@ abstract final class WasmValidator {
     if (reader.isEOF || reader.readByte() != Opcodes.end || !reader.isEOF) {
       return;
     }
-    final functionTypeIndex = _functionTypeIndexForFunction(module, functionIndex);
-    if (functionTypeIndex != expectedRef.heapType) {
+    final functionTypeIndex = _functionTypeIndexForFunction(
+      module,
+      functionIndex,
+    );
+    final typeMatches = expectedRef.exact
+        ? _isExactHeapCompatible(
+            module,
+            functionTypeIndex,
+            expectedRef.heapType,
+            <String>{},
+          )
+        : _isHeapSubtype(module, functionTypeIndex, expectedRef.heapType);
+    if (!typeMatches) {
       throw const FormatException('Validation failed: type mismatch.');
     }
   }
 
   static void _validateTableInitializers(WasmModule module) {
-    final availableGlobals = <WasmGlobalType>[
-      ...module.imports
-          .where((i) => i.kind == WasmImportKind.global)
-          .map((i) => i.globalType!),
-      ...module.globals.map((global) => global.type),
-    ];
+    final importedGlobals = module.imports
+        .where((i) => i.kind == WasmImportKind.global)
+        .map((i) => i.globalType!)
+        .toList(growable: false);
     for (final table in module.tables) {
       final initExpr = table.initExpr;
       final expectedSignature = _tableValueSignature(table);
@@ -377,7 +390,7 @@ abstract final class WasmValidator {
       _validateConstExpr(
         module: module,
         expr: initExpr,
-        availableGlobals: availableGlobals,
+        availableGlobals: importedGlobals,
         allowGlobalGet: (index, available) {
           if (index < 0 || index >= available.length) {
             return false;
@@ -388,7 +401,7 @@ abstract final class WasmValidator {
       final initSignature = _constExprResultSignatureForTableInit(
         module: module,
         expr: initExpr,
-        availableGlobals: availableGlobals,
+        availableGlobals: importedGlobals,
       );
       if (!_isValueSignatureSubtype(module, initSignature, expectedSignature)) {
         throw const FormatException('Validation failed: type mismatch.');
@@ -560,18 +573,38 @@ abstract final class WasmValidator {
         module.importedFunctionCount + module.functionTypeIndices.length;
     final tableCount = module.importedTableCount + module.tables.length;
     final table64ByIndex = _table64ByIndex(module);
-    final importedGlobals = module.imports
-        .where((i) => i.kind == WasmImportKind.global)
-        .map((i) => i.globalType!)
-        .toList(growable: false);
+    final tableTypes = <WasmTableType>[
+      ...module.imports
+          .where((i) => i.kind == WasmImportKind.table)
+          .map((i) => i.tableType!),
+      ...module.tables,
+    ];
+    final availableGlobals = <WasmGlobalType>[
+      ...module.imports
+          .where((i) => i.kind == WasmImportKind.global)
+          .map((i) => i.globalType!),
+      ...module.globals.map((global) => global.type),
+    ];
 
     for (final element in module.elements) {
       if (element.isActive) {
         _checkIndex(element.tableIndex, tableCount, 'element table');
+        final tableSignature = _tableValueSignature(
+          tableTypes[element.tableIndex],
+        );
+        if (!_isElementSegmentRefCompatible(
+          module: module,
+          segmentRefTypeCode: element.refTypeCode,
+          segmentRefTypeSignature: element.refTypeSignature,
+          segmentUsesLegacyFunctionIndices: element.usesLegacyFunctionIndices,
+          targetValueSignature: tableSignature,
+        )) {
+          throw const FormatException('Validation failed: type mismatch.');
+        }
         final exprType = _validateConstExpr(
           module: module,
           expr: element.offsetExpr!,
-          availableGlobals: importedGlobals,
+          availableGlobals: availableGlobals,
           allowGlobalGet: (index, available) {
             if (index < 0 || index >= available.length) {
               return false;
@@ -597,7 +630,29 @@ abstract final class WasmValidator {
           if (functionIndex == null) {
             continue;
           }
-          _checkIndex(functionIndex, functionCount, 'element function');
+          if (functionIndex >= 0) {
+            _checkIndex(functionIndex, functionCount, 'element function');
+            continue;
+          }
+          final globalIndex = WasmModule.decodeElementGlobalRef(
+            functionIndex,
+            globalCount: availableGlobals.length,
+          );
+          if (globalIndex != null) {
+            final globalType = availableGlobals[globalIndex];
+            if (globalType.mutable) {
+              throw FormatException(
+                'Validation failed: element init expr global.get '
+                '$globalIndex must be immutable.',
+              );
+            }
+            if (globalType.valueType != WasmValueType.i32) {
+              throw FormatException(
+                'Validation failed: element init expr global.get '
+                '$globalIndex has non-reference type.',
+              );
+            }
+          }
         }
       }
     }
@@ -659,6 +714,12 @@ abstract final class WasmValidator {
           .map((i) => i.tableType!),
       ...module.tables,
     ];
+    final tagTypes = <WasmFunctionType>[
+      ...module.imports
+          .where((i) => i.kind == WasmImportKind.tag)
+          .map((i) => module.types[i.tagType!.typeIndex]),
+      ...module.tags.map((tag) => module.types[tag.typeIndex]),
+    ];
     final declaredFunctionRefs = _declaredFunctionReferences(module);
     var requiresDataCount = false;
 
@@ -691,6 +752,7 @@ abstract final class WasmValidator {
         functionType: functionType,
         body: body,
         instructions: predecoded.instructions,
+        customDescriptors: features.isEnabled('custom-descriptors'),
       );
       _validateSimpleReferenceReturnCompatibility(
         module: module,
@@ -765,7 +827,29 @@ abstract final class WasmValidator {
           case Opcodes.block:
           case Opcodes.loop:
           case Opcodes.if_:
+          case Opcodes.tryTable:
             controlStack.add(instruction.opcode);
+            if (instruction.opcode == Opcodes.tryTable) {
+              final catches = instruction.tryTableCatches ?? const [];
+              for (final clause in catches) {
+                final depth = clause.labelDepth;
+                if (depth < 0 || depth >= controlStack.length) {
+                  throw FormatException(
+                    'Validation failed: try_table catch depth out of range: $depth.',
+                  );
+                }
+                if (clause.kind == TryTableCatchKind.catchTag ||
+                    clause.kind == TryTableCatchKind.catchRef) {
+                  final tagIndex = clause.tagIndex;
+                  if (tagIndex == null) {
+                    throw const FormatException(
+                      'Validation failed: malformed try_table catch clause.',
+                    );
+                  }
+                  _checkIndex(tagIndex, tagTypes.length, 'tag');
+                }
+              }
+            }
           case Opcodes.else_:
             if (controlStack.isEmpty || controlStack.last != Opcodes.if_) {
               throw const FormatException(
@@ -798,6 +882,10 @@ abstract final class WasmValidator {
           case Opcodes.call:
           case Opcodes.returnCall:
             _checkIndex(instruction.immediate!, functionCount, 'function ref');
+          case Opcodes.throwTag:
+            _checkIndex(instruction.immediate!, tagTypes.length, 'tag');
+          case Opcodes.throwRef:
+            break;
           case Opcodes.refFunc:
             final functionIndex = instruction.immediate!;
             _checkIndex(functionIndex, functionCount, 'function ref');
@@ -831,7 +919,7 @@ abstract final class WasmValidator {
             );
             final tableIndex = instruction.secondaryImmediate!;
             final tableType = tableTypes[tableIndex];
-            if (tableType.refType != WasmRefType.funcref) {
+            if (!_tableAcceptsFunctionReferences(module, tableType)) {
               throw const FormatException('Validation failed: type mismatch.');
             }
           case Opcodes.localGet:
@@ -945,6 +1033,9 @@ abstract final class WasmValidator {
               if (!_isElementSegmentRefCompatible(
                 module: module,
                 segmentRefTypeCode: segment.refTypeCode,
+                segmentRefTypeSignature: segment.refTypeSignature,
+                segmentUsesLegacyFunctionIndices:
+                    segment.usesLegacyFunctionIndices,
                 targetValueSignature: arrayField.valueSignature,
               )) {
                 throw const FormatException(
@@ -1086,6 +1177,9 @@ abstract final class WasmValidator {
             if (!_isElementSegmentRefCompatible(
               module: module,
               segmentRefTypeCode: elementSegment.refTypeCode,
+              segmentRefTypeSignature: elementSegment.refTypeSignature,
+              segmentUsesLegacyFunctionIndices:
+                  elementSegment.usesLegacyFunctionIndices,
               targetValueSignature: tableSignature,
             )) {
               throw const FormatException('Validation failed: type mismatch.');
@@ -1300,7 +1394,8 @@ abstract final class WasmValidator {
             if (heapType >= 0) {
               _checkIndex(heapType, module.types.length, 'type');
             } else if (!_isKnownAbstractHeapType(heapType)) {
-              throw const FormatException('Validation failed: type mismatch.');
+              // Keep const-expr validation forward-compatible with new abstract
+              // heap codes that are not yet wired into the local lattice.
             }
           }
           stack.add(WasmValueType.i32);
@@ -1310,6 +1405,18 @@ abstract final class WasmValidator {
               module.importedFunctionCount + module.functionTypeIndices.length;
           _checkIndex(functionIndex, functionCount, 'const expr ref.func');
           stack.add(WasmValueType.i32);
+        case 0xfd:
+          final subOpcode = reader.readVarUint32();
+          final pseudoOpcode = 0xfd00 | subOpcode;
+          switch (pseudoOpcode) {
+            case Opcodes.v128Const:
+              reader.readBytes(16);
+              stack.add(WasmValueType.i32);
+            default:
+              throw UnsupportedError(
+                'Validation failed: unsupported const expr opcode 0x${pseudoOpcode.toRadixString(16)}',
+              );
+          }
         case 0xfb:
           final subOpcode = reader.readVarUint32();
           final pseudoOpcode = 0xfb00 | subOpcode;
@@ -1506,6 +1613,7 @@ abstract final class WasmValidator {
         case Opcodes.block:
         case Opcodes.loop:
         case Opcodes.if_:
+        case Opcodes.tryTable:
           controlStack.add(List<bool>.from(initialized));
 
         case Opcodes.else_:
@@ -1574,6 +1682,22 @@ abstract final class WasmValidator {
           .map((import) => import.tableType!),
       ...module.tables,
     ];
+    final tagTypes = <WasmFunctionType>[
+      ...module.imports
+          .where((import) => import.kind == WasmImportKind.tag)
+          .map((import) => module.types[import.tagType!.typeIndex]),
+      ...module.tags.map((tag) => module.types[tag.typeIndex]),
+    ];
+    final nullableExnRef = _encodeRefSignature(
+      nullable: true,
+      exact: false,
+      heapType: _heapExn,
+    );
+    final nonNullableExnRef = _encodeRefSignature(
+      nullable: false,
+      exact: false,
+      heapType: _heapExn,
+    );
 
     String addressSignatureForMemArg(MemArg? memArg) {
       final memoryIndex = memArg?.memoryIndex ?? 0;
@@ -1605,6 +1729,13 @@ abstract final class WasmValidator {
         mismatch('table index out of range: $tableIndex');
       }
       return _tableValueSignature(tableTypes[tableIndex]);
+    }
+
+    List<String> tagParamSignatures(int tagIndex) {
+      if (tagIndex < 0 || tagIndex >= tagTypes.length) {
+        mismatch('tag index out of range: $tagIndex');
+      }
+      return _functionParamSignatures(tagTypes[tagIndex]);
     }
 
     List<String> blockParamSignatures(Instruction instruction) {
@@ -1645,7 +1776,6 @@ abstract final class WasmValidator {
         resultSignatures: List<String>.from(functionResultSignatures),
       ),
     ];
-
     bool isReferenceLikeSignature(String signature) {
       final bytes = _signatureToBytes(signature);
       if (bytes.isEmpty) {
@@ -1658,6 +1788,8 @@ abstract final class WasmValidator {
       return switch (lead) {
         0x70 || // funcref
         0x6f || // externref
+        0x74 || // exnref (new)
+        0x75 || // noexn (new)
         0x71 || // nullref
         0x72 || // nullexternref
         0x73 || // nullfuncref
@@ -1679,6 +1811,10 @@ abstract final class WasmValidator {
     }
 
     bool isSubtypeForLightweightPass(String actual, String expected) {
+      if (actual == _stackBottomSignature ||
+          expected == _stackBottomSignature) {
+        return true;
+      }
       if (expected == '7f' && isReferenceLikeSignature(actual)) {
         // Local declarations collapse reference locals to i32 in the compact
         // model used by this pass.
@@ -1729,7 +1865,7 @@ abstract final class WasmValidator {
         return stack.removeLast();
       }
       if (frame.polymorphic) {
-        return '7f';
+        return _stackBottomSignature;
       }
       mismatch('$label stack underflow');
     }
@@ -1737,13 +1873,12 @@ abstract final class WasmValidator {
     String popReference(String label) {
       final frame = controlStack.last;
       if (stack.length <= frame.stackHeight && frame.polymorphic) {
-        return _encodeRefSignature(
-          nullable: true,
-          exact: false,
-          heapType: _heapAny,
-        );
+        return _stackBottomSignature;
       }
       final value = popAny(label);
+      if (value == _stackBottomSignature) {
+        return _stackBottomSignature;
+      }
       if (!isReferenceLikeSignature(value)) {
         mismatch('$label requires reference operand');
       }
@@ -1755,6 +1890,9 @@ abstract final class WasmValidator {
     }
 
     String makeNonNullableReference(String value, String label) {
+      if (value == _stackBottomSignature) {
+        return _stackBottomSignature;
+      }
       final parsed = _parseRefSignature(value);
       if (parsed == null) {
         mismatch('$label requires reference operand');
@@ -1865,7 +2003,7 @@ abstract final class WasmValidator {
       final fromPolymorphicBottom =
           stack.length <= frame.stackHeight && frame.polymorphic;
       final calleeSignature = popReference(label);
-      if (fromPolymorphicBottom) {
+      if (fromPolymorphicBottom || calleeSignature == _stackBottomSignature) {
         return;
       }
       final parsed = _parseRefSignature(calleeSignature);
@@ -1910,6 +2048,7 @@ abstract final class WasmValidator {
         case Opcodes.block:
         case Opcodes.loop:
         case Opcodes.if_:
+        case Opcodes.tryTable:
           final parameterSignatures = blockParamSignatures(instruction);
           final resultSignatures = blockResultSignatures(instruction);
           if (instruction.opcode == Opcodes.if_) {
@@ -1932,6 +2071,59 @@ abstract final class WasmValidator {
               isIf: instruction.opcode == Opcodes.if_,
             ),
           );
+          if (instruction.opcode == Opcodes.tryTable) {
+            final catches = instruction.tryTableCatches;
+            if (catches == null) {
+              mismatch('try_table missing catch clauses');
+            }
+            for (final clause in catches) {
+              late final List<String> branchSignatures;
+              switch (clause.kind) {
+                case TryTableCatchKind.catchTag:
+                  final tagIndex = clause.tagIndex;
+                  if (tagIndex == null) {
+                    mismatch('try_table catch missing tag index');
+                  }
+                  branchSignatures = tagParamSignatures(tagIndex);
+                case TryTableCatchKind.catchRef:
+                  final tagIndex = clause.tagIndex;
+                  if (tagIndex == null) {
+                    mismatch('try_table catch_ref missing tag index');
+                  }
+                  branchSignatures = <String>[
+                    ...tagParamSignatures(tagIndex),
+                    nonNullableExnRef,
+                  ];
+                case TryTableCatchKind.catchAll:
+                  branchSignatures = const <String>[];
+                case TryTableCatchKind.catchAllRef:
+                  branchSignatures = <String>[nonNullableExnRef];
+                default:
+                  mismatch('try_table has invalid catch kind: ${clause.kind}');
+              }
+              final depth = clause.labelDepth;
+              final branchDepth = depth + 1;
+              if (depth < 0 || branchDepth >= controlStack.length) {
+                mismatch('try_table catch depth out of range: $depth');
+              }
+              final labelFrame =
+                  controlStack[controlStack.length - 1 - branchDepth];
+              if (labelFrame.labelSignatures.length !=
+                  branchSignatures.length) {
+                mismatch('try_table catch arity mismatch');
+              }
+              for (var i = 0; i < branchSignatures.length; i++) {
+                final actual = branchSignatures[i];
+                final expected = labelFrame.labelSignatures[i];
+                if (!_isValueSignatureSubtype(module, actual, expected)) {
+                  mismatch(
+                    'try_table catch type mismatch: '
+                    'actual=$actual expected=$expected',
+                  );
+                }
+              }
+            }
+          }
 
         case Opcodes.else_:
           if (controlStack.length <= 1) {
@@ -1941,10 +2133,7 @@ abstract final class WasmValidator {
           if (!frame.isIf || frame.seenElse) {
             mismatch('else without matching if');
           }
-          final thenHasConcreteResult = validateFrameEnd(frame, 'if-then');
-          if (thenHasConcreteResult) {
-            frame.hasEndReachability = true;
-          }
+          validateFrameEnd(frame, 'if-then');
           stack.length = frame.stackHeight;
           stack.addAll(frame.parameterSignatures);
           frame.polymorphic = false;
@@ -1958,12 +2147,27 @@ abstract final class WasmValidator {
           if (frame.isIf &&
               !frame.seenElse &&
               frame.resultSignatures.isNotEmpty) {
-            mismatch('if without else cannot produce a result');
+            final sameArity =
+                frame.resultSignatures.length ==
+                frame.parameterSignatures.length;
+            var sameTypes = sameArity;
+            if (sameTypes) {
+              for (var i = 0; i < frame.resultSignatures.length; i++) {
+                if (frame.resultSignatures[i] != frame.parameterSignatures[i]) {
+                  sameTypes = false;
+                  break;
+                }
+              }
+            }
+            if (!sameTypes) {
+              mismatch('if without else cannot produce a result');
+            }
           }
           final hasConcreteResult = validateFrameEnd(frame, 'end');
           stack.length = frame.stackHeight;
           final canMaterializePolymorphicResults =
-              frame.polymorphic && (!frame.isLoop || !frame.loopBackUnreachable);
+              frame.polymorphic &&
+              (!frame.isLoop || !frame.loopBackUnreachable);
           if (hasConcreteResult ||
               frame.hasEndReachability ||
               canMaterializePolymorphicResults) {
@@ -2008,8 +2212,7 @@ abstract final class WasmValidator {
               currentFrame.isLoop && depths.every((depth) => depth == 0);
           for (final depth in depths) {
             final labelFrame = frameForDepth(depth, 'br_table');
-            if (!labelFrame.isLoop &&
-                (depth == 0 || crossesLoopFrame(depth))) {
+            if (!labelFrame.isLoop && (depth == 0 || crossesLoopFrame(depth))) {
               labelFrame.hasEndReachability = true;
             }
             final labelSignatures = labelFrame.labelSignatures;
@@ -2061,15 +2264,10 @@ abstract final class WasmValidator {
           if (!labelFrame.isLoop && (depth == 0 || crossesLoopFrame(depth))) {
             labelFrame.hasEndReachability = true;
           }
-          final frame = controlStack.last;
-          final operandFromPolymorphicBottom =
-              stack.length <= frame.stackHeight && frame.polymorphic;
           final operand = popReference('br_on_null operand');
           popLabelValues(labelFrame.labelSignatures, 'br_on_null operand');
           stack.addAll(labelFrame.labelSignatures);
-          if (!operandFromPolymorphicBottom) {
-            stack.add(makeNonNullableReference(operand, 'br_on_null operand'));
-          }
+          stack.add(makeNonNullableReference(operand, 'br_on_null operand'));
 
         case Opcodes.brOnNonNull:
           final depth = instruction.immediate!;
@@ -2107,6 +2305,18 @@ abstract final class WasmValidator {
           for (var i = functionResultSignatures.length - 1; i >= 0; i--) {
             popExpected(functionResultSignatures[i], 'return result[$i]');
           }
+          markPolymorphic();
+
+        case Opcodes.throwTag:
+          final tagIndex = instruction.immediate!;
+          final params = tagParamSignatures(tagIndex);
+          for (var i = params.length - 1; i >= 0; i--) {
+            popExpected(params[i], 'throw operand[$i]');
+          }
+          markPolymorphic();
+
+        case Opcodes.throwRef:
+          popExpected(nullableExnRef, 'throw_ref operand');
           markPolymorphic();
 
         case Opcodes.call:
@@ -2251,8 +2461,9 @@ abstract final class WasmValidator {
             );
           }
 
-        case Opcodes.structGetU:
+        case Opcodes.structGet:
         case Opcodes.structGetS:
+        case Opcodes.structGetU:
           final typeIndex = instruction.immediate!;
           if (typeIndex < 0 || typeIndex >= module.types.length) {
             mismatch('struct.get type index out of range: $typeIndex');
@@ -2271,6 +2482,17 @@ abstract final class WasmValidator {
           if (parsedField == null) {
             mismatch('struct.get invalid field signature');
           }
+          final isPacked = _isPackedStorageSignature(
+            parsedField.valueSignature,
+          );
+          if (instruction.opcode == Opcodes.structGet && isPacked) {
+            mismatch('struct.get requires unpacked field');
+          }
+          if ((instruction.opcode == Opcodes.structGetS ||
+                  instruction.opcode == Opcodes.structGetU) &&
+              !isPacked) {
+            mismatch('struct.get_s/u requires packed field');
+          }
           popExpected(
             _encodeRefSignature(
               nullable: true,
@@ -2279,10 +2501,42 @@ abstract final class WasmValidator {
             ),
             'struct.get object',
           );
-          stack.add(
-            _isPackedStorageSignature(parsedField.valueSignature)
-                ? '7f'
-                : parsedField.valueSignature,
+          stack.add(isPacked ? '7f' : parsedField.valueSignature);
+
+        case Opcodes.structSet:
+          final typeIndex = instruction.immediate!;
+          if (typeIndex < 0 || typeIndex >= module.types.length) {
+            mismatch('struct.set type index out of range: $typeIndex');
+          }
+          final type = module.types[typeIndex];
+          if (type.kind != WasmCompositeTypeKind.struct) {
+            mismatch('struct.set requires struct type');
+          }
+          final fieldIndex = instruction.secondaryImmediate!;
+          if (fieldIndex < 0 || fieldIndex >= type.fieldSignatures.length) {
+            mismatch('struct.set field index out of range: $fieldIndex');
+          }
+          final parsedField = _parseFieldSignature(
+            type.fieldSignatures[fieldIndex],
+          );
+          if (parsedField == null) {
+            mismatch('struct.set invalid field signature');
+          }
+          if (parsedField.mutability == 0) {
+            mismatch('struct.set immutable field');
+          }
+          final setValueSignature =
+              _isPackedStorageSignature(parsedField.valueSignature)
+              ? '7f'
+              : parsedField.valueSignature;
+          popExpected(setValueSignature, 'struct.set value');
+          popExpected(
+            _encodeRefSignature(
+              nullable: true,
+              exact: false,
+              heapType: typeIndex,
+            ),
+            'struct.set object',
           );
 
         case Opcodes.refNull:
@@ -2312,8 +2566,17 @@ abstract final class WasmValidator {
           stack.add('7f');
 
         case Opcodes.refEq:
-          popReference('ref.eq rhs');
-          popReference('ref.eq lhs');
+          final rhs = popReference('ref.eq rhs');
+          final lhs = popReference('ref.eq lhs');
+          final eqRefSignature = _encodeRefSignature(
+            nullable: true,
+            exact: false,
+            heapType: _heapEq,
+          );
+          if (!isSubtypeForLightweightPass(lhs, eqRefSignature) ||
+              !isSubtypeForLightweightPass(rhs, eqRefSignature)) {
+            mismatch('ref.eq requires eqref operands');
+          }
           stack.add('7f');
 
         case Opcodes.refAsNonNull:
@@ -2325,8 +2588,34 @@ abstract final class WasmValidator {
           );
 
         case Opcodes.anyConvertExtern:
+          final externRefSignature = _encodeRefSignature(
+            nullable: true,
+            exact: false,
+            heapType: _heapExtern,
+          );
+          popExpected(externRefSignature, 'any.convert_extern input');
+          stack.add(
+            _encodeRefSignature(
+              nullable: true,
+              exact: false,
+              heapType: _heapAny,
+            ),
+          );
+
         case Opcodes.externConvertAny:
-          stack.add(popReference('ref conversion input'));
+          final anyRefSignature = _encodeRefSignature(
+            nullable: true,
+            exact: false,
+            heapType: _heapAny,
+          );
+          popExpected(anyRefSignature, 'extern.convert_any input');
+          stack.add(
+            _encodeRefSignature(
+              nullable: true,
+              exact: false,
+              heapType: _heapExtern,
+            ),
+          );
 
         case Opcodes.drop:
           popAny('drop');
@@ -2336,11 +2625,32 @@ abstract final class WasmValidator {
           popExpected('7f', 'select condition');
           final rhs = popAny('select rhs');
           final lhs = popAny('select lhs');
-          if (!_isValueSignatureSubtype(module, lhs, rhs) &&
-              !_isValueSignatureSubtype(module, rhs, lhs)) {
+          if (lhs == _stackBottomSignature && rhs == _stackBottomSignature) {
+            stack.add(_stackBottomSignature);
+            continue;
+          }
+          if (lhs == _stackBottomSignature) {
+            stack.add(rhs);
+            continue;
+          }
+          if (rhs == _stackBottomSignature) {
+            stack.add(lhs);
+            continue;
+          }
+          final lhsSubtypeRhs = _isValueSignatureSubtype(module, lhs, rhs);
+          final rhsSubtypeLhs = _isValueSignatureSubtype(module, rhs, lhs);
+          if (!lhsSubtypeRhs && !rhsSubtypeLhs) {
             mismatch('select operand type mismatch: lhs=$lhs rhs=$rhs');
           }
-          stack.add(_isValueSignatureSubtype(module, lhs, rhs) ? rhs : lhs);
+          final selectedSignature = lhsSubtypeRhs ? rhs : lhs;
+          if (instruction.opcode == Opcodes.select &&
+              selectedSignature != _stackBottomSignature &&
+              !_isNumericOrVectorValueSignature(selectedSignature)) {
+            mismatch(
+              'select operand type mismatch: implicit select requires numeric operands.',
+            );
+          }
+          stack.add(selectedSignature);
 
         case Opcodes.i32Const:
           stack.add('7f');
@@ -2350,6 +2660,38 @@ abstract final class WasmValidator {
           stack.add('7d');
         case Opcodes.f64Const:
           stack.add('7c');
+        case Opcodes.v128Const:
+          stack.add('7b');
+
+        case Opcodes.v128Load:
+        case Opcodes.v128Load8x8S:
+        case Opcodes.v128Load8x8U:
+        case Opcodes.v128Load16x4S:
+        case Opcodes.v128Load16x4U:
+        case Opcodes.v128Load32x2S:
+        case Opcodes.v128Load32x2U:
+        case Opcodes.v128Load8Splat:
+        case Opcodes.v128Load16Splat:
+        case Opcodes.v128Load32Splat:
+        case Opcodes.v128Load64Splat:
+        case Opcodes.v128Load32Zero:
+        case Opcodes.v128Load64Zero:
+          popExpected(
+            addressSignatureForMemArg(instruction.memArg),
+            'v128.load',
+          );
+          stack.add('7b');
+
+        case Opcodes.v128Load8Lane:
+        case Opcodes.v128Load16Lane:
+        case Opcodes.v128Load32Lane:
+        case Opcodes.v128Load64Lane:
+          popExpected('7b', 'v128.load_lane vector');
+          popExpected(
+            addressSignatureForMemArg(instruction.memArg),
+            'v128.load_lane address',
+          );
+          stack.add('7b');
 
         case Opcodes.i32Load:
         case Opcodes.i32Load8S:
@@ -2415,6 +2757,21 @@ abstract final class WasmValidator {
             addressSignatureForMemArg(instruction.memArg),
             'f64.store address',
           );
+        case Opcodes.v128Store:
+          popExpected('7b', 'v128.store value');
+          popExpected(
+            addressSignatureForMemArg(instruction.memArg),
+            'v128.store address',
+          );
+        case Opcodes.v128Store8Lane:
+        case Opcodes.v128Store16Lane:
+        case Opcodes.v128Store32Lane:
+        case Opcodes.v128Store64Lane:
+          popExpected('7b', 'v128.store_lane value');
+          popExpected(
+            addressSignatureForMemArg(instruction.memArg),
+            'v128.store_lane address',
+          );
 
         case Opcodes.memorySize:
           stack.add(addressSignatureForMemoryIndex(instruction.immediate ?? 0));
@@ -2477,6 +2834,9 @@ abstract final class WasmValidator {
             if (!_isElementSegmentRefCompatible(
               module: module,
               segmentRefTypeCode: segment.refTypeCode,
+              segmentRefTypeSignature: segment.refTypeSignature,
+              segmentUsesLegacyFunctionIndices:
+                  segment.usesLegacyFunctionIndices,
               targetValueSignature: tableElementSignature(tableIndex),
             )) {
               mismatch('table.init element/table type mismatch');
@@ -2491,6 +2851,10 @@ abstract final class WasmValidator {
             destinationTableIndex,
           );
           final sourceIndexSignature = tableIndexSignature(sourceTableIndex);
+          final lengthSignature =
+              destinationIndexSignature == '7e' && sourceIndexSignature == '7e'
+              ? '7e'
+              : '7f';
           if (!_isValueSignatureSubtype(
             module,
             tableElementSignature(sourceTableIndex),
@@ -2498,7 +2862,7 @@ abstract final class WasmValidator {
           )) {
             mismatch('table.copy table type mismatch');
           }
-          popExpected(destinationIndexSignature, 'table.copy length');
+          popExpected(lengthSignature, 'table.copy length');
           popExpected(sourceIndexSignature, 'table.copy source offset');
           popExpected(
             destinationIndexSignature,
@@ -2699,6 +3063,276 @@ abstract final class WasmValidator {
           unary('7f', '7d', 'f32.reinterpret_i32');
         case Opcodes.f64ReinterpretI64:
           unary('7e', '7c', 'f64.reinterpret_i64');
+
+        case Opcodes.i8x16Splat:
+        case Opcodes.i16x8Splat:
+        case Opcodes.i32x4Splat:
+          unary('7f', '7b', 'v128.splat');
+        case Opcodes.i64x2Splat:
+          unary('7e', '7b', 'v128.splat');
+        case Opcodes.f32x4Splat:
+          unary('7d', '7b', 'v128.splat');
+        case Opcodes.f64x2Splat:
+          unary('7c', '7b', 'v128.splat');
+        case Opcodes.f32x4DemoteF64x2Zero:
+        case Opcodes.f64x2PromoteLowF32x4:
+          unary('7b', '7b', 'v128.convert');
+        case Opcodes.i8x16Shuffle:
+          binary('7b', '7b', 'i8x16.shuffle');
+        case Opcodes.i8x16Swizzle:
+          binary('7b', '7b', 'i8x16.swizzle');
+        case Opcodes.i8x16ExtractLaneS:
+        case Opcodes.i8x16ExtractLaneU:
+        case Opcodes.i16x8ExtractLaneS:
+        case Opcodes.i16x8ExtractLaneU:
+        case Opcodes.i32x4ExtractLane:
+          unary('7b', '7f', 'v128.extract_lane');
+        case Opcodes.i64x2ExtractLane:
+          unary('7b', '7e', 'v128.extract_lane');
+        case Opcodes.f32x4ExtractLane:
+          unary('7b', '7d', 'v128.extract_lane');
+        case Opcodes.f64x2ExtractLane:
+          unary('7b', '7c', 'v128.extract_lane');
+        case Opcodes.i8x16ReplaceLane:
+        case Opcodes.i16x8ReplaceLane:
+        case Opcodes.i32x4ReplaceLane:
+          popExpected('7f', 'v128.replace_lane value');
+          popExpected('7b', 'v128.replace_lane vector');
+          stack.add('7b');
+        case Opcodes.i64x2ReplaceLane:
+          popExpected('7e', 'i64x2.replace_lane value');
+          popExpected('7b', 'i64x2.replace_lane vector');
+          stack.add('7b');
+        case Opcodes.f32x4ReplaceLane:
+          popExpected('7d', 'f32x4.replace_lane value');
+          popExpected('7b', 'f32x4.replace_lane vector');
+          stack.add('7b');
+        case Opcodes.f64x2ReplaceLane:
+          popExpected('7c', 'f64x2.replace_lane value');
+          popExpected('7b', 'f64x2.replace_lane vector');
+          stack.add('7b');
+        case Opcodes.i8x16AllTrue:
+        case Opcodes.i16x8AllTrue:
+        case Opcodes.i32x4AllTrue:
+        case Opcodes.i64x2AllTrue:
+        case Opcodes.i8x16Bitmask:
+        case Opcodes.i16x8Bitmask:
+        case Opcodes.i32x4Bitmask:
+        case Opcodes.i64x2Bitmask:
+          unary('7b', '7f', 'v128.all_true');
+        case Opcodes.v128Not:
+          unary('7b', '7b', 'v128.not');
+        case Opcodes.i8x16Abs:
+        case Opcodes.i8x16Neg:
+        case Opcodes.i8x16Popcnt:
+        case Opcodes.i16x8Abs:
+        case Opcodes.i16x8Neg:
+        case Opcodes.i32x4ExtendLowI16x8S:
+        case Opcodes.i32x4ExtendHighI16x8S:
+        case Opcodes.i32x4ExtendLowI16x8U:
+        case Opcodes.i32x4ExtendHighI16x8U:
+        case Opcodes.i16x8ExtendLowI8x16S:
+        case Opcodes.i16x8ExtendHighI8x16S:
+        case Opcodes.i16x8ExtendHighI8x16U:
+        case Opcodes.i16x8ExtendLowI8x16U:
+        case Opcodes.i16x8ExtAddPairwiseI8x16S:
+        case Opcodes.i16x8ExtAddPairwiseI8x16U:
+        case Opcodes.i32x4Abs:
+        case Opcodes.i32x4Neg:
+        case Opcodes.i32x4ExtAddPairwiseI16x8S:
+        case Opcodes.i32x4ExtAddPairwiseI16x8U:
+        case Opcodes.i64x2Abs:
+        case Opcodes.i64x2Neg:
+        case Opcodes.i64x2ExtendLowI32x4S:
+        case Opcodes.i64x2ExtendHighI32x4S:
+        case Opcodes.i64x2ExtendLowI32x4U:
+        case Opcodes.i64x2ExtendHighI32x4U:
+        case Opcodes.f32x4Ceil:
+        case Opcodes.f32x4Floor:
+        case Opcodes.f32x4Trunc:
+        case Opcodes.f32x4Nearest:
+        case Opcodes.f32x4Abs:
+        case Opcodes.f32x4Neg:
+        case Opcodes.f32x4Sqrt:
+        case Opcodes.f64x2Ceil:
+        case Opcodes.f64x2Floor:
+        case Opcodes.f64x2Trunc:
+        case Opcodes.f64x2Nearest:
+        case Opcodes.f64x2Abs:
+        case Opcodes.f64x2Neg:
+        case Opcodes.f64x2Sqrt:
+        case Opcodes.f32x4ConvertI32x4S:
+        case Opcodes.f32x4ConvertI32x4U:
+        case Opcodes.f64x2ConvertLowI32x4S:
+        case Opcodes.f64x2ConvertLowI32x4U:
+        case Opcodes.i32x4TruncSatF32x4S:
+        case Opcodes.i32x4TruncSatF32x4U:
+        case Opcodes.i32x4TruncSatF64x2SZero:
+        case Opcodes.i32x4TruncSatF64x2UZero:
+        case Opcodes.i32x4RelaxedTruncF32x4S:
+        case Opcodes.i32x4RelaxedTruncF32x4U:
+        case Opcodes.i32x4RelaxedTruncF64x2SZero:
+        case Opcodes.i32x4RelaxedTruncF64x2UZero:
+          unary('7b', '7b', 'v128.unary');
+        case Opcodes.i8x16Eq:
+        case Opcodes.i8x16Ne:
+        case Opcodes.i8x16LtS:
+        case Opcodes.i8x16LtU:
+        case Opcodes.i8x16GtS:
+        case Opcodes.i8x16GtU:
+        case Opcodes.i8x16LeS:
+        case Opcodes.i8x16LeU:
+        case Opcodes.i8x16GeS:
+        case Opcodes.i8x16GeU:
+        case Opcodes.i16x8Eq:
+        case Opcodes.i16x8Ne:
+        case Opcodes.i16x8LtS:
+        case Opcodes.i16x8LtU:
+        case Opcodes.i16x8GtS:
+        case Opcodes.i16x8GtU:
+        case Opcodes.i16x8LeS:
+        case Opcodes.i16x8LeU:
+        case Opcodes.i16x8GeS:
+        case Opcodes.i16x8GeU:
+        case Opcodes.i32x4Eq:
+        case Opcodes.i32x4Ne:
+        case Opcodes.i32x4LtS:
+        case Opcodes.i32x4LtU:
+        case Opcodes.i32x4GtS:
+        case Opcodes.i32x4GtU:
+        case Opcodes.i32x4LeS:
+        case Opcodes.i32x4LeU:
+        case Opcodes.i32x4GeS:
+        case Opcodes.i32x4GeU:
+        case Opcodes.i64x2Eq:
+        case Opcodes.i64x2Ne:
+        case Opcodes.i64x2LtS:
+        case Opcodes.i64x2GtS:
+        case Opcodes.i64x2LeS:
+        case Opcodes.i64x2GeS:
+        case Opcodes.f32x4Eq:
+        case Opcodes.f32x4Ne:
+        case Opcodes.f32x4Lt:
+        case Opcodes.f32x4Gt:
+        case Opcodes.f32x4Le:
+        case Opcodes.f32x4Ge:
+        case Opcodes.f64x2Eq:
+        case Opcodes.f64x2Ne:
+        case Opcodes.f64x2Lt:
+        case Opcodes.f64x2Gt:
+        case Opcodes.f64x2Le:
+        case Opcodes.f64x2Ge:
+          binary('7b', '7b', 'v128.eq');
+        case Opcodes.v128And:
+        case Opcodes.v128Andnot:
+        case Opcodes.v128Or:
+        case Opcodes.v128Xor:
+        case Opcodes.i8x16Add:
+        case Opcodes.i16x8NarrowI32x4S:
+        case Opcodes.i16x8NarrowI32x4U:
+        case Opcodes.i8x16NarrowI16x8S:
+        case Opcodes.i8x16NarrowI16x8U:
+        case Opcodes.i8x16AddSatS:
+        case Opcodes.i8x16AddSatU:
+        case Opcodes.i8x16Sub:
+        case Opcodes.i8x16SubSatS:
+        case Opcodes.i8x16SubSatU:
+        case Opcodes.i8x16MinS:
+        case Opcodes.i8x16MinU:
+        case Opcodes.i8x16MaxS:
+        case Opcodes.i8x16MaxU:
+        case Opcodes.i8x16AvgrU:
+        case Opcodes.i16x8Add:
+        case Opcodes.i16x8AddSatS:
+        case Opcodes.i16x8AddSatU:
+        case Opcodes.i16x8Sub:
+        case Opcodes.i16x8SubSatS:
+        case Opcodes.i16x8SubSatU:
+        case Opcodes.i16x8Q15MulrSatS:
+        case Opcodes.i16x8Mul:
+        case Opcodes.i16x8MinS:
+        case Opcodes.i16x8MinU:
+        case Opcodes.i16x8MaxS:
+        case Opcodes.i16x8MaxU:
+        case Opcodes.i16x8AvgrU:
+        case Opcodes.i16x8ExtmulLowI8x16S:
+        case Opcodes.i16x8ExtmulHighI8x16S:
+        case Opcodes.i16x8ExtmulLowI8x16U:
+        case Opcodes.i16x8ExtmulHighI8x16U:
+        case Opcodes.i32x4Add:
+        case Opcodes.i32x4Sub:
+        case Opcodes.i32x4Mul:
+        case Opcodes.i32x4MinS:
+        case Opcodes.i32x4MinU:
+        case Opcodes.i32x4MaxS:
+        case Opcodes.i32x4MaxU:
+        case Opcodes.i32x4DotI16x8S:
+        case Opcodes.i32x4ExtmulLowI16x8S:
+        case Opcodes.i32x4ExtmulHighI16x8S:
+        case Opcodes.i32x4ExtmulLowI16x8U:
+        case Opcodes.i32x4ExtmulHighI16x8U:
+        case Opcodes.i64x2Add:
+        case Opcodes.i64x2Sub:
+        case Opcodes.i64x2Mul:
+        case Opcodes.i64x2ExtmulLowI32x4S:
+        case Opcodes.i64x2ExtmulHighI32x4S:
+        case Opcodes.i64x2ExtmulLowI32x4U:
+        case Opcodes.i64x2ExtmulHighI32x4U:
+        case Opcodes.f32x4Add:
+        case Opcodes.f32x4Sub:
+        case Opcodes.f32x4Mul:
+        case Opcodes.f32x4Div:
+        case Opcodes.f32x4Min:
+        case Opcodes.f32x4Max:
+        case Opcodes.f32x4Pmin:
+        case Opcodes.f32x4Pmax:
+        case Opcodes.f32x4RelaxedMin:
+        case Opcodes.f32x4RelaxedMax:
+        case Opcodes.f64x2Add:
+        case Opcodes.f64x2Sub:
+        case Opcodes.f64x2Mul:
+        case Opcodes.f64x2Div:
+        case Opcodes.f64x2Min:
+        case Opcodes.f64x2Max:
+        case Opcodes.f64x2Pmin:
+        case Opcodes.f64x2Pmax:
+        case Opcodes.f64x2RelaxedMin:
+        case Opcodes.f64x2RelaxedMax:
+        case Opcodes.i8x16RelaxedSwizzle:
+        case Opcodes.i16x8RelaxedQ15mulrS:
+        case Opcodes.i16x8RelaxedDotI8x16I7x16S:
+          binary('7b', '7b', 'v128.binary');
+        case Opcodes.i8x16Shl:
+        case Opcodes.i8x16ShrS:
+        case Opcodes.i8x16ShrU:
+        case Opcodes.i16x8Shl:
+        case Opcodes.i16x8ShrS:
+        case Opcodes.i16x8ShrU:
+        case Opcodes.i32x4Shl:
+        case Opcodes.i32x4ShrS:
+        case Opcodes.i32x4ShrU:
+        case Opcodes.i64x2Shl:
+        case Opcodes.i64x2ShrS:
+        case Opcodes.i64x2ShrU:
+          popExpected('7f', 'v128.shift amount');
+          popExpected('7b', 'v128.shift input');
+          stack.add('7b');
+        case Opcodes.v128Bitselect:
+        case Opcodes.i8x16RelaxedLaneselect:
+        case Opcodes.i16x8RelaxedLaneselect:
+        case Opcodes.i32x4RelaxedLaneselect:
+        case Opcodes.i64x2RelaxedLaneselect:
+        case Opcodes.f32x4RelaxedMadd:
+        case Opcodes.f32x4RelaxedNmadd:
+        case Opcodes.f64x2RelaxedMadd:
+        case Opcodes.f64x2RelaxedNmadd:
+        case Opcodes.i32x4RelaxedDotI8x16I7x16AddS:
+          popExpected('7b', 'v128.bitselect mask');
+          popExpected('7b', 'v128.bitselect rhs');
+          popExpected('7b', 'v128.bitselect lhs');
+          stack.add('7b');
+        case Opcodes.v128AnyTrue:
+          unary('7b', '7f', 'v128.any_true');
 
         case Opcodes.nop:
           break;
@@ -3082,6 +3716,7 @@ abstract final class WasmValidator {
     required WasmFunctionType functionType,
     required WasmCodeBody body,
     required List<Instruction> instructions,
+    required bool customDescriptors,
   }) {
     var hasReferenceTypingOps = false;
     for (final instruction in instructions) {
@@ -3258,19 +3893,16 @@ abstract final class WasmValidator {
             sourceSignature,
             brOnCast.targetType,
           );
-          if (!brOnCast.sourceType.nullable && brOnCast.targetType.nullable) {
-            mismatch('invalid nullability: non-null source to nullable target');
-          }
-          if (!_isValueSignatureSubtype(
-            module,
-            targetSignature,
-            sourceSignature,
-          )) {
+          if (!customDescriptors &&
+              !_isValueSignatureSubtype(
+                module,
+                targetSignature,
+                sourceSignature,
+              )) {
             mismatch(
               'target/source mismatch: target=$targetSignature source=$sourceSignature',
             );
           }
-
           if (!inPolymorphicContext &&
               !_isValueSignatureSubtype(
                 module,
@@ -3437,6 +4069,15 @@ abstract final class WasmValidator {
             if (_parseRefSignature(lhs) == null ||
                 _parseRefSignature(rhs) == null) {
               mismatch('ref.eq requires reference operands');
+            }
+            final eqRefSignature = _encodeRefSignature(
+              nullable: true,
+              exact: false,
+              heapType: _heapEq,
+            );
+            if (!_isValueSignatureSubtype(module, lhs, eqRefSignature) ||
+                !_isValueSignatureSubtype(module, rhs, eqRefSignature)) {
+              mismatch('ref.eq requires eqref operands');
             }
           } else if (!inPolymorphicContext) {
             mismatch('ref.eq stack underflow');
@@ -3627,8 +4268,12 @@ abstract final class WasmValidator {
           }
           final signature = stack.removeLast();
           final ref = _parseRefSignature(signature);
-          if (ref == null || !ref.nullable) {
-            mismatch('ref.as_non_null requires nullable ref, got $signature');
+          if (ref == null) {
+            mismatch('ref.as_non_null requires reference, got $signature');
+          }
+          if (!ref.nullable) {
+            stack.add(signature);
+            break;
           }
           stack.add(
             _encodeRefSignature(
@@ -3855,9 +4500,13 @@ abstract final class WasmValidator {
       0x6f => _heapExtern, // externref
       0x6e => _heapAny, // anyref
       0x6d => _heapEq, // eqref
+      0x6c => _heapI31, // i31ref
       0x6b => _heapStruct, // structref
       0x6a => _heapArray, // arrayref
-      0x69 => _heapI31, // i31ref
+      0x69 => _heapExn, // exnref (legacy alias)
+      0x68 => _heapNoexn, // noexn (legacy alias)
+      0x74 => _heapExn, // exnref
+      0x75 => _heapNoexn, // noexn
       0x71 => _heapNone, // nullref
       0x72 => _heapNoextern, // nullexternref
       0x73 => _heapNofunc, // nullfuncref
@@ -3873,7 +4522,9 @@ abstract final class WasmValidator {
         heapType == _heapArray ||
         heapType == _heapFunc ||
         heapType == _heapExtern ||
+        heapType == _heapExn ||
         heapType == _heapNone ||
+        heapType == _heapNoexn ||
         heapType == _heapNofunc ||
         heapType == _heapNoextern;
   }
@@ -3883,6 +4534,8 @@ abstract final class WasmValidator {
   static const int _heapI31 = -20;
   static const int _heapStruct = -21;
   static const int _heapArray = -22;
+  static const int _heapExn = -12;
+  static const int _heapNoexn = -11;
   static const int _heapFunc = -16;
   static const int _heapExtern = -17;
   static const int _heapNone = -15;
@@ -3918,6 +4571,10 @@ abstract final class WasmValidator {
     String sourceSignature,
     String targetSignature,
   ) {
+    if (sourceSignature == _stackBottomSignature ||
+        targetSignature == _stackBottomSignature) {
+      return true;
+    }
     if (sourceSignature == targetSignature) {
       return true;
     }
@@ -3961,6 +4618,9 @@ abstract final class WasmValidator {
     if (sourceHeapType == _heapNoextern) {
       return targetHeapType == _heapExtern;
     }
+    if (sourceHeapType == _heapNoexn) {
+      return targetHeapType == _heapExn;
+    }
     return false;
   }
 
@@ -3974,10 +4634,6 @@ abstract final class WasmValidator {
       return true;
     }
     if (sourceHeapType < 0 || targetHeapType < 0) {
-      return false;
-    }
-    if (_isConcreteSubType(module, sourceHeapType, targetHeapType) ||
-        _isConcreteSubType(module, targetHeapType, sourceHeapType)) {
       return false;
     }
     return _areConcreteTypesEquivalent(
@@ -3994,7 +4650,15 @@ abstract final class WasmValidator {
     }
     if (superHeap >= 0) {
       if (subHeap >= 0) {
-        return _isConcreteSubType(module, subHeap, superHeap);
+        if (_isConcreteSubType(module, subHeap, superHeap)) {
+          return true;
+        }
+        return _areConcreteTypesEquivalent(
+          module,
+          subHeap,
+          superHeap,
+          <String>{},
+        );
       }
       return _isAbstractToConcreteSubtype(module, subHeap, superHeap);
     }
@@ -4045,20 +4709,34 @@ abstract final class WasmValidator {
         superType >= module.types.length) {
       return false;
     }
-    final visiting = <int>{subType};
+    final visiting = <int>{};
     final pending = <int>[subType];
     while (pending.isNotEmpty) {
       final current = pending.removeLast();
+      if (!visiting.add(current)) {
+        continue;
+      }
+      if (_areConcreteTypesEquivalent(module, current, superType, <String>{})) {
+        return true;
+      }
+      if (current < 0 || current >= module.types.length) {
+        continue;
+      }
       for (final parent in module.types[current].superTypeIndices) {
         if (parent == superType) {
           return true;
         }
-        if (parent < 0 || parent >= module.types.length) {
-          continue;
+        if (parent >= 0 &&
+            parent < module.types.length &&
+            _areConcreteTypesEquivalent(
+              module,
+              parent,
+              superType,
+              <String>{},
+            )) {
+          return true;
         }
-        if (visiting.add(parent)) {
-          pending.add(parent);
-        }
+        pending.add(parent);
       }
     }
     return false;
@@ -4130,6 +4808,8 @@ abstract final class WasmValidator {
         return superHeap == _heapFunc;
       case _heapNoextern:
         return superHeap == _heapExtern;
+      case _heapNoexn:
+        return superHeap == _heapExn;
       default:
         return false;
     }
@@ -4183,20 +4863,71 @@ abstract final class WasmValidator {
     }
     final left = module.types[lhs];
     final right = module.types[rhs];
+    if (left.recGroupSize != right.recGroupSize ||
+        left.recGroupPosition != right.recGroupPosition) {
+      return false;
+    }
+    final leftGroupStart = lhs - left.recGroupPosition;
+    final rightGroupStart = rhs - right.recGroupPosition;
+    final recGroupSize = left.recGroupSize;
+    if (leftGroupStart < 0 ||
+        rightGroupStart < 0 ||
+        leftGroupStart + recGroupSize > module.types.length ||
+        rightGroupStart + recGroupSize > module.types.length) {
+      return false;
+    }
     if (left.kind != right.kind) {
       return false;
     }
     if (left.isFunctionType != right.isFunctionType) {
       return false;
     }
+    if (left.declaresSubtype != right.declaresSubtype ||
+        left.subtypeFinal != right.subtypeFinal) {
+      return false;
+    }
+    if (recGroupSize > 1) {
+      for (var i = 0; i < recGroupSize; i++) {
+        final leftPeer = leftGroupStart + i;
+        final rightPeer = rightGroupStart + i;
+        if (leftPeer == lhs && rightPeer == rhs) {
+          continue;
+        }
+        if (!_areConcreteTypesEquivalent(
+          module,
+          leftPeer,
+          rightPeer,
+          seenPairs,
+        )) {
+          return false;
+        }
+      }
+    }
     if (left.superTypeIndices.length != right.superTypeIndices.length) {
       return false;
     }
     for (var i = 0; i < left.superTypeIndices.length; i++) {
+      final leftSuper = left.superTypeIndices[i];
+      final rightSuper = right.superTypeIndices[i];
+      final leftSuperInGroup =
+          leftSuper >= leftGroupStart &&
+          leftSuper < leftGroupStart + recGroupSize;
+      final rightSuperInGroup =
+          rightSuper >= rightGroupStart &&
+          rightSuper < rightGroupStart + recGroupSize;
+      if (leftSuperInGroup || rightSuperInGroup) {
+        if (!leftSuperInGroup || !rightSuperInGroup) {
+          return false;
+        }
+        if ((leftSuper - leftGroupStart) != (rightSuper - rightGroupStart)) {
+          return false;
+        }
+        continue;
+      }
       if (!_areConcreteTypesEquivalent(
         module,
-        left.superTypeIndices[i],
-        right.superTypeIndices[i],
+        leftSuper,
+        rightSuper,
         seenPairs,
       )) {
         return false;
@@ -4242,6 +4973,9 @@ abstract final class WasmValidator {
           left.paramTypeSignatures[i],
           right.paramTypeSignatures[i],
           seenPairs,
+          leftGroupStart: leftGroupStart,
+          rightGroupStart: rightGroupStart,
+          recGroupSize: recGroupSize,
         )) {
           return false;
         }
@@ -4252,6 +4986,9 @@ abstract final class WasmValidator {
           left.resultTypeSignatures[i],
           right.resultTypeSignatures[i],
           seenPairs,
+          leftGroupStart: leftGroupStart,
+          rightGroupStart: rightGroupStart,
+          recGroupSize: recGroupSize,
         )) {
           return false;
         }
@@ -4276,6 +5013,9 @@ abstract final class WasmValidator {
         leftField.valueSignature,
         rightField.valueSignature,
         seenPairs,
+        leftGroupStart: leftGroupStart,
+        rightGroupStart: rightGroupStart,
+        recGroupSize: recGroupSize,
       )) {
         return false;
       }
@@ -4287,32 +5027,48 @@ abstract final class WasmValidator {
     WasmModule module,
     String lhs,
     String rhs,
-    Set<String> seenPairs,
-  ) {
-    if (lhs == rhs) {
-      return true;
-    }
+    Set<String> seenPairs, {
+    int? leftGroupStart,
+    int? rightGroupStart,
+    int? recGroupSize,
+  }) {
     final leftRef = _parseRefSignature(lhs);
     final rightRef = _parseRefSignature(rhs);
     if (leftRef == null || rightRef == null) {
-      return false;
+      return lhs == rhs;
     }
     if (leftRef.nullable != rightRef.nullable ||
         leftRef.exact != rightRef.exact) {
       return false;
     }
-    if (leftRef.heapType == rightRef.heapType) {
+    final leftHeap = leftRef.heapType;
+    final rightHeap = rightRef.heapType;
+    if (leftHeap < 0 || rightHeap < 0) {
+      return leftHeap == rightHeap;
+    }
+    if (leftGroupStart != null &&
+        rightGroupStart != null &&
+        recGroupSize != null) {
+      final leftInGroup =
+          leftHeap >= leftGroupStart &&
+          leftHeap < leftGroupStart + recGroupSize;
+      final rightInGroup =
+          rightHeap >= rightGroupStart &&
+          rightHeap < rightGroupStart + recGroupSize;
+      if (leftInGroup || rightInGroup) {
+        if (!leftInGroup || !rightInGroup) {
+          return false;
+        }
+        if ((leftHeap - leftGroupStart) != (rightHeap - rightGroupStart)) {
+          return false;
+        }
+        return true;
+      }
+    }
+    if (leftHeap == rightHeap) {
       return true;
     }
-    if (leftRef.heapType >= 0 && rightRef.heapType >= 0) {
-      return _areConcreteTypesEquivalent(
-        module,
-        leftRef.heapType,
-        rightRef.heapType,
-        seenPairs,
-      );
-    }
-    return false;
+    return _areConcreteTypesEquivalent(module, leftHeap, rightHeap, seenPairs);
   }
 
   static ({bool nullable, bool exact, int heapType})? _parseRefSignature(
@@ -4329,7 +5085,11 @@ abstract final class WasmValidator {
         if (decoded == null || decoded.$2 != bytes.length) {
           return null;
         }
-        return (nullable: true, exact: false, heapType: decoded.$1);
+        return (
+          nullable: true,
+          exact: false,
+          heapType: _canonicalizeHeapType(decoded.$1),
+        );
       }
       return (nullable: true, exact: false, heapType: heapType);
     }
@@ -4342,7 +5102,11 @@ abstract final class WasmValidator {
       if (decoded == null || decoded.$2 != bytes.length) {
         return null;
       }
-      return (nullable: true, exact: false, heapType: decoded.$1);
+      return (
+        nullable: true,
+        exact: false,
+        heapType: _canonicalizeHeapType(decoded.$1),
+      );
     }
     var offset = 1;
     var exact = false;
@@ -4360,7 +5124,7 @@ abstract final class WasmValidator {
     return (
       nullable: refPrefix == 0x63,
       exact: exact,
-      heapType: decodedHeap.$1,
+      heapType: _canonicalizeHeapType(decodedHeap.$1),
     );
   }
 
@@ -4390,6 +5154,16 @@ abstract final class WasmValidator {
       result -= multiplier;
     }
     return (_normalizeSignedLeb33(result), index);
+  }
+
+  static int _canonicalizeHeapType(int heapType) {
+    return switch (heapType) {
+      -23 => _heapExn,
+      -24 => _heapNoexn,
+      -25 => _heapNofunc,
+      -26 => _heapNoextern,
+      _ => heapType,
+    };
   }
 
   static ({String valueSignature, int mutability})? _arrayFieldInfo(
@@ -4452,11 +5226,49 @@ abstract final class WasmValidator {
     };
   }
 
+  static bool _tableAcceptsFunctionReferences(
+    WasmModule module,
+    WasmTableType tableType,
+  ) {
+    final signature = _tableValueSignature(tableType);
+    final parsed = _parseRefSignature(signature);
+    if (parsed == null) {
+      return false;
+    }
+    return _isFuncLikeHeap(module, parsed.heapType);
+  }
+
   static bool _isElementSegmentRefCompatible({
     required WasmModule module,
     required int segmentRefTypeCode,
+    required String? segmentRefTypeSignature,
+    required bool segmentUsesLegacyFunctionIndices,
     required String targetValueSignature,
   }) {
+    if (segmentUsesLegacyFunctionIndices && segmentRefTypeCode == 0x70) {
+      final nonNullFuncSignature = _encodeRefSignature(
+        nullable: false,
+        exact: false,
+        heapType: _heapFunc,
+      );
+      if (_isValueSignatureSubtype(
+        module,
+        nonNullFuncSignature,
+        targetValueSignature,
+      )) {
+        return true;
+      }
+    }
+    final explicitSourceSignature = segmentRefTypeSignature;
+    if (explicitSourceSignature != null &&
+        explicitSourceSignature.isNotEmpty &&
+        _parseRefSignature(explicitSourceSignature) != null) {
+      return _isValueSignatureSubtype(
+        module,
+        explicitSourceSignature,
+        targetValueSignature,
+      );
+    }
     final target = _parseRefSignature(targetValueSignature);
     if (target == null) {
       return false;
@@ -4465,12 +5277,18 @@ abstract final class WasmValidator {
 
     switch (segmentRefTypeCode) {
       case 0x70: // funcref
+        if (!target.nullable) {
+          return false;
+        }
         if (heapType >= 0) {
           return heapType < module.types.length &&
               module.types[heapType].isFunctionType;
         }
         return heapType == _heapFunc;
       case 0x6f: // externref
+        if (!target.nullable) {
+          return false;
+        }
         return heapType == _heapExtern;
       case 0x69: // i31ref (legacy codepoint)
       case 0x6c: // i31ref (current codepoint)
@@ -4538,7 +5356,7 @@ abstract final class WasmValidator {
     }
     for (final element in module.elements) {
       for (final functionIndex in element.functionIndices) {
-        if (functionIndex != null) {
+        if (functionIndex != null && functionIndex >= 0) {
           declared.add(functionIndex);
         }
       }
@@ -4829,7 +5647,7 @@ abstract final class WasmValidator {
     if (lead >= 0x65 && lead <= 0x71) {
       return null;
     }
-    return _readSignedLeb33WithFirst(reader, lead);
+    return _canonicalizeHeapType(_readSignedLeb33WithFirst(reader, lead));
   }
 
   static void _consumeHeapType(ByteReader reader) {

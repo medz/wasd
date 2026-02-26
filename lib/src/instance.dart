@@ -22,11 +22,15 @@ final class WasmInstance {
     required this.tables,
     required this.functions,
     required this.globals,
+    required List<WasmGlobalType> globalTypes,
     required List<bool> memory64ByIndex,
     required List<bool> table64ByIndex,
     required List<Uint8List?> dataSegments,
     required List<List<int?>?> elementSegments,
     required List<int> elementSegmentRefTypeCodes,
+    required int functionRefNamespace,
+    required List<WasmFunctionType> tagTypes,
+    required List<String> tagNominalTypeKeys,
     required Map<String, int> functionExports,
     required Map<String, int> globalExports,
     required Map<String, WasmMemory> memoryExports,
@@ -38,12 +42,17 @@ final class WasmInstance {
        _memoryExports = memoryExports,
        _tableExports = tableExports,
        _tagExports = tagExports,
+       _globalTypes = globalTypes,
+       _functionRefNamespace = functionRefNamespace,
        _vm = WasmVm(
          functions: functions,
          types: module.types,
+         tagTypes: tagTypes,
+         tagNominalTypeKeys: tagNominalTypeKeys,
          tables: tables,
          memories: memories,
          globals: globals,
+         functionRefNamespace: functionRefNamespace,
          memory64ByIndex: memory64ByIndex,
          table64ByIndex: table64ByIndex,
          dataSegments: dataSegments,
@@ -63,6 +72,8 @@ final class WasmInstance {
   final Map<String, WasmMemory> _memoryExports;
   final Map<String, WasmTable> _tableExports;
   final Map<String, WasmTagImport> _tagExports;
+  final List<WasmGlobalType> _globalTypes;
+  final int _functionRefNamespace;
   final WasmVm _vm;
 
   factory WasmInstance.fromBytes(
@@ -84,8 +95,10 @@ final class WasmInstance {
   }) {
     WasmValidator.validateModule(module, features: features);
 
+    final functionRefNamespace = WasmVm.allocateFunctionRefNamespace();
     final functions = <RuntimeFunction>[];
     final globals = <RuntimeGlobal>[];
+    final globalTypes = <WasmGlobalType>[];
     final tables = <WasmTable>[];
     final memories = <WasmMemory>[];
     final tagTypes = <WasmTagImport>[];
@@ -137,7 +150,16 @@ final class WasmInstance {
             throw StateError('Missing table import `${import.key}`.');
           }
 
-          if (importedTable.refType != expected.refType) {
+          final expectedRefSignature = expected.refTypeSignature;
+          final actualRefSignature = importedTable.refTypeSignature;
+          final refTypeMatches =
+              expectedRefSignature != null && actualRefSignature != null
+              ? _referenceTypeSignaturesMatch(
+                  expectedRefSignature,
+                  actualRefSignature,
+                )
+              : importedTable.refType == expected.refType;
+          if (!refTypeMatches) {
             throw StateError(
               'Imported table `${import.key}` ref type mismatch: '
               'expected=${expected.refType} actual=${importedTable.refType}.',
@@ -209,13 +231,6 @@ final class WasmInstance {
             );
           }
 
-          if (importedMemory.minPages < expected.minPages) {
-            throw StateError(
-              'Imported memory `${import.key}` has min ${importedMemory.minPages} pages '
-              'but requires at least ${expected.minPages}.',
-            );
-          }
-
           final expectedMax = expected.maxPages;
           if (expectedMax != null) {
             final importedMax = importedMemory.maxPages;
@@ -242,21 +257,46 @@ final class WasmInstance {
             throw FormatException('Malformed global import `${import.key}`.');
           }
 
+          final importedBinding = imports.globalBindings[import.key];
+          final hasImportedValue = imports.globals.containsKey(import.key);
           final importedValue = imports.globals[import.key];
-          if (importedValue == null) {
+          if (importedBinding == null && !hasImportedValue) {
             throw StateError('Missing global import `${import.key}`.');
           }
 
-          globals.add(
-            RuntimeGlobal(
-              valueType: globalType.valueType,
-              mutable: globalType.mutable,
-              value: WasmValue.fromExternal(
-                globalType.valueType,
-                importedValue,
+          final importedType =
+              imports.globalTypes[import.key] ??
+              (importedBinding == null
+                  ? null
+                  : WasmGlobalType(
+                      valueType: importedBinding.valueType,
+                      mutable: importedBinding.mutable,
+                    ));
+          if (importedType != null &&
+              !_isGlobalImportTypeCompatible(
+                expected: globalType,
+                actual: importedType,
+              )) {
+            throw StateError(
+              'Imported global `${import.key}` has incompatible import type.',
+            );
+          }
+
+          if (importedBinding != null) {
+            globals.add(importedBinding);
+          } else {
+            globals.add(
+              RuntimeGlobal(
+                valueType: globalType.valueType,
+                mutable: globalType.mutable,
+                value: WasmValue.fromExternal(
+                  globalType.valueType,
+                  importedValue,
+                ),
               ),
-            ),
-          );
+            );
+          }
+          globalTypes.add(globalType);
 
         case WasmImportKind.tag:
           final tagType = import.tagType;
@@ -272,7 +312,7 @@ final class WasmInstance {
           }
           final expectedTagType = module.types[tagType.typeIndex];
           if (!_sameFunctionSignature(importedTagType.type, expectedTagType) ||
-              importedTagType.nominalTypeKey !=
+              importedTagType.typeKey !=
                   _tagNominalTypeKey(module, tagType.typeIndex)) {
             throw StateError(
               'Imported tag `${import.key}` has incompatible type.',
@@ -281,6 +321,7 @@ final class WasmInstance {
           tagTypes.add(importedTagType);
       }
     }
+    final importedGlobals = List<RuntimeGlobal>.unmodifiable(globals);
 
     for (final memoryType in module.memories) {
       _validateSupportedMemoryType(
@@ -291,7 +332,7 @@ final class WasmInstance {
       memories.add(
         WasmMemory(
           minPages: memoryType.minPages,
-          maxPages: memoryType.maxPages,
+          maxPages: _runtimeMaxPagesForMemoryType(memoryType),
           shared: memoryType.shared,
           isMemory64: memoryType.isMemory64,
           pageSizeBytes: 1 << memoryType.pageSizeLog2,
@@ -306,6 +347,7 @@ final class WasmInstance {
           min: tableType.min,
           max: tableType.max,
           isTable64: tableType.isTable64,
+          refTypeSignature: tableType.refTypeSignature,
         ),
       );
     }
@@ -315,6 +357,7 @@ final class WasmInstance {
         globalDef.initExpr,
         globals,
         module.types,
+        functionRefNamespace: functionRefNamespace,
       );
       globals.add(
         RuntimeGlobal(
@@ -323,8 +366,14 @@ final class WasmInstance {
           value: value,
         ),
       );
+      globalTypes.add(globalDef.type);
     }
-    for (final tag in module.tags) {
+    for (
+      var localTagIndex = 0;
+      localTagIndex < module.tags.length;
+      localTagIndex++
+    ) {
+      final tag = module.tags[localTagIndex];
       if (tag.typeIndex < 0 ||
           tag.typeIndex >= module.types.length ||
           !module.types[tag.typeIndex].isFunctionType) {
@@ -333,7 +382,9 @@ final class WasmInstance {
       tagTypes.add(
         WasmTagImport(
           type: module.types[tag.typeIndex],
-          nominalTypeKey: _tagNominalTypeKey(module, tag.typeIndex),
+          nominalTypeKey:
+              'inst:$functionRefNamespace:tag:${module.importedTagCount + localTagIndex}',
+          typeKey: _tagNominalTypeKey(module, tag.typeIndex),
         ),
       );
     }
@@ -350,8 +401,9 @@ final class WasmInstance {
       }
       final initValue = _evaluateConstExpr(
         initExpr,
-        globals,
+        importedGlobals,
         module.types,
+        functionRefNamespace: functionRefNamespace,
       ).castTo(WasmValueType.i32).asI32();
       final refValue = initValue == -1 ? null : initValue;
       final table = tables[tableIndex];
@@ -391,11 +443,28 @@ final class WasmInstance {
       (index) => Uint8List.fromList(module.dataSegments[index].bytes),
       growable: false,
     );
-    final elementSegments = List<List<int?>?>.generate(
-      module.elements.length,
-      (index) => List<int?>.from(module.elements[index].functionIndices),
-      growable: false,
-    );
+    final elementSegments = List<List<int?>?>.generate(module.elements.length, (
+      index,
+    ) {
+      final segment = module.elements[index];
+      if (!segment.isPassive) {
+        return null;
+      }
+      final carriesFunctionRefs = _elementCarriesFunctionRefs(module, segment);
+      return segment.functionIndices
+          .map(
+            (functionIndex) => functionIndex == null
+                ? null
+                : _resolveElementReference(
+                    functionIndex,
+                    carriesFunctionRefs: carriesFunctionRefs,
+                    globals: globals,
+                    functionCount: functions.length,
+                    functionRefNamespace: functionRefNamespace,
+                  ),
+          )
+          .toList(growable: false);
+    }, growable: false);
     final elementSegmentRefTypeCodes = List<int>.generate(
       module.elements.length,
       (index) => module.elements[index].refTypeCode,
@@ -458,11 +527,19 @@ final class WasmInstance {
       tables: List.unmodifiable(tables),
       functions: List.unmodifiable(functions),
       globals: globals,
+      globalTypes: List.unmodifiable(globalTypes),
       memory64ByIndex: memory64ByIndex,
       table64ByIndex: table64ByIndex,
       dataSegments: dataSegments,
       elementSegments: elementSegments,
       elementSegmentRefTypeCodes: elementSegmentRefTypeCodes,
+      functionRefNamespace: functionRefNamespace,
+      tagTypes: List<WasmFunctionType>.unmodifiable(
+        tagTypes.map((tag) => tag.type),
+      ),
+      tagNominalTypeKeys: List<String>.unmodifiable(
+        tagTypes.map((tag) => tag.nominalTypeKey),
+      ),
       functionExports: Map.unmodifiable(functionExports),
       globalExports: Map.unmodifiable(globalExports),
       memoryExports: Map.unmodifiable(memoryExports),
@@ -512,6 +589,42 @@ final class WasmInstance {
       );
     }
     return functions[functionIndex].runtimeTypeDepth;
+  }
+
+  int exportedFunctionTypeIndex(String exportName) {
+    final functionIndex = _functionExports[exportName];
+    if (functionIndex == null) {
+      throw ArgumentError.value(
+        exportName,
+        'exportName',
+        'Function export not found',
+      );
+    }
+    return functions[functionIndex].declaredTypeIndex;
+  }
+
+  WasmGlobalType exportedGlobalType(String exportName) {
+    final globalIndex = _globalExports[exportName];
+    if (globalIndex == null) {
+      throw ArgumentError.value(
+        exportName,
+        'exportName',
+        'Global export not found',
+      );
+    }
+    return _globalTypes[globalIndex];
+  }
+
+  RuntimeGlobal exportedGlobalBinding(String exportName) {
+    final globalIndex = _globalExports[exportName];
+    if (globalIndex == null) {
+      throw ArgumentError.value(
+        exportName,
+        'exportName',
+        'Global export not found',
+      );
+    }
+    return globals[globalIndex];
   }
 
   WasmFunctionType exportedTagType(String exportName) {
@@ -762,6 +875,44 @@ final class WasmInstance {
     return exported;
   }
 
+  static int? _resolveElementReference(
+    int rawReference, {
+    required bool carriesFunctionRefs,
+    required List<RuntimeGlobal> globals,
+    required int functionCount,
+    required int functionRefNamespace,
+  }) {
+    final globalIndex = WasmModule.decodeElementGlobalRef(
+      rawReference,
+      globalCount: globals.length,
+    );
+    if (globalIndex != null) {
+      final globalRaw = globals[globalIndex].value
+          .castTo(WasmValueType.i32)
+          .asI32();
+      if (globalRaw == -1) {
+        return null;
+      }
+      if (carriesFunctionRefs && globalRaw >= 0 && globalRaw < functionCount) {
+        return WasmVm.functionRefIdFor(
+          namespace: functionRefNamespace,
+          functionIndex: globalRaw,
+        );
+      }
+      return globalRaw;
+    }
+    if (!carriesFunctionRefs) {
+      return rawReference;
+    }
+    if (rawReference < 0) {
+      return rawReference;
+    }
+    return WasmVm.functionRefIdFor(
+      namespace: functionRefNamespace,
+      functionIndex: rawReference,
+    );
+  }
+
   void _initializeActiveElements() {
     if (module.elements.isEmpty) {
       return;
@@ -791,13 +942,16 @@ final class WasmInstance {
           table64ByIndex[element.tableIndex];
       final offset = _constExprTableOffset(offsetValue, isTable64: isTable64);
 
-      final carriesFunctionRefs = element.refTypeCode == 0x70;
+      final carriesFunctionRefs = _elementCarriesFunctionRefs(module, element);
       if (carriesFunctionRefs) {
         for (final functionIndex in element.functionIndices) {
           if (functionIndex == null) {
             continue;
           }
-          if (functionIndex < 0 || functionIndex >= functions.length) {
+          if (functionIndex < 0) {
+            continue;
+          }
+          if (functionIndex >= functions.length) {
             throw FormatException(
               'Invalid function index in element: $functionIndex',
             );
@@ -805,7 +959,20 @@ final class WasmInstance {
         }
       }
 
-      table.initialize(offset, element.functionIndices);
+      final initializedRefs = element.functionIndices
+          .map(
+            (functionIndex) => functionIndex == null
+                ? null
+                : _resolveElementReference(
+                    functionIndex,
+                    carriesFunctionRefs: carriesFunctionRefs,
+                    globals: globals,
+                    functionCount: functions.length,
+                    functionRefNamespace: _functionRefNamespace,
+                  ),
+          )
+          .toList(growable: false);
+      table.initialize(offset, initializedRefs);
     }
   }
 
@@ -863,8 +1030,9 @@ final class WasmInstance {
   static WasmValue _evaluateConstExpr(
     Uint8List expr,
     List<RuntimeGlobal> globals,
-    List<WasmFunctionType> types,
-  ) {
+    List<WasmFunctionType> types, {
+    int? functionRefNamespace,
+  }) {
     final reader = ByteReader(expr);
     final stack = <WasmValue>[];
 
@@ -917,7 +1085,7 @@ final class WasmInstance {
           stack.add(WasmValue.i32(reader.readVarInt32()));
 
         case Opcodes.i64Const:
-          stack.add(WasmValue.i64(reader.readVarInt64()));
+          stack.add(WasmValue.i64(reader.readVarInt64Value()));
 
         case Opcodes.f32Const:
           final bits = ByteData.sublistView(
@@ -948,7 +1116,28 @@ final class WasmInstance {
           stack.add(WasmValue.i32(-1));
 
         case Opcodes.refFunc:
-          stack.add(WasmValue.i32(reader.readVarUint32()));
+          final functionIndex = reader.readVarUint32();
+          final functionRef = functionRefNamespace == null
+              ? functionIndex
+              : WasmVm.functionRefIdFor(
+                  namespace: functionRefNamespace,
+                  functionIndex: functionIndex,
+                );
+          stack.add(WasmValue.i32(functionRef));
+
+        case 0xfd:
+          final subOpcode = reader.readVarUint32();
+          final pseudoOpcode = 0xfd00 | subOpcode;
+          switch (pseudoOpcode) {
+            case Opcodes.v128Const:
+              stack.add(
+                WasmValue.i32(WasmVm.internV128Bytes(reader.readBytes(16))),
+              );
+            default:
+              throw UnsupportedError(
+                'Unsupported const expr opcode: 0x${pseudoOpcode.toRadixString(16)}',
+              );
+          }
 
         case 0xfb:
           final subOpcode = reader.readVarUint32();
@@ -1246,6 +1435,230 @@ final class WasmInstance {
     throw const FormatException('Const expr missing end opcode.');
   }
 
+  static bool _isGlobalImportTypeCompatible({
+    required WasmGlobalType expected,
+    required WasmGlobalType actual,
+  }) {
+    if (expected.mutable != actual.mutable) {
+      return false;
+    }
+
+    final expectedSignature = expected.valueTypeSignature;
+    final actualSignature = actual.valueTypeSignature;
+    final expectedIsNumeric = _isNumericValueTypeSignature(expectedSignature);
+    final actualIsNumeric = _isNumericValueTypeSignature(actualSignature);
+
+    if (expectedIsNumeric || actualIsNumeric) {
+      if (expectedSignature != null && actualSignature != null) {
+        return expectedSignature == actualSignature;
+      }
+      return expected.valueType == actual.valueType;
+    }
+
+    if (expectedSignature != null && actualSignature != null) {
+      final expectedRef = _parseReferenceGlobalType(expectedSignature);
+      final actualRef = _parseReferenceGlobalType(actualSignature);
+      if (expectedRef != null && actualRef != null) {
+        if (expected.mutable) {
+          return _referenceGlobalTypeEquals(expectedRef, actualRef);
+        }
+        return _isReferenceGlobalSubtype(
+          actual: actualRef,
+          expected: expectedRef,
+        );
+      }
+      if (expected.mutable) {
+        return expectedSignature == actualSignature;
+      }
+    }
+
+    return expected.valueType == actual.valueType;
+  }
+
+  static bool _isNumericValueTypeSignature(String? signature) {
+    return signature == '7f' ||
+        signature == '7e' ||
+        signature == '7d' ||
+        signature == '7c';
+  }
+
+  static ({bool nullable, String kind, String? typeKey})?
+  _parseReferenceGlobalType(String signature) {
+    final bytes = _signatureBytes(signature);
+    if (bytes.isEmpty) {
+      return null;
+    }
+
+    final first = bytes.first;
+    if (bytes.length == 1) {
+      return switch (first) {
+        0x70 => (nullable: true, kind: 'func', typeKey: null),
+        0x6f => (nullable: true, kind: 'extern', typeKey: null),
+        _ => null,
+      };
+    }
+
+    if (first != 0x63 && first != 0x64) {
+      return null;
+    }
+
+    final nullable = first == 0x63;
+    final heapBytes = bytes.sublist(1);
+    if (heapBytes.isEmpty) {
+      return null;
+    }
+
+    if (heapBytes.length == 1) {
+      final heapCode = heapBytes.first;
+      switch (heapCode) {
+        case 0x70:
+          return (nullable: nullable, kind: 'func', typeKey: null);
+        case 0x6f:
+          return (nullable: nullable, kind: 'extern', typeKey: null);
+      }
+      if (heapCode >= 0x65 && heapCode <= 0x73) {
+        return (
+          nullable: nullable,
+          kind: 'other:${_bytesToSignature(heapBytes)}',
+          typeKey: null,
+        );
+      }
+    }
+
+    final heapReader = ByteReader(Uint8List.fromList(heapBytes));
+    final heapType = _readSignedLeb33WithFirst(
+      heapReader,
+      heapReader.readByte(),
+    );
+    if (!heapReader.isEOF) {
+      return (
+        nullable: nullable,
+        kind: 'other:${_bytesToSignature(heapBytes)}',
+        typeKey: null,
+      );
+    }
+
+    if (heapType >= 0) {
+      return (
+        nullable: nullable,
+        kind: 'typed-func',
+        typeKey: _bytesToSignature(heapBytes),
+      );
+    }
+
+    return switch (heapType) {
+      -16 => (nullable: nullable, kind: 'func', typeKey: null),
+      -17 => (nullable: nullable, kind: 'extern', typeKey: null),
+      _ => (
+        nullable: nullable,
+        kind: 'other:${_bytesToSignature(heapBytes)}',
+        typeKey: null,
+      ),
+    };
+  }
+
+  static bool _referenceGlobalTypeEquals(
+    ({bool nullable, String kind, String? typeKey}) lhs,
+    ({bool nullable, String kind, String? typeKey}) rhs,
+  ) {
+    return lhs.nullable == rhs.nullable &&
+        lhs.kind == rhs.kind &&
+        lhs.typeKey == rhs.typeKey;
+  }
+
+  static bool _referenceTypeSignaturesMatch(String expected, String actual) {
+    final expectedRef = _parseReferenceGlobalType(expected);
+    final actualRef = _parseReferenceGlobalType(actual);
+    if (expectedRef != null && actualRef != null) {
+      return _referenceGlobalTypeEquals(expectedRef, actualRef);
+    }
+    return expected == actual;
+  }
+
+  static bool _elementCarriesFunctionRefs(
+    WasmModule module,
+    WasmElementSegment segment,
+  ) {
+    if (segment.usesLegacyFunctionIndices ||
+        segment.refTypeCode == 0x70 ||
+        segment.refTypeCode == 0x73) {
+      return true;
+    }
+
+    final signature = segment.refTypeSignature;
+    if (signature == null || signature.isEmpty) {
+      return false;
+    }
+    final parsed = _parseReferenceGlobalType(signature);
+    if (parsed == null) {
+      return false;
+    }
+    if (parsed.kind == 'func') {
+      return true;
+    }
+    if (parsed.kind != 'typed-func') {
+      return false;
+    }
+    final typeKey = parsed.typeKey;
+    if (typeKey == null || typeKey.isEmpty) {
+      return false;
+    }
+    final typeBytes = _signatureBytes(typeKey);
+    if (typeBytes.isEmpty) {
+      return false;
+    }
+    final heapReader = ByteReader(Uint8List.fromList(typeBytes));
+    final heapType = _readSignedLeb33WithFirst(
+      heapReader,
+      heapReader.readByte(),
+    );
+    if (!heapReader.isEOF || heapType < 0 || heapType >= module.types.length) {
+      return false;
+    }
+    return module.types[heapType].isFunctionType;
+  }
+
+  static bool _isReferenceGlobalSubtype({
+    required ({bool nullable, String kind, String? typeKey}) actual,
+    required ({bool nullable, String kind, String? typeKey}) expected,
+  }) {
+    if (actual.nullable && !expected.nullable) {
+      return false;
+    }
+
+    if (actual.kind == expected.kind) {
+      if (actual.kind == 'typed-func') {
+        return actual.typeKey == expected.typeKey;
+      }
+      return true;
+    }
+
+    if (actual.kind == 'typed-func' && expected.kind == 'func') {
+      return true;
+    }
+
+    return false;
+  }
+
+  static List<int> _signatureBytes(String signature) {
+    if (signature.isEmpty || signature.length.isOdd) {
+      return const <int>[];
+    }
+    final bytes = <int>[];
+    for (var i = 0; i < signature.length; i += 2) {
+      bytes.add(int.parse(signature.substring(i, i + 2), radix: 16));
+    }
+    return bytes;
+  }
+
+  static String _bytesToSignature(List<int> bytes) {
+    final buffer = StringBuffer();
+    for (final byte in bytes) {
+      buffer.write((byte & 0xff).toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
+  }
+
   static void _validateSupportedMemoryType(
     WasmMemoryType memoryType, {
     required WasmFeatureSet features,
@@ -1258,6 +1671,21 @@ final class WasmInstance {
       );
     }
     final pageSizeBytes = 1 << memoryType.pageSizeLog2;
+    final maxPagesPerAddress = _maxPagesPerAddressType(memoryType);
+    if (BigInt.from(memoryType.minPages) > maxPagesPerAddress) {
+      throw FormatException(
+        '$context exceeds canonical memory size limits: '
+        'minPages=${memoryType.minPages}, '
+        'maxPagesPerAddress=$maxPagesPerAddress.',
+      );
+    }
+    final declaredMax = memoryType.maxPages;
+    if (declaredMax != null && BigInt.from(declaredMax) > maxPagesPerAddress) {
+      throw FormatException(
+        '$context exceeds canonical memory size limits: '
+        'maxPages=$declaredMax, maxPagesPerAddress=$maxPagesPerAddress.',
+      );
+    }
     final maxPagesSupported = wasmAddressSpaceBytes ~/ pageSizeBytes;
     if (memoryType.minPages > maxPagesSupported) {
       throw UnsupportedError(
@@ -1265,8 +1693,9 @@ final class WasmInstance {
         'maxSupportedPages=$maxPagesSupported.',
       );
     }
-    final declaredMax = memoryType.maxPages;
-    if (declaredMax != null && declaredMax > maxPagesSupported) {
+    if (declaredMax != null &&
+        declaredMax > maxPagesSupported &&
+        !memoryType.isMemory64) {
       throw UnsupportedError(
         '$context exceeds runtime memory capacity: maxPages=$declaredMax, '
         'maxSupportedPages=$maxPagesSupported.',
@@ -1277,6 +1706,27 @@ final class WasmInstance {
         '$context uses shared memory, but threads feature is disabled.',
       );
     }
+  }
+
+  static BigInt _maxPagesPerAddressType(WasmMemoryType memoryType) {
+    final addressBits = memoryType.isMemory64 ? 64 : 32;
+    if (memoryType.pageSizeLog2 > addressBits) {
+      return BigInt.zero;
+    }
+    return BigInt.one << (addressBits - memoryType.pageSizeLog2);
+  }
+
+  static int? _runtimeMaxPagesForMemoryType(WasmMemoryType memoryType) {
+    final declaredMax = memoryType.maxPages;
+    if (declaredMax == null) {
+      return null;
+    }
+    final pageSizeBytes = 1 << memoryType.pageSizeLog2;
+    final maxPagesSupported = wasmAddressSpaceBytes ~/ pageSizeBytes;
+    if (declaredMax <= maxPagesSupported) {
+      return declaredMax;
+    }
+    return memoryType.isMemory64 ? maxPagesSupported : declaredMax;
   }
 
   static int _constExprMemoryOffset(

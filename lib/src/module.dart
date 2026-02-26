@@ -124,6 +124,8 @@ final class WasmFunctionType {
     this.runtimeSupported = true,
     this.recGroupSize = 1,
     this.recGroupPosition = 0,
+    this.declaresSubtype = false,
+    this.subtypeFinal = false,
   });
 
   const WasmFunctionType.nonFunction({
@@ -133,13 +135,15 @@ final class WasmFunctionType {
     this.descriptorTypeIndex,
     this.describesTypeIndex,
     this.runtimeSupported = false,
+    this.recGroupSize = 1,
+    this.recGroupPosition = 0,
+    this.declaresSubtype = false,
+    this.subtypeFinal = false,
   }) : params = const <WasmValueType>[],
        results = const <WasmValueType>[],
        paramTypeSignatures = const <String>[],
        resultTypeSignatures = const <String>[],
-       isFunctionType = false,
-       recGroupSize = 1,
-       recGroupPosition = 0;
+       isFunctionType = false;
 
   final List<WasmValueType> params;
   final List<WasmValueType> results;
@@ -154,6 +158,8 @@ final class WasmFunctionType {
   final bool runtimeSupported;
   final int recGroupSize;
   final int recGroupPosition;
+  final bool declaresSubtype;
+  final bool subtypeFinal;
 }
 
 final class WasmMemoryType {
@@ -298,12 +304,14 @@ final class WasmElementSegment {
     required this.functionIndices,
     this.refTypeCode = 0x70,
     this.refTypeSignature = '70',
+    this.usesLegacyFunctionIndices = false,
   }) : mode = WasmElementMode.active;
 
   const WasmElementSegment.passive({
     required this.functionIndices,
     this.refTypeCode = 0x70,
     this.refTypeSignature = '70',
+    this.usesLegacyFunctionIndices = false,
   }) : mode = WasmElementMode.passive,
        tableIndex = 0,
        offsetExpr = null;
@@ -312,6 +320,7 @@ final class WasmElementSegment {
     required this.functionIndices,
     this.refTypeCode = 0x70,
     this.refTypeSignature = '70',
+    this.usesLegacyFunctionIndices = false,
   }) : mode = WasmElementMode.declarative,
        tableIndex = 0,
        offsetExpr = null;
@@ -322,6 +331,7 @@ final class WasmElementSegment {
   final List<int?> functionIndices;
   final int refTypeCode;
   final String? refTypeSignature;
+  final bool usesLegacyFunctionIndices;
 
   bool get isActive => mode == WasmElementMode.active;
   bool get isPassive => mode == WasmElementMode.passive;
@@ -329,6 +339,8 @@ final class WasmElementSegment {
 }
 
 final class WasmModule {
+  static const int elementGlobalRefEncodingBase = -0x20000000;
+
   const WasmModule({
     required this.types,
     required this.imports,
@@ -368,6 +380,24 @@ final class WasmModule {
   final int importedMemoryCount;
   final int importedGlobalCount;
   final int importedTagCount;
+
+  static int encodeElementGlobalRef(int globalIndex) {
+    if (globalIndex < 0) {
+      throw RangeError.value(globalIndex, 'globalIndex', 'must be >= 0');
+    }
+    return elementGlobalRefEncodingBase - globalIndex;
+  }
+
+  static int? decodeElementGlobalRef(int encoded, {required int globalCount}) {
+    if (encoded > elementGlobalRefEncodingBase) {
+      return null;
+    }
+    final globalIndex = elementGlobalRefEncodingBase - encoded;
+    if (globalIndex < 0 || globalIndex >= globalCount) {
+      return null;
+    }
+    return globalIndex;
+  }
 
   static WasmModule decode(
     Uint8List wasmBytes, {
@@ -587,6 +617,8 @@ final class WasmModule {
     var form = leadingForm;
     var hasDescribes = false;
     var hasDescriptor = false;
+    var declaresSubtype = false;
+    var subtypeFinal = false;
     int? descriptorTypeIndex;
     int? describesTypeIndex;
 
@@ -594,6 +626,8 @@ final class WasmModule {
       switch (form) {
         case 0x50:
         case 0x4f:
+          declaresSubtype = true;
+          subtypeFinal = subtypeFinal || form == 0x4f;
           final superCount = reader.readVarUint32();
           for (var i = 0; i < superCount; i++) {
             superTypeIndices.add(reader.readVarUint32());
@@ -627,6 +661,8 @@ final class WasmModule {
             superTypeIndices: superTypeIndices,
             descriptorTypeIndex: descriptorTypeIndex,
             describesTypeIndex: describesTypeIndex,
+            declaresSubtype: declaresSubtype,
+            subtypeFinal: subtypeFinal,
             recGroupSize: recGroupSize,
             recGroupPosition: recGroupPosition,
           );
@@ -648,6 +684,8 @@ final class WasmModule {
     required List<int> superTypeIndices,
     required int? descriptorTypeIndex,
     required int? describesTypeIndex,
+    required bool declaresSubtype,
+    required bool subtypeFinal,
     required int recGroupSize,
     required int recGroupPosition,
   }) {
@@ -671,6 +709,8 @@ final class WasmModule {
             runtimeSupported: functionType.$5,
             recGroupSize: recGroupSize,
             recGroupPosition: recGroupPosition,
+            declaresSubtype: declaresSubtype,
+            subtypeFinal: subtypeFinal,
           ),
         );
       case 0x5e:
@@ -682,6 +722,10 @@ final class WasmModule {
             superTypeIndices: List.unmodifiable(superTypeIndices),
             descriptorTypeIndex: descriptorTypeIndex,
             describesTypeIndex: describesTypeIndex,
+            recGroupSize: recGroupSize,
+            recGroupPosition: recGroupPosition,
+            declaresSubtype: declaresSubtype,
+            subtypeFinal: subtypeFinal,
           ),
         );
       case 0x5f:
@@ -697,6 +741,10 @@ final class WasmModule {
             superTypeIndices: List.unmodifiable(superTypeIndices),
             descriptorTypeIndex: descriptorTypeIndex,
             describesTypeIndex: describesTypeIndex,
+            recGroupSize: recGroupSize,
+            recGroupPosition: recGroupPosition,
+            declaresSubtype: declaresSubtype,
+            subtypeFinal: subtypeFinal,
           ),
         );
       default:
@@ -793,13 +841,12 @@ final class WasmModule {
           throw FormatException('Invalid super type index: $superTypeIndex');
         }
         final superType = types[superTypeIndex];
-        if (subType.kind != superType.kind) {
+        if (!superType.declaresSubtype || superType.subtypeFinal) {
           throw FormatException(
             'Sub type $i does not match super type $superTypeIndex',
           );
         }
-        if (subType.isFunctionType &&
-            !_functionSignaturesEqual(subType, superType)) {
+        if (subType.kind != superType.kind) {
           throw FormatException(
             'Sub type $i does not match super type $superTypeIndex',
           );
@@ -813,18 +860,6 @@ final class WasmModule {
                   'Sub type $i does not match super type $superTypeIndex',
                 );
               }
-              for (
-                var fieldIndex = 0;
-                fieldIndex < subType.fieldSignatures.length;
-                fieldIndex++
-              ) {
-                if (subType.fieldSignatures[fieldIndex] !=
-                    superType.fieldSignatures[fieldIndex]) {
-                  throw FormatException(
-                    'Sub type $i does not match super type $superTypeIndex',
-                  );
-                }
-              }
             case WasmCompositeTypeKind.struct:
               if (subType.fieldSignatures.length <
                   superType.fieldSignatures.length) {
@@ -832,21 +867,14 @@ final class WasmModule {
                   'Sub type $i does not match super type $superTypeIndex',
                 );
               }
-              for (
-                var fieldIndex = 0;
-                fieldIndex < superType.fieldSignatures.length;
-                fieldIndex++
-              ) {
-                if (subType.fieldSignatures[fieldIndex] !=
-                    superType.fieldSignatures[fieldIndex]) {
-                  throw FormatException(
-                    'Sub type $i does not match super type $superTypeIndex',
-                  );
-                }
-              }
             case WasmCompositeTypeKind.function:
               break;
           }
+        }
+        if (!_isCompositeSubtypeShapeCompatible(types, subType, superType)) {
+          throw FormatException(
+            'Sub type $i does not match super type $superTypeIndex',
+          );
         }
         final superHasDescriptor = superType.descriptorTypeIndex != null;
         final subHasDescriptor = subType.descriptorTypeIndex != null;
@@ -886,6 +914,272 @@ final class WasmModule {
     }
   }
 
+  static bool _isCompositeSubtypeShapeCompatible(
+    List<WasmFunctionType> types,
+    WasmFunctionType subType,
+    WasmFunctionType superType,
+  ) {
+    if (subType.kind != superType.kind) {
+      return false;
+    }
+    if (subType.isFunctionType != superType.isFunctionType) {
+      return false;
+    }
+    if (subType.isFunctionType) {
+      return _isFunctionSubtypeShapeCompatible(types, subType, superType);
+    }
+    switch (subType.kind) {
+      case WasmCompositeTypeKind.array:
+        if (subType.fieldSignatures.length != 1 ||
+            superType.fieldSignatures.length != 1) {
+          return false;
+        }
+        return _isFieldSubtypeCompatible(
+          types,
+          subType.fieldSignatures.single,
+          superType.fieldSignatures.single,
+        );
+      case WasmCompositeTypeKind.struct:
+        if (subType.fieldSignatures.length < superType.fieldSignatures.length) {
+          return false;
+        }
+        for (var i = 0; i < superType.fieldSignatures.length; i++) {
+          if (!_isFieldSubtypeCompatible(
+            types,
+            subType.fieldSignatures[i],
+            superType.fieldSignatures[i],
+          )) {
+            return false;
+          }
+        }
+        return true;
+      case WasmCompositeTypeKind.function:
+        return true;
+    }
+  }
+
+  static bool _isFunctionSubtypeShapeCompatible(
+    List<WasmFunctionType> types,
+    WasmFunctionType subType,
+    WasmFunctionType superType,
+  ) {
+    if (subType.paramTypeSignatures.length !=
+            superType.paramTypeSignatures.length ||
+        subType.resultTypeSignatures.length !=
+            superType.resultTypeSignatures.length) {
+      return false;
+    }
+    // Function subtyping is contravariant in params and covariant in results.
+    for (var i = 0; i < subType.paramTypeSignatures.length; i++) {
+      if (!_isSubtypeValueSignatureForShapeCheck(
+        types,
+        superType.paramTypeSignatures[i],
+        subType.paramTypeSignatures[i],
+      )) {
+        return false;
+      }
+    }
+    for (var i = 0; i < subType.resultTypeSignatures.length; i++) {
+      if (!_isSubtypeValueSignatureForShapeCheck(
+        types,
+        subType.resultTypeSignatures[i],
+        superType.resultTypeSignatures[i],
+      )) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static bool _isFieldSubtypeCompatible(
+    List<WasmFunctionType> types,
+    String subFieldSignature,
+    String superFieldSignature,
+  ) {
+    final subField = _parseFieldSignature(subFieldSignature);
+    final superField = _parseFieldSignature(superFieldSignature);
+    if (subField == null || superField == null) {
+      return false;
+    }
+    if (subField.mutability == 1 || superField.mutability == 1) {
+      if (subField.mutability != superField.mutability) {
+        return false;
+      }
+      return _isEquivalentValueSignatureForShapeCheck(
+        types,
+        subField.valueSignature,
+        superField.valueSignature,
+      );
+    }
+    return _isSubtypeValueSignatureForShapeCheck(
+      types,
+      subField.valueSignature,
+      superField.valueSignature,
+    );
+  }
+
+  static bool _isEquivalentValueSignatureForShapeCheck(
+    List<WasmFunctionType> types,
+    String lhs,
+    String rhs,
+  ) {
+    return _isSubtypeValueSignatureForShapeCheck(types, lhs, rhs) &&
+        _isSubtypeValueSignatureForShapeCheck(types, rhs, lhs);
+  }
+
+  static bool _isSubtypeValueSignatureForShapeCheck(
+    List<WasmFunctionType> types,
+    String sourceSignature,
+    String targetSignature,
+  ) {
+    if (sourceSignature == targetSignature) {
+      return true;
+    }
+
+    // Keep declaration-time checks permissive for concrete recursive refs.
+    // Runtime/validator paths enforce the full relation.
+    if (_concreteHeapTypeFromSignature(sourceSignature) != null ||
+        _concreteHeapTypeFromSignature(targetSignature) != null) {
+      return true;
+    }
+
+    final sourceRef = _parseRefSignatureForShapeCheck(sourceSignature);
+    final targetRef = _parseRefSignatureForShapeCheck(targetSignature);
+    if (sourceRef == null || targetRef == null) {
+      return false;
+    }
+    if (sourceRef.nullable && !targetRef.nullable) {
+      return false;
+    }
+    return _isAbstractHeapSubtypeForShapeCheck(
+      sourceRef.heapType,
+      targetRef.heapType,
+    );
+  }
+
+  static bool _isAbstractHeapSubtypeForShapeCheck(int subHeap, int superHeap) {
+    if (subHeap == superHeap) {
+      return true;
+    }
+    if (subHeap >= 0 || superHeap >= 0) {
+      return false;
+    }
+    switch (subHeap) {
+      case _shapeHeapNone:
+        return superHeap == _shapeHeapStruct ||
+            superHeap == _shapeHeapArray ||
+            superHeap == _shapeHeapEq ||
+            superHeap == _shapeHeapAny;
+      case _shapeHeapStruct:
+      case _shapeHeapArray:
+      case _shapeHeapI31:
+      case _shapeHeapEq:
+        return superHeap == _shapeHeapEq || superHeap == _shapeHeapAny;
+      case _shapeHeapNofunc:
+        return superHeap == _shapeHeapFunc;
+      case _shapeHeapNoextern:
+        return superHeap == _shapeHeapExtern;
+      case _shapeHeapNoexn:
+        return superHeap == _shapeHeapExn;
+      default:
+        return false;
+    }
+  }
+
+  static ({bool nullable, int heapType})? _parseRefSignatureForShapeCheck(
+    String signature,
+  ) {
+    if (signature.isEmpty || signature.length.isOdd) {
+      return null;
+    }
+    final bytes = <int>[];
+    for (var i = 0; i < signature.length; i += 2) {
+      bytes.add(int.parse(signature.substring(i, i + 2), radix: 16));
+    }
+    if (bytes.isEmpty) {
+      return null;
+    }
+    if (bytes.length == 1) {
+      final heap = _shapeLegacyHeapTypeFromRefTypeCode(bytes.single);
+      if (heap == null) {
+        return null;
+      }
+      return (nullable: true, heapType: heap);
+    }
+    final prefix = bytes.first;
+    if (prefix != 0x63 && prefix != 0x64) {
+      return null;
+    }
+    var offset = 1;
+    if (offset < bytes.length &&
+        (bytes[offset] == 0x62 || bytes[offset] == 0x61)) {
+      offset++;
+    }
+    final decoded = _readSignedLeb33FromBytes(bytes, offset);
+    if (decoded == null || decoded.$2 != bytes.length) {
+      return null;
+    }
+    return (nullable: prefix == 0x63, heapType: decoded.$1);
+  }
+
+  static ({String valueSignature, int mutability})? _parseFieldSignature(
+    String signature,
+  ) {
+    if (signature.length < 4 || signature.length.isOdd) {
+      return null;
+    }
+    final bytes = <int>[];
+    for (var i = 0; i < signature.length; i += 2) {
+      bytes.add(int.parse(signature.substring(i, i + 2), radix: 16));
+    }
+    if (bytes.length < 2) {
+      return null;
+    }
+    final mutability = bytes.last;
+    if (mutability != 0 && mutability != 1) {
+      return null;
+    }
+    return (
+      valueSignature: _typeEncodingSignature(
+        bytes.sublist(0, bytes.length - 1),
+      ),
+      mutability: mutability,
+    );
+  }
+
+  static int? _shapeLegacyHeapTypeFromRefTypeCode(int code) {
+    return switch (code & 0xff) {
+      0x70 => _shapeHeapFunc, // funcref
+      0x6f => _shapeHeapExtern, // externref
+      0x6e => _shapeHeapAny, // anyref
+      0x6d => _shapeHeapEq, // eqref
+      0x6c => _shapeHeapI31, // i31ref
+      0x6b => _shapeHeapStruct, // structref
+      0x6a => _shapeHeapArray, // arrayref
+      0x69 => _shapeHeapExn, // exnref legacy alias
+      0x68 => _shapeHeapNoexn, // noexn legacy alias
+      0x74 => _shapeHeapExn, // exnref
+      0x75 => _shapeHeapNoexn, // noexn
+      0x71 => _shapeHeapNone, // nullref
+      0x72 => _shapeHeapNoextern, // nullexternref
+      0x73 => _shapeHeapNofunc, // nullfuncref
+      _ => null,
+    };
+  }
+
+  static const int _shapeHeapAny = -18;
+  static const int _shapeHeapEq = -19;
+  static const int _shapeHeapI31 = -21;
+  static const int _shapeHeapStruct = -20;
+  static const int _shapeHeapArray = -14;
+  static const int _shapeHeapFunc = -16;
+  static const int _shapeHeapExtern = -17;
+  static const int _shapeHeapExn = -22;
+  static const int _shapeHeapNone = -23;
+  static const int _shapeHeapNoexn = -24;
+  static const int _shapeHeapNofunc = -13;
+  static const int _shapeHeapNoextern = -15;
+
   static bool _isSubType(
     List<WasmFunctionType> types,
     int subTypeIndex,
@@ -919,24 +1213,6 @@ final class WasmModule {
       }
     }
     return false;
-  }
-
-  static bool _functionSignaturesEqual(WasmFunctionType a, WasmFunctionType b) {
-    if (a.params.length != b.params.length ||
-        a.results.length != b.results.length) {
-      return false;
-    }
-    for (var i = 0; i < a.params.length; i++) {
-      if (a.params[i] != b.params[i]) {
-        return false;
-      }
-    }
-    for (var i = 0; i < a.results.length; i++) {
-      if (a.results[i] != b.results[i]) {
-        return false;
-      }
-    }
-    return true;
   }
 
   static String _readFieldType(ByteReader reader) {
@@ -1128,6 +1404,7 @@ final class WasmModule {
               offsetExpr: offsetExpr,
               functionIndices: functionIndices,
               refTypeCode: 0x70,
+              usesLegacyFunctionIndices: true,
             ),
           );
 
@@ -1137,6 +1414,7 @@ final class WasmModule {
             WasmElementSegment.passive(
               functionIndices: _readFunctionIndexVector(reader),
               refTypeCode: 0x70,
+              usesLegacyFunctionIndices: true,
             ),
           );
 
@@ -1150,6 +1428,7 @@ final class WasmModule {
               offsetExpr: offsetExpr,
               functionIndices: _readFunctionIndexVector(reader),
               refTypeCode: 0x70,
+              usesLegacyFunctionIndices: true,
             ),
           );
 
@@ -1159,6 +1438,7 @@ final class WasmModule {
             WasmElementSegment.declarative(
               functionIndices: _readFunctionIndexVector(reader),
               refTypeCode: 0x70,
+              usesLegacyFunctionIndices: true,
             ),
           );
 
@@ -1168,7 +1448,11 @@ final class WasmModule {
             WasmElementSegment.active(
               tableIndex: 0,
               offsetExpr: offsetExpr,
-              functionIndices: _readElementExprFunctionIndices(reader, types),
+              functionIndices: _readElementExprFunctionIndices(
+                reader,
+                types,
+                0x70,
+              ),
               refTypeCode: 0x70,
             ),
           );
@@ -1181,7 +1465,11 @@ final class WasmModule {
           );
           sink.add(
             WasmElementSegment.passive(
-              functionIndices: _readElementExprFunctionIndices(reader, types),
+              functionIndices: _readElementExprFunctionIndices(
+                reader,
+                types,
+                refTypeCode,
+              ),
               refTypeCode: refTypeCode,
               refTypeSignature: refTypeSignature,
             ),
@@ -1199,7 +1487,11 @@ final class WasmModule {
             WasmElementSegment.active(
               tableIndex: tableIndex,
               offsetExpr: offsetExpr,
-              functionIndices: _readElementExprFunctionIndices(reader, types),
+              functionIndices: _readElementExprFunctionIndices(
+                reader,
+                types,
+                refTypeCode,
+              ),
               refTypeCode: refTypeCode,
               refTypeSignature: refTypeSignature,
             ),
@@ -1213,7 +1505,11 @@ final class WasmModule {
           );
           sink.add(
             WasmElementSegment.declarative(
-              functionIndices: _readElementExprFunctionIndices(reader, types),
+              functionIndices: _readElementExprFunctionIndices(
+                reader,
+                types,
+                refTypeCode,
+              ),
               refTypeCode: refTypeCode,
               refTypeSignature: refTypeSignature,
             ),
@@ -1317,6 +1613,17 @@ final class WasmModule {
           _consumeHeapType(reader);
         case Opcodes.refFunc:
           reader.readVarUint32();
+        case 0xfd:
+          final subOpcode = reader.readVarUint32();
+          final pseudoOpcode = 0xfd00 | subOpcode;
+          switch (pseudoOpcode) {
+            case Opcodes.v128Const:
+              reader.readBytes(16);
+            default:
+              throw UnsupportedError(
+                'Unsupported init expression opcode: 0xFD${subOpcode.toRadixString(16).padLeft(2, '0')}',
+              );
+          }
         case 0xfb:
           final subOpcode = reader.readVarUint32();
           final pseudoOpcode = 0xfb00 | subOpcode;
@@ -1446,6 +1753,10 @@ final class WasmModule {
       case 0x7b:
       case 0x70:
       case 0x71:
+      case 0x72:
+      case 0x73:
+      case 0x74:
+      case 0x75:
       case 0x6f:
       case 0x6e:
       case 0x6d:
@@ -1490,19 +1801,27 @@ final class WasmModule {
   static List<int?> _readElementExprFunctionIndices(
     ByteReader reader,
     List<WasmFunctionType> types,
+    int expectedRefTypeCode,
   ) {
     final count = reader.readVarUint32();
     final result = <int?>[];
     for (var i = 0; i < count; i++) {
-      result.add(_readElementExprFunctionIndex(reader, types));
+      result.add(
+        _readElementExprFunctionIndex(
+          reader,
+          types,
+          expectedRefTypeCode: expectedRefTypeCode,
+        ),
+      );
     }
     return result;
   }
 
   static int? _readElementExprFunctionIndex(
     ByteReader reader,
-    List<WasmFunctionType> types,
-  ) {
+    List<WasmFunctionType> types, {
+    required int expectedRefTypeCode,
+  }) {
     final stack = <WasmValue>[];
     while (true) {
       final opcode = reader.readByte();
@@ -1511,11 +1830,22 @@ final class WasmModule {
           stack.add(WasmValue.i32(reader.readVarInt32()));
 
         case Opcodes.refNull:
-          _consumeHeapType(reader);
+          final heapTypeCode = _readHeapTypeCode(reader);
+          if (!_isHeapTypeCompatibleWithElementRef(
+            heapTypeCode: heapTypeCode,
+            expectedRefTypeCode: expectedRefTypeCode,
+          )) {
+            throw const FormatException('Element init expr type mismatch.');
+          }
           stack.add(WasmValue.i32(-1));
 
         case Opcodes.refFunc:
           stack.add(WasmValue.i32(reader.readVarUint32()));
+
+        case Opcodes.globalGet:
+          stack.add(
+            WasmValue.i32(encodeElementGlobalRef(reader.readVarUint32())),
+          );
 
         case 0xfb:
           final subOpcode = reader.readVarUint32();
@@ -1743,6 +2073,30 @@ final class WasmModule {
 
   static void _consumeHeapType(ByteReader reader) {
     _consumeHeapTypeWithLeadingByte(reader, reader.readByte());
+  }
+
+  static int _readHeapTypeCode(ByteReader reader) {
+    final lead = reader.readByte();
+    _consumeHeapTypeWithLeadingByte(reader, lead);
+    return lead;
+  }
+
+  static bool _isHeapTypeCompatibleWithElementRef({
+    required int heapTypeCode,
+    required int expectedRefTypeCode,
+  }) {
+    final isTypeIndexEncoding = heapTypeCode <= 0x60 || heapTypeCode >= 0x80;
+    if (isTypeIndexEncoding) {
+      return true;
+    }
+    switch (expectedRefTypeCode) {
+      case 0x70: // funcref
+        return heapTypeCode == 0x70 || heapTypeCode == 0x73;
+      case 0x6f: // externref
+        return heapTypeCode == 0x6f || heapTypeCode == 0x72;
+      default:
+        return true;
+    }
   }
 
   static void _consumeHeapTypeWithLeadingByte(ByteReader reader, int lead) {

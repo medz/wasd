@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'src/spec_player_bridge_io.dart'
     if (dart.library.js_interop) 'src/spec_player_bridge_web.dart'
     as player_bridge;
+import 'src/spec_v128_codec.dart' as spec_v128;
 import 'package:wasd/wasd.dart';
 
 enum _SpecSuite { core, proposal, all }
@@ -93,36 +94,63 @@ final class _ExpectedValue {
       isNaN = false,
       floatBits = null,
       expectsRef = false,
-      expectsNullRef = false;
+      expectsNullRef = false,
+      v128Raw = null,
+      alternatives = null;
   const _ExpectedValue.i64(BigInt this.value)
     : type = 'i64',
       isNaN = false,
       floatBits = null,
       expectsRef = false,
-      expectsNullRef = false;
+      expectsNullRef = false,
+      v128Raw = null,
+      alternatives = null;
   const _ExpectedValue.f32(this.floatBits)
     : type = 'f32',
       isNaN = false,
       value = null,
       expectsRef = false,
-      expectsNullRef = false;
+      expectsNullRef = false,
+      v128Raw = null,
+      alternatives = null;
   const _ExpectedValue.f64(this.floatBits)
     : type = 'f64',
       isNaN = false,
       value = null,
       expectsRef = false,
-      expectsNullRef = false;
+      expectsNullRef = false,
+      v128Raw = null,
+      alternatives = null;
   const _ExpectedValue.nan(this.type)
     : isNaN = true,
       value = null,
       floatBits = null,
       expectsRef = false,
-      expectsNullRef = false;
+      expectsNullRef = false,
+      v128Raw = null,
+      alternatives = null;
+  _ExpectedValue.v128(int this.value, {this.v128Raw})
+    : type = 'v128',
+      isNaN = false,
+      floatBits = null,
+      expectsRef = false,
+      expectsNullRef = false,
+      alternatives = null;
+  _ExpectedValue.either(this.alternatives)
+    : type = 'either',
+      isNaN = false,
+      value = null,
+      floatBits = null,
+      expectsRef = false,
+      expectsNullRef = false,
+      v128Raw = null;
   const _ExpectedValue.ref(this.type, {required this.expectsNullRef})
     : isNaN = false,
       value = null,
       floatBits = null,
-      expectsRef = true;
+      expectsRef = true,
+      v128Raw = null,
+      alternatives = null;
 
   final String type;
   final bool isNaN;
@@ -130,6 +158,8 @@ final class _ExpectedValue {
   final int? floatBits;
   final bool expectsRef;
   final bool expectsNullRef;
+  final Map<String, Object?>? v128Raw;
+  final List<_ExpectedValue>? alternatives;
 }
 
 final class _FileResult {
@@ -213,6 +243,8 @@ final class _ScriptExecutionState {
   final WasmFeatureSet _features;
   final Uint8List Function(String filename)? _moduleLoader;
 
+  final Map<String, WasmModule> _moduleDefinitions = <String, WasmModule>{};
+  WasmModule? _anonymousModuleDefinition;
   final Map<String, WasmInstance> _namedModules = <String, WasmInstance>{};
   final Map<String, WasmInstance> _registeredModules = <String, WasmInstance>{};
   final WasmMemory _spectestMemory = WasmMemory(minPages: 1, maxPages: 2);
@@ -225,6 +257,14 @@ final class _ScriptExecutionState {
     refType: WasmRefType.funcref,
     min: 10,
     max: 20,
+    refTypeSignature: '70',
+  );
+  final WasmTable _spectestTable64 = WasmTable(
+    refType: WasmRefType.funcref,
+    min: 10,
+    max: 20,
+    isTable64: true,
+    refTypeSignature: '70',
   );
 
   WasmInstance? _currentInstance;
@@ -240,6 +280,10 @@ final class _ScriptExecutionState {
 
     try {
       switch (type) {
+        case 'module_definition':
+          return _handleModuleDefinition(command);
+        case 'module_instance':
+          return _handleModuleInstance(command);
         case 'module':
           return _handleModule(command);
         case 'register':
@@ -271,29 +315,9 @@ final class _ScriptExecutionState {
   }
 
   _CommandResult _handleModule(Map<String, Object?> command) {
-    final filename = command['filename'];
-    if (filename is! String || filename.isEmpty) {
+    final resolvedFilename = _resolveModuleFilename(command);
+    if (resolvedFilename == null) {
       return _CommandResult.fail('module-missing-filename', '$command');
-    }
-    final moduleType = command['module_type'];
-    var resolvedFilename = filename;
-    if (moduleType is String && moduleType != 'binary') {
-      if (moduleType == 'text') {
-        final binaryFilename = command['binary_filename'];
-        if (binaryFilename is String && binaryFilename.isNotEmpty) {
-          resolvedFilename = binaryFilename;
-        } else {
-          return _CommandResult.skip(
-            'unsupported-module-type',
-            'module_type `$moduleType` has no binary translation.',
-          );
-        }
-      } else {
-        return _CommandResult.skip(
-          'unsupported-module-type',
-          'module_type `$moduleType` is not supported.',
-        );
-      }
     }
 
     final moduleBytes = _readBinaryModule(resolvedFilename);
@@ -309,6 +333,72 @@ final class _ScriptExecutionState {
       _namedModules[name] = instance;
     }
     return _CommandResult.pass();
+  }
+
+  _CommandResult _handleModuleDefinition(Map<String, Object?> command) {
+    final resolvedFilename = _resolveModuleFilename(command);
+    if (resolvedFilename == null) {
+      return _CommandResult.fail('module-missing-filename', '$command');
+    }
+    final moduleBytes = _readBinaryModule(resolvedFilename);
+    final module = WasmModule.decode(moduleBytes, features: _features);
+    final name = command['name'];
+    if (name is String && name.isNotEmpty) {
+      _moduleDefinitions[name] = module;
+    } else {
+      _anonymousModuleDefinition = module;
+    }
+    return _CommandResult.pass();
+  }
+
+  _CommandResult _handleModuleInstance(Map<String, Object?> command) {
+    final moduleName = command['module'];
+    final module = switch (moduleName) {
+      String() when moduleName.isNotEmpty => _moduleDefinitions[moduleName],
+      _ => _anonymousModuleDefinition,
+    };
+    if (module == null) {
+      if (moduleName is String && moduleName.isNotEmpty) {
+        return _CommandResult.fail(
+          'module-instance-definition-not-found',
+          'Module definition `$moduleName` not found.',
+        );
+      }
+      return _CommandResult.fail('module-instance-missing-module', '$command');
+    }
+    final instance = WasmInstance.fromModule(
+      module,
+      imports: _buildImports(module),
+      features: _features,
+    );
+    _currentInstance = instance;
+    final instanceName = command['instance'];
+    if (instanceName is String && instanceName.isNotEmpty) {
+      _namedModules[instanceName] = instance;
+    }
+    return _CommandResult.pass();
+  }
+
+  String? _resolveModuleFilename(Map<String, Object?> command) {
+    final filename = command['filename'];
+    if (filename is! String || filename.isEmpty) {
+      return null;
+    }
+    final moduleType = command['module_type'];
+    var resolvedFilename = filename;
+    if (moduleType is String && moduleType != 'binary') {
+      if (moduleType == 'text') {
+        final binaryFilename = command['binary_filename'];
+        if (binaryFilename is String && binaryFilename.isNotEmpty) {
+          resolvedFilename = binaryFilename;
+        } else {
+          return null;
+        }
+      } else {
+        return null;
+      }
+    }
+    return resolvedFilename;
   }
 
   _CommandResult _handleRegister(Map<String, Object?> command) {
@@ -465,7 +555,7 @@ final class _ScriptExecutionState {
     switch (type) {
       case 'invoke':
         final field = action['field'];
-        if (field is! String || field.isEmpty) {
+        if (field is! String) {
           throw _SpecRunnerFailure('invoke-missing-field', '$action');
         }
         final rawArgs = action['args'];
@@ -481,7 +571,7 @@ final class _ScriptExecutionState {
         return instance.invokeMulti(field, args);
       case 'get':
         final field = action['field'];
-        if (field is! String || field.isEmpty) {
+        if (field is! String) {
           throw _SpecRunnerFailure('get-missing-field', '$action');
         }
         return [instance.readGlobal(field)];
@@ -518,9 +608,14 @@ final class _ScriptExecutionState {
 
   WasmImports _buildImports(WasmModule targetModule) {
     final expectedFunctionImports = <String, WasmImport>{};
+    final expectedGlobalImports = <String, WasmImport>{};
     for (final import in targetModule.imports) {
       if (import.kind != WasmImportKind.function &&
           import.kind != WasmImportKind.exactFunction) {
+        if (import.kind != WasmImportKind.global || import.globalType == null) {
+          continue;
+        }
+        expectedGlobalImports[import.key] = import;
         continue;
       }
       final typeIndex = import.functionTypeIndex;
@@ -548,15 +643,39 @@ final class _ScriptExecutionState {
     final globals = <String, Object?>{
       WasmImports.key('spectest', 'global_i32'): 666,
       WasmImports.key('spectest', 'global_i64'): 666,
-      WasmImports.key('spectest', 'global_f32'): 666.0,
-      WasmImports.key('spectest', 'global_f64'): 666.0,
+      WasmImports.key('spectest', 'global_f32'): 666.6,
+      WasmImports.key('spectest', 'global_f64'): 666.6,
     };
+    final globalTypes = <String, WasmGlobalType>{
+      WasmImports.key('spectest', 'global_i32'): const WasmGlobalType(
+        valueType: WasmValueType.i32,
+        mutable: false,
+        valueTypeSignature: '7f',
+      ),
+      WasmImports.key('spectest', 'global_i64'): const WasmGlobalType(
+        valueType: WasmValueType.i64,
+        mutable: false,
+        valueTypeSignature: '7e',
+      ),
+      WasmImports.key('spectest', 'global_f32'): const WasmGlobalType(
+        valueType: WasmValueType.f32,
+        mutable: false,
+        valueTypeSignature: '7d',
+      ),
+      WasmImports.key('spectest', 'global_f64'): const WasmGlobalType(
+        valueType: WasmValueType.f64,
+        mutable: false,
+        valueTypeSignature: '7c',
+      ),
+    };
+    final globalBindings = <String, RuntimeGlobal>{};
     final memories = <String, WasmMemory>{
       WasmImports.key('spectest', 'memory'): _spectestMemory,
       WasmImports.key('spectest', 'shared_memory'): _spectestSharedMemory,
     };
     final tables = <String, WasmTable>{
       WasmImports.key('spectest', 'table'): _spectestTable,
+      WasmImports.key('spectest', 'table64'): _spectestTable64,
     };
     final tags = <String, WasmTagImport>{};
 
@@ -569,19 +688,20 @@ final class _ScriptExecutionState {
         if (expectedImport == null) {
           continue;
         }
-        final expectedType =
-            targetModule.types[expectedImport.functionTypeIndex!];
+        final expectedTypeIndex = expectedImport.functionTypeIndex!;
         final expectedDepth = _functionTypeDepth(
           targetModule,
-          expectedImport.functionTypeIndex!,
+          expectedTypeIndex,
         );
-        final actualType = instance.exportedFunctionType(export);
+        final actualTypeIndex = instance.exportedFunctionTypeIndex(export);
         final actualDepth = instance.exportedFunctionTypeDepth(export);
         if (!_functionTypeCompatibleForImport(
-          expectedType: expectedType,
+          expectedModule: targetModule,
+          expectedTypeIndex: expectedTypeIndex,
           expectedDepth: expectedDepth,
           isExactImport: expectedImport.isExactFunction,
-          actualType: actualType,
+          actualModule: instance.module,
+          actualTypeIndex: actualTypeIndex,
           actualDepth: actualDepth,
         )) {
           continue;
@@ -592,6 +712,22 @@ final class _ScriptExecutionState {
       for (final export in instance.exportedGlobals) {
         final key = WasmImports.key(alias, export);
         globals[key] = instance.readGlobal(export);
+        final actualType = instance.exportedGlobalType(export);
+        final expectedImport = expectedGlobalImports[key];
+        if (expectedImport != null &&
+            _globalTypeCompatibleForImport(
+              expectedModule: targetModule,
+              expectedType: expectedImport.globalType!,
+              actualModule: instance.module,
+              actualType: actualType,
+            )) {
+          // Canonicalize imported global signatures to the target module when
+          // cross-module equivalent types use different local type indices.
+          globalTypes[key] = expectedImport.globalType!;
+        } else {
+          globalTypes[key] = actualType;
+        }
+        globalBindings[key] = instance.exportedGlobalBinding(export);
       }
       for (final export in instance.exportedMemories) {
         final key = WasmImports.key(alias, export);
@@ -611,13 +747,15 @@ final class _ScriptExecutionState {
       functions: functions,
       functionTypeDepths: functionTypeDepths,
       globals: globals,
+      globalTypes: globalTypes,
+      globalBindings: globalBindings,
       memories: memories,
       tables: tables,
       tags: tags,
     );
   }
 
-  static Object? _parseActionArg(Map<String, Object?> raw) {
+  Object? _parseActionArg(Map<String, Object?> raw) {
     final type = raw['type'];
     final value = raw['value'];
     if (type is! String) {
@@ -630,13 +768,16 @@ final class _ScriptExecutionState {
         type == 'arrayref' ||
         type == 'eqref' ||
         type == 'i31ref' ||
+        type == 'exnref' ||
         type == 'anyref' ||
         type == 'refnull' ||
         type == 'nullref' ||
         type == 'nullfuncref' ||
+        type == 'nullexternref' ||
+        type == 'nullexnref' ||
         type == 'nullstructref' ||
         type == 'nullarrayref';
-    if (value is! String && !isReferenceArg) {
+    if (value is! String && !isReferenceArg && type != 'v128') {
       throw _SpecRunnerFailure('invalid-arg-value', '$raw');
     }
 
@@ -653,12 +794,15 @@ final class _ScriptExecutionState {
       case 'f64':
         final valueString = value as String;
         return WasmF64Bits(_parseFloatBits(valueString, 64));
+      case 'v128':
+        return _parseV128Token(raw);
       case 'externref':
       case 'funcref':
       case 'structref':
       case 'arrayref':
       case 'eqref':
       case 'i31ref':
+      case 'exnref':
       case 'anyref':
         if (value == null || value == 'null') {
           return -1;
@@ -668,6 +812,8 @@ final class _ScriptExecutionState {
       case 'nullref':
       case 'refnull':
       case 'nullfuncref':
+      case 'nullexternref':
+      case 'nullexnref':
       case 'nullstructref':
       case 'nullarrayref':
         return -1;
@@ -679,29 +825,47 @@ final class _ScriptExecutionState {
     }
   }
 
-  static _ExpectedValue _parseExpectedValue(Map<String, Object?> raw) {
+  _ExpectedValue _parseExpectedValue(Map<String, Object?> raw) {
     final type = raw['type'];
     final value = raw['value'];
     if (type is! String) {
       throw _SpecRunnerFailure('invalid-expected-type', '$raw');
     }
     if (value is! String &&
+        type != 'either' &&
+        type != 'v128' &&
         type != 'funcref' &&
         type != 'externref' &&
         type != 'structref' &&
         type != 'arrayref' &&
         type != 'eqref' &&
         type != 'i31ref' &&
+        type != 'exnref' &&
         type != 'anyref' &&
         type != 'nullref' &&
         type != 'refnull' &&
         type != 'nullfuncref' &&
+        type != 'nullexternref' &&
+        type != 'nullexnref' &&
         type != 'nullstructref' &&
         type != 'nullarrayref') {
       throw _SpecRunnerFailure('invalid-expected-value', '$raw');
     }
 
     switch (type) {
+      case 'either':
+        final valuesRaw = raw['values'];
+        if (valuesRaw is! List || valuesRaw.isEmpty) {
+          throw _SpecRunnerFailure('invalid-expected-value', '$raw');
+        }
+        final alternatives = <_ExpectedValue>[];
+        for (final candidate in valuesRaw) {
+          if (candidate is! Map) {
+            throw _SpecRunnerFailure('invalid-expected-value', '$raw');
+          }
+          alternatives.add(_parseExpectedValue(candidate.cast<String, Object?>()));
+        }
+        return _ExpectedValue.either(alternatives);
       case 'i32':
         final valueString = value as String;
         return _ExpectedValue.i32(_signedBits(BigInt.parse(valueString), 32));
@@ -722,20 +886,22 @@ final class _ScriptExecutionState {
           return const _ExpectedValue.nan('f64');
         }
         return _ExpectedValue.f64(_parseFloatBits(valueString, 64));
+      case 'v128':
+        return _ExpectedValue.v128(_parseV128Token(raw), v128Raw: raw);
       case 'funcref':
       case 'externref':
       case 'structref':
       case 'arrayref':
       case 'eqref':
       case 'i31ref':
+      case 'exnref':
       case 'anyref':
-        return _ExpectedValue.ref(
-          type,
-          expectsNullRef: value == 'null',
-        );
+        return _ExpectedValue.ref(type, expectsNullRef: value == 'null');
       case 'nullref':
       case 'refnull':
       case 'nullfuncref':
+      case 'nullexternref':
+      case 'nullexnref':
       case 'nullstructref':
       case 'nullarrayref':
         return _ExpectedValue.ref(type, expectsNullRef: true);
@@ -755,6 +921,17 @@ final class _ScriptExecutionState {
       return actual is int && actual != -1;
     }
     switch (expected.type) {
+      case 'either':
+        final alternatives = expected.alternatives;
+        if (alternatives == null || alternatives.isEmpty) {
+          return false;
+        }
+        for (final candidate in alternatives) {
+          if (_matchExpected(actual, candidate)) {
+            return true;
+          }
+        }
+        return false;
       case 'i32':
         final expectedValue = expected.value;
         return actual is int &&
@@ -800,8 +977,181 @@ final class _ScriptExecutionState {
           return actual.isNaN;
         }
         return _f64Bits(actual) == expected.floatBits;
+      case 'v128':
+        final expectedValue = expected.value;
+        if (actual is! int || expectedValue is! int) {
+          return false;
+        }
+        if (actual.toSigned(32) == expectedValue.toSigned(32)) {
+          return true;
+        }
+        final raw = expected.v128Raw;
+        if (raw == null) {
+          return false;
+        }
+        return _matchV128NaNPattern(actual, expectedValue, raw);
       default:
         return false;
+    }
+  }
+
+  static bool _matchV128NaNPattern(
+    int actualToken,
+    int expectedToken,
+    Map<String, Object?> raw,
+  ) {
+    final laneType = raw['lane_type'];
+    final lanesRaw = raw['value'];
+    if (laneType is! String || lanesRaw is! List) {
+      return false;
+    }
+    final bytes = WasmVm.v128BytesForValue(actualToken);
+    final expectedBytes = WasmVm.v128BytesForValue(expectedToken);
+    if (bytes == null || expectedBytes == null) {
+      return false;
+    }
+    final data = ByteData.sublistView(bytes);
+    final expectedData = ByteData.sublistView(expectedBytes);
+    switch (laneType) {
+      case 'f32':
+        if (lanesRaw.length != 4) {
+          return false;
+        }
+        for (var lane = 0; lane < 4; lane++) {
+          final expectedLane = lanesRaw[lane];
+          final actualLaneBits = data.getUint32(lane * 4, Endian.little);
+          final expectedLaneBits = expectedData.getUint32(
+            lane * 4,
+            Endian.little,
+          );
+          if (_isV128NaNPatternToken(expectedLane)) {
+            if (!_matchF32NaNPattern(actualLaneBits, expectedLane)) {
+              return false;
+            }
+            continue;
+          }
+          if (actualLaneBits != expectedLaneBits) {
+            return false;
+          }
+        }
+        return true;
+      case 'f64':
+        if (lanesRaw.length != 2) {
+          return false;
+        }
+        for (var lane = 0; lane < 2; lane++) {
+          final expectedLane = lanesRaw[lane];
+          final actualLaneBits = _u64FromLane(data, lane * 8);
+          final expectedLaneBits = _u64FromLane(expectedData, lane * 8);
+          if (_isV128NaNPatternToken(expectedLane)) {
+            if (!_matchF64NaNPattern(actualLaneBits, expectedLane)) {
+              return false;
+            }
+            continue;
+          }
+          if (actualLaneBits != expectedLaneBits) {
+            return false;
+          }
+        }
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  static bool _isV128NaNPatternToken(Object? token) {
+    if (token is! String) {
+      return false;
+    }
+    final normalized = token.trim().toLowerCase();
+    final unsignedText = _stripLeadingSign(normalized);
+    return unsignedText == 'nan:canonical' || unsignedText == 'nan:arithmetic';
+  }
+
+  static bool _matchF32NaNPattern(int actualBits, Object? expectedLane) {
+    if (expectedLane is! String) {
+      return false;
+    }
+    final normalized = expectedLane.trim().toLowerCase();
+    final signRequirement = _nanSignRequirement(normalized);
+    final unsignedText = _stripLeadingSign(normalized);
+    if (unsignedText != 'nan:canonical' && unsignedText != 'nan:arithmetic') {
+      return false;
+    }
+    if (!_isF32NaNBits(actualBits)) {
+      return false;
+    }
+    final signBitSet = (actualBits & 0x80000000) != 0;
+    if (signRequirement == -1 && !signBitSet) {
+      return false;
+    }
+    if (signRequirement == 1 && signBitSet) {
+      return false;
+    }
+    if (unsignedText == 'nan:canonical') {
+      return (actualBits & 0x7fffffff) == 0x7fc00000;
+    }
+    final fraction = actualBits & 0x007fffff;
+    return (fraction & 0x00400000) != 0;
+  }
+
+  static bool _matchF64NaNPattern(BigInt actualBits, Object? expectedLane) {
+    if (expectedLane is! String) {
+      return false;
+    }
+    final normalized = expectedLane.trim().toLowerCase();
+    final signRequirement = _nanSignRequirement(normalized);
+    final unsignedText = _stripLeadingSign(normalized);
+    if (unsignedText != 'nan:canonical' && unsignedText != 'nan:arithmetic') {
+      return false;
+    }
+    if (!_isF64NaNBits(_signedBits(actualBits, 64))) {
+      return false;
+    }
+    final normalizedBits = actualBits & _u64Mask;
+    final signBitSet = (normalizedBits & _u64SignBit) != BigInt.zero;
+    if (signRequirement == -1 && !signBitSet) {
+      return false;
+    }
+    if (signRequirement == 1 && signBitSet) {
+      return false;
+    }
+    if (unsignedText == 'nan:canonical') {
+      return (normalizedBits & _u64AbsMask) == _f64CanonicalAbsBits;
+    }
+    final fraction = normalizedBits & _f64FractionMask;
+    return (fraction & _f64QuietBit) != BigInt.zero;
+  }
+
+  static int _nanSignRequirement(String text) {
+    if (text.startsWith('-')) {
+      return -1;
+    }
+    if (text.startsWith('+')) {
+      return 1;
+    }
+    return 0;
+  }
+
+  static String _stripLeadingSign(String text) {
+    if (text.startsWith('+') || text.startsWith('-')) {
+      return text.substring(1);
+    }
+    return text;
+  }
+
+  static BigInt _u64FromLane(ByteData data, int offset) {
+    final low = BigInt.from(data.getUint32(offset, Endian.little));
+    final high = BigInt.from(data.getUint32(offset + 4, Endian.little));
+    return (low | (high << 32)) & _u64Mask;
+  }
+
+  int _parseV128Token(Map<String, Object?> raw) {
+    try {
+      final bytes = spec_v128.parseV128LiteralBytes(raw);
+      return WasmVm.internV128Bytes(bytes);
+    } on FormatException {
+      throw _SpecRunnerFailure('invalid-v128-value', '$raw');
     }
   }
 
@@ -878,6 +1228,19 @@ final class _ScriptExecutionState {
     return _signedBits((BigInt.from(high) << 32) | BigInt.from(low), 64);
   }
 
+  static final BigInt _u64Mask = (BigInt.one << 64) - BigInt.one;
+  static final BigInt _u64SignBit = BigInt.one << 63;
+  static final BigInt _u64AbsMask = _u64SignBit - BigInt.one;
+  static final BigInt _f64CanonicalAbsBits = BigInt.parse(
+    '7ff8000000000000',
+    radix: 16,
+  );
+  static final BigInt _f64FractionMask = BigInt.parse(
+    '000fffffffffffff',
+    radix: 16,
+  );
+  static final BigInt _f64QuietBit = BigInt.parse('0008000000000000', radix: 16);
+
   static bool _isF32NaNBits(int bits) {
     final normalized = bits.toUnsigned(32);
     return (normalized & 0x7f800000) == 0x7f800000 &&
@@ -895,6 +1258,13 @@ final class _ScriptExecutionState {
     if (expected.expectsRef) {
       return expected.expectsNullRef ? '${expected.type}(null)' : expected.type;
     }
+    if (expected.type == 'either') {
+      final alternatives = expected.alternatives;
+      if (alternatives == null || alternatives.isEmpty) {
+        return 'either()';
+      }
+      return 'either(${alternatives.map(_expectedToString).join('|')})';
+    }
     if (expected.isNaN) {
       return '${expected.type}(nan)';
     }
@@ -904,38 +1274,500 @@ final class _ScriptExecutionState {
     return '${expected.type}(bits=${expected.floatBits})';
   }
 
-  static bool _functionTypesEqual(WasmFunctionType lhs, WasmFunctionType rhs) {
-    if (lhs.params.length != rhs.params.length ||
-        lhs.results.length != rhs.results.length) {
+  static bool _functionTypeCompatibleForImport({
+    required WasmModule expectedModule,
+    required int expectedTypeIndex,
+    required int expectedDepth,
+    required bool isExactImport,
+    required WasmModule actualModule,
+    required int actualTypeIndex,
+    required int actualDepth,
+  }) {
+    final equivalent = _areTypesEquivalentAcrossModules(
+      leftModule: actualModule,
+      leftTypeIndex: actualTypeIndex,
+      rightModule: expectedModule,
+      rightTypeIndex: expectedTypeIndex,
+      seenPairs: <String>{},
+    );
+    final actualIsSubtype = _hasEquivalentSupertypeAcrossModules(
+      actualModule: actualModule,
+      actualTypeIndex: actualTypeIndex,
+      expectedModule: expectedModule,
+      expectedTypeIndex: expectedTypeIndex,
+    );
+    final expectedIsSubtype = _hasEquivalentSupertypeAcrossModules(
+      actualModule: expectedModule,
+      actualTypeIndex: expectedTypeIndex,
+      expectedModule: actualModule,
+      expectedTypeIndex: actualTypeIndex,
+    );
+    if (!(equivalent || actualIsSubtype || expectedIsSubtype)) {
       return false;
     }
-    for (var i = 0; i < lhs.params.length; i++) {
-      if (lhs.params[i] != rhs.params[i]) {
+    if (isExactImport) {
+      return actualDepth == expectedDepth;
+    }
+    return actualDepth >= expectedDepth && (equivalent || actualIsSubtype);
+  }
+
+  static bool _globalTypeCompatibleForImport({
+    required WasmModule expectedModule,
+    required WasmGlobalType expectedType,
+    required WasmModule actualModule,
+    required WasmGlobalType actualType,
+  }) {
+    if (expectedType.mutable != actualType.mutable) {
+      return false;
+    }
+
+    final expectedSignature = expectedType.valueTypeSignature;
+    final actualSignature = actualType.valueTypeSignature;
+    if (expectedSignature == null ||
+        expectedSignature.isEmpty ||
+        actualSignature == null ||
+        actualSignature.isEmpty) {
+      return expectedType.valueType == actualType.valueType;
+    }
+
+    final expectedRef = _parseRefSignature(expectedSignature);
+    final actualRef = _parseRefSignature(actualSignature);
+    if (expectedRef == null || actualRef == null) {
+      return expectedSignature == actualSignature;
+    }
+    if (expectedRef.nullable != actualRef.nullable ||
+        expectedRef.exact != actualRef.exact) {
+      return false;
+    }
+    final expectedHeap = expectedRef.heapType;
+    final actualHeap = actualRef.heapType;
+    if (expectedHeap < 0 || actualHeap < 0) {
+      return expectedHeap == actualHeap;
+    }
+    return _areTypesEquivalentAcrossModules(
+      leftModule: actualModule,
+      leftTypeIndex: actualHeap,
+      rightModule: expectedModule,
+      rightTypeIndex: expectedHeap,
+      seenPairs: <String>{},
+    );
+  }
+
+  static bool _hasEquivalentSupertypeAcrossModules({
+    required WasmModule actualModule,
+    required int actualTypeIndex,
+    required WasmModule expectedModule,
+    required int expectedTypeIndex,
+  }) {
+    if (actualTypeIndex < 0 || actualTypeIndex >= actualModule.types.length) {
+      return false;
+    }
+    final visited = <int>{actualTypeIndex};
+    final pending = <int>[actualTypeIndex];
+    while (pending.isNotEmpty) {
+      final current = pending.removeLast();
+      if (_areTypesEquivalentAcrossModules(
+        leftModule: actualModule,
+        leftTypeIndex: current,
+        rightModule: expectedModule,
+        rightTypeIndex: expectedTypeIndex,
+        seenPairs: <String>{},
+      )) {
+        return true;
+      }
+      for (final parent in actualModule.types[current].superTypeIndices) {
+        if (parent < 0 || parent >= actualModule.types.length) {
+          continue;
+        }
+        if (visited.add(parent)) {
+          pending.add(parent);
+        }
+      }
+    }
+    return false;
+  }
+
+  static bool _areTypesEquivalentAcrossModules({
+    required WasmModule leftModule,
+    required int leftTypeIndex,
+    required WasmModule rightModule,
+    required int rightTypeIndex,
+    required Set<String> seenPairs,
+  }) {
+    if (leftTypeIndex < 0 ||
+        leftTypeIndex >= leftModule.types.length ||
+        rightTypeIndex < 0 ||
+        rightTypeIndex >= rightModule.types.length) {
+      return false;
+    }
+    final pairKey =
+        '${identityHashCode(leftModule)}:$leftTypeIndex|'
+        '${identityHashCode(rightModule)}:$rightTypeIndex';
+    if (!seenPairs.add(pairKey)) {
+      return true;
+    }
+
+    final left = leftModule.types[leftTypeIndex];
+    final right = rightModule.types[rightTypeIndex];
+    if (left.kind != right.kind ||
+        left.isFunctionType != right.isFunctionType ||
+        left.declaresSubtype != right.declaresSubtype ||
+        left.subtypeFinal != right.subtypeFinal ||
+        left.recGroupSize != right.recGroupSize ||
+        left.recGroupPosition != right.recGroupPosition) {
+      return false;
+    }
+
+    final recGroupSize = left.recGroupSize;
+    final leftGroupStart = leftTypeIndex - left.recGroupPosition;
+    final rightGroupStart = rightTypeIndex - right.recGroupPosition;
+    if (leftGroupStart < 0 ||
+        rightGroupStart < 0 ||
+        leftGroupStart + recGroupSize > leftModule.types.length ||
+        rightGroupStart + recGroupSize > rightModule.types.length) {
+      return false;
+    }
+
+    if (recGroupSize > 1) {
+      for (var i = 0; i < recGroupSize; i++) {
+        final leftPeer = leftGroupStart + i;
+        final rightPeer = rightGroupStart + i;
+        if (leftPeer == leftTypeIndex && rightPeer == rightTypeIndex) {
+          continue;
+        }
+        if (!_areTypesEquivalentAcrossModules(
+          leftModule: leftModule,
+          leftTypeIndex: leftPeer,
+          rightModule: rightModule,
+          rightTypeIndex: rightPeer,
+          seenPairs: seenPairs,
+        )) {
+          return false;
+        }
+      }
+    }
+
+    if (left.superTypeIndices.length != right.superTypeIndices.length) {
+      return false;
+    }
+    for (var i = 0; i < left.superTypeIndices.length; i++) {
+      final leftSuper = left.superTypeIndices[i];
+      final rightSuper = right.superTypeIndices[i];
+      final leftSuperInGroup =
+          leftSuper >= leftGroupStart &&
+          leftSuper < leftGroupStart + recGroupSize;
+      final rightSuperInGroup =
+          rightSuper >= rightGroupStart &&
+          rightSuper < rightGroupStart + recGroupSize;
+      if (leftSuperInGroup || rightSuperInGroup) {
+        if (!leftSuperInGroup || !rightSuperInGroup) {
+          return false;
+        }
+        if ((leftSuper - leftGroupStart) != (rightSuper - rightGroupStart)) {
+          return false;
+        }
+        continue;
+      }
+      if (!_areTypesEquivalentAcrossModules(
+        leftModule: leftModule,
+        leftTypeIndex: leftSuper,
+        rightModule: rightModule,
+        rightTypeIndex: rightSuper,
+        seenPairs: seenPairs,
+      )) {
         return false;
       }
     }
-    for (var i = 0; i < lhs.results.length; i++) {
-      if (lhs.results[i] != rhs.results[i]) {
+
+    final leftDescriptor = left.descriptorTypeIndex;
+    final rightDescriptor = right.descriptorTypeIndex;
+    if ((leftDescriptor == null) != (rightDescriptor == null)) {
+      return false;
+    }
+    if (leftDescriptor != null &&
+        !_areTypesEquivalentAcrossModules(
+          leftModule: leftModule,
+          leftTypeIndex: leftDescriptor,
+          rightModule: rightModule,
+          rightTypeIndex: rightDescriptor!,
+          seenPairs: seenPairs,
+        )) {
+      return false;
+    }
+
+    final leftDescribes = left.describesTypeIndex;
+    final rightDescribes = right.describesTypeIndex;
+    if ((leftDescribes == null) != (rightDescribes == null)) {
+      return false;
+    }
+    if (leftDescribes != null &&
+        !_areTypesEquivalentAcrossModules(
+          leftModule: leftModule,
+          leftTypeIndex: leftDescribes,
+          rightModule: rightModule,
+          rightTypeIndex: rightDescribes!,
+          seenPairs: seenPairs,
+        )) {
+      return false;
+    }
+
+    if (left.isFunctionType) {
+      if (left.paramTypeSignatures.length != right.paramTypeSignatures.length ||
+          left.resultTypeSignatures.length !=
+              right.resultTypeSignatures.length) {
+        return false;
+      }
+      for (var i = 0; i < left.paramTypeSignatures.length; i++) {
+        if (!_areValueSignaturesEquivalentAcrossModules(
+          leftModule: leftModule,
+          rightModule: rightModule,
+          leftSignature: left.paramTypeSignatures[i],
+          rightSignature: right.paramTypeSignatures[i],
+          seenPairs: seenPairs,
+          leftGroupStart: leftGroupStart,
+          rightGroupStart: rightGroupStart,
+          recGroupSize: recGroupSize,
+        )) {
+          return false;
+        }
+      }
+      for (var i = 0; i < left.resultTypeSignatures.length; i++) {
+        if (!_areValueSignaturesEquivalentAcrossModules(
+          leftModule: leftModule,
+          rightModule: rightModule,
+          leftSignature: left.resultTypeSignatures[i],
+          rightSignature: right.resultTypeSignatures[i],
+          seenPairs: seenPairs,
+          leftGroupStart: leftGroupStart,
+          rightGroupStart: rightGroupStart,
+          recGroupSize: recGroupSize,
+        )) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    if (left.fieldSignatures.length != right.fieldSignatures.length) {
+      return false;
+    }
+    for (var i = 0; i < left.fieldSignatures.length; i++) {
+      final leftField = _parseFieldSignature(left.fieldSignatures[i]);
+      final rightField = _parseFieldSignature(right.fieldSignatures[i]);
+      if (leftField == null || rightField == null) {
+        return false;
+      }
+      if (leftField.mutability != rightField.mutability) {
+        return false;
+      }
+      if (!_areValueSignaturesEquivalentAcrossModules(
+        leftModule: leftModule,
+        rightModule: rightModule,
+        leftSignature: leftField.valueSignature,
+        rightSignature: rightField.valueSignature,
+        seenPairs: seenPairs,
+        leftGroupStart: leftGroupStart,
+        rightGroupStart: rightGroupStart,
+        recGroupSize: recGroupSize,
+      )) {
         return false;
       }
     }
     return true;
   }
 
-  static bool _functionTypeCompatibleForImport({
-    required WasmFunctionType expectedType,
-    required int expectedDepth,
-    required bool isExactImport,
-    required WasmFunctionType actualType,
-    required int actualDepth,
+  static bool _areValueSignaturesEquivalentAcrossModules({
+    required WasmModule leftModule,
+    required WasmModule rightModule,
+    required String leftSignature,
+    required String rightSignature,
+    required Set<String> seenPairs,
+    required int leftGroupStart,
+    required int rightGroupStart,
+    required int recGroupSize,
   }) {
-    if (!_functionTypesEqual(expectedType, actualType)) {
+    final leftRef = _parseRefSignature(leftSignature);
+    final rightRef = _parseRefSignature(rightSignature);
+    if (leftRef == null || rightRef == null) {
+      return leftSignature == rightSignature;
+    }
+    if (leftRef.nullable != rightRef.nullable ||
+        leftRef.exact != rightRef.exact) {
       return false;
     }
-    if (isExactImport) {
-      return actualDepth == expectedDepth;
+    final leftHeap = leftRef.heapType;
+    final rightHeap = rightRef.heapType;
+    if (leftHeap < 0 || rightHeap < 0) {
+      return leftHeap == rightHeap;
     }
-    return actualDepth >= expectedDepth;
+
+    final leftInGroup =
+        leftHeap >= leftGroupStart && leftHeap < leftGroupStart + recGroupSize;
+    final rightInGroup =
+        rightHeap >= rightGroupStart &&
+        rightHeap < rightGroupStart + recGroupSize;
+    if (leftInGroup || rightInGroup) {
+      if (!leftInGroup || !rightInGroup) {
+        return false;
+      }
+      return (leftHeap - leftGroupStart) == (rightHeap - rightGroupStart);
+    }
+    if (leftHeap == rightHeap && identical(leftModule, rightModule)) {
+      return true;
+    }
+    return _areTypesEquivalentAcrossModules(
+      leftModule: leftModule,
+      leftTypeIndex: leftHeap,
+      rightModule: rightModule,
+      rightTypeIndex: rightHeap,
+      seenPairs: seenPairs,
+    );
+  }
+
+  static ({String valueSignature, int mutability})? _parseFieldSignature(
+    String signature,
+  ) {
+    final bytes = _signatureToBytes(signature);
+    if (bytes.length < 2) {
+      return null;
+    }
+    final mutability = bytes.last;
+    if (mutability != 0 && mutability != 1) {
+      return null;
+    }
+    return (
+      valueSignature: _bytesToSignature(bytes.sublist(0, bytes.length - 1)),
+      mutability: mutability,
+    );
+  }
+
+  static ({bool nullable, bool exact, int heapType})? _parseRefSignature(
+    String signature,
+  ) {
+    final bytes = _signatureToBytes(signature);
+    if (bytes.isEmpty) {
+      return null;
+    }
+    if (bytes.length == 1) {
+      final heapType = _legacyHeapTypeFromRefTypeCode(bytes.single);
+      if (heapType == null) {
+        final decoded = _readSignedLeb33FromBytes(bytes, 0);
+        if (decoded == null || decoded.$2 != bytes.length) {
+          return null;
+        }
+        return (nullable: true, exact: false, heapType: decoded.$1);
+      }
+      return (nullable: true, exact: false, heapType: heapType);
+    }
+    if (bytes.length < 2) {
+      return null;
+    }
+    final refPrefix = bytes[0];
+    if (refPrefix != 0x63 && refPrefix != 0x64) {
+      final decoded = _readSignedLeb33FromBytes(bytes, 0);
+      if (decoded == null || decoded.$2 != bytes.length) {
+        return null;
+      }
+      return (nullable: true, exact: false, heapType: decoded.$1);
+    }
+    var offset = 1;
+    var exact = false;
+    if (bytes[offset] == 0x62 || bytes[offset] == 0x61) {
+      exact = bytes[offset] == 0x62;
+      offset++;
+      if (offset >= bytes.length) {
+        return null;
+      }
+    }
+    final decodedHeap = _readSignedLeb33FromBytes(bytes, offset);
+    if (decodedHeap == null || decodedHeap.$2 != bytes.length) {
+      return null;
+    }
+    return (
+      nullable: refPrefix == 0x63,
+      exact: exact,
+      heapType: decodedHeap.$1,
+    );
+  }
+
+  static (int, int)? _readSignedLeb33FromBytes(List<int> bytes, int offset) {
+    if (offset >= bytes.length) {
+      return null;
+    }
+    final firstByte = bytes[offset];
+    var result = firstByte & 0x7f;
+    var shift = 7;
+    var byte = firstByte;
+    var multiplier = 128;
+    var index = offset + 1;
+    while ((byte & 0x80) != 0) {
+      if (index >= bytes.length) {
+        return null;
+      }
+      byte = bytes[index++];
+      result += (byte & 0x7f) * multiplier;
+      multiplier *= 128;
+      shift += 7;
+      if (shift > 35) {
+        return null;
+      }
+    }
+    if (shift < 33 && (byte & 0x40) != 0) {
+      result -= multiplier;
+    }
+    return (_normalizeSignedLeb33(result), index);
+  }
+
+  static int _normalizeSignedLeb33(int value) {
+    const signBit33 = 0x100000000;
+    const width33 = 0x200000000;
+    var normalized = value % width33;
+    if (normalized < 0) {
+      normalized += width33;
+    }
+    if (normalized >= signBit33) {
+      normalized -= width33;
+    }
+    return normalized;
+  }
+
+  static int? _legacyHeapTypeFromRefTypeCode(int code) {
+    return switch (code & 0xff) {
+      0x70 => -16, // funcref
+      0x6f => -17, // externref
+      0x6e => -18, // anyref
+      0x6d => -19, // eqref
+      0x6c => -21, // i31ref
+      0x6b => -20, // structref
+      0x6a => -14, // arrayref
+      0x69 => -22, // exnref legacy alias
+      0x68 => -24, // noexn legacy alias
+      0x74 => -22, // exnref
+      0x75 => -24, // noexn
+      0x71 => -23, // nullref
+      0x72 => -15, // nullexternref
+      0x73 => -13, // nullfuncref
+      _ => null,
+    };
+  }
+
+  static List<int> _signatureToBytes(String signature) {
+    if (signature.isEmpty || signature.length.isOdd) {
+      return const <int>[];
+    }
+    final bytes = <int>[];
+    for (var i = 0; i < signature.length; i += 2) {
+      bytes.add(int.parse(signature.substring(i, i + 2), radix: 16));
+    }
+    return bytes;
+  }
+
+  static String _bytesToSignature(List<int> bytes) {
+    final buffer = StringBuffer();
+    for (final byte in bytes) {
+      buffer.write(byte.toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
   }
 
   static int _functionTypeDepth(WasmModule module, int typeIndex) {
@@ -1593,6 +2425,9 @@ WasmFeatureSet _featuresForGroup(String group) {
     case 'custom-page-sizes':
       additionalEnabled.add('multi-memory');
       additionalEnabled.add('multi-table');
+      break;
+    case 'custom-descriptors':
+      additionalEnabled.add('custom-descriptors');
       break;
   }
   return base.copyWith(additionalEnabled: additionalEnabled);

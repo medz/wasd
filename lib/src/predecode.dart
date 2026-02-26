@@ -17,12 +17,33 @@ final class MemArg {
   final int memoryIndex;
 }
 
+abstract final class TryTableCatchKind {
+  static const int catchTag = 0;
+  static const int catchRef = 1;
+  static const int catchAll = 2;
+  static const int catchAllRef = 3;
+}
+
+final class TryTableCatchClause {
+  const TryTableCatchClause({
+    required this.kind,
+    required this.labelDepth,
+    this.tagIndex,
+  });
+
+  final int kind;
+  final int labelDepth;
+  final int? tagIndex;
+}
+
 final class Instruction {
   Instruction({
     required this.opcode,
     this.immediate,
+    this.wideImmediate,
     this.secondaryImmediate,
     this.floatImmediate,
+    this.floatBytesImmediate,
     this.memArg,
     this.tableDepths,
     this.blockParameterTypes,
@@ -31,14 +52,17 @@ final class Instruction {
     this.blockResultTypeSignatures,
     this.gcRefType,
     this.gcBrOnCast,
+    this.tryTableCatches,
     this.endIndex,
     this.elseIndex,
   });
 
   final int opcode;
   int? immediate;
+  Object? wideImmediate;
   int? secondaryImmediate;
   double? floatImmediate;
+  Uint8List? floatBytesImmediate;
   MemArg? memArg;
   List<int>? tableDepths;
   List<WasmValueType>? blockParameterTypes;
@@ -47,6 +71,7 @@ final class Instruction {
   List<String>? blockResultTypeSignatures;
   GcRefTypeImmediate? gcRefType;
   GcBrOnCastImmediate? gcBrOnCast;
+  List<TryTableCatchClause>? tryTableCatches;
   int? endIndex;
   int? elseIndex;
 }
@@ -87,7 +112,7 @@ final class PredecodedFunction {
   final List<Instruction> instructions;
 }
 
-enum _ControlKind { block, loop, if_ }
+enum _ControlKind { block, loop, if_, tryTable }
 
 final class _ControlFrame {
   _ControlFrame({required this.kind, required this.startIndex});
@@ -121,6 +146,7 @@ abstract final class WasmPredecoder {
       switch (opcode) {
         case Opcodes.unreachable:
         case Opcodes.nop:
+        case Opcodes.throwRef:
         case Opcodes.return_:
         case Opcodes.drop:
         case Opcodes.select:
@@ -311,6 +337,31 @@ abstract final class WasmPredecoder {
             ),
           );
 
+        case Opcodes.tryTable:
+          final blockType = _readBlockTypeInfo(reader, moduleTypes);
+          final catchCount = reader.readVarUint32();
+          final catches = List<TryTableCatchClause>.generate(
+            catchCount,
+            (_) => _readTryTableCatchClause(reader),
+            growable: false,
+          );
+          instructions.add(
+            Instruction(
+              opcode: opcode,
+              blockParameterTypes: blockType.paramTypes,
+              blockParameterTypeSignatures: blockType.paramSignatures,
+              blockResultTypes: blockType.resultTypes,
+              blockResultTypeSignatures: blockType.resultSignatures,
+              tryTableCatches: catches,
+            ),
+          );
+          controlStack.add(
+            _ControlFrame(
+              kind: _ControlKind.tryTable,
+              startIndex: instructions.length - 1,
+            ),
+          );
+
         case Opcodes.else_:
           if (controlStack.isEmpty ||
               controlStack.last.kind != _ControlKind.if_) {
@@ -360,6 +411,7 @@ abstract final class WasmPredecoder {
         case Opcodes.globalSet:
         case Opcodes.tableGet:
         case Opcodes.tableSet:
+        case Opcodes.throwTag:
         case Opcodes.memorySize:
         case Opcodes.memoryGrow:
         case Opcodes.refFunc:
@@ -408,23 +460,32 @@ abstract final class WasmPredecoder {
           );
 
         case Opcodes.i64Const:
-          instructions.add(
-            Instruction(opcode: opcode, immediate: reader.readVarInt64()),
-          );
-
-        case Opcodes.f32Const:
+          final wideImmediate = reader.readVarInt64Value();
           instructions.add(
             Instruction(
               opcode: opcode,
-              floatImmediate: _decodeF32(reader.readBytes(4)),
+              immediate: wideImmediate is int ? wideImmediate : 0,
+              wideImmediate: wideImmediate,
+            ),
+          );
+
+        case Opcodes.f32Const:
+          final floatBytes = reader.readBytes(4);
+          instructions.add(
+            Instruction(
+              opcode: opcode,
+              floatImmediate: _decodeF32(floatBytes),
+              floatBytesImmediate: floatBytes,
             ),
           );
 
         case Opcodes.f64Const:
+          final floatBytes = reader.readBytes(8);
           instructions.add(
             Instruction(
               opcode: opcode,
-              floatImmediate: _decodeF64(reader.readBytes(8)),
+              floatImmediate: _decodeF64(floatBytes),
+              floatBytesImmediate: floatBytes,
             ),
           );
 
@@ -480,9 +541,7 @@ abstract final class WasmPredecoder {
               'SIMD opcode prefix (0xFD) encountered but `simd` feature is disabled.',
             );
           }
-          throw UnsupportedError(
-            'SIMD feature gate is enabled, but SIMD execution is not implemented yet.',
-          );
+          _decodeSimdInstruction(reader, instructions, memory64ByIndex);
 
         case 0xfe:
           if (!features.threads) {
@@ -597,6 +656,15 @@ abstract final class WasmPredecoder {
         instructions.add(
           Instruction(opcode: pseudoOpcode, immediate: reader.readVarUint32()),
         );
+      case Opcodes.structSet:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            immediate: reader.readVarUint32(),
+            secondaryImmediate: reader.readVarUint32(),
+          ),
+        );
+      case Opcodes.structGet:
       case Opcodes.structGetU:
       case Opcodes.structGetS:
       case Opcodes.arrayNewData:
@@ -634,7 +702,9 @@ abstract final class WasmPredecoder {
       case Opcodes.refCastDescEq:
         final baseRefType = _readGcRefType(reader);
         final nullable = switch (pseudoOpcode) {
+          Opcodes.refTest => false,
           Opcodes.refTestNullable => true,
+          Opcodes.refCast => false,
           Opcodes.refCastNullable => true,
           Opcodes.refCastDesc => false,
           Opcodes.refCastDescEq => true,
@@ -780,6 +850,531 @@ abstract final class WasmPredecoder {
       default:
         throw UnsupportedError(
           'Unsupported 0xFE sub-opcode: 0x${subOpcode.toRadixString(16)}',
+        );
+    }
+  }
+
+  static void _decodeSimdInstruction(
+    ByteReader reader,
+    List<Instruction> instructions,
+    List<bool> memory64ByIndex,
+  ) {
+    final subOpcode = reader.readVarUint32();
+    final pseudoOpcode = subOpcode <= 0xff
+        ? (0xfd00 | subOpcode)
+        : (0xfd0000 | subOpcode);
+    switch (pseudoOpcode) {
+      case Opcodes.v128Load:
+      case Opcodes.v128Store:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            memArg: _readSimdMemArg(
+              reader,
+              memory64ByIndex,
+              maxAlign: 4,
+              opcode: pseudoOpcode,
+            ),
+          ),
+        );
+      case Opcodes.v128Load8x8S:
+      case Opcodes.v128Load8x8U:
+      case Opcodes.v128Load16x4S:
+      case Opcodes.v128Load16x4U:
+      case Opcodes.v128Load32x2S:
+      case Opcodes.v128Load32x2U:
+      case Opcodes.v128Load64Splat:
+      case Opcodes.v128Load64Zero:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            memArg: _readSimdMemArg(
+              reader,
+              memory64ByIndex,
+              maxAlign: 3,
+              opcode: pseudoOpcode,
+            ),
+          ),
+        );
+      case Opcodes.v128Load32Splat:
+      case Opcodes.v128Load32Zero:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            memArg: _readSimdMemArg(
+              reader,
+              memory64ByIndex,
+              maxAlign: 2,
+              opcode: pseudoOpcode,
+            ),
+          ),
+        );
+      case Opcodes.v128Load16Splat:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            memArg: _readSimdMemArg(
+              reader,
+              memory64ByIndex,
+              maxAlign: 1,
+              opcode: pseudoOpcode,
+            ),
+          ),
+        );
+      case Opcodes.v128Load8Splat:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            memArg: _readSimdMemArg(
+              reader,
+              memory64ByIndex,
+              maxAlign: 0,
+              opcode: pseudoOpcode,
+            ),
+          ),
+        );
+      case Opcodes.f32x4DemoteF64x2Zero:
+      case Opcodes.f64x2PromoteLowF32x4:
+        instructions.add(Instruction(opcode: pseudoOpcode));
+      case Opcodes.v128Const:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            floatBytesImmediate: reader.readBytes(16),
+          ),
+        );
+      case Opcodes.i8x16Shuffle:
+        final lanes = reader.readBytes(16);
+        for (var lane = 0; lane < lanes.length; lane++) {
+          if (lanes[lane] > 31) {
+            throw FormatException(
+              'Invalid i8x16.shuffle lane index ${lanes[lane]}.',
+            );
+          }
+        }
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            floatBytesImmediate: lanes,
+          ),
+        );
+      case Opcodes.i8x16Splat:
+      case Opcodes.i16x8Splat:
+      case Opcodes.i32x4Splat:
+      case Opcodes.i64x2Splat:
+      case Opcodes.f32x4Splat:
+      case Opcodes.f64x2Splat:
+      case Opcodes.i8x16Swizzle:
+      case Opcodes.i8x16Abs:
+      case Opcodes.i8x16Neg:
+      case Opcodes.i8x16Popcnt:
+      case Opcodes.i8x16NarrowI16x8S:
+      case Opcodes.i8x16NarrowI16x8U:
+      case Opcodes.i16x8NarrowI32x4S:
+      case Opcodes.i16x8NarrowI32x4U:
+      case Opcodes.i16x8Abs:
+      case Opcodes.i16x8Neg:
+      case Opcodes.i32x4Abs:
+      case Opcodes.i32x4Neg:
+      case Opcodes.i64x2Abs:
+      case Opcodes.i64x2Neg:
+      case Opcodes.i8x16Eq:
+      case Opcodes.i8x16Ne:
+      case Opcodes.i8x16LtS:
+      case Opcodes.i8x16LtU:
+      case Opcodes.i8x16GtS:
+      case Opcodes.i8x16GtU:
+      case Opcodes.i8x16LeS:
+      case Opcodes.i8x16LeU:
+      case Opcodes.i8x16GeS:
+      case Opcodes.i8x16GeU:
+      case Opcodes.i16x8Eq:
+      case Opcodes.i16x8Ne:
+      case Opcodes.i16x8LtS:
+      case Opcodes.i16x8LtU:
+      case Opcodes.i16x8GtS:
+      case Opcodes.i16x8GtU:
+      case Opcodes.i16x8LeS:
+      case Opcodes.i16x8LeU:
+      case Opcodes.i16x8GeS:
+      case Opcodes.i16x8GeU:
+      case Opcodes.i32x4Eq:
+      case Opcodes.i32x4Ne:
+      case Opcodes.i32x4LtS:
+      case Opcodes.i32x4LtU:
+      case Opcodes.i32x4GtS:
+      case Opcodes.i32x4GtU:
+      case Opcodes.i32x4LeS:
+      case Opcodes.i32x4LeU:
+      case Opcodes.i32x4GeS:
+      case Opcodes.i32x4GeU:
+      case Opcodes.i64x2Eq:
+      case Opcodes.i64x2Ne:
+      case Opcodes.i64x2LtS:
+      case Opcodes.i64x2GtS:
+      case Opcodes.i64x2LeS:
+      case Opcodes.i64x2GeS:
+      case Opcodes.f32x4Eq:
+      case Opcodes.f32x4Ne:
+      case Opcodes.f32x4Lt:
+      case Opcodes.f32x4Gt:
+      case Opcodes.f32x4Le:
+      case Opcodes.f32x4Ge:
+      case Opcodes.f64x2Eq:
+      case Opcodes.f64x2Ne:
+      case Opcodes.f64x2Lt:
+      case Opcodes.f64x2Gt:
+      case Opcodes.f64x2Le:
+      case Opcodes.f64x2Ge:
+      case Opcodes.v128Not:
+      case Opcodes.v128And:
+      case Opcodes.v128Andnot:
+      case Opcodes.v128Or:
+      case Opcodes.v128Xor:
+      case Opcodes.v128Bitselect:
+      case Opcodes.v128AnyTrue:
+      case Opcodes.i8x16AllTrue:
+      case Opcodes.i8x16Bitmask:
+      case Opcodes.i8x16Shl:
+      case Opcodes.i8x16ShrS:
+      case Opcodes.i8x16ShrU:
+      case Opcodes.i8x16Add:
+      case Opcodes.i8x16AddSatS:
+      case Opcodes.i8x16AddSatU:
+      case Opcodes.i8x16Sub:
+      case Opcodes.i8x16SubSatS:
+      case Opcodes.i8x16SubSatU:
+      case Opcodes.i8x16MinS:
+      case Opcodes.i8x16MinU:
+      case Opcodes.i8x16MaxS:
+      case Opcodes.i8x16MaxU:
+      case Opcodes.i8x16AvgrU:
+      case Opcodes.i16x8ExtAddPairwiseI8x16S:
+      case Opcodes.i16x8ExtAddPairwiseI8x16U:
+      case Opcodes.i32x4ExtAddPairwiseI16x8S:
+      case Opcodes.i32x4ExtAddPairwiseI16x8U:
+      case Opcodes.i16x8AllTrue:
+      case Opcodes.i16x8Bitmask:
+      case Opcodes.i16x8ExtendHighI8x16S:
+      case Opcodes.i16x8ExtendLowI8x16S:
+      case Opcodes.i16x8ExtendHighI8x16U:
+      case Opcodes.i16x8ExtendLowI8x16U:
+      case Opcodes.i16x8Shl:
+      case Opcodes.i16x8ShrS:
+      case Opcodes.i16x8ShrU:
+      case Opcodes.i16x8Add:
+      case Opcodes.i16x8AddSatS:
+      case Opcodes.i16x8AddSatU:
+      case Opcodes.i16x8Sub:
+      case Opcodes.i16x8SubSatS:
+      case Opcodes.i16x8SubSatU:
+      case Opcodes.i16x8Q15MulrSatS:
+      case Opcodes.i16x8Mul:
+      case Opcodes.i16x8MinS:
+      case Opcodes.i16x8MinU:
+      case Opcodes.i16x8MaxS:
+      case Opcodes.i16x8MaxU:
+      case Opcodes.i16x8AvgrU:
+      case Opcodes.i16x8ExtmulLowI8x16S:
+      case Opcodes.i16x8ExtmulHighI8x16S:
+      case Opcodes.i16x8ExtmulLowI8x16U:
+      case Opcodes.i16x8ExtmulHighI8x16U:
+      case Opcodes.i32x4AllTrue:
+      case Opcodes.i32x4Bitmask:
+      case Opcodes.i32x4ExtendLowI16x8S:
+      case Opcodes.i32x4ExtendHighI16x8S:
+      case Opcodes.i32x4ExtendLowI16x8U:
+      case Opcodes.i32x4ExtendHighI16x8U:
+      case Opcodes.i32x4Shl:
+      case Opcodes.i32x4ShrS:
+      case Opcodes.i32x4ShrU:
+      case Opcodes.i32x4Add:
+      case Opcodes.i32x4Sub:
+      case Opcodes.i32x4Mul:
+      case Opcodes.i32x4MinS:
+      case Opcodes.i32x4MinU:
+      case Opcodes.i32x4MaxS:
+      case Opcodes.i32x4MaxU:
+      case Opcodes.i32x4DotI16x8S:
+      case Opcodes.i32x4ExtmulLowI16x8S:
+      case Opcodes.i32x4ExtmulHighI16x8S:
+      case Opcodes.i32x4ExtmulLowI16x8U:
+      case Opcodes.i32x4ExtmulHighI16x8U:
+      case Opcodes.i64x2AllTrue:
+      case Opcodes.i64x2Bitmask:
+      case Opcodes.i64x2Shl:
+      case Opcodes.i64x2ShrS:
+      case Opcodes.i64x2ShrU:
+      case Opcodes.i64x2Add:
+      case Opcodes.i64x2Sub:
+      case Opcodes.i64x2Mul:
+      case Opcodes.i64x2ExtmulLowI32x4S:
+      case Opcodes.i64x2ExtmulHighI32x4S:
+      case Opcodes.i64x2ExtmulLowI32x4U:
+      case Opcodes.i64x2ExtmulHighI32x4U:
+      case Opcodes.i64x2ExtendLowI32x4S:
+      case Opcodes.i64x2ExtendHighI32x4S:
+      case Opcodes.i64x2ExtendLowI32x4U:
+      case Opcodes.i64x2ExtendHighI32x4U:
+      case Opcodes.f32x4Ceil:
+      case Opcodes.f32x4Floor:
+      case Opcodes.f32x4Trunc:
+      case Opcodes.f32x4Nearest:
+      case Opcodes.f32x4Abs:
+      case Opcodes.f32x4Neg:
+      case Opcodes.f32x4Sqrt:
+      case Opcodes.f32x4Add:
+      case Opcodes.f32x4Sub:
+      case Opcodes.f32x4Mul:
+      case Opcodes.f32x4Div:
+      case Opcodes.f32x4Min:
+      case Opcodes.f32x4Max:
+      case Opcodes.f32x4Pmin:
+      case Opcodes.f32x4Pmax:
+      case Opcodes.f64x2Ceil:
+      case Opcodes.f64x2Floor:
+      case Opcodes.f64x2Trunc:
+      case Opcodes.f64x2Nearest:
+      case Opcodes.f64x2Abs:
+      case Opcodes.f64x2Neg:
+      case Opcodes.f64x2Sqrt:
+      case Opcodes.f64x2Add:
+      case Opcodes.f64x2Sub:
+      case Opcodes.f64x2Mul:
+      case Opcodes.f64x2Div:
+      case Opcodes.f64x2Min:
+      case Opcodes.f64x2Max:
+      case Opcodes.f64x2Pmin:
+      case Opcodes.f64x2Pmax:
+      case Opcodes.i32x4TruncSatF32x4S:
+      case Opcodes.i32x4TruncSatF32x4U:
+      case Opcodes.f32x4ConvertI32x4S:
+      case Opcodes.f32x4ConvertI32x4U:
+      case Opcodes.i32x4TruncSatF64x2SZero:
+      case Opcodes.i32x4TruncSatF64x2UZero:
+      case Opcodes.f64x2ConvertLowI32x4S:
+      case Opcodes.f64x2ConvertLowI32x4U:
+      case Opcodes.i8x16RelaxedSwizzle:
+      case Opcodes.i32x4RelaxedTruncF32x4S:
+      case Opcodes.i32x4RelaxedTruncF32x4U:
+      case Opcodes.i32x4RelaxedTruncF64x2SZero:
+      case Opcodes.i32x4RelaxedTruncF64x2UZero:
+      case Opcodes.f32x4RelaxedMadd:
+      case Opcodes.f32x4RelaxedNmadd:
+      case Opcodes.f64x2RelaxedMadd:
+      case Opcodes.f64x2RelaxedNmadd:
+      case Opcodes.i8x16RelaxedLaneselect:
+      case Opcodes.i16x8RelaxedLaneselect:
+      case Opcodes.i32x4RelaxedLaneselect:
+      case Opcodes.i64x2RelaxedLaneselect:
+      case Opcodes.f32x4RelaxedMin:
+      case Opcodes.f32x4RelaxedMax:
+      case Opcodes.f64x2RelaxedMin:
+      case Opcodes.f64x2RelaxedMax:
+      case Opcodes.i16x8RelaxedQ15mulrS:
+      case Opcodes.i16x8RelaxedDotI8x16I7x16S:
+      case Opcodes.i32x4RelaxedDotI8x16I7x16AddS:
+        instructions.add(Instruction(opcode: pseudoOpcode));
+      case Opcodes.v128Load8Lane:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            memArg: _readSimdMemArg(
+              reader,
+              memory64ByIndex,
+              maxAlign: 0,
+              opcode: pseudoOpcode,
+            ),
+            immediate: _readSimdLaneImmediate(
+              reader,
+              laneCount: 16,
+              opcode: pseudoOpcode,
+            ),
+          ),
+        );
+      case Opcodes.v128Load16Lane:
+      case Opcodes.v128Store16Lane:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            memArg: _readSimdMemArg(
+              reader,
+              memory64ByIndex,
+              maxAlign: 1,
+              opcode: pseudoOpcode,
+            ),
+            immediate: _readSimdLaneImmediate(
+              reader,
+              laneCount: 8,
+              opcode: pseudoOpcode,
+            ),
+          ),
+        );
+      case Opcodes.v128Load32Lane:
+      case Opcodes.v128Store32Lane:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            memArg: _readSimdMemArg(
+              reader,
+              memory64ByIndex,
+              maxAlign: 2,
+              opcode: pseudoOpcode,
+            ),
+            immediate: _readSimdLaneImmediate(
+              reader,
+              laneCount: 4,
+              opcode: pseudoOpcode,
+            ),
+          ),
+        );
+      case Opcodes.v128Load64Lane:
+      case Opcodes.v128Store64Lane:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            memArg: _readSimdMemArg(
+              reader,
+              memory64ByIndex,
+              maxAlign: 3,
+              opcode: pseudoOpcode,
+            ),
+            immediate: _readSimdLaneImmediate(
+              reader,
+              laneCount: 2,
+              opcode: pseudoOpcode,
+            ),
+          ),
+        );
+      case Opcodes.v128Store8Lane:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            memArg: _readSimdMemArg(
+              reader,
+              memory64ByIndex,
+              maxAlign: 0,
+              opcode: pseudoOpcode,
+            ),
+            immediate: _readSimdLaneImmediate(
+              reader,
+              laneCount: 16,
+              opcode: pseudoOpcode,
+            ),
+          ),
+        );
+      case Opcodes.i8x16ExtractLaneS:
+      case Opcodes.i8x16ExtractLaneU:
+      case Opcodes.i8x16ReplaceLane:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            immediate: _readSimdLaneImmediate(
+              reader,
+              laneCount: 16,
+              opcode: pseudoOpcode,
+            ),
+          ),
+        );
+      case Opcodes.i16x8ExtractLaneS:
+      case Opcodes.i16x8ExtractLaneU:
+      case Opcodes.i16x8ReplaceLane:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            immediate: _readSimdLaneImmediate(
+              reader,
+              laneCount: 8,
+              opcode: pseudoOpcode,
+            ),
+          ),
+        );
+      case Opcodes.i32x4ExtractLane:
+      case Opcodes.f32x4ExtractLane:
+      case Opcodes.i32x4ReplaceLane:
+      case Opcodes.f32x4ReplaceLane:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            immediate: _readSimdLaneImmediate(
+              reader,
+              laneCount: 4,
+              opcode: pseudoOpcode,
+            ),
+          ),
+        );
+      case Opcodes.i64x2ExtractLane:
+      case Opcodes.f64x2ExtractLane:
+      case Opcodes.i64x2ReplaceLane:
+      case Opcodes.f64x2ReplaceLane:
+        instructions.add(
+          Instruction(
+            opcode: pseudoOpcode,
+            immediate: _readSimdLaneImmediate(
+              reader,
+              laneCount: 2,
+              opcode: pseudoOpcode,
+            ),
+          ),
+        );
+      default:
+        throw UnsupportedError(
+          'Unsupported 0xFD sub-opcode: 0x${subOpcode.toRadixString(16)}',
+        );
+    }
+  }
+
+  static MemArg _readSimdMemArg(
+    ByteReader reader,
+    List<bool> memory64ByIndex, {
+    required int maxAlign,
+    required int opcode,
+  }) {
+    final memArg = _readMemArg(reader, memory64ByIndex);
+    if (memArg.align > maxAlign) {
+      throw FormatException(
+        'Invalid SIMD memarg alignment ${memArg.align} for opcode '
+        '0x${opcode.toRadixString(16)}.',
+      );
+    }
+    return memArg;
+  }
+
+  static int _readSimdLaneImmediate(
+    ByteReader reader, {
+    required int laneCount,
+    required int opcode,
+  }) {
+    final lane = reader.readByte();
+    if (lane < 0 || lane >= laneCount) {
+      throw FormatException(
+        'Invalid SIMD lane index $lane for opcode 0x${opcode.toRadixString(16)}.',
+      );
+    }
+    return lane;
+  }
+
+  static TryTableCatchClause _readTryTableCatchClause(ByteReader reader) {
+    final kind = reader.readByte();
+    switch (kind) {
+      case TryTableCatchKind.catchTag:
+      case TryTableCatchKind.catchRef:
+        final tagIndex = reader.readVarUint32();
+        final labelDepth = reader.readVarUint32();
+        return TryTableCatchClause(
+          kind: kind,
+          tagIndex: tagIndex,
+          labelDepth: labelDepth,
+        );
+      case TryTableCatchKind.catchAll:
+      case TryTableCatchKind.catchAllRef:
+        return TryTableCatchClause(
+          kind: kind,
+          labelDepth: reader.readVarUint32(),
+        );
+      default:
+        throw FormatException(
+          'Invalid try_table catch kind: 0x${kind.toRadixString(16)}',
         );
     }
   }
@@ -1112,8 +1707,10 @@ abstract final class WasmPredecoder {
       0x07 || // catch
       0x08 || // throw
       0x09 || // rethrow
+      0x0a || // throw_ref
+      0x18 || // delegate
       0x19 || // catch_all
-      0x1a => true, // delegate
+      0x1f => true, // try_table
       _ => false,
     };
   }

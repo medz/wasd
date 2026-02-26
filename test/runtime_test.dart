@@ -332,7 +332,11 @@ void main() {
       final instance = WasmInstance.fromBytes(wasm);
       expect(instance.invokeI32('dispatch', [0, 3, 4]), 7);
       expect(instance.invokeI32('dispatch', [1, 3, 4]), 12);
-      expect(instance.exportedTable('table0').snapshot(), [0, 1]);
+      final snapshot = instance.exportedTable('table0').snapshot();
+      expect(snapshot, hasLength(2));
+      expect(snapshot[0], isNotNull);
+      expect(snapshot[1], isNotNull);
+      expect(snapshot[0], isNot(equals(snapshot[1])));
     });
 
     test('accepts passive element segments', () {
@@ -900,7 +904,15 @@ void main() {
         types: [_funcType([], [])],
         functionTypeIndices: [0],
         functionBodies: [
-          _FunctionBodySpec(instructions: [0xfd, 0x00, Opcodes.end]),
+          _FunctionBodySpec(
+            instructions: [
+              ..._i32Const(0),
+              0xfd,
+              0x0f, // i8x16.splat
+              Opcodes.drop,
+              Opcodes.end,
+            ],
+          ),
         ],
       );
 
@@ -909,11 +921,9 @@ void main() {
         throwsA(isA<UnsupportedError>()),
       );
       expect(
-        () => WasmInstance.fromBytes(
-          wasm,
-          features: const WasmFeatureSet(simd: true),
-        ),
-        throwsA(isA<UnsupportedError>()),
+        () =>
+            WasmInstance.fromBytes(wasm, features: const WasmFeatureSet(simd: true)),
+        returnsNormally,
       );
     });
 
@@ -1344,22 +1354,23 @@ List<int> _u32Leb(int value) {
 
 List<int> _i32Leb(int value) {
   final bytes = <int>[];
-  var current = value;
-  var more = true;
+  var remaining = BigInt.from(value);
 
-  while (more) {
-    var byte = current & 0x7f;
-    current >>= 7;
+  while (true) {
+    var byte = (remaining & BigInt.from(0x7f)).toInt();
+    remaining >>= 7;
 
     final signBitSet = (byte & 0x40) != 0;
-    final done = (current == 0 && !signBitSet) || (current == -1 && signBitSet);
-
+    final done =
+        (remaining == BigInt.zero && !signBitSet) ||
+        (remaining == -BigInt.one && signBitSet);
     if (!done) {
       byte |= 0x80;
     }
-
     bytes.add(byte);
-    more = !done;
+    if (done) {
+      break;
+    }
   }
 
   return bytes;
@@ -1367,22 +1378,23 @@ List<int> _i32Leb(int value) {
 
 List<int> _i64Leb(int value) {
   final bytes = <int>[];
-  var current = value;
-  var more = true;
+  var remaining = BigInt.from(value);
 
-  while (more) {
-    var byte = current & 0x7f;
-    current >>= 7;
+  while (true) {
+    var byte = (remaining & BigInt.from(0x7f)).toInt();
+    remaining >>= 7;
 
     final signBitSet = (byte & 0x40) != 0;
-    final done = (current == 0 && !signBitSet) || (current == -1 && signBitSet);
-
+    final done =
+        (remaining == BigInt.zero && !signBitSet) ||
+        (remaining == -BigInt.one && signBitSet);
     if (!done) {
       byte |= 0x80;
     }
-
     bytes.add(byte);
-    more = !done;
+    if (done) {
+      break;
+    }
   }
 
   return bytes;
