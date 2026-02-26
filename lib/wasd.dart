@@ -4,6 +4,7 @@ export 'src/imports.dart';
 export 'src/instance.dart';
 export 'src/memory.dart';
 export 'src/module.dart';
+export 'src/component.dart';
 export 'src/opcode.dart';
 export 'src/predecode.dart';
 export 'src/features.dart';
