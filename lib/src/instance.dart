@@ -1641,6 +1641,150 @@ final class WasmInstance {
           stack.add(WasmValue.i64(WasmI64.signExtend(value, 32)));
           pc++;
 
+        case Opcodes.i32TruncF32S:
+          final value = _popValue(
+            stack,
+            'i32.trunc_f32_s',
+          ).castTo(WasmValueType.f32).asF32();
+          stack.add(WasmValue.i32(_truncToI32S(value)));
+          pc++;
+
+        case Opcodes.i32TruncF32U:
+          final value = _popValue(
+            stack,
+            'i32.trunc_f32_u',
+          ).castTo(WasmValueType.f32).asF32();
+          stack.add(WasmValue.i32(_truncToI32U(value)));
+          pc++;
+
+        case Opcodes.i32TruncF64S:
+          final value = _popValue(
+            stack,
+            'i32.trunc_f64_s',
+          ).castTo(WasmValueType.f64).asF64();
+          stack.add(WasmValue.i32(_truncToI32S(value)));
+          pc++;
+
+        case Opcodes.i32TruncF64U:
+          final value = _popValue(
+            stack,
+            'i32.trunc_f64_u',
+          ).castTo(WasmValueType.f64).asF64();
+          stack.add(WasmValue.i32(_truncToI32U(value)));
+          pc++;
+
+        case Opcodes.i64TruncF32S:
+          final value = _popValue(
+            stack,
+            'i64.trunc_f32_s',
+          ).castTo(WasmValueType.f32).asF32();
+          stack.add(WasmValue.i64(_truncToI64S(value)));
+          pc++;
+
+        case Opcodes.i64TruncF32U:
+          final value = _popValue(
+            stack,
+            'i64.trunc_f32_u',
+          ).castTo(WasmValueType.f32).asF32();
+          stack.add(WasmValue.i64(WasmI64.signed(_truncToI64U(value))));
+          pc++;
+
+        case Opcodes.i64TruncF64S:
+          final value = _popValue(
+            stack,
+            'i64.trunc_f64_s',
+          ).castTo(WasmValueType.f64).asF64();
+          stack.add(WasmValue.i64(_truncToI64S(value)));
+          pc++;
+
+        case Opcodes.i64TruncF64U:
+          final value = _popValue(
+            stack,
+            'i64.trunc_f64_u',
+          ).castTo(WasmValueType.f64).asF64();
+          stack.add(WasmValue.i64(WasmI64.signed(_truncToI64U(value))));
+          pc++;
+
+        case Opcodes.f32ConvertI32S:
+          final value = _popValue(
+            stack,
+            'f32.convert_i32_s',
+          ).castTo(WasmValueType.i32).asI32();
+          stack.add(WasmValue.f32(value.toDouble()));
+          pc++;
+
+        case Opcodes.f32ConvertI32U:
+          final value = _popValue(
+            stack,
+            'f32.convert_i32_u',
+          ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+          stack.add(WasmValue.f32(value.toDouble()));
+          pc++;
+
+        case Opcodes.f32ConvertI64S:
+          final value = _popValue(
+            stack,
+            'f32.convert_i64_s',
+          ).castTo(WasmValueType.i64).asI64();
+          stack.add(WasmValue.f32(_f32FromInteger(value)));
+          pc++;
+
+        case Opcodes.f32ConvertI64U:
+          final value = _popValue(
+            stack,
+            'f32.convert_i64_u',
+          ).castTo(WasmValueType.i64).asI64();
+          stack.add(WasmValue.f32(_f32FromInteger(WasmI64.unsigned(value))));
+          pc++;
+
+        case Opcodes.f32DemoteF64:
+          final value = _popValue(
+            stack,
+            'f32.demote_f64',
+          ).castTo(WasmValueType.f64).asF64();
+          stack.add(WasmValue.f32(value));
+          pc++;
+
+        case Opcodes.f64ConvertI32S:
+          final value = _popValue(
+            stack,
+            'f64.convert_i32_s',
+          ).castTo(WasmValueType.i32).asI32();
+          stack.add(WasmValue.f64(value.toDouble()));
+          pc++;
+
+        case Opcodes.f64ConvertI32U:
+          final value = _popValue(
+            stack,
+            'f64.convert_i32_u',
+          ).castTo(WasmValueType.i32).asI32().toUnsigned(32);
+          stack.add(WasmValue.f64(value.toDouble()));
+          pc++;
+
+        case Opcodes.f64ConvertI64S:
+          final value = _popValue(
+            stack,
+            'f64.convert_i64_s',
+          ).castTo(WasmValueType.i64).asI64();
+          stack.add(WasmValue.f64(value.toDouble()));
+          pc++;
+
+        case Opcodes.f64ConvertI64U:
+          final value = _popValue(
+            stack,
+            'f64.convert_i64_u',
+          ).castTo(WasmValueType.i64).asI64();
+          stack.add(WasmValue.f64(WasmI64.unsignedToDouble(value)));
+          pc++;
+
+        case Opcodes.f64PromoteF32:
+          final value = _popValue(
+            stack,
+            'f64.promote_f32',
+          ).castTo(WasmValueType.f32).asF32();
+          stack.add(WasmValue.f64(value));
+          pc++;
+
         case Opcodes.f32Add:
           final rhs = _popValue(stack, 'f32.add rhs').castTo(WasmValueType.f32);
           final lhs = _popValue(stack, 'f32.add lhs').castTo(WasmValueType.f32);
@@ -2414,6 +2558,102 @@ final class WasmInstance {
     }
     return count;
   }
+
+  static double _f32FromInteger(Object value) {
+    return WasmValue.fromF32Bits(_f32BitsFromInteger(value));
+  }
+
+  static int _f32BitsFromInteger(Object value) {
+    var integer = value is BigInt ? value : BigInt.from(value as int);
+    if (integer == BigInt.zero) {
+      return 0;
+    }
+
+    var signBit = 0;
+    if (integer < BigInt.zero) {
+      signBit = 1;
+      integer = -integer;
+    }
+
+    const significandBits = 24;
+    final bitLength = integer.bitLength;
+    var exponent = bitLength - 1;
+    BigInt significand;
+
+    if (bitLength <= significandBits) {
+      significand = integer << (significandBits - bitLength);
+    } else {
+      final shift = bitLength - significandBits;
+      significand = integer >> shift;
+      final remainderMask = (BigInt.one << shift) - BigInt.one;
+      final remainder = integer & remainderMask;
+      final halfway = BigInt.one << (shift - 1);
+      final shouldRoundUp =
+          remainder > halfway ||
+          (remainder == halfway && (significand & BigInt.one) == BigInt.one);
+      if (shouldRoundUp) {
+        significand += BigInt.one;
+        if (significand == (BigInt.one << significandBits)) {
+          significand >>= 1;
+          exponent++;
+        }
+      }
+    }
+
+    final exponentBits = exponent + 127;
+    final fractionBits = (significand & BigInt.from(0x7fffff)).toInt();
+    return (signBit << 31) | (exponentBits << 23) | fractionBits;
+  }
+
+  static int _truncToI32S(double value) {
+    _assertFinite(value);
+    final truncated = value.truncate();
+    if (truncated < _i32MinValueInt || truncated > _i32MaxValueInt) {
+      throw StateError('i32.trunc_*_s overflow trap');
+    }
+    return truncated.toSigned(32);
+  }
+
+  static int _truncToI32U(double value) {
+    _assertFinite(value);
+    final truncated = value.truncate();
+    if (truncated < 0 || truncated > _u32MaxValueInt) {
+      throw StateError('i32.trunc_*_u overflow trap');
+    }
+    return truncated.toUnsigned(32).toSigned(32);
+  }
+
+  static BigInt _truncToI64S(double value) {
+    _assertFinite(value);
+    if (value < _i64Min || value >= _i64MaxPlusOne) {
+      throw StateError('i64.trunc_*_s overflow trap');
+    }
+    final truncated = BigInt.from(value);
+    return WasmI64.signed(truncated);
+  }
+
+  static BigInt _truncToI64U(double value) {
+    _assertFinite(value);
+    if (value <= -1.0 || value >= _u64MaxPlusOne) {
+      throw StateError('i64.trunc_*_u overflow trap');
+    }
+    final truncated = BigInt.from(value);
+    return WasmI64.unsigned(truncated);
+  }
+
+  static void _assertFinite(double value) {
+    if (value.isNaN || value.isInfinite) {
+      throw StateError('Invalid conversion trap: NaN or infinite value');
+    }
+  }
+
+  static const int _i32MinValueInt = -2147483648;
+  static const int _i32MaxValueInt = 2147483647;
+  static const int _u32MaxValueInt = 0xffffffff;
+
+  static const double _i64Min = -9223372036854775808.0;
+  static const double _i64MaxPlusOne = 9223372036854775808.0;
+  static const double _u64MaxPlusOne = 18446744073709551616.0;
 
   int _coerceAsyncSubsetPageDelta(BigInt value, {required String context}) {
     if (value < BigInt.zero) {

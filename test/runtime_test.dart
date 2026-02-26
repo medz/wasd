@@ -1858,6 +1858,162 @@ void main() {
     );
 
     test(
+      'supports trunc/convert/promote/demote in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [0],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._i32Const(0),
+
+                ..._f64Const(42.9),
+                Opcodes.i32TruncF64S,
+                ..._i32Const(42),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._f64Const(42.9),
+                Opcodes.i32TruncF64U,
+                ..._i32Const(42),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._f64Const(42.9),
+                Opcodes.f32DemoteF64,
+                Opcodes.i32TruncF32S,
+                ..._i32Const(42),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._f64Const(42.9),
+                Opcodes.f32DemoteF64,
+                Opcodes.i32TruncF32U,
+                ..._i32Const(42),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+
+                ..._f64Const(9.9),
+                Opcodes.i64TruncF64S,
+                ..._i64Const(9),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._f64Const(9.9),
+                Opcodes.i64TruncF64U,
+                ..._i64Const(9),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._f64Const(9.9),
+                Opcodes.f32DemoteF64,
+                Opcodes.i64TruncF32S,
+                ..._i64Const(9),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._f64Const(9.9),
+                Opcodes.f32DemoteF64,
+                Opcodes.i64TruncF32U,
+                ..._i64Const(9),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+
+                ..._i32Const(-7),
+                Opcodes.f64ConvertI32S,
+                Opcodes.i32TruncF64S,
+                ..._i32Const(-7),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._i32Const(16777215),
+                Opcodes.f64ConvertI32U,
+                Opcodes.i32TruncF64U,
+                ..._i32Const(16777215),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._i32Const(-7),
+                Opcodes.f32ConvertI32S,
+                Opcodes.i32TruncF32S,
+                ..._i32Const(-7),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._i32Const(16777215),
+                Opcodes.f32ConvertI32U,
+                Opcodes.i32TruncF32U,
+                ..._i32Const(16777215),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+
+                ..._i64Const(-9),
+                Opcodes.f64ConvertI64S,
+                Opcodes.i64TruncF64S,
+                ..._i64Const(-9),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._i64Const(9007199254740991),
+                Opcodes.f64ConvertI64U,
+                Opcodes.i64TruncF64U,
+                ..._i64Const(9007199254740991),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._i64Const(-9),
+                Opcodes.f32ConvertI64S,
+                Opcodes.i64TruncF32S,
+                ..._i64Const(-9),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+                ..._i64Const(1234567),
+                Opcodes.f32ConvertI64U,
+                Opcodes.i64TruncF32U,
+                ..._i64Const(1234567),
+                Opcodes.i64Eq,
+                Opcodes.i32Add,
+
+                ..._f64Const(42.5),
+                Opcodes.f32DemoteF64,
+                Opcodes.f64PromoteF32,
+                Opcodes.i32TruncF64S,
+                ..._i32Const(42),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+                ..._f64Const(42.5),
+                Opcodes.f32DemoteF64,
+                Opcodes.i32TruncF32S,
+                ..._i32Const(42),
+                Opcodes.i32Eq,
+                Opcodes.i32Add,
+
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'wrapNumericConvert',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('wrapNumericConvert', [41]), 18);
+      },
+    );
+
+    test(
       'reports explicit boundary for unsupported async call chains',
       () async {
         final wasm = _buildModule(
@@ -1875,7 +2031,8 @@ void main() {
                 ..._call(0),
                 Opcodes.drop,
                 ..._f64Const(1.25),
-                Opcodes.i32TruncF64S,
+                Opcodes.f32DemoteF64,
+                Opcodes.f32Abs,
                 Opcodes.drop,
                 ..._i32Const(0),
                 Opcodes.end,
