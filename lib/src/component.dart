@@ -561,6 +561,60 @@ final class WasmComponent {
             );
           }
       }
+
+      final resolvedDeclaration = _resolveTypeDeclaration(
+        typeDeclarations,
+        binding.typeDeclarationIndex,
+      );
+      if (binding.targetKind ==
+          WasmComponentTypeBindingTargetKind.importRequirement) {
+        final importRequirement = importRequirements[binding.targetIndex];
+        switch (importRequirement.kind) {
+          case WasmComponentImportKind.function:
+            if (resolvedDeclaration.kind != WasmComponentTypeKind.function) {
+              throw FormatException(
+                'Component type binding for function import '
+                '`${importRequirement.componentImportName}` must reference '
+                'a function type declaration.',
+              );
+            }
+            break;
+          case WasmComponentImportKind.global:
+            if (resolvedDeclaration.kind != WasmComponentTypeKind.value) {
+              throw FormatException(
+                'Component type binding for global import '
+                '`${importRequirement.componentImportName}` must reference '
+                'a value type declaration.',
+              );
+            }
+            break;
+          case WasmComponentImportKind.memory:
+          case WasmComponentImportKind.table:
+          case WasmComponentImportKind.tag:
+            throw UnsupportedError(
+              'Component type binding for `${importRequirement.kind.name}` '
+              'imports is not implemented yet.',
+            );
+        }
+      }
+    }
+  }
+
+  static WasmComponentTypeDeclaration _resolveTypeDeclaration(
+    List<WasmComponentTypeDeclaration> declarations,
+    int index,
+  ) {
+    var current = index;
+    final visited = <int>{};
+    while (true) {
+      if (!visited.add(current)) {
+        throw const FormatException('Component type alias cycle detected.');
+      }
+      final declaration = declarations[current];
+      if (declaration.kind != WasmComponentTypeKind.alias) {
+        return declaration;
+      }
+      current = declaration.aliasTargetIndex!;
     }
   }
 

@@ -563,6 +563,71 @@ void main() {
       expect(component.typeBindings[1].typeDeclarationIndex, 0);
     });
 
+    test(
+      'rejects function import type binding to non-function declaration',
+      () {
+        final importSection = <int>[
+          ..._u32Leb(1),
+          ..._name('incFn'),
+          ..._name('host'),
+          ..._name('inc'),
+          0x00,
+        ];
+        final typeSection = <int>[..._u32Leb(1), ..._name('i32_t'), 0x00, 0x7f];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ..._componentHeaderWithOneCoreModule(),
+          ..._section(0x04, importSection),
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponent.decode(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test('rejects unsupported memory import type bindings', () {
+      final importSection = <int>[
+        ..._u32Leb(1),
+        ..._name('mem'),
+        ..._name('env'),
+        ..._name('memory'),
+        0x01,
+      ];
+      final typeSection = <int>[..._u32Leb(1), ..._name('i32_t'), 0x00, 0x7f];
+      final typeBindingSection = <int>[
+        ..._u32Leb(1),
+        0x00,
+        ..._u32Leb(0),
+        ..._u32Leb(0),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ..._componentHeaderWithOneCoreModule(),
+        ..._section(0x04, importSection),
+        ..._section(0x06, typeSection),
+        ..._section(0x07, typeBindingSection),
+      ]);
+
+      expect(
+        () => WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsA(isA<UnsupportedError>()),
+      );
+    });
+
     test('rejects type bindings with out-of-range indexes', () {
       final typeSection = <int>[..._u32Leb(1), ..._name('i32_t'), 0x00, 0x7f];
       final typeBindingSection = <int>[
