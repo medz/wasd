@@ -4,8 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOLCHAIN_DIR="$ROOT_DIR/.toolchains"
 BIN_DIR="$TOOLCHAIN_DIR/bin"
-WABT_VERSION="${WABT_VERSION:-1.0.39}"
-WASM_TOOLS_VERSION="${WASM_TOOLS_VERSION:-1.245.1}"
+LOCK_FILE="$ROOT_DIR/tool/toolchain.lock.json"
+WABT_VERSION="${WABT_VERSION:-}"
+WASM_TOOLS_VERSION="${WASM_TOOLS_VERSION:-}"
 
 MODE="install"
 if [[ "${1:-}" == "--check" ]]; then
@@ -22,6 +23,40 @@ need_cmd() {
     echo "Missing required command: $1" >&2
     exit 1
   }
+}
+
+load_locked_versions() {
+  if [[ ! -f "$LOCK_FILE" ]]; then
+    echo "Missing toolchain lock file: $LOCK_FILE" >&2
+    exit 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Missing required command: jq (needed to read $LOCK_FILE)" >&2
+    exit 1
+  fi
+
+  local locked_wabt locked_wasm_tools
+  locked_wabt="$(jq -r '.wabt.version // ""' "$LOCK_FILE")"
+  locked_wasm_tools="$(jq -r '.wasm_tools.version // ""' "$LOCK_FILE")"
+  if [[ -z "$locked_wabt" || -z "$locked_wasm_tools" ]]; then
+    echo "Invalid toolchain lock file (missing versions): $LOCK_FILE" >&2
+    exit 1
+  fi
+
+  if [[ -z "$WABT_VERSION" ]]; then
+    WABT_VERSION="$locked_wabt"
+  fi
+  if [[ -z "$WASM_TOOLS_VERSION" ]]; then
+    WASM_TOOLS_VERSION="$locked_wasm_tools"
+  fi
+
+  if [[ "$WABT_VERSION" != "$locked_wabt" || "$WASM_TOOLS_VERSION" != "$locked_wasm_tools" ]]; then
+    echo "Toolchain version drift detected between script/env and lock file." >&2
+    echo "lock wabt=$locked_wabt wasm_tools=$locked_wasm_tools" >&2
+    echo "script/env wabt=$WABT_VERSION wasm_tools=$WASM_TOOLS_VERSION" >&2
+    echo "Sync tool/ensure_toolchains.sh (or env overrides) with $LOCK_FILE." >&2
+    exit 1
+  fi
 }
 
 sha256_file() {
@@ -129,8 +164,24 @@ is_ready() {
     [[ -x "$BIN_DIR/wasm-tools" ]]
 }
 
+load_locked_versions
+
 if [[ "$MODE" == "check" ]]; then
   if is_ready; then
+    wabt_installed="$("$BIN_DIR/wasm-interp" --version 2>/dev/null | head -n1 || true)"
+    wasm_tools_installed="$("$BIN_DIR/wasm-tools" --version 2>/dev/null | head -n1 || true)"
+    if [[ "$wabt_installed" != *"$WABT_VERSION"* ]]; then
+      echo "toolchains: version mismatch" >&2
+      echo "expected wabt version: $WABT_VERSION" >&2
+      echo "actual wasm-interp --version: ${wabt_installed:-<empty>}" >&2
+      exit 1
+    fi
+    if [[ "$wasm_tools_installed" != *"$WASM_TOOLS_VERSION"* ]]; then
+      echo "toolchains: version mismatch" >&2
+      echo "expected wasm-tools version: $WASM_TOOLS_VERSION" >&2
+      echo "actual wasm-tools --version: ${wasm_tools_installed:-<empty>}" >&2
+      exit 1
+    fi
     echo "toolchains: ok"
     "$BIN_DIR/wasm-interp" --version || true
     "$BIN_DIR/wast2json" --version || true
