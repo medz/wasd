@@ -1386,6 +1386,30 @@ final class WasmInstance {
             _simdI32x4Splat(stack);
             pc++;
 
+          case Opcodes.i32x4ExtAddPairwiseI16x8S:
+            _simdI32x4ExtAddPairwiseI16x8S(stack);
+            pc++;
+
+          case Opcodes.i32x4ExtAddPairwiseI16x8U:
+            _simdI32x4ExtAddPairwiseI16x8U(stack);
+            pc++;
+
+          case Opcodes.i32x4ExtendLowI16x8S:
+            _simdI32x4ExtendLowI16x8S(stack);
+            pc++;
+
+          case Opcodes.i32x4ExtendHighI16x8S:
+            _simdI32x4ExtendHighI16x8S(stack);
+            pc++;
+
+          case Opcodes.i32x4ExtendLowI16x8U:
+            _simdI32x4ExtendLowI16x8U(stack);
+            pc++;
+
+          case Opcodes.i32x4ExtendHighI16x8U:
+            _simdI32x4ExtendHighI16x8U(stack);
+            pc++;
+
           case Opcodes.i32x4Eq:
             _simdI32x4Eq(stack);
             pc++;
@@ -1472,6 +1496,26 @@ final class WasmInstance {
 
           case Opcodes.i32x4MaxU:
             _simdI32x4MaxU(stack);
+            pc++;
+
+          case Opcodes.i32x4DotI16x8S:
+            _simdI32x4DotI16x8S(stack);
+            pc++;
+
+          case Opcodes.i32x4ExtmulLowI16x8S:
+            _simdI32x4ExtmulLowI16x8S(stack);
+            pc++;
+
+          case Opcodes.i32x4ExtmulHighI16x8S:
+            _simdI32x4ExtmulHighI16x8S(stack);
+            pc++;
+
+          case Opcodes.i32x4ExtmulLowI16x8U:
+            _simdI32x4ExtmulLowI16x8U(stack);
+            pc++;
+
+          case Opcodes.i32x4ExtmulHighI16x8U:
+            _simdI32x4ExtmulHighI16x8U(stack);
             pc++;
 
           case Opcodes.i32x4Bitmask:
@@ -6443,6 +6487,110 @@ final class WasmInstance {
     _pushAsyncSubsetV128(stack, result);
   }
 
+  void _simdI32x4ExtAddPairwiseI16x8S(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.extadd_pairwise_i16x8_s',
+    );
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final a = inputData.getInt16(lane * 4, Endian.little);
+      final b = inputData.getInt16((lane * 4) + 2, Endian.little);
+      resultData.setUint32(lane * 4, (a + b).toUnsigned(32), Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4ExtAddPairwiseI16x8U(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.extadd_pairwise_i16x8_u',
+    );
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final a = inputData.getUint16(lane * 4, Endian.little);
+      final b = inputData.getUint16((lane * 4) + 2, Endian.little);
+      resultData.setUint32(lane * 4, (a + b) & 0xffffffff, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4ExtendLowI16x8S(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.extend_low_i16x8_s',
+    );
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      resultData.setUint32(
+        lane * 4,
+        inputData.getInt16(lane * 2, Endian.little).toUnsigned(32),
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4ExtendHighI16x8S(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.extend_high_i16x8_s',
+    );
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      resultData.setUint32(
+        lane * 4,
+        inputData.getInt16((lane + 4) * 2, Endian.little).toUnsigned(32),
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4ExtendLowI16x8U(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.extend_low_i16x8_u',
+    );
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      resultData.setUint32(
+        lane * 4,
+        inputData.getUint16(lane * 2, Endian.little),
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4ExtendHighI16x8U(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.extend_high_i16x8_u',
+    );
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      resultData.setUint32(
+        lane * 4,
+        inputData.getUint16((lane + 4) * 2, Endian.little),
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
   void _simdI32x4Eq(List<WasmValue> stack) {
     final rhs = _popAsyncSubsetV128(stack, opName: 'i32x4.eq rhs');
     final lhs = _popAsyncSubsetV128(stack, opName: 'i32x4.eq lhs');
@@ -6725,6 +6873,112 @@ final class WasmInstance {
       final a = lhsData.getUint32(offset, Endian.little);
       final b = rhsData.getUint32(offset, Endian.little);
       resultData.setUint32(offset, a > b ? a : b, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4DotI16x8S(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'i32x4.dot_i16x8_s rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'i32x4.dot_i16x8_s lhs');
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final a0 = lhsData.getInt16(offset, Endian.little);
+      final a1 = lhsData.getInt16(offset + 2, Endian.little);
+      final b0 = rhsData.getInt16(offset, Endian.little);
+      final b1 = rhsData.getInt16(offset + 2, Endian.little);
+      resultData.setUint32(
+        offset,
+        ((a0 * b0) + (a1 * b1)).toUnsigned(32),
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4ExtmulLowI16x8S(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.extmul_low_i16x8_s rhs',
+    );
+    final lhs = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.extmul_low_i16x8_s lhs',
+    );
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final a = lhsData.getInt16(lane * 2, Endian.little);
+      final b = rhsData.getInt16(lane * 2, Endian.little);
+      resultData.setUint32(lane * 4, (a * b).toUnsigned(32), Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4ExtmulHighI16x8S(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.extmul_high_i16x8_s rhs',
+    );
+    final lhs = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.extmul_high_i16x8_s lhs',
+    );
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final a = lhsData.getInt16((lane + 4) * 2, Endian.little);
+      final b = rhsData.getInt16((lane + 4) * 2, Endian.little);
+      resultData.setUint32(lane * 4, (a * b).toUnsigned(32), Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4ExtmulLowI16x8U(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.extmul_low_i16x8_u rhs',
+    );
+    final lhs = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.extmul_low_i16x8_u lhs',
+    );
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final a = lhsData.getUint16(lane * 2, Endian.little);
+      final b = rhsData.getUint16(lane * 2, Endian.little);
+      resultData.setUint32(lane * 4, (a * b) & 0xffffffff, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4ExtmulHighI16x8U(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.extmul_high_i16x8_u rhs',
+    );
+    final lhs = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.extmul_high_i16x8_u lhs',
+    );
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final a = lhsData.getUint16((lane + 4) * 2, Endian.little);
+      final b = rhsData.getUint16((lane + 4) * 2, Endian.little);
+      resultData.setUint32(lane * 4, (a * b) & 0xffffffff, Endian.little);
     }
     _pushAsyncSubsetV128(stack, result);
   }
