@@ -1766,6 +1766,14 @@ final class WasmInstance {
             _simdF32x4Max(stack);
             pc++;
 
+          case Opcodes.f32x4RelaxedMadd:
+            _simdF32x4RelaxedMadd(stack);
+            pc++;
+
+          case Opcodes.f32x4RelaxedNmadd:
+            _simdF32x4RelaxedNmadd(stack);
+            pc++;
+
           case Opcodes.f64x2Splat:
             _simdF64x2Splat(stack);
             pc++;
@@ -1868,6 +1876,14 @@ final class WasmInstance {
 
           case Opcodes.f64x2RelaxedMax:
             _simdF64x2Max(stack);
+            pc++;
+
+          case Opcodes.f64x2RelaxedMadd:
+            _simdF64x2RelaxedMadd(stack);
+            pc++;
+
+          case Opcodes.f64x2RelaxedNmadd:
+            _simdF64x2RelaxedNmadd(stack);
             pc++;
 
           case Opcodes.f32x4ConvertI32x4S:
@@ -8419,6 +8435,98 @@ final class WasmInstance {
       } else {
         _writeAsyncSubsetLaneU64(resultData, offset, lhsBits);
       }
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF32x4RelaxedMadd(List<WasmValue> stack) {
+    final addend = _popAsyncSubsetV128(
+      stack,
+      opName: 'f32x4.relaxed_madd addend',
+    );
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f32x4.relaxed_madd rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f32x4.relaxed_madd lhs');
+    final addendData = ByteData.sublistView(addend);
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final value =
+          (lhsData.getFloat32(offset, Endian.little) *
+              rhsData.getFloat32(offset, Endian.little)) +
+          addendData.getFloat32(offset, Endian.little);
+      _setAsyncSubsetF32LaneCanonical(resultData, offset, value);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF32x4RelaxedNmadd(List<WasmValue> stack) {
+    final addend = _popAsyncSubsetV128(
+      stack,
+      opName: 'f32x4.relaxed_nmadd addend',
+    );
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f32x4.relaxed_nmadd rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f32x4.relaxed_nmadd lhs');
+    final addendData = ByteData.sublistView(addend);
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final value =
+          -(lhsData.getFloat32(offset, Endian.little) *
+              rhsData.getFloat32(offset, Endian.little)) +
+          addendData.getFloat32(offset, Endian.little);
+      _setAsyncSubsetF32LaneCanonical(resultData, offset, value);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2RelaxedMadd(List<WasmValue> stack) {
+    final addend = _popAsyncSubsetV128(
+      stack,
+      opName: 'f64x2.relaxed_madd addend',
+    );
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f64x2.relaxed_madd rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f64x2.relaxed_madd lhs');
+    final addendData = ByteData.sublistView(addend);
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      final value =
+          (lhsData.getFloat64(offset, Endian.little) *
+              rhsData.getFloat64(offset, Endian.little)) +
+          addendData.getFloat64(offset, Endian.little);
+      _setAsyncSubsetF64LaneCanonical(resultData, offset, value);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2RelaxedNmadd(List<WasmValue> stack) {
+    final addend = _popAsyncSubsetV128(
+      stack,
+      opName: 'f64x2.relaxed_nmadd addend',
+    );
+    final rhs = _popAsyncSubsetV128(stack, opName: 'f64x2.relaxed_nmadd rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'f64x2.relaxed_nmadd lhs');
+    final addendData = ByteData.sublistView(addend);
+    final rhsData = ByteData.sublistView(rhs);
+    final lhsData = ByteData.sublistView(lhs);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      final value =
+          -(lhsData.getFloat64(offset, Endian.little) *
+              rhsData.getFloat64(offset, Endian.little)) +
+          addendData.getFloat64(offset, Endian.little);
+      _setAsyncSubsetF64LaneCanonical(resultData, offset, value);
     }
     _pushAsyncSubsetV128(stack, result);
   }
