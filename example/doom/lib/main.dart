@@ -707,7 +707,7 @@ final class _HudPanel extends StatelessWidget {
               ),
               if (showHint)
                 const Text(
-                  'WASD move | Ctrl/Space fire | Enter use | Esc menu',
+                  'Arrows move | Ctrl fire | Space use | Esc menu',
                 ),
             ],
           ),
@@ -754,9 +754,9 @@ final class _HelpCard extends StatelessWidget {
                 ),
                 SizedBox(height: 10),
                 Text('Click viewport to focus input.'),
-                Text('Move: WASD or Arrow Keys'),
-                Text('Fire: Ctrl or Space'),
-                Text('Use/Open: Enter'),
+                Text('Move: Arrow Keys'),
+                Text('Fire: Ctrl'),
+                Text('Use/Open: Space'),
                 Text('Menu: Esc'),
                 SizedBox(height: 10),
                 Text('F1: Toggle this overlay'),
