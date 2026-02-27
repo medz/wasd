@@ -243,6 +243,38 @@ void main() {
     );
 
     test(
+      'prefers later compatible memory export when an earlier dependency is incompatible',
+      () {
+        final componentBytes = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleExportMemory(name: 'mem', minPages: 1, maxPages: 1),
+            _coreModuleExportMemory(name: 'mem', minPages: 3, maxPages: 3),
+            _coreModuleImportMemoryAndConst(
+              importModule: 'env',
+              importName: 'mem',
+              minPages: 2,
+              maxPages: 3,
+              exportName: 'run',
+              value: 21,
+            ),
+          ],
+          instantiateModuleIndices: const [0, 1, 2],
+          instantiateArgumentInstanceIndices: const [
+            <int>[],
+            <int>[],
+            <int>[0, 1],
+          ],
+        );
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.invokeCore('run', moduleIndex: 2), 21);
+      },
+    );
+
+    test(
       'rejects table imports wired from core-instance args with mismatched types',
       () {
         final componentBytes = _componentWithCoreModules(
