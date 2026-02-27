@@ -4,6 +4,34 @@ import 'dart:typed_data';
 import 'package:wasd/wasd.dart';
 import 'package:test/test.dart';
 
+const int _errnoSuccess = 0;
+const int _errnoBadf = 8;
+const int _errnoFault = 21;
+const int _errnoInval = 28;
+const int _errnoNametoolong = 37;
+const int _errnoNotsup = 58;
+const int _errnoNotcapable = 76;
+
+const int _oflagCreat = 0x0001;
+const int _oflagDirectory = 0x0002;
+
+const int _rightFdDatasync = 0x0000000000000001;
+const int _rightFdRead = 0x0000000000000002;
+const int _rightFdSeek = 0x0000000000000004;
+const int _rightFdFdstatSetFlags = 0x0000000000000008;
+const int _rightFdSync = 0x0000000000000010;
+const int _rightFdTell = 0x0000000000000020;
+const int _rightFdWrite = 0x0000000000000040;
+const int _rightFdAdvise = 0x0000000000000080;
+const int _rightFdAllocate = 0x0000000000000100;
+const int _rightFdReaddir = 0x0000000000004000;
+const int _rightFdFileStatSetTimes = 0x0000000000008000;
+const int _rightFdFileStatGet = 0x0000000000200000;
+const int _rightFdFileStatSetSize = 0x0000000000400000;
+
+const int _rightFdReadWrite = _rightFdRead | _rightFdWrite;
+const int _maxWasiFileSize = 0x7fffffffffffffff;
+
 void main() {
   group('WasiPreview1', () {
     test('auto-selects filesystem backend based on io capability', () {
@@ -1359,6 +1387,30 @@ void main() {
       expect(names, contains('sub'));
     });
 
+    test('fd_readdir requires RIGHT_FD_READDIR on opened directory fds', () {
+      final fs = WasiInMemoryFileSystem();
+      fs.createDirectory('/scan');
+      final wasi = WasiPreview1(fileSystem: fs);
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final fdReaddir = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_readdir')]!;
+
+      expect(
+        _pathOpen(
+          wasi: wasi,
+          memory: memory,
+          path: 'scan',
+          oflags: _oflagDirectory,
+          rightsBase: 0,
+        ),
+        _errnoSuccess,
+      );
+      final dirFd = memory.loadI32(32);
+      expect(fdReaddir([dirFd, 96, 64, 0, 24]), _errnoNotcapable);
+    });
+
     test('path_filestat_get and clock_res_get are supported', () {
       final fs = WasiInMemoryFileSystem();
       final file = fs.open(
@@ -1499,7 +1551,16 @@ void main() {
               ..._i32Const(64),
               ..._i32Const(8),
               ..._i32Const(1),
-              ..._i64Const(2130030),
+              ..._i64Const(
+                _rightFdRead |
+                    _rightFdWrite |
+                    _rightFdSeek |
+                    _rightFdFdstatSetFlags |
+                    _rightFdTell |
+                    _rightFdAllocate |
+                    _rightFdFileStatSetTimes |
+                    _rightFdFileStatGet,
+              ),
               ..._i64Const(0),
               ..._i32Const(0),
               ..._i32Const(0),
@@ -1579,9 +1640,6 @@ void main() {
       final wasi = WasiPreview1(fileSystem: fs);
       final memory = WasmMemory(minPages: 1);
       wasi.bindMemory(memory);
-      final pathOpen = wasi
-          .imports
-          .functions[WasmImports.key('wasi_snapshot_preview1', 'path_open')]!;
       final fdAdvise = wasi
           .imports
           .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_advise')]!;
@@ -1589,13 +1647,91 @@ void main() {
           .imports
           .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_close')]!;
 
-      memory.writeBytesFromList(64, utf8.encode('advise.txt'));
-      expect(pathOpen([3, 0, 64, 10, 1, 66, 0, 0, 32]), 0);
+      expect(
+        _pathOpen(
+          wasi: wasi,
+          memory: memory,
+          path: 'advise.txt',
+          oflags: _oflagCreat,
+          rightsBase: _rightFdReadWrite | _rightFdAdvise,
+        ),
+        _errnoSuccess,
+      );
       final openedFd = memory.loadI32(32);
-      expect(fdAdvise([openedFd, 0, 0, 0]), 0);
-      expect(fdAdvise([3, 0, 0, 0]), 8);
-      expect(fdAdvise([999, 0, 0, 0]), 8);
-      expect(fdClose([openedFd]), 0);
+      expect(fdAdvise([openedFd, 0, 0, 0]), _errnoSuccess);
+      expect(fdAdvise([openedFd, 0, 0, 99]), _errnoInval);
+      expect(fdAdvise([openedFd, -1, 0, 0]), _errnoInval);
+      expect(fdAdvise([openedFd, 0, -1, 0]), _errnoInval);
+      expect(fdAdvise([openedFd, _maxWasiFileSize, 1, 0]), _errnoInval);
+      expect(fdAdvise([3, 0, 0, 0]), _errnoBadf);
+      expect(fdAdvise([999, 0, 0, 0]), _errnoBadf);
+      expect(fdClose([openedFd]), _errnoSuccess);
+    });
+
+    test('fd_advise requires RIGHT_FD_ADVISE', () {
+      final wasi = WasiPreview1(fileSystem: WasiInMemoryFileSystem());
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final fdAdvise = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_advise')]!;
+
+      expect(
+        _pathOpen(
+          wasi: wasi,
+          memory: memory,
+          path: 'no-advise.txt',
+          oflags: _oflagCreat,
+          rightsBase: _rightFdReadWrite,
+        ),
+        _errnoSuccess,
+      );
+      final openedFd = memory.loadI32(32);
+      expect(fdAdvise([openedFd, 0, 0, 0]), _errnoNotcapable);
+    });
+
+    test('fd_allocate validates range and requires RIGHT_FD_ALLOCATE', () {
+      final fs = WasiInMemoryFileSystem();
+      final wasi = WasiPreview1(fileSystem: fs);
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final fdAllocate =
+          wasi.imports.functions[WasmImports.key(
+            'wasi_snapshot_preview1',
+            'fd_allocate',
+          )]!;
+
+      expect(
+        _pathOpen(
+          wasi: wasi,
+          memory: memory,
+          path: 'alloc.txt',
+          oflags: _oflagCreat,
+          rightsBase: _rightFdWrite | _rightFdAllocate,
+        ),
+        _errnoSuccess,
+      );
+      final fdWithAllocate = memory.loadI32(32);
+      expect(fdAllocate([fdWithAllocate, 2, 4]), _errnoSuccess);
+      expect(fs.readFileBytes('/alloc.txt')!.length, 6);
+      expect(fdAllocate([fdWithAllocate, -1, 1]), _errnoInval);
+      expect(fdAllocate([fdWithAllocate, 0, -1]), _errnoInval);
+      expect(fdAllocate([fdWithAllocate, _maxWasiFileSize, 1]), _errnoInval);
+
+      expect(
+        _pathOpen(
+          wasi: wasi,
+          memory: memory,
+          path: 'alloc-no-right.txt',
+          oflags: _oflagCreat,
+          rightsBase: _rightFdWrite,
+          outFdPtr: 36,
+        ),
+        _errnoSuccess,
+      );
+      final fdNoAllocate = memory.loadI32(36);
+      expect(fdAllocate([fdNoAllocate, 0, 1]), _errnoNotcapable);
+      expect(fdAllocate([3, 0, 1]), _errnoBadf);
     });
 
     test(
@@ -1605,9 +1741,6 @@ void main() {
         final wasi = WasiPreview1(fileSystem: fs);
         final memory = WasmMemory(minPages: 1);
         wasi.bindMemory(memory);
-        final pathOpen = wasi
-            .imports
-            .functions[WasmImports.key('wasi_snapshot_preview1', 'path_open')]!;
         final fdDatasync =
             wasi.imports.functions[WasmImports.key(
               'wasi_snapshot_preview1',
@@ -1620,16 +1753,67 @@ void main() {
             .imports
             .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_close')]!;
 
-        memory.writeBytesFromList(64, utf8.encode('sync.txt'));
-        expect(pathOpen([3, 0, 64, 8, 1, 66, 0, 0, 32]), 0);
+        expect(
+          _pathOpen(
+            wasi: wasi,
+            memory: memory,
+            path: 'sync.txt',
+            oflags: _oflagCreat,
+            rightsBase: _rightFdWrite | _rightFdDatasync | _rightFdSync,
+          ),
+          _errnoSuccess,
+        );
         final openedFd = memory.loadI32(32);
-        expect(fdDatasync([openedFd]), 0);
-        expect(fdSync([openedFd]), 0);
-        expect(fdDatasync([3]), 8);
-        expect(fdSync([999]), 8);
-        expect(fdClose([openedFd]), 0);
+        expect(fdDatasync([openedFd]), _errnoSuccess);
+        expect(fdSync([openedFd]), _errnoSuccess);
+        expect(fdDatasync([3]), _errnoBadf);
+        expect(fdSync([999]), _errnoBadf);
+        expect(fdClose([openedFd]), _errnoSuccess);
       },
     );
+
+    test('fd_datasync and fd_sync enforce independent rights', () {
+      final wasi = WasiPreview1(fileSystem: WasiInMemoryFileSystem());
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final fdDatasync =
+          wasi.imports.functions[WasmImports.key(
+            'wasi_snapshot_preview1',
+            'fd_datasync',
+          )]!;
+      final fdSync = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_sync')]!;
+
+      expect(
+        _pathOpen(
+          wasi: wasi,
+          memory: memory,
+          path: 'datasync-only.txt',
+          oflags: _oflagCreat,
+          rightsBase: _rightFdWrite | _rightFdDatasync,
+        ),
+        _errnoSuccess,
+      );
+      final datasyncFd = memory.loadI32(32);
+      expect(fdDatasync([datasyncFd]), _errnoSuccess);
+      expect(fdSync([datasyncFd]), _errnoNotcapable);
+
+      expect(
+        _pathOpen(
+          wasi: wasi,
+          memory: memory,
+          path: 'sync-only.txt',
+          oflags: _oflagCreat,
+          rightsBase: _rightFdWrite | _rightFdSync,
+          outFdPtr: 36,
+        ),
+        _errnoSuccess,
+      );
+      final syncFd = memory.loadI32(36);
+      expect(fdSync([syncFd]), _errnoSuccess);
+      expect(fdDatasync([syncFd]), _errnoNotcapable);
+    });
 
     test('fd_filestat_set_size truncates files and validates size bounds', () {
       final fs = WasiInMemoryFileSystem();
@@ -1647,9 +1831,6 @@ void main() {
       final wasi = WasiPreview1(fileSystem: fs);
       final memory = WasmMemory(minPages: 1);
       wasi.bindMemory(memory);
-      final pathOpen = wasi
-          .imports
-          .functions[WasmImports.key('wasi_snapshot_preview1', 'path_open')]!;
       final fdFilestatSetSize =
           wasi.imports.functions[WasmImports.key(
             'wasi_snapshot_preview1',
@@ -1659,14 +1840,35 @@ void main() {
           .imports
           .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_close')]!;
 
-      memory.writeBytesFromList(64, utf8.encode('resize.txt'));
-      expect(pathOpen([3, 0, 64, 10, 0, 66, 0, 0, 32]), 0);
+      expect(
+        _pathOpen(
+          wasi: wasi,
+          memory: memory,
+          path: 'resize.txt',
+          rightsBase: _rightFdWrite | _rightFdFileStatSetSize,
+        ),
+        _errnoSuccess,
+      );
       final openedFd = memory.loadI32(32);
-      expect(fdFilestatSetSize([openedFd, 2]), 0);
+      expect(fdFilestatSetSize([openedFd, 2]), _errnoSuccess);
       expect(fs.readFileText('/resize.txt'), 'AB');
-      expect(fdFilestatSetSize([openedFd, -1]), 28);
-      expect(fdFilestatSetSize([3, 1]), 8);
-      expect(fdClose([openedFd]), 0);
+      expect(fdFilestatSetSize([openedFd, -1]), _errnoInval);
+      expect(fdFilestatSetSize([3, 1]), _errnoBadf);
+      expect(fdClose([openedFd]), _errnoSuccess);
+
+      expect(
+        _pathOpen(
+          wasi: wasi,
+          memory: memory,
+          path: 'resize-no-right.txt',
+          oflags: _oflagCreat,
+          rightsBase: _rightFdWrite,
+          outFdPtr: 36,
+        ),
+        _errnoSuccess,
+      );
+      final noRightFd = memory.loadI32(36);
+      expect(fdFilestatSetSize([noRightFd, 1]), _errnoNotcapable);
     });
 
     test('path_filestat_set_times updates path metadata in in-memory fs', () {
@@ -2271,6 +2473,33 @@ void main() {
       expect(instance.invokeI32('run'), 78);
     });
 
+    test('fd_renumber rejects preopened directories with NOTSUP', () {
+      final wasi = WasiPreview1(fileSystem: WasiInMemoryFileSystem());
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final fdRenumber = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_renumber')]!;
+      expect(fdRenumber([3, 9]), _errnoNotsup);
+    });
+
+    test('fd_close keeps preopened directories reachable', () {
+      final wasi = WasiPreview1(fileSystem: WasiInMemoryFileSystem());
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final fdClose = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_close')]!;
+      final fdPrestatGet =
+          wasi.imports.functions[WasmImports.key(
+            'wasi_snapshot_preview1',
+            'fd_prestat_get',
+          )]!;
+
+      expect(fdClose([3]), _errnoSuccess);
+      expect(fdPrestatGet([3, 40]), _errnoSuccess);
+    });
+
     test(
       'proc_raise defaults to ENOSYS and sock_* imports are ENOSYS stubs',
       () {
@@ -2760,6 +2989,41 @@ Uint8List _buildFdCloseModule({required int fd}) {
       _ExportSpec(name: 'run', kind: WasmExportKind.function, index: 1),
     ],
   );
+}
+
+Object? Function(List<Object?>) _wasiFunction(WasiPreview1 wasi, String name) {
+  return wasi.imports.functions[
+      WasmImports.key('wasi_snapshot_preview1', name)]!;
+}
+
+int _pathOpen({
+  required WasiPreview1 wasi,
+  required WasmMemory memory,
+  required String path,
+  int dirFd = 3,
+  int dirFlags = 0,
+  int oflags = 0,
+  required int rightsBase,
+  int rightsInheriting = 0,
+  int fdFlags = 0,
+  int pathPtr = 64,
+  int outFdPtr = 32,
+}) {
+  final pathOpen = _wasiFunction(wasi, 'path_open');
+  final pathBytes = utf8.encode(path);
+  memory.writeBytesFromList(pathPtr, pathBytes);
+  final errno = pathOpen([
+    dirFd,
+    dirFlags,
+    pathPtr,
+    pathBytes.length,
+    oflags,
+    rightsBase,
+    rightsInheriting,
+    fdFlags,
+    outFdPtr,
+  ]);
+  return errno as int;
 }
 
 String _readCString(WasmMemory memory, int pointer) {
