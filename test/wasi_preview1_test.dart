@@ -332,6 +332,27 @@ void main() {
       );
     });
 
+    test('proc_exit direct host call throws WasiProcExit with i32 code', () {
+      final wasi = WasiPreview1();
+      final procExit = _wasiFunction(wasi, 'proc_exit');
+
+      expect(
+        () => procExit([27]),
+        throwsA(isA<WasiProcExit>().having((e) => e.exitCode, 'exitCode', 27)),
+      );
+    });
+
+    test(
+      'proc_exit direct host call keeps StateError contract for missing/invalid args',
+      () {
+        final wasi = WasiPreview1();
+        final procExit = _wasiFunction(wasi, 'proc_exit');
+
+        expect(() => procExit([]), throwsStateError);
+        expect(() => procExit(['bad']), throwsStateError);
+      },
+    );
+
     test('path_open + fd_write + fd_close writes file content', () {
       final fs = WasiInMemoryFileSystem();
       final wasi = WasiPreview1(fileSystem: fs);
@@ -3453,40 +3474,29 @@ void main() {
       expect(closedFd, 77);
     });
 
-    test('proc_raise mode success returns errno 0', () {
-      final wasi = WasiPreview1(
-        procRaiseMode: WasiProcRaiseMode.success,
-        allowNonStandardWasi: true,
-      );
-      final wasm = _buildProcRaiseModule(signal: 15);
-      final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
+    test('proc_raise direct host call returns ENOSYS', () {
+      final wasi = WasiPreview1();
+      final procRaise = _wasiFunction(wasi, 'proc_raise');
 
-      expect(instance.invokeI32('run'), 0);
+      expect(procRaise([15]), _errnoNosys);
     });
 
-    test('proc_raise mode trap throws WasiProcRaise with signal', () {
-      final wasi = WasiPreview1(
-        procRaiseMode: WasiProcRaiseMode.trap,
-        allowNonStandardWasi: true,
-      );
+    test(
+      'proc_raise direct host call keeps StateError contract for missing/invalid args',
+      () {
+        final wasi = WasiPreview1();
+        final procRaise = _wasiFunction(wasi, 'proc_raise');
+
+        expect(() => procRaise([]), throwsStateError);
+        expect(() => procRaise(['bad']), throwsStateError);
+      },
+    );
+
+    test('proc_raise wasm import returns ENOSYS', () {
+      final wasi = WasiPreview1();
       final wasm = _buildProcRaiseModule(signal: 9);
       final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
-
-      expect(
-        () => instance.invokeI32('run'),
-        throwsA(isA<WasiProcRaise>().having((e) => e.signal, 'signal', 9)),
-      );
-    });
-
-    test('proc_raise non-standard modes require explicit opt-in', () {
-      expect(
-        () => WasiPreview1(procRaiseMode: WasiProcRaiseMode.success),
-        throwsArgumentError,
-      );
-      expect(
-        () => WasiPreview1(procRaiseMode: WasiProcRaiseMode.trap),
-        throwsArgumentError,
-      );
+      expect(instance.invokeI32('run'), _errnoNosys);
     });
   });
 }
