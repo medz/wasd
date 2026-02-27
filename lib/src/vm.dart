@@ -408,6 +408,22 @@ final class WasmVm {
     return object.descriptorRef;
   }
 
+  bool gcRefMatches(int? reference, GcRefTypeImmediate refType) {
+    return _gcRefMatches(reference, refType);
+  }
+
+  bool gcRefMatchesWithDescriptor({
+    required int? value,
+    required int? descriptor,
+    required GcRefTypeImmediate targetType,
+  }) {
+    return _gcRefMatchesWithDescriptor(
+      value: value,
+      descriptor: descriptor,
+      targetType: targetType,
+    );
+  }
+
   static int _canonicalI31Ref(int value) {
     final normalized = value & 0x7fffffff;
     return _sharedI31Refs.putIfAbsent(

@@ -1003,6 +1003,27 @@ final class WasmInstance {
             stack.add(WasmValue.i32(reference));
             pc++;
 
+          case Opcodes.refTest:
+          case Opcodes.refTestNullable:
+            stack.add(
+              WasmValue.i32(_gcRefTestAsyncSubset(stack, instruction) ? 1 : 0),
+            );
+            pc++;
+
+          case Opcodes.refCast:
+          case Opcodes.refCastNullable:
+            _gcRefCastAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.refGetDesc:
+            _gcRefGetDescAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.refCastDesc:
+          case Opcodes.refCastDescEq:
+            _gcRefCastDescEqAsyncSubset(stack, instruction);
+            pc++;
+
           case Opcodes.anyConvertExtern:
             _gcAnyConvertExternAsyncSubset(stack);
             pc++;
@@ -4886,6 +4907,17 @@ final class WasmInstance {
               pc++;
             }
 
+          case Opcodes.brOnCast:
+          case Opcodes.brOnCastFail:
+          case Opcodes.brOnCastDescEq:
+          case Opcodes.brOnCastDescEqFail:
+            pc = _gcBrOnCastAsyncSubset(
+              stack: stack,
+              instruction: instruction,
+              currentPc: pc,
+              controlStack: controlStack,
+            );
+
           case Opcodes.brTable:
             final selector = _popValue(
               stack,
@@ -5489,6 +5521,137 @@ final class WasmInstance {
     stack.add(
       WasmValue.i32(WasmVm.i31Get(reference: reference, signed: signed)),
     );
+  }
+
+  bool _gcRefTestAsyncSubset(List<WasmValue> stack, Instruction instruction) {
+    final gcRefType = instruction.gcRefType;
+    if (gcRefType == null) {
+      throw StateError('Missing ref.test immediate.');
+    }
+    final value = _popAsyncSubsetRef(stack, context: 'ref.test operand');
+    return _vm.gcRefMatches(value, gcRefType);
+  }
+
+  void _gcRefCastAsyncSubset(List<WasmValue> stack, Instruction instruction) {
+    final gcRefType = instruction.gcRefType;
+    if (gcRefType == null) {
+      throw StateError('Missing ref.cast immediate.');
+    }
+    final value = _popAsyncSubsetRef(stack, context: 'ref.cast operand');
+    if (!_vm.gcRefMatches(value, gcRefType)) {
+      throw StateError('cast failure');
+    }
+    stack.add(WasmValue.i32(value ?? -1));
+  }
+
+  void _gcRefGetDescAsyncSubset(
+    List<WasmValue> stack,
+    Instruction instruction,
+  ) {
+    final typeIndex = _checkAsyncSubsetTypeIndex(instruction.immediate!);
+    final expectedType = module.types[typeIndex];
+    if (expectedType.descriptorTypeIndex == null) {
+      throw StateError('type without descriptor');
+    }
+    final value = _popAsyncSubsetRef(stack, context: 'ref.get_desc operand');
+    if (value == null) {
+      throw StateError('null reference');
+    }
+    final descriptor = WasmVm.descriptorForRef(value);
+    if (descriptor == null) {
+      throw StateError('descriptor not available');
+    }
+    stack.add(WasmValue.i32(descriptor));
+  }
+
+  void _gcRefCastDescEqAsyncSubset(
+    List<WasmValue> stack,
+    Instruction instruction,
+  ) {
+    final gcRefType = instruction.gcRefType;
+    if (gcRefType == null) {
+      throw StateError('Missing ref.cast_desc_eq immediate.');
+    }
+    final descriptor = _popAsyncSubsetRef(
+      stack,
+      context: 'ref.cast_desc_eq descriptor',
+    );
+    final value = _popAsyncSubsetRef(stack, context: 'ref.cast_desc_eq value');
+    if (!_vm.gcRefMatchesWithDescriptor(
+      value: value,
+      descriptor: descriptor,
+      targetType: gcRefType,
+    )) {
+      throw StateError('descriptor cast failure');
+    }
+    stack.add(WasmValue.i32(value ?? -1));
+  }
+
+  int _gcBrOnCastAsyncSubset({
+    required List<WasmValue> stack,
+    required Instruction instruction,
+    required int currentPc,
+    required List<_AsyncSubsetControlFrame> controlStack,
+  }) {
+    final brOnCast = instruction.gcBrOnCast;
+    if (brOnCast == null) {
+      throw StateError('Missing br_on_cast immediate.');
+    }
+    switch (instruction.opcode) {
+      case Opcodes.brOnCast:
+      case Opcodes.brOnCastFail:
+        final value = _popAsyncSubsetRef(stack, context: 'br_on_cast operand');
+        final matches = _vm.gcRefMatches(value, brOnCast.targetType);
+        stack.add(WasmValue.i32(value ?? -1));
+        final shouldBranch = instruction.opcode == Opcodes.brOnCast
+            ? matches
+            : !matches;
+        if (!shouldBranch) {
+          return currentPc + 1;
+        }
+        return _branchInAsyncSubset(
+          depth: brOnCast.depth,
+          stack: stack,
+          controlStack: controlStack,
+          context: instruction.opcode == Opcodes.brOnCast
+              ? 'br_on_cast'
+              : 'br_on_cast_fail',
+        );
+      case Opcodes.brOnCastDescEq:
+      case Opcodes.brOnCastDescEqFail:
+        final descriptor = _popAsyncSubsetRef(
+          stack,
+          context: 'br_on_cast_desc_eq descriptor',
+        );
+        final value = _popAsyncSubsetRef(
+          stack,
+          context: 'br_on_cast_desc_eq operand',
+        );
+        final matches = _vm.gcRefMatchesWithDescriptor(
+          value: value,
+          descriptor: descriptor,
+          targetType: brOnCast.targetType,
+        );
+        stack.add(WasmValue.i32(value ?? -1));
+        final shouldBranch = instruction.opcode == Opcodes.brOnCastDescEq
+            ? matches
+            : !matches;
+        if (!shouldBranch) {
+          return currentPc + 1;
+        }
+        return _branchInAsyncSubset(
+          depth: brOnCast.depth,
+          stack: stack,
+          controlStack: controlStack,
+          context: instruction.opcode == Opcodes.brOnCastDescEq
+              ? 'br_on_cast_desc_eq'
+              : 'br_on_cast_desc_eq_fail',
+        );
+      default:
+        throw StateError(
+          'Unsupported br_on_cast opcode: 0x${instruction.opcode.toRadixString(16)}',
+        );
+    }
   }
 
   int _checkAsyncSubsetTypeIndex(int index) {

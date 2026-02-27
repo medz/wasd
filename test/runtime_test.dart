@@ -10317,6 +10317,287 @@ void main() {
       );
     });
 
+    test(
+      'supports gc cast/test branch opcodes in async import call chains',
+      () async {
+        List<int> gcInstr(int opcode, List<int> immediates) {
+          return <int>[0xfb, ..._u32Leb(opcode & 0xff), ...immediates];
+        }
+
+        List<int> brOnCastInstr(
+          int opcode, {
+          required int flags,
+          required int depth,
+          required List<int> sourceType,
+          required List<int> targetType,
+        }) {
+          return gcInstr(opcode, <int>[
+            ..._u32Leb(flags),
+            ..._u32Leb(depth),
+            ...sourceType,
+            ...targetType,
+          ]);
+        }
+
+        List<int> descriptorRecGroupType() {
+          return <int>[
+            0x4e,
+            ..._u32Leb(2),
+            0x4d,
+            ..._u32Leb(1),
+            0x5f,
+            ..._u32Leb(0),
+            0x4c,
+            ..._u32Leb(0),
+            0x5f,
+            ..._u32Leb(0),
+          ];
+        }
+
+        final wasm = _buildModule(
+          types: [
+            descriptorRecGroupType(),
+            _funcType([0x7f], [0x7f]),
+            _funcType([], []),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 2),
+          ],
+          functionTypeIndices: const [2, 2, 2, 2, 2, 2],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                Opcodes.refFunc,
+                ..._u32Leb(1),
+                ...gcInstr(Opcodes.refTest, const <int>[0x70]),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                Opcodes.refNull,
+                0x70,
+                ...gcInstr(Opcodes.refTestNullable, const <int>[0x70]),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                Opcodes.refFunc,
+                ..._u32Leb(1),
+                ...gcInstr(Opcodes.refCast, const <int>[0x70]),
+                Opcodes.refIsNull,
+                ..._i32Const(0),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                Opcodes.refNull,
+                0x70,
+                ...gcInstr(Opcodes.refCastNullable, const <int>[0x70]),
+                Opcodes.refIsNull,
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ...gcInstr(Opcodes.structNewDefault, _u32Leb(1)),
+                ...gcInstr(Opcodes.structNewDefaultDesc, _u32Leb(0)),
+                ...gcInstr(Opcodes.refGetDesc, _u32Leb(0)),
+                Opcodes.refIsNull,
+                ..._i32Const(0),
+                Opcodes.i32Eq,
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ...gcInstr(Opcodes.structNewDefault, _u32Leb(1)),
+                ...gcInstr(Opcodes.structNewDefaultDesc, _u32Leb(0)),
+                ...gcInstr(Opcodes.structNewDefault, _u32Leb(1)),
+                ...gcInstr(Opcodes.refCastDesc, _i32Leb(0)),
+                Opcodes.refIsNull,
+                ..._i32Const(0),
+                Opcodes.i32Eq,
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ...gcInstr(Opcodes.structNewDefault, _u32Leb(1)),
+                ...gcInstr(Opcodes.structNewDefaultDesc, _u32Leb(0)),
+                ...gcInstr(Opcodes.structNewDefault, _u32Leb(1)),
+                ...gcInstr(Opcodes.refCastDescEq, _i32Leb(0)),
+                Opcodes.refIsNull,
+                ..._i32Const(0),
+                Opcodes.i32Eq,
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              locals: const [_LocalDeclSpec(1, 0x7f)],
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._i32Const(0),
+                ..._localSet(1),
+                Opcodes.block,
+                0x70,
+                Opcodes.refFunc,
+                ..._u32Leb(1),
+                ...brOnCastInstr(
+                  Opcodes.brOnCast,
+                  flags: 0,
+                  depth: 0,
+                  sourceType: const <int>[0x70],
+                  targetType: const <int>[0x70],
+                ),
+                ..._i32Const(1),
+                ..._localSet(1),
+                Opcodes.end,
+                Opcodes.drop,
+                Opcodes.block,
+                0x70,
+                Opcodes.refFunc,
+                ..._u32Leb(1),
+                ...brOnCastInstr(
+                  Opcodes.brOnCastFail,
+                  flags: 0,
+                  depth: 0,
+                  sourceType: const <int>[0x70],
+                  targetType: _i32Leb(3),
+                ),
+                ..._i32Const(2),
+                ..._localSet(1),
+                Opcodes.end,
+                Opcodes.drop,
+                ..._localGet(1),
+                Opcodes.i32Eqz,
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              locals: const [_LocalDeclSpec(1, 0x7f)],
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._i32Const(0),
+                ..._localSet(1),
+                Opcodes.block,
+                0x6e,
+                ...gcInstr(Opcodes.structNewDefault, _u32Leb(1)),
+                ...gcInstr(Opcodes.structNewDefaultDesc, _u32Leb(0)),
+                ...gcInstr(Opcodes.structNewDefault, _u32Leb(1)),
+                ...brOnCastInstr(
+                  Opcodes.brOnCastDescEq,
+                  flags: 0,
+                  depth: 0,
+                  sourceType: _i32Leb(0),
+                  targetType: _i32Leb(0),
+                ),
+                ..._i32Const(1),
+                ..._localSet(1),
+                Opcodes.end,
+                Opcodes.drop,
+                Opcodes.block,
+                0x6e,
+                ...gcInstr(Opcodes.structNewDefault, _u32Leb(1)),
+                ...gcInstr(Opcodes.structNewDefaultDesc, _u32Leb(0)),
+                ...gcInstr(Opcodes.structNewDefault, _u32Leb(1)),
+                ...brOnCastInstr(
+                  Opcodes.brOnCastDescEqFail,
+                  flags: 0,
+                  depth: 0,
+                  sourceType: _i32Leb(0),
+                  targetType: _i32Leb(0),
+                ),
+                ..._i32Const(2),
+                ..._localSet(1),
+                Opcodes.end,
+                Opcodes.drop,
+                ..._localGet(1),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'supportsRefTestCastOps',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+            _ExportSpec(
+              name: 'supportsRefGetDesc',
+              kind: WasmExportKind.function,
+              index: 2,
+            ),
+            _ExportSpec(
+              name: 'trapsRefCastDescMismatch',
+              kind: WasmExportKind.function,
+              index: 3,
+            ),
+            _ExportSpec(
+              name: 'trapsRefCastDescEqMismatch',
+              kind: WasmExportKind.function,
+              index: 4,
+            ),
+            _ExportSpec(
+              name: 'supportsBrOnCastOps',
+              kind: WasmExportKind.function,
+              index: 5,
+            ),
+            _ExportSpec(
+              name: 'supportsBrOnCastDescOps',
+              kind: WasmExportKind.function,
+              index: 6,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          features: const WasmFeatureSet(gc: true),
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(
+          await instance.invokeI32Async('supportsRefTestCastOps', [41]),
+          1,
+        );
+        expect(await instance.invokeI32Async('supportsRefGetDesc', [41]), 1);
+        await expectLater(
+          instance.invokeI32Async('trapsRefCastDescMismatch', [41]),
+          throwsA(isA<StateError>()),
+        );
+        await expectLater(
+          instance.invokeI32Async('trapsRefCastDescEqMismatch', [41]),
+          throwsA(isA<StateError>()),
+        );
+        expect(await instance.invokeI32Async('supportsBrOnCastOps', [41]), 1);
+        expect(
+          await instance.invokeI32Async('supportsBrOnCastDescOps', [41]),
+          1,
+        );
+      },
+    );
+
     test('supports layered feature defaults and extension query', () {
       final features = WasmFeatureSet.layeredDefaults(
         profile: WasmFeatureProfile.stable,
