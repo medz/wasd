@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'byte_reader.dart';
@@ -17,6 +18,13 @@ typedef _ComponentExportAliasBinding = ({
   int instanceIndex,
   String coreExportName,
   WasmComponentImportKind kind,
+});
+typedef _ResolvedCoreSortExport = ({WasmInstance instance, String exportName});
+typedef _ResolvedFromExportsBinding = ({
+  String exportName,
+  WasmComponentImportKind kind,
+  WasmInstance sourceInstance,
+  String sourceExportName,
 });
 typedef _TypedFunctionImportRequirement = ({
   String componentImportName,
@@ -124,7 +132,7 @@ final class WasmComponentInstance {
     );
     _validateComponentImportRequirements(component, imports);
     final coreInstances = <WasmInstance>[];
-    if (component.coreInstances.isEmpty || component.hasOpaqueCoreInstances) {
+    if (component.coreInstances.isEmpty) {
       for (
         var moduleIndex = 0;
         moduleIndex < component.coreModules.length;
@@ -152,14 +160,12 @@ final class WasmComponentInstance {
     } else {
       for (final declaration in component.coreInstances) {
         if (declaration.isFromExports) {
-          if (declaration.exports.isNotEmpty) {
-            throw UnsupportedError(
-              'Component core-instance from-exports declarations with '
-              'non-empty export lists are not yet supported.',
-            );
-          }
           coreInstances.add(
-            WasmInstance.fromBytes(_emptyCoreModuleBytes, features: features),
+            _instantiateCoreInstanceFromExports(
+              declaration: declaration,
+              instantiatedCoreInstances: coreInstances,
+              features: features,
+            ),
           );
           continue;
         }
@@ -431,6 +437,438 @@ final class WasmComponentInstance {
     ).exportedTagImport(binding.coreExportName);
   }
 
+  static WasmInstance _instantiateCoreInstanceFromExports({
+    required WasmComponentCoreInstance declaration,
+    required List<WasmInstance> instantiatedCoreInstances,
+    required WasmFeatureSet features,
+  }) {
+    if (declaration.exports.isEmpty) {
+      return WasmInstance.fromBytes(_emptyCoreModuleBytes, features: features);
+    }
+
+    final resolved = _resolveFromExportsBindings(
+      declaration: declaration,
+      instantiatedCoreInstances: instantiatedCoreInstances,
+    );
+    final synthetic = _buildFromExportsSyntheticModule(resolved);
+    return WasmInstance.fromBytes(
+      synthetic.moduleBytes,
+      imports: synthetic.imports,
+      features: features,
+    );
+  }
+
+  static List<_ResolvedFromExportsBinding> _resolveFromExportsBindings({
+    required WasmComponentCoreInstance declaration,
+    required List<WasmInstance> instantiatedCoreInstances,
+  }) {
+    final functionExports = <_ResolvedCoreSortExport>[];
+    final memoryExports = <_ResolvedCoreSortExport>[];
+    final tableExports = <_ResolvedCoreSortExport>[];
+    final globalExports = <_ResolvedCoreSortExport>[];
+    final tagExports = <_ResolvedCoreSortExport>[];
+
+    for (final instance in instantiatedCoreInstances) {
+      for (final exportName in instance.exportedFunctions) {
+        functionExports.add((instance: instance, exportName: exportName));
+      }
+      for (final exportName in instance.exportedMemories) {
+        memoryExports.add((instance: instance, exportName: exportName));
+      }
+      for (final exportName in instance.exportedTables) {
+        tableExports.add((instance: instance, exportName: exportName));
+      }
+      for (final exportName in instance.exportedGlobals) {
+        globalExports.add((instance: instance, exportName: exportName));
+      }
+      for (final exportName in instance.exportedTags) {
+        tagExports.add((instance: instance, exportName: exportName));
+      }
+    }
+
+    final seenExportNames = <String>{};
+    final resolved = <_ResolvedFromExportsBinding>[];
+    for (final export in declaration.exports) {
+      if (!seenExportNames.add(export.exportName)) {
+        throw FormatException(
+          'Duplicate core-instance from-exports export name: '
+          '`${export.exportName}`.',
+        );
+      }
+      switch (export.kind) {
+        case 0x00:
+          resolved.add(
+            _resolveFromExportsBindingByKind(
+              declarationExport: export,
+              kind: WasmComponentImportKind.function,
+              candidates: functionExports,
+            ),
+          );
+        case 0x01:
+          resolved.add(
+            _resolveFromExportsBindingByKind(
+              declarationExport: export,
+              kind: WasmComponentImportKind.memory,
+              candidates: memoryExports,
+            ),
+          );
+        case 0x02:
+          resolved.add(
+            _resolveFromExportsBindingByKind(
+              declarationExport: export,
+              kind: WasmComponentImportKind.table,
+              candidates: tableExports,
+            ),
+          );
+        case 0x03:
+          resolved.add(
+            _resolveFromExportsBindingByKind(
+              declarationExport: export,
+              kind: WasmComponentImportKind.global,
+              candidates: globalExports,
+            ),
+          );
+        case 0x04:
+          resolved.add(
+            _resolveFromExportsBindingByKind(
+              declarationExport: export,
+              kind: WasmComponentImportKind.tag,
+              candidates: tagExports,
+            ),
+          );
+        default:
+          throw UnsupportedError(
+            'Unsupported component core-instance from-exports kind: '
+            '0x${export.kind.toRadixString(16)}.',
+          );
+      }
+    }
+    return List<_ResolvedFromExportsBinding>.unmodifiable(resolved);
+  }
+
+  static _ResolvedFromExportsBinding _resolveFromExportsBindingByKind({
+    required WasmComponentCoreInstanceExport declarationExport,
+    required WasmComponentImportKind kind,
+    required List<_ResolvedCoreSortExport> candidates,
+  }) {
+    final index = declarationExport.index;
+    if (index < 0 || index >= candidates.length) {
+      throw FormatException(
+        'Component core-instance from-exports `${declarationExport.exportName}` '
+        '(kind=${kind.name}) index out of range: $index '
+        '(available=${candidates.length}).',
+      );
+    }
+    final candidate = candidates[index];
+    return (
+      exportName: declarationExport.exportName,
+      kind: kind,
+      sourceInstance: candidate.instance,
+      sourceExportName: candidate.exportName,
+    );
+  }
+
+  static ({Uint8List moduleBytes, WasmImports imports})
+  _buildFromExportsSyntheticModule(List<_ResolvedFromExportsBinding> bindings) {
+    const importModuleName = '__wasd_from_exports';
+    final typeEntries = <List<int>>[];
+    final importPayload = <int>[..._u32Leb(bindings.length)];
+    final exportPayload = <int>[..._u32Leb(bindings.length)];
+    final functions = <String, WasmHostFunction>{};
+    final asyncFunctions = <String, WasmAsyncHostFunction>{};
+    final functionTypes = <String, WasmFunctionType>{};
+    final functionTypeDepths = <String, int>{};
+    final memories = <String, WasmMemory>{};
+    final tables = <String, WasmTable>{};
+    final globalTypes = <String, WasmGlobalType>{};
+    final globalBindings = <String, RuntimeGlobal>{};
+    final tags = <String, WasmTagImport>{};
+    var functionImportCount = 0;
+    var memoryImportCount = 0;
+    var tableImportCount = 0;
+    var globalImportCount = 0;
+    var tagImportCount = 0;
+
+    for (var i = 0; i < bindings.length; i++) {
+      final binding = bindings[i];
+      final fieldName = 'b$i';
+      final importKey = WasmImports.key(importModuleName, fieldName);
+      importPayload
+        ..addAll(_encodeName(importModuleName))
+        ..addAll(_encodeName(fieldName));
+      switch (binding.kind) {
+        case WasmComponentImportKind.function:
+          final functionType = binding.sourceInstance.exportedFunctionType(
+            binding.sourceExportName,
+          );
+          importPayload
+            ..add(WasmImportKind.function)
+            ..addAll(_u32Leb(typeEntries.length));
+          typeEntries.add(_encodeFunctionType(functionType));
+          functions[importKey] = (args) =>
+              binding.sourceInstance.invoke(binding.sourceExportName, args);
+          asyncFunctions[importKey] = (args) => binding.sourceInstance
+              .invokeAsync(binding.sourceExportName, args);
+          functionTypes[importKey] = functionType;
+          functionTypeDepths[importKey] = binding.sourceInstance
+              .exportedFunctionTypeDepth(binding.sourceExportName);
+          exportPayload
+            ..addAll(_encodeName(binding.exportName))
+            ..add(WasmExportKind.function)
+            ..addAll(_u32Leb(functionImportCount));
+          functionImportCount++;
+        case WasmComponentImportKind.memory:
+          final memory = binding.sourceInstance.exportedMemory(
+            binding.sourceExportName,
+          );
+          importPayload
+            ..add(WasmImportKind.memory)
+            ..addAll(_encodeMemoryImportType(memory));
+          memories[importKey] = memory;
+          exportPayload
+            ..addAll(_encodeName(binding.exportName))
+            ..add(WasmExportKind.memory)
+            ..addAll(_u32Leb(memoryImportCount));
+          memoryImportCount++;
+        case WasmComponentImportKind.table:
+          final table = binding.sourceInstance.exportedTable(
+            binding.sourceExportName,
+          );
+          importPayload
+            ..add(WasmImportKind.table)
+            ..addAll(_encodeTableImportType(table));
+          tables[importKey] = table;
+          exportPayload
+            ..addAll(_encodeName(binding.exportName))
+            ..add(WasmExportKind.table)
+            ..addAll(_u32Leb(tableImportCount));
+          tableImportCount++;
+        case WasmComponentImportKind.global:
+          final globalType = binding.sourceInstance.exportedGlobalType(
+            binding.sourceExportName,
+          );
+          final globalBinding = binding.sourceInstance.exportedGlobalBinding(
+            binding.sourceExportName,
+          );
+          importPayload
+            ..add(WasmImportKind.global)
+            ..addAll(_encodeGlobalType(globalType));
+          globalTypes[importKey] = globalType;
+          globalBindings[importKey] = globalBinding;
+          exportPayload
+            ..addAll(_encodeName(binding.exportName))
+            ..add(WasmExportKind.global)
+            ..addAll(_u32Leb(globalImportCount));
+          globalImportCount++;
+        case WasmComponentImportKind.tag:
+          final tagImport = binding.sourceInstance.exportedTagImport(
+            binding.sourceExportName,
+          );
+          importPayload
+            ..add(WasmImportKind.tag)
+            ..add(0x00)
+            ..addAll(_u32Leb(typeEntries.length));
+          typeEntries.add(_encodeFunctionType(tagImport.type));
+          tags[importKey] = tagImport;
+          exportPayload
+            ..addAll(_encodeName(binding.exportName))
+            ..add(WasmExportKind.tag)
+            ..addAll(_u32Leb(tagImportCount));
+          tagImportCount++;
+      }
+    }
+
+    final moduleBytes = <int>[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+    if (typeEntries.isNotEmpty) {
+      final typePayload = <int>[..._u32Leb(typeEntries.length)];
+      for (final entry in typeEntries) {
+        typePayload.addAll(entry);
+      }
+      moduleBytes.addAll(_encodeSection(0x01, typePayload));
+    }
+    moduleBytes.addAll(_encodeSection(0x02, importPayload));
+    moduleBytes.addAll(_encodeSection(0x07, exportPayload));
+
+    return (
+      moduleBytes: Uint8List.fromList(moduleBytes),
+      imports: WasmImports(
+        functions: functions,
+        asyncFunctions: asyncFunctions,
+        functionTypes: functionTypes,
+        functionTypeDepths: functionTypeDepths,
+        memories: memories,
+        tables: tables,
+        globalTypes: globalTypes,
+        globalBindings: globalBindings,
+        tags: tags,
+      ),
+    );
+  }
+
+  static List<int> _encodeFunctionType(WasmFunctionType type) {
+    final out = <int>[0x60];
+    final paramTypes = _encodeTypeVector(
+      valueTypes: type.params,
+      signatures: type.paramTypeSignatures,
+    );
+    final resultTypes = _encodeTypeVector(
+      valueTypes: type.results,
+      signatures: type.resultTypeSignatures,
+    );
+    out
+      ..addAll(_u32Leb(paramTypes.length))
+      ..addAll(paramTypes.expand((entry) => entry))
+      ..addAll(_u32Leb(resultTypes.length))
+      ..addAll(resultTypes.expand((entry) => entry));
+    return out;
+  }
+
+  static List<List<int>> _encodeTypeVector({
+    required List<WasmValueType> valueTypes,
+    required List<String> signatures,
+  }) {
+    if (signatures.length == valueTypes.length && signatures.isNotEmpty) {
+      return signatures
+          .map((signature) => _signatureToBytes(signature))
+          .toList(growable: false);
+    }
+    return valueTypes
+        .map((valueType) => <int>[_valueTypeCode(valueType)])
+        .toList(growable: false);
+  }
+
+  static List<int> _encodeMemoryImportType(WasmMemory memory) {
+    final pageSizeLog2 = _pageSizeLog2(memory.pageSizeBytes);
+    final hasPageSize = pageSizeLog2 != 16;
+    final hasMax = memory.maxPages != null;
+    final flags =
+        (hasMax ? 0x01 : 0x00) |
+        (memory.shared ? 0x02 : 0x00) |
+        (memory.isMemory64 ? 0x04 : 0x00) |
+        (hasPageSize ? 0x08 : 0x00);
+    final out = <int>[flags];
+    out.addAll(
+      memory.isMemory64 ? _u64Leb(memory.pageCount) : _u32Leb(memory.pageCount),
+    );
+    final maxPages = memory.maxPages;
+    if (maxPages != null) {
+      out.addAll(memory.isMemory64 ? _u64Leb(maxPages) : _u32Leb(maxPages));
+    }
+    if (hasPageSize) {
+      out.addAll(_u32Leb(pageSizeLog2));
+    }
+    return out;
+  }
+
+  static List<int> _encodeTableImportType(WasmTable table) {
+    final refTypeBytes = table.refTypeSignature == null
+        ? <int>[_refTypeCode(table.refType)]
+        : _signatureToBytes(table.refTypeSignature!);
+    final hasMax = table.max != null;
+    final flags = (hasMax ? 0x01 : 0x00) | (table.isTable64 ? 0x02 : 0x00);
+    final out = <int>[...refTypeBytes, flags];
+    out.addAll(table.isTable64 ? _u64Leb(table.length) : _u32Leb(table.length));
+    final max = table.max;
+    if (max != null) {
+      out.addAll(table.isTable64 ? _u64Leb(max) : _u32Leb(max));
+    }
+    return out;
+  }
+
+  static List<int> _encodeGlobalType(WasmGlobalType globalType) {
+    final valueTypeBytes = globalType.valueTypeSignature == null
+        ? <int>[_valueTypeCode(globalType.valueType)]
+        : _signatureToBytes(globalType.valueTypeSignature!);
+    return <int>[...valueTypeBytes, globalType.mutable ? 1 : 0];
+  }
+
+  static int _valueTypeCode(WasmValueType valueType) {
+    return switch (valueType) {
+      WasmValueType.i32 => 0x7f,
+      WasmValueType.i64 => 0x7e,
+      WasmValueType.f32 => 0x7d,
+      WasmValueType.f64 => 0x7c,
+    };
+  }
+
+  static int _refTypeCode(WasmRefType refType) {
+    return switch (refType) {
+      WasmRefType.funcref => 0x70,
+      WasmRefType.externref => 0x6f,
+    };
+  }
+
+  static int _pageSizeLog2(int pageSizeBytes) {
+    if (pageSizeBytes <= 0 || (pageSizeBytes & (pageSizeBytes - 1)) != 0) {
+      throw FormatException('Invalid Wasm memory page size: $pageSizeBytes.');
+    }
+    var log2 = 0;
+    var value = pageSizeBytes;
+    while (value > 1) {
+      value >>= 1;
+      log2++;
+    }
+    return log2;
+  }
+
+  static List<int> _signatureToBytes(String signature) {
+    if (signature.isEmpty || (signature.length & 1) != 0) {
+      throw FormatException('Invalid type signature encoding: `$signature`.');
+    }
+    final out = <int>[];
+    for (var i = 0; i < signature.length; i += 2) {
+      final byte = int.tryParse(signature.substring(i, i + 2), radix: 16);
+      if (byte == null) {
+        throw FormatException('Invalid type signature encoding: `$signature`.');
+      }
+      out.add(byte);
+    }
+    return out;
+  }
+
+  static List<int> _encodeName(String value) {
+    final encoded = utf8.encode(value);
+    return <int>[..._u32Leb(encoded.length), ...encoded];
+  }
+
+  static List<int> _encodeSection(int id, List<int> payload) {
+    return <int>[id, ..._u32Leb(payload.length), ...payload];
+  }
+
+  static List<int> _u32Leb(int value) {
+    if (value < 0) {
+      throw ArgumentError.value(value, 'value', 'must be >= 0');
+    }
+    final out = <int>[];
+    var remaining = value;
+    do {
+      var byte = remaining & 0x7f;
+      remaining >>= 7;
+      if (remaining != 0) {
+        byte |= 0x80;
+      }
+      out.add(byte);
+    } while (remaining != 0);
+    return out;
+  }
+
+  static List<int> _u64Leb(int value) {
+    if (value < 0) {
+      throw ArgumentError.value(value, 'value', 'must be >= 0');
+    }
+    final out = <int>[];
+    var remaining = value;
+    do {
+      var byte = remaining & 0x7f;
+      remaining >>= 7;
+      if (remaining != 0) {
+        byte |= 0x80;
+      }
+      out.add(byte);
+    } while (remaining != 0);
+    return out;
+  }
+
   static void _validateComponentImportRequirements(
     WasmComponent component,
     WasmImports imports,
@@ -636,7 +1074,8 @@ final class WasmComponentInstance {
                 '${importedGlobalType.valueType.name}.',
               );
             }
-            if (expectedType != null && bindingGlobal.valueType != expectedType) {
+            if (expectedType != null &&
+                bindingGlobal.valueType != expectedType) {
               throw FormatException(
                 'Component global import '
                 '`${requirement.componentImportName}` type mismatch: '

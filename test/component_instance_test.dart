@@ -123,6 +123,71 @@ void main() {
       },
     );
 
+    test(
+      'instantiates non-empty from-exports core instances from prior exports',
+      () {
+        final baseComponent = _componentWithCoreModules(<Uint8List>[
+          _coreModuleConstI32(name: 'one', value: 1),
+        ]);
+        final coreInstanceSectionPayload = <int>[
+          ..._u32Leb(2),
+          // declaration 0: instantiate module 0
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+          // declaration 1: from-exports with one function binding
+          0x01,
+          ..._u32Leb(1),
+          ..._name('alias'),
+          0x00, // function kind
+          ..._u32Leb(0), // function index in prior core export space
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x02, coreInstanceSectionPayload),
+        ]);
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+
+        expect(instance.component.hasOpaqueCoreInstances, isTrue);
+        expect(instance.coreInstances, hasLength(2));
+        expect(instance.invokeCore('one', moduleIndex: 0), 1);
+        expect(instance.invokeCore('alias', moduleIndex: 1), 1);
+      },
+    );
+
+    test(
+      'rejects from-exports entries with out-of-range core export indexes',
+      () {
+        final baseComponent = _componentWithCoreModules(<Uint8List>[
+          _coreModuleConstI32(name: 'one', value: 1),
+        ]);
+        final coreInstanceSectionPayload = <int>[
+          ..._u32Leb(1),
+          0x01,
+          ..._u32Leb(1),
+          ..._name('alias'),
+          0x00, // function kind
+          ..._u32Leb(0), // no prior exports exist
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x02, coreInstanceSectionPayload),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
     test('accepts declared core-instance argument dependency indexes', () {
       final componentBytes = _componentWithCoreModules(
         <Uint8List>[
