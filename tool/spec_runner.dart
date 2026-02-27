@@ -235,6 +235,7 @@ Future<void> main(List<String> args) async {
       '.dart_tool/spec_runner/wasm_conformance_matrix.md';
   final jsonPath =
       _argValue(args, '--json') ?? '.dart_tool/spec_runner/latest.json';
+  final wasmPhaseTestFiles = await _collectWasmPhaseTestFiles();
 
   final startedAt = DateTime.now().toUtc();
   final steps = <StepResult>[];
@@ -301,6 +302,7 @@ Future<void> main(List<String> args) async {
           target: target,
           testsuiteDir: testsuiteDir,
           strictProposals: strictProposals,
+          wasmPhaseTestFiles: wasmPhaseTestFiles,
         ),
       );
     case RunnerTarget.js:
@@ -310,6 +312,7 @@ Future<void> main(List<String> args) async {
           target: target,
           testsuiteDir: testsuiteDir,
           strictProposals: strictProposals,
+          wasmPhaseTestFiles: wasmPhaseTestFiles,
         ),
       );
     case RunnerTarget.wasm:
@@ -319,6 +322,7 @@ Future<void> main(List<String> args) async {
           target: target,
           testsuiteDir: testsuiteDir,
           strictProposals: strictProposals,
+          wasmPhaseTestFiles: wasmPhaseTestFiles,
         ),
       );
     case RunnerTarget.all:
@@ -327,6 +331,7 @@ Future<void> main(List<String> args) async {
           suite,
           testsuiteDir: testsuiteDir,
           strictProposals: strictProposals,
+          wasmPhaseTestFiles: wasmPhaseTestFiles,
         ),
       );
   }
@@ -381,10 +386,16 @@ Future<List<StepResult>> _runVmSuite(
   required RunnerTarget target,
   required String? testsuiteDir,
   required bool strictProposals,
+  required List<String> wasmPhaseTestFiles,
 }) async {
   final steps = <StepResult>[];
   if (suite != RunnerSuite.proposal) {
-    steps.add(await _runStep(name: 'vm-tests', command: ['dart', 'test']));
+    steps.add(
+      await _runStep(
+        name: 'vm-tests',
+        command: _dartTestCommand(wasmPhaseTestFiles, node: false),
+      ),
+    );
   }
   for (final specSuite in _specSuitesForRunnerSuite(suite)) {
     final artifacts = _artifactsForSuite(specSuite, target: target);
@@ -414,6 +425,7 @@ Future<List<StepResult>> _runJsSuite(
   required RunnerTarget target,
   required String? testsuiteDir,
   required bool strictProposals,
+  required List<String> wasmPhaseTestFiles,
 }) async {
   final steps = <StepResult>[];
   final nodeCheck = await _runStep(
@@ -439,7 +451,10 @@ Future<List<StepResult>> _runJsSuite(
 
   if (suite != RunnerSuite.proposal) {
     steps.add(
-      await _runStep(name: 'js-tests', command: ['dart', 'test', '-p', 'node']),
+      await _runStep(
+        name: 'js-tests',
+        command: _dartTestCommand(wasmPhaseTestFiles, node: true),
+      ),
     );
   }
   for (final specSuite in _specSuitesForRunnerSuite(suite)) {
@@ -518,6 +533,7 @@ Future<List<StepResult>> _runWasmSuite(
   required RunnerTarget target,
   required String? testsuiteDir,
   required bool strictProposals,
+  required List<String> wasmPhaseTestFiles,
 }) async {
   final steps = <StepResult>[];
   if (suite != RunnerSuite.proposal) {
@@ -537,7 +553,7 @@ Future<List<StepResult>> _runWasmSuite(
     steps.add(
       await _runStep(
         name: 'vm-regression-after-wasm-compile',
-        command: ['dart', 'test'],
+        command: _dartTestCommand(wasmPhaseTestFiles, node: false),
       ),
     );
   }
@@ -648,6 +664,7 @@ Future<List<StepResult>> _runAllTargetsSuite(
   RunnerSuite suite, {
   required String? testsuiteDir,
   required bool strictProposals,
+  required List<String> wasmPhaseTestFiles,
 }) async {
   final steps = <StepResult>[];
   steps.addAll(
@@ -658,6 +675,7 @@ Future<List<StepResult>> _runAllTargetsSuite(
         target: RunnerTarget.vm,
         testsuiteDir: testsuiteDir,
         strictProposals: strictProposals,
+        wasmPhaseTestFiles: wasmPhaseTestFiles,
       ),
     ),
   );
@@ -669,6 +687,7 @@ Future<List<StepResult>> _runAllTargetsSuite(
         target: RunnerTarget.js,
         testsuiteDir: testsuiteDir,
         strictProposals: strictProposals,
+        wasmPhaseTestFiles: wasmPhaseTestFiles,
       ),
     ),
   );
@@ -680,6 +699,7 @@ Future<List<StepResult>> _runAllTargetsSuite(
         target: RunnerTarget.wasm,
         testsuiteDir: testsuiteDir,
         strictProposals: strictProposals,
+        wasmPhaseTestFiles: wasmPhaseTestFiles,
       ),
     ),
   );
@@ -1042,6 +1062,41 @@ Future<StepResult> _runStep({
     stderr: (result.stderr as String?) ?? '',
     optional: optional,
   );
+}
+
+Future<List<String>> _collectWasmPhaseTestFiles() async {
+  final testDir = Directory('test');
+  if (!testDir.existsSync()) {
+    return const <String>[];
+  }
+  final files = <String>[];
+  await for (final entity in testDir.list(recursive: false)) {
+    if (entity is! File || !entity.path.endsWith('.dart')) {
+      continue;
+    }
+    final filename = entity.uri.pathSegments.isEmpty
+        ? entity.path
+        : entity.uri.pathSegments.last;
+    if (filename.startsWith('wasi')) {
+      continue;
+    }
+    files.add('test/$filename');
+  }
+  files.sort();
+  return files;
+}
+
+List<String> _dartTestCommand(List<String> testFiles, {required bool node}) {
+  final command = <String>[
+    'dart',
+    'test',
+    if (node) ...<String>['-p', 'node'],
+  ];
+  if (testFiles.isEmpty) {
+    return command;
+  }
+  command.addAll(testFiles);
+  return command;
 }
 
 List<_SpecSuiteKind> _specSuitesForRunnerSuite(RunnerSuite suite) {

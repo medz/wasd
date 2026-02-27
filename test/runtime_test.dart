@@ -4230,12 +4230,34 @@ void main() {
                 Opcodes.i32Add,
                 ..._f64Const(1e30),
                 ..._fc0(Opcodes.i64TruncSatF64S),
-                ..._i64Const(9223372036854775807),
+                ..._i64ConstRawLeb(const <int>[
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0xff,
+                  0x00,
+                ]),
                 Opcodes.i64Eq,
                 Opcodes.i32Add,
                 ..._f64Const(-1e30),
                 ..._fc0(Opcodes.i64TruncSatF64S),
-                ..._i64Const(-9223372036854775808),
+                ..._i64ConstRawLeb(const <int>[
+                  0x80,
+                  0x80,
+                  0x80,
+                  0x80,
+                  0x80,
+                  0x80,
+                  0x80,
+                  0x80,
+                  0x80,
+                  0x7f,
+                ]),
                 Opcodes.i64Eq,
                 Opcodes.i32Add,
                 ..._f64Const(-1.0),
@@ -10974,6 +10996,10 @@ List<int> _memorySize() => <int>[Opcodes.memorySize, ..._u32Leb(0)];
 List<int> _memoryGrow() => <int>[Opcodes.memoryGrow, ..._u32Leb(0)];
 List<int> _i32Const(int value) => <int>[Opcodes.i32Const, ..._i32Leb(value)];
 List<int> _i64Const(int value) => <int>[Opcodes.i64Const, ..._i64Leb(value)];
+List<int> _i64ConstRawLeb(List<int> rawLeb) => <int>[
+  Opcodes.i64Const,
+  ...rawLeb,
+];
 List<int> _f32Const(double value) => <int>[
   Opcodes.f32Const,
   ...(() {
