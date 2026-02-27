@@ -1342,6 +1342,58 @@ void main() {
     );
 
     test(
+      'invokeAsync skips sync pre-pass when async-only imports are present',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([], []),
+            _funcType([], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'tick', typeIndex: 0),
+          ],
+          functionTypeIndices: const [1],
+          globals: [
+            _GlobalSpec(
+              valueType: 0x7f,
+              mutable: true,
+              initExpr: [..._i32Const(0), Opcodes.end],
+            ),
+          ],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._globalGet(0),
+                ..._i32Const(1),
+                Opcodes.i32Add,
+                ..._globalSet(0),
+                ..._call(0),
+                ..._globalGet(0),
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(name: 'run', kind: WasmExportKind.function, index: 1),
+            _ExportSpec(name: 'g', kind: WasmExportKind.global, index: 0),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'tick'): (_) async => null,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('run'), 1);
+        expect(instance.readGlobalI32('g'), 1);
+      },
+    );
+
+    test(
       'supports async import call chains for subset-compatible wrappers',
       () async {
         final wasm = _buildModule(

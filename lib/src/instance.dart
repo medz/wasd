@@ -82,6 +82,7 @@ final class WasmInstance {
     required Map<String, WasmMemory> memoryExports,
     required Map<String, WasmTable> tableExports,
     required Map<String, WasmTagImport> tagExports,
+    required bool hasAsyncOnlyHostImports,
   }) : memory = memories.isEmpty ? null : memories.first,
        _functionExports = functionExports,
        _globalExports = globalExports,
@@ -95,6 +96,7 @@ final class WasmInstance {
        _asyncElementSegments = elementSegments,
        _asyncElementSegmentRefTypeCodes = elementSegmentRefTypeCodes,
        _functionRefNamespace = functionRefNamespace,
+       _hasAsyncOnlyHostImports = hasAsyncOnlyHostImports,
        _vm = WasmVm(
          functions: functions,
          types: module.types,
@@ -130,6 +132,7 @@ final class WasmInstance {
   final List<List<int?>?> _asyncElementSegments;
   final List<int> _asyncElementSegmentRefTypeCodes;
   final int _functionRefNamespace;
+  final bool _hasAsyncOnlyHostImports;
   final WasmVm _vm;
   final Map<int, _AsyncSubsetThrownException> _asyncExceptionObjects =
       <int, _AsyncSubsetThrownException>{};
@@ -162,6 +165,7 @@ final class WasmInstance {
     final tables = <WasmTable>[];
     final memories = <WasmMemory>[];
     final tagTypes = <WasmTagImport>[];
+    var hasAsyncOnlyHostImports = false;
 
     for (final import in module.imports) {
       switch (import.kind) {
@@ -181,6 +185,9 @@ final class WasmInstance {
           final asyncCallback = imports.asyncFunctions[import.key];
           if (callback == null && asyncCallback == null) {
             throw StateError('Missing function import `${import.key}`.');
+          }
+          if (callback == null && asyncCallback != null) {
+            hasAsyncOnlyHostImports = true;
           }
           final importedFunctionType = imports.functionTypes[import.key];
           if (importedFunctionType != null) {
@@ -624,6 +631,7 @@ final class WasmInstance {
       memoryExports: Map.unmodifiable(memoryExports),
       tableExports: Map.unmodifiable(tableExports),
       tagExports: Map.unmodifiable(tagExports),
+      hasAsyncOnlyHostImports: hasAsyncOnlyHostImports,
     );
 
     instance._initializeActiveElements();
@@ -755,6 +763,14 @@ final class WasmInstance {
       final results = WasmValue.decodeResults(
         function.type.results,
         hostResult,
+      );
+      return _externalizeResults(results);
+    }
+    if (function is DefinedRuntimeFunction && _hasAsyncOnlyHostImports) {
+      final results = await _invokeFunctionAsyncSubset(
+        prepared.functionIndex,
+        prepared.typedArgs,
+        depth: 0,
       );
       return _externalizeResults(results);
     }
