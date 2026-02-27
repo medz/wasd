@@ -187,6 +187,22 @@ Future<void> main(List<String> args) async {
     '--strict-component-subset',
   );
   final explicitEnableComponentSubset = args.contains('--component-subset');
+  final disableComponentOfficial = args.contains('--no-component-official');
+  final optionalComponentOfficial = args.contains(
+    '--component-official-optional',
+  );
+  final explicitStrictComponentOfficial = args.contains(
+    '--strict-component-official',
+  );
+  final explicitEnableComponentOfficial = args.contains('--component-official');
+  final componentOfficialTestsuiteDir = _argValue(
+    args,
+    '--component-official-testsuite-dir',
+  );
+  final componentOfficialGroups = _argValue(
+    args,
+    '--component-official-groups',
+  );
   final runComponentSubset =
       explicitStrictComponentSubset ||
       explicitEnableComponentSubset ||
@@ -197,6 +213,14 @@ Future<void> main(List<String> args) async {
           (!optionalComponentSubset &&
               !explicitEnableComponentSubset &&
               !disableComponentSubset));
+  final runComponentOfficial =
+      explicitStrictComponentOfficial ||
+      explicitEnableComponentOfficial ||
+      !disableComponentOfficial;
+  final strictComponentOfficial =
+      runComponentOfficial &&
+      explicitStrictComponentOfficial &&
+      !optionalComponentOfficial;
   final reportPath =
       _argValue(args, '--report') ??
       '.dart_tool/spec_runner/wasm_conformance_matrix.md';
@@ -229,6 +253,18 @@ Future<void> main(List<String> args) async {
           'tool/component_subset_runner.dart',
         ],
         optional: !strictComponentSubset,
+      ),
+    );
+  }
+  if (runComponentOfficial) {
+    steps.add(
+      await _runStep(
+        name: 'component-official',
+        command: _componentOfficialRunnerCommand(
+          componentOfficialTestsuiteDir: componentOfficialTestsuiteDir,
+          componentOfficialGroups: componentOfficialGroups,
+        ),
+        optional: !strictComponentOfficial,
       ),
     );
   }
@@ -284,6 +320,10 @@ Future<void> main(List<String> args) async {
     'strict_proposals': strictProposals,
     'component_subset': runComponentSubset,
     'strict_component_subset': strictComponentSubset,
+    'component_official': runComponentOfficial,
+    'strict_component_official': strictComponentOfficial,
+    'component_official_testsuite_dir': componentOfficialTestsuiteDir,
+    'component_official_groups': componentOfficialGroups,
     'status': status,
     'steps': steps.map((s) => s.toJson()).toList(growable: false),
   };
@@ -1066,6 +1106,23 @@ List<String> _resultReportCommand(_SpecSuiteArtifacts artifacts) {
   ];
 }
 
+List<String> _componentOfficialRunnerCommand({
+  required String? componentOfficialTestsuiteDir,
+  required String? componentOfficialGroups,
+}) {
+  return <String>[
+    'dart',
+    'run',
+    'tool/component_official_runner.dart',
+    if (componentOfficialTestsuiteDir != null &&
+        componentOfficialTestsuiteDir.trim().isNotEmpty)
+      '--testsuite-dir=${componentOfficialTestsuiteDir.trim()}',
+    if (componentOfficialGroups != null &&
+        componentOfficialGroups.trim().isNotEmpty)
+      '--groups=${componentOfficialGroups.trim()}',
+  ];
+}
+
 String _renderMarkdownReport({
   required Map<String, Object?> payload,
   required List<StepResult> steps,
@@ -1134,6 +1191,30 @@ String _renderMarkdownReport({
       '- Component subset conformance is disabled (`--no-component-subset`).',
     );
   }
+  if (payload['component_official'] == true) {
+    if (payload['strict_component_official'] == true) {
+      b.writeln('- Official component testsuite subset is gating.');
+    } else {
+      b.writeln(
+        '- Official component testsuite subset is non-gating (pass `--strict-component-official` to enforce).',
+      );
+    }
+    final selectedGroups = payload['component_official_groups'] as String?;
+    if (selectedGroups != null && selectedGroups.trim().isNotEmpty) {
+      b.writeln('- Official component groups: `$selectedGroups`.');
+    }
+    final selectedDir = payload['component_official_testsuite_dir'] as String?;
+    if (selectedDir != null && selectedDir.trim().isNotEmpty) {
+      b.writeln('- Official component testsuite dir: `$selectedDir`.');
+    }
+    b.writeln(
+      '- Official component reports are written to `.dart_tool/spec_runner/component_official_latest.json` and `.dart_tool/spec_runner/component_official_failures.md`.',
+    );
+  } else {
+    b.writeln(
+      '- Official component testsuite subset is disabled (`--no-component-official`).',
+    );
+  }
   if (target == RunnerTarget.all.name) {
     b.writeln(
       '- Cross-target totals consistency is enforced by the `cross-target-consistency` step.',
@@ -1151,6 +1232,6 @@ void _printUsage() {
     'Usage: dart run tool/spec_runner.dart --target=<vm|js|wasm|all> --suite=<core|proposal|all>',
   );
   stdout.writeln(
-    'Optional: --report=<path> --json=<path> --testsuite-dir=<path> --strict-proposals --no-component-subset --component-subset-optional --component-subset --strict-component-subset',
+    'Optional: --report=<path> --json=<path> --testsuite-dir=<path> --strict-proposals --no-component-subset --component-subset-optional --component-subset --strict-component-subset --no-component-official --component-official --component-official-optional --strict-component-official --component-official-testsuite-dir=<path> --component-official-groups=<comma-separated>',
   );
 }
