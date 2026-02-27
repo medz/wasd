@@ -774,6 +774,241 @@ void main() {
     );
 
     test(
+      'rejects mismatched typed memory import requirements against core module signatures',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleImportMemoryAndConst(
+              importModule: 'env',
+              importName: 'mem',
+              minPages: 2,
+              maxPages: 2,
+              exportName: 'run',
+              value: 1,
+            ),
+          ],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'memory',
+              moduleName: 'env',
+              fieldName: 'mem',
+              kind: 0x01,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('mem_t'),
+          0x03,
+          0x01,
+          ..._u32Leb(1),
+          ..._u32Leb(1),
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: WasmImports(
+              memories: {
+                WasmImports.key('env', 'mem'): WasmMemory(
+                  minPages: 1,
+                  maxPages: 1,
+                ),
+              },
+            ),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test(
+      'rejects mismatched typed table import requirements against core module signatures',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleImportTableAndConst(
+              importModule: 'env',
+              importName: 'tab',
+              min: 2,
+              max: 2,
+              exportName: 'run',
+              value: 1,
+            ),
+          ],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'table',
+              moduleName: 'env',
+              fieldName: 'tab',
+              kind: 0x02,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('tab_t'),
+          0x04,
+          0x70,
+          0x01,
+          ..._u32Leb(1),
+          ..._u32Leb(1),
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: WasmImports(
+              tables: {
+                WasmImports.key('env', 'tab'): WasmTable(
+                  refType: WasmRefType.funcref,
+                  min: 1,
+                  max: 1,
+                ),
+              },
+            ),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test(
+      'rejects mismatched typed global import requirements against core module signatures',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleImportGlobalAndConst(
+              importModule: 'env',
+              importName: 'g',
+              valueType: 0x7e,
+              mutable: false,
+              exportName: 'run',
+              value: 1,
+            ),
+          ],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'globalI32',
+              moduleName: 'env',
+              fieldName: 'g',
+              kind: 0x03,
+            ),
+          ],
+        );
+        final typeSection = <int>[..._u32Leb(1), ..._name('i32_t'), 0x00, 0x7f];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: const WasmImports(globals: {'env::g': 7}),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test(
+      'rejects mismatched typed tag import requirements against core module signatures',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleImportTagAndConst(
+              importModule: 'env',
+              importName: 'err',
+              expectedParamType: 0x7e,
+              exportName: 'run',
+              value: 1,
+            ),
+          ],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'tag',
+              moduleName: 'env',
+              fieldName: 'err',
+              kind: 0x04,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('tag_t'),
+          0x05,
+          ..._u32Leb(1),
+          0x7f,
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: WasmImports(
+              tags: {
+                WasmImports.key('env', 'err'): WasmTagImport(
+                  type: const WasmFunctionType(
+                    params: [WasmValueType.i32],
+                    results: [],
+                    kind: WasmCompositeTypeKind.function,
+                  ),
+                  nominalTypeKey: 'tag:i32',
+                  typeKey: 'tag:i32',
+                ),
+              },
+            ),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test(
       'validates typed memory import requirements against provided memories',
       () {
         final baseComponent = _componentWithCoreModules(

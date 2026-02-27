@@ -18,6 +18,22 @@ typedef _TypedFunctionImportRequirement = ({
   List<String> parameterSignatures,
   List<String> resultSignatures,
 });
+typedef _TypedGlobalImportRequirement = ({
+  String componentImportName,
+  String valueSignature,
+});
+typedef _TypedMemoryImportRequirement = ({
+  String componentImportName,
+  WasmMemoryType memoryType,
+});
+typedef _TypedTableImportRequirement = ({
+  String componentImportName,
+  WasmTableType tableType,
+});
+typedef _TypedTagImportRequirement = ({
+  String componentImportName,
+  List<String> parameterSignatures,
+});
 
 /// Component-level runtime that instantiates embedded core modules.
 ///
@@ -77,6 +93,18 @@ final class WasmComponentInstance {
     _validateComponentImportRequirements(component, imports);
     final typedFunctionImportRequirements =
         _collectTypedFunctionImportRequirements(component);
+    final typedGlobalImportRequirements = _collectTypedGlobalImportRequirements(
+      component,
+    );
+    final typedMemoryImportRequirements = _collectTypedMemoryImportRequirements(
+      component,
+    );
+    final typedTableImportRequirements = _collectTypedTableImportRequirements(
+      component,
+    );
+    final typedTagImportRequirements = _collectTypedTagImportRequirements(
+      component,
+    );
     final coreInstances = <WasmInstance>[];
     if (component.coreInstances.isEmpty) {
       for (
@@ -85,11 +113,15 @@ final class WasmComponentInstance {
         moduleIndex++
       ) {
         final moduleBytes = component.coreModules[moduleIndex];
-        _validateTypedFunctionImportBindingsForCoreModule(
+        _validateTypedImportBindingsForCoreModule(
           moduleBytes: moduleBytes,
           moduleIndex: moduleIndex,
           features: features,
-          typedRequirementsByImportKey: typedFunctionImportRequirements,
+          typedFunctionRequirementsByImportKey: typedFunctionImportRequirements,
+          typedGlobalRequirementsByImportKey: typedGlobalImportRequirements,
+          typedMemoryRequirementsByImportKey: typedMemoryImportRequirements,
+          typedTableRequirementsByImportKey: typedTableImportRequirements,
+          typedTagRequirementsByImportKey: typedTagImportRequirements,
         );
         coreInstances.add(
           WasmInstance.fromBytes(
@@ -117,11 +149,15 @@ final class WasmComponentInstance {
           }
         }
         final moduleBytes = component.coreModules[moduleIndex];
-        _validateTypedFunctionImportBindingsForCoreModule(
+        _validateTypedImportBindingsForCoreModule(
           moduleBytes: moduleBytes,
           moduleIndex: moduleIndex,
           features: features,
-          typedRequirementsByImportKey: typedFunctionImportRequirements,
+          typedFunctionRequirementsByImportKey: typedFunctionImportRequirements,
+          typedGlobalRequirementsByImportKey: typedGlobalImportRequirements,
+          typedMemoryRequirementsByImportKey: typedMemoryImportRequirements,
+          typedTableRequirementsByImportKey: typedTableImportRequirements,
+          typedTagRequirementsByImportKey: typedTagImportRequirements,
         );
         final declarationImports = _composeCoreInstanceImports(
           moduleBytes: moduleBytes,
@@ -463,6 +499,32 @@ final class WasmComponentInstance {
     return null;
   }
 
+  static String? _typedMemoryTypeMismatch({
+    required WasmMemoryType expected,
+    required WasmMemoryType actual,
+  }) {
+    if (actual.isMemory64 != expected.isMemory64) {
+      return 'expected memory64=${expected.isMemory64}, '
+          'actual=${actual.isMemory64}';
+    }
+    if (actual.shared != expected.shared) {
+      return 'expected shared=${expected.shared}, actual=${actual.shared}';
+    }
+    if (actual.pageSizeLog2 != expected.pageSizeLog2) {
+      return 'expected pageSizeLog2=${expected.pageSizeLog2}, '
+          'actual=${actual.pageSizeLog2}';
+    }
+    if (actual.minPages != expected.minPages) {
+      return 'expected minPages=${expected.minPages}, '
+          'actual=${actual.minPages}';
+    }
+    if (actual.maxPages != expected.maxPages) {
+      return 'expected maxPages=${expected.maxPages ?? 'unbounded'}, '
+          'actual=${actual.maxPages ?? 'unbounded'}';
+    }
+    return null;
+  }
+
   static String? _typedTableImportMismatch({
     required WasmTableType expected,
     required WasmTable actual,
@@ -489,6 +551,33 @@ final class WasmComponentInstance {
       if (actualMax == null || actualMax > expectedMax) {
         return 'expected max<=$expectedMax, actual=${actualMax ?? 'unbounded'}';
       }
+    }
+    return null;
+  }
+
+  static String? _typedTableTypeMismatch({
+    required WasmTableType expected,
+    required WasmTableType actual,
+  }) {
+    final expectedSignature = expected.refTypeSignature;
+    final actualSignature = actual.refTypeSignature;
+    final refTypeMatches = expectedSignature != null && actualSignature != null
+        ? _referenceTypeSignaturesMatch(expectedSignature, actualSignature)
+        : actual.refType == expected.refType;
+    if (!refTypeMatches) {
+      return 'expected table type ${_formatTableType(expected)}, '
+          'actual ${_formatTableType(actual)}';
+    }
+    if (actual.isTable64 != expected.isTable64) {
+      return 'expected table64=${expected.isTable64}, '
+          'actual=${actual.isTable64}';
+    }
+    if (actual.min != expected.min) {
+      return 'expected min=${expected.min}, actual=${actual.min}';
+    }
+    if (actual.max != expected.max) {
+      return 'expected max=${expected.max ?? 'unbounded'}, '
+          'actual=${actual.max ?? 'unbounded'}';
     }
     return null;
   }
@@ -591,51 +680,375 @@ final class WasmComponentInstance {
     return out;
   }
 
-  static void _validateTypedFunctionImportBindingsForCoreModule({
+  static Map<String, _TypedGlobalImportRequirement>
+  _collectTypedGlobalImportRequirements(WasmComponent component) {
+    final out = <String, _TypedGlobalImportRequirement>{};
+    for (final binding in component.typeBindings) {
+      if (binding.targetKind !=
+          WasmComponentTypeBindingTargetKind.importRequirement) {
+        continue;
+      }
+      if (binding.targetIndex < 0 ||
+          binding.targetIndex >= component.importRequirements.length) {
+        continue;
+      }
+      final requirement = component.importRequirements[binding.targetIndex];
+      if (requirement.kind != WasmComponentImportKind.global) {
+        continue;
+      }
+      final declaration = _resolveComponentTypeDeclaration(
+        component.typeDeclarations,
+        binding.typeDeclarationIndex,
+      );
+      final valueTypeCode = declaration.valueTypeCode;
+      if (declaration.kind != WasmComponentTypeKind.value ||
+          valueTypeCode == null) {
+        continue;
+      }
+      final key = WasmImports.key(
+        requirement.moduleName,
+        requirement.fieldName,
+      );
+      final entry = (
+        componentImportName: requirement.componentImportName,
+        valueSignature: _componentTypeCodesToSignatures(<int>[
+          valueTypeCode,
+        ]).single,
+      );
+      final existing = out[key];
+      if (existing != null && existing.valueSignature != entry.valueSignature) {
+        throw FormatException(
+          'Conflicting typed global bindings for component import '
+          '`${requirement.componentImportName}` ($key).',
+        );
+      }
+      out[key] = entry;
+    }
+    return out;
+  }
+
+  static Map<String, _TypedMemoryImportRequirement>
+  _collectTypedMemoryImportRequirements(WasmComponent component) {
+    final out = <String, _TypedMemoryImportRequirement>{};
+    for (final binding in component.typeBindings) {
+      if (binding.targetKind !=
+          WasmComponentTypeBindingTargetKind.importRequirement) {
+        continue;
+      }
+      if (binding.targetIndex < 0 ||
+          binding.targetIndex >= component.importRequirements.length) {
+        continue;
+      }
+      final requirement = component.importRequirements[binding.targetIndex];
+      if (requirement.kind != WasmComponentImportKind.memory) {
+        continue;
+      }
+      final declaration = _resolveComponentTypeDeclaration(
+        component.typeDeclarations,
+        binding.typeDeclarationIndex,
+      );
+      final memoryType = declaration.memoryType;
+      if (declaration.kind != WasmComponentTypeKind.memory ||
+          memoryType == null) {
+        continue;
+      }
+      final key = WasmImports.key(
+        requirement.moduleName,
+        requirement.fieldName,
+      );
+      final entry = (
+        componentImportName: requirement.componentImportName,
+        memoryType: memoryType,
+      );
+      final existing = out[key];
+      if (existing != null &&
+          _typedMemoryTypeMismatch(
+                expected: existing.memoryType,
+                actual: entry.memoryType,
+              ) !=
+              null) {
+        throw FormatException(
+          'Conflicting typed memory bindings for component import '
+          '`${requirement.componentImportName}` ($key).',
+        );
+      }
+      out[key] = entry;
+    }
+    return out;
+  }
+
+  static Map<String, _TypedTableImportRequirement>
+  _collectTypedTableImportRequirements(WasmComponent component) {
+    final out = <String, _TypedTableImportRequirement>{};
+    for (final binding in component.typeBindings) {
+      if (binding.targetKind !=
+          WasmComponentTypeBindingTargetKind.importRequirement) {
+        continue;
+      }
+      if (binding.targetIndex < 0 ||
+          binding.targetIndex >= component.importRequirements.length) {
+        continue;
+      }
+      final requirement = component.importRequirements[binding.targetIndex];
+      if (requirement.kind != WasmComponentImportKind.table) {
+        continue;
+      }
+      final declaration = _resolveComponentTypeDeclaration(
+        component.typeDeclarations,
+        binding.typeDeclarationIndex,
+      );
+      final tableType = declaration.tableType;
+      if (declaration.kind != WasmComponentTypeKind.table ||
+          tableType == null) {
+        continue;
+      }
+      final key = WasmImports.key(
+        requirement.moduleName,
+        requirement.fieldName,
+      );
+      final entry = (
+        componentImportName: requirement.componentImportName,
+        tableType: tableType,
+      );
+      final existing = out[key];
+      if (existing != null &&
+          _typedTableTypeMismatch(
+                expected: existing.tableType,
+                actual: entry.tableType,
+              ) !=
+              null) {
+        throw FormatException(
+          'Conflicting typed table bindings for component import '
+          '`${requirement.componentImportName}` ($key).',
+        );
+      }
+      out[key] = entry;
+    }
+    return out;
+  }
+
+  static Map<String, _TypedTagImportRequirement>
+  _collectTypedTagImportRequirements(WasmComponent component) {
+    final out = <String, _TypedTagImportRequirement>{};
+    for (final binding in component.typeBindings) {
+      if (binding.targetKind !=
+          WasmComponentTypeBindingTargetKind.importRequirement) {
+        continue;
+      }
+      if (binding.targetIndex < 0 ||
+          binding.targetIndex >= component.importRequirements.length) {
+        continue;
+      }
+      final requirement = component.importRequirements[binding.targetIndex];
+      if (requirement.kind != WasmComponentImportKind.tag) {
+        continue;
+      }
+      final declaration = _resolveComponentTypeDeclaration(
+        component.typeDeclarations,
+        binding.typeDeclarationIndex,
+      );
+      final tagParameterTypeCodes = declaration.tagParameterTypeCodes;
+      if (declaration.kind != WasmComponentTypeKind.tag ||
+          tagParameterTypeCodes == null) {
+        continue;
+      }
+      final key = WasmImports.key(
+        requirement.moduleName,
+        requirement.fieldName,
+      );
+      final entry = (
+        componentImportName: requirement.componentImportName,
+        parameterSignatures: _componentTypeCodesToSignatures(
+          tagParameterTypeCodes,
+        ),
+      );
+      final existing = out[key];
+      if (existing != null &&
+          !_sameSignatureLists(
+            existing.parameterSignatures,
+            entry.parameterSignatures,
+          )) {
+        throw FormatException(
+          'Conflicting typed tag bindings for component import '
+          '`${requirement.componentImportName}` ($key).',
+        );
+      }
+      out[key] = entry;
+    }
+    return out;
+  }
+
+  static void _validateTypedImportBindingsForCoreModule({
     required Uint8List moduleBytes,
     required int moduleIndex,
     required WasmFeatureSet features,
     required Map<String, _TypedFunctionImportRequirement>
-    typedRequirementsByImportKey,
+    typedFunctionRequirementsByImportKey,
+    required Map<String, _TypedGlobalImportRequirement>
+    typedGlobalRequirementsByImportKey,
+    required Map<String, _TypedMemoryImportRequirement>
+    typedMemoryRequirementsByImportKey,
+    required Map<String, _TypedTableImportRequirement>
+    typedTableRequirementsByImportKey,
+    required Map<String, _TypedTagImportRequirement>
+    typedTagRequirementsByImportKey,
   }) {
-    if (typedRequirementsByImportKey.isEmpty) {
+    if (typedFunctionRequirementsByImportKey.isEmpty &&
+        typedGlobalRequirementsByImportKey.isEmpty &&
+        typedMemoryRequirementsByImportKey.isEmpty &&
+        typedTableRequirementsByImportKey.isEmpty &&
+        typedTagRequirementsByImportKey.isEmpty) {
       return;
     }
     final module = WasmModule.decode(moduleBytes, features: features);
     for (final imported in module.imports) {
-      if (imported.kind != WasmImportKind.function &&
-          imported.kind != WasmImportKind.exactFunction) {
-        continue;
+      switch (imported.kind) {
+        case WasmImportKind.function:
+        case WasmImportKind.exactFunction:
+          final typedRequirement =
+              typedFunctionRequirementsByImportKey[imported.key];
+          if (typedRequirement == null) {
+            continue;
+          }
+          final typeIndex = imported.functionTypeIndex;
+          if (typeIndex == null ||
+              typeIndex < 0 ||
+              typeIndex >= module.types.length) {
+            throw FormatException(
+              'Malformed function import `${imported.key}` in core module '
+              '#$moduleIndex: invalid type index $typeIndex.',
+            );
+          }
+          final actualType = module.types[typeIndex];
+          if (!actualType.isFunctionType) {
+            throw FormatException(
+              'Malformed function import `${imported.key}` in core module '
+              '#$moduleIndex: type index $typeIndex is not a function type.',
+            );
+          }
+          _validateExpectedFunctionSignaturesAgainstCoreType(
+            expectedParameters: typedRequirement.parameterSignatures,
+            expectedResults: typedRequirement.resultSignatures,
+            actualType: actualType,
+            context:
+                'Component typed function import '
+                '`${typedRequirement.componentImportName}` (${imported.key}) '
+                'in core module #$moduleIndex',
+          );
+          break;
+        case WasmImportKind.global:
+          final typedRequirement =
+              typedGlobalRequirementsByImportKey[imported.key];
+          if (typedRequirement == null) {
+            continue;
+          }
+          final globalType = imported.globalType;
+          if (globalType == null) {
+            throw FormatException(
+              'Malformed global import `${imported.key}` in core module '
+              '#$moduleIndex: missing global type.',
+            );
+          }
+          final actualSignature =
+              globalType.valueTypeSignature ??
+              _coreValueTypeSignature(globalType.valueType);
+          if (actualSignature != typedRequirement.valueSignature) {
+            throw FormatException(
+              'Component typed global import '
+              '`${typedRequirement.componentImportName}` (${imported.key}) '
+              'in core module #$moduleIndex has incompatible value type: '
+              'expected ${typedRequirement.valueSignature}, '
+              'actual $actualSignature.',
+            );
+          }
+          break;
+        case WasmImportKind.memory:
+          final typedRequirement =
+              typedMemoryRequirementsByImportKey[imported.key];
+          if (typedRequirement == null) {
+            continue;
+          }
+          final memoryType = imported.memoryType;
+          if (memoryType == null) {
+            throw FormatException(
+              'Malformed memory import `${imported.key}` in core module '
+              '#$moduleIndex: missing memory type.',
+            );
+          }
+          final mismatch = _typedMemoryTypeMismatch(
+            expected: typedRequirement.memoryType,
+            actual: memoryType,
+          );
+          if (mismatch != null) {
+            throw FormatException(
+              'Component typed memory import '
+              '`${typedRequirement.componentImportName}` (${imported.key}) '
+              'in core module #$moduleIndex has incompatible type: $mismatch.',
+            );
+          }
+          break;
+        case WasmImportKind.table:
+          final typedRequirement =
+              typedTableRequirementsByImportKey[imported.key];
+          if (typedRequirement == null) {
+            continue;
+          }
+          final tableType = imported.tableType;
+          if (tableType == null) {
+            throw FormatException(
+              'Malformed table import `${imported.key}` in core module '
+              '#$moduleIndex: missing table type.',
+            );
+          }
+          final mismatch = _typedTableTypeMismatch(
+            expected: typedRequirement.tableType,
+            actual: tableType,
+          );
+          if (mismatch != null) {
+            throw FormatException(
+              'Component typed table import '
+              '`${typedRequirement.componentImportName}` (${imported.key}) '
+              'in core module #$moduleIndex has incompatible type: $mismatch.',
+            );
+          }
+          break;
+        case WasmImportKind.tag:
+          final typedRequirement =
+              typedTagRequirementsByImportKey[imported.key];
+          if (typedRequirement == null) {
+            continue;
+          }
+          final tagType = imported.tagType;
+          final typeIndex = tagType?.typeIndex;
+          if (tagType == null ||
+              typeIndex == null ||
+              typeIndex < 0 ||
+              typeIndex >= module.types.length) {
+            throw FormatException(
+              'Malformed tag import `${imported.key}` in core module '
+              '#$moduleIndex: invalid type index ${tagType?.typeIndex}.',
+            );
+          }
+          final actualType = module.types[typeIndex];
+          if (!actualType.isFunctionType) {
+            throw FormatException(
+              'Malformed tag import `${imported.key}` in core module '
+              '#$moduleIndex: type index $typeIndex is not a function type.',
+            );
+          }
+          _validateExpectedFunctionSignaturesAgainstCoreType(
+            expectedParameters: typedRequirement.parameterSignatures,
+            expectedResults: const <String>[],
+            actualType: actualType,
+            context:
+                'Component typed tag import '
+                '`${typedRequirement.componentImportName}` (${imported.key}) '
+                'in core module #$moduleIndex',
+          );
+          break;
+        default:
+          continue;
       }
-      final typedRequirement = typedRequirementsByImportKey[imported.key];
-      if (typedRequirement == null) {
-        continue;
-      }
-      final typeIndex = imported.functionTypeIndex;
-      if (typeIndex == null ||
-          typeIndex < 0 ||
-          typeIndex >= module.types.length) {
-        throw FormatException(
-          'Malformed function import `${imported.key}` in core module '
-          '#$moduleIndex: invalid type index $typeIndex.',
-        );
-      }
-      final actualType = module.types[typeIndex];
-      if (!actualType.isFunctionType) {
-        throw FormatException(
-          'Malformed function import `${imported.key}` in core module '
-          '#$moduleIndex: type index $typeIndex is not a function type.',
-        );
-      }
-      _validateExpectedFunctionSignaturesAgainstCoreType(
-        expectedParameters: typedRequirement.parameterSignatures,
-        expectedResults: typedRequirement.resultSignatures,
-        actualType: actualType,
-        context:
-            'Component typed function import '
-            '`${typedRequirement.componentImportName}` (${imported.key}) '
-            'in core module #$moduleIndex',
-      );
     }
   }
 
