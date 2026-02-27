@@ -1,16 +1,19 @@
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:wasd/wasd.dart';
 
-const String _doomWasmPath = 'example/doom/assets/doom/doom.wasm';
-const String _doomIwadPath = 'example/doom/assets/doom/doom1.wad';
+const List<String> _doomWasmCandidates = <String>[
+  'test/fixtures/doom/doom.wasm',
+];
+const List<String> _doomIwadCandidates = <String>[
+  'test/fixtures/doom/doom1.wad',
+];
 
 void main() {
-  final wasmFile = File(_doomWasmPath);
-  final iwadFile = File(_doomIwadPath);
+  final wasmFile = _firstExistingFile(_doomWasmCandidates);
+  final iwadFile = _firstExistingFile(_doomIwadCandidates);
   final assetsAvailable = wasmFile.existsSync() && iwadFile.existsSync();
 
   test(
@@ -18,93 +21,55 @@ void main() {
     () async {
       final wasmBytes = await wasmFile.readAsBytes();
       final iwadBytes = await iwadFile.readAsBytes();
-
-      final port = ReceivePort();
-      final isolate = await Isolate.spawn<Map<String, Object?>>(_runDoomSmoke, {
-        'port': port.sendPort,
-        'wasm': TransferableTypedData.fromList(<Uint8List>[wasmBytes]),
-        'iwad': TransferableTypedData.fromList(<Uint8List>[iwadBytes]),
-      });
-
-      addTearDown(() {
-        isolate.kill(priority: Isolate.immediate);
-        port.close();
-      });
-
-      final raw = await port.first.timeout(
-        const Duration(seconds: 60),
-        onTimeout: () => <String, Object?>{
-          'ok': false,
-          'error': 'Timed out waiting for Doom first frame.',
-        },
-      );
-
-      if (raw is! Map) {
-        fail('Unexpected isolate result type: ${raw.runtimeType}');
-      }
-      final result = raw.cast<String, Object?>();
-      if (result['ok'] != true) {
-        fail('Doom smoke test failed: ${result['error']}');
-      }
-
-      final frames = result['frames'];
-      expect(frames, isA<int>());
-      expect(frames, greaterThanOrEqualTo(1));
-      expect(result['paletteSet'], isTrue);
+      final frame = _runDoomSmoke(wasmBytes, iwadBytes);
+      expect(frame.frames, greaterThanOrEqualTo(1));
+      expect(frame.paletteSet, isTrue);
     },
     skip: assetsAvailable
         ? false
-        : 'Missing Doom assets. Run: (cd example/doom && tool/setup_assets.sh)',
+        : 'Missing Doom fixtures. Run: tool/setup_test_fixtures.sh --doom-only',
     timeout: const Timeout(Duration(minutes: 2)),
   );
 }
 
-void _runDoomSmoke(Map<String, Object?> args) {
-  final port = args['port'] as SendPort;
-  final wasmBytes = (args['wasm'] as TransferableTypedData)
-      .materialize()
-      .asUint8List();
-  final iwadBytes = (args['iwad'] as TransferableTypedData)
-      .materialize()
-      .asUint8List();
+File _firstExistingFile(List<String> candidates) {
+  for (final path in candidates) {
+    final file = File(path);
+    if (file.existsSync()) {
+      return file;
+    }
+  }
+  return File(candidates.first);
+}
 
+_DoomFirstFrame _runDoomSmoke(Uint8List wasmBytes, Uint8List iwadBytes) {
+  final fs = WasiInMemoryFileSystem();
+  _writeInMemoryFile(fs, '/doom1.wad', iwadBytes);
+
+  final wasi = WasiPreview1(
+    args: const ['doom.wasm'],
+    stdin: Uint8List(0),
+    stdoutSink: (_) {},
+    stderrSink: (_) {},
+    fileSystem: fs,
+    preferHostIo: false,
+  );
+  final host = _DoomSmokeHost();
+  final imports = <String, WasmHostFunction>{
+    ...wasi.imports.functions,
+    ...host.imports,
+  };
+  final instance = WasmInstance.fromBytes(
+    wasmBytes,
+    imports: WasmImports(functions: imports),
+  );
+  wasi.bindInstance(instance);
+  host.bindMemory(instance.exportedMemory('memory'));
   try {
-    final fs = WasiInMemoryFileSystem();
-    _writeInMemoryFile(fs, '/doom1.wad', iwadBytes);
-
-    final wasi = WasiPreview1(
-      args: const ['doom.wasm'],
-      stdin: Uint8List(0),
-      stdoutSink: (_) {},
-      stderrSink: (_) {},
-      fileSystem: fs,
-      preferHostIo: false,
-    );
-    final host = _DoomSmokeHost();
-    final imports = <String, WasmHostFunction>{
-      ...wasi.imports.functions,
-      ...host.imports,
-    };
-    final instance = WasmInstance.fromBytes(
-      wasmBytes,
-      imports: WasmImports(functions: imports),
-    );
-    wasi.bindInstance(instance);
-    host.bindMemory(instance.exportedMemory('memory'));
     instance.invoke('_start');
-
-    port.send(<String, Object?>{
-      'ok': false,
-      'error': 'doom _start returned before rendering a frame',
-    });
+    throw StateError('doom _start returned before rendering a frame');
   } on _DoomFirstFrame catch (event) {
-    port.send(<String, Object?>{
-      'ok': true,
-      'frames': event.frames,
-      'paletteSet': event.paletteSet,
-    });
-  } catch (error, stackTrace) {
-    port.send(<String, Object?>{'ok': false, 'error': '$error\n$stackTrace'});
+    return event;
   }
 }
 

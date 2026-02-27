@@ -195,8 +195,10 @@ Spec reports are written under `.dart_tool/spec_runner/`.
 
 ```bash
 dart pub get
+tool/setup_test_fixtures.sh
 dart analyze
 dart test
+dart test test/doom_smoke_test.dart test/community_wasm_fixtures_test.dart
 dart test test/wasi_preview1_test.dart
 dart run example/hello.dart
 ```
