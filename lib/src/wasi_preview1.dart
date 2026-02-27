@@ -1759,15 +1759,12 @@ final class WasiPreview1 {
     if (bufLen < 0) {
       return _errnoInval;
     }
-
-    final bytes = Uint8List(bufLen);
-    for (var i = 0; i < bufLen; i++) {
-      bytes[i] = _nextRandomByte();
-    }
-
     final memory = _requireMemory();
     try {
-      memory.writeBytes(bufPtr, bytes);
+      final view = memory.viewBytes(bufPtr, bufLen);
+      for (var i = 0; i < view.length; i++) {
+        view[i] = _nextRandomByte();
+      }
       return _errnoSuccess;
     } on RangeError {
       return _errnoFault;
