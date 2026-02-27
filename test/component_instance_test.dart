@@ -2146,6 +2146,84 @@ void main() {
       expect(instance.invokeCore('one'), 1);
     });
 
+    test(
+      'validates typed tag import requirements with multi-byte signatures',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'tag',
+              moduleName: 'env',
+              fieldName: 'err',
+              kind: 0x04,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('tag_typed'),
+          0x05, // tag
+          ..._u32Leb(1), // params
+          0x63, // ref null
+          0x00, // heap type = type index 0
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: WasmImports(
+              tags: {
+                WasmImports.key('env', 'err'): const WasmTagImport(
+                  type: WasmFunctionType(
+                    params: [WasmValueType.i32],
+                    results: [],
+                    kind: WasmCompositeTypeKind.function,
+                    paramTypeSignatures: ['6301'],
+                  ),
+                  nominalTypeKey: 'tag:6301',
+                  typeKey: 'tag:6301',
+                ),
+              },
+            ),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          imports: WasmImports(
+            tags: {
+              WasmImports.key('env', 'err'): const WasmTagImport(
+                type: WasmFunctionType(
+                  params: [WasmValueType.i32],
+                  results: [],
+                  kind: WasmCompositeTypeKind.function,
+                  paramTypeSignatures: ['6300'],
+                ),
+                nominalTypeKey: 'tag:6300',
+                typeKey: 'tag:6300',
+              ),
+            },
+          ),
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.invokeCore('one'), 1);
+      },
+    );
+
     test('resolves core instances by alias from section 0x05', () {
       final componentBytes = _componentWithCoreModules(
         <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
