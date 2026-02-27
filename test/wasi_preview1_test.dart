@@ -1129,6 +1129,56 @@ void main() {
     });
 
     test(
+      'random_get direct host call returns success and writes in-bounds',
+      () {
+        final wasi = WasiPreview1();
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final randomGet = _wasiFunction(wasi, 'random_get');
+
+        memory.storeI8(31, 0x55);
+        memory.storeI8(40, 0x66);
+        expect(randomGet([32, 8]), _errnoSuccess);
+
+        final bytes = memory.readBytes(32, 8);
+        expect(bytes.length, 8);
+        expect(memory.loadU8(31), 0x55);
+        expect(memory.loadU8(40), 0x66);
+      },
+    );
+
+    test('random_get returns EINVAL for negative length', () {
+      final wasi = WasiPreview1();
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final randomGet = _wasiFunction(wasi, 'random_get');
+
+      expect(randomGet([0, -1]), _errnoInval);
+    });
+
+    test('random_get returns EFAULT for out-of-bounds destination buffer', () {
+      final wasi = WasiPreview1();
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final randomGet = _wasiFunction(wasi, 'random_get');
+
+      expect(randomGet([65535, 2]), _errnoFault);
+    });
+
+    test(
+      'random_get direct host call keeps StateError contract for missing/invalid args',
+      () {
+        final wasi = WasiPreview1();
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final randomGet = _wasiFunction(wasi, 'random_get');
+
+        expect(() => randomGet([]), throwsStateError);
+        expect(() => randomGet(['bad', 4]), throwsStateError);
+      },
+    );
+
+    test(
       'clock_time_get supports realtime/monotonic/process/thread mappings',
       () {
         final wasi = WasiPreview1(
