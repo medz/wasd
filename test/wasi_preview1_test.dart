@@ -2019,6 +2019,86 @@ void main() {
       expect(pollOneoff([64, 128, 0, 32]), 28);
     });
 
+    test(
+      'poll_oneoff returns EFAULT for out-of-bounds input span atomically',
+      () {
+        final wasi = WasiPreview1();
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final pollOneoff =
+            wasi.imports.functions[WasmImports.key(
+              'wasi_snapshot_preview1',
+              'poll_oneoff',
+            )]!;
+
+        memory.storeI32(32, 91);
+        memory.fillBytes(128, 0x5a, 32);
+
+        expect(pollOneoff([65520, 128, 1, 32]), _errnoFault);
+        expect(memory.loadI32(32), 91);
+        expect(memory.loadU8(128), 0x5a);
+      },
+    );
+
+    test(
+      'poll_oneoff returns EFAULT when output span cannot hold all events atomically',
+      () {
+        final wasi = WasiPreview1();
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final pollOneoff =
+            wasi.imports.functions[WasmImports.key(
+              'wasi_snapshot_preview1',
+              'poll_oneoff',
+            )]!;
+
+        // sub 0: fd_write on stdout -> immediately ready
+        memory.storeI64(64, 1);
+        memory.storeI8(72, 2);
+        memory.storeI32(80, 1);
+        // sub 1: immediate clock -> immediately ready
+        memory.storeI64(112, 2);
+        memory.storeI8(120, 0);
+        memory.storeI32(128, 1);
+        memory.storeI64(136, 0);
+        memory.storeI64(144, 0);
+        memory.storeI16(152, 0);
+
+        const outPtr = 65500; // first event fits, second does not.
+        memory.fillBytes(outPtr, 0x44, 32);
+        memory.storeI32(32, 73);
+
+        expect(pollOneoff([64, outPtr, 2, 32]), _errnoFault);
+        expect(memory.loadI32(32), 73);
+        expect(memory.loadU8(outPtr), 0x44);
+      },
+    );
+
+    test(
+      'poll_oneoff returns EFAULT when nevents pointer is out-of-bounds atomically',
+      () {
+        final wasi = WasiPreview1();
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final pollOneoff =
+            wasi.imports.functions[WasmImports.key(
+              'wasi_snapshot_preview1',
+              'poll_oneoff',
+            )]!;
+
+        memory.fillBytes(128, 0x33, 32);
+        memory.storeI64(64, 7);
+        memory.storeI8(72, 0); // clock
+        memory.storeI32(80, 1);
+        memory.storeI64(88, 0);
+        memory.storeI64(96, 0);
+        memory.storeI16(104, 0);
+
+        expect(pollOneoff([64, 128, 1, 65535]), _errnoFault);
+        expect(memory.loadU8(128), 0x33);
+      },
+    );
+
     test('poll_oneoff rejects unknown subscription event type', () {
       final wasi = WasiPreview1();
       final memory = WasmMemory(minPages: 1);
@@ -2052,6 +2132,97 @@ void main() {
       expect(memory.loadU16(136), 8);
       expect(memory.loadU8(138), 1);
     });
+
+    test('poll_oneoff emits EINVAL event for unsupported clock id', () {
+      final wasi = WasiPreview1();
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pollOneoff = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'poll_oneoff')]!;
+
+      memory.storeI64(64, 66);
+      memory.storeI8(72, 0); // clock
+      memory.storeI32(80, 99); // unsupported id
+      memory.storeI64(88, 0);
+      memory.storeI64(96, 0);
+      memory.storeI16(104, 0);
+
+      expect(pollOneoff([64, 128, 1, 32]), _errnoSuccess);
+      expect(memory.loadI32(32), 1);
+      expect(memory.loadU16(136), _errnoInval);
+      expect(memory.loadU8(138), 0);
+    });
+
+    test(
+      'poll_oneoff emits NOTCAPABLE event when fd_read right is missing',
+      () {
+        final wasi = WasiPreview1(fileSystem: WasiInMemoryFileSystem());
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final pollOneoff =
+            wasi.imports.functions[WasmImports.key(
+              'wasi_snapshot_preview1',
+              'poll_oneoff',
+            )]!;
+
+        expect(
+          _pathOpen(
+            wasi: wasi,
+            memory: memory,
+            path: 'poll-read-cap.txt',
+            oflags: _oflagCreat,
+            rightsBase: _rightFdWrite,
+            outFdPtr: 40,
+          ),
+          _errnoSuccess,
+        );
+        final fd = memory.loadI32(40);
+        memory.storeI64(64, 77);
+        memory.storeI8(72, 1); // fd_read
+        memory.storeI32(80, fd);
+
+        expect(pollOneoff([64, 128, 1, 32]), _errnoSuccess);
+        expect(memory.loadI32(32), 1);
+        expect(memory.loadU16(136), _errnoNotcapable);
+        expect(memory.loadU8(138), 1);
+      },
+    );
+
+    test(
+      'poll_oneoff emits NOTCAPABLE event when fd_write right is missing',
+      () {
+        final wasi = WasiPreview1(fileSystem: WasiInMemoryFileSystem());
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final pollOneoff =
+            wasi.imports.functions[WasmImports.key(
+              'wasi_snapshot_preview1',
+              'poll_oneoff',
+            )]!;
+
+        expect(
+          _pathOpen(
+            wasi: wasi,
+            memory: memory,
+            path: 'poll-write-cap.txt',
+            oflags: _oflagCreat,
+            rightsBase: _rightFdRead,
+            outFdPtr: 40,
+          ),
+          _errnoSuccess,
+        );
+        final fd = memory.loadI32(40);
+        memory.storeI64(64, 88);
+        memory.storeI8(72, 2); // fd_write
+        memory.storeI32(80, fd);
+
+        expect(pollOneoff([64, 128, 1, 32]), _errnoSuccess);
+        expect(memory.loadI32(32), 1);
+        expect(memory.loadU16(136), _errnoNotcapable);
+        expect(memory.loadU8(138), 2);
+      },
+    );
 
     test('poll_oneoff rejects invalid clock flags atomically', () {
       final wasi = WasiPreview1();
@@ -2167,6 +2338,69 @@ void main() {
       expect(memory.loadU8(298), 0);
     });
 
+    test(
+      'poll_oneoff preserves order across ready and error events in mixed subscriptions',
+      () {
+        final wasi = WasiPreview1(fileSystem: WasiInMemoryFileSystem());
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final pollOneoff =
+            wasi.imports.functions[WasmImports.key(
+              'wasi_snapshot_preview1',
+              'poll_oneoff',
+            )]!;
+
+        expect(
+          _pathOpen(
+            wasi: wasi,
+            memory: memory,
+            path: 'poll-mixed-cap.txt',
+            oflags: _oflagCreat,
+            rightsBase: _rightFdRead,
+            outFdPtr: 48,
+          ),
+          _errnoSuccess,
+        );
+        final fdNoWrite = memory.loadI32(48);
+
+        // sub 0: unsupported clock id -> EINVAL event
+        memory.storeI64(64, 11);
+        memory.storeI8(72, 0);
+        memory.storeI32(80, 99);
+        memory.storeI64(88, 0);
+        memory.storeI64(96, 0);
+        memory.storeI16(104, 0);
+
+        // sub 1: fd_write without RIGHT_FD_WRITE -> NOTCAPABLE event
+        memory.storeI64(112, 22);
+        memory.storeI8(120, 2);
+        memory.storeI32(128, fdNoWrite);
+
+        // sub 2: immediate monotonic clock -> success event
+        memory.storeI64(160, 33);
+        memory.storeI8(168, 0);
+        memory.storeI32(176, 1);
+        memory.storeI64(184, 0);
+        memory.storeI64(192, 0);
+        memory.storeI16(200, 0);
+
+        expect(pollOneoff([64, 256, 3, 32]), _errnoSuccess);
+        expect(memory.loadI32(32), 3);
+
+        expect(memory.loadI64(256), BigInt.from(11));
+        expect(memory.loadU16(264), _errnoInval);
+        expect(memory.loadU8(266), 0);
+
+        expect(memory.loadI64(288), BigInt.from(22));
+        expect(memory.loadU16(296), _errnoNotcapable);
+        expect(memory.loadU8(298), 2);
+
+        expect(memory.loadI64(320), BigInt.from(33));
+        expect(memory.loadU16(328), _errnoSuccess);
+        expect(memory.loadU8(330), 0);
+      },
+    );
+
     test('poll_oneoff blocks when no ready events and no timeout', () {
       final wasi = WasiPreview1(sleep: (_) => throw const _PollWaitAbort());
       final memory = WasmMemory(minPages: 1);
@@ -2187,6 +2421,45 @@ void main() {
       );
       expect(memory.loadI32(32), 55);
       expect(memory.loadU8(128), 0x5c);
+    });
+
+    test('sched_yield direct host call returns success', () {
+      final wasi = WasiPreview1();
+      final schedYield = _wasiFunction(wasi, 'sched_yield');
+      expect(schedYield([]), _errnoSuccess);
+    });
+
+    test('sched_yield ignores extra host arguments and still succeeds', () {
+      final wasi = WasiPreview1();
+      final schedYield = _wasiFunction(wasi, 'sched_yield');
+      expect(schedYield([1, 2, 3]), _errnoSuccess);
+    });
+
+    test('sched_yield wasm import returns success errno', () {
+      final wasi = WasiPreview1();
+      final wasm = _buildModule(
+        types: [
+          _funcType([], [0x7f]),
+          _funcType([], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(
+            module: 'wasi_snapshot_preview1',
+            name: 'sched_yield',
+            typeIndex: 0,
+          ),
+        ],
+        functionTypeIndices: [1],
+        functionBodies: [
+          _FunctionBodySpec(instructions: [..._call(0), Opcodes.end]),
+        ],
+        exports: const [
+          _ExportSpec(name: 'run', kind: WasmExportKind.function, index: 1),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
+      expect(instance.invokeI32('run'), _errnoSuccess);
     });
 
     test('path_open supports O_DIRECTORY for directory targets', () {
