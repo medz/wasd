@@ -80,6 +80,81 @@ void main() {
       expect(component.sections[1].payload, hasLength(4));
     });
 
+    test(
+      'keeps strict decode on official-style section layouts without legacy parse errors',
+      () {
+        final componentBytes = Uint8List.fromList(<int>[
+          0x00,
+          0x61,
+          0x73,
+          0x6d,
+          0x0d,
+          0x00,
+          0x01,
+          0x00,
+          // section 4 with nested component payload
+          0x04,
+          0x08,
+          0x00,
+          0x61,
+          0x73,
+          0x6d,
+          0x0d,
+          0x00,
+          0x01,
+          0x00,
+          // section 8 marker (official canonical section id space)
+          0x08,
+          0x01,
+          0x00,
+        ]);
+
+        final component = WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+
+        expect(component.sections, hasLength(2));
+        expect(component.importRequirements, isEmpty);
+        expect(component.coreInstanceAliases, isEmpty);
+        expect(component.typeDeclarations, isEmpty);
+      },
+    );
+
+    test(
+      'keeps strict decode on official-style type-only layouts without core modules',
+      () {
+        final componentBytes = Uint8List.fromList(<int>[
+          0x00,
+          0x61,
+          0x73,
+          0x6d,
+          0x0d,
+          0x00,
+          0x01,
+          0x00,
+          // section 7 payload encoded by official component type section forms
+          0x07,
+          0x05,
+          0x01,
+          0x40,
+          0x00,
+          0x01,
+          0x00,
+        ]);
+
+        final component = WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+
+        expect(component.sections, hasLength(1));
+        expect(component.coreModules, isEmpty);
+        expect(component.typeDeclarations, isEmpty);
+        expect(component.typeBindings, isEmpty);
+      },
+    );
+
     test('decodes core-instance instantiate args', () {
       final componentBytes = Uint8List.fromList(<int>[
         0x00,
@@ -123,6 +198,157 @@ void main() {
         orderedEquals(const <int>[0]),
       );
     });
+
+    test('decodes core-instance named instantiate args in official layout', () {
+      final componentBytes = Uint8List.fromList(<int>[
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x0d,
+        0x00,
+        0x01,
+        0x00,
+        // section 1: one core module payload
+        0x01,
+        0x08,
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        // section 2:
+        // - core instance 0: instantiate module 0, no args
+        // - core instance 1: instantiate module 0, named instance arg `a` -> 0
+        0x02,
+        0x0b,
+        0x02,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x01,
+        0x61,
+        0x12,
+        0x00,
+      ]);
+
+      final component = WasmComponent.decode(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
+      expect(component.coreInstances, hasLength(2));
+      expect(component.coreInstances[0].moduleIndex, 0);
+      expect(component.coreInstances[0].argumentInstanceIndices, isEmpty);
+      expect(component.coreInstances[1].moduleIndex, 0);
+      expect(
+        component.coreInstances[1].argumentInstanceIndices,
+        orderedEquals(const <int>[0]),
+      );
+    });
+
+    test(
+      'decodes core-instance unnamed instantiate args in official layout',
+      () {
+        final componentBytes = Uint8List.fromList(<int>[
+          0x00,
+          0x61,
+          0x73,
+          0x6d,
+          0x0d,
+          0x00,
+          0x01,
+          0x00,
+          // section 1: one core module payload
+          0x01,
+          0x08,
+          0x00,
+          0x61,
+          0x73,
+          0x6d,
+          0x01,
+          0x00,
+          0x00,
+          0x00,
+          // section 2:
+          // - core instance 0: instantiate module 0, no args
+          // - core instance 1: instantiate module 0, unnamed instance arg -> 0
+          0x02,
+          0x0a,
+          0x02,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x01,
+          0x00,
+          0x12,
+          0x00,
+        ]);
+
+        final component = WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+
+        expect(component.coreInstances, hasLength(2));
+        expect(component.coreInstances[1].moduleIndex, 0);
+        expect(
+          component.coreInstances[1].argumentInstanceIndices,
+          orderedEquals(const <int>[0]),
+        );
+      },
+    );
+
+    test(
+      'keeps strict decode on official-style section 0x06 payloads with legacy-empty names',
+      () {
+        final componentBytes = Uint8List.fromList(<int>[
+          0x00,
+          0x61,
+          0x73,
+          0x6d,
+          0x0d,
+          0x00,
+          0x01,
+          0x00,
+          // section 1: one core module payload
+          0x01,
+          0x08,
+          0x00,
+          0x61,
+          0x73,
+          0x6d,
+          0x01,
+          0x00,
+          0x00,
+          0x00,
+          // section 6 payload begins with declaration name length 0
+          // (official alias-layout style, not legacy declaration layout)
+          0x06,
+          0x04,
+          0x01,
+          0x00,
+          0x00,
+          0x01,
+        ]);
+
+        final component = WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+
+        expect(component.sections, hasLength(2));
+        expect(component.typeDeclarations, isEmpty);
+      },
+    );
 
     test('decodes core export aliases from section 0x03', () {
       final componentBytes = Uint8List.fromList(<int>[

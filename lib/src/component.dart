@@ -264,63 +264,76 @@ final class WasmComponent {
     final coreInstanceAliases = <WasmComponentCoreInstanceAlias>[];
     final typeDeclarations = <WasmComponentTypeDeclaration>[];
     final typeBindings = <WasmComponentTypeBinding>[];
+
     while (!reader.isEOF) {
       final id = reader.readByte();
       final sectionSize = reader.readVarUint32();
       final section = reader.readSubReader(sectionSize);
       final payload = section.readRemainingBytes();
       sections.add(WasmComponentSection(id: id, payload: payload));
-      if (id == 0x01 && _isCoreModulePayload(payload)) {
-        coreModules.add(Uint8List.fromList(payload));
-      } else if (id == 0x02) {
-        _tryDecodeComponentSection(
-          bestEffort: bestEffort,
-          decode: () =>
-              coreInstances.addAll(_decodeCoreInstanceSectionPayload(payload)),
-        );
-      } else if (id == 0x03) {
-        _tryDecodeComponentSection(
-          bestEffort: bestEffort,
-          decode: () => coreExportAliases.addAll(
-            _decodeCoreExportAliasSectionPayload(payload),
-          ),
-        );
-      } else if (id == 0x04) {
-        _tryDecodeComponentSection(
-          bestEffort: bestEffort,
-          decode: () =>
-              importRequirements.addAll(_decodeImportSectionPayload(payload)),
-        );
-      } else if (id == 0x05) {
-        _tryDecodeComponentSection(
-          bestEffort: bestEffort,
-          decode: () => coreInstanceAliases.addAll(
-            _decodeCoreInstanceAliasSectionPayload(payload),
-          ),
-        );
-      } else if (id == 0x06) {
-        _tryDecodeComponentSection(
-          bestEffort: bestEffort,
-          decode: () =>
-              typeDeclarations.addAll(_decodeTypeSectionPayload(payload)),
-        );
-      } else if (id == 0x07) {
-        _tryDecodeComponentSection(
-          bestEffort: bestEffort,
-          decode: () =>
-              typeBindings.addAll(_decodeTypeBindingSectionPayload(payload)),
-        );
+    }
+
+    for (final section in sections) {
+      if (section.id == 0x01 && _isCoreModulePayload(section.payload)) {
+        coreModules.add(Uint8List.fromList(section.payload));
       }
     }
-    _tryDecodeComponentSection(
-      bestEffort: bestEffort,
-      decode: () => _validateTypeBindings(
-        typeBindings: typeBindings,
-        typeDeclarations: typeDeclarations,
-        importRequirements: importRequirements,
-        coreExportAliases: coreExportAliases,
-      ),
-    );
+
+    if (_shouldDecodeLegacyStructuredSections(sections)) {
+      for (final section in sections) {
+        final payload = section.payload;
+        if (section.id == 0x02) {
+          _tryDecodeComponentSection(
+            bestEffort: bestEffort,
+            decode: () => coreInstances.addAll(
+              _decodeCoreInstanceSectionPayload(payload),
+            ),
+          );
+        } else if (section.id == 0x03) {
+          _tryDecodeComponentSection(
+            bestEffort: bestEffort,
+            decode: () => coreExportAliases.addAll(
+              _decodeCoreExportAliasSectionPayload(payload),
+            ),
+          );
+        } else if (section.id == 0x04) {
+          _tryDecodeComponentSection(
+            bestEffort: bestEffort,
+            decode: () =>
+                importRequirements.addAll(_decodeImportSectionPayload(payload)),
+          );
+        } else if (section.id == 0x05) {
+          _tryDecodeComponentSection(
+            bestEffort: bestEffort,
+            decode: () => coreInstanceAliases.addAll(
+              _decodeCoreInstanceAliasSectionPayload(payload),
+            ),
+          );
+        } else if (section.id == 0x06) {
+          _tryDecodeComponentSection(
+            bestEffort: bestEffort,
+            decode: () =>
+                typeDeclarations.addAll(_decodeTypeSectionPayload(payload)),
+          );
+        } else if (section.id == 0x07) {
+          _tryDecodeComponentSection(
+            bestEffort: bestEffort,
+            decode: () =>
+                typeBindings.addAll(_decodeTypeBindingSectionPayload(payload)),
+          );
+        }
+      }
+
+      _tryDecodeComponentSection(
+        bestEffort: bestEffort,
+        decode: () => _validateTypeBindings(
+          typeBindings: typeBindings,
+          typeDeclarations: typeDeclarations,
+          importRequirements: importRequirements,
+          coreExportAliases: coreExportAliases,
+        ),
+      );
+    }
 
     return WasmComponent._(
       sections: List<WasmComponentSection>.unmodifiable(sections),
@@ -373,10 +386,9 @@ final class WasmComponent {
         case 0x00:
           final moduleIndex = reader.readVarUint32();
           final argCount = reader.readVarUint32();
-          final argumentInstanceIndices = List<int>.generate(
+          final argumentInstanceIndices = _readCoreInstanceArgumentIndices(
+            reader,
             argCount,
-            (_) => reader.readVarUint32(),
-            growable: false,
           );
           instances.add(
             WasmComponentCoreInstance.instantiate(
@@ -384,6 +396,13 @@ final class WasmComponent {
               argumentInstanceIndices: argumentInstanceIndices,
             ),
           );
+        case 0x01:
+          final exportCount = reader.readVarUint32();
+          for (var j = 0; j < exportCount; j++) {
+            _readName(reader);
+            reader.readByte();
+            reader.readVarUint32();
+          }
         default:
           throw UnsupportedError(
             'Unsupported component core-instance kind: 0x${kind.toRadixString(16)}',
@@ -396,6 +415,48 @@ final class WasmComponent {
       );
     }
     return instances;
+  }
+
+  static List<int> _readCoreInstanceArgumentIndices(
+    ByteReader reader,
+    int argCount,
+  ) {
+    if (argCount == 0) {
+      return const <int>[];
+    }
+
+    final start = reader.offset;
+    final officialIndices = <int>[];
+    var officialOk = true;
+    try {
+      for (var i = 0; i < argCount; i++) {
+        final nameLength = reader.readVarUint32();
+        reader.readBytes(nameLength);
+        final kind = reader.readByte();
+        if (kind != 0x11 && kind != 0x12 && kind != 0x13) {
+          throw FormatException(
+            'Unsupported core-instance arg kind: 0x${kind.toRadixString(16)}',
+          );
+        }
+        final index = reader.readVarUint32();
+        if (kind == 0x12) {
+          officialIndices.add(index);
+        }
+      }
+    } on FormatException {
+      officialOk = false;
+    }
+
+    if (officialOk) {
+      return List<int>.unmodifiable(officialIndices);
+    }
+
+    reader.offset = start;
+    return List<int>.generate(
+      argCount,
+      (_) => reader.readVarUint32(),
+      growable: false,
+    );
   }
 
   static List<WasmComponentCoreExportAlias>
@@ -1085,6 +1146,71 @@ final class WasmComponent {
   static String _readName(ByteReader reader) {
     final length = reader.readVarUint32();
     return String.fromCharCodes(reader.readBytes(length));
+  }
+
+  static bool _shouldDecodeLegacyStructuredSections(
+    List<WasmComponentSection> sections,
+  ) {
+    var hasLegacyCoreModule = false;
+    var hasLegacyStructuredSection = false;
+    for (final section in sections) {
+      if (section.id == 0x01 && _isCoreModulePayload(section.payload)) {
+        hasLegacyCoreModule = true;
+      }
+      if (section.id >= 0x08) {
+        return false;
+      }
+      if (section.id == 0x04 && _isComponentPayload(section.payload)) {
+        return false;
+      }
+      if (section.id == 0x06 &&
+          !_looksLegacyTypeSectionPayload(section.payload)) {
+        return false;
+      }
+      if (section.id >= 0x02 && section.id <= 0x07) {
+        hasLegacyStructuredSection = true;
+      }
+    }
+    if (!hasLegacyCoreModule && hasLegacyStructuredSection) {
+      return false;
+    }
+    return true;
+  }
+
+  static bool _looksLegacyTypeSectionPayload(Uint8List payload) {
+    final reader = ByteReader(payload);
+    try {
+      final count = reader.readVarUint32();
+      if (count == 0) {
+        return true;
+      }
+      final firstNameLength = reader.readVarUint32();
+      if (firstNameLength == 0 || reader.remaining < firstNameLength + 1) {
+        return false;
+      }
+      reader.readBytes(firstNameLength);
+      final firstKind = reader.readByte();
+      if (firstKind < 0x00 || firstKind > 0x05) {
+        return false;
+      }
+      return true;
+    } on FormatException {
+      return false;
+    }
+  }
+
+  static bool _isComponentPayload(Uint8List payload) {
+    if (payload.length < 8) {
+      return false;
+    }
+    return payload[0] == 0x00 &&
+        payload[1] == 0x61 &&
+        payload[2] == 0x73 &&
+        payload[3] == 0x6d &&
+        payload[4] == 0x0d &&
+        payload[5] == 0x00 &&
+        payload[6] == 0x01 &&
+        payload[7] == 0x00;
   }
 
   static bool _isCoreModulePayload(Uint8List payload) {
