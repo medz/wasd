@@ -6,14 +6,26 @@ import 'package:test/test.dart';
 
 const int _errnoSuccess = 0;
 const int _errnoBadf = 8;
+const int _errnoExist = 20;
 const int _errnoFault = 21;
 const int _errnoInval = 28;
+const int _errnoIsdir = 31;
+const int _errnoLoop = 32;
 const int _errnoNametoolong = 37;
+const int _errnoNoent = 44;
+const int _errnoNosys = 52;
+const int _errnoNotdir = 54;
+const int _errnoNotempty = 55;
 const int _errnoNotsup = 58;
 const int _errnoNotcapable = 76;
 
+const int _lookupflagSymlinkFollow = 0x0001;
 const int _oflagCreat = 0x0001;
 const int _oflagDirectory = 0x0002;
+const int _oflagExcl = 0x0004;
+const int _oflagTrunc = 0x0008;
+
+const int _fstFlagMtim = 0x0004;
 
 const int _rightFdDatasync = 0x0000000000000001;
 const int _rightFdRead = 0x0000000000000002;
@@ -31,6 +43,9 @@ const int _rightFdFileStatSetSize = 0x0000000000400000;
 
 const int _rightFdReadWrite = _rightFdRead | _rightFdWrite;
 const int _maxWasiFileSize = 0x7fffffffffffffff;
+
+const int _filetypeRegularFile = 4;
+const int _filetypeSymbolicLink = 7;
 
 void main() {
   group('WasiPreview1', () {
@@ -1335,6 +1350,7 @@ void main() {
         read: true,
         write: true,
         exclusive: false,
+        followSymlinks: true,
       );
       file.write(Uint8List.fromList(utf8.encode('x')));
       file.close();
@@ -1420,6 +1436,7 @@ void main() {
         read: true,
         write: true,
         exclusive: false,
+        followSymlinks: true,
       );
       file.write(Uint8List.fromList(utf8.encode('HELLO')));
       file.close();
@@ -1695,11 +1712,9 @@ void main() {
       final wasi = WasiPreview1(fileSystem: fs);
       final memory = WasmMemory(minPages: 1);
       wasi.bindMemory(memory);
-      final fdAllocate =
-          wasi.imports.functions[WasmImports.key(
-            'wasi_snapshot_preview1',
-            'fd_allocate',
-          )]!;
+      final fdAllocate = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_allocate')]!;
 
       expect(
         _pathOpen(
@@ -1776,11 +1791,9 @@ void main() {
       final wasi = WasiPreview1(fileSystem: WasiInMemoryFileSystem());
       final memory = WasmMemory(minPages: 1);
       wasi.bindMemory(memory);
-      final fdDatasync =
-          wasi.imports.functions[WasmImports.key(
-            'wasi_snapshot_preview1',
-            'fd_datasync',
-          )]!;
+      final fdDatasync = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_datasync')]!;
       final fdSync = wasi
           .imports
           .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_sync')]!;
@@ -1824,6 +1837,7 @@ void main() {
         read: true,
         write: true,
         exclusive: false,
+        followSymlinks: true,
       );
       writer.write(Uint8List.fromList(utf8.encode('ABCDE')));
       writer.close();
@@ -1880,6 +1894,7 @@ void main() {
         read: true,
         write: true,
         exclusive: false,
+        followSymlinks: true,
       );
       file.write(Uint8List.fromList(utf8.encode('t')));
       file.close();
@@ -2210,6 +2225,7 @@ void main() {
         read: true,
         write: true,
         exclusive: false,
+        followSymlinks: true,
       );
       file.write(Uint8List.fromList(utf8.encode('x')));
       file.close();
@@ -2223,6 +2239,208 @@ void main() {
       memory.writeBytesFromList(64, utf8.encode('plain.txt'));
       expect(pathOpen([3, 0, 64, 9, 2, 0, 0, 0, 32]), 54);
     });
+
+    test(
+      'path_open rejects unknown oflags and truncate without write rights',
+      () {
+        final fs = WasiInMemoryFileSystem();
+        final seed = fs.open(
+          path: '/truncate.txt',
+          create: true,
+          truncate: true,
+          read: true,
+          write: true,
+          exclusive: false,
+          followSymlinks: true,
+        );
+        seed.write(Uint8List.fromList(utf8.encode('abc')));
+        seed.close();
+
+        final wasi = WasiPreview1(fileSystem: fs);
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+
+        expect(
+          _pathOpen(
+            wasi: wasi,
+            memory: memory,
+            path: 'truncate.txt',
+            oflags: 0x0010,
+            rightsBase: _rightFdRead,
+          ),
+          _errnoInval,
+        );
+        expect(
+          _pathOpen(
+            wasi: wasi,
+            memory: memory,
+            path: 'truncate.txt',
+            oflags: _oflagTrunc,
+            rightsBase: _rightFdRead,
+          ),
+          _errnoNotcapable,
+        );
+      },
+    );
+
+    test(
+      'path_open and path_filestat_get respect LOOKUP_SYMLINK_FOLLOW for final component',
+      () {
+        final fs = WasiInMemoryFileSystem();
+        final target = fs.open(
+          path: '/target.txt',
+          create: true,
+          truncate: true,
+          read: true,
+          write: true,
+          exclusive: false,
+          followSymlinks: true,
+        );
+        target.write(Uint8List.fromList(utf8.encode('XYZ')));
+        target.close();
+        fs.symlink(targetPath: '/target.txt', linkPath: '/alias.txt');
+
+        final wasi = WasiPreview1(fileSystem: fs);
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final fdClose = _wasiFunction(wasi, 'fd_close');
+        final pathFilestatGet = _wasiFunction(wasi, 'path_filestat_get');
+        final pathBytes = utf8.encode('alias.txt');
+        memory.writeBytesFromList(64, pathBytes);
+
+        expect(
+          _pathOpen(
+            wasi: wasi,
+            memory: memory,
+            path: 'alias.txt',
+            rightsBase: _rightFdRead,
+          ),
+          _errnoLoop,
+        );
+        expect(
+          _pathOpen(
+            wasi: wasi,
+            memory: memory,
+            path: 'alias.txt',
+            dirFlags: _lookupflagSymlinkFollow,
+            rightsBase: _rightFdRead,
+            outFdPtr: 36,
+          ),
+          _errnoSuccess,
+        );
+        expect(fdClose([memory.loadI32(36)]), _errnoSuccess);
+
+        expect(
+          pathFilestatGet([3, 0, 64, pathBytes.length, 128]),
+          _errnoSuccess,
+        );
+        expect(memory.loadU8(144), _filetypeSymbolicLink);
+        expect(
+          memory.loadI64(160),
+          BigInt.from(utf8.encode('/target.txt').length),
+        );
+        expect(
+          pathFilestatGet([
+            3,
+            _lookupflagSymlinkFollow,
+            64,
+            pathBytes.length,
+            256,
+          ]),
+          _errnoSuccess,
+        );
+        expect(memory.loadU8(272), _filetypeRegularFile);
+        expect(memory.loadI64(288), BigInt.from(3));
+      },
+    );
+
+    test(
+      'path_filestat_set_times applies to link or target based on flags',
+      () {
+        final fs = WasiInMemoryFileSystem();
+        final target = fs.open(
+          path: '/time-target.txt',
+          create: true,
+          truncate: true,
+          read: true,
+          write: true,
+          exclusive: false,
+          followSymlinks: true,
+        );
+        target.write(Uint8List.fromList(utf8.encode('t')));
+        target.close();
+        fs.symlink(targetPath: '/time-target.txt', linkPath: '/time-link.txt');
+
+        final wasi = WasiPreview1(fileSystem: fs);
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final pathFilestatGet = _wasiFunction(wasi, 'path_filestat_get');
+        final pathFilestatSetTimes = _wasiFunction(
+          wasi,
+          'path_filestat_set_times',
+        );
+        final pathBytes = utf8.encode('time-link.txt');
+        memory.writeBytesFromList(64, pathBytes);
+
+        expect(
+          pathFilestatSetTimes([
+            3,
+            0,
+            64,
+            pathBytes.length,
+            0,
+            1111,
+            _fstFlagMtim,
+          ]),
+          _errnoSuccess,
+        );
+        expect(
+          pathFilestatGet([3, 0, 64, pathBytes.length, 128]),
+          _errnoSuccess,
+        );
+        expect(memory.loadI64(176), BigInt.from(1111));
+        expect(
+          pathFilestatGet([
+            3,
+            _lookupflagSymlinkFollow,
+            64,
+            pathBytes.length,
+            256,
+          ]),
+          _errnoSuccess,
+        );
+        expect(memory.loadI64(304), isNot(BigInt.from(1111)));
+
+        expect(
+          pathFilestatSetTimes([
+            3,
+            _lookupflagSymlinkFollow,
+            64,
+            pathBytes.length,
+            0,
+            2222,
+            _fstFlagMtim,
+          ]),
+          _errnoSuccess,
+        );
+        expect(
+          pathFilestatGet([
+            3,
+            _lookupflagSymlinkFollow,
+            64,
+            pathBytes.length,
+            384,
+          ]),
+          _errnoSuccess,
+        );
+        expect(memory.loadI64(432), BigInt.from(2222));
+        expect(
+          pathFilestatGet([3, 0, 64, pathBytes.length, 512]),
+          _errnoSuccess,
+        );
+        expect(memory.loadI64(560), BigInt.from(1111));
+      },
+    );
 
     test('path resolution returns BADF/NOTCAPABLE/INVAL/FAULT distinctly', () {
       final wasi = WasiPreview1(fileSystem: WasiInMemoryFileSystem());
@@ -2255,6 +2473,7 @@ void main() {
         read: true,
         write: true,
         exclusive: false,
+        followSymlinks: true,
       );
       source.write(Uint8List.fromList(utf8.encode('ABC')));
       source.close();
@@ -2356,6 +2575,253 @@ void main() {
         utf8.decode(instance.exportedMemory('memory').readBytes(160, 10)),
         'source.txt',
       );
+    });
+
+    test('path_link validates flags and respects symlink follow behavior', () {
+      final fs = WasiInMemoryFileSystem();
+      final source = fs.open(
+        path: '/origin.txt',
+        create: true,
+        truncate: true,
+        read: true,
+        write: true,
+        exclusive: false,
+        followSymlinks: true,
+      );
+      source.write(Uint8List.fromList(utf8.encode('ABCD')));
+      source.close();
+      fs.symlink(targetPath: '/origin.txt', linkPath: '/origin-link.txt');
+
+      final wasi = WasiPreview1(fileSystem: fs);
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pathLink = _wasiFunction(wasi, 'path_link');
+      final pathReadlink = _wasiFunction(wasi, 'path_readlink');
+      final pathFilestatGet = _wasiFunction(wasi, 'path_filestat_get');
+      final sourceBytes = utf8.encode('origin-link.txt');
+      final noFollowDestBytes = utf8.encode('copy-link.txt');
+      final followDestBytes = utf8.encode('copy-file.txt');
+      memory.writeBytesFromList(64, sourceBytes);
+      memory.writeBytesFromList(96, noFollowDestBytes);
+      memory.writeBytesFromList(128, followDestBytes);
+
+      expect(
+        pathLink([
+          3,
+          0x0002,
+          64,
+          sourceBytes.length,
+          3,
+          96,
+          noFollowDestBytes.length,
+        ]),
+        _errnoInval,
+      );
+      expect(
+        pathLink([
+          3,
+          0,
+          64,
+          sourceBytes.length,
+          3,
+          96,
+          noFollowDestBytes.length,
+        ]),
+        _errnoSuccess,
+      );
+      expect(
+        pathReadlink([3, 96, noFollowDestBytes.length, 256, 64, 336]),
+        _errnoSuccess,
+      );
+      expect(memory.loadI32(336), utf8.encode('/origin.txt').length);
+      expect(
+        utf8.decode(memory.readBytes(256, memory.loadI32(336))),
+        '/origin.txt',
+      );
+
+      expect(
+        pathLink([
+          3,
+          _lookupflagSymlinkFollow,
+          64,
+          sourceBytes.length,
+          3,
+          128,
+          followDestBytes.length,
+        ]),
+        _errnoSuccess,
+      );
+      expect(
+        pathFilestatGet([3, 0, 128, followDestBytes.length, 384]),
+        _errnoSuccess,
+      );
+      expect(memory.loadU8(400), _filetypeRegularFile);
+    });
+
+    test('path_readlink truncates output and reports nread', () {
+      final fs = WasiInMemoryFileSystem();
+      fs.symlink(targetPath: '/very/long/target', linkPath: '/long-link.txt');
+
+      final wasi = WasiPreview1(fileSystem: fs);
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pathReadlink = _wasiFunction(wasi, 'path_readlink');
+      final pathBytes = utf8.encode('long-link.txt');
+      memory.writeBytesFromList(64, pathBytes);
+
+      expect(
+        pathReadlink([3, 64, pathBytes.length, 128, 4, 200]),
+        _errnoSuccess,
+      );
+      expect(memory.loadI32(200), 4);
+      expect(utf8.decode(memory.readBytes(128, 4)), '/ver');
+      expect(
+        pathReadlink([3, 65535, pathBytes.length, 128, 4, 200]),
+        _errnoFault,
+      );
+      expect(pathReadlink([99, 64, pathBytes.length, 128, 4, 200]), _errnoBadf);
+    });
+
+    test('path_create/remove/unlink enforce errno boundaries', () {
+      final fs = WasiInMemoryFileSystem();
+      fs.createDirectory('/dir');
+      final file = fs.open(
+        path: '/file.txt',
+        create: true,
+        truncate: true,
+        read: true,
+        write: true,
+        exclusive: false,
+        followSymlinks: true,
+      );
+      file.write(Uint8List.fromList(utf8.encode('x')));
+      file.close();
+      final nested = fs.open(
+        path: '/dir/nested.txt',
+        create: true,
+        truncate: true,
+        read: true,
+        write: true,
+        exclusive: false,
+        followSymlinks: true,
+      );
+      nested.close();
+
+      final wasi = WasiPreview1(fileSystem: fs);
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pathCreateDirectory = _wasiFunction(wasi, 'path_create_directory');
+      final pathRemoveDirectory = _wasiFunction(wasi, 'path_remove_directory');
+      final pathUnlinkFile = _wasiFunction(wasi, 'path_unlink_file');
+      final fdFdstatSetRights = _wasiFunction(wasi, 'fd_fdstat_set_rights');
+
+      memory.writeBytesFromList(64, utf8.encode('tmp'));
+      expect(pathCreateDirectory([3, 64, 3]), _errnoSuccess);
+      expect(pathCreateDirectory([3, 64, 3]), _errnoExist);
+
+      memory.writeBytesFromList(96, utf8.encode('dir'));
+      expect(pathRemoveDirectory([3, 96, 3]), _errnoNotempty);
+      memory.writeBytesFromList(128, utf8.encode('dir/nested.txt'));
+      expect(pathUnlinkFile([3, 128, 14]), _errnoSuccess);
+      expect(pathRemoveDirectory([3, 96, 3]), _errnoSuccess);
+
+      memory.writeBytesFromList(160, utf8.encode('tmp'));
+      expect(pathUnlinkFile([3, 160, 3]), _errnoIsdir);
+      memory.writeBytesFromList(192, utf8.encode('missing.txt'));
+      expect(pathUnlinkFile([3, 192, 11]), _errnoNoent);
+      expect(pathRemoveDirectory([3, 192, 11]), _errnoNotdir);
+      expect(pathCreateDirectory([99, 64, 3]), _errnoBadf);
+      expect(pathCreateDirectory([3, 65535, 3]), _errnoFault);
+
+      expect(fdFdstatSetRights([3, 0, 0]), _errnoSuccess);
+      expect(pathCreateDirectory([3, 64, 3]), _errnoNotcapable);
+    });
+
+    test('path_rename enforces replace and type-conflict semantics', () {
+      final fs = WasiInMemoryFileSystem();
+      final src = fs.open(
+        path: '/src.txt',
+        create: true,
+        truncate: true,
+        read: true,
+        write: true,
+        exclusive: false,
+        followSymlinks: true,
+      );
+      src.write(Uint8List.fromList(utf8.encode('src')));
+      src.close();
+      final dst = fs.open(
+        path: '/dst.txt',
+        create: true,
+        truncate: true,
+        read: true,
+        write: true,
+        exclusive: false,
+        followSymlinks: true,
+      );
+      dst.write(Uint8List.fromList(utf8.encode('dst')));
+      dst.close();
+      fs.createDirectory('/dir-src');
+      fs.createDirectory('/dir-empty');
+      fs.createDirectory('/dir-nonempty');
+      final nested = fs.open(
+        path: '/dir-nonempty/child.txt',
+        create: true,
+        truncate: true,
+        read: true,
+        write: true,
+        exclusive: false,
+        followSymlinks: true,
+      );
+      nested.close();
+
+      final wasi = WasiPreview1(fileSystem: fs);
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pathRename = _wasiFunction(wasi, 'path_rename');
+      final fdFdstatSetRights = _wasiFunction(wasi, 'fd_fdstat_set_rights');
+
+      memory.writeBytesFromList(64, utf8.encode('src.txt'));
+      memory.writeBytesFromList(96, utf8.encode('dst.txt'));
+      expect(pathRename([3, 64, 7, 3, 96, 7]), _errnoSuccess);
+      expect(fs.readFileText('/dst.txt'), 'src');
+      expect(fs.readFileText('/src.txt'), isNull);
+
+      memory.writeBytesFromList(128, utf8.encode('dir-src'));
+      memory.writeBytesFromList(160, utf8.encode('dir-nonempty'));
+      expect(pathRename([3, 128, 7, 3, 160, 12]), _errnoNotempty);
+      expect(pathRename([3, 128, 7, 3, 96, 7]), _errnoNotdir);
+      expect(pathRename([3, 96, 7, 3, 160, 12]), _errnoIsdir);
+
+      memory.writeBytesFromList(192, utf8.encode('dir-empty'));
+      expect(pathRename([3, 128, 7, 3, 192, 9]), _errnoSuccess);
+      expect(fs.snapshotDirectories(), contains('/dir-empty'));
+      expect(fs.snapshotDirectories(), isNot(contains('/dir-src')));
+
+      expect(pathRename([99, 64, 7, 3, 96, 7]), _errnoBadf);
+      expect(pathRename([3, 65535, 7, 3, 96, 7]), _errnoFault);
+
+      expect(fdFdstatSetRights([3, 0, 0]), _errnoSuccess);
+      expect(pathRename([3, 64, 7, 3, 96, 7]), _errnoNotcapable);
+    });
+
+    test('path APIs return NOSYS when backend capability is missing', () {
+      final wasi = WasiPreview1(fileSystem: _OpenOnlyFileSystem());
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pathOpen = _wasiFunction(wasi, 'path_open');
+      final pathFilestatGet = _wasiFunction(wasi, 'path_filestat_get');
+      final pathCreateDirectory = _wasiFunction(wasi, 'path_create_directory');
+      final pathReadlink = _wasiFunction(wasi, 'path_readlink');
+      memory.writeBytesFromList(64, utf8.encode('p'));
+
+      expect(
+        pathOpen([3, 0, 64, 1, _oflagDirectory, 0, 0, 0, 32]),
+        _errnoNosys,
+      );
+      expect(pathFilestatGet([3, 0, 64, 1, 128]), _errnoNosys);
+      expect(pathCreateDirectory([3, 64, 1]), _errnoNosys);
+      expect(pathReadlink([3, 64, 1, 256, 16, 300]), _errnoNosys);
     });
 
     test('fd_fdstat_set_rights and fd_renumber are supported', () {
@@ -2992,8 +3458,10 @@ Uint8List _buildFdCloseModule({required int fd}) {
 }
 
 Object? Function(List<Object?>) _wasiFunction(WasiPreview1 wasi, String name) {
-  return wasi.imports.functions[
-      WasmImports.key('wasi_snapshot_preview1', name)]!;
+  return wasi.imports.functions[WasmImports.key(
+    'wasi_snapshot_preview1',
+    name,
+  )]!;
 }
 
 int _pathOpen({
@@ -3053,6 +3521,21 @@ Set<String> _decodeDirentNames(Uint8List bytes) {
     cursor += 24 + nameLen;
   }
   return names;
+}
+
+final class _OpenOnlyFileSystem implements WasiFileSystem {
+  @override
+  WasiFileDescriptor open({
+    required String path,
+    required bool create,
+    required bool truncate,
+    required bool read,
+    required bool write,
+    required bool exclusive,
+    required bool followSymlinks,
+  }) {
+    throw const WasiFsException(WasiFsError.notSupported);
+  }
 }
 
 final class _FunctionBodySpec {
