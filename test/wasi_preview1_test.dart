@@ -44,6 +44,11 @@ const int _rightFdFileStatSetSize = 0x0000000000400000;
 const int _rightFdReadWrite = _rightFdRead | _rightFdWrite;
 const int _maxWasiFileSize = 0x7fffffffffffffff;
 
+const int _sockAcceptFlagNonblock = 0x0004;
+const int _sockRecvFlagPeek = 0x0001;
+const int _sockRecvFlagWaitall = 0x0002;
+const int _sockRecvRoFlagDataTruncated = 0x0001;
+
 const int _filetypeRegularFile = 4;
 const int _filetypeSymbolicLink = 7;
 
@@ -3401,13 +3406,17 @@ void main() {
           socketTransport: WasiSocketTransport(
             accept: ({required fd, required flags, required allocateFd}) {
               expect(fd, 41);
-              expect(flags, 3);
+              expect(flags, _sockAcceptFlagNonblock);
               return WasiSockAcceptResult.accepted(allocateFd());
             },
             containsFd: ({required fd}) => fd == 4,
           ),
         );
-        final wasm = _buildSockAcceptModule(fd: 41, flags: 3, roFdPtr: 64);
+        final wasm = _buildSockAcceptModule(
+          fd: 41,
+          flags: _sockAcceptFlagNonblock,
+          roFdPtr: 64,
+        );
         final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
         wasi.bindInstance(instance);
 
@@ -3417,23 +3426,82 @@ void main() {
       },
     );
 
+    test('sock_accept returns ENOSYS without socket transport', () {
+      final wasi = WasiPreview1();
+      final sockAccept = _wasiFunction(wasi, 'sock_accept');
+
+      expect(sockAccept([3, 0, 0]), _errnoNosys);
+    });
+
+    test('sock_accept rejects invalid flags before transport call', () {
+      var called = false;
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          accept: ({required fd, required flags, required allocateFd}) {
+            called = true;
+            return WasiSockAcceptResult.accepted(allocateFd());
+          },
+        ),
+      );
+      final sockAccept = _wasiFunction(wasi, 'sock_accept');
+
+      expect(sockAccept([41, 1, 0]), _errnoInval);
+      expect(called, isFalse);
+    });
+
+    test('sock_accept returns EFAULT for out-of-bounds ro_fd_ptr', () {
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          accept: ({required fd, required flags, required allocateFd}) {
+            return WasiSockAcceptResult.accepted(allocateFd());
+          },
+        ),
+      );
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final sockAccept = _wasiFunction(wasi, 'sock_accept');
+
+      expect(
+        sockAccept([41, _sockAcceptFlagNonblock, memory.lengthInBytes - 1]),
+        _errnoFault,
+      );
+    });
+
+    test('sock_accept throws on conflicting accepted fd', () {
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          accept: ({required fd, required flags, required allocateFd}) {
+            return const WasiSockAcceptResult.accepted(3);
+          },
+        ),
+      );
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final sockAccept = _wasiFunction(wasi, 'sock_accept');
+
+      expect(
+        () => sockAccept([41, _sockAcceptFlagNonblock, 0]),
+        throwsStateError,
+      );
+    });
+
     test('sock_recv copies data into iovecs and writes result metadata', () {
       final wasi = WasiPreview1(
         socketTransport: WasiSocketTransport(
           recv: ({required fd, required flags, required maxBytes}) {
             expect(fd, 7);
-            expect(flags, 9);
+            expect(flags, _sockRecvFlagPeek | _sockRecvFlagWaitall);
             expect(maxBytes, 5);
             return WasiSockRecvResult.received(
               Uint8List.fromList([1, 2, 3, 4, 5, 6]),
-              flags: 2,
+              flags: _sockRecvRoFlagDataTruncated,
             );
           },
         ),
       );
       final wasm = _buildSockRecvModule(
         fd: 7,
-        riFlags: 9,
+        riFlags: _sockRecvFlagPeek | _sockRecvFlagWaitall,
         riDataPtr: 32,
         firstDataPtr: 96,
         firstDataLen: 2,
@@ -3450,7 +3518,137 @@ void main() {
       expect(memory.readBytes(96, 2), [1, 2]);
       expect(memory.readBytes(98, 3), [3, 4, 5]);
       expect(memory.loadI32(48), 5);
-      expect(memory.loadU16(52), 2);
+      expect(memory.loadU16(52), _sockRecvRoFlagDataTruncated);
+    });
+
+    test('sock_recv returns ENOSYS without socket transport', () {
+      final wasi = WasiPreview1();
+      final sockRecv = _wasiFunction(wasi, 'sock_recv');
+
+      expect(sockRecv([7, 0, 0, 0, 4, 8]), _errnoNosys);
+    });
+
+    test('sock_recv rejects invalid flags before transport call', () {
+      var called = false;
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          recv: ({required fd, required flags, required maxBytes}) {
+            called = true;
+            return WasiSockRecvResult.received(Uint8List(0));
+          },
+        ),
+      );
+      final sockRecv = _wasiFunction(wasi, 'sock_recv');
+
+      expect(sockRecv([7, 0, 0, 8, 4, 8]), _errnoInval);
+      expect(called, isFalse);
+    });
+
+    test('sock_recv returns EINVAL for negative iovec length', () {
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          recv: ({required fd, required flags, required maxBytes}) {
+            return WasiSockRecvResult.received(Uint8List(0));
+          },
+        ),
+      );
+      final sockRecv = _wasiFunction(wasi, 'sock_recv');
+
+      expect(sockRecv([7, 0, -1, 0, 4, 8]), _errnoInval);
+    });
+
+    test(
+      'sock_recv returns EFAULT for out-of-bounds iovec descriptor span',
+      () {
+        final wasi = WasiPreview1(
+          socketTransport: WasiSocketTransport(
+            recv: ({required fd, required flags, required maxBytes}) {
+              return WasiSockRecvResult.received(Uint8List(0));
+            },
+          ),
+        );
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final sockRecv = _wasiFunction(wasi, 'sock_recv');
+
+        expect(
+          sockRecv([7, memory.lengthInBytes - 4, 1, 0, 4, 8]),
+          _errnoFault,
+        );
+      },
+    );
+
+    test('sock_recv returns EFAULT for out-of-bounds iovec target span', () {
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          recv: ({required fd, required flags, required maxBytes}) {
+            return WasiSockRecvResult.received(Uint8List.fromList([1]));
+          },
+        ),
+      );
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final sockRecv = _wasiFunction(wasi, 'sock_recv');
+      _writeIoVec(
+        memory: memory,
+        iovPtr: 32,
+        dataPtr: memory.lengthInBytes - 1,
+        dataLen: 2,
+      );
+
+      expect(sockRecv([7, 32, 1, 0, 4, 8]), _errnoFault);
+    });
+
+    test('sock_recv returns EFAULT for out-of-bounds output pointers', () {
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          recv: ({required fd, required flags, required maxBytes}) {
+            return WasiSockRecvResult.received(Uint8List.fromList([1]));
+          },
+        ),
+      );
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final sockRecv = _wasiFunction(wasi, 'sock_recv');
+      _writeIoVec(memory: memory, iovPtr: 32, dataPtr: 96, dataLen: 1);
+
+      expect(sockRecv([7, 32, 1, 0, memory.lengthInBytes - 1, 8]), _errnoFault);
+      expect(sockRecv([7, 32, 1, 0, 4, memory.lengthInBytes - 1]), _errnoFault);
+    });
+
+    test('sock_recv passes through transport errno', () {
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          recv: ({required fd, required flags, required maxBytes}) {
+            return const WasiSockRecvResult.error(_errnoBadf);
+          },
+        ),
+      );
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final sockRecv = _wasiFunction(wasi, 'sock_recv');
+      _writeIoVec(memory: memory, iovPtr: 32, dataPtr: 96, dataLen: 1);
+
+      expect(sockRecv([7, 32, 1, 0, 4, 8]), _errnoBadf);
+    });
+
+    test('sock_recv throws when transport returns invalid ro_flags bits', () {
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          recv: ({required fd, required flags, required maxBytes}) {
+            return WasiSockRecvResult.received(
+              Uint8List.fromList([1]),
+              flags: 2,
+            );
+          },
+        ),
+      );
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final sockRecv = _wasiFunction(wasi, 'sock_recv');
+      _writeIoVec(memory: memory, iovPtr: 32, dataPtr: 96, dataLen: 1);
+
+      expect(() => sockRecv([7, 32, 1, 0, 4, 8]), throwsStateError);
     });
 
     test('sock_send flattens ciovecs and reports bytes written', () {
@@ -3469,7 +3667,7 @@ void main() {
       );
       final wasm = _buildSockSendModule(
         fd: 11,
-        siFlags: 7,
+        siFlags: 0,
         siDataPtr: 32,
         firstDataPtr: 96,
         firstDataLen: 2,
@@ -3483,9 +3681,135 @@ void main() {
 
       expect(instance.invokeI32('run'), 0);
       expect(capturedFd, 11);
-      expect(capturedFlags, 7);
+      expect(capturedFlags, 0);
       expect(capturedData, [65, 66, 67, 68, 69]);
       expect(instance.exportedMemory('memory').loadI32(48), 3);
+    });
+
+    test('sock_send returns ENOSYS without socket transport', () {
+      final wasi = WasiPreview1();
+      final sockSend = _wasiFunction(wasi, 'sock_send');
+
+      expect(sockSend([7, 0, 0, 0, 4]), _errnoNosys);
+    });
+
+    test('sock_send rejects invalid flags before transport call', () {
+      var called = false;
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          send: ({required fd, required flags, required data}) {
+            called = true;
+            return const WasiSockSendResult.sent(0);
+          },
+        ),
+      );
+      final sockSend = _wasiFunction(wasi, 'sock_send');
+
+      expect(sockSend([7, 0, 0, 1, 4]), _errnoInval);
+      expect(called, isFalse);
+    });
+
+    test('sock_send returns EINVAL for negative iovec length', () {
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          send: ({required fd, required flags, required data}) {
+            return const WasiSockSendResult.sent(0);
+          },
+        ),
+      );
+      final sockSend = _wasiFunction(wasi, 'sock_send');
+
+      expect(sockSend([7, 0, -1, 0, 4]), _errnoInval);
+    });
+
+    test(
+      'sock_send returns EFAULT for out-of-bounds iovec descriptor span',
+      () {
+        final wasi = WasiPreview1(
+          socketTransport: WasiSocketTransport(
+            send: ({required fd, required flags, required data}) {
+              return const WasiSockSendResult.sent(0);
+            },
+          ),
+        );
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final sockSend = _wasiFunction(wasi, 'sock_send');
+
+        expect(sockSend([7, memory.lengthInBytes - 4, 1, 0, 4]), _errnoFault);
+      },
+    );
+
+    test('sock_send returns EFAULT for out-of-bounds iovec source span', () {
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          send: ({required fd, required flags, required data}) {
+            return WasiSockSendResult.sent(data.length);
+          },
+        ),
+      );
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final sockSend = _wasiFunction(wasi, 'sock_send');
+      _writeIoVec(
+        memory: memory,
+        iovPtr: 32,
+        dataPtr: memory.lengthInBytes - 1,
+        dataLen: 2,
+      );
+
+      expect(sockSend([7, 32, 1, 0, 4]), _errnoFault);
+    });
+
+    test('sock_send returns EFAULT for out-of-bounds so_datalen_ptr', () {
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          send: ({required fd, required flags, required data}) {
+            return WasiSockSendResult.sent(data.length);
+          },
+        ),
+      );
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final sockSend = _wasiFunction(wasi, 'sock_send');
+      _writeIoVec(memory: memory, iovPtr: 32, dataPtr: 96, dataLen: 1);
+      memory.storeI8(96, 42);
+
+      expect(sockSend([7, 32, 1, 0, memory.lengthInBytes - 1]), _errnoFault);
+    });
+
+    test('sock_send passes through transport errno', () {
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          send: ({required fd, required flags, required data}) {
+            return const WasiSockSendResult.error(_errnoBadf);
+          },
+        ),
+      );
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final sockSend = _wasiFunction(wasi, 'sock_send');
+      _writeIoVec(memory: memory, iovPtr: 32, dataPtr: 96, dataLen: 1);
+      memory.storeI8(96, 42);
+
+      expect(sockSend([7, 32, 1, 0, 4]), _errnoBadf);
+    });
+
+    test('sock_send throws when transport reports invalid bytesWritten', () {
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          send: ({required fd, required flags, required data}) {
+            return WasiSockSendResult.sent(data.length + 1);
+          },
+        ),
+      );
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final sockSend = _wasiFunction(wasi, 'sock_send');
+      _writeIoVec(memory: memory, iovPtr: 32, dataPtr: 96, dataLen: 1);
+      memory.storeI8(96, 42);
+
+      expect(() => sockSend([7, 32, 1, 0, 4]), throwsStateError);
     });
 
     test('sock_shutdown returns errno from socket transport', () {
@@ -3505,6 +3829,29 @@ void main() {
 
       expect(instance.invokeI32('run'), 0);
       expect(called, isTrue);
+    });
+
+    test('sock_shutdown returns ENOSYS without socket transport', () {
+      final wasi = WasiPreview1();
+      final sockShutdown = _wasiFunction(wasi, 'sock_shutdown');
+
+      expect(sockShutdown([7, 0]), _errnoNosys);
+    });
+
+    test('sock_shutdown rejects invalid how before transport call', () {
+      var called = false;
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          shutdown: ({required fd, required how}) {
+            called = true;
+            return 0;
+          },
+        ),
+      );
+      final sockShutdown = _wasiFunction(wasi, 'sock_shutdown');
+
+      expect(sockShutdown([7, 99]), _errnoInval);
+      expect(called, isFalse);
     });
 
     test('fd_close closes socket-only descriptors via socket transport', () {
@@ -3795,6 +4142,16 @@ Object? Function(List<Object?>) _wasiFunction(WasiPreview1 wasi, String name) {
     'wasi_snapshot_preview1',
     name,
   )]!;
+}
+
+void _writeIoVec({
+  required WasmMemory memory,
+  required int iovPtr,
+  required int dataPtr,
+  required int dataLen,
+}) {
+  memory.storeI32(iovPtr, dataPtr);
+  memory.storeI32(iovPtr + 4, dataLen);
 }
 
 int _pathOpen({
