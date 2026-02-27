@@ -384,6 +384,30 @@ final class WasmVm {
     );
   }
 
+  static ({int typeIndex, List<WasmValue> elements}) requireArrayRef(
+    int reference,
+  ) {
+    final object = _requireSharedGcObject(reference);
+    if (object.kind != _GcRefKind.array ||
+        object.typeIndex == null ||
+        object.elements == null) {
+      throw StateError('Invalid array reference: $reference');
+    }
+    return (typeIndex: object.typeIndex!, elements: object.elements!);
+  }
+
+  static int? descriptorForRef(int reference) {
+    if (reference >= 0) {
+      return null;
+    }
+    final constRef = decodeConstGcRef(reference);
+    if (constRef != null) {
+      return constRef.descriptorRef;
+    }
+    final object = _requireSharedGcObject(reference);
+    return object.descriptorRef;
+  }
+
   static int _canonicalI31Ref(int value) {
     final normalized = value & 0x7fffffff;
     return _sharedI31Refs.putIfAbsent(

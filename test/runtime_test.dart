@@ -10071,6 +10071,252 @@ void main() {
       },
     );
 
+    test('supports array gc opcodes in async import call chains', () async {
+      List<int> gcInstr(int opcode, List<int> immediates) {
+        return <int>[0xfb, ..._u32Leb(opcode & 0xff), ...immediates];
+      }
+
+      List<int> arrayType(int valueType, int mutability) {
+        return <int>[0x5e, valueType, mutability];
+      }
+
+      final wasm = _buildModule(
+        types: [
+          arrayType(0x7f, 0x01), // (mut i32)
+          arrayType(0x70, 0x01), // (mut funcref)
+          arrayType(0x78, 0x01), // (mut i8)
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 3),
+        ],
+        functionTypeIndices: const [3, 3, 3, 3],
+        functionBodies: [
+          _FunctionBodySpec(
+            locals: const [_LocalDeclSpec(3, 0x6e)],
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._i32Const(4),
+              ..._i32Const(2),
+              ...gcInstr(Opcodes.arrayNew, _u32Leb(0)),
+              ..._localSet(1),
+              ..._localGet(1),
+              ..._i32Const(1),
+              ..._i32Const(5),
+              ...gcInstr(Opcodes.arraySet, _u32Leb(0)),
+              ..._localGet(1),
+              ..._i32Const(1),
+              ...gcInstr(Opcodes.arrayGet, _u32Leb(0)),
+              ..._i32Const(5),
+              Opcodes.i32Eq,
+              ..._localGet(1),
+              ...gcInstr(Opcodes.arrayLen, const <int>[]),
+              ..._i32Const(2),
+              Opcodes.i32Eq,
+              Opcodes.i32And,
+              ..._localGet(1),
+              ..._i32Const(0),
+              ..._i32Const(7),
+              ..._i32Const(2),
+              ...gcInstr(Opcodes.arrayFill, _u32Leb(0)),
+              ..._localGet(1),
+              ..._i32Const(0),
+              ...gcInstr(Opcodes.arrayGet, _u32Leb(0)),
+              ..._i32Const(7),
+              Opcodes.i32Eq,
+              Opcodes.i32And,
+              ..._i32Const(2),
+              ...gcInstr(Opcodes.arrayNewDefault, _u32Leb(0)),
+              ..._localSet(2),
+              ..._localGet(2),
+              ..._i32Const(0),
+              ..._localGet(1),
+              ..._i32Const(0),
+              ..._i32Const(2),
+              ...gcInstr(Opcodes.arrayCopy, <int>[
+                ..._u32Leb(0),
+                ..._u32Leb(0),
+              ]),
+              ..._localGet(2),
+              ..._i32Const(1),
+              ...gcInstr(Opcodes.arrayGet, _u32Leb(0)),
+              ..._i32Const(7),
+              Opcodes.i32Eq,
+              Opcodes.i32And,
+              ..._i32Const(8),
+              ..._i32Const(9),
+              ...gcInstr(Opcodes.arrayNewFixed, <int>[
+                ..._u32Leb(0),
+                ..._u32Leb(2),
+              ]),
+              ..._localSet(3),
+              ..._localGet(3),
+              ..._i32Const(0),
+              ...gcInstr(Opcodes.arrayGet, _u32Leb(0)),
+              ..._i32Const(8),
+              Opcodes.i32Eq,
+              Opcodes.i32And,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            locals: const [_LocalDeclSpec(2, 0x6e)],
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._i32Const(0),
+              ..._i32Const(2),
+              ...gcInstr(Opcodes.arrayNewData, <int>[
+                ..._u32Leb(0),
+                ..._u32Leb(0),
+              ]),
+              ..._localSet(1),
+              ..._localGet(1),
+              ..._i32Const(0),
+              ...gcInstr(Opcodes.arrayGet, _u32Leb(0)),
+              ..._i32Const(1),
+              Opcodes.i32Eq,
+              ..._i32Const(2),
+              ...gcInstr(Opcodes.arrayNewDefault, _u32Leb(0)),
+              ..._localSet(2),
+              ..._localGet(2),
+              ..._i32Const(0),
+              ..._i32Const(8),
+              ..._i32Const(2),
+              ...gcInstr(Opcodes.arrayInitData, <int>[
+                ..._u32Leb(0),
+                ..._u32Leb(0),
+              ]),
+              ..._localGet(2),
+              ..._i32Const(0),
+              ...gcInstr(Opcodes.arrayGet, _u32Leb(0)),
+              ..._i32Const(3),
+              Opcodes.i32Eq,
+              Opcodes.i32And,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            locals: const [_LocalDeclSpec(2, 0x6e)],
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._i32Const(0),
+              ..._i32Const(1),
+              ...gcInstr(Opcodes.arrayNewElem, <int>[
+                ..._u32Leb(1),
+                ..._u32Leb(0),
+              ]),
+              ..._localSet(1),
+              ..._localGet(1),
+              ..._i32Const(0),
+              ...gcInstr(Opcodes.arrayGet, _u32Leb(1)),
+              Opcodes.refIsNull,
+              ..._i32Const(0),
+              Opcodes.i32Eq,
+              ..._i32Const(1),
+              ...gcInstr(Opcodes.arrayNewDefault, _u32Leb(1)),
+              ..._localSet(2),
+              ..._localGet(2),
+              ..._i32Const(0),
+              ..._i32Const(0),
+              ..._i32Const(1),
+              ...gcInstr(Opcodes.arrayInitElem, <int>[
+                ..._u32Leb(1),
+                ..._u32Leb(0),
+              ]),
+              ..._localGet(2),
+              ..._i32Const(0),
+              ...gcInstr(Opcodes.arrayGet, _u32Leb(1)),
+              Opcodes.refIsNull,
+              ..._i32Const(0),
+              Opcodes.i32Eq,
+              Opcodes.i32And,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            locals: const [_LocalDeclSpec(1, 0x6e)],
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._i32Const(0xfe),
+              ..._i32Const(1),
+              ...gcInstr(Opcodes.arrayNew, _u32Leb(2)),
+              ..._localSet(1),
+              ..._localGet(1),
+              ..._i32Const(0),
+              ...gcInstr(Opcodes.arrayGetS, _u32Leb(2)),
+              ..._i32Const(-2),
+              Opcodes.i32Eq,
+              ..._localGet(1),
+              ..._i32Const(0),
+              ...gcInstr(Opcodes.arrayGetU, _u32Leb(2)),
+              ..._i32Const(254),
+              Opcodes.i32Eq,
+              Opcodes.i32And,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        dataCount: 1,
+        dataSegments: [
+          _DataSegmentSpec.passive(
+            bytes: const <int>[1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0],
+          ),
+        ],
+        elements: const [
+          _ElementSegmentSpec.passive(functionIndices: [1]),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'supportsArrayCoreOps',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+          _ExportSpec(
+            name: 'supportsArrayDataOps',
+            kind: WasmExportKind.function,
+            index: 2,
+          ),
+          _ExportSpec(
+            name: 'supportsArrayElemOps',
+            kind: WasmExportKind.function,
+            index: 3,
+          ),
+          _ExportSpec(
+            name: 'supportsArrayPackedGetOps',
+            kind: WasmExportKind.function,
+            index: 4,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(gc: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('supportsArrayCoreOps', [41]), 1);
+      expect(await instance.invokeI32Async('supportsArrayDataOps', [41]), 1);
+      expect(await instance.invokeI32Async('supportsArrayElemOps', [41]), 1);
+      expect(
+        await instance.invokeI32Async('supportsArrayPackedGetOps', [41]),
+        1,
+      );
+    });
+
     test('supports layered feature defaults and extension query', () {
       final features = WasmFeatureSet.layeredDefaults(
         profile: WasmFeatureProfile.stable,

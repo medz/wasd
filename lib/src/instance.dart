@@ -93,6 +93,7 @@ final class WasmInstance {
        _globalTypes = globalTypes,
        _asyncDataSegments = dataSegments,
        _asyncElementSegments = elementSegments,
+       _asyncElementSegmentRefTypeCodes = elementSegmentRefTypeCodes,
        _functionRefNamespace = functionRefNamespace,
        _vm = WasmVm(
          functions: functions,
@@ -127,6 +128,7 @@ final class WasmInstance {
   final List<WasmGlobalType> _globalTypes;
   final List<Uint8List?> _asyncDataSegments;
   final List<List<int?>?> _asyncElementSegments;
+  final List<int> _asyncElementSegmentRefTypeCodes;
   final int _functionRefNamespace;
   final WasmVm _vm;
   final Map<int, _AsyncSubsetThrownException> _asyncExceptionObjects =
@@ -1050,6 +1052,60 @@ final class WasmInstance {
 
           case Opcodes.structSet:
             _gcStructSetAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.arrayNew:
+            _gcArrayNewAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.arrayNewDefault:
+            _gcArrayNewDefaultAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.arrayNewFixed:
+            _gcArrayNewFixedAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.arrayNewData:
+            _gcArrayNewDataAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.arrayNewElem:
+            _gcArrayNewElemAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.arrayInitData:
+            _gcArrayInitDataAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.arrayInitElem:
+            _gcArrayInitElemAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.arrayCopy:
+            _gcArrayCopyAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.arrayFill:
+            _gcArrayFillAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.arrayGet:
+          case Opcodes.arrayGetS:
+          case Opcodes.arrayGetU:
+            _gcArrayGetAsyncSubset(
+              stack,
+              instruction,
+              signed: instruction.opcode == Opcodes.arrayGetS,
+            );
+            pc++;
+
+          case Opcodes.arraySet:
+            _gcArraySetAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.arrayLen:
+            _gcArrayLenAsyncSubset(stack);
             pc++;
 
           case Opcodes.f32Const:
@@ -5638,6 +5694,619 @@ final class WasmInstance {
       throw StateError('immutable field');
     }
     fields[fieldIndex] = _coerceAsyncSubsetFieldValue(fieldSignature, value);
+  }
+
+  void _gcArrayNewAsyncSubset(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkAsyncSubsetTypeIndex(instruction.immediate!);
+    final type = module.types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.new requires an array type.');
+    }
+    final length = _popAsyncSubsetLength(stack, context: 'array.new length');
+    final seed = _coerceAsyncSubsetFieldValue(
+      type.fieldSignatures.single,
+      _popValue(stack, 'array.new seed'),
+    );
+    final elements = List<WasmValue>.generate(
+      length,
+      (_) => seed,
+      growable: false,
+    );
+    stack.add(
+      WasmValue.i32(
+        WasmVm.allocateConstArrayRef(typeIndex: typeIndex, elements: elements),
+      ),
+    );
+  }
+
+  void _gcArrayNewDefaultAsyncSubset(
+    List<WasmValue> stack,
+    Instruction instruction,
+  ) {
+    final typeIndex = _checkAsyncSubsetTypeIndex(instruction.immediate!);
+    final type = module.types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.new_default requires an array type.');
+    }
+    final length = _popAsyncSubsetLength(
+      stack,
+      context: 'array.new_default length',
+    );
+    final seed = _defaultAsyncSubsetFieldValue(type.fieldSignatures.single);
+    final elements = List<WasmValue>.filled(length, seed, growable: false);
+    stack.add(
+      WasmValue.i32(
+        WasmVm.allocateConstArrayRef(typeIndex: typeIndex, elements: elements),
+      ),
+    );
+  }
+
+  void _gcArrayNewFixedAsyncSubset(
+    List<WasmValue> stack,
+    Instruction instruction,
+  ) {
+    final typeIndex = _checkAsyncSubsetTypeIndex(instruction.immediate!);
+    final type = module.types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.new_fixed requires an array type.');
+    }
+    final length = instruction.secondaryImmediate!;
+    if (length < 0) {
+      throw StateError('Invalid array.new_fixed length: $length');
+    }
+    final elements = List<WasmValue>.filled(
+      length,
+      WasmValue.i32(0),
+      growable: false,
+    );
+    for (var i = length - 1; i >= 0; i--) {
+      elements[i] = _coerceAsyncSubsetFieldValue(
+        type.fieldSignatures.single,
+        _popValue(stack, 'array.new_fixed element'),
+      );
+    }
+    stack.add(
+      WasmValue.i32(
+        WasmVm.allocateConstArrayRef(typeIndex: typeIndex, elements: elements),
+      ),
+    );
+  }
+
+  void _gcArrayNewDataAsyncSubset(
+    List<WasmValue> stack,
+    Instruction instruction,
+  ) {
+    final typeIndex = _checkAsyncSubsetTypeIndex(instruction.immediate!);
+    final dataIndex = _checkAsyncSubsetDataSegmentIndex(
+      instruction.secondaryImmediate!,
+    );
+    final type = module.types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.new_data requires an array type.');
+    }
+    final fieldBytes = _asyncSubsetFieldSignatureBytes(
+      type.fieldSignatures.single,
+    );
+    final valueTypeCode = fieldBytes.first;
+
+    final length = _popAsyncSubsetLength(
+      stack,
+      context: 'array.new_data length',
+    );
+    final sourceOffset = _popAsyncSubsetLength(
+      stack,
+      context: 'array.new_data source offset',
+    );
+    final data = _asyncDataSegments[dataIndex];
+    if (data == null) {
+      if (length == 0) {
+        stack.add(
+          WasmValue.i32(
+            WasmVm.allocateConstArrayRef(
+              typeIndex: typeIndex,
+              elements: const [],
+            ),
+          ),
+        );
+        return;
+      }
+      throw StateError('out of bounds memory access');
+    }
+    final elements = _readAsyncSubsetNumericArrayElementsFromData(
+      data: data,
+      sourceOffset: sourceOffset,
+      length: length,
+      valueTypeCode: valueTypeCode,
+    );
+    stack.add(
+      WasmValue.i32(
+        WasmVm.allocateConstArrayRef(typeIndex: typeIndex, elements: elements),
+      ),
+    );
+  }
+
+  void _gcArrayNewElemAsyncSubset(
+    List<WasmValue> stack,
+    Instruction instruction,
+  ) {
+    final typeIndex = _checkAsyncSubsetTypeIndex(instruction.immediate!);
+    final elementIndex = _checkAsyncSubsetElementSegmentIndex(
+      instruction.secondaryImmediate!,
+    );
+    final type = module.types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.new_elem requires an array type.');
+    }
+
+    final length = _popAsyncSubsetLength(
+      stack,
+      context: 'array.new_elem length',
+    );
+    final sourceOffset = _popAsyncSubsetLength(
+      stack,
+      context: 'array.new_elem source offset',
+    );
+    final segmentValues = _sliceAsyncSubsetElementSegment(
+      elementIndex: elementIndex,
+      sourceOffset: sourceOffset,
+      length: length,
+    );
+    final segmentRefTypeCode = _asyncElementSegmentRefTypeCodes[elementIndex];
+    final elements = List<WasmValue>.generate(
+      length,
+      (index) => _coerceAsyncSubsetArrayElementFromSegment(
+        segmentRefTypeCode: segmentRefTypeCode,
+        segmentValue: segmentValues[index],
+      ),
+      growable: false,
+    );
+    stack.add(
+      WasmValue.i32(
+        WasmVm.allocateConstArrayRef(typeIndex: typeIndex, elements: elements),
+      ),
+    );
+  }
+
+  void _gcArrayInitDataAsyncSubset(
+    List<WasmValue> stack,
+    Instruction instruction,
+  ) {
+    final typeIndex = _checkAsyncSubsetTypeIndex(instruction.immediate!);
+    final dataIndex = _checkAsyncSubsetDataSegmentIndex(
+      instruction.secondaryImmediate!,
+    );
+    final type = module.types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.init_data requires an array type.');
+    }
+    final parsedField = _parseAsyncSubsetFieldTypeForEquivalence(
+      type.fieldSignatures.single,
+    );
+    if (parsedField == null || parsedField.mutability == 0) {
+      throw StateError('immutable array');
+    }
+    final valueTypeBytes = _asyncSubsetSignatureToBytes(
+      parsedField.valueSignature,
+    );
+    if (valueTypeBytes.isEmpty) {
+      throw StateError('type mismatch');
+    }
+
+    final length = _popAsyncSubsetLength(
+      stack,
+      context: 'array.init_data length',
+    );
+    final sourceOffset = _popAsyncSubsetLength(
+      stack,
+      context: 'array.init_data source offset',
+    );
+    final destinationOffset = _popAsyncSubsetLength(
+      stack,
+      context: 'array.init_data destination offset',
+    );
+    final reference = _popAsyncSubsetRef(stack, context: 'array.init_data ref');
+    if (reference == null) {
+      throw StateError('null array reference');
+    }
+    final arrayRef = WasmVm.requireArrayRef(reference);
+    if (!_isAsyncSubsetTypeSubtype(arrayRef.typeIndex, typeIndex)) {
+      throw StateError('array.init_data on incompatible reference.');
+    }
+    final elements = arrayRef.elements;
+    if (destinationOffset > elements.length ||
+        length > elements.length - destinationOffset) {
+      throw StateError('out of bounds array access');
+    }
+    final data = _asyncDataSegments[dataIndex];
+    if (data == null) {
+      if (length == 0) {
+        return;
+      }
+      throw StateError('out of bounds memory access');
+    }
+    final loaded = _readAsyncSubsetNumericArrayElementsFromData(
+      data: data,
+      sourceOffset: sourceOffset,
+      length: length,
+      valueTypeCode: valueTypeBytes.first,
+    );
+    for (var i = 0; i < length; i++) {
+      elements[destinationOffset + i] = loaded[i];
+    }
+  }
+
+  void _gcArrayInitElemAsyncSubset(
+    List<WasmValue> stack,
+    Instruction instruction,
+  ) {
+    final typeIndex = _checkAsyncSubsetTypeIndex(instruction.immediate!);
+    final elementIndex = _checkAsyncSubsetElementSegmentIndex(
+      instruction.secondaryImmediate!,
+    );
+    final type = module.types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.init_elem requires an array type.');
+    }
+    final parsedField = _parseAsyncSubsetFieldTypeForEquivalence(
+      type.fieldSignatures.single,
+    );
+    if (parsedField == null || parsedField.mutability == 0) {
+      throw StateError('immutable array');
+    }
+
+    final length = _popAsyncSubsetLength(
+      stack,
+      context: 'array.init_elem length',
+    );
+    final sourceOffset = _popAsyncSubsetLength(
+      stack,
+      context: 'array.init_elem source offset',
+    );
+    final destinationOffset = _popAsyncSubsetLength(
+      stack,
+      context: 'array.init_elem destination offset',
+    );
+    final reference = _popAsyncSubsetRef(stack, context: 'array.init_elem ref');
+    if (reference == null) {
+      throw StateError('null array reference');
+    }
+    final arrayRef = WasmVm.requireArrayRef(reference);
+    if (!_isAsyncSubsetTypeSubtype(arrayRef.typeIndex, typeIndex)) {
+      throw StateError('array.init_elem on incompatible reference.');
+    }
+    final elements = arrayRef.elements;
+    if (destinationOffset > elements.length ||
+        length > elements.length - destinationOffset) {
+      throw StateError('out of bounds array access');
+    }
+    final segmentValues = _sliceAsyncSubsetElementSegment(
+      elementIndex: elementIndex,
+      sourceOffset: sourceOffset,
+      length: length,
+    );
+    final segmentRefTypeCode = _asyncElementSegmentRefTypeCodes[elementIndex];
+    for (var i = 0; i < length; i++) {
+      elements[destinationOffset +
+          i] = _coerceAsyncSubsetArrayElementFromSegment(
+        segmentRefTypeCode: segmentRefTypeCode,
+        segmentValue: segmentValues[i],
+      );
+    }
+  }
+
+  void _gcArrayCopyAsyncSubset(List<WasmValue> stack, Instruction instruction) {
+    final destinationTypeIndex = _checkAsyncSubsetTypeIndex(
+      instruction.immediate!,
+    );
+    final sourceTypeIndex = _checkAsyncSubsetTypeIndex(
+      instruction.secondaryImmediate!,
+    );
+
+    final length = _popAsyncSubsetLength(stack, context: 'array.copy length');
+    final sourceOffset = _popAsyncSubsetLength(
+      stack,
+      context: 'array.copy source offset',
+    );
+    final sourceReference = _popAsyncSubsetRef(
+      stack,
+      context: 'array.copy source',
+    );
+    final destinationOffset = _popAsyncSubsetLength(
+      stack,
+      context: 'array.copy destination offset',
+    );
+    final destinationReference = _popAsyncSubsetRef(
+      stack,
+      context: 'array.copy destination',
+    );
+    if (destinationReference == null || sourceReference == null) {
+      throw StateError('null array reference');
+    }
+
+    final destinationRef = WasmVm.requireArrayRef(destinationReference);
+    final sourceRef = WasmVm.requireArrayRef(sourceReference);
+    if (!_isAsyncSubsetTypeSubtype(
+      destinationRef.typeIndex,
+      destinationTypeIndex,
+    )) {
+      throw StateError('array.copy destination type mismatch');
+    }
+    if (!_isAsyncSubsetTypeSubtype(sourceRef.typeIndex, sourceTypeIndex)) {
+      throw StateError('array.copy source type mismatch');
+    }
+
+    final destinationType = module.types[destinationTypeIndex];
+    final destinationField = _parseAsyncSubsetFieldTypeForEquivalence(
+      destinationType.fieldSignatures.single,
+    );
+    if (destinationField == null || destinationField.mutability == 0) {
+      throw StateError('immutable array');
+    }
+
+    final destinationElements = destinationRef.elements;
+    final sourceElements = sourceRef.elements;
+    if (destinationOffset > destinationElements.length ||
+        length > destinationElements.length - destinationOffset ||
+        sourceOffset > sourceElements.length ||
+        length > sourceElements.length - sourceOffset) {
+      throw StateError('out of bounds array access');
+    }
+
+    final copied = List<WasmValue>.from(
+      sourceElements.sublist(sourceOffset, sourceOffset + length),
+      growable: false,
+    );
+    for (var i = 0; i < length; i++) {
+      destinationElements[destinationOffset + i] = _coerceAsyncSubsetFieldValue(
+        destinationType.fieldSignatures.single,
+        copied[i],
+      );
+    }
+  }
+
+  void _gcArrayFillAsyncSubset(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkAsyncSubsetTypeIndex(instruction.immediate!);
+    final type = module.types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.array) {
+      throw StateError('array.fill requires an array type.');
+    }
+    final parsedField = _parseAsyncSubsetFieldTypeForEquivalence(
+      type.fieldSignatures.single,
+    );
+    if (parsedField == null || parsedField.mutability == 0) {
+      throw StateError('immutable array');
+    }
+
+    final length = _popAsyncSubsetLength(stack, context: 'array.fill length');
+    final fillValue = _coerceAsyncSubsetFieldValue(
+      type.fieldSignatures.single,
+      _popValue(stack, 'array.fill value'),
+    );
+    final destinationOffset = _popAsyncSubsetLength(
+      stack,
+      context: 'array.fill destination offset',
+    );
+    final reference = _popAsyncSubsetRef(stack, context: 'array.fill ref');
+    if (reference == null) {
+      throw StateError('null array reference');
+    }
+    final arrayRef = WasmVm.requireArrayRef(reference);
+    if (!_isAsyncSubsetTypeSubtype(arrayRef.typeIndex, typeIndex)) {
+      throw StateError('array.fill on incompatible reference.');
+    }
+    final elements = arrayRef.elements;
+    if (destinationOffset > elements.length ||
+        length > elements.length - destinationOffset) {
+      throw StateError('out of bounds array access');
+    }
+    for (var i = 0; i < length; i++) {
+      elements[destinationOffset + i] = fillValue;
+    }
+  }
+
+  void _gcArrayGetAsyncSubset(
+    List<WasmValue> stack,
+    Instruction instruction, {
+    required bool signed,
+  }) {
+    final expectedTypeIndex = _checkAsyncSubsetTypeIndex(
+      instruction.immediate!,
+    );
+    final index = _popAsyncSubsetLength(stack, context: 'array.get index');
+    final reference = _popAsyncSubsetRef(stack, context: 'array.get ref');
+    if (reference == null) {
+      throw StateError('null reference');
+    }
+    final arrayRef = WasmVm.requireArrayRef(reference);
+    if (!_isAsyncSubsetTypeSubtype(arrayRef.typeIndex, expectedTypeIndex)) {
+      throw StateError('array.get on incompatible reference.');
+    }
+    final elements = arrayRef.elements;
+    if (index < 0 || index >= elements.length) {
+      throw RangeError('Array index out of bounds: $index');
+    }
+    final fieldSignature =
+        module.types[arrayRef.typeIndex].fieldSignatures.single;
+    stack.add(
+      _coerceAsyncSubsetLoadedFieldValue(
+        fieldSignature,
+        elements[index],
+        signed: signed,
+      ),
+    );
+  }
+
+  void _gcArraySetAsyncSubset(List<WasmValue> stack, Instruction instruction) {
+    final expectedTypeIndex = _checkAsyncSubsetTypeIndex(
+      instruction.immediate!,
+    );
+    final value = _popValue(stack, 'array.set value');
+    final index = _popAsyncSubsetLength(stack, context: 'array.set index');
+    final reference = _popAsyncSubsetRef(stack, context: 'array.set ref');
+    if (reference == null) {
+      throw StateError('null array reference');
+    }
+    final arrayRef = WasmVm.requireArrayRef(reference);
+    if (!_isAsyncSubsetTypeSubtype(arrayRef.typeIndex, expectedTypeIndex)) {
+      throw StateError('array.set on incompatible reference.');
+    }
+    final type = module.types[arrayRef.typeIndex];
+    final parsedField = _parseAsyncSubsetFieldTypeForEquivalence(
+      type.fieldSignatures.single,
+    );
+    if (parsedField == null || parsedField.mutability == 0) {
+      throw StateError('immutable array');
+    }
+    final elements = arrayRef.elements;
+    if (index < 0 || index >= elements.length) {
+      throw StateError('out of bounds array access');
+    }
+    elements[index] = _coerceAsyncSubsetFieldValue(
+      type.fieldSignatures.single,
+      value,
+    );
+  }
+
+  void _gcArrayLenAsyncSubset(List<WasmValue> stack) {
+    final reference = _popAsyncSubsetRef(stack, context: 'array.len');
+    if (reference == null) {
+      throw StateError('null reference');
+    }
+    final arrayRef = WasmVm.requireArrayRef(reference);
+    stack.add(WasmValue.i32(arrayRef.elements.length));
+  }
+
+  int _checkAsyncSubsetDataSegmentIndex(int index) {
+    if (index < 0 || index >= _asyncDataSegments.length) {
+      throw RangeError(
+        'Invalid data segment index: $index (count=${_asyncDataSegments.length}).',
+      );
+    }
+    return index;
+  }
+
+  int _checkAsyncSubsetElementSegmentIndex(int index) {
+    if (index < 0 || index >= _asyncElementSegments.length) {
+      throw RangeError(
+        'Invalid element segment index: $index '
+        '(count=${_asyncElementSegments.length}).',
+      );
+    }
+    return index;
+  }
+
+  int _popAsyncSubsetLength(List<WasmValue> stack, {required String context}) {
+    final value = _popValue(stack, context).castTo(WasmValueType.i32).asI32();
+    if (value < 0) {
+      throw StateError('Negative length in memory/table operation: $value');
+    }
+    return value;
+  }
+
+  List<int?> _sliceAsyncSubsetElementSegment({
+    required int elementIndex,
+    required int sourceOffset,
+    required int length,
+  }) {
+    final segment = _asyncElementSegments[elementIndex];
+    if (segment == null) {
+      if (length == 0) {
+        return const <int?>[];
+      }
+      throw StateError('out of bounds table access');
+    }
+    if (sourceOffset > segment.length ||
+        length > segment.length - sourceOffset) {
+      throw StateError('out of bounds table access');
+    }
+    return List<int?>.from(
+      segment.sublist(sourceOffset, sourceOffset + length),
+      growable: false,
+    );
+  }
+
+  List<WasmValue> _readAsyncSubsetNumericArrayElementsFromData({
+    required Uint8List data,
+    required int sourceOffset,
+    required int length,
+    required int valueTypeCode,
+  }) {
+    final elementSize = _asyncSubsetNumericArrayElementSize(valueTypeCode);
+    final totalBytes = length * elementSize;
+    if (sourceOffset > data.length || totalBytes > data.length - sourceOffset) {
+      throw StateError('out of bounds memory access');
+    }
+    final view = ByteData.sublistView(data);
+    return List<WasmValue>.generate(length, (index) {
+      final byteOffset = sourceOffset + (index * elementSize);
+      return _readAsyncSubsetNumericArrayElement(
+        view: view,
+        byteOffset: byteOffset,
+        valueTypeCode: valueTypeCode,
+      );
+    }, growable: false);
+  }
+
+  WasmValue _coerceAsyncSubsetArrayElementFromSegment({
+    required int segmentRefTypeCode,
+    required int? segmentValue,
+  }) {
+    if (segmentValue == null) {
+      return WasmValue.i32(-1);
+    }
+    if (segmentRefTypeCode == 0x69 || segmentRefTypeCode == 0x6c) {
+      if (segmentValue < 0) {
+        return WasmValue.i32(segmentValue);
+      }
+      return WasmValue.i32(WasmVm.allocateConstI31Ref(segmentValue));
+    }
+    return WasmValue.i32(segmentValue);
+  }
+
+  int _asyncSubsetNumericArrayElementSize(int valueTypeCode) {
+    return switch (valueTypeCode) {
+      0x78 => 1,
+      0x77 => 2,
+      0x7f || 0x7d => 4,
+      0x7e || 0x7c => 8,
+      0x7b => 16,
+      _ => throw StateError('array type is not numeric or vector'),
+    };
+  }
+
+  WasmValue _readAsyncSubsetNumericArrayElement({
+    required ByteData view,
+    required int byteOffset,
+    required int valueTypeCode,
+  }) {
+    return switch (valueTypeCode) {
+      0x78 => WasmValue.i32(view.getUint8(byteOffset)),
+      0x77 => WasmValue.i32(view.getUint16(byteOffset, Endian.little)),
+      0x7f => WasmValue.i32(view.getInt32(byteOffset, Endian.little)),
+      0x7d => WasmValue.f32(view.getFloat32(byteOffset, Endian.little)),
+      0x7e => WasmValue.i64(
+        WasmI64.fromU32PairSigned(
+          low: view.getUint32(byteOffset, Endian.little),
+          high: view.getUint32(byteOffset + 4, Endian.little),
+        ),
+      ),
+      0x7c => WasmValue.f64(view.getFloat64(byteOffset, Endian.little)),
+      0x7b => throw UnsupportedError(
+        'array data initialization for v128 is not supported yet.',
+      ),
+      _ => throw StateError('array type is not numeric or vector'),
+    };
+  }
+
+  List<int> _asyncSubsetSignatureToBytes(String signature) {
+    if (signature.isEmpty || signature.length.isOdd) {
+      return const <int>[];
+    }
+    final bytes = <int>[];
+    for (var i = 0; i < signature.length; i += 2) {
+      bytes.add(int.parse(signature.substring(i, i + 2), radix: 16));
+    }
+    return bytes;
   }
 
   WasmValue _coerceAsyncSubsetFieldValue(
