@@ -203,6 +203,10 @@ Future<void> main(List<String> args) async {
     args,
     '--component-official-groups',
   );
+  final componentOfficialFeatures = _argValue(
+    args,
+    '--component-official-features',
+  );
   final componentOfficialAllGroups = args.contains(
     '--component-official-all-groups',
   );
@@ -284,6 +288,7 @@ Future<void> main(List<String> args) async {
         command: _componentOfficialRunnerCommand(
           componentOfficialTestsuiteDir: componentOfficialTestsuiteDir,
           componentOfficialGroups: componentOfficialGroups,
+          componentOfficialFeatures: componentOfficialFeatures,
           componentOfficialAllGroups: componentOfficialAllGroups,
           requireTestsuiteDir: strictComponentOfficial,
         ),
@@ -298,6 +303,7 @@ Future<void> main(List<String> args) async {
         command: _componentDecodeProbeCommand(
           componentOfficialTestsuiteDir: componentOfficialTestsuiteDir,
           componentOfficialGroups: componentOfficialGroups,
+          strict: strictComponentDecodeProbe,
           bestEffort: componentDecodeProbeBestEffort,
           requireTestsuiteDir: strictComponentDecodeProbe,
         ),
@@ -365,6 +371,7 @@ Future<void> main(List<String> args) async {
     'strict_component_official': strictComponentOfficial,
     'component_official_testsuite_dir': componentOfficialTestsuiteDir,
     'component_official_groups': componentOfficialGroups,
+    'component_official_features': componentOfficialFeatures,
     'component_official_all_groups': componentOfficialAllGroups,
     'component_decode_probe': runComponentDecodeProbe,
     'strict_component_decode_probe': strictComponentDecodeProbe,
@@ -1204,6 +1211,7 @@ List<String> _resultReportCommand(_SpecSuiteArtifacts artifacts) {
 List<String> _componentOfficialRunnerCommand({
   required String? componentOfficialTestsuiteDir,
   required String? componentOfficialGroups,
+  required String? componentOfficialFeatures,
   required bool componentOfficialAllGroups,
   required bool requireTestsuiteDir,
 }) {
@@ -1219,12 +1227,16 @@ List<String> _componentOfficialRunnerCommand({
     if (componentOfficialGroups != null &&
         componentOfficialGroups.trim().isNotEmpty)
       '--groups=${componentOfficialGroups.trim()}',
+    if (componentOfficialFeatures != null &&
+        componentOfficialFeatures.trim().isNotEmpty)
+      '--features=${componentOfficialFeatures.trim()}',
   ];
 }
 
 List<String> _componentDecodeProbeCommand({
   required String? componentOfficialTestsuiteDir,
   required String? componentOfficialGroups,
+  required bool strict,
   required bool bestEffort,
   required bool requireTestsuiteDir,
 }) {
@@ -1232,6 +1244,7 @@ List<String> _componentDecodeProbeCommand({
     'dart',
     'run',
     'tool/component_decode_probe.dart',
+    if (strict) '--strict',
     if (requireTestsuiteDir) '--require-testsuite-dir',
     if (componentOfficialTestsuiteDir != null &&
         componentOfficialTestsuiteDir.trim().isNotEmpty)
@@ -1320,6 +1333,7 @@ String _renderMarkdownReport({
       );
     }
     final selectedGroups = payload['component_official_groups'] as String?;
+    final selectedFeatures = payload['component_official_features'] as String?;
     final selectedAllGroups = payload['component_official_all_groups'] == true;
     if (selectedAllGroups) {
       b.writeln('- Official component groups: `all`.');
@@ -1330,6 +1344,9 @@ String _renderMarkdownReport({
     final selectedDir = payload['component_official_testsuite_dir'] as String?;
     if (selectedDir != null && selectedDir.trim().isNotEmpty) {
       b.writeln('- Official component testsuite dir: `$selectedDir`.');
+    }
+    if (selectedFeatures != null && selectedFeatures.trim().isNotEmpty) {
+      b.writeln('- Official component features: `$selectedFeatures`.');
     }
     b.writeln(
       '- Official component reports are written to `.dart_tool/spec_runner/component_official_latest.json` and `.dart_tool/spec_runner/component_official_failures.md`.',
@@ -1377,6 +1394,6 @@ void _printUsage() {
     'Usage: dart run tool/spec_runner.dart --target=<vm|js|wasm|all> --suite=<core|proposal|all>',
   );
   stdout.writeln(
-    'Optional: --report=<path> --json=<path> --testsuite-dir=<path> --strict-proposals --no-component-subset --component-subset-optional --component-subset --strict-component-subset --no-component-official --component-official --component-official-optional --strict-component-official --component-official-testsuite-dir=<path> --component-official-groups=<comma-separated> --component-official-all-groups --component-decode-probe --strict-component-decode-probe --component-decode-probe-best-effort',
+    'Optional: --report=<path> --json=<path> --testsuite-dir=<path> --strict-proposals --no-component-subset --component-subset-optional --component-subset --strict-component-subset --no-component-official --component-official --component-official-optional --strict-component-official --component-official-testsuite-dir=<path> --component-official-groups=<comma-separated> --component-official-features=<comma-separated> --component-official-all-groups --component-decode-probe --strict-component-decode-probe --component-decode-probe-best-effort',
   );
 }

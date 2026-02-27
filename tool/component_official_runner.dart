@@ -6,6 +6,9 @@ const String _defaultJsonPath =
 const String _defaultMarkdownPath =
     '.dart_tool/spec_runner/component_official_failures.md';
 const String _defaultTestsuiteDir = 'third_party/component-model-tests/test';
+const String _defaultPortableFeatures =
+    'component-model,cm-values,cm-async,cm-async-builtins,cm-async-stackful,'
+    'cm-threading,cm-map,cm-gc,cm-fixed-length-lists';
 const String _testsuiteSubmoduleHint =
     'Initialize testsuite submodule: '
     'git submodule update --init --recursive third_party/component-model-tests';
@@ -23,6 +26,9 @@ const Map<String, String> _defaultExpectedFailureReasonPatterns =
           '`stream<char>` is not valid at this time',
       // Parser token coverage gap in current wasm-tools release.
       'async/trap-if-block-and-sync.wast': 'unexpected token, expected one of:',
+    };
+const Map<String, String> _allFeaturesAdditionalExpectedFailureReasonPatterns =
+    <String, String>{
       // Known wasm-tools/parser drift for package-name parsing assertions.
       'wasm-tools/import.wast': 'should have failed with: expected `/` after',
     };
@@ -43,11 +49,13 @@ Future<void> main(List<String> args) async {
   final outputJsonPath = _argValue(args, '--json') ?? _defaultJsonPath;
   final outputMarkdownPath =
       _argValue(args, '--markdown') ?? _defaultMarkdownPath;
-  final features = _argValue(args, '--features') ?? 'all';
+  final allGroups = args.contains('--all-groups');
+  final features =
+      _argValue(args, '--features') ??
+      (allGroups ? 'all' : _defaultPortableFeatures);
   final wasmToolsBin =
       _argValue(args, '--wasm-tools-bin') ?? '.toolchains/bin/wasm-tools';
   final includePattern = _argValue(args, '--include-pattern');
-  final allGroups = args.contains('--all-groups');
   final requireTestsuiteDir = args.contains('--require-testsuite-dir');
   final ignoreErrorMessages = !args.contains('--no-ignore-error-messages');
   final disableDefaultExpectedFailures = args.contains(
@@ -57,6 +65,13 @@ Future<void> main(List<String> args) async {
   final expectedFailureRules = <String, _ExpectedFailureRule>{
     if (!disableDefaultExpectedFailures)
       ..._defaultExpectedFailureReasonPatterns.map(
+        (path, reasonContains) => MapEntry(
+          path,
+          _ExpectedFailureRule(path: path, reasonContains: reasonContains),
+        ),
+      ),
+    if (!disableDefaultExpectedFailures && _featuresIncludeAll(features))
+      ..._allFeaturesAdditionalExpectedFailureReasonPatterns.map(
         (path, reasonContains) => MapEntry(
           path,
           _ExpectedFailureRule(path: path, reasonContains: reasonContains),
@@ -367,6 +382,15 @@ bool _matchesExpectedFailureRule(
     return true;
   }
   return failureText.contains(expectedReason);
+}
+
+bool _featuresIncludeAll(String features) {
+  for (final token in features.split(',')) {
+    if (token.trim() == 'all') {
+      return true;
+    }
+  }
+  return false;
 }
 
 String? _argValue(List<String> args, String key) {

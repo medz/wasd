@@ -166,9 +166,15 @@ dart run tool/spec_runner.dart --target=vm --suite=core
 dart run tool/spec_runner.dart --target=vm --suite=proposal
 # strict component-model gates (uses third_party/component-model-tests/test by default)
 dart run tool/spec_runner.dart --target=vm --suite=all --strict-component-official --strict-component-decode-probe
+# override component-official feature profile explicitly when needed
+dart run tool/spec_runner.dart --target=vm --suite=all --strict-component-official --component-official-features=all
 # include policy-oriented wasmtime group in official component step explicitly
 dart run tool/spec_runner.dart --target=vm --suite=all --strict-component-official --component-official-all-groups
 ```
+
+`component-official` now defaults to a component-focused portable feature
+profile (instead of `all`) to reduce wasm-tools parser/feature drift noise in
+the default gating path.
 
 Artifacts:
 
