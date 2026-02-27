@@ -79,23 +79,29 @@ final class WasmComponentTypeDeclaration {
     required this.valueTypeSignature,
   }) : kind = WasmComponentTypeKind.value,
        parameterTypeCodes = null,
+       parameterTypeSignatures = null,
        resultTypeCodes = null,
+       resultTypeSignatures = null,
        aliasTargetIndex = null,
        memoryType = null,
        tableType = null,
-       tagParameterTypeCodes = null;
+       tagParameterTypeCodes = null,
+       tagParameterTypeSignatures = null;
 
   const WasmComponentTypeDeclaration.function({
     required this.name,
     required this.parameterTypeCodes,
+    required this.parameterTypeSignatures,
     required this.resultTypeCodes,
+    required this.resultTypeSignatures,
   }) : kind = WasmComponentTypeKind.function,
        valueTypeCode = null,
        valueTypeSignature = null,
        aliasTargetIndex = null,
        memoryType = null,
        tableType = null,
-       tagParameterTypeCodes = null;
+       tagParameterTypeCodes = null,
+       tagParameterTypeSignatures = null;
 
   const WasmComponentTypeDeclaration.alias({
     required this.name,
@@ -104,10 +110,13 @@ final class WasmComponentTypeDeclaration {
        valueTypeCode = null,
        valueTypeSignature = null,
        parameterTypeCodes = null,
+       parameterTypeSignatures = null,
        resultTypeCodes = null,
+       resultTypeSignatures = null,
        memoryType = null,
        tableType = null,
-       tagParameterTypeCodes = null;
+       tagParameterTypeCodes = null,
+       tagParameterTypeSignatures = null;
 
   const WasmComponentTypeDeclaration.memory({
     required this.name,
@@ -116,10 +125,13 @@ final class WasmComponentTypeDeclaration {
        valueTypeCode = null,
        valueTypeSignature = null,
        parameterTypeCodes = null,
+       parameterTypeSignatures = null,
        resultTypeCodes = null,
+       resultTypeSignatures = null,
        aliasTargetIndex = null,
        tableType = null,
-       tagParameterTypeCodes = null;
+       tagParameterTypeCodes = null,
+       tagParameterTypeSignatures = null;
 
   const WasmComponentTypeDeclaration.table({
     required this.name,
@@ -128,19 +140,25 @@ final class WasmComponentTypeDeclaration {
        valueTypeCode = null,
        valueTypeSignature = null,
        parameterTypeCodes = null,
+       parameterTypeSignatures = null,
        resultTypeCodes = null,
+       resultTypeSignatures = null,
        aliasTargetIndex = null,
        memoryType = null,
-       tagParameterTypeCodes = null;
+       tagParameterTypeCodes = null,
+       tagParameterTypeSignatures = null;
 
   const WasmComponentTypeDeclaration.tag({
     required this.name,
     required this.tagParameterTypeCodes,
+    required this.tagParameterTypeSignatures,
   }) : kind = WasmComponentTypeKind.tag,
        valueTypeCode = null,
        valueTypeSignature = null,
        parameterTypeCodes = null,
+       parameterTypeSignatures = null,
        resultTypeCodes = null,
+       resultTypeSignatures = null,
        aliasTargetIndex = null,
        memoryType = null,
        tableType = null;
@@ -150,11 +168,14 @@ final class WasmComponentTypeDeclaration {
   final int? valueTypeCode;
   final String? valueTypeSignature;
   final List<int>? parameterTypeCodes;
+  final List<String>? parameterTypeSignatures;
   final List<int>? resultTypeCodes;
+  final List<String>? resultTypeSignatures;
   final int? aliasTargetIndex;
   final WasmMemoryType? memoryType;
   final WasmTableType? tableType;
   final List<int>? tagParameterTypeCodes;
+  final List<String>? tagParameterTypeSignatures;
 }
 
 enum WasmComponentTypeBindingTargetKind {
@@ -632,22 +653,16 @@ final class WasmComponent {
           );
         case 0x01:
           final paramCount = reader.readVarUint32();
-          final params = List<int>.generate(
-            paramCount,
-            (_) => reader.readByte(),
-            growable: false,
-          );
+          final params = _readComponentTypeVector(reader, paramCount);
           final resultCount = reader.readVarUint32();
-          final results = List<int>.generate(
-            resultCount,
-            (_) => reader.readByte(),
-            growable: false,
-          );
+          final results = _readComponentTypeVector(reader, resultCount);
           declarations.add(
             WasmComponentTypeDeclaration.function(
               name: name,
-              parameterTypeCodes: params,
-              resultTypeCodes: results,
+              parameterTypeCodes: params.codes,
+              parameterTypeSignatures: params.signatures,
+              resultTypeCodes: results.codes,
+              resultTypeSignatures: results.signatures,
             ),
           );
         case 0x02:
@@ -673,15 +688,12 @@ final class WasmComponent {
           );
         case 0x05:
           final paramCount = reader.readVarUint32();
-          final params = List<int>.generate(
-            paramCount,
-            (_) => reader.readByte(),
-            growable: false,
-          );
+          final params = _readComponentTypeVector(reader, paramCount);
           declarations.add(
             WasmComponentTypeDeclaration.tag(
               name: name,
-              tagParameterTypeCodes: params,
+              tagParameterTypeCodes: params.codes,
+              tagParameterTypeSignatures: params.signatures,
             ),
           );
         default:
@@ -698,6 +710,26 @@ final class WasmComponent {
     }
     _validateTypeDeclarationGraph(declarations);
     return declarations;
+  }
+
+  static ({List<int> codes, List<String> signatures}) _readComponentTypeVector(
+    ByteReader reader,
+    int count,
+  ) {
+    final codes = <int>[];
+    final signatures = <String>[];
+    for (var i = 0; i < count; i++) {
+      final typeStart = reader.offset;
+      final code = _readComponentValueTypeCode(reader);
+      codes.add(code);
+      signatures.add(
+        _bytesToSignature(reader.bytes.sublist(typeStart, reader.offset)),
+      );
+    }
+    return (
+      codes: List<int>.unmodifiable(codes),
+      signatures: List<String>.unmodifiable(signatures),
+    );
   }
 
   static void _validateTypeDeclarationGraph(

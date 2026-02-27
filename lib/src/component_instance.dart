@@ -509,6 +509,8 @@ final class WasmComponentInstance {
           break;
         case WasmComponentImportKind.tag:
           final tagParameterTypeCodes = declaration.tagParameterTypeCodes;
+          final tagParameterTypeSignatures =
+              declaration.tagParameterTypeSignatures;
           if (declaration.kind != WasmComponentTypeKind.tag ||
               tagParameterTypeCodes == null) {
             throw FormatException(
@@ -519,8 +521,9 @@ final class WasmComponentInstance {
           final importedTag = imports.tags[key];
           if (importedTag != null) {
             _validateExpectedFunctionSignaturesAgainstCoreType(
-              expectedParameters: _componentTypeCodesToSignatures(
-                tagParameterTypeCodes,
+              expectedParameters: _componentTypesToSignatures(
+                typeCodes: tagParameterTypeCodes,
+                typeSignatures: tagParameterTypeSignatures,
               ),
               expectedResults: const <String>[],
               actualType: importedTag.type,
@@ -854,11 +857,13 @@ final class WasmComponentInstance {
       );
       final entry = (
         componentImportName: requirement.componentImportName,
-        parameterSignatures: _componentTypeCodesToSignatures(
-          declaration.parameterTypeCodes,
+        parameterSignatures: _componentTypesToSignatures(
+          typeCodes: declaration.parameterTypeCodes,
+          typeSignatures: declaration.parameterTypeSignatures,
         ),
-        resultSignatures: _componentTypeCodesToSignatures(
-          declaration.resultTypeCodes,
+        resultSignatures: _componentTypesToSignatures(
+          typeCodes: declaration.resultTypeCodes,
+          typeSignatures: declaration.resultTypeSignatures,
         ),
       );
       final existing = out[key];
@@ -1050,6 +1055,7 @@ final class WasmComponentInstance {
         binding.typeDeclarationIndex,
       );
       final tagParameterTypeCodes = declaration.tagParameterTypeCodes;
+      final tagParameterTypeSignatures = declaration.tagParameterTypeSignatures;
       if (declaration.kind != WasmComponentTypeKind.tag ||
           tagParameterTypeCodes == null) {
         continue;
@@ -1060,8 +1066,9 @@ final class WasmComponentInstance {
       );
       final entry = (
         componentImportName: requirement.componentImportName,
-        parameterSignatures: _componentTypeCodesToSignatures(
-          tagParameterTypeCodes,
+        parameterSignatures: _componentTypesToSignatures(
+          typeCodes: tagParameterTypeCodes,
+          typeSignatures: tagParameterTypeSignatures,
         ),
       );
       final existing = out[key];
@@ -1397,14 +1404,17 @@ final class WasmComponentInstance {
             );
           }
           final tagParameterTypeCodes = declaration.tagParameterTypeCodes;
+          final tagParameterTypeSignatures =
+              declaration.tagParameterTypeSignatures;
           if (tagParameterTypeCodes == null) {
             throw FormatException(
               '$context has malformed tag type declaration `${declaration.name}`.',
             );
           }
           _validateExpectedFunctionSignaturesAgainstCoreType(
-            expectedParameters: _componentTypeCodesToSignatures(
-              tagParameterTypeCodes,
+            expectedParameters: _componentTypesToSignatures(
+              typeCodes: tagParameterTypeCodes,
+              typeSignatures: tagParameterTypeSignatures,
             ),
             expectedResults: const <String>[],
             actualType: instance.exportedTagImport(alias.coreExportName).type,
@@ -1425,15 +1435,27 @@ final class WasmComponentInstance {
     required String context,
   }) {
     _validateExpectedFunctionSignaturesAgainstCoreType(
-      expectedParameters: _componentTypeCodesToSignatures(
-        declaration.parameterTypeCodes,
+      expectedParameters: _componentTypesToSignatures(
+        typeCodes: declaration.parameterTypeCodes,
+        typeSignatures: declaration.parameterTypeSignatures,
       ),
-      expectedResults: _componentTypeCodesToSignatures(
-        declaration.resultTypeCodes,
+      expectedResults: _componentTypesToSignatures(
+        typeCodes: declaration.resultTypeCodes,
+        typeSignatures: declaration.resultTypeSignatures,
       ),
       actualType: actualType,
       context: '$context for function declaration `${declaration.name}`',
     );
+  }
+
+  static List<String> _componentTypesToSignatures({
+    required List<int>? typeCodes,
+    required List<String>? typeSignatures,
+  }) {
+    if (typeSignatures != null && typeSignatures.isNotEmpty) {
+      return List<String>.from(typeSignatures, growable: false);
+    }
+    return _componentTypeCodesToSignatures(typeCodes);
   }
 
   static List<String> _componentTypeCodesToSignatures(List<int>? typeCodes) {

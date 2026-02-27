@@ -717,8 +717,16 @@ void main() {
         orderedEquals(const <int>[0x7f]),
       );
       expect(
+        component.typeDeclarations[1].parameterTypeSignatures,
+        orderedEquals(const <String>['7f']),
+      );
+      expect(
         component.typeDeclarations[1].resultTypeCodes,
         orderedEquals(const <int>[0x7f]),
+      );
+      expect(
+        component.typeDeclarations[1].resultTypeSignatures,
+        orderedEquals(const <String>['7f']),
       );
       expect(component.typeDeclarations[2].kind, WasmComponentTypeKind.alias);
       expect(component.typeDeclarations[2].aliasTargetIndex, 0);
@@ -780,6 +788,50 @@ void main() {
         expect(declaration.kind, WasmComponentTypeKind.value);
         expect(declaration.valueTypeCode, 0x63);
         expect(declaration.valueTypeSignature, '6300');
+      },
+    );
+
+    test(
+      'decodes function/tag declarations with multi-byte ref signatures',
+      () {
+        final typeSection = <int>[
+          ..._u32Leb(2),
+          ..._name('fn_typed'),
+          0x01, // function
+          ..._u32Leb(1),
+          0x63, // ref null
+          0x00, // heap type = type index 0
+          ..._u32Leb(1),
+          0x63, // ref null
+          0x01, // heap type = type index 1
+          ..._name('tag_typed'),
+          0x05, // tag
+          ..._u32Leb(1),
+          0x63, // ref null
+          0x00, // heap type = type index 0
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ..._componentHeaderWithOneCoreModule(),
+          ..._section(0x06, typeSection),
+        ]);
+
+        final component = WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(component.typeDeclarations, hasLength(2));
+        expect(
+          component.typeDeclarations[0].parameterTypeSignatures,
+          orderedEquals(const <String>['6300']),
+        );
+        expect(
+          component.typeDeclarations[0].resultTypeSignatures,
+          orderedEquals(const <String>['6301']),
+        );
+        expect(
+          component.typeDeclarations[1].tagParameterTypeSignatures,
+          orderedEquals(const <String>['6300']),
+        );
       },
     );
 
@@ -1144,6 +1196,10 @@ void main() {
       expect(
         component.typeDeclarations[1].tagParameterTypeCodes,
         orderedEquals(const <int>[0x7f]),
+      );
+      expect(
+        component.typeDeclarations[1].tagParameterTypeSignatures,
+        orderedEquals(const <String>['7f']),
       );
     });
 
