@@ -160,6 +160,119 @@ void main() {
     );
 
     test(
+      'instantiates from-exports core instances for all core export kinds',
+      () {
+        final baseComponent = _componentWithCoreModules(<Uint8List>[
+          _coreModuleConstI32(name: 'fun', value: 9),
+          _coreModuleExportMemory(name: 'mem', minPages: 1, maxPages: 1),
+          _coreModuleExportTable(name: 'tab', min: 1, max: 1),
+          _coreModuleExportGlobalI32(name: 'glob', value: 17),
+          _coreModuleExportTag(name: 'tag', paramType: 0x7f),
+        ]);
+        final coreInstanceSectionPayload = <int>[
+          ..._u32Leb(6),
+          // declarations 0..4: instantiate module 0..4
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+          0x00,
+          ..._u32Leb(1),
+          ..._u32Leb(0),
+          0x00,
+          ..._u32Leb(2),
+          ..._u32Leb(0),
+          0x00,
+          ..._u32Leb(3),
+          ..._u32Leb(0),
+          0x00,
+          ..._u32Leb(4),
+          ..._u32Leb(0),
+          // declaration 5: from-exports of all core kinds
+          0x01,
+          ..._u32Leb(5),
+          ..._name('fun_alias'),
+          0x00,
+          ..._u32Leb(0),
+          ..._name('mem_alias'),
+          0x01,
+          ..._u32Leb(0),
+          ..._name('tab_alias'),
+          0x02,
+          ..._u32Leb(0),
+          ..._name('glob_alias'),
+          0x03,
+          ..._u32Leb(0),
+          ..._name('tag_alias'),
+          0x04,
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x02, coreInstanceSectionPayload),
+        ]);
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+
+        expect(instance.coreInstances, hasLength(6));
+        expect(instance.invokeCore('fun_alias', moduleIndex: 5), 9);
+        expect(
+          identical(
+            instance.coreInstance(5).exportedMemory('mem_alias'),
+            instance.coreInstance(1).exportedMemory('mem'),
+          ),
+          isTrue,
+        );
+        expect(
+          identical(
+            instance.coreInstance(5).exportedTable('tab_alias'),
+            instance.coreInstance(2).exportedTable('tab'),
+          ),
+          isTrue,
+        );
+        expect(instance.coreInstance(5).readGlobal('glob_alias'), 17);
+        expect(
+          instance.coreInstance(5).exportedTagImport('tag_alias').typeKey,
+          instance.coreInstance(4).exportedTagImport('tag').typeKey,
+        );
+      },
+    );
+
+    test('rejects duplicate export names in from-exports declarations', () {
+      final baseComponent = _componentWithCoreModules(<Uint8List>[
+        _coreModuleConstI32(name: 'one', value: 1),
+      ]);
+      final coreInstanceSectionPayload = <int>[
+        ..._u32Leb(2),
+        0x00,
+        ..._u32Leb(0),
+        ..._u32Leb(0),
+        0x01,
+        ..._u32Leb(2),
+        ..._name('dup'),
+        0x00,
+        ..._u32Leb(0),
+        ..._name('dup'),
+        0x00,
+        ..._u32Leb(0),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ...baseComponent,
+        ..._section(0x02, coreInstanceSectionPayload),
+      ]);
+
+      expect(
+        () => WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+    });
+
+    test(
       'rejects from-exports entries with out-of-range core export indexes',
       () {
         final baseComponent = _componentWithCoreModules(<Uint8List>[
