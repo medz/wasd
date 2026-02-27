@@ -1125,6 +1125,91 @@ void main() {
     );
 
     test(
+      'validates typed global reference import requirements via globalBindings signature',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'globalFuncref',
+              moduleName: 'env',
+              fieldName: 'gref',
+              kind: 0x03,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('funcref_t'),
+          0x00,
+          0x70,
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: WasmImports(
+              globalBindings: {
+                'env::gref': RuntimeGlobal(
+                  valueType: WasmValueType.i32,
+                  mutable: false,
+                  value: WasmValue.i32(-1),
+                ),
+              },
+            ),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsA(isA<UnsupportedError>()),
+        );
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: WasmImports(
+              globalBindings: {
+                'env::gref': RuntimeGlobal(
+                  valueType: WasmValueType.i32,
+                  mutable: false,
+                  valueTypeSignature: '6f',
+                  value: WasmValue.i32(-1),
+                ),
+              },
+            ),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          imports: WasmImports(
+            globalBindings: {
+              'env::gref': RuntimeGlobal(
+                valueType: WasmValueType.i32,
+                mutable: false,
+                valueTypeSignature: '70',
+                value: WasmValue.i32(-1),
+              ),
+            },
+          ),
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.invokeCore('one'), 1);
+      },
+    );
+
+    test(
       'rejects typed global reference imports when globalTypes carrier is non-i32',
       () {
         final baseComponent = _componentWithCoreModules(

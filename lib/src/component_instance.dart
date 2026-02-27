@@ -581,11 +581,26 @@ final class WasmComponentInstance {
 
           final bindingGlobal = imports.globalBindings[key];
           if (bindingGlobal != null) {
-            if (expectedType == null && importedGlobalType == null) {
+            final bindingSignature = bindingGlobal.valueTypeSignature;
+            if (bindingSignature != null &&
+                !_referenceTypeSignaturesMatch(
+                  expectedSignature,
+                  bindingSignature,
+                )) {
+              throw FormatException(
+                'Component global import `${requirement.componentImportName}` '
+                'type mismatch: expected $expectedSignature, '
+                'actual $bindingSignature.',
+              );
+            }
+            if (expectedType == null &&
+                importedGlobalType == null &&
+                bindingSignature == null) {
               throw UnsupportedError(
                 'Component global import `${requirement.componentImportName}` '
-                'requires `imports.globalTypes[$key]` for non-numeric '
-                'typed globals.',
+                'requires `imports.globalTypes[$key]` or '
+                '`imports.globalBindings[$key].valueTypeSignature` for '
+                'non-numeric typed globals.',
               );
             }
             if (importedGlobalType != null &&
@@ -598,15 +613,22 @@ final class WasmComponentInstance {
                 '${importedGlobalType.valueType.name}.',
               );
             }
-            if (bindingGlobal.valueType != expectedType) {
-              if (expectedType != null) {
-                throw FormatException(
-                  'Component global import '
-                  '`${requirement.componentImportName}` type mismatch: '
-                  'expected ${expectedType.name}, '
-                  'actual ${bindingGlobal.valueType.name}.',
-                );
-              }
+            if (expectedType != null && bindingGlobal.valueType != expectedType) {
+              throw FormatException(
+                'Component global import '
+                '`${requirement.componentImportName}` type mismatch: '
+                'expected ${expectedType.name}, '
+                'actual ${bindingGlobal.valueType.name}.',
+              );
+            }
+            if (!_isNumericValueTypeSignature(expectedSignature) &&
+                bindingGlobal.valueType != WasmValueType.i32) {
+              throw FormatException(
+                'Component global import `${requirement.componentImportName}` '
+                'uses reference signature $expectedSignature, but '
+                '`imports.globalBindings[$key]` carrier type is '
+                '${bindingGlobal.valueType.name} (expected i32).',
+              );
             }
             break;
           }

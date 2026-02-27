@@ -347,6 +347,7 @@ final class WasmInstance {
                   : WasmGlobalType(
                       valueType: importedBinding.valueType,
                       mutable: importedBinding.mutable,
+                      valueTypeSignature: importedBinding.valueTypeSignature,
                     ));
           if (importedType != null &&
               !_isGlobalImportTypeCompatible(
@@ -365,6 +366,7 @@ final class WasmInstance {
               RuntimeGlobal(
                 valueType: globalType.valueType,
                 mutable: globalType.mutable,
+                valueTypeSignature: globalType.valueTypeSignature,
                 value: WasmValue.fromExternal(
                   globalType.valueType,
                   importedValue,
@@ -439,6 +441,7 @@ final class WasmInstance {
         RuntimeGlobal(
           valueType: globalDef.type.valueType,
           mutable: globalDef.type.mutable,
+          valueTypeSignature: globalDef.type.valueTypeSignature,
           value: value,
         ),
       );
