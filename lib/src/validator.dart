@@ -2287,6 +2287,11 @@ abstract final class WasmValidator {
           final canMaterializePolymorphicResults =
               frame.polymorphic &&
               (!frame.isLoop || !frame.loopBackUnreachable);
+          final propagateUnreachableToParent =
+              frame.polymorphic &&
+              !hasConcreteResult &&
+              !frame.hasEndReachability &&
+              !canMaterializePolymorphicResults;
           if (hasConcreteResult ||
               frame.hasEndReachability ||
               canMaterializePolymorphicResults) {
@@ -2294,6 +2299,9 @@ abstract final class WasmValidator {
           }
           if (controlStack.isEmpty) {
             return;
+          }
+          if (propagateUnreachableToParent) {
+            markPolymorphic();
           }
 
         case Opcodes.unreachable:

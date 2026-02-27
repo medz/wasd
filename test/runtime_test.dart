@@ -121,6 +121,41 @@ void main() {
       expect(instance.invokeI32('countdown', [5]), 0);
     });
 
+    test(
+      'accepts unreachable nested loop end when outer loop declares a result',
+      () {
+        final wasm = _buildModule(
+          types: [
+            _funcType([], [0x7f]),
+          ],
+          functionTypeIndices: [0],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                Opcodes.loop,
+                0x7f,
+                Opcodes.loop,
+                0x40,
+                ..._br(0),
+                Opcodes.end,
+                Opcodes.end,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: [
+            _ExportSpec(
+              name: 'never_returns',
+              kind: WasmExportKind.function,
+              index: 0,
+            ),
+          ],
+        );
+
+        expect(() => WasmInstance.fromBytes(wasm), returnsNormally);
+      },
+    );
+
     test('runs start function and supports global.get/global.set', () {
       final wasm = _buildModule(
         types: [
