@@ -12,6 +12,11 @@ import 'table.dart';
 import 'value.dart';
 
 typedef _CoreImportBindingAttempt = ({bool bound, String? incompatibility});
+typedef _TypedFunctionImportRequirement = ({
+  String componentImportName,
+  List<String> parameterSignatures,
+  List<String> resultSignatures,
+});
 
 /// Component-level runtime that instantiates embedded core modules.
 ///
@@ -69,17 +74,30 @@ final class WasmComponentInstance {
       );
     }
     _validateComponentImportRequirements(component, imports);
+    final typedFunctionImportRequirements =
+        _collectTypedFunctionImportRequirements(component);
     final coreInstances = <WasmInstance>[];
     if (component.coreInstances.isEmpty) {
-      coreInstances.addAll(
-        component.coreModules.map(
-          (moduleBytes) => WasmInstance.fromBytes(
+      for (
+        var moduleIndex = 0;
+        moduleIndex < component.coreModules.length;
+        moduleIndex++
+      ) {
+        final moduleBytes = component.coreModules[moduleIndex];
+        _validateTypedFunctionImportBindingsForCoreModule(
+          moduleBytes: moduleBytes,
+          moduleIndex: moduleIndex,
+          features: features,
+          typedRequirementsByImportKey: typedFunctionImportRequirements,
+        );
+        coreInstances.add(
+          WasmInstance.fromBytes(
             moduleBytes,
             imports: imports,
             features: features,
           ),
-        ),
-      );
+        );
+      }
     } else {
       for (final declaration in component.coreInstances) {
         final moduleIndex = declaration.moduleIndex;
@@ -97,8 +115,15 @@ final class WasmComponentInstance {
             );
           }
         }
+        final moduleBytes = component.coreModules[moduleIndex];
+        _validateTypedFunctionImportBindingsForCoreModule(
+          moduleBytes: moduleBytes,
+          moduleIndex: moduleIndex,
+          features: features,
+          typedRequirementsByImportKey: typedFunctionImportRequirements,
+        );
         final declarationImports = _composeCoreInstanceImports(
-          moduleBytes: component.coreModules[moduleIndex],
+          moduleBytes: moduleBytes,
           declaration: declaration,
           baseImports: imports,
           instantiatedCoreInstances: coreInstances,
@@ -106,7 +131,7 @@ final class WasmComponentInstance {
         );
         coreInstances.add(
           WasmInstance.fromBytes(
-            component.coreModules[moduleIndex],
+            moduleBytes,
             imports: declarationImports,
             features: features,
           ),
@@ -381,6 +406,111 @@ final class WasmComponentInstance {
     };
   }
 
+  static Map<String, _TypedFunctionImportRequirement>
+  _collectTypedFunctionImportRequirements(WasmComponent component) {
+    final out = <String, _TypedFunctionImportRequirement>{};
+    for (final binding in component.typeBindings) {
+      if (binding.targetKind !=
+          WasmComponentTypeBindingTargetKind.importRequirement) {
+        continue;
+      }
+      if (binding.targetIndex < 0 ||
+          binding.targetIndex >= component.importRequirements.length) {
+        continue;
+      }
+      final requirement = component.importRequirements[binding.targetIndex];
+      if (requirement.kind != WasmComponentImportKind.function) {
+        continue;
+      }
+      final declaration = _resolveComponentTypeDeclaration(
+        component.typeDeclarations,
+        binding.typeDeclarationIndex,
+      );
+      if (declaration.kind != WasmComponentTypeKind.function) {
+        continue;
+      }
+
+      final key = WasmImports.key(
+        requirement.moduleName,
+        requirement.fieldName,
+      );
+      final entry = (
+        componentImportName: requirement.componentImportName,
+        parameterSignatures: _componentTypeCodesToSignatures(
+          declaration.parameterTypeCodes,
+        ),
+        resultSignatures: _componentTypeCodesToSignatures(
+          declaration.resultTypeCodes,
+        ),
+      );
+      final existing = out[key];
+      if (existing != null &&
+          (!_sameSignatureLists(
+                existing.parameterSignatures,
+                entry.parameterSignatures,
+              ) ||
+              !_sameSignatureLists(
+                existing.resultSignatures,
+                entry.resultSignatures,
+              ))) {
+        throw FormatException(
+          'Conflicting typed function bindings for component import '
+          '`${requirement.componentImportName}` ($key).',
+        );
+      }
+      out[key] = entry;
+    }
+    return out;
+  }
+
+  static void _validateTypedFunctionImportBindingsForCoreModule({
+    required Uint8List moduleBytes,
+    required int moduleIndex,
+    required WasmFeatureSet features,
+    required Map<String, _TypedFunctionImportRequirement>
+    typedRequirementsByImportKey,
+  }) {
+    if (typedRequirementsByImportKey.isEmpty) {
+      return;
+    }
+    final module = WasmModule.decode(moduleBytes, features: features);
+    for (final imported in module.imports) {
+      if (imported.kind != WasmImportKind.function &&
+          imported.kind != WasmImportKind.exactFunction) {
+        continue;
+      }
+      final typedRequirement = typedRequirementsByImportKey[imported.key];
+      if (typedRequirement == null) {
+        continue;
+      }
+      final typeIndex = imported.functionTypeIndex;
+      if (typeIndex == null ||
+          typeIndex < 0 ||
+          typeIndex >= module.types.length) {
+        throw FormatException(
+          'Malformed function import `${imported.key}` in core module '
+          '#$moduleIndex: invalid type index $typeIndex.',
+        );
+      }
+      final actualType = module.types[typeIndex];
+      if (!actualType.isFunctionType) {
+        throw FormatException(
+          'Malformed function import `${imported.key}` in core module '
+          '#$moduleIndex: type index $typeIndex is not a function type.',
+        );
+      }
+      _validateExpectedFunctionSignaturesAgainstCoreType(
+        expectedParameters: typedRequirement.parameterSignatures,
+        expectedResults: typedRequirement.resultSignatures,
+        actualType: actualType,
+        context:
+            'Component typed function import '
+            '`${typedRequirement.componentImportName}` (${imported.key}) '
+            'in core module #$moduleIndex',
+      );
+    }
+  }
+
   static void _validateTypedCoreExportAliasBindings({
     required WasmComponent component,
     required List<WasmInstance> coreInstances,
@@ -426,49 +556,16 @@ final class WasmComponentInstance {
     required WasmFunctionType actualType,
     required String context,
   }) {
-    final expectedParams = _componentTypeCodesToSignatures(
-      declaration.parameterTypeCodes,
+    _validateExpectedFunctionSignaturesAgainstCoreType(
+      expectedParameters: _componentTypeCodesToSignatures(
+        declaration.parameterTypeCodes,
+      ),
+      expectedResults: _componentTypeCodesToSignatures(
+        declaration.resultTypeCodes,
+      ),
+      actualType: actualType,
+      context: '$context for function declaration `${declaration.name}`',
     );
-    final expectedResults = _componentTypeCodesToSignatures(
-      declaration.resultTypeCodes,
-    );
-    final actualParams = _coreFunctionSignatures(
-      valueTypes: actualType.params,
-      signatures: actualType.paramTypeSignatures,
-    );
-    final actualResults = _coreFunctionSignatures(
-      valueTypes: actualType.results,
-      signatures: actualType.resultTypeSignatures,
-    );
-
-    if (expectedParams.length != actualParams.length ||
-        expectedResults.length != actualResults.length) {
-      throw FormatException(
-        '$context has incompatible typed binding for function declaration '
-        '`${declaration.name}`: expected '
-        '(${expectedParams.join(', ')}) -> (${expectedResults.join(', ')}), '
-        'actual (${actualParams.join(', ')}) -> (${actualResults.join(', ')}).',
-      );
-    }
-
-    for (var i = 0; i < expectedParams.length; i++) {
-      if (expectedParams[i] != actualParams[i]) {
-        throw FormatException(
-          '$context has incompatible typed parameter binding at index $i for '
-          'function declaration `${declaration.name}`: expected '
-          '${expectedParams[i]}, actual ${actualParams[i]}.',
-        );
-      }
-    }
-    for (var i = 0; i < expectedResults.length; i++) {
-      if (expectedResults[i] != actualResults[i]) {
-        throw FormatException(
-          '$context has incompatible typed result binding at index $i for '
-          'function declaration `${declaration.name}`: expected '
-          '${expectedResults[i]}, actual ${actualResults[i]}.',
-        );
-      }
-    }
   }
 
   static List<String> _componentTypeCodesToSignatures(List<int>? typeCodes) {
@@ -497,6 +594,59 @@ final class WasmComponentInstance {
       WasmValueType.f32 => '7d',
       WasmValueType.f64 => '7c',
     };
+  }
+
+  static void _validateExpectedFunctionSignaturesAgainstCoreType({
+    required List<String> expectedParameters,
+    required List<String> expectedResults,
+    required WasmFunctionType actualType,
+    required String context,
+  }) {
+    final actualParams = _coreFunctionSignatures(
+      valueTypes: actualType.params,
+      signatures: actualType.paramTypeSignatures,
+    );
+    final actualResults = _coreFunctionSignatures(
+      valueTypes: actualType.results,
+      signatures: actualType.resultTypeSignatures,
+    );
+
+    if (expectedParameters.length != actualParams.length ||
+        expectedResults.length != actualResults.length) {
+      throw FormatException(
+        '$context has incompatible typed function signature: expected '
+        '(${expectedParameters.join(', ')}) -> (${expectedResults.join(', ')}), '
+        'actual (${actualParams.join(', ')}) -> (${actualResults.join(', ')}).',
+      );
+    }
+    for (var i = 0; i < expectedParameters.length; i++) {
+      if (expectedParameters[i] != actualParams[i]) {
+        throw FormatException(
+          '$context has incompatible typed function parameter at index $i: '
+          'expected ${expectedParameters[i]}, actual ${actualParams[i]}.',
+        );
+      }
+    }
+    for (var i = 0; i < expectedResults.length; i++) {
+      if (expectedResults[i] != actualResults[i]) {
+        throw FormatException(
+          '$context has incompatible typed function result at index $i: '
+          'expected ${expectedResults[i]}, actual ${actualResults[i]}.',
+        );
+      }
+    }
+  }
+
+  static bool _sameSignatureLists(List<String> lhs, List<String> rhs) {
+    if (lhs.length != rhs.length) {
+      return false;
+    }
+    for (var i = 0; i < lhs.length; i++) {
+      if (lhs[i] != rhs[i]) {
+        return false;
+      }
+    }
+    return true;
   }
 
   static WasmImports _composeCoreInstanceImports({
