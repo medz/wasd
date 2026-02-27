@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:isolate';
 import 'dart:ui' as ui;
@@ -12,6 +13,25 @@ const String _doomIwadAssetPath = 'assets/doom/doom1.wad';
 const int _doomWidth = 320;
 const int _doomHeight = 200;
 const int _doomTargetFrameIntervalUs = 28000;
+const bool _doomPerfEnabled = bool.fromEnvironment(
+  'WASD_DOOM_PERF',
+  defaultValue: false,
+);
+const int _doomPerfLogIntervalUs = 1000000;
+const int _doomEventYieldIntervalUs = int.fromEnvironment(
+  'WASD_DOOM_EVENT_YIELD_US',
+  defaultValue: 8000,
+);
+const bool _doomPerfLoggingEnabled = bool.fromEnvironment(
+  'WASD_DOOM_PERF_LOG',
+  defaultValue: false,
+);
+const bool _doomPerfOverlayDefault = bool.fromEnvironment(
+  'WASD_DOOM_PERF_OVERLAY',
+  defaultValue: false,
+);
+
+const int _messageFrame = 1;
 
 const int _eventTypeKeyDown = 0;
 const int _eventTypeKeyUp = 1;
@@ -29,6 +49,223 @@ const int _doomKeyAlt = 0xb8;
 const int _doomKeyShift = 0xb6;
 
 enum _DoomRuntimeState { booting, running, exited, error, missingAssets }
+
+final class _LatencySamples {
+  final List<int> _values = <int>[];
+
+  void add(int valueUs) {
+    if (valueUs < 0) {
+      return;
+    }
+    _values.add(valueUs);
+  }
+
+  ({double p50, double p95}) consumeQuantiles() {
+    if (_values.isEmpty) {
+      return (p50: 0, p95: 0);
+    }
+    _values.sort();
+    final p50 = _quantile(_values, 0.50);
+    final p95 = _quantile(_values, 0.95);
+    _values.clear();
+    return (p50: p50, p95: p95);
+  }
+
+  static double _quantile(List<int> sorted, double q) {
+    if (sorted.isEmpty) {
+      return 0;
+    }
+    final index = ((sorted.length - 1) * q).round();
+    return sorted[index].toDouble();
+  }
+}
+
+final class _HostPerfSnapshot {
+  const _HostPerfSnapshot({
+    required this.renderCallsPerSecond,
+    required this.pendingEventCallsPerSecond,
+    required this.nextEventCallsPerSecond,
+    required this.eventYieldCountPerSecond,
+    required this.renderCopyP50Us,
+    required this.renderCopyP95Us,
+    required this.frameSendP50Us,
+    required this.frameSendP95Us,
+    required this.hostImportCallsPerSecond,
+    required this.wasiCallsPerSecond,
+    required this.wasiSharePercent,
+  });
+
+  final int renderCallsPerSecond;
+  final int pendingEventCallsPerSecond;
+  final int nextEventCallsPerSecond;
+  final int eventYieldCountPerSecond;
+  final double renderCopyP50Us;
+  final double renderCopyP95Us;
+  final double frameSendP50Us;
+  final double frameSendP95Us;
+  final int hostImportCallsPerSecond;
+  final int wasiCallsPerSecond;
+  final double wasiSharePercent;
+
+  static _HostPerfSnapshot? fromMessage(Map<Object?, Object?> message) {
+    int intOf(Object? value) {
+      if (value is int) {
+        return value;
+      }
+      if (value is num) {
+        return value.toInt();
+      }
+      return 0;
+    }
+
+    double doubleOf(Object? value) {
+      if (value is double) {
+        return value;
+      }
+      if (value is num) {
+        return value.toDouble();
+      }
+      return 0;
+    }
+
+    return _HostPerfSnapshot(
+      renderCallsPerSecond: intOf(message['render_calls_s']),
+      pendingEventCallsPerSecond: intOf(message['pending_event_calls_s']),
+      nextEventCallsPerSecond: intOf(message['next_event_calls_s']),
+      eventYieldCountPerSecond: intOf(message['event_yield_count_s']),
+      renderCopyP50Us: doubleOf(message['render_copy_us_p50']),
+      renderCopyP95Us: doubleOf(message['render_copy_us_p95']),
+      frameSendP50Us: doubleOf(message['frame_send_us_p50']),
+      frameSendP95Us: doubleOf(message['frame_send_us_p95']),
+      hostImportCallsPerSecond: intOf(message['host_import_calls_s']),
+      wasiCallsPerSecond: intOf(message['wasi_calls_s']),
+      wasiSharePercent: doubleOf(message['wasi_share_pct']),
+    );
+  }
+
+  String toPerfInline() {
+    return 'host rc/s:$renderCallsPerSecond '
+        'ev:$pendingEventCallsPerSecond/$nextEventCallsPerSecond '
+        'imp:$hostImportCallsPerSecond '
+        'wasi:$wasiCallsPerSecond '
+        'w%:${wasiSharePercent.toStringAsFixed(1)} '
+        'y:$eventYieldCountPerSecond '
+        'cpy:${renderCopyP95Us.toStringAsFixed(0)}us '
+        'snd:${frameSendP95Us.toStringAsFixed(0)}us';
+  }
+}
+
+final class _ImportPerfPeriodSnapshot {
+  const _ImportPerfPeriodSnapshot({
+    required this.hostImportCallsPerSecond,
+    required this.hostImportUs,
+    required this.wasiCallsPerSecond,
+    required this.wasiUs,
+    required this.wasiSharePercent,
+    required this.wasiClockTimeGetCallsPerSecond,
+    required this.wasiPollOneoffCallsPerSecond,
+    required this.wasiFdCallsPerSecond,
+  });
+
+  final int hostImportCallsPerSecond;
+  final int hostImportUs;
+  final int wasiCallsPerSecond;
+  final int wasiUs;
+  final double wasiSharePercent;
+  final int wasiClockTimeGetCallsPerSecond;
+  final int wasiPollOneoffCallsPerSecond;
+  final int wasiFdCallsPerSecond;
+}
+
+final class _ImportPerfStats {
+  _ImportPerfStats({required this.enabled}) {
+    if (enabled) {
+      _clock.start();
+    }
+  }
+
+  final bool enabled;
+  final Stopwatch _clock = Stopwatch();
+
+  int _hostImportCalls = 0;
+  int _hostImportUs = 0;
+  int _wasiCalls = 0;
+  int _wasiUs = 0;
+  int _wasiClockTimeGetCalls = 0;
+  int _wasiPollOneoffCalls = 0;
+  int _wasiFdCalls = 0;
+
+  int get nowUs => _clock.elapsedMicroseconds;
+
+  void record({required String importKey, required int elapsedUs}) {
+    if (!enabled) {
+      return;
+    }
+    _hostImportCalls++;
+    _hostImportUs += elapsedUs;
+    if (!importKey.startsWith('wasi_snapshot_preview1::')) {
+      return;
+    }
+    _wasiCalls++;
+    _wasiUs += elapsedUs;
+    if (importKey == 'wasi_snapshot_preview1::clock_time_get') {
+      _wasiClockTimeGetCalls++;
+      return;
+    }
+    if (importKey == 'wasi_snapshot_preview1::poll_oneoff') {
+      _wasiPollOneoffCalls++;
+      return;
+    }
+    if (importKey.startsWith('wasi_snapshot_preview1::fd_')) {
+      _wasiFdCalls++;
+    }
+  }
+
+  _ImportPerfPeriodSnapshot flush({required int elapsedUs}) {
+    if (!enabled || elapsedUs <= 0) {
+      return const _ImportPerfPeriodSnapshot(
+        hostImportCallsPerSecond: 0,
+        hostImportUs: 0,
+        wasiCallsPerSecond: 0,
+        wasiUs: 0,
+        wasiSharePercent: 0,
+        wasiClockTimeGetCallsPerSecond: 0,
+        wasiPollOneoffCallsPerSecond: 0,
+        wasiFdCallsPerSecond: 0,
+      );
+    }
+    final hostImportCallsPerSecond = _hostImportCalls * 1000000 ~/ elapsedUs;
+    final wasiCallsPerSecond = _wasiCalls * 1000000 ~/ elapsedUs;
+    final wasiClockTimeGetCallsPerSecond =
+        _wasiClockTimeGetCalls * 1000000 ~/ elapsedUs;
+    final wasiPollOneoffCallsPerSecond =
+        _wasiPollOneoffCalls * 1000000 ~/ elapsedUs;
+    final wasiFdCallsPerSecond = _wasiFdCalls * 1000000 ~/ elapsedUs;
+    final wasiSharePercent = _hostImportUs == 0
+        ? 0.0
+        : (_wasiUs * 100.0) / _hostImportUs;
+
+    final snapshot = _ImportPerfPeriodSnapshot(
+      hostImportCallsPerSecond: hostImportCallsPerSecond,
+      hostImportUs: _hostImportUs,
+      wasiCallsPerSecond: wasiCallsPerSecond,
+      wasiUs: _wasiUs,
+      wasiSharePercent: wasiSharePercent,
+      wasiClockTimeGetCallsPerSecond: wasiClockTimeGetCallsPerSecond,
+      wasiPollOneoffCallsPerSecond: wasiPollOneoffCallsPerSecond,
+      wasiFdCallsPerSecond: wasiFdCallsPerSecond,
+    );
+
+    _hostImportCalls = 0;
+    _hostImportUs = 0;
+    _wasiCalls = 0;
+    _wasiUs = 0;
+    _wasiClockTimeGetCalls = 0;
+    _wasiPollOneoffCalls = 0;
+    _wasiFdCalls = 0;
+    return snapshot;
+  }
+}
 
 void main() {
   runApp(const DoomWindowApp());
@@ -69,8 +306,19 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
   int _lastFpsMarkUs = 0;
   double _fps = 0;
   bool _showHelpOverlay = true;
+  bool _showPerfOverlay = _doomPerfOverlayDefault;
   String _status = 'Booting Doom runtime...';
   _DoomRuntimeState _runtimeState = _DoomRuntimeState.booting;
+
+  int _lastUiPerfMarkUs = 0;
+  int _framesAtUiPerfMark = 0;
+  int _dropCountSinceUiPerfMark = 0;
+  int _lastUiFramesPerSecond = 0;
+  int _lastDropsPerSecond = 0;
+  double _lastUiDecodeP95Us = 0;
+  final _LatencySamples _uiDecodeUsSamples = _LatencySamples();
+  _HostPerfSnapshot? _lastHostPerf;
+  String _perfLine = '';
 
   @override
   void initState() {
@@ -104,6 +352,15 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
     _lastFpsMarkUs = 0;
     _fps = 0;
     _decodingFrame = false;
+    _lastUiPerfMarkUs = 0;
+    _framesAtUiPerfMark = 0;
+    _dropCountSinceUiPerfMark = 0;
+    _lastUiFramesPerSecond = 0;
+    _lastDropsPerSecond = 0;
+    _lastUiDecodeP95Us = 0;
+    _uiDecodeUsSamples.consumeQuantiles();
+    _lastHostPerf = null;
+    _perfLine = '';
     if (mounted) {
       setState(() {
         _runtimeState = _DoomRuntimeState.booting;
@@ -150,9 +407,20 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
   }
 
   void _onIsolateMessage(Object? message) {
-    if (!mounted || message is! Map<Object?, Object?>) {
+    if (!mounted) {
       return;
     }
+
+    if (message is List<Object?>) {
+      if (message.length == 2 && message[0] == _messageFrame) {
+        _handleFrameMessage(message[1]);
+      }
+      return;
+    }
+    if (message is! Map<Object?, Object?>) {
+      return;
+    }
+
     final type = message['type'];
     if (type == 'event_port') {
       final port = message['port'];
@@ -191,48 +459,130 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
       });
       return;
     }
-    if (type == 'frame') {
-      if (_decodingFrame) {
+    if (type == 'perf' && _doomPerfEnabled) {
+      final snapshot = _HostPerfSnapshot.fromMessage(message);
+      if (snapshot == null) {
         return;
       }
-      final data = message['rgba'];
-      if (data is! TransferableTypedData) {
-        return;
+      _lastHostPerf = snapshot;
+      if (_showPerfOverlay) {
+        _refreshPerfLine();
+        setState(() {});
       }
-      final bytes = data.materialize().asUint8List();
-      _decodingFrame = true;
-      ui.decodeImageFromPixels(
-        bytes,
-        _doomWidth,
-        _doomHeight,
-        ui.PixelFormat.rgba8888,
-        (image) {
-          _decodingFrame = false;
-          if (!mounted) {
-            image.dispose();
-            return;
-          }
-          final nowUs = _uiClock.elapsedMicroseconds;
-          if (_lastFpsMarkUs == 0) {
+      return;
+    }
+  }
+
+  void _handleFrameMessage(Object? payload) {
+    if (_decodingFrame) {
+      _dropCountSinceUiPerfMark++;
+      return;
+    }
+    if (payload is! TransferableTypedData) {
+      return;
+    }
+
+    final bytes = payload.materialize().asUint8List();
+    final decodeStartUs = _uiClock.elapsedMicroseconds;
+    _decodingFrame = true;
+    ui.decodeImageFromPixels(
+      bytes,
+      _doomWidth,
+      _doomHeight,
+      ui.PixelFormat.rgba8888,
+      (image) {
+        _decodingFrame = false;
+        if (!mounted) {
+          image.dispose();
+          return;
+        }
+        final nowUs = _uiClock.elapsedMicroseconds;
+        _uiDecodeUsSamples.add(nowUs - decodeStartUs);
+        if (_lastFpsMarkUs == 0) {
+          _lastFpsMarkUs = nowUs;
+        }
+        setState(() {
+          _frameImage?.dispose();
+          _frameImage = image;
+          _frames++;
+          _runtimeState = _DoomRuntimeState.running;
+          _status = 'In game';
+          final elapsedUs = nowUs - _lastFpsMarkUs;
+          if (elapsedUs >= 1000000) {
+            final newFrames = _frames - _framesAtFpsMark;
+            _fps = newFrames * 1000000 / elapsedUs;
+            _framesAtFpsMark = _frames;
             _lastFpsMarkUs = nowUs;
           }
-          setState(() {
-            _frameImage?.dispose();
-            _frameImage = image;
-            _frames++;
-            _runtimeState = _DoomRuntimeState.running;
-            _status = 'In game';
-            final elapsedUs = nowUs - _lastFpsMarkUs;
-            if (elapsedUs >= 1000000) {
-              final newFrames = _frames - _framesAtFpsMark;
-              _fps = newFrames * 1000000 / elapsedUs;
-              _framesAtFpsMark = _frames;
-              _lastFpsMarkUs = nowUs;
-            }
-          });
-        },
+        });
+        _emitUiPerfIfNeeded(nowUs);
+      },
+    );
+  }
+
+  void _emitUiPerfIfNeeded(int nowUs) {
+    if (!_doomPerfEnabled) {
+      return;
+    }
+    if (_lastUiPerfMarkUs == 0) {
+      _lastUiPerfMarkUs = nowUs;
+      _framesAtUiPerfMark = _frames;
+      return;
+    }
+    final elapsedUs = nowUs - _lastUiPerfMarkUs;
+    if (elapsedUs < _doomPerfLogIntervalUs) {
+      return;
+    }
+
+    final uiFramesPerSecond =
+        (_frames - _framesAtUiPerfMark) * 1000000 ~/ elapsedUs;
+    final dropsPerSecond = _dropCountSinceUiPerfMark * 1000000 ~/ elapsedUs;
+    final decode = _uiDecodeUsSamples.consumeQuantiles();
+
+    if (_doomPerfLoggingEnabled) {
+      debugPrint(
+        'doom_perf role=ui '
+        'ui_frames_s=$uiFramesPerSecond '
+        'drop_count_s=$dropsPerSecond '
+        'ui_decode_us_p50=${decode.p50.toStringAsFixed(1)} '
+        'ui_decode_us_p95=${decode.p95.toStringAsFixed(1)}',
       );
     }
+
+    _framesAtUiPerfMark = _frames;
+    _dropCountSinceUiPerfMark = 0;
+    _lastUiPerfMarkUs = nowUs;
+    _refreshPerfLine(
+      uiFramesPerSecond: uiFramesPerSecond,
+      dropsPerSecond: dropsPerSecond,
+      decodeP95: decode.p95,
+    );
+    if (_showPerfOverlay && mounted) {
+      setState(() {});
+    }
+  }
+
+  void _refreshPerfLine({
+    int? uiFramesPerSecond,
+    int? dropsPerSecond,
+    double? decodeP95,
+  }) {
+    if (uiFramesPerSecond != null) {
+      _lastUiFramesPerSecond = uiFramesPerSecond;
+    }
+    if (dropsPerSecond != null) {
+      _lastDropsPerSecond = dropsPerSecond;
+    }
+    if (decodeP95 != null) {
+      _lastUiDecodeP95Us = decodeP95;
+    }
+    final host = _lastHostPerf;
+    final left =
+        'ui f/s:$_lastUiFramesPerSecond '
+        'drop:$_lastDropsPerSecond '
+        'dec:${_lastUiDecodeP95Us.toStringAsFixed(0)}us';
+    final hostText = host == null ? '' : host.toPerfInline();
+    _perfLine = hostText.isEmpty ? left : '$left | $hostText';
   }
 
   KeyEventResult _onKeyEvent(KeyEvent event) {
@@ -242,6 +592,10 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
     }
     if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.f5) {
       _restartDoom();
+      return KeyEventResult.handled;
+    }
+    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.f3) {
+      _togglePerfOverlay();
       return KeyEventResult.handled;
     }
 
@@ -345,6 +699,16 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
     _focusNode.requestFocus();
   }
 
+  void _togglePerfOverlay() {
+    setState(() {
+      _showPerfOverlay = !_showPerfOverlay;
+      if (_showPerfOverlay) {
+        _refreshPerfLine();
+      }
+    });
+    _focusNode.requestFocus();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -440,13 +804,23 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: _TopStatusBar(fps: _fps, frameCount: _frames),
+                        child: _TopStatusBar(
+                          fps: _fps,
+                          frameCount: _frames,
+                          perfLine: _showPerfOverlay ? _perfLine : null,
+                        ),
                       ),
                       const SizedBox(width: 12),
                       _SmallKeycap(
                         keyName: 'F1',
                         description: _showHelpOverlay ? 'Hide Help' : 'Help',
                         onTap: _toggleHelpOverlay,
+                      ),
+                      const SizedBox(width: 8),
+                      _SmallKeycap(
+                        keyName: 'F3',
+                        description: _showPerfOverlay ? 'Perf Off' : 'Perf On',
+                        onTap: _togglePerfOverlay,
                       ),
                       const SizedBox(width: 8),
                       _SmallKeycap(
@@ -565,10 +939,15 @@ final class _ScanlineOverlayPainter extends CustomPainter {
 }
 
 final class _TopStatusBar extends StatelessWidget {
-  const _TopStatusBar({required this.fps, required this.frameCount});
+  const _TopStatusBar({
+    required this.fps,
+    required this.frameCount,
+    this.perfLine,
+  });
 
   final double fps;
   final int frameCount;
+  final String? perfLine;
 
   @override
   Widget build(BuildContext context) {
@@ -605,6 +984,18 @@ final class _TopStatusBar extends StatelessWidget {
                   Text('frames: $frameCount'),
                 ],
               ),
+              if (perfLine != null && perfLine!.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  perfLine!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xffd6b799),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -706,9 +1097,7 @@ final class _HudPanel extends StatelessWidget {
                 ),
               ),
               if (showHint)
-                const Text(
-                  'Arrows move | Ctrl fire | Space use | Esc menu',
-                ),
+                const Text('Arrows move | Ctrl fire | Space use | Esc menu'),
             ],
           ),
         ),
@@ -780,9 +1169,13 @@ Future<void> _doomIsolateMain(Map<String, Object?> args) async {
       .asUint8List();
 
   _WindowDoomHost? frontend;
+  final importPerfStats = _ImportPerfStats(enabled: _doomPerfEnabled);
 
   try {
-    frontend = _WindowDoomHost(uiPort: uiPort);
+    frontend = _WindowDoomHost(
+      uiPort: uiPort,
+      importPerfStats: importPerfStats,
+    );
     uiPort.send(<String, Object?>{
       'type': 'event_port',
       'port': frontend.eventSendPort,
@@ -803,12 +1196,17 @@ Future<void> _doomIsolateMain(Map<String, Object?> args) async {
       fileSystem: fs,
       preferHostIo: false,
     );
+    final wrappedSyncImports = <String, WasmHostFunction>{
+      ..._wrapSyncHostImports(wasi.imports.functions, importPerfStats),
+      ..._wrapSyncHostImports(frontend.syncImports, importPerfStats),
+    };
+    final wrappedAsyncImports = _wrapAsyncHostImports(
+      frontend.asyncImports,
+      importPerfStats,
+    );
     final imports = WasmImports(
-      functions: <String, WasmHostFunction>{
-        ...wasi.imports.functions,
-        ...frontend.syncImports,
-      },
-      asyncFunctions: frontend.asyncImports,
+      functions: wrappedSyncImports,
+      asyncFunctions: wrappedAsyncImports,
     );
     final instance = WasmInstance.fromBytes(wasmBytes, imports: imports);
     wasi.bindInstance(instance);
@@ -850,20 +1248,72 @@ void _writeInMemoryFile(
   fd.close();
 }
 
+Map<String, WasmHostFunction> _wrapSyncHostImports(
+  Map<String, WasmHostFunction> source,
+  _ImportPerfStats stats,
+) {
+  if (!stats.enabled) {
+    return source;
+  }
+  final wrapped = <String, WasmHostFunction>{};
+  for (final entry in source.entries) {
+    wrapped[entry.key] = (args) {
+      final startUs = stats.nowUs;
+      final result = entry.value(args);
+      stats.record(importKey: entry.key, elapsedUs: stats.nowUs - startUs);
+      return result;
+    };
+  }
+  return wrapped;
+}
+
+Map<String, WasmAsyncHostFunction> _wrapAsyncHostImports(
+  Map<String, WasmAsyncHostFunction> source,
+  _ImportPerfStats stats,
+) {
+  if (!stats.enabled) {
+    return source;
+  }
+  final wrapped = <String, WasmAsyncHostFunction>{};
+  for (final entry in source.entries) {
+    wrapped[entry.key] = (args) {
+      final startUs = stats.nowUs;
+      final result = entry.value(args);
+      if (result is Future<Object?>) {
+        return result.then<Object?>((value) {
+          stats.record(importKey: entry.key, elapsedUs: stats.nowUs - startUs);
+          return value;
+        });
+      }
+      stats.record(importKey: entry.key, elapsedUs: stats.nowUs - startUs);
+      return result;
+    };
+  }
+  return wrapped;
+}
+
 final class _WindowDoomHost {
-  _WindowDoomHost({required this.uiPort}) {
+  _WindowDoomHost({required this.uiPort, required this.importPerfStats}) {
     _eventPort.handler = _onEventMessage;
   }
 
   final SendPort uiPort;
+  final _ImportPerfStats importPerfStats;
   final RawReceivePort _eventPort = RawReceivePort();
   final Queue<_DoomEvent> _events = Queue<_DoomEvent>();
   final Uint8List _palette = Uint8List(1024);
   final Stopwatch _frameClock = Stopwatch()..start();
+  final _LatencySamples _renderCopyUsSamples = _LatencySamples();
+  final _LatencySamples _frameSendUsSamples = _LatencySamples();
 
   WasmMemory? _memory;
   int _lastEventYieldUs = 0;
   int _lastFrameSentUs = 0;
+  int _lastPerfFlushUs = 0;
+  int _renderCalls = 0;
+  int _pendingEventCalls = 0;
+  int _nextEventCalls = 0;
+  int _eventYieldCount = 0;
 
   SendPort get eventSendPort => _eventPort.sendPort;
 
@@ -918,21 +1368,45 @@ final class _WindowDoomHost {
     _events.add(_DoomEvent(type: eventType.toSigned(32), data1: keyCode));
   }
 
-  Future<Object?> _pendingEventAsync(List<Object?> args) async {
-    if (_events.isEmpty) {
-      await _yieldToEventLoopIfNeeded();
+  FutureOr<Object?> _pendingEventAsync(List<Object?> args) {
+    if (_doomPerfEnabled) {
+      _pendingEventCalls++;
     }
+    if (_events.isEmpty) {
+      final yieldFuture = _yieldToEventLoopIfNeeded();
+      if (yieldFuture != null) {
+        return yieldFuture.then<Object?>((_) {
+          _emitPerfIfNeeded();
+          return _events.isNotEmpty ? 1 : 0;
+        });
+      }
+    }
+    _emitPerfIfNeeded();
     return _events.isNotEmpty ? 1 : 0;
   }
 
-  Future<Object?> _nextEventAsync(List<Object?> args) async {
+  FutureOr<Object?> _nextEventAsync(List<Object?> args) {
+    if (_doomPerfEnabled) {
+      _nextEventCalls++;
+    }
     if (_events.isEmpty) {
-      await _yieldToEventLoopIfNeeded();
-      if (_events.isEmpty) {
-        return 0;
+      final yieldFuture = _yieldToEventLoopIfNeeded();
+      if (yieldFuture != null) {
+        return yieldFuture.then<Object?>((_) {
+          if (_events.isEmpty) {
+            _emitPerfIfNeeded();
+            return 0;
+          }
+          _writeNextEventToGuest(args);
+          _emitPerfIfNeeded();
+          return 1;
+        });
       }
+      _emitPerfIfNeeded();
+      return 0;
     }
     _writeNextEventToGuest(args);
+    _emitPerfIfNeeded();
     return 1;
   }
 
@@ -951,25 +1425,40 @@ final class _WindowDoomHost {
   }
 
   Object? _renderFrame(List<Object?> args) {
+    if (_doomPerfEnabled) {
+      _renderCalls++;
+    }
     final memory = _requireMemory();
     final framePtr = _asI32(args, 0, 'frame_ptr');
     final frameLen = _asI32(args, 1, 'frame_len');
     if (frameLen <= 0) {
+      _emitPerfIfNeeded();
       return 0;
     }
 
     final nowUs = _frameClock.elapsedMicroseconds;
     if (nowUs - _lastFrameSentUs < _doomTargetFrameIntervalUs) {
+      _emitPerfIfNeeded();
       return 0;
     }
     _lastFrameSentUs = nowUs;
 
+    final copyStartUs = _doomPerfEnabled ? _frameClock.elapsedMicroseconds : 0;
     final indexed = memory.readBytes(framePtr, frameLen);
     final rgba = _indexedToRgba(indexed);
-    uiPort.send(<String, Object?>{
-      'type': 'frame',
-      'rgba': TransferableTypedData.fromList(<Uint8List>[rgba]),
-    });
+    if (_doomPerfEnabled) {
+      _renderCopyUsSamples.add(_frameClock.elapsedMicroseconds - copyStartUs);
+    }
+
+    final sendStartUs = _doomPerfEnabled ? _frameClock.elapsedMicroseconds : 0;
+    uiPort.send(<Object?>[
+      _messageFrame,
+      TransferableTypedData.fromList(<Uint8List>[rgba]),
+    ]);
+    if (_doomPerfEnabled) {
+      _frameSendUsSamples.add(_frameClock.elapsedMicroseconds - sendStartUs);
+    }
+    _emitPerfIfNeeded();
     return 0;
   }
 
@@ -993,13 +1482,87 @@ final class _WindowDoomHost {
     _eventPort.close();
   }
 
-  Future<void> _yieldToEventLoopIfNeeded() async {
+  Future<void>? _yieldToEventLoopIfNeeded() {
     final nowUs = _frameClock.elapsedMicroseconds;
-    if (nowUs - _lastEventYieldUs < 2000) {
-      return;
+    if (nowUs - _lastEventYieldUs < _doomEventYieldIntervalUs) {
+      return null;
     }
     _lastEventYieldUs = nowUs;
-    await Future<void>.delayed(Duration.zero);
+    if (_doomPerfEnabled) {
+      _eventYieldCount++;
+    }
+    return Future<void>.delayed(Duration.zero);
+  }
+
+  void _emitPerfIfNeeded() {
+    if (!_doomPerfEnabled) {
+      return;
+    }
+    final nowUs = _frameClock.elapsedMicroseconds;
+    if (_lastPerfFlushUs == 0) {
+      _lastPerfFlushUs = nowUs;
+      return;
+    }
+    final elapsedUs = nowUs - _lastPerfFlushUs;
+    if (elapsedUs < _doomPerfLogIntervalUs) {
+      return;
+    }
+
+    final renderCallsPerSecond = _renderCalls * 1000000 ~/ elapsedUs;
+    final pendingEventCallsPerSecond =
+        _pendingEventCalls * 1000000 ~/ elapsedUs;
+    final nextEventCallsPerSecond = _nextEventCalls * 1000000 ~/ elapsedUs;
+    final eventYieldCountPerSecond = _eventYieldCount * 1000000 ~/ elapsedUs;
+    final renderCopy = _renderCopyUsSamples.consumeQuantiles();
+    final frameSend = _frameSendUsSamples.consumeQuantiles();
+    final importPerf = importPerfStats.flush(elapsedUs: elapsedUs);
+
+    final message = <String, Object?>{
+      'type': 'perf',
+      'render_calls_s': renderCallsPerSecond,
+      'pending_event_calls_s': pendingEventCallsPerSecond,
+      'next_event_calls_s': nextEventCallsPerSecond,
+      'event_yield_count_s': eventYieldCountPerSecond,
+      'render_copy_us_p50': renderCopy.p50,
+      'render_copy_us_p95': renderCopy.p95,
+      'frame_send_us_p50': frameSend.p50,
+      'frame_send_us_p95': frameSend.p95,
+      'host_import_calls_s': importPerf.hostImportCallsPerSecond,
+      'wasi_calls_s': importPerf.wasiCallsPerSecond,
+      'wasi_us_total': importPerf.wasiUs,
+      'wasi_share_pct': importPerf.wasiSharePercent,
+      'wasi_clock_time_get_calls_s': importPerf.wasiClockTimeGetCallsPerSecond,
+      'wasi_poll_oneoff_calls_s': importPerf.wasiPollOneoffCallsPerSecond,
+      'wasi_fd_calls_s': importPerf.wasiFdCallsPerSecond,
+    };
+    uiPort.send(message);
+    if (_doomPerfLoggingEnabled) {
+      debugPrint(
+        'doom_perf role=host '
+        'render_calls_s=$renderCallsPerSecond '
+        'render_copy_us_p50=${renderCopy.p50.toStringAsFixed(1)} '
+        'render_copy_us_p95=${renderCopy.p95.toStringAsFixed(1)} '
+        'frame_send_us_p50=${frameSend.p50.toStringAsFixed(1)} '
+        'frame_send_us_p95=${frameSend.p95.toStringAsFixed(1)} '
+        'pending_event_calls_s=$pendingEventCallsPerSecond '
+        'next_event_calls_s=$nextEventCallsPerSecond '
+        'event_yield_count_s=$eventYieldCountPerSecond '
+        'host_import_calls_s=${importPerf.hostImportCallsPerSecond} '
+        'host_import_us=${importPerf.hostImportUs} '
+        'wasi_calls_s=${importPerf.wasiCallsPerSecond} '
+        'wasi_us_total=${importPerf.wasiUs} '
+        'wasi_share_pct=${importPerf.wasiSharePercent.toStringAsFixed(2)} '
+        'wasi_clock_time_get_calls_s=${importPerf.wasiClockTimeGetCallsPerSecond} '
+        'wasi_poll_oneoff_calls_s=${importPerf.wasiPollOneoffCallsPerSecond} '
+        'wasi_fd_calls_s=${importPerf.wasiFdCallsPerSecond}',
+      );
+    }
+
+    _lastPerfFlushUs = nowUs;
+    _renderCalls = 0;
+    _pendingEventCalls = 0;
+    _nextEventCalls = 0;
+    _eventYieldCount = 0;
   }
 
   WasmMemory _requireMemory() {

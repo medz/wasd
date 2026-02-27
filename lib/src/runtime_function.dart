@@ -1,6 +1,7 @@
 import 'imports.dart';
 import 'module.dart';
 import 'predecode.dart';
+import 'value.dart';
 
 sealed class RuntimeFunction {
   const RuntimeFunction({
@@ -16,15 +17,18 @@ sealed class RuntimeFunction {
 }
 
 final class DefinedRuntimeFunction extends RuntimeFunction {
-  const DefinedRuntimeFunction({
+  DefinedRuntimeFunction({
     required super.type,
     required super.declaredTypeIndex,
     required super.runtimeTypeDepth,
     required this.localTypes,
     required this.instructions,
-  });
+  }) : localZeroValues = List<WasmValue>.unmodifiable(
+         localTypes.map(WasmValue.zeroForType),
+       );
 
   final List<WasmValueType> localTypes;
+  final List<WasmValue> localZeroValues;
   final List<Instruction> instructions;
 
   @override
