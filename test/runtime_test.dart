@@ -7275,6 +7275,155 @@ void main() {
       },
     );
 
+    test(
+      'supports v128 bitwise SIMD opcodes in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [0],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0x00)),
+                ..._fdBytes(Opcodes.v128Not, []),
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0xff)),
+                ..._fdBytes(Opcodes.i8x16Eq, []),
+                ..._fdBytes(Opcodes.i8x16Bitmask, []),
+                ..._i32Const(0xffff),
+                Opcodes.i32Eq,
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0xf0)),
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0x0f)),
+                ..._fdBytes(Opcodes.v128And, []),
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0x00)),
+                ..._fdBytes(Opcodes.i8x16Eq, []),
+                ..._fdBytes(Opcodes.i8x16Bitmask, []),
+                ..._i32Const(0xffff),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0xff)),
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0x0f)),
+                ..._fdBytes(Opcodes.v128Andnot, []),
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0xf0)),
+                ..._fdBytes(Opcodes.i8x16Eq, []),
+                ..._fdBytes(Opcodes.i8x16Bitmask, []),
+                ..._i32Const(0xffff),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0xf0)),
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0x0f)),
+                ..._fdBytes(Opcodes.v128Or, []),
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0xff)),
+                ..._fdBytes(Opcodes.i8x16Eq, []),
+                ..._fdBytes(Opcodes.i8x16Bitmask, []),
+                ..._i32Const(0xffff),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0xaa)),
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0xff)),
+                ..._fdBytes(Opcodes.v128Xor, []),
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0x55)),
+                ..._fdBytes(Opcodes.i8x16Eq, []),
+                ..._fdBytes(Opcodes.i8x16Bitmask, []),
+                ..._i32Const(0xffff),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'supportsV128Bitwise',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          features: const WasmFeatureSet(simd: true),
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('supportsV128Bitwise', [41]), 1);
+      },
+    );
+
+    test(
+      'supports i32x4 lane extract/replace SIMD opcodes in async import call chains',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [0],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._i32Const(0x11111111),
+                ..._fdBytes(Opcodes.i32x4Splat, []),
+                ..._i32Const(0x7fffffff),
+                ..._fdBytes(Opcodes.i32x4ReplaceLane, [2]),
+                ..._fdBytes(Opcodes.i32x4ExtractLane, [2]),
+                ..._i32Const(0x7fffffff),
+                Opcodes.i32Eq,
+                ..._i32Const(-1),
+                ..._fdBytes(Opcodes.i32x4Splat, []),
+                ..._fdBytes(Opcodes.i32x4ExtractLane, [1]),
+                ..._i32Const(-1),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'supportsI32x4ExtractReplace',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          features: const WasmFeatureSet(simd: true),
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(
+          await instance.invokeI32Async('supportsI32x4ExtractReplace', [41]),
+          1,
+        );
+      },
+    );
+
     test('supports i64x2 SIMD opcodes in async import call chains', () async {
       final wasm = _buildModule(
         types: [

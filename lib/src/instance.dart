@@ -1169,6 +1169,26 @@ final class WasmInstance {
             _simdI8x16AllTrue(stack);
             pc++;
 
+          case Opcodes.v128Not:
+            _simdV128Not(stack);
+            pc++;
+
+          case Opcodes.v128And:
+            _simdV128And(stack);
+            pc++;
+
+          case Opcodes.v128Andnot:
+            _simdV128Andnot(stack);
+            pc++;
+
+          case Opcodes.v128Or:
+            _simdV128Or(stack);
+            pc++;
+
+          case Opcodes.v128Xor:
+            _simdV128Xor(stack);
+            pc++;
+
           case Opcodes.v128Bitselect:
           case Opcodes.i8x16RelaxedLaneselect:
           case Opcodes.i16x8RelaxedLaneselect:
@@ -1384,6 +1404,14 @@ final class WasmInstance {
 
           case Opcodes.i32x4Splat:
             _simdI32x4Splat(stack);
+            pc++;
+
+          case Opcodes.i32x4ExtractLane:
+            _simdI32x4ExtractLane(stack, immediate: instruction.immediate!);
+            pc++;
+
+          case Opcodes.i32x4ReplaceLane:
+            _simdI32x4ReplaceLane(stack, immediate: instruction.immediate!);
             pc++;
 
           case Opcodes.i32x4ExtAddPairwiseI16x8S:
@@ -5797,6 +5825,55 @@ final class WasmInstance {
     stack.add(WasmValue.i32(allTrue));
   }
 
+  void _simdV128Not(List<WasmValue> stack) {
+    final operand = _popAsyncSubsetV128(stack, opName: 'v128.not');
+    final result = Uint8List(16);
+    for (var i = 0; i < 16; i++) {
+      result[i] = (~operand[i]) & 0xff;
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdV128And(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'v128.and rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'v128.and lhs');
+    final result = Uint8List(16);
+    for (var i = 0; i < 16; i++) {
+      result[i] = lhs[i] & rhs[i];
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdV128Andnot(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'v128.andnot rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'v128.andnot lhs');
+    final result = Uint8List(16);
+    for (var i = 0; i < 16; i++) {
+      result[i] = lhs[i] & ((~rhs[i]) & 0xff);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdV128Or(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'v128.or rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'v128.or lhs');
+    final result = Uint8List(16);
+    for (var i = 0; i < 16; i++) {
+      result[i] = lhs[i] | rhs[i];
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdV128Xor(List<WasmValue> stack) {
+    final rhs = _popAsyncSubsetV128(stack, opName: 'v128.xor rhs');
+    final lhs = _popAsyncSubsetV128(stack, opName: 'v128.xor lhs');
+    final result = Uint8List(16);
+    for (var i = 0; i < 16; i++) {
+      result[i] = lhs[i] ^ rhs[i];
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
   void _simdV128Bitselect(List<WasmValue> stack) {
     final mask = _popAsyncSubsetV128(stack, opName: 'v128.bitselect mask');
     final rhs = _popAsyncSubsetV128(stack, opName: 'v128.bitselect rhs');
@@ -6524,6 +6601,29 @@ final class WasmInstance {
     for (var i = 0; i < 4; i++) {
       data.setUint32(i * 4, laneBits, Endian.little);
     }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4ExtractLane(List<WasmValue> stack, {required int immediate}) {
+    final lane = immediate & 0x03;
+    final value = _popAsyncSubsetV128(stack, opName: 'i32x4.extract_lane');
+    final laneValue = ByteData.sublistView(
+      value,
+    ).getInt32(lane * 4, Endian.little);
+    stack.add(WasmValue.i32(laneValue));
+  }
+
+  void _simdI32x4ReplaceLane(List<WasmValue> stack, {required int immediate}) {
+    final lane = immediate & 0x03;
+    final replacement = _popValue(
+      stack,
+      'i32x4.replace_lane value',
+    ).castTo(WasmValueType.i32).asI32();
+    final value = _popAsyncSubsetV128(stack, opName: 'i32x4.replace_lane');
+    final result = Uint8List.fromList(value);
+    ByteData.sublistView(
+      result,
+    ).setUint32(lane * 4, replacement.toUnsigned(32), Endian.little);
     _pushAsyncSubsetV128(stack, result);
   }
 
