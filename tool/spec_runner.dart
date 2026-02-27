@@ -564,9 +564,9 @@ Future<List<StepResult>> _runWasmSuite(
           'dart',
           'compile',
           'wasm',
-          'example/invoke.dart',
+          'tool/smoke/wasm_compile_smoke.dart',
           '-o',
-          '.dart_tool/spec_runner/invoke.wasm',
+          '.dart_tool/spec_runner/wasm_compile_smoke.wasm',
         ],
       ),
     );

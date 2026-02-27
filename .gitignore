@@ -19,8 +19,3 @@ coverage/
 **/.packages
 **/Generated.xcconfig
 **/ephemeral/
-
-# Local example artifacts (not source)
-example/doom/freedoom-*.zip
-example/doom/freedoom1.wad
-example/doom/frame_*.ppm
