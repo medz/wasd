@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'byte_reader.dart';
 import 'component.dart';
 import 'component_canonical_abi.dart';
 import 'features.dart';
@@ -812,17 +813,47 @@ final class WasmComponentInstance {
         if (!sourceInstance.exportedMemories.contains(exportName)) {
           return (bound: false, incompatibility: null);
         }
+        final compatibility = _isMemoryImportCompatibleWithExport(
+          imported: imported,
+          importKey: key,
+          sourceInstance: sourceInstance,
+          sourceInstanceIndex: sourceInstanceIndex,
+          sourceExportName: exportName,
+        );
+        if (compatibility != null) {
+          return (bound: false, incompatibility: compatibility);
+        }
         memories[key] = sourceInstance.exportedMemory(exportName);
         return (bound: true, incompatibility: null);
       case WasmImportKind.table:
         if (!sourceInstance.exportedTables.contains(exportName)) {
           return (bound: false, incompatibility: null);
         }
+        final compatibility = _isTableImportCompatibleWithExport(
+          imported: imported,
+          importKey: key,
+          sourceInstance: sourceInstance,
+          sourceInstanceIndex: sourceInstanceIndex,
+          sourceExportName: exportName,
+        );
+        if (compatibility != null) {
+          return (bound: false, incompatibility: compatibility);
+        }
         tables[key] = sourceInstance.exportedTable(exportName);
         return (bound: true, incompatibility: null);
       case WasmImportKind.global:
         if (!sourceInstance.exportedGlobals.contains(exportName)) {
           return (bound: false, incompatibility: null);
+        }
+        final compatibility = _isGlobalImportCompatibleWithExport(
+          imported: imported,
+          importKey: key,
+          sourceInstance: sourceInstance,
+          sourceInstanceIndex: sourceInstanceIndex,
+          sourceExportName: exportName,
+        );
+        if (compatibility != null) {
+          return (bound: false, incompatibility: compatibility);
         }
         globals[key] = sourceInstance.readGlobal(exportName);
         globalTypes[key] = sourceInstance.exportedGlobalType(exportName);
@@ -831,6 +862,17 @@ final class WasmComponentInstance {
       case WasmImportKind.tag:
         if (!sourceInstance.exportedTags.contains(exportName)) {
           return (bound: false, incompatibility: null);
+        }
+        final compatibility = _isTagImportCompatibleWithExport(
+          imported: imported,
+          importKey: key,
+          importingModule: importingModule,
+          sourceInstance: sourceInstance,
+          sourceInstanceIndex: sourceInstanceIndex,
+          sourceExportName: exportName,
+        );
+        if (compatibility != null) {
+          return (bound: false, incompatibility: compatibility);
         }
         tags[key] = sourceInstance.exportedTagImport(exportName);
         return (bound: true, incompatibility: null);
@@ -866,6 +908,162 @@ final class WasmComponentInstance {
           'for import `$importKey`: expected '
           '${_formatFunctionType(expectedType)} but got '
           '${_formatFunctionType(actualType)}.';
+    }
+    return null;
+  }
+
+  static String? _isMemoryImportCompatibleWithExport({
+    required WasmImport imported,
+    required String importKey,
+    required WasmInstance sourceInstance,
+    required int sourceInstanceIndex,
+    required String sourceExportName,
+  }) {
+    final expectedType = imported.memoryType;
+    if (expectedType == null) {
+      return 'Malformed memory import `$importKey`: missing memory type.';
+    }
+    final actualMemory = sourceInstance.exportedMemory(sourceExportName);
+    final expectedPageSize = 1 << expectedType.pageSizeLog2;
+    if (actualMemory.isMemory64 != expectedType.isMemory64) {
+      return 'Component core-instance argument #$sourceInstanceIndex export '
+          '`$sourceExportName` has incompatible memory index type for '
+          'import `$importKey`: expected memory64=${expectedType.isMemory64}, '
+          'actual=${actualMemory.isMemory64}.';
+    }
+    if (actualMemory.shared != expectedType.shared) {
+      return 'Component core-instance argument #$sourceInstanceIndex export '
+          '`$sourceExportName` has incompatible memory shared flag for '
+          'import `$importKey`: expected=${expectedType.shared}, '
+          'actual=${actualMemory.shared}.';
+    }
+    if (actualMemory.pageSizeBytes != expectedPageSize) {
+      return 'Component core-instance argument #$sourceInstanceIndex export '
+          '`$sourceExportName` has incompatible memory page size for '
+          'import `$importKey`: expected=$expectedPageSize, '
+          'actual=${actualMemory.pageSizeBytes}.';
+    }
+    if (actualMemory.pageCount < expectedType.minPages) {
+      return 'Component core-instance argument #$sourceInstanceIndex export '
+          '`$sourceExportName` has insufficient memory pages for '
+          'import `$importKey`: expected at least ${expectedType.minPages}, '
+          'actual=${actualMemory.pageCount}.';
+    }
+    final expectedMax = expectedType.maxPages;
+    if (expectedMax != null) {
+      final actualMax = actualMemory.maxPages;
+      if (actualMax == null || actualMax > expectedMax) {
+        return 'Component core-instance argument #$sourceInstanceIndex export '
+            '`$sourceExportName` has incompatible memory max pages for '
+            'import `$importKey`: expected <= $expectedMax, '
+            'actual=${actualMax ?? 'unbounded'}.';
+      }
+    }
+    return null;
+  }
+
+  static String? _isTableImportCompatibleWithExport({
+    required WasmImport imported,
+    required String importKey,
+    required WasmInstance sourceInstance,
+    required int sourceInstanceIndex,
+    required String sourceExportName,
+  }) {
+    final expectedType = imported.tableType;
+    if (expectedType == null) {
+      return 'Malformed table import `$importKey`: missing table type.';
+    }
+    final actualTable = sourceInstance.exportedTable(sourceExportName);
+    final expectedSignature = expectedType.refTypeSignature;
+    final actualSignature = actualTable.refTypeSignature;
+    final refTypeMatches = expectedSignature != null && actualSignature != null
+        ? _referenceTypeSignaturesMatch(expectedSignature, actualSignature)
+        : actualTable.refType == expectedType.refType;
+    if (!refTypeMatches) {
+      return 'Component core-instance argument #$sourceInstanceIndex export '
+          '`$sourceExportName` has incompatible table reference type for '
+          'import `$importKey`: expected ${_formatTableType(expectedType)}, '
+          'actual ${_formatTable(actualTable)}.';
+    }
+    if (actualTable.isTable64 != expectedType.isTable64) {
+      return 'Component core-instance argument #$sourceInstanceIndex export '
+          '`$sourceExportName` has incompatible table index type for '
+          'import `$importKey`: expected table64=${expectedType.isTable64}, '
+          'actual=${actualTable.isTable64}.';
+    }
+    if (actualTable.length < expectedType.min) {
+      return 'Component core-instance argument #$sourceInstanceIndex export '
+          '`$sourceExportName` has insufficient table length for '
+          'import `$importKey`: expected at least ${expectedType.min}, '
+          'actual=${actualTable.length}.';
+    }
+    final expectedMax = expectedType.max;
+    if (expectedMax != null) {
+      final actualMax = actualTable.max;
+      if (actualMax == null || actualMax > expectedMax) {
+        return 'Component core-instance argument #$sourceInstanceIndex export '
+            '`$sourceExportName` has incompatible table max for import '
+            '`$importKey`: expected <= $expectedMax, '
+            'actual=${actualMax ?? 'unbounded'}.';
+      }
+    }
+    return null;
+  }
+
+  static String? _isGlobalImportCompatibleWithExport({
+    required WasmImport imported,
+    required String importKey,
+    required WasmInstance sourceInstance,
+    required int sourceInstanceIndex,
+    required String sourceExportName,
+  }) {
+    final expectedType = imported.globalType;
+    if (expectedType == null) {
+      return 'Malformed global import `$importKey`: missing global type.';
+    }
+    final actualType = sourceInstance.exportedGlobalType(sourceExportName);
+    if (!_isGlobalImportTypeCompatible(
+      expected: expectedType,
+      actual: actualType,
+    )) {
+      return 'Component core-instance argument #$sourceInstanceIndex export '
+          '`$sourceExportName` has incompatible global type for '
+          'import `$importKey`: expected ${_formatGlobalType(expectedType)}, '
+          'actual ${_formatGlobalType(actualType)}.';
+    }
+    return null;
+  }
+
+  static String? _isTagImportCompatibleWithExport({
+    required WasmImport imported,
+    required String importKey,
+    required WasmModule importingModule,
+    required WasmInstance sourceInstance,
+    required int sourceInstanceIndex,
+    required String sourceExportName,
+  }) {
+    final tagType = imported.tagType;
+    if (tagType == null) {
+      return 'Malformed tag import `$importKey`: missing tag type.';
+    }
+    final typeIndex = tagType.typeIndex;
+    if (typeIndex < 0 ||
+        typeIndex >= importingModule.types.length ||
+        !importingModule.types[typeIndex].isFunctionType) {
+      return 'Malformed tag import `$importKey`: invalid type index '
+          '$typeIndex.';
+    }
+    final expectedType = importingModule.types[typeIndex];
+    final expectedTypeKey = _tagNominalTypeKey(importingModule, typeIndex);
+    final actualTag = sourceInstance.exportedTagImport(sourceExportName);
+    if (!_sameFunctionSignature(expectedType, actualTag.type) ||
+        expectedTypeKey != actualTag.typeKey) {
+      return 'Component core-instance argument #$sourceInstanceIndex export '
+          '`$sourceExportName` has incompatible tag type for import '
+          '`$importKey`: expected ${_formatFunctionType(expectedType)} '
+          '(nominal=$expectedTypeKey), actual '
+          '${_formatFunctionType(actualTag.type)} '
+          '(nominal=${actualTag.typeKey}).';
     }
     return null;
   }
@@ -943,6 +1141,237 @@ final class WasmComponentInstance {
       type.resultTypeSignatures,
     ).join(', ');
     return '($params) -> ($results)';
+  }
+
+  static String _formatTableType(WasmTableType type) {
+    final refType = type.refTypeSignature ?? type.refType.name;
+    return '(ref=$refType, min=${type.min}, max=${type.max ?? 'unbounded'}, '
+        'table64=${type.isTable64})';
+  }
+
+  static String _formatTable(WasmTable table) {
+    final refType = table.refTypeSignature ?? table.refType.name;
+    return '(ref=$refType, min=${table.min}, max=${table.max ?? 'unbounded'}, '
+        'table64=${table.isTable64}, len=${table.length})';
+  }
+
+  static String _formatGlobalType(WasmGlobalType type) {
+    final valueType = type.valueTypeSignature ?? type.valueType.name;
+    return '(value=$valueType, mutable=${type.mutable})';
+  }
+
+  static bool _isGlobalImportTypeCompatible({
+    required WasmGlobalType expected,
+    required WasmGlobalType actual,
+  }) {
+    if (expected.mutable != actual.mutable) {
+      return false;
+    }
+
+    final expectedSignature = expected.valueTypeSignature;
+    final actualSignature = actual.valueTypeSignature;
+    final expectedIsNumeric = _isNumericValueTypeSignature(expectedSignature);
+    final actualIsNumeric = _isNumericValueTypeSignature(actualSignature);
+
+    if (expectedIsNumeric || actualIsNumeric) {
+      if (expectedSignature != null && actualSignature != null) {
+        return expectedSignature == actualSignature;
+      }
+      return expected.valueType == actual.valueType;
+    }
+
+    if (expectedSignature != null && actualSignature != null) {
+      final expectedRef = _parseReferenceGlobalType(expectedSignature);
+      final actualRef = _parseReferenceGlobalType(actualSignature);
+      if (expectedRef != null && actualRef != null) {
+        if (expected.mutable) {
+          return _referenceGlobalTypeEquals(expectedRef, actualRef);
+        }
+        return _isReferenceGlobalSubtype(
+          actual: actualRef,
+          expected: expectedRef,
+        );
+      }
+      if (expected.mutable) {
+        return expectedSignature == actualSignature;
+      }
+    }
+
+    return expected.valueType == actual.valueType;
+  }
+
+  static bool _isNumericValueTypeSignature(String? signature) {
+    return signature == '7f' ||
+        signature == '7e' ||
+        signature == '7d' ||
+        signature == '7c';
+  }
+
+  static ({bool nullable, String kind, String? typeKey})?
+  _parseReferenceGlobalType(String signature) {
+    final bytes = _signatureBytes(signature);
+    if (bytes.isEmpty) {
+      return null;
+    }
+
+    final first = bytes.first;
+    if (bytes.length == 1) {
+      return switch (first) {
+        0x70 => (nullable: true, kind: 'func', typeKey: null),
+        0x6f => (nullable: true, kind: 'extern', typeKey: null),
+        _ => null,
+      };
+    }
+
+    if (first != 0x63 && first != 0x64) {
+      return null;
+    }
+
+    final nullable = first == 0x63;
+    final heapBytes = bytes.sublist(1);
+    if (heapBytes.isEmpty) {
+      return null;
+    }
+
+    final heapReader = ByteReader(Uint8List.fromList(heapBytes));
+    final heapType = _readSignedLeb33WithFirst(
+      heapReader,
+      heapReader.readByte(),
+    );
+    if (!heapReader.isEOF) {
+      return (
+        nullable: nullable,
+        kind: 'other:${_bytesToSignature(heapBytes)}',
+        typeKey: null,
+      );
+    }
+
+    if (heapType >= 0) {
+      return (
+        nullable: nullable,
+        kind: 'typed-func',
+        typeKey: _bytesToSignature(heapBytes),
+      );
+    }
+
+    return switch (heapType) {
+      -16 => (nullable: nullable, kind: 'func', typeKey: null),
+      -17 => (nullable: nullable, kind: 'extern', typeKey: null),
+      _ => (
+        nullable: nullable,
+        kind: 'other:${_bytesToSignature(heapBytes)}',
+        typeKey: null,
+      ),
+    };
+  }
+
+  static bool _referenceGlobalTypeEquals(
+    ({bool nullable, String kind, String? typeKey}) lhs,
+    ({bool nullable, String kind, String? typeKey}) rhs,
+  ) {
+    return lhs.nullable == rhs.nullable &&
+        lhs.kind == rhs.kind &&
+        lhs.typeKey == rhs.typeKey;
+  }
+
+  static bool _referenceTypeSignaturesMatch(String expected, String actual) {
+    final expectedRef = _parseReferenceGlobalType(expected);
+    final actualRef = _parseReferenceGlobalType(actual);
+    if (expectedRef != null && actualRef != null) {
+      return _referenceGlobalTypeEquals(expectedRef, actualRef);
+    }
+    return expected == actual;
+  }
+
+  static bool _isReferenceGlobalSubtype({
+    required ({bool nullable, String kind, String? typeKey}) actual,
+    required ({bool nullable, String kind, String? typeKey}) expected,
+  }) {
+    if (actual.nullable && !expected.nullable) {
+      return false;
+    }
+
+    if (actual.kind == expected.kind) {
+      if (actual.kind == 'typed-func') {
+        return actual.typeKey == expected.typeKey;
+      }
+      return true;
+    }
+
+    if (actual.kind == 'typed-func' && expected.kind == 'func') {
+      return true;
+    }
+
+    return false;
+  }
+
+  static List<int> _signatureBytes(String signature) {
+    if (signature.isEmpty || signature.length.isOdd) {
+      return const <int>[];
+    }
+    final bytes = <int>[];
+    for (var i = 0; i < signature.length; i += 2) {
+      bytes.add(int.parse(signature.substring(i, i + 2), radix: 16));
+    }
+    return bytes;
+  }
+
+  static String _bytesToSignature(List<int> bytes) {
+    final buffer = StringBuffer();
+    for (final byte in bytes) {
+      buffer.write((byte & 0xff).toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
+  }
+
+  static int _readSignedLeb33WithFirst(ByteReader reader, int firstByte) {
+    var result = firstByte & 0x7f;
+    var shift = 7;
+    var byte = firstByte;
+    var multiplier = 128;
+    while ((byte & 0x80) != 0) {
+      byte = reader.readByte();
+      result += (byte & 0x7f) * multiplier;
+      multiplier *= 128;
+      shift += 7;
+      if (shift > 35) {
+        throw const FormatException('Invalid signed LEB33 encoding.');
+      }
+    }
+    if (shift < 33 && (byte & 0x40) != 0) {
+      result -= multiplier;
+    }
+    return _normalizeSignedLeb33(result);
+  }
+
+  static int _normalizeSignedLeb33(int value) {
+    const signBit33 = 0x100000000;
+    const width33 = 0x200000000;
+    var normalized = value % width33;
+    if (normalized < 0) {
+      normalized += width33;
+    }
+    if (normalized >= signBit33) {
+      normalized -= width33;
+    }
+    return normalized;
+  }
+
+  static String _tagNominalTypeKey(WasmModule module, int typeIndex) {
+    if (typeIndex < 0 || typeIndex >= module.types.length) {
+      return 'invalid';
+    }
+    final type = module.types[typeIndex];
+    if (!type.isFunctionType) {
+      return 'invalid';
+    }
+    final paramsKey = type.params.map((value) => value.index).join(',');
+    final resultsKey = type.results.map((value) => value.index).join(',');
+    final shape = '$paramsKey->$resultsKey';
+    if (type.recGroupSize > 1) {
+      return '$shape@${type.recGroupPosition}/${type.recGroupSize}';
+    }
+    return shape;
   }
 
   List<Object?> invokeCanonical({

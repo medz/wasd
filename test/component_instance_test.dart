@@ -147,6 +147,196 @@ void main() {
       },
     );
 
+    test('wires non-function imports from core-instance argument exports', () {
+      final componentBytes = _componentWithCoreModules(
+        <Uint8List>[
+          _coreModuleExportMemory(name: 'mem', minPages: 2, maxPages: 2),
+          _coreModuleImportMemoryAndConst(
+            importModule: 'env',
+            importName: 'mem',
+            minPages: 1,
+            maxPages: 3,
+            exportName: 'runMem',
+            value: 11,
+          ),
+          _coreModuleExportTable(name: 'tab', min: 3, max: 3),
+          _coreModuleImportTableAndConst(
+            importModule: 'env',
+            importName: 'tab',
+            min: 2,
+            max: 4,
+            exportName: 'runTab',
+            value: 12,
+          ),
+          _coreModuleExportGlobalI32(name: 'g', value: 7),
+          _coreModuleImportGlobalAndConst(
+            importModule: 'env',
+            importName: 'g',
+            valueType: 0x7f,
+            mutable: false,
+            exportName: 'runGlobal',
+            value: 13,
+          ),
+          _coreModuleExportTag(name: 't', paramType: 0x7f),
+          _coreModuleImportTagAndConst(
+            importModule: 'env',
+            importName: 't',
+            expectedParamType: 0x7f,
+            exportName: 'runTag',
+            value: 14,
+          ),
+        ],
+        instantiateModuleIndices: const [0, 1, 2, 3, 4, 5, 6, 7],
+        instantiateArgumentInstanceIndices: const [
+          <int>[],
+          <int>[0],
+          <int>[],
+          <int>[2],
+          <int>[],
+          <int>[4],
+          <int>[],
+          <int>[6],
+        ],
+      );
+
+      final instance = WasmComponentInstance.fromBytes(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
+      expect(instance.invokeCore('runMem', moduleIndex: 1), 11);
+      expect(instance.invokeCore('runTab', moduleIndex: 3), 12);
+      expect(instance.invokeCore('runGlobal', moduleIndex: 5), 13);
+      expect(instance.invokeCore('runTag', moduleIndex: 7), 14);
+    });
+
+    test(
+      'rejects memory imports wired from core-instance args with mismatched types',
+      () {
+        final componentBytes = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleExportMemory(name: 'mem', minPages: 1, maxPages: 1),
+            _coreModuleImportMemoryAndConst(
+              importModule: 'env',
+              importName: 'mem',
+              minPages: 2,
+              maxPages: 2,
+              exportName: 'run',
+              value: 1,
+            ),
+          ],
+          instantiateModuleIndices: const [0, 1],
+          instantiateArgumentInstanceIndices: const [
+            <int>[],
+            <int>[0],
+          ],
+        );
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test(
+      'rejects table imports wired from core-instance args with mismatched types',
+      () {
+        final componentBytes = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleExportTable(name: 'tab', min: 1, max: 1),
+            _coreModuleImportTableAndConst(
+              importModule: 'env',
+              importName: 'tab',
+              min: 2,
+              max: 2,
+              exportName: 'run',
+              value: 1,
+            ),
+          ],
+          instantiateModuleIndices: const [0, 1],
+          instantiateArgumentInstanceIndices: const [
+            <int>[],
+            <int>[0],
+          ],
+        );
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test(
+      'rejects global imports wired from core-instance args with mismatched types',
+      () {
+        final componentBytes = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleExportGlobalI64(name: 'g', value: 0),
+            _coreModuleImportGlobalAndConst(
+              importModule: 'env',
+              importName: 'g',
+              valueType: 0x7f,
+              mutable: false,
+              exportName: 'run',
+              value: 1,
+            ),
+          ],
+          instantiateModuleIndices: const [0, 1],
+          instantiateArgumentInstanceIndices: const [
+            <int>[],
+            <int>[0],
+          ],
+        );
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test(
+      'rejects tag imports wired from core-instance args with mismatched types',
+      () {
+        final componentBytes = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleExportTag(name: 't', paramType: 0x7e),
+            _coreModuleImportTagAndConst(
+              importModule: 'env',
+              importName: 't',
+              expectedParamType: 0x7f,
+              exportName: 'run',
+              value: 1,
+            ),
+          ],
+          instantiateModuleIndices: const [0, 1],
+          instantiateArgumentInstanceIndices: const [
+            <int>[],
+            <int>[0],
+          ],
+        );
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
     test('invokes component export aliases from section 0x03', () async {
       final componentBytes = _componentWithCoreModules(
         <Uint8List>[_coreModuleConstI32(name: 'one', value: 9)],
@@ -796,6 +986,292 @@ Uint8List _coreModuleCallImportedNullary({
     // code section
     ..._section(0x0a, codeSection),
   ]);
+}
+
+Uint8List _coreModuleExportMemory({
+  required String name,
+  required int minPages,
+  int? maxPages,
+}) {
+  final memoryPayload = <int>[
+    ..._u32Leb(1),
+    ..._limits(
+      flags: maxPages == null ? 0x00 : 0x01,
+      min: minPages,
+      max: maxPages,
+    ),
+  ];
+  final exportPayload = <int>[
+    ..._u32Leb(1),
+    ..._name(name),
+    WasmExportKind.memory,
+    ..._u32Leb(0),
+  ];
+  return _coreModuleWithSections(<List<int>>[
+    _section(0x05, memoryPayload),
+    _section(0x07, exportPayload),
+  ]);
+}
+
+Uint8List _coreModuleImportMemoryAndConst({
+  required String importModule,
+  required String importName,
+  required int minPages,
+  int? maxPages,
+  required String exportName,
+  required int value,
+}) {
+  final importPayload = <int>[
+    ..._u32Leb(1),
+    ..._name(importModule),
+    ..._name(importName),
+    WasmImportKind.memory,
+    ..._limits(
+      flags: maxPages == null ? 0x00 : 0x01,
+      min: minPages,
+      max: maxPages,
+    ),
+  ];
+  return _coreModuleConstRunWithImports(
+    typeSectionPayload: const <int>[0x01, 0x60, 0x00, 0x01, 0x7f],
+    importSectionPayload: importPayload,
+    runTypeIndex: 0,
+    exportName: exportName,
+    value: value,
+  );
+}
+
+Uint8List _coreModuleExportTable({
+  required String name,
+  required int min,
+  int? max,
+  int refType = 0x70,
+}) {
+  final tablePayload = <int>[
+    ..._u32Leb(1),
+    refType,
+    ..._limits(flags: max == null ? 0x00 : 0x01, min: min, max: max),
+  ];
+  final exportPayload = <int>[
+    ..._u32Leb(1),
+    ..._name(name),
+    WasmExportKind.table,
+    ..._u32Leb(0),
+  ];
+  return _coreModuleWithSections(<List<int>>[
+    _section(0x04, tablePayload),
+    _section(0x07, exportPayload),
+  ]);
+}
+
+Uint8List _coreModuleImportTableAndConst({
+  required String importModule,
+  required String importName,
+  required int min,
+  int? max,
+  int refType = 0x70,
+  required String exportName,
+  required int value,
+}) {
+  final importPayload = <int>[
+    ..._u32Leb(1),
+    ..._name(importModule),
+    ..._name(importName),
+    WasmImportKind.table,
+    refType,
+    ..._limits(flags: max == null ? 0x00 : 0x01, min: min, max: max),
+  ];
+  return _coreModuleConstRunWithImports(
+    typeSectionPayload: const <int>[0x01, 0x60, 0x00, 0x01, 0x7f],
+    importSectionPayload: importPayload,
+    runTypeIndex: 0,
+    exportName: exportName,
+    value: value,
+  );
+}
+
+Uint8List _coreModuleExportGlobalI32({
+  required String name,
+  int value = 0,
+  bool mutable = false,
+}) {
+  return _coreModuleExportGlobal(
+    name: name,
+    valueType: 0x7f,
+    mutable: mutable,
+    initOpcode: 0x41,
+    value: value,
+  );
+}
+
+Uint8List _coreModuleExportGlobalI64({
+  required String name,
+  int value = 0,
+  bool mutable = false,
+}) {
+  return _coreModuleExportGlobal(
+    name: name,
+    valueType: 0x7e,
+    mutable: mutable,
+    initOpcode: 0x42,
+    value: value,
+  );
+}
+
+Uint8List _coreModuleExportGlobal({
+  required String name,
+  required int valueType,
+  required bool mutable,
+  required int initOpcode,
+  required int value,
+}) {
+  final globalPayload = <int>[
+    ..._u32Leb(1),
+    valueType,
+    mutable ? 1 : 0,
+    initOpcode,
+    ..._u32Leb(value),
+    0x0b,
+  ];
+  final exportPayload = <int>[
+    ..._u32Leb(1),
+    ..._name(name),
+    WasmExportKind.global,
+    ..._u32Leb(0),
+  ];
+  return _coreModuleWithSections(<List<int>>[
+    _section(0x06, globalPayload),
+    _section(0x07, exportPayload),
+  ]);
+}
+
+Uint8List _coreModuleImportGlobalAndConst({
+  required String importModule,
+  required String importName,
+  required int valueType,
+  required bool mutable,
+  required String exportName,
+  required int value,
+}) {
+  final importPayload = <int>[
+    ..._u32Leb(1),
+    ..._name(importModule),
+    ..._name(importName),
+    WasmImportKind.global,
+    valueType,
+    mutable ? 1 : 0,
+  ];
+  return _coreModuleConstRunWithImports(
+    typeSectionPayload: const <int>[0x01, 0x60, 0x00, 0x01, 0x7f],
+    importSectionPayload: importPayload,
+    runTypeIndex: 0,
+    exportName: exportName,
+    value: value,
+  );
+}
+
+Uint8List _coreModuleExportTag({required String name, required int paramType}) {
+  final typePayload = <int>[
+    ..._u32Leb(1),
+    0x60,
+    ..._u32Leb(1),
+    paramType,
+    ..._u32Leb(0),
+  ];
+  final tagPayload = <int>[..._u32Leb(1), 0x00, ..._u32Leb(0)];
+  final exportPayload = <int>[
+    ..._u32Leb(1),
+    ..._name(name),
+    WasmExportKind.tag,
+    ..._u32Leb(0),
+  ];
+  return _coreModuleWithSections(<List<int>>[
+    _section(0x01, typePayload),
+    _section(0x0d, tagPayload),
+    _section(0x07, exportPayload),
+  ]);
+}
+
+Uint8List _coreModuleImportTagAndConst({
+  required String importModule,
+  required String importName,
+  required int expectedParamType,
+  required String exportName,
+  required int value,
+}) {
+  final typePayload = <int>[
+    ..._u32Leb(2),
+    0x60,
+    0x00,
+    0x01,
+    0x7f,
+    0x60,
+    ..._u32Leb(1),
+    expectedParamType,
+    ..._u32Leb(0),
+  ];
+  final importPayload = <int>[
+    ..._u32Leb(1),
+    ..._name(importModule),
+    ..._name(importName),
+    WasmImportKind.tag,
+    0x00,
+    ..._u32Leb(1),
+  ];
+  return _coreModuleConstRunWithImports(
+    typeSectionPayload: typePayload,
+    importSectionPayload: importPayload,
+    runTypeIndex: 0,
+    exportName: exportName,
+    value: value,
+  );
+}
+
+Uint8List _coreModuleConstRunWithImports({
+  required List<int> typeSectionPayload,
+  required List<int> importSectionPayload,
+  required int runTypeIndex,
+  required String exportName,
+  required int value,
+}) {
+  final exportPayload = <int>[
+    ..._u32Leb(1),
+    ..._name(exportName),
+    WasmExportKind.function,
+    ..._u32Leb(0),
+  ];
+  final codeBody = <int>[0x00, 0x41, ..._u32Leb(value), 0x0b];
+  final codePayload = <int>[
+    ..._u32Leb(1),
+    ..._u32Leb(codeBody.length),
+    ...codeBody,
+  ];
+  return _coreModuleWithSections(<List<int>>[
+    _section(0x01, typeSectionPayload),
+    _section(0x02, importSectionPayload),
+    _section(0x03, <int>[..._u32Leb(1), ..._u32Leb(runTypeIndex)]),
+    _section(0x07, exportPayload),
+    _section(0x0a, codePayload),
+  ]);
+}
+
+Uint8List _coreModuleWithSections(List<List<int>> sections) {
+  final bytes = <int>[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+  for (final section in sections) {
+    bytes.addAll(section);
+  }
+  return Uint8List.fromList(bytes);
+}
+
+List<int> _limits({required int flags, required int min, int? max}) {
+  final out = <int>[..._u32Leb(flags), ..._u32Leb(min)];
+  if ((flags & 0x01) != 0) {
+    if (max == null) {
+      throw ArgumentError('max is required when limits include max flag.');
+    }
+    out.addAll(_u32Leb(max));
+  }
+  return out;
 }
 
 Uint8List _coreModuleEchoUtf8PointerLength({required String name}) {
