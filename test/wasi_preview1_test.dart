@@ -144,6 +144,68 @@ void main() {
       expect(arg1, 'world');
     });
 
+    test('args_sizes_get returns zero counts for empty args', () {
+      final wasi = WasiPreview1(args: const []);
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final argsSizesGet =
+          wasi.imports.functions[WasmImports.key(
+            'wasi_snapshot_preview1',
+            'args_sizes_get',
+          )]!;
+
+      expect(argsSizesGet([0, 4]), 0);
+      expect(memory.loadI32(0), 0);
+      expect(memory.loadI32(4), 0);
+    });
+
+    test('args_sizes_get returns EFAULT for out-of-bounds output pointers', () {
+      final wasi = WasiPreview1(args: const ['x']);
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final argsSizesGet =
+          wasi.imports.functions[WasmImports.key(
+            'wasi_snapshot_preview1',
+            'args_sizes_get',
+          )]!;
+
+      expect(argsSizesGet([65535, 4]), 21);
+      expect(argsSizesGet([0, 65535]), 21);
+    });
+
+    test('args_get writes contiguous UTF-8 c-strings and argv pointers', () {
+      final wasi = WasiPreview1(args: const ['hé', '🚀']);
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final argsGet = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'args_get')]!;
+
+      expect(argsGet([0, 32]), 0);
+      final arg0Bytes = utf8.encode('hé');
+      final arg1Bytes = utf8.encode('🚀');
+      final argv0Ptr = memory.loadI32(0);
+      final argv1Ptr = memory.loadI32(4);
+      expect(argv0Ptr, 32);
+      expect(argv1Ptr, 32 + arg0Bytes.length + 1);
+      expect(memory.readBytes(argv0Ptr, arg0Bytes.length), arg0Bytes);
+      expect(memory.readBytes(argv1Ptr, arg1Bytes.length), arg1Bytes);
+      expect(memory.loadU8(argv0Ptr + arg0Bytes.length), 0);
+      expect(memory.loadU8(argv1Ptr + arg1Bytes.length), 0);
+    });
+
+    test('args_get returns EFAULT for out-of-bounds argv or argv_buf', () {
+      final wasi = WasiPreview1(args: const ['x']);
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final argsGet = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'args_get')]!;
+
+      expect(argsGet([65535, 32]), 21);
+      expect(argsGet([0, 65535]), 21);
+    });
+
     test('fd_read fills memory from stdin bytes and sets nread', () {
       final wasi = WasiPreview1(stdin: const [65, 66, 67]);
       final wasm = _buildModule(
@@ -879,6 +941,76 @@ void main() {
       expect(<String>{env0, env1}, {'A=1', 'B=two'});
     });
 
+    test('environ_sizes_get returns zero counts for empty environment', () {
+      final wasi = WasiPreview1(environment: const {});
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final environSizesGet =
+          wasi.imports.functions[WasmImports.key(
+            'wasi_snapshot_preview1',
+            'environ_sizes_get',
+          )]!;
+
+      expect(environSizesGet([0, 4]), 0);
+      expect(memory.loadI32(0), 0);
+      expect(memory.loadI32(4), 0);
+    });
+
+    test(
+      'environ_sizes_get returns EFAULT for out-of-bounds output pointers',
+      () {
+        final wasi = WasiPreview1(environment: const {'A': '1'});
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final environSizesGet =
+            wasi.imports.functions[WasmImports.key(
+              'wasi_snapshot_preview1',
+              'environ_sizes_get',
+            )]!;
+
+        expect(environSizesGet([65535, 4]), 21);
+        expect(environSizesGet([0, 65535]), 21);
+      },
+    );
+
+    test('environ_get writes UTF-8 KEY=VALUE c-strings and pointer table', () {
+      final wasi = WasiPreview1(environment: const {'A': '1', 'B': 'twø'});
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final environGet = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'environ_get')]!;
+
+      expect(environGet([0, 64]), 0);
+      final env0Ptr = memory.loadI32(0);
+      final env1Ptr = memory.loadI32(4);
+      final env0 = _readCString(memory, env0Ptr);
+      final env1 = _readCString(memory, env1Ptr);
+      expect(<String>{env0, env1}, {'A=1', 'B=twø'});
+      final env0Len = utf8.encode(env0).length;
+      final env1Len = utf8.encode(env1).length;
+      expect(env1Ptr, env0Ptr + env0Len + 1);
+      expect(memory.loadU8(env0Ptr + env0Len), 0);
+      expect(memory.loadU8(env1Ptr + env1Len), 0);
+    });
+
+    test(
+      'environ_get returns EFAULT for out-of-bounds environ or environ_buf',
+      () {
+        final wasi = WasiPreview1(environment: const {'A': '1'});
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final environGet =
+            wasi.imports.functions[WasmImports.key(
+              'wasi_snapshot_preview1',
+              'environ_get',
+            )]!;
+
+        expect(environGet([65535, 64]), 21);
+        expect(environGet([0, 65535]), 21);
+      },
+    );
+
     test('clock_time_get + random_get populate memory', () {
       final wasi = WasiPreview1();
       final wasm = _buildModule(
@@ -1353,6 +1485,101 @@ void main() {
       expect(fs.readFileBytes('/grow.bin')!.length, 15);
     });
 
+    test('fd_advise supports file descriptors and rejects invalid targets', () {
+      final fs = WasiInMemoryFileSystem();
+      final wasi = WasiPreview1(fileSystem: fs);
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pathOpen = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'path_open')]!;
+      final fdAdvise = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_advise')]!;
+      final fdClose = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_close')]!;
+
+      memory.writeBytesFromList(64, utf8.encode('advise.txt'));
+      expect(pathOpen([3, 0, 64, 10, 1, 66, 0, 0, 32]), 0);
+      final openedFd = memory.loadI32(32);
+      expect(fdAdvise([openedFd, 0, 0, 0]), 0);
+      expect(fdAdvise([3, 0, 0, 0]), 8);
+      expect(fdAdvise([999, 0, 0, 0]), 8);
+      expect(fdClose([openedFd]), 0);
+    });
+
+    test(
+      'fd_datasync and fd_sync flush writable files and reject non-file descriptors',
+      () {
+        final fs = WasiInMemoryFileSystem();
+        final wasi = WasiPreview1(fileSystem: fs);
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final pathOpen = wasi
+            .imports
+            .functions[WasmImports.key('wasi_snapshot_preview1', 'path_open')]!;
+        final fdDatasync =
+            wasi.imports.functions[WasmImports.key(
+              'wasi_snapshot_preview1',
+              'fd_datasync',
+            )]!;
+        final fdSync = wasi
+            .imports
+            .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_sync')]!;
+        final fdClose = wasi
+            .imports
+            .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_close')]!;
+
+        memory.writeBytesFromList(64, utf8.encode('sync.txt'));
+        expect(pathOpen([3, 0, 64, 8, 1, 66, 0, 0, 32]), 0);
+        final openedFd = memory.loadI32(32);
+        expect(fdDatasync([openedFd]), 0);
+        expect(fdSync([openedFd]), 0);
+        expect(fdDatasync([3]), 8);
+        expect(fdSync([999]), 8);
+        expect(fdClose([openedFd]), 0);
+      },
+    );
+
+    test('fd_filestat_set_size truncates files and validates size bounds', () {
+      final fs = WasiInMemoryFileSystem();
+      final writer = fs.open(
+        path: '/resize.txt',
+        create: true,
+        truncate: true,
+        read: true,
+        write: true,
+        exclusive: false,
+      );
+      writer.write(Uint8List.fromList(utf8.encode('ABCDE')));
+      writer.close();
+
+      final wasi = WasiPreview1(fileSystem: fs);
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pathOpen = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'path_open')]!;
+      final fdFilestatSetSize =
+          wasi.imports.functions[WasmImports.key(
+            'wasi_snapshot_preview1',
+            'fd_filestat_set_size',
+          )]!;
+      final fdClose = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_close')]!;
+
+      memory.writeBytesFromList(64, utf8.encode('resize.txt'));
+      expect(pathOpen([3, 0, 64, 10, 0, 66, 0, 0, 32]), 0);
+      final openedFd = memory.loadI32(32);
+      expect(fdFilestatSetSize([openedFd, 2]), 0);
+      expect(fs.readFileText('/resize.txt'), 'AB');
+      expect(fdFilestatSetSize([openedFd, -1]), 28);
+      expect(fdFilestatSetSize([3, 1]), 8);
+      expect(fdClose([openedFd]), 0);
+    });
+
     test('path_filestat_set_times updates path metadata in in-memory fs', () {
       final fs = WasiInMemoryFileSystem();
       final file = fs.open(
@@ -1494,9 +1721,13 @@ void main() {
           .imports
           .functions[WasmImports.key('wasi_snapshot_preview1', 'poll_oneoff')]!;
 
+      memory.storeI32(32, 123);
+      memory.fillBytes(128, 0x7a, 32);
       memory.storeI64(64, 7);
       memory.storeI8(72, 99);
       expect(pollOneoff([64, 128, 1, 32]), 28);
+      expect(memory.loadI32(32), 123);
+      expect(memory.loadU8(128), 0x7a);
     });
 
     test('poll_oneoff emits BADF event for unknown fd subscriptions', () {
@@ -1514,6 +1745,142 @@ void main() {
       expect(memory.loadI32(32), 1);
       expect(memory.loadU16(136), 8);
       expect(memory.loadU8(138), 1);
+    });
+
+    test('poll_oneoff rejects invalid clock flags atomically', () {
+      final wasi = WasiPreview1();
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pollOneoff = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'poll_oneoff')]!;
+
+      memory.storeI32(32, 77);
+      memory.fillBytes(128, 0x6b, 32);
+      memory.storeI64(64, 42);
+      memory.storeI8(72, 0); // clock
+      memory.storeI32(80, 1); // monotonic
+      memory.storeI64(88, 1); // timeout ns
+      memory.storeI64(96, 0); // precision
+      memory.storeI16(104, 0x0002); // invalid flags
+
+      expect(pollOneoff([64, 128, 1, 32]), 28);
+      expect(memory.loadI32(32), 77);
+      expect(memory.loadU8(128), 0x6b);
+    });
+
+    test('poll_oneoff blocks on relative clock timeout then returns event', () {
+      var nowNs = BigInt.from(1_000_000_000);
+      final sleepDurations = <Duration>[];
+      final wasi = WasiPreview1(
+        nowRealtimeNs: () => nowNs,
+        nowMonotonicNs: () => nowNs,
+        sleep: (duration) {
+          sleepDurations.add(duration);
+          nowNs += BigInt.from(duration.inMicroseconds) * BigInt.from(1000);
+        },
+      );
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pollOneoff = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'poll_oneoff')]!;
+
+      memory.storeI64(64, 11);
+      memory.storeI8(72, 0); // clock
+      memory.storeI32(80, 1); // monotonic
+      memory.storeI64(88, 5_000_000); // 5ms relative timeout
+      memory.storeI64(96, 0); // precision
+      memory.storeI16(104, 0); // relative
+
+      expect(pollOneoff([64, 128, 1, 32]), 0);
+      expect(memory.loadI32(32), 1);
+      expect(memory.loadI64(128), BigInt.from(11));
+      expect(memory.loadU16(136), 0);
+      expect(memory.loadU8(138), 0);
+      expect(sleepDurations, isNotEmpty);
+    });
+
+    test('poll_oneoff blocks on ABSTIME clock deadline then returns event', () {
+      var nowNs = BigInt.from(3_000_000_000);
+      final sleepDurations = <Duration>[];
+      final wasi = WasiPreview1(
+        nowRealtimeNs: () => nowNs,
+        nowMonotonicNs: () => nowNs,
+        sleep: (duration) {
+          sleepDurations.add(duration);
+          nowNs += BigInt.from(duration.inMicroseconds) * BigInt.from(1000);
+        },
+      );
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pollOneoff = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'poll_oneoff')]!;
+
+      memory.storeI64(64, 12);
+      memory.storeI8(72, 0); // clock
+      memory.storeI32(80, 1); // monotonic
+      memory.storeI64(88, BigInt.from(3_008_000_000)); // absolute deadline
+      memory.storeI64(96, 0); // precision
+      memory.storeI16(104, 0x0001); // ABSTIME
+
+      expect(pollOneoff([64, 128, 1, 32]), 0);
+      expect(memory.loadI32(32), 1);
+      expect(memory.loadI64(128), BigInt.from(12));
+      expect(memory.loadU16(136), 0);
+      expect(memory.loadU8(138), 0);
+      expect(sleepDurations, isNotEmpty);
+    });
+
+    test('poll_oneoff preserves subscription order for mixed ready events', () {
+      final wasi = WasiPreview1();
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pollOneoff = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'poll_oneoff')]!;
+
+      // subscription 0: fd_write stdout (ready)
+      memory.storeI64(64, 33);
+      memory.storeI8(72, 2);
+      memory.storeI32(80, 1);
+      // subscription 1: clock immediate (ready)
+      memory.storeI64(112, 44);
+      memory.storeI8(120, 0);
+      memory.storeI32(128, 1);
+      memory.storeI64(136, 0);
+      memory.storeI64(144, 0);
+      memory.storeI16(152, 0);
+
+      expect(pollOneoff([64, 256, 2, 32]), 0);
+      expect(memory.loadI32(32), 2);
+      expect(memory.loadI64(256), BigInt.from(33));
+      expect(memory.loadU8(266), 2);
+      expect(memory.loadI64(288), BigInt.from(44));
+      expect(memory.loadU8(298), 0);
+    });
+
+    test('poll_oneoff blocks when no ready events and no timeout', () {
+      final wasi = WasiPreview1(sleep: (_) => throw const _PollWaitAbort());
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pollOneoff = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'poll_oneoff')]!;
+
+      memory.storeI32(32, 55);
+      memory.fillBytes(128, 0x5c, 32);
+      memory.storeI64(64, 9);
+      memory.storeI8(72, 1); // fd_read
+      memory.storeI32(80, 0); // stdin, empty buffer => not ready
+
+      expect(
+        () => pollOneoff([64, 128, 1, 32]),
+        throwsA(isA<_PollWaitAbort>()),
+      );
+      expect(memory.loadI32(32), 55);
+      expect(memory.loadU8(128), 0x5c);
     });
 
     test('path_open supports O_DIRECTORY for directory targets', () {
@@ -2375,6 +2742,10 @@ final class _ExportSpec {
   final String name;
   final int kind;
   final int index;
+}
+
+final class _PollWaitAbort implements Exception {
+  const _PollWaitAbort();
 }
 
 Uint8List _buildModule({
