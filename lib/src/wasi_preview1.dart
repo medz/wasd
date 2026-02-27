@@ -148,14 +148,12 @@ final class _PollReadyEvent {
     required this.eventType,
     required this.errno,
     this.nbytes = 0,
-    this.flags = 0,
   });
 
   final BigInt userdata;
   final int eventType;
   final int errno;
   final int nbytes;
-  final int flags;
 }
 
 final class _IoVec {
@@ -2011,7 +2009,7 @@ final class WasiPreview1 {
               eventType: event.eventType,
               errno: event.errno,
               nbytes: event.nbytes,
-              flags: event.flags,
+              flags: 0,
             );
           }
           memory.storeI32(nEventsPtr, readyEvents.length);
