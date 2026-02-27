@@ -342,6 +342,9 @@ void main() {
       expect(component.coreInstances[0].moduleIndex, 0);
       expect(component.coreInstances[0].argumentInstanceIndices, isEmpty);
       expect(component.coreInstances[1].moduleIndex, 0);
+      expect(component.coreInstances[1].arguments, hasLength(1));
+      expect(component.coreInstances[1].arguments.single.name, 'a');
+      expect(component.coreInstances[1].arguments.single.kind, 0x12);
       expect(
         component.coreInstances[1].argumentInstanceIndices,
         orderedEquals(const <int>[0]),
@@ -395,6 +398,9 @@ void main() {
 
         expect(component.coreInstances, hasLength(2));
         expect(component.coreInstances[1].moduleIndex, 0);
+        expect(component.coreInstances[1].arguments, hasLength(1));
+        expect(component.coreInstances[1].arguments.single.name, '');
+        expect(component.coreInstances[1].arguments.single.kind, 0x12);
         expect(
           component.coreInstances[1].argumentInstanceIndices,
           orderedEquals(const <int>[0]),

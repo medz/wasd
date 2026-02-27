@@ -324,6 +324,92 @@ void main() {
       expect(instance.invokeCore('two', moduleIndex: 1), 2);
     });
 
+    test(
+      'prefers named core-instance arguments matching import module name',
+      () {
+        final baseComponent = _componentWithCoreModules(<Uint8List>[
+          _coreModuleConstI32(name: 'run', value: 11),
+          _coreModuleConstI32(name: 'run', value: 22),
+          _coreModuleCallImportedNullary(
+            importModule: 'm2',
+            importName: 'run',
+            exportName: 'run2',
+          ),
+        ]);
+        final coreInstanceSectionPayload = <int>[
+          ..._u32Leb(3),
+          // declaration 0: instantiate module 0
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+          // declaration 1: instantiate module 1
+          0x00,
+          ..._u32Leb(1),
+          ..._u32Leb(0),
+          // declaration 2: instantiate module 2 with named args
+          0x00,
+          ..._u32Leb(2),
+          ..._u32Leb(2),
+          ..._name('m1'),
+          0x12,
+          ..._u32Leb(0),
+          ..._name('m2'),
+          0x12,
+          ..._u32Leb(1),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x02, coreInstanceSectionPayload),
+        ]);
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.invokeCore('run2', moduleIndex: 2), 22);
+      },
+    );
+
+    test(
+      'does not bind imports from named core-instance args with non-matching module names',
+      () {
+        final baseComponent = _componentWithCoreModules(<Uint8List>[
+          _coreModuleConstI32(name: 'run', value: 11),
+          _coreModuleCallImportedNullary(
+            importModule: 'm2',
+            importName: 'run',
+            exportName: 'run2',
+          ),
+        ]);
+        final coreInstanceSectionPayload = <int>[
+          ..._u32Leb(2),
+          // declaration 0: instantiate module 0
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+          // declaration 1: instantiate module 1 with named arg `m1` -> 0
+          0x00,
+          ..._u32Leb(1),
+          ..._u32Leb(1),
+          ..._name('m1'),
+          0x12,
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x02, coreInstanceSectionPayload),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsA(isA<StateError>()),
+        );
+      },
+    );
+
     test('rejects out-of-range core-instance argument dependency indexes', () {
       final componentBytes = _componentWithCoreModules(
         <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],

@@ -2159,7 +2159,10 @@ final class WasmComponentInstance {
 
       var bound = false;
       String? incompatibility;
-      for (final argumentIndex in declaration.argumentInstanceIndices) {
+      for (final argumentIndex in _candidateInstanceArgumentIndicesForImport(
+        declaration: declaration,
+        importModuleName: imported.module,
+      )) {
         final sourceInstance = instantiatedCoreInstances[argumentIndex];
         final attempt = _tryBindImportFromCoreInstance(
           imported: imported,
@@ -2205,6 +2208,51 @@ final class WasmComponentInstance {
       globalBindings: globalBindings,
       tags: tags,
     );
+  }
+
+  static List<int> _candidateInstanceArgumentIndicesForImport({
+    required WasmComponentCoreInstance declaration,
+    required String importModuleName,
+  }) {
+    final arguments = declaration.arguments;
+    if (arguments.isEmpty) {
+      return declaration.argumentInstanceIndices;
+    }
+
+    final named = <int>[];
+    final unnamed = <int>[];
+    for (final argument in arguments) {
+      if (!argument.isCoreInstance) {
+        continue;
+      }
+      final name = argument.name;
+      if (name == null || name.isEmpty) {
+        unnamed.add(argument.index);
+        continue;
+      }
+      if (name == importModuleName) {
+        named.add(argument.index);
+      }
+    }
+
+    if (named.isEmpty) {
+      return List<int>.unmodifiable(unnamed);
+    }
+    if (unnamed.isEmpty) {
+      return List<int>.unmodifiable(named);
+    }
+    final merged = <int>[];
+    for (final index in named) {
+      if (!merged.contains(index)) {
+        merged.add(index);
+      }
+    }
+    for (final index in unnamed) {
+      if (!merged.contains(index)) {
+        merged.add(index);
+      }
+    }
+    return List<int>.unmodifiable(merged);
   }
 
   static bool _isImportSatisfied({

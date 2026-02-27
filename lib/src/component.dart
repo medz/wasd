@@ -25,26 +25,49 @@ final class WasmComponentCoreInstanceExport {
   final int index;
 }
 
+/// Decoded core instance instantiation argument from component section `0x02`.
+final class WasmComponentCoreInstanceArgument {
+  const WasmComponentCoreInstanceArgument({
+    this.name,
+    required this.kind,
+    required this.index,
+  });
+
+  final String? name;
+  final int kind;
+  final int index;
+
+  bool get isCoreInstance => kind == 0x12;
+}
+
 /// Decoded core instance declaration from component section `0x02`.
 final class WasmComponentCoreInstance {
   WasmComponentCoreInstance.fromExports({
     List<WasmComponentCoreInstanceExport> exports =
         const <WasmComponentCoreInstanceExport>[],
   }) : moduleIndex = -1,
+       arguments = const <WasmComponentCoreInstanceArgument>[],
        argumentInstanceIndices = const <int>[],
        exports = List<WasmComponentCoreInstanceExport>.unmodifiable(exports),
        isFromExports = true;
 
   WasmComponentCoreInstance.instantiate({
     required this.moduleIndex,
-    List<int> argumentInstanceIndices = const <int>[],
-  }) : argumentInstanceIndices = List<int>.unmodifiable(
-         argumentInstanceIndices,
+    List<WasmComponentCoreInstanceArgument> arguments =
+        const <WasmComponentCoreInstanceArgument>[],
+  }) : arguments = List<WasmComponentCoreInstanceArgument>.unmodifiable(
+         arguments,
+       ),
+       argumentInstanceIndices = List<int>.unmodifiable(
+         arguments
+             .where((argument) => argument.isCoreInstance)
+             .map((argument) => argument.index),
        ),
        exports = const <WasmComponentCoreInstanceExport>[],
        isFromExports = false;
 
   final int moduleIndex;
+  final List<WasmComponentCoreInstanceArgument> arguments;
   final List<int> argumentInstanceIndices;
   final List<WasmComponentCoreInstanceExport> exports;
   final bool isFromExports;
@@ -465,14 +488,11 @@ final class WasmComponent {
         case 0x00:
           final moduleIndex = reader.readVarUint32();
           final argCount = reader.readVarUint32();
-          final argumentInstanceIndices = _readCoreInstanceArgumentIndices(
-            reader,
-            argCount,
-          );
+          final arguments = _readCoreInstanceArguments(reader, argCount);
           instances.add(
             WasmComponentCoreInstance.instantiate(
               moduleIndex: moduleIndex,
-              argumentInstanceIndices: argumentInstanceIndices,
+              arguments: arguments,
             ),
           );
         case 0x01:
@@ -509,21 +529,20 @@ final class WasmComponent {
     return (instances: instances, hasOpaqueKinds: hasOpaqueKinds);
   }
 
-  static List<int> _readCoreInstanceArgumentIndices(
+  static List<WasmComponentCoreInstanceArgument> _readCoreInstanceArguments(
     ByteReader reader,
     int argCount,
   ) {
     if (argCount == 0) {
-      return const <int>[];
+      return const <WasmComponentCoreInstanceArgument>[];
     }
 
     final start = reader.offset;
-    final officialIndices = <int>[];
+    final officialArguments = <WasmComponentCoreInstanceArgument>[];
     var officialOk = true;
     try {
       for (var i = 0; i < argCount; i++) {
-        final nameLength = reader.readVarUint32();
-        reader.readBytes(nameLength);
+        final name = _readName(reader);
         final kind = reader.readByte();
         if (kind != 0x11 && kind != 0x12 && kind != 0x13) {
           throw FormatException(
@@ -531,22 +550,31 @@ final class WasmComponent {
           );
         }
         final index = reader.readVarUint32();
-        if (kind == 0x12) {
-          officialIndices.add(index);
-        }
+        officialArguments.add(
+          WasmComponentCoreInstanceArgument(
+            name: name,
+            kind: kind,
+            index: index,
+          ),
+        );
       }
     } on FormatException {
       officialOk = false;
     }
 
     if (officialOk) {
-      return List<int>.unmodifiable(officialIndices);
+      return List<WasmComponentCoreInstanceArgument>.unmodifiable(
+        officialArguments,
+      );
     }
 
     reader.offset = start;
-    return List<int>.generate(
+    return List<WasmComponentCoreInstanceArgument>.generate(
       argCount,
-      (_) => reader.readVarUint32(),
+      (_) => WasmComponentCoreInstanceArgument(
+        kind: 0x12,
+        index: reader.readVarUint32(),
+      ),
       growable: false,
     );
   }
