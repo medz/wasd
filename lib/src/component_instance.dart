@@ -562,6 +562,15 @@ final class WasmComponentInstance {
                 'actual $actualSignature.',
               );
             }
+            if (!_isNumericValueTypeSignature(expectedSignature) &&
+                importedGlobalType.valueType != WasmValueType.i32) {
+              throw FormatException(
+                'Component global import `${requirement.componentImportName}` '
+                'uses reference signature $expectedSignature, but '
+                '`imports.globalTypes[$key]` carrier type is '
+                '${importedGlobalType.valueType.name} (expected i32).',
+              );
+            }
           }
 
           final bindingGlobal = imports.globalBindings[key];
@@ -571,6 +580,16 @@ final class WasmComponentInstance {
                 'Component global import `${requirement.componentImportName}` '
                 'requires `imports.globalTypes[$key]` for non-numeric '
                 'typed globals.',
+              );
+            }
+            if (importedGlobalType != null &&
+                bindingGlobal.valueType != importedGlobalType.valueType) {
+              throw FormatException(
+                'Component global import `${requirement.componentImportName}` '
+                'type mismatch: `imports.globalBindings[$key]` carrier type '
+                '${bindingGlobal.valueType.name} does not match '
+                '`imports.globalTypes[$key]` carrier type '
+                '${importedGlobalType.valueType.name}.',
               );
             }
             if (bindingGlobal.valueType != expectedType) {
