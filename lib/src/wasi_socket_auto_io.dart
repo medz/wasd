@@ -102,7 +102,7 @@ final class _IoSocketTransport {
     return WasiSockSendResult.sent(written);
   }
 
-  int? _shutdown({required int fd, required int how}) {
+  int _shutdown({required int fd, required int how}) {
     final socket = _streams[fd];
     if (socket == null) {
       return _errnoBadf;
@@ -110,7 +110,7 @@ final class _IoSocketTransport {
     return socket.shutdown(how);
   }
 
-  int? _close({required int fd}) {
+  int _close({required int fd}) {
     final stream = _streams.remove(fd);
     if (stream != null) {
       stream.close();
@@ -121,7 +121,7 @@ final class _IoSocketTransport {
       listener.close();
       return _errnoSuccess;
     }
-    return null;
+    return _errnoBadf;
   }
 }
 

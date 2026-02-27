@@ -20,8 +20,8 @@ typedef WasiSockSendHandler =
       required Uint8List data,
     });
 typedef WasiSockShutdownHandler =
-    int? Function({required int fd, required int how});
-typedef WasiSockCloseHandler = int? Function({required int fd});
+    int Function({required int fd, required int how});
+typedef WasiSockCloseHandler = int Function({required int fd});
 typedef WasiSockContainsFdHandler = bool Function({required int fd});
 
 final class WasiSocketTransport {

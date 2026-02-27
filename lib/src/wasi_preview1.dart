@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'imports.dart';
@@ -94,6 +95,15 @@ final class _FdEntry {
   int fdFlags;
 }
 
+final class _ResolvedPath {
+  const _ResolvedPath.path(this.path) : errno = 0;
+
+  const _ResolvedPath.error(this.errno) : path = null;
+
+  final String? path;
+  final int errno;
+}
+
 final class WasiPreview1 {
   WasiPreview1({
     List<String> args = const [],
@@ -101,6 +111,7 @@ final class WasiPreview1 {
     List<int> stdin = const [],
     this.stdinSource,
     this.procRaiseMode = WasiProcRaiseMode.enosys,
+    this.allowNonStandardWasi = false,
     WasiSocketTransport? socketTransport,
     Map<int, Object> preopenedSockets = const {},
     WasiWriteSink? stdoutSink,
@@ -132,6 +143,13 @@ final class WasiPreview1 {
                MapEntry(fd, WasiInMemoryFileSystem.normalizeAbsolutePath(path)),
          ),
        ) {
+    if (!allowNonStandardWasi && procRaiseMode != WasiProcRaiseMode.enosys) {
+      throw ArgumentError.value(
+        procRaiseMode,
+        'procRaiseMode',
+        'Non-standard proc_raise modes require allowNonStandardWasi: true.',
+      );
+    }
     _resetFdTable();
   }
 
@@ -140,6 +158,7 @@ final class WasiPreview1 {
   final Uint8List _stdinBuffer;
   final WasiReadSource? stdinSource;
   final WasiProcRaiseMode procRaiseMode;
+  final bool allowNonStandardWasi;
   final WasiWriteSink _stdoutSink;
   final WasiWriteSink _stderrSink;
   final WasiFileSystem _fileSystem;
@@ -148,7 +167,7 @@ final class WasiPreview1 {
 
   WasmMemory? _memory;
   final Stopwatch _monotonicClock = Stopwatch()..start();
-  int _randomState = DateTime.now().microsecondsSinceEpoch & 0xffffffff;
+  final Random _random = _createRandom();
   int _stdinOffset = 0;
   final Map<int, _FdEntry> _fdTable = <int, _FdEntry>{};
   late int _nextDynamicFd;
@@ -278,7 +297,7 @@ final class WasiPreview1 {
           _stderrSink(bytes);
         case _FdKind.file:
           if ((target.rightsBase & _rightFdWrite) == 0) {
-            return _errnoPerm;
+            return _errnoNotcapable;
           }
           if ((target.fdFlags & _fdflagAppend) != 0) {
             target.file!.seek(0, _whenceEnd);
@@ -334,7 +353,7 @@ final class WasiPreview1 {
           data = _readInput(requestedBytes);
         case _FdKind.file:
           if ((target.rightsBase & _rightFdRead) == 0) {
-            return _errnoPerm;
+            return _errnoNotcapable;
           }
           data = target.file!.read(requestedBytes);
         case _FdKind.stdout:
@@ -397,7 +416,7 @@ final class WasiPreview1 {
       return _errnoBadf;
     }
     if ((entry.rightsBase & _rightFdRead) == 0) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
 
     final memory = _requireMemory();
@@ -475,7 +494,7 @@ final class WasiPreview1 {
       return _errnoBadf;
     }
     if ((entry.rightsBase & _rightFdWrite) == 0) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
 
     final memory = _requireMemory();
@@ -543,7 +562,7 @@ final class WasiPreview1 {
       return _errnoBadf;
     }
     if ((entry.rightsBase & _rightFdWrite) == 0) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
 
     try {
@@ -563,10 +582,7 @@ final class WasiPreview1 {
     if (entry == null) {
       final closeSocket = _socketTransport?.close;
       if (closeSocket != null) {
-        final socketResult = closeSocket(fd: fd);
-        if (socketResult != null) {
-          return socketResult;
-        }
+        return closeSocket(fd: fd);
       }
       return _errnoBadf;
     }
@@ -603,7 +619,7 @@ final class WasiPreview1 {
       return _errnoBadf;
     }
     if ((entry.rightsBase & _rightFdWrite) == 0) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
     try {
       entry.file!.flush();
@@ -636,7 +652,7 @@ final class WasiPreview1 {
       return _errnoInval;
     }
     if ((entry.rightsBase & _rightFdSeek) == 0) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
 
     final memory = _requireMemory();
@@ -668,7 +684,7 @@ final class WasiPreview1 {
       return _errnoInval;
     }
     if ((entry.rightsBase & _rightFdTell) == 0) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
 
     final memory = _requireMemory();
@@ -721,7 +737,7 @@ final class WasiPreview1 {
       return _errnoBadf;
     }
     if ((entry.rightsBase & _rightFdFdstatSetFlags) == 0) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
 
     entry.fdFlags = fdFlags;
@@ -761,11 +777,11 @@ final class WasiPreview1 {
     }
     if ((entry.rightsBase & _rightFdFileStatGet) == 0 &&
         entry.kind == _FdKind.file) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
     if ((entry.rightsBase & _rightPathFileStatGet) == 0 &&
         entry.kind == _FdKind.directory) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
 
     late WasiPathStat stat;
@@ -826,7 +842,7 @@ final class WasiPreview1 {
       return _errnoBadf;
     }
     if ((entry.rightsBase & _rightFdWrite) == 0) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
 
     try {
@@ -851,7 +867,7 @@ final class WasiPreview1 {
       return _errnoBadf;
     }
     if ((entry.rightsBase & _rightFdFileStatSetTimes) == 0) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
 
     final resolvedTimes = _resolveSetTimes(
@@ -1041,45 +1057,82 @@ final class WasiPreview1 {
       return _errnoBadf;
     }
     if ((dirEntry.rightsBase & _rightPathOpen) == 0) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
 
-    final baseDir = dirEntry.directoryPath!;
     final memory = _requireMemory();
-    String path;
+    String rawPath;
     try {
       final pathBytes = memory.readBytes(pathPtr, pathLen);
-      path = utf8.decode(pathBytes, allowMalformed: false);
+      rawPath = utf8.decode(pathBytes, allowMalformed: false);
     } on RangeError {
       return _errnoFault;
     } on FormatException {
       return _errnoInval;
     }
 
-    final resolvedPath = _resolvePath(baseDir, path);
-    if (resolvedPath == null) {
-      return _errnoPerm;
+    final resolvedPathResult = _resolvePath(
+      baseDirectory: dirEntry.directoryPath!,
+      rawPath: rawPath,
+    );
+    if (resolvedPathResult.path == null) {
+      return resolvedPathResult.errno;
     }
+    final resolvedPath = resolvedPathResult.path!;
 
-    if ((oflags & _oflagDirectory) != 0) {
-      return _errnoNotdir;
-    }
-
+    final openDirectory = (oflags & _oflagDirectory) != 0;
     final canRead = (rightsBaseInt & _rightFdRead) != 0;
     final canWrite = (rightsBaseInt & _rightFdWrite) != 0;
-    if (!canRead && !canWrite) {
-      return _errnoPerm;
+    if (!openDirectory && !canRead && !canWrite) {
+      return _errnoNotcapable;
     }
     if ((rightsBaseInt & ~dirEntry.rightsInheriting) != 0) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
     if ((rightsInheritingInt & ~dirEntry.rightsInheriting) != 0) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
 
     final create = (oflags & _oflagCreat) != 0;
     final truncate = (oflags & _oflagTrunc) != 0;
     final exclusive = (oflags & _oflagExcl) != 0;
+
+    if (openDirectory) {
+      if (create || truncate || exclusive) {
+        return _errnoInval;
+      }
+
+      final metadataFs = _fileSystem;
+      if (metadataFs is! WasiPathMetadataFileSystem) {
+        return _errnoNosys;
+      }
+
+      WasiPathStat stat;
+      try {
+        stat = (metadataFs as WasiPathMetadataFileSystem).statPath(
+          resolvedPath,
+        );
+      } on WasiFsException catch (error) {
+        return _fsErrno(error.error);
+      }
+      if (stat.fileType != WasiFileType.directory) {
+        return _errnoNotdir;
+      }
+
+      final openedFd = _allocateDynamicFd();
+      final openedEntry = _FdEntry.directory(resolvedPath)
+        ..rightsBase = rightsBaseInt
+        ..rightsInheriting = rightsInheritingInt
+        ..fdFlags = fdFlags;
+      _fdTable[openedFd] = openedEntry;
+      try {
+        memory.storeI32(fdOutPtr, openedFd);
+        return _errnoSuccess;
+      } on RangeError {
+        _fdTable.remove(openedFd);
+        return _errnoFault;
+      }
+    }
 
     WasiFileDescriptor descriptor;
     try {
@@ -1127,15 +1180,16 @@ final class WasiPreview1 {
       return _errnoInval;
     }
 
-    final resolvedPath = _resolveGuestPath(
+    final resolvedPathResult = _resolveGuestPath(
       dirFd: dirFd,
       pathPtr: pathPtr,
       pathLen: pathLen,
       requiredRight: _rightPathFileStatGet,
     );
-    if (resolvedPath == null) {
-      return _errnoPerm;
+    if (resolvedPathResult.path == null) {
+      return resolvedPathResult.errno;
     }
+    final resolvedPath = resolvedPathResult.path!;
 
     final metadataFs = _fileSystem;
     if (metadataFs is! WasiPathMetadataFileSystem) {
@@ -1173,15 +1227,16 @@ final class WasiPreview1 {
       return _errnoInval;
     }
 
-    final resolvedPath = _resolveGuestPath(
+    final resolvedPathResult = _resolveGuestPath(
       dirFd: dirFd,
       pathPtr: pathPtr,
       pathLen: pathLen,
       requiredRight: _rightPathFileStatSetTimes,
     );
-    if (resolvedPath == null) {
-      return _errnoPerm;
+    if (resolvedPathResult.path == null) {
+      return resolvedPathResult.errno;
     }
+    final resolvedPath = resolvedPathResult.path!;
 
     final resolvedTimes = _resolveSetTimes(
       atim: atim,
@@ -1224,21 +1279,26 @@ final class WasiPreview1 {
       return _errnoInval;
     }
 
-    final source = _resolveGuestPath(
+    final sourceResult = _resolveGuestPath(
       dirFd: oldDirFd,
       pathPtr: oldPathPtr,
       pathLen: oldPathLen,
       requiredRight: _rightPathLinkSource,
     );
-    final destination = _resolveGuestPath(
+    if (sourceResult.path == null) {
+      return sourceResult.errno;
+    }
+    final destinationResult = _resolveGuestPath(
       dirFd: newDirFd,
       pathPtr: newPathPtr,
       pathLen: newPathLen,
       requiredRight: _rightPathLinkTarget,
     );
-    if (source == null || destination == null) {
-      return _errnoPerm;
+    if (destinationResult.path == null) {
+      return destinationResult.errno;
     }
+    final source = sourceResult.path!;
+    final destination = destinationResult.path!;
 
     final fs = _fileSystem;
     if (fs is! WasiPathLinkFileSystem) {
@@ -1271,7 +1331,7 @@ final class WasiPreview1 {
       return _errnoBadf;
     }
     if ((dirEntry.rightsBase & _rightPathSymlink) == 0) {
-      return _errnoPerm;
+      return _errnoNotcapable;
     }
 
     final memory = _requireMemory();
@@ -1287,15 +1347,16 @@ final class WasiPreview1 {
       return _errnoInval;
     }
 
-    final linkPath = _resolveGuestPath(
+    final linkPathResult = _resolveGuestPath(
       dirFd: fd,
       pathPtr: newPathPtr,
       pathLen: newPathLen,
       requiredRight: _rightPathSymlink,
     );
-    if (linkPath == null) {
-      return _errnoPerm;
+    if (linkPathResult.path == null) {
+      return linkPathResult.errno;
     }
+    final linkPath = linkPathResult.path!;
 
     final fs = _fileSystem;
     if (fs is! WasiPathLinkFileSystem) {
@@ -1324,15 +1385,16 @@ final class WasiPreview1 {
       return _errnoInval;
     }
 
-    final resolvedPath = _resolveGuestPath(
+    final resolvedPathResult = _resolveGuestPath(
       dirFd: dirFd,
       pathPtr: pathPtr,
       pathLen: pathLen,
       requiredRight: _rightPathReadlink,
     );
-    if (resolvedPath == null) {
-      return _errnoPerm;
+    if (resolvedPathResult.path == null) {
+      return resolvedPathResult.errno;
     }
+    final resolvedPath = resolvedPathResult.path!;
 
     final fs = _fileSystem;
     if (fs is! WasiPathLinkFileSystem) {
@@ -1366,15 +1428,16 @@ final class WasiPreview1 {
       return _errnoInval;
     }
 
-    final resolvedPath = _resolveGuestPath(
+    final resolvedPathResult = _resolveGuestPath(
       dirFd: dirFd,
       pathPtr: pathPtr,
       pathLen: pathLen,
       requiredRight: _rightPathCreateDirectory,
     );
-    if (resolvedPath == null) {
-      return _errnoPerm;
+    if (resolvedPathResult.path == null) {
+      return resolvedPathResult.errno;
     }
+    final resolvedPath = resolvedPathResult.path!;
 
     final mutableFs = _fileSystem;
     if (mutableFs is! WasiMutablePathFileSystem) {
@@ -1397,15 +1460,16 @@ final class WasiPreview1 {
       return _errnoInval;
     }
 
-    final resolvedPath = _resolveGuestPath(
+    final resolvedPathResult = _resolveGuestPath(
       dirFd: dirFd,
       pathPtr: pathPtr,
       pathLen: pathLen,
       requiredRight: _rightPathRemoveDirectory,
     );
-    if (resolvedPath == null) {
-      return _errnoPerm;
+    if (resolvedPathResult.path == null) {
+      return resolvedPathResult.errno;
     }
+    final resolvedPath = resolvedPathResult.path!;
 
     final mutableFs = _fileSystem;
     if (mutableFs is! WasiMutablePathFileSystem) {
@@ -1428,15 +1492,16 @@ final class WasiPreview1 {
       return _errnoInval;
     }
 
-    final resolvedPath = _resolveGuestPath(
+    final resolvedPathResult = _resolveGuestPath(
       dirFd: dirFd,
       pathPtr: pathPtr,
       pathLen: pathLen,
       requiredRight: _rightPathUnlinkFile,
     );
-    if (resolvedPath == null) {
-      return _errnoPerm;
+    if (resolvedPathResult.path == null) {
+      return resolvedPathResult.errno;
     }
+    final resolvedPath = resolvedPathResult.path!;
 
     final mutableFs = _fileSystem;
     if (mutableFs is! WasiMutablePathFileSystem) {
@@ -1462,21 +1527,26 @@ final class WasiPreview1 {
       return _errnoInval;
     }
 
-    final oldResolvedPath = _resolveGuestPath(
+    final oldResolvedPathResult = _resolveGuestPath(
       dirFd: oldDirFd,
       pathPtr: oldPathPtr,
       pathLen: oldPathLen,
       requiredRight: _rightPathRenameSource,
     );
-    final newResolvedPath = _resolveGuestPath(
+    if (oldResolvedPathResult.path == null) {
+      return oldResolvedPathResult.errno;
+    }
+    final newResolvedPathResult = _resolveGuestPath(
       dirFd: newDirFd,
       pathPtr: newPathPtr,
       pathLen: newPathLen,
       requiredRight: _rightPathRenameTarget,
     );
-    if (oldResolvedPath == null || newResolvedPath == null) {
-      return _errnoPerm;
+    if (newResolvedPathResult.path == null) {
+      return newResolvedPathResult.errno;
     }
+    final oldResolvedPath = oldResolvedPathResult.path!;
+    final newResolvedPath = newResolvedPathResult.path!;
 
     final mutableFs = _fileSystem;
     if (mutableFs is! WasiMutablePathFileSystem) {
@@ -1642,52 +1712,114 @@ final class WasiPreview1 {
     final outPtr = _asI32(args, 1, 'out_ptr');
     final nSubscriptions = _asI32(args, 2, 'nsubscriptions');
     final nEventsPtr = _asI32(args, 3, 'nevents_ptr');
-    if (nSubscriptions < 0) {
+    if (nSubscriptions <= 0) {
       return _errnoInval;
     }
 
     final memory = _requireMemory();
     try {
+      var eventsWritten = 0;
       for (var i = 0; i < nSubscriptions; i++) {
         final subscriptionPtr = inPtr + (i * _subscriptionSize);
-        final eventPtr = outPtr + (i * _eventSize);
-
-        final userdata = memory.loadI64(subscriptionPtr + 0);
-        final eventType = memory.loadU8(subscriptionPtr + 8);
-
-        memory.storeI64(eventPtr + 0, userdata);
-        memory.storeI16(eventPtr + 8, _errnoSuccess);
-        memory.storeI8(eventPtr + 10, eventType);
-        memory.storeI8(eventPtr + 11, 0);
+        final userdata = memory.loadI64(
+          subscriptionPtr + _subscriptionOffsetUserdata,
+        );
+        final eventType = memory.loadU8(
+          subscriptionPtr + _subscriptionOffsetEventType,
+        );
 
         switch (eventType) {
           case _eventTypeClock:
-            memory.storeI64(eventPtr + 16, 0);
-            memory.storeI16(eventPtr + 24, 0);
+            final clockId = memory.loadI32(
+              subscriptionPtr + _subscriptionOffsetClockId,
+            );
+            final clockFlags = memory.loadU16(
+              subscriptionPtr + _subscriptionOffsetClockFlags,
+            );
+            if ((clockFlags & ~_subclockFlagAbstime) != 0) {
+              return _errnoInval;
+            }
+            final eventErrno = _isSupportedClockId(clockId)
+                ? _errnoSuccess
+                : _errnoInval;
+            _storePollEvent(
+              memory: memory,
+              eventPtr: outPtr + (eventsWritten * _eventSize),
+              userdata: userdata,
+              eventType: eventType,
+              errno: eventErrno,
+              nbytes: 0,
+              flags: 0,
+            );
+            eventsWritten++;
           case _eventTypeFdRead:
-          case _eventTypeFdWrite:
-            final fd = memory.loadI32(subscriptionPtr + 12);
+            final fd = memory.loadI32(subscriptionPtr + _subscriptionOffsetFd);
             final entry = _fdTable[fd];
-            if (entry == null) {
-              memory.storeI16(eventPtr + 8, _errnoBadf);
-              memory.storeI64(eventPtr + 16, 0);
-              memory.storeI16(eventPtr + 24, 0);
+            if (entry == null ||
+                entry.kind == _FdKind.stdout ||
+                entry.kind == _FdKind.stderr ||
+                entry.kind == _FdKind.directory) {
+              _storePollEvent(
+                memory: memory,
+                eventPtr: outPtr + (eventsWritten * _eventSize),
+                userdata: userdata,
+                eventType: eventType,
+                errno: _errnoBadf,
+                nbytes: 0,
+                flags: 0,
+              );
+              eventsWritten++;
               break;
             }
-            if (eventType == _eventTypeFdRead) {
-              memory.storeI64(eventPtr + 16, _availableReadBytes(entry: entry));
-              memory.storeI16(eventPtr + 24, 0);
-            } else {
-              memory.storeI64(eventPtr + 16, 0);
-              memory.storeI16(eventPtr + 24, 0);
+
+            final nbytes = _availableReadBytes(entry: entry);
+            final ready = entry.kind == _FdKind.file || nbytes > 0;
+            if (!ready) {
+              break;
             }
+            _storePollEvent(
+              memory: memory,
+              eventPtr: outPtr + (eventsWritten * _eventSize),
+              userdata: userdata,
+              eventType: eventType,
+              errno: _errnoSuccess,
+              nbytes: nbytes,
+              flags: 0,
+            );
+            eventsWritten++;
+          case _eventTypeFdWrite:
+            final fd = memory.loadI32(subscriptionPtr + _subscriptionOffsetFd);
+            final entry = _fdTable[fd];
+            if (entry == null ||
+                entry.kind == _FdKind.stdin ||
+                entry.kind == _FdKind.directory) {
+              _storePollEvent(
+                memory: memory,
+                eventPtr: outPtr + (eventsWritten * _eventSize),
+                userdata: userdata,
+                eventType: eventType,
+                errno: _errnoBadf,
+                nbytes: 0,
+                flags: 0,
+              );
+              eventsWritten++;
+              break;
+            }
+            _storePollEvent(
+              memory: memory,
+              eventPtr: outPtr + (eventsWritten * _eventSize),
+              userdata: userdata,
+              eventType: eventType,
+              errno: _errnoSuccess,
+              nbytes: 0,
+              flags: 0,
+            );
+            eventsWritten++;
           default:
-            memory.storeI16(eventPtr + 8, _errnoInval);
-            memory.storeI64(eventPtr + 16, 0);
-            memory.storeI16(eventPtr + 24, 0);
+            return _errnoInval;
         }
       }
-      memory.storeI32(nEventsPtr, nSubscriptions);
+      memory.storeI32(nEventsPtr, eventsWritten);
       return _errnoSuccess;
     } on RangeError {
       return _errnoFault;
@@ -1874,7 +2006,7 @@ final class WasiPreview1 {
     if (handler == null) {
       return _errnoNosys;
     }
-    return handler(fd: fd, how: how) ?? _errnoSuccess;
+    return handler(fd: fd, how: how);
   }
 
   void _resetFdTable() {
@@ -1950,12 +2082,15 @@ final class WasiPreview1 {
   }
 
   int _nextRandomByte() {
-    var state = _randomState;
-    state ^= (state << 13) & 0xffffffff;
-    state ^= state >> 17;
-    state ^= (state << 5) & 0xffffffff;
-    _randomState = state & 0xffffffff;
-    return _randomState & 0xff;
+    return _random.nextInt(256);
+  }
+
+  static Random _createRandom() {
+    try {
+      return Random.secure();
+    } on UnsupportedError {
+      return Random();
+    }
   }
 
   int _availableReadBytes({required _FdEntry entry}) {
@@ -1967,6 +2102,36 @@ final class WasiPreview1 {
       _FdKind.file => _availableFileBytes(entry.file!),
       _FdKind.stdout || _FdKind.stderr || _FdKind.directory => 0,
     };
+  }
+
+  static void _storePollEvent({
+    required WasmMemory memory,
+    required int eventPtr,
+    required BigInt userdata,
+    required int eventType,
+    required int errno,
+    required int nbytes,
+    required int flags,
+  }) {
+    memory.storeI64(eventPtr + _eventOffsetUserdata, userdata);
+    memory.storeI16(eventPtr + _eventOffsetErrno, errno);
+    memory.storeI8(eventPtr + _eventOffsetEventType, eventType);
+    memory.storeI8(eventPtr + (_eventOffsetEventType + 1), 0);
+    memory.storeI64(eventPtr + _eventOffsetNbytes, nbytes);
+    memory.storeI16(eventPtr + _eventOffsetFlags, flags);
+    memory.fillBytes(eventPtr + (_eventOffsetFlags + 2), 0, 6);
+  }
+
+  static bool _isSupportedClockId(int clockId) {
+    switch (clockId) {
+      case _clockIdRealtime:
+      case _clockIdMonotonic:
+      case _clockIdProcessCpuTime:
+      case _clockIdThreadCpuTime:
+        return true;
+      default:
+        return false;
+    }
   }
 
   static int _availableFileBytes(WasiFileDescriptor file) {
@@ -2044,29 +2209,35 @@ final class WasiPreview1 {
     return bytes;
   }
 
-  String? _resolvePath(String baseDirectory, String rawPath) {
+  _ResolvedPath _resolvePath({
+    required String baseDirectory,
+    required String rawPath,
+  }) {
     if (rawPath.contains('\u0000')) {
-      return null;
+      return const _ResolvedPath.error(_errnoInval);
     }
+
     final combined = rawPath.startsWith('/')
         ? rawPath
         : (baseDirectory == '/' ? '/$rawPath' : '$baseDirectory/$rawPath');
-    final normalized = _normalizePathOrNull(combined);
-    if (normalized == null) {
-      return null;
+    late final String normalized;
+    try {
+      normalized = WasiInMemoryFileSystem.normalizeAbsolutePath(combined);
+    } on WasiFsException catch (error) {
+      return _ResolvedPath.error(_pathResolutionErrno(error.error));
     }
 
     if (baseDirectory == '/') {
-      return normalized;
+      return _ResolvedPath.path(normalized);
     }
     if (normalized == baseDirectory ||
         normalized.startsWith('$baseDirectory/')) {
-      return normalized;
+      return _ResolvedPath.path(normalized);
     }
-    return null;
+    return const _ResolvedPath.error(_errnoNotcapable);
   }
 
-  String? _resolveGuestPath({
+  _ResolvedPath _resolveGuestPath({
     required int dirFd,
     required int pathPtr,
     required int pathLen,
@@ -2074,29 +2245,35 @@ final class WasiPreview1 {
   }) {
     final dirEntry = _fdTable[dirFd];
     if (dirEntry == null || dirEntry.kind != _FdKind.directory) {
-      return null;
+      return const _ResolvedPath.error(_errnoBadf);
     }
     if ((dirEntry.rightsBase & requiredRight) == 0) {
-      return null;
+      return const _ResolvedPath.error(_errnoNotcapable);
     }
 
     final memory = _requireMemory();
     try {
       final pathBytes = memory.readBytes(pathPtr, pathLen);
       final rawPath = utf8.decode(pathBytes, allowMalformed: false);
-      return _resolvePath(dirEntry.directoryPath!, rawPath);
+      return _resolvePath(
+        baseDirectory: dirEntry.directoryPath!,
+        rawPath: rawPath,
+      );
     } on RangeError {
-      return null;
+      return const _ResolvedPath.error(_errnoFault);
     } on FormatException {
-      return null;
+      return const _ResolvedPath.error(_errnoInval);
     }
   }
 
-  static String? _normalizePathOrNull(String path) {
-    try {
-      return WasiInMemoryFileSystem.normalizeAbsolutePath(path);
-    } on WasiFsException {
-      return null;
+  static int _pathResolutionErrno(WasiFsError error) {
+    switch (error) {
+      case WasiFsError.permissionDenied:
+        return _errnoNotcapable;
+      case WasiFsError.invalid:
+        return _errnoInval;
+      default:
+        return _fsErrno(error);
     }
   }
 
@@ -2248,6 +2425,20 @@ final class WasiPreview1 {
   static const int _eventTypeClock = 0;
   static const int _eventTypeFdRead = 1;
   static const int _eventTypeFdWrite = 2;
+  static const int _subclockFlagAbstime = 0x0001;
+
+  static const int _subscriptionOffsetUserdata = 0;
+  static const int _subscriptionOffsetEventType = 8;
+  static const int _subscriptionOffsetFd = 16;
+  static const int _subscriptionOffsetClockId = 16;
+  static const int _subscriptionOffsetClockFlags = 40;
+
+  static const int _eventOffsetUserdata = 0;
+  static const int _eventOffsetErrno = 8;
+  static const int _eventOffsetEventType = 10;
+  static const int _eventOffsetNbytes = 16;
+  static const int _eventOffsetFlags = 24;
+
   static const int _subscriptionSize = 48;
   static const int _eventSize = 32;
 

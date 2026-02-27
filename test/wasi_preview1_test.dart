@@ -1475,6 +1475,119 @@ void main() {
       expect(instance.invokeI32('run'), 1);
     });
 
+    test('poll_oneoff rejects zero subscriptions', () {
+      final wasi = WasiPreview1();
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pollOneoff = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'poll_oneoff')]!;
+
+      expect(pollOneoff([64, 128, 0, 32]), 28);
+    });
+
+    test('poll_oneoff rejects unknown subscription event type', () {
+      final wasi = WasiPreview1();
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pollOneoff = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'poll_oneoff')]!;
+
+      memory.storeI64(64, 7);
+      memory.storeI8(72, 99);
+      expect(pollOneoff([64, 128, 1, 32]), 28);
+    });
+
+    test('poll_oneoff emits BADF event for unknown fd subscriptions', () {
+      final wasi = WasiPreview1();
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pollOneoff = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'poll_oneoff')]!;
+
+      memory.storeI64(64, 99);
+      memory.storeI8(72, 1);
+      memory.storeI32(80, 1234);
+      expect(pollOneoff([64, 128, 1, 32]), 0);
+      expect(memory.loadI32(32), 1);
+      expect(memory.loadU16(136), 8);
+      expect(memory.loadU8(138), 1);
+    });
+
+    test('path_open supports O_DIRECTORY for directory targets', () {
+      final fs = WasiInMemoryFileSystem();
+      fs.createDirectory('/data');
+      final wasi = WasiPreview1(fileSystem: fs);
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pathOpen = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'path_open')]!;
+      final fdFdstatGet =
+          wasi.imports.functions[WasmImports.key(
+            'wasi_snapshot_preview1',
+            'fd_fdstat_get',
+          )]!;
+      final fdClose = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_close')]!;
+
+      memory.writeBytesFromList(64, utf8.encode('data'));
+      expect(pathOpen([3, 0, 64, 4, 2, 0, 0, 0, 32]), 0);
+      final openedFd = memory.loadI32(32);
+      expect(openedFd, greaterThanOrEqualTo(4));
+      expect(fdFdstatGet([openedFd, 96]), 0);
+      expect(memory.loadU8(96), 3);
+      expect(fdClose([openedFd]), 0);
+    });
+
+    test('path_open O_DIRECTORY returns NOTDIR for regular files', () {
+      final fs = WasiInMemoryFileSystem();
+      final file = fs.open(
+        path: '/plain.txt',
+        create: true,
+        truncate: true,
+        read: true,
+        write: true,
+        exclusive: false,
+      );
+      file.write(Uint8List.fromList(utf8.encode('x')));
+      file.close();
+      final wasi = WasiPreview1(fileSystem: fs);
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pathOpen = wasi
+          .imports
+          .functions[WasmImports.key('wasi_snapshot_preview1', 'path_open')]!;
+
+      memory.writeBytesFromList(64, utf8.encode('plain.txt'));
+      expect(pathOpen([3, 0, 64, 9, 2, 0, 0, 0, 32]), 54);
+    });
+
+    test('path resolution returns BADF/NOTCAPABLE/INVAL/FAULT distinctly', () {
+      final wasi = WasiPreview1(fileSystem: WasiInMemoryFileSystem());
+      final memory = WasmMemory(minPages: 1);
+      wasi.bindMemory(memory);
+      final pathFilestatGet =
+          wasi.imports.functions[WasmImports.key(
+            'wasi_snapshot_preview1',
+            'path_filestat_get',
+          )]!;
+
+      memory.writeBytesFromList(64, utf8.encode('ok'));
+      expect(pathFilestatGet([99, 0, 64, 2, 128]), 8);
+
+      memory.writeBytesFromList(64, utf8.encode('../escape'));
+      expect(pathFilestatGet([3, 0, 64, 9, 128]), 76);
+
+      memory.writeBytesFromList(64, const [0xff]);
+      expect(pathFilestatGet([3, 0, 64, 1, 128]), 28);
+
+      expect(pathFilestatGet([3, 0, 65535, 2, 128]), 21);
+    });
+
     test('path_link + path_symlink + path_readlink work on in-memory fs', () {
       final fs = WasiInMemoryFileSystem();
       final source = fs.open(
@@ -1699,7 +1812,7 @@ void main() {
 
       final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
       wasi.bindInstance(instance);
-      expect(instance.invokeI32('run'), 65);
+      expect(instance.invokeI32('run'), 78);
     });
 
     test(
@@ -1880,7 +1993,7 @@ void main() {
       expect(instance.exportedMemory('memory').loadI32(48), 3);
     });
 
-    test('sock_shutdown treats null handler result as success', () {
+    test('sock_shutdown returns errno from socket transport', () {
       var called = false;
       final wasi = WasiPreview1(
         socketTransport: WasiSocketTransport(
@@ -1888,7 +2001,7 @@ void main() {
             called = true;
             expect(fd, 9);
             expect(how, 2);
-            return null;
+            return 0;
           },
         ),
       );
@@ -1917,7 +2030,10 @@ void main() {
     });
 
     test('proc_raise mode success returns errno 0', () {
-      final wasi = WasiPreview1(procRaiseMode: WasiProcRaiseMode.success);
+      final wasi = WasiPreview1(
+        procRaiseMode: WasiProcRaiseMode.success,
+        allowNonStandardWasi: true,
+      );
       final wasm = _buildProcRaiseModule(signal: 15);
       final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
 
@@ -1925,13 +2041,27 @@ void main() {
     });
 
     test('proc_raise mode trap throws WasiProcRaise with signal', () {
-      final wasi = WasiPreview1(procRaiseMode: WasiProcRaiseMode.trap);
+      final wasi = WasiPreview1(
+        procRaiseMode: WasiProcRaiseMode.trap,
+        allowNonStandardWasi: true,
+      );
       final wasm = _buildProcRaiseModule(signal: 9);
       final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
 
       expect(
         () => instance.invokeI32('run'),
         throwsA(isA<WasiProcRaise>().having((e) => e.signal, 'signal', 9)),
+      );
+    });
+
+    test('proc_raise non-standard modes require explicit opt-in', () {
+      expect(
+        () => WasiPreview1(procRaiseMode: WasiProcRaiseMode.success),
+        throwsArgumentError,
+      );
+      expect(
+        () => WasiPreview1(procRaiseMode: WasiProcRaiseMode.trap),
+        throwsArgumentError,
       );
     });
   });

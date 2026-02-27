@@ -1,4 +1,6 @@
 @TestOn('vm')
+library;
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
@@ -6,7 +8,6 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:wasd/wasd.dart';
 import 'package:wasd/src/wasi_socket_auto_io.dart' as auto_io;
-import 'package:wasd/src/wasi_socket_transport.dart';
 
 void main() {
   group('wasi_socket_auto_io', () {
@@ -87,7 +88,7 @@ void main() {
       expect(transport.shutdown?.call(fd: 5, how: 99), _errnoInval);
       expect(transport.shutdown?.call(fd: 5, how: 1), _errnoSuccess);
       expect(transport.close?.call(fd: 5), _errnoSuccess);
-      expect(transport.close?.call(fd: 999), isNull);
+      expect(transport.close?.call(fd: 999), _errnoBadf);
     });
 
     test(

@@ -53,7 +53,8 @@ Wasm compile targets.
   - `environ_sizes_get`, `environ_get`
   - `clock_time_get`, `clock_res_get`, `random_get`
   - `poll_oneoff`, `sched_yield`, `proc_exit`
-  - `proc_raise` (configurable via `procRaiseMode`: `enosys` / `success` / `trap`)
+  - `proc_raise` (default strict behavior: `ENOSYS`; non-standard modes
+    `success` / `trap` require `allowNonStandardWasi: true`)
   - `sock_accept`, `sock_recv`, `sock_send`, `sock_shutdown` via transport abstraction
     (`socketTransport`; default remains `ENOSYS` when transport is absent)
   - filesystem backend auto-selection via conditional import:

@@ -79,7 +79,7 @@ final class _WebSocketTransport {
     return WasiSockSendResult.sent(data.length);
   }
 
-  int? _shutdown({required int fd, required int how}) {
+  int _shutdown({required int fd, required int how}) {
     final socket = _sockets[fd];
     if (socket == null) {
       return _errnoBadf;
@@ -91,10 +91,10 @@ final class _WebSocketTransport {
     return _errnoSuccess;
   }
 
-  int? _close({required int fd}) {
+  int _close({required int fd}) {
     final socket = _sockets.remove(fd);
     if (socket == null) {
-      return null;
+      return _errnoBadf;
     }
     socket.close();
     return _errnoSuccess;
