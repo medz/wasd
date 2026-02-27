@@ -1,5 +1,7 @@
 import 'dart:collection';
+import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -58,7 +60,8 @@ final class DoomWindowPage extends StatefulWidget {
 final class _DoomWindowPageState extends State<DoomWindowPage> {
   ReceivePort? _receivePort;
   Isolate? _doomIsolate;
-  SendPort? _eventSendPort;
+  RandomAccessFile? _eventWriter;
+  File? _eventFile;
   final FocusNode _focusNode = FocusNode(debugLabel: 'doom-input-focus');
   final Stopwatch _uiClock = Stopwatch()..start();
 
@@ -92,7 +95,13 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
     _doomIsolate = null;
     _receivePort?.close();
     _receivePort = null;
-    _eventSendPort = null;
+    _eventWriter?.closeSync();
+    _eventWriter = null;
+    final eventFile = _eventFile;
+    _eventFile = null;
+    if (eventFile != null && eventFile.existsSync()) {
+      eventFile.deleteSync();
+    }
   }
 
   Future<void> _startDoom() async {
@@ -131,8 +140,17 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
     receivePort.listen(_onIsolateMessage);
     _receivePort = receivePort;
 
+    final eventFile = File(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}'
+      'doom_example_events_${DateTime.now().microsecondsSinceEpoch}.bin',
+    );
+    eventFile.createSync(recursive: true);
+    _eventFile = eventFile;
+    _eventWriter = eventFile.openSync(mode: FileMode.writeOnlyAppend);
+
     _doomIsolate = await Isolate.spawn<Map<String, Object?>>(_doomIsolateMain, {
       'uiPort': receivePort.sendPort,
+      'eventFilePath': eventFile.path,
       'wasmBytes': TransferableTypedData.fromList(<Uint8List>[wasmBytes]),
       'iwadBytes': TransferableTypedData.fromList(<Uint8List>[iwadBytes]),
     });
@@ -154,13 +172,6 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
       return;
     }
     final type = message['type'];
-    if (type == 'event_port') {
-      final port = message['port'];
-      if (port is SendPort) {
-        _eventSendPort = port;
-      }
-      return;
-    }
     if (type == 'status') {
       final text = message['text'] as String? ?? '';
       setState(() {
@@ -316,11 +327,15 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
   }
 
   void _writeEvent(int eventType, int keyCode) {
-    final port = _eventSendPort;
-    if (port == null) {
+    final writer = _eventWriter;
+    if (writer == null) {
       return;
     }
-    port.send(<int>[eventType, keyCode]);
+    final bytes = ByteData(8)
+      ..setInt32(0, eventType, Endian.little)
+      ..setInt32(4, keyCode, Endian.little);
+    writer.writeFromSync(bytes.buffer.asUint8List());
+    writer.flushSync();
   }
 
   void _toggleHelpOverlay() {
@@ -782,19 +797,17 @@ final class _HelpCard extends StatelessWidget {
 
 void _doomIsolateMain(Map<String, Object?> args) {
   final uiPort = args['uiPort'] as SendPort;
+  final eventFilePath = args['eventFilePath'] as String;
   final wasmBytes = (args['wasmBytes'] as TransferableTypedData)
       .materialize()
       .asUint8List();
   final iwadBytes = (args['iwadBytes'] as TransferableTypedData)
       .materialize()
       .asUint8List();
-  final eventPort = ReceivePort();
+
+  _WindowDoomHost? frontend;
 
   try {
-    uiPort.send(<String, Object?>{
-      'type': 'event_port',
-      'port': eventPort.sendPort,
-    });
     uiPort.send(<String, Object?>{
       'type': 'status',
       'text': 'Loading Doom wasm...',
@@ -811,7 +824,7 @@ void _doomIsolateMain(Map<String, Object?> args) {
       fileSystem: fs,
       preferHostIo: false,
     );
-    final frontend = _WindowDoomHost(uiPort: uiPort, eventPort: eventPort);
+    frontend = _WindowDoomHost(uiPort: uiPort, eventFilePath: eventFilePath);
     final imports = <String, WasmHostFunction>{
       ...wasi.imports.functions,
       ...frontend.imports,
@@ -837,7 +850,7 @@ void _doomIsolateMain(Map<String, Object?> args) {
   } catch (error) {
     uiPort.send(<String, Object?>{'type': 'error', 'text': error.toString()});
   } finally {
-    eventPort.close();
+    frontend?.close();
   }
 }
 
@@ -860,26 +873,17 @@ void _writeInMemoryFile(
 }
 
 final class _WindowDoomHost {
-  _WindowDoomHost({required this.uiPort, required ReceivePort eventPort}) {
-    eventPort.listen((Object? message) {
-      if (message is! List || message.length != 2) {
-        return;
-      }
-      final eventType = message[0];
-      final keyCode = message[1];
-      if (eventType is! int || keyCode is! int) {
-        return;
-      }
-      _events.add(_DoomEvent(type: eventType.toSigned(32), data1: keyCode));
-    });
-  }
+  _WindowDoomHost({required this.uiPort, required String eventFilePath})
+    : _eventReader = File(eventFilePath).openSync(mode: FileMode.read);
 
   final SendPort uiPort;
+  final RandomAccessFile _eventReader;
   final Queue<_DoomEvent> _events = Queue<_DoomEvent>();
   final Uint8List _palette = Uint8List(1024);
   final Stopwatch _frameClock = Stopwatch()..start();
 
   WasmMemory? _memory;
+  int _eventReadOffset = 0;
   int _lastFrameSentUs = 0;
 
   Map<String, WasmHostFunction> get imports => <String, WasmHostFunction>{
@@ -918,10 +922,12 @@ final class _WindowDoomHost {
   }
 
   Object? _pendingEvent(List<Object?> args) {
+    _pumpEventFile();
     return _events.isNotEmpty ? 1 : 0;
   }
 
   Object? _nextEvent(List<Object?> args) {
+    _pumpEventFile();
     if (_events.isEmpty) {
       return 0;
     }
@@ -977,6 +983,26 @@ final class _WindowDoomHost {
       rgba[out + 3] = 255;
     }
     return rgba;
+  }
+
+  void close() {
+    _eventReader.closeSync();
+  }
+
+  void _pumpEventFile() {
+    final length = _eventReader.lengthSync();
+    while (_eventReadOffset + 8 <= length) {
+      _eventReader.setPositionSync(_eventReadOffset);
+      final bytes = _eventReader.readSync(8);
+      if (bytes.length != 8) {
+        break;
+      }
+      _eventReadOffset += 8;
+      final view = ByteData.sublistView(Uint8List.fromList(bytes));
+      final type = view.getInt32(0, Endian.little);
+      final key = view.getInt32(4, Endian.little);
+      _events.add(_DoomEvent(type: type, data1: key));
+    }
   }
 
   WasmMemory _requireMemory() {
