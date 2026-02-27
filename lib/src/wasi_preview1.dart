@@ -104,6 +104,55 @@ final class _ResolvedPath {
   final int errno;
 }
 
+final class _PollSubscription {
+  const _PollSubscription.clock({
+    required this.userdata,
+    required this.clockId,
+    required this.clockFlags,
+    required this.clockPrecisionNs,
+    required this.clockDeadlineNs,
+  }) : eventType = WasiPreview1._eventTypeClock,
+       fd = null;
+
+  const _PollSubscription.fdRead({required this.userdata, required this.fd})
+    : eventType = WasiPreview1._eventTypeFdRead,
+      clockId = null,
+      clockFlags = null,
+      clockPrecisionNs = null,
+      clockDeadlineNs = null;
+
+  const _PollSubscription.fdWrite({required this.userdata, required this.fd})
+    : eventType = WasiPreview1._eventTypeFdWrite,
+      clockId = null,
+      clockFlags = null,
+      clockPrecisionNs = null,
+      clockDeadlineNs = null;
+
+  final BigInt userdata;
+  final int eventType;
+  final int? fd;
+  final int? clockId;
+  final int? clockFlags;
+  final BigInt? clockPrecisionNs;
+  final BigInt? clockDeadlineNs;
+}
+
+final class _PollReadyEvent {
+  const _PollReadyEvent({
+    required this.userdata,
+    required this.eventType,
+    required this.errno,
+    this.nbytes = 0,
+    this.flags = 0,
+  });
+
+  final BigInt userdata;
+  final int eventType;
+  final int errno;
+  final int nbytes;
+  final int flags;
+}
+
 final class WasiPreview1 {
   WasiPreview1({
     List<String> args = const [],
@@ -120,6 +169,9 @@ final class WasiPreview1 {
     bool preferHostIo = true,
     String? ioRootPath,
     Map<int, String> preopenedDirectories = const {3: '/'},
+    BigInt Function()? nowRealtimeNs,
+    BigInt Function()? nowMonotonicNs,
+    void Function(Duration duration)? sleep,
   }) : _args = List.unmodifiable(args),
        _environment = Map.unmodifiable(environment),
        _stdinBuffer = Uint8List.fromList(stdin),
@@ -143,6 +195,15 @@ final class WasiPreview1 {
                MapEntry(fd, WasiInMemoryFileSystem.normalizeAbsolutePath(path)),
          ),
        ) {
+    _encodedArgs = _encodeUtf8Values(_args);
+    _encodedArgsTotalSize = _cstringVectorTotalSize(_encodedArgs);
+    _encodedEnvironmentEntries = _encodeEnvironmentValues(_environment);
+    _encodedEnvironmentTotalSize = _cstringVectorTotalSize(
+      _encodedEnvironmentEntries,
+    );
+    _nowRealtimeNs = nowRealtimeNs ?? _defaultNowRealtimeNs;
+    _nowMonotonicNs = nowMonotonicNs ?? _defaultNowMonotonicNs;
+    _sleep = sleep ?? _defaultSleep;
     if (!allowNonStandardWasi && procRaiseMode != WasiProcRaiseMode.enosys) {
       throw ArgumentError.value(
         procRaiseMode,
@@ -164,9 +225,16 @@ final class WasiPreview1 {
   final WasiFileSystem _fileSystem;
   final WasiSocketTransport? _socketTransport;
   final Map<int, String> _preopenedDirectories;
+  late final List<Uint8List> _encodedArgs;
+  late final int _encodedArgsTotalSize;
+  late final List<Uint8List> _encodedEnvironmentEntries;
+  late final int _encodedEnvironmentTotalSize;
 
   WasmMemory? _memory;
   final Stopwatch _monotonicClock = Stopwatch()..start();
+  late final BigInt Function() _nowRealtimeNs;
+  late final BigInt Function() _nowMonotonicNs;
+  late final void Function(Duration duration) _sleep;
   final Random _random = _createRandom();
   int _stdinOffset = 0;
   final Map<int, _FdEntry> _fdTable = <int, _FdEntry>{};
@@ -1568,14 +1636,9 @@ final class WasiPreview1 {
     final argcPtr = _asI32(args, 0, 'argc');
     final argvBufSizePtr = _asI32(args, 1, 'argv_buf_size');
     final memory = _requireMemory();
-    final encodedArgs = _args.map(utf8.encode).toList(growable: false);
-    final totalSize = encodedArgs.fold<int>(
-      0,
-      (sum, part) => sum + part.length + 1,
-    );
     try {
-      memory.storeI32(argcPtr, encodedArgs.length);
-      memory.storeI32(argvBufSizePtr, totalSize);
+      memory.storeI32(argcPtr, _encodedArgs.length);
+      memory.storeI32(argvBufSizePtr, _encodedArgsTotalSize);
     } on RangeError {
       return _errnoFault;
     }
@@ -1586,16 +1649,13 @@ final class WasiPreview1 {
     final argvPtr = _asI32(args, 0, 'argv');
     final argvBufPtr = _asI32(args, 1, 'argv_buf');
     final memory = _requireMemory();
-    final encodedArgs = _args.map(utf8.encode).toList(growable: false);
-    var cursor = argvBufPtr;
     try {
-      for (var i = 0; i < encodedArgs.length; i++) {
-        final encoded = encodedArgs[i];
-        memory.storeI32(argvPtr + (i * 4), cursor);
-        memory.writeBytesFromList(cursor, encoded);
-        memory.storeI8(cursor + encoded.length, 0);
-        cursor += encoded.length + 1;
-      }
+      _writeCStringVector(
+        memory: memory,
+        pointersPtr: argvPtr,
+        bufferPtr: argvBufPtr,
+        encodedValues: _encodedArgs,
+      );
     } on RangeError {
       return _errnoFault;
     }
@@ -1606,14 +1666,9 @@ final class WasiPreview1 {
     final environCountPtr = _asI32(args, 0, 'environ_count');
     final environBufSizePtr = _asI32(args, 1, 'environ_buf_size');
     final memory = _requireMemory();
-    final encodedEnvironment = _encodedEnvironment();
-    final totalSize = encodedEnvironment.fold<int>(
-      0,
-      (sum, part) => sum + part.length + 1,
-    );
     try {
-      memory.storeI32(environCountPtr, encodedEnvironment.length);
-      memory.storeI32(environBufSizePtr, totalSize);
+      memory.storeI32(environCountPtr, _encodedEnvironmentEntries.length);
+      memory.storeI32(environBufSizePtr, _encodedEnvironmentTotalSize);
       return _errnoSuccess;
     } on RangeError {
       return _errnoFault;
@@ -1624,16 +1679,13 @@ final class WasiPreview1 {
     final environPtr = _asI32(args, 0, 'environ');
     final environBufPtr = _asI32(args, 1, 'environ_buf');
     final memory = _requireMemory();
-    final encodedEnvironment = _encodedEnvironment();
-    var cursor = environBufPtr;
     try {
-      for (var i = 0; i < encodedEnvironment.length; i++) {
-        final encoded = encodedEnvironment[i];
-        memory.storeI32(environPtr + (i * 4), cursor);
-        memory.writeBytesFromList(cursor, encoded);
-        memory.storeI8(cursor + encoded.length, 0);
-        cursor += encoded.length + 1;
-      }
+      _writeCStringVector(
+        memory: memory,
+        pointersPtr: environPtr,
+        bufferPtr: environBufPtr,
+        encodedValues: _encodedEnvironmentEntries,
+      );
       return _errnoSuccess;
     } on RangeError {
       return _errnoFault;
@@ -1645,14 +1697,8 @@ final class WasiPreview1 {
     _asI64(args, 1, 'precision');
     final timePtr = _asI32(args, 2, 'time_ptr');
 
-    final nowNs = switch (clockId) {
-      _clockIdRealtime => DateTime.now().microsecondsSinceEpoch * 1000,
-      _clockIdMonotonic => _monotonicClock.elapsedMicroseconds * 1000,
-      _clockIdProcessCpuTime => _monotonicClock.elapsedMicroseconds * 1000,
-      _clockIdThreadCpuTime => _monotonicClock.elapsedMicroseconds * 1000,
-      _ => -1,
-    };
-    if (nowNs < 0) {
+    final nowNs = _clockNowNs(clockId);
+    if (nowNs == null) {
       return _errnoInval;
     }
 
@@ -1717,8 +1763,8 @@ final class WasiPreview1 {
     }
 
     final memory = _requireMemory();
+    final subscriptions = <_PollSubscription>[];
     try {
-      var eventsWritten = 0;
       for (var i = 0; i < nSubscriptions; i++) {
         final subscriptionPtr = inPtr + (i * _subscriptionSize);
         final userdata = memory.loadI64(
@@ -1733,96 +1779,169 @@ final class WasiPreview1 {
             final clockId = memory.loadI32(
               subscriptionPtr + _subscriptionOffsetClockId,
             );
+            final timeout = memory.loadU64(
+              subscriptionPtr + _subscriptionOffsetClockTimeout,
+            );
+            final precision = memory.loadU64(
+              subscriptionPtr + _subscriptionOffsetClockPrecision,
+            );
             final clockFlags = memory.loadU16(
               subscriptionPtr + _subscriptionOffsetClockFlags,
             );
             if ((clockFlags & ~_subclockFlagAbstime) != 0) {
               return _errnoInval;
             }
-            final eventErrno = _isSupportedClockId(clockId)
-                ? _errnoSuccess
-                : _errnoInval;
-            _storePollEvent(
-              memory: memory,
-              eventPtr: outPtr + (eventsWritten * _eventSize),
-              userdata: userdata,
-              eventType: eventType,
-              errno: eventErrno,
-              nbytes: 0,
-              flags: 0,
+            final now = _clockNowNs(clockId);
+            final isAbsolute = (clockFlags & _subclockFlagAbstime) != 0;
+            final deadline = now == null
+                ? null
+                : (isAbsolute ? timeout : now + timeout);
+            subscriptions.add(
+              _PollSubscription.clock(
+                userdata: userdata,
+                clockId: clockId,
+                clockFlags: clockFlags,
+                clockPrecisionNs: precision,
+                clockDeadlineNs: deadline,
+              ),
             );
-            eventsWritten++;
           case _eventTypeFdRead:
             final fd = memory.loadI32(subscriptionPtr + _subscriptionOffsetFd);
+            subscriptions.add(
+              _PollSubscription.fdRead(userdata: userdata, fd: fd),
+            );
+          case _eventTypeFdWrite:
+            final fd = memory.loadI32(subscriptionPtr + _subscriptionOffsetFd);
+            subscriptions.add(
+              _PollSubscription.fdWrite(userdata: userdata, fd: fd),
+            );
+          default:
+            return _errnoInval;
+        }
+      }
+    } on RangeError {
+      return _errnoFault;
+    }
+
+    while (true) {
+      final readyEvents = <_PollReadyEvent>[];
+      BigInt? minClockRemainingNs;
+      var hasNonClockSubscriptions = false;
+
+      for (final subscription in subscriptions) {
+        switch (subscription.eventType) {
+          case _eventTypeClock:
+            final clockId = subscription.clockId!;
+            final now = _clockNowNs(clockId);
+            if (now == null) {
+              readyEvents.add(
+                _PollReadyEvent(
+                  userdata: subscription.userdata,
+                  eventType: _eventTypeClock,
+                  errno: _errnoInval,
+                ),
+              );
+              continue;
+            }
+            final deadline = subscription.clockDeadlineNs!;
+            if (now >= deadline) {
+              readyEvents.add(
+                _PollReadyEvent(
+                  userdata: subscription.userdata,
+                  eventType: _eventTypeClock,
+                  errno: _errnoSuccess,
+                ),
+              );
+              continue;
+            }
+            final remaining = deadline - now;
+            if (minClockRemainingNs == null ||
+                remaining < minClockRemainingNs) {
+              minClockRemainingNs = remaining;
+            }
+          case _eventTypeFdRead:
+            hasNonClockSubscriptions = true;
+            final fd = subscription.fd!;
             final entry = _fdTable[fd];
             if (entry == null ||
                 entry.kind == _FdKind.stdout ||
                 entry.kind == _FdKind.stderr ||
                 entry.kind == _FdKind.directory) {
-              _storePollEvent(
-                memory: memory,
-                eventPtr: outPtr + (eventsWritten * _eventSize),
-                userdata: userdata,
-                eventType: eventType,
-                errno: _errnoBadf,
-                nbytes: 0,
-                flags: 0,
+              readyEvents.add(
+                _PollReadyEvent(
+                  userdata: subscription.userdata,
+                  eventType: _eventTypeFdRead,
+                  errno: _errnoBadf,
+                ),
               );
-              eventsWritten++;
-              break;
+              continue;
             }
-
             final nbytes = _availableReadBytes(entry: entry);
             final ready = entry.kind == _FdKind.file || nbytes > 0;
-            if (!ready) {
-              break;
+            if (ready) {
+              readyEvents.add(
+                _PollReadyEvent(
+                  userdata: subscription.userdata,
+                  eventType: _eventTypeFdRead,
+                  errno: _errnoSuccess,
+                  nbytes: nbytes,
+                ),
+              );
             }
-            _storePollEvent(
-              memory: memory,
-              eventPtr: outPtr + (eventsWritten * _eventSize),
-              userdata: userdata,
-              eventType: eventType,
-              errno: _errnoSuccess,
-              nbytes: nbytes,
-              flags: 0,
-            );
-            eventsWritten++;
           case _eventTypeFdWrite:
-            final fd = memory.loadI32(subscriptionPtr + _subscriptionOffsetFd);
+            hasNonClockSubscriptions = true;
+            final fd = subscription.fd!;
             final entry = _fdTable[fd];
             if (entry == null ||
                 entry.kind == _FdKind.stdin ||
                 entry.kind == _FdKind.directory) {
-              _storePollEvent(
-                memory: memory,
-                eventPtr: outPtr + (eventsWritten * _eventSize),
-                userdata: userdata,
-                eventType: eventType,
-                errno: _errnoBadf,
-                nbytes: 0,
-                flags: 0,
+              readyEvents.add(
+                _PollReadyEvent(
+                  userdata: subscription.userdata,
+                  eventType: _eventTypeFdWrite,
+                  errno: _errnoBadf,
+                ),
               );
-              eventsWritten++;
-              break;
+              continue;
             }
-            _storePollEvent(
-              memory: memory,
-              eventPtr: outPtr + (eventsWritten * _eventSize),
-              userdata: userdata,
-              eventType: eventType,
-              errno: _errnoSuccess,
-              nbytes: 0,
-              flags: 0,
+            readyEvents.add(
+              _PollReadyEvent(
+                userdata: subscription.userdata,
+                eventType: _eventTypeFdWrite,
+                errno: _errnoSuccess,
+              ),
             );
-            eventsWritten++;
           default:
             return _errnoInval;
         }
       }
-      memory.storeI32(nEventsPtr, eventsWritten);
-      return _errnoSuccess;
-    } on RangeError {
-      return _errnoFault;
+
+      if (readyEvents.isNotEmpty) {
+        try {
+          for (var i = 0; i < readyEvents.length; i++) {
+            final event = readyEvents[i];
+            _storePollEvent(
+              memory: memory,
+              eventPtr: outPtr + (i * _eventSize),
+              userdata: event.userdata,
+              eventType: event.eventType,
+              errno: event.errno,
+              nbytes: event.nbytes,
+              flags: event.flags,
+            );
+          }
+          memory.storeI32(nEventsPtr, readyEvents.length);
+          return _errnoSuccess;
+        } on RangeError {
+          return _errnoFault;
+        }
+      }
+
+      final sleepDuration = _nextPollSleepDuration(
+        minClockRemainingNs: minClockRemainingNs,
+        hasNonClockSubscriptions: hasNonClockSubscriptions,
+      );
+      _sleep(sleepDuration);
     }
   }
 
@@ -2074,11 +2193,39 @@ final class WasiPreview1 {
     return Uint8List.fromList(chunk);
   }
 
-  List<Uint8List> _encodedEnvironment() {
-    return _environment.entries
-        .map((entry) => utf8.encode('${entry.key}=${entry.value}'))
+  static List<Uint8List> _encodeUtf8Values(Iterable<String> values) {
+    return values
+        .map(utf8.encode)
         .map(Uint8List.fromList)
         .toList(growable: false);
+  }
+
+  static List<Uint8List> _encodeEnvironmentValues(
+    Map<String, String> environment,
+  ) {
+    return _encodeUtf8Values(
+      environment.entries.map((entry) => '${entry.key}=${entry.value}'),
+    );
+  }
+
+  static int _cstringVectorTotalSize(List<Uint8List> encodedValues) {
+    return encodedValues.fold<int>(0, (sum, part) => sum + part.length + 1);
+  }
+
+  static void _writeCStringVector({
+    required WasmMemory memory,
+    required int pointersPtr,
+    required int bufferPtr,
+    required List<Uint8List> encodedValues,
+  }) {
+    var cursor = bufferPtr;
+    for (var i = 0; i < encodedValues.length; i++) {
+      final encoded = encodedValues[i];
+      memory.storeI32(pointersPtr + (i * 4), cursor);
+      memory.writeBytesFromList(cursor, encoded);
+      memory.storeI8(cursor + encoded.length, 0);
+      cursor += encoded.length + 1;
+    }
   }
 
   int _nextRandomByte() {
@@ -2091,6 +2238,63 @@ final class WasiPreview1 {
     } on UnsupportedError {
       return Random();
     }
+  }
+
+  BigInt _defaultNowRealtimeNs() {
+    return BigInt.from(DateTime.now().microsecondsSinceEpoch) *
+        BigInt.from(1000);
+  }
+
+  BigInt _defaultNowMonotonicNs() {
+    return BigInt.from(_monotonicClock.elapsedMicroseconds) * BigInt.from(1000);
+  }
+
+  static void _defaultSleep(Duration duration) {
+    if (duration <= Duration.zero) {
+      return;
+    }
+    final targetMicros = duration.inMicroseconds;
+    final sw = Stopwatch()..start();
+    while (sw.elapsedMicroseconds < targetMicros) {}
+  }
+
+  BigInt? _clockNowNs(int clockId) {
+    switch (clockId) {
+      case _clockIdRealtime:
+        return _nowRealtimeNs();
+      case _clockIdMonotonic:
+      case _clockIdProcessCpuTime:
+      case _clockIdThreadCpuTime:
+        return _nowMonotonicNs();
+      default:
+        return null;
+    }
+  }
+
+  Duration _nextPollSleepDuration({
+    required BigInt? minClockRemainingNs,
+    required bool hasNonClockSubscriptions,
+  }) {
+    var sleepDuration = _pollIdleSleep;
+    if (minClockRemainingNs != null) {
+      if (minClockRemainingNs <= BigInt.zero) {
+        return Duration.zero;
+      }
+      final maxNs =
+          BigInt.from(_pollMaxSleep.inMicroseconds) * BigInt.from(1000);
+      if (minClockRemainingNs >= maxNs) {
+        sleepDuration = _pollMaxSleep;
+      } else {
+        final micros =
+            ((minClockRemainingNs + BigInt.from(999)) ~/ BigInt.from(1000))
+                .toInt();
+        sleepDuration = Duration(microseconds: micros);
+      }
+    }
+    if (hasNonClockSubscriptions && sleepDuration > _pollIdleSleep) {
+      return _pollIdleSleep;
+    }
+    return sleepDuration;
   }
 
   int _availableReadBytes({required _FdEntry entry}) {
@@ -2120,18 +2324,6 @@ final class WasiPreview1 {
     memory.storeI64(eventPtr + _eventOffsetNbytes, nbytes);
     memory.storeI16(eventPtr + _eventOffsetFlags, flags);
     memory.fillBytes(eventPtr + (_eventOffsetFlags + 2), 0, 6);
-  }
-
-  static bool _isSupportedClockId(int clockId) {
-    switch (clockId) {
-      case _clockIdRealtime:
-      case _clockIdMonotonic:
-      case _clockIdProcessCpuTime:
-      case _clockIdThreadCpuTime:
-        return true;
-      default:
-        return false;
-    }
   }
 
   static int _availableFileBytes(WasiFileDescriptor file) {
@@ -2431,6 +2623,8 @@ final class WasiPreview1 {
   static const int _subscriptionOffsetEventType = 8;
   static const int _subscriptionOffsetFd = 16;
   static const int _subscriptionOffsetClockId = 16;
+  static const int _subscriptionOffsetClockTimeout = 24;
+  static const int _subscriptionOffsetClockPrecision = 32;
   static const int _subscriptionOffsetClockFlags = 40;
 
   static const int _eventOffsetUserdata = 0;
@@ -2441,6 +2635,8 @@ final class WasiPreview1 {
 
   static const int _subscriptionSize = 48;
   static const int _eventSize = 32;
+  static const Duration _pollIdleSleep = Duration(milliseconds: 5);
+  static const Duration _pollMaxSleep = Duration(milliseconds: 50);
 
   static const int _preopenTypeDir = 0;
 
