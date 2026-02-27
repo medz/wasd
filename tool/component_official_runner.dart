@@ -6,10 +6,18 @@ const String _defaultJsonPath =
 const String _defaultMarkdownPath =
     '.dart_tool/spec_runner/component_official_failures.md';
 const String _defaultTestsuiteDir = 'third_party/component-model-tests/test';
-const List<String> _defaultGroups = <String>['wasm-tools'];
 const Set<String> _defaultExpectedFailures = <String>{
+  // wasm-tools currently rejects `stream<char>` payload typing.
+  'async/same-component-stream-future.wast',
+  // Parser token coverage gap in current wasm-tools release.
+  'async/trap-if-block-and-sync.wast',
   // Known wasm-tools/parser drift for package-name parsing assertions.
   'wasm-tools/import.wast',
+  // Wasmtime policy assertions do not match raw wasm-tools validation behavior.
+  'wasmtime/import.wast',
+  'wasmtime/restrictions.wast',
+  'wasmtime/simple.wast',
+  'wasmtime/types.wast',
 };
 
 Future<void> main(List<String> args) async {
@@ -40,12 +48,16 @@ Future<void> main(List<String> args) async {
   final selectedGroups = allGroups
       ? const <String>[]
       : (groupsArg == null
-            ? _defaultGroups
+            ? const <String>[]
             : groupsArg
                   .split(',')
                   .map((value) => value.trim())
                   .where((value) => value.isNotEmpty)
                   .toList(growable: false));
+  final filterByGroup = selectedGroups.isNotEmpty;
+  final effectiveGroups = filterByGroup
+      ? selectedGroups
+      : const <String>['all'];
 
   final startedAt = DateTime.now().toUtc();
   final testsuite = Directory(testsuiteDir);
@@ -55,7 +67,7 @@ Future<void> main(List<String> args) async {
       outputMarkdownPath: outputMarkdownPath,
       startedAt: startedAt,
       testsuiteDir: testsuiteDir,
-      selectedGroups: selectedGroups,
+      selectedGroups: effectiveGroups,
       features: features,
       expectedFailures: expectedFailures,
       reason:
@@ -75,7 +87,7 @@ Future<void> main(List<String> args) async {
     }
     final relativePath = _relativePath(entity.path, from: testsuite.path);
     final group = _groupForPath(relativePath);
-    if (!allGroups && !selectedGroups.contains(group)) {
+    if (filterByGroup && !selectedGroups.contains(group)) {
       continue;
     }
     if (regex != null && !regex.hasMatch(relativePath)) {
@@ -93,7 +105,7 @@ Future<void> main(List<String> args) async {
       outputMarkdownPath: outputMarkdownPath,
       startedAt: startedAt,
       testsuiteDir: testsuiteDir,
-      selectedGroups: selectedGroups,
+      selectedGroups: effectiveGroups,
       features: features,
       expectedFailures: expectedFailures,
       reason: 'No .wast files matched current group/filter selection.',
@@ -111,7 +123,7 @@ Future<void> main(List<String> args) async {
       outputMarkdownPath: outputMarkdownPath,
       startedAt: startedAt,
       testsuiteDir: testsuiteDir,
-      selectedGroups: selectedGroups,
+      selectedGroups: effectiveGroups,
       features: features,
       expectedFailures: expectedFailures,
       reason: 'Unable to locate usable wasm-tools binary.',
@@ -190,7 +202,7 @@ Future<void> main(List<String> args) async {
     'started_at_utc': startedAt.toIso8601String(),
     'duration_ms': stopwatch.elapsedMilliseconds,
     'testsuite_dir': testsuiteDir,
-    'groups': selectedGroups,
+    'groups': effectiveGroups,
     'features': features,
     'wasm_tools_binary': resolvedWasmTools,
     'ignore_error_messages': ignoreErrorMessages,
