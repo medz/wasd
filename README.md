@@ -1,5 +1,10 @@
 # WASD
 
+[![pub package](https://img.shields.io/pub/v/wasd.svg)](https://pub.dev/packages/wasd)
+[![Dart SDK](https://img.shields.io/badge/Dart-%3E%3D3.11.0-0175C2?logo=dart)](https://dart.dev/)
+[![License](https://img.shields.io/github/license/medz/wasd)](LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/medz/wasd?style=social)](https://github.com/medz/wasd/stargazers)
+
 **A pure Dart WebAssembly runtime for Dart and Flutter ecosystems.**
 
 WASD provides Dart-native WebAssembly execution with a pure Dart core runtime layer, so you can embed and run Wasm modules directly from Dart code without relying on a native runtime dependency in the core library.
