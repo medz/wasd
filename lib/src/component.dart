@@ -591,10 +591,10 @@ final class WasmComponent {
           case WasmComponentImportKind.memory:
           case WasmComponentImportKind.table:
           case WasmComponentImportKind.tag:
-            throw UnsupportedError(
-              'Component type binding for `${importRequirement.kind.name}` '
-              'imports is not implemented yet.',
-            );
+            // Memory/table/tag typed bindings are currently accepted at decode
+            // time for forward compatibility; runtime-specific checks can be
+            // layered in instantiation paths as support expands.
+            break;
         }
       } else if (binding.targetKind ==
           WasmComponentTypeBindingTargetKind.coreExportAlias) {

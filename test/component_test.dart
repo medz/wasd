@@ -597,7 +597,7 @@ void main() {
       },
     );
 
-    test('rejects unsupported memory import type bindings', () {
+    test('accepts memory import type bindings at decode time', () {
       final importSection = <int>[
         ..._u32Leb(1),
         ..._name('mem'),
@@ -619,13 +619,55 @@ void main() {
         ..._section(0x07, typeBindingSection),
       ]);
 
-      expect(
-        () => WasmComponent.decode(
-          componentBytes,
-          features: const WasmFeatureSet(componentModel: true),
-        ),
-        throwsA(isA<UnsupportedError>()),
+      final component = WasmComponent.decode(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
       );
+      expect(component.typeBindings, hasLength(1));
+      expect(
+        component.typeBindings.single.targetKind,
+        WasmComponentTypeBindingTargetKind.importRequirement,
+      );
+      expect(component.typeBindings.single.targetIndex, 0);
+      expect(component.typeBindings.single.typeDeclarationIndex, 0);
+    });
+
+    test('accepts table/tag import type bindings at decode time', () {
+      final importSection = <int>[
+        ..._u32Leb(2),
+        ..._name('tab'),
+        ..._name('env'),
+        ..._name('table'),
+        0x02,
+        ..._name('errTag'),
+        ..._name('env'),
+        ..._name('tag'),
+        0x04,
+      ];
+      final typeSection = <int>[..._u32Leb(1), ..._name('i32_t'), 0x00, 0x7f];
+      final typeBindingSection = <int>[
+        ..._u32Leb(2),
+        0x00,
+        ..._u32Leb(0),
+        ..._u32Leb(0),
+        0x00,
+        ..._u32Leb(1),
+        ..._u32Leb(0),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ..._componentHeaderWithOneCoreModule(),
+        ..._section(0x04, importSection),
+        ..._section(0x06, typeSection),
+        ..._section(0x07, typeBindingSection),
+      ]);
+
+      final component = WasmComponent.decode(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+      expect(component.typeBindings, hasLength(2));
+      expect(component.typeBindings[0].targetIndex, 0);
+      expect(component.typeBindings[1].targetIndex, 1);
     });
 
     test(
