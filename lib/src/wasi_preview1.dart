@@ -1714,18 +1714,12 @@ final class WasiPreview1 {
   Object? _clockResGet(List<Object?> args) {
     final clockId = _asI32(args, 0, 'clock_id');
     final resolutionPtr = _asI32(args, 1, 'resolution_ptr');
-    switch (clockId) {
-      case _clockIdRealtime:
-      case _clockIdMonotonic:
-      case _clockIdProcessCpuTime:
-      case _clockIdThreadCpuTime:
-        break;
-      default:
-        return _errnoInval;
+    if (!_isSupportedClockId(clockId)) {
+      return _errnoInval;
     }
     final memory = _requireMemory();
     try {
-      memory.storeI64(resolutionPtr, 1);
+      memory.storeI64(resolutionPtr, _clockResolutionNanoseconds);
       return _errnoSuccess;
     } on RangeError {
       return _errnoFault;
@@ -2259,15 +2253,24 @@ final class WasiPreview1 {
   }
 
   BigInt? _clockNowNs(int clockId) {
+    if (!_isSupportedClockId(clockId)) {
+      return null;
+    }
+    if (clockId == _clockIdRealtime) {
+      return _nowRealtimeNs();
+    }
+    return _nowMonotonicNs();
+  }
+
+  static bool _isSupportedClockId(int clockId) {
     switch (clockId) {
       case _clockIdRealtime:
-        return _nowRealtimeNs();
       case _clockIdMonotonic:
       case _clockIdProcessCpuTime:
       case _clockIdThreadCpuTime:
-        return _nowMonotonicNs();
+        return true;
       default:
-        return null;
+        return false;
     }
   }
 
@@ -2613,6 +2616,7 @@ final class WasiPreview1 {
   static const int _clockIdMonotonic = 1;
   static const int _clockIdProcessCpuTime = 2;
   static const int _clockIdThreadCpuTime = 3;
+  static const int _clockResolutionNanoseconds = 1;
 
   static const int _eventTypeClock = 0;
   static const int _eventTypeFdRead = 1;
