@@ -203,6 +203,15 @@ Future<void> main(List<String> args) async {
     args,
     '--component-official-groups',
   );
+  final runComponentDecodeProbe =
+      args.contains('--component-decode-probe') ||
+      args.contains('--strict-component-decode-probe');
+  final strictComponentDecodeProbe = args.contains(
+    '--strict-component-decode-probe',
+  );
+  final componentDecodeProbeBestEffort = args.contains(
+    '--component-decode-probe-best-effort',
+  );
   final runComponentSubset =
       explicitStrictComponentSubset ||
       explicitEnableComponentSubset ||
@@ -268,6 +277,19 @@ Future<void> main(List<String> args) async {
       ),
     );
   }
+  if (runComponentDecodeProbe) {
+    steps.add(
+      await _runStep(
+        name: 'component-decode-probe',
+        command: _componentDecodeProbeCommand(
+          componentOfficialTestsuiteDir: componentOfficialTestsuiteDir,
+          componentOfficialGroups: componentOfficialGroups,
+          bestEffort: componentDecodeProbeBestEffort,
+        ),
+        optional: !strictComponentDecodeProbe,
+      ),
+    );
+  }
 
   switch (target) {
     case RunnerTarget.vm:
@@ -324,6 +346,9 @@ Future<void> main(List<String> args) async {
     'strict_component_official': strictComponentOfficial,
     'component_official_testsuite_dir': componentOfficialTestsuiteDir,
     'component_official_groups': componentOfficialGroups,
+    'component_decode_probe': runComponentDecodeProbe,
+    'strict_component_decode_probe': strictComponentDecodeProbe,
+    'component_decode_probe_best_effort': componentDecodeProbeBestEffort,
     'status': status,
     'steps': steps.map((s) => s.toJson()).toList(growable: false),
   };
@@ -1123,6 +1148,25 @@ List<String> _componentOfficialRunnerCommand({
   ];
 }
 
+List<String> _componentDecodeProbeCommand({
+  required String? componentOfficialTestsuiteDir,
+  required String? componentOfficialGroups,
+  required bool bestEffort,
+}) {
+  return <String>[
+    'dart',
+    'run',
+    'tool/component_decode_probe.dart',
+    if (componentOfficialTestsuiteDir != null &&
+        componentOfficialTestsuiteDir.trim().isNotEmpty)
+      '--testsuite-dir=${componentOfficialTestsuiteDir.trim()}',
+    if (componentOfficialGroups != null &&
+        componentOfficialGroups.trim().isNotEmpty)
+      '--groups=${componentOfficialGroups.trim()}',
+    if (bestEffort) '--best-effort',
+  ];
+}
+
 String _renderMarkdownReport({
   required Map<String, Object?> payload,
   required List<StepResult> steps,
@@ -1215,6 +1259,27 @@ String _renderMarkdownReport({
       '- Official component testsuite subset is disabled (`--no-component-official`).',
     );
   }
+  if (payload['component_decode_probe'] == true) {
+    if (payload['strict_component_decode_probe'] == true) {
+      b.writeln('- Component decode probe is gating.');
+    } else {
+      b.writeln(
+        '- Component decode probe is non-gating (pass `--strict-component-decode-probe` to enforce).',
+      );
+    }
+    if (payload['component_decode_probe_best_effort'] == true) {
+      b.writeln('- Component decode probe mode: `best-effort`.');
+    } else {
+      b.writeln('- Component decode probe mode: `strict`.');
+    }
+    b.writeln(
+      '- Component decode probe reports are written to `.dart_tool/spec_runner/component_decode_probe_latest.json` and `.dart_tool/spec_runner/component_decode_probe_failures.md`.',
+    );
+  } else {
+    b.writeln(
+      '- Component decode probe is disabled (pass `--component-decode-probe`).',
+    );
+  }
   if (target == RunnerTarget.all.name) {
     b.writeln(
       '- Cross-target totals consistency is enforced by the `cross-target-consistency` step.',
@@ -1232,6 +1297,6 @@ void _printUsage() {
     'Usage: dart run tool/spec_runner.dart --target=<vm|js|wasm|all> --suite=<core|proposal|all>',
   );
   stdout.writeln(
-    'Optional: --report=<path> --json=<path> --testsuite-dir=<path> --strict-proposals --no-component-subset --component-subset-optional --component-subset --strict-component-subset --no-component-official --component-official --component-official-optional --strict-component-official --component-official-testsuite-dir=<path> --component-official-groups=<comma-separated>',
+    'Optional: --report=<path> --json=<path> --testsuite-dir=<path> --strict-proposals --no-component-subset --component-subset-optional --component-subset --strict-component-subset --no-component-official --component-official --component-official-optional --strict-component-official --component-official-testsuite-dir=<path> --component-official-groups=<comma-separated> --component-decode-probe --strict-component-decode-probe --component-decode-probe-best-effort',
   );
 }
