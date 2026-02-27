@@ -2849,6 +2849,62 @@ void main() {
         throwsFormatException,
       );
     });
+
+    test(
+      'instantiates component without embedded core modules when declarations are from-exports empty',
+      () {
+        final bytes = Uint8List.fromList(<int>[
+          0x00,
+          0x61,
+          0x73,
+          0x6d,
+          0x0d,
+          0x00,
+          0x01,
+          0x00,
+          // section 2: one from-exports declaration with zero exports
+          0x02,
+          0x03,
+          0x01,
+          0x01,
+          0x00,
+        ]);
+
+        final instance = WasmComponentInstance.fromBytes(
+          bytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.coreInstances, hasLength(1));
+        expect(
+          () => instance.invokeCore('missing', moduleIndex: 0),
+          throwsA(isA<ArgumentError>()),
+        );
+      },
+    );
+
+    test(
+      'rejects component with no modules and no core-instance declarations',
+      () {
+        final bytes = Uint8List.fromList(<int>[
+          0x00,
+          0x61,
+          0x73,
+          0x6d,
+          0x0d,
+          0x00,
+          0x01,
+          0x00,
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            bytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
   });
 }
 

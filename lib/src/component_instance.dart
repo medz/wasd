@@ -111,11 +111,6 @@ final class WasmComponentInstance {
         'Component instantiation requires `componentModel` feature to be enabled.',
       );
     }
-    if (component.coreModules.isEmpty) {
-      throw const FormatException(
-        'Component does not contain embedded core modules.',
-      );
-    }
     final typedFunctionImportRequirements =
         _collectTypedFunctionImportRequirements(component);
     final typedGlobalImportRequirements = _collectTypedGlobalImportRequirements(
