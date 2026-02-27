@@ -275,6 +275,101 @@ void main() {
     );
 
     test(
+      'prefers later compatible table export when an earlier dependency is incompatible',
+      () {
+        final componentBytes = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleExportTable(name: 'tab', min: 1, max: 1),
+            _coreModuleExportTable(name: 'tab', min: 3, max: 3),
+            _coreModuleImportTableAndConst(
+              importModule: 'env',
+              importName: 'tab',
+              min: 2,
+              max: 3,
+              exportName: 'run',
+              value: 22,
+            ),
+          ],
+          instantiateModuleIndices: const [0, 1, 2],
+          instantiateArgumentInstanceIndices: const [
+            <int>[],
+            <int>[],
+            <int>[0, 1],
+          ],
+        );
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.invokeCore('run', moduleIndex: 2), 22);
+      },
+    );
+
+    test(
+      'prefers later compatible global export when an earlier dependency is incompatible',
+      () {
+        final componentBytes = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleExportGlobalI64(name: 'g', value: 0),
+            _coreModuleExportGlobalI32(name: 'g', value: 0),
+            _coreModuleImportGlobalAndConst(
+              importModule: 'env',
+              importName: 'g',
+              valueType: 0x7f,
+              mutable: false,
+              exportName: 'run',
+              value: 23,
+            ),
+          ],
+          instantiateModuleIndices: const [0, 1, 2],
+          instantiateArgumentInstanceIndices: const [
+            <int>[],
+            <int>[],
+            <int>[0, 1],
+          ],
+        );
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.invokeCore('run', moduleIndex: 2), 23);
+      },
+    );
+
+    test(
+      'prefers later compatible tag export when an earlier dependency is incompatible',
+      () {
+        final componentBytes = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleExportTag(name: 't', paramType: 0x7e),
+            _coreModuleExportTag(name: 't', paramType: 0x7f),
+            _coreModuleImportTagAndConst(
+              importModule: 'env',
+              importName: 't',
+              expectedParamType: 0x7f,
+              exportName: 'run',
+              value: 24,
+            ),
+          ],
+          instantiateModuleIndices: const [0, 1, 2],
+          instantiateArgumentInstanceIndices: const [
+            <int>[],
+            <int>[],
+            <int>[0, 1],
+          ],
+        );
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.invokeCore('run', moduleIndex: 2), 24);
+      },
+    );
+
+    test(
       'rejects table imports wired from core-instance args with mismatched types',
       () {
         final componentBytes = _componentWithCoreModules(
