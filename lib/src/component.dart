@@ -918,6 +918,15 @@ final class WasmComponent {
       );
     }
     if (!reader.isEOF) {
+      final allOpaque =
+          bindings.isNotEmpty &&
+          bindings.every(
+            (binding) =>
+                binding.targetKind == WasmComponentTypeBindingTargetKind.opaque,
+          );
+      if (allOpaque) {
+        return bindings;
+      }
       throw const FormatException(
         'Trailing bytes in component type-binding section payload.',
       );

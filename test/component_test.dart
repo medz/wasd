@@ -671,6 +671,41 @@ void main() {
     });
 
     test(
+      'retains opaque type-binding entries when section has trailing bytes',
+      () {
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('fn_t'),
+          0x01,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x40,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+          0xff, // unknown trailing byte kept for forward-compat paths
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ..._componentHeaderWithOneCoreModule(),
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        final component = WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(component.typeBindings, hasLength(1));
+        expect(
+          component.typeBindings.single.targetKind,
+          WasmComponentTypeBindingTargetKind.opaque,
+        );
+      },
+    );
+
+    test(
       'decodeBestEffort skips malformed structured import sections with trailing bytes',
       () {
         final malformedImportSection = <int>[
