@@ -157,17 +157,23 @@ final class WasmComponentTypeDeclaration {
   final List<int>? tagParameterTypeCodes;
 }
 
-enum WasmComponentTypeBindingTargetKind { importRequirement, coreExportAlias }
+enum WasmComponentTypeBindingTargetKind {
+  importRequirement,
+  coreExportAlias,
+  opaque,
+}
 
 /// Type binding edge decoded from section `0x07`.
 final class WasmComponentTypeBinding {
   const WasmComponentTypeBinding({
     required this.targetKind,
+    required this.rawTargetKind,
     required this.targetIndex,
     required this.typeDeclarationIndex,
   });
 
   final WasmComponentTypeBindingTargetKind targetKind;
+  final int rawTargetKind;
   final int targetIndex;
   final int typeDeclarationIndex;
 }
@@ -898,12 +904,14 @@ final class WasmComponent {
     final count = reader.readVarUint32();
     final bindings = <WasmComponentTypeBinding>[];
     for (var i = 0; i < count; i++) {
-      final targetKind = _decodeTypeBindingTargetKind(reader.readByte());
+      final rawTargetKind = reader.readByte();
+      final targetKind = _decodeTypeBindingTargetKind(rawTargetKind);
       final targetIndex = reader.readVarUint32();
       final typeDeclarationIndex = reader.readVarUint32();
       bindings.add(
         WasmComponentTypeBinding(
           targetKind: targetKind,
+          rawTargetKind: rawTargetKind,
           targetIndex: targetIndex,
           typeDeclarationIndex: typeDeclarationIndex,
         ),
@@ -926,10 +934,7 @@ final class WasmComponent {
       case 0x01:
         return WasmComponentTypeBindingTargetKind.coreExportAlias;
       default:
-        throw UnsupportedError(
-          'Unsupported component type-binding target kind: '
-          '0x${raw.toRadixString(16)}',
-        );
+        return WasmComponentTypeBindingTargetKind.opaque;
     }
   }
 
@@ -940,6 +945,10 @@ final class WasmComponent {
     required List<WasmComponentCoreExportAlias> coreExportAliases,
   }) {
     for (final binding in typeBindings) {
+      if (binding.targetKind == WasmComponentTypeBindingTargetKind.opaque) {
+        // Unknown target kinds are preserved for forward-compatibility.
+        continue;
+      }
       if (binding.typeDeclarationIndex < 0 ||
           binding.typeDeclarationIndex >= typeDeclarations.length) {
         throw FormatException(
@@ -964,6 +973,8 @@ final class WasmComponent {
               '${binding.targetIndex} (count=${coreExportAliases.length}).',
             );
           }
+        case WasmComponentTypeBindingTargetKind.opaque:
+          continue;
       }
 
       final resolvedDeclaration = _resolveTypeDeclaration(
@@ -1036,6 +1047,10 @@ final class WasmComponent {
               '`${alias.componentExportName}` resolved to an alias declaration.',
             );
         }
+      } else {
+        // Opaque target kinds intentionally skip strict declaration compatibility
+        // checks until semantics are implemented.
+        continue;
       }
     }
   }

@@ -623,48 +623,52 @@ void main() {
       expect(component.typeBindings[1].typeDeclarationIndex, 0);
     });
 
-    test(
-      'decodeBestEffort skips unsupported type-binding target kinds in section 0x07',
-      () {
-        final typeSection = <int>[
-          ..._u32Leb(1),
-          ..._name('fn_t'),
-          0x01,
-          ..._u32Leb(0),
-          ..._u32Leb(0),
-        ];
-        final typeBindingSection = <int>[
-          ..._u32Leb(1),
-          0x40, // unsupported target kind in strict mode
-          ..._u32Leb(0),
-          ..._u32Leb(0),
-        ];
-        final componentBytes = Uint8List.fromList(<int>[
-          ..._componentHeaderWithOneCoreModule(),
-          ..._section(0x06, typeSection),
-          ..._section(0x07, typeBindingSection),
-        ]);
+    test('decodes unknown type-binding target kinds as opaque entries', () {
+      final typeSection = <int>[
+        ..._u32Leb(1),
+        ..._name('fn_t'),
+        0x01,
+        ..._u32Leb(0),
+        ..._u32Leb(0),
+      ];
+      final typeBindingSection = <int>[
+        ..._u32Leb(1),
+        0x40,
+        ..._u32Leb(0),
+        ..._u32Leb(0),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ..._componentHeaderWithOneCoreModule(),
+        ..._section(0x06, typeSection),
+        ..._section(0x07, typeBindingSection),
+      ]);
 
-        expect(
-          () => WasmComponent.decode(
-            componentBytes,
-            features: const WasmFeatureSet(componentModel: true),
-          ),
-          throwsA(isA<UnsupportedError>()),
-        );
+      final component = WasmComponent.decode(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+      expect(component.typeBindings, hasLength(1));
+      expect(
+        component.typeBindings.single.targetKind,
+        WasmComponentTypeBindingTargetKind.opaque,
+      );
+      expect(component.typeBindings.single.rawTargetKind, 0x40);
 
-        final bestEffort = WasmComponent.decodeBestEffort(
-          componentBytes,
-          features: const WasmFeatureSet(componentModel: true),
-        );
-        expect(
-          bestEffort.sections.where((section) => section.id == 0x07),
-          hasLength(1),
-        );
-        expect(bestEffort.typeBindings, isEmpty);
-        expect(bestEffort.typeDeclarations, hasLength(1));
-      },
-    );
+      final bestEffort = WasmComponent.decodeBestEffort(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+      expect(
+        bestEffort.sections.where((section) => section.id == 0x07),
+        hasLength(1),
+      );
+      expect(bestEffort.typeBindings, hasLength(1));
+      expect(
+        bestEffort.typeBindings.single.targetKind,
+        WasmComponentTypeBindingTargetKind.opaque,
+      );
+      expect(bestEffort.typeDeclarations, hasLength(1));
+    });
 
     test(
       'decodeBestEffort skips malformed structured import sections with trailing bytes',

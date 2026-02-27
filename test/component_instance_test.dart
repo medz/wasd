@@ -50,13 +50,11 @@ void main() {
           ..._section(0x07, unsupportedTypeBindingSection),
         ]);
 
-        expect(
-          () => WasmComponentInstance.fromBytes(
-            componentBytes,
-            features: const WasmFeatureSet(componentModel: true),
-          ),
-          throwsA(isA<UnsupportedError>()),
+        final strictInstance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
         );
+        expect(strictInstance.invokeCore('one'), 9);
 
         final instance = WasmComponentInstance.fromBytes(
           componentBytes,
