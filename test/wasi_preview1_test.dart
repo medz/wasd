@@ -1702,87 +1702,155 @@ void main() {
       expect(instance.invokeI32('run'), 65);
     });
 
-    test('proc_raise and sock_* imports are wired as ENOSYS stubs', () {
-      final wasi = WasiPreview1();
-      final wasm = _buildModule(
-        types: [
-          _funcType([0x7f], [0x7f]),
-          _funcType([0x7f, 0x7f, 0x7f], [0x7f]),
-          _funcType([0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f], [0x7f]),
-          _funcType([0x7f, 0x7f, 0x7f, 0x7f, 0x7f], [0x7f]),
-          _funcType([0x7f, 0x7f], [0x7f]),
-          _funcType([], [0x7f]),
-        ],
-        imports: const [
-          _ImportFunctionSpec(
-            module: 'wasi_snapshot_preview1',
-            name: 'proc_raise',
-            typeIndex: 0,
-          ),
-          _ImportFunctionSpec(
-            module: 'wasi_snapshot_preview1',
-            name: 'sock_accept',
-            typeIndex: 1,
-          ),
-          _ImportFunctionSpec(
-            module: 'wasi_snapshot_preview1',
-            name: 'sock_recv',
-            typeIndex: 2,
-          ),
-          _ImportFunctionSpec(
-            module: 'wasi_snapshot_preview1',
-            name: 'sock_send',
-            typeIndex: 3,
-          ),
-          _ImportFunctionSpec(
-            module: 'wasi_snapshot_preview1',
-            name: 'sock_shutdown',
-            typeIndex: 4,
-          ),
-        ],
-        functionTypeIndices: [5],
-        functionBodies: [
-          _FunctionBodySpec(
-            instructions: [
-              ..._i32Const(0),
-              ..._call(0),
-              ..._i32Const(0),
-              ..._i32Const(0),
-              ..._i32Const(0),
-              ..._call(1),
-              Opcodes.i32Add,
-              ..._i32Const(0),
-              ..._i32Const(0),
-              ..._i32Const(0),
-              ..._i32Const(0),
-              ..._i32Const(0),
-              ..._i32Const(0),
-              ..._call(2),
-              Opcodes.i32Add,
-              ..._i32Const(0),
-              ..._i32Const(0),
-              ..._i32Const(0),
-              ..._i32Const(0),
-              ..._i32Const(0),
-              ..._call(3),
-              Opcodes.i32Add,
-              ..._i32Const(0),
-              ..._i32Const(0),
-              ..._call(4),
-              Opcodes.i32Add,
-              Opcodes.end,
-            ],
-          ),
-        ],
-        exports: const [
-          _ExportSpec(name: 'run', kind: WasmExportKind.function, index: 5),
-        ],
-      );
+    test(
+      'proc_raise defaults to ENOSYS and sock_* imports are ENOSYS stubs',
+      () {
+        final wasi = WasiPreview1();
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+            _funcType([0x7f, 0x7f, 0x7f], [0x7f]),
+            _funcType([0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f], [0x7f]),
+            _funcType([0x7f, 0x7f, 0x7f, 0x7f, 0x7f], [0x7f]),
+            _funcType([0x7f, 0x7f], [0x7f]),
+            _funcType([], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(
+              module: 'wasi_snapshot_preview1',
+              name: 'proc_raise',
+              typeIndex: 0,
+            ),
+            _ImportFunctionSpec(
+              module: 'wasi_snapshot_preview1',
+              name: 'sock_accept',
+              typeIndex: 1,
+            ),
+            _ImportFunctionSpec(
+              module: 'wasi_snapshot_preview1',
+              name: 'sock_recv',
+              typeIndex: 2,
+            ),
+            _ImportFunctionSpec(
+              module: 'wasi_snapshot_preview1',
+              name: 'sock_send',
+              typeIndex: 3,
+            ),
+            _ImportFunctionSpec(
+              module: 'wasi_snapshot_preview1',
+              name: 'sock_shutdown',
+              typeIndex: 4,
+            ),
+          ],
+          functionTypeIndices: [5],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._i32Const(0),
+                ..._call(0),
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._call(1),
+                Opcodes.i32Add,
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._call(2),
+                Opcodes.i32Add,
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._call(3),
+                Opcodes.i32Add,
+                ..._i32Const(0),
+                ..._i32Const(0),
+                ..._call(4),
+                Opcodes.i32Add,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(name: 'run', kind: WasmExportKind.function, index: 5),
+          ],
+        );
 
+        final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
+        expect(instance.invokeI32('run'), 260);
+      },
+    );
+
+    test('proc_raise handler int return is used as errno', () {
+      int? seenSignal;
+      final wasi = WasiPreview1(
+        procRaiseHandler: (signal) {
+          seenSignal = signal;
+          return 28;
+        },
+      );
+      final wasm = _buildProcRaiseModule(signal: 15);
       final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
-      expect(instance.invokeI32('run'), 260);
+
+      expect(instance.invokeI32('run'), 28);
+      expect(seenSignal, 15);
+    });
+
+    test('proc_raise handler null return is treated as errno 0', () {
+      var callCount = 0;
+      final wasi = WasiPreview1(
+        procRaiseHandler: (signal) {
+          callCount++;
+          expect(signal, 9);
+          return null;
+        },
+      );
+      final wasm = _buildProcRaiseModule(signal: 9);
+      final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
+
+      expect(instance.invokeI32('run'), 0);
+      expect(callCount, 1);
+    });
+
+    test('proc_raise handler exception is propagated', () {
+      final error = StateError('proc_raise handler failure');
+      final wasi = WasiPreview1(procRaiseHandler: (_) => throw error);
+      final wasm = _buildProcRaiseModule(signal: 2);
+      final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
+
+      expect(() => instance.invokeI32('run'), throwsA(same(error)));
     });
   });
+}
+
+Uint8List _buildProcRaiseModule({required int signal}) {
+  return _buildModule(
+    types: [
+      _funcType([0x7f], [0x7f]),
+      _funcType([], [0x7f]),
+    ],
+    imports: const [
+      _ImportFunctionSpec(
+        module: 'wasi_snapshot_preview1',
+        name: 'proc_raise',
+        typeIndex: 0,
+      ),
+    ],
+    functionTypeIndices: [1],
+    functionBodies: [
+      _FunctionBodySpec(
+        instructions: [..._i32Const(signal), ..._call(0), Opcodes.end],
+      ),
+    ],
+    exports: const [
+      _ExportSpec(name: 'run', kind: WasmExportKind.function, index: 1),
+    ],
+  );
 }
 
 String _readCString(WasmMemory memory, int pointer) {

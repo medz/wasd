@@ -11,6 +11,7 @@ import 'wasi_fs_auto.dart' as auto_fs;
 
 typedef WasiReadSource = Uint8List Function(int maxBytes);
 typedef WasiWriteSink = void Function(Uint8List bytes);
+typedef WasiProcRaiseHandler = Object? Function(int signal);
 
 enum _FdKind { stdin, stdout, stderr, directory, file }
 
@@ -96,6 +97,7 @@ final class WasiPreview1 {
     Map<String, String> environment = const {},
     List<int> stdin = const [],
     this.stdinSource,
+    WasiProcRaiseHandler? procRaiseHandler,
     WasiWriteSink? stdoutSink,
     WasiWriteSink? stderrSink,
     WasiFileSystem? fileSystem,
@@ -112,6 +114,7 @@ final class WasiPreview1 {
            (preferHostIo
                ? auto_fs.createAutoWasiFileSystem(ioRootPath: ioRootPath)
                : WasiInMemoryFileSystem()),
+       _procRaiseHandler = procRaiseHandler,
        _preopenedDirectories = Map.unmodifiable(
          preopenedDirectories.map(
            (fd, path) =>
@@ -128,6 +131,7 @@ final class WasiPreview1 {
   final WasiWriteSink _stdoutSink;
   final WasiWriteSink _stderrSink;
   final WasiFileSystem _fileSystem;
+  final WasiProcRaiseHandler? _procRaiseHandler;
   final Map<int, String> _preopenedDirectories;
 
   WasmMemory? _memory;
@@ -1678,8 +1682,21 @@ final class WasiPreview1 {
   }
 
   Object? _procRaise(List<Object?> args) {
-    _asI32(args, 0, 'sig');
-    return _errnoNosys;
+    final signal = _asI32(args, 0, 'sig');
+    final handler = _procRaiseHandler;
+    if (handler == null) {
+      return _errnoNosys;
+    }
+    final result = handler(signal);
+    if (result == null) {
+      return _errnoSuccess;
+    }
+    if (result is int) {
+      return result;
+    }
+    throw StateError(
+      'WASI proc_raise handler must return an int errno, null, or throw.',
+    );
   }
 
   Object? _procExit(List<Object?> args) {
