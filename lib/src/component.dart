@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'byte_reader.dart';
 import 'features.dart';
+import 'module.dart';
 
 /// Decoded component section payload.
 final class WasmComponentSection {
@@ -67,7 +68,7 @@ final class WasmComponentCoreInstanceAlias {
   final int instanceIndex;
 }
 
-enum WasmComponentTypeKind { value, function, alias }
+enum WasmComponentTypeKind { value, function, alias, memory, table, tag }
 
 /// Component type declaration decoded from section `0x06`.
 final class WasmComponentTypeDeclaration {
@@ -77,7 +78,10 @@ final class WasmComponentTypeDeclaration {
   }) : kind = WasmComponentTypeKind.value,
        parameterTypeCodes = null,
        resultTypeCodes = null,
-       aliasTargetIndex = null;
+       aliasTargetIndex = null,
+       memoryType = null,
+       tableType = null,
+       tagParameterTypeCodes = null;
 
   const WasmComponentTypeDeclaration.function({
     required this.name,
@@ -85,7 +89,10 @@ final class WasmComponentTypeDeclaration {
     required this.resultTypeCodes,
   }) : kind = WasmComponentTypeKind.function,
        valueTypeCode = null,
-       aliasTargetIndex = null;
+       aliasTargetIndex = null,
+       memoryType = null,
+       tableType = null,
+       tagParameterTypeCodes = null;
 
   const WasmComponentTypeDeclaration.alias({
     required this.name,
@@ -93,7 +100,43 @@ final class WasmComponentTypeDeclaration {
   }) : kind = WasmComponentTypeKind.alias,
        valueTypeCode = null,
        parameterTypeCodes = null,
-       resultTypeCodes = null;
+       resultTypeCodes = null,
+       memoryType = null,
+       tableType = null,
+       tagParameterTypeCodes = null;
+
+  const WasmComponentTypeDeclaration.memory({
+    required this.name,
+    required this.memoryType,
+  }) : kind = WasmComponentTypeKind.memory,
+       valueTypeCode = null,
+       parameterTypeCodes = null,
+       resultTypeCodes = null,
+       aliasTargetIndex = null,
+       tableType = null,
+       tagParameterTypeCodes = null;
+
+  const WasmComponentTypeDeclaration.table({
+    required this.name,
+    required this.tableType,
+  }) : kind = WasmComponentTypeKind.table,
+       valueTypeCode = null,
+       parameterTypeCodes = null,
+       resultTypeCodes = null,
+       aliasTargetIndex = null,
+       memoryType = null,
+       tagParameterTypeCodes = null;
+
+  const WasmComponentTypeDeclaration.tag({
+    required this.name,
+    required this.tagParameterTypeCodes,
+  }) : kind = WasmComponentTypeKind.tag,
+       valueTypeCode = null,
+       parameterTypeCodes = null,
+       resultTypeCodes = null,
+       aliasTargetIndex = null,
+       memoryType = null,
+       tableType = null;
 
   final String name;
   final WasmComponentTypeKind kind;
@@ -101,6 +144,9 @@ final class WasmComponentTypeDeclaration {
   final List<int>? parameterTypeCodes;
   final List<int>? resultTypeCodes;
   final int? aliasTargetIndex;
+  final WasmMemoryType? memoryType;
+  final WasmTableType? tableType;
+  final List<int>? tagParameterTypeCodes;
 }
 
 enum WasmComponentTypeBindingTargetKind { importRequirement, coreExportAlias }
@@ -426,6 +472,33 @@ final class WasmComponent {
               aliasTargetIndex: reader.readVarUint32(),
             ),
           );
+        case 0x03:
+          declarations.add(
+            WasmComponentTypeDeclaration.memory(
+              name: name,
+              memoryType: _readComponentMemoryType(reader),
+            ),
+          );
+        case 0x04:
+          declarations.add(
+            WasmComponentTypeDeclaration.table(
+              name: name,
+              tableType: _readComponentTableType(reader),
+            ),
+          );
+        case 0x05:
+          final paramCount = reader.readVarUint32();
+          final params = List<int>.generate(
+            paramCount,
+            (_) => reader.readByte(),
+            growable: false,
+          );
+          declarations.add(
+            WasmComponentTypeDeclaration.tag(
+              name: name,
+              tagParameterTypeCodes: params,
+            ),
+          );
         default:
           throw UnsupportedError(
             'Unsupported component type declaration kind: '
@@ -485,6 +558,59 @@ final class WasmComponent {
         throw const FormatException('Component type alias cycle detected.');
       }
     }
+  }
+
+  static WasmMemoryType _readComponentMemoryType(ByteReader reader) {
+    final flags = reader.readByte();
+    if ((flags & ~0x0f) != 0) {
+      throw UnsupportedError(
+        'Unsupported component memory type flags: '
+        '0x${flags.toRadixString(16)}',
+      );
+    }
+    final hasMax = (flags & 0x01) != 0;
+    final shared = (flags & 0x02) != 0;
+    final memory64 = (flags & 0x04) != 0;
+    final hasPageSize = (flags & 0x08) != 0;
+
+    final minPages = memory64 ? reader.readVarUint64() : reader.readVarUint32();
+    final maxPages = hasMax
+        ? (memory64 ? reader.readVarUint64() : reader.readVarUint32())
+        : null;
+    final pageSizeLog2 = hasPageSize ? reader.readVarUint32() : 16;
+    return WasmMemoryType(
+      minPages: minPages,
+      maxPages: maxPages,
+      shared: shared,
+      isMemory64: memory64,
+      pageSizeLog2: pageSizeLog2,
+    );
+  }
+
+  static WasmTableType _readComponentTableType(ByteReader reader) {
+    final rawRefType = reader.readByte();
+    final refType = WasmRefTypeCodec.fromByte(rawRefType);
+    final flags = reader.readByte();
+    if ((flags & ~0x03) != 0) {
+      throw UnsupportedError(
+        'Unsupported component table type flags: '
+        '0x${flags.toRadixString(16)}',
+      );
+    }
+    final hasMax = (flags & 0x01) != 0;
+    final table64 = (flags & 0x02) != 0;
+
+    final min = table64 ? reader.readVarUint64() : reader.readVarUint32();
+    final max = hasMax
+        ? (table64 ? reader.readVarUint64() : reader.readVarUint32())
+        : null;
+    return WasmTableType(
+      refType: refType,
+      min: min,
+      max: max,
+      isTable64: table64,
+      refTypeSignature: (rawRefType & 0xff).toRadixString(16).padLeft(2, '0'),
+    );
   }
 
   static List<WasmComponentTypeBinding> _decodeTypeBindingSectionPayload(
@@ -589,11 +715,31 @@ final class WasmComponent {
             }
             break;
           case WasmComponentImportKind.memory:
+            if (resolvedDeclaration.kind != WasmComponentTypeKind.memory) {
+              throw FormatException(
+                'Component type binding for memory import '
+                '`${importRequirement.componentImportName}` must reference '
+                'a memory type declaration.',
+              );
+            }
+            break;
           case WasmComponentImportKind.table:
+            if (resolvedDeclaration.kind != WasmComponentTypeKind.table) {
+              throw FormatException(
+                'Component type binding for table import '
+                '`${importRequirement.componentImportName}` must reference '
+                'a table type declaration.',
+              );
+            }
+            break;
           case WasmComponentImportKind.tag:
-            // Memory/table/tag typed bindings are currently accepted at decode
-            // time for forward compatibility; runtime-specific checks can be
-            // layered in instantiation paths as support expands.
+            if (resolvedDeclaration.kind != WasmComponentTypeKind.tag) {
+              throw FormatException(
+                'Component type binding for tag import '
+                '`${importRequirement.componentImportName}` must reference '
+                'a tag type declaration.',
+              );
+            }
             break;
         }
       } else if (binding.targetKind ==

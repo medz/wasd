@@ -317,6 +317,75 @@ final class WasmComponentInstance {
         requirement.fieldName,
       );
       switch (requirement.kind) {
+        case WasmComponentImportKind.memory:
+          final memoryType = declaration.memoryType;
+          if (declaration.kind != WasmComponentTypeKind.memory ||
+              memoryType == null) {
+            throw FormatException(
+              'Component memory import `${requirement.componentImportName}` '
+              'must bind to a memory type declaration.',
+            );
+          }
+          final memory = imports.memories[key];
+          if (memory != null) {
+            final mismatch = _typedMemoryImportMismatch(
+              expected: memoryType,
+              actual: memory,
+            );
+            if (mismatch != null) {
+              throw FormatException(
+                'Component memory import `${requirement.componentImportName}` '
+                'type mismatch: $mismatch.',
+              );
+            }
+          }
+          break;
+        case WasmComponentImportKind.table:
+          final tableType = declaration.tableType;
+          if (declaration.kind != WasmComponentTypeKind.table ||
+              tableType == null) {
+            throw FormatException(
+              'Component table import `${requirement.componentImportName}` '
+              'must bind to a table type declaration.',
+            );
+          }
+          final table = imports.tables[key];
+          if (table != null) {
+            final mismatch = _typedTableImportMismatch(
+              expected: tableType,
+              actual: table,
+            );
+            if (mismatch != null) {
+              throw FormatException(
+                'Component table import `${requirement.componentImportName}` '
+                'type mismatch: $mismatch.',
+              );
+            }
+          }
+          break;
+        case WasmComponentImportKind.tag:
+          final tagParameterTypeCodes = declaration.tagParameterTypeCodes;
+          if (declaration.kind != WasmComponentTypeKind.tag ||
+              tagParameterTypeCodes == null) {
+            throw FormatException(
+              'Component tag import `${requirement.componentImportName}` '
+              'must bind to a tag type declaration.',
+            );
+          }
+          final importedTag = imports.tags[key];
+          if (importedTag != null) {
+            _validateExpectedFunctionSignaturesAgainstCoreType(
+              expectedParameters: _componentTypeCodesToSignatures(
+                tagParameterTypeCodes,
+              ),
+              expectedResults: const <String>[],
+              actualType: importedTag.type,
+              context:
+                  'Component tag import '
+                  '`${requirement.componentImportName}` ($key)',
+            );
+          }
+          break;
         case WasmComponentImportKind.global:
           final valueTypeCode = declaration.valueTypeCode;
           if (declaration.kind != WasmComponentTypeKind.value ||
@@ -358,12 +427,70 @@ final class WasmComponentInstance {
           }
           break;
         case WasmComponentImportKind.function:
-        case WasmComponentImportKind.memory:
-        case WasmComponentImportKind.table:
-        case WasmComponentImportKind.tag:
           break;
       }
     }
+  }
+
+  static String? _typedMemoryImportMismatch({
+    required WasmMemoryType expected,
+    required WasmMemory actual,
+  }) {
+    final expectedPageSize = 1 << expected.pageSizeLog2;
+    if (actual.isMemory64 != expected.isMemory64) {
+      return 'expected memory64=${expected.isMemory64}, '
+          'actual=${actual.isMemory64}';
+    }
+    if (actual.shared != expected.shared) {
+      return 'expected shared=${expected.shared}, actual=${actual.shared}';
+    }
+    if (actual.pageSizeBytes != expectedPageSize) {
+      return 'expected pageSize=$expectedPageSize, '
+          'actual=${actual.pageSizeBytes}';
+    }
+    if (actual.pageCount < expected.minPages) {
+      return 'expected minPages>=${expected.minPages}, '
+          'actual=${actual.pageCount}';
+    }
+    final expectedMax = expected.maxPages;
+    if (expectedMax != null) {
+      final actualMax = actual.maxPages;
+      if (actualMax == null || actualMax > expectedMax) {
+        return 'expected maxPages<=$expectedMax, '
+            'actual=${actualMax ?? 'unbounded'}';
+      }
+    }
+    return null;
+  }
+
+  static String? _typedTableImportMismatch({
+    required WasmTableType expected,
+    required WasmTable actual,
+  }) {
+    final expectedSignature = expected.refTypeSignature;
+    final actualSignature = actual.refTypeSignature;
+    final refTypeMatches = expectedSignature != null && actualSignature != null
+        ? _referenceTypeSignaturesMatch(expectedSignature, actualSignature)
+        : actual.refType == expected.refType;
+    if (!refTypeMatches) {
+      return 'expected table type ${_formatTableType(expected)}, '
+          'actual ${_formatTable(actual)}';
+    }
+    if (actual.isTable64 != expected.isTable64) {
+      return 'expected table64=${expected.isTable64}, '
+          'actual=${actual.isTable64}';
+    }
+    if (actual.length < expected.min) {
+      return 'expected min>=${expected.min}, actual=${actual.length}';
+    }
+    final expectedMax = expected.max;
+    if (expectedMax != null) {
+      final actualMax = actual.max;
+      if (actualMax == null || actualMax > expectedMax) {
+        return 'expected max<=$expectedMax, actual=${actualMax ?? 'unbounded'}';
+      }
+    }
+    return null;
   }
 
   static WasmComponentTypeDeclaration _resolveComponentTypeDeclaration(

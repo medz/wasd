@@ -773,6 +773,213 @@ void main() {
       },
     );
 
+    test(
+      'validates typed memory import requirements against provided memories',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'memory',
+              moduleName: 'env',
+              fieldName: 'mem',
+              kind: 0x01,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('mem_t'),
+          0x03, // memory
+          0x01, // has max
+          ..._u32Leb(1),
+          ..._u32Leb(2),
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: WasmImports(
+              memories: {
+                WasmImports.key('env', 'mem'): WasmMemory(
+                  minPages: 1,
+                  maxPages: 3,
+                ),
+              },
+            ),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          imports: WasmImports(
+            memories: {
+              WasmImports.key('env', 'mem'): WasmMemory(
+                minPages: 1,
+                maxPages: 2,
+              ),
+            },
+          ),
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.invokeCore('one'), 1);
+      },
+    );
+
+    test(
+      'validates typed table import requirements against provided tables',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'table',
+              moduleName: 'env',
+              fieldName: 'tab',
+              kind: 0x02,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('tab_t'),
+          0x04, // table
+          0x70, // funcref
+          0x01, // has max
+          ..._u32Leb(1),
+          ..._u32Leb(2),
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: WasmImports(
+              tables: {
+                WasmImports.key('env', 'tab'): WasmTable(
+                  refType: WasmRefType.funcref,
+                  min: 0,
+                  max: 2,
+                ),
+              },
+            ),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          imports: WasmImports(
+            tables: {
+              WasmImports.key('env', 'tab'): WasmTable(
+                refType: WasmRefType.funcref,
+                min: 1,
+                max: 2,
+              ),
+            },
+          ),
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.invokeCore('one'), 1);
+      },
+    );
+
+    test('validates typed tag import requirements against provided tags', () {
+      final baseComponent = _componentWithCoreModules(
+        <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+        importRequirements: const [
+          _ComponentImportRequirementSpec(
+            componentImportName: 'tag',
+            moduleName: 'env',
+            fieldName: 'err',
+            kind: 0x04,
+          ),
+        ],
+      );
+      final typeSection = <int>[
+        ..._u32Leb(1),
+        ..._name('tag_t'),
+        0x05, // tag
+        ..._u32Leb(1), // params
+        0x7f, // i32
+      ];
+      final typeBindingSection = <int>[
+        ..._u32Leb(1),
+        0x00,
+        ..._u32Leb(0),
+        ..._u32Leb(0),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ...baseComponent,
+        ..._section(0x06, typeSection),
+        ..._section(0x07, typeBindingSection),
+      ]);
+
+      expect(
+        () => WasmComponentInstance.fromBytes(
+          componentBytes,
+          imports: WasmImports(
+            tags: {
+              WasmImports.key('env', 'err'): WasmTagImport(
+                type: const WasmFunctionType(
+                  params: [WasmValueType.i64],
+                  results: [],
+                  kind: WasmCompositeTypeKind.function,
+                ),
+                nominalTypeKey: 'tag:i64',
+                typeKey: 'tag:i64',
+              ),
+            },
+          ),
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+
+      final instance = WasmComponentInstance.fromBytes(
+        componentBytes,
+        imports: WasmImports(
+          tags: {
+            WasmImports.key('env', 'err'): WasmTagImport(
+              type: const WasmFunctionType(
+                params: [WasmValueType.i32],
+                results: [],
+                kind: WasmCompositeTypeKind.function,
+              ),
+              nominalTypeKey: 'tag:i32',
+              typeKey: 'tag:i32',
+            ),
+          },
+        ),
+        features: const WasmFeatureSet(componentModel: true),
+      );
+      expect(instance.invokeCore('one'), 1);
+    });
+
     test('resolves core instances by alias from section 0x05', () {
       final componentBytes = _componentWithCoreModules(
         <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],

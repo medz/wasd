@@ -605,7 +605,14 @@ void main() {
         ..._name('memory'),
         0x01,
       ];
-      final typeSection = <int>[..._u32Leb(1), ..._name('i32_t'), 0x00, 0x7f];
+      final typeSection = <int>[
+        ..._u32Leb(1),
+        ..._name('mem_t'),
+        0x03, // memory
+        0x01, // has max
+        ..._u32Leb(1), // min pages
+        ..._u32Leb(2), // max pages
+      ];
       final typeBindingSection = <int>[
         ..._u32Leb(1),
         0x00,
@@ -630,6 +637,12 @@ void main() {
       );
       expect(component.typeBindings.single.targetIndex, 0);
       expect(component.typeBindings.single.typeDeclarationIndex, 0);
+      expect(
+        component.typeDeclarations.single.kind,
+        WasmComponentTypeKind.memory,
+      );
+      expect(component.typeDeclarations.single.memoryType?.minPages, 1);
+      expect(component.typeDeclarations.single.memoryType?.maxPages, 2);
     });
 
     test('accepts table/tag import type bindings at decode time', () {
@@ -644,7 +657,19 @@ void main() {
         ..._name('tag'),
         0x04,
       ];
-      final typeSection = <int>[..._u32Leb(1), ..._name('i32_t'), 0x00, 0x7f];
+      final typeSection = <int>[
+        ..._u32Leb(2),
+        ..._name('tab_t'),
+        0x04, // table
+        0x70, // funcref
+        0x01, // has max
+        ..._u32Leb(1), // min
+        ..._u32Leb(2), // max
+        ..._name('tag_t'),
+        0x05, // tag
+        ..._u32Leb(1), // param count
+        0x7f, // i32
+      ];
       final typeBindingSection = <int>[
         ..._u32Leb(2),
         0x00,
@@ -652,7 +677,7 @@ void main() {
         ..._u32Leb(0),
         0x00,
         ..._u32Leb(1),
-        ..._u32Leb(0),
+        ..._u32Leb(1),
       ];
       final componentBytes = Uint8List.fromList(<int>[
         ..._componentHeaderWithOneCoreModule(),
@@ -668,6 +693,43 @@ void main() {
       expect(component.typeBindings, hasLength(2));
       expect(component.typeBindings[0].targetIndex, 0);
       expect(component.typeBindings[1].targetIndex, 1);
+      expect(component.typeDeclarations[0].kind, WasmComponentTypeKind.table);
+      expect(component.typeDeclarations[1].kind, WasmComponentTypeKind.tag);
+      expect(
+        component.typeDeclarations[1].tagParameterTypeCodes,
+        orderedEquals(const <int>[0x7f]),
+      );
+    });
+
+    test('rejects memory import type binding to non-memory declaration', () {
+      final importSection = <int>[
+        ..._u32Leb(1),
+        ..._name('mem'),
+        ..._name('env'),
+        ..._name('memory'),
+        0x01,
+      ];
+      final typeSection = <int>[..._u32Leb(1), ..._name('i32_t'), 0x00, 0x7f];
+      final typeBindingSection = <int>[
+        ..._u32Leb(1),
+        0x00,
+        ..._u32Leb(0),
+        ..._u32Leb(0),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ..._componentHeaderWithOneCoreModule(),
+        ..._section(0x04, importSection),
+        ..._section(0x06, typeSection),
+        ..._section(0x07, typeBindingSection),
+      ]);
+
+      expect(
+        () => WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
     });
 
     test(
