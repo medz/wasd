@@ -634,6 +634,40 @@ final class WasmComponentInstance {
           }
           break;
         case WasmComponentImportKind.function:
+          final parameterTypeCodes = declaration.parameterTypeCodes;
+          final resultTypeCodes = declaration.resultTypeCodes;
+          if (declaration.kind != WasmComponentTypeKind.function ||
+              parameterTypeCodes == null ||
+              resultTypeCodes == null) {
+            throw FormatException(
+              'Component function import `${requirement.componentImportName}` '
+              'must bind to a function type declaration.',
+            );
+          }
+          final importedFunctionType = imports.functionTypes[key];
+          if (importedFunctionType == null) {
+            break;
+          }
+          if (!importedFunctionType.isFunctionType) {
+            throw FormatException(
+              'Component function import `${requirement.componentImportName}` '
+              'has non-function host signature in `imports.functionTypes[$key]`.',
+            );
+          }
+          _validateExpectedFunctionSignaturesAgainstCoreType(
+            expectedParameters: _componentTypesToSignatures(
+              typeCodes: parameterTypeCodes,
+              typeSignatures: declaration.parameterTypeSignatures,
+            ),
+            expectedResults: _componentTypesToSignatures(
+              typeCodes: resultTypeCodes,
+              typeSignatures: declaration.resultTypeSignatures,
+            ),
+            actualType: importedFunctionType,
+            context:
+                'Component function import '
+                '`${requirement.componentImportName}` ($key)',
+          );
           break;
       }
     }
@@ -1555,6 +1589,9 @@ final class WasmComponentInstance {
     final asyncFunctions = Map<String, WasmAsyncHostFunction>.from(
       baseImports.asyncFunctions,
     );
+    final functionTypes = Map<String, WasmFunctionType>.from(
+      baseImports.functionTypes,
+    );
     final functionTypeDepths = Map<String, int>.from(
       baseImports.functionTypeDepths,
     );
@@ -1598,6 +1635,7 @@ final class WasmComponentInstance {
           sourceInstanceIndex: argumentIndex,
           functions: functions,
           asyncFunctions: asyncFunctions,
+          functionTypes: functionTypes,
           functionTypeDepths: functionTypeDepths,
           memories: memories,
           tables: tables,
@@ -1624,6 +1662,7 @@ final class WasmComponentInstance {
     return WasmImports(
       functions: functions,
       asyncFunctions: asyncFunctions,
+      functionTypes: functionTypes,
       functionTypeDepths: functionTypeDepths,
       memories: memories,
       tables: tables,
@@ -1665,6 +1704,7 @@ final class WasmComponentInstance {
     required int sourceInstanceIndex,
     required Map<String, WasmHostFunction> functions,
     required Map<String, WasmAsyncHostFunction> asyncFunctions,
+    required Map<String, WasmFunctionType> functionTypes,
     required Map<String, int> functionTypeDepths,
     required Map<String, WasmMemory> memories,
     required Map<String, WasmTable> tables,
@@ -1694,6 +1734,7 @@ final class WasmComponentInstance {
         functions[key] = (args) => sourceInstance.invoke(exportName, args);
         asyncFunctions[key] = (args) =>
             sourceInstance.invokeAsync(exportName, args);
+        functionTypes[key] = sourceInstance.exportedFunctionType(exportName);
         functionTypeDepths[key] = sourceInstance.exportedFunctionTypeDepth(
           exportName,
         );

@@ -1408,6 +1408,126 @@ void main() {
     );
 
     test(
+      'validates typed function import requirements against provided functionTypes',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleCallImportedNullary(
+              importModule: 'host',
+              importName: 'inc',
+              exportName: 'run',
+            ),
+          ],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'incFn',
+              moduleName: 'host',
+              fieldName: 'inc',
+              kind: 0x00,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('fn_i32'),
+          0x01,
+          ..._u32Leb(0),
+          ..._u32Leb(1),
+          0x7f,
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          imports: WasmImports(
+            functions: {WasmImports.key('host', 'inc'): (_) => 11},
+            functionTypes: {
+              WasmImports.key('host', 'inc'): const WasmFunctionType(
+                params: [],
+                results: [WasmValueType.i32],
+                kind: WasmCompositeTypeKind.function,
+                resultTypeSignatures: ['7f'],
+              ),
+            },
+          ),
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.invokeCore('run'), 11);
+      },
+    );
+
+    test(
+      'rejects mismatched typed function import requirements against provided functionTypes',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleCallImportedNullary(
+              importModule: 'host',
+              importName: 'inc',
+              exportName: 'run',
+            ),
+          ],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'incFn',
+              moduleName: 'host',
+              fieldName: 'inc',
+              kind: 0x00,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('fn_i32'),
+          0x01,
+          ..._u32Leb(0),
+          ..._u32Leb(1),
+          0x7f,
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: WasmImports(
+              functions: {WasmImports.key('host', 'inc'): (_) => 11},
+              functionTypes: {
+                WasmImports.key('host', 'inc'): const WasmFunctionType(
+                  params: [],
+                  results: [WasmValueType.i64],
+                  kind: WasmCompositeTypeKind.function,
+                  resultTypeSignatures: ['7e'],
+                ),
+              },
+            ),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test(
       'rejects mismatched typed memory import requirements against core module signatures',
       () {
         final baseComponent = _componentWithCoreModules(
