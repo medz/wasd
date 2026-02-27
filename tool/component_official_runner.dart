@@ -16,20 +16,25 @@ const List<String> _defaultPortableGroups = <String>[
   'values',
   'wasm-tools',
 ];
-const Set<String> _defaultExpectedFailures = <String>{
-  // wasm-tools currently rejects `stream<char>` payload typing.
-  'async/same-component-stream-future.wast',
-  // Parser token coverage gap in current wasm-tools release.
-  'async/trap-if-block-and-sync.wast',
-  // Known wasm-tools/parser drift for package-name parsing assertions.
-  'wasm-tools/import.wast',
-};
-const Set<String> _allGroupsAdditionalExpectedFailures = <String>{
+const Map<String, String> _defaultExpectedFailureReasonPatterns =
+    <String, String>{
+      // wasm-tools currently rejects `stream<char>` payload typing.
+      'async/same-component-stream-future.wast':
+          '`stream<char>` is not valid at this time',
+      // Parser token coverage gap in current wasm-tools release.
+      'async/trap-if-block-and-sync.wast': 'unexpected token, expected one of:',
+      // Known wasm-tools/parser drift for package-name parsing assertions.
+      'wasm-tools/import.wast': 'should have failed with: expected `/` after',
+    };
+const Map<String, String>
+_allGroupsAdditionalExpectedFailureReasonPatterns = <String, String>{
   // Wasmtime policy assertions do not match raw wasm-tools validation behavior.
-  'wasmtime/import.wast',
-  'wasmtime/restrictions.wast',
-  'wasmtime/simple.wast',
-  'wasmtime/types.wast',
+  'wasmtime/import.wast':
+      'reexport of an imported function which is not implemented',
+  'wasmtime/restrictions.wast':
+      'root-level component imports are not supported',
+  'wasmtime/simple.wast': 'root-level component imports are not supported',
+  'wasmtime/types.wast': 'type nesting is too deep',
 };
 
 Future<void> main(List<String> args) async {
@@ -49,16 +54,32 @@ Future<void> main(List<String> args) async {
     '--no-default-expected-failures',
   );
   final expectedFailuresArg = _argValue(args, '--expected-failures');
-  final expectedFailures = <String>{
-    if (!disableDefaultExpectedFailures) ..._defaultExpectedFailures,
+  final expectedFailureRules = <String, _ExpectedFailureRule>{
+    if (!disableDefaultExpectedFailures)
+      ..._defaultExpectedFailureReasonPatterns.map(
+        (path, reasonContains) => MapEntry(
+          path,
+          _ExpectedFailureRule(path: path, reasonContains: reasonContains),
+        ),
+      ),
     if (!disableDefaultExpectedFailures && allGroups)
-      ..._allGroupsAdditionalExpectedFailures,
-    if (expectedFailuresArg != null)
-      ...expectedFailuresArg
-          .split(',')
-          .map((value) => value.trim())
-          .where((value) => value.isNotEmpty),
+      ..._allGroupsAdditionalExpectedFailureReasonPatterns.map(
+        (path, reasonContains) => MapEntry(
+          path,
+          _ExpectedFailureRule(path: path, reasonContains: reasonContains),
+        ),
+      ),
   };
+  if (expectedFailuresArg != null) {
+    for (final path
+        in expectedFailuresArg
+            .split(',')
+            .map((value) => value.trim())
+            .where((value) => value.isNotEmpty)) {
+      expectedFailureRules[path] = _ExpectedFailureRule(path: path);
+    }
+  }
+  final expectedFailures = expectedFailureRules.keys.toSet();
   final groupsArg = _argValue(args, '--groups');
   final selectedGroups = allGroups
       ? const <String>[]
@@ -84,7 +105,7 @@ Future<void> main(List<String> args) async {
       testsuiteDir: testsuiteDir,
       selectedGroups: effectiveGroups,
       features: features,
-      expectedFailures: expectedFailures,
+      expectedFailureRules: expectedFailureRules,
       reason:
           'component-model testsuite directory does not exist: $testsuiteDir',
     );
@@ -131,7 +152,7 @@ Future<void> main(List<String> args) async {
       testsuiteDir: testsuiteDir,
       selectedGroups: effectiveGroups,
       features: features,
-      expectedFailures: expectedFailures,
+      expectedFailureRules: expectedFailureRules,
       reason: 'No .wast files matched current group/filter selection.',
     );
     stdout.writeln('component-official status: skipped');
@@ -149,7 +170,7 @@ Future<void> main(List<String> args) async {
       testsuiteDir: testsuiteDir,
       selectedGroups: effectiveGroups,
       features: features,
-      expectedFailures: expectedFailures,
+      expectedFailureRules: expectedFailureRules,
       reason: 'Unable to locate usable wasm-tools binary.',
     );
     stdout.writeln('component-official status: skipped');
@@ -177,16 +198,34 @@ Future<void> main(List<String> args) async {
     final ended = DateTime.now();
     final stdoutText = _asText(result.stdout);
     final stderrText = _asText(result.stderr);
+    final expectedFailureRule = expectedFailureRules[file.relativePath];
+    final expectedFailure = expectedFailureRule != null;
+    final failureSummary = result.exitCode == 0
+        ? null
+        : _firstNonEmptyLine(stderrText) ?? 'unknown failure';
+    final failureText = '$failureSummary\n$stderrText';
+    final expectedFailureReasonMatched =
+        expectedFailure &&
+        result.exitCode != 0 &&
+        _matchesExpectedFailureRule(
+          expectedFailureRule,
+          failureText: failureText,
+        );
     fileResults.add(
       _FileResult(
         path: file.relativePath,
         group: file.group,
         passed: result.exitCode == 0,
+        expectedFailure: expectedFailure,
+        expectedFailureReasonMatched: expectedFailureReasonMatched,
+        xfailed:
+            expectedFailure &&
+            result.exitCode != 0 &&
+            expectedFailureReasonMatched,
+        xpassed: expectedFailure && result.exitCode == 0,
         exitCode: result.exitCode,
         durationMs: ended.difference(started).inMilliseconds,
-        failureSummary: result.exitCode == 0
-            ? null
-            : _firstNonEmptyLine(stderrText) ?? 'unknown failure',
+        failureSummary: failureSummary,
         stdoutTail: _tailLines(stdoutText, 60),
         stderrTail: _tailLines(stderrText, 60),
       ),
@@ -195,21 +234,15 @@ Future<void> main(List<String> args) async {
   stopwatch.stop();
 
   final filesPassed = fileResults.where((result) => result.passed).length;
-  final xfailedFiles = fileResults
-      .where(
-        (result) => !result.passed && expectedFailures.contains(result.path),
-      )
+  final xfailedFiles = fileResults.where((result) => result.xfailed).length;
+  final xpassedFiles = fileResults.where((result) => result.xpassed).length;
+  final filesFailed = fileResults
+      .where((result) => !result.passed && !result.xfailed)
       .length;
-  final xpassedFiles = fileResults
-      .where(
-        (result) => result.passed && expectedFailures.contains(result.path),
-      )
-      .length;
-  final filesFailed = fileResults.length - filesPassed - xfailedFiles;
   final status = (filesFailed == 0 && xpassedFiles == 0) ? 'passed' : 'failed';
   final failuresByGroup = <String, int>{};
   for (final result in fileResults) {
-    if (result.passed || expectedFailures.contains(result.path)) {
+    if (result.passed || result.xfailed) {
       continue;
     }
     failuresByGroup.update(
@@ -231,6 +264,9 @@ Future<void> main(List<String> args) async {
     'wasm_tools_binary': resolvedWasmTools,
     'ignore_error_messages': ignoreErrorMessages,
     'expected_failures': expectedFailures.toList()..sort(),
+    'expected_failure_rules': expectedFailureRules.map(
+      (path, rule) => MapEntry(path, rule.reasonContains),
+    ),
     'totals': <String, Object?>{
       'files_total': fileResults.length,
       'files_passed': filesPassed,
@@ -284,9 +320,10 @@ Future<void> _writeSkippedReport({
   required String testsuiteDir,
   required List<String> selectedGroups,
   required String features,
-  required Set<String> expectedFailures,
+  required Map<String, _ExpectedFailureRule> expectedFailureRules,
   required String reason,
 }) async {
+  final expectedFailures = expectedFailureRules.keys.toList()..sort();
   final payload = <String, Object?>{
     'suite': 'component-official',
     'status': 'skipped',
@@ -296,7 +333,10 @@ Future<void> _writeSkippedReport({
     'testsuite_dir': testsuiteDir,
     'groups': selectedGroups,
     'features': features,
-    'expected_failures': expectedFailures.toList()..sort(),
+    'expected_failures': expectedFailures,
+    'expected_failure_rules': expectedFailureRules.map(
+      (path, rule) => MapEntry(path, rule.reasonContains),
+    ),
     'skip_reason': reason,
     'totals': const <String, Object?>{
       'files_total': 0,
@@ -313,6 +353,20 @@ Future<void> _writeSkippedReport({
     '${const JsonEncoder.withIndent('  ').convert(payload)}\n',
   );
   await _writeFile(outputMarkdownPath, _renderMarkdown(payload));
+}
+
+bool _matchesExpectedFailureRule(
+  _ExpectedFailureRule? rule, {
+  required String failureText,
+}) {
+  if (rule == null) {
+    return false;
+  }
+  final expectedReason = rule.reasonContains;
+  if (expectedReason == null || expectedReason.isEmpty) {
+    return true;
+  }
+  return failureText.contains(expectedReason);
 }
 
 String? _argValue(List<String> args, String key) {
@@ -407,6 +461,13 @@ String _renderMarkdown(Map<String, Object?> payload) {
       (payload['expected_failures'] as List<Object?>? ?? const <Object?>[])
           .map((value) => value.toString())
           .toSet();
+  final expectedFailureRules =
+      (payload['expected_failure_rules'] as Map<Object?, Object?>? ??
+              const <Object?, Object?>{})
+          .map(
+            (rawPath, rawReason) =>
+                MapEntry(rawPath.toString(), rawReason?.toString()),
+          );
   final skipReason = payload['skip_reason'] as String?;
   final files = (payload['files'] as List<Object?>? ?? const <Object?>[])
       .whereType<Map>()
@@ -427,6 +488,22 @@ String _renderMarkdown(Map<String, Object?> payload) {
     );
   if (expectedFailures.isNotEmpty) {
     b.writeln('- Expected failures: `${expectedFailures.toList()..sort()}`');
+    final withReasons =
+        expectedFailureRules.entries
+            .where(
+              (entry) =>
+                  entry.key.trim().isNotEmpty &&
+                  entry.value != null &&
+                  entry.value!.trim().isNotEmpty,
+            )
+            .toList(growable: false)
+          ..sort((a, b) => a.key.compareTo(b.key));
+    if (withReasons.isNotEmpty) {
+      b.writeln('- Expected failure reason matchers:');
+      for (final entry in withReasons) {
+        b.writeln('  - `${entry.key}` contains `${entry.value}`');
+      }
+    }
   }
   if (skipReason != null && skipReason.isNotEmpty) {
     b.writeln('- Skip reason: `$skipReason`');
@@ -434,11 +511,7 @@ String _renderMarkdown(Map<String, Object?> payload) {
   }
 
   final failedFiles = files
-      .where(
-        (entry) =>
-            entry['passed'] != true &&
-            !expectedFailures.contains(entry['path']?.toString() ?? ''),
-      )
+      .where((entry) => entry['passed'] != true && entry['xfailed'] != true)
       .toList(growable: false);
   if (failedFiles.isEmpty) {
     return b.toString();
@@ -484,6 +557,10 @@ final class _FileResult {
     required this.path,
     required this.group,
     required this.passed,
+    required this.expectedFailure,
+    required this.expectedFailureReasonMatched,
+    required this.xfailed,
+    required this.xpassed,
     required this.exitCode,
     required this.durationMs,
     required this.failureSummary,
@@ -494,6 +571,10 @@ final class _FileResult {
   final String path;
   final String group;
   final bool passed;
+  final bool expectedFailure;
+  final bool expectedFailureReasonMatched;
+  final bool xfailed;
+  final bool xpassed;
   final int exitCode;
   final int durationMs;
   final String? failureSummary;
@@ -504,10 +585,21 @@ final class _FileResult {
     'path': path,
     'group': group,
     'passed': passed,
+    'expected_failure': expectedFailure,
+    'expected_failure_reason_matched': expectedFailureReasonMatched,
+    'xfailed': xfailed,
+    'xpassed': xpassed,
     'exit_code': exitCode,
     'duration_ms': durationMs,
     'failure_summary': failureSummary,
     'stdout_tail': stdoutTail,
     'stderr_tail': stderrTail,
   };
+}
+
+final class _ExpectedFailureRule {
+  const _ExpectedFailureRule({required this.path, this.reasonContains});
+
+  final String path;
+  final String? reasonContains;
 }

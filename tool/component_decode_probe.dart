@@ -15,10 +15,11 @@ const String _defaultMarkdownPath =
 const String _testsuiteSubmoduleHint =
     'Initialize testsuite submodule: '
     'git submodule update --init --recursive third_party/component-model-tests';
-const Set<String> _defaultExpectedFailures = <String>{
-  // Parser token coverage gap in current wasm-tools release.
-  'async/trap-if-block-and-sync.wast',
-};
+const Map<String, String> _defaultExpectedFailureReasonPatterns =
+    <String, String>{
+      // Parser token coverage gap in current wasm-tools release.
+      'async/trap-if-block-and-sync.wast': 'unexpected token, expected one of:',
+    };
 
 Future<void> main(List<String> args) async {
   final testsuiteDir =
@@ -37,14 +38,25 @@ Future<void> main(List<String> args) async {
     '--no-default-expected-failures',
   );
   final expectedFailuresArg = _argValue(args, '--expected-failures');
-  final expectedFailures = <String>{
-    if (!disableDefaultExpectedFailures) ..._defaultExpectedFailures,
-    if (expectedFailuresArg != null)
-      ...expectedFailuresArg
-          .split(',')
-          .map((value) => value.trim())
-          .where((value) => value.isNotEmpty),
+  final expectedFailureRules = <String, _ExpectedFailureRule>{
+    if (!disableDefaultExpectedFailures)
+      ..._defaultExpectedFailureReasonPatterns.map(
+        (path, reasonContains) => MapEntry(
+          path,
+          _ExpectedFailureRule(path: path, reasonContains: reasonContains),
+        ),
+      ),
   };
+  if (expectedFailuresArg != null) {
+    for (final path
+        in expectedFailuresArg
+            .split(',')
+            .map((value) => value.trim())
+            .where((value) => value.isNotEmpty)) {
+      expectedFailureRules[path] = _ExpectedFailureRule(path: path);
+    }
+  }
+  final expectedFailures = expectedFailureRules.keys.toSet();
   final allGroups = args.contains('--all-groups');
   final selectedGroups = allGroups
       ? const <String>[]
@@ -74,6 +86,9 @@ Future<void> main(List<String> args) async {
         'testsuite_dir': testsuiteDir,
         'groups': effectiveGroups,
         'expected_failures': expectedFailures.toList()..sort(),
+        'expected_failure_rules': expectedFailureRules.map(
+          (path, rule) => MapEntry(path, rule.reasonContains),
+        ),
         'skip_reason':
             'component-model testsuite directory does not exist: $testsuiteDir',
       },
@@ -106,6 +121,9 @@ Future<void> main(List<String> args) async {
         'testsuite_dir': testsuiteDir,
         'groups': effectiveGroups,
         'expected_failures': expectedFailures.toList()..sort(),
+        'expected_failure_rules': expectedFailureRules.map(
+          (path, rule) => MapEntry(path, rule.reasonContains),
+        ),
         'skip_reason': 'Unable to locate usable wasm-tools binary.',
       },
     );
@@ -150,7 +168,8 @@ Future<void> main(List<String> args) async {
   final stopwatch = Stopwatch()..start();
 
   for (final wastFile in wastFiles) {
-    final expectedFailure = expectedFailures.contains(wastFile.relativePath);
+    final expectedFailureRule = expectedFailureRules[wastFile.relativePath];
+    final expectedFailure = expectedFailureRule != null;
     final work = await Directory.systemTemp.createTemp('wasd-component-probe-');
     try {
       final scriptJsonPath = '${work.path}/script.json';
@@ -167,7 +186,13 @@ Future<void> main(List<String> args) async {
         final reason =
             _firstNonEmptyLine(_asText(converterResult.stderr)) ??
             'wast conversion failed';
-        if (expectedFailure) {
+        final expectedFailureReasonMatched =
+            expectedFailure &&
+            _matchesExpectedFailureRule(
+              expectedFailureRule,
+              failureText: reason,
+            );
+        if (expectedFailureReasonMatched) {
           xfailedWastFiles++;
           xfailReasonCounts.update(
             reason,
@@ -188,8 +213,9 @@ Future<void> main(List<String> args) async {
             group: wastFile.group,
             converted: false,
             expectedFailure: expectedFailure,
+            expectedFailureReasonMatched: expectedFailureReasonMatched,
             failed: true,
-            xfailed: expectedFailure,
+            xfailed: expectedFailureReasonMatched,
             xpassed: false,
             componentFilesSeen: 0,
             componentFilesDecoded: 0,
@@ -204,7 +230,13 @@ Future<void> main(List<String> args) async {
       final scriptFile = File(scriptJsonPath);
       if (!scriptFile.existsSync()) {
         const reason = 'json-from-wast produced no script.json output';
-        if (expectedFailure) {
+        final expectedFailureReasonMatched =
+            expectedFailure &&
+            _matchesExpectedFailureRule(
+              expectedFailureRule,
+              failureText: reason,
+            );
+        if (expectedFailureReasonMatched) {
           xfailedWastFiles++;
           xfailReasonCounts.update(
             reason,
@@ -225,8 +257,9 @@ Future<void> main(List<String> args) async {
             group: wastFile.group,
             converted: false,
             expectedFailure: expectedFailure,
+            expectedFailureReasonMatched: expectedFailureReasonMatched,
             failed: true,
-            xfailed: expectedFailure,
+            xfailed: expectedFailureReasonMatched,
             xpassed: false,
             componentFilesSeen: 0,
             componentFilesDecoded: 0,
@@ -243,6 +276,7 @@ Future<void> main(List<String> args) async {
         scriptJsonPayload: jsonDecode(scriptFile.readAsStringSync()),
       );
       var decodedCount = 0;
+      final fileFailureReasonCounts = <String, int>{};
       final fileFailureReasons = <String>{};
       for (final filename in componentFilenames) {
         componentFilesSeen++;
@@ -265,31 +299,46 @@ Future<void> main(List<String> args) async {
           componentFilesFailed++;
           final reason = _reasonKey(error);
           fileFailureReasons.add(reason);
-          if (expectedFailure) {
-            xfailReasonCounts.update(
-              reason,
-              (count) => count + 1,
-              ifAbsent: () => 1,
-            );
-          } else {
-            componentFilesFailedNonXfail++;
-            failureReasonCounts.update(
-              reason,
-              (count) => count + 1,
-              ifAbsent: () => 1,
-            );
-          }
+          fileFailureReasonCounts.update(
+            reason,
+            (count) => count + 1,
+            ifAbsent: () => 1,
+          );
         }
       }
       final fileFailed = decodedCount != componentFilenames.length;
-      final xfailed = expectedFailure && fileFailed;
+      final expectedFailureReasonMatched =
+          expectedFailure &&
+          fileFailed &&
+          _matchesExpectedFailureRule(
+            expectedFailureRule,
+            failureText: fileFailureReasons.join('\n'),
+          );
+      final xfailed =
+          expectedFailure && fileFailed && expectedFailureReasonMatched;
       final xpassed = expectedFailure && !fileFailed;
       if (xfailed) {
         xfailedWastFiles++;
+        for (final entry in fileFailureReasonCounts.entries) {
+          xfailReasonCounts.update(
+            entry.key,
+            (count) => count + entry.value,
+            ifAbsent: () => entry.value,
+          );
+        }
       } else if (xpassed) {
         xpassedWastFiles++;
       } else if (fileFailed) {
         failedWastFiles++;
+        componentFilesFailedNonXfail +=
+            componentFilenames.length - decodedCount;
+        for (final entry in fileFailureReasonCounts.entries) {
+          failureReasonCounts.update(
+            entry.key,
+            (count) => count + entry.value,
+            ifAbsent: () => entry.value,
+          );
+        }
       }
       fileResults.add(
         _ProbeFileResult(
@@ -297,6 +346,7 @@ Future<void> main(List<String> args) async {
           group: wastFile.group,
           converted: true,
           expectedFailure: expectedFailure,
+          expectedFailureReasonMatched: expectedFailureReasonMatched,
           failed: fileFailed,
           xfailed: xfailed,
           xpassed: xpassed,
@@ -329,6 +379,9 @@ Future<void> main(List<String> args) async {
     'strict': strict,
     'best_effort': bestEffort,
     'expected_failures': expectedFailures.toList()..sort(),
+    'expected_failure_rules': expectedFailureRules.map(
+      (path, rule) => MapEntry(path, rule.reasonContains),
+    ),
     'totals': <String, Object?>{
       'wast_total': wastFiles.length,
       'wast_converted': convertedWastFiles,
@@ -439,6 +492,20 @@ String _reasonKey(Object error) {
   return '${text.substring(0, 240)}...';
 }
 
+bool _matchesExpectedFailureRule(
+  _ExpectedFailureRule? rule, {
+  required String failureText,
+}) {
+  if (rule == null) {
+    return false;
+  }
+  final expectedReason = rule.reasonContains;
+  if (expectedReason == null || expectedReason.isEmpty) {
+    return true;
+  }
+  return failureText.contains(expectedReason);
+}
+
 Future<void> _writeReport({
   required String outputJsonPath,
   required String outputMarkdownPath,
@@ -524,6 +591,13 @@ String _renderMarkdown(Map<String, Object?> payload) {
       (payload['expected_failures'] as List<Object?>? ?? const <Object?>[])
           .map((value) => value.toString())
           .toList(growable: false);
+  final expectedFailureRules =
+      (payload['expected_failure_rules'] as Map<Object?, Object?>? ??
+              const <Object?, Object?>{})
+          .map(
+            (rawPath, rawReason) =>
+                MapEntry(rawPath.toString(), rawReason?.toString()),
+          );
   final totals = payload['totals'] as Map<Object?, Object?>?;
   final skipReason = payload['skip_reason'] as String?;
   final failureReasonCounts =
@@ -551,6 +625,24 @@ String _renderMarkdown(Map<String, Object?> payload) {
     ..writeln('- Groups: `${groups.isEmpty ? 'all' : groups.join(', ')}`')
     ..writeln('- Decode mode: `${bestEffort ? 'best-effort' : 'strict'}`')
     ..writeln('- Expected failures: `${expectedFailures.length}`');
+  if (expectedFailureRules.isNotEmpty) {
+    final withReasons =
+        expectedFailureRules.entries
+            .where(
+              (entry) =>
+                  entry.key.trim().isNotEmpty &&
+                  entry.value != null &&
+                  entry.value!.trim().isNotEmpty,
+            )
+            .toList(growable: false)
+          ..sort((a, b) => a.key.compareTo(b.key));
+    if (withReasons.isNotEmpty) {
+      b.writeln('- Expected failure reason matchers:');
+      for (final entry in withReasons) {
+        b.writeln('  - `${entry.key}` contains `${entry.value}`');
+      }
+    }
+  }
 
   if (skipReason != null && skipReason.isNotEmpty) {
     b.writeln('- Skip reason: `$skipReason`');
@@ -626,6 +718,7 @@ final class _ProbeFileResult {
     required this.group,
     required this.converted,
     required this.expectedFailure,
+    required this.expectedFailureReasonMatched,
     required this.failed,
     required this.xfailed,
     required this.xpassed,
@@ -639,6 +732,7 @@ final class _ProbeFileResult {
   final String group;
   final bool converted;
   final bool expectedFailure;
+  final bool expectedFailureReasonMatched;
   final bool failed;
   final bool xfailed;
   final bool xpassed;
@@ -652,6 +746,7 @@ final class _ProbeFileResult {
     'group': group,
     'converted': converted,
     'expected_failure': expectedFailure,
+    'expected_failure_reason_matched': expectedFailureReasonMatched,
     'failed': failed,
     'xfailed': xfailed,
     'xpassed': xpassed,
@@ -660,4 +755,11 @@ final class _ProbeFileResult {
     'component_files_failed': componentFilesFailed,
     'failure_reasons': failureReasons,
   };
+}
+
+final class _ExpectedFailureRule {
+  const _ExpectedFailureRule({required this.path, this.reasonContains});
+
+  final String path;
+  final String? reasonContains;
 }
