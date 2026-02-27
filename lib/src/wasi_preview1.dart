@@ -57,6 +57,7 @@ final class _FdEntry {
     : kind = _FdKind.directory,
       file = null,
       rightsBase =
+          WasiPreview1._rightFdReaddir |
           WasiPreview1._rightPathOpen |
           WasiPreview1._rightPathCreateDirectory |
           WasiPreview1._rightPathLinkSource |
@@ -70,11 +71,17 @@ final class _FdEntry {
           WasiPreview1._rightPathReadlink |
           WasiPreview1._rightPathUnlinkFile,
       rightsInheriting =
+          WasiPreview1._rightFdDatasync |
           WasiPreview1._rightFdRead |
           WasiPreview1._rightFdWrite |
           WasiPreview1._rightFdSeek |
+          WasiPreview1._rightFdSync |
           WasiPreview1._rightFdTell |
+          WasiPreview1._rightFdAdvise |
+          WasiPreview1._rightFdAllocate |
           WasiPreview1._rightFdFdstatSetFlags |
+          WasiPreview1._rightFdReaddir |
+          WasiPreview1._rightFdFileStatSetSize |
           WasiPreview1._rightFdFileStatSetTimes |
           WasiPreview1._rightFdFileStatGet,
       fdFlags = 0;
@@ -600,16 +607,23 @@ final class WasiPreview1 {
 
   Object? _fdAdvise(List<Object?> args) {
     final fd = _asI32(args, 0, 'fd');
-    _asI64(args, 1, 'offset');
-    _asI64(args, 2, 'len');
-    _asI32(args, 3, 'advice');
+    final offset = _asI64(args, 1, 'offset');
+    final len = _asI64(args, 2, 'len');
+    final advice = _asI32(args, 3, 'advice');
+    if (offset < 0 || len < 0) {
+      return _errnoInval;
+    }
+    if (advice < _adviceNormal || advice > _adviceNoReuse) {
+      return _errnoInval;
+    }
+    if (_checkedFileRangeEnd(offset, len) == null) {
+      return _errnoInval;
+    }
 
     final entry = _fdTable[fd];
-    if (entry == null) {
-      return _errnoBadf;
-    }
-    if (entry.kind != _FdKind.file) {
-      return _errnoBadf;
+    final guardErrno = _requireFileRight(entry, _rightFdAdvise);
+    if (guardErrno != null) {
+      return guardErrno;
     }
     return _errnoSuccess;
   }
@@ -618,24 +632,19 @@ final class WasiPreview1 {
     final fd = _asI32(args, 0, 'fd');
     final offset = _asI64(args, 1, 'offset');
     final len = _asI64(args, 2, 'len');
-    if (offset < 0 || len < 0) {
+    final requiredSize = _checkedFileRangeEnd(offset, len);
+    if (requiredSize == null) {
       return _errnoInval;
     }
 
     final entry = _fdTable[fd];
-    if (entry == null) {
-      return _errnoBadf;
-    }
-    if (entry.kind != _FdKind.file) {
-      return _errnoBadf;
-    }
-    if ((entry.rightsBase & _rightFdWrite) == 0) {
-      return _errnoNotcapable;
+    final guardErrno = _requireFileRight(entry, _rightFdAllocate);
+    if (guardErrno != null) {
+      return guardErrno;
     }
 
     try {
-      final requiredSize = offset + len;
-      if (entry.file!.size < requiredSize) {
+      if (entry!.file!.size < requiredSize) {
         entry.file!.truncate(requiredSize);
       }
       return _errnoSuccess;
@@ -680,17 +689,12 @@ final class WasiPreview1 {
   Object? _fdDatasync(List<Object?> args) {
     final fd = _asI32(args, 0, 'fd');
     final entry = _fdTable[fd];
-    if (entry == null) {
-      return _errnoBadf;
-    }
-    if (entry.kind != _FdKind.file) {
-      return _errnoBadf;
-    }
-    if ((entry.rightsBase & _rightFdWrite) == 0) {
-      return _errnoNotcapable;
+    final guardErrno = _requireFileRight(entry, _rightFdDatasync);
+    if (guardErrno != null) {
+      return guardErrno;
     }
     try {
-      entry.file!.flush();
+      entry!.file!.flush();
       return _errnoSuccess;
     } on WasiFsException catch (error) {
       return _fsErrno(error.error);
@@ -698,7 +702,18 @@ final class WasiPreview1 {
   }
 
   Object? _fdSync(List<Object?> args) {
-    return _fdDatasync(args);
+    final fd = _asI32(args, 0, 'fd');
+    final entry = _fdTable[fd];
+    final guardErrno = _requireFileRight(entry, _rightFdSync);
+    if (guardErrno != null) {
+      return guardErrno;
+    }
+    try {
+      entry!.file!.flush();
+      return _errnoSuccess;
+    } on WasiFsException catch (error) {
+      return _fsErrno(error.error);
+    }
   }
 
   Object? _fdSeek(List<Object?> args) {
@@ -909,7 +924,7 @@ final class WasiPreview1 {
     if (entry.kind != _FdKind.file) {
       return _errnoBadf;
     }
-    if ((entry.rightsBase & _rightFdWrite) == 0) {
+    if ((entry.rightsBase & _rightFdFileStatSetSize) == 0) {
       return _errnoNotcapable;
     }
 
@@ -1024,15 +1039,23 @@ final class WasiPreview1 {
     if (entry == null || entry.kind != _FdKind.directory) {
       return _errnoBadf;
     }
+    if ((entry.rightsBase & _rightFdReaddir) == 0) {
+      return _errnoNotcapable;
+    }
 
     final listingFs = _fileSystem;
     if (listingFs is! WasiDirectoryListingFileSystem) {
       return _errnoNosys;
     }
 
-    final entries = (listingFs as WasiDirectoryListingFileSystem).readDirectory(
-      entry.directoryPath!,
-    );
+    List<WasiDirectoryEntry> entries;
+    try {
+      entries = (listingFs as WasiDirectoryListingFileSystem).readDirectory(
+        entry.directoryPath!,
+      );
+    } on WasiFsException catch (error) {
+      return _fsErrno(error.error);
+    }
     final startIndex = cookie.toInt();
     if (startIndex > entries.length) {
       return _errnoInval;
@@ -2160,6 +2183,30 @@ final class WasiPreview1 {
     return memory;
   }
 
+  int? _requireFileRight(_FdEntry? entry, int requiredRight) {
+    if (entry == null) {
+      return _errnoBadf;
+    }
+    if (entry.kind != _FdKind.file) {
+      return _errnoBadf;
+    }
+    if ((entry.rightsBase & requiredRight) == 0) {
+      return _errnoNotcapable;
+    }
+    return null;
+  }
+
+  int? _checkedFileRangeEnd(int offset, int length) {
+    if (offset < 0 || length < 0) {
+      return null;
+    }
+    final end = BigInt.from(offset) + BigInt.from(length);
+    if (end > _maxFileSizeBigInt) {
+      return null;
+    }
+    return end.toInt();
+  }
+
   Uint8List _readInput(int maxBytes) {
     if (maxBytes <= 0) {
       return Uint8List(0);
@@ -2573,11 +2620,17 @@ final class WasiPreview1 {
   static const int _fstFlagMask =
       _fstFlagAtim | _fstFlagAtimNow | _fstFlagMtim | _fstFlagMtimNow;
 
+  static const int _rightFdDatasync = 0x0000000000000001;
   static const int _rightFdRead = 0x0000000000000002;
   static const int _rightFdSeek = 0x0000000000000004;
   static const int _rightFdFdstatSetFlags = 0x0000000000000008;
+  static const int _rightFdSync = 0x0000000000000010;
   static const int _rightFdTell = 0x0000000000000020;
   static const int _rightFdWrite = 0x0000000000000040;
+  static const int _rightFdAdvise = 0x0000000000000080;
+  static const int _rightFdAllocate = 0x0000000000000100;
+  static const int _rightFdReaddir = 0x0000000000004000;
+  static const int _rightFdFileStatSetSize = 0x0000000000400000;
   static const int _rightFdFileStatSetTimes = 0x0000000000008000;
   static const int _rightPathCreateDirectory = 0x0000000000000200;
   static const int _rightPathLinkSource = 0x0000000000000400;
@@ -2622,6 +2675,10 @@ final class WasiPreview1 {
   static const int _eventTypeFdRead = 1;
   static const int _eventTypeFdWrite = 2;
   static const int _subclockFlagAbstime = 0x0001;
+
+  static const int _adviceNormal = 0;
+  static const int _adviceNoReuse = 5;
+  static final BigInt _maxFileSizeBigInt = WasmI64.maxSigned;
 
   static const int _subscriptionOffsetUserdata = 0;
   static const int _subscriptionOffsetEventType = 8;
