@@ -732,6 +732,78 @@ void main() {
       );
     });
 
+    test('rejects malformed component memory type declaration limits', () {
+      final typeSection = <int>[
+        ..._u32Leb(1),
+        ..._name('mem_t'),
+        0x03, // memory
+        0x01, // has max
+        ..._u32Leb(3), // min
+        ..._u32Leb(2), // max
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ..._componentHeaderWithOneCoreModule(),
+        ..._section(0x06, typeSection),
+      ]);
+
+      expect(
+        () => WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+    });
+
+    test(
+      'rejects malformed shared component memory type declaration without max',
+      () {
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('mem_t'),
+          0x03, // memory
+          0x02, // shared without has-max
+          ..._u32Leb(1), // min
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ..._componentHeaderWithOneCoreModule(),
+          ..._section(0x06, typeSection),
+        ]);
+
+        expect(
+          () => WasmComponent.decode(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test('rejects malformed component table type declaration limits', () {
+      final typeSection = <int>[
+        ..._u32Leb(1),
+        ..._name('tab_t'),
+        0x04, // table
+        0x70, // funcref
+        0x01, // has max
+        ..._u32Leb(4), // min
+        ..._u32Leb(3), // max
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ..._componentHeaderWithOneCoreModule(),
+        ..._section(0x06, typeSection),
+      ]);
+
+      expect(
+        () => WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+    });
+
     test(
       'rejects core export alias type binding to non-function declaration',
       () {

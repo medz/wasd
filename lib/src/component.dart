@@ -578,6 +578,21 @@ final class WasmComponent {
         ? (memory64 ? reader.readVarUint64() : reader.readVarUint32())
         : null;
     final pageSizeLog2 = hasPageSize ? reader.readVarUint32() : 16;
+    if (maxPages != null && maxPages < minPages) {
+      throw FormatException(
+        'Invalid component memory type limits: max($maxPages) < min($minPages).',
+      );
+    }
+    if (shared && maxPages == null) {
+      throw const FormatException(
+        'Invalid component memory type: shared memory requires max pages.',
+      );
+    }
+    if (pageSizeLog2 < 0 || pageSizeLog2 > 16) {
+      throw FormatException(
+        'Invalid component memory type page size log2: $pageSizeLog2.',
+      );
+    }
     return WasmMemoryType(
       minPages: minPages,
       maxPages: maxPages,
@@ -604,6 +619,11 @@ final class WasmComponent {
     final max = hasMax
         ? (table64 ? reader.readVarUint64() : reader.readVarUint32())
         : null;
+    if (max != null && max < min) {
+      throw FormatException(
+        'Invalid component table type limits: max($max) < min($min).',
+      );
+    }
     return WasmTableType(
       refType: refType,
       min: min,
