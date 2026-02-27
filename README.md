@@ -63,6 +63,8 @@ Wasm compile targets.
     - supports `dart:io`: `RawServerSocket`/`RawSocket` host transport
     - supports `dart:js_interop`: `package:web` `WebSocket` transport
     - no host backend support: no-op transport (socket calls remain `ENOSYS`)
+  - `preferHostIo` only controls filesystem backend selection; socket capability is driven by
+    `socketTransport` / `preopenedSockets`
   - can force in-memory backend: `WasiPreview1(preferHostIo: false)`
   - custom socket transport injection: `WasiPreview1(socketTransport: ...)`
   - host-io path sandbox checks (canonical root boundary enforcement)

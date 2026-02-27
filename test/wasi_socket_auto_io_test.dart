@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:wasd/wasd.dart';
 import 'package:wasd/src/wasi_socket_auto_io.dart' as auto_io;
 import 'package:wasd/src/wasi_socket_transport.dart';
 
@@ -88,6 +89,39 @@ void main() {
       expect(transport.close?.call(fd: 5), _errnoSuccess);
       expect(transport.close?.call(fd: 999), isNull);
     });
+
+    test(
+      'WasiPreview1 preferHostIo=false still enables socket capability from preopenedSockets',
+      () async {
+        final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+        final rawClient = await RawSocket.connect(
+          InternetAddress.loopbackIPv4,
+          server.port,
+        );
+        final peer = await server.first;
+        final wasi = WasiPreview1(
+          preferHostIo: false,
+          preopenedSockets: {5: rawClient},
+        );
+
+        addTearDown(() async {
+          await peer.close();
+          await server.close();
+        });
+
+        final sockShutdown =
+            wasi.imports.functions[WasmImports.key(
+              'wasi_snapshot_preview1',
+              'sock_shutdown',
+            )]!;
+        final fdClose = wasi
+            .imports
+            .functions[WasmImports.key('wasi_snapshot_preview1', 'fd_close')]!;
+
+        expect(sockShutdown([5, 1]), _errnoSuccess);
+        expect(fdClose([5]), _errnoSuccess);
+      },
+    );
   });
 }
 

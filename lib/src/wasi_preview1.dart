@@ -121,7 +121,7 @@ final class WasiPreview1 {
                : WasiInMemoryFileSystem()),
        _socketTransport =
            socketTransport ??
-           (preferHostIo && preopenedSockets.isNotEmpty
+           (preopenedSockets.isNotEmpty
                ? auto_socket.createAutoWasiSocketTransport(
                    preopenedSockets: preopenedSockets,
                  )
