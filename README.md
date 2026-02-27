@@ -166,6 +166,8 @@ dart run tool/spec_runner.dart --target=vm --suite=core
 dart run tool/spec_runner.dart --target=vm --suite=proposal
 # strict component-model gates (uses third_party/component-model-tests/test by default)
 dart run tool/spec_runner.dart --target=vm --suite=all --strict-component-official --strict-component-decode-probe
+# include policy-oriented wasmtime group in official component step explicitly
+dart run tool/spec_runner.dart --target=vm --suite=all --strict-component-official --component-official-groups=async,names,resources,values,wasm-tools,wasmtime
 ```
 
 Artifacts:

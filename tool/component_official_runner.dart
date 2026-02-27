@@ -9,6 +9,13 @@ const String _defaultTestsuiteDir = 'third_party/component-model-tests/test';
 const String _testsuiteSubmoduleHint =
     'Initialize testsuite submodule: '
     'git submodule update --init --recursive third_party/component-model-tests';
+const List<String> _defaultPortableGroups = <String>[
+  'async',
+  'names',
+  'resources',
+  'values',
+  'wasm-tools',
+];
 const Set<String> _defaultExpectedFailures = <String>{
   // wasm-tools currently rejects `stream<char>` payload typing.
   'async/same-component-stream-future.wast',
@@ -16,6 +23,8 @@ const Set<String> _defaultExpectedFailures = <String>{
   'async/trap-if-block-and-sync.wast',
   // Known wasm-tools/parser drift for package-name parsing assertions.
   'wasm-tools/import.wast',
+};
+const Set<String> _allGroupsAdditionalExpectedFailures = <String>{
   // Wasmtime policy assertions do not match raw wasm-tools validation behavior.
   'wasmtime/import.wast',
   'wasmtime/restrictions.wast',
@@ -42,6 +51,8 @@ Future<void> main(List<String> args) async {
   final expectedFailuresArg = _argValue(args, '--expected-failures');
   final expectedFailures = <String>{
     if (!disableDefaultExpectedFailures) ..._defaultExpectedFailures,
+    if (!disableDefaultExpectedFailures && allGroups)
+      ..._allGroupsAdditionalExpectedFailures,
     if (expectedFailuresArg != null)
       ...expectedFailuresArg
           .split(',')
@@ -52,7 +63,7 @@ Future<void> main(List<String> args) async {
   final selectedGroups = allGroups
       ? const <String>[]
       : (groupsArg == null
-            ? const <String>[]
+            ? _defaultPortableGroups
             : groupsArg
                   .split(',')
                   .map((value) => value.trim())
