@@ -803,6 +803,108 @@ void main() {
       },
     );
 
+    test(
+      'validates typed core export alias bindings for reference global exports',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleExportGlobal(
+              name: 'gref',
+              valueType: 0x70,
+              mutable: false,
+              initOpcode: 0xd0,
+              value: 0x70,
+            ),
+          ],
+          instantiateModuleIndices: const [0],
+          exportAliases: const [
+            _ComponentAliasSpec(
+              instanceIndex: 0,
+              coreExportName: 'gref',
+              componentExportName: 'apiGref',
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('funcref_t'),
+          0x00, // value
+          0x70, // funcref
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x01, // coreExportAlias
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(
+          instance.componentExportKind('apiGref'),
+          WasmComponentImportKind.global,
+        );
+        expect(instance.readComponentExportGlobal('apiGref'), -1);
+      },
+    );
+
+    test(
+      'rejects mismatched typed core export alias bindings for reference global exports',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleExportGlobal(
+              name: 'gref',
+              valueType: 0x70,
+              mutable: false,
+              initOpcode: 0xd0,
+              value: 0x70,
+            ),
+          ],
+          instantiateModuleIndices: const [0],
+          exportAliases: const [
+            _ComponentAliasSpec(
+              instanceIndex: 0,
+              coreExportName: 'gref',
+              componentExportName: 'apiGref',
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('externref_t'),
+          0x00, // value
+          0x6f, // externref
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x01, // coreExportAlias
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
     test('validates component import requirements before instantiation', () {
       final componentBytes = _componentWithCoreModules(
         <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
@@ -875,6 +977,83 @@ void main() {
         final instance = WasmComponentInstance.fromBytes(
           componentBytes,
           imports: const WasmImports(globals: {'env::g': 7}),
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.invokeCore('one'), 1);
+      },
+    );
+
+    test(
+      'validates typed global reference import requirements via globalTypes signatures',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'globalFuncref',
+              moduleName: 'env',
+              fieldName: 'gref',
+              kind: 0x03,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('funcref_t'),
+          0x00,
+          0x70,
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: const WasmImports(globals: {'env::gref': -1}),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsA(isA<UnsupportedError>()),
+        );
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: const WasmImports(
+              globals: {'env::gref': -1},
+              globalTypes: {
+                'env::gref': WasmGlobalType(
+                  valueType: WasmValueType.i32,
+                  mutable: false,
+                  valueTypeSignature: '6f',
+                ),
+              },
+            ),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          imports: const WasmImports(
+            globals: {'env::gref': -1},
+            globalTypes: {
+              'env::gref': WasmGlobalType(
+                valueType: WasmValueType.i32,
+                mutable: false,
+                valueTypeSignature: '70',
+              ),
+            },
+          ),
           features: const WasmFeatureSet(componentModel: true),
         );
         expect(instance.invokeCore('one'), 1);

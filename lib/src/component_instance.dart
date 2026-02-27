@@ -536,33 +536,73 @@ final class WasmComponentInstance {
               'must bind to a value type declaration.',
             );
           }
-          final expectedType = _decodeCoreValueTypeCode(valueTypeCode);
-          if (expectedType == null) {
+          final expectedSignature = _componentValueTypeCodeToSignature(
+            valueTypeCode,
+          );
+          if (expectedSignature == null) {
             throw UnsupportedError(
               'Component global import `${requirement.componentImportName}` '
               'uses unsupported value type code 0x${valueTypeCode.toRadixString(16)}.',
             );
           }
+          final expectedType = _decodeCoreValueTypeCode(valueTypeCode);
+          final importedGlobalType = imports.globalTypes[key];
+          if (importedGlobalType != null) {
+            final actualSignature =
+                importedGlobalType.valueTypeSignature ??
+                _coreValueTypeSignature(importedGlobalType.valueType);
+            if (!_referenceTypeSignaturesMatch(
+              expectedSignature,
+              actualSignature,
+            )) {
+              throw FormatException(
+                'Component global import `${requirement.componentImportName}` '
+                'type mismatch: expected $expectedSignature, '
+                'actual $actualSignature.',
+              );
+            }
+          }
 
           final bindingGlobal = imports.globalBindings[key];
           if (bindingGlobal != null) {
-            if (bindingGlobal.valueType != expectedType) {
-              throw FormatException(
+            if (expectedType == null && importedGlobalType == null) {
+              throw UnsupportedError(
                 'Component global import `${requirement.componentImportName}` '
-                'type mismatch: expected ${expectedType.name}, '
-                'actual ${bindingGlobal.valueType.name}.',
+                'requires `imports.globalTypes[$key]` for non-numeric '
+                'typed globals.',
               );
+            }
+            if (bindingGlobal.valueType != expectedType) {
+              if (expectedType != null) {
+                throw FormatException(
+                  'Component global import '
+                  '`${requirement.componentImportName}` type mismatch: '
+                  'expected ${expectedType.name}, '
+                  'actual ${bindingGlobal.valueType.name}.',
+                );
+              }
             }
             break;
           }
           if (imports.globals.containsKey(key)) {
             final value = imports.globals[key];
+            if (expectedType == null && importedGlobalType == null) {
+              throw UnsupportedError(
+                'Component global import `${requirement.componentImportName}` '
+                'requires `imports.globalTypes[$key]` for non-numeric '
+                'typed globals.',
+              );
+            }
             try {
-              WasmValue.fromExternal(expectedType, value);
+              WasmValue.fromExternal(
+                expectedType ?? importedGlobalType!.valueType,
+                value,
+              );
             } catch (_) {
               throw FormatException(
                 'Component global import `${requirement.componentImportName}` '
-                'is not compatible with expected type ${expectedType.name}.',
+                'is not compatible with expected type '
+                '${expectedType?.name ?? expectedSignature}.',
               );
             }
           }
@@ -726,6 +766,39 @@ final class WasmComponentInstance {
       0x7c => WasmValueType.f64,
       _ => null,
     };
+  }
+
+  static String? _componentValueTypeCodeToSignature(int code) {
+    switch (code & 0xff) {
+      case 0x7f:
+      case 0x7e:
+      case 0x7d:
+      case 0x7c:
+      case 0x7b:
+      case 0x70:
+      case 0x71:
+      case 0x72:
+      case 0x73:
+      case 0x74:
+      case 0x75:
+      case 0x6f:
+      case 0x6e:
+      case 0x6d:
+      case 0x6c:
+      case 0x6b:
+      case 0x6a:
+      case 0x69:
+      case 0x68:
+      case 0x67:
+      case 0x66:
+      case 0x65:
+      case 0x62:
+      case 0x61:
+      case 0x60:
+        return (code & 0xff).toRadixString(16).padLeft(2, '0');
+      default:
+        return null;
+    }
   }
 
   static Map<String, _TypedFunctionImportRequirement>
@@ -1218,8 +1291,10 @@ final class WasmComponentInstance {
               '`${declaration.name}`.',
             );
           }
-          final expectedType = _decodeCoreValueTypeCode(valueTypeCode);
-          if (expectedType == null) {
+          final expectedSignature = _componentValueTypeCodeToSignature(
+            valueTypeCode,
+          );
+          if (expectedSignature == null) {
             throw UnsupportedError(
               '$context uses unsupported value type code '
               '0x${valueTypeCode.toRadixString(16)}.',
@@ -1231,8 +1306,10 @@ final class WasmComponentInstance {
           final actualSignature =
               actualGlobalType.valueTypeSignature ??
               _coreValueTypeSignature(actualGlobalType.valueType);
-          final expectedSignature = _coreValueTypeSignature(expectedType);
-          if (actualSignature != expectedSignature) {
+          if (!_referenceTypeSignaturesMatch(
+            expectedSignature,
+            actualSignature,
+          )) {
             throw FormatException(
               '$context has incompatible typed global signature: expected '
               '$expectedSignature, actual $actualSignature.',
