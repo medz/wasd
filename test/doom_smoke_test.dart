@@ -49,7 +49,7 @@ void main() {
 
       final frames = result['frames'];
       expect(frames, isA<int>());
-      expect(frames! as int, greaterThanOrEqualTo(1));
+      expect(frames, greaterThanOrEqualTo(1));
       expect(result['paletteSet'], isTrue);
     },
     skip: assetsAvailable

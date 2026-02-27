@@ -2292,6 +2292,12 @@ abstract final class WasmValidator {
               (!frame.isLoop || !frame.loopBackUnreachable);
           final parentIsFunction =
               controlStack.isNotEmpty && controlStack.last.isFunction;
+          // suppressLoopBackPropagation keeps a void `frame` loop that only
+          // loops back from marking the enclosing function frame in
+          // `controlStack` (identified by `parentIsFunction`) unreachable; this
+          // preserves `propagateUnreachableToParent` for polymorphic/result
+          // materialization checks while matching the empty-result loop edge
+          // case in the spec.
           final suppressLoopBackPropagation =
               frame.isLoop &&
               frame.resultSignatures.isEmpty &&
