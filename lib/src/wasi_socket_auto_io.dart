@@ -162,6 +162,7 @@ final class _IoListenerSocket {
 final class _IoStreamSocket {
   _IoStreamSocket(this.socket) {
     socket.readEventsEnabled = true;
+    socket.writeEventsEnabled = true;
     _subscription = socket.listen(
       _onEvent,
       onDone: () => _readClosed = true,
