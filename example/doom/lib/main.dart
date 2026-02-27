@@ -1,7 +1,5 @@
 import 'dart:collection';
-import 'dart:io';
 import 'dart:isolate';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -13,6 +11,7 @@ const String _doomIwadAssetPath = 'assets/doom/doom1.wad';
 
 const int _doomWidth = 320;
 const int _doomHeight = 200;
+const int _doomTargetFrameIntervalUs = 28000;
 
 const int _eventTypeKeyDown = 0;
 const int _eventTypeKeyUp = 1;
@@ -29,6 +28,8 @@ const int _doomKeyCtrl = 0x9d;
 const int _doomKeyAlt = 0xb8;
 const int _doomKeyShift = 0xb6;
 
+enum _DoomRuntimeState { booting, running, exited, error, missingAssets }
+
 void main() {
   runApp(const DoomWindowApp());
 }
@@ -39,7 +40,7 @@ final class DoomWindowApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Doom Wasm Window',
+      title: 'DOOM // WASD',
       theme: ThemeData.dark(useMaterial3: true),
       home: const DoomWindowPage(),
       debugShowCheckedModeBanner: false,
@@ -57,13 +58,19 @@ final class DoomWindowPage extends StatefulWidget {
 final class _DoomWindowPageState extends State<DoomWindowPage> {
   ReceivePort? _receivePort;
   Isolate? _doomIsolate;
-  RandomAccessFile? _eventWriter;
-  File? _eventFile;
+  SendPort? _eventSendPort;
+  final FocusNode _focusNode = FocusNode(debugLabel: 'doom-input-focus');
+  final Stopwatch _uiClock = Stopwatch()..start();
 
   ui.Image? _frameImage;
   bool _decodingFrame = false;
   int _frames = 0;
-  String _status = 'Starting Doom runtime...';
+  int _framesAtFpsMark = 0;
+  int _lastFpsMarkUs = 0;
+  double _fps = 0;
+  bool _showHelpOverlay = true;
+  String _status = 'Booting Doom runtime...';
+  _DoomRuntimeState _runtimeState = _DoomRuntimeState.booting;
 
   @override
   void initState() {
@@ -73,19 +80,37 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
 
   @override
   void dispose() {
+    _shutdownRuntime();
+    _focusNode.dispose();
     _frameImage?.dispose();
     _frameImage = null;
-    _doomIsolate?.kill(priority: Isolate.immediate);
-    _receivePort?.close();
-    _eventWriter?.closeSync();
-    final eventFile = _eventFile;
-    if (eventFile != null && eventFile.existsSync()) {
-      eventFile.deleteSync();
-    }
     super.dispose();
   }
 
+  void _shutdownRuntime() {
+    _doomIsolate?.kill(priority: Isolate.immediate);
+    _doomIsolate = null;
+    _receivePort?.close();
+    _receivePort = null;
+    _eventSendPort = null;
+  }
+
   Future<void> _startDoom() async {
+    _shutdownRuntime();
+    _frameImage?.dispose();
+    _frameImage = null;
+    _frames = 0;
+    _framesAtFpsMark = 0;
+    _lastFpsMarkUs = 0;
+    _fps = 0;
+    _decodingFrame = false;
+    if (mounted) {
+      setState(() {
+        _runtimeState = _DoomRuntimeState.booting;
+        _status = 'Booting Doom runtime...';
+      });
+    }
+
     final wasmBytes = await _loadAssetBytes(_doomWasmAssetPath);
     final iwadBytes = await _loadAssetBytes(_doomIwadAssetPath);
     if (wasmBytes == null || iwadBytes == null) {
@@ -93,6 +118,7 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
         return;
       }
       setState(() {
+        _runtimeState = _DoomRuntimeState.missingAssets;
         _status =
             'Missing bundled assets.\n'
             'Run: tool/setup_assets.sh\n'
@@ -101,23 +127,12 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
       return;
     }
 
-    final eventFile = File(
-      '${Directory.systemTemp.path}${Platform.pathSeparator}'
-      'doom_example_events_${DateTime.now().microsecondsSinceEpoch}.bin',
-    );
-    eventFile.createSync(recursive: true);
-    final eventWriter = eventFile.openSync(mode: FileMode.writeOnlyAppend);
-
     final receivePort = ReceivePort();
     receivePort.listen(_onIsolateMessage);
-
-    _eventFile = eventFile;
-    _eventWriter = eventWriter;
     _receivePort = receivePort;
 
     _doomIsolate = await Isolate.spawn<Map<String, Object?>>(_doomIsolateMain, {
       'uiPort': receivePort.sendPort,
-      'eventFilePath': eventFile.path,
       'wasmBytes': TransferableTypedData.fromList(<Uint8List>[wasmBytes]),
       'iwadBytes': TransferableTypedData.fromList(<Uint8List>[iwadBytes]),
     });
@@ -139,16 +154,31 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
       return;
     }
     final type = message['type'];
+    if (type == 'event_port') {
+      final port = message['port'];
+      if (port is SendPort) {
+        _eventSendPort = port;
+      }
+      return;
+    }
     if (type == 'status') {
       final text = message['text'] as String? ?? '';
       setState(() {
         _status = text;
+        if (_runtimeState == _DoomRuntimeState.error ||
+            _runtimeState == _DoomRuntimeState.exited) {
+          return;
+        }
+        _runtimeState = text == 'Running'
+            ? _DoomRuntimeState.running
+            : _DoomRuntimeState.booting;
       });
       return;
     }
     if (type == 'error') {
       final text = message['text'] as String? ?? 'Unknown error';
       setState(() {
+        _runtimeState = _DoomRuntimeState.error;
         _status = 'Runtime error: $text';
       });
       return;
@@ -156,6 +186,7 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
     if (type == 'exit') {
       final text = message['text'] as String? ?? 'Runtime stopped';
       setState(() {
+        _runtimeState = _DoomRuntimeState.exited;
         _status = text;
       });
       return;
@@ -181,11 +212,23 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
             image.dispose();
             return;
           }
+          final nowUs = _uiClock.elapsedMicroseconds;
+          if (_lastFpsMarkUs == 0) {
+            _lastFpsMarkUs = nowUs;
+          }
           setState(() {
             _frameImage?.dispose();
             _frameImage = image;
             _frames++;
-            _status = 'Running';
+            _runtimeState = _DoomRuntimeState.running;
+            _status = 'In game';
+            final elapsedUs = nowUs - _lastFpsMarkUs;
+            if (elapsedUs >= 1000000) {
+              final newFrames = _frames - _framesAtFpsMark;
+              _fps = newFrames * 1000000 / elapsedUs;
+              _framesAtFpsMark = _frames;
+              _lastFpsMarkUs = nowUs;
+            }
           });
         },
       );
@@ -193,6 +236,17 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
   }
 
   KeyEventResult _onKeyEvent(KeyEvent event) {
+    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.f1) {
+      setState(() {
+        _showHelpOverlay = !_showHelpOverlay;
+      });
+      return KeyEventResult.handled;
+    }
+    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.f5) {
+      _startDoom();
+      return KeyEventResult.handled;
+    }
+
     final doomKey = _mapKey(event);
     if (doomKey == null) {
       return KeyEventResult.ignored;
@@ -264,61 +318,183 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
   }
 
   void _writeEvent(int eventType, int keyCode) {
-    final writer = _eventWriter;
-    if (writer == null) {
+    final port = _eventSendPort;
+    if (port == null) {
       return;
     }
-    final bytes = ByteData(8)
-      ..setInt32(0, eventType, Endian.little)
-      ..setInt32(4, keyCode, Endian.little);
-    writer.writeFromSync(bytes.buffer.asUint8List());
-    writer.flushSync();
+    port.send(<int>[eventType, keyCode]);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        title: const Text('Doom Wasm Window'),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-            child: Text('frames: $_frames'),
-          ),
-        ],
-      ),
-      body: Focus(
-        autofocus: true,
-        onKeyEvent: (_, event) => _onKeyEvent(event),
-        child: Column(
-          children: [
-            Expanded(
-              child: Center(
-                child: AspectRatio(
-                  aspectRatio: _doomWidth / _doomHeight,
-                  child: ColoredBox(
-                    color: Colors.black,
-                    child: _frameImage == null
-                        ? const Center(
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : RawImage(
-                            image: _frameImage,
-                            fit: BoxFit.contain,
-                            filterQuality: FilterQuality.none,
-                          ),
+      backgroundColor: const Color(0xff040404),
+      body: GestureDetector(
+        onTap: _focusNode.requestFocus,
+        child: Focus(
+          focusNode: _focusNode,
+          autofocus: true,
+          onKeyEvent: (_, event) => _onKeyEvent(event),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: const BoxDecoration(
+                    gradient: RadialGradient(
+                      center: Alignment(0, -0.15),
+                      radius: 1.2,
+                      colors: <Color>[
+                        Color(0xff22160f),
+                        Color(0xff130a06),
+                        Color(0xff050303),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              child: Text(
-                'status: $_status\n'
-                'controls: arrows/WASD move, Ctrl/Space fire, Alt strafe, Shift run, Enter use, Esc menu',
-                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 72, 18, 120),
+                  child: AspectRatio(
+                    aspectRatio: _doomWidth / _doomHeight,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.black,
+                        border: Border.all(
+                          color: const Color(0xff9d5530),
+                          width: 2,
+                        ),
+                        boxShadow: const <BoxShadow>[
+                          BoxShadow(
+                            color: Colors.black87,
+                            blurRadius: 24,
+                            spreadRadius: 2,
+                          ),
+                        ],
+                      ),
+                      child: ClipRect(
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            _frameImage == null
+                                ? const _BootBackdrop()
+                                : RawImage(
+                                    image: _frameImage,
+                                    fit: BoxFit.fill,
+                                    filterQuality: FilterQuality.none,
+                                  ),
+                            IgnorePointer(
+                              child: CustomPaint(
+                                painter: _ScanlineOverlayPainter(
+                                  opacity: _frameImage == null ? 0 : 0.12,
+                                ),
+                              ),
+                            ),
+                            if (_frameImage != null)
+                              const IgnorePointer(
+                                child: Center(
+                                  child: Text(
+                                    '+',
+                                    style: TextStyle(
+                                      color: Color(0x88f4b36a),
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ),
+              Positioned(
+                top: 20,
+                left: 20,
+                right: 20,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _TopStatusBar(
+                        runtimeLabel: _runtimeLabel,
+                        statusText: _status,
+                        fps: _fps,
+                        frameCount: _frames,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    _SmallKeycap(
+                      keyName: 'F1',
+                      description: _showHelpOverlay ? 'Hide Help' : 'Help',
+                    ),
+                    const SizedBox(width: 8),
+                    const _SmallKeycap(keyName: 'F5', description: 'Restart'),
+                  ],
+                ),
+              ),
+              Positioned(
+                left: 20,
+                right: 20,
+                bottom: 18,
+                child: _HudPanel(
+                  runtimeLabel: _runtimeLabel,
+                  statusText: _status,
+                  showHint: _frameImage != null,
+                ),
+              ),
+              if (_showHelpOverlay)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    ignoring: false,
+                    child: DecoratedBox(
+                      decoration: const BoxDecoration(color: Color(0xaa000000)),
+                      child: const Center(child: _HelpCard()),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String get _runtimeLabel => switch (_runtimeState) {
+    _DoomRuntimeState.booting => 'BOOTING',
+    _DoomRuntimeState.running => 'LIVE',
+    _DoomRuntimeState.exited => 'EXITED',
+    _DoomRuntimeState.error => 'ERROR',
+    _DoomRuntimeState.missingAssets => 'MISSING ASSETS',
+  };
+}
+
+final class _BootBackdrop extends StatelessWidget {
+  const _BootBackdrop();
+
+  @override
+  Widget build(BuildContext context) {
+    return const ColoredBox(
+      color: Color(0xff070707),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'DOOM // WASD',
+              style: TextStyle(
+                color: Color(0xfff39b57),
+                fontSize: 26,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.5,
+                fontFamily: 'monospace',
+              ),
+            ),
+            SizedBox(height: 14),
+            CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xffe07a3d)),
             ),
           ],
         ),
@@ -327,17 +503,261 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
   }
 }
 
+final class _ScanlineOverlayPainter extends CustomPainter {
+  const _ScanlineOverlayPainter({required this.opacity});
+
+  final double opacity;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (opacity <= 0) {
+      return;
+    }
+    final linePaint = Paint()
+      ..color = Color.fromRGBO(0, 0, 0, opacity)
+      ..strokeWidth = 1;
+    for (double y = 0; y < size.height; y += 3) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), linePaint);
+    }
+    final vignette = Paint()
+      ..shader = const RadialGradient(
+        center: Alignment.center,
+        radius: 0.95,
+        colors: <Color>[
+          Color(0x00000000),
+          Color(0x33000000),
+          Color(0x88000000),
+        ],
+        stops: <double>[0.45, 0.78, 1],
+      ).createShader(Offset.zero & size);
+    canvas.drawRect(Offset.zero & size, vignette);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ScanlineOverlayPainter oldDelegate) {
+    return oldDelegate.opacity != opacity;
+  }
+}
+
+final class _TopStatusBar extends StatelessWidget {
+  const _TopStatusBar({
+    required this.runtimeLabel,
+    required this.statusText,
+    required this.fps,
+    required this.frameCount,
+  });
+
+  final String runtimeLabel;
+  final String statusText;
+  final double fps;
+  final int frameCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xbb080808),
+        border: Border.all(color: const Color(0xff8f4b28), width: 1),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: DefaultTextStyle(
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            color: Color(0xfff4e2cf),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'DOOM // WASD',
+                style: TextStyle(
+                  color: Color(0xffef9d5b),
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  letterSpacing: 0.8,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 14,
+                runSpacing: 4,
+                children: [
+                  Text('state: $runtimeLabel'),
+                  Text('fps: ${fps.toStringAsFixed(1)}'),
+                  Text('frames: $frameCount'),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                statusText,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Color(0xffd8c3b0), fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _SmallKeycap extends StatelessWidget {
+  const _SmallKeycap({required this.keyName, required this.description});
+
+  final String keyName;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xcc121212),
+        border: Border.all(color: const Color(0xff6f3a1f), width: 1),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: DefaultTextStyle(
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            color: Color(0xfff0d7bf),
+            fontSize: 11,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                keyName,
+                style: const TextStyle(
+                  color: Color(0xfff39b57),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(description),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _HudPanel extends StatelessWidget {
+  const _HudPanel({
+    required this.runtimeLabel,
+    required this.statusText,
+    required this.showHint,
+  });
+
+  final String runtimeLabel;
+  final String statusText;
+  final bool showHint;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xcc090909),
+        border: Border.all(color: const Color(0xff8d4e2b), width: 1),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: DefaultTextStyle(
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            color: Color(0xffe5d7c8),
+            fontSize: 11,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'state=$runtimeLabel  status=$statusText',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (showHint)
+                const Text(
+                  'WASD move | Ctrl/Space fire | Enter use | Esc menu',
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _HelpCard extends StatelessWidget {
+  const _HelpCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 560),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xee0a0a0a),
+          border: Border.all(color: const Color(0xff9b5931), width: 1.5),
+          boxShadow: const <BoxShadow>[
+            BoxShadow(color: Colors.black87, blurRadius: 18, spreadRadius: 2),
+          ],
+        ),
+        child: const Padding(
+          padding: EdgeInsets.fromLTRB(18, 16, 18, 16),
+          child: DefaultTextStyle(
+            style: TextStyle(
+              fontFamily: 'monospace',
+              color: Color(0xfff0dcc7),
+              fontSize: 13,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Mission Briefing',
+                  style: TextStyle(
+                    color: Color(0xfff39b57),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                SizedBox(height: 10),
+                Text('Click viewport to focus input.'),
+                Text('Move: WASD or Arrow Keys'),
+                Text('Fire: Ctrl or Space'),
+                Text('Use/Open: Enter'),
+                Text('Menu: Esc'),
+                SizedBox(height: 10),
+                Text('F1: Toggle this overlay'),
+                Text('F5: Restart runtime'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 void _doomIsolateMain(Map<String, Object?> args) {
   final uiPort = args['uiPort'] as SendPort;
-  final eventFilePath = args['eventFilePath'] as String;
   final wasmBytes = (args['wasmBytes'] as TransferableTypedData)
       .materialize()
       .asUint8List();
   final iwadBytes = (args['iwadBytes'] as TransferableTypedData)
       .materialize()
       .asUint8List();
+  final eventPort = ReceivePort();
 
   try {
+    uiPort.send(<String, Object?>{
+      'type': 'event_port',
+      'port': eventPort.sendPort,
+    });
     uiPort.send(<String, Object?>{
       'type': 'status',
       'text': 'Loading Doom wasm...',
@@ -354,10 +774,7 @@ void _doomIsolateMain(Map<String, Object?> args) {
       fileSystem: fs,
       preferHostIo: false,
     );
-    final frontend = _WindowDoomHost(
-      uiPort: uiPort,
-      eventFilePath: eventFilePath,
-    );
+    final frontend = _WindowDoomHost(uiPort: uiPort, eventPort: eventPort);
     final imports = <String, WasmHostFunction>{
       ...wasi.imports.functions,
       ...frontend.imports,
@@ -382,6 +799,8 @@ void _doomIsolateMain(Map<String, Object?> args) {
     });
   } catch (error) {
     uiPort.send(<String, Object?>{'type': 'error', 'text': error.toString()});
+  } finally {
+    eventPort.close();
   }
 }
 
@@ -404,17 +823,26 @@ void _writeInMemoryFile(
 }
 
 final class _WindowDoomHost {
-  _WindowDoomHost({required this.uiPort, required String eventFilePath})
-    : _eventReader = File(eventFilePath).openSync(mode: FileMode.read);
+  _WindowDoomHost({required this.uiPort, required ReceivePort eventPort}) {
+    eventPort.listen((Object? message) {
+      if (message is! List || message.length != 2) {
+        return;
+      }
+      final eventType = message[0];
+      final keyCode = message[1];
+      if (eventType is! int || keyCode is! int) {
+        return;
+      }
+      _events.add(_DoomEvent(type: eventType.toSigned(32), data1: keyCode));
+    });
+  }
 
   final SendPort uiPort;
-  final RandomAccessFile _eventReader;
   final Queue<_DoomEvent> _events = Queue<_DoomEvent>();
   final Uint8List _palette = Uint8List(1024);
   final Stopwatch _frameClock = Stopwatch()..start();
 
   WasmMemory? _memory;
-  int _eventReadOffset = 0;
   int _lastFrameSentUs = 0;
 
   Map<String, WasmHostFunction> get imports => <String, WasmHostFunction>{
@@ -453,12 +881,10 @@ final class _WindowDoomHost {
   }
 
   Object? _pendingEvent(List<Object?> args) {
-    _pumpEventFile();
     return _events.isNotEmpty ? 1 : 0;
   }
 
   Object? _nextEvent(List<Object?> args) {
-    _pumpEventFile();
     if (_events.isEmpty) {
       return 0;
     }
@@ -486,7 +912,7 @@ final class _WindowDoomHost {
     }
 
     final nowUs = _frameClock.elapsedMicroseconds;
-    if (nowUs - _lastFrameSentUs < 33 * 1000) {
+    if (nowUs - _lastFrameSentUs < _doomTargetFrameIntervalUs) {
       return 0;
     }
     _lastFrameSentUs = nowUs;
@@ -514,22 +940,6 @@ final class _WindowDoomHost {
       rgba[out + 3] = 255;
     }
     return rgba;
-  }
-
-  void _pumpEventFile() {
-    final length = _eventReader.lengthSync();
-    while (_eventReadOffset + 8 <= length) {
-      _eventReader.setPositionSync(_eventReadOffset);
-      final bytes = _eventReader.readSync(8);
-      if (bytes.length != 8) {
-        break;
-      }
-      _eventReadOffset += 8;
-      final view = ByteData.sublistView(Uint8List.fromList(bytes));
-      final type = view.getInt32(0, Endian.little);
-      final key = view.getInt32(4, Endian.little);
-      _events.add(_DoomEvent(type: type, data1: key));
-    }
   }
 
   WasmMemory _requireMemory() {

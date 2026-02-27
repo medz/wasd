@@ -7,6 +7,7 @@ void main() {
     await tester.pumpWidget(const DoomWindowApp());
     await tester.pump();
 
-    expect(find.text('Doom Wasm Window'), findsOneWidget);
+    expect(find.text('DOOM // WASD'), findsWidgets);
+    expect(find.textContaining('Mission Briefing'), findsOneWidget);
   });
 }

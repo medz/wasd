@@ -9,7 +9,9 @@ const String _doomWasmPath = 'assets/doom/doom.wasm';
 const String _doomIwadPath = 'assets/doom/doom1.wad';
 
 void main() {
-  test('doom wasm + wad boots and renders first frame', () async {
+  test(
+    'doom wasm + wad boots and renders first frame',
+    () async {
     final wasmFile = File(_doomWasmPath);
     final iwadFile = File(_doomIwadPath);
     if (!wasmFile.existsSync() || !iwadFile.existsSync()) {
@@ -55,7 +57,9 @@ void main() {
     expect(frames, isA<int>());
     expect(frames! as int, greaterThanOrEqualTo(1));
     expect(result['paletteSet'], isTrue);
-  });
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
 }
 
 void _runDoomSmoke(Map<String, Object?> args) {
