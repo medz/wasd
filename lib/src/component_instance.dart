@@ -113,7 +113,7 @@ final class WasmComponentInstance {
     );
     _validateComponentImportRequirements(component, imports);
     final coreInstances = <WasmInstance>[];
-    if (component.coreInstances.isEmpty) {
+    if (component.coreInstances.isEmpty || component.hasOpaqueCoreInstances) {
       for (
         var moduleIndex = 0;
         moduleIndex < component.coreModules.length;

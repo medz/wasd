@@ -197,6 +197,52 @@ void main() {
         component.coreInstances.single.argumentInstanceIndices,
         orderedEquals(const <int>[0]),
       );
+      expect(component.hasOpaqueCoreInstances, isFalse);
+    });
+
+    test('marks opaque core-instance section entries with kind 0x01', () {
+      final componentBytes = Uint8List.fromList(<int>[
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x0d,
+        0x00,
+        0x01,
+        0x00,
+        // section 1: one core module payload
+        0x01,
+        0x08,
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        // section 2:
+        // - declaration 0: core instance from-exports (kind 0x01), zero exports
+        // - declaration 1: core instance instantiate module 0, no args
+        0x02,
+        0x06,
+        0x02,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+      ]);
+
+      final component = WasmComponent.decode(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
+      expect(component.coreInstances, hasLength(1));
+      expect(component.coreInstances.single.moduleIndex, 0);
+      expect(component.coreInstances.single.argumentInstanceIndices, isEmpty);
+      expect(component.hasOpaqueCoreInstances, isTrue);
     });
 
     test('decodes core-instance named instantiate args in official layout', () {

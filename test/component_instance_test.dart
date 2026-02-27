@@ -84,6 +84,38 @@ void main() {
       expect(() => instance.invokeCore('one'), throwsA(isA<ArgumentError>()));
     });
 
+    test(
+      'falls back to module-order instantiation when core-instance declarations include opaque entries',
+      () {
+        final baseComponent = _componentWithCoreModules(<Uint8List>[
+          _coreModuleConstI32(name: 'one', value: 1),
+          _coreModuleConstI32(name: 'two', value: 2),
+        ]);
+        final opaqueCoreInstanceSectionPayload = <int>[
+          ..._u32Leb(2),
+          0x01,
+          ..._u32Leb(0),
+          0x00,
+          ..._u32Leb(1),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x02, opaqueCoreInstanceSectionPayload),
+        ]);
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+
+        expect(instance.component.hasOpaqueCoreInstances, isTrue);
+        expect(instance.coreInstances, hasLength(2));
+        expect(instance.invokeCore('one', moduleIndex: 0), 1);
+        expect(instance.invokeCore('two', moduleIndex: 1), 2);
+      },
+    );
+
     test('accepts declared core-instance argument dependency indexes', () {
       final componentBytes = _componentWithCoreModules(
         <Uint8List>[

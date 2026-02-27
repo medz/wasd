@@ -187,6 +187,7 @@ final class WasmComponent {
     required this.sections,
     required this.coreModules,
     required this.coreInstances,
+    required this.hasOpaqueCoreInstances,
     required this.coreExportAliases,
     required this.importRequirements,
     required this.coreInstanceAliases,
@@ -200,6 +201,7 @@ final class WasmComponent {
   final List<WasmComponentSection> sections;
   final List<Uint8List> coreModules;
   final List<WasmComponentCoreInstance> coreInstances;
+  final bool hasOpaqueCoreInstances;
   final List<WasmComponentCoreExportAlias> coreExportAliases;
   final List<WasmComponentImportRequirement> importRequirements;
   final List<WasmComponentCoreInstanceAlias> coreInstanceAliases;
@@ -264,6 +266,7 @@ final class WasmComponent {
     final coreInstanceAliases = <WasmComponentCoreInstanceAlias>[];
     final typeDeclarations = <WasmComponentTypeDeclaration>[];
     final typeBindings = <WasmComponentTypeBinding>[];
+    var hasOpaqueCoreInstances = false;
 
     while (!reader.isEOF) {
       final id = reader.readByte();
@@ -279,15 +282,21 @@ final class WasmComponent {
       }
     }
 
-    if (_shouldDecodeLegacyStructuredSections(sections)) {
+    final decodeLegacyStructuredSections =
+        _shouldDecodeLegacyStructuredSections(sections);
+    if (decodeLegacyStructuredSections) {
       for (final section in sections) {
         final payload = section.payload;
         if (section.id == 0x02) {
           _tryDecodeComponentSection(
             bestEffort: bestEffort,
-            decode: () => coreInstances.addAll(
-              _decodeCoreInstanceSectionPayload(payload),
-            ),
+            decode: () {
+              final decodeResult = _decodeCoreInstanceSectionPayload(payload);
+              coreInstances.addAll(decodeResult.instances);
+              if (decodeResult.hasOpaqueKinds) {
+                hasOpaqueCoreInstances = true;
+              }
+            },
           );
         } else if (section.id == 0x03) {
           _tryDecodeComponentSection(
@@ -334,6 +343,27 @@ final class WasmComponent {
         ),
       );
     }
+    if (!decodeLegacyStructuredSections) {
+      for (final section in sections) {
+        if (section.id != 0x02) {
+          continue;
+        }
+        try {
+          final decodeResult = _decodeCoreInstanceSectionPayload(
+            section.payload,
+          );
+          coreInstances.addAll(decodeResult.instances);
+          if (decodeResult.hasOpaqueKinds) {
+            hasOpaqueCoreInstances = true;
+          }
+        } on UnsupportedError {
+          hasOpaqueCoreInstances = true;
+          coreInstances.clear();
+        } on FormatException {
+          // Official-layout core-instance forms may diverge; preserve passthrough.
+        }
+      }
+    }
 
     return WasmComponent._(
       sections: List<WasmComponentSection>.unmodifiable(sections),
@@ -341,6 +371,7 @@ final class WasmComponent {
       coreInstances: List<WasmComponentCoreInstance>.unmodifiable(
         coreInstances,
       ),
+      hasOpaqueCoreInstances: hasOpaqueCoreInstances,
       coreExportAliases: List<WasmComponentCoreExportAlias>.unmodifiable(
         coreExportAliases,
       ),
@@ -374,12 +405,12 @@ final class WasmComponent {
     }
   }
 
-  static List<WasmComponentCoreInstance> _decodeCoreInstanceSectionPayload(
-    Uint8List payload,
-  ) {
+  static ({List<WasmComponentCoreInstance> instances, bool hasOpaqueKinds})
+  _decodeCoreInstanceSectionPayload(Uint8List payload) {
     final reader = ByteReader(payload);
     final count = reader.readVarUint32();
     final instances = <WasmComponentCoreInstance>[];
+    var hasOpaqueKinds = false;
     for (var i = 0; i < count; i++) {
       final kind = reader.readByte();
       switch (kind) {
@@ -397,6 +428,7 @@ final class WasmComponent {
             ),
           );
         case 0x01:
+          hasOpaqueKinds = true;
           final exportCount = reader.readVarUint32();
           for (var j = 0; j < exportCount; j++) {
             _readName(reader);
@@ -414,7 +446,7 @@ final class WasmComponent {
         'Trailing bytes in component core-instance section payload.',
       );
     }
-    return instances;
+    return (instances: instances, hasOpaqueKinds: hasOpaqueKinds);
   }
 
   static List<int> _readCoreInstanceArgumentIndices(
