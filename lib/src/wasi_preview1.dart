@@ -1797,6 +1797,30 @@ final class WasiPreview1 {
     }
 
     final memory = _requireMemory();
+    final inputBytes = _checkedByteLength(
+      count: nSubscriptions,
+      elementSize: _subscriptionSize,
+    );
+    final outputBytes = _checkedByteLength(
+      count: nSubscriptions,
+      elementSize: _eventSize,
+    );
+    if (inputBytes == null ||
+        outputBytes == null ||
+        !_isValidMemoryRange(
+          memory: memory,
+          offset: inPtr,
+          length: inputBytes,
+        ) ||
+        !_isValidMemoryRange(
+          memory: memory,
+          offset: outPtr,
+          length: outputBytes,
+        ) ||
+        !_isValidMemoryRange(memory: memory, offset: nEventsPtr, length: 4)) {
+      return _errnoFault;
+    }
+
     final subscriptions = <_PollSubscription>[];
     try {
       for (var i = 0; i < nSubscriptions; i++) {
@@ -1910,6 +1934,16 @@ final class WasiPreview1 {
               );
               continue;
             }
+            if ((entry.rightsBase & _rightFdRead) == 0) {
+              readyEvents.add(
+                _PollReadyEvent(
+                  userdata: subscription.userdata,
+                  eventType: _eventTypeFdRead,
+                  errno: _errnoNotcapable,
+                ),
+              );
+              continue;
+            }
             final nbytes = _availableReadBytes(entry: entry);
             final ready = entry.kind == _FdKind.file || nbytes > 0;
             if (ready) {
@@ -1934,6 +1968,16 @@ final class WasiPreview1 {
                   userdata: subscription.userdata,
                   eventType: _eventTypeFdWrite,
                   errno: _errnoBadf,
+                ),
+              );
+              continue;
+            }
+            if ((entry.rightsBase & _rightFdWrite) == 0) {
+              readyEvents.add(
+                _PollReadyEvent(
+                  userdata: subscription.userdata,
+                  eventType: _eventTypeFdWrite,
+                  errno: _errnoNotcapable,
                 ),
               );
               continue;
@@ -1981,7 +2025,8 @@ final class WasiPreview1 {
 
   Object? _schedYield(List<Object?> args) {
     if (args.isNotEmpty) {
-      // Ignore extra values to stay permissive with host adapters.
+      // Preview1 has no sched_yield parameters; keep this permissive for
+      // host adapters that may pass spurious extras.
     }
     return _errnoSuccess;
   }
@@ -2222,6 +2267,32 @@ final class WasiPreview1 {
       return null;
     }
     return end.toInt();
+  }
+
+  static int? _checkedByteLength({
+    required int count,
+    required int elementSize,
+  }) {
+    if (count < 0 || elementSize < 0) {
+      return null;
+    }
+    final total = BigInt.from(count) * BigInt.from(elementSize);
+    if (total > BigInt.from(0x7fffffff)) {
+      return null;
+    }
+    return total.toInt();
+  }
+
+  static bool _isValidMemoryRange({
+    required WasmMemory memory,
+    required int offset,
+    required int length,
+  }) {
+    if (offset < 0 || length < 0) {
+      return false;
+    }
+    final end = BigInt.from(offset) + BigInt.from(length);
+    return end <= BigInt.from(memory.lengthInBytes);
   }
 
   Uint8List _readInput(int maxBytes) {
