@@ -644,8 +644,24 @@ final class WasmComponentInstance {
               'must bind to a function type declaration.',
             );
           }
+          final expectedParameters = _componentTypesToSignatures(
+            typeCodes: parameterTypeCodes,
+            typeSignatures: declaration.parameterTypeSignatures,
+          );
+          final expectedResults = _componentTypesToSignatures(
+            typeCodes: resultTypeCodes,
+            typeSignatures: declaration.resultTypeSignatures,
+          );
           final importedFunctionType = imports.functionTypes[key];
           if (importedFunctionType == null) {
+            if (_hasNonNumericValueSignature(expectedParameters) ||
+                _hasNonNumericValueSignature(expectedResults)) {
+              throw UnsupportedError(
+                'Component function import '
+                '`${requirement.componentImportName}` uses non-numeric typed '
+                'signatures and requires `imports.functionTypes[$key]`.',
+              );
+            }
             break;
           }
           if (!importedFunctionType.isFunctionType) {
@@ -655,18 +671,28 @@ final class WasmComponentInstance {
             );
           }
           _validateExpectedFunctionSignaturesAgainstCoreType(
-            expectedParameters: _componentTypesToSignatures(
-              typeCodes: parameterTypeCodes,
-              typeSignatures: declaration.parameterTypeSignatures,
-            ),
-            expectedResults: _componentTypesToSignatures(
-              typeCodes: resultTypeCodes,
-              typeSignatures: declaration.resultTypeSignatures,
-            ),
+            expectedParameters: expectedParameters,
+            expectedResults: expectedResults,
             actualType: importedFunctionType,
             context:
                 'Component function import '
                 '`${requirement.componentImportName}` ($key)',
+          );
+          _validateReferenceFunctionCarrierTypes(
+            expectedSignatures: expectedParameters,
+            carrierTypes: importedFunctionType.params,
+            context:
+                'Component function import '
+                '`${requirement.componentImportName}` ($key)',
+            kind: 'parameter',
+          );
+          _validateReferenceFunctionCarrierTypes(
+            expectedSignatures: expectedResults,
+            carrierTypes: importedFunctionType.results,
+            context:
+                'Component function import '
+                '`${requirement.componentImportName}` ($key)',
+            kind: 'result',
           );
           break;
       }
@@ -1571,6 +1597,35 @@ final class WasmComponentInstance {
       }
     }
     return true;
+  }
+
+  static bool _hasNonNumericValueSignature(List<String> signatures) {
+    for (final signature in signatures) {
+      if (!_isNumericValueTypeSignature(signature)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static void _validateReferenceFunctionCarrierTypes({
+    required List<String> expectedSignatures,
+    required List<WasmValueType> carrierTypes,
+    required String context,
+    required String kind,
+  }) {
+    for (var i = 0; i < expectedSignatures.length; i++) {
+      final signature = expectedSignatures[i];
+      if (_isNumericValueTypeSignature(signature)) {
+        continue;
+      }
+      if (carrierTypes[i] != WasmValueType.i32) {
+        throw FormatException(
+          '$context uses reference signature $signature at $kind index $i, '
+          'but carrier type is ${carrierTypes[i].name} (expected i32).',
+        );
+      }
+    }
   }
 
   static WasmImports _composeCoreInstanceImports({

@@ -1528,6 +1528,164 @@ void main() {
     );
 
     test(
+      'requires functionTypes for typed function imports with reference signatures',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'refFn',
+              moduleName: 'host',
+              fieldName: 'ref',
+              kind: 0x00,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('fn_ref'),
+          0x01,
+          ..._u32Leb(0), // params
+          ..._u32Leb(1), // results
+          0x63, // ref null
+          0x00, // heap type = type index 0
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: WasmImports(
+              functions: {WasmImports.key('host', 'ref'): (_) => 0},
+            ),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsA(isA<UnsupportedError>()),
+        );
+      },
+    );
+
+    test(
+      'validates reference typed function imports against provided functionTypes',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'refFn',
+              moduleName: 'host',
+              fieldName: 'ref',
+              kind: 0x00,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('fn_ref'),
+          0x01,
+          ..._u32Leb(0), // params
+          ..._u32Leb(1), // results
+          0x63, // ref null
+          0x00, // heap type = type index 0
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          imports: WasmImports(
+            functions: {WasmImports.key('host', 'ref'): (_) => 0},
+            functionTypes: {
+              WasmImports.key('host', 'ref'): const WasmFunctionType(
+                params: [],
+                results: [WasmValueType.i32],
+                kind: WasmCompositeTypeKind.function,
+                resultTypeSignatures: ['6300'],
+              ),
+            },
+          ),
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.invokeCore('one'), 1);
+      },
+    );
+
+    test(
+      'rejects reference typed function imports when functionTypes carrier is non-i32',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'refFn',
+              moduleName: 'host',
+              fieldName: 'ref',
+              kind: 0x00,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('fn_ref'),
+          0x01,
+          ..._u32Leb(0), // params
+          ..._u32Leb(1), // results
+          0x63, // ref null
+          0x00, // heap type = type index 0
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: WasmImports(
+              functions: {WasmImports.key('host', 'ref'): (_) => 0},
+              functionTypes: {
+                WasmImports.key('host', 'ref'): const WasmFunctionType(
+                  params: [],
+                  results: [WasmValueType.i64],
+                  kind: WasmCompositeTypeKind.function,
+                  resultTypeSignatures: ['6300'],
+                ),
+              },
+            ),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
+
+    test(
       'rejects mismatched typed memory import requirements against core module signatures',
       () {
         final baseComponent = _componentWithCoreModules(
