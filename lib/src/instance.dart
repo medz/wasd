@@ -1870,6 +1870,50 @@ final class WasmInstance {
             _simdF64x2Max(stack);
             pc++;
 
+          case Opcodes.f32x4ConvertI32x4S:
+            _simdF32x4ConvertI32x4S(stack);
+            pc++;
+
+          case Opcodes.f32x4ConvertI32x4U:
+            _simdF32x4ConvertI32x4U(stack);
+            pc++;
+
+          case Opcodes.i32x4TruncSatF32x4S:
+          case Opcodes.i32x4RelaxedTruncF32x4S:
+            _simdI32x4TruncSatF32x4S(stack);
+            pc++;
+
+          case Opcodes.i32x4TruncSatF32x4U:
+          case Opcodes.i32x4RelaxedTruncF32x4U:
+            _simdI32x4TruncSatF32x4U(stack);
+            pc++;
+
+          case Opcodes.i32x4TruncSatF64x2SZero:
+          case Opcodes.i32x4RelaxedTruncF64x2SZero:
+            _simdI32x4TruncSatF64x2SZero(stack);
+            pc++;
+
+          case Opcodes.i32x4TruncSatF64x2UZero:
+          case Opcodes.i32x4RelaxedTruncF64x2UZero:
+            _simdI32x4TruncSatF64x2UZero(stack);
+            pc++;
+
+          case Opcodes.f64x2ConvertLowI32x4S:
+            _simdF64x2ConvertLowI32x4S(stack);
+            pc++;
+
+          case Opcodes.f64x2ConvertLowI32x4U:
+            _simdF64x2ConvertLowI32x4U(stack);
+            pc++;
+
+          case Opcodes.f32x4DemoteF64x2Zero:
+            _simdF32x4DemoteF64x2Zero(stack);
+            pc++;
+
+          case Opcodes.f64x2PromoteLowF32x4:
+            _simdF64x2PromoteLowF32x4(stack);
+            pc++;
+
           case Opcodes.i32Eqz:
             final value = _popValue(stack, 'i32.eqz').castTo(WasmValueType.i32);
             stack.add(WasmValue.i32(value.asI32() == 0 ? 1 : 0));
@@ -8375,6 +8419,164 @@ final class WasmInstance {
       } else {
         _writeAsyncSubsetLaneU64(resultData, offset, lhsBits);
       }
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF32x4ConvertI32x4S(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(stack, opName: 'f32x4.convert_i32x4_s');
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      resultData.setFloat32(
+        offset,
+        inputData.getInt32(offset, Endian.little).toDouble(),
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF32x4ConvertI32x4U(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(stack, opName: 'f32x4.convert_i32x4_u');
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      resultData.setFloat32(
+        offset,
+        inputData.getUint32(offset, Endian.little).toDouble(),
+        Endian.little,
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4TruncSatF32x4S(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(stack, opName: 'i32x4.trunc_sat_f32x4_s');
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final laneValue = _truncSatToI32S(
+        inputData.getFloat32(offset, Endian.little),
+      );
+      resultData.setUint32(offset, laneValue.toUnsigned(32), Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4TruncSatF32x4U(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(stack, opName: 'i32x4.trunc_sat_f32x4_u');
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      final laneValue = _truncSatToI32U(
+        inputData.getFloat32(offset, Endian.little),
+      );
+      resultData.setUint32(offset, laneValue.toUnsigned(32), Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4TruncSatF64x2SZero(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.trunc_sat_f64x2_s_zero',
+    );
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      final laneValue = _truncSatToI32S(
+        inputData.getFloat64(offset, Endian.little),
+      );
+      resultData.setUint32(lane * 4, laneValue.toUnsigned(32), Endian.little);
+    }
+    resultData.setUint32(8, 0, Endian.little);
+    resultData.setUint32(12, 0, Endian.little);
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4TruncSatF64x2UZero(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.trunc_sat_f64x2_u_zero',
+    );
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final offset = lane * 8;
+      final laneValue = _truncSatToI32U(
+        inputData.getFloat64(offset, Endian.little),
+      );
+      resultData.setUint32(lane * 4, laneValue.toUnsigned(32), Endian.little);
+    }
+    resultData.setUint32(8, 0, Endian.little);
+    resultData.setUint32(12, 0, Endian.little);
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2ConvertLowI32x4S(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(
+      stack,
+      opName: 'f64x2.convert_low_i32x4_s',
+    );
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final value = inputData.getInt32(lane * 4, Endian.little).toDouble();
+      resultData.setFloat64(lane * 8, value, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2ConvertLowI32x4U(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(
+      stack,
+      opName: 'f64x2.convert_low_i32x4_u',
+    );
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final value = inputData.getUint32(lane * 4, Endian.little).toDouble();
+      resultData.setFloat64(lane * 8, value, Endian.little);
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF32x4DemoteF64x2Zero(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(stack, opName: 'f32x4.demote_f64x2_zero');
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final value = inputData.getFloat64(lane * 8, Endian.little);
+      _setAsyncSubsetF32LaneCanonical(resultData, lane * 4, value);
+    }
+    resultData.setUint32(8, 0, Endian.little);
+    resultData.setUint32(12, 0, Endian.little);
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2PromoteLowF32x4(List<WasmValue> stack) {
+    final input = _popAsyncSubsetV128(stack, opName: 'f64x2.promote_low_f32x4');
+    final inputData = ByteData.sublistView(input);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final value = inputData.getFloat32(lane * 4, Endian.little);
+      _setAsyncSubsetF64LaneCanonical(resultData, lane * 8, value);
     }
     _pushAsyncSubsetV128(stack, result);
   }

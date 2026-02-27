@@ -8798,6 +8798,264 @@ void main() {
     });
 
     test(
+      'supports SIMD conversion/trunc/demote/promote opcodes in async import call chains',
+      () async {
+        List<int> f32x4Bytes(List<double> lanes) {
+          final data = ByteData(16);
+          for (var i = 0; i < 4; i++) {
+            data.setFloat32(i * 4, lanes[i], Endian.little);
+          }
+          return data.buffer.asUint8List();
+        }
+
+        List<int> f64x2Bytes(List<double> lanes) {
+          final data = ByteData(16);
+          for (var i = 0; i < 2; i++) {
+            data.setFloat64(i * 8, lanes[i], Endian.little);
+          }
+          return data.buffer.asUint8List();
+        }
+
+        List<int> i32x4Bytes(List<int> lanes) {
+          final data = ByteData(16);
+          for (var i = 0; i < 4; i++) {
+            data.setUint32(i * 4, lanes[i].toUnsigned(32), Endian.little);
+          }
+          return data.buffer.asUint8List();
+        }
+
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [0, 0, 0, 0, 0],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._fdBytes(Opcodes.v128Const, i32x4Bytes([1, -2, 3, -4])),
+                ..._fdBytes(Opcodes.f32x4ConvertI32x4S, []),
+                ..._fdBytes(Opcodes.i32x4TruncSatF32x4S, []),
+                ..._fdBytes(Opcodes.v128Const, i32x4Bytes([1, -2, 3, -4])),
+                ..._fdBytes(Opcodes.i32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                ..._fdBytes(Opcodes.v128Const, i32x4Bytes([1, -2, 3, -4])),
+                ..._fdBytes(Opcodes.f32x4ConvertI32x4S, []),
+                ..._fdBytes(Opcodes.i32x4RelaxedTruncF32x4S, []),
+                ..._fdBytes(Opcodes.v128Const, i32x4Bytes([1, -2, 3, -4])),
+                ..._fdBytes(Opcodes.i32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._fdBytes(
+                  Opcodes.v128Const,
+                  i32x4Bytes([1, 0x80000000, -1, 123]),
+                ),
+                ..._fdBytes(Opcodes.f32x4ConvertI32x4U, []),
+                ..._fdBytes(Opcodes.i32x4TruncSatF32x4U, []),
+                ..._fdBytes(
+                  Opcodes.v128Const,
+                  i32x4Bytes([1, 0x80000000, -1, 123]),
+                ),
+                ..._fdBytes(Opcodes.i32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                ..._fdBytes(
+                  Opcodes.v128Const,
+                  i32x4Bytes([1, 0x80000000, -1, 123]),
+                ),
+                ..._fdBytes(Opcodes.f32x4ConvertI32x4U, []),
+                ..._fdBytes(Opcodes.i32x4RelaxedTruncF32x4U, []),
+                ..._fdBytes(
+                  Opcodes.v128Const,
+                  i32x4Bytes([1, 0x80000000, -1, 123]),
+                ),
+                ..._fdBytes(Opcodes.i32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._fdBytes(Opcodes.v128Const, f64x2Bytes([1.9, -2.4])),
+                ..._fdBytes(Opcodes.i32x4TruncSatF64x2SZero, []),
+                ..._fdBytes(Opcodes.v128Const, i32x4Bytes([1, -2, 0, 0])),
+                ..._fdBytes(Opcodes.i32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                ..._fdBytes(Opcodes.v128Const, f64x2Bytes([1.9, -2.4])),
+                ..._fdBytes(Opcodes.i32x4RelaxedTruncF64x2SZero, []),
+                ..._fdBytes(Opcodes.v128Const, i32x4Bytes([1, -2, 0, 0])),
+                ..._fdBytes(Opcodes.i32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                ..._fdBytes(Opcodes.v128Const, f64x2Bytes([1.9, 1e30])),
+                ..._fdBytes(Opcodes.i32x4TruncSatF64x2UZero, []),
+                ..._fdBytes(Opcodes.v128Const, i32x4Bytes([1, -1, 0, 0])),
+                ..._fdBytes(Opcodes.i32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                ..._fdBytes(Opcodes.v128Const, f64x2Bytes([1.9, 1e30])),
+                ..._fdBytes(Opcodes.i32x4RelaxedTruncF64x2UZero, []),
+                ..._fdBytes(Opcodes.v128Const, i32x4Bytes([1, -1, 0, 0])),
+                ..._fdBytes(Opcodes.i32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._fdBytes(Opcodes.v128Const, i32x4Bytes([7, -9, 111, 222])),
+                ..._fdBytes(Opcodes.f64x2ConvertLowI32x4S, []),
+                ..._fdBytes(Opcodes.i32x4TruncSatF64x2SZero, []),
+                ..._fdBytes(Opcodes.v128Const, i32x4Bytes([7, -9, 0, 0])),
+                ..._fdBytes(Opcodes.i32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                ..._fdBytes(
+                  Opcodes.v128Const,
+                  i32x4Bytes([0x80000000, -1, 0, 0]),
+                ),
+                ..._fdBytes(Opcodes.f64x2ConvertLowI32x4U, []),
+                ..._fdBytes(Opcodes.i32x4TruncSatF64x2UZero, []),
+                ..._fdBytes(
+                  Opcodes.v128Const,
+                  i32x4Bytes([0x80000000, -1, 0, 0]),
+                ),
+                ..._fdBytes(Opcodes.i32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._fdBytes(Opcodes.v128Const, f64x2Bytes([3.5, -4.25])),
+                ..._fdBytes(Opcodes.f32x4DemoteF64x2Zero, []),
+                ..._fdBytes(Opcodes.v128Const, f32x4Bytes([3.5, -4.25, 0, 0])),
+                ..._fdBytes(Opcodes.f32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                ..._fdBytes(
+                  Opcodes.v128Const,
+                  f32x4Bytes([1.25, -2.5, 99.0, 88.0]),
+                ),
+                ..._fdBytes(Opcodes.f64x2PromoteLowF32x4, []),
+                ..._fdBytes(Opcodes.v128Const, f64x2Bytes([1.25, -2.5])),
+                ..._fdBytes(Opcodes.f64x2Eq, []),
+                ..._fdBytes(Opcodes.i64x2AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'supportsF32x4ConvertI32x4S',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+            _ExportSpec(
+              name: 'supportsF32x4ConvertI32x4U',
+              kind: WasmExportKind.function,
+              index: 2,
+            ),
+            _ExportSpec(
+              name: 'supportsI32x4TruncSatF64x2AndRelaxed',
+              kind: WasmExportKind.function,
+              index: 3,
+            ),
+            _ExportSpec(
+              name: 'supportsF64x2ConvertLowI32x4',
+              kind: WasmExportKind.function,
+              index: 4,
+            ),
+            _ExportSpec(
+              name: 'supportsDemotePromote',
+              kind: WasmExportKind.function,
+              index: 5,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          features: const WasmFeatureSet(simd: true),
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(
+          await instance.invokeI32Async('supportsF32x4ConvertI32x4S', [41]),
+          1,
+        );
+        expect(
+          await instance.invokeI32Async('supportsF32x4ConvertI32x4U', [41]),
+          1,
+        );
+        expect(
+          await instance.invokeI32Async(
+            'supportsI32x4TruncSatF64x2AndRelaxed',
+            [41],
+          ),
+          1,
+        );
+        expect(
+          await instance.invokeI32Async('supportsF64x2ConvertLowI32x4', [41]),
+          1,
+        );
+        expect(await instance.invokeI32Async('supportsDemotePromote', [41]), 1);
+      },
+    );
+
+    test(
       'supports f32x4/f64x2 pmin and pmax in async import call chains',
       () async {
         List<int> f32x4SplatBytes(double value) {
