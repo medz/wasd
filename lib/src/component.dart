@@ -204,6 +204,35 @@ final class WasmComponent {
     Uint8List componentBytes, {
     WasmFeatureSet features = const WasmFeatureSet(),
   }) {
+    return _decodeInternal(
+      componentBytes,
+      features: features,
+      bestEffort: false,
+    );
+  }
+
+  /// Best-effort decoder for component binaries produced by fast-moving
+  /// upstream tooling/testsuites.
+  ///
+  /// Unlike [decode], this mode swallows unsupported/malformed structured
+  /// section decodes and preserves only sections that were successfully parsed.
+  /// Raw section bytes are still retained in [sections].
+  static WasmComponent decodeBestEffort(
+    Uint8List componentBytes, {
+    WasmFeatureSet features = const WasmFeatureSet(),
+  }) {
+    return _decodeInternal(
+      componentBytes,
+      features: features,
+      bestEffort: true,
+    );
+  }
+
+  static WasmComponent _decodeInternal(
+    Uint8List componentBytes, {
+    required WasmFeatureSet features,
+    required bool bestEffort,
+  }) {
     if (!features.componentModel) {
       throw UnsupportedError(
         'Component model binary requires `componentModel` feature to be enabled.',
@@ -238,26 +267,53 @@ final class WasmComponent {
       if (id == 0x01 && _isCoreModulePayload(payload)) {
         coreModules.add(Uint8List.fromList(payload));
       } else if (id == 0x02) {
-        coreInstances.addAll(_decodeCoreInstanceSectionPayload(payload));
+        _tryDecodeComponentSection(
+          bestEffort: bestEffort,
+          decode: () =>
+              coreInstances.addAll(_decodeCoreInstanceSectionPayload(payload)),
+        );
       } else if (id == 0x03) {
-        coreExportAliases.addAll(_decodeCoreExportAliasSectionPayload(payload));
+        _tryDecodeComponentSection(
+          bestEffort: bestEffort,
+          decode: () => coreExportAliases.addAll(
+            _decodeCoreExportAliasSectionPayload(payload),
+          ),
+        );
       } else if (id == 0x04) {
-        importRequirements.addAll(_decodeImportSectionPayload(payload));
+        _tryDecodeComponentSection(
+          bestEffort: bestEffort,
+          decode: () =>
+              importRequirements.addAll(_decodeImportSectionPayload(payload)),
+        );
       } else if (id == 0x05) {
-        coreInstanceAliases.addAll(
-          _decodeCoreInstanceAliasSectionPayload(payload),
+        _tryDecodeComponentSection(
+          bestEffort: bestEffort,
+          decode: () => coreInstanceAliases.addAll(
+            _decodeCoreInstanceAliasSectionPayload(payload),
+          ),
         );
       } else if (id == 0x06) {
-        typeDeclarations.addAll(_decodeTypeSectionPayload(payload));
+        _tryDecodeComponentSection(
+          bestEffort: bestEffort,
+          decode: () =>
+              typeDeclarations.addAll(_decodeTypeSectionPayload(payload)),
+        );
       } else if (id == 0x07) {
-        typeBindings.addAll(_decodeTypeBindingSectionPayload(payload));
+        _tryDecodeComponentSection(
+          bestEffort: bestEffort,
+          decode: () =>
+              typeBindings.addAll(_decodeTypeBindingSectionPayload(payload)),
+        );
       }
     }
-    _validateTypeBindings(
-      typeBindings: typeBindings,
-      typeDeclarations: typeDeclarations,
-      importRequirements: importRequirements,
-      coreExportAliases: coreExportAliases,
+    _tryDecodeComponentSection(
+      bestEffort: bestEffort,
+      decode: () => _validateTypeBindings(
+        typeBindings: typeBindings,
+        typeDeclarations: typeDeclarations,
+        importRequirements: importRequirements,
+        coreExportAliases: coreExportAliases,
+      ),
     );
 
     return WasmComponent._(
@@ -280,6 +336,23 @@ final class WasmComponent {
       ),
       typeBindings: List<WasmComponentTypeBinding>.unmodifiable(typeBindings),
     );
+  }
+
+  static void _tryDecodeComponentSection({
+    required bool bestEffort,
+    required void Function() decode,
+  }) {
+    if (!bestEffort) {
+      decode();
+      return;
+    }
+    try {
+      decode();
+    } on UnsupportedError {
+      // Best-effort mode keeps raw section bytes and skips this structured view.
+    } on FormatException {
+      // Best-effort mode keeps raw section bytes and skips this structured view.
+    }
   }
 
   static List<WasmComponentCoreInstance> _decodeCoreInstanceSectionPayload(
