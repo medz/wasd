@@ -237,13 +237,11 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
 
   KeyEventResult _onKeyEvent(KeyEvent event) {
     if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.f1) {
-      setState(() {
-        _showHelpOverlay = !_showHelpOverlay;
-      });
+      _toggleHelpOverlay();
       return KeyEventResult.handled;
     }
     if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.f5) {
-      _startDoom();
+      _restartDoom();
       return KeyEventResult.handled;
     }
 
@@ -325,136 +323,167 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
     port.send(<int>[eventType, keyCode]);
   }
 
+  void _toggleHelpOverlay() {
+    setState(() {
+      _showHelpOverlay = !_showHelpOverlay;
+    });
+    _focusNode.requestFocus();
+  }
+
+  void _dismissHelpOverlay() {
+    if (!_showHelpOverlay) {
+      return;
+    }
+    setState(() {
+      _showHelpOverlay = false;
+    });
+    _focusNode.requestFocus();
+  }
+
+  void _restartDoom() {
+    _startDoom();
+    _focusNode.requestFocus();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xff040404),
-      body: GestureDetector(
-        onTap: _focusNode.requestFocus,
-        child: Focus(
-          focusNode: _focusNode,
-          autofocus: true,
-          onKeyEvent: (_, event) => _onKeyEvent(event),
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: DecoratedBox(
-                  decoration: const BoxDecoration(
-                    gradient: RadialGradient(
-                      center: Alignment(0, -0.15),
-                      radius: 1.2,
-                      colors: <Color>[
-                        Color(0xff22160f),
-                        Color(0xff130a06),
-                        Color(0xff050303),
-                      ],
+      body: Listener(
+        onPointerDown: (_) => _focusNode.requestFocus(),
+        behavior: HitTestBehavior.translucent,
+        child: GestureDetector(
+          onTap: _focusNode.requestFocus,
+          child: Focus(
+            focusNode: _focusNode,
+            autofocus: true,
+            onKeyEvent: (_, event) => _onKeyEvent(event),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: const BoxDecoration(
+                      gradient: RadialGradient(
+                        center: Alignment(0, -0.15),
+                        radius: 1.2,
+                        colors: <Color>[
+                          Color(0xff22160f),
+                          Color(0xff130a06),
+                          Color(0xff050303),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-              Center(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 72, 18, 120),
-                  child: AspectRatio(
-                    aspectRatio: _doomWidth / _doomHeight,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: Colors.black,
-                        border: Border.all(
-                          color: const Color(0xff9d5530),
-                          width: 2,
-                        ),
-                        boxShadow: const <BoxShadow>[
-                          BoxShadow(
-                            color: Colors.black87,
-                            blurRadius: 24,
-                            spreadRadius: 2,
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 72, 18, 120),
+                    child: AspectRatio(
+                      aspectRatio: _doomWidth / _doomHeight,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.black,
+                          border: Border.all(
+                            color: const Color(0xff9d5530),
+                            width: 2,
                           ),
-                        ],
-                      ),
-                      child: ClipRect(
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            _frameImage == null
-                                ? const _BootBackdrop()
-                                : RawImage(
-                                    image: _frameImage,
-                                    fit: BoxFit.fill,
-                                    filterQuality: FilterQuality.none,
+                          boxShadow: const <BoxShadow>[
+                            BoxShadow(
+                              color: Colors.black87,
+                              blurRadius: 24,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                        ),
+                        child: ClipRect(
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              _frameImage == null
+                                  ? const _BootBackdrop()
+                                  : RawImage(
+                                      image: _frameImage,
+                                      fit: BoxFit.fill,
+                                      filterQuality: FilterQuality.none,
+                                    ),
+                              IgnorePointer(
+                                child: CustomPaint(
+                                  painter: _ScanlineOverlayPainter(
+                                    opacity: _frameImage == null ? 0 : 0.12,
                                   ),
-                            IgnorePointer(
-                              child: CustomPaint(
-                                painter: _ScanlineOverlayPainter(
-                                  opacity: _frameImage == null ? 0 : 0.12,
                                 ),
                               ),
-                            ),
-                            if (_frameImage != null)
-                              const IgnorePointer(
-                                child: Center(
-                                  child: Text(
-                                    '+',
-                                    style: TextStyle(
-                                      color: Color(0x88f4b36a),
-                                      fontSize: 22,
-                                      fontWeight: FontWeight.w500,
+                              if (_frameImage != null)
+                                const IgnorePointer(
+                                  child: Center(
+                                    child: Text(
+                                      '+',
+                                      style: TextStyle(
+                                        color: Color(0x88f4b36a),
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.w500,
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              Positioned(
-                top: 20,
-                left: 20,
-                right: 20,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _TopStatusBar(
-                        runtimeLabel: _runtimeLabel,
-                        statusText: _status,
-                        fps: _fps,
-                        frameCount: _frames,
+                Positioned(
+                  top: 20,
+                  left: 20,
+                  right: 20,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _TopStatusBar(
+                          runtimeLabel: _runtimeLabel,
+                          fps: _fps,
+                          frameCount: _frames,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    _SmallKeycap(
-                      keyName: 'F1',
-                      description: _showHelpOverlay ? 'Hide Help' : 'Help',
-                    ),
-                    const SizedBox(width: 8),
-                    const _SmallKeycap(keyName: 'F5', description: 'Restart'),
-                  ],
-                ),
-              ),
-              Positioned(
-                left: 20,
-                right: 20,
-                bottom: 18,
-                child: _HudPanel(
-                  runtimeLabel: _runtimeLabel,
-                  statusText: _status,
-                  showHint: _frameImage != null,
-                ),
-              ),
-              if (_showHelpOverlay)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    ignoring: false,
-                    child: DecoratedBox(
-                      decoration: const BoxDecoration(color: Color(0xaa000000)),
-                      child: const Center(child: _HelpCard()),
-                    ),
+                      const SizedBox(width: 12),
+                      _SmallKeycap(
+                        keyName: 'F1',
+                        description: _showHelpOverlay ? 'Hide Help' : 'Help',
+                        onTap: _toggleHelpOverlay,
+                      ),
+                      const SizedBox(width: 8),
+                      _SmallKeycap(
+                        keyName: 'F5',
+                        description: 'Restart',
+                        onTap: _restartDoom,
+                      ),
+                    ],
                   ),
                 ),
-            ],
+                Positioned(
+                  left: 20,
+                  right: 20,
+                  bottom: 18,
+                  child: _HudPanel(
+                    runtimeLabel: _runtimeLabel,
+                    statusText: _status,
+                    showHint: _frameImage != null,
+                  ),
+                ),
+                if (_showHelpOverlay)
+                  Positioned.fill(
+                    child: GestureDetector(
+                      onTap: _dismissHelpOverlay,
+                      behavior: HitTestBehavior.opaque,
+                      child: const DecoratedBox(
+                        decoration: BoxDecoration(color: Color(0xaa000000)),
+                        child: Center(child: _HelpCard()),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -542,13 +571,11 @@ final class _ScanlineOverlayPainter extends CustomPainter {
 final class _TopStatusBar extends StatelessWidget {
   const _TopStatusBar({
     required this.runtimeLabel,
-    required this.statusText,
     required this.fps,
     required this.frameCount,
   });
 
   final String runtimeLabel;
-  final String statusText;
   final double fps;
   final int frameCount;
 
@@ -588,13 +615,6 @@ final class _TopStatusBar extends StatelessWidget {
                   Text('frames: $frameCount'),
                 ],
               ),
-              const SizedBox(height: 4),
-              Text(
-                statusText,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Color(0xffd8c3b0), fontSize: 12),
-              ),
             ],
           ),
         ),
@@ -604,14 +624,19 @@ final class _TopStatusBar extends StatelessWidget {
 }
 
 final class _SmallKeycap extends StatelessWidget {
-  const _SmallKeycap({required this.keyName, required this.description});
+  const _SmallKeycap({
+    required this.keyName,
+    required this.description,
+    this.onTap,
+  });
 
   final String keyName;
   final String description;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
+    final content = DecoratedBox(
       decoration: BoxDecoration(
         color: const Color(0xcc121212),
         border: Border.all(color: const Color(0xff6f3a1f), width: 1),
@@ -638,6 +663,18 @@ final class _SmallKeycap extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+    final callback = onTap;
+    if (callback == null) {
+      return content;
+    }
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: callback,
+        child: content,
       ),
     );
   }
