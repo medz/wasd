@@ -53,7 +53,7 @@ Wasm compile targets.
   - `environ_sizes_get`, `environ_get`
   - `clock_time_get`, `clock_res_get`, `random_get`
   - `poll_oneoff`, `sched_yield`, `proc_exit`
-  - `proc_raise` (default: `ENOSYS`; configurable via `procRaiseHandler`, where `int` => errno, `null` => `0`, and exceptions are propagated)
+  - `proc_raise` (configurable via `procRaiseMode`: `enosys` / `success` / `trap`)
   - `sock_accept`, `sock_recv`, `sock_send`, `sock_shutdown` (stubs: `ENOSYS`)
   - filesystem backend auto-selection via conditional import:
     - supports `dart:io`: use host-backed filesystem

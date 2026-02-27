@@ -11,7 +11,8 @@ import 'wasi_fs_auto.dart' as auto_fs;
 
 typedef WasiReadSource = Uint8List Function(int maxBytes);
 typedef WasiWriteSink = void Function(Uint8List bytes);
-typedef WasiProcRaiseHandler = Object? Function(int signal);
+
+enum WasiProcRaiseMode { enosys, success, trap }
 
 enum _FdKind { stdin, stdout, stderr, directory, file }
 
@@ -97,7 +98,7 @@ final class WasiPreview1 {
     Map<String, String> environment = const {},
     List<int> stdin = const [],
     this.stdinSource,
-    WasiProcRaiseHandler? procRaiseHandler,
+    this.procRaiseMode = WasiProcRaiseMode.enosys,
     WasiWriteSink? stdoutSink,
     WasiWriteSink? stderrSink,
     WasiFileSystem? fileSystem,
@@ -114,7 +115,6 @@ final class WasiPreview1 {
            (preferHostIo
                ? auto_fs.createAutoWasiFileSystem(ioRootPath: ioRootPath)
                : WasiInMemoryFileSystem()),
-       _procRaiseHandler = procRaiseHandler,
        _preopenedDirectories = Map.unmodifiable(
          preopenedDirectories.map(
            (fd, path) =>
@@ -128,10 +128,10 @@ final class WasiPreview1 {
   final Map<String, String> _environment;
   final Uint8List _stdinBuffer;
   final WasiReadSource? stdinSource;
+  final WasiProcRaiseMode procRaiseMode;
   final WasiWriteSink _stdoutSink;
   final WasiWriteSink _stderrSink;
   final WasiFileSystem _fileSystem;
-  final WasiProcRaiseHandler? _procRaiseHandler;
   final Map<int, String> _preopenedDirectories;
 
   WasmMemory? _memory;
@@ -1683,20 +1683,14 @@ final class WasiPreview1 {
 
   Object? _procRaise(List<Object?> args) {
     final signal = _asI32(args, 0, 'sig');
-    final handler = _procRaiseHandler;
-    if (handler == null) {
-      return _errnoNosys;
+    switch (procRaiseMode) {
+      case WasiProcRaiseMode.enosys:
+        return _errnoNosys;
+      case WasiProcRaiseMode.success:
+        return _errnoSuccess;
+      case WasiProcRaiseMode.trap:
+        throw WasiProcRaise(signal);
     }
-    final result = handler(signal);
-    if (result == null) {
-      return _errnoSuccess;
-    }
-    if (result is int) {
-      return result;
-    }
-    throw StateError(
-      'WASI proc_raise handler must return an int errno, null, or throw.',
-    );
   }
 
   Object? _procExit(List<Object?> args) {
@@ -2128,4 +2122,13 @@ final class WasiProcExit implements Exception {
 
   @override
   String toString() => 'WasiProcExit($exitCode)';
+}
+
+final class WasiProcRaise implements Exception {
+  const WasiProcRaise(this.signal);
+
+  final int signal;
+
+  @override
+  String toString() => 'WasiProcRaise(signal: $signal)';
 }

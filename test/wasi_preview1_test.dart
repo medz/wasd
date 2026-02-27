@@ -1786,44 +1786,23 @@ void main() {
       },
     );
 
-    test('proc_raise handler int return is used as errno', () {
-      int? seenSignal;
-      final wasi = WasiPreview1(
-        procRaiseHandler: (signal) {
-          seenSignal = signal;
-          return 28;
-        },
-      );
+    test('proc_raise mode success returns errno 0', () {
+      final wasi = WasiPreview1(procRaiseMode: WasiProcRaiseMode.success);
       final wasm = _buildProcRaiseModule(signal: 15);
       final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
 
-      expect(instance.invokeI32('run'), 28);
-      expect(seenSignal, 15);
+      expect(instance.invokeI32('run'), 0);
     });
 
-    test('proc_raise handler null return is treated as errno 0', () {
-      var callCount = 0;
-      final wasi = WasiPreview1(
-        procRaiseHandler: (signal) {
-          callCount++;
-          expect(signal, 9);
-          return null;
-        },
-      );
+    test('proc_raise mode trap throws WasiProcRaise with signal', () {
+      final wasi = WasiPreview1(procRaiseMode: WasiProcRaiseMode.trap);
       final wasm = _buildProcRaiseModule(signal: 9);
       final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
 
-      expect(instance.invokeI32('run'), 0);
-      expect(callCount, 1);
-    });
-
-    test('proc_raise handler exception is propagated', () {
-      final error = StateError('proc_raise handler failure');
-      final wasi = WasiPreview1(procRaiseHandler: (_) => throw error);
-      final wasm = _buildProcRaiseModule(signal: 2);
-      final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
-
-      expect(() => instance.invokeI32('run'), throwsA(same(error)));
+      expect(
+        () => instance.invokeI32('run'),
+        throwsA(isA<WasiProcRaise>().having((e) => e.signal, 'signal', 9)),
+      );
     });
   });
 }
