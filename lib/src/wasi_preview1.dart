@@ -158,6 +158,28 @@ final class _PollReadyEvent {
   final int flags;
 }
 
+final class _IoVec {
+  const _IoVec({required this.ptr, required this.len});
+
+  final int ptr;
+  final int len;
+}
+
+final class _IoVecDecodeResult {
+  const _IoVecDecodeResult.success({
+    required this.iovecs,
+    required this.totalBytes,
+  }) : errno = null;
+
+  const _IoVecDecodeResult.error(this.errno)
+    : iovecs = const <_IoVec>[],
+      totalBytes = 0;
+
+  final int? errno;
+  final List<_IoVec> iovecs;
+  final int totalBytes;
+}
+
 final class WasiPreview1 {
   WasiPreview1({
     List<String> args = const [],
@@ -2030,14 +2052,22 @@ final class WasiPreview1 {
     final fd = _asI32(args, 0, 'fd');
     final flags = _asI32(args, 1, 'flags');
     final roFdPtr = _asI32(args, 2, 'ro_fd_ptr');
+    if (!_isValidSockAcceptFlags(flags)) {
+      return _errnoInval;
+    }
     final handler = _socketTransport?.accept;
     if (handler == null) {
       return _errnoNosys;
     }
+    final allocatedFds = <int>{};
     final result = handler(
       fd: fd,
       flags: flags,
-      allocateFd: _allocateDynamicFd,
+      allocateFd: () {
+        final allocated = _allocateDynamicFd();
+        allocatedFds.add(allocated);
+        return allocated;
+      },
     );
     if (result.errno != _errnoSuccess) {
       return result.errno;
@@ -2046,6 +2076,19 @@ final class WasiPreview1 {
     if (acceptedFd == null || acceptedFd < 0) {
       throw StateError(
         'WASI sock_accept handler must return a non-negative acceptedFd when errno is success.',
+      );
+    }
+    if (_fdTable.containsKey(acceptedFd)) {
+      throw StateError(
+        'WASI sock_accept handler returned a conflicting acceptedFd: $acceptedFd',
+      );
+    }
+    final reservedByTransport =
+        (_socketTransport?.containsFd?.call(fd: acceptedFd) ?? false) &&
+        !allocatedFds.contains(acceptedFd);
+    if (reservedByTransport) {
+      throw StateError(
+        'WASI sock_accept handler returned acceptedFd $acceptedFd without allocating it via allocateFd.',
       );
     }
     final memory = _requireMemory();
@@ -2067,51 +2110,64 @@ final class WasiPreview1 {
     if (riDataLen < 0) {
       return _errnoInval;
     }
+    if (!_isValidSockRecvFlags(riFlags)) {
+      return _errnoInval;
+    }
     final handler = _socketTransport?.recv;
     if (handler == null) {
       return _errnoNosys;
     }
 
     final memory = _requireMemory();
-    var requestedBytes = 0;
-    try {
-      for (var i = 0; i < riDataLen; i++) {
-        final iovBase = riDataPtr + (i * 8);
-        final len = memory.loadI32(iovBase + 4);
-        if (len < 0) {
-          return _errnoInval;
-        }
-        requestedBytes += len;
-      }
-    } on RangeError {
+    if (!_isValidMemoryRange(memory: memory, offset: roDatalenPtr, length: 4) ||
+        !_isValidMemoryRange(memory: memory, offset: roFlagsPtr, length: 2)) {
       return _errnoFault;
     }
+    final ioVecDecode = _decodeIoVecs(
+      memory: memory,
+      iovPtr: riDataPtr,
+      iovLen: riDataLen,
+    );
+    if (ioVecDecode.errno != null) {
+      return ioVecDecode.errno;
+    }
 
-    final result = handler(fd: fd, flags: riFlags, maxBytes: requestedBytes);
+    final result = handler(
+      fd: fd,
+      flags: riFlags,
+      maxBytes: ioVecDecode.totalBytes,
+    );
     if (result.errno != _errnoSuccess) {
       return result.errno;
     }
+    if (!_isValidSockRecvRoFlags(result.flags)) {
+      throw StateError(
+        'WASI sock_recv handler flags must only use supported ro_flags bits.',
+      );
+    }
     final incoming = result.data ?? Uint8List(0);
-    final bytes = incoming.length <= requestedBytes
+    final bytes = incoming.length <= ioVecDecode.totalBytes
         ? incoming
-        : Uint8List.sublistView(incoming, 0, requestedBytes);
+        : Uint8List.sublistView(incoming, 0, ioVecDecode.totalBytes);
 
     var copied = 0;
     var cursor = 0;
     try {
-      for (var i = 0; i < riDataLen && cursor < bytes.length; i++) {
-        final iovBase = riDataPtr + (i * 8);
-        final ptr = memory.loadI32(iovBase);
-        final len = memory.loadI32(iovBase + 4);
-        final chunkLen = (bytes.length - cursor) < len
+      for (final ioVec in ioVecDecode.iovecs) {
+        if (cursor >= bytes.length) {
+          break;
+        }
+        final chunkLen = (bytes.length - cursor) < ioVec.len
             ? (bytes.length - cursor)
-            : len;
+            : ioVec.len;
         if (chunkLen <= 0) {
           continue;
         }
-        memory.writeBytes(
-          ptr,
-          Uint8List.sublistView(bytes, cursor, cursor + chunkLen),
+        memory.writeBytesFromList(
+          ioVec.ptr,
+          bytes,
+          sourceOffset: cursor,
+          length: chunkLen,
         );
         cursor += chunkLen;
         copied += chunkLen;
@@ -2133,27 +2189,32 @@ final class WasiPreview1 {
     if (siDataLen < 0) {
       return _errnoInval;
     }
+    if (!_isValidSockSendFlags(siFlags)) {
+      return _errnoInval;
+    }
     final handler = _socketTransport?.send;
     if (handler == null) {
       return _errnoNosys;
     }
 
     final memory = _requireMemory();
-    final output = BytesBuilder(copy: false);
-    var totalBytes = 0;
-    try {
-      for (var i = 0; i < siDataLen; i++) {
-        final iovBase = siDataPtr + (i * 8);
-        final ptr = memory.loadI32(iovBase);
-        final len = memory.loadI32(iovBase + 4);
-        if (len < 0) {
-          return _errnoInval;
-        }
-        output.add(memory.readBytes(ptr, len));
-        totalBytes += len;
-      }
-    } on RangeError {
+    if (!_isValidMemoryRange(memory: memory, offset: soDatalenPtr, length: 4)) {
       return _errnoFault;
+    }
+    final ioVecDecode = _decodeIoVecs(
+      memory: memory,
+      iovPtr: siDataPtr,
+      iovLen: siDataLen,
+    );
+    if (ioVecDecode.errno != null) {
+      return ioVecDecode.errno;
+    }
+    final output = BytesBuilder(copy: false);
+    for (final ioVec in ioVecDecode.iovecs) {
+      if (ioVec.len == 0) {
+        continue;
+      }
+      output.add(memory.viewBytes(ioVec.ptr, ioVec.len));
     }
     final data = Uint8List.fromList(output.takeBytes());
 
@@ -2162,7 +2223,7 @@ final class WasiPreview1 {
       return result.errno;
     }
     final bytesWritten = result.bytesWritten;
-    if (bytesWritten < 0 || bytesWritten > totalBytes) {
+    if (bytesWritten < 0 || bytesWritten > ioVecDecode.totalBytes) {
       throw StateError(
         'WASI sock_send handler bytesWritten must be between 0 and input length.',
       );
@@ -2178,6 +2239,9 @@ final class WasiPreview1 {
   Object? _sockShutdown(List<Object?> args) {
     final fd = _asI32(args, 0, 'fd');
     final how = _asI32(args, 1, 'how');
+    if (!_isValidSockShutdownHow(how)) {
+      return _errnoInval;
+    }
     final handler = _socketTransport?.shutdown;
     if (handler == null) {
       return _errnoNosys;
@@ -2271,6 +2335,74 @@ final class WasiPreview1 {
     }
     final end = BigInt.from(offset) + BigInt.from(length);
     return end <= BigInt.from(memory.lengthInBytes);
+  }
+
+  static bool _isValidSockAcceptFlags(int flags) {
+    return flags >= 0 && (flags & ~_sockAcceptFlagMask) == 0;
+  }
+
+  static bool _isValidSockRecvFlags(int flags) {
+    return flags >= 0 && (flags & ~_sockRecvFlagMask) == 0;
+  }
+
+  static bool _isValidSockRecvRoFlags(int flags) {
+    return flags >= 0 && (flags & ~_sockRecvRoFlagMask) == 0;
+  }
+
+  static bool _isValidSockSendFlags(int flags) {
+    return flags == _sockSendFlagMask;
+  }
+
+  static bool _isValidSockShutdownHow(int how) {
+    return how == _sockShutdownHowRead ||
+        how == _sockShutdownHowWrite ||
+        how == _sockShutdownHowReadWrite;
+  }
+
+  _IoVecDecodeResult _decodeIoVecs({
+    required WasmMemory memory,
+    required int iovPtr,
+    required int iovLen,
+  }) {
+    final iovBytes = _checkedByteLength(count: iovLen, elementSize: 8);
+    if (iovBytes == null) {
+      return const _IoVecDecodeResult.error(_errnoInval);
+    }
+    if (!_isValidMemoryRange(
+      memory: memory,
+      offset: iovPtr,
+      length: iovBytes,
+    )) {
+      return const _IoVecDecodeResult.error(_errnoFault);
+    }
+
+    final ioVecs = <_IoVec>[];
+    var totalBytes = BigInt.zero;
+    try {
+      for (var i = 0; i < iovLen; i++) {
+        final iovBase = iovPtr + (i * 8);
+        final ptr = memory.loadI32(iovBase);
+        final len = memory.loadI32(iovBase + 4);
+        if (len < 0) {
+          return const _IoVecDecodeResult.error(_errnoInval);
+        }
+        if (!_isValidMemoryRange(memory: memory, offset: ptr, length: len)) {
+          return const _IoVecDecodeResult.error(_errnoFault);
+        }
+        totalBytes += BigInt.from(len);
+        if (totalBytes > BigInt.from(0x7fffffff)) {
+          return const _IoVecDecodeResult.error(_errnoInval);
+        }
+        ioVecs.add(_IoVec(ptr: ptr, len: len));
+      }
+    } on RangeError {
+      return const _IoVecDecodeResult.error(_errnoFault);
+    }
+
+    return _IoVecDecodeResult.success(
+      iovecs: ioVecs,
+      totalBytes: totalBytes.toInt(),
+    );
   }
 
   Uint8List _readInput(int maxBytes) {
@@ -2684,6 +2816,18 @@ final class WasiPreview1 {
       _fdflagNonblock |
       _fdflagRsync |
       _fdflagSync;
+
+  static const int _sockAcceptFlagNonblock = _fdflagNonblock;
+  static const int _sockAcceptFlagMask = _sockAcceptFlagNonblock;
+  static const int _sockRecvFlagPeek = 0x0001;
+  static const int _sockRecvFlagWaitall = 0x0002;
+  static const int _sockRecvFlagMask = _sockRecvFlagPeek | _sockRecvFlagWaitall;
+  static const int _sockRecvRoFlagDataTruncated = 0x0001;
+  static const int _sockRecvRoFlagMask = _sockRecvRoFlagDataTruncated;
+  static const int _sockSendFlagMask = 0x0000;
+  static const int _sockShutdownHowRead = 0;
+  static const int _sockShutdownHowWrite = 1;
+  static const int _sockShutdownHowReadWrite = 2;
 
   static const int _fstFlagAtim = 0x0001;
   static const int _fstFlagAtimNow = 0x0002;
