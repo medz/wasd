@@ -203,6 +203,17 @@ Future<void> main(List<String> args) async {
     args,
     '--component-official-groups',
   );
+  final componentOfficialAllGroups = args.contains(
+    '--component-official-all-groups',
+  );
+  if (componentOfficialAllGroups &&
+      componentOfficialGroups != null &&
+      componentOfficialGroups.trim().isNotEmpty) {
+    throw ArgumentError(
+      'Use either --component-official-all-groups or '
+      '--component-official-groups=<...>, not both.',
+    );
+  }
   final runComponentDecodeProbe =
       args.contains('--component-decode-probe') ||
       args.contains('--strict-component-decode-probe');
@@ -273,6 +284,7 @@ Future<void> main(List<String> args) async {
         command: _componentOfficialRunnerCommand(
           componentOfficialTestsuiteDir: componentOfficialTestsuiteDir,
           componentOfficialGroups: componentOfficialGroups,
+          componentOfficialAllGroups: componentOfficialAllGroups,
           requireTestsuiteDir: strictComponentOfficial,
         ),
         optional: !strictComponentOfficial,
@@ -353,6 +365,7 @@ Future<void> main(List<String> args) async {
     'strict_component_official': strictComponentOfficial,
     'component_official_testsuite_dir': componentOfficialTestsuiteDir,
     'component_official_groups': componentOfficialGroups,
+    'component_official_all_groups': componentOfficialAllGroups,
     'component_decode_probe': runComponentDecodeProbe,
     'strict_component_decode_probe': strictComponentDecodeProbe,
     'component_decode_probe_best_effort': componentDecodeProbeBestEffort,
@@ -1191,6 +1204,7 @@ List<String> _resultReportCommand(_SpecSuiteArtifacts artifacts) {
 List<String> _componentOfficialRunnerCommand({
   required String? componentOfficialTestsuiteDir,
   required String? componentOfficialGroups,
+  required bool componentOfficialAllGroups,
   required bool requireTestsuiteDir,
 }) {
   return <String>[
@@ -1198,6 +1212,7 @@ List<String> _componentOfficialRunnerCommand({
     'run',
     'tool/component_official_runner.dart',
     if (requireTestsuiteDir) '--require-testsuite-dir',
+    if (componentOfficialAllGroups) '--all-groups',
     if (componentOfficialTestsuiteDir != null &&
         componentOfficialTestsuiteDir.trim().isNotEmpty)
       '--testsuite-dir=${componentOfficialTestsuiteDir.trim()}',
@@ -1305,6 +1320,10 @@ String _renderMarkdownReport({
       );
     }
     final selectedGroups = payload['component_official_groups'] as String?;
+    final selectedAllGroups = payload['component_official_all_groups'] == true;
+    if (selectedAllGroups) {
+      b.writeln('- Official component groups: `all`.');
+    }
     if (selectedGroups != null && selectedGroups.trim().isNotEmpty) {
       b.writeln('- Official component groups: `$selectedGroups`.');
     }
@@ -1358,6 +1377,6 @@ void _printUsage() {
     'Usage: dart run tool/spec_runner.dart --target=<vm|js|wasm|all> --suite=<core|proposal|all>',
   );
   stdout.writeln(
-    'Optional: --report=<path> --json=<path> --testsuite-dir=<path> --strict-proposals --no-component-subset --component-subset-optional --component-subset --strict-component-subset --no-component-official --component-official --component-official-optional --strict-component-official --component-official-testsuite-dir=<path> --component-official-groups=<comma-separated> --component-decode-probe --strict-component-decode-probe --component-decode-probe-best-effort',
+    'Optional: --report=<path> --json=<path> --testsuite-dir=<path> --strict-proposals --no-component-subset --component-subset-optional --component-subset --strict-component-subset --no-component-official --component-official --component-official-optional --strict-component-official --component-official-testsuite-dir=<path> --component-official-groups=<comma-separated> --component-official-all-groups --component-decode-probe --strict-component-decode-probe --component-decode-probe-best-effort',
   );
 }
