@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -1338,6 +1339,83 @@ void main() {
             ),
           ),
         );
+      },
+    );
+
+    test(
+      'supports FutureOr sync-return path for async-only host imports',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [],
+          functionBodies: const [],
+          exports: const [
+            _ExportSpec(name: 'inc', kind: WasmExportKind.function, index: 0),
+          ],
+        );
+
+        var callCount = 0;
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) {
+                callCount++;
+                return (args.single as int) + 1;
+              },
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('inc', [41]), 42);
+        expect(callCount, 1);
+      },
+    );
+
+    test(
+      'handles mixed sync/future branches for async event-style imports',
+      () async {
+        final wasm = _buildModule(
+          types: [
+            _funcType([], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'next', typeIndex: 0),
+          ],
+          functionTypeIndices: const [0],
+          functionBodies: [
+            _FunctionBodySpec(instructions: [..._call(0), Opcodes.end]),
+          ],
+          exports: const [
+            _ExportSpec(name: 'poll', kind: WasmExportKind.function, index: 1),
+          ],
+        );
+
+        final queuedValues = Queue<Object?>.from(<Object?>[7]);
+        var yieldedCount = 0;
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'next'): (_) {
+                if (queuedValues.isNotEmpty) {
+                  return queuedValues.removeFirst();
+                }
+                yieldedCount++;
+                return Future<Object?>.value(0);
+              },
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('poll'), 7);
+        expect(await instance.invokeI32Async('poll'), 0);
+        expect(yieldedCount, 1);
       },
     );
 
