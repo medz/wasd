@@ -1064,6 +1064,95 @@ void main() {
       expect(randomBytes.any((b) => b != 0), isTrue);
     });
 
+    test(
+      'clock_time_get supports realtime/monotonic/process/thread mappings',
+      () {
+        final wasi = WasiPreview1(
+          nowRealtimeNs: () => BigInt.from(111),
+          nowMonotonicNs: () => BigInt.from(222),
+        );
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final clockTimeGet =
+            wasi.imports.functions[WasmImports.key(
+              'wasi_snapshot_preview1',
+              'clock_time_get',
+            )]!;
+
+        expect(clockTimeGet([0, 0, 0]), 0);
+        expect(memory.loadI64(0), BigInt.from(111));
+
+        expect(clockTimeGet([1, 0, 8]), 0);
+        expect(memory.loadI64(8), BigInt.from(222));
+
+        expect(clockTimeGet([2, 0, 16]), 0);
+        expect(memory.loadI64(16), BigInt.from(222));
+
+        expect(clockTimeGet([3, 0, 24]), 0);
+        expect(memory.loadI64(24), BigInt.from(222));
+      },
+    );
+
+    test(
+      'clock_time_get returns EINVAL for unsupported id and EFAULT for oob pointer',
+      () {
+        final wasi = WasiPreview1();
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final clockTimeGet =
+            wasi.imports.functions[WasmImports.key(
+              'wasi_snapshot_preview1',
+              'clock_time_get',
+            )]!;
+
+        expect(clockTimeGet([99, 0, 0]), 28);
+        expect(clockTimeGet([0, 0, 65535]), 21);
+      },
+    );
+
+    test(
+      'clock_res_get supports all preview1 clock ids with 1ns resolution',
+      () {
+        final wasi = WasiPreview1();
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final clockResGet =
+            wasi.imports.functions[WasmImports.key(
+              'wasi_snapshot_preview1',
+              'clock_res_get',
+            )]!;
+
+        expect(clockResGet([0, 0]), 0);
+        expect(memory.loadI64(0), BigInt.one);
+
+        expect(clockResGet([1, 8]), 0);
+        expect(memory.loadI64(8), BigInt.one);
+
+        expect(clockResGet([2, 16]), 0);
+        expect(memory.loadI64(16), BigInt.one);
+
+        expect(clockResGet([3, 24]), 0);
+        expect(memory.loadI64(24), BigInt.one);
+      },
+    );
+
+    test(
+      'clock_res_get returns EINVAL for unsupported id and EFAULT for oob pointer',
+      () {
+        final wasi = WasiPreview1();
+        final memory = WasmMemory(minPages: 1);
+        wasi.bindMemory(memory);
+        final clockResGet =
+            wasi.imports.functions[WasmImports.key(
+              'wasi_snapshot_preview1',
+              'clock_res_get',
+            )]!;
+
+        expect(clockResGet([99, 0]), 28);
+        expect(clockResGet([0, 65535]), 21);
+      },
+    );
+
     test('fd_pwrite + fd_pread keep cursor unchanged', () {
       final fs = WasiInMemoryFileSystem();
       final wasi = WasiPreview1(fileSystem: fs);
