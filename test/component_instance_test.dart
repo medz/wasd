@@ -1189,6 +1189,68 @@ void main() {
       );
     });
 
+    test(
+      'rejects conflicting typed tag import bindings before import resolution',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'tagA',
+              moduleName: 'env',
+              fieldName: 'err',
+              kind: 0x04,
+            ),
+            _ComponentImportRequirementSpec(
+              componentImportName: 'tagB',
+              moduleName: 'env',
+              fieldName: 'err',
+              kind: 0x04,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(2),
+          ..._name('tag_i32'),
+          0x05,
+          ..._u32Leb(1),
+          0x7f,
+          ..._name('tag_i64'),
+          0x05,
+          ..._u32Leb(1),
+          0x7e,
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(2),
+          0x00,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+          0x00,
+          ..._u32Leb(1),
+          ..._u32Leb(1),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsA(
+            isA<FormatException>().having(
+              (error) => error.message,
+              'message',
+              contains('Conflicting typed tag bindings'),
+            ),
+          ),
+        );
+      },
+    );
+
     test('resolves typed tag import bindings through type aliases', () {
       final baseComponent = _componentWithCoreModules(
         <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],

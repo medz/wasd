@@ -90,7 +90,6 @@ final class WasmComponentInstance {
         'Component does not contain embedded core modules.',
       );
     }
-    _validateComponentImportRequirements(component, imports);
     final typedFunctionImportRequirements =
         _collectTypedFunctionImportRequirements(component);
     final typedGlobalImportRequirements = _collectTypedGlobalImportRequirements(
@@ -105,6 +104,7 @@ final class WasmComponentInstance {
     final typedTagImportRequirements = _collectTypedTagImportRequirements(
       component,
     );
+    _validateComponentImportRequirements(component, imports);
     final coreInstances = <WasmInstance>[];
     if (component.coreInstances.isEmpty) {
       for (
