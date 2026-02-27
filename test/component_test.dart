@@ -732,6 +732,68 @@ void main() {
       );
     });
 
+    test('rejects table import type binding to non-table declaration', () {
+      final importSection = <int>[
+        ..._u32Leb(1),
+        ..._name('tab'),
+        ..._name('env'),
+        ..._name('table'),
+        0x02,
+      ];
+      final typeSection = <int>[..._u32Leb(1), ..._name('i32_t'), 0x00, 0x7f];
+      final typeBindingSection = <int>[
+        ..._u32Leb(1),
+        0x00,
+        ..._u32Leb(0),
+        ..._u32Leb(0),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ..._componentHeaderWithOneCoreModule(),
+        ..._section(0x04, importSection),
+        ..._section(0x06, typeSection),
+        ..._section(0x07, typeBindingSection),
+      ]);
+
+      expect(
+        () => WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+    });
+
+    test('rejects tag import type binding to non-tag declaration', () {
+      final importSection = <int>[
+        ..._u32Leb(1),
+        ..._name('errTag'),
+        ..._name('env'),
+        ..._name('tag'),
+        0x04,
+      ];
+      final typeSection = <int>[..._u32Leb(1), ..._name('i32_t'), 0x00, 0x7f];
+      final typeBindingSection = <int>[
+        ..._u32Leb(1),
+        0x00,
+        ..._u32Leb(0),
+        ..._u32Leb(0),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ..._componentHeaderWithOneCoreModule(),
+        ..._section(0x04, importSection),
+        ..._section(0x06, typeSection),
+        ..._section(0x07, typeBindingSection),
+      ]);
+
+      expect(
+        () => WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+    });
+
     test('rejects malformed component memory type declaration limits', () {
       final typeSection = <int>[
         ..._u32Leb(1),
