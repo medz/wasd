@@ -194,6 +194,86 @@ void main() {
       },
     );
 
+    test('validates typed core export alias signatures', () {
+      final baseComponent = _componentWithCoreModules(
+        <Uint8List>[_coreModuleConstI32(name: 'one', value: 9)],
+        instantiateModuleIndices: const [0],
+        exportAliases: const [
+          _ComponentAliasSpec(
+            instanceIndex: 0,
+            coreExportName: 'one',
+            componentExportName: 'apiOne',
+          ),
+        ],
+      );
+      final typeSection = <int>[
+        ..._u32Leb(1),
+        ..._name('fn_i32'),
+        0x01,
+        ..._u32Leb(0),
+        ..._u32Leb(1),
+        0x7f,
+      ];
+      final typeBindingSection = <int>[
+        ..._u32Leb(1),
+        0x01,
+        ..._u32Leb(0),
+        ..._u32Leb(0),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ...baseComponent,
+        ..._section(0x06, typeSection),
+        ..._section(0x07, typeBindingSection),
+      ]);
+
+      final instance = WasmComponentInstance.fromBytes(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+      expect(instance.invokeComponentExport('apiOne'), 9);
+    });
+
+    test('rejects mismatched typed core export alias signatures', () {
+      final baseComponent = _componentWithCoreModules(
+        <Uint8List>[_coreModuleConstI32(name: 'one', value: 9)],
+        instantiateModuleIndices: const [0],
+        exportAliases: const [
+          _ComponentAliasSpec(
+            instanceIndex: 0,
+            coreExportName: 'one',
+            componentExportName: 'apiOne',
+          ),
+        ],
+      );
+      final typeSection = <int>[
+        ..._u32Leb(1),
+        ..._name('fn_i64'),
+        0x01,
+        ..._u32Leb(0),
+        ..._u32Leb(1),
+        0x7e,
+      ];
+      final typeBindingSection = <int>[
+        ..._u32Leb(1),
+        0x01,
+        ..._u32Leb(0),
+        ..._u32Leb(0),
+      ];
+      final componentBytes = Uint8List.fromList(<int>[
+        ...baseComponent,
+        ..._section(0x06, typeSection),
+        ..._section(0x07, typeBindingSection),
+      ]);
+
+      expect(
+        () => WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+    });
+
     test('validates component import requirements before instantiation', () {
       final componentBytes = _componentWithCoreModules(
         <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],

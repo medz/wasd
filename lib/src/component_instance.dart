@@ -153,6 +153,10 @@ final class WasmComponentInstance {
         coreExportName: alias.coreExportName,
       );
     }
+    _validateTypedCoreExportAliasBindings(
+      component: component,
+      coreInstances: coreInstances,
+    );
     return WasmComponentInstance._(
       component: component,
       imports: imports,
@@ -374,6 +378,124 @@ final class WasmComponentInstance {
       0x7d => WasmValueType.f32,
       0x7c => WasmValueType.f64,
       _ => null,
+    };
+  }
+
+  static void _validateTypedCoreExportAliasBindings({
+    required WasmComponent component,
+    required List<WasmInstance> coreInstances,
+  }) {
+    for (final binding in component.typeBindings) {
+      if (binding.targetKind !=
+          WasmComponentTypeBindingTargetKind.coreExportAlias) {
+        continue;
+      }
+      if (binding.targetIndex < 0 ||
+          binding.targetIndex >= component.coreExportAliases.length) {
+        continue;
+      }
+      final alias = component.coreExportAliases[binding.targetIndex];
+      final declaration = _resolveComponentTypeDeclaration(
+        component.typeDeclarations,
+        binding.typeDeclarationIndex,
+      );
+      if (declaration.kind != WasmComponentTypeKind.function) {
+        continue;
+      }
+      final instanceIndex = alias.instanceIndex;
+      if (instanceIndex < 0 || instanceIndex >= coreInstances.length) {
+        continue;
+      }
+      final instance = coreInstances[instanceIndex];
+      if (!instance.exportedFunctions.contains(alias.coreExportName)) {
+        continue;
+      }
+      final actualType = instance.exportedFunctionType(alias.coreExportName);
+      _validateComponentFunctionDeclarationAgainstCoreType(
+        declaration: declaration,
+        actualType: actualType,
+        context:
+            'Component export alias `${alias.componentExportName}` '
+            '(instance=$instanceIndex, export=`${alias.coreExportName}`)',
+      );
+    }
+  }
+
+  static void _validateComponentFunctionDeclarationAgainstCoreType({
+    required WasmComponentTypeDeclaration declaration,
+    required WasmFunctionType actualType,
+    required String context,
+  }) {
+    final expectedParams = _componentTypeCodesToSignatures(
+      declaration.parameterTypeCodes,
+    );
+    final expectedResults = _componentTypeCodesToSignatures(
+      declaration.resultTypeCodes,
+    );
+    final actualParams = _coreFunctionSignatures(
+      valueTypes: actualType.params,
+      signatures: actualType.paramTypeSignatures,
+    );
+    final actualResults = _coreFunctionSignatures(
+      valueTypes: actualType.results,
+      signatures: actualType.resultTypeSignatures,
+    );
+
+    if (expectedParams.length != actualParams.length ||
+        expectedResults.length != actualResults.length) {
+      throw FormatException(
+        '$context has incompatible typed binding for function declaration '
+        '`${declaration.name}`: expected '
+        '(${expectedParams.join(', ')}) -> (${expectedResults.join(', ')}), '
+        'actual (${actualParams.join(', ')}) -> (${actualResults.join(', ')}).',
+      );
+    }
+
+    for (var i = 0; i < expectedParams.length; i++) {
+      if (expectedParams[i] != actualParams[i]) {
+        throw FormatException(
+          '$context has incompatible typed parameter binding at index $i for '
+          'function declaration `${declaration.name}`: expected '
+          '${expectedParams[i]}, actual ${actualParams[i]}.',
+        );
+      }
+    }
+    for (var i = 0; i < expectedResults.length; i++) {
+      if (expectedResults[i] != actualResults[i]) {
+        throw FormatException(
+          '$context has incompatible typed result binding at index $i for '
+          'function declaration `${declaration.name}`: expected '
+          '${expectedResults[i]}, actual ${actualResults[i]}.',
+        );
+      }
+    }
+  }
+
+  static List<String> _componentTypeCodesToSignatures(List<int>? typeCodes) {
+    if (typeCodes == null || typeCodes.isEmpty) {
+      return const <String>[];
+    }
+    return typeCodes
+        .map((code) => (code & 0xff).toRadixString(16).padLeft(2, '0'))
+        .toList(growable: false);
+  }
+
+  static List<String> _coreFunctionSignatures({
+    required List<WasmValueType> valueTypes,
+    required List<String> signatures,
+  }) {
+    if (signatures.length == valueTypes.length) {
+      return List<String>.from(signatures, growable: false);
+    }
+    return valueTypes.map(_coreValueTypeSignature).toList(growable: false);
+  }
+
+  static String _coreValueTypeSignature(WasmValueType type) {
+    return switch (type) {
+      WasmValueType.i32 => '7f',
+      WasmValueType.i64 => '7e',
+      WasmValueType.f32 => '7d',
+      WasmValueType.f64 => '7c',
     };
   }
 
