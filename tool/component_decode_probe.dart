@@ -29,6 +29,7 @@ Future<void> main(List<String> args) async {
   final groupsArg = _argValue(args, '--groups');
   final strict = args.contains('--strict');
   final bestEffort = args.contains('--best-effort');
+  final requireTestsuiteDir = args.contains('--require-testsuite-dir');
   final disableDefaultExpectedFailures = args.contains(
     '--no-default-expected-failures',
   );
@@ -77,6 +78,13 @@ Future<void> main(List<String> args) async {
     stdout.writeln('component-decode-probe status: skipped');
     stdout.writeln('json report: $outputJsonPath');
     stdout.writeln('markdown report: $outputMarkdownPath');
+    if (requireTestsuiteDir) {
+      stderr.writeln(
+        'component-decode-probe required testsuite directory is missing: '
+        '$testsuiteDir',
+      );
+      exitCode = 1;
+    }
     return;
   }
 

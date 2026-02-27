@@ -272,6 +272,7 @@ Future<void> main(List<String> args) async {
         command: _componentOfficialRunnerCommand(
           componentOfficialTestsuiteDir: componentOfficialTestsuiteDir,
           componentOfficialGroups: componentOfficialGroups,
+          requireTestsuiteDir: strictComponentOfficial,
         ),
         optional: !strictComponentOfficial,
       ),
@@ -285,6 +286,7 @@ Future<void> main(List<String> args) async {
           componentOfficialTestsuiteDir: componentOfficialTestsuiteDir,
           componentOfficialGroups: componentOfficialGroups,
           bestEffort: componentDecodeProbeBestEffort,
+          requireTestsuiteDir: strictComponentDecodeProbe,
         ),
         optional: !strictComponentDecodeProbe,
       ),
@@ -1134,11 +1136,13 @@ List<String> _resultReportCommand(_SpecSuiteArtifacts artifacts) {
 List<String> _componentOfficialRunnerCommand({
   required String? componentOfficialTestsuiteDir,
   required String? componentOfficialGroups,
+  required bool requireTestsuiteDir,
 }) {
   return <String>[
     'dart',
     'run',
     'tool/component_official_runner.dart',
+    if (requireTestsuiteDir) '--require-testsuite-dir',
     if (componentOfficialTestsuiteDir != null &&
         componentOfficialTestsuiteDir.trim().isNotEmpty)
       '--testsuite-dir=${componentOfficialTestsuiteDir.trim()}',
@@ -1152,11 +1156,13 @@ List<String> _componentDecodeProbeCommand({
   required String? componentOfficialTestsuiteDir,
   required String? componentOfficialGroups,
   required bool bestEffort,
+  required bool requireTestsuiteDir,
 }) {
   return <String>[
     'dart',
     'run',
     'tool/component_decode_probe.dart',
+    if (requireTestsuiteDir) '--require-testsuite-dir',
     if (componentOfficialTestsuiteDir != null &&
         componentOfficialTestsuiteDir.trim().isNotEmpty)
       '--testsuite-dir=${componentOfficialTestsuiteDir.trim()}',

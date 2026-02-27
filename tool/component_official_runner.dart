@@ -31,6 +31,7 @@ Future<void> main(List<String> args) async {
       _argValue(args, '--wasm-tools-bin') ?? '.toolchains/bin/wasm-tools';
   final includePattern = _argValue(args, '--include-pattern');
   final allGroups = args.contains('--all-groups');
+  final requireTestsuiteDir = args.contains('--require-testsuite-dir');
   final ignoreErrorMessages = !args.contains('--no-ignore-error-messages');
   final disableDefaultExpectedFailures = args.contains(
     '--no-default-expected-failures',
@@ -76,6 +77,13 @@ Future<void> main(List<String> args) async {
     stdout.writeln('component-official status: skipped');
     stdout.writeln('json report: $outputJsonPath');
     stdout.writeln('markdown report: $outputMarkdownPath');
+    if (requireTestsuiteDir) {
+      stderr.writeln(
+        'component-official required testsuite directory is missing: '
+        '$testsuiteDir',
+      );
+      exitCode = 1;
+    }
     return;
   }
 
