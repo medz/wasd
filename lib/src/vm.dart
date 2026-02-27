@@ -311,6 +311,50 @@ final class WasmVm {
     return _canonicalI31Ref(value);
   }
 
+  static int? anyConvertExternRef(int? externReference) {
+    if (externReference == null) {
+      return null;
+    }
+    final existing = _sharedGcObjects[externReference];
+    if (existing != null) {
+      if (existing.kind == _GcRefKind.anyExtern) {
+        return externReference;
+      }
+      if (existing.kind == _GcRefKind.extern) {
+        return existing.externValue;
+      }
+    }
+    return _allocateSharedGcObject(_GcRefObject.anyExtern(externReference));
+  }
+
+  static int? externConvertAnyRef(int? anyReference) {
+    if (anyReference == null) {
+      return null;
+    }
+    final existing = _sharedGcObjects[anyReference];
+    if (existing != null) {
+      if (existing.kind == _GcRefKind.anyExtern) {
+        return existing.externValue;
+      }
+      if (existing.kind == _GcRefKind.extern) {
+        return anyReference;
+      }
+    }
+    return _allocateSharedGcObject(_GcRefObject.extern(anyReference));
+  }
+
+  static int i31Get({required int reference, required bool signed}) {
+    final object = _requireSharedGcObject(reference);
+    if (object.kind != _GcRefKind.i31) {
+      throw StateError('i31.get expects an i31 reference.');
+    }
+    final value = object.i31Value!;
+    if (!signed) {
+      return value & 0x7fffffff;
+    }
+    return (value & 0x40000000) != 0 ? (value | ~0x7fffffff) : value;
+  }
+
   static _GcRefObject _requireSharedGcObject(int reference) {
     final cached = _sharedGcObjects[reference];
     if (cached != null) {

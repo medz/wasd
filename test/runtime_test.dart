@@ -9970,6 +9970,107 @@ void main() {
       );
     });
 
+    test(
+      'supports i31 and extern/any gc opcodes in async import call chains',
+      () async {
+        List<int> gcInstr(int opcode, List<int> immediates) {
+          return <int>[0xfb, ..._u32Leb(opcode & 0xff), ...immediates];
+        }
+
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [0, 0],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._i32Const(-1),
+                ...gcInstr(Opcodes.refI31, const <int>[]),
+                ...gcInstr(Opcodes.i31GetS, const <int>[]),
+                ..._i32Const(-1),
+                Opcodes.i32Eq,
+                ..._i32Const(-1),
+                ...gcInstr(Opcodes.refI31, const <int>[]),
+                ...gcInstr(Opcodes.i31GetU, const <int>[]),
+                ..._i32Const(2147483647),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._i32Const(123),
+                ...gcInstr(Opcodes.refI31, const <int>[]),
+                ...gcInstr(Opcodes.externConvertAny, const <int>[]),
+                ...gcInstr(Opcodes.anyConvertExtern, const <int>[]),
+                ...gcInstr(Opcodes.i31GetU, const <int>[]),
+                ..._i32Const(123),
+                Opcodes.i32Eq,
+                ..._i32Const(123),
+                ...gcInstr(Opcodes.refI31, const <int>[]),
+                ...gcInstr(Opcodes.externConvertAny, const <int>[]),
+                ...gcInstr(Opcodes.anyConvertExtern, const <int>[]),
+                ...gcInstr(Opcodes.i31GetU, const <int>[]),
+                ..._i32Const(123),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                Opcodes.refNull,
+                0x6f,
+                ...gcInstr(Opcodes.anyConvertExtern, const <int>[]),
+                ...gcInstr(Opcodes.externConvertAny, const <int>[]),
+                Opcodes.refIsNull,
+                Opcodes.i32And,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'supportsI31GetSignedUnsigned',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+            _ExportSpec(
+              name: 'supportsAnyExternRoundTrip',
+              kind: WasmExportKind.function,
+              index: 2,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          features: const WasmFeatureSet(gc: true),
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(
+          await instance.invokeI32Async('supportsI31GetSignedUnsigned', [41]),
+          1,
+        );
+        expect(
+          await instance.invokeI32Async('supportsAnyExternRoundTrip', [41]),
+          1,
+        );
+      },
+    );
+
     test('supports layered feature defaults and extension query', () {
       final features = WasmFeatureSet.layeredDefaults(
         profile: WasmFeatureProfile.stable,

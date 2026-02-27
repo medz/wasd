@@ -1001,6 +1001,26 @@ final class WasmInstance {
             stack.add(WasmValue.i32(reference));
             pc++;
 
+          case Opcodes.anyConvertExtern:
+            _gcAnyConvertExternAsyncSubset(stack);
+            pc++;
+
+          case Opcodes.externConvertAny:
+            _gcExternConvertAnyAsyncSubset(stack);
+            pc++;
+
+          case Opcodes.refI31:
+            _gcRefI31AsyncSubset(stack);
+            pc++;
+
+          case Opcodes.i31GetS:
+          case Opcodes.i31GetU:
+            _gcI31GetAsyncSubset(
+              stack,
+              signed: instruction.opcode == Opcodes.i31GetS,
+            );
+            pc++;
+
           case Opcodes.structNew:
             _gcStructNewAsyncSubset(stack, instruction);
             pc++;
@@ -5378,6 +5398,41 @@ final class WasmInstance {
   int? _popAsyncSubsetRef(List<WasmValue> stack, {required String context}) {
     final rawRef = _popValue(stack, context).castTo(WasmValueType.i32).asI32();
     return rawRef == -1 ? null : rawRef;
+  }
+
+  void _gcAnyConvertExternAsyncSubset(List<WasmValue> stack) {
+    final externReference = _popAsyncSubsetRef(
+      stack,
+      context: 'any.convert_extern',
+    );
+    final converted = WasmVm.anyConvertExternRef(externReference);
+    stack.add(WasmValue.i32(converted ?? -1));
+  }
+
+  void _gcExternConvertAnyAsyncSubset(List<WasmValue> stack) {
+    final anyReference = _popAsyncSubsetRef(
+      stack,
+      context: 'extern.convert_any',
+    );
+    final converted = WasmVm.externConvertAnyRef(anyReference);
+    stack.add(WasmValue.i32(converted ?? -1));
+  }
+
+  void _gcRefI31AsyncSubset(List<WasmValue> stack) {
+    final value =
+        _popValue(stack, 'ref.i31').castTo(WasmValueType.i32).asI32() &
+        0x7fffffff;
+    stack.add(WasmValue.i32(WasmVm.allocateConstI31Ref(value)));
+  }
+
+  void _gcI31GetAsyncSubset(List<WasmValue> stack, {required bool signed}) {
+    final reference = _popAsyncSubsetRef(stack, context: 'i31.get');
+    if (reference == null) {
+      throw StateError('null reference');
+    }
+    stack.add(
+      WasmValue.i32(WasmVm.i31Get(reference: reference, signed: signed)),
+    );
   }
 
   int _checkAsyncSubsetTypeIndex(int index) {
