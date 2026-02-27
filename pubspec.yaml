@@ -1,6 +1,6 @@
 name: wasd
 description: "WASD: Wasm And Dart System / WebAssembly System for Dart."
-version: 0.0.1
+version: 0.1.0
 repository: https://github.com/medz/wasd
 
 environment:
