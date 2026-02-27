@@ -85,7 +85,7 @@ void main() {
     });
 
     test(
-      'falls back to module-order instantiation when core-instance declarations include opaque entries',
+      'preserves declaration indices for empty from-exports core instances',
       () {
         final baseComponent = _componentWithCoreModules(<Uint8List>[
           _coreModuleConstI32(name: 'one', value: 1),
@@ -109,9 +109,16 @@ void main() {
           features: const WasmFeatureSet(componentModel: true),
         );
 
-        expect(instance.component.hasOpaqueCoreInstances, isTrue);
+        expect(instance.component.hasOpaqueCoreInstances, isFalse);
         expect(instance.coreInstances, hasLength(2));
-        expect(instance.invokeCore('one', moduleIndex: 0), 1);
+        expect(
+          () => instance.invokeCore('one', moduleIndex: 0),
+          throwsA(isA<ArgumentError>()),
+        );
+        expect(
+          () => instance.invokeCore('two', moduleIndex: 0),
+          throwsA(isA<ArgumentError>()),
+        );
         expect(instance.invokeCore('two', moduleIndex: 1), 2);
       },
     );

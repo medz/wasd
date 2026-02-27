@@ -40,6 +40,17 @@ typedef _TypedTagImportRequirement = ({
   List<String> parameterSignatures,
 });
 
+final Uint8List _emptyCoreModuleBytes = Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+]);
+
 /// Component-level runtime that instantiates embedded core modules.
 ///
 /// Current scope:
@@ -140,6 +151,18 @@ final class WasmComponentInstance {
       }
     } else {
       for (final declaration in component.coreInstances) {
+        if (declaration.isFromExports) {
+          if (declaration.exports.isNotEmpty) {
+            throw UnsupportedError(
+              'Component core-instance from-exports declarations with '
+              'non-empty export lists are not yet supported.',
+            );
+          }
+          coreInstances.add(
+            WasmInstance.fromBytes(_emptyCoreModuleBytes, features: features),
+          );
+          continue;
+        }
         final moduleIndex = declaration.moduleIndex;
         if (moduleIndex < 0 || moduleIndex >= component.coreModules.length) {
           throw FormatException(

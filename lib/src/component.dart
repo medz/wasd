@@ -13,16 +13,43 @@ final class WasmComponentSection {
 }
 
 /// Decoded core instance declaration from component section `0x02`.
+final class WasmComponentCoreInstanceExport {
+  const WasmComponentCoreInstanceExport({
+    required this.exportName,
+    required this.kind,
+    required this.index,
+  });
+
+  final String exportName;
+  final int kind;
+  final int index;
+}
+
+/// Decoded core instance declaration from component section `0x02`.
 final class WasmComponentCoreInstance {
+  WasmComponentCoreInstance.fromExports({
+    List<WasmComponentCoreInstanceExport> exports =
+        const <WasmComponentCoreInstanceExport>[],
+  }) : moduleIndex = -1,
+       argumentInstanceIndices = const <int>[],
+       exports = List<WasmComponentCoreInstanceExport>.unmodifiable(exports),
+       isFromExports = true;
+
   WasmComponentCoreInstance.instantiate({
     required this.moduleIndex,
     List<int> argumentInstanceIndices = const <int>[],
   }) : argumentInstanceIndices = List<int>.unmodifiable(
          argumentInstanceIndices,
-       );
+       ),
+       exports = const <WasmComponentCoreInstanceExport>[],
+       isFromExports = false;
 
   final int moduleIndex;
   final List<int> argumentInstanceIndices;
+  final List<WasmComponentCoreInstanceExport> exports;
+  final bool isFromExports;
+
+  bool get isInstantiate => !isFromExports;
 }
 
 /// Component-level exported core alias.
@@ -449,13 +476,25 @@ final class WasmComponent {
             ),
           );
         case 0x01:
-          hasOpaqueKinds = true;
           final exportCount = reader.readVarUint32();
+          final exports = <WasmComponentCoreInstanceExport>[];
           for (var j = 0; j < exportCount; j++) {
-            _readName(reader);
-            reader.readByte();
-            reader.readVarUint32();
+            exports.add(
+              WasmComponentCoreInstanceExport(
+                exportName: _readName(reader),
+                kind: reader.readByte(),
+                index: reader.readVarUint32(),
+              ),
+            );
           }
+          instances.add(
+            WasmComponentCoreInstance.fromExports(
+              exports: List<WasmComponentCoreInstanceExport>.unmodifiable(
+                exports,
+              ),
+            ),
+          );
+          hasOpaqueKinds = hasOpaqueKinds || exports.isNotEmpty;
         default:
           throw UnsupportedError(
             'Unsupported component core-instance kind: 0x${kind.toRadixString(16)}',

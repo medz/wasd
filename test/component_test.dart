@@ -200,7 +200,7 @@ void main() {
       expect(component.hasOpaqueCoreInstances, isFalse);
     });
 
-    test('marks opaque core-instance section entries with kind 0x01', () {
+    test('decodes empty core-instance from-exports entries (kind 0x01)', () {
       final componentBytes = Uint8List.fromList(<int>[
         0x00,
         0x61,
@@ -239,9 +239,58 @@ void main() {
         features: const WasmFeatureSet(componentModel: true),
       );
 
+      expect(component.coreInstances, hasLength(2));
+      expect(component.coreInstances[0].isFromExports, isTrue);
+      expect(component.coreInstances[0].exports, isEmpty);
+      expect(component.coreInstances[1].isInstantiate, isTrue);
+      expect(component.coreInstances[1].moduleIndex, 0);
+      expect(component.coreInstances[1].argumentInstanceIndices, isEmpty);
+      expect(component.hasOpaqueCoreInstances, isFalse);
+    });
+
+    test('marks non-empty core-instance from-exports entries as opaque', () {
+      final componentBytes = Uint8List.fromList(<int>[
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x0d,
+        0x00,
+        0x01,
+        0x00,
+        // section 1: one core module payload
+        0x01,
+        0x08,
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        // section 2:
+        // - declaration 0: core instance from-exports (kind 0x01), one export
+        0x02,
+        0x07,
+        0x01,
+        0x01,
+        0x01,
+        0x01,
+        0x78, // "x"
+        0x00, // function
+        0x00, // index 0
+      ]);
+
+      final component = WasmComponent.decode(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
       expect(component.coreInstances, hasLength(1));
-      expect(component.coreInstances.single.moduleIndex, 0);
-      expect(component.coreInstances.single.argumentInstanceIndices, isEmpty);
+      expect(component.coreInstances.single.isFromExports, isTrue);
+      expect(component.coreInstances.single.exports, hasLength(1));
+      expect(component.coreInstances.single.exports.single.exportName, 'x');
       expect(component.hasOpaqueCoreInstances, isTrue);
     });
 
