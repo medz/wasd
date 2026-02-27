@@ -1139,6 +1139,9 @@ final class WasiPreview1 {
     if ((dirFlags & ~_lookupflagSymlinkFollow) != 0) {
       return _errnoInval;
     }
+    if ((oflags & ~_oflagMask) != 0) {
+      return _errnoInval;
+    }
     if ((fdFlags & ~_fdflagMask) != 0) {
       return _errnoInval;
     }
@@ -1187,6 +1190,10 @@ final class WasiPreview1 {
     final create = (oflags & _oflagCreat) != 0;
     final truncate = (oflags & _oflagTrunc) != 0;
     final exclusive = (oflags & _oflagExcl) != 0;
+    final followSymlinks = (dirFlags & _lookupflagSymlinkFollow) != 0;
+    if (truncate && !canWrite) {
+      return _errnoNotcapable;
+    }
 
     if (openDirectory) {
       if (create || truncate || exclusive) {
@@ -1202,6 +1209,7 @@ final class WasiPreview1 {
       try {
         stat = (metadataFs as WasiPathMetadataFileSystem).statPath(
           resolvedPath,
+          followSymlinks: followSymlinks,
         );
       } on WasiFsException catch (error) {
         return _fsErrno(error.error);
@@ -1234,6 +1242,7 @@ final class WasiPreview1 {
         read: canRead,
         write: canWrite,
         exclusive: exclusive,
+        followSymlinks: followSymlinks,
       );
     } on WasiFsException catch (error) {
       return _fsErrno(error.error);
@@ -1270,6 +1279,7 @@ final class WasiPreview1 {
     if ((flags & ~_lookupflagSymlinkFollow) != 0) {
       return _errnoInval;
     }
+    final followSymlinks = (flags & _lookupflagSymlinkFollow) != 0;
 
     final resolvedPathResult = _resolveGuestPath(
       dirFd: dirFd,
@@ -1289,7 +1299,10 @@ final class WasiPreview1 {
 
     WasiPathStat stat;
     try {
-      stat = (metadataFs as WasiPathMetadataFileSystem).statPath(resolvedPath);
+      stat = (metadataFs as WasiPathMetadataFileSystem).statPath(
+        resolvedPath,
+        followSymlinks: followSymlinks,
+      );
     } on WasiFsException catch (error) {
       return _fsErrno(error.error);
     }
@@ -1317,6 +1330,7 @@ final class WasiPreview1 {
     if ((flags & ~_lookupflagSymlinkFollow) != 0) {
       return _errnoInval;
     }
+    final followSymlinks = (flags & _lookupflagSymlinkFollow) != 0;
 
     final resolvedPathResult = _resolveGuestPath(
       dirFd: dirFd,
@@ -1348,6 +1362,7 @@ final class WasiPreview1 {
         path: resolvedPath,
         atimeNs: resolvedTimes.$1,
         mtimeNs: resolvedTimes.$2,
+        followSymlinks: followSymlinks,
       );
       return _errnoSuccess;
     } on WasiFsException catch (error) {
@@ -1369,6 +1384,7 @@ final class WasiPreview1 {
     if ((oldFlags & ~_lookupflagSymlinkFollow) != 0) {
       return _errnoInval;
     }
+    final followSymlinks = (oldFlags & _lookupflagSymlinkFollow) != 0;
 
     final sourceResult = _resolveGuestPath(
       dirFd: oldDirFd,
@@ -1400,6 +1416,7 @@ final class WasiPreview1 {
       (fs as WasiPathLinkFileSystem).link(
         sourcePath: source,
         destinationPath: destination,
+        followSymlinks: followSymlinks,
       );
       return _errnoSuccess;
     } on WasiFsException catch (error) {
@@ -2510,6 +2527,8 @@ final class WasiPreview1 {
 
   static int _pathResolutionErrno(WasiFsError error) {
     switch (error) {
+      case WasiFsError.loop:
+        return _errnoLoop;
       case WasiFsError.permissionDenied:
         return _errnoNotcapable;
       case WasiFsError.invalid:
@@ -2552,6 +2571,8 @@ final class WasiPreview1 {
         return _errnoExist;
       case WasiFsError.invalid:
         return _errnoInval;
+      case WasiFsError.loop:
+        return _errnoLoop;
       case WasiFsError.permissionDenied:
         return _errnoPerm;
       case WasiFsError.notSupported:
@@ -2600,6 +2621,8 @@ final class WasiPreview1 {
   static const int _oflagDirectory = 0x0002;
   static const int _oflagExcl = 0x0004;
   static const int _oflagTrunc = 0x0008;
+  static const int _oflagMask =
+      _oflagCreat | _oflagDirectory | _oflagExcl | _oflagTrunc;
 
   static const int _fdflagAppend = 0x0001;
   static const int _fdflagDsync = 0x0002;
@@ -2652,6 +2675,7 @@ final class WasiPreview1 {
   static const int _errnoExist = 20;
   static const int _errnoFault = 21;
   static const int _errnoInval = 28;
+  static const int _errnoLoop = 32;
   static const int _errnoNametoolong = 37;
   static const int _errnoNoent = 44;
   static const int _errnoNosys = 52;
