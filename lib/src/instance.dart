@@ -1666,6 +1666,14 @@ final class WasmInstance {
             _simdF32x4Splat(stack);
             pc++;
 
+          case Opcodes.f32x4ExtractLane:
+            _simdF32x4ExtractLane(stack, immediate: instruction.immediate!);
+            pc++;
+
+          case Opcodes.f32x4ReplaceLane:
+            _simdF32x4ReplaceLane(stack, immediate: instruction.immediate!);
+            pc++;
+
           case Opcodes.f32x4Eq:
             _simdF32x4Eq(stack);
             pc++;
@@ -1706,6 +1714,22 @@ final class WasmInstance {
             _simdF32x4Div(stack);
             pc++;
 
+          case Opcodes.f32x4Ceil:
+            _simdF32x4Ceil(stack);
+            pc++;
+
+          case Opcodes.f32x4Floor:
+            _simdF32x4Floor(stack);
+            pc++;
+
+          case Opcodes.f32x4Trunc:
+            _simdF32x4Trunc(stack);
+            pc++;
+
+          case Opcodes.f32x4Nearest:
+            _simdF32x4Nearest(stack);
+            pc++;
+
           case Opcodes.f32x4Abs:
             _simdF32x4Abs(stack);
             pc++;
@@ -1744,6 +1768,14 @@ final class WasmInstance {
 
           case Opcodes.f64x2Splat:
             _simdF64x2Splat(stack);
+            pc++;
+
+          case Opcodes.f64x2ExtractLane:
+            _simdF64x2ExtractLane(stack, immediate: instruction.immediate!);
+            pc++;
+
+          case Opcodes.f64x2ReplaceLane:
+            _simdF64x2ReplaceLane(stack, immediate: instruction.immediate!);
             pc++;
 
           case Opcodes.f64x2Eq:
@@ -7590,6 +7622,27 @@ final class WasmInstance {
     _pushAsyncSubsetV128(stack, result);
   }
 
+  void _simdF32x4ExtractLane(List<WasmValue> stack, {required int immediate}) {
+    final lane = immediate & 0x03;
+    final value = _popAsyncSubsetV128(stack, opName: 'f32x4.extract_lane');
+    final bits = ByteData.sublistView(value).getUint32(lane * 4, Endian.little);
+    stack.add(WasmValue.f32Bits(bits));
+  }
+
+  void _simdF32x4ReplaceLane(List<WasmValue> stack, {required int immediate}) {
+    final lane = immediate & 0x03;
+    final replacement = _popValue(
+      stack,
+      'f32x4.replace_lane value',
+    ).castTo(WasmValueType.f32).asF32Bits();
+    final value = _popAsyncSubsetV128(stack, opName: 'f32x4.replace_lane');
+    final result = Uint8List.fromList(value);
+    ByteData.sublistView(
+      result,
+    ).setUint32(lane * 4, replacement & 0xffffffff, Endian.little);
+    _pushAsyncSubsetV128(stack, result);
+  }
+
   void _simdF32x4Eq(List<WasmValue> stack) {
     final rhs = _popAsyncSubsetV128(stack, opName: 'f32x4.eq rhs');
     final lhs = _popAsyncSubsetV128(stack, opName: 'f32x4.eq lhs');
@@ -7730,6 +7783,70 @@ final class WasmInstance {
         offset,
         lhsData.getFloat32(offset, Endian.little) /
             rhsData.getFloat32(offset, Endian.little),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF32x4Ceil(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'f32x4.ceil');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      _setAsyncSubsetF32LaneCanonical(
+        resultData,
+        offset,
+        valueData.getFloat32(offset, Endian.little).ceilToDouble(),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF32x4Floor(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'f32x4.floor');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      _setAsyncSubsetF32LaneCanonical(
+        resultData,
+        offset,
+        valueData.getFloat32(offset, Endian.little).floorToDouble(),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF32x4Trunc(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'f32x4.trunc');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      _setAsyncSubsetF32LaneCanonical(
+        resultData,
+        offset,
+        valueData.getFloat32(offset, Endian.little).truncateToDouble(),
+      );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF32x4Nearest(List<WasmValue> stack) {
+    final value = _popAsyncSubsetV128(stack, opName: 'f32x4.nearest');
+    final valueData = ByteData.sublistView(value);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final offset = lane * 4;
+      _setAsyncSubsetF32LaneCanonical(
+        resultData,
+        offset,
+        _nearest(valueData.getFloat32(offset, Endian.little)),
       );
     }
     _pushAsyncSubsetV128(stack, result);
@@ -7885,6 +8002,26 @@ final class WasmInstance {
     for (var i = 0; i < 2; i++) {
       _writeAsyncSubsetLaneU64(data, i * 8, laneBits);
     }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdF64x2ExtractLane(List<WasmValue> stack, {required int immediate}) {
+    final lane = immediate & 0x01;
+    final value = _popAsyncSubsetV128(stack, opName: 'f64x2.extract_lane');
+    final valueData = ByteData.sublistView(value);
+    stack.add(WasmValue.f64Bits(_readAsyncSubsetLaneU64(valueData, lane * 8)));
+  }
+
+  void _simdF64x2ReplaceLane(List<WasmValue> stack, {required int immediate}) {
+    final lane = immediate & 0x01;
+    final replacement = _popValue(
+      stack,
+      'f64x2.replace_lane value',
+    ).castTo(WasmValueType.f64).asF64Bits();
+    final value = _popAsyncSubsetV128(stack, opName: 'f64x2.replace_lane');
+    final result = Uint8List.fromList(value);
+    final resultData = ByteData.sublistView(result);
+    _writeAsyncSubsetLaneU64(resultData, lane * 8, replacement);
     _pushAsyncSubsetV128(stack, result);
   }
 

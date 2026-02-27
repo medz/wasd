@@ -8629,6 +8629,175 @@ void main() {
     });
 
     test(
+      'supports f32x4 round and lane opcodes in async import call chains',
+      () async {
+        List<int> f32x4SplatBytes(double value) {
+          final lane = ByteData(4);
+          lane.setFloat32(0, value, Endian.little);
+          final bytes = lane.buffer.asUint8List();
+          return List<int>.generate(16, (index) => bytes[index % 4]);
+        }
+
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [0, 0],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._fdBytes(Opcodes.v128Const, f32x4SplatBytes(1.25)),
+                ..._fdBytes(Opcodes.f32x4Ceil, []),
+                ..._fdBytes(Opcodes.v128Const, f32x4SplatBytes(2.0)),
+                ..._fdBytes(Opcodes.f32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                ..._fdBytes(Opcodes.v128Const, f32x4SplatBytes(1.75)),
+                ..._fdBytes(Opcodes.f32x4Floor, []),
+                ..._fdBytes(Opcodes.v128Const, f32x4SplatBytes(1.0)),
+                ..._fdBytes(Opcodes.f32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                ..._fdBytes(Opcodes.v128Const, f32x4SplatBytes(1.75)),
+                ..._fdBytes(Opcodes.f32x4Trunc, []),
+                ..._fdBytes(Opcodes.v128Const, f32x4SplatBytes(1.0)),
+                ..._fdBytes(Opcodes.f32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                ..._fdBytes(Opcodes.v128Const, f32x4SplatBytes(2.5)),
+                ..._fdBytes(Opcodes.f32x4Nearest, []),
+                ..._fdBytes(Opcodes.v128Const, f32x4SplatBytes(2.0)),
+                ..._fdBytes(Opcodes.f32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
+                Opcodes.i32And,
+                Opcodes.end,
+              ],
+            ),
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ..._f32Const(3.5),
+                ..._fdBytes(Opcodes.f32x4Splat, []),
+                ..._f32Const(-1.25),
+                ..._fdBytes(Opcodes.f32x4ReplaceLane, [2]),
+                ..._fdBytes(Opcodes.f32x4ExtractLane, [2]),
+                ..._f32Const(-1.25),
+                Opcodes.f32Eq,
+                ..._f32Const(3.5),
+                ..._fdBytes(Opcodes.f32x4Splat, []),
+                ..._f32Const(-1.25),
+                ..._fdBytes(Opcodes.f32x4ReplaceLane, [2]),
+                ..._fdBytes(Opcodes.f32x4ExtractLane, [0]),
+                ..._f32Const(3.5),
+                Opcodes.f32Eq,
+                Opcodes.i32And,
+                Opcodes.end,
+              ],
+            ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'supportsF32x4RoundOps',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+            _ExportSpec(
+              name: 'supportsF32x4LaneOps',
+              kind: WasmExportKind.function,
+              index: 2,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          features: const WasmFeatureSet(simd: true),
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
+          ),
+        );
+
+        expect(await instance.invokeI32Async('supportsF32x4RoundOps', [41]), 1);
+        expect(await instance.invokeI32Async('supportsF32x4LaneOps', [41]), 1);
+      },
+    );
+
+    test('supports f64x2 lane opcodes in async import call chains', () async {
+      final wasm = _buildModule(
+        types: [
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+        ],
+        functionTypeIndices: const [0],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._f64Const(4.5),
+              ..._fdBytes(Opcodes.f64x2Splat, []),
+              ..._f64Const(-2.25),
+              ..._fdBytes(Opcodes.f64x2ReplaceLane, [1]),
+              ..._fdBytes(Opcodes.f64x2ExtractLane, [1]),
+              ..._f64Const(-2.25),
+              Opcodes.f64Eq,
+              ..._f64Const(4.5),
+              ..._fdBytes(Opcodes.f64x2Splat, []),
+              ..._f64Const(-2.25),
+              ..._fdBytes(Opcodes.f64x2ReplaceLane, [1]),
+              ..._fdBytes(Opcodes.f64x2ExtractLane, [0]),
+              ..._f64Const(4.5),
+              Opcodes.f64Eq,
+              Opcodes.i32And,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'supportsF64x2LaneOps',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(simd: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('supportsF64x2LaneOps', [41]), 1);
+    });
+
+    test(
       'supports f32x4/f64x2 pmin and pmax in async import call chains',
       () async {
         List<int> f32x4SplatBytes(double value) {
