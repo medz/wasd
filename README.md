@@ -40,7 +40,7 @@ Or add manually in `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  wasd: ^0.0.1
+  wasd: ^0.1.0
 ```
 
 ## Quick Start
