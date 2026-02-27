@@ -231,6 +231,150 @@ void main() {
       expect(instance.invokeI32('use_plus', [4, 5]), 9);
     });
 
+    test('validates optional functionTypes for imported host function', () {
+      final wasm = _buildModule(
+        types: [
+          _funcType([0x7f, 0x7f], [0x7f]),
+        ],
+        imports: [
+          _ImportFunctionSpec(module: 'env', name: 'plus', typeIndex: 0),
+        ],
+        functionTypeIndices: [0],
+        functionBodies: [
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._localGet(1),
+              ..._call(0),
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: [
+          _ExportSpec(
+            name: 'use_plus',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+        ],
+      );
+
+      expect(
+        () => WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            functions: {WasmImports.key('env', 'plus'): (_) => 0},
+            functionTypes: {
+              WasmImports.key('env', 'plus'): const WasmFunctionType(
+                params: [WasmValueType.i32, WasmValueType.i32],
+                results: [WasmValueType.i64],
+                kind: WasmCompositeTypeKind.function,
+                resultTypeSignatures: ['7e'],
+              ),
+            },
+          ),
+        ),
+        throwsStateError,
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        imports: WasmImports(
+          functions: {WasmImports.key('env', 'plus'): (args) => 7},
+          functionTypes: {
+            WasmImports.key('env', 'plus'): const WasmFunctionType(
+              params: [WasmValueType.i32, WasmValueType.i32],
+              results: [WasmValueType.i32],
+              kind: WasmCompositeTypeKind.function,
+              paramTypeSignatures: ['7f', '7f'],
+              resultTypeSignatures: ['7f'],
+            ),
+          },
+        ),
+      );
+      expect(instance.invokeI32('use_plus', [1, 2]), 7);
+    });
+
+    test(
+      'allows missing functionTypes for imported host function with reference signature',
+      () {
+        final wasm = _buildModule(
+          types: [
+            _funcType([], [0x70]),
+          ],
+          imports: [
+            _ImportFunctionSpec(module: 'env', name: 'mk', typeIndex: 0),
+          ],
+          functionTypeIndices: const [],
+          functionBodies: const [],
+          exports: const [
+            _ExportSpec(name: 'mk', kind: WasmExportKind.function, index: 0),
+          ],
+        );
+
+        final noTypes = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            functions: {WasmImports.key('env', 'mk'): (_) => -2},
+          ),
+        );
+        expect(noTypes.invoke('mk'), -2);
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          imports: WasmImports(
+            functions: {WasmImports.key('env', 'mk'): (_) => -1},
+            functionTypes: {
+              WasmImports.key('env', 'mk'): const WasmFunctionType(
+                params: [],
+                results: [WasmValueType.i32],
+                kind: WasmCompositeTypeKind.function,
+                resultTypeSignatures: ['70'],
+              ),
+            },
+          ),
+        );
+        expect(instance.invoke('mk'), -1);
+      },
+    );
+
+    test(
+      'rejects reference-typed functionTypes with non-i32 carrier for host imports',
+      () {
+        final wasm = _buildModule(
+          types: [
+            _funcType([], [0x70]),
+          ],
+          imports: [
+            _ImportFunctionSpec(module: 'env', name: 'mk', typeIndex: 0),
+          ],
+          functionTypeIndices: const [],
+          functionBodies: const [],
+          exports: const [
+            _ExportSpec(name: 'mk', kind: WasmExportKind.function, index: 0),
+          ],
+        );
+
+        expect(
+          () => WasmInstance.fromBytes(
+            wasm,
+            imports: WasmImports(
+              functions: {WasmImports.key('env', 'mk'): (_) => -1},
+              functionTypes: {
+                WasmImports.key('env', 'mk'): const WasmFunctionType(
+                  params: [],
+                  results: [WasmValueType.i64],
+                  kind: WasmCompositeTypeKind.function,
+                  resultTypeSignatures: ['70'],
+                ),
+              },
+            ),
+          ),
+          throwsStateError,
+        );
+      },
+    );
+
     test('accepts passive data segments', () {
       final wasm = _buildModule(
         types: [

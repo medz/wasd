@@ -175,11 +175,25 @@ final class WasmInstance {
               'Invalid function import type index: $typeIndex',
             );
           }
+          final expectedFunctionType = module.types[typeIndex];
 
           final callback = imports.functions[import.key];
           final asyncCallback = imports.asyncFunctions[import.key];
           if (callback == null && asyncCallback == null) {
             throw StateError('Missing function import `${import.key}`.');
+          }
+          final importedFunctionType = imports.functionTypes[import.key];
+          if (importedFunctionType != null) {
+            final mismatch = _typedFunctionImportTypeMismatch(
+              expected: expectedFunctionType,
+              actual: importedFunctionType,
+            );
+            if (mismatch != null) {
+              throw StateError(
+                'Imported function `${import.key}` has incompatible import type: '
+                '$mismatch.',
+              );
+            }
           }
           final syncCallback =
               callback ??
@@ -11962,6 +11976,103 @@ final class WasmInstance {
       }
     }
     return true;
+  }
+
+  static String? _typedFunctionImportTypeMismatch({
+    required WasmFunctionType expected,
+    required WasmFunctionType actual,
+  }) {
+    if (!actual.isFunctionType) {
+      return 'expected function type, actual ${actual.kind.name}.';
+    }
+
+    final expectedParams = _functionTypeSignaturesForValidation(
+      valueTypes: expected.params,
+      signatures: expected.paramTypeSignatures,
+    );
+    final expectedResults = _functionTypeSignaturesForValidation(
+      valueTypes: expected.results,
+      signatures: expected.resultTypeSignatures,
+    );
+    final actualParams = _functionTypeSignaturesForValidation(
+      valueTypes: actual.params,
+      signatures: actual.paramTypeSignatures,
+    );
+    final actualResults = _functionTypeSignaturesForValidation(
+      valueTypes: actual.results,
+      signatures: actual.resultTypeSignatures,
+    );
+
+    if (expectedParams.length != actualParams.length ||
+        expectedResults.length != actualResults.length) {
+      return 'expected (${expectedParams.join(', ')}) -> '
+          '(${expectedResults.join(', ')}), actual '
+          '(${actualParams.join(', ')}) -> (${actualResults.join(', ')}).';
+    }
+
+    for (var i = 0; i < expectedParams.length; i++) {
+      if (expectedParams[i] != actualParams[i]) {
+        return 'parameter signature mismatch at index $i: '
+            'expected ${expectedParams[i]}, actual ${actualParams[i]}.';
+      }
+    }
+    for (var i = 0; i < expectedResults.length; i++) {
+      if (expectedResults[i] != actualResults[i]) {
+        return 'result signature mismatch at index $i: '
+            'expected ${expectedResults[i]}, actual ${actualResults[i]}.';
+      }
+    }
+
+    final carrierMismatch = _referenceFunctionCarrierMismatch(
+      signatures: actualParams,
+      carrierTypes: actual.params,
+      kind: 'parameter',
+    );
+    if (carrierMismatch != null) {
+      return carrierMismatch;
+    }
+    return _referenceFunctionCarrierMismatch(
+      signatures: actualResults,
+      carrierTypes: actual.results,
+      kind: 'result',
+    );
+  }
+
+  static List<String> _functionTypeSignaturesForValidation({
+    required List<WasmValueType> valueTypes,
+    required List<String> signatures,
+  }) {
+    if (signatures.length == valueTypes.length) {
+      return List<String>.from(signatures, growable: false);
+    }
+    return valueTypes
+        .map(
+          (type) => switch (type) {
+            WasmValueType.i32 => '7f',
+            WasmValueType.i64 => '7e',
+            WasmValueType.f32 => '7d',
+            WasmValueType.f64 => '7c',
+          },
+        )
+        .toList(growable: false);
+  }
+
+  static String? _referenceFunctionCarrierMismatch({
+    required List<String> signatures,
+    required List<WasmValueType> carrierTypes,
+    required String kind,
+  }) {
+    for (var i = 0; i < signatures.length; i++) {
+      final signature = signatures[i];
+      if (_isNumericValueTypeSignature(signature)) {
+        continue;
+      }
+      if (carrierTypes[i] != WasmValueType.i32) {
+        return 'reference signature $signature at $kind index $i uses '
+            'carrier ${carrierTypes[i].name} (expected i32).';
+      }
+    }
+    return null;
   }
 
   static String _tagNominalTypeKey(WasmModule module, int typeIndex) {
