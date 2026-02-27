@@ -12,6 +12,9 @@ const String _defaultJsonPath =
     '.dart_tool/spec_runner/component_decode_probe_latest.json';
 const String _defaultMarkdownPath =
     '.dart_tool/spec_runner/component_decode_probe_failures.md';
+const String _testsuiteSubmoduleHint =
+    'Initialize testsuite submodule: '
+    'git submodule update --init --recursive third_party/component-model-tests';
 const Set<String> _defaultExpectedFailures = <String>{
   // Parser token coverage gap in current wasm-tools release.
   'async/trap-if-block-and-sync.wast',
@@ -78,11 +81,13 @@ Future<void> main(List<String> args) async {
     stdout.writeln('component-decode-probe status: skipped');
     stdout.writeln('json report: $outputJsonPath');
     stdout.writeln('markdown report: $outputMarkdownPath');
+    stdout.writeln(_testsuiteSubmoduleHint);
     if (requireTestsuiteDir) {
       stderr.writeln(
         'component-decode-probe required testsuite directory is missing: '
         '$testsuiteDir',
       );
+      stderr.writeln(_testsuiteSubmoduleHint);
       exitCode = 1;
     }
     return;

@@ -6,6 +6,9 @@ const String _defaultJsonPath =
 const String _defaultMarkdownPath =
     '.dart_tool/spec_runner/component_official_failures.md';
 const String _defaultTestsuiteDir = 'third_party/component-model-tests/test';
+const String _testsuiteSubmoduleHint =
+    'Initialize testsuite submodule: '
+    'git submodule update --init --recursive third_party/component-model-tests';
 const Set<String> _defaultExpectedFailures = <String>{
   // wasm-tools currently rejects `stream<char>` payload typing.
   'async/same-component-stream-future.wast',
@@ -77,11 +80,13 @@ Future<void> main(List<String> args) async {
     stdout.writeln('component-official status: skipped');
     stdout.writeln('json report: $outputJsonPath');
     stdout.writeln('markdown report: $outputMarkdownPath');
+    stdout.writeln(_testsuiteSubmoduleHint);
     if (requireTestsuiteDir) {
       stderr.writeln(
         'component-official required testsuite directory is missing: '
         '$testsuiteDir',
       );
+      stderr.writeln(_testsuiteSubmoduleHint);
       exitCode = 1;
     }
     return;

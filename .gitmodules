@@ -1,0 +1,6 @@
+[submodule "third_party/component-model-tests"]
+	path = third_party/component-model-tests
+	url = https://github.com/WebAssembly/component-model.git
+[submodule "third_party/wasm-spec-tests"]
+	path = third_party/wasm-spec-tests
+	url = https://github.com/WebAssembly/testsuite.git

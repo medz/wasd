@@ -151,12 +151,12 @@ strafe, `Shift` run, `Enter` use, `Esc` menu.
 
 ## Conformance Tooling
 
-The repository includes a first-pass conformance runner and pinned toolchain
-bootstrap scripts:
+The repository includes conformance runners and pinned toolchain bootstrap.
+Official testsuites are tracked in `third_party` as git submodules:
 
 ```bash
+git submodule update --init --recursive third_party/wasm-spec-tests third_party/component-model-tests
 tool/ensure_toolchains.sh
-git clone --depth 1 https://github.com/WebAssembly/testsuite.git third_party/wasm-spec-tests
 dart run tool/spec_runner.dart --target=vm --suite=all
 dart run tool/spec_runner.dart --target=js --suite=all
 dart run tool/spec_runner.dart --target=wasm --suite=all
@@ -164,6 +164,8 @@ dart run tool/spec_runner.dart --target=wasm --suite=all
 dart run tool/spec_runner.dart --target=vm --suite=core
 # proposal-only run (non-gating by default)
 dart run tool/spec_runner.dart --target=vm --suite=proposal
+# strict component-model gates (uses third_party/component-model-tests/test by default)
+dart run tool/spec_runner.dart --target=vm --suite=all --strict-component-official --strict-component-decode-probe
 ```
 
 Artifacts:
