@@ -76,6 +76,7 @@ final class WasmComponentTypeDeclaration {
   const WasmComponentTypeDeclaration.value({
     required this.name,
     required this.valueTypeCode,
+    required this.valueTypeSignature,
   }) : kind = WasmComponentTypeKind.value,
        parameterTypeCodes = null,
        resultTypeCodes = null,
@@ -90,6 +91,7 @@ final class WasmComponentTypeDeclaration {
     required this.resultTypeCodes,
   }) : kind = WasmComponentTypeKind.function,
        valueTypeCode = null,
+       valueTypeSignature = null,
        aliasTargetIndex = null,
        memoryType = null,
        tableType = null,
@@ -100,6 +102,7 @@ final class WasmComponentTypeDeclaration {
     required this.aliasTargetIndex,
   }) : kind = WasmComponentTypeKind.alias,
        valueTypeCode = null,
+       valueTypeSignature = null,
        parameterTypeCodes = null,
        resultTypeCodes = null,
        memoryType = null,
@@ -111,6 +114,7 @@ final class WasmComponentTypeDeclaration {
     required this.memoryType,
   }) : kind = WasmComponentTypeKind.memory,
        valueTypeCode = null,
+       valueTypeSignature = null,
        parameterTypeCodes = null,
        resultTypeCodes = null,
        aliasTargetIndex = null,
@@ -122,6 +126,7 @@ final class WasmComponentTypeDeclaration {
     required this.tableType,
   }) : kind = WasmComponentTypeKind.table,
        valueTypeCode = null,
+       valueTypeSignature = null,
        parameterTypeCodes = null,
        resultTypeCodes = null,
        aliasTargetIndex = null,
@@ -133,6 +138,7 @@ final class WasmComponentTypeDeclaration {
     required this.tagParameterTypeCodes,
   }) : kind = WasmComponentTypeKind.tag,
        valueTypeCode = null,
+       valueTypeSignature = null,
        parameterTypeCodes = null,
        resultTypeCodes = null,
        aliasTargetIndex = null,
@@ -142,6 +148,7 @@ final class WasmComponentTypeDeclaration {
   final String name;
   final WasmComponentTypeKind kind;
   final int? valueTypeCode;
+  final String? valueTypeSignature;
   final List<int>? parameterTypeCodes;
   final List<int>? resultTypeCodes;
   final int? aliasTargetIndex;
@@ -440,10 +447,15 @@ final class WasmComponent {
       final kind = reader.readByte();
       switch (kind) {
         case 0x00:
+          final typeStart = reader.offset;
+          final valueTypeCode = _readComponentValueTypeCode(reader);
           declarations.add(
             WasmComponentTypeDeclaration.value(
               name: name,
-              valueTypeCode: reader.readByte(),
+              valueTypeCode: valueTypeCode,
+              valueTypeSignature: _bytesToSignature(
+                reader.bytes.sublist(typeStart, reader.offset),
+              ),
             ),
           );
         case 0x01:
@@ -637,6 +649,47 @@ final class WasmComponent {
     );
   }
 
+  static int _readComponentValueTypeCode(ByteReader reader) {
+    final lead = reader.readByte();
+    switch (lead) {
+      case 0x7f:
+      case 0x7e:
+      case 0x7d:
+      case 0x7c:
+      case 0x7b:
+      case 0x70:
+      case 0x6f:
+      case 0x71:
+      case 0x72:
+      case 0x73:
+      case 0x74:
+      case 0x75:
+      case 0x6e:
+      case 0x6d:
+      case 0x6c:
+      case 0x6b:
+      case 0x6a:
+      case 0x69:
+      case 0x68:
+      case 0x67:
+      case 0x66:
+      case 0x65:
+      case 0x62:
+      case 0x61:
+      case 0x60:
+      case 0x63:
+      case 0x64:
+        if (lead == 0x63 || lead == 0x64 || lead == 0x62 || lead == 0x61) {
+          _readComponentReferenceTypeCodeWithLead(reader, lead);
+        }
+        return lead;
+      default:
+        throw UnsupportedError(
+          'Unsupported component value type: 0x${lead.toRadixString(16)}',
+        );
+    }
+  }
+
   static WasmRefType _readComponentReferenceType(ByteReader reader) {
     final lead = _readComponentReferenceTypeCode(reader);
     switch (lead) {
@@ -671,6 +724,13 @@ final class WasmComponent {
 
   static int _readComponentReferenceTypeCode(ByteReader reader) {
     final lead = reader.readByte();
+    return _readComponentReferenceTypeCodeWithLead(reader, lead);
+  }
+
+  static int _readComponentReferenceTypeCodeWithLead(
+    ByteReader reader,
+    int lead,
+  ) {
     if (_isLegacyHeapTypeCode(lead)) {
       return lead;
     }

@@ -1061,6 +1061,75 @@ void main() {
     );
 
     test(
+      'validates typed global imports with multi-byte reference signatures',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[_coreModuleConstI32(name: 'one', value: 1)],
+          importRequirements: const [
+            _ComponentImportRequirementSpec(
+              componentImportName: 'globalTypedRef',
+              moduleName: 'env',
+              fieldName: 'gtyped',
+              kind: 0x03,
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('typed_ref_t'),
+          0x00, // value
+          0x63, // ref null
+          0x00, // heaptype = type index 0
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x00, // importRequirement
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            imports: const WasmImports(
+              globals: {'env::gtyped': -1},
+              globalTypes: {
+                'env::gtyped': WasmGlobalType(
+                  valueType: WasmValueType.i32,
+                  mutable: false,
+                  valueTypeSignature: '6301',
+                ),
+              },
+            ),
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          imports: const WasmImports(
+            globals: {'env::gtyped': -1},
+            globalTypes: {
+              'env::gtyped': WasmGlobalType(
+                valueType: WasmValueType.i32,
+                mutable: false,
+                valueTypeSignature: '6300',
+              ),
+            },
+          ),
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.invokeCore('one'), 1);
+      },
+    );
+
+    test(
       'validates typed function import requirements against core module signatures',
       () {
         final baseComponent = _componentWithCoreModules(

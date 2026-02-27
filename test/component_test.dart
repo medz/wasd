@@ -435,6 +435,7 @@ void main() {
       expect(component.typeDeclarations[0].name, 'i32_t');
       expect(component.typeDeclarations[0].kind, WasmComponentTypeKind.value);
       expect(component.typeDeclarations[0].valueTypeCode, 0x7f);
+      expect(component.typeDeclarations[0].valueTypeSignature, '7f');
       expect(
         component.typeDeclarations[1].kind,
         WasmComponentTypeKind.function,
@@ -480,6 +481,33 @@ void main() {
         expect(declaration.tableType!.refTypeSignature, '6300');
         expect(declaration.tableType!.min, 1);
         expect(declaration.tableType!.max, 2);
+      },
+    );
+
+    test(
+      'decodes component value type declarations with multi-byte ref signatures',
+      () {
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('g_typed'),
+          0x00, // value
+          0x63, // ref null
+          0x00, // heap type = type index 0 (signed LEB33)
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ..._componentHeaderWithOneCoreModule(),
+          ..._section(0x06, typeSection),
+        ]);
+
+        final component = WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(component.typeDeclarations, hasLength(1));
+        final declaration = component.typeDeclarations.single;
+        expect(declaration.kind, WasmComponentTypeKind.value);
+        expect(declaration.valueTypeCode, 0x63);
+        expect(declaration.valueTypeSignature, '6300');
       },
     );
 

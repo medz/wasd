@@ -529,6 +529,7 @@ final class WasmComponentInstance {
           break;
         case WasmComponentImportKind.global:
           final valueTypeCode = declaration.valueTypeCode;
+          final declarationValueSignature = declaration.valueTypeSignature;
           if (declaration.kind != WasmComponentTypeKind.value ||
               valueTypeCode == null) {
             throw FormatException(
@@ -536,9 +537,9 @@ final class WasmComponentInstance {
               'must bind to a value type declaration.',
             );
           }
-          final expectedSignature = _componentValueTypeCodeToSignature(
-            valueTypeCode,
-          );
+          final expectedSignature =
+              declarationValueSignature ??
+              _componentValueTypeCodeToSignature(valueTypeCode);
           if (expectedSignature == null) {
             throw UnsupportedError(
               'Component global import `${requirement.componentImportName}` '
@@ -879,6 +880,7 @@ final class WasmComponentInstance {
         binding.typeDeclarationIndex,
       );
       final valueTypeCode = declaration.valueTypeCode;
+      final declarationValueSignature = declaration.valueTypeSignature;
       if (declaration.kind != WasmComponentTypeKind.value ||
           valueTypeCode == null) {
         continue;
@@ -889,9 +891,9 @@ final class WasmComponentInstance {
       );
       final entry = (
         componentImportName: requirement.componentImportName,
-        valueSignature: _componentTypeCodesToSignatures(<int>[
-          valueTypeCode,
-        ]).single,
+        valueSignature:
+            declarationValueSignature ??
+            _componentTypeCodesToSignatures(<int>[valueTypeCode]).single,
       );
       final existing = out[key];
       if (existing != null && existing.valueSignature != entry.valueSignature) {
@@ -1285,15 +1287,16 @@ final class WasmComponentInstance {
             );
           }
           final valueTypeCode = declaration.valueTypeCode;
+          final declarationValueSignature = declaration.valueTypeSignature;
           if (valueTypeCode == null) {
             throw FormatException(
               '$context has malformed value type declaration '
               '`${declaration.name}`.',
             );
           }
-          final expectedSignature = _componentValueTypeCodeToSignature(
-            valueTypeCode,
-          );
+          final expectedSignature =
+              declarationValueSignature ??
+              _componentValueTypeCodeToSignature(valueTypeCode);
           if (expectedSignature == null) {
             throw UnsupportedError(
               '$context uses unsupported value type code '
