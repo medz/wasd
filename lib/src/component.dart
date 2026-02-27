@@ -27,6 +27,10 @@ final class WasmComponentCoreInstanceExport {
 
 /// Decoded core instance instantiation argument from component section `0x02`.
 final class WasmComponentCoreInstanceArgument {
+  static const int kindCoreExport = 0x11;
+  static const int kindCoreInstance = 0x12;
+  static const int kindCoreModule = 0x13;
+
   const WasmComponentCoreInstanceArgument({
     this.name,
     required this.kind,
@@ -37,7 +41,22 @@ final class WasmComponentCoreInstanceArgument {
   final int kind;
   final int index;
 
-  bool get isCoreInstance => kind == 0x12;
+  bool get isCoreExport => kind == kindCoreExport;
+  bool get isCoreInstance => kind == kindCoreInstance;
+  bool get isCoreModule => kind == kindCoreModule;
+
+  /// Runtime auto-wiring currently supports only core-instance (`0x12`) args.
+  bool get isRuntimeWireable => isCoreInstance;
+
+  String get kindHex => kindToHex(kind);
+
+  static bool isSupportedKind(int kind) {
+    return kind == kindCoreExport ||
+        kind == kindCoreInstance ||
+        kind == kindCoreModule;
+  }
+
+  static String kindToHex(int kind) => '0x${kind.toRadixString(16)}';
 }
 
 /// Decoded core instance declaration from component section `0x02`.
@@ -60,7 +79,7 @@ final class WasmComponentCoreInstance {
        ),
        argumentInstanceIndices = List<int>.unmodifiable(
          arguments
-             .where((argument) => argument.isCoreInstance)
+             .where((argument) => argument.isRuntimeWireable)
              .map((argument) => argument.index),
        ),
        exports = const <WasmComponentCoreInstanceExport>[],
@@ -544,9 +563,10 @@ final class WasmComponent {
       for (var i = 0; i < argCount; i++) {
         final name = _readName(reader);
         final kind = reader.readByte();
-        if (kind != 0x11 && kind != 0x12 && kind != 0x13) {
+        if (!WasmComponentCoreInstanceArgument.isSupportedKind(kind)) {
           throw FormatException(
-            'Unsupported core-instance arg kind: 0x${kind.toRadixString(16)}',
+            'Unsupported core-instance arg kind: '
+            '${WasmComponentCoreInstanceArgument.kindToHex(kind)}',
           );
         }
         final index = reader.readVarUint32();
@@ -572,7 +592,7 @@ final class WasmComponent {
     return List<WasmComponentCoreInstanceArgument>.generate(
       argCount,
       (_) => WasmComponentCoreInstanceArgument(
-        kind: 0x12,
+        kind: WasmComponentCoreInstanceArgument.kindCoreInstance,
         index: reader.readVarUint32(),
       ),
       growable: false,

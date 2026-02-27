@@ -408,6 +408,67 @@ void main() {
       },
     );
 
+    test('preserves core-instance arg metadata for kinds 0x11/0x12/0x13', () {
+      final componentBytes = Uint8List.fromList(<int>[
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x0d,
+        0x00,
+        0x01,
+        0x00,
+        // section 1: one core module payload
+        0x01,
+        0x08,
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        // section 2: one instantiate declaration with three official-form args
+        0x02,
+        0x17,
+        0x01,
+        0x00,
+        0x00,
+        0x03,
+        ..._name('exp'),
+        0x11,
+        0x07,
+        ..._name('inst'),
+        0x12,
+        0x08,
+        ..._name('mod'),
+        0x13,
+        0x09,
+      ]);
+
+      final component = WasmComponent.decode(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
+      final args = component.coreInstances.single.arguments;
+      expect(args, hasLength(3));
+      expect(args[0].name, 'exp');
+      expect(args[0].kind, WasmComponentCoreInstanceArgument.kindCoreExport);
+      expect(args[0].isRuntimeWireable, isFalse);
+      expect(args[1].name, 'inst');
+      expect(args[1].kind, WasmComponentCoreInstanceArgument.kindCoreInstance);
+      expect(args[1].isRuntimeWireable, isTrue);
+      expect(args[2].name, 'mod');
+      expect(args[2].kind, WasmComponentCoreInstanceArgument.kindCoreModule);
+      expect(args[2].isRuntimeWireable, isFalse);
+      expect(
+        component.coreInstances.single.argumentInstanceIndices,
+        orderedEquals(const <int>[8]),
+      );
+    });
+
     test(
       'keeps strict decode on official-style section 0x06 payloads with legacy-empty names',
       () {

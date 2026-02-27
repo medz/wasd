@@ -153,7 +153,10 @@ final class WasmComponentInstance {
         );
       }
     } else {
-      for (final declaration in component.coreInstances) {
+      for (var declarationIndex = 0;
+          declarationIndex < component.coreInstances.length;
+          declarationIndex++) {
+        final declaration = component.coreInstances[declarationIndex];
         if (declaration.isFromExports) {
           coreInstances.add(
             _instantiateCoreInstanceFromExports(
@@ -171,14 +174,11 @@ final class WasmComponentInstance {
             '(count=${component.coreModules.length}).',
           );
         }
-        for (final argumentIndex in declaration.argumentInstanceIndices) {
-          if (argumentIndex < 0 || argumentIndex >= coreInstances.length) {
-            throw FormatException(
-              'Component core-instance argument index out of range: '
-              '$argumentIndex (instantiated=${coreInstances.length}).',
-            );
-          }
-        }
+        _validateCoreInstanceInstantiateArguments(
+          declaration: declaration,
+          declarationIndex: declarationIndex,
+          instantiatedCoreInstancesCount: coreInstances.length,
+        );
         final moduleBytes = component.coreModules[moduleIndex];
         _validateTypedImportBindingsForCoreModule(
           moduleBytes: moduleBytes,
@@ -2210,6 +2210,54 @@ final class WasmComponentInstance {
     );
   }
 
+  static void _validateCoreInstanceInstantiateArguments({
+    required WasmComponentCoreInstance declaration,
+    required int declarationIndex,
+    required int instantiatedCoreInstancesCount,
+  }) {
+    final arguments = declaration.arguments;
+    if (arguments.isEmpty) {
+      for (final argumentIndex in declaration.argumentInstanceIndices) {
+        if (argumentIndex < 0 ||
+            argumentIndex >= instantiatedCoreInstancesCount) {
+          throw FormatException(
+            'Component core-instance declaration #$declarationIndex '
+            'argument index out of range: $argumentIndex '
+            '(instantiated=$instantiatedCoreInstancesCount).',
+          );
+        }
+      }
+      return;
+    }
+
+    for (var argumentPosition = 0;
+        argumentPosition < arguments.length;
+        argumentPosition++) {
+      final argument = arguments[argumentPosition];
+      if (!argument.isRuntimeWireable) {
+        final name = argument.name;
+        final label =
+            name == null || name.isEmpty ? '<unnamed>' : '`${argument.name}`';
+        throw UnsupportedError(
+          'Component core-instance declaration #$declarationIndex uses '
+          'non-runtime-wirable argument kind ${argument.kindHex} at position '
+          '$argumentPosition ($label). Only '
+          '${WasmComponentCoreInstanceArgument.kindToHex(WasmComponentCoreInstanceArgument.kindCoreInstance)} '
+          'is currently supported for instantiate auto-wiring.',
+        );
+      }
+      final argumentIndex = argument.index;
+      if (argumentIndex < 0 || argumentIndex >= instantiatedCoreInstancesCount) {
+        throw FormatException(
+          'Component core-instance declaration #$declarationIndex argument '
+          'index out of range: $argumentIndex '
+          '(instantiated=$instantiatedCoreInstancesCount, '
+          'arg_position=$argumentPosition).',
+        );
+      }
+    }
+  }
+
   static List<int> _candidateInstanceArgumentIndicesForImport({
     required WasmComponentCoreInstance declaration,
     required String importModuleName,
@@ -2222,7 +2270,7 @@ final class WasmComponentInstance {
     final named = <int>[];
     final unnamed = <int>[];
     for (final argument in arguments) {
-      if (!argument.isCoreInstance) {
+      if (!argument.isRuntimeWireable) {
         continue;
       }
       final name = argument.name;
