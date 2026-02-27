@@ -70,8 +70,11 @@ final class WasmComponentInstance {
     Uint8List componentBytes, {
     WasmImports imports = const WasmImports(),
     WasmFeatureSet features = const WasmFeatureSet(componentModel: true),
+    bool bestEffortDecode = false,
   }) {
-    final component = WasmComponent.decode(componentBytes, features: features);
+    final component = bestEffortDecode
+        ? WasmComponent.decodeBestEffort(componentBytes, features: features)
+        : WasmComponent.decode(componentBytes, features: features);
     return WasmComponentInstance.fromComponent(
       component,
       imports: imports,

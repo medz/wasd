@@ -33,6 +33,40 @@ void main() {
       expect(instance.invokeCore('one'), 7);
     });
 
+    test(
+      'can instantiate from bytes with bestEffortDecode for unsupported structured sections',
+      () {
+        final baseComponent = _componentWithCoreModules(<Uint8List>[
+          _coreModuleConstI32(name: 'one', value: 9),
+        ]);
+        final unsupportedTypeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x40, // unsupported in strict decode mode
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x07, unsupportedTypeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsA(isA<UnsupportedError>()),
+        );
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+          bestEffortDecode: true,
+        );
+        expect(instance.invokeCore('one'), 9);
+      },
+    );
+
     test('uses core-instance declarations when section 0x02 is present', () {
       final componentBytes = _componentWithCoreModules(
         <Uint8List>[
