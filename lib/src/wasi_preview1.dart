@@ -8,6 +8,8 @@ import 'int64.dart';
 import 'memory.dart';
 import 'wasi_filesystem.dart';
 import 'wasi_fs_auto.dart' as auto_fs;
+import 'wasi_socket_auto.dart' as auto_socket;
+import 'wasi_socket_transport.dart';
 
 typedef WasiReadSource = Uint8List Function(int maxBytes);
 typedef WasiWriteSink = void Function(Uint8List bytes);
@@ -99,6 +101,8 @@ final class WasiPreview1 {
     List<int> stdin = const [],
     this.stdinSource,
     this.procRaiseMode = WasiProcRaiseMode.enosys,
+    WasiSocketTransport? socketTransport,
+    Map<int, Object> preopenedSockets = const {},
     WasiWriteSink? stdoutSink,
     WasiWriteSink? stderrSink,
     WasiFileSystem? fileSystem,
@@ -115,6 +119,13 @@ final class WasiPreview1 {
            (preferHostIo
                ? auto_fs.createAutoWasiFileSystem(ioRootPath: ioRootPath)
                : WasiInMemoryFileSystem()),
+       _socketTransport =
+           socketTransport ??
+           (preferHostIo && preopenedSockets.isNotEmpty
+               ? auto_socket.createAutoWasiSocketTransport(
+                   preopenedSockets: preopenedSockets,
+                 )
+               : null),
        _preopenedDirectories = Map.unmodifiable(
          preopenedDirectories.map(
            (fd, path) =>
@@ -132,6 +143,7 @@ final class WasiPreview1 {
   final WasiWriteSink _stdoutSink;
   final WasiWriteSink _stderrSink;
   final WasiFileSystem _fileSystem;
+  final WasiSocketTransport? _socketTransport;
   final Map<int, String> _preopenedDirectories;
 
   WasmMemory? _memory;
@@ -145,6 +157,7 @@ final class WasiPreview1 {
   bool get hostIoSupported => auto_fs.autoHostIoSupported;
   bool get usingHostIo =>
       auto_fs.autoHostIoSupported && _fileSystem is! WasiInMemoryFileSystem;
+  bool get hostSocketSupported => auto_socket.autoHostSocketSupported;
 
   WasmImports get imports => WasmImports(
     functions: {
@@ -548,6 +561,13 @@ final class WasiPreview1 {
     final fd = _asI32(args, 0, 'fd');
     final entry = _fdTable[fd];
     if (entry == null) {
+      final closeSocket = _socketTransport?.close;
+      if (closeSocket != null) {
+        final socketResult = closeSocket(fd: fd);
+        if (socketResult != null) {
+          return socketResult;
+        }
+      }
       return _errnoBadf;
     }
 
@@ -1699,35 +1719,162 @@ final class WasiPreview1 {
   }
 
   Object? _sockAccept(List<Object?> args) {
-    _asI32(args, 0, 'fd');
-    _asI32(args, 1, 'flags');
-    _asI32(args, 2, 'ro_fd_ptr');
-    return _errnoNosys;
+    final fd = _asI32(args, 0, 'fd');
+    final flags = _asI32(args, 1, 'flags');
+    final roFdPtr = _asI32(args, 2, 'ro_fd_ptr');
+    final handler = _socketTransport?.accept;
+    if (handler == null) {
+      return _errnoNosys;
+    }
+    final result = handler(
+      fd: fd,
+      flags: flags,
+      allocateFd: _allocateDynamicFd,
+    );
+    if (result.errno != _errnoSuccess) {
+      return result.errno;
+    }
+    final acceptedFd = result.acceptedFd;
+    if (acceptedFd == null || acceptedFd < 0) {
+      throw StateError(
+        'WASI sock_accept handler must return a non-negative acceptedFd when errno is success.',
+      );
+    }
+    final memory = _requireMemory();
+    try {
+      memory.storeI32(roFdPtr, acceptedFd);
+      return _errnoSuccess;
+    } on RangeError {
+      return _errnoFault;
+    }
   }
 
   Object? _sockRecv(List<Object?> args) {
-    _asI32(args, 0, 'fd');
-    _asI32(args, 1, 'ri_data_ptr');
-    _asI32(args, 2, 'ri_data_len');
-    _asI32(args, 3, 'ri_flags');
-    _asI32(args, 4, 'ro_datalen_ptr');
-    _asI32(args, 5, 'ro_flags_ptr');
-    return _errnoNosys;
+    final fd = _asI32(args, 0, 'fd');
+    final riDataPtr = _asI32(args, 1, 'ri_data_ptr');
+    final riDataLen = _asI32(args, 2, 'ri_data_len');
+    final riFlags = _asI32(args, 3, 'ri_flags');
+    final roDatalenPtr = _asI32(args, 4, 'ro_datalen_ptr');
+    final roFlagsPtr = _asI32(args, 5, 'ro_flags_ptr');
+    if (riDataLen < 0) {
+      return _errnoInval;
+    }
+    final handler = _socketTransport?.recv;
+    if (handler == null) {
+      return _errnoNosys;
+    }
+
+    final memory = _requireMemory();
+    var requestedBytes = 0;
+    try {
+      for (var i = 0; i < riDataLen; i++) {
+        final iovBase = riDataPtr + (i * 8);
+        final len = memory.loadI32(iovBase + 4);
+        if (len < 0) {
+          return _errnoInval;
+        }
+        requestedBytes += len;
+      }
+    } on RangeError {
+      return _errnoFault;
+    }
+
+    final result = handler(fd: fd, flags: riFlags, maxBytes: requestedBytes);
+    if (result.errno != _errnoSuccess) {
+      return result.errno;
+    }
+    final incoming = result.data ?? Uint8List(0);
+    final bytes = incoming.length <= requestedBytes
+        ? incoming
+        : Uint8List.sublistView(incoming, 0, requestedBytes);
+
+    var copied = 0;
+    var cursor = 0;
+    try {
+      for (var i = 0; i < riDataLen && cursor < bytes.length; i++) {
+        final iovBase = riDataPtr + (i * 8);
+        final ptr = memory.loadI32(iovBase);
+        final len = memory.loadI32(iovBase + 4);
+        final chunkLen = (bytes.length - cursor) < len
+            ? (bytes.length - cursor)
+            : len;
+        if (chunkLen <= 0) {
+          continue;
+        }
+        memory.writeBytes(
+          ptr,
+          Uint8List.sublistView(bytes, cursor, cursor + chunkLen),
+        );
+        cursor += chunkLen;
+        copied += chunkLen;
+      }
+      memory.storeI32(roDatalenPtr, copied);
+      memory.storeI16(roFlagsPtr, result.flags);
+      return _errnoSuccess;
+    } on RangeError {
+      return _errnoFault;
+    }
   }
 
   Object? _sockSend(List<Object?> args) {
-    _asI32(args, 0, 'fd');
-    _asI32(args, 1, 'si_data_ptr');
-    _asI32(args, 2, 'si_data_len');
-    _asI32(args, 3, 'si_flags');
-    _asI32(args, 4, 'so_datalen_ptr');
-    return _errnoNosys;
+    final fd = _asI32(args, 0, 'fd');
+    final siDataPtr = _asI32(args, 1, 'si_data_ptr');
+    final siDataLen = _asI32(args, 2, 'si_data_len');
+    final siFlags = _asI32(args, 3, 'si_flags');
+    final soDatalenPtr = _asI32(args, 4, 'so_datalen_ptr');
+    if (siDataLen < 0) {
+      return _errnoInval;
+    }
+    final handler = _socketTransport?.send;
+    if (handler == null) {
+      return _errnoNosys;
+    }
+
+    final memory = _requireMemory();
+    final output = BytesBuilder(copy: false);
+    var totalBytes = 0;
+    try {
+      for (var i = 0; i < siDataLen; i++) {
+        final iovBase = siDataPtr + (i * 8);
+        final ptr = memory.loadI32(iovBase);
+        final len = memory.loadI32(iovBase + 4);
+        if (len < 0) {
+          return _errnoInval;
+        }
+        output.add(memory.readBytes(ptr, len));
+        totalBytes += len;
+      }
+    } on RangeError {
+      return _errnoFault;
+    }
+    final data = Uint8List.fromList(output.takeBytes());
+
+    final result = handler(fd: fd, flags: siFlags, data: data);
+    if (result.errno != _errnoSuccess) {
+      return result.errno;
+    }
+    final bytesWritten = result.bytesWritten;
+    if (bytesWritten < 0 || bytesWritten > totalBytes) {
+      throw StateError(
+        'WASI sock_send handler bytesWritten must be between 0 and input length.',
+      );
+    }
+    try {
+      memory.storeI32(soDatalenPtr, bytesWritten);
+      return _errnoSuccess;
+    } on RangeError {
+      return _errnoFault;
+    }
   }
 
   Object? _sockShutdown(List<Object?> args) {
-    _asI32(args, 0, 'fd');
-    _asI32(args, 1, 'how');
-    return _errnoNosys;
+    final fd = _asI32(args, 0, 'fd');
+    final how = _asI32(args, 1, 'how');
+    final handler = _socketTransport?.shutdown;
+    if (handler == null) {
+      return _errnoNosys;
+    }
+    return handler(fd: fd, how: how) ?? _errnoSuccess;
   }
 
   void _resetFdTable() {
@@ -1751,7 +1898,8 @@ final class WasiPreview1 {
   }
 
   int _allocateDynamicFd() {
-    while (_fdTable.containsKey(_nextDynamicFd)) {
+    while (_fdTable.containsKey(_nextDynamicFd) ||
+        (_socketTransport?.containsFd?.call(fd: _nextDynamicFd) ?? false)) {
       _nextDynamicFd++;
     }
     return _nextDynamicFd++;

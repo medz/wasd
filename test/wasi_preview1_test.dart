@@ -1786,6 +1786,136 @@ void main() {
       },
     );
 
+    test(
+      'sock_accept delegates to socket transport and writes accepted fd',
+      () {
+        final wasi = WasiPreview1(
+          socketTransport: WasiSocketTransport(
+            accept: ({required fd, required flags, required allocateFd}) {
+              expect(fd, 41);
+              expect(flags, 3);
+              return WasiSockAcceptResult.accepted(allocateFd());
+            },
+            containsFd: ({required fd}) => fd == 4,
+          ),
+        );
+        final wasm = _buildSockAcceptModule(fd: 41, flags: 3, roFdPtr: 64);
+        final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
+        wasi.bindInstance(instance);
+
+        expect(instance.invokeI32('run'), 0);
+        final memory = instance.exportedMemory('memory');
+        expect(memory.loadI32(64), 5);
+      },
+    );
+
+    test('sock_recv copies data into iovecs and writes result metadata', () {
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          recv: ({required fd, required flags, required maxBytes}) {
+            expect(fd, 7);
+            expect(flags, 9);
+            expect(maxBytes, 5);
+            return WasiSockRecvResult.received(
+              Uint8List.fromList([1, 2, 3, 4, 5, 6]),
+              flags: 2,
+            );
+          },
+        ),
+      );
+      final wasm = _buildSockRecvModule(
+        fd: 7,
+        riFlags: 9,
+        riDataPtr: 32,
+        firstDataPtr: 96,
+        firstDataLen: 2,
+        secondDataPtr: 98,
+        secondDataLen: 3,
+        roDatalenPtr: 48,
+        roFlagsPtr: 52,
+      );
+      final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
+      wasi.bindInstance(instance);
+
+      expect(instance.invokeI32('run'), 0);
+      final memory = instance.exportedMemory('memory');
+      expect(memory.readBytes(96, 2), [1, 2]);
+      expect(memory.readBytes(98, 3), [3, 4, 5]);
+      expect(memory.loadI32(48), 5);
+      expect(memory.loadU16(52), 2);
+    });
+
+    test('sock_send flattens ciovecs and reports bytes written', () {
+      var capturedFd = -1;
+      var capturedFlags = -1;
+      var capturedData = Uint8List(0);
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          send: ({required fd, required flags, required data}) {
+            capturedFd = fd;
+            capturedFlags = flags;
+            capturedData = Uint8List.fromList(data);
+            return const WasiSockSendResult.sent(3);
+          },
+        ),
+      );
+      final wasm = _buildSockSendModule(
+        fd: 11,
+        siFlags: 7,
+        siDataPtr: 32,
+        firstDataPtr: 96,
+        firstDataLen: 2,
+        secondDataPtr: 98,
+        secondDataLen: 3,
+        soDatalenPtr: 48,
+        payload: const [65, 66, 67, 68, 69],
+      );
+      final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
+      wasi.bindInstance(instance);
+
+      expect(instance.invokeI32('run'), 0);
+      expect(capturedFd, 11);
+      expect(capturedFlags, 7);
+      expect(capturedData, [65, 66, 67, 68, 69]);
+      expect(instance.exportedMemory('memory').loadI32(48), 3);
+    });
+
+    test('sock_shutdown treats null handler result as success', () {
+      var called = false;
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          shutdown: ({required fd, required how}) {
+            called = true;
+            expect(fd, 9);
+            expect(how, 2);
+            return null;
+          },
+        ),
+      );
+      final wasm = _buildSockShutdownModule(fd: 9, how: 2);
+      final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
+
+      expect(instance.invokeI32('run'), 0);
+      expect(called, isTrue);
+    });
+
+    test('fd_close closes socket-only descriptors via socket transport', () {
+      var closedFd = -1;
+      final wasi = WasiPreview1(
+        socketTransport: WasiSocketTransport(
+          close: ({required fd}) {
+            closedFd = fd;
+            return 0;
+          },
+        ),
+      );
+      final wasm = _buildFdCloseModule(fd: 77);
+      final instance = WasmInstance.fromBytes(wasm, imports: wasi.imports);
+
+      expect(instance.invokeI32('run'), 0);
+      expect(closedFd, 77);
+    });
+
     test('proc_raise mode success returns errno 0', () {
       final wasi = WasiPreview1(procRaiseMode: WasiProcRaiseMode.success);
       final wasm = _buildProcRaiseModule(signal: 15);
@@ -1824,6 +1954,220 @@ Uint8List _buildProcRaiseModule({required int signal}) {
     functionBodies: [
       _FunctionBodySpec(
         instructions: [..._i32Const(signal), ..._call(0), Opcodes.end],
+      ),
+    ],
+    exports: const [
+      _ExportSpec(name: 'run', kind: WasmExportKind.function, index: 1),
+    ],
+  );
+}
+
+Uint8List _buildSockAcceptModule({
+  required int fd,
+  required int flags,
+  required int roFdPtr,
+}) {
+  return _buildModule(
+    types: [
+      _funcType([0x7f, 0x7f, 0x7f], [0x7f]),
+      _funcType([], [0x7f]),
+    ],
+    imports: const [
+      _ImportFunctionSpec(
+        module: 'wasi_snapshot_preview1',
+        name: 'sock_accept',
+        typeIndex: 0,
+      ),
+    ],
+    functionTypeIndices: [1],
+    functionBodies: [
+      _FunctionBodySpec(
+        instructions: [
+          ..._i32Const(fd),
+          ..._i32Const(flags),
+          ..._i32Const(roFdPtr),
+          ..._call(0),
+          Opcodes.end,
+        ],
+      ),
+    ],
+    memoryMinPages: 1,
+    exports: const [
+      _ExportSpec(name: 'run', kind: WasmExportKind.function, index: 1),
+      _ExportSpec(name: 'memory', kind: WasmExportKind.memory, index: 0),
+    ],
+  );
+}
+
+Uint8List _buildSockRecvModule({
+  required int fd,
+  required int riFlags,
+  required int riDataPtr,
+  required int firstDataPtr,
+  required int firstDataLen,
+  required int secondDataPtr,
+  required int secondDataLen,
+  required int roDatalenPtr,
+  required int roFlagsPtr,
+}) {
+  return _buildModule(
+    types: [
+      _funcType([0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f], [0x7f]),
+      _funcType([], [0x7f]),
+    ],
+    imports: const [
+      _ImportFunctionSpec(
+        module: 'wasi_snapshot_preview1',
+        name: 'sock_recv',
+        typeIndex: 0,
+      ),
+    ],
+    functionTypeIndices: [1],
+    functionBodies: [
+      _FunctionBodySpec(
+        instructions: [
+          ..._i32Const(riDataPtr),
+          ..._i32Const(firstDataPtr),
+          ..._memInstr(Opcodes.i32Store),
+          ..._i32Const(riDataPtr + 4),
+          ..._i32Const(firstDataLen),
+          ..._memInstr(Opcodes.i32Store),
+          ..._i32Const(riDataPtr + 8),
+          ..._i32Const(secondDataPtr),
+          ..._memInstr(Opcodes.i32Store),
+          ..._i32Const(riDataPtr + 12),
+          ..._i32Const(secondDataLen),
+          ..._memInstr(Opcodes.i32Store),
+          ..._i32Const(fd),
+          ..._i32Const(riDataPtr),
+          ..._i32Const(2),
+          ..._i32Const(riFlags),
+          ..._i32Const(roDatalenPtr),
+          ..._i32Const(roFlagsPtr),
+          ..._call(0),
+          Opcodes.end,
+        ],
+      ),
+    ],
+    memoryMinPages: 1,
+    exports: const [
+      _ExportSpec(name: 'run', kind: WasmExportKind.function, index: 1),
+      _ExportSpec(name: 'memory', kind: WasmExportKind.memory, index: 0),
+    ],
+  );
+}
+
+Uint8List _buildSockSendModule({
+  required int fd,
+  required int siFlags,
+  required int siDataPtr,
+  required int firstDataPtr,
+  required int firstDataLen,
+  required int secondDataPtr,
+  required int secondDataLen,
+  required int soDatalenPtr,
+  required List<int> payload,
+}) {
+  return _buildModule(
+    types: [
+      _funcType([0x7f, 0x7f, 0x7f, 0x7f, 0x7f], [0x7f]),
+      _funcType([], [0x7f]),
+    ],
+    imports: const [
+      _ImportFunctionSpec(
+        module: 'wasi_snapshot_preview1',
+        name: 'sock_send',
+        typeIndex: 0,
+      ),
+    ],
+    functionTypeIndices: [1],
+    functionBodies: [
+      _FunctionBodySpec(
+        instructions: [
+          ..._i32Const(siDataPtr),
+          ..._i32Const(firstDataPtr),
+          ..._memInstr(Opcodes.i32Store),
+          ..._i32Const(siDataPtr + 4),
+          ..._i32Const(firstDataLen),
+          ..._memInstr(Opcodes.i32Store),
+          ..._i32Const(siDataPtr + 8),
+          ..._i32Const(secondDataPtr),
+          ..._memInstr(Opcodes.i32Store),
+          ..._i32Const(siDataPtr + 12),
+          ..._i32Const(secondDataLen),
+          ..._memInstr(Opcodes.i32Store),
+          ..._i32Const(fd),
+          ..._i32Const(siDataPtr),
+          ..._i32Const(2),
+          ..._i32Const(siFlags),
+          ..._i32Const(soDatalenPtr),
+          ..._call(0),
+          Opcodes.end,
+        ],
+      ),
+    ],
+    memoryMinPages: 1,
+    dataSegments: [
+      _DataSegmentSpec.active(
+        memoryIndex: 0,
+        offsetExpr: [..._i32Const(firstDataPtr), Opcodes.end],
+        bytes: payload,
+      ),
+    ],
+    exports: const [
+      _ExportSpec(name: 'run', kind: WasmExportKind.function, index: 1),
+      _ExportSpec(name: 'memory', kind: WasmExportKind.memory, index: 0),
+    ],
+  );
+}
+
+Uint8List _buildSockShutdownModule({required int fd, required int how}) {
+  return _buildModule(
+    types: [
+      _funcType([0x7f, 0x7f], [0x7f]),
+      _funcType([], [0x7f]),
+    ],
+    imports: const [
+      _ImportFunctionSpec(
+        module: 'wasi_snapshot_preview1',
+        name: 'sock_shutdown',
+        typeIndex: 0,
+      ),
+    ],
+    functionTypeIndices: [1],
+    functionBodies: [
+      _FunctionBodySpec(
+        instructions: [
+          ..._i32Const(fd),
+          ..._i32Const(how),
+          ..._call(0),
+          Opcodes.end,
+        ],
+      ),
+    ],
+    exports: const [
+      _ExportSpec(name: 'run', kind: WasmExportKind.function, index: 1),
+    ],
+  );
+}
+
+Uint8List _buildFdCloseModule({required int fd}) {
+  return _buildModule(
+    types: [
+      _funcType([0x7f], [0x7f]),
+      _funcType([], [0x7f]),
+    ],
+    imports: const [
+      _ImportFunctionSpec(
+        module: 'wasi_snapshot_preview1',
+        name: 'fd_close',
+        typeIndex: 0,
+      ),
+    ],
+    functionTypeIndices: [1],
+    functionBodies: [
+      _FunctionBodySpec(
+        instructions: [..._i32Const(fd), ..._call(0), Opcodes.end],
       ),
     ],
     exports: const [

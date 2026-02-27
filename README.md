@@ -54,11 +54,17 @@ Wasm compile targets.
   - `clock_time_get`, `clock_res_get`, `random_get`
   - `poll_oneoff`, `sched_yield`, `proc_exit`
   - `proc_raise` (configurable via `procRaiseMode`: `enosys` / `success` / `trap`)
-  - `sock_accept`, `sock_recv`, `sock_send`, `sock_shutdown` (stubs: `ENOSYS`)
+  - `sock_accept`, `sock_recv`, `sock_send`, `sock_shutdown` via transport abstraction
+    (`socketTransport`; default remains `ENOSYS` when transport is absent)
   - filesystem backend auto-selection via conditional import:
     - supports `dart:io`: use host-backed filesystem
     - no `dart:io`: fallback to `WasiInMemoryFileSystem`
+  - socket backend auto-selection via conditional import (when `preopenedSockets` provided):
+    - supports `dart:io`: `RawServerSocket`/`RawSocket` host transport
+    - supports `dart:js_interop`: `package:web` `WebSocket` transport
+    - no host backend support: no-op transport (socket calls remain `ENOSYS`)
   - can force in-memory backend: `WasiPreview1(preferHostIo: false)`
+  - custom socket transport injection: `WasiPreview1(socketTransport: ...)`
   - host-io path sandbox checks (canonical root boundary enforcement)
   - proposal feature gates: `WasmFeatureSet(simd/threads/exceptionHandling/gc/componentModel)`
   - helper runner: `WasiRunner` (instantiate + bind memory + invoke `_start`)
@@ -73,7 +79,7 @@ Wasm compile targets.
 - exception handling semantics
 - GC/reference-subtyping semantics
 - component model semantics
-- remaining WASI Preview1 semantics (`fd_prestat_set_flags`, `fd_filestat_set_times` full flag semantics, `path_open` symlink-follow semantics, full `sock_*` behavior, etc.)
+- remaining WASI Preview1 semantics (`fd_prestat_set_flags`, `fd_filestat_set_times` full flag semantics, `path_open` symlink-follow semantics, and advanced socket lifecycle semantics beyond current transport-backed `sock_*` subset, etc.)
 
 ## Examples
 

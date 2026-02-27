@@ -17,5 +17,6 @@ export 'src/validator.dart';
 export 'src/value.dart';
 export 'src/vm.dart';
 export 'src/wasi_preview1.dart';
+export 'src/wasi_socket_transport.dart';
 export 'src/wasi_runner.dart';
 export 'src/wasi_filesystem.dart';
