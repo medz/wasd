@@ -440,11 +440,7 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: _TopStatusBar(
-                          runtimeLabel: _runtimeLabel,
-                          fps: _fps,
-                          frameCount: _frames,
-                        ),
+                        child: _TopStatusBar(fps: _fps, frameCount: _frames),
                       ),
                       const SizedBox(width: 12),
                       _SmallKeycap(
@@ -569,13 +565,8 @@ final class _ScanlineOverlayPainter extends CustomPainter {
 }
 
 final class _TopStatusBar extends StatelessWidget {
-  const _TopStatusBar({
-    required this.runtimeLabel,
-    required this.fps,
-    required this.frameCount,
-  });
+  const _TopStatusBar({required this.fps, required this.frameCount});
 
-  final String runtimeLabel;
   final double fps;
   final int frameCount;
 
@@ -610,7 +601,6 @@ final class _TopStatusBar extends StatelessWidget {
                 spacing: 14,
                 runSpacing: 4,
                 children: [
-                  Text('state: $runtimeLabel'),
                   Text('fps: ${fps.toStringAsFixed(1)}'),
                   Text('frames: $frameCount'),
                 ],
