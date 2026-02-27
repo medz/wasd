@@ -181,6 +181,9 @@ Future<void> main(List<String> args) async {
   final suite = _parseSuite(_argValue(args, '--suite') ?? 'all');
   final testsuiteDir = _argValue(args, '--testsuite-dir');
   final strictProposals = args.contains('--strict-proposals');
+  final strictComponentSubset = args.contains('--strict-component-subset');
+  final runComponentSubset =
+      strictComponentSubset || args.contains('--component-subset');
   final reportPath =
       _argValue(args, '--report') ??
       '.dart_tool/spec_runner/wasm_conformance_matrix.md';
@@ -203,6 +206,19 @@ Future<void> main(List<String> args) async {
       command: ['dart', 'analyze', 'lib', 'test', 'tool', 'example'],
     ),
   );
+  if (runComponentSubset) {
+    steps.add(
+      await _runStep(
+        name: 'component-subset',
+        command: const <String>[
+          'dart',
+          'run',
+          'tool/component_subset_runner.dart',
+        ],
+        optional: !strictComponentSubset,
+      ),
+    );
+  }
 
   switch (target) {
     case RunnerTarget.vm:
@@ -253,6 +269,8 @@ Future<void> main(List<String> args) async {
     'suite': suite.name,
     'testsuite_dir': testsuiteDir,
     'strict_proposals': strictProposals,
+    'component_subset': runComponentSubset,
+    'strict_component_subset': strictComponentSubset,
     'status': status,
     'steps': steps.map((s) => s.toJson()).toList(growable: false),
   };
@@ -1087,6 +1105,20 @@ String _renderMarkdownReport({
       '- Proposal failures are non-gating by default; pass `--strict-proposals` to enforce them.',
     );
   }
+  if (payload['component_subset'] == true) {
+    if (payload['strict_component_subset'] == true) {
+      b.writeln(
+        '- Component subset conformance is gating (`--strict-component-subset`).',
+      );
+    } else {
+      b.writeln(
+        '- Component subset conformance is non-gating (`--component-subset`).',
+      );
+    }
+    b.writeln(
+      '- Component subset reports are written to `.dart_tool/spec_runner/component_subset_latest.json` and `.dart_tool/spec_runner/component_subset_failures.md`.',
+    );
+  }
   if (target == RunnerTarget.all.name) {
     b.writeln(
       '- Cross-target totals consistency is enforced by the `cross-target-consistency` step.',
@@ -1104,6 +1136,6 @@ void _printUsage() {
     'Usage: dart run tool/spec_runner.dart --target=<vm|js|wasm|all> --suite=<core|proposal|all>',
   );
   stdout.writeln(
-    'Optional: --report=<path> --json=<path> --testsuite-dir=<path> --strict-proposals',
+    'Optional: --report=<path> --json=<path> --testsuite-dir=<path> --strict-proposals --component-subset --strict-component-subset',
   );
 }

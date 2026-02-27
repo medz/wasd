@@ -143,7 +143,7 @@ Future<void> _writeFile(String path, String content) async {
 String _renderMarkdown(Map<String, Object?> payload) {
   final status = payload['status'] as String? ?? 'unknown';
   final startedAt = payload['started_at_utc'] as String? ?? 'unknown';
-  final durationMs = payload['duration_ms'] as Object?;
+  final durationMs = payload['duration_ms'];
   final command = (payload['command'] as List<Object?>?)?.join(' ') ?? '';
   final files = (payload['files'] as List<Object?>? ?? const <Object?>[])
       .map((value) => value.toString())
@@ -168,7 +168,7 @@ String _renderMarkdown(Map<String, Object?> payload) {
     ..writeln('- Files:')
     ..writeln(files.map((file) => '  - `$file`').join('\n'));
   if (summary != null && summary.isNotEmpty) {
-    buffer..writeln('- Summary: `$summary`');
+    buffer.writeln('- Summary: `$summary`');
   }
   if (status != 'passed') {
     if (stdoutTail.isNotEmpty) {
