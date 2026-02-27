@@ -451,6 +451,38 @@ void main() {
       expect(component.typeDeclarations[2].aliasTargetIndex, 0);
     });
 
+    test(
+      'decodes component table type declarations with multi-byte ref signatures',
+      () {
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('tab_typed'),
+          0x04, // table
+          0x63, // ref null
+          0x00, // heap type = type index 0 (signed LEB33)
+          0x01, // has max
+          ..._u32Leb(1),
+          ..._u32Leb(2),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ..._componentHeaderWithOneCoreModule(),
+          ..._section(0x06, typeSection),
+        ]);
+
+        final component = WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(component.typeDeclarations, hasLength(1));
+        final declaration = component.typeDeclarations.single;
+        expect(declaration.kind, WasmComponentTypeKind.table);
+        expect(declaration.tableType, isNotNull);
+        expect(declaration.tableType!.refTypeSignature, '6300');
+        expect(declaration.tableType!.min, 1);
+        expect(declaration.tableType!.max, 2);
+      },
+    );
+
     test('rejects out-of-range type alias target in section 0x06', () {
       final typeSection = <int>[
         ..._u32Leb(1),

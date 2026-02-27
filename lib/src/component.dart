@@ -603,8 +603,11 @@ final class WasmComponent {
   }
 
   static WasmTableType _readComponentTableType(ByteReader reader) {
-    final rawRefType = reader.readByte();
-    final refType = WasmRefTypeCodec.fromByte(rawRefType);
+    final refTypeStart = reader.offset;
+    final refType = _readComponentReferenceType(reader);
+    final refTypeSignature = _bytesToSignature(
+      reader.bytes.sublist(refTypeStart, reader.offset),
+    );
     final flags = reader.readByte();
     if ((flags & ~0x03) != 0) {
       throw UnsupportedError(
@@ -629,8 +632,129 @@ final class WasmComponent {
       min: min,
       max: max,
       isTable64: table64,
-      refTypeSignature: (rawRefType & 0xff).toRadixString(16).padLeft(2, '0'),
+      refTypeSignature: refTypeSignature,
     );
+  }
+
+  static WasmRefType _readComponentReferenceType(ByteReader reader) {
+    final lead = _readComponentReferenceTypeCode(reader);
+    switch (lead) {
+      case 0x70:
+        return WasmRefType.funcref;
+      case 0x6f:
+      case 0x71:
+      case 0x72:
+      case 0x73:
+      case 0x6e:
+      case 0x6d:
+      case 0x6c:
+      case 0x6b:
+      case 0x6a:
+      case 0x69:
+      case 0x68:
+      case 0x67:
+      case 0x66:
+      case 0x65:
+        return WasmRefType.externref;
+      case 0x63:
+      case 0x64:
+      case 0x62:
+      case 0x61:
+        return WasmRefType.externref;
+      default:
+        throw UnsupportedError(
+          'Unsupported component ref type: 0x${lead.toRadixString(16)}',
+        );
+    }
+  }
+
+  static int _readComponentReferenceTypeCode(ByteReader reader) {
+    final lead = reader.readByte();
+    if (_isLegacyHeapTypeCode(lead)) {
+      return lead;
+    }
+    if (lead == 0x63 || lead == 0x64 || lead == 0x62 || lead == 0x61) {
+      var heapLead = reader.readByte();
+      if (heapLead == 0x62 || heapLead == 0x61) {
+        heapLead = reader.readByte();
+      }
+      if (_isLegacyHeapTypeCode(heapLead)) {
+        return heapLead;
+      }
+      _readComponentSignedLeb33WithFirst(reader, heapLead);
+      return lead;
+    }
+    if (lead <= 0x60 || lead >= 0x80) {
+      _readComponentSignedLeb33WithFirst(reader, lead);
+      return lead;
+    }
+    throw UnsupportedError(
+      'Unsupported component ref type: 0x${lead.toRadixString(16)}',
+    );
+  }
+
+  static bool _isLegacyHeapTypeCode(int code) {
+    switch (code & 0xff) {
+      case 0x65:
+      case 0x66:
+      case 0x67:
+      case 0x68:
+      case 0x6c:
+      case 0x70:
+      case 0x6f:
+      case 0x6e:
+      case 0x6d:
+      case 0x6b:
+      case 0x6a:
+      case 0x69:
+      case 0x71:
+      case 0x72:
+      case 0x73:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  static int _readComponentSignedLeb33WithFirst(ByteReader reader, int first) {
+    var result = first & 0x7f;
+    var shift = 7;
+    var byte = first;
+    var multiplier = 128;
+    while ((byte & 0x80) != 0) {
+      byte = reader.readByte();
+      result += (byte & 0x7f) * multiplier;
+      multiplier *= 128;
+      shift += 7;
+      if (shift > 35) {
+        throw const FormatException('Invalid signed LEB33 encoding.');
+      }
+    }
+    if (shift < 33 && (byte & 0x40) != 0) {
+      result -= multiplier;
+    }
+    return _normalizeSignedLeb33(result);
+  }
+
+  static int _normalizeSignedLeb33(int value) {
+    const signBit33 = 0x100000000;
+    const width33 = 0x200000000;
+    var normalized = value % width33;
+    if (normalized < 0) {
+      normalized += width33;
+    }
+    if (normalized >= signBit33) {
+      normalized -= width33;
+    }
+    return normalized;
+  }
+
+  static String _bytesToSignature(List<int> bytes) {
+    final buffer = StringBuffer();
+    for (final byte in bytes) {
+      buffer.write((byte & 0xff).toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
   }
 
   static List<WasmComponentTypeBinding> _decodeTypeBindingSectionPayload(
