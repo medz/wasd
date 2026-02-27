@@ -9338,8 +9338,17 @@ void main() {
     );
 
     test(
-      'reports explicit boundary for unsupported async call chains',
+      'supports i32x4 relaxed dot add opcode in async import call chains',
       () async {
+        List<int> i32x4Bytes(List<int> lanes) {
+          final bytes = Uint8List(16);
+          final data = ByteData.sublistView(bytes);
+          for (var lane = 0; lane < 4; lane++) {
+            data.setUint32(lane * 4, lanes[lane].toUnsigned(32), Endian.little);
+          }
+          return bytes;
+        }
+
         final wasm = _buildModule(
           types: [
             _funcType([0x7f], [0x7f]),
@@ -9354,19 +9363,22 @@ void main() {
                 ..._localGet(0),
                 ..._call(0),
                 Opcodes.drop,
-                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
-                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
-                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0x01)),
+                ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0x01)),
+                ..._fdBytes(Opcodes.v128Const, i32x4Bytes([10, 20, 30, 40])),
                 ..._fdBytes(Opcodes.i32x4RelaxedDotI8x16I7x16AddS, []),
-                Opcodes.drop,
-                ..._i32Const(0),
+                ..._fdBytes(Opcodes.v128Const, i32x4Bytes([14, 24, 34, 44])),
+                ..._fdBytes(Opcodes.i32x4Eq, []),
+                ..._fdBytes(Opcodes.i32x4AllTrue, []),
+                ..._i32Const(1),
+                Opcodes.i32Eq,
                 Opcodes.end,
               ],
             ),
           ],
           exports: const [
             _ExportSpec(
-              name: 'unsupportedWrap',
+              name: 'supportsI32x4RelaxedDotAdd',
               kind: WasmExportKind.function,
               index: 1,
             ),
@@ -9384,15 +9396,447 @@ void main() {
           ),
         );
 
-        await expectLater(
-          () async => instance.invokeI32Async('unsupportedWrap', [41]),
-          throwsA(
-            isA<UnsupportedError>().having(
-              (e) => e.message,
-              'message',
-              contains('wasm-defined functions'),
+        expect(
+          await instance.invokeI32Async('supportsI32x4RelaxedDotAdd', [41]),
+          1,
+        );
+      },
+    );
+
+    test(
+      'supports v128 memory SIMD opcodes in async import call chains',
+      () async {
+        List<int> i16x8Bytes(List<int> lanes) {
+          final bytes = Uint8List(16);
+          final data = ByteData.sublistView(bytes);
+          for (var lane = 0; lane < 8; lane++) {
+            data.setUint16(lane * 2, lanes[lane].toUnsigned(16), Endian.little);
+          }
+          return bytes;
+        }
+
+        List<int> i32x4Bytes(List<int> lanes) {
+          final bytes = Uint8List(16);
+          final data = ByteData.sublistView(bytes);
+          for (var lane = 0; lane < 4; lane++) {
+            data.setUint32(lane * 4, lanes[lane].toUnsigned(32), Endian.little);
+          }
+          return bytes;
+        }
+
+        List<int> simdMem(
+          int opcode, {
+          int align = 0,
+          int offset = 0,
+          int? lane,
+        }) {
+          return _fdBytes(opcode, [
+            ..._u32Leb(align),
+            ..._u32Leb(offset),
+            if (lane != null) ..._u32Leb(lane),
+          ]);
+        }
+
+        List<int> vectorEquals(List<int> expected) {
+          return <int>[
+            ..._fdBytes(Opcodes.v128Const, expected),
+            ..._fdBytes(Opcodes.i8x16Eq, []),
+            ..._fdBytes(Opcodes.i8x16Bitmask, []),
+            ..._i32Const(0xffff),
+            Opcodes.i32Eq,
+          ];
+        }
+
+        final memoryBytes = List<int>.filled(160, 0);
+        const load8x8 = <int>[0xff, 0x01, 0x80, 0x7f, 0x02, 0xfe, 0x55, 0xaa];
+        memoryBytes.setRange(0, 8, load8x8);
+        memoryBytes.setRange(16, 24, const <int>[
+          0xff,
+          0xff,
+          0x34,
+          0x12,
+          0x00,
+          0x80,
+          0xfe,
+          0xff,
+        ]);
+        memoryBytes.setRange(32, 40, const <int>[
+          0xff,
+          0xff,
+          0xff,
+          0xff,
+          0x78,
+          0x56,
+          0x34,
+          0x12,
+        ]);
+        memoryBytes[48] = 0xab;
+        memoryBytes.setRange(49, 51, const <int>[0x34, 0x12]);
+        memoryBytes.setRange(52, 56, const <int>[0x78, 0x56, 0x34, 0x12]);
+        memoryBytes.setRange(56, 64, const <int>[
+          0xef,
+          0xcd,
+          0xab,
+          0x89,
+          0x67,
+          0x45,
+          0x23,
+          0x01,
+        ]);
+        memoryBytes.setRange(64, 68, const <int>[0xde, 0xad, 0xbe, 0xef]);
+        memoryBytes.setRange(72, 80, const <int>[1, 2, 3, 4, 5, 6, 7, 8]);
+        memoryBytes.setRange(80, 88, const <int>[
+          0xaa,
+          0xbb,
+          0xcc,
+          0xdd,
+          0xee,
+          0xff,
+          0x11,
+          0x22,
+        ]);
+        memoryBytes.setRange(88, 96, const <int>[
+          0x10,
+          0x20,
+          0x30,
+          0x40,
+          0x50,
+          0x60,
+          0x70,
+          0x80,
+        ]);
+
+        final load0Expected = <int>[...load8x8, ...List<int>.filled(8, 0)];
+        final load8x8SExpected = i16x8Bytes([-1, 1, -128, 127, 2, -2, 85, -86]);
+        final load8x8UExpected = i16x8Bytes([
+          255,
+          1,
+          128,
+          127,
+          2,
+          254,
+          85,
+          170,
+        ]);
+        final load16x4SExpected = i32x4Bytes([-1, 0x1234, -32768, -2]);
+        final load16x4UExpected = i32x4Bytes([0xffff, 0x1234, 0x8000, 0xfffe]);
+        final load32x2SExpected = <int>[
+          ...List<int>.filled(8, 0xff),
+          0x78,
+          0x56,
+          0x34,
+          0x12,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+        ];
+        final load32x2UExpected = <int>[
+          0xff,
+          0xff,
+          0xff,
+          0xff,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x78,
+          0x56,
+          0x34,
+          0x12,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+        ];
+        final load8SplatExpected = List<int>.filled(16, 0xab);
+        final load16SplatExpected = List<int>.generate(
+          16,
+          (index) => index.isEven ? 0x34 : 0x12,
+        );
+        final load32SplatExpected = List<int>.generate(
+          16,
+          (index) => const <int>[0x78, 0x56, 0x34, 0x12][index % 4],
+        );
+        final load64SplatExpected = List<int>.generate(
+          16,
+          (index) => const <int>[
+            0xef,
+            0xcd,
+            0xab,
+            0x89,
+            0x67,
+            0x45,
+            0x23,
+            0x01,
+          ][index % 8],
+        );
+        final load32ZeroExpected = <int>[
+          0xde,
+          0xad,
+          0xbe,
+          0xef,
+          ...List<int>.filled(12, 0),
+        ];
+        final load64ZeroExpected = <int>[
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          ...List<int>.filled(8, 0),
+        ];
+        final laneLoad8Expected = <int>[
+          0x00,
+          0x00,
+          0x00,
+          0xaa,
+          ...List<int>.filled(12, 0),
+        ];
+        final laneLoad16Expected = <int>[
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0xcc,
+          0xdd,
+          ...List<int>.filled(10, 0),
+        ];
+        final laneLoad32Expected = <int>[
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0xee,
+          0xff,
+          0x11,
+          0x22,
+          ...List<int>.filled(8, 0),
+        ];
+        final laneLoad64Expected = <int>[
+          ...List<int>.filled(8, 0),
+          0x10,
+          0x20,
+          0x30,
+          0x40,
+          0x50,
+          0x60,
+          0x70,
+          0x80,
+        ];
+        final storeVector = List<int>.generate(16, (index) => index);
+        final store64Expected = <int>[
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          ...List<int>.filled(8, 0),
+        ];
+        final basicStoreVector = List<int>.generate(
+          16,
+          (index) => 0xf0 + index,
+        );
+
+        final checks = <List<int>>[
+          <int>[
+            ..._i32Const(0),
+            ...simdMem(Opcodes.v128Load),
+            ...vectorEquals(load0Expected),
+          ],
+          <int>[
+            ..._i32Const(96),
+            ..._fdBytes(Opcodes.v128Const, basicStoreVector),
+            ...simdMem(Opcodes.v128Store),
+            ..._i32Const(96),
+            ...simdMem(Opcodes.v128Load),
+            ...vectorEquals(basicStoreVector),
+          ],
+          <int>[
+            ..._i32Const(0),
+            ...simdMem(Opcodes.v128Load8x8S),
+            ...vectorEquals(load8x8SExpected),
+          ],
+          <int>[
+            ..._i32Const(0),
+            ...simdMem(Opcodes.v128Load8x8U),
+            ...vectorEquals(load8x8UExpected),
+          ],
+          <int>[
+            ..._i32Const(16),
+            ...simdMem(Opcodes.v128Load16x4S),
+            ...vectorEquals(load16x4SExpected),
+          ],
+          <int>[
+            ..._i32Const(16),
+            ...simdMem(Opcodes.v128Load16x4U),
+            ...vectorEquals(load16x4UExpected),
+          ],
+          <int>[
+            ..._i32Const(32),
+            ...simdMem(Opcodes.v128Load32x2S),
+            ...vectorEquals(load32x2SExpected),
+          ],
+          <int>[
+            ..._i32Const(32),
+            ...simdMem(Opcodes.v128Load32x2U),
+            ...vectorEquals(load32x2UExpected),
+          ],
+          <int>[
+            ..._i32Const(48),
+            ...simdMem(Opcodes.v128Load8Splat),
+            ...vectorEquals(load8SplatExpected),
+          ],
+          <int>[
+            ..._i32Const(49),
+            ...simdMem(Opcodes.v128Load16Splat),
+            ...vectorEquals(load16SplatExpected),
+          ],
+          <int>[
+            ..._i32Const(52),
+            ...simdMem(Opcodes.v128Load32Splat),
+            ...vectorEquals(load32SplatExpected),
+          ],
+          <int>[
+            ..._i32Const(56),
+            ...simdMem(Opcodes.v128Load64Splat),
+            ...vectorEquals(load64SplatExpected),
+          ],
+          <int>[
+            ..._i32Const(64),
+            ...simdMem(Opcodes.v128Load32Zero),
+            ...vectorEquals(load32ZeroExpected),
+          ],
+          <int>[
+            ..._i32Const(72),
+            ...simdMem(Opcodes.v128Load64Zero),
+            ...vectorEquals(load64ZeroExpected),
+          ],
+          <int>[
+            ..._i32Const(80),
+            ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
+            ...simdMem(Opcodes.v128Load8Lane, lane: 3),
+            ...vectorEquals(laneLoad8Expected),
+          ],
+          <int>[
+            ..._i32Const(82),
+            ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
+            ...simdMem(Opcodes.v128Load16Lane, lane: 2),
+            ...vectorEquals(laneLoad16Expected),
+          ],
+          <int>[
+            ..._i32Const(84),
+            ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
+            ...simdMem(Opcodes.v128Load32Lane, lane: 1),
+            ...vectorEquals(laneLoad32Expected),
+          ],
+          <int>[
+            ..._i32Const(88),
+            ..._fdBytes(Opcodes.v128Const, List<int>.filled(16, 0)),
+            ...simdMem(Opcodes.v128Load64Lane, lane: 1),
+            ...vectorEquals(laneLoad64Expected),
+          ],
+          <int>[
+            ..._i32Const(100),
+            ..._fdBytes(Opcodes.v128Const, storeVector),
+            ...simdMem(Opcodes.v128Store8Lane, lane: 5),
+            ..._i32Const(100),
+            ..._memInstr(Opcodes.i32Load8U),
+            ..._i32Const(5),
+            Opcodes.i32Eq,
+          ],
+          <int>[
+            ..._i32Const(102),
+            ..._fdBytes(Opcodes.v128Const, storeVector),
+            ...simdMem(Opcodes.v128Store16Lane, lane: 3),
+            ..._i32Const(102),
+            ..._memInstr(Opcodes.i32Load16U),
+            ..._i32Const(0x0706),
+            Opcodes.i32Eq,
+          ],
+          <int>[
+            ..._i32Const(104),
+            ..._fdBytes(Opcodes.v128Const, storeVector),
+            ...simdMem(Opcodes.v128Store32Lane, lane: 2),
+            ..._i32Const(104),
+            ..._memInstr(Opcodes.i32Load),
+            ..._i32Const(0x0b0a0908),
+            Opcodes.i32Eq,
+          ],
+          <int>[
+            ..._i32Const(108),
+            ..._fdBytes(Opcodes.v128Const, storeVector),
+            ...simdMem(Opcodes.v128Store64Lane, lane: 1),
+            ..._i32Const(108),
+            ...simdMem(Opcodes.v128Load),
+            ...vectorEquals(store64Expected),
+          ],
+        ];
+
+        final combinedChecks = <int>[
+          ...checks.first,
+          for (final check in checks.skip(1)) ...<int>[
+            ...check,
+            Opcodes.i32And,
+          ],
+        ];
+
+        final wasm = _buildModule(
+          types: [
+            _funcType([0x7f], [0x7f]),
+          ],
+          imports: const [
+            _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 0),
+          ],
+          functionTypeIndices: const [0],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                ..._localGet(0),
+                ..._call(0),
+                Opcodes.drop,
+                ...combinedChecks,
+                Opcodes.end,
+              ],
             ),
+          ],
+          exports: const [
+            _ExportSpec(
+              name: 'supportsV128MemoryOpcodes',
+              kind: WasmExportKind.function,
+              index: 1,
+            ),
+          ],
+          memoryMinPages: 1,
+          dataSegments: [
+            _DataSegmentSpec.active(
+              memoryIndex: 0,
+              offsetExpr: [..._i32Const(0), Opcodes.end],
+              bytes: memoryBytes,
+            ),
+          ],
+        );
+
+        final instance = WasmInstance.fromBytes(
+          wasm,
+          features: const WasmFeatureSet(simd: true),
+          imports: WasmImports(
+            asyncFunctions: {
+              WasmImports.key('host', 'inc'): (args) async =>
+                  (args.single as int) + 1,
+            },
           ),
+        );
+
+        expect(
+          await instance.invokeI32Async('supportsV128MemoryOpcodes', [41]),
+          1,
         );
       },
     );

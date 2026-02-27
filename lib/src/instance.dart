@@ -1037,6 +1037,261 @@ final class WasmInstance {
             stack.add(WasmValue.i32(WasmVm.internV128Bytes(laneBytes)));
             pc++;
 
+          case Opcodes.v128Load:
+            _pushAsyncSubsetV128(
+              stack,
+              _loadAsyncSubsetV128(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load8x8S:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoad8x8AsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                signed: true,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load8x8U:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoad8x8AsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                signed: false,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load16x4S:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoad16x4AsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                signed: true,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load16x4U:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoad16x4AsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                signed: false,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load32x2S:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoad32x2AsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                signed: true,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load32x2U:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoad32x2AsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                signed: false,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load8Splat:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoadSplatAsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                laneWidth: 1,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load16Splat:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoadSplatAsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                laneWidth: 2,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load32Splat:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoadSplatAsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                laneWidth: 4,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load64Splat:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoadSplatAsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                laneWidth: 8,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load32Zero:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoadZeroExtendAsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                laneWidth: 4,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load64Zero:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoadZeroExtendAsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                laneWidth: 8,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Store:
+            _storeAsyncSubsetV128(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+            );
+            pc++;
+
+          case Opcodes.v128Load8Lane:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoadLaneAsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                laneWidth: 1,
+                laneCount: 16,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load16Lane:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoadLaneAsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                laneWidth: 2,
+                laneCount: 8,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load32Lane:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoadLaneAsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                laneWidth: 4,
+                laneCount: 4,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Load64Lane:
+            _pushAsyncSubsetV128(
+              stack,
+              _simdLoadLaneAsyncSubset(
+                stack,
+                instruction: instruction,
+                memory64ByIndex: memory64ByIndex,
+                laneWidth: 8,
+                laneCount: 2,
+              ),
+            );
+            pc++;
+
+          case Opcodes.v128Store8Lane:
+            _simdStoreLaneAsyncSubset(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              laneWidth: 1,
+              laneCount: 16,
+            );
+            pc++;
+
+          case Opcodes.v128Store16Lane:
+            _simdStoreLaneAsyncSubset(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              laneWidth: 2,
+              laneCount: 8,
+            );
+            pc++;
+
+          case Opcodes.v128Store32Lane:
+            _simdStoreLaneAsyncSubset(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              laneWidth: 4,
+              laneCount: 4,
+            );
+            pc++;
+
+          case Opcodes.v128Store64Lane:
+            _simdStoreLaneAsyncSubset(
+              stack,
+              instruction: instruction,
+              memory64ByIndex: memory64ByIndex,
+              laneWidth: 8,
+              laneCount: 2,
+            );
+            pc++;
+
           case Opcodes.i8x16Splat:
             _simdI8x16Splat(stack);
             pc++;
@@ -1528,6 +1783,10 @@ final class WasmInstance {
 
           case Opcodes.i32x4DotI16x8S:
             _simdI32x4DotI16x8S(stack);
+            pc++;
+
+          case Opcodes.i32x4RelaxedDotI8x16I7x16AddS:
+            _simdI32x4RelaxedDotI8x16I7x16AddS(stack);
             pc++;
 
           case Opcodes.i32x4ExtmulLowI16x8S:
@@ -5579,6 +5838,226 @@ final class WasmInstance {
       ..add(WasmValue.i64(high));
   }
 
+  ({WasmMemory memory, int address}) _resolveAsyncSubsetSimdMemoryAccess(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required String context,
+  }) {
+    final memArg = instruction.memArg;
+    if (memArg == null) {
+      throw StateError('Missing memarg for $context.');
+    }
+    final target = _resolveAsyncSubsetMemoryTarget(
+      memArg: memArg,
+      memory64ByIndex: memory64ByIndex,
+      context: context,
+    );
+    final addressValue = _popValue(stack, '$context address');
+    final address = _resolveAsyncSubsetMemoryAddress(
+      memArg: memArg,
+      baseAddressValue: addressValue,
+      isMemory64: target.isMemory64,
+      context: context,
+    );
+    return (memory: target.memory, address: address);
+  }
+
+  Uint8List _loadAsyncSubsetV128(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+  }) {
+    final access = _resolveAsyncSubsetSimdMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      context: 'v128.load',
+    );
+    return access.memory.viewBytes(access.address, 16);
+  }
+
+  void _storeAsyncSubsetV128(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+  }) {
+    final bytes = _popAsyncSubsetV128(stack, opName: 'v128.store');
+    final access = _resolveAsyncSubsetSimdMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      context: 'v128.store',
+    );
+    access.memory.writeBytes(access.address, bytes);
+  }
+
+  Uint8List _simdLoad8x8AsyncSubset(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required bool signed,
+  }) {
+    final access = _resolveAsyncSubsetSimdMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      context: 'v128.load8x8',
+    );
+    final result = Uint8List(16);
+    final data = ByteData.sublistView(result);
+    for (var lane = 0; lane < 8; lane++) {
+      final value = access.memory.loadU8(access.address + lane);
+      final widened = signed ? value.toSigned(8) : value;
+      data.setUint16(lane * 2, widened & 0xffff, Endian.little);
+    }
+    return result;
+  }
+
+  Uint8List _simdLoad16x4AsyncSubset(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required bool signed,
+  }) {
+    final access = _resolveAsyncSubsetSimdMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      context: 'v128.load16x4',
+    );
+    final result = Uint8List(16);
+    final data = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final value = access.memory.loadU16(access.address + (lane * 2));
+      final widened = signed ? value.toSigned(16) : value;
+      data.setUint32(lane * 4, widened.toUnsigned(32), Endian.little);
+    }
+    return result;
+  }
+
+  Uint8List _simdLoad32x2AsyncSubset(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required bool signed,
+  }) {
+    final access = _resolveAsyncSubsetSimdMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      context: 'v128.load32x2',
+    );
+    final result = Uint8List(16);
+    final data = ByteData.sublistView(result);
+    for (var lane = 0; lane < 2; lane++) {
+      final laneOffset = access.address + (lane * 4);
+      final value = signed
+          ? WasmI64.signed(access.memory.loadI32(laneOffset))
+          : BigInt.from(access.memory.loadU32(laneOffset));
+      _writeAsyncSubsetLaneU64(data, lane * 8, value);
+    }
+    return result;
+  }
+
+  Uint8List _simdLoadSplatAsyncSubset(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required int laneWidth,
+  }) {
+    final access = _resolveAsyncSubsetSimdMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      context: 'v128.load_splat',
+    );
+    final laneBytes = access.memory.viewBytes(access.address, laneWidth);
+    final result = Uint8List(16);
+    for (var offset = 0; offset < 16; offset += laneWidth) {
+      result.setRange(offset, offset + laneWidth, laneBytes);
+    }
+    return result;
+  }
+
+  Uint8List _simdLoadZeroExtendAsyncSubset(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required int laneWidth,
+  }) {
+    final access = _resolveAsyncSubsetSimdMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      context: 'v128.load_zero',
+    );
+    final result = Uint8List(16);
+    result.setRange(
+      0,
+      laneWidth,
+      access.memory.viewBytes(access.address, laneWidth),
+    );
+    return result;
+  }
+
+  Uint8List _simdLoadLaneAsyncSubset(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required int laneWidth,
+    required int laneCount,
+  }) {
+    final lane = _requireAsyncSubsetSimdLane(
+      instruction,
+      laneCount: laneCount,
+      opName: 'v128.load_lane',
+    );
+    final vector = _popAsyncSubsetV128(stack, opName: 'v128.load_lane');
+    final result = Uint8List.fromList(vector);
+    final access = _resolveAsyncSubsetSimdMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      context: 'v128.load_lane',
+    );
+    final laneOffset = lane * laneWidth;
+    result.setRange(
+      laneOffset,
+      laneOffset + laneWidth,
+      access.memory.viewBytes(access.address, laneWidth),
+    );
+    return result;
+  }
+
+  void _simdStoreLaneAsyncSubset(
+    List<WasmValue> stack, {
+    required Instruction instruction,
+    required List<bool> memory64ByIndex,
+    required int laneWidth,
+    required int laneCount,
+  }) {
+    final lane = _requireAsyncSubsetSimdLane(
+      instruction,
+      laneCount: laneCount,
+      opName: 'v128.store_lane',
+    );
+    final vector = _popAsyncSubsetV128(stack, opName: 'v128.store_lane');
+    final access = _resolveAsyncSubsetSimdMemoryAccess(
+      stack,
+      instruction: instruction,
+      memory64ByIndex: memory64ByIndex,
+      context: 'v128.store_lane',
+    );
+    final laneOffset = lane * laneWidth;
+    access.memory.writeBytesFromList(
+      access.address,
+      vector,
+      sourceOffset: laneOffset,
+      length: laneWidth,
+    );
+  }
+
   void _simdI8x16Splat(List<WasmValue> stack) {
     final lane = _popValue(
       stack,
@@ -7127,6 +7606,35 @@ final class WasmInstance {
         ((a0 * b0) + (a1 * b1)).toUnsigned(32),
         Endian.little,
       );
+    }
+    _pushAsyncSubsetV128(stack, result);
+  }
+
+  void _simdI32x4RelaxedDotI8x16I7x16AddS(List<WasmValue> stack) {
+    final addend = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.relaxed_dot_i8x16_i7x16_add_s addend',
+    );
+    final rhs = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.relaxed_dot_i8x16_i7x16_add_s rhs',
+    );
+    final lhs = _popAsyncSubsetV128(
+      stack,
+      opName: 'i32x4.relaxed_dot_i8x16_i7x16_add_s lhs',
+    );
+    final addendData = ByteData.sublistView(addend);
+    final result = Uint8List(16);
+    final resultData = ByteData.sublistView(result);
+    for (var lane = 0; lane < 4; lane++) {
+      final byteOffset = lane * 4;
+      var dot = 0;
+      for (var i = 0; i < 4; i++) {
+        dot +=
+            lhs[byteOffset + i].toSigned(8) * rhs[byteOffset + i].toSigned(8);
+      }
+      final value = addendData.getInt32(lane * 4, Endian.little) + dot;
+      resultData.setUint32(lane * 4, value.toUnsigned(32), Endian.little);
     }
     _pushAsyncSubsetV128(stack, result);
   }
@@ -8723,6 +9231,18 @@ final class WasmInstance {
 
   void _pushAsyncSubsetV128(List<WasmValue> stack, Uint8List bytes) {
     stack.add(WasmValue.i32(WasmVm.internV128Bytes(bytes)));
+  }
+
+  int _requireAsyncSubsetSimdLane(
+    Instruction instruction, {
+    required int laneCount,
+    required String opName,
+  }) {
+    final lane = instruction.immediate;
+    if (lane == null || lane < 0 || lane >= laneCount) {
+      throw StateError('$opName lane index out of range.');
+    }
+    return lane;
   }
 
   Uint8List _popAsyncSubsetV128(
