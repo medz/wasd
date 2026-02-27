@@ -1001,6 +1001,37 @@ final class WasmInstance {
             stack.add(WasmValue.i32(reference));
             pc++;
 
+          case Opcodes.structNew:
+            _gcStructNewAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.structNewDefault:
+            _gcStructNewDefaultAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.structNewDesc:
+            _gcStructNewDescAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.structNewDefaultDesc:
+            _gcStructNewDefaultDescAsyncSubset(stack, instruction);
+            pc++;
+
+          case Opcodes.structGet:
+          case Opcodes.structGetS:
+          case Opcodes.structGetU:
+            _gcStructGetAsyncSubset(
+              stack,
+              instruction,
+              signed: instruction.opcode == Opcodes.structGetS,
+              allowPacked: instruction.opcode != Opcodes.structGet,
+            );
+            pc++;
+
+          case Opcodes.structSet:
+            _gcStructSetAsyncSubset(stack, instruction);
+            pc++;
+
           case Opcodes.f32Const:
             final floatBytes = instruction.floatBytesImmediate;
             if (floatBytes != null && floatBytes.length == 4) {
@@ -5347,6 +5378,334 @@ final class WasmInstance {
   int? _popAsyncSubsetRef(List<WasmValue> stack, {required String context}) {
     final rawRef = _popValue(stack, context).castTo(WasmValueType.i32).asI32();
     return rawRef == -1 ? null : rawRef;
+  }
+
+  int _checkAsyncSubsetTypeIndex(int index) {
+    if (index < 0 || index >= module.types.length) {
+      throw RangeError(
+        'Invalid type index: $index (count=${module.types.length}).',
+      );
+    }
+    return index;
+  }
+
+  void _gcStructNewAsyncSubset(List<WasmValue> stack, Instruction instruction) {
+    final typeIndex = _checkAsyncSubsetTypeIndex(instruction.immediate!);
+    final type = module.types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.struct) {
+      throw StateError('struct.new requires a struct type.');
+    }
+    if (type.descriptorTypeIndex != null) {
+      throw StateError('type with descriptor requires descriptor allocation');
+    }
+    final fields = List<WasmValue>.filled(
+      type.fieldSignatures.length,
+      WasmValue.i32(0),
+      growable: false,
+    );
+    for (var i = type.fieldSignatures.length - 1; i >= 0; i--) {
+      fields[i] = _coerceAsyncSubsetFieldValue(
+        type.fieldSignatures[i],
+        _popValue(stack, 'struct.new field'),
+      );
+    }
+    stack.add(
+      WasmValue.i32(
+        WasmVm.allocateConstStructRef(typeIndex: typeIndex, fields: fields),
+      ),
+    );
+  }
+
+  void _gcStructNewDefaultAsyncSubset(
+    List<WasmValue> stack,
+    Instruction instruction,
+  ) {
+    final typeIndex = _checkAsyncSubsetTypeIndex(instruction.immediate!);
+    final type = module.types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.struct) {
+      throw StateError('struct.new_default requires a struct type.');
+    }
+    if (type.descriptorTypeIndex != null) {
+      throw StateError('type with descriptor requires descriptor allocation');
+    }
+    final fields = type.fieldSignatures
+        .map(_defaultAsyncSubsetFieldValue)
+        .toList(growable: false);
+    stack.add(
+      WasmValue.i32(
+        WasmVm.allocateConstStructRef(typeIndex: typeIndex, fields: fields),
+      ),
+    );
+  }
+
+  void _gcStructNewDescAsyncSubset(
+    List<WasmValue> stack,
+    Instruction instruction,
+  ) {
+    final typeIndex = _checkAsyncSubsetTypeIndex(instruction.immediate!);
+    final type = module.types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.struct) {
+      throw StateError('struct.new_desc requires a struct type.');
+    }
+    if (type.descriptorTypeIndex == null) {
+      throw StateError(
+        'type without descriptor requires non-descriptor allocation',
+      );
+    }
+    final descriptor = _popAsyncSubsetRef(
+      stack,
+      context: 'struct.new_desc descriptor',
+    );
+    if (descriptor == null) {
+      throw StateError('null descriptor reference');
+    }
+    final fields = List<WasmValue>.filled(
+      type.fieldSignatures.length,
+      WasmValue.i32(0),
+      growable: false,
+    );
+    for (var i = type.fieldSignatures.length - 1; i >= 0; i--) {
+      fields[i] = _coerceAsyncSubsetFieldValue(
+        type.fieldSignatures[i],
+        _popValue(stack, 'struct.new_desc field'),
+      );
+    }
+    stack.add(
+      WasmValue.i32(
+        WasmVm.allocateConstStructRef(
+          typeIndex: typeIndex,
+          descriptorRef: descriptor,
+          fields: fields,
+        ),
+      ),
+    );
+  }
+
+  void _gcStructNewDefaultDescAsyncSubset(
+    List<WasmValue> stack,
+    Instruction instruction,
+  ) {
+    final typeIndex = _checkAsyncSubsetTypeIndex(instruction.immediate!);
+    final type = module.types[typeIndex];
+    if (type.kind != WasmCompositeTypeKind.struct) {
+      throw StateError('struct.new_default_desc requires a struct type.');
+    }
+    if (type.descriptorTypeIndex == null) {
+      throw StateError(
+        'type without descriptor requires non-descriptor allocation',
+      );
+    }
+    final descriptor = _popAsyncSubsetRef(
+      stack,
+      context: 'struct.new_default_desc descriptor',
+    );
+    if (descriptor == null) {
+      throw StateError('null descriptor reference');
+    }
+    final fields = type.fieldSignatures
+        .map(_defaultAsyncSubsetFieldValue)
+        .toList(growable: false);
+    stack.add(
+      WasmValue.i32(
+        WasmVm.allocateConstStructRef(
+          typeIndex: typeIndex,
+          descriptorRef: descriptor,
+          fields: fields,
+        ),
+      ),
+    );
+  }
+
+  void _gcStructGetAsyncSubset(
+    List<WasmValue> stack,
+    Instruction instruction, {
+    required bool signed,
+    required bool allowPacked,
+  }) {
+    final expectedTypeIndex = _checkAsyncSubsetTypeIndex(
+      instruction.immediate!,
+    );
+    final fieldIndex = instruction.secondaryImmediate!;
+    final reference = _popAsyncSubsetRef(
+      stack,
+      context: 'struct.get reference',
+    );
+    if (reference == null) {
+      throw StateError('null reference');
+    }
+    final structRef = WasmVm.requireStructRef(reference);
+    if (!_isAsyncSubsetTypeSubtype(structRef.typeIndex, expectedTypeIndex)) {
+      throw StateError('struct.get on incompatible reference.');
+    }
+    final fields = structRef.fields;
+    if (fieldIndex < 0 || fieldIndex >= fields.length) {
+      throw StateError('Invalid struct field index: $fieldIndex');
+    }
+    final fieldSignature =
+        module.types[structRef.typeIndex].fieldSignatures[fieldIndex];
+    if (!allowPacked && _isAsyncSubsetPackedStorageSignature(fieldSignature)) {
+      throw StateError('struct.get requires unpacked field.');
+    }
+    final value = fields[fieldIndex];
+    stack.add(
+      _coerceAsyncSubsetLoadedFieldValue(fieldSignature, value, signed: signed),
+    );
+  }
+
+  void _gcStructSetAsyncSubset(List<WasmValue> stack, Instruction instruction) {
+    final expectedTypeIndex = _checkAsyncSubsetTypeIndex(
+      instruction.immediate!,
+    );
+    final fieldIndex = instruction.secondaryImmediate!;
+    final value = _popValue(stack, 'struct.set value');
+    final reference = _popAsyncSubsetRef(
+      stack,
+      context: 'struct.set reference',
+    );
+    if (reference == null) {
+      throw StateError('null reference');
+    }
+    final structRef = WasmVm.requireStructRef(reference);
+    if (!_isAsyncSubsetTypeSubtype(structRef.typeIndex, expectedTypeIndex)) {
+      throw StateError('struct.set on incompatible reference.');
+    }
+    final fields = structRef.fields;
+    if (fieldIndex < 0 || fieldIndex >= fields.length) {
+      throw StateError('Invalid struct field index: $fieldIndex');
+    }
+    final fieldSignature =
+        module.types[structRef.typeIndex].fieldSignatures[fieldIndex];
+    final parsed = _parseAsyncSubsetFieldTypeForEquivalence(fieldSignature);
+    if (parsed == null) {
+      throw StateError('Invalid struct field signature: $fieldSignature');
+    }
+    if (parsed.mutability == 0) {
+      throw StateError('immutable field');
+    }
+    fields[fieldIndex] = _coerceAsyncSubsetFieldValue(fieldSignature, value);
+  }
+
+  WasmValue _coerceAsyncSubsetFieldValue(
+    String fieldSignature,
+    WasmValue input,
+  ) {
+    final bytes = _asyncSubsetFieldSignatureBytes(fieldSignature);
+    final typeCode = bytes[0];
+    switch (typeCode) {
+      case 0x78:
+        return WasmValue.i32(input.castTo(WasmValueType.i32).asI32() & 0xff);
+      case 0x77:
+        return WasmValue.i32(input.castTo(WasmValueType.i32).asI32() & 0xffff);
+      case 0x7f:
+      case 0x63:
+      case 0x64:
+        return WasmValue.i32(input.castTo(WasmValueType.i32).asI32());
+      case 0x7e:
+        return WasmValue.i64(input.castTo(WasmValueType.i64).asI64());
+      case 0x7d:
+        return WasmValue.f32(input.castTo(WasmValueType.f32).asF32());
+      case 0x7c:
+        return WasmValue.f64(input.castTo(WasmValueType.f64).asF64());
+      default:
+        return input;
+    }
+  }
+
+  WasmValue _coerceAsyncSubsetLoadedFieldValue(
+    String fieldSignature,
+    WasmValue value, {
+    required bool signed,
+  }) {
+    final bytes = _asyncSubsetFieldSignatureBytes(fieldSignature);
+    final typeCode = bytes[0];
+    if (typeCode == 0x78) {
+      final raw = value.castTo(WasmValueType.i32).asI32() & 0xff;
+      return WasmValue.i32(signed ? raw.toSigned(8) : raw);
+    }
+    if (typeCode == 0x77) {
+      final raw = value.castTo(WasmValueType.i32).asI32() & 0xffff;
+      return WasmValue.i32(signed ? raw.toSigned(16) : raw);
+    }
+    return value;
+  }
+
+  WasmValue _defaultAsyncSubsetFieldValue(String fieldSignature) {
+    final bytes = _asyncSubsetFieldSignatureBytes(fieldSignature);
+    final typeCode = bytes[0];
+    switch (typeCode) {
+      case 0x7f:
+      case 0x78:
+      case 0x77:
+        return WasmValue.i32(0);
+      case 0x63:
+      case 0x64:
+      case 0x70:
+      case 0x6f:
+      case 0x6e:
+      case 0x6d:
+      case 0x6c:
+      case 0x6b:
+      case 0x6a:
+      case 0x69:
+      case 0x68:
+      case 0x67:
+      case 0x66:
+      case 0x65:
+      case 0x71:
+      case 0x72:
+      case 0x73:
+        return WasmValue.i32(-1);
+      case 0x7e:
+        return WasmValue.i64(0);
+      case 0x7d:
+        return WasmValue.f32(0);
+      case 0x7c:
+        return WasmValue.f64(0);
+      default:
+        return WasmValue.i32(0);
+    }
+  }
+
+  ({String valueSignature, int mutability})?
+  _parseAsyncSubsetFieldTypeForEquivalence(String signature) {
+    final bytes = <int>[];
+    if (signature.length < 2 || signature.length.isOdd) {
+      return null;
+    }
+    for (var i = 0; i < signature.length; i += 2) {
+      bytes.add(int.parse(signature.substring(i, i + 2), radix: 16));
+    }
+    if (bytes.length < 2) {
+      return null;
+    }
+    final mutability = bytes.last;
+    if (mutability != 0 && mutability != 1) {
+      return null;
+    }
+    final valueSignature = bytes
+        .sublist(0, bytes.length - 1)
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join();
+    return (valueSignature: valueSignature, mutability: mutability);
+  }
+
+  List<int> _asyncSubsetFieldSignatureBytes(String fieldSignature) {
+    if (fieldSignature.length < 4 || fieldSignature.length.isOdd) {
+      throw StateError('Invalid field signature: $fieldSignature');
+    }
+    final bytes = <int>[];
+    for (var i = 0; i < fieldSignature.length; i += 2) {
+      bytes.add(int.parse(fieldSignature.substring(i, i + 2), radix: 16));
+    }
+    if (bytes.length < 2) {
+      throw StateError('Invalid field signature: $fieldSignature');
+    }
+    bytes.removeLast();
+    return bytes;
+  }
+
+  bool _isAsyncSubsetPackedStorageSignature(String valueSignature) {
+    return valueSignature == '78' || valueSignature == '77';
   }
 
   WasmValue _asyncSubsetTableIndexValue({

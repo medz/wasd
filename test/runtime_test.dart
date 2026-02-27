@@ -9841,6 +9841,135 @@ void main() {
       },
     );
 
+    test('supports struct gc opcodes in async import call chains', () async {
+      List<int> gcInstr(int opcode, List<int> immediates) {
+        return <int>[0xfb, ..._u32Leb(opcode & 0xff), ...immediates];
+      }
+
+      List<int> structType(List<int> fields) {
+        return <int>[0x5f, ..._u32Leb(fields.length ~/ 2), ...fields];
+      }
+
+      final wasm = _buildModule(
+        types: [
+          structType(const <int>[0x7f, 0x01]), // (mut i32)
+          structType(const <int>[0x78, 0x01]), // (mut i8)
+          _funcType([0x7f], [0x7f]),
+        ],
+        imports: const [
+          _ImportFunctionSpec(module: 'host', name: 'inc', typeIndex: 2),
+        ],
+        functionTypeIndices: const [2, 2, 2],
+        functionBodies: [
+          _FunctionBodySpec(
+            locals: const [_LocalDeclSpec(1, 0x7f)],
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._i32Const(11),
+              ...gcInstr(Opcodes.structNew, _u32Leb(0)),
+              ..._localSet(1),
+              ..._localGet(1),
+              ..._i32Const(22),
+              ...gcInstr(Opcodes.structSet, <int>[
+                ..._u32Leb(0),
+                ..._u32Leb(0),
+              ]),
+              ..._localGet(1),
+              ...gcInstr(Opcodes.structGet, <int>[
+                ..._u32Leb(0),
+                ..._u32Leb(0),
+              ]),
+              ..._i32Const(22),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ...gcInstr(Opcodes.structNewDefault, _u32Leb(0)),
+              ...gcInstr(Opcodes.structGet, <int>[
+                ..._u32Leb(0),
+                ..._u32Leb(0),
+              ]),
+              ..._i32Const(0),
+              Opcodes.i32Eq,
+              Opcodes.end,
+            ],
+          ),
+          _FunctionBodySpec(
+            locals: const [_LocalDeclSpec(1, 0x7f)],
+            instructions: [
+              ..._localGet(0),
+              ..._call(0),
+              Opcodes.drop,
+              ..._i32Const(0xfe),
+              ...gcInstr(Opcodes.structNew, _u32Leb(1)),
+              ..._localSet(1),
+              ..._localGet(1),
+              ...gcInstr(Opcodes.structGetS, <int>[
+                ..._u32Leb(1),
+                ..._u32Leb(0),
+              ]),
+              ..._i32Const(-2),
+              Opcodes.i32Eq,
+              ..._localGet(1),
+              ...gcInstr(Opcodes.structGetU, <int>[
+                ..._u32Leb(1),
+                ..._u32Leb(0),
+              ]),
+              ..._i32Const(254),
+              Opcodes.i32Eq,
+              Opcodes.i32And,
+              Opcodes.end,
+            ],
+          ),
+        ],
+        exports: const [
+          _ExportSpec(
+            name: 'supportsStructSetGet',
+            kind: WasmExportKind.function,
+            index: 1,
+          ),
+          _ExportSpec(
+            name: 'supportsStructNewDefault',
+            kind: WasmExportKind.function,
+            index: 2,
+          ),
+          _ExportSpec(
+            name: 'supportsStructGetSignedUnsigned',
+            kind: WasmExportKind.function,
+            index: 3,
+          ),
+        ],
+      );
+
+      final instance = WasmInstance.fromBytes(
+        wasm,
+        features: const WasmFeatureSet(gc: true),
+        imports: WasmImports(
+          asyncFunctions: {
+            WasmImports.key('host', 'inc'): (args) async =>
+                (args.single as int) + 1,
+          },
+        ),
+      );
+
+      expect(await instance.invokeI32Async('supportsStructSetGet', [41]), 1);
+      expect(
+        await instance.invokeI32Async('supportsStructNewDefault', [41]),
+        1,
+      );
+      expect(
+        await instance.invokeI32Async('supportsStructGetSignedUnsigned', [41]),
+        1,
+      );
+    });
+
     test('supports layered feature defaults and extension query', () {
       final features = WasmFeatureSet.layeredDefaults(
         profile: WasmFeatureProfile.stable,

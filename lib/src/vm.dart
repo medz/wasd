@@ -311,6 +311,35 @@ final class WasmVm {
     return _canonicalI31Ref(value);
   }
 
+  static _GcRefObject _requireSharedGcObject(int reference) {
+    final cached = _sharedGcObjects[reference];
+    if (cached != null) {
+      return cached;
+    }
+    final constRef = decodeConstGcRef(reference);
+    if (constRef != null && constRef.kind == constGcRefKindI31) {
+      final materialized = _GcRefObject.i31(constRef.typeIndex & 0x7fffffff);
+      _sharedGcObjects[reference] = materialized;
+      return materialized;
+    }
+    throw StateError('Invalid GC reference: $reference');
+  }
+
+  static ({int typeIndex, int? descriptorRef, List<WasmValue> fields})
+  requireStructRef(int reference) {
+    final object = _requireSharedGcObject(reference);
+    if (object.kind != _GcRefKind.struct ||
+        object.typeIndex == null ||
+        object.fields == null) {
+      throw StateError('Invalid struct reference: $reference');
+    }
+    return (
+      typeIndex: object.typeIndex!,
+      descriptorRef: object.descriptorRef,
+      fields: object.fields!,
+    );
+  }
+
   static int _canonicalI31Ref(int value) {
     final normalized = value & 0x7fffffff;
     return _sharedI31Refs.putIfAbsent(
@@ -4798,17 +4827,7 @@ final class WasmVm {
   }
 
   _GcRefObject _requireGcObject(int reference) {
-    final cached = _sharedGcObjects[reference];
-    if (cached != null) {
-      return cached;
-    }
-    final constRef = decodeConstGcRef(reference);
-    if (constRef != null && constRef.kind == constGcRefKindI31) {
-      final materialized = _GcRefObject.i31(constRef.typeIndex & 0x7fffffff);
-      _sharedGcObjects[reference] = materialized;
-      return materialized;
-    }
-    throw StateError('Invalid GC reference: $reference');
+    return _requireSharedGcObject(reference);
   }
 
   void _gcStructNew(List<WasmValue> stack, Instruction instruction) {
