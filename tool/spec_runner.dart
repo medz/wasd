@@ -181,9 +181,22 @@ Future<void> main(List<String> args) async {
   final suite = _parseSuite(_argValue(args, '--suite') ?? 'all');
   final testsuiteDir = _argValue(args, '--testsuite-dir');
   final strictProposals = args.contains('--strict-proposals');
-  final strictComponentSubset = args.contains('--strict-component-subset');
+  final disableComponentSubset = args.contains('--no-component-subset');
+  final optionalComponentSubset = args.contains('--component-subset-optional');
+  final explicitStrictComponentSubset = args.contains(
+    '--strict-component-subset',
+  );
+  final explicitEnableComponentSubset = args.contains('--component-subset');
   final runComponentSubset =
-      strictComponentSubset || args.contains('--component-subset');
+      explicitStrictComponentSubset ||
+      explicitEnableComponentSubset ||
+      !disableComponentSubset;
+  final strictComponentSubset =
+      runComponentSubset &&
+      (explicitStrictComponentSubset ||
+          (!optionalComponentSubset &&
+              !explicitEnableComponentSubset &&
+              !disableComponentSubset));
   final reportPath =
       _argValue(args, '--report') ??
       '.dart_tool/spec_runner/wasm_conformance_matrix.md';
@@ -1107,16 +1120,18 @@ String _renderMarkdownReport({
   }
   if (payload['component_subset'] == true) {
     if (payload['strict_component_subset'] == true) {
-      b.writeln(
-        '- Component subset conformance is gating (`--strict-component-subset`).',
-      );
+      b.writeln('- Component subset conformance is gating.');
     } else {
       b.writeln(
-        '- Component subset conformance is non-gating (`--component-subset`).',
+        '- Component subset conformance is non-gating (`--component-subset-optional`).',
       );
     }
     b.writeln(
       '- Component subset reports are written to `.dart_tool/spec_runner/component_subset_latest.json` and `.dart_tool/spec_runner/component_subset_failures.md`.',
+    );
+  } else {
+    b.writeln(
+      '- Component subset conformance is disabled (`--no-component-subset`).',
     );
   }
   if (target == RunnerTarget.all.name) {
@@ -1136,6 +1151,6 @@ void _printUsage() {
     'Usage: dart run tool/spec_runner.dart --target=<vm|js|wasm|all> --suite=<core|proposal|all>',
   );
   stdout.writeln(
-    'Optional: --report=<path> --json=<path> --testsuite-dir=<path> --strict-proposals --component-subset --strict-component-subset',
+    'Optional: --report=<path> --json=<path> --testsuite-dir=<path> --strict-proposals --no-component-subset --component-subset-optional --component-subset --strict-component-subset',
   );
 }
