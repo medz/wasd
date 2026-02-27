@@ -25,9 +25,10 @@ final class WasmComponentCoreInstance {
   final List<int> argumentInstanceIndices;
 }
 
-/// Component-level exported core function alias.
+/// Component-level exported core alias.
 ///
-/// Current subset decodes this from section `0x03`.
+/// Alias kind is resolved from the referenced core instance export at
+/// instantiation time.
 final class WasmComponentCoreExportAlias {
   const WasmComponentCoreExportAlias({
     required this.componentExportName,
@@ -888,13 +889,19 @@ final class WasmComponent {
         }
       } else if (binding.targetKind ==
           WasmComponentTypeBindingTargetKind.coreExportAlias) {
-        if (resolvedDeclaration.kind != WasmComponentTypeKind.function) {
-          final alias = coreExportAliases[binding.targetIndex];
-          throw FormatException(
-            'Component type binding for core export alias '
-            '`${alias.componentExportName}` must reference '
-            'a function type declaration.',
-          );
+        switch (resolvedDeclaration.kind) {
+          case WasmComponentTypeKind.value:
+          case WasmComponentTypeKind.function:
+          case WasmComponentTypeKind.memory:
+          case WasmComponentTypeKind.table:
+          case WasmComponentTypeKind.tag:
+            break;
+          case WasmComponentTypeKind.alias:
+            final alias = coreExportAliases[binding.targetIndex];
+            throw FormatException(
+              'Component type binding for core export alias '
+              '`${alias.componentExportName}` resolved to an alias declaration.',
+            );
         }
       }
     }

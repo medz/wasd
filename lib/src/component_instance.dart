@@ -13,6 +13,11 @@ import 'table.dart';
 import 'value.dart';
 
 typedef _CoreImportBindingAttempt = ({bool bound, String? incompatibility});
+typedef _ComponentExportAliasBinding = ({
+  int instanceIndex,
+  String coreExportName,
+  WasmComponentImportKind kind,
+});
 typedef _TypedFunctionImportRequirement = ({
   String componentImportName,
   List<String> parameterSignatures,
@@ -40,7 +45,8 @@ typedef _TypedTagImportRequirement = ({
 /// Current scope:
 /// - Instantiates embedded core modules discovered in section `0x01`.
 /// - Exposes direct core export invocation.
-/// - Exposes component export aliases decoded from section `0x03`.
+/// - Exposes component export aliases decoded from section `0x03` for
+///   function/memory/table/global/tag exports.
 /// - Provides canonical ABI lowering/lifting wrappers over a selected memory.
 final class WasmComponentInstance {
   WasmComponentInstance._({
@@ -49,8 +55,7 @@ final class WasmComponentInstance {
     required this.features,
     required this.coreInstances,
     required Map<String, int> coreInstanceAliases,
-    required Map<String, ({int instanceIndex, String coreExportName})>
-    coreExportAliases,
+    required Map<String, _ComponentExportAliasBinding> coreExportAliases,
   }) : _coreInstanceAliases = coreInstanceAliases,
        _coreExportAliases = coreExportAliases;
 
@@ -59,8 +64,7 @@ final class WasmComponentInstance {
   final WasmFeatureSet features;
   final List<WasmInstance> coreInstances;
   final Map<String, int> _coreInstanceAliases;
-  final Map<String, ({int instanceIndex, String coreExportName})>
-  _coreExportAliases;
+  final Map<String, _ComponentExportAliasBinding> _coreExportAliases;
 
   factory WasmComponentInstance.fromBytes(
     Uint8List componentBytes, {
@@ -192,7 +196,7 @@ final class WasmComponentInstance {
       }
       instanceAliasMap[alias.aliasName] = instanceIndex;
     }
-    final aliasMap = <String, ({int instanceIndex, String coreExportName})>{};
+    final aliasMap = <String, _ComponentExportAliasBinding>{};
     for (final alias in component.coreExportAliases) {
       final instanceIndex = alias.instanceIndex;
       if (instanceIndex < 0 || instanceIndex >= coreInstances.length) {
@@ -203,16 +207,18 @@ final class WasmComponentInstance {
         );
       }
       final sourceInstance = coreInstances[instanceIndex];
-      if (!sourceInstance.exportedFunctions.contains(alias.coreExportName)) {
+      final kind = _resolveCoreExportKind(sourceInstance, alias.coreExportName);
+      if (kind == null) {
         throw FormatException(
           'Component export alias `${alias.componentExportName}` references '
-          'missing core function export `${alias.coreExportName}` in '
+          'missing core export `${alias.coreExportName}` in '
           'instance $instanceIndex.',
         );
       }
       aliasMap[alias.componentExportName] = (
         instanceIndex: instanceIndex,
         coreExportName: alias.coreExportName,
+        kind: kind,
       );
     }
     _validateTypedCoreExportAliasBindings(
@@ -225,11 +231,9 @@ final class WasmComponentInstance {
       features: features,
       coreInstances: List<WasmInstance>.unmodifiable(coreInstances),
       coreInstanceAliases: Map<String, int>.unmodifiable(instanceAliasMap),
-      coreExportAliases:
-          Map<
-            String,
-            ({int instanceIndex, String coreExportName})
-          >.unmodifiable(aliasMap),
+      coreExportAliases: Map<String, _ComponentExportAliasBinding>.unmodifiable(
+        aliasMap,
+      ),
     );
   }
 
@@ -270,12 +274,11 @@ final class WasmComponentInstance {
     String exportName, {
     List<Object?> args = const [],
   }) {
-    final binding = _coreExportAliases[exportName];
-    if (binding == null) {
-      throw ArgumentError.value(
-        exportName,
-        'exportName',
-        'Component export alias not found',
+    final binding = _componentExportBinding(exportName);
+    if (binding.kind != WasmComponentImportKind.function) {
+      throw StateError(
+        'Component export alias `$exportName` is not a function export '
+        '(kind=${binding.kind.name}).',
       );
     }
     return coreInstance(
@@ -287,6 +290,19 @@ final class WasmComponentInstance {
     String exportName, {
     List<Object?> args = const [],
   }) {
+    final binding = _componentExportBinding(exportName);
+    if (binding.kind != WasmComponentImportKind.function) {
+      throw StateError(
+        'Component export alias `$exportName` is not a function export '
+        '(kind=${binding.kind.name}).',
+      );
+    }
+    return coreInstance(
+      binding.instanceIndex,
+    ).invokeAsync(binding.coreExportName, args);
+  }
+
+  _ComponentExportAliasBinding _componentExportBinding(String exportName) {
     final binding = _coreExportAliases[exportName];
     if (binding == null) {
       throw ArgumentError.value(
@@ -295,9 +311,98 @@ final class WasmComponentInstance {
         'Component export alias not found',
       );
     }
+    return binding;
+  }
+
+  static WasmComponentImportKind? _resolveCoreExportKind(
+    WasmInstance instance,
+    String exportName,
+  ) {
+    if (instance.exportedFunctions.contains(exportName)) {
+      return WasmComponentImportKind.function;
+    }
+    if (instance.exportedMemories.contains(exportName)) {
+      return WasmComponentImportKind.memory;
+    }
+    if (instance.exportedTables.contains(exportName)) {
+      return WasmComponentImportKind.table;
+    }
+    if (instance.exportedGlobals.contains(exportName)) {
+      return WasmComponentImportKind.global;
+    }
+    if (instance.exportedTags.contains(exportName)) {
+      return WasmComponentImportKind.tag;
+    }
+    return null;
+  }
+
+  WasmComponentImportKind componentExportKind(String exportName) {
+    return _componentExportBinding(exportName).kind;
+  }
+
+  WasmMemory componentExportMemory(String exportName) {
+    final binding = _componentExportBinding(exportName);
+    if (binding.kind != WasmComponentImportKind.memory) {
+      throw StateError(
+        'Component export alias `$exportName` is not a memory export '
+        '(kind=${binding.kind.name}).',
+      );
+    }
     return coreInstance(
       binding.instanceIndex,
-    ).invokeAsync(binding.coreExportName, args);
+    ).exportedMemory(binding.coreExportName);
+  }
+
+  WasmTable componentExportTable(String exportName) {
+    final binding = _componentExportBinding(exportName);
+    if (binding.kind != WasmComponentImportKind.table) {
+      throw StateError(
+        'Component export alias `$exportName` is not a table export '
+        '(kind=${binding.kind.name}).',
+      );
+    }
+    return coreInstance(
+      binding.instanceIndex,
+    ).exportedTable(binding.coreExportName);
+  }
+
+  Object? readComponentExportGlobal(String exportName) {
+    final binding = _componentExportBinding(exportName);
+    if (binding.kind != WasmComponentImportKind.global) {
+      throw StateError(
+        'Component export alias `$exportName` is not a global export '
+        '(kind=${binding.kind.name}).',
+      );
+    }
+    return coreInstance(
+      binding.instanceIndex,
+    ).readGlobal(binding.coreExportName);
+  }
+
+  RuntimeGlobal componentExportGlobalBinding(String exportName) {
+    final binding = _componentExportBinding(exportName);
+    if (binding.kind != WasmComponentImportKind.global) {
+      throw StateError(
+        'Component export alias `$exportName` is not a global export '
+        '(kind=${binding.kind.name}).',
+      );
+    }
+    return coreInstance(
+      binding.instanceIndex,
+    ).exportedGlobalBinding(binding.coreExportName);
+  }
+
+  WasmTagImport componentExportTag(String exportName) {
+    final binding = _componentExportBinding(exportName);
+    if (binding.kind != WasmComponentImportKind.tag) {
+      throw StateError(
+        'Component export alias `$exportName` is not a tag export '
+        '(kind=${binding.kind.name}).',
+      );
+    }
+    return coreInstance(
+      binding.instanceIndex,
+    ).exportedTagImport(binding.coreExportName);
   }
 
   static void _validateComponentImportRequirements(
@@ -1070,25 +1175,145 @@ final class WasmComponentInstance {
         component.typeDeclarations,
         binding.typeDeclarationIndex,
       );
-      if (declaration.kind != WasmComponentTypeKind.function) {
-        continue;
-      }
       final instanceIndex = alias.instanceIndex;
       if (instanceIndex < 0 || instanceIndex >= coreInstances.length) {
         continue;
       }
       final instance = coreInstances[instanceIndex];
-      if (!instance.exportedFunctions.contains(alias.coreExportName)) {
+      final exportKind = _resolveCoreExportKind(instance, alias.coreExportName);
+      if (exportKind == null) {
         continue;
       }
-      final actualType = instance.exportedFunctionType(alias.coreExportName);
-      _validateComponentFunctionDeclarationAgainstCoreType(
-        declaration: declaration,
-        actualType: actualType,
-        context:
-            'Component export alias `${alias.componentExportName}` '
-            '(instance=$instanceIndex, export=`${alias.coreExportName}`)',
-      );
+      final context =
+          'Component export alias `${alias.componentExportName}` '
+          '(instance=$instanceIndex, export=`${alias.coreExportName}`)';
+      switch (declaration.kind) {
+        case WasmComponentTypeKind.function:
+          if (exportKind != WasmComponentImportKind.function) {
+            throw FormatException(
+              '$context has incompatible kind: expected function export, '
+              'actual ${exportKind.name}.',
+            );
+          }
+          final actualType = instance.exportedFunctionType(
+            alias.coreExportName,
+          );
+          _validateComponentFunctionDeclarationAgainstCoreType(
+            declaration: declaration,
+            actualType: actualType,
+            context: context,
+          );
+          break;
+        case WasmComponentTypeKind.value:
+          if (exportKind != WasmComponentImportKind.global) {
+            throw FormatException(
+              '$context has incompatible kind: expected global export, '
+              'actual ${exportKind.name}.',
+            );
+          }
+          final valueTypeCode = declaration.valueTypeCode;
+          if (valueTypeCode == null) {
+            throw FormatException(
+              '$context has malformed value type declaration '
+              '`${declaration.name}`.',
+            );
+          }
+          final expectedType = _decodeCoreValueTypeCode(valueTypeCode);
+          if (expectedType == null) {
+            throw UnsupportedError(
+              '$context uses unsupported value type code '
+              '0x${valueTypeCode.toRadixString(16)}.',
+            );
+          }
+          final actualGlobalType = instance.exportedGlobalType(
+            alias.coreExportName,
+          );
+          final actualSignature =
+              actualGlobalType.valueTypeSignature ??
+              _coreValueTypeSignature(actualGlobalType.valueType);
+          final expectedSignature = _coreValueTypeSignature(expectedType);
+          if (actualSignature != expectedSignature) {
+            throw FormatException(
+              '$context has incompatible typed global signature: expected '
+              '$expectedSignature, actual $actualSignature.',
+            );
+          }
+          break;
+        case WasmComponentTypeKind.memory:
+          if (exportKind != WasmComponentImportKind.memory) {
+            throw FormatException(
+              '$context has incompatible kind: expected memory export, '
+              'actual ${exportKind.name}.',
+            );
+          }
+          final memoryType = declaration.memoryType;
+          if (memoryType == null) {
+            throw FormatException(
+              '$context has malformed memory type declaration '
+              '`${declaration.name}`.',
+            );
+          }
+          final mismatch = _typedMemoryImportMismatch(
+            expected: memoryType,
+            actual: instance.exportedMemory(alias.coreExportName),
+          );
+          if (mismatch != null) {
+            throw FormatException(
+              '$context has incompatible typed memory export: $mismatch.',
+            );
+          }
+          break;
+        case WasmComponentTypeKind.table:
+          if (exportKind != WasmComponentImportKind.table) {
+            throw FormatException(
+              '$context has incompatible kind: expected table export, '
+              'actual ${exportKind.name}.',
+            );
+          }
+          final tableType = declaration.tableType;
+          if (tableType == null) {
+            throw FormatException(
+              '$context has malformed table type declaration '
+              '`${declaration.name}`.',
+            );
+          }
+          final mismatch = _typedTableImportMismatch(
+            expected: tableType,
+            actual: instance.exportedTable(alias.coreExportName),
+          );
+          if (mismatch != null) {
+            throw FormatException(
+              '$context has incompatible typed table export: $mismatch.',
+            );
+          }
+          break;
+        case WasmComponentTypeKind.tag:
+          if (exportKind != WasmComponentImportKind.tag) {
+            throw FormatException(
+              '$context has incompatible kind: expected tag export, '
+              'actual ${exportKind.name}.',
+            );
+          }
+          final tagParameterTypeCodes = declaration.tagParameterTypeCodes;
+          if (tagParameterTypeCodes == null) {
+            throw FormatException(
+              '$context has malformed tag type declaration `${declaration.name}`.',
+            );
+          }
+          _validateExpectedFunctionSignaturesAgainstCoreType(
+            expectedParameters: _componentTypeCodesToSignatures(
+              tagParameterTypeCodes,
+            ),
+            expectedResults: const <String>[],
+            actualType: instance.exportedTagImport(alias.coreExportName).type,
+            context: '$context for tag declaration `${declaration.name}`',
+          );
+          break;
+        case WasmComponentTypeKind.alias:
+          throw FormatException(
+            '$context resolved to an alias type declaration, which is invalid.',
+          );
+      }
     }
   }
 

@@ -899,7 +899,7 @@ void main() {
     });
 
     test(
-      'rejects core export alias type binding to non-function declaration',
+      'accepts core export alias type binding to non-function declaration at decode time',
       () {
         final instanceSection = <int>[
           ..._u32Leb(1),
@@ -928,12 +928,14 @@ void main() {
           ..._section(0x07, typeBindingSection),
         ]);
 
+        final component = WasmComponent.decode(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(component.typeBindings, hasLength(1));
         expect(
-          () => WasmComponent.decode(
-            componentBytes,
-            features: const WasmFeatureSet(componentModel: true),
-          ),
-          throwsFormatException,
+          component.typeDeclarations.single.kind,
+          WasmComponentTypeKind.value,
         );
       },
     );

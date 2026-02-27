@@ -486,30 +486,106 @@ void main() {
       expect(await instance.invokeComponentExportAsync('apiOne'), 9);
     });
 
-    test(
-      'rejects component export alias pointing to missing function export',
-      () {
-        final componentBytes = _componentWithCoreModules(
-          <Uint8List>[_coreModuleConstI32(name: 'one', value: 9)],
-          instantiateModuleIndices: const [0],
-          exportAliases: const [
-            _ComponentAliasSpec(
-              instanceIndex: 0,
-              coreExportName: 'missing',
-              componentExportName: 'apiMissing',
-            ),
-          ],
-        );
-
-        expect(
-          () => WasmComponentInstance.fromBytes(
-            componentBytes,
-            features: const WasmFeatureSet(componentModel: true),
+    test('rejects component export alias pointing to missing core export', () {
+      final componentBytes = _componentWithCoreModules(
+        <Uint8List>[_coreModuleConstI32(name: 'one', value: 9)],
+        instantiateModuleIndices: const [0],
+        exportAliases: const [
+          _ComponentAliasSpec(
+            instanceIndex: 0,
+            coreExportName: 'missing',
+            componentExportName: 'apiMissing',
           ),
-          throwsFormatException,
-        );
-      },
-    );
+        ],
+      );
+
+      expect(
+        () => WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        ),
+        throwsFormatException,
+      );
+    });
+
+    test('exposes non-function component export aliases from section 0x03', () {
+      final componentBytes = _componentWithCoreModules(
+        <Uint8List>[
+          _coreModuleExportMemory(name: 'mem', minPages: 1, maxPages: 2),
+          _coreModuleExportTable(name: 'tab', min: 1, max: 3),
+          _coreModuleExportGlobalI32(name: 'g', value: 7),
+          _coreModuleExportTag(name: 'err', paramType: 0x7f),
+        ],
+        instantiateModuleIndices: const [0, 1, 2, 3],
+        exportAliases: const [
+          _ComponentAliasSpec(
+            instanceIndex: 0,
+            coreExportName: 'mem',
+            componentExportName: 'apiMem',
+          ),
+          _ComponentAliasSpec(
+            instanceIndex: 1,
+            coreExportName: 'tab',
+            componentExportName: 'apiTab',
+          ),
+          _ComponentAliasSpec(
+            instanceIndex: 2,
+            coreExportName: 'g',
+            componentExportName: 'apiGlobal',
+          ),
+          _ComponentAliasSpec(
+            instanceIndex: 3,
+            coreExportName: 'err',
+            componentExportName: 'apiTag',
+          ),
+        ],
+      );
+
+      final instance = WasmComponentInstance.fromBytes(
+        componentBytes,
+        features: const WasmFeatureSet(componentModel: true),
+      );
+
+      expect(
+        instance.componentExportKind('apiMem'),
+        WasmComponentImportKind.memory,
+      );
+      expect(
+        instance.componentExportKind('apiTab'),
+        WasmComponentImportKind.table,
+      );
+      expect(
+        instance.componentExportKind('apiGlobal'),
+        WasmComponentImportKind.global,
+      );
+      expect(
+        instance.componentExportKind('apiTag'),
+        WasmComponentImportKind.tag,
+      );
+
+      final memory = instance.componentExportMemory('apiMem');
+      expect(memory.pageCount, 1);
+      expect(memory.maxPages, 2);
+
+      final table = instance.componentExportTable('apiTab');
+      expect(table.length, 1);
+      expect(table.max, 3);
+
+      expect(instance.readComponentExportGlobal('apiGlobal'), 7);
+      expect(
+        instance.componentExportGlobalBinding('apiGlobal').valueType,
+        WasmValueType.i32,
+      );
+
+      final tag = instance.componentExportTag('apiTag');
+      expect(
+        tag.type.params,
+        orderedEquals(const <WasmValueType>[WasmValueType.i32]),
+      );
+      expect(tag.type.results, isEmpty);
+
+      expect(() => instance.invokeComponentExport('apiMem'), throwsStateError);
+    });
 
     test('validates typed core export alias signatures', () {
       final baseComponent = _componentWithCoreModules(
@@ -590,6 +666,142 @@ void main() {
         throwsFormatException,
       );
     });
+
+    test(
+      'validates typed core export alias bindings for non-function exports',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleExportMemory(name: 'mem', minPages: 1, maxPages: 2),
+            _coreModuleExportTable(name: 'tab', min: 1, max: 3),
+            _coreModuleExportGlobalI32(name: 'g', value: 11),
+            _coreModuleExportTag(name: 'err', paramType: 0x7f),
+          ],
+          instantiateModuleIndices: const [0, 1, 2, 3],
+          exportAliases: const [
+            _ComponentAliasSpec(
+              instanceIndex: 0,
+              coreExportName: 'mem',
+              componentExportName: 'apiMem',
+            ),
+            _ComponentAliasSpec(
+              instanceIndex: 1,
+              coreExportName: 'tab',
+              componentExportName: 'apiTab',
+            ),
+            _ComponentAliasSpec(
+              instanceIndex: 2,
+              coreExportName: 'g',
+              componentExportName: 'apiGlobal',
+            ),
+            _ComponentAliasSpec(
+              instanceIndex: 3,
+              coreExportName: 'err',
+              componentExportName: 'apiTag',
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(4),
+          ..._name('mem_t'),
+          0x03, // memory
+          0x01, // has max
+          ..._u32Leb(1),
+          ..._u32Leb(2),
+          ..._name('tab_t'),
+          0x04, // table
+          0x70, // funcref
+          0x01, // has max
+          ..._u32Leb(1),
+          ..._u32Leb(3),
+          ..._name('g_t'),
+          0x00, // value
+          0x7f, // i32
+          ..._name('tag_t'),
+          0x05, // tag
+          ..._u32Leb(1),
+          0x7f, // i32
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(4),
+          0x01,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+          0x01,
+          ..._u32Leb(1),
+          ..._u32Leb(1),
+          0x01,
+          ..._u32Leb(2),
+          ..._u32Leb(2),
+          0x01,
+          ..._u32Leb(3),
+          ..._u32Leb(3),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        final instance = WasmComponentInstance.fromBytes(
+          componentBytes,
+          features: const WasmFeatureSet(componentModel: true),
+        );
+        expect(instance.componentExportMemory('apiMem').maxPages, 2);
+        expect(instance.componentExportTable('apiTab').max, 3);
+        expect(instance.readComponentExportGlobal('apiGlobal'), 11);
+        expect(
+          instance.componentExportTag('apiTag').type.params,
+          orderedEquals(const <WasmValueType>[WasmValueType.i32]),
+        );
+      },
+    );
+
+    test(
+      'rejects mismatched typed core export alias bindings for non-function exports',
+      () {
+        final baseComponent = _componentWithCoreModules(
+          <Uint8List>[
+            _coreModuleExportMemory(name: 'mem', minPages: 1, maxPages: 2),
+          ],
+          instantiateModuleIndices: const [0],
+          exportAliases: const [
+            _ComponentAliasSpec(
+              instanceIndex: 0,
+              coreExportName: 'mem',
+              componentExportName: 'apiMem',
+            ),
+          ],
+        );
+        final typeSection = <int>[
+          ..._u32Leb(1),
+          ..._name('mem_t'),
+          0x03, // memory
+          0x01, // has max
+          ..._u32Leb(1),
+          ..._u32Leb(1), // tighter max than actual max=2
+        ];
+        final typeBindingSection = <int>[
+          ..._u32Leb(1),
+          0x01,
+          ..._u32Leb(0),
+          ..._u32Leb(0),
+        ];
+        final componentBytes = Uint8List.fromList(<int>[
+          ...baseComponent,
+          ..._section(0x06, typeSection),
+          ..._section(0x07, typeBindingSection),
+        ]);
+
+        expect(
+          () => WasmComponentInstance.fromBytes(
+            componentBytes,
+            features: const WasmFeatureSet(componentModel: true),
+          ),
+          throwsFormatException,
+        );
+      },
+    );
 
     test('validates component import requirements before instantiation', () {
       final componentBytes = _componentWithCoreModules(
