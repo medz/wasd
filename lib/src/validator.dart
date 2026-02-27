@@ -27,6 +27,7 @@ final class _SimpleControlFrame {
     this.isLoop = false,
     this.isIf = false,
     this.isLegacyTry = false,
+    this.isFunction = false,
   });
 
   final int stackHeight;
@@ -37,6 +38,7 @@ final class _SimpleControlFrame {
   final bool isLoop;
   final bool isIf;
   final bool isLegacyTry;
+  final bool isFunction;
   bool seenElse = false;
   bool inLegacyCatch = false;
   bool hasEndReachability = false;
@@ -1824,6 +1826,7 @@ abstract final class WasmValidator {
         parameterSignatures: const <String>[],
         labelSignatures: List<String>.from(functionResultSignatures),
         resultSignatures: List<String>.from(functionResultSignatures),
+        isFunction: true,
       ),
     ];
     bool isReferenceLikeSignature(String signature) {
@@ -2287,11 +2290,25 @@ abstract final class WasmValidator {
           final canMaterializePolymorphicResults =
               frame.polymorphic &&
               (!frame.isLoop || !frame.loopBackUnreachable);
+          final parentIsFunction =
+              controlStack.isNotEmpty && controlStack.last.isFunction;
+          // suppressLoopBackPropagation keeps a void `frame` loop that only
+          // loops back from marking the enclosing function frame in
+          // `controlStack` (identified by `parentIsFunction`) unreachable; this
+          // preserves `propagateUnreachableToParent` for polymorphic/result
+          // materialization checks while matching the empty-result loop edge
+          // case in the spec.
+          final suppressLoopBackPropagation =
+              frame.isLoop &&
+              frame.resultSignatures.isEmpty &&
+              frame.loopBackUnreachable &&
+              parentIsFunction;
           final propagateUnreachableToParent =
               frame.polymorphic &&
               !hasConcreteResult &&
               !frame.hasEndReachability &&
-              !canMaterializePolymorphicResults;
+              !canMaterializePolymorphicResults &&
+              !suppressLoopBackPropagation;
           if (hasConcreteResult ||
               frame.hasEndReachability ||
               canMaterializePolymorphicResults) {

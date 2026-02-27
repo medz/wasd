@@ -1205,6 +1205,35 @@ void main() {
       );
     });
 
+    test(
+      'validation rejects loop back-edge when function result is not produced',
+      () {
+        final wasm = _buildModule(
+          types: [
+            _funcType([], [0x7f]),
+          ],
+          functionTypeIndices: [0],
+          functionBodies: [
+            _FunctionBodySpec(
+              instructions: [
+                Opcodes.loop,
+                0x40,
+                Opcodes.nop,
+                ..._br(0),
+                Opcodes.end,
+                Opcodes.end,
+              ],
+            ),
+          ],
+        );
+
+        expect(
+          () => WasmInstance.fromBytes(wasm),
+          throwsA(isA<FormatException>()),
+        );
+      },
+    );
+
     test('validation rejects invalid call index before execution', () {
       final wasm = _buildModule(
         types: [_funcType([], [])],
