@@ -15,8 +15,6 @@ import 'wasi_socket_transport.dart';
 typedef WasiReadSource = Uint8List Function(int maxBytes);
 typedef WasiWriteSink = void Function(Uint8List bytes);
 
-enum WasiProcRaiseMode { enosys, success, trap }
-
 enum _FdKind { stdin, stdout, stderr, directory, file }
 
 final class _FdEntry {
@@ -166,8 +164,6 @@ final class WasiPreview1 {
     Map<String, String> environment = const {},
     List<int> stdin = const [],
     this.stdinSource,
-    this.procRaiseMode = WasiProcRaiseMode.enosys,
-    this.allowNonStandardWasi = false,
     WasiSocketTransport? socketTransport,
     Map<int, Object> preopenedSockets = const {},
     WasiWriteSink? stdoutSink,
@@ -211,13 +207,6 @@ final class WasiPreview1 {
     _nowRealtimeNs = nowRealtimeNs ?? _defaultNowRealtimeNs;
     _nowMonotonicNs = nowMonotonicNs ?? _defaultNowMonotonicNs;
     _sleep = sleep ?? _defaultSleep;
-    if (!allowNonStandardWasi && procRaiseMode != WasiProcRaiseMode.enosys) {
-      throw ArgumentError.value(
-        procRaiseMode,
-        'procRaiseMode',
-        'Non-standard proc_raise modes require allowNonStandardWasi: true.',
-      );
-    }
     _resetFdTable();
   }
 
@@ -225,8 +214,6 @@ final class WasiPreview1 {
   final Map<String, String> _environment;
   final Uint8List _stdinBuffer;
   final WasiReadSource? stdinSource;
-  final WasiProcRaiseMode procRaiseMode;
-  final bool allowNonStandardWasi;
   final WasiWriteSink _stdoutSink;
   final WasiWriteSink _stderrSink;
   final WasiFileSystem _fileSystem;
@@ -2032,18 +2019,12 @@ final class WasiPreview1 {
   }
 
   Object? _procRaise(List<Object?> args) {
-    final signal = _asI32(args, 0, 'sig');
-    switch (procRaiseMode) {
-      case WasiProcRaiseMode.enosys:
-        return _errnoNosys;
-      case WasiProcRaiseMode.success:
-        return _errnoSuccess;
-      case WasiProcRaiseMode.trap:
-        throw WasiProcRaise(signal);
-    }
+    _asI32(args, 0, 'sig');
+    return _errnoNosys;
   }
 
   Object? _procExit(List<Object?> args) {
+    // Preview1 proc_exit terminates execution and does not return errno.
     final code = _asI32(args, 0, 'code');
     throw WasiProcExit(code);
   }
@@ -2813,13 +2794,4 @@ final class WasiProcExit implements Exception {
 
   @override
   String toString() => 'WasiProcExit($exitCode)';
-}
-
-final class WasiProcRaise implements Exception {
-  const WasiProcRaise(this.signal);
-
-  final int signal;
-
-  @override
-  String toString() => 'WasiProcRaise(signal: $signal)';
 }
