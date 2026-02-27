@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -35,9 +36,13 @@ final class WasiLocalFileSystem
     required bool read,
     required bool write,
     required bool exclusive,
+    required bool followSymlinks,
   }) {
     final guestPath = WasiInMemoryFileSystem.normalizeAbsolutePath(path);
     final hostPath = _resolveHostPath(guestPath);
+    if (!followSymlinks && Link(hostPath).existsSync()) {
+      throw const WasiFsException(WasiFsError.loop);
+    }
     final file = File(hostPath);
     if (Directory(hostPath).existsSync()) {
       throw const WasiFsException(WasiFsError.isDirectory);
@@ -72,9 +77,29 @@ final class WasiLocalFileSystem
   }
 
   @override
-  WasiPathStat statPath(String path) {
+  WasiPathStat statPath(String path, {required bool followSymlinks}) {
     final guestPath = WasiInMemoryFileSystem.normalizeAbsolutePath(path);
     final hostPath = _resolveHostPath(guestPath);
+    if (!followSymlinks) {
+      final link = Link(hostPath);
+      if (link.existsSync()) {
+        final stat = link.statSync();
+        String target;
+        try {
+          target = link.targetSync();
+        } on FileSystemException {
+          throw const WasiFsException(WasiFsError.invalid);
+        }
+        return WasiPathStat(
+          fileType: WasiFileType.symbolicLink,
+          inode: _inodeFromPath(hostPath),
+          size: utf8.encode(target).length,
+          atimeNs: _toNs(stat.accessed),
+          mtimeNs: _toNs(stat.modified),
+          ctimeNs: _toNs(stat.changed),
+        );
+      }
+    }
     if (Directory(hostPath).existsSync()) {
       final stat = Directory(hostPath).statSync();
       return WasiPathStat(
@@ -172,14 +197,16 @@ final class WasiLocalFileSystem
     final destinationGuest = WasiInMemoryFileSystem.normalizeAbsolutePath(
       destinationPath,
     );
+    if (sourceGuest == destinationGuest) {
+      return;
+    }
     final sourceHost = _resolveHostPath(sourceGuest);
     final destinationHost = _resolveHostPath(destinationGuest);
-
-    final source = File(sourceHost);
-    if (Directory(sourceHost).existsSync()) {
-      throw const WasiFsException(WasiFsError.isDirectory);
-    }
-    if (!source.existsSync()) {
+    final sourceType = FileSystemEntity.typeSync(
+      sourceHost,
+      followLinks: false,
+    );
+    if (sourceType == FileSystemEntityType.notFound) {
       throw const WasiFsException(WasiFsError.notFound);
     }
 
@@ -187,15 +214,41 @@ final class WasiLocalFileSystem
     if (!destinationParent.existsSync()) {
       throw const WasiFsException(WasiFsError.notFound);
     }
-    if (Directory(destinationHost).existsSync()) {
-      throw const WasiFsException(WasiFsError.isDirectory);
-    }
-    final destinationFile = File(destinationHost);
-    if (destinationFile.existsSync()) {
-      destinationFile.deleteSync();
+
+    final destinationType = FileSystemEntity.typeSync(
+      destinationHost,
+      followLinks: false,
+    );
+    if (sourceType == FileSystemEntityType.directory) {
+      if (destinationType == FileSystemEntityType.file ||
+          destinationType == FileSystemEntityType.link) {
+        throw const WasiFsException(WasiFsError.notDirectory);
+      }
+      if (destinationType == FileSystemEntityType.directory) {
+        final destinationDirectory = Directory(destinationHost);
+        if (destinationDirectory.listSync(followLinks: false).isNotEmpty) {
+          throw const WasiFsException(WasiFsError.directoryNotEmpty);
+        }
+        destinationDirectory.deleteSync(recursive: false);
+      }
+      Directory(sourceHost).renameSync(destinationHost);
+      return;
     }
 
-    source.renameSync(destinationHost);
+    if (destinationType == FileSystemEntityType.directory) {
+      throw const WasiFsException(WasiFsError.isDirectory);
+    }
+    if (destinationType == FileSystemEntityType.file) {
+      File(destinationHost).deleteSync();
+    } else if (destinationType == FileSystemEntityType.link) {
+      Link(destinationHost).deleteSync();
+    }
+
+    if (sourceType == FileSystemEntityType.link) {
+      Link(sourceHost).renameSync(destinationHost);
+      return;
+    }
+    File(sourceHost).renameSync(destinationHost);
   }
 
   @override
@@ -239,9 +292,17 @@ final class WasiLocalFileSystem
     int? atimeNs,
     int? mtimeNs,
     int? ctimeNs,
+    required bool followSymlinks,
   }) {
     final guestPath = WasiInMemoryFileSystem.normalizeAbsolutePath(path);
     final hostPath = _resolveHostPath(guestPath);
+    final link = Link(hostPath);
+    if (!followSymlinks && link.existsSync()) {
+      throw const WasiFsException(
+        WasiFsError.notSupported,
+        'Symlink timestamp updates are not supported by this backend.',
+      );
+    }
     final file = File(hostPath);
     final directory = Directory(hostPath);
     if (!file.existsSync() && !directory.existsSync()) {
@@ -273,7 +334,11 @@ final class WasiLocalFileSystem
   }
 
   @override
-  void link({required String sourcePath, required String destinationPath}) {
+  void link({
+    required String sourcePath,
+    required String destinationPath,
+    required bool followSymlinks,
+  }) {
     final sourceGuest = WasiInMemoryFileSystem.normalizeAbsolutePath(
       sourcePath,
     );
@@ -282,12 +347,14 @@ final class WasiLocalFileSystem
     );
     final sourceHost = _resolveHostPath(sourceGuest);
     final destinationHost = _resolveHostPath(destinationGuest);
-
-    final source = File(sourceHost);
-    if (!source.existsSync()) {
+    final sourceType = FileSystemEntity.typeSync(
+      sourceHost,
+      followLinks: false,
+    );
+    if (sourceType == FileSystemEntityType.notFound) {
       throw const WasiFsException(WasiFsError.notFound);
     }
-    if (Directory(sourceHost).existsSync()) {
+    if (sourceType == FileSystemEntityType.directory) {
       throw const WasiFsException(WasiFsError.isDirectory);
     }
     final destination = File(destinationHost);
@@ -297,7 +364,20 @@ final class WasiLocalFileSystem
     if (!destination.parent.existsSync()) {
       throw const WasiFsException(WasiFsError.notFound);
     }
-    final bytes = source.readAsBytesSync();
+
+    if (sourceType == FileSystemEntityType.link && !followSymlinks) {
+      final sourceLink = Link(sourceHost);
+      String target;
+      try {
+        target = sourceLink.targetSync();
+      } on FileSystemException {
+        throw const WasiFsException(WasiFsError.invalid);
+      }
+      Link(destinationHost).createSync(target, recursive: false);
+      return;
+    }
+
+    final bytes = File(sourceHost).readAsBytesSync();
     destination.writeAsBytesSync(bytes, flush: true);
   }
 

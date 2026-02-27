@@ -72,11 +72,12 @@ abstract interface class WasiFileSystem {
     required bool read,
     required bool write,
     required bool exclusive,
+    required bool followSymlinks,
   });
 }
 
 abstract interface class WasiPathMetadataFileSystem {
-  WasiPathStat statPath(String path);
+  WasiPathStat statPath(String path, {required bool followSymlinks});
 }
 
 abstract interface class WasiDirectoryListingFileSystem {
@@ -96,11 +97,16 @@ abstract interface class WasiPathTimesFileSystem {
     int? atimeNs,
     int? mtimeNs,
     int? ctimeNs,
+    required bool followSymlinks,
   });
 }
 
 abstract interface class WasiPathLinkFileSystem {
-  void link({required String sourcePath, required String destinationPath});
+  void link({
+    required String sourcePath,
+    required String destinationPath,
+    required bool followSymlinks,
+  });
   void symlink({required String targetPath, required String linkPath});
   String readlink(String path);
 }
@@ -109,6 +115,7 @@ enum WasiFsError {
   notFound,
   exists,
   invalid,
+  loop,
   permissionDenied,
   notSupported,
   directoryNotEmpty,
@@ -154,9 +161,16 @@ final class WasiInMemoryFileSystem
     required bool read,
     required bool write,
     required bool exclusive,
+    required bool followSymlinks,
   }) {
     final normalizedPath = normalizeAbsolutePath(path);
-    final resolvedPath = _resolveFilePath(normalizedPath);
+    if (!followSymlinks && _symlinks.containsKey(normalizedPath)) {
+      throw const WasiFsException(WasiFsError.loop);
+    }
+    final resolvedPath = _resolveLookupPath(
+      normalizedPath,
+      followSymlinks: followSymlinks,
+    );
     if (_directories.contains(resolvedPath)) {
       throw const WasiFsException(
         WasiFsError.isDirectory,
@@ -240,12 +254,17 @@ final class WasiInMemoryFileSystem
   }
 
   @override
-  WasiPathStat statPath(String path) {
+  WasiPathStat statPath(String path, {required bool followSymlinks}) {
     final normalizedPath = normalizeAbsolutePath(path);
-    if (_directories.contains(normalizedPath)) {
+    final lookedUpPath = _resolveLookupPath(
+      normalizedPath,
+      followSymlinks: followSymlinks,
+    );
+
+    if (_directories.contains(lookedUpPath)) {
       return WasiPathStat(
         fileType: WasiFileType.directory,
-        inode: _inodeFromPath(normalizedPath),
+        inode: _inodeFromPath(lookedUpPath),
         size: 0,
         atimeNs: 0,
         mtimeNs: 0,
@@ -253,7 +272,7 @@ final class WasiInMemoryFileSystem
       );
     }
 
-    final symlink = _symlinks[normalizedPath];
+    final symlink = _symlinks[lookedUpPath];
     if (symlink != null) {
       return WasiPathStat(
         fileType: WasiFileType.symbolicLink,
@@ -265,7 +284,7 @@ final class WasiInMemoryFileSystem
       );
     }
 
-    final file = _files[normalizedPath];
+    final file = _files[lookedUpPath];
     if (file == null) {
       throw const WasiFsException(WasiFsError.notFound);
     }
@@ -398,6 +417,9 @@ final class WasiInMemoryFileSystem
   void rename({required String sourcePath, required String destinationPath}) {
     final source = normalizeAbsolutePath(sourcePath);
     final destination = normalizeAbsolutePath(destinationPath);
+    if (source == destination) {
+      return;
+    }
     if (source == '/' || destination == '/') {
       throw const WasiFsException(
         WasiFsError.permissionDenied,
@@ -414,24 +436,33 @@ final class WasiInMemoryFileSystem
     if (!_directories.contains(destinationParent)) {
       throw const WasiFsException(WasiFsError.notFound);
     }
-    if (_entryExists(destination)) {
-      throw const WasiFsException(WasiFsError.exists);
-    }
-
-    final file = _files.remove(source);
-    if (file != null) {
-      _files[destination] = file;
-      return;
-    }
-
-    final symlink = _symlinks.remove(source);
-    if (symlink != null) {
-      _symlinks[destination] = symlink;
-      return;
-    }
-
-    if (!_directories.contains(source)) {
+    final sourceKind = _entryKind(source);
+    if (sourceKind == _InMemoryEntryKind.none) {
       throw const WasiFsException(WasiFsError.notFound);
+    }
+
+    final destinationKind = _entryKind(destination);
+    if (sourceKind == _InMemoryEntryKind.file ||
+        sourceKind == _InMemoryEntryKind.symlink) {
+      if (destinationKind == _InMemoryEntryKind.directory) {
+        throw const WasiFsException(WasiFsError.isDirectory);
+      }
+      _removeNonDirectory(destination);
+      if (sourceKind == _InMemoryEntryKind.file) {
+        _files[destination] = _files.remove(source)!;
+      } else {
+        _symlinks[destination] = _symlinks.remove(source)!;
+      }
+      return;
+    }
+
+    if (destinationKind == _InMemoryEntryKind.file ||
+        destinationKind == _InMemoryEntryKind.symlink) {
+      throw const WasiFsException(WasiFsError.notDirectory);
+    }
+    if (destinationKind == _InMemoryEntryKind.directory &&
+        !_isDirectoryEmpty(destination)) {
+      throw const WasiFsException(WasiFsError.directoryNotEmpty);
     }
 
     final sourcePrefix = '$source/';
@@ -459,12 +490,16 @@ final class WasiInMemoryFileSystem
     };
     for (final oldPath in movingSet) {
       final nextPath = remap(oldPath);
-      if (movingSet.contains(nextPath)) {
+      if (movingSet.contains(nextPath) || nextPath == destination) {
         continue;
       }
       if (_entryExists(nextPath)) {
         throw const WasiFsException(WasiFsError.exists);
       }
+    }
+
+    if (destinationKind == _InMemoryEntryKind.directory) {
+      _directories.remove(destination);
     }
 
     final movedFiles = <String, _InMemoryFile>{};
@@ -541,9 +576,14 @@ final class WasiInMemoryFileSystem
     int? atimeNs,
     int? mtimeNs,
     int? ctimeNs,
+    required bool followSymlinks,
   }) {
     final normalizedPath = normalizeAbsolutePath(path);
-    final file = _files[normalizedPath];
+    final lookedUpPath = _resolveLookupPath(
+      normalizedPath,
+      followSymlinks: followSymlinks,
+    );
+    final file = _files[lookedUpPath];
     if (file != null) {
       if (atimeNs != null) {
         file.atimeNs = atimeNs;
@@ -557,7 +597,7 @@ final class WasiInMemoryFileSystem
       return;
     }
 
-    final symlink = _symlinks[normalizedPath];
+    final symlink = _symlinks[lookedUpPath];
     if (symlink != null) {
       if (atimeNs != null) {
         symlink.atimeNs = atimeNs;
@@ -571,7 +611,7 @@ final class WasiInMemoryFileSystem
       return;
     }
 
-    if (_directories.contains(normalizedPath)) {
+    if (_directories.contains(lookedUpPath)) {
       // Directory timestamps are not tracked in the in-memory backend.
       return;
     }
@@ -579,15 +619,23 @@ final class WasiInMemoryFileSystem
   }
 
   @override
-  void link({required String sourcePath, required String destinationPath}) {
+  void link({
+    required String sourcePath,
+    required String destinationPath,
+    required bool followSymlinks,
+  }) {
     final source = normalizeAbsolutePath(sourcePath);
     final destination = normalizeAbsolutePath(destinationPath);
-
-    if (_directories.contains(source)) {
+    final lookedUpSource = _resolveLookupPath(
+      source,
+      followSymlinks: followSymlinks,
+    );
+    if (_directories.contains(lookedUpSource)) {
       throw const WasiFsException(WasiFsError.isDirectory);
     }
-    final file = _files[source];
-    if (file == null) {
+    final file = _files[lookedUpSource];
+    final linkEntry = _symlinks[lookedUpSource];
+    if (file == null && linkEntry == null) {
       throw const WasiFsException(WasiFsError.notFound);
     }
     if (_entryExists(destination)) {
@@ -598,7 +646,11 @@ final class WasiInMemoryFileSystem
     if (!_directories.contains(destinationParent)) {
       throw const WasiFsException(WasiFsError.notFound);
     }
-    _files[destination] = file;
+    if (file != null) {
+      _files[destination] = file;
+      return;
+    }
+    _symlinks[destination] = linkEntry!;
   }
 
   @override
@@ -632,6 +684,46 @@ final class WasiInMemoryFileSystem
         _symlinks.containsKey(normalizedPath);
   }
 
+  _InMemoryEntryKind _entryKind(String normalizedPath) {
+    if (_directories.contains(normalizedPath)) {
+      return _InMemoryEntryKind.directory;
+    }
+    if (_files.containsKey(normalizedPath)) {
+      return _InMemoryEntryKind.file;
+    }
+    if (_symlinks.containsKey(normalizedPath)) {
+      return _InMemoryEntryKind.symlink;
+    }
+    return _InMemoryEntryKind.none;
+  }
+
+  void _removeNonDirectory(String normalizedPath) {
+    _files.remove(normalizedPath);
+    _symlinks.remove(normalizedPath);
+  }
+
+  bool _isDirectoryEmpty(String normalizedPath) {
+    final prefix = '$normalizedPath/';
+    final hasNestedDirectory = _directories.any((path) {
+      return path != normalizedPath && path.startsWith(prefix);
+    });
+    final hasNestedFiles = _files.keys.any((path) => path.startsWith(prefix));
+    final hasNestedSymlinks = _symlinks.keys.any(
+      (path) => path.startsWith(prefix),
+    );
+    return !hasNestedDirectory && !hasNestedFiles && !hasNestedSymlinks;
+  }
+
+  String _resolveLookupPath(
+    String normalizedPath, {
+    required bool followSymlinks,
+  }) {
+    if (!followSymlinks && _symlinks.containsKey(normalizedPath)) {
+      return normalizedPath;
+    }
+    return _resolveFilePath(normalizedPath);
+  }
+
   String _resolveFilePath(String normalizedPath) {
     var current = normalizedPath;
     final seen = <String>{};
@@ -641,10 +733,7 @@ final class WasiInMemoryFileSystem
         return current;
       }
       if (!seen.add(current)) {
-        throw const WasiFsException(
-          WasiFsError.invalid,
-          'Symlink loop detected.',
-        );
+        throw const WasiFsException(WasiFsError.loop, 'Symlink loop detected.');
       }
       current = _resolveSymlinkTarget(
         linkPath: current,
@@ -652,7 +741,7 @@ final class WasiInMemoryFileSystem
       );
     }
     throw const WasiFsException(
-      WasiFsError.invalid,
+      WasiFsError.loop,
       'Symlink resolution depth exceeded.',
     );
   }
@@ -684,6 +773,8 @@ final class WasiInMemoryFileSystem
     return WasmHash.fnv1a64Positive(path);
   }
 }
+
+enum _InMemoryEntryKind { none, file, directory, symlink }
 
 final class _InMemoryFile {
   _InMemoryFile(this.inode)
