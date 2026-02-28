@@ -22,7 +22,7 @@ Usage: tool/setup_test_fixtures.sh [options]
 Options:
   --doom-only                 Setup Doom fixtures only.
   --community-only            Setup community wasm fixtures only.
-  --with-tinygo               Build TinyGo fixture from tinygo-org/tinygo official example source.
+  --with-tinygo               Build TinyGo fixture from tinygo-org/tinygo official example source (implies community setup).
   -h, --help                  Show this help message.
 EOF
 }
@@ -52,6 +52,10 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+if [[ "$WITH_TINYGO" -eq 1 ]]; then
+  DO_SETUP_COMMUNITY=1
+fi
 
 setup_doom_fixture() {
   mkdir -p "$DOOM_FIXTURE_DIR"
@@ -112,8 +116,12 @@ setup_tinygo_fixture() {
   local tinygo_src="$tinygo_src_dir/main.go"
   local tinygo_out="$COMMUNITY_FIXTURE_DIR/tinygo_hello_wasi.wasm"
   mkdir -p "$tinygo_src_dir"
-  echo "Fetching TinyGo official example source ..."
-  curl -L --fail "$TINYGO_EXAMPLE_URL" -o "$tinygo_src"
+  if [[ ! -f "$tinygo_src" ]]; then
+    echo "Fetching TinyGo official example source ..."
+    curl -L --fail "$TINYGO_EXAMPLE_URL" -o "$tinygo_src"
+  else
+    echo "TinyGo official example source already present, skipping download."
+  fi
   echo "Building TinyGo WASI fixture ..."
   tinygo build -target wasi -opt 2 -o "$tinygo_out" "$tinygo_src"
   echo "  $tinygo_out"

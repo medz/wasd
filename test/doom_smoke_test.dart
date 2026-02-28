@@ -4,16 +4,12 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:wasd/wasd.dart';
 
-const List<String> _doomWasmCandidates = <String>[
-  'test/fixtures/doom/doom.wasm',
-];
-const List<String> _doomIwadCandidates = <String>[
-  'test/fixtures/doom/doom1.wad',
-];
+const String _doomWasmPath = 'test/fixtures/doom/doom.wasm';
+const String _doomIwadPath = 'test/fixtures/doom/doom1.wad';
 
 void main() {
-  final wasmFile = _firstExistingFile(_doomWasmCandidates);
-  final iwadFile = _firstExistingFile(_doomIwadCandidates);
+  final wasmFile = File(_doomWasmPath);
+  final iwadFile = File(_doomIwadPath);
   final assetsAvailable = wasmFile.existsSync() && iwadFile.existsSync();
 
   test(
@@ -30,16 +26,6 @@ void main() {
         : 'Missing Doom fixtures. Run: tool/setup_test_fixtures.sh --doom-only',
     timeout: const Timeout(Duration(minutes: 2)),
   );
-}
-
-File _firstExistingFile(List<String> candidates) {
-  for (final path in candidates) {
-    final file = File(path);
-    if (file.existsSync()) {
-      return file;
-    }
-  }
-  return File(candidates.first);
 }
 
 _DoomFirstFrame _runDoomSmoke(Uint8List wasmBytes, Uint8List iwadBytes) {
