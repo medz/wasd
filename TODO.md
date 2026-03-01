@@ -37,7 +37,8 @@
 
 - [x] 实现 `GlobalDescriptor` / `Global`
   - commit: `fe7c3a3`
-- [ ] 实现 `TableKind` / `TableDescriptor` / `Table`
+- [x] 实现 `TableKind` / `TableDescriptor` / `Table`
+  - commit: `05cf801`
 - [ ] 实现 `MemoryDescriptor` / `Memory`（含 `buffer`、`grow`）
 - [ ] 补齐对应 API 文档
 
@@ -91,4 +92,4 @@
 
 ## 当前执行焦点
 
-- [-] 进入 Issue #7：`global.dart` / `table.dart` / `memory` 接口收敛。
+- [-] 继续 Issue #7：完成 `memory` 接口并补齐里程碑 C 文档项。
