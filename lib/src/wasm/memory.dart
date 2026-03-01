@@ -1,7 +1,8 @@
 import 'dart:typed_data';
 
-import 'backend/memory.dart' as backend
-    if (dart.library.js_interop) 'backend/memory.js.dart';
+import 'backend/memory.dart'
+    if (dart.library.js_interop) 'backend/memory.js.dart'
+    as backend;
 
 /// Describes limits and behavior of a WebAssembly linear memory.
 class MemoryDescriptor {
