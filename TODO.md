@@ -61,11 +61,16 @@
 
 ## 里程碑 E：Module/Instance/WebAssembly（Issue #9）
 
-- [ ] 完成 `Module` 最小接口与静态查询方法
-- [ ] 完成 `Instance` 最小接口
-- [ ] 完成 `WebAssembly` 最小接口
-- [ ] 支持 `compileStreaming(Stream<List<int>>)`
-- [ ] `instantiateModule` 返回 `Future<Instance>`
+- [x] 完成 `Module` 最小接口与静态查询方法
+  - commit: `57eeaf6`
+- [x] 完成 `Instance` 最小接口
+  - commit: `6864e26`
+- [x] 完成 `WebAssembly` 最小接口
+  - commit: `6864e26`
+- [x] 支持 `compileStreaming(Stream<List<int>>)`
+  - commit: `6864e26`
+- [x] `instantiateModule` 返回 `Future<Instance>`
+  - commit: `6864e26`
 
 ## 里程碑 F：WASM Backend 框架（Issue #10）
 
@@ -100,4 +105,4 @@
 
 ## 当前执行焦点
 
-- [-] 进入 Issue #9：`instance` / `webassembly` 最小接口实现。
+- [-] 进入 Issue #10：`wasm/backend` 目录与适配边界收敛。
