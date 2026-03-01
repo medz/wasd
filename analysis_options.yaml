@@ -1,5 +1,9 @@
 include: package:lints/recommended.yaml
 
+analyzer:
+  exclude:
+    - old.*/**
+
 linter:
   rules:
     - prefer_final_fields
