@@ -35,7 +35,8 @@
 
 ## 里程碑 C：Global/Table/Memory（Issue #7）
 
-- [ ] 实现 `GlobalDescriptor` / `Global`
+- [x] 实现 `GlobalDescriptor` / `Global`
+  - commit: `fe7c3a3`
 - [ ] 实现 `TableKind` / `TableDescriptor` / `Table`
 - [ ] 实现 `MemoryDescriptor` / `Memory`（含 `buffer`、`grow`）
 - [ ] 补齐对应 API 文档
