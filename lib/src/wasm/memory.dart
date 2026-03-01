@@ -1,5 +1,8 @@
 import 'dart:typed_data';
 
+import 'backend/memory.dart' as backend
+    if (dart.library.js_interop) 'backend/memory.js.dart';
+
 /// Describes limits and behavior of a WebAssembly linear memory.
 class MemoryDescriptor {
   /// Creates a memory descriptor.
@@ -18,7 +21,7 @@ class MemoryDescriptor {
 /// Minimal linear memory interface.
 abstract class Memory {
   /// Creates a memory from [descriptor].
-  Memory(MemoryDescriptor descriptor);
+  factory Memory(MemoryDescriptor descriptor) = backend.Memory;
 
   /// Raw underlying buffer of the memory.
   ByteBuffer get buffer;
