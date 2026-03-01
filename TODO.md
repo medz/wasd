@@ -26,9 +26,12 @@
   - commit: `cde415b`
 - [x] 修复 `errors.dart` 的 API 文档告警
   - commit: `4227734`
-- [ ] 实现 `value.dart`（`ValueKind` + sealed/final 值类型）
-- [ ] `Vector128` 构造函数内长度校验（16 bytes）
-- [ ] 为 `value.dart` 补齐 `public_member_api_docs`
+- [x] 实现 `value.dart`（`ValueKind` + sealed/final 值类型）
+  - commit: `df922a3`
+- [x] `Vector128` 构造函数内长度校验（16 bytes）
+  - commit: `df922a3`
+- [x] 为 `value.dart` 补齐 `public_member_api_docs`
+  - commit: `df922a3`
 
 ## 里程碑 C：Global/Table/Memory（Issue #7）
 
@@ -87,4 +90,4 @@
 
 ## 当前执行焦点
 
-- [-] 继续完成 Issue #6：`value.dart` 的类型系统实现。
+- [-] 进入 Issue #7：`global.dart` / `table.dart` / `memory` 接口收敛。
