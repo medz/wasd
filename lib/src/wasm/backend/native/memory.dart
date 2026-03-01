@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import '../memory.dart' as wasm;
+import '../../memory.dart' as wasm;
 
 class Memory implements wasm.Memory {
   Memory(wasm.MemoryDescriptor descriptor);
