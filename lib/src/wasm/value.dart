@@ -3,7 +3,7 @@ import 'dart:typed_data';
 /// Factory-backed kind marker for [Value] types.
 enum ValueKind<T extends Value<T, V>, V extends Object?> {
   /// Function reference type.
-  funcref(FuncRef._, {'anyfunc'}),
+  funcref(FuncRef._, 'anyfunc'),
 
   /// External reference type.
   externref(ExternRef._),
@@ -23,13 +23,13 @@ enum ValueKind<T extends Value<T, V>, V extends Object?> {
   /// 128-bit vector type.
   v128(Vector128._);
 
-  /// Creates a [ValueKind] from a concrete value factory and optional aliases.
-  const ValueKind(this._factory, [this.aliases = const {}]);
+  /// Creates a [ValueKind] from a concrete value factory and optional alias.
+  const ValueKind(this._factory, [this.alias]);
 
   final T Function(V value) _factory;
 
-  /// Alternative textual names accepted for this kind.
-  final Set<String> aliases;
+  /// Alternative textual alias accepted for this kind.
+  final String? alias;
 
   /// Creates a typed [Value] wrapper from raw [ref].
   T call(V ref) => _factory(ref);

@@ -3,16 +3,16 @@ import 'value.dart';
 /// Element kind marker for WebAssembly tables.
 enum TableKind<T extends Value<T, V>, V extends Object?> {
   /// Function reference table.
-  funcref(.funcref, {'anyfunc'}),
+  funcref(.funcref, 'anyfunc'),
 
   /// External reference table.
   externref(.externref);
 
-  /// Creates a table kind from a value kind and optional aliases.
-  const TableKind(this.value, [this.aliases = const {}]);
+  /// Creates a table kind from a value kind and optional alias.
+  const TableKind(this.value, [this.alias]);
 
-  /// Alternative textual names accepted for this kind.
-  final Set<String> aliases;
+  /// Alternative textual alias accepted for this kind.
+  final String? alias;
 
   /// Value kind used by table elements.
   final ValueKind<T, V> value;
