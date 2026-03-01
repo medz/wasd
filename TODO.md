@@ -39,8 +39,10 @@
   - commit: `fe7c3a3`
 - [x] 实现 `TableKind` / `TableDescriptor` / `Table`
   - commit: `05cf801`
-- [ ] 实现 `MemoryDescriptor` / `Memory`（含 `buffer`、`grow`）
-- [ ] 补齐对应 API 文档
+- [x] 实现 `MemoryDescriptor` / `Memory`（含 `buffer`、`grow`）
+  - commit: `7fd9ed6`
+- [x] 补齐对应 API 文档
+  - commit: `7fd9ed6`
 
 ## 里程碑 D：Module Import/Export 模型（Issue #8）
 
@@ -92,4 +94,4 @@
 
 ## 当前执行焦点
 
-- [-] 继续 Issue #7：完成 `memory` 接口并补齐里程碑 C 文档项。
+- [-] 进入 Issue #8：`module import/export` 类型模型实现。
