@@ -1,0 +1,28 @@
+import 'dart:typed_data';
+
+/// Describes limits and behavior of a WebAssembly linear memory.
+class MemoryDescriptor {
+  /// Creates a memory descriptor.
+  const MemoryDescriptor({required this.initial, this.maximum, this.shared});
+
+  /// Initial memory size in WebAssembly pages (64 KiB per page).
+  final int initial;
+
+  /// Optional maximum memory size in pages.
+  final int? maximum;
+
+  /// Whether this memory is shared between agents/threads.
+  final bool? shared;
+}
+
+/// Minimal linear memory interface.
+abstract class Memory {
+  /// Creates a memory from [descriptor].
+  Memory(MemoryDescriptor descriptor);
+
+  /// Raw underlying buffer of the memory.
+  ByteBuffer get buffer;
+
+  /// Grows memory by [delta] pages and returns previous size.
+  int grow(int delta);
+}
