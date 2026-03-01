@@ -5,7 +5,7 @@ import 'instance.dart';
 import 'module.dart';
 
 /// Minimal WebAssembly facade interface.
-abstract class WebAssembly {
+abstract interface class WebAssembly {
   /// Instantiated module instance.
   Instance get instance;
 

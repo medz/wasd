@@ -20,7 +20,7 @@ class MemoryDescriptor {
 }
 
 /// Minimal linear memory interface.
-abstract class Memory {
+abstract interface class Memory {
   /// Creates a memory from [descriptor].
   factory Memory(MemoryDescriptor descriptor) = backend.Memory;
 

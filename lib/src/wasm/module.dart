@@ -143,7 +143,7 @@ class ModuleExportDescriptor<T extends Object, R extends ExportValue<T, R>> {
 }
 
 /// Minimal module interface.
-abstract class Module {
+abstract interface class Module {
   /// Creates a module from raw [bytes].
   Module(ByteBuffer bytes);
 

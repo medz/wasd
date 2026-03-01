@@ -34,16 +34,13 @@ class TableDescriptor<T extends Value<T, V>, V extends Object?> {
 }
 
 /// Minimal table interface.
-abstract class Table<T extends Value<T, V>, V extends Object?>
-    with Iterable<V> {
-  /// Creates a table interface from [descriptor] and default [fill].
-  Table(this.descriptor, this.fill);
-
+abstract interface class Table<T extends Value<T, V>, V extends Object?>
+    implements Iterable<V> {
   /// Descriptor of this table.
-  final TableDescriptor<T, V> descriptor;
+  TableDescriptor<T, V> get descriptor;
 
   /// Default fill value used by grow operations.
-  final V fill;
+  V get fill;
 
   /// Grows table length by [delta], optionally overriding fill [value].
   int grow(int delta, [V? value]);
