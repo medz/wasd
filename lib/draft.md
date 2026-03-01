@@ -98,11 +98,11 @@ final class Int32 extends Value<Int32, int> {
   ValueKind<Int32, int> get kind => .i32;
 }
 
-final class Int64 extends Value<Int64, int> {
+final class Int64 extends Value<Int64, BigInt> {
   const Int64._(super.ref) : super._();
 
   @override
-  ValueKind<Int64, int> get kind => .i64;
+  ValueKind<Int64, BigInt> get kind => .i64;
 }
 
 final class Float32 extends Value<Float32, double> {

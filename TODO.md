@@ -76,7 +76,6 @@
 
 - [ ] 建立 `src/wasm/backend/js/` 适配边界
 - [ ] 建立 `src/wasm/backend/native/` 目录与占位结构
-- [ ] 明确 JS 平台类型桥接点（如 `i64 <-> bigint`）
 
 ## 里程碑 G：WASI 核心 API（Issue #11）
 

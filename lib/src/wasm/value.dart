@@ -77,12 +77,12 @@ final class Int32 extends Value<Int32, int> {
   ValueKind<Int32, int> get kind => .i32;
 }
 
-/// 64-bit integer value.
-final class Int64 extends Value<Int64, int> {
+/// 64-bit integer value backed by [BigInt] (Node-aligned `bigint` semantics).
+final class Int64 extends Value<Int64, BigInt> {
   const Int64._(super.ref) : super._();
 
   @override
-  ValueKind<Int64, int> get kind => .i64;
+  ValueKind<Int64, BigInt> get kind => .i64;
 }
 
 /// 32-bit floating-point value.
