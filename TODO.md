@@ -46,12 +46,18 @@
 
 ## 里程碑 D：Module Import/Export 模型（Issue #8）
 
-- [ ] 完成 `ImportExportKind<T, R>` 泛型工厂
-- [ ] 完成 `ImportExportValue` / `ImportValue` / `ExportValue` 体系
-- [ ] 完成 `Function/Global/Memory/TableImportExportValue`
-- [ ] 完成 typedef：`Exports`、`ModuleImports`、`Imports`
-- [ ] 完成 `ModuleImportDescriptor` / `ModuleExportDescriptor`
-- [ ] 补齐对应 API 文档
+- [x] 完成 `ImportExportKind<T, R>` 泛型工厂
+  - commit: `57eeaf6`
+- [x] 完成 `ImportExportValue` / `ImportValue` / `ExportValue` 体系
+  - commit: `57eeaf6`
+- [x] 完成 `Function/Global/Memory/TableImportExportValue`
+  - commit: `57eeaf6`
+- [x] 完成 typedef：`Exports`、`ModuleImports`、`Imports`
+  - commit: `57eeaf6`
+- [x] 完成 `ModuleImportDescriptor` / `ModuleExportDescriptor`
+  - commit: `57eeaf6`
+- [x] 补齐对应 API 文档
+  - commit: `57eeaf6`
 
 ## 里程碑 E：Module/Instance/WebAssembly（Issue #9）
 
@@ -94,4 +100,4 @@
 
 ## 当前执行焦点
 
-- [-] 进入 Issue #8：`module import/export` 类型模型实现。
+- [-] 进入 Issue #9：`instance` / `webassembly` 最小接口实现。
