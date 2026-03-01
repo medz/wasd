@@ -320,11 +320,11 @@ class ModuleExportDescriptor<T extends Object, R extends ExportValue<T, R>> {
 abstract class Module {
   Module(ByteBuffer bytes);
 
-  static List<ModuleImportDescriptor> imports(Module moduleObject);
-  static List<ModuleExportDescriptor> exports(Module moduleObject);
+  static List<ModuleImportDescriptor> imports(Module module);
+  static List<ModuleExportDescriptor> exports(Module module);
   static List<ByteBuffer> customSections(
-    Module moduleObject,
-    String sectionName,
+    Module module,
+    String name,
   );
 }
 ```

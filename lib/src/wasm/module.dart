@@ -147,17 +147,15 @@ abstract class Module {
   /// Creates a module from raw [bytes].
   Module(ByteBuffer bytes);
 
-  /// Returns all import descriptors from [moduleObject].
-  static List<ModuleImportDescriptor> imports(Module moduleObject) =>
+  /// Returns all import descriptors from [module].
+  static List<ModuleImportDescriptor> imports(Module module) =>
       throw UnimplementedError();
 
-  /// Returns all export descriptors from [moduleObject].
-  static List<ModuleExportDescriptor> exports(Module moduleObject) =>
+  /// Returns all export descriptors from [module].
+  static List<ModuleExportDescriptor> exports(Module module) =>
       throw UnimplementedError();
 
-  /// Returns custom section contents by [sectionName].
-  static List<ByteBuffer> customSections(
-    Module moduleObject,
-    String sectionName,
-  ) => throw UnimplementedError();
+  /// Returns custom section contents by [name].
+  static List<ByteBuffer> customSections(Module module, String name) =>
+      throw UnimplementedError();
 }
