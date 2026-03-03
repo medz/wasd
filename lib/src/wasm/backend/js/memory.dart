@@ -1,3 +1,4 @@
+@JS()
 library;
 
 import 'dart:typed_data';
