@@ -1,4 +1,7 @@
 import 'value.dart';
+import 'backend/native/global.dart'
+    if (dart.library.js_interop) 'backend/js/global.dart'
+    as backend;
 
 /// Describes a WebAssembly global variable.
 class GlobalDescriptor<T extends Value<T, V>, V extends Object?> {
@@ -13,22 +16,14 @@ class GlobalDescriptor<T extends Value<T, V>, V extends Object?> {
 }
 
 /// Represents a WebAssembly global variable instance.
-class Global<T extends Value<T, V>, V extends Object?> {
+abstract interface class Global<T extends Value<T, V>, V extends Object?> {
   /// Creates a global from [descriptor] and initial [value].
-  Global(this._descriptor, this._value);
-
-  final GlobalDescriptor<T, V> _descriptor;
-  V _value;
+  factory Global(GlobalDescriptor<T, V> descriptor, V value) =
+      backend.Global<T, V>;
 
   /// Current value of this global.
-  V get value => _value;
+  V get value;
 
   /// Updates the current value when the global is mutable.
-  set value(V value) {
-    if (!_descriptor.mutable) {
-      throw StateError('Cannot set value of immutable global');
-    }
-
-    _value = value;
-  }
+  set value(V value);
 }
