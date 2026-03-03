@@ -24,9 +24,7 @@ V decodeRef<T extends Value<T, V>, V extends Object?>(
   ValueKind<T, V> kind,
   JSAny? encoded,
 ) => switch (kind) {
-  ValueKind<ExternRef, Object?>() => throw UnsupportedError(
-    'JS backend does not support externref decode to Dart objects yet.',
-  ),
+  ValueKind<ExternRef, Object?>() => encoded?.dartify() as V,
   ValueKind<FuncRef, Function>() => throw UnsupportedError(
     'JS backend does not support funcref decode to Dart Function yet.',
   ),

@@ -1,4 +1,7 @@
 import 'value.dart';
+import 'backend/native/table.dart'
+    if (dart.library.js_interop) 'backend/js/table.dart'
+    as backend;
 
 /// Element kind marker for WebAssembly tables.
 enum TableKind<T extends Value<T, V>, V extends Object?> {
@@ -34,14 +37,20 @@ class TableDescriptor<T extends Value<T, V>, V extends Object?> {
 }
 
 /// Minimal table interface.
-abstract interface class Table<T extends Value<T, V>, V extends Object?>
-    implements Iterable<V> {
-  /// Descriptor of this table.
-  TableDescriptor<T, V> get descriptor;
+abstract interface class Table<T extends Value<T, V>, V extends Object?> {
+  /// Creates a table from [descriptor] and optional initial [value].
+  factory Table(TableDescriptor<T, V> descriptor, [V? value]) =
+      backend.Table<T, V>;
 
-  /// Default fill value used by grow operations.
-  V get fill;
+  /// Current table length.
+  int get length;
 
-  /// Grows table length by [delta], optionally overriding fill [value].
+  /// Returns the element at [index], or `null` for an empty slot.
+  V? get(int index);
+
+  /// Writes [value] into the element slot at [index].
+  void set(int index, V? value);
+
+  /// Grows table length by [delta], optionally using fill [value].
   int grow(int delta, [V? value]);
 }
