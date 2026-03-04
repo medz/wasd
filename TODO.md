@@ -104,8 +104,11 @@
 - [x] 新建 `lib/wasd.dart`（仅 re-export）
   - commit: `07c9000`
 - [x] 增加/更新 0.2 定向测试（wasm_test.dart 20 项，wasi_test.dart 5 项）
+  - commit: `388396e`
 - [x] 执行并通过 `dart analyze`
+  - commit: `388396e`
 - [x] 执行并通过 `dart test`
+  - commit: `388396e`
 
 ## 当前执行焦点
 
