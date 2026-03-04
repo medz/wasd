@@ -4,20 +4,20 @@ import '../../value.dart';
 class Table<T extends Value<T, V>, V extends Object?>
     implements wasm.Table<T, V> {
   Table(this.descriptor, [V? value])
-    : _values = List<V?>.filled(descriptor.initial, value, growable: true);
+    : values = List<V?>.filled(descriptor.initial, value, growable: true);
 
   final wasm.TableDescriptor<T, V> descriptor;
-  final List<V?> _values;
+  final List<V?> values;
 
   @override
-  int get length => _values.length;
+  int get length => values.length;
 
   @override
-  V? get(int index) => _values[index];
+  V? get(int index) => values[index];
 
   @override
   void set(int index, V? value) {
-    _values[index] = value;
+    values[index] = value;
   }
 
   @override
@@ -26,16 +26,16 @@ class Table<T extends Value<T, V>, V extends Object?>
       throw ArgumentError.value(delta, 'delta', 'must be >= 0');
     }
 
-    final oldLength = _values.length;
+    final oldLength = values.length;
     final nextLength = oldLength + delta;
     final maximum = descriptor.maximum;
     if (maximum != null && nextLength > maximum) {
       throw RangeError('Table maximum exceeded: $nextLength > $maximum');
     }
 
-    _values.length = nextLength;
+    values.length = nextLength;
     if (delta > 0) {
-      _values.fillRange(oldLength, nextLength, value);
+      values.fillRange(oldLength, nextLength, value);
     }
     return oldLength;
   }

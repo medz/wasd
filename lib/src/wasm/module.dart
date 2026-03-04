@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'global.dart';
 import 'memory.dart';
 import 'table.dart';
+import 'tag.dart';
 
 /// Kind marker and typed factory for module import/export values.
 enum ImportExportKind<T extends Object, R extends ExportValue<T, R>> {
@@ -16,7 +17,10 @@ enum ImportExportKind<T extends Object, R extends ExportValue<T, R>> {
   memory(MemoryImportExportValue._),
 
   /// Table import/export kind.
-  table(TableImportExportValue._);
+  table(TableImportExportValue._),
+
+  /// Tag import/export kind.
+  tag(TagImportExportValue._);
 
   /// Creates a kind from its concrete value factory.
   const ImportExportKind(this._factory);
@@ -100,6 +104,16 @@ final class TableImportExportValue
 
   @override
   ImportExportKind<Table, TableImportExportValue> get kind => .table;
+}
+
+/// Tag import/export value wrapper.
+final class TagImportExportValue extends ExportValue<Tag, TagImportExportValue>
+    implements ImportValue<Tag> {
+  /// Creates a tag import/export value wrapper.
+  const TagImportExportValue._(super.ref) : super._();
+
+  @override
+  ImportExportKind<Tag, TagImportExportValue> get kind => .tag;
 }
 
 /// Export object map for an instantiated module.

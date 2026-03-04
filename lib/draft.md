@@ -404,6 +404,43 @@ class WASI {
   5. 两者都不可用时，抛出异常。
   6. `finalizeBindings` 为可选显式调用；`start` / `initialize` 在需要时应自动确保绑定完成。
 
+### 3.11 Tag / Exception 最小接口（补充）
+
+```dart
+class TagDescriptor {
+  const TagDescriptor({required this.parameters});
+
+  final List<ValueKind> parameters;
+}
+
+abstract class Tag {
+  Tag(TagDescriptor descriptor);
+
+  TagDescriptor type();
+}
+
+class ExceptionOptions {
+  const ExceptionOptions({this.traceStack = false});
+
+  final bool traceStack;
+}
+
+abstract class Exception {
+  Exception(
+    Tag tag,
+    List<Object?> payload, [
+    ExceptionOptions? options,
+  ]);
+
+  bool isTag(Tag tag);
+  Object? getArg(Tag tag, int index);
+}
+```
+
+- `Tag` 对齐 JS `WebAssembly.Tag` 的 descriptor 形态（`parameters`）。
+- `Exception` 对齐 JS `WebAssembly.Exception` 的 `is/getArg` 核心能力。
+- `module import/export kind` 需要补充 `tag` 类型。
+
 ## 4. 当前 0.2 代码快照（便于跟进）
 
 - `src/wasm/module.dart`

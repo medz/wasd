@@ -5,14 +5,19 @@ import 'dart:js_interop';
 
 import '../../value.dart';
 
-JSAny? encodeRef<T extends Value<T, V>, V extends Object?>(
-  ValueKind<T, V> kind,
-  V ref,
-) => switch (kind) {
-  ValueKind<ExternRef, Object?>() => _encodeExternRef(ref),
-  ValueKind<FuncRef, Function>() => (ref as Function).toJS,
+JSAny? encodeAnyRef(ValueKind kind, Object? ref) => switch (kind) {
+  ValueKind<ExternRef, Object?>() => encodeExternRef(ref),
+  ValueKind<FuncRef, Function>() => switch (ref) {
+    null => null,
+    final Function fn => fn.toJS,
+    _ => throw ArgumentError.value(
+      ref,
+      'ref',
+      'Expected Function for funcref encoding.',
+    ),
+  },
   ValueKind<Int32, int>() => (ref as int).toJS,
-  ValueKind<Int64, BigInt>() => _jsBigInt((ref as BigInt).toString().toJS),
+  ValueKind<Int64, BigInt>() => jsBigInt((ref as BigInt).toString().toJS),
   ValueKind<Float32, double>() => (ref as double).toJS,
   ValueKind<Float64, double>() => (ref as double).toJS,
   ValueKind<Vector128, dynamic>() => throw UnsupportedError(
@@ -20,24 +25,31 @@ JSAny? encodeRef<T extends Value<T, V>, V extends Object?>(
   ),
 };
 
-V decodeRef<T extends Value<T, V>, V extends Object?>(
-  ValueKind<T, V> kind,
-  JSAny? encoded,
-) => switch (kind) {
-  ValueKind<ExternRef, Object?>() => encoded?.dartify() as V,
+Object? decodeAnyRef(ValueKind kind, JSAny? encoded) => switch (kind) {
+  ValueKind<ExternRef, Object?>() => encoded?.dartify(),
   ValueKind<FuncRef, Function>() => throw UnsupportedError(
     'JS backend does not support funcref decode to Dart Function yet.',
   ),
-  ValueKind<Int32, int>() => (encoded as JSNumber).toDartDouble.toInt() as V,
-  ValueKind<Int64, BigInt>() => BigInt.parse(_jsString(encoded).toDart) as V,
-  ValueKind<Float32, double>() => (encoded as JSNumber).toDartDouble as V,
-  ValueKind<Float64, double>() => (encoded as JSNumber).toDartDouble as V,
+  ValueKind<Int32, int>() => (encoded as JSNumber).toDartDouble.toInt(),
+  ValueKind<Int64, BigInt>() => BigInt.parse(jsString(encoded).toDart),
+  ValueKind<Float32, double>() => (encoded as JSNumber).toDartDouble,
+  ValueKind<Float64, double>() => (encoded as JSNumber).toDartDouble,
   ValueKind<Vector128, dynamic>() => throw UnsupportedError(
     'JS backend does not support v128 ref decoding yet.',
   ),
 };
 
-JSAny? _encodeExternRef(Object? value) {
+JSAny? encodeRef<T extends Value<T, V>, V extends Object?>(
+  ValueKind<T, V> kind,
+  V ref,
+) => encodeAnyRef(kind, ref);
+
+V decodeRef<T extends Value<T, V>, V extends Object?>(
+  ValueKind<T, V> kind,
+  JSAny? encoded,
+) => decodeAnyRef(kind, encoded) as V;
+
+JSAny? encodeExternRef(Object? value) {
   if (value == null) {
     return null;
   }
@@ -45,7 +57,7 @@ JSAny? _encodeExternRef(Object? value) {
     return value.toJS;
   }
   if (value is BigInt) {
-    return _jsBigInt(value.toString().toJS);
+    return jsBigInt(value.toString().toJS);
   }
   if (value is double) {
     return value.toJS;
@@ -65,7 +77,7 @@ JSAny? _encodeExternRef(Object? value) {
 }
 
 @JS('BigInt')
-external JSAny _jsBigInt(JSString value);
+external JSAny jsBigInt(JSString value);
 
 @JS('String')
-external JSString _jsString(JSAny? value);
+external JSString jsString(JSAny? value);

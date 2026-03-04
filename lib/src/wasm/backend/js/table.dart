@@ -10,20 +10,20 @@ import 'value_codec.dart' as codec;
 class Table<T extends Value<T, V>, V extends Object?>
     implements wasm.Table<T, V> {
   Table(this.descriptor, [V? value])
-    : _host = _createHost(
+    : host = createHost(
         descriptor,
         value == null ? null : codec.encodeRef(descriptor.element.value, value),
       );
 
   final wasm.TableDescriptor<T, V> descriptor;
-  final JSTable _host;
+  final JSTable host;
 
   @override
-  int get length => _host.length;
+  int get length => host.length;
 
   @override
   V? get(int index) {
-    final raw = _host.get(index);
+    final raw = host.get(index);
     if (raw == null) {
       return null;
     }
@@ -33,22 +33,22 @@ class Table<T extends Value<T, V>, V extends Object?>
   @override
   void set(int index, V? value) {
     if (value == null) {
-      _host.set(index, null);
+      host.set(index, null);
       return;
     }
-    _host.set(index, codec.encodeRef(descriptor.element.value, value));
+    host.set(index, codec.encodeRef(descriptor.element.value, value));
   }
 
   @override
   int grow(int delta, [V? value]) {
     if (value == null) {
-      return _host.grow(delta);
+      return host.grow(delta);
     }
-    return _host.grow(delta, codec.encodeRef(descriptor.element.value, value));
+    return host.grow(delta, codec.encodeRef(descriptor.element.value, value));
   }
 }
 
-JSTable _createHost<T extends Value<T, V>, V extends Object?>(
+JSTable createHost<T extends Value<T, V>, V extends Object?>(
   wasm.TableDescriptor<T, V> descriptor,
   JSAny? value,
 ) {
