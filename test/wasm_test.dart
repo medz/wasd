@@ -1,6 +1,3 @@
-@TestOn('browser || node || vm')
-library;
-
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
@@ -114,8 +111,11 @@ void main() {
       final descriptors = Module.exports(module);
 
       for (final d in descriptors) {
-        expect(exports.containsKey(d.name), isTrue,
-            reason: 'missing export: ${d.name}');
+        expect(
+          exports.containsKey(d.name),
+          isTrue,
+          reason: 'missing export: ${d.name}',
+        );
       }
     });
   });
@@ -132,8 +132,7 @@ void main() {
       late Function addFn;
 
       setUp(() {
-        addFn =
-            (instance.exports['add']! as FunctionImportExportValue).ref;
+        addFn = (instance.exports['add']! as FunctionImportExportValue).ref;
       });
 
       test('2 + 3 = 5', () {
@@ -153,8 +152,7 @@ void main() {
       late Memory memory;
 
       setUp(() {
-        memory =
-            (instance.exports['memory']! as MemoryImportExportValue).ref;
+        memory = (instance.exports['memory']! as MemoryImportExportValue).ref;
       });
 
       test('initial buffer size is 1 page (64 KiB)', () {
