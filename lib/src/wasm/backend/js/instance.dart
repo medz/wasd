@@ -117,7 +117,7 @@ wasm.WasmFunction _wrapFunction(JSFunction jsFunc) =>
 /// parameter is a nullable reference type (externref / funcref). Numeric types
 /// (i32, i64, f32, f64) are always non-null and are unaffected.
 JSFunction _hostFuncToJS(wasm.WasmFunction hostFn) {
-  JSAny? bridge(
+  JSAny? bridge([
     JSAny? a,
     JSAny? b,
     JSAny? c,
@@ -126,7 +126,7 @@ JSFunction _hostFuncToJS(wasm.WasmFunction hostFn) {
     JSAny? f,
     JSAny? g,
     JSAny? h,
-  ) {
+  ]) {
     final all = [a, b, c, d, e, f, g, h];
     final last = all.lastIndexWhere((x) => x != null);
     final args =

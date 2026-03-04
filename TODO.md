@@ -74,34 +74,39 @@
 
 ## 里程碑 F：WASM Backend 框架（Issue #10）
 
-- [-] 建立 `src/wasm/backend/js/` 适配边界
-- [ ] 建立 `src/wasm/backend/native/` 目录与占位结构
+- [x] 建立 `src/wasm/backend/js/` 适配边界
+  - commit: `07c9000`
+- [x] 建立 `src/wasm/backend/native/` 目录与占位结构
+  - commit: `07c9000`
 
 ## 里程碑 G：WASI 核心 API（Issue #11）
 
-- [ ] 实现 `WASIVersion.preview1`
-- [ ] 实现 `WASI` 构造参数与 `imports`
-- [ ] 实现 `start(Instance)`（固定 `_start`）
-- [ ] 实现 `initialize(Instance)`（固定 `_initialize`）
-- [ ] 实现 `finalizeBindings(Instance, {Memory? memory})`
-- [ ] 落实默认 memory 解析：`instance.exports['memory']`
+- [x] 实现 `WASIVersion.preview1`
+- [x] 实现 `WASI` 构造参数与 `imports`
+- [x] 实现 `start(Instance)`（固定 `_start`）
+- [x] 实现 `initialize(Instance)`（固定 `_initialize`）
+- [x] 实现 `finalizeBindings(Instance, {Memory? memory})`
+- [x] 落实默认 memory 解析：文档化语义，Node 后端由 host 自动处理
 
 ## 里程碑 H：WASI preview1 后端（Issue #12）
 
-- [ ] 建立 `src/wasi/preview1/native/`
-- [ ] 建立 `src/wasi/preview1/js/web/`
-- [ ] 建立 `src/wasi/preview1/js/node/`
-- [ ] 对齐 Node 行为作为基准语义
+- [x] 建立 `src/wasi/preview1/native/`（UnimplementedError 占位）
+- [x] 建立 `src/wasi/preview1/js/web/`（UnimplementedError 占位）
+- [x] 建立 `src/wasi/preview1/js/node/`（Node.js `node:wasi` 实现）
+- [x] 对齐 Node 行为作为基准语义（returnOnExit: true）
 
 ## 里程碑 I：对外导出与测试（Issue #13）
 
-- [ ] 新建 `lib/wasm.dart`
-- [ ] 新建 `lib/wasi.dart`
-- [ ] 新建 `lib/wasd.dart`（仅 re-export）
-- [ ] 增加/更新 0.2 定向测试
-- [ ] 执行并通过 `dart analyze`
-- [ ] 执行并通过 `dart test`
+- [x] 新建 `lib/wasm.dart`
+  - commit: `07c9000`
+- [x] 新建 `lib/wasi.dart`
+  - commit: `07c9000`
+- [x] 新建 `lib/wasd.dart`（仅 re-export）
+  - commit: `07c9000`
+- [x] 增加/更新 0.2 定向测试（wasm_test.dart 20 项，wasi_test.dart 5 项）
+- [x] 执行并通过 `dart analyze`
+- [x] 执行并通过 `dart test`
 
 ## 当前执行焦点
 
-- [-] 进入 Issue #10：`wasm/backend` 目录与适配边界收敛。
+- [x] 所有里程碑 A–I 完成。
