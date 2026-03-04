@@ -5,13 +5,22 @@ import 'dart:js_interop';
 import 'dart:typed_data';
 
 import '../../module.dart' as wasm;
+import 'errors.dart' as js_errors;
 
 class Module implements wasm.Module {
-  Module(ByteBuffer bytes) : host = JSImportModule(bytes.toJS);
+  Module(ByteBuffer bytes) : host = _compile(bytes);
 
   Module.fromHost(this.host);
 
   final JSImportModule host;
+
+  static JSImportModule _compile(ByteBuffer bytes) {
+    try {
+      return JSImportModule(bytes.toJS);
+    } catch (e, st) {
+      js_errors.translateJsError(e, st);
+    }
+  }
 }
 
 List<wasm.ModuleImportDescriptor> imports(wasm.Module module) =>

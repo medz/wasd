@@ -11,6 +11,7 @@ import '../../memory.dart' as wasm;
 import '../../module.dart' as wasm;
 import '../../table.dart' as wasm;
 import '../../value.dart';
+import 'errors.dart' as js_errors;
 import 'global.dart' as js_global;
 import 'memory.dart' as js_memory;
 import 'module.dart' as js_module;
@@ -20,7 +21,7 @@ import 'tag.dart' as js_tag;
 class Instance implements wasm.Instance {
   Instance(wasm.Module module, [wasm.Imports imports = const {}])
     : _module = module,
-      host = JSImportInstance(
+      host = _instantiate(
         (module as js_module.Module).host,
         createImportObject(imports),
       );
@@ -32,6 +33,17 @@ class Instance implements wasm.Instance {
 
   @override
   late final wasm.Exports exports = _createExports(_module, host.exports);
+
+  static JSImportInstance _instantiate(
+    js_module.JSImportModule jsModule,
+    JSObject imports,
+  ) {
+    try {
+      return JSImportInstance(jsModule, imports);
+    } catch (e, st) {
+      js_errors.translateJsError(e, st);
+    }
+  }
 }
 
 wasm.Exports _createExports(wasm.Module module, JSObject exportObject) {
