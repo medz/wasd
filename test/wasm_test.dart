@@ -1,4 +1,4 @@
-@TestOn('browser || node')
+@TestOn('browser || node || vm')
 library;
 
 import 'dart:typed_data';
