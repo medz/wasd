@@ -86,6 +86,20 @@ wasm.WasmFunction _wrapNodeFunc(JSFunction fn) =>
           ?.dartify();
     };
 
+// ── Node.js environment detection ─────────────────────────────────────────────
+
+/// Returns `true` when running inside Node.js.
+///
+/// Checks for `process.versions.node` following the standard Node.js idiom.
+bool _isNodeJs() {
+  final process = globalContext.getProperty<JSAny?>('process'.toJS);
+  if (process == null) return false;
+  final versions =
+      (process as JSObject).getProperty<JSAny?>('versions'.toJS);
+  if (versions == null) return false;
+  return (versions as JSObject).getProperty<JSAny?>('node'.toJS) != null;
+}
+
 // ── Node.js WASI construction ─────────────────────────────────────────────────
 
 _JSNodeWasi _createNodeWasi({
@@ -96,6 +110,12 @@ _JSNodeWasi _createNodeWasi({
   required int stdout,
   required int stderr,
 }) {
+  if (!_isNodeJs()) {
+    throw UnsupportedError(
+      'WASI is only supported in Node.js environments. '
+      'Browser WASI is not yet implemented.',
+    );
+  }
   final opts = JSObject();
   opts['version'] = 'preview1'.toJS;
   // returnOnExit: true (Node.js default) causes proc_exit to be captured so
