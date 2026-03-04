@@ -5,11 +5,11 @@ import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
-import '../../global.dart' as wasm_global;
-import '../../instance.dart' as wasm_instance;
-import '../../memory.dart' as wasm_memory;
-import '../../module.dart' as wasm_module;
-import '../../table.dart' as wasm_table;
+import '../../global.dart' as wasm;
+import '../../instance.dart' as wasm;
+import '../../memory.dart' as wasm;
+import '../../module.dart' as wasm;
+import '../../table.dart' as wasm;
 import '../../value.dart';
 import 'global.dart' as js_global;
 import 'memory.dart' as js_memory;
@@ -17,141 +17,126 @@ import 'module.dart' as js_module;
 import 'table.dart' as js_table;
 import 'tag.dart' as js_tag;
 
-class Instance implements wasm_instance.Instance {
-  Instance(this.module, [wasm_module.Imports imports = const {}])
-    : host = JSImportInstance(
+class Instance implements wasm.Instance {
+  Instance(wasm.Module module, [wasm.Imports imports = const {}])
+    : _module = module,
+      host = JSImportInstance(
         (module as js_module.Module).host,
         createImportObject(imports),
       );
 
-  final wasm_module.Module module;
+  Instance.fromHost(this._module, this.host);
+
+  final wasm.Module _module;
   final JSImportInstance host;
 
   @override
-  late final wasm_module.Exports exports = createExports(module, host.exports);
+  late final wasm.Exports exports = _createExports(_module, host.exports);
 }
 
-wasm_module.Exports createExports(
-  wasm_module.Module module,
-  JSObject exportObject,
-) {
-  final descriptors = wasm_module.Module.exports(module);
-  final values = <String, wasm_module.ExportValue>{};
-  for (final descriptor in descriptors) {
+wasm.Exports _createExports(wasm.Module module, JSObject exportObject) {
+  final result = <String, wasm.ExportValue>{};
+  for (final descriptor in wasm.Module.exports(module)) {
     final name = descriptor.name;
     final raw = exportObject[name];
-    if (raw == null) {
-      continue;
-    }
-    values[name] = switch (descriptor.kind.name) {
-      'function' => wasm_module.ImportExportKind.function(
-        wrapJsFunction(raw as JSFunction),
+    if (raw == null) continue;
+    result[name] = switch (descriptor.kind) {
+      wasm.ImportExportKind.function => wasm.ImportExportKind.function(
+        _wrapFunction(raw as JSFunction),
       ),
-      'global' => wasm_module.ImportExportKind.global(
-        ExportGlobal(raw as js_global.JSGlobal),
+      wasm.ImportExportKind.global => wasm.ImportExportKind.global(
+        _ExportGlobal(raw as js_global.JSGlobal),
       ),
-      'memory' => wasm_module.ImportExportKind.memory(
-        ExportMemory(raw as js_memory.JSMemory),
+      wasm.ImportExportKind.memory => wasm.ImportExportKind.memory(
+        _ExportMemory(raw as js_memory.JSMemory),
       ),
-      'table' => wasm_module.ImportExportKind.table(
-        ExportTable(raw as js_table.JSTable),
+      wasm.ImportExportKind.table => wasm.ImportExportKind.table(
+        _ExportTable(raw as js_table.JSTable),
       ),
-      'tag' => wasm_module.ImportExportKind.tag(
+      wasm.ImportExportKind.tag => wasm.ImportExportKind.tag(
         js_tag.Tag.fromHost(raw as js_tag.JSTag),
-      ),
-      _ => throw UnsupportedError(
-        'Unsupported export kind: ${descriptor.kind.name}',
       ),
     };
   }
-  return values;
+  return result;
 }
 
-JSObject createImportObject(wasm_module.Imports imports) {
+JSObject createImportObject(wasm.Imports imports) {
   final root = JSObject();
   for (final moduleEntry in imports.entries) {
     final moduleObject = JSObject();
     for (final importEntry in moduleEntry.value.entries) {
-      moduleObject[importEntry.key] = encodeImportValue(importEntry.value);
+      moduleObject[importEntry.key] = _encodeImport(importEntry.value);
     }
     root[moduleEntry.key] = moduleObject;
   }
   return root;
 }
 
-JSAny? encodeImportValue(wasm_module.ImportValue value) => switch (value) {
-  wasm_module.IntImportValue(:final ref) => ref.toJS,
-  wasm_module.FunctionImportExportValue(:final ref) => ref.toJS,
-  wasm_module.GlobalImportExportValue(:final ref) =>
-    (ref as js_global.Global).host,
-  wasm_module.MemoryImportExportValue(:final ref) =>
-    (ref as js_memory.Memory).host,
-  wasm_module.TableImportExportValue(:final ref) =>
-    (ref as js_table.Table).host,
-  wasm_module.TagImportExportValue(:final ref) => (ref as js_tag.Tag).host,
+JSAny? _encodeImport(wasm.ImportValue value) => switch (value) {
+  wasm.IntImportValue(:final ref) => ref.toJS,
+  wasm.FunctionImportExportValue(:final ref) => ref.toJS,
+  wasm.GlobalImportExportValue(:final ref) => (ref as js_global.Global).host,
+  wasm.MemoryImportExportValue(:final ref) => (ref as js_memory.Memory).host,
+  wasm.TableImportExportValue(:final ref) => (ref as js_table.Table).host,
+  wasm.TagImportExportValue(:final ref) => (ref as js_tag.Tag).host,
 };
 
-Function wrapJsFunction(JSFunction function) =>
-    ([List<Object?> arguments = const []]) {
-      final jsArguments = <JSAny?>[
+Function _wrapFunction(JSFunction jsFunc) =>
+    ([List<Object?> args = const []]) {
+      final jsArgs = <JSAny?>[
         null,
-        ...arguments.map((value) => value.jsify()),
+        for (final arg in args) arg.jsify(),
       ];
-      final result = (function as JSObject).callMethodVarArgs<JSAny?>(
-        'call'.toJS,
-        jsArguments,
-      );
-      return result?.dartify();
+      return (jsFunc as JSObject)
+          .callMethodVarArgs<JSAny?>('call'.toJS, jsArgs)
+          ?.dartify();
     };
 
-class ExportGlobal implements wasm_global.Global<ExternRef, Object?> {
-  ExportGlobal(this.host);
+class _ExportGlobal implements wasm.Global<ExternRef, Object?> {
+  _ExportGlobal(this._host);
 
-  final js_global.JSGlobal host;
+  final js_global.JSGlobal _host;
 
   @override
-  Object? get value => host.value?.dartify();
+  Object? get value => _host.value?.dartify();
 
   @override
   set value(Object? value) {
-    host.value = value.jsify();
+    _host.value = value.jsify();
   }
 }
 
-class ExportMemory implements wasm_memory.Memory {
-  ExportMemory(this.host);
+class _ExportMemory implements wasm.Memory {
+  _ExportMemory(this._host);
 
-  final js_memory.JSMemory host;
-
-  @override
-  ByteBuffer get buffer => host.buffer.toDart;
+  final js_memory.JSMemory _host;
 
   @override
-  int grow(int delta) => host.grow(delta);
+  ByteBuffer get buffer => _host.buffer.toDart;
+
+  @override
+  int grow(int delta) => _host.grow(delta);
 }
 
-class ExportTable implements wasm_table.Table<ExternRef, Object?> {
-  ExportTable(this.host);
+class _ExportTable implements wasm.Table<ExternRef, Object?> {
+  _ExportTable(this._host);
 
-  final js_table.JSTable host;
-
-  @override
-  int get length => host.length;
+  final js_table.JSTable _host;
 
   @override
-  Object? get(int index) => host.get(index)?.dartify();
+  int get length => _host.length;
 
   @override
-  void set(int index, Object? value) {
-    host.set(index, value.jsify());
-  }
+  Object? get(int index) => _host.get(index)?.dartify();
+
+  @override
+  void set(int index, Object? value) => _host.set(index, value.jsify());
 
   @override
   int grow(int delta, [Object? value]) {
-    if (value == null) {
-      return host.grow(delta);
-    }
-    return host.grow(delta, value.jsify());
+    if (value == null) return _host.grow(delta);
+    return _host.grow(delta, value.jsify());
   }
 }
 

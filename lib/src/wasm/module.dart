@@ -129,7 +129,7 @@ typedef ModuleImports = Map<String, ImportValue>;
 typedef Imports = Map<String, ModuleImports>;
 
 /// Module import descriptor metadata.
-class ModuleImportDescriptor<T extends Object, R extends ExportValue<T, R>> {
+class ModuleImportDescriptor {
   /// Creates a module import descriptor.
   const ModuleImportDescriptor({
     required this.kind,
@@ -138,7 +138,7 @@ class ModuleImportDescriptor<T extends Object, R extends ExportValue<T, R>> {
   });
 
   /// Kind of the imported value.
-  final ImportExportKind<T, R> kind;
+  final ImportExportKind kind;
 
   /// Source module name.
   final String module;
@@ -148,12 +148,12 @@ class ModuleImportDescriptor<T extends Object, R extends ExportValue<T, R>> {
 }
 
 /// Module export descriptor metadata.
-class ModuleExportDescriptor<T extends Object, R extends ExportValue<T, R>> {
+class ModuleExportDescriptor {
   /// Creates a module export descriptor.
   const ModuleExportDescriptor({required this.kind, required this.name});
 
   /// Kind of the exported value.
-  final ImportExportKind<T, R> kind;
+  final ImportExportKind kind;
 
   /// Export name.
   final String name;
