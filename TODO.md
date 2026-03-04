@@ -78,6 +78,8 @@
   - commit: `07c9000`
 - [x] 建立 `src/wasm/backend/native/` 目录与占位结构
   - commit: `07c9000`
+- [x] 实现 native backend：`decoder.dart`（二进制解码）+ `runtime.dart`（线性内存 + 栈机执行器）
+  - commit: `eacfd91`
 
 ## 里程碑 G：WASI 核心 API（Issue #11）
 
