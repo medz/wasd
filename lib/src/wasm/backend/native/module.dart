@@ -2,19 +2,17 @@ import 'dart:typed_data';
 
 import '../../errors.dart';
 import '../../module.dart' as wasm;
-import 'interpreter/module.dart' as old;
+import 'decoder.dart' as dec;
 
 class Module implements wasm.Module {
-  Module(ByteBuffer bytes)
-    : _bytes = bytes,
-      host = _decode(bytes);
+  Module(ByteBuffer bytes) : _bytes = bytes, decoded = _decode(bytes);
 
   final ByteBuffer _bytes;
-  final old.WasmModule host;
+  final dec.WasmDecoded decoded;
 
-  static old.WasmModule _decode(ByteBuffer bytes) {
+  static dec.WasmDecoded _decode(ByteBuffer bytes) {
     try {
-      return old.WasmModule.decode(bytes.asUint8List());
+      return dec.decode(bytes.asUint8List());
     } on FormatException catch (e) {
       throw CompileError(e.message, cause: e);
     }
@@ -22,51 +20,36 @@ class Module implements wasm.Module {
 }
 
 List<wasm.ModuleImportDescriptor> imports(wasm.Module module) => [
-  for (final imp in (module as Module).host.imports)
+  for (final imp in (module as Module).decoded.imports)
     wasm.ModuleImportDescriptor(
-      kind: _importKind(imp.kind),
+      kind: _toKind(imp.kind),
       module: imp.module,
       name: imp.name,
     ),
 ];
 
 List<wasm.ModuleExportDescriptor> exports(wasm.Module module) => [
-  for (final exp in (module as Module).host.exports)
-    wasm.ModuleExportDescriptor(kind: _exportKind(exp.kind), name: exp.name),
+  for (final exp in (module as Module).decoded.exports)
+    wasm.ModuleExportDescriptor(kind: _toKind(exp.kind), name: exp.name),
 ];
 
 List<ByteBuffer> customSections(wasm.Module module, String name) =>
     _parseCustomSections((module as Module)._bytes.asUint8List(), name);
 
-// ── Kind mappings ─────────────────────────────────────────────────────────────
-
-wasm.ImportExportKind _importKind(int k) {
-  if (k == old.WasmImportKind.function || k == old.WasmImportKind.exactFunction) {
-    return wasm.ImportExportKind.function;
-  }
-  if (k == old.WasmImportKind.table) return wasm.ImportExportKind.table;
-  if (k == old.WasmImportKind.memory) return wasm.ImportExportKind.memory;
-  if (k == old.WasmImportKind.global) return wasm.ImportExportKind.global;
-  if (k == old.WasmImportKind.tag) return wasm.ImportExportKind.tag;
-  throw UnsupportedError('Unknown import kind: $k');
-}
-
-wasm.ImportExportKind _exportKind(int k) {
-  if (k == old.WasmExportKind.function) return wasm.ImportExportKind.function;
-  if (k == old.WasmExportKind.table) return wasm.ImportExportKind.table;
-  if (k == old.WasmExportKind.memory) return wasm.ImportExportKind.memory;
-  if (k == old.WasmExportKind.global) return wasm.ImportExportKind.global;
-  if (k == old.WasmExportKind.tag) return wasm.ImportExportKind.tag;
-  throw UnsupportedError('Unknown export kind: $k');
-}
+wasm.ImportExportKind _toKind(dec.ExternKind k) => switch (k) {
+  dec.ExternKind.function => wasm.ImportExportKind.function,
+  dec.ExternKind.table => wasm.ImportExportKind.table,
+  dec.ExternKind.memory => wasm.ImportExportKind.memory,
+  dec.ExternKind.global => wasm.ImportExportKind.global,
+  dec.ExternKind.tag => wasm.ImportExportKind.tag,
+};
 
 // ── Custom-section parser ─────────────────────────────────────────────────────
 
-/// Parses the WebAssembly binary and returns raw payloads of all custom
-/// sections whose name equals [name].
+/// Parses the binary and returns payloads of all custom sections named [name].
 List<ByteBuffer> _parseCustomSections(Uint8List bytes, String name) {
   final result = <ByteBuffer>[];
-  var i = 8; // skip magic (4 bytes) + version (4 bytes)
+  var i = 8; // skip magic + version
   while (i < bytes.length) {
     final sectionId = bytes[i++];
     var size = 0;
@@ -79,7 +62,6 @@ List<ByteBuffer> _parseCustomSections(Uint8List bytes, String name) {
     }
     final sectionEnd = i + size;
     if (sectionId == 0 && sectionEnd <= bytes.length) {
-      // Leading LEB128 name length followed by UTF-8 name bytes.
       var nameLen = 0;
       var nameShift = 0;
       var j = i;
@@ -93,7 +75,9 @@ List<ByteBuffer> _parseCustomSections(Uint8List bytes, String name) {
       if (nameEnd <= sectionEnd) {
         final sectionName = String.fromCharCodes(bytes, j, nameEnd);
         if (sectionName == name) {
-          result.add(Uint8List.fromList(bytes.sublist(nameEnd, sectionEnd)).buffer);
+          result.add(
+            Uint8List.fromList(bytes.sublist(nameEnd, sectionEnd)).buffer,
+          );
         }
       }
     }

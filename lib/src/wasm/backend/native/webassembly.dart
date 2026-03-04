@@ -7,7 +7,6 @@ import '../../module.dart' as wasm;
 import '../../webassembly.dart' as wasm;
 import 'instance.dart' as native_instance;
 import 'module.dart' as native_module;
-import 'interpreter/module.dart' as old;
 
 class WebAssembly implements wasm.WebAssembly {
   WebAssembly(this.module, this.instance);
@@ -66,7 +65,7 @@ Future<wasm.Instance> instantiateModule(
 
 bool validate(ByteBuffer bytes) {
   try {
-    old.WasmModule.decode(bytes.asUint8List());
+    native_module.Module(bytes);
     return true;
   } catch (_) {
     return false;
