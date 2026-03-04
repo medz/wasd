@@ -1,5 +1,8 @@
 import 'dart:typed_data';
 
+import 'backend/native/module.dart'
+    if (dart.library.js_interop) 'backend/js/module.dart'
+    as backend;
 import 'global.dart';
 import 'memory.dart';
 import 'table.dart';
@@ -159,17 +162,17 @@ class ModuleExportDescriptor<T extends Object, R extends ExportValue<T, R>> {
 /// Minimal module interface.
 abstract interface class Module {
   /// Creates a module from raw [bytes].
-  Module(ByteBuffer bytes);
+  factory Module(ByteBuffer bytes) = backend.Module;
 
   /// Returns all import descriptors from [module].
   static List<ModuleImportDescriptor> imports(Module module) =>
-      throw UnimplementedError();
+      backend.imports(module);
 
   /// Returns all export descriptors from [module].
   static List<ModuleExportDescriptor> exports(Module module) =>
-      throw UnimplementedError();
+      backend.exports(module);
 
   /// Returns custom section contents by [name].
   static List<ByteBuffer> customSections(Module module, String name) =>
-      throw UnimplementedError();
+      backend.customSections(module, name);
 }

@@ -17,6 +17,8 @@ class Tag implements wasm.Tag {
         ),
       );
 
+  Tag.fromHost(this.host);
+
   final JSTag host;
 
   @override
