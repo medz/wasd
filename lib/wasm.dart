@@ -1,0 +1,10 @@
+export 'src/wasm/errors.dart';
+export 'src/wasm/exception.dart';
+export 'src/wasm/global.dart';
+export 'src/wasm/instance.dart';
+export 'src/wasm/memory.dart';
+export 'src/wasm/module.dart';
+export 'src/wasm/table.dart';
+export 'src/wasm/tag.dart';
+export 'src/wasm/value.dart';
+export 'src/wasm/webassembly.dart';

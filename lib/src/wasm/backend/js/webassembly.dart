@@ -3,6 +3,7 @@ library;
 
 import 'dart:async';
 import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
 import '../../instance.dart' as wasm;
@@ -118,14 +119,16 @@ JSResponse _streamToResponse(Stream<List<int>> source) {
 
   void cancel(JSAny? _) => subscription?.cancel();
 
-  final stream = JSReadableStream(
-    {'start': start.toJS, 'cancel': cancel.toJS}.jsify() as JSObject,
-  );
-  return JSResponse(
-    stream,
-    {'headers': {'Content-Type': 'application/wasm'}.jsify()}.jsify()
-        as JSObject,
-  );
+  final underlyingSource = JSObject();
+  underlyingSource['start'] = start.toJS;
+  underlyingSource['cancel'] = cancel.toJS;
+  final stream = JSReadableStream(underlyingSource);
+
+  final headers = JSObject();
+  headers['Content-Type'] = 'application/wasm'.toJS;
+  final init = JSObject();
+  init['headers'] = headers;
+  return JSResponse(stream, init);
 }
 
 // ── JS interop declarations ───────────────────────────────────────────────────

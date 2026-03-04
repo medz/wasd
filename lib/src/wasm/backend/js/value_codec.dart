@@ -7,15 +7,9 @@ import '../../value.dart';
 
 JSAny? encodeAnyRef(ValueKind kind, Object? ref) => switch (kind) {
   ValueKind<ExternRef, Object?>() => encodeExternRef(ref),
-  ValueKind<FuncRef, Function>() => switch (ref) {
-    null => null,
-    final Function fn => fn.toJS,
-    _ => throw ArgumentError.value(
-      ref,
-      'ref',
-      'Expected Function for funcref encoding.',
-    ),
-  },
+  ValueKind<FuncRef, Function>() => throw UnsupportedError(
+    'JS backend does not support funcref value encoding yet.',
+  ),
   ValueKind<Int32, int>() => (ref as int).toJS,
   ValueKind<Int64, BigInt>() => jsBigInt((ref as BigInt).toString().toJS),
   ValueKind<Float32, double>() => (ref as double).toJS,
@@ -69,7 +63,9 @@ JSAny? encodeExternRef(Object? value) {
     return value.toJS;
   }
   if (value is Function) {
-    return value.toJS;
+    throw UnsupportedError(
+      'JS backend does not support Function as externref yet.',
+    );
   }
   throw UnsupportedError(
     'Unsupported externref type for JS backend: ${value.runtimeType}',

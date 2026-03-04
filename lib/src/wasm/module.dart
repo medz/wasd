@@ -65,15 +65,21 @@ sealed class ExportValue<T extends Object, R extends ExportValue<T, R>>
   ImportExportKind<T, R> get kind;
 }
 
+/// The Dart calling convention for host functions passed to or received from
+/// WebAssembly: arguments are delivered as a [List] and the return value is
+/// nullable.
+typedef WasmFunction = Object? Function(List<Object?>);
+
 /// Function import/export value wrapper.
 final class FunctionImportExportValue
-    extends ExportValue<Function, FunctionImportExportValue>
-    implements ImportValue<Function> {
+    extends ExportValue<WasmFunction, FunctionImportExportValue>
+    implements ImportValue<WasmFunction> {
   /// Creates a function import/export value wrapper.
   const FunctionImportExportValue._(super.ref) : super._();
 
   @override
-  ImportExportKind<Function, FunctionImportExportValue> get kind => .function;
+  ImportExportKind<WasmFunction, FunctionImportExportValue> get kind =>
+      .function;
 }
 
 /// Global import/export value wrapper.

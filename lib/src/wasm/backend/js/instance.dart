@@ -87,15 +87,15 @@ JSObject createImportObject(wasm.Imports imports) {
 
 JSAny? _encodeImport(wasm.ImportValue value) => switch (value) {
   wasm.IntImportValue(:final ref) => ref.toJS,
-  wasm.FunctionImportExportValue(:final ref) => ref.toJS,
+  wasm.FunctionImportExportValue(:final ref) => _hostFuncToJS(ref),
   wasm.GlobalImportExportValue(:final ref) => (ref as js_global.Global).host,
   wasm.MemoryImportExportValue(:final ref) => (ref as js_memory.Memory).host,
   wasm.TableImportExportValue(:final ref) => (ref as js_table.Table).host,
   wasm.TagImportExportValue(:final ref) => (ref as js_tag.Tag).host,
 };
 
-Function _wrapFunction(JSFunction jsFunc) =>
-    ([List<Object?> args = const []]) {
+wasm.WasmFunction _wrapFunction(JSFunction jsFunc) =>
+    (List<Object?> args) {
       final jsArgs = <JSAny?>[
         null,
         for (final arg in args) arg.jsify(),
@@ -104,6 +104,38 @@ Function _wrapFunction(JSFunction jsFunc) =>
           .callMethodVarArgs<JSAny?>('call'.toJS, jsArgs)
           ?.dartify();
     };
+
+/// Converts a [wasm.WasmFunction] host function to a [JSFunction] for use as
+/// a WebAssembly import.
+///
+/// WebAssembly calls the import with exactly N positional arguments matching
+/// the wasm function type. Our bridge has a fixed 8-param signature; the extra
+/// params arrive as JS `undefined` (Dart `null`). Trailing nulls are trimmed
+/// to recover the actual argument list.
+///
+/// Limitation: this heuristic is incorrect for host functions whose final
+/// parameter is a nullable reference type (externref / funcref). Numeric types
+/// (i32, i64, f32, f64) are always non-null and are unaffected.
+JSFunction _hostFuncToJS(wasm.WasmFunction hostFn) {
+  JSAny? bridge(
+    JSAny? a,
+    JSAny? b,
+    JSAny? c,
+    JSAny? d,
+    JSAny? e,
+    JSAny? f,
+    JSAny? g,
+    JSAny? h,
+  ) {
+    final all = [a, b, c, d, e, f, g, h];
+    final last = all.lastIndexWhere((x) => x != null);
+    final args =
+        all.sublist(0, last + 1).map((x) => x?.dartify()).toList();
+    return hostFn(args)?.jsify();
+  }
+
+  return bridge.toJS;
+}
 
 class _ExportGlobal implements wasm.Global<ExternRef, Object?> {
   _ExportGlobal(this._host);

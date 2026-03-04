@@ -74,7 +74,7 @@
 
 ## 里程碑 F：WASM Backend 框架（Issue #10）
 
-- [ ] 建立 `src/wasm/backend/js/` 适配边界
+- [-] 建立 `src/wasm/backend/js/` 适配边界
 - [ ] 建立 `src/wasm/backend/native/` 目录与占位结构
 
 ## 里程碑 G：WASI 核心 API（Issue #11）
