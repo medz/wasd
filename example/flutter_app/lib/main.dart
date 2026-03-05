@@ -326,7 +326,7 @@ final class _InlineDoomRunnerClient implements _DoomRunnerClient {
   final Uint8List _wasmBytes;
   final Uint8List _iwadBytes;
   final StreamController<_DoomRunnerMessage> _messagesController =
-      StreamController<_DoomRunnerMessage>.broadcast();
+      StreamController<_DoomRunnerMessage>.broadcast(sync: true);
 
   _DoomRunnerWorker? _worker;
   Future<void>? _runFuture;

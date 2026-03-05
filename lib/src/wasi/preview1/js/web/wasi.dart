@@ -56,6 +56,18 @@ class WASI implements wasi.WASI {
   final Stopwatch _monotonicClock = Stopwatch()..start();
   final Map<int, _VirtualOpenFile> _openFilesByFd = <int, _VirtualOpenFile>{};
   final Map<int, String> _openDirectoriesByFd = <int, String>{};
+  late final Map<String, Uint8List> _filesByLowerGuestPath =
+      _indexFilesByLowerPath(_filesByGuestPath);
+  late final Map<String, Uint8List> _filesByBasenameLower =
+      _indexFilesByBasename(_filesByGuestPath, compact: false);
+  late final Map<String, Uint8List> _filesByBasenameCompact =
+      _indexFilesByBasename(_filesByGuestPath, compact: true);
+  late final Set<String> _virtualDirectoryPaths = _buildVirtualDirectorySet(
+    preopenGuestPathsByFd: _preopenGuestPathsByFd,
+    filesByGuestPath: _filesByGuestPath,
+  );
+  ByteBuffer? _cachedMemoryBuffer;
+  _MemoryView? _cachedMemoryView;
   int _nextVirtualFd = 64;
   final bool _traceSyscalls = const bool.fromEnvironment('WASI_TRACE');
   wasm.Memory? _boundMemory;
@@ -108,20 +120,18 @@ class WASI implements wasi.WASI {
           return _errnoBadf;
         }
 
-        final memory = _boundMemory;
-        if (memory == null) {
+        final view = _memoryView();
+        if (view == null) {
           return _errnoInval;
         }
-
-        final buffer = memory.buffer;
         if (iovs < 0 || iovsLen < 0 || nwrittenPtr < 0) {
           return _errnoInval;
         }
 
-        final bytes = Uint8List.view(buffer);
-        final data = ByteData.view(buffer);
+        final bytes = view.bytes;
+        final data = view.data;
         int totalBytes = 0;
-        final output = <int>[];
+        final output = _traceSyscalls ? <int>[] : null;
 
         for (var index = 0; index < iovsLen; index++) {
           final entry = iovs + index * _iovecEntrySize;
@@ -135,14 +145,13 @@ class WASI implements wasi.WASI {
             if (buf + len > bytes.length) {
               return _errnoInval;
             }
-            final chunk = bytes.sublist(buf, buf + len);
-            output.addAll(chunk);
+            output?.addAll(bytes.sublist(buf, buf + len));
           }
 
           totalBytes += len;
         }
 
-        if (_traceSyscalls && output.isNotEmpty) {
+        if (_traceSyscalls && output != null && output.isNotEmpty) {
           print(_decodeUtf8(output));
         }
 
@@ -309,18 +318,16 @@ class WASI implements wasi.WASI {
           return _errnoBadf;
         }
 
-        final memory = _boundMemory;
-        if (memory == null) {
+        final view = _memoryView();
+        if (view == null) {
           return _errnoInval;
         }
-
-        final buffer = memory.buffer;
         if (iovs < 0 || iovsLen < 0 || nreadPtr < 0) {
           return _errnoInval;
         }
 
-        final bytes = Uint8List.view(buffer);
-        final data = ByteData.view(buffer);
+        final bytes = view.bytes;
+        final data = view.data;
         var totalRead = 0;
 
         for (var index = 0; index < iovsLen; index++) {
@@ -634,7 +641,7 @@ class WASI implements wasi.WASI {
       return _errnoInval;
     }
     final normalizedPath = _normalizeGuestPath(guestPath);
-    final fileBytes = _lookupVirtualFile(_filesByGuestPath, normalizedPath);
+    final fileBytes = _lookupVirtualFile(normalizedPath);
     if (_traceSyscalls) {
       print(
         '[wasi:path_open] normalized=$normalizedPath found=${fileBytes != null}',
@@ -647,11 +654,7 @@ class WASI implements wasi.WASI {
       return _errnoSuccess;
     }
 
-    if (_isVirtualDirectory(
-      _preopenGuestPathsByFd,
-      _filesByGuestPath,
-      normalizedPath,
-    )) {
+    if (_isVirtualDirectory(normalizedPath)) {
       final fd = _nextVirtualFd++;
       _openDirectoriesByFd[fd] = normalizedPath;
       data.setUint32(openedFdPtr, fd, Endian.little);
@@ -702,12 +705,8 @@ class WASI implements wasi.WASI {
     }
 
     final normalizedPath = _normalizeGuestPath(guestPath);
-    final fileBytes = _lookupVirtualFile(_filesByGuestPath, normalizedPath);
-    final isDirectory = _isVirtualDirectory(
-      _preopenGuestPathsByFd,
-      _filesByGuestPath,
-      normalizedPath,
-    );
+    final fileBytes = _lookupVirtualFile(normalizedPath);
+    final isDirectory = _isVirtualDirectory(normalizedPath);
     if (fileBytes == null && !isDirectory) {
       return _errnoNoent;
     }
@@ -820,7 +819,14 @@ class WASI implements wasi.WASI {
       return null;
     }
     final buffer = memory.buffer;
-    return _MemoryView(Uint8List.view(buffer), ByteData.view(buffer));
+    final cachedBuffer = _cachedMemoryBuffer;
+    var cachedView = _cachedMemoryView;
+    if (!identical(cachedBuffer, buffer) || cachedView == null) {
+      cachedView = _MemoryView(Uint8List.view(buffer), ByteData.view(buffer));
+      _cachedMemoryBuffer = buffer;
+      _cachedMemoryView = cachedView;
+    }
+    return cachedView;
   }
 
   @override
@@ -855,12 +861,16 @@ class WASI implements wasi.WASI {
   void finalizeBindings(wasm.Instance instance, {wasm.Memory? memory}) {
     if (memory != null) {
       _boundMemory = memory;
+      _cachedMemoryBuffer = null;
+      _cachedMemoryView = null;
       return;
     }
 
     final exportedMemory = instance.exports['memory'];
     if (exportedMemory is wasm.MemoryImportExportValue) {
       _boundMemory = exportedMemory.ref;
+      _cachedMemoryBuffer = null;
+      _cachedMemoryView = null;
       return;
     }
 
@@ -875,6 +885,38 @@ class WASI implements wasi.WASI {
 
   String? _directoryPathForFd(int fd) =>
       _preopenGuestPathsByFd[fd] ?? _openDirectoriesByFd[fd];
+
+  Uint8List? _lookupVirtualFile(String guestPath) {
+    final normalized = _normalizeGuestPath(guestPath);
+    final direct = _filesByGuestPath[normalized];
+    if (direct != null) {
+      return direct;
+    }
+
+    final caseInsensitive = _filesByLowerGuestPath[normalized.toLowerCase()];
+    if (caseInsensitive != null) {
+      return caseInsensitive;
+    }
+
+    final basename = _basename(normalized);
+    if (basename.isEmpty) {
+      return null;
+    }
+    final basenameLower = basename.toLowerCase();
+    final byBasenameLower = _filesByBasenameLower[basenameLower];
+    if (byBasenameLower != null) {
+      return byBasenameLower;
+    }
+
+    final compactBasename = _compactPathToken(basenameLower);
+    if (compactBasename.isEmpty) {
+      return null;
+    }
+    return _filesByBasenameCompact[compactBasename];
+  }
+
+  bool _isVirtualDirectory(String guestPath) =>
+      _virtualDirectoryPaths.contains(_normalizeGuestPath(guestPath));
 
   String _debugArgs(List<Uint8List> args) => args
       .map((entry) {
@@ -1016,59 +1058,70 @@ String? _resolveGuestPath({
   return _joinGuestPath(preopenPath, normalizedPath);
 }
 
-Uint8List? _lookupVirtualFile(
+Map<String, Uint8List> _indexFilesByLowerPath(
   Map<String, Uint8List> filesByGuestPath,
-  String guestPath,
 ) {
-  final normalized = _normalizeGuestPath(guestPath);
-  final direct = filesByGuestPath[normalized];
-  if (direct != null) {
-    return direct;
-  }
-  final lower = normalized.toLowerCase();
+  final indexed = <String, Uint8List>{};
   for (final entry in filesByGuestPath.entries) {
-    if (entry.key.toLowerCase() == lower) {
-      return entry.value;
-    }
+    indexed.putIfAbsent(entry.key.toLowerCase(), () => entry.value);
   }
-  final basename = _basename(normalized);
-  if (basename.isEmpty) {
-    return null;
-  }
-  final basenameLower = basename.toLowerCase();
-  final basenameCompact = _compactPathToken(basenameLower);
-  for (final entry in filesByGuestPath.entries) {
-    final candidateBase = _basename(entry.key);
-    if (candidateBase == basename ||
-        candidateBase.toLowerCase() == basenameLower ||
-        _compactPathToken(candidateBase.toLowerCase()) == basenameCompact) {
-      return entry.value;
-    }
-  }
-  return null;
+  return indexed;
 }
 
-bool _isVirtualDirectory(
-  Map<int, String> preopenGuestPathsByFd,
-  Map<String, Uint8List> filesByGuestPath,
-  String guestPath,
-) {
-  final normalized = _normalizeGuestPath(guestPath);
-  if (normalized == '/') {
-    return true;
+Map<String, Uint8List> _indexFilesByBasename(
+  Map<String, Uint8List> filesByGuestPath, {
+  required bool compact,
+}) {
+  final indexed = <String, Uint8List>{};
+  for (final entry in filesByGuestPath.entries) {
+    final basenameLower = _basename(entry.key).toLowerCase();
+    if (basenameLower.isEmpty) {
+      continue;
+    }
+    final key = compact ? _compactPathToken(basenameLower) : basenameLower;
+    if (key.isEmpty) {
+      continue;
+    }
+    indexed.putIfAbsent(key, () => entry.value);
   }
+  return indexed;
+}
+
+Set<String> _buildVirtualDirectorySet({
+  required Map<int, String> preopenGuestPathsByFd,
+  required Map<String, Uint8List> filesByGuestPath,
+}) {
+  final directories = <String>{'/'};
+
+  void addDirectoryAndParents(String path) {
+    var current = _normalizeGuestPath(path);
+    while (true) {
+      directories.add(current);
+      if (current == '/') {
+        break;
+      }
+      final slash = current.lastIndexOf('/');
+      current = slash <= 0 ? '/' : current.substring(0, slash);
+    }
+  }
+
+  void addParentDirectories(String filePath) {
+    final normalized = _normalizeGuestPath(filePath);
+    final slash = normalized.lastIndexOf('/');
+    if (slash <= 0) {
+      directories.add('/');
+      return;
+    }
+    addDirectoryAndParents(normalized.substring(0, slash));
+  }
+
   for (final preopen in preopenGuestPathsByFd.values) {
-    if (_normalizeGuestPath(preopen) == normalized) {
-      return true;
-    }
+    addDirectoryAndParents(preopen);
   }
-  final prefix = '$normalized/';
   for (final filePath in filesByGuestPath.keys) {
-    if (filePath.startsWith(prefix)) {
-      return true;
-    }
+    addParentDirectories(filePath);
   }
-  return false;
+  return directories;
 }
 
 void _setUint64(ByteData data, int offset, int value) {
