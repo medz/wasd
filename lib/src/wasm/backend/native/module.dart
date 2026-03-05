@@ -2,19 +2,23 @@ import 'dart:typed_data';
 
 import '../../errors.dart';
 import '../../module.dart' as wasm;
-import 'decoder.dart' as dec;
+import 'interpreter/module.dart' as native_ir;
 
 class Module implements wasm.Module {
   Module(ByteBuffer bytes) : _bytes = bytes, decoded = _decode(bytes);
 
   final ByteBuffer _bytes;
-  final dec.WasmDecoded decoded;
+  final native_ir.WasmModule decoded;
 
-  static dec.WasmDecoded _decode(ByteBuffer bytes) {
+  static native_ir.WasmModule _decode(ByteBuffer bytes) {
     try {
-      return dec.decode(bytes.asUint8List());
+      return native_ir.WasmModule.decode(bytes.asUint8List());
     } on FormatException catch (e) {
       throw CompileError(e.message, cause: e);
+    } on UnsupportedError catch (e) {
+      throw CompileError(e.message, cause: e);
+    } on ArgumentError catch (e) {
+      throw CompileError(e.message ?? e.toString(), cause: e);
     }
   }
 }
@@ -22,7 +26,7 @@ class Module implements wasm.Module {
 List<wasm.ModuleImportDescriptor> imports(wasm.Module module) => [
   for (final imp in (module as Module).decoded.imports)
     wasm.ModuleImportDescriptor(
-      kind: _toKind(imp.kind),
+      kind: _toImportKind(imp.kind),
       module: imp.module,
       name: imp.name,
     ),
@@ -30,18 +34,29 @@ List<wasm.ModuleImportDescriptor> imports(wasm.Module module) => [
 
 List<wasm.ModuleExportDescriptor> exports(wasm.Module module) => [
   for (final exp in (module as Module).decoded.exports)
-    wasm.ModuleExportDescriptor(kind: _toKind(exp.kind), name: exp.name),
+    wasm.ModuleExportDescriptor(kind: _toExportKind(exp.kind), name: exp.name),
 ];
 
 List<ByteBuffer> customSections(wasm.Module module, String name) =>
     _parseCustomSections((module as Module)._bytes.asUint8List(), name);
 
-wasm.ImportExportKind _toKind(dec.ExternKind k) => switch (k) {
-  dec.ExternKind.function => wasm.ImportExportKind.function,
-  dec.ExternKind.table => wasm.ImportExportKind.table,
-  dec.ExternKind.memory => wasm.ImportExportKind.memory,
-  dec.ExternKind.global => wasm.ImportExportKind.global,
-  dec.ExternKind.tag => wasm.ImportExportKind.tag,
+wasm.ImportExportKind _toImportKind(int kind) => switch (kind) {
+  native_ir.WasmImportKind.function || native_ir.WasmImportKind.exactFunction =>
+    wasm.ImportExportKind.function,
+  native_ir.WasmImportKind.table => wasm.ImportExportKind.table,
+  native_ir.WasmImportKind.memory => wasm.ImportExportKind.memory,
+  native_ir.WasmImportKind.global => wasm.ImportExportKind.global,
+  native_ir.WasmImportKind.tag => wasm.ImportExportKind.tag,
+  _ => throw UnsupportedError('Unsupported import kind: $kind'),
+};
+
+wasm.ImportExportKind _toExportKind(int kind) => switch (kind) {
+  native_ir.WasmExportKind.function => wasm.ImportExportKind.function,
+  native_ir.WasmExportKind.table => wasm.ImportExportKind.table,
+  native_ir.WasmExportKind.memory => wasm.ImportExportKind.memory,
+  native_ir.WasmExportKind.global => wasm.ImportExportKind.global,
+  native_ir.WasmExportKind.tag => wasm.ImportExportKind.tag,
+  _ => throw UnsupportedError('Unsupported export kind: $kind'),
 };
 
 // ── Custom-section parser ─────────────────────────────────────────────────────

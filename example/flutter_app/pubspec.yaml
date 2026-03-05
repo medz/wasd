@@ -1,5 +1,5 @@
 name: wasd_flutter_example
-description: "Flutter example for running WebAssembly with wasd."
+description: "Flutter DOOM example."
 publish_to: "none"
 version: 0.1.0
 
@@ -14,6 +14,3 @@ dependencies:
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/doom/frame_bootstrap.bmp
-    - assets/doom/report_bootstrap.json

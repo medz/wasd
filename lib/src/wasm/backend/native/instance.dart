@@ -1,79 +1,89 @@
 import '../../errors.dart';
 import '../../instance.dart' as wasm;
 import '../../module.dart' as wasm;
-import 'decoder.dart' as dec;
+import 'interpreter/imports.dart' as ir_imports;
+import 'interpreter/instance.dart' as ir_instance;
+import 'interpreter/memory.dart' as ir_memory;
 import 'memory.dart' as native_memory;
 import 'module.dart' as native_module;
-import 'runtime.dart' as rt;
 
 class Instance implements wasm.Instance {
   Instance(wasm.Module module, [wasm.Imports imports = const {}])
-    : _module = module,
-      _memories = _buildMemories(module),
-      _hostFunctions = _buildHostFunctions(module, imports) {
+    : _module = module {
+    try {
+      _runtime = ir_instance.WasmInstance.fromModule(
+        (module as native_module.Module).decoded,
+        imports: _buildImports(imports),
+      );
+    } on WasmError {
+      rethrow;
+    } catch (e) {
+      throw LinkError(e.toString(), cause: e);
+    }
     _exports = _buildExports();
   }
 
   final wasm.Module _module;
-  final List<rt.LinearMemory> _memories;
-  final List<rt.HostFn> _hostFunctions;
+  late final ir_instance.WasmInstance _runtime;
   late final wasm.Exports _exports;
 
   @override
   wasm.Exports get exports => _exports;
 
-  // ── Setup ──────────────────────────────────────────────────────────────────
+  static ir_imports.WasmImports _buildImports(wasm.Imports imports) {
+    final functions = <String, ir_imports.WasmHostFunction>{};
+    final memories = <String, ir_memory.WasmMemory>{};
 
-  static List<rt.LinearMemory> _buildMemories(wasm.Module module) {
-    final decoded = (module as native_module.Module).decoded;
-    return [
-      for (final mem in decoded.memories)
-        rt.LinearMemory(minPages: mem.min, maxPages: mem.max),
-    ];
-  }
-
-  static List<rt.HostFn> _buildHostFunctions(
-    wasm.Module module,
-    wasm.Imports imports,
-  ) {
-    final decoded = (module as native_module.Module).decoded;
-    final hostFns = <rt.HostFn>[];
-    for (final imp in decoded.imports) {
-      if (imp.kind != dec.ExternKind.function) continue;
-      final modImports = imports[imp.module];
-      if (modImports == null) {
-        throw LinkError('Missing import module: ${imp.module}');
+    for (final moduleEntry in imports.entries) {
+      for (final importEntry in moduleEntry.value.entries) {
+        final key = ir_imports.WasmImports.key(
+          moduleEntry.key,
+          importEntry.key,
+        );
+        final importValue = importEntry.value;
+        switch (importValue) {
+          case wasm.FunctionImportExportValue(:final ref):
+            functions[key] = ref;
+          case wasm.MemoryImportExportValue(:final ref):
+            if (ref is! native_memory.Memory) {
+              throw LinkError(
+                'Memory import `$key` must be created by native backend.',
+              );
+            }
+            memories[key] = ref.host;
+          default:
+            throw LinkError(
+              'Unsupported native import value `${importValue.runtimeType}` for `$key`.',
+            );
+        }
       }
-      final importValue = modImports[imp.name];
-      if (importValue is! wasm.FunctionImportExportValue) {
-        throw LinkError('Missing function import: ${imp.module}.${imp.name}');
-      }
-      hostFns.add(importValue.ref);
     }
-    return hostFns;
-  }
 
-  // ── Exports ────────────────────────────────────────────────────────────────
+    return ir_imports.WasmImports(functions: functions, memories: memories);
+  }
 
   wasm.Exports _buildExports() {
-    final decoded = (_module as native_module.Module).decoded;
     final result = <String, wasm.ExportValue>{};
-    for (final exp in decoded.exports) {
-      switch (exp.kind) {
-        case dec.ExternKind.function:
-          final idx = exp.index;
-          result[exp.name] = wasm.ImportExportKind.function(
-            (List<Object?> args) =>
-                rt.execute(decoded, idx, args, _hostFunctions, _memories),
+    for (final descriptor in wasm.Module.exports(_module)) {
+      final name = descriptor.name;
+      switch (descriptor.kind) {
+        case wasm.ImportExportKind.function:
+          result[name] = wasm.ImportExportKind.function((List<Object?> args) {
+            try {
+              return _runtime.invoke(name, args);
+            } catch (e) {
+              throw RuntimeError('Failed to invoke `$name`.', cause: e);
+            }
+          });
+        case wasm.ImportExportKind.memory:
+          final memory = _runtime.exportedMemory(name);
+          result[name] = wasm.ImportExportKind.memory(
+            native_memory.Memory.fromRuntime(memory),
           );
-        case dec.ExternKind.memory:
-          result[exp.name] = wasm.ImportExportKind.memory(
-            native_memory.Memory.fromRuntime(_memories[exp.index]),
-          );
-        case dec.ExternKind.global:
-        case dec.ExternKind.table:
-        case dec.ExternKind.tag:
-          break; // not yet supported
+        case wasm.ImportExportKind.global:
+        case wasm.ImportExportKind.table:
+        case wasm.ImportExportKind.tag:
+          break;
       }
     }
     return result;
