@@ -617,8 +617,8 @@ class WASI implements wasi_iface.WASI {
     final pathPtr = _asInt(args[2]);
     final pathLen = _asInt(args[3]);
     final openedFdPtr = _asInt(args[8]);
-    final preopenPath = _preopenGuestPathsByFd[dirFd];
-    if (preopenPath == null) {
+    final baseDirectory = _directoryPathForFd(dirFd);
+    if (baseDirectory == null) {
       return _errnoBadf;
     }
 
@@ -638,13 +638,13 @@ class WASI implements wasi_iface.WASI {
 
     final guestPath = _resolveGuestPath(
       bytes: bytes,
-      preopenPath: preopenPath,
+      preopenPath: baseDirectory,
       pathPtr: pathPtr,
       pathLen: pathLen,
     );
     if (_traceSyscalls) {
       io.stderr.writeln(
-        '[wasi:path_open] dirFd=$dirFd preopen=$preopenPath path=$guestPath len=$pathLen',
+        '[wasi:path_open] dirFd=$dirFd preopen=$baseDirectory path=$guestPath len=$pathLen',
       );
     }
     if (guestPath == null) {
@@ -685,8 +685,8 @@ class WASI implements wasi_iface.WASI {
     final pathPtr = _asInt(args[2]);
     final pathLen = _asInt(args[3]);
     final filestatPtr = _asInt(args[4]);
-    final preopenPath = _preopenGuestPathsByFd[dirFd];
-    if (preopenPath == null) {
+    final baseDirectory = _directoryPathForFd(dirFd);
+    if (baseDirectory == null) {
       return _errnoBadf;
     }
 
@@ -701,13 +701,13 @@ class WASI implements wasi_iface.WASI {
     }
     final guestPath = _resolveGuestPath(
       bytes: bytes,
-      preopenPath: preopenPath,
+      preopenPath: baseDirectory,
       pathPtr: pathPtr,
       pathLen: pathLen,
     );
     if (_traceSyscalls) {
       io.stderr.writeln(
-        '[wasi:path_filestat_get] dirFd=$dirFd preopen=$preopenPath path=$guestPath len=$pathLen',
+        '[wasi:path_filestat_get] dirFd=$dirFd preopen=$baseDirectory path=$guestPath len=$pathLen',
       );
     }
     if (guestPath == null) {
@@ -816,6 +816,9 @@ class WASI implements wasi_iface.WASI {
     }
     return false;
   }
+
+  String? _directoryPathForFd(int fd) =>
+      _preopenGuestPathsByFd[fd] ?? _openDirectoriesByFd[fd];
 
   Uint8List? _lookupVirtualFile(String guestPath) {
     final normalized = _normalizeGuestPath(guestPath);
@@ -933,7 +936,7 @@ const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
 const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
 const int _filestatSize = 64;
-const int _allRightsMask = 0x1fffffff;
+const int _allRightsMask = 0xffffffff;
 const List<String> _preview1NosysImports = wasi_common.preview1NosysImports;
 
 bool _isU32InBounds(int ptr, int length) => ptr >= 0 && ptr + 4 <= length;

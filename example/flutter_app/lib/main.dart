@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wasd/wasm.dart';
@@ -40,6 +42,7 @@ class _DoomPage extends StatefulWidget {
 }
 
 class _DoomPageState extends State<_DoomPage> {
+  static const bool _autoStart = bool.fromEnvironment('DOOM_AUTO_START');
   final FocusNode _focusNode = FocusNode();
   final List<String> _logs = <String>[];
   final Queue<_DoomInputEvent> _queuedEvents = Queue<_DoomInputEvent>();
@@ -48,13 +51,24 @@ class _DoomPageState extends State<_DoomPage> {
   String? _error;
   bool _running = false;
   int _frameCount = 0;
+  Isolate? _nativeRunnerIsolate;
+  ReceivePort? _nativeRunnerEvents;
   Memory? _memory;
   Uint8List? _palette;
   int _windowWidth = _doomDefaultWidth;
   int _windowHeight = _doomDefaultHeight;
 
   @override
+  void initState() {
+    super.initState();
+    if (_autoStart) {
+      scheduleMicrotask(_startGame);
+    }
+  }
+
+  @override
   void dispose() {
+    _stopNativeRunner();
     _focusNode.dispose();
     super.dispose();
   }
@@ -93,6 +107,11 @@ class _DoomPageState extends State<_DoomPage> {
           iwadData.lengthInBytes,
         ),
       );
+
+      if (!kIsWeb) {
+        await _startNativeRunner(wasmBytes, iwadBytes);
+        return;
+      }
 
       final preopens = <String, String>{_guestRoot: _guestRoot};
       final files = <String, Uint8List>{
@@ -155,7 +174,84 @@ class _DoomPageState extends State<_DoomPage> {
     }
   }
 
+  Future<void> _startNativeRunner(
+    Uint8List wasmBytes,
+    Uint8List iwadBytes,
+  ) async {
+    _stopNativeRunner();
+    final events = ReceivePort();
+    _nativeRunnerEvents = events;
+    events.listen(_onNativeRunnerMessage);
+    _appendLog('starting native runner isolate...');
+    _nativeRunnerIsolate = await Isolate.spawn<_DoomRunnerBootstrap>(
+      _doomRunnerEntryPoint,
+      _DoomRunnerBootstrap(events.sendPort, wasmBytes, iwadBytes),
+      errorsAreFatal: false,
+    );
+  }
+
+  void _onNativeRunnerMessage(Object? message) {
+    if (!mounted || message is! Map<Object?, Object?>) {
+      return;
+    }
+    final type = message['type'];
+    if (type == 'log') {
+      final line = message['line'];
+      if (line is String) {
+        _appendLog(line);
+      }
+      return;
+    }
+    if (type == 'frame') {
+      final frame = message['frame'];
+      final bmp = message['bmp'];
+      if (frame is int && bmp is TransferableTypedData) {
+        final bytes = bmp.materialize().asUint8List();
+        setState(() {
+          _frameCount = frame;
+          _frameBytes = bytes;
+        });
+      }
+      return;
+    }
+    if (type == 'exit') {
+      final code = message['code'];
+      setState(() {
+        _running = false;
+      });
+      _appendLog('doom exited: $code');
+      _stopNativeRunner();
+      return;
+    }
+    if (type == 'error') {
+      final error = message['error'];
+      setState(() {
+        _running = false;
+        _error = '$error';
+      });
+      final stack = message['stack'];
+      _appendLog('$error\n$stack');
+      _stopNativeRunner();
+    }
+  }
+
+  void _stopNativeRunner() {
+    _nativeRunnerIsolate?.kill(priority: Isolate.immediate);
+    _nativeRunnerIsolate = null;
+    _nativeRunnerEvents?.close();
+    _nativeRunnerEvents = null;
+  }
+
   Future<void> _stopGame() async {
+    if (!kIsWeb) {
+      _stopNativeRunner();
+      setState(() {
+        _running = false;
+        _logs.add('native runner stopped.');
+      });
+      return;
+    }
+
     setState(() {
       _running = false;
       _logs.add('stop requested (wasi command modules cannot be interrupted).');
@@ -418,6 +514,205 @@ class _DoomPageState extends State<_DoomPage> {
       ),
     );
   }
+}
+
+final class _DoomRunnerBootstrap {
+  const _DoomRunnerBootstrap(this.events, this.wasmBytes, this.iwadBytes);
+
+  final SendPort events;
+  final Uint8List wasmBytes;
+  final Uint8List iwadBytes;
+}
+
+final class _DoomRunnerWorker {
+  _DoomRunnerWorker({
+    required SendPort events,
+    required Uint8List wasmBytes,
+    required Uint8List iwadBytes,
+  }) : _events = events,
+       _wasmBytes = wasmBytes,
+       _iwadBytes = iwadBytes;
+
+  final SendPort _events;
+  final Uint8List _wasmBytes;
+  final Uint8List _iwadBytes;
+
+  Memory? _memory;
+  Uint8List? _palette;
+  int _windowWidth = _doomDefaultWidth;
+  int _windowHeight = _doomDefaultHeight;
+  int _frameCount = 0;
+
+  Future<void> run() async {
+    try {
+      _log('instantiating module...');
+      final wasi = WASI(
+        args: const <String>[
+          'doom.wasm',
+          '-file',
+          '$_guestRoot/$_guestIwadName',
+          '-nosound',
+        ],
+        preopens: const <String, String>{_guestRoot: _guestRoot},
+        files: <String, Uint8List>{'$_guestRoot/$_guestIwadName': _iwadBytes},
+        env: const <String, String>{
+          'HOME': _guestRoot,
+          'TERM': 'xterm',
+          'DOOMWADDIR': _guestRoot,
+          'DOOMWADPATH': _guestRoot,
+        },
+      );
+
+      final imports = <String, ModuleImports>{
+        ...wasi.imports,
+        'env': <String, ImportValue>{
+          'ZwareDoomOpenWindow': ImportExportKind.function(_onOpenWindow),
+          'ZwareDoomSetPalette': ImportExportKind.function(_onSetPalette),
+          'ZwareDoomRenderFrame': ImportExportKind.function(_onRenderFrame),
+          'ZwareDoomPendingEvent': ImportExportKind.function(_onPendingEvent),
+          'ZwareDoomNextEvent': ImportExportKind.function(_onNextEvent),
+        },
+      };
+
+      final result = await WebAssembly.instantiate(_wasmBytes.buffer, imports);
+      final memoryExport = result.instance.exports['memory'];
+      if (memoryExport is MemoryImportExportValue) {
+        _memory = memoryExport.ref;
+      }
+
+      _log('running wasi _start...');
+      final exit = wasi.start(result.instance);
+      _events.send(<String, Object?>{'type': 'exit', 'code': exit});
+    } catch (error, stackTrace) {
+      _events.send(<String, Object?>{
+        'type': 'error',
+        'error': '$error',
+        'stack': '$stackTrace',
+      });
+    }
+  }
+
+  Object? _onOpenWindow(List<Object?> args) {
+    final values = args
+        .map(_asIntOrNull)
+        .whereType<int>()
+        .toList(growable: false);
+    if (values.length >= 2) {
+      if (_isLikelyResolution(values[0], values[1])) {
+        _windowWidth = values[0];
+        _windowHeight = values[1];
+      } else if (_isLikelyResolution(values[1], values[0])) {
+        _windowWidth = values[1];
+        _windowHeight = values[0];
+      }
+    }
+    return 0;
+  }
+
+  Object? _onSetPalette(List<Object?> args) {
+    final memory = _memory;
+    if (memory == null || args.isEmpty) {
+      return 0;
+    }
+    final ptr = _asIntOrNull(args.first);
+    if (ptr == null || ptr < 0) {
+      return 0;
+    }
+    final bytes = Uint8List.view(memory.buffer);
+    final colors = args.length > 1 ? (_asIntOrNull(args[1]) ?? 256) : 256;
+    final paletteLength = colors * 3;
+    if (ptr + paletteLength > bytes.length) {
+      return 0;
+    }
+    _palette = Uint8List.fromList(bytes.sublist(ptr, ptr + paletteLength));
+    return 0;
+  }
+
+  Object? _onRenderFrame(List<Object?> args) {
+    final memory = _memory;
+    if (memory == null) {
+      return 0;
+    }
+
+    final bytes = Uint8List.view(memory.buffer);
+    final resolution = _resolveResolution(args);
+    final width = resolution.$1;
+    final height = resolution.$2;
+    final pixelCount = width * height;
+    if (pixelCount <= 0 || pixelCount > bytes.length) {
+      return 0;
+    }
+
+    final ptr = _resolveFramePointer(args, pixelCount, bytes.length);
+    if (ptr == null) {
+      return 0;
+    }
+
+    final indexed = Uint8List.fromList(bytes.sublist(ptr, ptr + pixelCount));
+    final rgb = _indexedToRgb(indexed, _palette);
+    final bmp = _encodeBmp24(width: width, height: height, rgb: rgb);
+    _frameCount++;
+    _events.send(<String, Object?>{
+      'type': 'frame',
+      'frame': _frameCount,
+      'bmp': TransferableTypedData.fromList(<Uint8List>[bmp]),
+    });
+    return 0;
+  }
+
+  Object? _onPendingEvent(List<Object?> args) => 0;
+
+  Object? _onNextEvent(List<Object?> args) => 0;
+
+  (int, int) _resolveResolution(List<Object?> args) {
+    final ints = args
+        .map(_asIntOrNull)
+        .whereType<int>()
+        .toList(growable: false);
+    for (var i = 0; i + 1 < ints.length; i++) {
+      final a = ints[i];
+      final b = ints[i + 1];
+      if (_isLikelyResolution(a, b)) {
+        _windowWidth = a;
+        _windowHeight = b;
+      } else if (_isLikelyResolution(b, a)) {
+        _windowWidth = b;
+        _windowHeight = a;
+      }
+    }
+    return (_windowWidth, _windowHeight);
+  }
+
+  int? _resolveFramePointer(
+    List<Object?> args,
+    int pixelCount,
+    int memoryLength,
+  ) {
+    for (final arg in args) {
+      final value = _asIntOrNull(arg);
+      if (value != null && value >= 0 && value + pixelCount <= memoryLength) {
+        return value;
+      }
+    }
+    if (pixelCount <= memoryLength) {
+      return 0;
+    }
+    return null;
+  }
+
+  void _log(String line) {
+    _events.send(<String, Object?>{'type': 'log', 'line': line});
+  }
+}
+
+@pragma('vm:entry-point')
+Future<void> _doomRunnerEntryPoint(_DoomRunnerBootstrap bootstrap) async {
+  final runner = _DoomRunnerWorker(
+    events: bootstrap.events,
+    wasmBytes: bootstrap.wasmBytes,
+    iwadBytes: bootstrap.iwadBytes,
+  );
+  await runner.run();
 }
 
 final class _DoomInputEvent {

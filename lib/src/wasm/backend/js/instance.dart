@@ -126,8 +126,16 @@ JSFunction _hostFuncToJS(wasm.WasmFunction hostFn) {
     JSAny? f,
     JSAny? g,
     JSAny? h,
+    JSAny? i,
+    JSAny? j,
+    JSAny? k,
+    JSAny? l,
+    JSAny? m,
+    JSAny? n,
+    JSAny? o,
+    JSAny? p,
   ]) {
-    final all = [a, b, c, d, e, f, g, h];
+    final all = [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p];
     final last = all.lastIndexWhere((x) => x != null);
     final args =
         all.sublist(0, last + 1).map((x) => x?.dartify()).toList();

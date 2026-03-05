@@ -55,6 +55,7 @@ class WASI implements wasi.WASI {
   final Map<int, _VirtualOpenFile> _openFilesByFd = <int, _VirtualOpenFile>{};
   final Map<int, String> _openDirectoriesByFd = <int, String>{};
   int _nextVirtualFd = 64;
+  final bool _traceSyscalls = const bool.fromEnvironment('WASI_TRACE');
   wasm.Memory? _boundMemory;
   late final wasm.FunctionImportExportValue _nosysImport =
       wasm.ImportExportKind.function((List<Object?> _) => _errnoNosys);
@@ -152,34 +153,41 @@ class WASI implements wasi.WASI {
         return _errnoSuccess;
       });
 
-  wasm.FunctionImportExportValue get _argsSizesGetImport =>
-      wasm.ImportExportKind.function((List<Object?> args) {
-        if (args.length < 2) {
-          return _errnoInval;
-        }
-        final argcPtr = _asInt(args[0]);
-        final argvBufSizePtr = _asInt(args[1]);
+  wasm.FunctionImportExportValue
+  get _argsSizesGetImport => wasm.ImportExportKind.function((
+    List<Object?> args,
+  ) {
+    if (args.length < 2) {
+      return _errnoInval;
+    }
+    final argcPtr = _asInt(args[0]);
+    final argvBufSizePtr = _asInt(args[1]);
 
-        final view = _memoryView();
-        if (view == null) {
-          return _errnoInval;
-        }
+    final view = _memoryView();
+    if (view == null) {
+      return _errnoInval;
+    }
 
-        final bytes = view.bytes;
-        final data = view.data;
-        if (!_isU32InBounds(argcPtr, bytes.length) ||
-            !_isU32InBounds(argvBufSizePtr, bytes.length)) {
-          return _errnoInval;
-        }
+    final bytes = view.bytes;
+    final data = view.data;
+    if (!_isU32InBounds(argcPtr, bytes.length) ||
+        !_isU32InBounds(argvBufSizePtr, bytes.length)) {
+      return _errnoInval;
+    }
 
-        data.setUint32(argcPtr, _argsData.length, Endian.little);
-        data.setUint32(
-          argvBufSizePtr,
-          _argsData.fold<int>(0, (sum, arg) => sum + arg.length),
-          Endian.little,
-        );
-        return _errnoSuccess;
-      });
+    data.setUint32(argcPtr, _argsData.length, Endian.little);
+    data.setUint32(
+      argvBufSizePtr,
+      _argsData.fold<int>(0, (sum, arg) => sum + arg.length),
+      Endian.little,
+    );
+    if (_traceSyscalls) {
+      print(
+        '[wasi:args_sizes_get] argc=${_argsData.length} argvBufSize=${_argsData.fold<int>(0, (sum, arg) => sum + arg.length)}',
+      );
+    }
+    return _errnoSuccess;
+  });
 
   wasm.FunctionImportExportValue get _argsGetImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
@@ -188,12 +196,31 @@ class WASI implements wasi.WASI {
         }
         final argvPtr = _asInt(args[0]);
         final argvBufPtr = _asInt(args[1]);
+        if (_traceSyscalls) {
+          print('[wasi:args_get] args=${_debugArgs(_argsData)}');
+        }
 
-        return _writeStringVector(
+        final result = _writeStringVector(
           strings: _argsData,
           ptrTable: argvPtr,
           ptrBuffer: argvBufPtr,
         );
+        if (_traceSyscalls && result == _errnoSuccess) {
+          final view = _memoryView();
+          if (view != null) {
+            final guestArgs = <String>[];
+            for (var i = 0; i < _argsData.length; i++) {
+              final ptrEntry = argvPtr + i * 4;
+              if (!_isU32InBounds(ptrEntry, view.bytes.length)) {
+                continue;
+              }
+              final ptr = view.data.getUint32(ptrEntry, Endian.little);
+              guestArgs.add(_readCString(view.bytes, ptr));
+            }
+            print('[wasi:args_get:guest] args=${guestArgs.join(' | ')}');
+          }
+        }
+        return result;
       });
 
   wasm.FunctionImportExportValue get _environSizesGetImport =>
@@ -331,45 +358,52 @@ class WASI implements wasi.WASI {
         return _errnoSuccess;
       });
 
-  wasm.FunctionImportExportValue get _fdFdstatGetImport =>
-      wasm.ImportExportKind.function((List<Object?> args) {
-        if (args.length < 2) {
-          return _errnoInval;
-        }
-        final fd = _asInt(args[0]);
-        final fdstatPtr = _asInt(args[1]);
-        final isStdio = fd == _stdin || fd == _stdout || fd == _stderr;
-        final isDir =
-            _preopenGuestPathsByFd.containsKey(fd) ||
-            _openDirectoriesByFd.containsKey(fd);
-        final isFile = _openFilesByFd.containsKey(fd);
-        if (!isStdio && !isDir && !isFile) {
-          return _errnoBadf;
-        }
+  wasm.FunctionImportExportValue
+  get _fdFdstatGetImport => wasm.ImportExportKind.function((
+    List<Object?> args,
+  ) {
+    if (args.length < 2) {
+      return _errnoInval;
+    }
+    final fd = _asInt(args[0]);
+    final fdstatPtr = _asInt(args[1]);
+    final isStdio = fd == _stdin || fd == _stdout || fd == _stderr;
+    final isDir =
+        _preopenGuestPathsByFd.containsKey(fd) ||
+        _openDirectoriesByFd.containsKey(fd);
+    final isFile = _openFilesByFd.containsKey(fd);
+    if (_traceSyscalls) {
+      print(
+        '[wasi:fd_fdstat_get] fd=$fd isStdio=$isStdio isDir=$isDir isFile=$isFile',
+      );
+    }
+    if (!isStdio && !isDir && !isFile) {
+      return _errnoBadf;
+    }
 
-        final view = _memoryView();
-        if (view == null) {
-          return _errnoInval;
-        }
-        final bytes = view.bytes;
-        final data = view.data;
-        if (fdstatPtr < 0 || fdstatPtr + _fdstatSize > bytes.length) {
-          return _errnoInval;
-        }
+    final view = _memoryView();
+    if (view == null) {
+      return _errnoInval;
+    }
+    final bytes = view.bytes;
+    final data = view.data;
+    if (fdstatPtr < 0 || fdstatPtr + _fdstatSize > bytes.length) {
+      return _errnoInval;
+    }
 
-        bytes.fillRange(fdstatPtr, fdstatPtr + _fdstatSize, 0);
-        bytes[fdstatPtr] = isFile
-            ? _filetypeRegularFile
-            : isDir
-            ? _filetypeDirectory
-            : _filetypeCharacterDevice;
-        data.setUint16(fdstatPtr + 2, 0, Endian.little);
-        final rightsBase = _allRightsMask;
-        final rightsInheriting = isDir ? _allRightsMask : 0;
-        _setUint64(data, fdstatPtr + 8, rightsBase);
-        _setUint64(data, fdstatPtr + 16, rightsInheriting);
-        return _errnoSuccess;
-      });
+    bytes.fillRange(fdstatPtr, fdstatPtr + _fdstatSize, 0);
+    bytes[fdstatPtr] = isFile
+        ? _filetypeRegularFile
+        : isDir
+        ? _filetypeDirectory
+        : _filetypeCharacterDevice;
+    data.setUint16(fdstatPtr + 2, 0, Endian.little);
+    final rightsBase = _allRightsMask;
+    final rightsInheriting = isDir ? _allRightsMask : 0;
+    _setUint64(data, fdstatPtr + 8, rightsBase);
+    _setUint64(data, fdstatPtr + 16, rightsInheriting);
+    return _errnoSuccess;
+  });
 
   wasm.FunctionImportExportValue get _fdFilestatGetImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
@@ -498,6 +532,9 @@ class WASI implements wasi.WASI {
         }
         final fd = _asInt(args[0]);
         final prestatPtr = _asInt(args[1]);
+        if (_traceSyscalls) {
+          print('[wasi:fd_prestat_get] fd=$fd');
+        }
         final path = _preopensByFd[fd];
         if (path == null) {
           return _errnoBadf;
@@ -527,6 +564,9 @@ class WASI implements wasi.WASI {
         final fd = _asInt(args[0]);
         final pathPtr = _asInt(args[1]);
         final pathLen = _asInt(args[2]);
+        if (_traceSyscalls) {
+          print('[wasi:fd_prestat_dir_name] fd=$fd pathLen=$pathLen');
+        }
         final path = _preopensByFd[fd];
         if (path == null) {
           return _errnoBadf;
@@ -547,119 +587,136 @@ class WASI implements wasi.WASI {
         return _errnoSuccess;
       });
 
-  wasm.FunctionImportExportValue get _pathOpenImport =>
-      wasm.ImportExportKind.function((List<Object?> args) {
-        if (args.length < 9) {
-          return _errnoInval;
-        }
-        final dirFd = _asInt(args[0]);
-        final pathPtr = _asInt(args[2]);
-        final pathLen = _asInt(args[3]);
-        final openedFdPtr = _asInt(args[8]);
-        final preopenPath = _preopenGuestPathsByFd[dirFd];
-        if (preopenPath == null) {
-          return _errnoBadf;
-        }
+  wasm.FunctionImportExportValue
+  get _pathOpenImport => wasm.ImportExportKind.function((List<Object?> args) {
+    if (args.length < 9) {
+      return _errnoInval;
+    }
+    final dirFd = _asInt(args[0]);
+    final pathPtr = _asInt(args[2]);
+    final pathLen = _asInt(args[3]);
+    final openedFdPtr = _asInt(args[8]);
+    final baseDirectory = _directoryPathForFd(dirFd);
+    if (baseDirectory == null) {
+      return _errnoBadf;
+    }
 
-        final view = _memoryView();
-        if (view == null) {
-          return _errnoInval;
-        }
-        final bytes = view.bytes;
-        final data = view.data;
-        if (pathPtr < 0 ||
-            pathLen < 0 ||
-            pathPtr + pathLen > bytes.length ||
-            openedFdPtr < 0 ||
-            openedFdPtr + 4 > bytes.length) {
-          return _errnoInval;
-        }
+    final view = _memoryView();
+    if (view == null) {
+      return _errnoInval;
+    }
+    final bytes = view.bytes;
+    final data = view.data;
+    if (pathPtr < 0 ||
+        pathLen < 0 ||
+        pathPtr + pathLen > bytes.length ||
+        openedFdPtr < 0 ||
+        openedFdPtr + 4 > bytes.length) {
+      return _errnoInval;
+    }
 
-        final guestPath = _resolveGuestPath(
-          bytes: bytes,
-          preopenPath: preopenPath,
-          pathPtr: pathPtr,
-          pathLen: pathLen,
-        );
-        if (guestPath == null) {
-          return _errnoInval;
-        }
-        final normalizedPath = _normalizeGuestPath(guestPath);
-        final fileBytes = _lookupVirtualFile(_filesByGuestPath, normalizedPath);
-        if (fileBytes != null) {
-          final fd = _nextVirtualFd++;
-          _openFilesByFd[fd] = _VirtualOpenFile(fileBytes);
-          data.setUint32(openedFdPtr, fd, Endian.little);
-          return _errnoSuccess;
-        }
+    final guestPath = _resolveGuestPath(
+      bytes: bytes,
+      preopenPath: baseDirectory,
+      pathPtr: pathPtr,
+      pathLen: pathLen,
+    );
+    if (_traceSyscalls) {
+      print(
+        '[wasi:path_open] dirFd=$dirFd base=$baseDirectory path=$guestPath len=$pathLen keys=${_filesByGuestPath.keys.join(',')}',
+      );
+    }
+    if (guestPath == null) {
+      return _errnoInval;
+    }
+    final normalizedPath = _normalizeGuestPath(guestPath);
+    final fileBytes = _lookupVirtualFile(_filesByGuestPath, normalizedPath);
+    if (_traceSyscalls) {
+      print(
+        '[wasi:path_open] normalized=$normalizedPath found=${fileBytes != null}',
+      );
+    }
+    if (fileBytes != null) {
+      final fd = _nextVirtualFd++;
+      _openFilesByFd[fd] = _VirtualOpenFile(fileBytes);
+      data.setUint32(openedFdPtr, fd, Endian.little);
+      return _errnoSuccess;
+    }
 
-        if (_isVirtualDirectory(
-          _preopenGuestPathsByFd,
-          _filesByGuestPath,
-          normalizedPath,
-        )) {
-          final fd = _nextVirtualFd++;
-          _openDirectoriesByFd[fd] = normalizedPath;
-          data.setUint32(openedFdPtr, fd, Endian.little);
-          return _errnoSuccess;
-        }
+    if (_isVirtualDirectory(
+      _preopenGuestPathsByFd,
+      _filesByGuestPath,
+      normalizedPath,
+    )) {
+      final fd = _nextVirtualFd++;
+      _openDirectoriesByFd[fd] = normalizedPath;
+      data.setUint32(openedFdPtr, fd, Endian.little);
+      return _errnoSuccess;
+    }
 
-        return _errnoNoent;
-      });
+    return _errnoNoent;
+  });
 
-  wasm.FunctionImportExportValue get _pathFilestatGetImport =>
-      wasm.ImportExportKind.function((List<Object?> args) {
-        if (args.length < 5) {
-          return _errnoInval;
-        }
-        final dirFd = _asInt(args[0]);
-        final pathPtr = _asInt(args[2]);
-        final pathLen = _asInt(args[3]);
-        final filestatPtr = _asInt(args[4]);
-        final preopenPath = _preopenGuestPathsByFd[dirFd];
-        if (preopenPath == null) {
-          return _errnoBadf;
-        }
+  wasm.FunctionImportExportValue
+  get _pathFilestatGetImport => wasm.ImportExportKind.function((
+    List<Object?> args,
+  ) {
+    if (args.length < 5) {
+      return _errnoInval;
+    }
+    final dirFd = _asInt(args[0]);
+    final pathPtr = _asInt(args[2]);
+    final pathLen = _asInt(args[3]);
+    final filestatPtr = _asInt(args[4]);
+    final baseDirectory = _directoryPathForFd(dirFd);
+    if (baseDirectory == null) {
+      return _errnoBadf;
+    }
 
-        final view = _memoryView();
-        if (view == null) {
-          return _errnoInval;
-        }
-        final bytes = view.bytes;
-        final data = view.data;
-        if (filestatPtr < 0 || filestatPtr + _filestatSize > bytes.length) {
-          return _errnoInval;
-        }
-        final guestPath = _resolveGuestPath(
-          bytes: bytes,
-          preopenPath: preopenPath,
-          pathPtr: pathPtr,
-          pathLen: pathLen,
-        );
-        if (guestPath == null) {
-          return _errnoInval;
-        }
+    final view = _memoryView();
+    if (view == null) {
+      return _errnoInval;
+    }
+    final bytes = view.bytes;
+    final data = view.data;
+    if (filestatPtr < 0 || filestatPtr + _filestatSize > bytes.length) {
+      return _errnoInval;
+    }
+    final guestPath = _resolveGuestPath(
+      bytes: bytes,
+      preopenPath: baseDirectory,
+      pathPtr: pathPtr,
+      pathLen: pathLen,
+    );
+    if (_traceSyscalls) {
+      print(
+        '[wasi:path_filestat_get] dirFd=$dirFd base=$baseDirectory path=$guestPath len=$pathLen',
+      );
+    }
+    if (guestPath == null) {
+      return _errnoInval;
+    }
 
-        final normalizedPath = _normalizeGuestPath(guestPath);
-        final fileBytes = _lookupVirtualFile(_filesByGuestPath, normalizedPath);
-        final isDirectory = _isVirtualDirectory(
-          _preopenGuestPathsByFd,
-          _filesByGuestPath,
-          normalizedPath,
-        );
-        if (fileBytes == null && !isDirectory) {
-          return _errnoNoent;
-        }
+    final normalizedPath = _normalizeGuestPath(guestPath);
+    final fileBytes = _lookupVirtualFile(_filesByGuestPath, normalizedPath);
+    final isDirectory = _isVirtualDirectory(
+      _preopenGuestPathsByFd,
+      _filesByGuestPath,
+      normalizedPath,
+    );
+    if (fileBytes == null && !isDirectory) {
+      return _errnoNoent;
+    }
 
-        bytes.fillRange(filestatPtr, filestatPtr + _filestatSize, 0);
-        bytes[filestatPtr + 16] = isDirectory
-            ? _filetypeDirectory
-            : _filetypeRegularFile;
-        if (fileBytes != null) {
-          _setUint64(data, filestatPtr + 32, fileBytes.length);
-        }
-        return _errnoSuccess;
-      });
+    bytes.fillRange(filestatPtr, filestatPtr + _filestatSize, 0);
+    bytes[filestatPtr + 16] = isDirectory
+        ? _filetypeDirectory
+        : _filetypeRegularFile;
+    if (fileBytes != null) {
+      _setUint64(data, filestatPtr + 32, fileBytes.length);
+    }
+    return _errnoSuccess;
+  });
 
   wasm.FunctionImportExportValue get _pollOneoffImport => _nosysImport;
 
@@ -759,6 +816,32 @@ class WASI implements wasi.WASI {
       'WASI finalizeBindings requires a memory export or an explicit memory.',
     );
   }
+
+  String? _directoryPathForFd(int fd) =>
+      _preopenGuestPathsByFd[fd] ?? _openDirectoriesByFd[fd];
+
+  String _debugArgs(List<Uint8List> args) => args
+      .map((entry) {
+        final zero = entry.indexOf(0);
+        final bytes = zero == -1 ? entry : entry.sublist(0, zero);
+        return utf8.decode(bytes, allowMalformed: true);
+      })
+      .join(' | ');
+
+  String _readCString(Uint8List bytes, int ptr) {
+    if (ptr < 0 || ptr >= bytes.length) {
+      return '';
+    }
+    final collected = <int>[];
+    for (var index = ptr; index < bytes.length; index++) {
+      final value = bytes[index];
+      if (value == 0) {
+        break;
+      }
+      collected.add(value);
+    }
+    return utf8.decode(collected, allowMalformed: true);
+  }
 }
 
 const int _iovecEntrySize = wasi_common.iovecEntrySize;
@@ -774,7 +857,7 @@ const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
 const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
 const int _filestatSize = 64;
-const int _allRightsMask = 0x1fffffff;
+const int _allRightsMask = 0xffffffff;
 const List<String> _preview1NosysImports = wasi_common.preview1NosysImports;
 
 bool _isU32InBounds(int ptr, int length) => ptr >= 0 && ptr + 4 <= length;
