@@ -415,7 +415,7 @@ class WASI implements wasi.WASI {
 
   wasm.FunctionImportExportValue get _fdSeekImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
-        if (args.length < 5) {
+        if (args.length < 4) {
           return _errnoInval;
         }
         final fd = _asInt(args[0]);

@@ -68,13 +68,9 @@ class Instance implements wasm.Instance {
       final name = descriptor.name;
       switch (descriptor.kind) {
         case wasm.ImportExportKind.function:
-          result[name] = wasm.ImportExportKind.function((List<Object?> args) {
-            try {
-              return _runtime.invoke(name, args);
-            } catch (e) {
-              throw RuntimeError('Failed to invoke `$name`.', cause: e);
-            }
-          });
+          result[name] = wasm.ImportExportKind.function(
+            (List<Object?> args) => _runtime.invoke(name, args),
+          );
         case wasm.ImportExportKind.memory:
           final memory = _runtime.exportedMemory(name);
           result[name] = wasm.ImportExportKind.memory(

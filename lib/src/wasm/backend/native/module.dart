@@ -14,9 +14,9 @@ class Module implements wasm.Module {
     try {
       return native_ir.WasmModule.decode(bytes.asUint8List());
     } on FormatException catch (e) {
-      throw CompileError(e.message, cause: e);
+      throw CompileError(e.message ?? e.toString(), cause: e);
     } on UnsupportedError catch (e) {
-      throw CompileError(e.message, cause: e);
+      throw CompileError(e.message ?? e.toString(), cause: e);
     } on ArgumentError catch (e) {
       throw CompileError(e.message ?? e.toString(), cause: e);
     }

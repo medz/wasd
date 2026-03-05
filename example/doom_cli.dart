@@ -35,6 +35,10 @@ Future<int> _run(List<String> args) async {
   final iwadPath = options['iwad'] ?? _defaultIwadPath;
   final guestRoot = options['guest-root'] ?? _defaultGuestRoot;
   final timedemo = options['timedemo'] ?? _defaultTimedemo;
+  final timedemoEnabled =
+      timedemo.trim().isNotEmpty &&
+      timedemo.toLowerCase() != 'off' &&
+      timedemo.toLowerCase() != 'none';
   final frameDirPath = options['frame-dir'] ?? _defaultFrameDir;
   final writeFrames = _parsePositiveInt(
     options['write-frames'],
@@ -68,8 +72,7 @@ Future<int> _run(List<String> args) async {
     '-iwad',
     guestIwadPath,
     '-nosound',
-    '-timedemo',
-    timedemo,
+    if (timedemoEnabled) ...<String>['-timedemo', timedemo],
   ];
   final wasi = WASI(
     args: wasiArgs,
