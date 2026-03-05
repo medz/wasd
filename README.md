@@ -228,8 +228,8 @@ dart pub get
 tool/setup_test_fixtures.sh
 dart analyze
 dart test
-dart test test/doom_smoke_test.dart test/community_wasm_fixtures_test.dart
-dart test test/wasi_preview1_test.dart
+dart test test/doom_smoke_test.dart test/doom_e2e_node_test.dart
+dart test test/wasi_test.dart test/wasm_test.dart
 dart run example/hello.dart
 ```
 

@@ -615,6 +615,68 @@ void main() {
       );
 
       test(
+        'path_filestat_get reports file, directory, and missing paths',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/doom1.wad': Uint8List.fromList([1, 2, 3, 4]),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 2064;
+          const filestatPtr = 2100;
+
+          final filePath = utf8.encode('doom1.wad');
+          bytes.setAll(pathPtr, filePath);
+          expect(
+            pathFilestatGet.ref([3, 0, pathPtr, filePath.length, filestatPtr]),
+            0,
+          );
+          expect(bytes[filestatPtr + 16], 4);
+          expect(data.getUint32(filestatPtr + 32, Endian.little), 4);
+          expect(data.getUint32(filestatPtr + 36, Endian.little), 0);
+
+          final dirPath = utf8.encode('.');
+          bytes.setAll(pathPtr, dirPath);
+          expect(
+            pathFilestatGet.ref([3, 0, pathPtr, dirPath.length, filestatPtr]),
+            0,
+          );
+          expect(bytes[filestatPtr + 16], 3);
+
+          final missingPath = utf8.encode('missing.wad');
+          bytes.setAll(pathPtr, missingPath);
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              pathPtr,
+              missingPath.length,
+              filestatPtr,
+            ]),
+            44,
+          );
+        },
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; path_filestat_get behavior is delegated to node:wasi.'
+            : false,
+      );
+
+      test(
         'fd_prestat_get and fd_prestat_dir_name expose configured preopen',
         () {
           final preview1 = wasi.imports['wasi_snapshot_preview1']!;
