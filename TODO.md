@@ -182,3 +182,11 @@
       - commit: `0964b90`
     - verify: `dart analyze` (pass)
     - verify: `dart test` (pass)
+  - [x] 持续优化（第 4 轮）：README 与 0.2 公共 API 对齐（Issue #5, #13）
+    - commit: `d571750`
+    - [x] 移除 README 中已下线 API（`WasmInstance` / `WasiPreview1` / `WasmFeatureSet` 等）并替换为 `WebAssembly` / `WASI` 当前用法（Issue #5, #13）
+      - commit: `d571750`
+    - [x] 新增 README 过时 API 名称回归测试，防止文档回退（Issue #13）
+      - commit: `d571750`
+    - verify: `dart analyze` (pass)
+    - verify: `dart test` (pass)
