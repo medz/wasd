@@ -143,3 +143,7 @@
     - commit: `d790335`
   - [x] 修复 Flutter Web DOOM 启动失败（移除 web 端 `dart:io` 依赖并补齐 WASI 虚拟文件读路径）（Issue #12, #13）
     - commit: `b079078`
+  - [x] 修复 Web WASI `setUint64` 在 dart2js 下崩溃并补齐 `fd_seek` 参数校验（Issue #12, #13）
+    - commit: `58c4480`
+  - [x] 新增 DOOM Node E2E 自运行测试并执行（Issue #13）
+    - commit: `2a069e6`
