@@ -248,3 +248,15 @@
     - verify: `dart test test/doom_first_frame_latency_test.dart` (pass)
     - verify: `flutter analyze` in `example/flutter_app` (pass)
     - verify: `flutter test` in `example/flutter_app` (pass)
+  - [x] 持续优化（第 11 轮）：DOOM 示例收敛到桌面可玩（移除 web 目标）与 macOS 交互/显示修复（Issue #12, #13）
+    - commit: `9d73397`
+    - [x] 移除 `example/flutter_app/web` 目标资产并在示例层显式下线 web 运行（Issue #13）
+      - commit: `9d73397`
+    - [x] 修复 macOS 焦点丢失导致输入无响应（启动后与点击游戏区域均请求焦点，并补齐点击输入映射）（Issue #13）
+      - commit: `9d73397`
+    - [x] 修复 DOOM 画面仅中间小窗口显示（基于 BMP 维度 + `FittedBox` 放大到可用视口）（Issue #13）
+      - commit: `9d73397`
+    - verify: `dart analyze` (pass)
+    - verify: `dart test test/wasi_test.dart` (pass)
+    - verify: `flutter analyze` in `example/flutter_app` (pass)
+    - verify: `flutter test` in `example/flutter_app` (pass)
