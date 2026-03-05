@@ -1,0 +1,10 @@
+{
+  "wabt": {
+    "version": "1.0.39",
+    "source": "https://github.com/WebAssembly/wabt/releases/tag/1.0.39"
+  },
+  "wasm_tools": {
+    "version": "1.245.1",
+    "source": "https://github.com/bytecodealliance/wasm-tools/releases/tag/v1.245.1"
+  }
+}

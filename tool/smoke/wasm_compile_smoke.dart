@@ -1,0 +1,24 @@
+import 'dart:typed_data';
+
+import '../_native_wasm_bridge.dart' as _native;
+
+typedef WasmInstance = _native.WasmInstance;
+typedef Opcodes = _native.Opcodes;
+
+void main() {
+  final instance = WasmInstance.fromBytes(_moduleBytes);
+  final value = instance.invokeI32('sum', const [20, 22]);
+  if (value != 42) {
+    throw StateError('wasm compile smoke failed: expected 42, got $value');
+  }
+}
+
+final Uint8List _moduleBytes = Uint8List.fromList(<int>[
+  0x00, 0x61, 0x73, 0x6d,
+  0x01, 0x00, 0x00, 0x00,
+  0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f,
+  0x03, 0x02, 0x01, 0x00,
+  0x07, 0x07, 0x01, 0x03, 0x73, 0x75, 0x6d, 0x00, 0x00,
+  0x0a, 0x09, 0x01, 0x07, 0x00, Opcodes.localGet, 0x00,
+  Opcodes.localGet, 0x01, Opcodes.i32Add, Opcodes.end,
+]);
