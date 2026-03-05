@@ -91,6 +91,14 @@ dart run tool/doom_runtime_matrix.dart --mode=instantiate
 
 You can switch to `--mode=start` to exercise `_start` behavior as the preview1 surface grows.
 
+Capture and monitor the first rendered DOOM frame (Node.js runtime):
+
+```bash
+node tool/doom_node_monitor.mjs
+```
+
+This command writes a frame image (`.bmp`) and `report.json` under `.dart_tool/doom_node_monitor/frames/`.
+
 ## Host Function Imports
 
 Provide host callbacks with `WasmImports`:

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 const String _defaultWasmPath = 'test/fixtures/doom/doom.wasm';
@@ -5,9 +6,17 @@ const String _defaultIwadPath = 'test/fixtures/doom/doom1.wad';
 const String _defaultGuestRoot = '/doom';
 const String _defaultTimedemo = 'demo1';
 const String _defaultMode = 'instantiate';
-const String _compiledJsPath = '.dart_tool/doom_runtime_matrix/doom_cli.js';
+const String _defaultNodeFrameDir =
+    '.dart_tool/doom_runtime_matrix/node_frames';
 
-Future<int> main(List<String> args) async {
+Future<void> main(List<String> args) async {
+  final code = await _run(args);
+  if (code != 0) {
+    exitCode = code;
+  }
+}
+
+Future<int> _run(List<String> args) async {
   final options = _parseArgs(args);
   if (options.containsKey('help')) {
     _printUsage();
@@ -25,6 +34,7 @@ Future<int> main(List<String> args) async {
   final iwadPath = options['iwad'] ?? _defaultIwadPath;
   final guestRoot = options['guest-root'] ?? _defaultGuestRoot;
   final timedemo = options['timedemo'] ?? _defaultTimedemo;
+  final nodeFrameDir = options['node-frame-dir'] ?? _defaultNodeFrameDir;
 
   if (!File(wasmPath).existsSync()) {
     stderr.writeln('Missing wasm fixture: $wasmPath');
@@ -35,7 +45,7 @@ Future<int> main(List<String> args) async {
     return 2;
   }
 
-  final cliArgs = <String>[
+  final sharedArgs = <String>[
     '--mode=$mode',
     '--wasm=$wasmPath',
     '--iwad=$iwadPath',
@@ -46,65 +56,81 @@ Future<int> main(List<String> args) async {
   final vmRun = await _runCommand(
     name: 'dart-vm',
     executable: 'dart',
-    arguments: ['run', 'example/doom_cli.dart', ...cliArgs],
+    arguments: <String>['run', 'example/doom_cli.dart', ...sharedArgs],
   );
   _printCommandResult(vmRun);
-  if (!vmRun.success) {
-    stderr.writeln('RUNTIME MATRIX FAIL: dart-vm failed.');
-    return vmRun.exitCode == 0 ? 1 : vmRun.exitCode;
-  }
 
-  await Directory('.dart_tool/doom_runtime_matrix').create(recursive: true);
-  final jsCompile = await _runCommand(
-    name: 'dart2js',
-    executable: 'dart',
-    arguments: [
-      'compile',
-      'js',
-      '-O1',
-      '-o',
-      _compiledJsPath,
-      'example/doom_cli.dart',
-    ],
-  );
-  _printCommandResult(jsCompile);
-  if (!jsCompile.success) {
-    stderr.writeln('RUNTIME MATRIX FAIL: dart2js compile failed.');
-    return jsCompile.exitCode == 0 ? 1 : jsCompile.exitCode;
-  }
-
+  final nodeArgs = <String>[
+    'tool/doom_node_monitor.mjs',
+    ...sharedArgs,
+    '--frame-dir=$nodeFrameDir',
+  ];
   final nodeRun = await _runCommand(
     name: 'node-js',
     executable: 'node',
-    arguments: <String>[_compiledJsPath, ...cliArgs],
+    arguments: nodeArgs,
   );
   _printCommandResult(nodeRun);
+
+  final failures = <String>[];
+  if (!vmRun.success) {
+    failures.add('dart-vm failed with exit=${vmRun.exitCode}');
+  }
   if (!nodeRun.success) {
-    stderr.writeln('RUNTIME MATRIX FAIL: node runtime failed.');
-    return nodeRun.exitCode == 0 ? 1 : nodeRun.exitCode;
+    failures.add('node-js failed with exit=${nodeRun.exitCode}');
   }
 
-  final mismatches = <String>[];
   if (vmRun.exitCode != nodeRun.exitCode) {
-    mismatches.add(
+    failures.add(
       'exit code mismatch: dart-vm=${vmRun.exitCode}, node-js=${nodeRun.exitCode}',
     );
   }
 
-  final vmReportedExit = _extractReportedExitCode(vmRun.stdout);
-  final nodeReportedExit = _extractReportedExitCode(nodeRun.stdout);
-  if (vmReportedExit != null &&
-      nodeReportedExit != null &&
-      vmReportedExit != nodeReportedExit) {
-    mismatches.add(
-      'reported DOOM exit mismatch: dart-vm=$vmReportedExit, node-js=$nodeReportedExit',
-    );
+  final reportFile = File('$nodeFrameDir/report.json');
+  if (!reportFile.existsSync()) {
+    failures.add('node-js missing report: ${reportFile.path}');
+  } else {
+    final report = jsonDecode(await reportFile.readAsString());
+    if (report is! Map<String, dynamic>) {
+      failures.add('node-js report is not JSON object.');
+    } else {
+      final reportMode = '${report['mode'] ?? ''}';
+      final health = '${report['health'] ?? ''}';
+      if (reportMode != mode) {
+        failures.add(
+          'node-js report mode mismatch: expected=$mode actual=$reportMode',
+        );
+      }
+
+      if (mode == 'instantiate') {
+        if (health != 'instantiated') {
+          failures.add(
+            'node-js instantiate health mismatch: expected=instantiated actual=$health',
+          );
+        }
+      } else {
+        if (health != 'ok') {
+          failures.add(
+            'node-js start health mismatch: expected=ok actual=$health',
+          );
+        }
+        final frames =
+            (report['writtenFrames'] as List<dynamic>? ?? const <dynamic>[])
+                .map((dynamic v) => '$v')
+                .toList();
+        if (frames.isEmpty) {
+          failures.add('node-js start has no frame artifacts.');
+        } else if (!File(frames.first).existsSync()) {
+          failures.add('node-js first frame missing: ${frames.first}');
+        }
+      }
+    }
   }
 
-  if (mismatches.isNotEmpty) {
+  if (failures.isNotEmpty) {
     stderr.writeln('RUNTIME MATRIX FAIL');
-    for (final mismatch in mismatches) {
-      stderr.writeln('- $mismatch');
+    for (final failure in failures) {
+      stderr.writeln('- $failure');
     }
     return 1;
   }
@@ -112,14 +138,6 @@ Future<int> main(List<String> args) async {
   stdout.writeln('RUNTIME MATRIX PASS');
   stdout.writeln('mode=$mode wasm=$wasmPath iwad=$iwadPath');
   return 0;
-}
-
-int? _extractReportedExitCode(String stdoutText) {
-  final match = RegExp(r'DOOM exited with code (\d+)').firstMatch(stdoutText);
-  if (match == null) {
-    return null;
-  }
-  return int.tryParse(match.group(1)!);
 }
 
 void _printCommandResult(_CommandResult result) {
@@ -216,11 +234,12 @@ Map<String, String> _parseArgs(List<String> args) {
 void _printUsage() {
   stdout.writeln('Usage: dart run tool/doom_runtime_matrix.dart [options]');
   stdout.writeln('Options:');
-  stdout.writeln('  --mode=instantiate|start   Default: instantiate');
+  stdout.writeln('  --mode=instantiate|start   Default: $_defaultMode');
   stdout.writeln('  --wasm=<path>              Default: $_defaultWasmPath');
   stdout.writeln('  --iwad=<path>              Default: $_defaultIwadPath');
   stdout.writeln('  --guest-root=<path>        Default: $_defaultGuestRoot');
   stdout.writeln('  --timedemo=<name>          Default: $_defaultTimedemo');
+  stdout.writeln('  --node-frame-dir=<path>    Default: $_defaultNodeFrameDir');
 }
 
 final class _CommandResult {
