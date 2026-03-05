@@ -115,3 +115,13 @@
 ## 当前执行焦点
 
 - [x] 所有里程碑 A–I 完成。
+- [-] 持续优化：WASI JS（Node/Web）语义一致性与回归测试补强（Issue #12, #13）
+  - note: in progress
+  - verify: `dart analyze` (pass)
+  - verify: `dart test` (pass)
+  - verify: `dart test --platform node test/wasi_test.dart` (pass)
+  - scope: add preview1 minimal fs io set (`fd_read` / `fd_write` / `fd_close`) on native+web
+  - scope: add preview1 process/env/random set (`args_*` / `environ_*` / `random_get`) on native+web
+  - scope: add preview1 descriptor/time basics (`fd_fdstat_get` / `clock_time_get`) on native+web
+  - scope: add preview1 preopen metadata (`fd_prestat_get` / `fd_prestat_dir_name`) on native+web
+  - scope: keep unsupported syscall imports explicit with `ENOSYS` stubs (`sched_yield` / `path_open` / `poll_oneoff`)

@@ -28,9 +28,11 @@ class WASI implements wasi_iface.WASI {
          stdin: stdin,
          stdout: stdout,
          stderr: stderr,
+         returnOnExit: returnOnExit,
        );
 
   final _JSNodeWasi _host;
+  bool _bindingsFinalized = false;
 
   @override
   wasm.Imports get imports {
@@ -48,8 +50,7 @@ class WASI implements wasi_iface.WASI {
   int start(wasm.Instance instance) {
     final jsInstance = (instance as js_instance.Instance).host;
     // Node.js wasi.start() handles memory binding internally.
-    // With returnOnExit: true, proc_exit is captured and the exit code is
-    // returned rather than calling process.exit() directly.
+    // When returnOnExit is enabled, proc_exit is captured and returned as code.
     final result = _host.start(jsInstance);
     return result.toDartDouble.toInt();
   }
@@ -63,11 +64,28 @@ class WASI implements wasi_iface.WASI {
 
   @override
   void finalizeBindings(wasm.Instance instance, {wasm.Memory? memory}) {
+    if (_bindingsFinalized) {
+      return;
+    }
+
     final jsInstance = (instance as js_instance.Instance).host;
-    if (memory != null) {
-      _host.finalizeBindings(jsInstance, (memory as js_memory.Memory).host);
-    } else {
-      _host.finalizeBindings(jsInstance);
+    try {
+      if (memory case final js_memory.Memory jsMemory) {
+        _host.finalizeBindings(jsInstance, jsMemory.host);
+      } else {
+        // For exported memory wrappers that are not js_memory.Memory, rely on
+        // Node's default instance memory binding behavior.
+        _host.finalizeBindings(jsInstance);
+      }
+      _bindingsFinalized = true;
+    } catch (error) {
+      // Node may report ERR_WASI_ALREADY_STARTED after runtime initialization.
+      // Treat it as an idempotent finalize call for parity with other backends.
+      if (error.toString().contains('ERR_WASI_ALREADY_STARTED')) {
+        _bindingsFinalized = true;
+        return;
+      }
+      rethrow;
     }
   }
 }
@@ -109,18 +127,18 @@ _JSNodeWasi _createNodeWasi({
   required int stdin,
   required int stdout,
   required int stderr,
+  required bool returnOnExit,
 }) {
   if (!_isNodeJs()) {
     throw UnsupportedError(
-      'WASI is only supported in Node.js environments. '
-      'Browser WASI is not yet implemented.',
+      'WASI(node:wasi) is only supported in Node.js environments.',
     );
   }
   final opts = JSObject();
   opts['version'] = 'preview1'.toJS;
-  // returnOnExit: true (Node.js default) causes proc_exit to be captured so
-  // that wasi.start() returns the exit code rather than calling process.exit().
-  opts['returnOnExit'] = true.toJS;
+  // returnOnExit controls whether proc_exit is converted to an exit-code return
+  // value (`true`) or triggers process termination (`false`).
+  opts['returnOnExit'] = returnOnExit.toJS;
   opts['stdin'] = stdin.toJS;
   opts['stdout'] = stdout.toJS;
   opts['stderr'] = stderr.toJS;
