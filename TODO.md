@@ -235,3 +235,16 @@
     - verify: `dart analyze` (pass)
     - verify: `dart test test/wasi_test.dart` (pass)
     - verify: `dart test` (pass)
+  - [x] 持续优化（第 10 轮）：Web WASI 启动热路径优化与首帧时延门禁（Issue #12, #13）
+    - commit: `c8a5df4`
+    - [x] web preview1 引入 memory view 缓存与虚拟文件/目录索引，降低 `fd_*` 与 `path_*` 热路径开销（Issue #12）
+      - commit: `c8a5df4`
+    - [x] Flutter web inline runner 改为同步消息分发，降低首帧/日志事件投递延后（Issue #13）
+      - commit: `c8a5df4`
+    - [x] 新增 DOOM Node 首帧时延回归测试（30s 预算）并执行（Issue #13）
+      - commit: `c8a5df4`
+    - verify: `dart analyze` (pass)
+    - verify: `dart test test/wasi_test.dart` (pass)
+    - verify: `dart test test/doom_first_frame_latency_test.dart` (pass)
+    - verify: `flutter analyze` in `example/flutter_app` (pass)
+    - verify: `flutter test` in `example/flutter_app` (pass)
