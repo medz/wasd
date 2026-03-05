@@ -190,3 +190,9 @@
       - commit: `d571750`
     - verify: `dart analyze` (pass)
     - verify: `dart test` (pass)
+  - [x] 持续优化（第 5 轮）：README 示例行为回归测试化（Issue #13）
+    - commit: `626d8be`
+    - [x] 新增 README quick start/host imports/module metadata/WASI 的可执行示例测试（Issue #13）
+      - commit: `626d8be`
+    - verify: `dart analyze` (pass)
+    - verify: `dart test` (pass)
