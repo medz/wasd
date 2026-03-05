@@ -53,6 +53,7 @@ class WASI implements wasi.WASI {
   final int _stderr;
   final math.Random _random = math.Random();
   final Map<int, _VirtualOpenFile> _openFilesByFd = <int, _VirtualOpenFile>{};
+  final Map<int, String> _openDirectoriesByFd = <int, String>{};
   int _nextVirtualFd = 64;
   wasm.Memory? _boundMemory;
   late final wasm.FunctionImportExportValue _nosysImport =
@@ -78,6 +79,7 @@ class WASI implements wasi.WASI {
       'sched_yield': _schedYieldImport,
       'fd_prestat_get': _fdPrestatGetImport,
       'fd_prestat_dir_name': _fdPrestatDirNameImport,
+      'path_filestat_get': _pathFilestatGetImport,
       'path_open': _pathOpenImport,
       'poll_oneoff': _pollOneoffImport,
     };
@@ -270,7 +272,11 @@ class WASI implements wasi.WASI {
         final iovsLen = _asInt(args[2]);
         final nreadPtr = _asInt(args[3]);
         final opened = _openFilesByFd[fd];
+        final isDirectory = _openDirectoriesByFd.containsKey(fd);
         if (fd != _stdin && opened == null) {
+          return _errnoBadf;
+        }
+        if (isDirectory) {
           return _errnoBadf;
         }
 
@@ -333,7 +339,9 @@ class WASI implements wasi.WASI {
         final fd = _asInt(args[0]);
         final fdstatPtr = _asInt(args[1]);
         final isStdio = fd == _stdin || fd == _stdout || fd == _stderr;
-        final isDir = _preopenGuestPathsByFd.containsKey(fd);
+        final isDir =
+            _preopenGuestPathsByFd.containsKey(fd) ||
+            _openDirectoriesByFd.containsKey(fd);
         final isFile = _openFilesByFd.containsKey(fd);
         if (!isStdio && !isDir && !isFile) {
           return _errnoBadf;
@@ -356,8 +364,10 @@ class WASI implements wasi.WASI {
             ? _filetypeDirectory
             : _filetypeCharacterDevice;
         data.setUint16(fdstatPtr + 2, 0, Endian.little);
-        _setUint64(data, fdstatPtr + 8, 0);
-        _setUint64(data, fdstatPtr + 16, 0);
+        final rightsBase = _allRightsMask;
+        final rightsInheriting = isDir ? _allRightsMask : 0;
+        _setUint64(data, fdstatPtr + 8, rightsBase);
+        _setUint64(data, fdstatPtr + 16, rightsInheriting);
         return _errnoSuccess;
       });
 
@@ -380,16 +390,17 @@ class WASI implements wasi.WASI {
         }
 
         final opened = _openFilesByFd[fd];
+        final openedDirectory = _openDirectoriesByFd[fd];
         final isStdio = fd == _stdin || fd == _stdout || fd == _stderr;
         final isDir = _preopenGuestPathsByFd.containsKey(fd);
-        if (opened == null && !isStdio && !isDir) {
+        if (opened == null && openedDirectory == null && !isStdio && !isDir) {
           return _errnoBadf;
         }
 
         bytes.fillRange(bufPtr, bufPtr + _filestatSize, 0);
         bytes[bufPtr + 16] = opened != null
             ? _filetypeRegularFile
-            : isDir
+            : (isDir || openedDirectory != null)
             ? _filetypeDirectory
             : _filetypeCharacterDevice;
         if (opened != null) {
@@ -408,6 +419,9 @@ class WASI implements wasi.WASI {
           return _errnoSuccess;
         }
         if (_openFilesByFd.remove(fd) != null) {
+          return _errnoSuccess;
+        }
+        if (_openDirectoriesByFd.remove(fd) != null) {
           return _errnoSuccess;
         }
         return _errnoBadf;
@@ -561,16 +575,89 @@ class WASI implements wasi.WASI {
           return _errnoInval;
         }
 
-        final relative = utf8.decode(bytes.sublist(pathPtr, pathPtr + pathLen));
-        final guestPath = _joinGuestPath(preopenPath, relative);
-        final fileBytes = _filesByGuestPath[guestPath];
-        if (fileBytes == null) {
+        final guestPath = _resolveGuestPath(
+          bytes: bytes,
+          preopenPath: preopenPath,
+          pathPtr: pathPtr,
+          pathLen: pathLen,
+        );
+        if (guestPath == null) {
+          return _errnoInval;
+        }
+        final normalizedPath = _normalizeGuestPath(guestPath);
+        final fileBytes = _lookupVirtualFile(_filesByGuestPath, normalizedPath);
+        if (fileBytes != null) {
+          final fd = _nextVirtualFd++;
+          _openFilesByFd[fd] = _VirtualOpenFile(fileBytes);
+          data.setUint32(openedFdPtr, fd, Endian.little);
+          return _errnoSuccess;
+        }
+
+        if (_isVirtualDirectory(
+          _preopenGuestPathsByFd,
+          _filesByGuestPath,
+          normalizedPath,
+        )) {
+          final fd = _nextVirtualFd++;
+          _openDirectoriesByFd[fd] = normalizedPath;
+          data.setUint32(openedFdPtr, fd, Endian.little);
+          return _errnoSuccess;
+        }
+
+        return _errnoNoent;
+      });
+
+  wasm.FunctionImportExportValue get _pathFilestatGetImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 5) {
+          return _errnoInval;
+        }
+        final dirFd = _asInt(args[0]);
+        final pathPtr = _asInt(args[2]);
+        final pathLen = _asInt(args[3]);
+        final filestatPtr = _asInt(args[4]);
+        final preopenPath = _preopenGuestPathsByFd[dirFd];
+        if (preopenPath == null) {
+          return _errnoBadf;
+        }
+
+        final view = _memoryView();
+        if (view == null) {
+          return _errnoInval;
+        }
+        final bytes = view.bytes;
+        final data = view.data;
+        if (filestatPtr < 0 || filestatPtr + _filestatSize > bytes.length) {
+          return _errnoInval;
+        }
+        final guestPath = _resolveGuestPath(
+          bytes: bytes,
+          preopenPath: preopenPath,
+          pathPtr: pathPtr,
+          pathLen: pathLen,
+        );
+        if (guestPath == null) {
+          return _errnoInval;
+        }
+
+        final normalizedPath = _normalizeGuestPath(guestPath);
+        final fileBytes = _lookupVirtualFile(_filesByGuestPath, normalizedPath);
+        final isDirectory = _isVirtualDirectory(
+          _preopenGuestPathsByFd,
+          _filesByGuestPath,
+          normalizedPath,
+        );
+        if (fileBytes == null && !isDirectory) {
           return _errnoNoent;
         }
 
-        final fd = _nextVirtualFd++;
-        _openFilesByFd[fd] = _VirtualOpenFile(fileBytes);
-        data.setUint32(openedFdPtr, fd, Endian.little);
+        bytes.fillRange(filestatPtr, filestatPtr + _filestatSize, 0);
+        bytes[filestatPtr + 16] = isDirectory
+            ? _filetypeDirectory
+            : _filetypeRegularFile;
+        if (fileBytes != null) {
+          _setUint64(data, filestatPtr + 32, fileBytes.length);
+        }
         return _errnoSuccess;
       });
 
@@ -687,6 +774,7 @@ const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
 const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
 const int _filestatSize = 64;
+const int _allRightsMask = 0x1fffffff;
 const List<String> _preview1NosysImports = wasi_common.preview1NosysImports;
 
 bool _isU32InBounds(int ptr, int length) => ptr >= 0 && ptr + 4 <= length;
@@ -715,6 +803,79 @@ int _asInt64(Object? value) {
   return _asInt(value);
 }
 
+String? _resolveGuestPath({
+  required Uint8List bytes,
+  required String preopenPath,
+  required int pathPtr,
+  required int pathLen,
+}) {
+  if (pathPtr < 0 || pathLen < 0 || pathPtr + pathLen > bytes.length) {
+    return null;
+  }
+  final decoded = utf8.decode(
+    bytes.sublist(pathPtr, pathPtr + pathLen),
+    allowMalformed: true,
+  );
+  final nul = decoded.indexOf('\u0000');
+  final normalizedPath = nul == -1 ? decoded : decoded.substring(0, nul);
+  return _joinGuestPath(preopenPath, normalizedPath);
+}
+
+Uint8List? _lookupVirtualFile(
+  Map<String, Uint8List> filesByGuestPath,
+  String guestPath,
+) {
+  final normalized = _normalizeGuestPath(guestPath);
+  final direct = filesByGuestPath[normalized];
+  if (direct != null) {
+    return direct;
+  }
+  final lower = normalized.toLowerCase();
+  for (final entry in filesByGuestPath.entries) {
+    if (entry.key.toLowerCase() == lower) {
+      return entry.value;
+    }
+  }
+  final basename = _basename(normalized);
+  if (basename.isEmpty) {
+    return null;
+  }
+  final basenameLower = basename.toLowerCase();
+  final basenameCompact = _compactPathToken(basenameLower);
+  for (final entry in filesByGuestPath.entries) {
+    final candidateBase = _basename(entry.key);
+    if (candidateBase == basename ||
+        candidateBase.toLowerCase() == basenameLower ||
+        _compactPathToken(candidateBase.toLowerCase()) == basenameCompact) {
+      return entry.value;
+    }
+  }
+  return null;
+}
+
+bool _isVirtualDirectory(
+  Map<int, String> preopenGuestPathsByFd,
+  Map<String, Uint8List> filesByGuestPath,
+  String guestPath,
+) {
+  final normalized = _normalizeGuestPath(guestPath);
+  if (normalized == '/') {
+    return true;
+  }
+  for (final preopen in preopenGuestPathsByFd.values) {
+    if (_normalizeGuestPath(preopen) == normalized) {
+      return true;
+    }
+  }
+  final prefix = '$normalized/';
+  for (final filePath in filesByGuestPath.keys) {
+    if (filePath.startsWith(prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void _setUint64(ByteData data, int offset, int value) {
   final normalized = value.toUnsigned(64);
   final low = normalized & 0xffffffff;
@@ -734,25 +895,49 @@ String _normalizeGuestPath(String path) {
   if (path.isEmpty) {
     return '/';
   }
-  var value = path.startsWith('/') ? path : '/$path';
-  while (value.length > 1 && value.endsWith('/')) {
-    value = value.substring(0, value.length - 1);
+  final sanitized = path.replaceAll('\\', '/');
+  final segments = <String>[];
+  for (final segment in sanitized.split('/')) {
+    if (segment.isEmpty || segment == '.') {
+      continue;
+    }
+    if (segment == '..') {
+      if (segments.isNotEmpty) {
+        segments.removeLast();
+      }
+      continue;
+    }
+    segments.add(segment);
   }
-  return value;
+  if (segments.isEmpty) {
+    return '/';
+  }
+  return '/${segments.join('/')}';
 }
 
 String _joinGuestPath(String preopen, String relative) {
+  if (relative.startsWith('/')) {
+    return _normalizeGuestPath(relative);
+  }
   final base = _normalizeGuestPath(preopen);
-  var rel = relative.trim();
-  while (rel.startsWith('/')) {
-    rel = rel.substring(1);
+  final rel = relative.trim();
+  if (rel.isEmpty || rel == '.') {
+    return base;
   }
-  while (rel.startsWith('./')) {
-    rel = rel.substring(2);
+  if (base == '/') {
+    return _normalizeGuestPath('/$rel');
   }
-  final joined = rel.isEmpty ? base : '$base/$rel';
-  return _normalizeGuestPath(joined);
+  return _normalizeGuestPath('$base/$rel');
 }
+
+String _basename(String path) {
+  final normalized = _normalizeGuestPath(path);
+  final slash = normalized.lastIndexOf('/');
+  return slash == -1 ? normalized : normalized.substring(slash + 1);
+}
+
+String _compactPathToken(String value) =>
+    value.replaceAll(RegExp(r'[^a-z0-9]'), '');
 
 final class _MemoryView {
   _MemoryView(this.bytes, this.data);

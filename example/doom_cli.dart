@@ -12,6 +12,7 @@ const String _defaultMode = 'instantiate';
 const String _defaultTimedemo = 'demo1';
 const String _defaultFrameDir = '.dart_tool/doom_frames';
 const int _defaultWriteFrames = 1;
+const int _defaultStopAfterFrames = 0;
 const int _doomDefaultWidth = 320;
 const int _doomDefaultHeight = 200;
 
@@ -44,6 +45,10 @@ Future<int> _run(List<String> args) async {
     options['write-frames'],
     _defaultWriteFrames,
   );
+  final stopAfterFrames = _parseNonNegativeInt(
+    options['stop-after-frames'],
+    _defaultStopAfterFrames,
+  );
 
   final wasmFile = File(wasmPath);
   final iwadFile = File(iwadPath);
@@ -59,25 +64,32 @@ Future<int> _run(List<String> args) async {
   final iwadName = iwadFile.uri.pathSegments.isEmpty
       ? 'doom1.wad'
       : iwadFile.uri.pathSegments.last;
-  final hostPreopenDir = iwadFile.parent.path;
   final guestIwadPath = '$guestRoot/$iwadName';
+  final iwadBytes = await iwadFile.readAsBytes();
 
   final monitor = _DoomFrameMonitor(
     frameDirPath: frameDirPath,
     maxFramesToWrite: writeFrames,
+    stopAfterFrames: stopAfterFrames,
   );
   final wasmBytes = await wasmFile.readAsBytes();
   final wasiArgs = <String>[
     'doom.wasm',
-    '-iwad',
+    '-file',
     guestIwadPath,
     '-nosound',
     if (timedemoEnabled) ...<String>['-timedemo', timedemo],
   ];
   final wasi = WASI(
     args: wasiArgs,
-    preopens: <String, String>{guestRoot: hostPreopenDir},
-    env: <String, String>{'HOME': guestRoot, 'TERM': 'xterm'},
+    preopens: <String, String>{guestRoot: guestRoot},
+    files: <String, Uint8List>{guestIwadPath: Uint8List.fromList(iwadBytes)},
+    env: <String, String>{
+      'HOME': guestRoot,
+      'TERM': 'xterm',
+      'DOOMWADDIR': guestRoot,
+      'DOOMWADPATH': guestRoot,
+    },
   );
   final imports = <String, ModuleImports>{
     ...wasi.imports,
@@ -107,7 +119,12 @@ Future<int> _run(List<String> args) async {
     return 0;
   }
 
-  final exitCode = wasi.start(result.instance);
+  var exitCode = 0;
+  try {
+    exitCode = wasi.start(result.instance);
+  } on _DoomStopSignal {
+    exitCode = 0;
+  }
   final reportPath = await monitor.writeReport(
     mode: mode,
     wasmPath: wasmPath,
@@ -171,6 +188,11 @@ int _parsePositiveInt(String? raw, int fallback) {
   return parsed <= 0 ? fallback : parsed;
 }
 
+int _parseNonNegativeInt(String? raw, int fallback) {
+  final parsed = raw == null ? fallback : int.tryParse(raw) ?? fallback;
+  return parsed < 0 ? fallback : parsed;
+}
+
 int? _asIntOrNull(Object? value) {
   if (value is int) {
     return value;
@@ -188,10 +210,12 @@ final class _DoomFrameMonitor {
   _DoomFrameMonitor({
     required this.frameDirPath,
     required this.maxFramesToWrite,
+    required this.stopAfterFrames,
   });
 
   final String frameDirPath;
   final int maxFramesToWrite;
+  final int stopAfterFrames;
   final List<String> callbackTrace = <String>[];
   final Set<int> uniqueFrameHashes = <int>{};
   final List<String> writtenFrames = <String>[];
@@ -302,6 +326,9 @@ final class _DoomFrameMonitor {
     final framePath = '$frameDirPath/$frameName';
     _writeBmp24(path: framePath, width: width, height: height, rgb: rgb);
     writtenFrames.add(framePath);
+    if (stopAfterFrames > 0 && frameCount >= stopAfterFrames) {
+      throw const _DoomStopSignal();
+    }
     return 0;
   }
 
@@ -423,6 +450,10 @@ final class _DoomFrameMonitor {
     }
     return value.runtimeType.toString();
   }
+}
+
+final class _DoomStopSignal {
+  const _DoomStopSignal();
 }
 
 void _writeBmp24({

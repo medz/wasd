@@ -1,9 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wasd/wasm.dart';
@@ -54,12 +52,10 @@ class _DoomPageState extends State<_DoomPage> {
   Uint8List? _palette;
   int _windowWidth = _doomDefaultWidth;
   int _windowHeight = _doomDefaultHeight;
-  String? _runtimeHostDir;
 
   @override
   void dispose() {
     _focusNode.dispose();
-    unawaited(_cleanupRuntimeHostDir());
     super.dispose();
   }
 
@@ -98,31 +94,27 @@ class _DoomPageState extends State<_DoomPage> {
         ),
       );
 
-      await _cleanupRuntimeHostDir();
-      final preopens = <String, String>{};
-      final files = <String, Uint8List>{};
-      if (kIsWeb) {
-        preopens[_guestRoot] = _guestRoot;
-        files['$_guestRoot/$_guestIwadName'] = iwadBytes;
-      } else {
-        final runtimeDir = await Directory.systemTemp.createTemp('wasd_doom_');
-        _runtimeHostDir = runtimeDir.path;
-        final iwadPath = '${runtimeDir.path}/$_guestIwadName';
-        await File(iwadPath).writeAsBytes(iwadBytes, flush: true);
-        preopens[_guestRoot] = runtimeDir.path;
-      }
+      final preopens = <String, String>{_guestRoot: _guestRoot};
+      final files = <String, Uint8List>{
+        '$_guestRoot/$_guestIwadName': iwadBytes,
+      };
 
       _appendLog('instantiating module...');
       final wasi = WASI(
         args: <String>[
           'doom.wasm',
-          '-iwad',
+          '-file',
           '$_guestRoot/$_guestIwadName',
           '-nosound',
         ],
         preopens: preopens,
         files: files,
-        env: <String, String>{'HOME': _guestRoot, 'TERM': 'xterm'},
+        env: <String, String>{
+          'HOME': _guestRoot,
+          'TERM': 'xterm',
+          'DOOMWADDIR': _guestRoot,
+          'DOOMWADPATH': _guestRoot,
+        },
       );
 
       final imports = <String, ModuleImports>{
@@ -136,10 +128,7 @@ class _DoomPageState extends State<_DoomPage> {
         },
       };
 
-      final result = await WebAssembly.instantiate(
-        wasmBytes.buffer,
-        imports,
-      );
+      final result = await WebAssembly.instantiate(wasmBytes.buffer, imports);
       final memoryExport = result.instance.exports['memory'];
       if (memoryExport is MemoryImportExportValue) {
         _memory = memoryExport.ref;
@@ -209,7 +198,8 @@ class _DoomPageState extends State<_DoomPage> {
         key == LogicalKeyboardKey.controlRight) {
       return 0x80 + 0x1d;
     }
-    if (key == LogicalKeyboardKey.altLeft || key == LogicalKeyboardKey.altRight) {
+    if (key == LogicalKeyboardKey.altLeft ||
+        key == LogicalKeyboardKey.altRight) {
       return 0x80 + 0x38;
     }
 
@@ -221,7 +211,10 @@ class _DoomPageState extends State<_DoomPage> {
   }
 
   Object? _onOpenWindow(List<Object?> args) {
-    final values = args.map(_asIntOrNull).whereType<int>().toList(growable: false);
+    final values = args
+        .map(_asIntOrNull)
+        .whereType<int>()
+        .toList(growable: false);
     if (values.length >= 2) {
       if (_isLikelyResolution(values[0], values[1])) {
         _windowWidth = values[0];
@@ -311,7 +304,10 @@ class _DoomPageState extends State<_DoomPage> {
   }
 
   (int, int) _resolveResolution(List<Object?> args) {
-    final ints = args.map(_asIntOrNull).whereType<int>().toList(growable: false);
+    final ints = args
+        .map(_asIntOrNull)
+        .whereType<int>()
+        .toList(growable: false);
     for (var i = 0; i + 1 < ints.length; i++) {
       final a = ints[i];
       final b = ints[i + 1];
@@ -326,7 +322,11 @@ class _DoomPageState extends State<_DoomPage> {
     return (_windowWidth, _windowHeight);
   }
 
-  int? _resolveFramePointer(List<Object?> args, int pixelCount, int memoryLength) {
+  int? _resolveFramePointer(
+    List<Object?> args,
+    int pixelCount,
+    int memoryLength,
+  ) {
     for (final arg in args) {
       final value = _asIntOrNull(arg);
       if (value != null && value >= 0 && value + pixelCount <= memoryLength) {
@@ -337,17 +337,6 @@ class _DoomPageState extends State<_DoomPage> {
       return 0;
     }
     return null;
-  }
-
-  Future<void> _cleanupRuntimeHostDir() async {
-    final hostDir = _runtimeHostDir;
-    _runtimeHostDir = null;
-    if (hostDir == null) {
-      return;
-    }
-    try {
-      await Directory(hostDir).delete(recursive: true);
-    } catch (_) {}
   }
 
   void _appendLog(String line) {
@@ -416,7 +405,10 @@ class _DoomPageState extends State<_DoomPage> {
                 child: SingleChildScrollView(
                   child: Text(
                     _logs.join('\n'),
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                    ),
                   ),
                 ),
               ),
