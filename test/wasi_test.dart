@@ -102,19 +102,21 @@ void main() {
       expect(preview1['clock_time_get'], isA<FunctionImportExportValue>());
     });
 
-    test('imports has ENOSYS stub functions', () {
+    test('imports exposes preview1 compatibility functions', () {
       final wasi = WASI();
       final preview1 = wasi.imports['wasi_snapshot_preview1']!;
       expect(preview1.containsKey('sched_yield'), isTrue);
       expect(preview1.containsKey('fd_prestat_get'), isTrue);
       expect(preview1.containsKey('fd_prestat_dir_name'), isTrue);
       expect(preview1.containsKey('path_open'), isTrue);
+      expect(preview1.containsKey('path_filestat_get'), isTrue);
       expect(preview1.containsKey('poll_oneoff'), isTrue);
       expect(preview1.containsKey('path_unlink_file'), isTrue);
       expect(preview1.containsKey('fd_seek'), isTrue);
       expect(preview1.containsKey('proc_raise'), isTrue);
       expect(preview1['sched_yield'], isA<FunctionImportExportValue>());
       expect(preview1['path_open'], isA<FunctionImportExportValue>());
+      expect(preview1['fd_seek'], isA<FunctionImportExportValue>());
     });
 
     group('with instantiated module', () {
@@ -148,50 +150,44 @@ void main() {
         'start rethrows on proc_exit when returnOnExit is false',
         () {
           final nonReturningWasi = WASI(returnOnExit: false);
-          expect(
-            () => nonReturningWasi.start(instance),
-            throwsA(isA<Error>()),
-          );
+          expect(() => nonReturningWasi.start(instance), throwsA(isA<Error>()));
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
+        skip: const bool.fromEnvironment('dart.library.js_interop')
             ? 'Skipping on JS runtimes; proc_exit may terminate process.'
             : false,
       );
 
-      test(
-        'fd_write writes bytes to stdout and returns number of bytes',
-        () {
-          final preview1 = wasi.imports['wasi_snapshot_preview1']!;
-          final fdWrite = preview1['fd_write'];
-          expect(fdWrite, isA<FunctionImportExportValue>());
+      test('fd_write writes bytes to stdout and returns number of bytes', () {
+        final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+        final fdWrite = preview1['fd_write'];
+        expect(fdWrite, isA<FunctionImportExportValue>());
 
-          final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
-          wasi.finalizeBindings(instance, memory: memory);
+        final memory =
+            (instance.exports['memory'] as MemoryImportExportValue).ref;
+        wasi.finalizeBindings(instance, memory: memory);
 
-          final bytes = Uint8List.view(memory.buffer);
-          final data = ByteData.view(memory.buffer);
-          const text = 'hello wasi';
-          final textBytes = utf8.encode(text);
-          const iovPtr = 128;
-          const bufferPtr = 256;
-          const writtenPtr = 1024;
+        final bytes = Uint8List.view(memory.buffer);
+        final data = ByteData.view(memory.buffer);
+        const text = 'hello wasi';
+        final textBytes = utf8.encode(text);
+        const iovPtr = 128;
+        const bufferPtr = 256;
+        const writtenPtr = 1024;
 
-          bytes.setAll(bufferPtr, textBytes);
-          data.setUint32(iovPtr, bufferPtr, Endian.little);
-          data.setUint32(iovPtr + 4, textBytes.length, Endian.little);
+        bytes.setAll(bufferPtr, textBytes);
+        data.setUint32(iovPtr, bufferPtr, Endian.little);
+        data.setUint32(iovPtr + 4, textBytes.length, Endian.little);
 
-          final result = (fdWrite as FunctionImportExportValue).ref([
-            1,
-            iovPtr,
-            1,
-            writtenPtr,
-          ]);
-          expect(result, 0);
-          final reported = data.getUint32(writtenPtr, Endian.little);
-          expect(reported, textBytes.length);
-        },
-      );
+        final result = (fdWrite as FunctionImportExportValue).ref([
+          1,
+          iovPtr,
+          1,
+          writtenPtr,
+        ]);
+        expect(result, 0);
+        final reported = data.getUint32(writtenPtr, Endian.little);
+        expect(reported, textBytes.length);
+      });
 
       test(
         'args_sizes_get and args_get write argv pointers and data',
@@ -200,7 +196,8 @@ void main() {
           final argsSizesGet =
               preview1['args_sizes_get'] as FunctionImportExportValue;
           final argsGet = preview1['args_get'] as FunctionImportExportValue;
-          final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
           wasi.finalizeBindings(instance, memory: memory);
 
           final bytes = Uint8List.view(memory.buffer);
@@ -223,10 +220,9 @@ void main() {
           );
           expect(bytes[firstArgPtr + 8], 0);
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; args behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; args behavior is delegated to node:wasi.'
+            : false,
       );
 
       test(
@@ -234,7 +230,8 @@ void main() {
         () {
           final preview1 = wasi.imports['wasi_snapshot_preview1']!;
           final argsGet = preview1['args_get'] as FunctionImportExportValue;
-          final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
           wasi.finalizeBindings(instance, memory: memory);
 
           final bytes = Uint8List.view(memory.buffer);
@@ -244,10 +241,9 @@ void main() {
           final result = argsGet.ref([argvPtr, argvBufPtr]);
           expect(result, 28);
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; args behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; args behavior is delegated to node:wasi.'
+            : false,
       );
 
       test(
@@ -256,8 +252,10 @@ void main() {
           final preview1 = wasi.imports['wasi_snapshot_preview1']!;
           final environSizesGet =
               preview1['environ_sizes_get'] as FunctionImportExportValue;
-          final environGet = preview1['environ_get'] as FunctionImportExportValue;
-          final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+          final environGet =
+              preview1['environ_get'] as FunctionImportExportValue;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
           wasi.finalizeBindings(instance, memory: memory);
 
           final bytes = Uint8List.view(memory.buffer);
@@ -280,10 +278,9 @@ void main() {
           );
           expect(bytes[firstEnvPtr + 7], 0);
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; environ behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; environ behavior is delegated to node:wasi.'
+            : false,
       );
 
       test(
@@ -291,7 +288,8 @@ void main() {
         () {
           final preview1 = wasi.imports['wasi_snapshot_preview1']!;
           final randomGet = preview1['random_get'] as FunctionImportExportValue;
-          final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
           wasi.finalizeBindings(instance, memory: memory);
 
           final bytes = Uint8List.view(memory.buffer);
@@ -303,10 +301,9 @@ void main() {
           final after = bytes.sublist(randomPtr, randomPtr + randomLen);
           expect(after.any((value) => value != 0xaa), isTrue);
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; random behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; random behavior is delegated to node:wasi.'
+            : false,
       );
 
       test(
@@ -317,10 +314,9 @@ void main() {
           final result = fdWrite.ref([99, 0, 0, 0]);
           expect(result, 8);
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; fd_write behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; fd_write behavior is delegated to node:wasi.'
+            : false,
       );
 
       test(
@@ -328,7 +324,8 @@ void main() {
         () {
           final preview1 = wasi.imports['wasi_snapshot_preview1']!;
           final fdWrite = preview1['fd_write'] as FunctionImportExportValue;
-          final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
           wasi.finalizeBindings(instance, memory: memory);
 
           final bytes = Uint8List.view(memory.buffer);
@@ -340,10 +337,9 @@ void main() {
           final result = fdWrite.ref([1, iovPtr, 1, 0]);
           expect(result, 28);
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; fd_write behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; fd_write behavior is delegated to node:wasi.'
+            : false,
       );
 
       test(
@@ -353,7 +349,8 @@ void main() {
           final fdRead = preview1['fd_read'];
           expect(fdRead, isA<FunctionImportExportValue>());
 
-          final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
           wasi.finalizeBindings(instance, memory: memory);
 
           final data = ByteData.view(memory.buffer);
@@ -374,10 +371,9 @@ void main() {
           expect(result, 0);
           expect(data.getUint32(nreadPtr, Endian.little), 0);
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; fd_read behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; fd_read behavior is delegated to node:wasi.'
+            : false,
       );
 
       test(
@@ -388,10 +384,9 @@ void main() {
           final result = fdRead.ref([99, 0, 0, 0]);
           expect(result, 8);
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; fd_read behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; fd_read behavior is delegated to node:wasi.'
+            : false,
       );
 
       test(
@@ -404,10 +399,9 @@ void main() {
           final result = (fdClose as FunctionImportExportValue).ref([42]);
           expect(result, 8);
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; fd_close behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; fd_close behavior is delegated to node:wasi.'
+            : false,
       );
 
       test(
@@ -416,7 +410,8 @@ void main() {
           final preview1 = wasi.imports['wasi_snapshot_preview1']!;
           final fdFdstatGet =
               preview1['fd_fdstat_get'] as FunctionImportExportValue;
-          final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
           wasi.finalizeBindings(instance, memory: memory);
 
           final bytes = Uint8List.view(memory.buffer);
@@ -427,10 +422,9 @@ void main() {
           expect(result, 0);
           expect(bytes[fdstatPtr], 2);
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; fd_fdstat_get behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; fd_fdstat_get behavior is delegated to node:wasi.'
+            : false,
       );
 
       test(
@@ -442,10 +436,9 @@ void main() {
           final result = fdFdstatGet.ref([42, 0]);
           expect(result, 8);
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; fd_fdstat_get behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; fd_fdstat_get behavior is delegated to node:wasi.'
+            : false,
       );
 
       test(
@@ -454,7 +447,8 @@ void main() {
           final preview1 = wasi.imports['wasi_snapshot_preview1']!;
           final clockTimeGet =
               preview1['clock_time_get'] as FunctionImportExportValue;
-          final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
           wasi.finalizeBindings(instance, memory: memory);
 
           final data = ByteData.view(memory.buffer);
@@ -465,10 +459,9 @@ void main() {
           expect(result, 0);
           expect(data.getUint64(timePtr, Endian.little), greaterThan(0));
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; clock_time_get behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; clock_time_get behavior is delegated to node:wasi.'
+            : false,
       );
 
       test(
@@ -477,17 +470,17 @@ void main() {
           final preview1 = wasi.imports['wasi_snapshot_preview1']!;
           final clockTimeGet =
               preview1['clock_time_get'] as FunctionImportExportValue;
-          final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
           wasi.finalizeBindings(instance, memory: memory);
 
           final bytes = Uint8List.view(memory.buffer);
           final result = clockTimeGet.ref([0, 0, bytes.length - 4]);
           expect(result, 28);
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; clock_time_get behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; clock_time_get behavior is delegated to node:wasi.'
+            : false,
       );
 
       test('finalizeBindings accepts explicit memory and reuses it later', () {
@@ -497,17 +490,16 @@ void main() {
 
         final memoryAwareWasi = WASI();
         memoryAwareWasi.finalizeBindings(instance, memory: memory);
-        expect(() => memoryAwareWasi.finalizeBindings(instance), returnsNormally);
+        expect(
+          () => memoryAwareWasi.finalizeBindings(instance),
+          returnsNormally,
+        );
       });
 
       test(
         'custom stdio descriptors are honored by fd_read/fd_write/fd_close',
         () async {
-          final customWasi = WASI(
-            stdin: 10,
-            stdout: 11,
-            stderr: 12,
-          );
+          final customWasi = WASI(stdin: 10, stdout: 11, stderr: 12);
           final customResult = await WebAssembly.instantiate(
             _wasiBytes.buffer,
             customWasi.imports,
@@ -539,10 +531,9 @@ void main() {
           expect(fdClose.ref([11]), 0);
           expect(fdClose.ref([12]), 0);
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; descriptor behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; descriptor behavior is delegated to node:wasi.'
+            : false,
       );
 
       test(
@@ -551,23 +542,76 @@ void main() {
           final preview1 = wasi.imports['wasi_snapshot_preview1']!;
           final schedYield =
               preview1['sched_yield'] as FunctionImportExportValue;
-          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
           final pathUnlinkFile =
               preview1['path_unlink_file'] as FunctionImportExportValue;
-          final fdSeek = preview1['fd_seek'] as FunctionImportExportValue;
+          final pollOneoff =
+              preview1['poll_oneoff'] as FunctionImportExportValue;
+          final procRaise = preview1['proc_raise'] as FunctionImportExportValue;
 
           expect(schedYield.ref(const []), 52);
-          expect(
-            pathOpen.ref([3, 0, 0, 0, 0, 0, 0, 0, 0]),
-            52,
-          );
           expect(pathUnlinkFile.ref([3, 0, 0]), 52);
-          expect(fdSeek.ref([1, 0, 0, 0]), 52);
+          expect(pollOneoff.ref([0, 0, 0, 0]), 52);
+          expect(procRaise.ref([15]), 52);
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; unsupported syscall behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; unsupported syscall behavior is delegated to node:wasi.'
+            : false,
+      );
+
+      test(
+        'path_open opens virtual file and fd_seek updates file offset',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/doom1.wad': Uint8List.fromList([1, 2, 3, 4]),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdSeek = preview1['fd_seek'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final relativePath = utf8.encode('doom1.wad');
+          const pathPtr = 2000;
+          const openedFdPtr = 2020;
+          const newOffsetPtr = 2032;
+
+          bytes.setAll(pathPtr, relativePath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              relativePath.length,
+              0,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final openedFd = data.getUint32(openedFdPtr, Endian.little);
+          expect(openedFd, greaterThanOrEqualTo(64));
+
+          expect(fdSeek.ref([openedFd, 2, 0, newOffsetPtr]), 0);
+          expect(data.getUint32(newOffsetPtr, Endian.little), 2);
+          expect(data.getUint32(newOffsetPtr + 4, Endian.little), 0);
+          expect(fdSeek.ref([1, 0, 0, newOffsetPtr]), 8);
+        },
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; path_open/fd_seek behavior is delegated to node:wasi.'
+            : false,
       );
 
       test(
@@ -578,7 +622,8 @@ void main() {
               preview1['fd_prestat_get'] as FunctionImportExportValue;
           final fdPrestatDirName =
               preview1['fd_prestat_dir_name'] as FunctionImportExportValue;
-          final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
           wasi.finalizeBindings(instance, memory: memory);
 
           final bytes = Uint8List.view(memory.buffer);
@@ -592,12 +637,14 @@ void main() {
           expect(pathLen, 8);
 
           expect(fdPrestatDirName.ref([3, pathPtr, pathLen]), 0);
-          expect(utf8.decode(bytes.sublist(pathPtr, pathPtr + pathLen)), '/sandbox');
+          expect(
+            utf8.decode(bytes.sublist(pathPtr, pathPtr + pathLen)),
+            '/sandbox',
+          );
         },
-        skip:
-            const bool.fromEnvironment('dart.library.js_interop')
-                ? 'Skipping on JS runtimes; prestat behavior is delegated to node:wasi.'
-                : false,
+        skip: const bool.fromEnvironment('dart.library.js_interop')
+            ? 'Skipping on JS runtimes; prestat behavior is delegated to node:wasi.'
+            : false,
       );
     });
   });

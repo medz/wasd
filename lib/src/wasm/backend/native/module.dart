@@ -14,7 +14,7 @@ class Module implements wasm.Module {
     try {
       return native_ir.WasmModule.decode(bytes.asUint8List());
     } on FormatException catch (e) {
-      throw CompileError(e.message ?? e.toString(), cause: e);
+      throw CompileError(e.message, cause: e);
     } on UnsupportedError catch (e) {
       throw CompileError(e.message ?? e.toString(), cause: e);
     } on ArgumentError catch (e) {
@@ -41,8 +41,8 @@ List<ByteBuffer> customSections(wasm.Module module, String name) =>
     _parseCustomSections((module as Module)._bytes.asUint8List(), name);
 
 wasm.ImportExportKind _toImportKind(int kind) => switch (kind) {
-  native_ir.WasmImportKind.function || native_ir.WasmImportKind.exactFunction =>
-    wasm.ImportExportKind.function,
+  native_ir.WasmImportKind.function ||
+  native_ir.WasmImportKind.exactFunction => wasm.ImportExportKind.function,
   native_ir.WasmImportKind.table => wasm.ImportExportKind.table,
   native_ir.WasmImportKind.memory => wasm.ImportExportKind.memory,
   native_ir.WasmImportKind.global => wasm.ImportExportKind.global,
