@@ -120,8 +120,8 @@
   - verify: `dart analyze` (pass)
   - verify: `dart test` (pass)
   - verify: `dart test --platform node test/wasi_test.dart` (pass)
-  - [-] CLI DOOM 基线与 VM/JS runtime 一致性矩阵（Issue #12, #13）
-    - note: in progress
+  - [x] CLI DOOM 基线与 VM/JS runtime 一致性矩阵（Issue #12, #13）
+    - commit: `5146817`
   - scope: add preview1 minimal fs io set (`fd_read` / `fd_write` / `fd_close`) on native+web
   - scope: add preview1 process/env/random set (`args_*` / `environ_*` / `random_get`) on native+web
   - scope: add preview1 descriptor/time basics (`fd_fdstat_get` / `clock_time_get`) on native+web
