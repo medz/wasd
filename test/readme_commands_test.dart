@@ -52,4 +52,26 @@ void main() {
       );
     }
   });
+
+  test('README does not reference removed pre-0.2 API symbols', () {
+    final readme = File('README.md').readAsStringSync();
+    const removedSymbols = <String>[
+      'WasmInstance',
+      'WasmImports',
+      'WasiPreview1',
+      'WasiRunner',
+      'WasmComponentInstance',
+      'WasmCanonicalAbi',
+      'WasmFeatureSet',
+      'WasmFeatureProfile',
+    ];
+
+    for (final symbol in removedSymbols) {
+      expect(
+        readme.contains(symbol),
+        isFalse,
+        reason: 'README still references removed API symbol: $symbol',
+      );
+    }
+  });
 }
