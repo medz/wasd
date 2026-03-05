@@ -94,16 +94,12 @@ JSAny? _encodeImport(wasm.ImportValue value) => switch (value) {
   wasm.TagImportExportValue(:final ref) => (ref as js_tag.Tag).host,
 };
 
-wasm.WasmFunction _wrapFunction(JSFunction jsFunc) =>
-    (List<Object?> args) {
-      final jsArgs = <JSAny?>[
-        null,
-        for (final arg in args) arg.jsify(),
-      ];
-      return (jsFunc as JSObject)
-          .callMethodVarArgs<JSAny?>('call'.toJS, jsArgs)
-          ?.dartify();
-    };
+wasm.WasmFunction _wrapFunction(JSFunction jsFunc) => (List<Object?> args) {
+  final jsArgs = <JSAny?>[null, for (final arg in args) arg.jsify()];
+  return (jsFunc as JSObject)
+      .callMethodVarArgs<JSAny?>('call'.toJS, jsArgs)
+      ?.dartify();
+};
 
 /// Converts a [wasm.WasmFunction] host function to a [JSFunction] for use as
 /// a WebAssembly import.
@@ -137,13 +133,28 @@ JSFunction _hostFuncToJS(wasm.WasmFunction hostFn) {
   ]) {
     final all = [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p];
     final last = all.lastIndexWhere((x) => x != null);
-    final args =
-        all.sublist(0, last + 1).map((x) => x?.dartify()).toList();
+    final args = all
+        .sublist(0, last + 1)
+        .map(_decodeHostArg)
+        .toList(growable: false);
     return hostFn(args)?.jsify();
   }
 
   return bridge.toJS;
 }
+
+Object? _decodeHostArg(JSAny? value) {
+  if (value == null) {
+    return null;
+  }
+  if (value.typeofEquals('bigint')) {
+    return BigInt.parse(_jsString(value).toDart);
+  }
+  return value.dartify();
+}
+
+@JS('String')
+external JSString _jsString(JSAny? value);
 
 class _ExportGlobal implements wasm.Global<ExternRef, Object?> {
   _ExportGlobal(this._host);

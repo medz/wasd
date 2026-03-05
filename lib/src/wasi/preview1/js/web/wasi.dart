@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:js_interop';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -872,6 +873,10 @@ int _asInt(Object? value) {
   if (value is BigInt) {
     return value.toInt();
   }
+  final jsNumeric = _decodeJsNumeric(value);
+  if (jsNumeric != null) {
+    return jsNumeric;
+  }
   throw ArgumentError.value(
     value,
     'args',
@@ -883,8 +888,44 @@ int _asInt64(Object? value) {
   if (value is BigInt) {
     return value.toInt();
   }
+  final jsNumeric = _decodeJsNumeric(value);
+  if (jsNumeric != null) {
+    return jsNumeric;
+  }
   return _asInt(value);
 }
+
+int? _decodeJsNumeric(Object? value) {
+  // ignore: invalid_runtime_check_with_js_interop_types
+  if (value is JSAny) {
+    if (value.typeofEquals('bigint') ||
+        value.typeofEquals('number') ||
+        value.typeofEquals('string')) {
+      final parsed = _tryParseJsInt(_jsString(value).toDart);
+      if (parsed != null) {
+        return parsed;
+      }
+    }
+  }
+  return _tryParseJsInt(value?.toString());
+}
+
+int? _tryParseJsInt(String? raw) {
+  if (raw == null) {
+    return null;
+  }
+  final normalized = raw.trim();
+  if (normalized.isEmpty) {
+    return null;
+  }
+  final candidate = normalized.endsWith('n')
+      ? normalized.substring(0, normalized.length - 1)
+      : normalized;
+  return int.tryParse(candidate);
+}
+
+@JS('String')
+external JSString _jsString(JSAny? value);
 
 String? _resolveGuestPath({
   required Uint8List bytes,

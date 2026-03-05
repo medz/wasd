@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:isolate';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -17,11 +16,11 @@ const int _doomDefaultWidth = 320;
 const int _doomDefaultHeight = 200;
 
 void main() {
-  runApp(const _DoomApp());
+  runApp(const DoomApp());
 }
 
-class _DoomApp extends StatelessWidget {
-  const _DoomApp();
+class DoomApp extends StatelessWidget {
+  const DoomApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -42,7 +41,9 @@ class _DoomPage extends StatefulWidget {
 }
 
 class _DoomPageState extends State<_DoomPage> {
-  static const bool _autoStart = bool.fromEnvironment('DOOM_AUTO_START');
+  static const bool _autoStart =
+      bool.fromEnvironment('DOOM_AUTO_START', defaultValue: true) &&
+      !bool.fromEnvironment('FLUTTER_TEST');
   final FocusNode _focusNode = FocusNode();
   final List<String> _logs = <String>[];
   final Queue<_DoomInputEvent> _queuedEvents = Queue<_DoomInputEvent>();
@@ -92,6 +93,8 @@ class _DoomPageState extends State<_DoomPage> {
         ..clear()
         ..add('loading DOOM assets...');
     });
+    _queuedEvents.clear();
+    _focusNode.requestFocus();
 
     try {
       final wasmData = await rootBundle.load(_doomWasmAsset);
@@ -147,6 +150,7 @@ class _DoomPageState extends State<_DoomPage> {
           'ZwareDoomNextEvent': ImportExportKind.function(_onNextEvent),
         },
       };
+      _enqueueBootstrapInputQueue(_queuedEvents);
 
       final result = await WebAssembly.instantiate(wasmBytes.buffer, imports);
       final memoryExport = result.instance.exports['memory'];
@@ -494,7 +498,7 @@ class _DoomPageState extends State<_DoomPage> {
               color: Colors.black,
               alignment: Alignment.center,
               child: frame == null
-                  ? const Text('Press Play to start DOOM')
+                  ? Text(_running ? 'Booting DOOM...' : 'DOOM is not running')
                   : Image.memory(
                       frame,
                       gaplessPlayback: true,
@@ -756,16 +760,7 @@ final class _DoomRunnerWorker {
   }
 
   void _enqueueBootstrapInput() {
-    const int enter = 13;
-    const int space = 32;
-    _queuedEvents.addAll(const <_DoomInputEvent>[
-      _DoomInputEvent(type: 0, code: enter),
-      _DoomInputEvent(type: 1, code: enter),
-      _DoomInputEvent(type: 0, code: space),
-      _DoomInputEvent(type: 1, code: space),
-      _DoomInputEvent(type: 0, code: enter),
-      _DoomInputEvent(type: 1, code: enter),
-    ]);
+    _enqueueBootstrapInputQueue(_queuedEvents);
   }
 }
 
@@ -786,11 +781,27 @@ final class _DoomInputEvent {
   final int code;
 }
 
+void _enqueueBootstrapInputQueue(Queue<_DoomInputEvent> queue) {
+  const int enter = 13;
+  const int space = 32;
+  queue.addAll(const <_DoomInputEvent>[
+    _DoomInputEvent(type: 0, code: enter),
+    _DoomInputEvent(type: 1, code: enter),
+    _DoomInputEvent(type: 0, code: space),
+    _DoomInputEvent(type: 1, code: space),
+    _DoomInputEvent(type: 0, code: enter),
+    _DoomInputEvent(type: 1, code: enter),
+  ]);
+}
+
 int? _asIntOrNull(Object? value) {
   if (value is int) {
     return value;
   }
   if (value is num) {
+    return value.toInt();
+  }
+  if (value is BigInt) {
     return value.toInt();
   }
   return null;
@@ -904,7 +915,7 @@ bool _isLikelySixBitPalette(Uint8List bytes, int stride) {
 }
 
 int _paletteExpand6To8(int value) {
-  final clamped = value.clamp(0, 63) as int;
+  final clamped = value.clamp(0, 63);
   return (clamped << 2) | (clamped >> 4);
 }
 

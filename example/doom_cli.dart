@@ -200,6 +200,9 @@ int? _asIntOrNull(Object? value) {
   if (value is num) {
     return value.toInt();
   }
+  if (value is BigInt) {
+    return value.toInt();
+  }
   return null;
 }
 
