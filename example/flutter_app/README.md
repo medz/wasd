@@ -1,17 +1,14 @@
-# wasd_flutter_example
+# DOOM Flutter Example
 
-A new Flutter project.
+This example targets desktop/mobile Flutter hosts only.
 
-## Getting Started
+## Run (macOS)
 
-This project is a starting point for a Flutter application.
+```sh
+flutter run -d macos
+```
 
-A few resources to get you started if this is your first Flutter project:
+## Target policy
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- Web target is intentionally removed for this example.
+- If you force-run on web from another scaffold, the app will show an explicit unsupported message.

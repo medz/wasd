@@ -15,6 +15,8 @@ const String _guestIwadName = 'doom1.wad';
 const int _doomDefaultWidth = 320;
 const int _doomDefaultHeight = 200;
 const int _runnerStoppedExitCode = -1;
+const String _webTargetRemovedMessage =
+    'DOOM web target has been removed. Run this example on desktop.';
 
 void main() {
   runApp(const DoomApp());
@@ -57,6 +59,7 @@ class _DoomPageState extends State<_DoomPage> {
   @override
   void initState() {
     super.initState();
+    _requestGameFocus();
     if (_autoStart) {
       scheduleMicrotask(_startGame);
     }
@@ -74,6 +77,17 @@ class _DoomPageState extends State<_DoomPage> {
       return;
     }
 
+    if (kIsWeb) {
+      setState(() {
+        _running = false;
+        _error = _webTargetRemovedMessage;
+        _logs
+          ..clear()
+          ..add(_webTargetRemovedMessage);
+      });
+      return;
+    }
+
     setState(() {
       _running = true;
       _error = null;
@@ -82,7 +96,7 @@ class _DoomPageState extends State<_DoomPage> {
         ..clear()
         ..add('loading DOOM assets...');
     });
-    _focusNode.requestFocus();
+    _requestGameFocus();
 
     try {
       final wasmData = await rootBundle.load(_doomWasmAsset);
@@ -206,6 +220,27 @@ class _DoomPageState extends State<_DoomPage> {
     _runner?.sendKey(event);
   }
 
+  void _requestGameFocus() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _focusNode.requestFocus();
+      }
+    });
+  }
+
+  void _onTapGameSurface(TapDownDetails _) {
+    _requestGameFocus();
+    if (_running) {
+      _dispatchInputEvent(const _DoomInputEvent(type: 0, code: 32));
+    }
+  }
+
+  void _onTapGameSurfaceUp(TapUpDetails _) {
+    if (_running) {
+      _dispatchInputEvent(const _DoomInputEvent(type: 1, code: 32));
+    }
+  }
+
   int? _mapDoomKey(LogicalKeyboardKey key) {
     if (key == LogicalKeyboardKey.arrowRight) return 0xae;
     if (key == LogicalKeyboardKey.arrowLeft) return 0xac;
@@ -249,42 +284,60 @@ class _DoomPageState extends State<_DoomPage> {
   @override
   Widget build(BuildContext context) {
     final frame = _frameBytes;
+    final frameSize = _decodeBmpDimensions(frame);
+    final frameWidth = (frameSize?.$1 ?? _doomDefaultWidth).toDouble();
+    final frameHeight = (frameSize?.$2 ?? _doomDefaultHeight).toDouble();
     return Scaffold(
-      body: KeyboardListener(
-        focusNode: _focusNode,
-        autofocus: true,
-        onKeyEvent: _sendKeyEvent,
-        child: Stack(
-          fit: StackFit.expand,
-          children: <Widget>[
-            Container(
-              color: Colors.black,
-              alignment: Alignment.center,
-              child: frame == null
-                  ? Text(_running ? 'Booting DOOM...' : 'DOOM is not running')
-                  : Image.memory(
-                      frame,
-                      gaplessPlayback: true,
-                      filterQuality: FilterQuality.none,
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: _onTapGameSurface,
+        onTapUp: _onTapGameSurfaceUp,
+        child: KeyboardListener(
+          focusNode: _focusNode,
+          autofocus: true,
+          onKeyEvent: _sendKeyEvent,
+          child: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              Container(
+                color: Colors.black,
+                alignment: Alignment.center,
+                child: frame == null
+                    ? Text(_running ? 'Booting DOOM...' : 'DOOM is not running')
+                    : SizedBox.expand(
+                        child: FittedBox(
+                          fit: BoxFit.contain,
+                          child: SizedBox(
+                            width: frameWidth,
+                            height: frameHeight,
+                            child: Image.memory(
+                              frame,
+                              gaplessPlayback: true,
+                              filterQuality: FilterQuality.none,
+                              fit: BoxFit.fill,
+                            ),
+                          ),
+                        ),
+                      ),
+              ),
+              if (_error != null)
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Container(
+                    margin: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
                     ),
-            ),
-            if (_error != null)
-              Align(
-                alignment: Alignment.bottomCenter,
-                child: Container(
-                  margin: const EdgeInsets.all(12),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 8,
-                  ),
-                  color: const Color(0xCC330000),
-                  child: Text(
-                    _error!,
-                    style: const TextStyle(color: Colors.redAccent),
+                    color: const Color(0xCC330000),
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(color: Colors.redAccent),
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -299,10 +352,7 @@ abstract interface class _DoomRunnerClient {
     required Uint8List iwadBytes,
   }) {
     if (kIsWeb) {
-      return _InlineDoomRunnerClient(
-        wasmBytes: wasmBytes,
-        iwadBytes: iwadBytes,
-      );
+      return _UnsupportedDoomRunnerClient();
     }
     return _IsolateDoomRunnerClient(wasmBytes: wasmBytes, iwadBytes: iwadBytes);
   }
@@ -316,20 +366,9 @@ abstract interface class _DoomRunnerClient {
   Future<void> stop();
 }
 
-final class _InlineDoomRunnerClient implements _DoomRunnerClient {
-  _InlineDoomRunnerClient({
-    required Uint8List wasmBytes,
-    required Uint8List iwadBytes,
-  }) : _wasmBytes = wasmBytes,
-       _iwadBytes = iwadBytes;
-
-  final Uint8List _wasmBytes;
-  final Uint8List _iwadBytes;
+final class _UnsupportedDoomRunnerClient implements _DoomRunnerClient {
   final StreamController<_DoomRunnerMessage> _messagesController =
       StreamController<_DoomRunnerMessage>.broadcast(sync: true);
-
-  _DoomRunnerWorker? _worker;
-  Future<void>? _runFuture;
   bool _stopped = false;
 
   @override
@@ -337,29 +376,11 @@ final class _InlineDoomRunnerClient implements _DoomRunnerClient {
 
   @override
   Future<void> start() async {
-    if (_stopped || _worker != null) {
-      return;
-    }
-    final worker = _DoomRunnerWorker(
-      wasmBytes: _wasmBytes,
-      iwadBytes: _iwadBytes,
-      emit: _emit,
-    );
-    _worker = worker;
-    final runFuture =
-        Future<void>(() async {
-          await worker.run();
-        }).whenComplete(() {
-          _worker = null;
-        });
-    _runFuture = runFuture;
-    unawaited(runFuture);
+    throw UnsupportedError(_webTargetRemovedMessage);
   }
 
   @override
-  void sendKey(_DoomInputEvent event) {
-    _worker?.enqueueInput(event);
-  }
+  void sendKey(_DoomInputEvent event) {}
 
   @override
   Future<void> stop() async {
@@ -367,19 +388,7 @@ final class _InlineDoomRunnerClient implements _DoomRunnerClient {
       return;
     }
     _stopped = true;
-    _worker?.requestStop();
-    final runFuture = _runFuture;
-    _runFuture = null;
-    if (runFuture != null) {
-      await runFuture;
-    }
     await _messagesController.close();
-  }
-
-  void _emit(_DoomRunnerMessage message) {
-    if (!_messagesController.isClosed) {
-      _messagesController.add(message);
-    }
   }
 }
 
@@ -935,6 +944,22 @@ bool _isLikelySixBitPalette(Uint8List bytes, int stride) {
 int _paletteExpand6To8(int value) {
   final clamped = value.clamp(0, 63);
   return (clamped << 2) | (clamped >> 4);
+}
+
+(int, int)? _decodeBmpDimensions(Uint8List? bmp) {
+  if (bmp == null || bmp.length < 26) {
+    return null;
+  }
+  if (bmp[0] != 0x42 || bmp[1] != 0x4d) {
+    return null;
+  }
+  final view = ByteData.sublistView(bmp);
+  final width = view.getInt32(18, Endian.little);
+  final height = view.getInt32(22, Endian.little).abs();
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+  return (width, height);
 }
 
 final class _PaletteData {
