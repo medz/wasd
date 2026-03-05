@@ -9,8 +9,10 @@ import 'package:flutter/services.dart';
 import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
 
-const String _defaultWasmPath = 'test/fixtures/doom/doom.wasm';
-const String _defaultIwadPath = 'test/fixtures/doom/doom1.wad';
+const String _doomWasmAsset = 'assets/doom/doom.wasm';
+const String _doomIwadAsset = 'assets/doom/doom1.wad';
+const String _guestRoot = '/doom';
+const String _guestIwadName = 'doom1.wad';
 const int _doomDefaultWidth = 320;
 const int _doomDefaultHeight = 200;
 
@@ -47,6 +49,7 @@ class _DoomPageState extends State<_DoomPage> {
   StreamSubscription<Object?>? _workerSubscription;
   Isolate? _workerIsolate;
   SendPort? _workerCommands;
+  String? _runtimeHostDir;
 
   Uint8List? _frameBytes;
   String? _error;
@@ -66,15 +69,6 @@ class _DoomPageState extends State<_DoomPage> {
     if (_running) {
       return;
     }
-
-    final fixturePaths = _resolveFixturePaths();
-    if (fixturePaths == null) {
-      setState(() {
-        _error = 'Cannot locate $_defaultWasmPath and $_defaultIwadPath';
-      });
-      return;
-    }
-
     setState(() {
       _running = true;
       _error = null;
@@ -82,28 +76,38 @@ class _DoomPageState extends State<_DoomPage> {
       _frameCount = 0;
       _logs
         ..clear()
-        ..add('starting doom worker...');
+        ..add('loading DOOM assets...');
     });
 
-    final events = ReceivePort();
-    _workerEvents = events;
-    _workerSubscription = events.listen(_onWorkerMessage);
     try {
+      final assets = await _prepareRuntimeAssets();
+      _runtimeHostDir = assets.iwadHostDir;
+      _appendLog('starting DOOM worker isolate...');
+
+      final events = ReceivePort();
+      _workerEvents = events;
+      _workerSubscription = events.listen(_onWorkerMessage);
       _workerIsolate = await Isolate.spawn(
         _doomWorkerMain,
         <String, Object>{
           'mainPort': events.sendPort,
-          'wasmPath': fixturePaths.$1,
-          'iwadPath': fixturePaths.$2,
+          'wasmBytes': TransferableTypedData.fromList(<Uint8List>[
+            assets.wasmBytes,
+          ]),
+          'iwadHostDir': assets.iwadHostDir,
+          'guestIwadPath': assets.guestIwadPath,
         },
       );
       _focusNode.requestFocus();
     } catch (error) {
+      await _stopWorker();
+      if (!mounted) {
+        return;
+      }
       setState(() {
         _running = false;
         _error = error.toString();
       });
-      await _stopWorker();
     }
   }
 
@@ -124,6 +128,39 @@ class _DoomPageState extends State<_DoomPage> {
     _workerSubscription = null;
     _workerEvents?.close();
     _workerEvents = null;
+    await _cleanupRuntimeHostDir();
+  }
+
+  Future<void> _cleanupRuntimeHostDir() async {
+    final hostDir = _runtimeHostDir;
+    _runtimeHostDir = null;
+    if (hostDir == null) {
+      return;
+    }
+    try {
+      await Directory(hostDir).delete(recursive: true);
+    } catch (_) {}
+  }
+
+  Future<_RuntimeAssets> _prepareRuntimeAssets() async {
+    final wasmData = await rootBundle.load(_doomWasmAsset);
+    final iwadData = await rootBundle.load(_doomIwadAsset);
+
+    final runtimeDir = await Directory.systemTemp.createTemp('wasd_doom_');
+    final iwadPath = '${runtimeDir.path}/$_guestIwadName';
+    await File(iwadPath).writeAsBytes(
+      iwadData.buffer.asUint8List(iwadData.offsetInBytes, iwadData.lengthInBytes),
+      flush: true,
+    );
+
+    return _RuntimeAssets(
+      wasmBytes: wasmData.buffer.asUint8List(
+        wasmData.offsetInBytes,
+        wasmData.lengthInBytes,
+      ),
+      iwadHostDir: runtimeDir.path,
+      guestIwadPath: '$_guestRoot/$_guestIwadName',
+    );
   }
 
   void _onWorkerMessage(Object? message) {
@@ -131,50 +168,71 @@ class _DoomPageState extends State<_DoomPage> {
       return;
     }
     final type = message['type'];
-    switch (type) {
-      case 'ready':
-        final port = message['commandPort'];
-        if (port is SendPort) {
-          _workerCommands = port;
-          setState(() {
-            _logs.add('doom worker ready');
-          });
-        }
-      case 'frame':
-        final bytes = message['bytes'];
-        final frameCount = message['frames'];
-        if (bytes is Uint8List) {
-          setState(() {
-            _frameBytes = bytes;
-            _frameCount = frameCount is int ? frameCount : _frameCount + 1;
-          });
-        }
-      case 'log':
-        final line = message['line'];
-        if (line is String) {
-          setState(() {
-            _logs.add(line);
-          });
-        }
-      case 'exit':
-        final code = message['code'];
+    if (type == 'ready') {
+      final port = message['commandPort'];
+      if (port is SendPort) {
+        _workerCommands = port;
+        _appendLog('worker ready');
+      }
+      return;
+    }
+    if (type == 'frame') {
+      final bytes = message['bytes'];
+      final frameCount = message['frames'];
+      if (bytes is Uint8List) {
         setState(() {
-          _running = false;
-          _logs.add('doom exited: $code');
+          _frameBytes = bytes;
+          if (frameCount is int) {
+            _frameCount = frameCount;
+          } else {
+            _frameCount++;
+          }
         });
-        unawaited(_stopWorker());
-      case 'error':
-        final text = message['message'];
-        setState(() {
-          _running = false;
-          _error = text?.toString() ?? 'Unknown worker error';
-          _logs.add(_error!);
-        });
-        unawaited(_stopWorker());
+      }
+      return;
+    }
+    if (type == 'log') {
+      final line = message['line'];
+      if (line is String) {
+        _appendLog(line);
+      }
+      return;
+    }
+    if (type == 'exit') {
+      final code = message['code'];
+      _appendLog('doom exited: $code');
+      setState(() {
+        _running = false;
+      });
+      unawaited(_stopWorker());
+      return;
+    }
+    if (type == 'error') {
+      final text = message['message'];
+      setState(() {
+        _running = false;
+        _error = text?.toString() ?? 'Unknown worker error';
+      });
+      if (_error != null) {
+        _appendLog(_error!);
+      }
+      unawaited(_stopWorker());
     }
   }
 
-  Future<void> _sendKeyEvent(KeyEvent event) async {
+  void _appendLog(String line) {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _logs.add(line);
+      if (_logs.length > 200) {
+        _logs.removeRange(0, _logs.length - 200);
+      }
+    });
+  }
+
+  void _sendKeyEvent(KeyEvent event) {
     final commands = _workerCommands;
     if (commands == null || !_running) {
       return;
@@ -195,19 +253,6 @@ class _DoomPageState extends State<_DoomPage> {
       'type': isDown ? 'keydown' : 'keyup',
       'code': code,
     });
-  }
-
-  (String, String)? _resolveFixturePaths() {
-    final cwd = Directory.current.absolute.path;
-    final candidates = <String>[cwd, '$cwd/..', '$cwd/../..', '$cwd/../../..'];
-    for (final base in candidates) {
-      final wasmFile = File('$base/$_defaultWasmPath');
-      final iwadFile = File('$base/$_defaultIwadPath');
-      if (wasmFile.existsSync() && iwadFile.existsSync()) {
-        return (wasmFile.absolute.path, iwadFile.absolute.path);
-      }
-    }
-    return null;
   }
 
   int? _mapDoomKey(LogicalKeyboardKey key) {
@@ -243,7 +288,7 @@ class _DoomPageState extends State<_DoomPage> {
     return Scaffold(
       appBar: AppBar(
         title: Text('DOOM ($_frameCount)'),
-        actions: [
+        actions: <Widget>[
           IconButton(
             onPressed: _running ? null : _startGame,
             icon: const Icon(Icons.play_arrow),
@@ -258,7 +303,7 @@ class _DoomPageState extends State<_DoomPage> {
         focusNode: _focusNode,
         onKeyEvent: _sendKeyEvent,
         child: Column(
-          children: [
+          children: <Widget>[
             Expanded(
               flex: 3,
               child: Container(
@@ -266,7 +311,7 @@ class _DoomPageState extends State<_DoomPage> {
                 color: Colors.black,
                 alignment: Alignment.center,
                 child: frame == null
-                    ? const Text('No frame yet')
+                    ? const Text('Press Play to start DOOM')
                     : Image.memory(
                         frame,
                         gaplessPlayback: true,
@@ -303,13 +348,31 @@ class _DoomPageState extends State<_DoomPage> {
   }
 }
 
+final class _RuntimeAssets {
+  const _RuntimeAssets({
+    required this.wasmBytes,
+    required this.iwadHostDir,
+    required this.guestIwadPath,
+  });
+
+  final Uint8List wasmBytes;
+  final String iwadHostDir;
+  final String guestIwadPath;
+}
+
 Future<void> _doomWorkerMain(Map<String, Object> config) async {
   final mainPort = config['mainPort'] as SendPort;
-  final wasmPath = config['wasmPath'] as String;
-  final iwadPath = config['iwadPath'] as String;
+  final wasmBytes = (config['wasmBytes'] as TransferableTypedData)
+      .materialize()
+      .asUint8List();
+  final iwadHostDir = config['iwadHostDir'] as String;
+  final guestIwadPath = config['guestIwadPath'] as String;
 
   final commandPort = ReceivePort();
-  mainPort.send(<String, Object>{'type': 'ready', 'commandPort': commandPort.sendPort});
+  mainPort.send(<String, Object>{
+    'type': 'ready',
+    'commandPort': commandPort.sendPort,
+  });
 
   final queuedEvents = Queue<_DoomInputEvent>();
   commandPort.listen((Object? message) {
@@ -322,61 +385,44 @@ Future<void> _doomWorkerMain(Map<String, Object> config) async {
       return;
     }
     if (type == 'keydown') {
-      queuedEvents.add(_DoomInputEvent(0, code));
+      queuedEvents.add(_DoomInputEvent(type: 0, code: code));
       return;
     }
     if (type == 'keyup') {
-      queuedEvents.add(_DoomInputEvent(1, code));
+      queuedEvents.add(_DoomInputEvent(type: 1, code: code));
     }
   });
 
   try {
-    final wasmFile = File(wasmPath);
-    final iwadFile = File(iwadPath);
-    if (!await wasmFile.exists()) {
-      throw StateError('Missing wasm file: $wasmPath');
-    }
-    if (!await iwadFile.exists()) {
-      throw StateError('Missing IWAD file: $iwadPath');
-    }
-
-    final guestRoot = '/doom';
-    final iwadName = iwadFile.uri.pathSegments.last;
-    final guestIwadPath = '$guestRoot/$iwadName';
-
     final monitor = _DoomWorkerMonitor(mainPort: mainPort, events: queuedEvents);
-    final wasmBytes = await wasmFile.readAsBytes();
-
     final wasi = WASI(
       args: <String>['doom.wasm', '-iwad', guestIwadPath, '-nosound'],
-      preopens: <String, String>{guestRoot: iwadFile.parent.path},
-      env: <String, String>{'HOME': guestRoot, 'TERM': 'xterm'},
+      preopens: <String, String>{_guestRoot: iwadHostDir},
+      env: <String, String>{'HOME': _guestRoot, 'TERM': 'xterm'},
     );
-    final imports = <String, ModuleImports>{
-      ...wasi.imports,
-      'env': monitor.imports,
-    };
+    final imports = <String, ModuleImports>{...wasi.imports, 'env': monitor.imports};
 
-    mainPort.send(<String, Object>{'type': 'log', 'line': 'instantiating doom...'});
-    final result = await WebAssembly.instantiate(
-      Uint8List.fromList(wasmBytes).buffer,
-      imports,
-    );
+    mainPort.send(<String, Object>{
+      'type': 'log',
+      'line': 'instantiating DOOM module...',
+    });
+    final result = await WebAssembly.instantiate(wasmBytes.buffer, imports);
     final memoryExport = result.instance.exports['memory'];
     if (memoryExport is MemoryImportExportValue) {
       monitor.bindMemory(memoryExport.ref);
     }
-    mainPort.send(<String, Object>{'type': 'log', 'line': 'starting wasi...'});
+
+    mainPort.send(<String, Object>{'type': 'log', 'line': 'running WASI _start...'});
     final exitCode = wasi.start(result.instance);
     mainPort.send(<String, Object>{
       'type': 'exit',
       'code': exitCode,
       'frames': monitor.frameCount,
     });
-  } catch (error, stack) {
+  } catch (error, stackTrace) {
     mainPort.send(<String, Object>{
       'type': 'error',
-      'message': '$error\n$stack',
+      'message': '$error\n$stackTrace',
     });
   } finally {
     commandPort.close();
@@ -384,7 +430,7 @@ Future<void> _doomWorkerMain(Map<String, Object> config) async {
 }
 
 final class _DoomInputEvent {
-  const _DoomInputEvent(this.type, this.code);
+  const _DoomInputEvent({required this.type, required this.code});
 
   final int type;
   final int code;
