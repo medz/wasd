@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wasd/wasm.dart';
@@ -84,17 +85,32 @@ class _DoomPageState extends State<_DoomPage> {
     try {
       final wasmData = await rootBundle.load(_doomWasmAsset);
       final iwadData = await rootBundle.load(_doomIwadAsset);
-      await _cleanupRuntimeHostDir();
-      final runtimeDir = await Directory.systemTemp.createTemp('wasd_doom_');
-      _runtimeHostDir = runtimeDir.path;
-      final iwadPath = '${runtimeDir.path}/$_guestIwadName';
-      await File(iwadPath).writeAsBytes(
+      final wasmBytes = Uint8List.fromList(
+        wasmData.buffer.asUint8List(
+          wasmData.offsetInBytes,
+          wasmData.lengthInBytes,
+        ),
+      );
+      final iwadBytes = Uint8List.fromList(
         iwadData.buffer.asUint8List(
           iwadData.offsetInBytes,
           iwadData.lengthInBytes,
         ),
-        flush: true,
       );
+
+      await _cleanupRuntimeHostDir();
+      final preopens = <String, String>{};
+      final files = <String, Uint8List>{};
+      if (kIsWeb) {
+        preopens[_guestRoot] = _guestRoot;
+        files['$_guestRoot/$_guestIwadName'] = iwadBytes;
+      } else {
+        final runtimeDir = await Directory.systemTemp.createTemp('wasd_doom_');
+        _runtimeHostDir = runtimeDir.path;
+        final iwadPath = '${runtimeDir.path}/$_guestIwadName';
+        await File(iwadPath).writeAsBytes(iwadBytes, flush: true);
+        preopens[_guestRoot] = runtimeDir.path;
+      }
 
       _appendLog('instantiating module...');
       final wasi = WASI(
@@ -104,7 +120,8 @@ class _DoomPageState extends State<_DoomPage> {
           '$_guestRoot/$_guestIwadName',
           '-nosound',
         ],
-        preopens: <String, String>{_guestRoot: runtimeDir.path},
+        preopens: preopens,
+        files: files,
         env: <String, String>{'HOME': _guestRoot, 'TERM': 'xterm'},
       );
 
@@ -120,7 +137,7 @@ class _DoomPageState extends State<_DoomPage> {
       };
 
       final result = await WebAssembly.instantiate(
-        wasmData.buffer,
+        wasmBytes.buffer,
         imports,
       );
       final memoryExport = result.instance.exports['memory'];

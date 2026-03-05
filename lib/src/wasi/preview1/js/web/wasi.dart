@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
+
 import '../../../../wasm/instance.dart' as wasm;
 import '../../../../wasm/memory.dart' as wasm;
 import '../../../../wasm/module.dart' as wasm;
@@ -13,6 +14,7 @@ class WASI implements wasi.WASI {
     List<String> args = const [],
     Map<String, String> env = const {},
     Map<String, String> preopens = const {},
+    Map<String, Uint8List> files = const {},
     bool returnOnExit = true,
     int stdin = 0,
     int stdout = 1,
@@ -28,6 +30,14 @@ class WASI implements wasi.WASI {
          for (final indexed in preopens.keys.toList().asMap().entries)
            indexed.key + 3: _pathBytes(indexed.value),
        },
+       _preopenGuestPathsByFd = {
+         for (final indexed in preopens.keys.toList().asMap().entries)
+           indexed.key + 3: indexed.value,
+       },
+       _filesByGuestPath = {
+         for (final entry in files.entries)
+           _normalizeGuestPath(entry.key): entry.value,
+       },
        _stdin = stdin,
        _stdout = stdout,
        _stderr = stderr;
@@ -36,10 +46,14 @@ class WASI implements wasi.WASI {
   final List<Uint8List> _argsData;
   final List<Uint8List> _envData;
   final Map<int, Uint8List> _preopensByFd;
+  final Map<int, String> _preopenGuestPathsByFd;
+  final Map<String, Uint8List> _filesByGuestPath;
   final int _stdin;
   final int _stdout;
   final int _stderr;
   final math.Random _random = math.Random();
+  final Map<int, _VirtualOpenFile> _openFilesByFd = <int, _VirtualOpenFile>{};
+  int _nextVirtualFd = 64;
   wasm.Memory? _boundMemory;
   late final wasm.FunctionImportExportValue _nosysImport =
       wasm.ImportExportKind.function((List<Object?> _) => _errnoNosys);
@@ -57,7 +71,9 @@ class WASI implements wasi.WASI {
       'fd_read': _fdReadImport,
       'fd_write': _fdWriteImport,
       'fd_fdstat_get': _fdFdstatGetImport,
+      'fd_filestat_get': _fdFilestatGetImport,
       'fd_close': _fdCloseImport,
+      'fd_seek': _fdSeekImport,
       'clock_time_get': _clockTimeGetImport,
       'sched_yield': _schedYieldImport,
       'fd_prestat_get': _fdPrestatGetImport,
@@ -253,8 +269,8 @@ class WASI implements wasi.WASI {
         final iovs = _asInt(args[1]);
         final iovsLen = _asInt(args[2]);
         final nreadPtr = _asInt(args[3]);
-
-        if (fd != _stdin) {
+        final opened = _openFilesByFd[fd];
+        if (fd != _stdin && opened == null) {
           return _errnoBadf;
         }
 
@@ -270,6 +286,7 @@ class WASI implements wasi.WASI {
 
         final bytes = Uint8List.view(buffer);
         final data = ByteData.view(buffer);
+        var totalRead = 0;
 
         for (var index = 0; index < iovsLen; index++) {
           final entry = iovs + index * _iovecEntrySize;
@@ -282,13 +299,28 @@ class WASI implements wasi.WASI {
           if (len > 0 && buf + len > bytes.length) {
             return _errnoInval;
           }
+
+          if (opened != null && len > 0) {
+            final available = opened.bytes.length - opened.offset;
+            if (available <= 0) {
+              continue;
+            }
+            final toRead = math.min(len, available);
+            bytes.setRange(buf, buf + toRead, opened.bytes, opened.offset);
+            opened.offset += toRead;
+            totalRead += toRead;
+          }
         }
 
         if (nreadPtr != 0) {
           if (nreadPtr + 4 > bytes.length) {
             return _errnoInval;
           }
-          data.setUint32(nreadPtr, 0, Endian.little);
+          data.setUint32(
+            nreadPtr,
+            opened == null ? 0 : totalRead,
+            Endian.little,
+          );
         }
         return _errnoSuccess;
       });
@@ -300,7 +332,10 @@ class WASI implements wasi.WASI {
         }
         final fd = _asInt(args[0]);
         final fdstatPtr = _asInt(args[1]);
-        if (fd != _stdin && fd != _stdout && fd != _stderr) {
+        final isStdio = fd == _stdin || fd == _stdout || fd == _stderr;
+        final isDir = _preopenGuestPathsByFd.containsKey(fd);
+        final isFile = _openFilesByFd.containsKey(fd);
+        if (!isStdio && !isDir && !isFile) {
           return _errnoBadf;
         }
 
@@ -315,10 +350,55 @@ class WASI implements wasi.WASI {
         }
 
         bytes.fillRange(fdstatPtr, fdstatPtr + _fdstatSize, 0);
-        bytes[fdstatPtr] = _filetypeCharacterDevice;
+        bytes[fdstatPtr] = isFile
+            ? _filetypeRegularFile
+            : isDir
+            ? _filetypeDirectory
+            : _filetypeCharacterDevice;
         data.setUint16(fdstatPtr + 2, 0, Endian.little);
         data.setUint64(fdstatPtr + 8, 0, Endian.little);
         data.setUint64(fdstatPtr + 16, 0, Endian.little);
+        return _errnoSuccess;
+      });
+
+  wasm.FunctionImportExportValue get _fdFilestatGetImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 2) {
+          return _errnoInval;
+        }
+        final fd = _asInt(args[0]);
+        final bufPtr = _asInt(args[1]);
+
+        final view = _memoryView();
+        if (view == null) {
+          return _errnoInval;
+        }
+        final bytes = view.bytes;
+        final data = view.data;
+        if (bufPtr < 0 || bufPtr + _filestatSize > bytes.length) {
+          return _errnoInval;
+        }
+
+        final opened = _openFilesByFd[fd];
+        final isStdio = fd == _stdin || fd == _stdout || fd == _stderr;
+        final isDir = _preopenGuestPathsByFd.containsKey(fd);
+        if (opened == null && !isStdio && !isDir) {
+          return _errnoBadf;
+        }
+
+        bytes.fillRange(bufPtr, bufPtr + _filestatSize, 0);
+        bytes[bufPtr + 16] = opened != null
+            ? _filetypeRegularFile
+            : isDir
+            ? _filetypeDirectory
+            : _filetypeCharacterDevice;
+        if (opened != null) {
+          data.setUint64(
+            bufPtr + 32,
+            opened.bytes.length.toUnsigned(64),
+            Endian.little,
+          );
+        }
         return _errnoSuccess;
       });
 
@@ -331,7 +411,52 @@ class WASI implements wasi.WASI {
         if (fd == _stdin || fd == _stdout || fd == _stderr) {
           return _errnoSuccess;
         }
+        if (_openFilesByFd.remove(fd) != null) {
+          return _errnoSuccess;
+        }
         return _errnoBadf;
+      });
+
+  wasm.FunctionImportExportValue get _fdSeekImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 5) {
+          return _errnoInval;
+        }
+        final fd = _asInt(args[0]);
+        final offset = _asInt64(args[1]);
+        final whence = _asInt(args[2]);
+        final newOffsetPtr = _asInt(args[3]);
+        final opened = _openFilesByFd[fd];
+        if (opened == null) {
+          return _errnoBadf;
+        }
+
+        final view = _memoryView();
+        if (view == null) {
+          return _errnoInval;
+        }
+        final bytes = view.bytes;
+        final data = view.data;
+        if (newOffsetPtr < 0 || newOffsetPtr + 8 > bytes.length) {
+          return _errnoInval;
+        }
+
+        final base = switch (whence) {
+          0 => 0,
+          1 => opened.offset,
+          2 => opened.bytes.length,
+          _ => -1,
+        };
+        if (base < 0) {
+          return _errnoInval;
+        }
+        final next = base + offset;
+        if (next < 0) {
+          return _errnoInval;
+        }
+        opened.offset = next;
+        data.setUint64(newOffsetPtr, next.toUnsigned(64), Endian.little);
+        return _errnoSuccess;
       });
 
   wasm.FunctionImportExportValue get _clockTimeGetImport =>
@@ -355,6 +480,7 @@ class WASI implements wasi.WASI {
       });
 
   wasm.FunctionImportExportValue get _schedYieldImport => _nosysImport;
+
   wasm.FunctionImportExportValue get _fdPrestatGetImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
         if (args.length < 2) {
@@ -410,7 +536,48 @@ class WASI implements wasi.WASI {
         bytes.setRange(pathPtr, pathPtr + path.length, path);
         return _errnoSuccess;
       });
-  wasm.FunctionImportExportValue get _pathOpenImport => _nosysImport;
+
+  wasm.FunctionImportExportValue get _pathOpenImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 9) {
+          return _errnoInval;
+        }
+        final dirFd = _asInt(args[0]);
+        final pathPtr = _asInt(args[2]);
+        final pathLen = _asInt(args[3]);
+        final openedFdPtr = _asInt(args[8]);
+        final preopenPath = _preopenGuestPathsByFd[dirFd];
+        if (preopenPath == null) {
+          return _errnoBadf;
+        }
+
+        final view = _memoryView();
+        if (view == null) {
+          return _errnoInval;
+        }
+        final bytes = view.bytes;
+        final data = view.data;
+        if (pathPtr < 0 ||
+            pathLen < 0 ||
+            pathPtr + pathLen > bytes.length ||
+            openedFdPtr < 0 ||
+            openedFdPtr + 4 > bytes.length) {
+          return _errnoInval;
+        }
+
+        final relative = utf8.decode(bytes.sublist(pathPtr, pathPtr + pathLen));
+        final guestPath = _joinGuestPath(preopenPath, relative);
+        final fileBytes = _filesByGuestPath[guestPath];
+        if (fileBytes == null) {
+          return _errnoNoent;
+        }
+
+        final fd = _nextVirtualFd++;
+        _openFilesByFd[fd] = _VirtualOpenFile(fileBytes);
+        data.setUint32(openedFdPtr, fd, Endian.little);
+        return _errnoSuccess;
+      });
+
   wasm.FunctionImportExportValue get _pollOneoffImport => _nosysImport;
 
   int _writeStringVector({
@@ -515,11 +682,15 @@ const int _iovecEntrySize = wasi_common.iovecEntrySize;
 const int _errnoSuccess = wasi_common.errnoSuccess;
 const int _errnoInval = wasi_common.errnoInval;
 const int _errnoBadf = wasi_common.errnoBadf;
+const int _errnoNoent = wasi_common.errnoNoent;
 const int _errnoNosys = wasi_common.errnoNosys;
 const int _prestatSize = wasi_common.prestatSize;
 const int _preopenTypeDir = wasi_common.preopenTypeDir;
 const int _fdstatSize = wasi_common.fdstatSize;
 const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
+const int _filetypeDirectory = wasi_common.filetypeDirectory;
+const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
+const int _filestatSize = 64;
 const List<String> _preview1NosysImports = wasi_common.preview1NosysImports;
 
 bool _isU32InBounds(int ptr, int length) => ptr >= 0 && ptr + 4 <= length;
@@ -531,11 +702,21 @@ int _asInt(Object? value) {
   if (value is num) {
     return value.toInt();
   }
+  if (value is BigInt) {
+    return value.toInt();
+  }
   throw ArgumentError.value(
     value,
     'args',
     'WASI args expect i32-like integer values.',
   );
+}
+
+int _asInt64(Object? value) {
+  if (value is BigInt) {
+    return value.toInt();
+  }
+  return _asInt(value);
 }
 
 String _decodeUtf8(List<int> bytes) => utf8.decode(bytes, allowMalformed: true);
@@ -545,11 +726,42 @@ Uint8List _nulTerminated(String value) =>
 
 Uint8List _pathBytes(String value) => Uint8List.fromList(utf8.encode(value));
 
+String _normalizeGuestPath(String path) {
+  if (path.isEmpty) {
+    return '/';
+  }
+  var value = path.startsWith('/') ? path : '/$path';
+  while (value.length > 1 && value.endsWith('/')) {
+    value = value.substring(0, value.length - 1);
+  }
+  return value;
+}
+
+String _joinGuestPath(String preopen, String relative) {
+  final base = _normalizeGuestPath(preopen);
+  var rel = relative.trim();
+  while (rel.startsWith('/')) {
+    rel = rel.substring(1);
+  }
+  while (rel.startsWith('./')) {
+    rel = rel.substring(2);
+  }
+  final joined = rel.isEmpty ? base : '$base/$rel';
+  return _normalizeGuestPath(joined);
+}
+
 final class _MemoryView {
   _MemoryView(this.bytes, this.data);
 
   final Uint8List bytes;
   final ByteData data;
+}
+
+final class _VirtualOpenFile {
+  _VirtualOpenFile(this.bytes);
+
+  final Uint8List bytes;
+  int offset = 0;
 }
 
 final class _WasiExit extends Error {

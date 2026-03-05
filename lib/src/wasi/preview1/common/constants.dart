@@ -3,11 +3,14 @@ const int iovecEntrySize = 8;
 const int errnoSuccess = 0;
 const int errnoInval = 28;
 const int errnoBadf = 8;
+const int errnoNoent = 44;
 const int errnoNosys = 52;
 const int prestatSize = 8;
 const int preopenTypeDir = 0;
 const int fdstatSize = 24;
 const int filetypeCharacterDevice = 2;
+const int filetypeDirectory = 3;
+const int filetypeRegularFile = 4;
 
 /// Preview1 imports that should exist and return `ENOSYS` when unsupported.
 const List<String> preview1NosysImports = <String>[

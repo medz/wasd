@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../wasm/instance.dart';
 import '../wasm/memory.dart';
 import '../wasm/module.dart';
@@ -15,6 +17,7 @@ abstract interface class WASI {
     List<String> args,
     Map<String, String> env,
     Map<String, String> preopens,
+    Map<String, Uint8List> files,
     bool returnOnExit,
     int stdin,
     int stdout,

@@ -1,6 +1,7 @@
 @JS()
 library;
 
+import 'dart:typed_data';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 
@@ -16,6 +17,7 @@ class WASI implements wasi_iface.WASI {
     List<String> args = const [],
     Map<String, String> env = const {},
     Map<String, String> preopens = const {},
+    Map<String, Uint8List> files = const {},
     bool returnOnExit = true,
     int stdin = 0,
     int stdout = 1,
