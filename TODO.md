@@ -212,3 +212,15 @@
     - verify: `dart test` (pass)
     - verify: `flutter analyze` in `example/flutter_app` (pass)
     - verify: `flutter test` in `example/flutter_app` (pass)
+  - [x] 持续优化（第 8 轮）：Flutter DOOM runner 单路径化与 web isolate 回归修复（Issue #12, #13）
+    - commit: `454dc88`
+    - [x] 页面层收敛为单一路径 runner 调用，平台差异下沉到内部 `_DoomRunnerClient`（Issue #13）
+      - commit: `454dc88`
+    - [x] 修复 Flutter web `dart:isolate is not supported on dart4web` 启动回归（Issue #12, #13）
+      - commit: `454dc88`
+    - [x] 移除示例顶部状态栏并更新 widget 测试断言（Issue #13）
+      - commit: `454dc88`
+    - verify: `dart analyze` (pass)
+    - verify: `dart test` (pass)
+    - verify: `flutter analyze` in `example/flutter_app` (pass)
+    - verify: `flutter test` in `example/flutter_app` (pass)
