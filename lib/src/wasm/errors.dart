@@ -8,6 +8,14 @@ abstract class WasmError extends Error {
 
   /// Optional underlying cause of the error.
   final Object? cause;
+
+  @override
+  String toString() {
+    if (cause == null) {
+      return '$runtimeType: $message';
+    }
+    return '$runtimeType: $message (cause: $cause)';
+  }
 }
 
 /// Thrown when compilation fails.

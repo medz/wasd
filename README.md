@@ -69,6 +69,28 @@ void main() {
 Uint8List loadYourModuleBytes() => throw UnimplementedError();
 ```
 
+## DOOM CLI and Runtime Parity
+
+Prepare Doom fixtures:
+
+```bash
+tool/setup_test_fixtures.sh --doom-only
+```
+
+Run the CLI baseline (native Dart runtime):
+
+```bash
+dart run example/doom_cli.dart --mode=instantiate
+```
+
+Run VM vs dart2js/Node parity matrix (same CLI entry):
+
+```bash
+dart run tool/doom_runtime_matrix.dart --mode=instantiate
+```
+
+You can switch to `--mode=start` to exercise `_start` behavior as the preview1 surface grows.
+
 ## Host Function Imports
 
 Provide host callbacks with `WasmImports`:
