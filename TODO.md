@@ -149,3 +149,5 @@
     - commit: `2a069e6`
   - [x] 修复 DOOM Flutter/CLI 无法加载 IWAD（切换 `-file` 启动参数，补齐 native/web WASI 虚拟目录与 fd rights 语义，新增 CLI `--stop-after-frames` 自验证路径）（Issue #12, #13）
     - commit: `d69161d`
+  - [x] 修复 Flutter Chrome 无法打开 `/doom/doom1.wad` 与 macOS 主线程卡死（修正 JS host import 参数桥接上限、修正 js 环境 Node 误判、补齐目录 fd 路径解析、桌面端隔离运行）（Issue #12, #13）
+    - commit: `f0d8b5f`
