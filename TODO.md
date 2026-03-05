@@ -164,3 +164,13 @@
     - [x] 对齐 README 的 preview1 能力描述与当前实现（Issue #13）
       - commit: `675e316`
       - verify: `dart test` (pass)
+  - [x] 持续优化（第 2 轮）：README 开发命令有效性与 WASI 文件元数据回归（Issue #12, #13）
+    - commit: `3b65ba3`
+    - [x] 修正 README 中失效测试命令路径并新增 README 命令存在性回归测试（Issue #13）
+      - commit: `3b65ba3`
+    - [x] 清理 preview1 `ENOSYS` 列表中的已实现项（`fd_filestat_get` / `fd_seek` / `path_filestat_get`）（Issue #12, #13）
+      - commit: `3b65ba3`
+    - [x] 新增 `path_filestat_get` 行为回归测试（file/dir/noent）（Issue #12, #13）
+      - commit: `3b65ba3`
+    - verify: `dart analyze` (pass)
+    - verify: `dart test` (pass)
