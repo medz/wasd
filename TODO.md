@@ -141,5 +141,5 @@
     - commit: `383fe77`
   - [x] Flutter 示例重建为完整多平台工程并移除 Isolate 运行路径（Issue #13）
     - commit: `d790335`
-  - [-] 修复 Flutter Web DOOM 启动失败（移除 web 端 `dart:io` 依赖并补齐 WASI 虚拟文件读路径）（Issue #12, #13）
-    - note: in progress
+  - [x] 修复 Flutter Web DOOM 启动失败（移除 web 端 `dart:io` 依赖并补齐 WASI 虚拟文件读路径）（Issue #12, #13）
+    - commit: `b079078`
