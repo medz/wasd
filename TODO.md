@@ -147,3 +147,5 @@
     - commit: `58c4480`
   - [x] 新增 DOOM Node E2E 自运行测试并执行（Issue #13）
     - commit: `2a069e6`
+  - [x] 修复 DOOM Flutter/CLI 无法加载 IWAD（切换 `-file` 启动参数，补齐 native/web WASI 虚拟目录与 fd rights 语义，新增 CLI `--stop-after-frames` 自验证路径）（Issue #12, #13）
+    - commit: `d69161d`
