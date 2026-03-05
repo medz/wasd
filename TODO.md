@@ -137,3 +137,5 @@
     - commit: `7bd7f1b`
   - [x] Flutter 示例切换为纯 `wasd` 直跑 DOOM（Issue #13）
     - commit: `7bd7f1b`
+  - [x] 修复 Flutter DOOM 示例运行失败（移除仓库路径依赖，改为 assets 加载）（Issue #13）
+    - commit: `383fe77`
