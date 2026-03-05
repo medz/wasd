@@ -133,7 +133,7 @@
     - commit: `094c48b`
   - [x] 新增 DOOM Flutter 全平台监控示例（Issue #13）
     - commit: `3390fcf`
-  - [-] native backend 接入完整解释器执行链（Issue #10, #12, #13）
-    - note: in progress (replace minimal opcode runtime with interpreter VM)
-  - [-] Flutter 示例切换为纯 `wasd` 直跑 DOOM（Issue #13）
-    - note: in progress (remove node runner/webview path)
+  - [x] native backend 接入完整解释器执行链（Issue #10, #12, #13）
+    - commit: `7bd7f1b`
+  - [x] Flutter 示例切换为纯 `wasd` 直跑 DOOM（Issue #13）
+    - commit: `7bd7f1b`
