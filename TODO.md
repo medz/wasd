@@ -153,3 +153,14 @@
     - commit: `f0d8b5f`
   - [x] 将 Flutter 示例收敛为可玩 DOOM（修复调色板解码花屏、接通桌面端键盘输入到 isolate、移除示例日志面板噪音）（Issue #13）
     - commit: `ee95cb9`
+  - [x] 建立多 agents 协作流程（产品/API、开发、测试）并固化执行规范（Issue #5, #13）
+    - commit: `2b06e94`
+    - [x] 收敛 WASI `path_open`/`fd_seek` 语义与回归测试（Issue #12, #13）
+      - commit: `675e316`
+      - verify: `dart test test/wasi_test.dart test/wasm_test.dart` (pass)
+    - [x] 修复 native backend `module.dart` 分析告警（Issue #10, #13）
+      - commit: `675e316`
+      - verify: `dart analyze` (pass)
+    - [x] 对齐 README 的 preview1 能力描述与当前实现（Issue #13）
+      - commit: `675e316`
+      - verify: `dart test` (pass)
