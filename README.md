@@ -48,9 +48,8 @@ dependencies:
 Run included examples:
 
 ```bash
-dart run example/hello.dart
-dart run example/sum.dart
-dart run example/sum.dart 3 9
+dart run example/wasm_cli.dart
+dart run example/wasm_cli.dart 3 9
 ```
 
 Minimal module invocation:
@@ -207,7 +206,7 @@ You can extend/override defaults with `additionalEnabled` and `additionalDisable
 - `lib/wasd.dart`: public package entrypoint
 - `lib/src/`: runtime, VM, module decoder, validator, WASI, component model
 - `test/`: regression and behavior tests
-- `example/`: runnable examples (`hello.dart`, `sum.dart`, `doom/`)
+- `example/`: runnable examples (`wasm_cli.dart`, `doom_cli.dart`, `flutter_app/`)
 - `tool/`: conformance runners and toolchain scripts
 - `third_party/`: vendored Wasm spec/component testsuites
 
@@ -230,7 +229,7 @@ dart analyze
 dart test
 dart test test/doom_smoke_test.dart test/doom_e2e_node_test.dart
 dart test test/wasi_test.dart test/wasm_test.dart
-dart run example/hello.dart
+dart run example/wasm_cli.dart
 ```
 
 ## Compatibility Snapshot
