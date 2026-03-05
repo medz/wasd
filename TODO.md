@@ -127,4 +127,5 @@
   - scope: add preview1 descriptor/time basics (`fd_fdstat_get` / `clock_time_get`) on native+web
   - scope: add preview1 preopen metadata (`fd_prestat_get` / `fd_prestat_dir_name`) on native+web
   - scope: keep unsupported syscall imports explicit with `ENOSYS` stubs (`sched_yield` / `path_open` / `poll_oneoff`)
-  - scope: add DOOM frame capture/monitor path on Node (`tool/doom_node_monitor.mjs`)
+  - [x] Node DOOM 首帧监控与图片产出链路（Issue #12, #13）
+    - commit: `8b117b1`
