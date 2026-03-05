@@ -174,3 +174,11 @@
       - commit: `3b65ba3`
     - verify: `dart analyze` (pass)
     - verify: `dart test` (pass)
+  - [x] 持续优化（第 3 轮）：README 示例路径可用性与命令清单校验（Issue #13）
+    - commit: `0964b90`
+    - [x] 修正 README 中过时的 `example/` 结构与运行命令（Issue #13）
+      - commit: `0964b90`
+    - [x] 扩展 README 命令回归测试，覆盖 `dart run` 示例文件存在性（Issue #13）
+      - commit: `0964b90`
+    - verify: `dart analyze` (pass)
+    - verify: `dart test` (pass)
