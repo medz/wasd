@@ -1,0 +1,19 @@
+name: wasd_flutter_example
+description: "Flutter example for running WebAssembly with wasd."
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  wasd:
+    path: ../../
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/doom/frame_bootstrap.bmp
+    - assets/doom/report_bootstrap.json
