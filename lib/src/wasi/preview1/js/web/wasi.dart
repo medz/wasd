@@ -356,8 +356,8 @@ class WASI implements wasi.WASI {
             ? _filetypeDirectory
             : _filetypeCharacterDevice;
         data.setUint16(fdstatPtr + 2, 0, Endian.little);
-        data.setUint64(fdstatPtr + 8, 0, Endian.little);
-        data.setUint64(fdstatPtr + 16, 0, Endian.little);
+        _setUint64(data, fdstatPtr + 8, 0);
+        _setUint64(data, fdstatPtr + 16, 0);
         return _errnoSuccess;
       });
 
@@ -393,11 +393,7 @@ class WASI implements wasi.WASI {
             ? _filetypeDirectory
             : _filetypeCharacterDevice;
         if (opened != null) {
-          data.setUint64(
-            bufPtr + 32,
-            opened.bytes.length.toUnsigned(64),
-            Endian.little,
-          );
+          _setUint64(data, bufPtr + 32, opened.bytes.length);
         }
         return _errnoSuccess;
       });
@@ -455,7 +451,7 @@ class WASI implements wasi.WASI {
           return _errnoInval;
         }
         opened.offset = next;
-        data.setUint64(newOffsetPtr, next.toUnsigned(64), Endian.little);
+        _setUint64(data, newOffsetPtr, next);
         return _errnoSuccess;
       });
 
@@ -475,7 +471,7 @@ class WASI implements wasi.WASI {
         }
 
         final nowNanos = DateTime.now().microsecondsSinceEpoch * 1000;
-        view.data.setUint64(timePtr, nowNanos, Endian.little);
+        _setUint64(view.data, timePtr, nowNanos);
         return _errnoSuccess;
       });
 
@@ -717,6 +713,14 @@ int _asInt64(Object? value) {
     return value.toInt();
   }
   return _asInt(value);
+}
+
+void _setUint64(ByteData data, int offset, int value) {
+  final normalized = value.toUnsigned(64);
+  final low = normalized & 0xffffffff;
+  final high = (normalized >> 32) & 0xffffffff;
+  data.setUint32(offset, low, Endian.little);
+  data.setUint32(offset + 4, high, Endian.little);
 }
 
 String _decodeUtf8(List<int> bytes) => utf8.decode(bytes, allowMalformed: true);
