@@ -151,3 +151,5 @@
     - commit: `d69161d`
   - [x] 修复 Flutter Chrome 无法打开 `/doom/doom1.wad` 与 macOS 主线程卡死（修正 JS host import 参数桥接上限、修正 js 环境 Node 误判、补齐目录 fd 路径解析、桌面端隔离运行）（Issue #12, #13）
     - commit: `f0d8b5f`
+  - [x] 将 Flutter 示例收敛为可玩 DOOM（修复调色板解码花屏、接通桌面端键盘输入到 isolate、移除示例日志面板噪音）（Issue #13）
+    - commit: `ee95cb9`
