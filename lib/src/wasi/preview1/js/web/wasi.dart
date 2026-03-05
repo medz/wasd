@@ -53,6 +53,7 @@ class WASI implements wasi.WASI {
   final int _stdout;
   final int _stderr;
   final math.Random _random = math.Random();
+  final Stopwatch _monotonicClock = Stopwatch()..start();
   final Map<int, _VirtualOpenFile> _openFilesByFd = <int, _VirtualOpenFile>{};
   final Map<int, String> _openDirectoriesByFd = <int, String>{};
   int _nextVirtualFd = 64;
@@ -141,7 +142,7 @@ class WASI implements wasi.WASI {
           totalBytes += len;
         }
 
-        if (output.isNotEmpty) {
+        if (_traceSyscalls && output.isNotEmpty) {
           print(_decodeUtf8(output));
         }
 
@@ -509,6 +510,7 @@ class WASI implements wasi.WASI {
         if (args.length < 3) {
           return _errnoInval;
         }
+        final clockId = _asInt(args[0]);
         final timePtr = _asInt(args[2]);
 
         final view = _memoryView();
@@ -519,12 +521,13 @@ class WASI implements wasi.WASI {
           return _errnoInval;
         }
 
-        final nowNanos = DateTime.now().microsecondsSinceEpoch * 1000;
+        final nowNanos = _clockNowNanos(clockId);
         _setUint64(view.data, timePtr, nowNanos);
         return _errnoSuccess;
       });
 
-  wasm.FunctionImportExportValue get _schedYieldImport => _nosysImport;
+  wasm.FunctionImportExportValue get _schedYieldImport =>
+      wasm.ImportExportKind.function((List<Object?> _) => _errnoSuccess);
 
   wasm.FunctionImportExportValue get _fdPrestatGetImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
@@ -719,7 +722,59 @@ class WASI implements wasi.WASI {
     return _errnoSuccess;
   });
 
-  wasm.FunctionImportExportValue get _pollOneoffImport => _nosysImport;
+  wasm.FunctionImportExportValue get _pollOneoffImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 4) {
+          return _errnoInval;
+        }
+        final inPtr = _asInt(args[0]);
+        final outPtr = _asInt(args[1]);
+        final nsubscriptions = _asInt(args[2]);
+        final neventsPtr = _asInt(args[3]);
+
+        final view = _memoryView();
+        if (view == null) {
+          return _errnoInval;
+        }
+        final bytes = view.bytes;
+        final data = view.data;
+        if (nsubscriptions < 0 ||
+            neventsPtr < 0 ||
+            neventsPtr + 4 > bytes.length) {
+          return _errnoInval;
+        }
+        if (nsubscriptions == 0) {
+          data.setUint32(neventsPtr, 0, Endian.little);
+          return _errnoSuccess;
+        }
+        if (inPtr < 0 ||
+            outPtr < 0 ||
+            inPtr + nsubscriptions * _subscriptionSize > bytes.length ||
+            outPtr + nsubscriptions * _eventSize > bytes.length) {
+          return _errnoInval;
+        }
+
+        for (var index = 0; index < nsubscriptions; index++) {
+          final subscriptionPtr = inPtr + index * _subscriptionSize;
+          final eventPtr = outPtr + index * _eventSize;
+          bytes.fillRange(eventPtr, eventPtr + _eventSize, 0);
+          data.setUint32(
+            eventPtr,
+            data.getUint32(subscriptionPtr, Endian.little),
+            Endian.little,
+          );
+          data.setUint32(
+            eventPtr + 4,
+            data.getUint32(subscriptionPtr + 4, Endian.little),
+            Endian.little,
+          );
+          bytes[eventPtr + _eventTypeOffset] =
+              bytes[subscriptionPtr + _subscriptionTagOffset];
+        }
+
+        data.setUint32(neventsPtr, nsubscriptions, Endian.little);
+        return _errnoSuccess;
+      });
 
   int _writeStringVector({
     required List<Uint8List> strings,
@@ -843,9 +898,25 @@ class WASI implements wasi.WASI {
     }
     return utf8.decode(collected, allowMalformed: true);
   }
+
+  int _clockNowNanos(int clockId) {
+    if (clockId == _clockMonotonic ||
+        clockId == _clockProcessCpuTimeId ||
+        clockId == _clockThreadCpuTimeId) {
+      return _monotonicClock.elapsedMicroseconds * 1000;
+    }
+    return DateTime.now().microsecondsSinceEpoch * 1000;
+  }
 }
 
 const int _iovecEntrySize = wasi_common.iovecEntrySize;
+const int _subscriptionSize = 48;
+const int _subscriptionTagOffset = 8;
+const int _eventSize = 32;
+const int _eventTypeOffset = 10;
+const int _clockMonotonic = 1;
+const int _clockProcessCpuTimeId = 2;
+const int _clockThreadCpuTimeId = 3;
 const int _errnoSuccess = wasi_common.errnoSuccess;
 const int _errnoInval = wasi_common.errnoInval;
 const int _errnoBadf = wasi_common.errnoBadf;

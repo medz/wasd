@@ -522,24 +522,39 @@ void main() {
       );
 
       test(
-        'unsupported syscalls return nosys',
-        () {
+        'unsupported syscalls return nosys while basic scheduling syscalls succeed',
+        () async {
           final preview1 = wasi.imports['wasi_snapshot_preview1']!;
           final schedYield =
               preview1['sched_yield'] as FunctionImportExportValue;
-          final pathUnlinkFile =
-              preview1['path_unlink_file'] as FunctionImportExportValue;
           final pollOneoff =
               preview1['poll_oneoff'] as FunctionImportExportValue;
+          final pathUnlinkFile =
+              preview1['path_unlink_file'] as FunctionImportExportValue;
           final procRaise = preview1['proc_raise'] as FunctionImportExportValue;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
+          wasi.finalizeBindings(instance, memory: memory);
 
-          expect(schedYield.ref(const []), 52);
+          final data = ByteData.view(memory.buffer);
+          const inPtr = 2200;
+          const outPtr = 2300;
+          const neventsPtr = 2400;
+          data.setUint32(inPtr, 0x11223344, Endian.little);
+          data.setUint32(inPtr + 4, 0x55667788, Endian.little);
+          data.setUint8(inPtr + 8, 0); // clock event
+
+          expect(schedYield.ref(const []), 0);
+          expect(pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]), 0);
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(data.getUint32(outPtr, Endian.little), 0x11223344);
+          expect(data.getUint32(outPtr + 4, Endian.little), 0x55667788);
+          expect(data.getUint8(outPtr + 10), 0);
           expect(pathUnlinkFile.ref([3, 0, 0]), 52);
-          expect(pollOneoff.ref([0, 0, 0, 0]), 52);
           expect(procRaise.ref([15]), 52);
         },
         skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; unsupported syscall behavior is delegated to node:wasi.'
+            ? 'Skipping on JS runtimes; syscall behavior is delegated to node:wasi.'
             : false,
       );
 
