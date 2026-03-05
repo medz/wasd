@@ -196,3 +196,9 @@
       - commit: `626d8be`
     - verify: `dart analyze` (pass)
     - verify: `dart test` (pass)
+  - [x] 持续优化（第 6 轮）：测试夹具复用与可维护性收敛（Issue #13）
+    - commit: `cafd116`
+    - [x] 提取共享 Wasm 测试二进制夹具，消除 `wasm_test` / `wasi_test` / `readme_snippets_test` 重复常量（Issue #13）
+      - commit: `cafd116`
+    - verify: `dart analyze` (pass)
+    - verify: `dart test` (pass)
