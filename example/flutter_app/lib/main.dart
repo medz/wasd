@@ -53,8 +53,9 @@ class _DoomPageState extends State<_DoomPage> {
   int _frameCount = 0;
   Isolate? _nativeRunnerIsolate;
   ReceivePort? _nativeRunnerEvents;
+  SendPort? _nativeRunnerControl;
   Memory? _memory;
-  Uint8List? _palette;
+  _PaletteData? _palette;
   int _windowWidth = _doomDefaultWidth;
   int _windowHeight = _doomDefaultHeight;
 
@@ -181,6 +182,7 @@ class _DoomPageState extends State<_DoomPage> {
     _stopNativeRunner();
     final events = ReceivePort();
     _nativeRunnerEvents = events;
+    _nativeRunnerControl = null;
     events.listen(_onNativeRunnerMessage);
     _appendLog('starting native runner isolate...');
     _nativeRunnerIsolate = await Isolate.spawn<_DoomRunnerBootstrap>(
@@ -195,6 +197,13 @@ class _DoomPageState extends State<_DoomPage> {
       return;
     }
     final type = message['type'];
+    if (type == 'control_port') {
+      final port = message['port'];
+      if (port is SendPort) {
+        _nativeRunnerControl = port;
+      }
+      return;
+    }
     if (type == 'log') {
       final line = message['line'];
       if (line is String) {
@@ -238,6 +247,7 @@ class _DoomPageState extends State<_DoomPage> {
   void _stopNativeRunner() {
     _nativeRunnerIsolate?.kill(priority: Isolate.immediate);
     _nativeRunnerIsolate = null;
+    _nativeRunnerControl = null;
     _nativeRunnerEvents?.close();
     _nativeRunnerEvents = null;
   }
@@ -274,6 +284,15 @@ class _DoomPageState extends State<_DoomPage> {
       KeyUpEvent() => false,
       _ => false,
     };
+
+    if (!kIsWeb) {
+      _nativeRunnerControl?.send(<String, Object?>{
+        'type': 'key',
+        'keyType': isDown ? 0 : 1,
+        'code': code,
+      });
+      return;
+    }
 
     _queuedEvents.add(_DoomInputEvent(type: isDown ? 0 : 1, code: code));
   }
@@ -333,12 +352,12 @@ class _DoomPageState extends State<_DoomPage> {
       return 0;
     }
     final bytes = Uint8List.view(memory.buffer);
-    final colors = args.length > 1 ? (_asIntOrNull(args[1]) ?? 256) : 256;
-    final paletteLength = colors * 3;
-    if (ptr + paletteLength > bytes.length) {
+    final hint = args.length > 1 ? _asIntOrNull(args[1]) : null;
+    final palette = _extractPalette(bytes, ptr, hint);
+    if (palette == null) {
       return 0;
     }
-    _palette = Uint8List.fromList(bytes.sublist(ptr, ptr + paletteLength));
+    _palette = palette;
     return 0;
   }
 
@@ -466,49 +485,38 @@ class _DoomPageState extends State<_DoomPage> {
       ),
       body: KeyboardListener(
         focusNode: _focusNode,
+        autofocus: true,
         onKeyEvent: _sendKeyEvent,
-        child: Column(
+        child: Stack(
+          fit: StackFit.expand,
           children: <Widget>[
-            Expanded(
-              flex: 3,
-              child: Container(
-                width: double.infinity,
-                color: Colors.black,
-                alignment: Alignment.center,
-                child: frame == null
-                    ? const Text('Press Play to start DOOM')
-                    : Image.memory(
-                        frame,
-                        gaplessPlayback: true,
-                        filterQuality: FilterQuality.none,
-                      ),
-              ),
+            Container(
+              color: Colors.black,
+              alignment: Alignment.center,
+              child: frame == null
+                  ? const Text('Press Play to start DOOM')
+                  : Image.memory(
+                      frame,
+                      gaplessPlayback: true,
+                      filterQuality: FilterQuality.none,
+                    ),
             ),
             if (_error != null)
-              Padding(
-                padding: const EdgeInsets.all(8),
-                child: Text(
-                  _error!,
-                  style: const TextStyle(color: Colors.redAccent),
-                ),
-              ),
-            Expanded(
-              flex: 2,
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(8),
-                color: const Color(0xFF101010),
-                child: SingleChildScrollView(
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: Container(
+                  margin: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  color: const Color(0xCC330000),
                   child: Text(
-                    _logs.join('\n'),
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                    ),
+                    _error!,
+                    style: const TextStyle(color: Colors.redAccent),
                   ),
                 ),
               ),
-            ),
           ],
         ),
       ),
@@ -536,16 +544,24 @@ final class _DoomRunnerWorker {
   final SendPort _events;
   final Uint8List _wasmBytes;
   final Uint8List _iwadBytes;
+  final Queue<_DoomInputEvent> _queuedEvents = Queue<_DoomInputEvent>();
 
   Memory? _memory;
-  Uint8List? _palette;
+  _PaletteData? _palette;
   int _windowWidth = _doomDefaultWidth;
   int _windowHeight = _doomDefaultHeight;
   int _frameCount = 0;
 
   Future<void> run() async {
     try {
+      final controlPort = ReceivePort();
+      controlPort.listen(_onControlMessage);
+      _events.send(<String, Object?>{
+        'type': 'control_port',
+        'port': controlPort.sendPort,
+      });
       _log('instantiating module...');
+      _enqueueBootstrapInput();
       final wasi = WASI(
         args: const <String>[
           'doom.wasm',
@@ -619,12 +635,12 @@ final class _DoomRunnerWorker {
       return 0;
     }
     final bytes = Uint8List.view(memory.buffer);
-    final colors = args.length > 1 ? (_asIntOrNull(args[1]) ?? 256) : 256;
-    final paletteLength = colors * 3;
-    if (ptr + paletteLength > bytes.length) {
+    final hint = args.length > 1 ? _asIntOrNull(args[1]) : null;
+    final palette = _extractPalette(bytes, ptr, hint);
+    if (palette == null) {
       return 0;
     }
-    _palette = Uint8List.fromList(bytes.sublist(ptr, ptr + paletteLength));
+    _palette = palette;
     return 0;
   }
 
@@ -652,6 +668,9 @@ final class _DoomRunnerWorker {
     final rgb = _indexedToRgb(indexed, _palette);
     final bmp = _encodeBmp24(width: width, height: height, rgb: rgb);
     _frameCount++;
+    if (_frameCount == 1) {
+      _log('received first frame');
+    }
     _events.send(<String, Object?>{
       'type': 'frame',
       'frame': _frameCount,
@@ -660,9 +679,26 @@ final class _DoomRunnerWorker {
     return 0;
   }
 
-  Object? _onPendingEvent(List<Object?> args) => 0;
+  Object? _onPendingEvent(List<Object?> args) =>
+      _queuedEvents.isNotEmpty ? 1 : 0;
 
-  Object? _onNextEvent(List<Object?> args) => 0;
+  Object? _onNextEvent(List<Object?> args) {
+    final memory = _memory;
+    if (memory == null || args.isEmpty || _queuedEvents.isEmpty) {
+      return 0;
+    }
+    final ptr = _asIntOrNull(args.first);
+    if (ptr == null || ptr < 0) {
+      return 0;
+    }
+    final event = _queuedEvents.removeFirst();
+    final view = ByteData.view(memory.buffer);
+    view.setInt32(ptr, event.type, Endian.little);
+    view.setInt32(ptr + 4, event.code, Endian.little);
+    view.setInt32(ptr + 8, 0, Endian.little);
+    view.setInt32(ptr + 12, 0, Endian.little);
+    return 0;
+  }
 
   (int, int) _resolveResolution(List<Object?> args) {
     final ints = args
@@ -703,6 +739,34 @@ final class _DoomRunnerWorker {
   void _log(String line) {
     _events.send(<String, Object?>{'type': 'log', 'line': line});
   }
+
+  void _onControlMessage(Object? message) {
+    if (message is! Map<Object?, Object?>) {
+      return;
+    }
+    if (message['type'] != 'key') {
+      return;
+    }
+    final keyType = _asIntOrNull(message['keyType']);
+    final code = _asIntOrNull(message['code']);
+    if (keyType == null || code == null) {
+      return;
+    }
+    _queuedEvents.add(_DoomInputEvent(type: keyType, code: code));
+  }
+
+  void _enqueueBootstrapInput() {
+    const int enter = 13;
+    const int space = 32;
+    _queuedEvents.addAll(const <_DoomInputEvent>[
+      _DoomInputEvent(type: 0, code: enter),
+      _DoomInputEvent(type: 1, code: enter),
+      _DoomInputEvent(type: 0, code: space),
+      _DoomInputEvent(type: 1, code: space),
+      _DoomInputEvent(type: 0, code: enter),
+      _DoomInputEvent(type: 1, code: enter),
+    ]);
+  }
 }
 
 @pragma('vm:entry-point')
@@ -735,14 +799,9 @@ int? _asIntOrNull(Object? value) {
 bool _isLikelyResolution(int width, int height) =>
     width >= 64 && height >= 64 && width <= 4096 && height <= 4096;
 
-int _paletteExpand6To8(int value) {
-  final clamped = value.clamp(0, 63) as int;
-  return (clamped << 2) | (clamped >> 4);
-}
-
-Uint8List _indexedToRgb(Uint8List indexed, Uint8List? palette) {
+Uint8List _indexedToRgb(Uint8List indexed, _PaletteData? palette) {
   final rgb = Uint8List(indexed.length * 3);
-  if (palette == null || palette.length < 3) {
+  if (palette == null || palette.bytes.length < 3) {
     for (var i = 0; i < indexed.length; i++) {
       final value = indexed[i];
       final base = i * 3;
@@ -753,16 +812,112 @@ Uint8List _indexedToRgb(Uint8List indexed, Uint8List? palette) {
     return rgb;
   }
 
-  final colorCount = palette.length ~/ 3;
+  final colorCount = palette.bytes.length ~/ palette.stride;
   for (var i = 0; i < indexed.length; i++) {
     final idx = indexed[i] % colorCount;
-    final src = idx * 3;
+    final src = idx * palette.stride;
     final dst = i * 3;
-    rgb[dst] = _paletteExpand6To8(palette[src]);
-    rgb[dst + 1] = _paletteExpand6To8(palette[src + 1]);
-    rgb[dst + 2] = _paletteExpand6To8(palette[src + 2]);
+    var r = palette.bytes[src];
+    var g = palette.bytes[src + 1];
+    var b = palette.bytes[src + 2];
+    if (palette.isSixBit) {
+      r = _paletteExpand6To8(r);
+      g = _paletteExpand6To8(g);
+      b = _paletteExpand6To8(b);
+    }
+    rgb[dst] = r;
+    rgb[dst + 1] = g;
+    rgb[dst + 2] = b;
   }
   return rgb;
+}
+
+_PaletteData? _extractPalette(Uint8List memory, int ptr, int? hint) {
+  if (ptr < 0 || ptr >= memory.length) {
+    return null;
+  }
+  final available = memory.length - ptr;
+  if (available < 3) {
+    return null;
+  }
+
+  var stride = 3;
+  var length = 256 * 3;
+
+  if (hint != null && hint > 0) {
+    if (hint <= 256 && hint * 3 <= available) {
+      stride = 3;
+      length = hint * 3;
+    } else if (hint <= available) {
+      if (hint == 1024 || (hint % 4 == 0 && hint >= 256 && hint <= 2048)) {
+        stride = 4;
+        length = hint;
+      } else if (hint % 3 == 0) {
+        stride = 3;
+        length = hint;
+      } else if (hint > 1024 && 1024 <= available) {
+        stride = 4;
+        length = 1024;
+      } else if (768 <= available) {
+        stride = 3;
+        length = 768;
+      } else {
+        return null;
+      }
+    }
+  } else if (1024 <= available) {
+    stride = 4;
+    length = 1024;
+  } else if (768 <= available) {
+    stride = 3;
+    length = 768;
+  } else {
+    length = (available ~/ 3) * 3;
+    stride = 3;
+  }
+
+  if (ptr + length > memory.length || length < stride * 2) {
+    return null;
+  }
+  final bytes = Uint8List.fromList(memory.sublist(ptr, ptr + length));
+  return _PaletteData(
+    bytes: bytes,
+    stride: stride,
+    isSixBit: _isLikelySixBitPalette(bytes, stride),
+  );
+}
+
+bool _isLikelySixBitPalette(Uint8List bytes, int stride) {
+  var max = 0;
+  for (var i = 0; i + 2 < bytes.length; i += stride) {
+    final r = bytes[i];
+    final g = bytes[i + 1];
+    final b = bytes[i + 2];
+    if (r > max) max = r;
+    if (g > max) max = g;
+    if (b > max) max = b;
+    if (max > 63) {
+      return false;
+    }
+  }
+  return true;
+}
+
+int _paletteExpand6To8(int value) {
+  final clamped = value.clamp(0, 63) as int;
+  return (clamped << 2) | (clamped >> 4);
+}
+
+final class _PaletteData {
+  const _PaletteData({
+    required this.bytes,
+    required this.stride,
+    required this.isSixBit,
+  });
+
+  final Uint8List bytes;
+  final int stride;
+  final bool isSixBit;
 }
 
 Uint8List _encodeBmp24({
