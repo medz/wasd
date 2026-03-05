@@ -224,3 +224,14 @@
     - verify: `dart test` (pass)
     - verify: `flutter analyze` in `example/flutter_app` (pass)
     - verify: `flutter test` in `example/flutter_app` (pass)
+  - [x] 持续优化（第 9 轮）：WASI 计时/调度 syscall 语义补齐与回归（Issue #12, #13）
+    - commit: `4558886`
+    - [x] web/native backend 补齐 `sched_yield` 成功返回与 `poll_oneoff` 最小事件写回语义（Issue #12）
+      - commit: `4558886`
+    - [x] `clock_time_get` 引入 monotonic 计时路径，降低 web 启动阶段时钟调用开销（Issue #12）
+      - commit: `4558886`
+    - [x] 新增 WASI 调度 syscall 回归测试（`sched_yield`/`poll_oneoff`）（Issue #13）
+      - commit: `4558886`
+    - verify: `dart analyze` (pass)
+    - verify: `dart test test/wasi_test.dart` (pass)
+    - verify: `dart test` (pass)
