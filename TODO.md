@@ -129,3 +129,7 @@
   - scope: keep unsupported syscall imports explicit with `ENOSYS` stubs (`sched_yield` / `path_open` / `poll_oneoff`)
   - [x] Node DOOM 首帧监控与图片产出链路（Issue #12, #13）
     - commit: `8b117b1`
+  - [x] 提交 0.2 执行期沉淀的 `tool/` 与 CLI 示例资产（Issue #13）
+    - commit: `094c48b`
+  - [x] 新增 DOOM Flutter 全平台监控示例（Issue #13）
+    - commit: `3390fcf`
