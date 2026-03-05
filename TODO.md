@@ -202,3 +202,13 @@
       - commit: `cafd116`
     - verify: `dart analyze` (pass)
     - verify: `dart test` (pass)
+  - [x] 持续优化（第 7 轮）：Web WASI 参数桥接与 Flutter DOOM 启动体验（Issue #12, #13）
+    - commit: `c393cd9`
+    - [x] 修复 JS host import 桥接对 `JavaScriptBigInt` 参数的解码，避免 web WASI 参数崩溃（Issue #12）
+      - commit: `c393cd9`
+    - [x] Flutter DOOM 示例改为默认自动启动，并注入开局引导输入（Issue #13）
+      - commit: `c393cd9`
+    - verify: `dart analyze` (pass)
+    - verify: `dart test` (pass)
+    - verify: `flutter analyze` in `example/flutter_app` (pass)
+    - verify: `flutter test` in `example/flutter_app` (pass)
