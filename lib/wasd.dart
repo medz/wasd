@@ -1,22 +1,2 @@
-library;
-
-export 'src/imports.dart';
-export 'src/instance.dart';
-export 'src/memory.dart';
-export 'src/module.dart';
-export 'src/component.dart';
-export 'src/component_instance.dart';
-export 'src/component_canonical_abi.dart';
-export 'src/opcode.dart';
-export 'src/predecode.dart';
-export 'src/features.dart';
-export 'src/runtime_function.dart';
-export 'src/runtime_global.dart';
-export 'src/table.dart';
-export 'src/validator.dart';
-export 'src/value.dart';
-export 'src/vm.dart';
-export 'src/wasi_preview1.dart';
-export 'src/wasi_socket_transport.dart';
-export 'src/wasi_runner.dart';
-export 'src/wasi_filesystem.dart';
+export 'wasm.dart';
+export 'wasi.dart';
