@@ -270,3 +270,11 @@
     - verify: `dart test test/wasi_test.dart` (pass)
     - verify: `flutter analyze` in `example/flutter_app` (pass)
     - verify: `flutter test` in `example/flutter_app` (pass)
+  - [x] 持续优化（第 13 轮）：DOOM `NextEvent` ABI 对齐修复（Issue #13）
+    - commit: `8e303a8`
+    - [x] 修复 `ZwareDoomNextEvent` 在新构建中使用 4 个 `int*` 参数的 ABI 兼容问题（按 `type/data1/data2/data3` 指针写入，并保留旧 struct 指针兜底）（Issue #13）
+      - commit: `8e303a8`
+    - verify: `dart analyze` (pass)
+    - verify: `dart test test/wasi_test.dart` (pass)
+    - verify: `flutter analyze` in `example/flutter_app` (pass)
+    - verify: `flutter test` in `example/flutter_app` (pass)
