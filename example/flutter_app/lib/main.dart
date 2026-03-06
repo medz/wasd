@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:ffi' as ffi;
 import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:ffi/ffi.dart' as pkg_ffi;
 import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
 
@@ -401,14 +403,13 @@ final class _IsolateDoomRunnerClient implements _DoomRunnerClient {
 
   final Uint8List _wasmBytes;
   final Uint8List _iwadBytes;
-  final Queue<_DoomInputEvent> _pendingEvents = Queue<_DoomInputEvent>();
   final StreamController<_DoomRunnerMessage> _messagesController =
       StreamController<_DoomRunnerMessage>.broadcast();
+  final _SharedInputBuffer _sharedInputBuffer = _SharedInputBuffer.allocate();
 
   Isolate? _isolate;
   ReceivePort? _events;
   StreamSubscription<Object?>? _eventSubscription;
-  SendPort? _control;
   bool _stopped = false;
 
   @override
@@ -424,23 +425,20 @@ final class _IsolateDoomRunnerClient implements _DoomRunnerClient {
     _eventSubscription = events.listen(_onNativeMessage);
     _isolate = await Isolate.spawn<_DoomRunnerBootstrap>(
       _doomRunnerEntryPoint,
-      _DoomRunnerBootstrap(events.sendPort, _wasmBytes, _iwadBytes),
+      _DoomRunnerBootstrap(
+        events.sendPort,
+        _wasmBytes,
+        _iwadBytes,
+        _sharedInputBuffer.address,
+        _sharedInputBuffer.capacity,
+      ),
       errorsAreFatal: false,
     );
   }
 
   @override
   void sendKey(_DoomInputEvent event) {
-    final control = _control;
-    if (control == null) {
-      _pendingEvents.add(event);
-      return;
-    }
-    control.send(<String, Object?>{
-      'type': 'key',
-      'keyType': event.type,
-      'code': event.code,
-    });
+    _sharedInputBuffer.enqueue(event);
   }
 
   @override
@@ -451,8 +449,7 @@ final class _IsolateDoomRunnerClient implements _DoomRunnerClient {
     _stopped = true;
     _isolate?.kill(priority: Isolate.immediate);
     _isolate = null;
-    _control = null;
-    _pendingEvents.clear();
+    _sharedInputBuffer.dispose();
 
     final subscription = _eventSubscription;
     _eventSubscription = null;
@@ -467,14 +464,6 @@ final class _IsolateDoomRunnerClient implements _DoomRunnerClient {
       return;
     }
     final type = message['type'];
-    if (type == 'control_port') {
-      final port = message['port'];
-      if (port is SendPort) {
-        _control = port;
-        _flushPendingEvents();
-      }
-      return;
-    }
     if (type == 'frame') {
       final frame = _asIntOrNull(message['frame']);
       final bmp = message['bmp'];
@@ -488,17 +477,6 @@ final class _IsolateDoomRunnerClient implements _DoomRunnerClient {
       }
     }
     _emit(_normalizeMessage(message));
-  }
-
-  void _flushPendingEvents() {
-    if (_pendingEvents.isEmpty) {
-      return;
-    }
-    final pending = _pendingEvents.toList(growable: false);
-    _pendingEvents.clear();
-    for (final event in pending) {
-      sendKey(event);
-    }
   }
 
   _DoomRunnerMessage _normalizeMessage(Map<Object?, Object?> message) {
@@ -520,11 +498,19 @@ final class _IsolateDoomRunnerClient implements _DoomRunnerClient {
 }
 
 final class _DoomRunnerBootstrap {
-  const _DoomRunnerBootstrap(this.events, this.wasmBytes, this.iwadBytes);
+  const _DoomRunnerBootstrap(
+    this.events,
+    this.wasmBytes,
+    this.iwadBytes,
+    this.inputBufferAddress,
+    this.inputBufferCapacity,
+  );
 
   final SendPort events;
   final Uint8List wasmBytes;
   final Uint8List iwadBytes;
+  final int inputBufferAddress;
+  final int inputBufferCapacity;
 }
 
 final class _DoomRunnerWorker {
@@ -532,13 +518,16 @@ final class _DoomRunnerWorker {
     required void Function(_DoomRunnerMessage message) emit,
     required Uint8List wasmBytes,
     required Uint8List iwadBytes,
+    _SharedInputBufferReader? sharedInputReader,
   }) : _emit = emit,
        _wasmBytes = wasmBytes,
-       _iwadBytes = iwadBytes;
+       _iwadBytes = iwadBytes,
+       _sharedInputReader = sharedInputReader;
 
   final void Function(_DoomRunnerMessage message) _emit;
   final Uint8List _wasmBytes;
   final Uint8List _iwadBytes;
+  final _SharedInputBufferReader? _sharedInputReader;
   final Queue<_DoomInputEvent> _queuedEvents = Queue<_DoomInputEvent>();
 
   Memory? _memory;
@@ -682,11 +671,13 @@ final class _DoomRunnerWorker {
 
   Object? _onPendingEvent(List<Object?> args) {
     _ensureRunning();
+    _sharedInputReader?.drainInto(_queuedEvents);
     return _queuedEvents.isNotEmpty ? 1 : 0;
   }
 
   Object? _onNextEvent(List<Object?> args) {
     _ensureRunning();
+    _sharedInputReader?.drainInto(_queuedEvents);
     final memory = _memory;
     if (memory == null || args.isEmpty || _queuedEvents.isEmpty) {
       return 0;
@@ -764,6 +755,10 @@ Future<void> _doomRunnerEntryPoint(_DoomRunnerBootstrap bootstrap) async {
   final runner = _DoomRunnerWorker(
     wasmBytes: bootstrap.wasmBytes,
     iwadBytes: bootstrap.iwadBytes,
+    sharedInputReader: _SharedInputBufferReader(
+      address: bootstrap.inputBufferAddress,
+      capacity: bootstrap.inputBufferCapacity,
+    ),
     emit: (_DoomRunnerMessage message) {
       if (message['type'] == 'frame') {
         final bmp = message['bmp'];
@@ -778,27 +773,7 @@ Future<void> _doomRunnerEntryPoint(_DoomRunnerBootstrap bootstrap) async {
       bootstrap.events.send(message);
     },
   );
-  final controlPort = ReceivePort();
-  controlPort.listen((Object? message) {
-    if (message is! Map<Object?, Object?>) {
-      return;
-    }
-    if (message['type'] != 'key') {
-      return;
-    }
-    final keyType = _asIntOrNull(message['keyType']);
-    final code = _asIntOrNull(message['code']);
-    if (keyType == null || code == null) {
-      return;
-    }
-    runner.enqueueInput(_DoomInputEvent(type: keyType, code: code));
-  });
-  bootstrap.events.send(<String, Object?>{
-    'type': 'control_port',
-    'port': controlPort.sendPort,
-  });
   await runner.run();
-  controlPort.close();
 }
 
 final class _DoomInputEvent {
@@ -806,6 +781,77 @@ final class _DoomInputEvent {
 
   final int type;
   final int code;
+}
+
+final class _SharedInputBuffer {
+  _SharedInputBuffer._(this._pointer, this.capacity)
+    : _view = _pointer.asTypedList(_headerSize + capacity * 2) {
+    _view[0] = 0; // write index
+    _view[1] = 0; // read index
+    _view[2] = capacity;
+  }
+
+  static const int _headerSize = 3;
+  static const int _defaultCapacity = 256;
+
+  static _SharedInputBuffer allocate({int capacity = _defaultCapacity}) {
+    final pointer = pkg_ffi.calloc<ffi.Int32>(_headerSize + capacity * 2);
+    return _SharedInputBuffer._(pointer, capacity);
+  }
+
+  final ffi.Pointer<ffi.Int32> _pointer;
+  final Int32List _view;
+  final int capacity;
+  bool _disposed = false;
+
+  int get address => _pointer.address;
+
+  void enqueue(_DoomInputEvent event) {
+    if (_disposed) {
+      return;
+    }
+    var write = _view[0];
+    var read = _view[1];
+    final nextWrite = (write + 1) % capacity;
+    if (nextWrite == read) {
+      read = (read + 1) % capacity;
+      _view[1] = read;
+    }
+
+    final base = _headerSize + write * 2;
+    _view[base] = event.type;
+    _view[base + 1] = event.code;
+    _view[0] = nextWrite;
+  }
+
+  void dispose() {
+    if (_disposed) {
+      return;
+    }
+    _disposed = true;
+    pkg_ffi.calloc.free(_pointer);
+  }
+}
+
+final class _SharedInputBufferReader {
+  _SharedInputBufferReader({required int address, required this.capacity})
+    : _view = ffi.Pointer<ffi.Int32>.fromAddress(
+        address,
+      ).asTypedList(_SharedInputBuffer._headerSize + capacity * 2);
+
+  final Int32List _view;
+  final int capacity;
+
+  void drainInto(Queue<_DoomInputEvent> queue) {
+    var read = _view[1];
+    final write = _view[0];
+    while (read != write) {
+      final base = _SharedInputBuffer._headerSize + read * 2;
+      queue.add(_DoomInputEvent(type: _view[base], code: _view[base + 1]));
+      read = (read + 1) % capacity;
+    }
+    _view[1] = read;
+  }
 }
 
 void _enqueueBootstrapInputQueue(Queue<_DoomInputEvent> queue) {
