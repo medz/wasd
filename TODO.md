@@ -260,3 +260,13 @@
     - verify: `dart test test/wasi_test.dart` (pass)
     - verify: `flutter analyze` in `example/flutter_app` (pass)
     - verify: `flutter test` in `example/flutter_app` (pass)
+  - [x] 持续优化（第 12 轮）：macOS 键盘事件桥接修复（Issue #13）
+    - commit: `b28f105`
+    - [x] 修复 isolate 模式下主线程键盘消息无法被忙循环消费的问题（改为共享输入环形缓冲 + 在 `pending_event/next_event` 轮询注入）（Issue #13）
+      - commit: `b28f105`
+    - [x] 为 Flutter 示例增加 `ffi` 依赖以分配跨 isolate 输入共享内存（Issue #13）
+      - commit: `b28f105`
+    - verify: `dart analyze` (pass)
+    - verify: `dart test test/wasi_test.dart` (pass)
+    - verify: `flutter analyze` in `example/flutter_app` (pass)
+    - verify: `flutter test` in `example/flutter_app` (pass)
