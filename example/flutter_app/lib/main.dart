@@ -682,17 +682,35 @@ final class _DoomRunnerWorker {
     if (memory == null || args.isEmpty || _queuedEvents.isEmpty) {
       return 0;
     }
-    final ptr = _asIntOrNull(args.first);
-    if (ptr == null || ptr < 0) {
-      return 0;
-    }
     final event = _queuedEvents.removeFirst();
     final view = ByteData.view(memory.buffer);
+    if (args.length >= 4) {
+      final typePtr = _asIntOrNull(args[0]);
+      final data1Ptr = _asIntOrNull(args[1]);
+      final data2Ptr = _asIntOrNull(args[2]);
+      final data3Ptr = _asIntOrNull(args[3]);
+      if (!_isI32PointerInBounds(typePtr, view) ||
+          !_isI32PointerInBounds(data1Ptr, view) ||
+          !_isI32PointerInBounds(data2Ptr, view) ||
+          !_isI32PointerInBounds(data3Ptr, view)) {
+        return 0;
+      }
+      view.setInt32(typePtr!, event.type, Endian.little);
+      view.setInt32(data1Ptr!, event.code, Endian.little);
+      view.setInt32(data2Ptr!, 0, Endian.little);
+      view.setInt32(data3Ptr!, 0, Endian.little);
+      return 1;
+    }
+
+    final ptr = _asIntOrNull(args.first);
+    if (!_isI32PointerInBounds(ptr, view) || ptr! + 16 > view.lengthInBytes) {
+      return 0;
+    }
     view.setInt32(ptr, event.type, Endian.little);
     view.setInt32(ptr + 4, event.code, Endian.little);
     view.setInt32(ptr + 8, 0, Endian.little);
     view.setInt32(ptr + 12, 0, Endian.little);
-    return 0;
+    return 1;
   }
 
   (int, int) _resolveResolution(List<Object?> args) {
@@ -879,6 +897,9 @@ int? _asIntOrNull(Object? value) {
   }
   return null;
 }
+
+bool _isI32PointerInBounds(int? ptr, ByteData view) =>
+    ptr != null && ptr >= 0 && ptr + 4 <= view.lengthInBytes;
 
 bool _isLikelyResolution(int width, int height) =>
     width >= 64 && height >= 64 && width <= 4096 && height <= 4096;
