@@ -336,3 +336,14 @@
     - verify: `dart run tool/native_benchmark.dart --frames=3 --cases=inline-none` in `example/doom` (pass; `firstFrameUs=34789039`, `firstAfterStartUs=33769546`, `totalUs=35048548`)
     - verify: `dart run tool/native_benchmark.dart --frames=5 --cases=inline-rgba` in `example/doom` (pass; `firstFrameUs=39206702`, `totalUs=39822672`)
     - verify: `dart run tool/native_benchmark.dart --frames=3 --cases=inline-none` in `example/doom` (pass; baseline `firstAfterStart=38283000 totalUs=39486400`, current `firstAfterStart=34803000 totalUs=35951700`)
+  - [-] 持续优化（第 16 轮）：清理本地开发文档与性能排查代码（Issue #13）
+    - [x] 删除仓库内仅用于性能排查的 benchmark / hotspot 工具、bootstrap 产物与首帧延迟测试，避免 example 和仓库根目录继续暴露内部调试脚本（Issue #13）
+      - commit: `a26688c`
+    - [x] 移除 DOOM runtime / native VM / WASI / node monitor 中仅服务性能排查与 syscall 调试的 profile/debug 逻辑，并精简 README 到对外必要命令（Issue #13）
+      - commit: `a26688c`
+    - verify: `dart analyze` (pass)
+    - verify: `dart test` (pass)
+    - verify: `dart test --platform node test/wasi_test.dart test/wasm_test.dart` (pass)
+    - verify: `dart test --platform chrome test/wasi_test.dart test/wasm_test.dart` (pass)
+    - verify: `flutter analyze` in `example/doom` (pass)
+    - verify: `flutter test` in `example/doom` (pass)
