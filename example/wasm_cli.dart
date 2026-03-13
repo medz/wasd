@@ -84,4 +84,3 @@ void main(List<String> args) async {
   final sum = await runWasmAdd(left, right);
   print('WASM add result: $left + $right = $sum');
 }
-

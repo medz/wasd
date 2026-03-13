@@ -109,9 +109,7 @@ BigInt _parseFloatingBits(Object? raw, int bits) {
     return _parseInteger(raw);
   }
   if (raw is num) {
-    return bits == 32
-        ? _f32Bits(raw.toDouble())
-        : _f64Bits(raw.toDouble());
+    return bits == 32 ? _f32Bits(raw.toDouble()) : _f64Bits(raw.toDouble());
   }
   throw const FormatException('invalid-v128-value');
 }

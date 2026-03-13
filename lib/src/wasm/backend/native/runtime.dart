@@ -72,13 +72,11 @@ Object? execute(
     final count = r.readU32();
     final type = _readValType(r);
     for (var i = 0; i < count; i++) {
-      locals.add(
-        switch (type) {
-          ValType.i32 || ValType.i64 => 0,
-          ValType.f32 || ValType.f64 => 0.0,
-          _ => null,
-        },
-      );
+      locals.add(switch (type) {
+        ValType.i32 || ValType.i64 => 0,
+        ValType.f32 || ValType.f64 => 0.0,
+        _ => null,
+      });
     }
   }
 
@@ -96,7 +94,13 @@ Object? execute(
         for (var i = callType.params.length - 1; i >= 0; i--) {
           callArgs[i] = stack.removeLast();
         }
-        final result = execute(module, callIdx, callArgs, hostFunctions, memories);
+        final result = execute(
+          module,
+          callIdx,
+          callArgs,
+          hostFunctions,
+          memories,
+        );
         if (callType.results.isNotEmpty) stack.add(result);
       case 0x20: // local.get
         stack.add(locals[r.readU32()]);
