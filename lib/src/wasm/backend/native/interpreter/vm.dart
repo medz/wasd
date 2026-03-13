@@ -863,7 +863,10 @@ final class WasmVm {
               return _collectResults(function.type.results, stack);
 
             case Opcodes.br:
-              pc = _branch(instruction.immediate!, labels, stack);
+              final depth = instruction.immediate!;
+              pc = depth == 0
+                  ? _branchInnermost(labels, stack)
+                  : _branch(depth, labels, stack);
 
             case Opcodes.brIf:
               final condition = _popI32(stack);
@@ -3257,7 +3260,9 @@ final class WasmVm {
               }
 
             case Opcodes.i32Eqz:
-              stack.add(WasmValue.i32(_popI32(stack) == 0 ? 1 : 0));
+              stack.add(
+                _popI32(stack) == 0 ? WasmValue.oneI32 : WasmValue.zeroI32,
+              );
               pc++;
 
             case Opcodes.i32Eq:
@@ -4129,6 +4134,35 @@ final class WasmVm {
     }
 
     labels.removeRange(targetPosition, labels.length);
+    return target.endIndex + 1;
+  }
+
+  int _branchInnermost(List<_LabelFrame> labels, List<WasmValue> stack) {
+    if (labels.isEmpty) {
+      throw RangeError('Invalid label depth out of range: 0 (labels=0)');
+    }
+    final target = labels.last;
+
+    if (target.branchTypes.isEmpty) {
+      _truncateStackToHeight(stack, target.stackHeight, context: 'branch');
+    } else {
+      RuntimeControlOps.rebaseStackForBranch(
+        stack: stack,
+        branchTypes: target.branchTypes,
+        stackBaseHeight: target.stackHeight,
+        context: 'branch',
+      );
+    }
+
+    if (target.kind == _LabelKind.loop) {
+      return target.loopStartIndex;
+    }
+
+    if (labels.length == 1) {
+      return target.endIndex;
+    }
+
+    labels.removeLast();
     return target.endIndex + 1;
   }
 

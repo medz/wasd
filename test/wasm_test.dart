@@ -7,6 +7,7 @@ import 'support/wasm_fixtures.dart';
 final _wasmBytes = simpleAddModuleBytes();
 final _localSetTeeBytes = localSetTeeModuleBytes();
 final _directCallBytes = directCallModuleBytes();
+final _loopBranchBytes = loopBranchModuleBytes();
 
 final _invalidBytes = Uint8List.fromList([0x00, 0x00, 0x00, 0x00]);
 
@@ -199,6 +200,25 @@ void main() {
       expect(callTwice([0]), 2);
       expect(callTwice([41]), 43);
       expect(callTwice([-2]), 0);
+    });
+  });
+
+  group('Interpreter loop and branch ops', () {
+    late Instance instance;
+
+    setUp(() async {
+      final result = await WebAssembly.instantiate(_loopBranchBytes.buffer);
+      instance = result.instance;
+    });
+
+    test('loop_count preserves block and loop branch semantics', () {
+      final loopCount =
+          (instance.exports['loop_count']! as FunctionImportExportValue).ref;
+
+      expect(loopCount([0]), 0);
+      expect(loopCount([1]), 1);
+      expect(loopCount([5]), 5);
+      expect(loopCount([10]), 10);
     });
   });
 
