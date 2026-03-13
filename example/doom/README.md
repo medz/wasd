@@ -1,5 +1,7 @@
 # DOOM Example
 
+This example is the standalone Flutter app for running DOOM with `wasd`.
+
 ## Run (macOS)
 
 ```sh
