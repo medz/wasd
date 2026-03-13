@@ -218,8 +218,8 @@
       - commit: `454dc88`
     - [x] 修复 Flutter web `dart:isolate is not supported on dart4web` 启动回归（Issue #12, #13）
       - commit: `454dc88`
-  - [-] 持续优化（第 9 轮）：补齐 JS runtime 区分测试，验证 browser WASI/WebAssembly 核心行为（Issue #12, #13）
-    - note: in progress
+  - [x] 持续优化（第 9 轮）：补齐 JS runtime 区分测试，验证 browser WASI/WebAssembly 核心行为（Issue #12, #13）
+    - commit: `ffda685`
     - verify: `dart analyze` (pass)
     - verify: `dart test test/wasi_test.dart test/wasm_test.dart` (pass)
     - verify: `dart test --platform node test/wasi_test.dart test/wasm_test.dart` (pass)
@@ -243,16 +243,16 @@
     - verify: `dart test` (pass)
   - [x] 持续优化（第 10 轮）：Web WASI 启动热路径优化与首帧时延门禁（Issue #12, #13）
     - commit: `c8a5df4`
-  - [-] 持续优化（第 11 轮）：恢复 Flutter web 工程并打通 DOOM 浏览器运行链路（Issue #12, #13）
-    - note: in progress
+  - [x] 持续优化（第 11 轮）：恢复 Flutter web 工程并打通 DOOM 浏览器运行链路（Issue #12, #13）
+    - commit: `ffda685`
     - [x] web preview1 引入 memory view 缓存与虚拟文件/目录索引，降低 `fd_*` 与 `path_*` 热路径开销（Issue #12）
       - commit: `c8a5df4`
     - [x] Flutter web inline runner 改为同步消息分发，降低首帧/日志事件投递延后（Issue #13）
       - commit: `c8a5df4`
     - [x] 新增 DOOM Node 首帧时延回归测试（30s 预算）并执行（Issue #13）
       - commit: `c8a5df4`
-    - [-] Flutter web 示例切换为 `isolate_manager 6.2.0` custom worker 并恢复浏览器 DOOM 首帧（Issue #12, #13）
-      - note: verified locally in browser; waiting for commit
+    - [x] Flutter web 示例切换为 `isolate_manager 6.2.0` custom worker 并恢复浏览器 DOOM 首帧（Issue #12, #13）
+      - commit: `ffda685`
     - verify: `dart analyze` (pass)
     - verify: `dart test test/wasi_test.dart` (pass)
     - verify: `dart test test/doom_first_frame_latency_test.dart` (pass)
@@ -295,11 +295,14 @@
     - verify: `dart test test/wasi_test.dart` (pass)
     - verify: `flutter analyze` in `example/flutter_app` (pass)
     - verify: `flutter test` in `example/flutter_app` (pass)
-  - [-] 持续优化（第 14 轮）：统一 DOOM runner 并修复 native async Wasm 执行路径（Issue #12, #13）
-    - note: verified locally on macOS; waiting for commit
+  - [x] 持续优化（第 14 轮）：统一 DOOM runner 并修复 native async Wasm 执行路径（Issue #12, #13）
+    - commit: `ffda685`
     - [x] DOOM Flutter 示例收敛到单一 `isolate_manager` runner，并移除 inline runner / `package:wasd/src/...` 依赖（Issue #13）
+      - commit: `ffda685`
     - [x] 修复 native backend 在 async-only host imports 下先走同步 VM 导致的 trap（Issue #12, #13）
+      - commit: `ffda685`
     - [x] 恢复 macOS 下 DOOM 启动后 `Enter`/方向键可改变游戏状态的输入链路（Issue #13）
+      - commit: `ffda685`
     - verify: `dart analyze` (pass)
     - verify: `dart test test/wasi_test.dart test/wasm_test.dart` (pass)
     - verify: `dart test --platform node test/wasi_test.dart test/wasm_test.dart` (pass)
