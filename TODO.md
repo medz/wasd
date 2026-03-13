@@ -218,6 +218,12 @@
       - commit: `454dc88`
     - [x] 修复 Flutter web `dart:isolate is not supported on dart4web` 启动回归（Issue #12, #13）
       - commit: `454dc88`
+  - [-] 持续优化（第 9 轮）：补齐 JS runtime 区分测试，验证 browser WASI/WebAssembly 核心行为（Issue #12, #13）
+    - note: in progress
+    - verify: `dart analyze` (pass)
+    - verify: `dart test test/wasi_test.dart test/wasm_test.dart` (pass)
+    - verify: `dart test --platform node test/wasi_test.dart test/wasm_test.dart` (pass)
+    - verify: `dart test --platform chrome test/wasi_test.dart test/wasm_test.dart` (pass)
     - [x] 移除示例顶部状态栏并更新 widget 测试断言（Issue #13）
       - commit: `454dc88`
     - verify: `dart analyze` (pass)
@@ -237,17 +243,28 @@
     - verify: `dart test` (pass)
   - [x] 持续优化（第 10 轮）：Web WASI 启动热路径优化与首帧时延门禁（Issue #12, #13）
     - commit: `c8a5df4`
+  - [-] 持续优化（第 11 轮）：恢复 Flutter web 工程并打通 DOOM 浏览器运行链路（Issue #12, #13）
+    - note: in progress
     - [x] web preview1 引入 memory view 缓存与虚拟文件/目录索引，降低 `fd_*` 与 `path_*` 热路径开销（Issue #12）
       - commit: `c8a5df4`
     - [x] Flutter web inline runner 改为同步消息分发，降低首帧/日志事件投递延后（Issue #13）
       - commit: `c8a5df4`
     - [x] 新增 DOOM Node 首帧时延回归测试（30s 预算）并执行（Issue #13）
       - commit: `c8a5df4`
+    - [-] Flutter web 示例切换为 `isolate_manager 6.2.0` custom worker 并恢复浏览器 DOOM 首帧（Issue #12, #13）
+      - note: verified locally in browser; waiting for commit
     - verify: `dart analyze` (pass)
     - verify: `dart test test/wasi_test.dart` (pass)
     - verify: `dart test test/doom_first_frame_latency_test.dart` (pass)
     - verify: `flutter analyze` in `example/flutter_app` (pass)
     - verify: `flutter test` in `example/flutter_app` (pass)
+    - verify: `flutter build web` in `example/flutter_app` (pass)
+    - verify: `dart test test/wasi_test.dart test/wasm_test.dart` (pass)
+    - verify: `dart test --platform node test/wasi_test.dart test/wasm_test.dart` (pass)
+    - verify: `dart test --platform chrome test/wasi_test.dart test/wasm_test.dart` (pass)
+    - verify: browser local serve + Playwright screenshot shows DOOM/FREEDOOM screen in app (pass)
+    - verify: browser local serve with `COOP/COEP` + Playwright key presses (`Enter` / `Escape` / `ArrowDown`) change DOOM state in app (pass)
+    - note: updated `example/flutter_app/README.md` and root `README.md` with required Chrome `COOP/COEP` flags; desktop native input path now uses a worker-created `SendPort` bridge while web keeps shared-memory input
   - [x] 持续优化（第 11 轮）：DOOM 示例收敛到桌面可玩（移除 web 目标）与 macOS 交互/显示修复（Issue #12, #13）
     - commit: `9d73397`
     - [x] 移除 `example/flutter_app/web` 目标资产并在示例层显式下线 web 运行（Issue #13）
@@ -278,3 +295,15 @@
     - verify: `dart test test/wasi_test.dart` (pass)
     - verify: `flutter analyze` in `example/flutter_app` (pass)
     - verify: `flutter test` in `example/flutter_app` (pass)
+  - [-] 持续优化（第 14 轮）：统一 DOOM runner 并修复 native async Wasm 执行路径（Issue #12, #13）
+    - note: verified locally on macOS; waiting for commit
+    - [x] DOOM Flutter 示例收敛到单一 `isolate_manager` runner，并移除 inline runner / `package:wasd/src/...` 依赖（Issue #13）
+    - [x] 修复 native backend 在 async-only host imports 下先走同步 VM 导致的 trap（Issue #12, #13）
+    - [x] 恢复 macOS 下 DOOM 启动后 `Enter`/方向键可改变游戏状态的输入链路（Issue #13）
+    - verify: `dart analyze` (pass)
+    - verify: `dart test test/wasi_test.dart test/wasm_test.dart` (pass)
+    - verify: `dart test --platform node test/wasi_test.dart test/wasm_test.dart` (pass)
+    - verify: `dart test --platform chrome test/wasi_test.dart test/wasm_test.dart` (pass)
+    - verify: `flutter analyze` in `example/flutter_app` (pass)
+    - verify: `flutter test` in `example/flutter_app` (pass)
+    - verify: `flutter run -d macos` + local screenshots confirm boot screen, main menu transition, and post-input state change (pass)

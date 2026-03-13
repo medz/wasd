@@ -50,6 +50,14 @@ dart run example/wasm_cli.dart
 dart run example/wasm_cli.dart 3 9
 ```
 
+Run the Flutter DOOM example:
+
+```bash
+cd example/flutter_app
+flutter run -d macos
+flutter run -d chrome --web-hostname=127.0.0.1 --web-port=8125 --web-header=Cross-Origin-Opener-Policy=same-origin --web-header=Cross-Origin-Embedder-Policy=require-corp
+```
+
 Minimal module invocation:
 
 ```dart

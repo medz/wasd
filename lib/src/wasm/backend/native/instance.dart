@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../../errors.dart';
 import '../../instance.dart' as wasm;
 import '../../module.dart' as wasm;
@@ -32,6 +34,7 @@ class Instance implements wasm.Instance {
 
   static ir_imports.WasmImports _buildImports(wasm.Imports imports) {
     final functions = <String, ir_imports.WasmHostFunction>{};
+    final asyncFunctions = <String, ir_imports.WasmAsyncHostFunction>{};
     final memories = <String, ir_memory.WasmMemory>{};
 
     for (final moduleEntry in imports.entries) {
@@ -43,7 +46,22 @@ class Instance implements wasm.Instance {
         final importValue = importEntry.value;
         switch (importValue) {
           case wasm.FunctionImportExportValue(:final ref):
-            functions[key] = ref;
+            final isAsyncTyped = ref.runtimeType.toString().contains('Future');
+            if (!isAsyncTyped) {
+              functions[key] = (List<Object?> args) {
+                final result = ref(args);
+                if (result is Future) {
+                  throw UnsupportedError(
+                    'Async-only host import `$key` is not available in '
+                    'the synchronous VM pipeline. Use invokeAsync on direct '
+                    'exported host functions.',
+                  );
+                }
+                return result;
+              };
+            }
+            asyncFunctions[key] = (List<Object?> args) =>
+                Future<Object?>.sync(() => ref(args));
           case wasm.MemoryImportExportValue(:final ref):
             if (ref is! native_memory.Memory) {
               throw LinkError(
@@ -59,7 +77,11 @@ class Instance implements wasm.Instance {
       }
     }
 
-    return ir_imports.WasmImports(functions: functions, memories: memories);
+    return ir_imports.WasmImports(
+      functions: functions,
+      asyncFunctions: asyncFunctions,
+      memories: memories,
+    );
   }
 
   wasm.Exports _buildExports() {
@@ -68,9 +90,20 @@ class Instance implements wasm.Instance {
       final name = descriptor.name;
       switch (descriptor.kind) {
         case wasm.ImportExportKind.function:
-          result[name] = wasm.ImportExportKind.function(
-            (List<Object?> args) => _runtime.invoke(name, args),
-          );
+          result[name] = wasm.ImportExportKind.function((List<Object?> args) {
+            if (_runtime.hasAsyncOnlyHostImports) {
+              return _runtime.invokeAsync(name, args);
+            }
+            try {
+              return _runtime.invoke(name, args);
+            } catch (error) {
+              final message = '$error';
+              if (message.contains('Async-only host import')) {
+                return _runtime.invokeAsync(name, args);
+              }
+              rethrow;
+            }
+          });
         case wasm.ImportExportKind.memory:
           final memory = _runtime.exportedMemory(name);
           result[name] = wasm.ImportExportKind.memory(

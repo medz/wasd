@@ -1,6 +1,6 @@
 # DOOM Flutter Example
 
-This example targets desktop/mobile Flutter hosts only.
+This example targets Flutter desktop and web hosts.
 
 ## Run (macOS)
 
@@ -8,7 +8,17 @@ This example targets desktop/mobile Flutter hosts only.
 flutter run -d macos
 ```
 
-## Target policy
+## Run (Chrome)
 
-- Web target is intentionally removed for this example.
-- If you force-run on web from another scaffold, the app will show an explicit unsupported message.
+The web worker input path uses `SharedArrayBuffer`, so Chrome must run with
+`COOP/COEP` response headers enabled:
+
+```sh
+flutter run -d chrome \
+  --web-hostname=127.0.0.1 \
+  --web-port=8125 \
+  --web-header=Cross-Origin-Opener-Policy=same-origin \
+  --web-header=Cross-Origin-Embedder-Policy=require-corp
+```
+
+Without these headers, DOOM can render on web, but keyboard input will not work.

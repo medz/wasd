@@ -18,6 +18,26 @@ import 'value.dart';
 
 enum _LabelKind { block, loop, if_, tryLegacy }
 
+final class _ExecutionTrapContext implements Exception {
+  _ExecutionTrapContext({
+    required this.functionIndex,
+    required this.programCounter,
+    required this.opcode,
+    required this.cause,
+  });
+
+  final int functionIndex;
+  final int programCounter;
+  final int opcode;
+  final Object cause;
+
+  @override
+  String toString() {
+    return 'WasmVm trap at function=$functionIndex '
+        'pc=$programCounter opcode=0x${opcode.toRadixString(16)}: $cause';
+  }
+}
+
 final class _LabelFrame {
   _LabelFrame({
     required this.kind,
@@ -3820,6 +3840,19 @@ final class WasmVm {
             rethrow;
           }
           pc = handledPc;
+        } catch (error, stackTrace) {
+          if (error.runtimeType.toString() == '_WasiExit') {
+            rethrow;
+          }
+          Error.throwWithStackTrace(
+            _ExecutionTrapContext(
+              functionIndex: currentFunctionIndex,
+              programCounter: pc,
+              opcode: instruction.opcode,
+              cause: error,
+            ),
+            stackTrace,
+          );
         }
       }
 

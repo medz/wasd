@@ -34,6 +34,26 @@ final class _AsyncSubsetThrownException implements Exception {
   final List<WasmValue> values;
 }
 
+final class _AsyncSubsetExecutionError implements Exception {
+  _AsyncSubsetExecutionError({
+    required this.functionIndex,
+    required this.programCounter,
+    required this.opcode,
+    required this.cause,
+  });
+
+  final int functionIndex;
+  final int programCounter;
+  final int opcode;
+  final Object cause;
+
+  @override
+  String toString() {
+    return 'invokeAsync subset failed at function=$functionIndex '
+        'pc=$programCounter opcode=0x${opcode.toRadixString(16)}: $cause';
+  }
+}
+
 final class _AsyncSubsetControlFrame {
   _AsyncSubsetControlFrame({
     required this.kind,
@@ -655,6 +675,8 @@ final class WasmInstance {
   List<String> get exportedTables => _tableExports.keys.toList(growable: false);
 
   List<String> get exportedTags => _tagExports.keys.toList(growable: false);
+
+  bool get hasAsyncOnlyHostImports => _hasAsyncOnlyHostImports;
 
   WasmFunctionType exportedFunctionType(String exportName) {
     final functionIndex = _functionExports[exportName];
@@ -5210,6 +5232,19 @@ final class WasmInstance {
           rethrow;
         }
         pc = handledPc;
+      } catch (error, stackTrace) {
+        if (error.runtimeType.toString() == '_WasiExit') {
+          rethrow;
+        }
+        Error.throwWithStackTrace(
+          _AsyncSubsetExecutionError(
+            functionIndex: functionIndex,
+            programCounter: pc,
+            opcode: instruction.opcode,
+            cause: error,
+          ),
+          stackTrace,
+        );
       }
     }
 

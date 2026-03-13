@@ -766,27 +766,115 @@ class WASI implements wasi_iface.WASI {
           return _errnoInval;
         }
 
-        for (var index = 0; index < nsubscriptions; index++) {
-          final subscriptionPtr = inPtr + index * _subscriptionSize;
-          final eventPtr = outPtr + index * _eventSize;
-          bytes.fillRange(eventPtr, eventPtr + _eventSize, 0);
-          data.setUint32(
-            eventPtr,
-            data.getUint32(subscriptionPtr, Endian.little),
-            Endian.little,
+        var waitNanos = _writePollEvents(
+          bytes: bytes,
+          data: data,
+          inPtr: inPtr,
+          outPtr: outPtr,
+          nsubscriptions: nsubscriptions,
+          neventsPtr: neventsPtr,
+        );
+        if (waitNanos > 0) {
+          io.sleep(_durationFromNanos(waitNanos));
+          waitNanos = _writePollEvents(
+            bytes: bytes,
+            data: data,
+            inPtr: inPtr,
+            outPtr: outPtr,
+            nsubscriptions: nsubscriptions,
+            neventsPtr: neventsPtr,
           );
-          data.setUint32(
-            eventPtr + 4,
-            data.getUint32(subscriptionPtr + 4, Endian.little),
-            Endian.little,
-          );
-          bytes[eventPtr + _eventTypeOffset] =
-              bytes[subscriptionPtr + _subscriptionTagOffset];
         }
-
-        data.setUint32(neventsPtr, nsubscriptions, Endian.little);
         return _errnoSuccess;
       });
+
+  int _writePollEvents({
+    required Uint8List bytes,
+    required ByteData data,
+    required int inPtr,
+    required int outPtr,
+    required int nsubscriptions,
+    required int neventsPtr,
+  }) {
+    var eventCount = 0;
+    var earliestWaitNanos = 0;
+    final nowMonotonic = _clockNowNanos(_clockMonotonic);
+    for (var index = 0; index < nsubscriptions; index++) {
+      final subscriptionPtr = inPtr + index * _subscriptionSize;
+      final eventPtr = outPtr + index * _eventSize;
+      bytes.fillRange(eventPtr, eventPtr + _eventSize, 0);
+
+      final tag = bytes[subscriptionPtr + _subscriptionTagOffset];
+      final remainingNanos = switch (tag) {
+        _eventTypeClock => _clockSubscriptionWaitNanos(
+          data: data,
+          subscriptionPtr: subscriptionPtr,
+          nowMonotonic: nowMonotonic,
+        ),
+        _ => 0,
+      };
+      if (remainingNanos > 0) {
+        if (earliestWaitNanos == 0 || remainingNanos < earliestWaitNanos) {
+          earliestWaitNanos = remainingNanos;
+        }
+        continue;
+      }
+
+      eventCount++;
+      data.setUint32(
+        eventPtr,
+        data.getUint32(subscriptionPtr, Endian.little),
+        Endian.little,
+      );
+      data.setUint32(
+        eventPtr + 4,
+        data.getUint32(subscriptionPtr + 4, Endian.little),
+        Endian.little,
+      );
+      bytes[eventPtr + _eventTypeOffset] = tag;
+    }
+
+    data.setUint32(neventsPtr, eventCount, Endian.little);
+    return eventCount == 0 ? earliestWaitNanos : 0;
+  }
+
+  int _clockSubscriptionWaitNanos({
+    required ByteData data,
+    required int subscriptionPtr,
+    required int nowMonotonic,
+  }) {
+    final clockId = data.getUint32(
+      subscriptionPtr + _subscriptionClockIdOffset,
+      Endian.little,
+    );
+    final timeout = _getUint64(
+      data,
+      subscriptionPtr + _subscriptionClockTimeoutOffset,
+    );
+    final flags = data.getUint16(
+      subscriptionPtr + _subscriptionClockFlagsOffset,
+      Endian.little,
+    );
+    final now = _clockNowNanos(clockId);
+    final deadline = (flags & _subscriptionClockAbstime) != 0
+        ? timeout
+        : now + timeout;
+    final remaining = deadline - now;
+    if (clockId == _clockMonotonic) {
+      return remaining > 0 ? remaining : 0;
+    }
+    final adjustedDeadline = nowMonotonic + remaining;
+    return adjustedDeadline > nowMonotonic
+        ? adjustedDeadline - nowMonotonic
+        : 0;
+  }
+
+  Duration _durationFromNanos(int nanos) {
+    if (nanos <= 0) {
+      return Duration.zero;
+    }
+    return Duration(microseconds: (nanos / 1000).ceil());
+  }
 
   int _writeStringVector({
     required List<Uint8List> strings,
@@ -992,9 +1080,14 @@ const int _subscriptionSize = 48;
 const int _subscriptionTagOffset = 8;
 const int _eventSize = 32;
 const int _eventTypeOffset = 10;
+const int _eventTypeClock = 0;
 const int _clockMonotonic = 1;
 const int _clockProcessCpuTimeId = 2;
 const int _clockThreadCpuTimeId = 3;
+const int _subscriptionClockIdOffset = 16;
+const int _subscriptionClockTimeoutOffset = 24;
+const int _subscriptionClockFlagsOffset = 40;
+const int _subscriptionClockAbstime = 1;
 const int _errnoSuccess = wasi_common.errnoSuccess;
 const int _errnoInval = wasi_common.errnoInval;
 const int _errnoBadf = wasi_common.errnoBadf;
@@ -1042,6 +1135,12 @@ void _setUint64(ByteData data, int offset, int value) {
   final high = (normalized >> 32) & 0xffffffff;
   data.setUint32(offset, low, Endian.little);
   data.setUint32(offset + 4, high, Endian.little);
+}
+
+int _getUint64(ByteData data, int offset) {
+  final low = data.getUint32(offset, Endian.little);
+  final high = data.getUint32(offset + 4, Endian.little);
+  return (high << 32) | low;
 }
 
 bool _isTruthyEnv(String? value) {

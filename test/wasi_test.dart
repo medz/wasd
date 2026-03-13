@@ -4,9 +4,27 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
+import 'support/runtime_environment.dart';
 import 'support/wasm_fixtures.dart';
 
 final _wasiBytes = wasiStartModuleBytes();
+
+Object? _skipOnNode(String reason) => isNodeJsRuntime ? reason : false;
+
+void _setUint64Le(ByteData data, int offset, int value) {
+  final normalized = value.toUnsigned(64);
+  data.setUint32(offset, normalized & 0xffffffff, Endian.little);
+  data.setUint32(offset + 4, normalized >>> 32, Endian.little);
+}
+
+int _getUint64Le(ByteData data, int offset) {
+  final low = data.getUint32(offset, Endian.little);
+  final high = data.getUint32(offset + 4, Endian.little);
+  return low | (high << 32);
+}
+
+Future<Object?> _awaitMaybeFuture(Object? value) async =>
+    value is Future ? await value : value;
 
 void main() {
   group('WASI', () {
@@ -137,9 +155,9 @@ void main() {
           final nonReturningWasi = WASI(returnOnExit: false);
           expect(() => nonReturningWasi.start(instance), throwsA(isA<Error>()));
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; proc_exit may terminate process.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; proc_exit may terminate process.',
+        ),
       );
 
       test('fd_write writes bytes to stdout and returns number of bytes', () {
@@ -205,9 +223,9 @@ void main() {
           );
           expect(bytes[firstArgPtr + 8], 0);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; args behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; args behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -226,9 +244,9 @@ void main() {
           final result = argsGet.ref([argvPtr, argvBufPtr]);
           expect(result, 28);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; args behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; args behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -263,9 +281,9 @@ void main() {
           );
           expect(bytes[firstEnvPtr + 7], 0);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; environ behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; environ behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -286,9 +304,9 @@ void main() {
           final after = bytes.sublist(randomPtr, randomPtr + randomLen);
           expect(after.any((value) => value != 0xaa), isTrue);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; random behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; random behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -299,9 +317,9 @@ void main() {
           final result = fdWrite.ref([99, 0, 0, 0]);
           expect(result, 8);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; fd_write behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; fd_write behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -322,9 +340,9 @@ void main() {
           final result = fdWrite.ref([1, iovPtr, 1, 0]);
           expect(result, 28);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; fd_write behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; fd_write behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -356,9 +374,9 @@ void main() {
           expect(result, 0);
           expect(data.getUint32(nreadPtr, Endian.little), 0);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; fd_read behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; fd_read behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -369,9 +387,9 @@ void main() {
           final result = fdRead.ref([99, 0, 0, 0]);
           expect(result, 8);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; fd_read behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; fd_read behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -384,9 +402,9 @@ void main() {
           final result = (fdClose as FunctionImportExportValue).ref([42]);
           expect(result, 8);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; fd_close behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; fd_close behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -407,9 +425,9 @@ void main() {
           expect(result, 0);
           expect(bytes[fdstatPtr], 2);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; fd_fdstat_get behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; fd_fdstat_get behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -421,9 +439,9 @@ void main() {
           final result = fdFdstatGet.ref([42, 0]);
           expect(result, 8);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; fd_fdstat_get behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; fd_fdstat_get behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -438,15 +456,15 @@ void main() {
 
           final data = ByteData.view(memory.buffer);
           const timePtr = 1600;
-          data.setUint64(timePtr, 0, Endian.little);
+          _setUint64Le(data, timePtr, 0);
 
           final result = clockTimeGet.ref([0, 0, timePtr]);
           expect(result, 0);
-          expect(data.getUint64(timePtr, Endian.little), greaterThan(0));
+          expect(_getUint64Le(data, timePtr), greaterThan(0));
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; clock_time_get behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; clock_time_get behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -463,9 +481,9 @@ void main() {
           final result = clockTimeGet.ref([0, 0, bytes.length - 4]);
           expect(result, 28);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; clock_time_get behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; clock_time_get behavior is delegated to node:wasi.',
+        ),
       );
 
       test('finalizeBindings accepts explicit memory and reuses it later', () {
@@ -516,9 +534,9 @@ void main() {
           expect(fdClose.ref([11]), 0);
           expect(fdClose.ref([12]), 0);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; descriptor behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; descriptor behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -544,8 +562,11 @@ void main() {
           data.setUint32(inPtr + 4, 0x55667788, Endian.little);
           data.setUint8(inPtr + 8, 0); // clock event
 
-          expect(schedYield.ref(const []), 0);
-          expect(pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]), 0);
+          expect(await _awaitMaybeFuture(schedYield.ref(const [])), 0);
+          expect(
+            await _awaitMaybeFuture(pollOneoff.ref([inPtr, outPtr, 1, neventsPtr])),
+            0,
+          );
           expect(data.getUint32(neventsPtr, Endian.little), 1);
           expect(data.getUint32(outPtr, Endian.little), 0x11223344);
           expect(data.getUint32(outPtr + 4, Endian.little), 0x55667788);
@@ -553,9 +574,9 @@ void main() {
           expect(pathUnlinkFile.ref([3, 0, 0]), 52);
           expect(procRaise.ref([15]), 52);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; syscall behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; syscall behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -609,9 +630,9 @@ void main() {
           expect(data.getUint32(newOffsetPtr + 4, Endian.little), 0);
           expect(fdSeek.ref([1, 0, 0, newOffsetPtr]), 8);
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; path_open/fd_seek behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; path_open/fd_seek behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -671,9 +692,9 @@ void main() {
             44,
           );
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; path_filestat_get behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; path_filestat_get behavior is delegated to node:wasi.',
+        ),
       );
 
       test(
@@ -704,9 +725,9 @@ void main() {
             '/sandbox',
           );
         },
-        skip: const bool.fromEnvironment('dart.library.js_interop')
-            ? 'Skipping on JS runtimes; prestat behavior is delegated to node:wasi.'
-            : false,
+        skip: _skipOnNode(
+          'Skipping on Node.js; prestat behavior is delegated to node:wasi.',
+        ),
       );
     });
   });
