@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -18,34 +19,49 @@ void doomRunnerWorker(dynamic params) {
       final request = normalizeDoomRunnerMessage(message);
       final command = request['type'];
       if (command != doomRunnerCommandStart) {
-        _sendMessage(controller, <String, Object?>{
-          'type': 'error',
+        _sendMessage(controller, request['uiPort'], <String, Object?>{
+          'type': doomRunnerMessageError,
           'error': 'Unsupported worker command: $command',
         });
         return const <String, Object?>{'type': 'ignored'};
       }
 
+      ReceivePort? nativeInputPort;
+      StreamSubscription<Object?>? nativeInputSubscription;
+
       try {
         final wasmBytes = _requireBytes(request['wasmBytes'], 'wasmBytes');
         final iwadBytes = _requireBytes(request['iwadBytes'], 'iwadBytes');
+        final nativeUiPort = request['uiPort'];
+        final frameTransport = request['frameTransport'] == doomFrameFormatBmp
+            ? DoomFrameTransport.bmp
+            : DoomFrameTransport.rgba;
         final inputQueue = DoomSharedInputQueue.fromHandle(
           request['inputQueue'],
           capacity: asIntOrNull(request['inputQueueCapacity']) ?? 256,
         );
-        final nativeInputPort = ReceivePort();
         final pendingNativeEvents = Queue<DoomInputEvent>();
-        final nativeInputSubscription = nativeInputPort.listen((message) {
-          final event = DoomInputEvent.fromMessage(message);
-          if (event != null) {
-            pendingNativeEvents.add(event);
-          }
-        });
-        _sendMessage(controller, <String, Object?>{
-          'type': 'input-port',
-          'port': nativeInputPort.sendPort,
-        });
+        if (inputQueue == null) {
+          nativeInputPort = ReceivePort();
+          nativeInputSubscription = nativeInputPort.listen((message) {
+            final event = DoomInputEvent.fromNativeMessage(message);
+            if (event != null) {
+              pendingNativeEvents.add(event);
+            }
+          });
+          _sendMessage(controller, nativeUiPort, <String, Object?>{
+            'type': doomRunnerMessageInputPort,
+            'port': nativeInputPort.sendPort,
+          });
+        }
+
         final runtime = DoomRuntime.withInputDrain(
-          emit: (runnerMessage) => _sendMessage(controller, runnerMessage),
+          emit: (runnerMessage) =>
+              _sendMessage(controller, nativeUiPort, runnerMessage),
+          frameTransport: frameTransport,
+          frameIntervalUs: frameTransport == DoomFrameTransport.rgba
+              ? doomNativeTargetFrameIntervalUs
+              : 0,
           drainInput: (queue) {
             inputQueue?.drainInto(queue);
             if (pendingNativeEvents.isEmpty) {
@@ -55,18 +71,16 @@ void doomRunnerWorker(dynamic params) {
             pendingNativeEvents.clear();
           },
         );
-        try {
-          await runtime.run(wasmBytes: wasmBytes, iwadBytes: iwadBytes);
-        } finally {
-          await nativeInputSubscription.cancel();
-          nativeInputPort.close();
-        }
+        await runtime.run(wasmBytes: wasmBytes, iwadBytes: iwadBytes);
       } catch (error, stackTrace) {
-        _sendMessage(controller, <String, Object?>{
-          'type': 'error',
+        _sendMessage(controller, request['uiPort'], <String, Object?>{
+          'type': doomRunnerMessageError,
           'error': '$error',
           'stack': '$stackTrace',
         });
+      } finally {
+        await nativeInputSubscription?.cancel();
+        nativeInputPort?.close();
       }
 
       return const <String, Object?>{'type': 'ignored'};
@@ -76,14 +90,30 @@ void doomRunnerWorker(dynamic params) {
 
 void _sendMessage(
   IsolateManagerController<Object?, Object?> controller,
+  Object? nativeUiPort,
   DoomRunnerMessage message,
 ) {
-  final bmp = message['bmp'];
-  if (bmp is Uint8List || bmp is ByteBuffer) {
+  if (nativeUiPort is SendPort) {
+    nativeUiPort.send(_nativeTransferMessage(message));
+    return;
+  }
+  final bytes = message['bytes'];
+  if (bytes is Uint8List || bytes is ByteBuffer) {
     controller.sendResultWithAutoTransfer(message);
     return;
   }
   controller.sendResult(message);
+}
+
+DoomRunnerMessage _nativeTransferMessage(DoomRunnerMessage message) {
+  final bytes = message['bytes'];
+  if (bytes is Uint8List) {
+    return <String, Object?>{
+      ...message,
+      'bytes': TransferableTypedData.fromList(<Uint8List>[bytes]),
+    };
+  }
+  return message;
 }
 
 Uint8List _requireBytes(Object? value, String fieldName) {

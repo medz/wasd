@@ -8,13 +8,35 @@ import 'package:wasd/wasi.dart';
 const String doomWasmAsset = 'assets/doom/doom.wasm';
 const String doomIwadAsset = 'assets/doom/doom1.wad';
 const String doomRunnerCommandStart = 'start';
+const String doomRunnerMessageFrame = 'frame';
+const String doomRunnerMessageExit = 'exit';
+const String doomRunnerMessageError = 'error';
+const String doomRunnerMessageInputPort = 'input-port';
+const String doomFrameFormatBmp = 'bmp';
+const String doomFrameFormatRgba = 'rgba';
 const String guestRoot = '/doom';
 const String guestIwadName = 'doom1.wad';
 const int doomDefaultWidth = 320;
 const int doomDefaultHeight = 200;
-const bool _usesJsInterop = bool.fromEnvironment('dart.library.js_interop');
+const int doomNativeTargetFrameIntervalUs = 28000;
+const int doomEventTypeKeyDown = 0;
+const int doomEventTypeKeyUp = 1;
+const int doomKeyRight = 0xae;
+const int doomKeyLeft = 0xac;
+const int doomKeyUp = 0xad;
+const int doomKeyDown = 0xaf;
+const int doomKeyEscape = 27;
+const int doomKeyEnter = 13;
+const int doomKeyTab = 9;
+const int doomKeyBackspace = 127;
+const int doomKeyCtrl = 0x9d;
+const int doomKeyAlt = 0xb8;
+const int doomKeyShift = 0xb6;
+const bool usesJsInterop = bool.fromEnvironment('dart.library.js_interop');
 
 typedef DoomRunnerMessage = Map<String, Object?>;
+
+enum DoomFrameTransport { bmp, rgba }
 
 DoomRunnerMessage normalizeDoomRunnerMessage(Object? value) {
   if (value is Map<String, Object?>) {
@@ -38,18 +60,14 @@ final class DoomInputEvent {
   final int type;
   final int code;
 
-  DoomRunnerMessage toMessage() => <String, Object?>{
-    'type': 'input',
-    'eventType': type,
-    'code': code,
-  };
+  List<int> toNativeMessage() => <int>[type, code];
 
-  static DoomInputEvent? fromMessage(Object? message) {
-    if (message is! Map<Object?, Object?>) {
+  static DoomInputEvent? fromNativeMessage(Object? message) {
+    if (message is! List || message.length != 2) {
       return null;
     }
-    final type = _asIntOrNull(message['eventType']);
-    final code = _asIntOrNull(message['code']);
+    final type = _asIntOrNull(message[0]);
+    final code = _asIntOrNull(message[1]);
     if (type == null || code == null) {
       return null;
     }
@@ -58,28 +76,35 @@ final class DoomInputEvent {
 }
 
 final class DoomRuntime {
-  DoomRuntime({required void Function(DoomRunnerMessage message) emit})
-    : this.withInputDrain(emit: emit);
+  DoomRuntime({
+    required void Function(DoomRunnerMessage message) emit,
+    required this.frameTransport,
+    this.frameIntervalUs = 0,
+  }) : _emit = emit,
+       _drainInput = null;
 
   DoomRuntime.withInputDrain({
     required void Function(DoomRunnerMessage message) emit,
+    required this.frameTransport,
+    this.frameIntervalUs = 0,
     void Function(Queue<DoomInputEvent> queue)? drainInput,
   }) : _emit = emit,
        _drainInput = drainInput;
 
   final void Function(DoomRunnerMessage message) _emit;
   final void Function(Queue<DoomInputEvent> queue)? _drainInput;
+  final DoomFrameTransport frameTransport;
+  final int frameIntervalUs;
   final Queue<DoomInputEvent> _queuedEvents = Queue<DoomInputEvent>();
+  final Stopwatch _frameClock = Stopwatch()..start();
 
   Memory? _memory;
   _PaletteData? _palette;
   int _windowWidth = doomDefaultWidth;
   int _windowHeight = doomDefaultHeight;
   int _frameCount = 0;
-
-  void enqueueInput(DoomInputEvent event) {
-    _queuedEvents.add(event);
-  }
+  int _lastFrameSentUs = 0;
+  int _lastEventYieldUs = 0;
 
   Future<void> run({
     required Uint8List wasmBytes,
@@ -110,10 +135,10 @@ final class DoomRuntime {
           'ZwareDoomSetPalette': ImportExportKind.function(_onSetPalette),
           'ZwareDoomRenderFrame': ImportExportKind.function(_onRenderFrame),
           'ZwareDoomPendingEvent': ImportExportKind.function(
-            _usesJsInterop ? _onPendingEvent : _onPendingEventAsync,
+            usesJsInterop ? _onPendingEvent : _onPendingEventAsync,
           ),
           'ZwareDoomNextEvent': ImportExportKind.function(
-            _usesJsInterop ? _onNextEvent : _onNextEventAsync,
+            usesJsInterop ? _onNextEvent : _onNextEventAsync,
           ),
         },
       };
@@ -130,16 +155,16 @@ final class DoomRuntime {
       }
 
       _emit(<String, Object?>{'type': 'log', 'line': 'running wasi _start...'});
-      if (!_usesJsInterop) {
+      if (!usesJsInterop) {
         wasi.finalizeBindings(result.instance);
       }
-      final exit = _usesJsInterop
+      final exit = usesJsInterop
           ? wasi.start(result.instance)
           : await _startAsync(result.instance);
-      _emit(<String, Object?>{'type': 'exit', 'code': exit});
+      _emit(<String, Object?>{'type': doomRunnerMessageExit, 'code': exit});
     } catch (error, stackTrace) {
       _emit(<String, Object?>{
-        'type': 'error',
+        'type': doomRunnerMessageError,
         'error': '$error',
         'stack': '$stackTrace',
       });
@@ -160,7 +185,7 @@ final class DoomRuntime {
         _windowHeight = values[0];
       }
     }
-    return 0;
+    return 1;
   }
 
   Object? _onSetPalette(List<Object?> args) {
@@ -202,14 +227,36 @@ final class DoomRuntime {
       return 0;
     }
 
+    if (frameIntervalUs > 0) {
+      final nowUs = _frameClock.elapsedMicroseconds;
+      if (nowUs - _lastFrameSentUs < frameIntervalUs) {
+        return 0;
+      }
+      _lastFrameSentUs = nowUs;
+    }
+
     final indexed = Uint8List.fromList(bytes.sublist(ptr, ptr + pixelCount));
-    final rgb = _indexedToRgb(indexed, _palette);
-    final bmp = encodeBmp24(width: width, height: height, rgb: rgb);
+    final frameBytes = switch (frameTransport) {
+      DoomFrameTransport.bmp => encodeBmp24(
+        width: width,
+        height: height,
+        rgb: _indexedToRgb(indexed, _palette),
+      ),
+      DoomFrameTransport.rgba => _indexedToRgba(indexed, _palette),
+    };
     _frameCount++;
     if (_frameCount == 1) {
       _emit(<String, Object?>{'type': 'log', 'line': 'received first frame'});
     }
-    _emit(<String, Object?>{'type': 'frame', 'frame': _frameCount, 'bmp': bmp});
+    _emit(<String, Object?>{
+      'type': doomRunnerMessageFrame,
+      'format': frameTransport == DoomFrameTransport.bmp
+          ? doomFrameFormatBmp
+          : doomFrameFormatRgba,
+      'width': width,
+      'height': height,
+      'bytes': frameBytes,
+    });
     return 0;
   }
 
@@ -222,7 +269,7 @@ final class DoomRuntime {
     if (_onPendingEvent(args) == 1) {
       return 1;
     }
-    await Future<void>.delayed(Duration.zero);
+    await _yieldToEventLoopIfNeeded();
     return _onPendingEvent(args);
   }
 
@@ -266,9 +313,21 @@ final class DoomRuntime {
 
   Future<Object?> _onNextEventAsync(List<Object?> args) async {
     if (_queuedEvents.isEmpty) {
-      await Future<void>.delayed(Duration.zero);
+      await _yieldToEventLoopIfNeeded();
+      if (_queuedEvents.isEmpty) {
+        return 0;
+      }
     }
     return _onNextEvent(args);
+  }
+
+  Future<void> _yieldToEventLoopIfNeeded() async {
+    final nowUs = _frameClock.elapsedMicroseconds;
+    if (nowUs - _lastEventYieldUs < 2000) {
+      return;
+    }
+    _lastEventYieldUs = nowUs;
+    await Future<void>.delayed(Duration.zero);
   }
 
   Future<int> _startAsync(Instance instance) async {
@@ -328,15 +387,13 @@ final class DoomRuntime {
 }
 
 void enqueueBootstrapInputQueue(Queue<DoomInputEvent> queue) {
-  const int enter = 13;
-  const int space = 32;
   queue.addAll(const <DoomInputEvent>[
-    DoomInputEvent(type: 0, code: enter),
-    DoomInputEvent(type: 1, code: enter),
-    DoomInputEvent(type: 0, code: space),
-    DoomInputEvent(type: 1, code: space),
-    DoomInputEvent(type: 0, code: enter),
-    DoomInputEvent(type: 1, code: enter),
+    DoomInputEvent(type: doomEventTypeKeyDown, code: doomKeyEnter),
+    DoomInputEvent(type: doomEventTypeKeyUp, code: doomKeyEnter),
+    DoomInputEvent(type: doomEventTypeKeyDown, code: 32),
+    DoomInputEvent(type: doomEventTypeKeyUp, code: 32),
+    DoomInputEvent(type: doomEventTypeKeyDown, code: doomKeyEnter),
+    DoomInputEvent(type: doomEventTypeKeyUp, code: doomKeyEnter),
   ]);
 }
 
@@ -417,109 +474,96 @@ Uint8List _indexedToRgb(Uint8List indexed, _PaletteData? palette) {
   return rgb;
 }
 
+Uint8List _indexedToRgba(Uint8List indexed, _PaletteData? palette) {
+  final rgba = Uint8List(indexed.length * 4);
+  if (palette == null || palette.bytes.length < 3) {
+    for (var i = 0; i < indexed.length; i++) {
+      final value = indexed[i];
+      final base = i * 4;
+      rgba[base] = value;
+      rgba[base + 1] = value;
+      rgba[base + 2] = value;
+      rgba[base + 3] = 255;
+    }
+    return rgba;
+  }
+
+  final colorCount = palette.bytes.length ~/ palette.stride;
+  for (var i = 0; i < indexed.length; i++) {
+    final idx = indexed[i] % colorCount;
+    final src = idx * palette.stride;
+    final dst = i * 4;
+    var r = palette.bytes[src];
+    var g = palette.bytes[src + 1];
+    var b = palette.bytes[src + 2];
+    if (palette.isSixBit) {
+      r = _paletteExpand6To8(r);
+      g = _paletteExpand6To8(g);
+      b = _paletteExpand6To8(b);
+    }
+    rgba[dst] = r;
+    rgba[dst + 1] = g;
+    rgba[dst + 2] = b;
+    rgba[dst + 3] = 255;
+  }
+  return rgba;
+}
+
 _PaletteData? _extractPalette(Uint8List memory, int ptr, int? hint) {
-  if (ptr < 0 || ptr >= memory.length) {
+  if (ptr >= memory.length) {
     return null;
   }
+  const int paletteEntries = 256;
   final available = memory.length - ptr;
-  if (available < 3) {
-    return null;
+
+  if (hint != null &&
+      hint >= paletteEntries * 4 &&
+      ptr + hint <= memory.length) {
+    return _PaletteData(
+      Uint8List.fromList(memory.sublist(ptr, ptr + paletteEntries * 4)),
+      4,
+      false,
+    );
   }
 
-  var stride = 3;
-  var length = 256 * 3;
-
-  if (hint != null && hint > 0) {
-    if (hint <= 256 && hint * 3 <= available) {
-      stride = 3;
-      length = hint * 3;
-    } else if (hint <= available) {
-      if (hint == 1024 || (hint % 4 == 0 && hint >= 256 && hint <= 2048)) {
-        stride = 4;
-        length = hint;
-      } else if (hint % 3 == 0) {
-        stride = 3;
-        length = hint;
-      } else if (hint > 1024 && 1024 <= available) {
-        stride = 4;
-        length = 1024;
-      } else if (768 <= available) {
-        stride = 3;
-        length = 768;
-      } else {
-        return null;
+  if (available >= paletteEntries * 4) {
+    final candidate = memory.sublist(ptr, ptr + paletteEntries * 4);
+    var looksLikeRgba = true;
+    for (var i = 3; i < candidate.length; i += 4) {
+      final alpha = candidate[i];
+      if (alpha != 0 && alpha != 255) {
+        looksLikeRgba = false;
+        break;
       }
     }
-  } else if (1024 <= available) {
-    stride = 4;
-    length = 1024;
-  } else if (768 <= available) {
-    stride = 3;
-    length = 768;
-  } else {
-    length = (available ~/ 3) * 3;
-    stride = 3;
-  }
-
-  if (ptr + length > memory.length || length < stride * 2) {
-    return null;
-  }
-  final bytes = Uint8List.fromList(memory.sublist(ptr, ptr + length));
-  return _PaletteData(
-    bytes: bytes,
-    stride: stride,
-    isSixBit: _isLikelySixBitPalette(bytes, stride),
-  );
-}
-
-bool _isLikelySixBitPalette(Uint8List bytes, int stride) {
-  var max = 0;
-  for (var i = 0; i + 2 < bytes.length; i += stride) {
-    final r = bytes[i];
-    final g = bytes[i + 1];
-    final b = bytes[i + 2];
-    if (r > max) max = r;
-    if (g > max) max = g;
-    if (b > max) max = b;
-    if (max > 63) {
-      return false;
+    if (looksLikeRgba) {
+      return _PaletteData(Uint8List.fromList(candidate), 4, false);
     }
   }
-  return true;
-}
 
-int _paletteExpand6To8(int value) {
-  final clamped = value.clamp(0, 63);
-  return (clamped << 2) | (clamped >> 4);
-}
-
-(int, int)? decodeBmpDimensions(Uint8List? bmp) {
-  if (bmp == null || bmp.length < 26) {
-    return null;
+  if (hint != null &&
+      hint >= paletteEntries * 3 &&
+      ptr + hint <= memory.length) {
+    final candidate = Uint8List.fromList(
+      memory.sublist(ptr, ptr + paletteEntries * 3),
+    );
+    return _PaletteData(candidate, 3, _paletteLooksSixBit(candidate));
   }
-  if (bmp[0] != 0x42 || bmp[1] != 0x4d) {
-    return null;
+
+  if (available >= paletteEntries * 3) {
+    final candidate = Uint8List.fromList(
+      memory.sublist(ptr, ptr + paletteEntries * 3),
+    );
+    return _PaletteData(candidate, 3, _paletteLooksSixBit(candidate));
   }
-  final view = ByteData.sublistView(bmp);
-  final width = view.getInt32(18, Endian.little);
-  final height = view.getInt32(22, Endian.little).abs();
-  if (width <= 0 || height <= 0) {
-    return null;
-  }
-  return (width, height);
+
+  return null;
 }
 
-final class _PaletteData {
-  const _PaletteData({
-    required this.bytes,
-    required this.stride,
-    required this.isSixBit,
-  });
+bool _paletteLooksSixBit(Uint8List palette) =>
+    palette.isNotEmpty && palette.every((value) => value <= 63);
 
-  final Uint8List bytes;
-  final int stride;
-  final bool isSixBit;
-}
+int _paletteExpand6To8(int value) => ((value * 255) ~/ 63).clamp(0, 255);
 
 Uint8List encodeBmp24({
   required int width,
@@ -527,11 +571,10 @@ Uint8List encodeBmp24({
   required Uint8List rgb,
 }) {
   final rowStride = width * 3;
-  final rowPad = (4 - (rowStride % 4)) % 4;
+  final rowPad = (4 - rowStride % 4) % 4;
   final pixelBytes = (rowStride + rowPad) * height;
-  final headerBytes = 54;
+  const headerBytes = 54;
   final fileSize = headerBytes + pixelBytes;
-
   final out = Uint8List(fileSize);
   final data = ByteData.view(out.buffer);
 
@@ -562,4 +605,12 @@ Uint8List encodeBmp24({
     }
   }
   return out;
+}
+
+final class _PaletteData {
+  const _PaletteData(this.bytes, this.stride, this.isSixBit);
+
+  final Uint8List bytes;
+  final int stride;
+  final bool isSixBit;
 }

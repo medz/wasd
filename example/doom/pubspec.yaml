@@ -1,5 +1,5 @@
-name: wasd_flutter_example
-description: "WASD Flutter DOOM example."
+name: wasd_doom_example
+description: "WASD DOOM example."
 publish_to: "none"
 version: 0.1.0+1
 

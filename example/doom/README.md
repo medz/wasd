@@ -1,19 +1,25 @@
-# DOOM Flutter Example
+# DOOM Example
 
-This example targets Flutter desktop and web hosts.
+This example uses a single `isolate_manager` worker model on every platform.
+
+- native/IO targets use the `main`-style DOOM transport path:
+  `SendPort` keyboard input + `rgba` frame transfer
+- web keeps the current worker path with `SharedArrayBuffer` keyboard input
 
 ## Run (macOS)
 
 ```sh
+flutter pub get
 flutter run -d macos
 ```
 
 ## Run (Chrome)
 
-The web worker input path uses `SharedArrayBuffer`, so Chrome must run with
+The web input path uses `SharedArrayBuffer`, so Chrome must run with
 `COOP/COEP` response headers enabled:
 
 ```sh
+flutter pub get
 flutter run -d chrome \
   --web-hostname=127.0.0.1 \
   --web-port=8125 \

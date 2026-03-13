@@ -15,7 +15,9 @@ final class DoomRunnerClient {
       StreamController<DoomRunnerMessage>.broadcast();
   late final Stream<DoomRunnerMessage> messages = _messagesController.stream;
   IsolateManager<Object?, Object?>? _manager;
-  DoomSharedInputQueue? _inputQueue;
+  DoomSharedInputQueue? _webInputQueue;
+  ReceivePort? _nativeMessagePort;
+  StreamSubscription<Object?>? _nativeMessageSubscription;
   SendPort? _nativeInputPort;
   bool _stopped = false;
 
@@ -26,9 +28,9 @@ final class DoomRunnerClient {
     if (_stopped) {
       return;
     }
-    final inputQueue = DoomSharedInputQueue();
-    _inputQueue = inputQueue;
-    final unsupportedReason = inputQueue.unsupportedReason;
+    final inputQueue = usesJsInterop ? DoomSharedInputQueue() : null;
+    _webInputQueue = inputQueue;
+    final unsupportedReason = inputQueue?.unsupportedReason;
     if (unsupportedReason != null) {
       _emit(<String, Object?>{'type': 'log', 'line': unsupportedReason});
     }
@@ -38,22 +40,33 @@ final class DoomRunnerClient {
     );
     _manager = manager;
     await manager.start();
+    if (!usesJsInterop) {
+      final nativeMessagePort = ReceivePort();
+      _nativeMessagePort = nativeMessagePort;
+      _nativeMessageSubscription = nativeMessagePort.listen(
+        _handleNativeMessage,
+      );
+    }
     final run = manager.compute(
       <String, Object?>{
         'type': doomRunnerCommandStart,
         'wasmBytes': wasmBytes,
         'iwadBytes': iwadBytes,
-        'inputQueue': inputQueue.handle,
-        'inputQueueCapacity': inputQueue.capacity,
+        'frameTransport': usesJsInterop
+            ? doomFrameFormatBmp
+            : doomFrameFormatRgba,
+        'inputQueue': inputQueue?.handle,
+        'inputQueueCapacity': inputQueue?.capacity ?? 256,
+        if (!usesJsInterop) 'uiPort': _nativeMessagePort!.sendPort,
       },
-      callback: _handleWorkerMessage,
+      callback: usesJsInterop ? _handleWorkerMessage : null,
       transferables: <Object>[wasmBytes.buffer, iwadBytes.buffer],
     );
     unawaited(_watchRunCompletion(run));
   }
 
   void sendKey(DoomInputEvent event) {
-    final inputQueue = _inputQueue;
+    final inputQueue = _webInputQueue;
     if (inputQueue != null && inputQueue.isSupported) {
       inputQueue.enqueue(event);
       return;
@@ -62,14 +75,19 @@ final class DoomRunnerClient {
     if (nativeInputPort == null || _stopped) {
       return;
     }
-    nativeInputPort.send(event.toMessage());
+    nativeInputPort.send(event.toNativeMessage());
   }
 
   Future<void> stop() async {
     _stopped = true;
     final manager = _manager;
     _manager = null;
-    _inputQueue = null;
+    _webInputQueue = null;
+    final nativeSubscription = _nativeMessageSubscription;
+    _nativeMessageSubscription = null;
+    await nativeSubscription?.cancel();
+    _nativeMessagePort?.close();
+    _nativeMessagePort = null;
     _nativeInputPort = null;
     await manager?.stop();
     await _messagesController.close();
@@ -83,16 +101,28 @@ final class DoomRunnerClient {
         return;
       }
       _emit(<String, Object?>{
-        'type': 'error',
+        'type': doomRunnerMessageError,
         'error': '$error',
         'stack': '$stackTrace',
       });
     }
   }
 
+  void _handleNativeMessage(Object? rawMessage) {
+    final message = normalizeDoomRunnerMessage(rawMessage);
+    if (message['type'] == doomRunnerMessageInputPort) {
+      final port = message['port'];
+      if (port is SendPort) {
+        _nativeInputPort = port;
+      }
+      return;
+    }
+    _emit(message);
+  }
+
   bool _handleWorkerMessage(Object? rawMessage) {
     final message = normalizeDoomRunnerMessage(rawMessage);
-    if (message['type'] == 'input-port') {
+    if (message['type'] == doomRunnerMessageInputPort) {
       final port = message['port'];
       if (port is SendPort) {
         _nativeInputPort = port;
@@ -101,7 +131,7 @@ final class DoomRunnerClient {
     }
     _emit(message);
     final type = message['type'];
-    return type == 'exit' || type == 'error';
+    return type == doomRunnerMessageExit || type == doomRunnerMessageError;
   }
 
   void _emit(DoomRunnerMessage message) {

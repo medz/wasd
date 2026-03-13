@@ -53,7 +53,7 @@ dart run example/wasm_cli.dart 3 9
 Run the Flutter DOOM example:
 
 ```bash
-cd example/flutter_app
+cd example/doom
 flutter run -d macos
 flutter run -d chrome --web-hostname=127.0.0.1 --web-port=8125 --web-header=Cross-Origin-Opener-Policy=same-origin --web-header=Cross-Origin-Embedder-Policy=require-corp
 ```
@@ -187,7 +187,7 @@ Uint8List loadYourModuleBytes() => throw UnimplementedError();
 - `lib/wasd.dart`: public package entrypoint
 - `lib/src/`: runtime, VM, module decoder, validator, WASI, component model
 - `test/`: regression and behavior tests
-- `example/`: runnable examples (`wasm_cli.dart`, `doom_cli.dart`, `flutter_app/`)
+- `example/`: runnable examples (`wasm_cli.dart`, `doom_cli.dart`, `doom/`)
 - `tool/`: conformance runners and toolchain scripts
 - `third_party/`: vendored Wasm spec/component testsuites
 
