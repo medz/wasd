@@ -311,11 +311,18 @@
     - verify: `flutter test` in `example/flutter_app` (pass)
     - verify: `flutter run -d macos` + local screenshots confirm boot screen, main menu transition, and post-input state change (pass)
   - [-] 持续优化（第 15 轮）：native DOOM 性能基准与同步输入回归（Issue #12, #13）
+    - [x] 建立 native DOOM benchmark / hotspot inspection 工具，并落地同步输入链路与首批解释器热路径优化（Issue #12, #13）
+      - commit: `92b5f59`
+    - [x] 新增 `local.set` / `local.tee` 语义回归测试，约束 native 解释器局部变量优化不破坏行为（Issue #10, #13）
+      - commit: `92b5f59`
     - note: migrated desktop DOOM input from isolate `SendPort` messages to a loopback UDP polling channel so native `ZwareDoomPendingEvent` / `ZwareDoomNextEvent` can stay synchronous and avoid the async subset hot path
     - note: added `example/doom/tool/native_benchmark.dart` with selectable `inline/worker` + `none/rgba/bmp` cases to split guest, transport, and frame encoding cost
     - note: profiled native sync VM hot functions (`f133` / `f98` / `f345` / `f107` / `f135`) and optimized interpreter hot paths with cached instruction constants, cached resolved memarg metadata, memory32 address fast path, non-`BigInt` i32 multiply, and direct i32 load/store dispatch
     - verify: `dart analyze` (pass)
     - verify: `dart test test/wasm_test.dart test/wasi_test.dart` (pass)
+    - verify: `dart test` (pass)
+    - verify: `dart test --platform node test/wasi_test.dart test/wasm_test.dart` (pass)
+    - verify: `dart test --platform chrome test/wasi_test.dart test/wasm_test.dart` (pass)
     - verify: `flutter analyze` in `example/doom` (pass)
     - verify: `flutter test` in `example/doom` (pass)
     - verify: `dart run tool/native_benchmark.dart --frames=5 --cases=inline-none` in `example/doom` (pass; `firstFrameUs=37952920`, `totalUs=38543785`)
