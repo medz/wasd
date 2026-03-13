@@ -27,7 +27,5 @@ test/fixtures/doom/freedoom1.wad
 test/fixtures/doom/freedoom-0.13.0.zip
 test/fixtures/community/*.wasm
 test/fixtures/src/tinygo_org_wasm_main/
-example/doom/assets/doom/doom.wasm
-example/doom/assets/doom/doom1.wad
 example/doom/assets/doom/freedoom1.wad
 example/doom/assets/doom/freedoom-0.13.0.zip
