@@ -52,7 +52,7 @@ class WASI implements wasi_iface.WASI {
   final int _stdinFd;
   final int _stdoutFd;
   final int _stderrFd;
-  final math.Random _random = math.Random();
+  final math.Random _secureRandom = math.Random.secure();
   final Stopwatch _monotonicClock = Stopwatch()..start();
   final Map<int, _VirtualOpenFile> _openFilesByFd = <int, _VirtualOpenFile>{};
   final Map<int, String> _openDirectoriesByFd = <int, String>{};
@@ -297,7 +297,7 @@ class WASI implements wasi_iface.WASI {
         }
 
         for (var i = 0; i < len; i++) {
-          view.bytes[bufPtr + i] = _random.nextInt(256);
+          view.bytes[bufPtr + i] = _secureRandom.nextInt(256);
         }
         return _errnoSuccess;
       });

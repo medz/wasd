@@ -6,6 +6,7 @@ import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
 import 'support/runtime_environment.dart';
 import 'support/wasm_fixtures.dart';
+import 'support/web_crypto_spy.dart';
 
 final _wasiBytes = wasiStartModuleBytes();
 
@@ -312,6 +313,51 @@ void main() {
           expect(randomGet.ref([randomPtr, randomLen]), 0);
           final after = bytes.sublist(randomPtr, randomPtr + randomLen);
           expect(after.any((value) => value != 0xaa), isTrue);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; random behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'random_get uses Web Crypto on browser runtimes',
+        () {
+          final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+          final randomGet = preview1['random_get'] as FunctionImportExportValue;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
+          wasi.finalizeBindings(instance, memory: memory);
+
+          final spy = installWebCryptoGetRandomValuesSpy();
+          addTearDown(spy.restore);
+
+          final bytes = Uint8List.view(memory.buffer);
+          const randomPtr = 1440;
+          const randomLen = 32;
+          bytes.fillRange(randomPtr, randomPtr + randomLen, 0xaa);
+
+          expect(randomGet.ref([randomPtr, randomLen]), 0);
+          expect(spy.callCount, greaterThan(0));
+
+          final after = bytes.sublist(randomPtr, randomPtr + randomLen);
+          expect(after.any((value) => value != 0xaa), isTrue);
+        },
+        skip: canSpyOnWebCrypto
+            ? false
+            : 'Skipping outside browser JS runtimes.',
+      );
+
+      test(
+        'random_get returns inval for out-of-bounds buffer',
+        () {
+          final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+          final randomGet = preview1['random_get'] as FunctionImportExportValue;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
+          wasi.finalizeBindings(instance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          expect(randomGet.ref([bytes.length - 8, 16]), 28);
         },
         skip: _skipOnNode(
           'Skipping on Node.js; random behavior is delegated to node:wasi.',

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -52,7 +53,8 @@ class WASI implements wasi.WASI {
   final int _stdin;
   final int _stdout;
   final int _stderr;
-  final math.Random _random = math.Random();
+  static const int _maxWebCryptoGetRandomValuesLength = 65536;
+
   final Stopwatch _monotonicClock = Stopwatch()..start();
   final Map<int, _VirtualOpenFile> _openFilesByFd = <int, _VirtualOpenFile>{};
   final Map<int, String> _openDirectoriesByFd = <int, String>{};
@@ -71,6 +73,7 @@ class WASI implements wasi.WASI {
   int _nextVirtualFd = 64;
   final bool _traceSyscalls = const bool.fromEnvironment('WASI_TRACE');
   wasm.Memory? _boundMemory;
+  final JSObject _crypto = _requireWebCrypto();
   late final wasm.FunctionImportExportValue _nosysImport =
       wasm.ImportExportKind.function((List<Object?> _) => _errnoNosys);
 
@@ -291,11 +294,30 @@ class WASI implements wasi.WASI {
           return _errnoInval;
         }
 
-        for (var i = 0; i < len; i++) {
-          view.bytes[bufPtr + i] = _random.nextInt(256);
-        }
+        _fillSecureRandom(view.bytes, start: bufPtr, length: len);
         return _errnoSuccess;
       });
+
+  void _fillSecureRandom(
+    Uint8List bytes, {
+    required int start,
+    required int length,
+  }) {
+    var offset = 0;
+    while (offset < length) {
+      final chunkLength = math.min(
+        length - offset,
+        _maxWebCryptoGetRandomValuesLength,
+      );
+      final chunk = Uint8List.sublistView(
+        bytes,
+        start + offset,
+        start + offset + chunkLength,
+      );
+      _crypto.callMethodVarArgs<JSAny?>('getRandomValues'.toJS, [chunk.toJS]);
+      offset += chunkLength;
+    }
+  }
 
   wasm.FunctionImportExportValue get _fdReadImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
@@ -1138,6 +1160,14 @@ int? _tryParseJsInt(String? raw) {
 
 @JS('String')
 external JSString _jsString(JSAny? value);
+
+JSObject _requireWebCrypto() {
+  final crypto = globalContext.getProperty<JSObject?>('crypto'.toJS);
+  if (crypto != null) {
+    return crypto;
+  }
+  throw UnsupportedError('Web Crypto is unavailable in this runtime.');
+}
 
 String? _resolveGuestPath({
   required Uint8List bytes,
