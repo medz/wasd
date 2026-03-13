@@ -317,6 +317,8 @@
       - commit: `92b5f59`
     - [x] 新增 direct-call 语义回归与小基准，并缓存 native 解释器 direct `call` / `return_call` 目标函数以降低热路径分发成本（Issue #10, #13）
       - commit: `38eb50b`
+    - [x] 新增 loop/branch 语义回归与小基准，并为 native 解释器 innermost `br` 热路径添加专用快路径与 `i32.eqz` 常量复用（Issue #10, #13）
+      - commit: `46eb540`
     - note: migrated desktop DOOM input from isolate `SendPort` messages to a loopback UDP polling channel so native `ZwareDoomPendingEvent` / `ZwareDoomNextEvent` can stay synchronous and avoid the async subset hot path
     - note: added `example/doom/tool/native_benchmark.dart` with selectable `inline/worker` + `none/rgba/bmp` cases to split guest, transport, and frame encoding cost
     - note: profiled native sync VM hot functions (`f133` / `f98` / `f345` / `f107` / `f135`) and optimized interpreter hot paths with cached instruction constants, cached resolved memarg metadata, memory32 address fast path, non-`BigInt` i32 multiply, and direct i32 load/store dispatch
@@ -326,9 +328,11 @@
     - verify: `dart test --platform node test/wasi_test.dart test/wasm_test.dart` (pass)
     - verify: `dart test --platform chrome test/wasi_test.dart test/wasm_test.dart` (pass)
     - verify: `dart run tool/direct_call_benchmark.dart --iterations=300000 --max-ms=1900` (pass after optimization; before change red at `1972.962ms`, after change green at `1860.377ms`)
+    - verify: `dart run tool/loop_branch_benchmark.dart --iterations=1000 --input=1000 --max-ms=6300` (pass after optimization; before change red at `6716.013ms`, after change green at `6086.703ms`)
     - verify: `flutter analyze` in `example/doom` (pass)
     - verify: `flutter test` in `example/doom` (pass)
     - verify: `dart run tool/native_benchmark.dart --frames=5 --cases=inline-none` in `example/doom` (pass; `firstFrameUs=37952920`, `totalUs=38543785`)
     - verify: `dart run tool/native_benchmark.dart --frames=5 --cases=worker-none` in `example/doom` (pass; `firstFrameUs=38209940`, `totalUs=38812832`)
+    - verify: `dart run tool/native_benchmark.dart --frames=3 --cases=inline-none` in `example/doom` (pass; `firstFrameUs=34789039`, `firstAfterStartUs=33769546`, `totalUs=35048548`)
     - verify: `dart run tool/native_benchmark.dart --frames=5 --cases=inline-rgba` in `example/doom` (pass; `firstFrameUs=39206702`, `totalUs=39822672`)
     - verify: `dart run tool/native_benchmark.dart --frames=3 --cases=inline-none` in `example/doom` (pass; baseline `firstAfterStart=38283000 totalUs=39486400`, current `firstAfterStart=34803000 totalUs=35951700`)
