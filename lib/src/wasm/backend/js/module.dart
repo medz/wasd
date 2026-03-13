@@ -24,8 +24,7 @@ class Module implements wasm.Module {
 }
 
 List<wasm.ModuleImportDescriptor> imports(wasm.Module module) =>
-    JSImportModule.imports((module as Module).host)
-        .toDart
+    JSImportModule.imports((module as Module).host).toDart
         .map(
           (d) => wasm.ModuleImportDescriptor(
             kind: _parseKind(d.kind),
@@ -36,8 +35,7 @@ List<wasm.ModuleImportDescriptor> imports(wasm.Module module) =>
         .toList(growable: false);
 
 List<wasm.ModuleExportDescriptor> exports(wasm.Module module) =>
-    JSImportModule.exports((module as Module).host)
-        .toDart
+    JSImportModule.exports((module as Module).host).toDart
         .map(
           (d) => wasm.ModuleExportDescriptor(
             kind: _parseKind(d.kind),
@@ -47,10 +45,10 @@ List<wasm.ModuleExportDescriptor> exports(wasm.Module module) =>
         .toList(growable: false);
 
 List<ByteBuffer> customSections(wasm.Module module, String name) =>
-    JSImportModule.customSections((module as Module).host, name)
-        .toDart
-        .map((b) => b.toDart)
-        .toList(growable: false);
+    JSImportModule.customSections(
+      (module as Module).host,
+      name,
+    ).toDart.map((b) => b.toDart).toList(growable: false);
 
 wasm.ImportExportKind _parseKind(String kind) => switch (kind) {
   'function' => wasm.ImportExportKind.function,

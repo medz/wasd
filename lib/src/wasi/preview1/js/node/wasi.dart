@@ -95,16 +95,12 @@ class WASI implements wasi_iface.WASI {
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 /// Wraps a Node.js WASI syscall [JSFunction] as a [wasm.WasmFunction].
-wasm.WasmFunction _wrapNodeFunc(JSFunction fn) =>
-    (List<Object?> args) {
-      final jsArgs = <JSAny?>[
-        null,
-        for (final arg in args) arg.jsify(),
-      ];
-      return (fn as JSObject)
-          .callMethodVarArgs<JSAny?>('call'.toJS, jsArgs)
-          ?.dartify();
-    };
+wasm.WasmFunction _wrapNodeFunc(JSFunction fn) => (List<Object?> args) {
+  final jsArgs = <JSAny?>[null, for (final arg in args) arg.jsify()];
+  return (fn as JSObject)
+      .callMethodVarArgs<JSAny?>('call'.toJS, jsArgs)
+      ?.dartify();
+};
 
 // ── Node.js environment detection ─────────────────────────────────────────────
 
@@ -114,8 +110,7 @@ wasm.WasmFunction _wrapNodeFunc(JSFunction fn) =>
 bool _isNodeJs() {
   final process = globalContext.getProperty<JSAny?>('process'.toJS);
   if (process == null) return false;
-  final versions =
-      (process as JSObject).getProperty<JSAny?>('versions'.toJS);
+  final versions = (process as JSObject).getProperty<JSAny?>('versions'.toJS);
   if (versions == null) return false;
   return (versions as JSObject).getProperty<JSAny?>('node'.toJS) != null;
 }

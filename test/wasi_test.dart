@@ -26,6 +26,8 @@ int _getUint64Le(ByteData data, int offset) {
 Future<Object?> _awaitMaybeFuture(Object? value) async =>
     value is Future ? await value : value;
 
+const _supportedClockIds = <int>[0, 1, 2, 3];
+
 void main() {
   group('WASI', () {
     test('constructor creates instance', () {
@@ -103,6 +105,13 @@ void main() {
       final preview1 = wasi.imports['wasi_snapshot_preview1']!;
       expect(preview1.containsKey('clock_time_get'), isTrue);
       expect(preview1['clock_time_get'], isA<FunctionImportExportValue>());
+    });
+
+    test('imports has clock_res_get function', () {
+      final wasi = WASI();
+      final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+      expect(preview1.containsKey('clock_res_get'), isTrue);
+      expect(preview1['clock_res_get'], isA<FunctionImportExportValue>());
     });
 
     test('imports exposes preview1 compatibility functions', () {
@@ -486,6 +495,82 @@ void main() {
         ),
       );
 
+      test(
+        'clock_res_get writes a non-zero resolution for supported clocks',
+        () {
+          final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+          final clockResGet =
+              preview1['clock_res_get'] as FunctionImportExportValue;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
+          wasi.finalizeBindings(instance, memory: memory);
+
+          final data = ByteData.view(memory.buffer);
+          const resolutionPtr = 1700;
+
+          for (final clockId in _supportedClockIds) {
+            _setUint64Le(data, resolutionPtr, 0);
+            final result = clockResGet.ref([clockId, resolutionPtr]);
+            expect(
+              result,
+              0,
+              reason: 'clock_res_get should support clock $clockId',
+            );
+            expect(
+              _getUint64Le(data, resolutionPtr),
+              greaterThan(0),
+              reason:
+                  'clock_res_get should write a non-zero resolution for clock $clockId',
+            );
+          }
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; clock_res_get behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'clock_res_get returns inval for unsupported clock ids',
+        () {
+          final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+          final clockResGet =
+              preview1['clock_res_get'] as FunctionImportExportValue;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
+          wasi.finalizeBindings(instance, memory: memory);
+
+          final data = ByteData.view(memory.buffer);
+          const resolutionPtr = 1710;
+          _setUint64Le(data, resolutionPtr, 123);
+
+          final result = clockResGet.ref([99, resolutionPtr]);
+          expect(result, 28);
+          expect(_getUint64Le(data, resolutionPtr), 123);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; clock_res_get behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'clock_res_get returns inval for out-of-bounds pointer',
+        () {
+          final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+          final clockResGet =
+              preview1['clock_res_get'] as FunctionImportExportValue;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
+          wasi.finalizeBindings(instance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final result = clockResGet.ref([0, bytes.length - 4]);
+          expect(result, 28);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; clock_res_get behavior is delegated to node:wasi.',
+        ),
+      );
+
       test('finalizeBindings accepts explicit memory and reuses it later', () {
         final memoryValue = instance.exports['memory'];
         expect(memoryValue, isA<MemoryImportExportValue>());
@@ -564,7 +649,9 @@ void main() {
 
           expect(await _awaitMaybeFuture(schedYield.ref(const [])), 0);
           expect(
-            await _awaitMaybeFuture(pollOneoff.ref([inPtr, outPtr, 1, neventsPtr])),
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]),
+            ),
             0,
           );
           expect(data.getUint32(neventsPtr, Endian.little), 1);

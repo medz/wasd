@@ -74,6 +74,7 @@ class WASI implements wasi_iface.WASI {
       'environ_sizes_get': _environSizesGetImport,
       'environ_get': _environGetImport,
       'random_get': _randomGetImport,
+      'clock_res_get': _clockResGetImport,
       'fd_read': _fdReadImport,
       'fd_write': _fdWriteImport,
       'fd_fdstat_get': _fdFdstatGetImport,
@@ -533,6 +534,30 @@ class WASI implements wasi_iface.WASI {
 
         final nowNanos = _clockNowNanos(clockId);
         _setUint64(view.data, timePtr, nowNanos);
+        return _errnoSuccess;
+      });
+
+  wasm.FunctionImportExportValue get _clockResGetImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 2) {
+          return _errnoInval;
+        }
+        final clockId = _asInt(args[0]);
+        final resolutionPtr = _asInt(args[1]);
+        final resolutionNanos = _clockResolutionNanos(clockId);
+        if (resolutionNanos == null) {
+          return _errnoInval;
+        }
+
+        final view = _memoryView();
+        if (view == null) {
+          return _errnoInval;
+        }
+        if (resolutionPtr < 0 || resolutionPtr + 8 > view.bytes.length) {
+          return _errnoInval;
+        }
+
+        _setUint64(view.data, resolutionPtr, resolutionNanos);
         return _errnoSuccess;
       });
 
@@ -1008,6 +1033,16 @@ class WASI implements wasi_iface.WASI {
     return DateTime.now().microsecondsSinceEpoch * 1000;
   }
 
+  int? _clockResolutionNanos(int clockId) {
+    if (clockId == _clockRealtime ||
+        clockId == _clockMonotonic ||
+        clockId == _clockProcessCpuTimeId ||
+        clockId == _clockThreadCpuTimeId) {
+      return 1000;
+    }
+    return null;
+  }
+
   @override
   int start(wasm.Instance instance) {
     finalizeBindings(instance);
@@ -1065,6 +1100,7 @@ const int _subscriptionTagOffset = 8;
 const int _eventSize = 32;
 const int _eventTypeOffset = 10;
 const int _eventTypeClock = 0;
+const int _clockRealtime = 0;
 const int _clockMonotonic = 1;
 const int _clockProcessCpuTimeId = 2;
 const int _clockThreadCpuTimeId = 3;

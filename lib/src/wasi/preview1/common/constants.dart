@@ -14,7 +14,6 @@ const int filetypeRegularFile = 4;
 
 /// Preview1 imports that should exist and return `ENOSYS` when unsupported.
 const List<String> preview1NosysImports = <String>[
-  'clock_res_get',
   'fd_advise',
   'fd_allocate',
   'fd_datasync',
