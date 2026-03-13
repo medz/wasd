@@ -923,9 +923,13 @@ final class WasmVm {
 
             case Opcodes.call:
               final targetIndex = instruction.immediate!;
-              _checkFunctionIndex(targetIndex);
-              final target = _functions[targetIndex];
-              final callArgs = _popArgs(stack, target.type.params);
+              var target = instruction.runtimeCachedObject as RuntimeFunction?;
+              if (target == null) {
+                _checkFunctionIndex(targetIndex);
+                target = _functions[targetIndex];
+                instruction.runtimeCachedObject = target;
+              }
+              final callArgs = _popDirectCallArgs(stack, target.type.params);
               final callResults = _execute(
                 targetIndex,
                 callArgs,
@@ -967,9 +971,13 @@ final class WasmVm {
 
             case Opcodes.returnCall:
               final targetIndex = instruction.immediate!;
-              _checkFunctionIndex(targetIndex);
-              final target = _functions[targetIndex];
-              final callArgs = _popArgs(stack, target.type.params);
+              var target = instruction.runtimeCachedObject as RuntimeFunction?;
+              if (target == null) {
+                _checkFunctionIndex(targetIndex);
+                target = _functions[targetIndex];
+                instruction.runtimeCachedObject = target;
+              }
+              final callArgs = _popDirectCallArgs(stack, target.type.params);
               profiler?.recordInstructionCount(
                 currentFunctionIndex,
                 executedInstructions,
@@ -4387,6 +4395,38 @@ final class WasmVm {
       paramTypes,
       context: 'Operand stack while preparing call args',
     );
+  }
+
+  List<WasmValue> _popDirectCallArgs(
+    List<WasmValue> stack,
+    List<WasmValueType> paramTypes,
+  ) {
+    switch (paramTypes.length) {
+      case 0:
+        return const <WasmValue>[];
+      case 1:
+        return <WasmValue>[_pop(stack)];
+      case 2:
+        final rhs = _pop(stack);
+        final lhs = _pop(stack);
+        return <WasmValue>[lhs, rhs];
+      default:
+        if (stack.length < paramTypes.length) {
+          throw StateError(
+            'Operand stack while preparing direct call args underflow: '
+            'needs ${paramTypes.length}, has ${stack.length}.',
+          );
+        }
+        final values = List<WasmValue>.filled(
+          paramTypes.length,
+          WasmValue.zeroI32,
+          growable: false,
+        );
+        for (var i = paramTypes.length - 1; i >= 0; i--) {
+          values[i] = _pop(stack);
+        }
+        return values;
+    }
   }
 
   List<WasmValue> _collectResults(

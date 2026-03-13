@@ -6,6 +6,7 @@ import 'support/wasm_fixtures.dart';
 
 final _wasmBytes = simpleAddModuleBytes();
 final _localSetTeeBytes = localSetTeeModuleBytes();
+final _directCallBytes = directCallModuleBytes();
 
 final _invalidBytes = Uint8List.fromList([0x00, 0x00, 0x00, 0x00]);
 
@@ -166,15 +167,38 @@ void main() {
     });
 
     test('local.tee keeps the value on stack and writes the local', () {
-      final fn = (instance.exports['tee_add']! as FunctionImportExportValue).ref;
+      final fn =
+          (instance.exports['tee_add']! as FunctionImportExportValue).ref;
       expect(fn([5]), 17);
       expect(fn([-3]), 1);
     });
 
     test('local.set writes the local without leaving an extra stack value', () {
-      final fn = (instance.exports['set_add']! as FunctionImportExportValue).ref;
+      final fn =
+          (instance.exports['set_add']! as FunctionImportExportValue).ref;
       expect(fn([5]), 12);
       expect(fn([-3]), 4);
+    });
+  });
+
+  group('Interpreter direct call ops', () {
+    late Instance instance;
+
+    setUp(() async {
+      final result = await WebAssembly.instantiate(_directCallBytes.buffer);
+      instance = result.instance;
+    });
+
+    test('call executes the direct callee with correct results', () {
+      final inc = (instance.exports['inc']! as FunctionImportExportValue).ref;
+      final callTwice =
+          (instance.exports['call_twice']! as FunctionImportExportValue).ref;
+
+      expect(inc([0]), 1);
+      expect(inc([41]), 42);
+      expect(callTwice([0]), 2);
+      expect(callTwice([41]), 43);
+      expect(callTwice([-2]), 0);
     });
   });
 

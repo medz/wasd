@@ -102,6 +102,7 @@ final class Instruction {
   WasmValue? runtimeCachedValue;
   WasmMemory? runtimeCachedMemory;
   bool? runtimeCachedMemory64;
+  Object? runtimeCachedObject;
 }
 
 final class GcRefTypeImmediate {
