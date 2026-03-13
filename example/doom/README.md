@@ -1,22 +1,26 @@
-# Doom Flutter Example
+# DOOM Example
 
-This Flutter app runs Doom (`doom.wasm`) through WASD with bundled assets.
+This example is the standalone Flutter app for running DOOM with `wasd`.
 
-## Run
+## Run (macOS)
 
-```bash
+```sh
 flutter pub get
-tool/setup_assets.sh
 flutter run -d macos
 ```
 
-Replace `-d macos` with your desktop target (`linux`, `windows`, etc.).
+## Run (Chrome)
 
-## Assets
+The web input path uses `SharedArrayBuffer`, so Chrome must run with
+`COOP/COEP` response headers enabled:
 
-`tool/setup_assets.sh` downloads:
+```sh
+flutter pub get
+flutter run -d chrome \
+  --web-hostname=127.0.0.1 \
+  --web-port=8125 \
+  --web-header=Cross-Origin-Opener-Policy=same-origin \
+  --web-header=Cross-Origin-Embedder-Policy=require-corp
+```
 
-- `assets/doom/doom.wasm`
-- `assets/doom/doom1.wad`
-
-These large binary assets are intentionally not tracked in git.
+Without these headers, DOOM can render on web, but keyboard input will not work.

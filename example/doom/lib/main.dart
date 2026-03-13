@@ -1,32 +1,17 @@
-import 'dart:collection';
-import 'dart:isolate';
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:wasd/wasd.dart';
 
-const String _doomWasmAssetPath = 'assets/doom/doom.wasm';
-const String _doomIwadAssetPath = 'assets/doom/doom1.wad';
+import 'src/doom_frame_bytes.dart';
+import 'src/doom_runner_client.dart';
+import 'src/doom_runtime.dart';
 
-const int _doomWidth = 320;
-const int _doomHeight = 200;
-const int _doomTargetFrameIntervalUs = 28000;
-
-const int _eventTypeKeyDown = 0;
-const int _eventTypeKeyUp = 1;
-
-const int _doomKeyRight = 0xae;
-const int _doomKeyLeft = 0xac;
-const int _doomKeyUp = 0xad;
-const int _doomKeyDown = 0xaf;
-const int _doomKeyEscape = 27;
-const int _doomKeyEnter = 13;
-const int _doomKeyTab = 9;
-const int _doomKeyBackspace = 127;
-const int _doomKeyCtrl = 0x9d;
-const int _doomKeyAlt = 0xb8;
-const int _doomKeyShift = 0xb6;
+const bool _doomAutoStartEnabled = bool.fromEnvironment(
+  'DOOM_AUTO_START',
+  defaultValue: true,
+);
 
 enum _DoomRuntimeState { booting, running, exited, error, missingAssets }
 
@@ -56,12 +41,11 @@ final class DoomWindowPage extends StatefulWidget {
 }
 
 final class _DoomWindowPageState extends State<DoomWindowPage> {
-  ReceivePort? _receivePort;
-  Isolate? _doomIsolate;
-  SendPort? _eventSendPort;
   final FocusNode _focusNode = FocusNode(debugLabel: 'doom-input-focus');
   final Stopwatch _uiClock = Stopwatch()..start();
 
+  DoomRunnerClient? _runner;
+  StreamSubscription<DoomRunnerMessage>? _runnerMessages;
   ui.Image? _frameImage;
   bool _decodingFrame = false;
   int _frames = 0;
@@ -72,31 +56,40 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
   String _status = 'Booting Doom runtime...';
   _DoomRuntimeState _runtimeState = _DoomRuntimeState.booting;
 
+  bool get _autoStart => _doomAutoStartEnabled && !_isWidgetTestBinding();
+
   @override
   void initState() {
     super.initState();
-    _startDoom();
+    if (_autoStart) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          unawaited(_startDoom());
+        }
+      });
+    }
   }
 
   @override
   void dispose() {
-    _shutdownRuntime();
+    unawaited(_shutdownRuntime());
     _focusNode.dispose();
     _frameImage?.dispose();
-    _frameImage = null;
     super.dispose();
   }
 
-  void _shutdownRuntime() {
-    _doomIsolate?.kill(priority: Isolate.immediate);
-    _doomIsolate = null;
-    _receivePort?.close();
-    _receivePort = null;
-    _eventSendPort = null;
+  Future<void> _shutdownRuntime() async {
+    final subscription = _runnerMessages;
+    _runnerMessages = null;
+    await subscription?.cancel();
+
+    final runner = _runner;
+    _runner = null;
+    await runner?.stop();
   }
 
   Future<void> _startDoom() async {
-    _shutdownRuntime();
+    await _shutdownRuntime();
     _frameImage?.dispose();
     _frameImage = null;
     _frames = 0;
@@ -111,8 +104,8 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
       });
     }
 
-    final wasmBytes = await _loadAssetBytes(_doomWasmAssetPath);
-    final iwadBytes = await _loadAssetBytes(_doomIwadAssetPath);
+    final wasmBytes = await _loadAssetBytes(doomWasmAsset);
+    final iwadBytes = await _loadAssetBytes(doomIwadAsset);
     if (wasmBytes == null || iwadBytes == null) {
       if (!mounted) {
         return;
@@ -121,21 +114,16 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
         _runtimeState = _DoomRuntimeState.missingAssets;
         _status =
             'Missing bundled assets.\n'
-            'Run: tool/setup_assets.sh\n'
             'Expected assets under: example/doom/assets/doom/';
       });
       return;
     }
 
-    final receivePort = ReceivePort();
-    receivePort.listen(_onIsolateMessage);
-    _receivePort = receivePort;
-
-    _doomIsolate = await Isolate.spawn<Map<String, Object?>>(_doomIsolateMain, {
-      'uiPort': receivePort.sendPort,
-      'wasmBytes': TransferableTypedData.fromList(<Uint8List>[wasmBytes]),
-      'iwadBytes': TransferableTypedData.fromList(<Uint8List>[iwadBytes]),
-    });
+    final runner = DoomRunnerClient();
+    _runner = runner;
+    _runnerMessages = runner.messages.listen(_onRunnerMessage);
+    _focusNode.requestFocus();
+    await runner.start(wasmBytes: wasmBytes, iwadBytes: iwadBytes);
   }
 
   Future<Uint8List?> _loadAssetBytes(String key) async {
@@ -149,90 +137,104 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
     }
   }
 
-  void _onIsolateMessage(Object? message) {
-    if (!mounted || message is! Map<Object?, Object?>) {
+  void _onRunnerMessage(DoomRunnerMessage message) {
+    if (!mounted) {
       return;
     }
     final type = message['type'];
-    if (type == 'event_port') {
-      final port = message['port'];
-      if (port is SendPort) {
-        _eventSendPort = port;
+    if (type == doomRunnerMessageInputChannel) {
+      return;
+    }
+    if (type == 'log') {
+      final line = message['line'] as String?;
+      if (line != null && mounted) {
+        setState(() {
+          _status = line;
+          if (_runtimeState == _DoomRuntimeState.booting &&
+              line == 'received first frame') {
+            _runtimeState = _DoomRuntimeState.running;
+          }
+        });
       }
       return;
     }
-    if (type == 'status') {
-      final text = message['text'] as String? ?? '';
-      setState(() {
-        _status = text;
-        if (_runtimeState == _DoomRuntimeState.error ||
-            _runtimeState == _DoomRuntimeState.exited) {
-          return;
-        }
-        _runtimeState = text == 'Running'
-            ? _DoomRuntimeState.running
-            : _DoomRuntimeState.booting;
-      });
-      return;
-    }
-    if (type == 'error') {
-      final text = message['text'] as String? ?? 'Unknown error';
-      setState(() {
-        _runtimeState = _DoomRuntimeState.error;
-        _status = 'Runtime error: $text';
-      });
-      return;
-    }
-    if (type == 'exit') {
-      final text = message['text'] as String? ?? 'Runtime stopped';
-      setState(() {
-        _runtimeState = _DoomRuntimeState.exited;
-        _status = text;
-      });
-      return;
-    }
-    if (type == 'frame') {
+    if (type == doomRunnerMessageFrame) {
       if (_decodingFrame) {
         return;
       }
-      final data = message['rgba'];
-      if (data is! TransferableTypedData) {
+      final bytes = frameMessageBytesAsUint8List(message['bytes']);
+      if (bytes == null) {
         return;
       }
-      final bytes = data.materialize().asUint8List();
+      final width = asIntOrNull(message['width']) ?? doomDefaultWidth;
+      final height = asIntOrNull(message['height']) ?? doomDefaultHeight;
+      final format = message['format'] as String? ?? doomFrameFormatRgba;
       _decodingFrame = true;
-      ui.decodeImageFromPixels(
-        bytes,
-        _doomWidth,
-        _doomHeight,
-        ui.PixelFormat.rgba8888,
-        (image) {
-          _decodingFrame = false;
-          if (!mounted) {
-            image.dispose();
-            return;
-          }
-          final nowUs = _uiClock.elapsedMicroseconds;
-          if (_lastFpsMarkUs == 0) {
-            _lastFpsMarkUs = nowUs;
-          }
-          setState(() {
-            _frameImage?.dispose();
-            _frameImage = image;
-            _frames++;
-            _runtimeState = _DoomRuntimeState.running;
-            _status = 'In game';
-            final elapsedUs = nowUs - _lastFpsMarkUs;
-            if (elapsedUs >= 1000000) {
-              final newFrames = _frames - _framesAtFpsMark;
-              _fps = newFrames * 1000000 / elapsedUs;
-              _framesAtFpsMark = _frames;
-              _lastFpsMarkUs = nowUs;
-            }
-          });
-        },
-      );
+      if (format == doomFrameFormatBmp) {
+        unawaited(_decodeCodecFrame(bytes));
+      } else {
+        ui.decodeImageFromPixels(
+          bytes,
+          width,
+          height,
+          ui.PixelFormat.rgba8888,
+          _commitFrame,
+        );
+      }
+      return;
     }
+    if (type == doomRunnerMessageExit) {
+      final code = message['code'];
+      setState(() {
+        _runtimeState = _DoomRuntimeState.exited;
+        _status = 'WASI exit code: $code';
+      });
+      return;
+    }
+    if (type == doomRunnerMessageError) {
+      final error = message['error'] as String? ?? 'Unknown error';
+      setState(() {
+        _runtimeState = _DoomRuntimeState.error;
+        _status = 'Runtime error: $error';
+      });
+    }
+  }
+
+  Future<void> _decodeCodecFrame(Uint8List bytes) async {
+    try {
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      codec.dispose();
+      _commitFrame(frame.image);
+    } catch (_) {
+      _decodingFrame = false;
+    }
+  }
+
+  void _commitFrame(ui.Image image) {
+    _decodingFrame = false;
+    if (!mounted) {
+      image.dispose();
+      return;
+    }
+    final nowUs = _uiClock.elapsedMicroseconds;
+    if (_lastFpsMarkUs == 0) {
+      _lastFpsMarkUs = nowUs;
+    }
+    setState(() {
+      _frameImage?.dispose();
+      _frameImage = image;
+      _frames++;
+      _runtimeState = _DoomRuntimeState.running;
+      _status = 'In game';
+      final elapsedUs = nowUs - _lastFpsMarkUs;
+      if (elapsedUs >= 1000000) {
+        final newFrames = _frames - _framesAtFpsMark;
+        _fps = newFrames * 1000000 / elapsedUs;
+        _framesAtFpsMark = _frames;
+        _lastFpsMarkUs = nowUs;
+      }
+    });
   }
 
   KeyEventResult _onKeyEvent(KeyEvent event) {
@@ -249,12 +251,14 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
     if (doomKey == null) {
       return KeyEventResult.ignored;
     }
-    if (event is KeyDownEvent) {
-      _writeEvent(_eventTypeKeyDown, doomKey);
+    if (event is KeyDownEvent || event is KeyRepeatEvent) {
+      _runner?.sendKey(
+        DoomInputEvent(type: doomEventTypeKeyDown, code: doomKey),
+      );
       return KeyEventResult.handled;
     }
     if (event is KeyUpEvent) {
-      _writeEvent(_eventTypeKeyUp, doomKey);
+      _runner?.sendKey(DoomInputEvent(type: doomEventTypeKeyUp, code: doomKey));
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -263,43 +267,43 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
   int? _mapKey(KeyEvent event) {
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.arrowRight) {
-      return _doomKeyRight;
+      return doomKeyRight;
     }
     if (key == LogicalKeyboardKey.arrowLeft) {
-      return _doomKeyLeft;
+      return doomKeyLeft;
     }
     if (key == LogicalKeyboardKey.arrowUp) {
-      return _doomKeyUp;
+      return doomKeyUp;
     }
     if (key == LogicalKeyboardKey.arrowDown) {
-      return _doomKeyDown;
+      return doomKeyDown;
     }
     if (key == LogicalKeyboardKey.escape) {
-      return _doomKeyEscape;
+      return doomKeyEscape;
     }
     if (key == LogicalKeyboardKey.enter) {
-      return _doomKeyEnter;
+      return doomKeyEnter;
     }
     if (key == LogicalKeyboardKey.space) {
       return 32;
     }
     if (key == LogicalKeyboardKey.controlLeft ||
         key == LogicalKeyboardKey.controlRight) {
-      return _doomKeyCtrl;
+      return doomKeyCtrl;
     }
     if (key == LogicalKeyboardKey.altLeft ||
         key == LogicalKeyboardKey.altRight) {
-      return _doomKeyAlt;
+      return doomKeyAlt;
     }
     if (key == LogicalKeyboardKey.shiftLeft ||
         key == LogicalKeyboardKey.shiftRight) {
-      return _doomKeyShift;
+      return doomKeyShift;
     }
     if (key == LogicalKeyboardKey.tab) {
-      return _doomKeyTab;
+      return doomKeyTab;
     }
     if (key == LogicalKeyboardKey.backspace) {
-      return _doomKeyBackspace;
+      return doomKeyBackspace;
     }
 
     final label = key.keyLabel;
@@ -313,14 +317,6 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
       }
     }
     return null;
-  }
-
-  void _writeEvent(int eventType, int keyCode) {
-    final port = _eventSendPort;
-    if (port == null) {
-      return;
-    }
-    port.send(<int>[eventType, keyCode]);
   }
 
   void _toggleHelpOverlay() {
@@ -341,8 +337,15 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
   }
 
   void _restartDoom() {
-    _startDoom();
+    unawaited(_startDoom());
     _focusNode.requestFocus();
+  }
+
+  bool _isWidgetTestBinding() {
+    final bindingName = WidgetsBinding.instance.runtimeType.toString();
+    return bindingName.contains('TestWidgetsFlutterBinding') ||
+        bindingName.contains('AutomatedTestWidgetsFlutterBinding') ||
+        bindingName.contains('LiveTestWidgetsFlutterBinding');
   }
 
   @override
@@ -359,7 +362,7 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
             autofocus: true,
             onKeyEvent: (_, event) => _onKeyEvent(event),
             child: Stack(
-              children: [
+              children: <Widget>[
                 Positioned.fill(
                   child: DecoratedBox(
                     decoration: const BoxDecoration(
@@ -379,7 +382,7 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(18, 72, 18, 120),
                     child: AspectRatio(
-                      aspectRatio: _doomWidth / _doomHeight,
+                      aspectRatio: doomDefaultWidth / doomDefaultHeight,
                       child: DecoratedBox(
                         decoration: BoxDecoration(
                           color: Colors.black,
@@ -398,7 +401,7 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
                         child: ClipRect(
                           child: Stack(
                             fit: StackFit.expand,
-                            children: [
+                            children: <Widget>[
                               _frameImage == null
                                   ? const _BootBackdrop()
                                   : RawImage(
@@ -438,7 +441,7 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
                   left: 20,
                   right: 20,
                   child: Row(
-                    children: [
+                    children: <Widget>[
                       Expanded(
                         child: _TopStatusBar(fps: _fps, frameCount: _frames),
                       ),
@@ -505,7 +508,7 @@ final class _BootBackdrop extends StatelessWidget {
       child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: [
+          children: <Widget>[
             Text(
               'DOOM // WASD',
               style: TextStyle(
@@ -586,7 +589,7 @@ final class _TopStatusBar extends StatelessWidget {
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+            children: <Widget>[
               const Text(
                 'DOOM // WASD',
                 style: TextStyle(
@@ -600,7 +603,7 @@ final class _TopStatusBar extends StatelessWidget {
               Wrap(
                 spacing: 14,
                 runSpacing: 4,
-                children: [
+                children: <Widget>[
                   Text('fps: ${fps.toStringAsFixed(1)}'),
                   Text('frames: $frameCount'),
                 ],
@@ -641,7 +644,7 @@ final class _SmallKeycap extends StatelessWidget {
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            children: [
+            children: <Widget>[
               Text(
                 keyName,
                 style: const TextStyle(
@@ -697,7 +700,7 @@ final class _HudPanel extends StatelessWidget {
             fontSize: 11,
           ),
           child: Row(
-            children: [
+            children: <Widget>[
               Expanded(
                 child: Text(
                   'state=$runtimeLabel  status=$statusText',
@@ -706,9 +709,7 @@ final class _HudPanel extends StatelessWidget {
                 ),
               ),
               if (showHint)
-                const Text(
-                  'Arrows move | Ctrl fire | Space use | Esc menu',
-                ),
+                const Text('Arrows move | Ctrl fire | Space use | Esc menu'),
             ],
           ),
         ),
@@ -743,7 +744,7 @@ final class _HelpCard extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+              children: <Widget>[
                 Text(
                   'Mission Briefing',
                   style: TextStyle(
@@ -768,263 +769,4 @@ final class _HelpCard extends StatelessWidget {
       ),
     );
   }
-}
-
-Future<void> _doomIsolateMain(Map<String, Object?> args) async {
-  final uiPort = args['uiPort'] as SendPort;
-  final wasmBytes = (args['wasmBytes'] as TransferableTypedData)
-      .materialize()
-      .asUint8List();
-  final iwadBytes = (args['iwadBytes'] as TransferableTypedData)
-      .materialize()
-      .asUint8List();
-
-  _WindowDoomHost? frontend;
-
-  try {
-    frontend = _WindowDoomHost(uiPort: uiPort);
-    uiPort.send(<String, Object?>{
-      'type': 'event_port',
-      'port': frontend.eventSendPort,
-    });
-    uiPort.send(<String, Object?>{
-      'type': 'status',
-      'text': 'Loading Doom wasm...',
-    });
-
-    final fs = WasiInMemoryFileSystem();
-    _writeInMemoryFile(fs, '/doom1.wad', iwadBytes);
-
-    final wasi = WasiPreview1(
-      args: const ['doom.wasm'],
-      stdin: Uint8List(0),
-      stdoutSink: (_) {},
-      stderrSink: (_) {},
-      fileSystem: fs,
-      preferHostIo: false,
-    );
-    final imports = WasmImports(
-      functions: <String, WasmHostFunction>{
-        ...wasi.imports.functions,
-        ...frontend.syncImports,
-      },
-      asyncFunctions: frontend.asyncImports,
-    );
-    final instance = WasmInstance.fromBytes(wasmBytes, imports: imports);
-    wasi.bindInstance(instance);
-    frontend.bindMemory(instance.exportedMemory('memory'));
-
-    uiPort.send(<String, Object?>{'type': 'status', 'text': 'Running'});
-    await instance.invokeAsync('_start');
-    uiPort.send(<String, Object?>{
-      'type': 'exit',
-      'text': 'doom _start returned',
-    });
-  } on WasiProcExit catch (error) {
-    uiPort.send(<String, Object?>{
-      'type': 'exit',
-      'text': 'WASI exit code: ${error.exitCode}',
-    });
-  } catch (error) {
-    uiPort.send(<String, Object?>{'type': 'error', 'text': error.toString()});
-  } finally {
-    frontend?.close();
-  }
-}
-
-void _writeInMemoryFile(
-  WasiInMemoryFileSystem fs,
-  String path,
-  Uint8List bytes,
-) {
-  final fd = fs.open(
-    path: path,
-    create: true,
-    truncate: true,
-    read: true,
-    write: true,
-    exclusive: false,
-    followSymlinks: true,
-  );
-  fd.write(bytes);
-  fd.close();
-}
-
-final class _WindowDoomHost {
-  _WindowDoomHost({required this.uiPort}) {
-    _eventPort.handler = _onEventMessage;
-  }
-
-  final SendPort uiPort;
-  final RawReceivePort _eventPort = RawReceivePort();
-  final Queue<_DoomEvent> _events = Queue<_DoomEvent>();
-  final Uint8List _palette = Uint8List(1024);
-  final Stopwatch _frameClock = Stopwatch()..start();
-
-  WasmMemory? _memory;
-  int _lastEventYieldUs = 0;
-  int _lastFrameSentUs = 0;
-
-  SendPort get eventSendPort => _eventPort.sendPort;
-
-  Map<String, WasmHostFunction> get syncImports => <String, WasmHostFunction>{
-    WasmImports.key('env', 'ZwareDoomOpenWindow'): _openWindow,
-    WasmImports.key('env', 'ZwareDoomSetPalette'): _setPalette,
-    WasmImports.key('env', 'ZwareDoomRenderFrame'): _renderFrame,
-  };
-
-  Map<String, WasmAsyncHostFunction> get asyncImports =>
-      <String, WasmAsyncHostFunction>{
-        WasmImports.key('env', 'ZwareDoomPendingEvent'): _pendingEventAsync,
-        WasmImports.key('env', 'ZwareDoomNextEvent'): _nextEventAsync,
-      };
-
-  void bindMemory(WasmMemory memory) {
-    _memory = memory;
-  }
-
-  Object? _openWindow(List<Object?> args) {
-    return 1;
-  }
-
-  Object? _setPalette(List<Object?> args) {
-    final memory = _requireMemory();
-    final ptr = _asI32(args, 0, 'palette_ptr');
-    final len = _asI32(args, 1, 'palette_len');
-    if (len <= 0) {
-      return null;
-    }
-
-    final bytes = memory.readBytes(ptr, len);
-    final copyLen = bytes.length < _palette.length
-        ? bytes.length
-        : _palette.length;
-    _palette.setRange(0, copyLen, bytes);
-    if (copyLen < _palette.length) {
-      _palette.fillRange(copyLen, _palette.length, 0);
-    }
-    return null;
-  }
-
-  void _onEventMessage(Object? message) {
-    if (message is! List || message.length != 2) {
-      return;
-    }
-    final eventType = message[0];
-    final keyCode = message[1];
-    if (eventType is! int || keyCode is! int) {
-      return;
-    }
-    _events.add(_DoomEvent(type: eventType.toSigned(32), data1: keyCode));
-  }
-
-  Future<Object?> _pendingEventAsync(List<Object?> args) async {
-    if (_events.isEmpty) {
-      await _yieldToEventLoopIfNeeded();
-    }
-    return _events.isNotEmpty ? 1 : 0;
-  }
-
-  Future<Object?> _nextEventAsync(List<Object?> args) async {
-    if (_events.isEmpty) {
-      await _yieldToEventLoopIfNeeded();
-      if (_events.isEmpty) {
-        return 0;
-      }
-    }
-    _writeNextEventToGuest(args);
-    return 1;
-  }
-
-  void _writeNextEventToGuest(List<Object?> args) {
-    final memory = _requireMemory();
-    final typePtr = _asI32(args, 0, 'type_ptr');
-    final data1Ptr = _asI32(args, 1, 'data1_ptr');
-    final data2Ptr = _asI32(args, 2, 'data2_ptr');
-    final data3Ptr = _asI32(args, 3, 'data3_ptr');
-
-    final event = _events.removeFirst();
-    memory.storeI32(typePtr, event.type);
-    memory.storeI32(data1Ptr, event.data1);
-    memory.storeI32(data2Ptr, 0);
-    memory.storeI32(data3Ptr, 0);
-  }
-
-  Object? _renderFrame(List<Object?> args) {
-    final memory = _requireMemory();
-    final framePtr = _asI32(args, 0, 'frame_ptr');
-    final frameLen = _asI32(args, 1, 'frame_len');
-    if (frameLen <= 0) {
-      return 0;
-    }
-
-    final nowUs = _frameClock.elapsedMicroseconds;
-    if (nowUs - _lastFrameSentUs < _doomTargetFrameIntervalUs) {
-      return 0;
-    }
-    _lastFrameSentUs = nowUs;
-
-    final indexed = memory.readBytes(framePtr, frameLen);
-    final rgba = _indexedToRgba(indexed);
-    uiPort.send(<String, Object?>{
-      'type': 'frame',
-      'rgba': TransferableTypedData.fromList(<Uint8List>[rgba]),
-    });
-    return 0;
-  }
-
-  Uint8List _indexedToRgba(Uint8List indexed) {
-    final pixelCount = _doomWidth * _doomHeight;
-    final rgba = Uint8List(pixelCount * 4);
-    final usable = indexed.length < pixelCount ? indexed.length : pixelCount;
-
-    for (var i = 0; i < usable; i++) {
-      final paletteOffset = indexed[i] * 4;
-      final out = i * 4;
-      rgba[out + 0] = _palette[paletteOffset + 0];
-      rgba[out + 1] = _palette[paletteOffset + 1];
-      rgba[out + 2] = _palette[paletteOffset + 2];
-      rgba[out + 3] = 255;
-    }
-    return rgba;
-  }
-
-  void close() {
-    _eventPort.close();
-  }
-
-  Future<void> _yieldToEventLoopIfNeeded() async {
-    final nowUs = _frameClock.elapsedMicroseconds;
-    if (nowUs - _lastEventYieldUs < 2000) {
-      return;
-    }
-    _lastEventYieldUs = nowUs;
-    await Future<void>.delayed(Duration.zero);
-  }
-
-  WasmMemory _requireMemory() {
-    final memory = _memory;
-    if (memory == null) {
-      throw StateError('Doom host memory is not bound.');
-    }
-    return memory;
-  }
-
-  static int _asI32(List<Object?> args, int index, String name) {
-    if (index < 0 || index >= args.length) {
-      throw StateError('Missing host argument: $name');
-    }
-    final value = args[index];
-    if (value is! int) {
-      throw StateError('Host argument `$name` must be i32/int.');
-    }
-    return value.toSigned(32);
-  }
-}
-
-final class _DoomEvent {
-  const _DoomEvent({required this.type, required this.data1});
-
-  final int type;
-  final int data1;
 }

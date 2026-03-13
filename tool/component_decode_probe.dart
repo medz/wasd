@@ -4,8 +4,28 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import '../lib/src/component.dart';
-import '../lib/src/features.dart';
+import '_native_wasm_bridge.dart' as _native;
+
+typedef WasmFeatureSet = _native.WasmFeatureSet;
+typedef WasmModule = _native.WasmModule;
+
+final class WasmComponent {
+  const WasmComponent._();
+
+  static WasmModule decode(
+    Uint8List bytes, {
+    WasmFeatureSet features = const WasmFeatureSet(componentModel: true),
+  }) {
+    return WasmModule.decode(bytes, features: features);
+  }
+
+  static WasmModule decodeBestEffort(
+    Uint8List bytes, {
+    WasmFeatureSet features = const WasmFeatureSet(componentModel: true),
+  }) {
+    return WasmModule.decode(bytes, features: features);
+  }
+}
 
 const String _defaultTestsuiteDir = 'third_party/component-model-tests/test';
 const String _defaultJsonPath =

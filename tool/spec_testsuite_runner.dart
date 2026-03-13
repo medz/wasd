@@ -7,6 +7,26 @@ import 'src/spec_player_bridge_io.dart'
     as player_bridge;
 import 'src/spec_v128_codec.dart' as spec_v128;
 import 'package:wasd/wasd.dart';
+import '_native_wasm_bridge.dart' as _native;
+
+typedef WasmFeatureSet = _native.WasmFeatureSet;
+typedef WasmFeatureProfile = _native.WasmFeatureProfile;
+typedef WasmModule = _native.WasmModule;
+typedef WasmInstance = _native.WasmInstance;
+typedef WasmImports = _native.WasmImports;
+typedef WasmImport = _native.WasmImport;
+typedef WasmImportKind = _native.WasmImportKind;
+typedef WasmHostFunction = _native.WasmHostFunction;
+typedef WasmGlobalType = _native.WasmGlobalType;
+typedef WasmMemory = _native.WasmMemory;
+typedef WasmTable = _native.WasmTable;
+typedef WasmTagImport = _native.WasmTagImport;
+typedef WasmRefType = _native.WasmRefType;
+typedef WasmValueType = _native.WasmValueType;
+typedef WasmF32Bits = _native.WasmF32Bits;
+typedef WasmF64Bits = _native.WasmF64Bits;
+typedef WasmVm = _native.WasmVm;
+typedef RuntimeGlobal = _native.RuntimeGlobal;
 
 enum _SpecSuite { core, proposal, all }
 
@@ -77,6 +97,12 @@ final class _SpecRunnerFailure implements Exception {
 
   final String reason;
   final String details;
+
+  @override
+  bool isTag(Tag tag) => false;
+
+  @override
+  Object? getArg(Tag tag, int index) => null;
 
   @override
   String toString() => '$reason: $details';
