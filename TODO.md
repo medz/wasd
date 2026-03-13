@@ -315,6 +315,8 @@
       - commit: `92b5f59`
     - [x] 新增 `local.set` / `local.tee` 语义回归测试，约束 native 解释器局部变量优化不破坏行为（Issue #10, #13）
       - commit: `92b5f59`
+    - [x] 新增 direct-call 语义回归与小基准，并缓存 native 解释器 direct `call` / `return_call` 目标函数以降低热路径分发成本（Issue #10, #13）
+      - commit: `38eb50b`
     - note: migrated desktop DOOM input from isolate `SendPort` messages to a loopback UDP polling channel so native `ZwareDoomPendingEvent` / `ZwareDoomNextEvent` can stay synchronous and avoid the async subset hot path
     - note: added `example/doom/tool/native_benchmark.dart` with selectable `inline/worker` + `none/rgba/bmp` cases to split guest, transport, and frame encoding cost
     - note: profiled native sync VM hot functions (`f133` / `f98` / `f345` / `f107` / `f135`) and optimized interpreter hot paths with cached instruction constants, cached resolved memarg metadata, memory32 address fast path, non-`BigInt` i32 multiply, and direct i32 load/store dispatch
@@ -323,6 +325,7 @@
     - verify: `dart test` (pass)
     - verify: `dart test --platform node test/wasi_test.dart test/wasm_test.dart` (pass)
     - verify: `dart test --platform chrome test/wasi_test.dart test/wasm_test.dart` (pass)
+    - verify: `dart run tool/direct_call_benchmark.dart --iterations=300000 --max-ms=1900` (pass after optimization; before change red at `1972.962ms`, after change green at `1860.377ms`)
     - verify: `flutter analyze` in `example/doom` (pass)
     - verify: `flutter test` in `example/doom` (pass)
     - verify: `dart run tool/native_benchmark.dart --frames=5 --cases=inline-none` in `example/doom` (pass; `firstFrameUs=37952920`, `totalUs=38543785`)
