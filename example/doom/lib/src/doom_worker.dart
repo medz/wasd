@@ -1,10 +1,9 @@
-import 'dart:async';
-import 'dart:collection';
 import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:isolate_manager/isolate_manager.dart';
 
+import 'doom_native_input_channel.dart';
 import 'doom_shared_input_queue.dart';
 import 'doom_runtime.dart';
 
@@ -26,32 +25,32 @@ void doomRunnerWorker(dynamic params) {
         return const <String, Object?>{'type': 'ignored'};
       }
 
-      ReceivePort? nativeInputPort;
-      StreamSubscription<Object?>? nativeInputSubscription;
+      DoomNativeInputServer? nativeInputChannel;
 
       try {
         final wasmBytes = _requireBytes(request['wasmBytes'], 'wasmBytes');
         final iwadBytes = _requireBytes(request['iwadBytes'], 'iwadBytes');
         final nativeUiPort = request['uiPort'];
-        final frameTransport = request['frameTransport'] == doomFrameFormatBmp
-            ? DoomFrameTransport.bmp
-            : DoomFrameTransport.rgba;
+        final frameTransport = switch (request['frameTransport']) {
+          doomFrameFormatNone => DoomFrameTransport.none,
+          doomFrameFormatBmp => DoomFrameTransport.bmp,
+          _ => DoomFrameTransport.rgba,
+        };
+        final maxFrames = asIntOrNull(request['maxFrames']) ?? 0;
+        final frameIntervalUs =
+            asIntOrNull(request['frameIntervalUs']) ??
+            (frameTransport == DoomFrameTransport.rgba
+                ? doomNativeTargetFrameIntervalUs
+                : 0);
         final inputQueue = DoomSharedInputQueue.fromHandle(
           request['inputQueue'],
           capacity: asIntOrNull(request['inputQueueCapacity']) ?? 256,
         );
-        final pendingNativeEvents = Queue<DoomInputEvent>();
         if (inputQueue == null) {
-          nativeInputPort = ReceivePort();
-          nativeInputSubscription = nativeInputPort.listen((message) {
-            final event = DoomInputEvent.fromNativeMessage(message);
-            if (event != null) {
-              pendingNativeEvents.add(event);
-            }
-          });
+          nativeInputChannel = await DoomNativeInputServer.bind();
           _sendMessage(controller, nativeUiPort, <String, Object?>{
-            'type': doomRunnerMessageInputPort,
-            'port': nativeInputPort.sendPort,
+            'type': doomRunnerMessageInputChannel,
+            'channel': nativeInputChannel?.handle,
           });
         }
 
@@ -59,16 +58,11 @@ void doomRunnerWorker(dynamic params) {
           emit: (runnerMessage) =>
               _sendMessage(controller, nativeUiPort, runnerMessage),
           frameTransport: frameTransport,
-          frameIntervalUs: frameTransport == DoomFrameTransport.rgba
-              ? doomNativeTargetFrameIntervalUs
-              : 0,
+          frameIntervalUs: frameIntervalUs,
+          maxFrames: maxFrames,
           drainInput: (queue) {
             inputQueue?.drainInto(queue);
-            if (pendingNativeEvents.isEmpty) {
-              return;
-            }
-            queue.addAll(pendingNativeEvents);
-            pendingNativeEvents.clear();
+            nativeInputChannel?.drainInto(queue);
           },
         );
         await runtime.run(wasmBytes: wasmBytes, iwadBytes: iwadBytes);
@@ -79,8 +73,7 @@ void doomRunnerWorker(dynamic params) {
           'stack': '$stackTrace',
         });
       } finally {
-        await nativeInputSubscription?.cancel();
-        nativeInputPort?.close();
+        await nativeInputChannel?.close();
       }
 
       return const <String, Object?>{'type': 'ignored'};

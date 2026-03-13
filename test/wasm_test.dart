@@ -5,6 +5,7 @@ import 'package:wasd/wasm.dart';
 import 'support/wasm_fixtures.dart';
 
 final _wasmBytes = simpleAddModuleBytes();
+final _localSetTeeBytes = localSetTeeModuleBytes();
 
 final _invalidBytes = Uint8List.fromList([0x00, 0x00, 0x00, 0x00]);
 
@@ -153,6 +154,27 @@ void main() {
         expect(prev, 1); // previous page count
         expect(memory.buffer.lengthInBytes, 65536 * 2);
       });
+    });
+  });
+
+  group('Interpreter local ops', () {
+    late Instance instance;
+
+    setUp(() async {
+      final result = await WebAssembly.instantiate(_localSetTeeBytes.buffer);
+      instance = result.instance;
+    });
+
+    test('local.tee keeps the value on stack and writes the local', () {
+      final fn = (instance.exports['tee_add']! as FunctionImportExportValue).ref;
+      expect(fn([5]), 17);
+      expect(fn([-3]), 1);
+    });
+
+    test('local.set writes the local without leaving an extra stack value', () {
+      final fn = (instance.exports['set_add']! as FunctionImportExportValue).ref;
+      expect(fn([5]), 12);
+      expect(fn([-3]), 4);
     });
   });
 

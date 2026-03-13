@@ -310,3 +310,15 @@
     - verify: `flutter analyze` in `example/flutter_app` (pass)
     - verify: `flutter test` in `example/flutter_app` (pass)
     - verify: `flutter run -d macos` + local screenshots confirm boot screen, main menu transition, and post-input state change (pass)
+  - [-] 持续优化（第 15 轮）：native DOOM 性能基准与同步输入回归（Issue #12, #13）
+    - note: migrated desktop DOOM input from isolate `SendPort` messages to a loopback UDP polling channel so native `ZwareDoomPendingEvent` / `ZwareDoomNextEvent` can stay synchronous and avoid the async subset hot path
+    - note: added `example/doom/tool/native_benchmark.dart` with selectable `inline/worker` + `none/rgba/bmp` cases to split guest, transport, and frame encoding cost
+    - note: profiled native sync VM hot functions (`f133` / `f98` / `f345` / `f107` / `f135`) and optimized interpreter hot paths with cached instruction constants, cached resolved memarg metadata, memory32 address fast path, non-`BigInt` i32 multiply, and direct i32 load/store dispatch
+    - verify: `dart analyze` (pass)
+    - verify: `dart test test/wasm_test.dart test/wasi_test.dart` (pass)
+    - verify: `flutter analyze` in `example/doom` (pass)
+    - verify: `flutter test` in `example/doom` (pass)
+    - verify: `dart run tool/native_benchmark.dart --frames=5 --cases=inline-none` in `example/doom` (pass; `firstFrameUs=37952920`, `totalUs=38543785`)
+    - verify: `dart run tool/native_benchmark.dart --frames=5 --cases=worker-none` in `example/doom` (pass; `firstFrameUs=38209940`, `totalUs=38812832`)
+    - verify: `dart run tool/native_benchmark.dart --frames=5 --cases=inline-rgba` in `example/doom` (pass; `firstFrameUs=39206702`, `totalUs=39822672`)
+    - verify: `dart run tool/native_benchmark.dart --frames=3 --cases=inline-none` in `example/doom` (pass; baseline `firstAfterStart=38283000 totalUs=39486400`, current `firstAfterStart=34803000 totalUs=35951700`)

@@ -142,7 +142,7 @@ final class _DoomWindowPageState extends State<DoomWindowPage> {
       return;
     }
     final type = message['type'];
-    if (type == doomRunnerMessageInputPort) {
+    if (type == doomRunnerMessageInputChannel) {
       return;
     }
     if (type == 'log') {

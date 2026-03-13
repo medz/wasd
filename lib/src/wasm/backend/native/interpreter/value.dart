@@ -22,9 +22,25 @@ final class WasmValue {
 
   final WasmValueType type;
   final Object raw;
+  static const int _i32CacheMin = -512;
+  static const int _i32CacheMax = 4096;
+  static final List<WasmValue> _i32Cache = List<WasmValue>.generate(
+    _i32CacheMax - _i32CacheMin + 1,
+    (index) =>
+        WasmValue._(WasmValueType.i32, (_i32CacheMin + index).toSigned(32)),
+    growable: false,
+  );
+  static const WasmValue zeroI32 = WasmValue._(WasmValueType.i32, 0);
+  static const WasmValue oneI32 = WasmValue._(WasmValueType.i32, 1);
+  static const WasmValue zeroF32 = WasmValue._(WasmValueType.f32, 0);
+  static final WasmValue zeroF64 = WasmValue._(WasmValueType.f64, BigInt.zero);
 
   factory WasmValue.i32(int value) {
-    return WasmValue._(WasmValueType.i32, value.toSigned(32));
+    final normalized = value.toSigned(32);
+    if (normalized >= _i32CacheMin && normalized <= _i32CacheMax) {
+      return _i32Cache[normalized - _i32CacheMin];
+    }
+    return WasmValue._(WasmValueType.i32, normalized);
   }
 
   factory WasmValue.i64(Object value) {
@@ -50,13 +66,13 @@ final class WasmValue {
   factory WasmValue.zeroForType(WasmValueType type) {
     switch (type) {
       case WasmValueType.i32:
-        return WasmValue.i32(0);
+        return zeroI32;
       case WasmValueType.i64:
         return WasmValue.i64(0);
       case WasmValueType.f32:
-        return WasmValue.f32(0.0);
+        return zeroF32;
       case WasmValueType.f64:
-        return WasmValue.f64(0.0);
+        return zeroF64;
     }
   }
 
@@ -69,7 +85,9 @@ final class WasmValue {
         return WasmValue.i32(value);
       case WasmValueType.i64:
         if (value is! int && value is! BigInt && value is! String) {
-          throw StateError('Expected i64 value (int/BigInt/string), got `$value`.');
+          throw StateError(
+            'Expected i64 value (int/BigInt/string), got `$value`.',
+          );
         }
         if (value == null) {
           throw StateError('Expected non-null i64 value.');
@@ -100,7 +118,7 @@ final class WasmValue {
 
   int asI32() {
     _expectType(WasmValueType.i32);
-    return (raw as int).toSigned(32);
+    return raw as int;
   }
 
   BigInt asI64() {
@@ -115,7 +133,7 @@ final class WasmValue {
 
   int asF32Bits() {
     _expectType(WasmValueType.f32);
-    return (raw as int).toUnsigned(32);
+    return raw as int;
   }
 
   double asF64() {

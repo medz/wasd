@@ -3,6 +3,7 @@
 import 'imports.dart';
 import 'module.dart';
 import 'predecode.dart';
+import 'value.dart';
 
 sealed class RuntimeFunction {
   const RuntimeFunction({
@@ -18,7 +19,7 @@ sealed class RuntimeFunction {
 }
 
 final class DefinedRuntimeFunction extends RuntimeFunction {
-  const DefinedRuntimeFunction({
+  DefinedRuntimeFunction({
     required super.type,
     required super.declaredTypeIndex,
     required super.runtimeTypeDepth,
@@ -28,6 +29,11 @@ final class DefinedRuntimeFunction extends RuntimeFunction {
 
   final List<WasmValueType> localTypes;
   final List<Instruction> instructions;
+  late final List<WasmValue> localZeroValues = List<WasmValue>.generate(
+    localTypes.length,
+    (index) => WasmValue.zeroForType(localTypes[index]),
+    growable: false,
+  );
 
   @override
   bool get isHost => false;
@@ -40,10 +46,12 @@ final class HostRuntimeFunction extends RuntimeFunction {
     required super.runtimeTypeDepth,
     required this.callback,
     this.asyncCallback,
+    this.supportsSync = true,
   });
 
   final WasmHostFunction callback;
   final WasmAsyncHostFunction? asyncCallback;
+  final bool supportsSync;
 
   @override
   bool get isHost => true;

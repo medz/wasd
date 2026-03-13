@@ -142,6 +142,112 @@ final class _WasmThrownException implements Exception {
   final int exceptionRef;
 }
 
+final class WasmVmProfileEntry {
+  const WasmVmProfileEntry({
+    required this.functionIndex,
+    required this.callCount,
+    required this.instructionCount,
+    required this.maxDepth,
+  });
+
+  final int functionIndex;
+  final int callCount;
+  final int instructionCount;
+  final int maxDepth;
+}
+
+final class WasmVmProfileSnapshot {
+  const WasmVmProfileSnapshot({
+    required this.totalCallCount,
+    required this.totalInstructionCount,
+    required this.maxDepth,
+    required this.functions,
+  });
+
+  final int totalCallCount;
+  final int totalInstructionCount;
+  final int maxDepth;
+  final List<WasmVmProfileEntry> functions;
+}
+
+final class WasmVmProfiler {
+  static _WasmVmProfilerState? _active;
+
+  static bool get isEnabled => _active != null;
+
+  static void start() {
+    _active = _WasmVmProfilerState();
+  }
+
+  static WasmVmProfileSnapshot stop() {
+    final state = _active ?? _WasmVmProfilerState();
+    _active = null;
+    return state.snapshot();
+  }
+}
+
+final class _WasmVmProfilerState {
+  final Map<int, _WasmVmMutableProfileEntry> _entries =
+      <int, _WasmVmMutableProfileEntry>{};
+  int totalCallCount = 0;
+  int totalInstructionCount = 0;
+  int maxDepth = 0;
+
+  void recordFunctionEntry(int functionIndex, int depth) {
+    totalCallCount++;
+    if (depth > maxDepth) {
+      maxDepth = depth;
+    }
+    final entry = _entries.putIfAbsent(
+      functionIndex,
+      () => _WasmVmMutableProfileEntry(functionIndex),
+    );
+    entry.callCount++;
+    if (depth > entry.maxDepth) {
+      entry.maxDepth = depth;
+    }
+  }
+
+  void recordInstructionCount(int functionIndex, int count) {
+    totalInstructionCount += count;
+    final entry = _entries.putIfAbsent(
+      functionIndex,
+      () => _WasmVmMutableProfileEntry(functionIndex),
+    );
+    entry.instructionCount += count;
+  }
+
+  WasmVmProfileSnapshot snapshot() {
+    final functions =
+        _entries.values
+            .map(
+              (entry) => WasmVmProfileEntry(
+                functionIndex: entry.functionIndex,
+                callCount: entry.callCount,
+                instructionCount: entry.instructionCount,
+                maxDepth: entry.maxDepth,
+              ),
+            )
+            .toList(growable: false)
+          ..sort((a, b) => b.instructionCount.compareTo(a.instructionCount));
+    return WasmVmProfileSnapshot(
+      totalCallCount: totalCallCount,
+      totalInstructionCount: totalInstructionCount,
+      maxDepth: maxDepth,
+      functions: functions,
+    );
+  }
+}
+
+final class _WasmVmMutableProfileEntry {
+  _WasmVmMutableProfileEntry(this.functionIndex);
+
+  final int functionIndex;
+  int callCount = 0;
+  int instructionCount = 0;
+  int maxDepth = 0;
+}
+
 final class WasmVm {
   WasmVm({
     required List<RuntimeFunction> functions,
@@ -505,13 +611,14 @@ final class WasmVm {
   }
 
   List<WasmValue> invokeFunction(int functionIndex, List<WasmValue> args) {
-    return _execute(functionIndex, args, depth: 0);
+    return _execute(functionIndex, args, depth: 0, argsNormalized: false);
   }
 
   List<WasmValue> _execute(
     int functionIndex,
     List<WasmValue> args, {
     required int depth,
+    required bool argsNormalized,
   }) {
     if (depth > maxCallDepth) {
       throw StateError('Call stack overflow (depth > $maxCallDepth).');
@@ -519,11 +626,14 @@ final class WasmVm {
 
     var currentFunctionIndex = functionIndex;
     var currentArgs = args;
+    var currentArgsNormalized = argsNormalized;
 
     executionLoop:
     while (true) {
       _checkFunctionIndex(currentFunctionIndex);
       final function = _functions[currentFunctionIndex];
+      final profiler = WasmVmProfiler._active;
+      profiler?.recordFunctionEntry(currentFunctionIndex, depth);
 
       if (currentArgs.length != function.type.params.length) {
         throw ArgumentError(
@@ -532,24 +642,35 @@ final class WasmVm {
         );
       }
 
-      final normalizedArgs = _normalizeValues(
-        currentArgs,
-        function.type.params,
-      );
+      final normalizedArgs = currentArgsNormalized
+          ? currentArgs
+          : _normalizeValues(currentArgs, function.type.params);
 
       if (function is HostRuntimeFunction) {
         final externalArgs = normalizedArgs
             .map((value) => value.toExternal())
             .toList(growable: false);
         final hostResult = function.callback(externalArgs);
+        profiler?.recordInstructionCount(currentFunctionIndex, 0);
         return WasmValue.decodeResults(function.type.results, hostResult);
       }
 
       final defined = function as DefinedRuntimeFunction;
-      final locals = <WasmValue>[];
-      locals.addAll(normalizedArgs);
-      for (final localType in defined.localTypes) {
-        locals.add(WasmValue.zeroForType(localType));
+      final localZeroValues = defined.localZeroValues;
+      final locals = List<WasmValue>.filled(
+        normalizedArgs.length + localZeroValues.length,
+        WasmValue.i32(0),
+        growable: false,
+      );
+      for (var i = 0; i < normalizedArgs.length; i++) {
+        locals[i] = normalizedArgs[i];
+      }
+      if (localZeroValues.isNotEmpty) {
+        locals.setRange(
+          normalizedArgs.length,
+          normalizedArgs.length + localZeroValues.length,
+          localZeroValues,
+        );
       }
 
       final stack = <WasmValue>[];
@@ -569,9 +690,11 @@ final class WasmVm {
         ),
       );
       var pc = 0;
+      var executedInstructions = 0;
 
       while (pc < instructions.length) {
         final instruction = instructions[pc];
+        executedInstructions++;
 
         try {
           switch (instruction.opcode) {
@@ -723,12 +846,20 @@ final class WasmVm {
                 final label = labels.removeLast();
                 _exitLabel(label, stack);
                 if (labels.isEmpty) {
+                  profiler?.recordInstructionCount(
+                    currentFunctionIndex,
+                    executedInstructions,
+                  );
                   return _collectResults(function.type.results, stack);
                 }
                 pc++;
                 continue;
               }
 
+              profiler?.recordInstructionCount(
+                currentFunctionIndex,
+                executedInstructions,
+              );
               return _collectResults(function.type.results, stack);
 
             case Opcodes.br:
@@ -775,6 +906,10 @@ final class WasmVm {
               pc = _branch(branchDepth, labels, stack);
 
             case Opcodes.return_:
+              profiler?.recordInstructionCount(
+                currentFunctionIndex,
+                executedInstructions,
+              );
               return _collectResults(function.type.results, stack);
 
             case Opcodes.throwTag:
@@ -795,6 +930,7 @@ final class WasmVm {
                 targetIndex,
                 callArgs,
                 depth: depth + 1,
+                argsNormalized: true,
               );
               stack.addAll(callResults);
               pc++;
@@ -824,6 +960,7 @@ final class WasmVm {
                 target.functionIndex,
                 callArgs,
                 depth: depth + 1,
+                argsNormalized: true,
               );
               stack.addAll(callResults);
               pc++;
@@ -833,8 +970,13 @@ final class WasmVm {
               _checkFunctionIndex(targetIndex);
               final target = _functions[targetIndex];
               final callArgs = _popArgs(stack, target.type.params);
+              profiler?.recordInstructionCount(
+                currentFunctionIndex,
+                executedInstructions,
+              );
               currentFunctionIndex = targetIndex;
               currentArgs = callArgs;
+              currentArgsNormalized = true;
               continue executionLoop;
 
             case Opcodes.returnCallRef:
@@ -859,14 +1001,24 @@ final class WasmVm {
               }
               final callArgs = _popArgs(stack, expectedType.params);
               if (identical(target.vm, this)) {
+                profiler?.recordInstructionCount(
+                  currentFunctionIndex,
+                  executedInstructions,
+                );
                 currentFunctionIndex = target.functionIndex;
                 currentArgs = callArgs;
+                currentArgsNormalized = true;
                 continue executionLoop;
               }
+              profiler?.recordInstructionCount(
+                currentFunctionIndex,
+                executedInstructions,
+              );
               return target.vm._execute(
                 target.functionIndex,
                 callArgs,
                 depth: depth,
+                argsNormalized: true,
               );
 
             case Opcodes.callIndirect:
@@ -910,6 +1062,7 @@ final class WasmVm {
                 target.functionIndex,
                 callArgs,
                 depth: depth + 1,
+                argsNormalized: true,
               );
               stack.addAll(callResults);
               pc++;
@@ -952,14 +1105,24 @@ final class WasmVm {
 
               final callArgs = _popArgs(stack, expectedType.params);
               if (identical(target.vm, this)) {
+                profiler?.recordInstructionCount(
+                  currentFunctionIndex,
+                  executedInstructions,
+                );
                 currentFunctionIndex = target.functionIndex;
                 currentArgs = callArgs;
+                currentArgsNormalized = true;
                 continue executionLoop;
               }
+              profiler?.recordInstructionCount(
+                currentFunctionIndex,
+                executedInstructions,
+              );
               return target.vm._execute(
                 target.functionIndex,
                 callArgs,
                 depth: depth,
+                argsNormalized: true,
               );
 
             case Opcodes.drop:
@@ -980,49 +1143,30 @@ final class WasmVm {
               pc++;
 
             case Opcodes.localGet:
-              final localIndex = _checkIndex(
-                instruction.immediate!,
-                locals.length,
-                'local',
-              );
+              final localIndex = instruction.immediate!;
               stack.add(locals[localIndex]);
               pc++;
 
             case Opcodes.localSet:
-              final localIndex = _checkIndex(
-                instruction.immediate!,
-                locals.length,
-                'local',
-              );
-              locals[localIndex] = _pop(stack).castTo(locals[localIndex].type);
+              final localIndex = instruction.immediate!;
+              locals[localIndex] = _pop(stack);
               pc++;
 
             case Opcodes.localTee:
-              final localIndex = _checkIndex(
-                instruction.immediate!,
-                locals.length,
-                'local',
-              );
-              final value = _pop(stack).castTo(locals[localIndex].type);
-              locals[localIndex] = value;
-              stack.add(value);
+              final localIndex = instruction.immediate!;
+              if (stack.isEmpty) {
+                throw StateError('Operand stack underflow for local.tee.');
+              }
+              locals[localIndex] = stack.last;
               pc++;
 
             case Opcodes.globalGet:
-              final globalIndex = _checkIndex(
-                instruction.immediate!,
-                _globals.length,
-                'global',
-              );
+              final globalIndex = instruction.immediate!;
               stack.add(_globals[globalIndex].value);
               pc++;
 
             case Opcodes.globalSet:
-              final globalIndex = _checkIndex(
-                instruction.immediate!,
-                _globals.length,
-                'global',
-              );
+              final globalIndex = instruction.immediate!;
               final global = _globals[globalIndex];
               if (!global.mutable) {
                 throw StateError(
@@ -1054,13 +1198,38 @@ final class WasmVm {
               pc++;
 
             case Opcodes.i32Load:
+              final memory = _memoryForMemArg(instruction);
+              final address = _addressFromStack(stack, instruction);
+              stack.add(WasmValue.i32(memory.loadI32(address)));
+              pc++;
+
+            case Opcodes.i32Load8S:
+              final memory = _memoryForMemArg(instruction);
+              final address = _addressFromStack(stack, instruction);
+              stack.add(WasmValue.i32(memory.loadI8(address)));
+              pc++;
+
+            case Opcodes.i32Load8U:
+              final memory = _memoryForMemArg(instruction);
+              final address = _addressFromStack(stack, instruction);
+              stack.add(WasmValue.i32(memory.loadU8(address)));
+              pc++;
+
+            case Opcodes.i32Load16S:
+              final memory = _memoryForMemArg(instruction);
+              final address = _addressFromStack(stack, instruction);
+              stack.add(WasmValue.i32(memory.loadI16(address)));
+              pc++;
+
+            case Opcodes.i32Load16U:
+              final memory = _memoryForMemArg(instruction);
+              final address = _addressFromStack(stack, instruction);
+              stack.add(WasmValue.i32(memory.loadU16(address)));
+              pc++;
+
             case Opcodes.i64Load:
             case Opcodes.f32Load:
             case Opcodes.f64Load:
-            case Opcodes.i32Load8S:
-            case Opcodes.i32Load8U:
-            case Opcodes.i32Load16S:
-            case Opcodes.i32Load16U:
             case Opcodes.i64Load8S:
             case Opcodes.i64Load8U:
             case Opcodes.i64Load16S:
@@ -1078,11 +1247,29 @@ final class WasmVm {
               pc++;
 
             case Opcodes.i32Store:
+              final value = _pop(stack);
+              final memory = _memoryForMemArg(instruction);
+              final address = _addressFromStack(stack, instruction);
+              memory.storeI32(address, value.asI32());
+              pc++;
+
+            case Opcodes.i32Store8:
+              final value = _pop(stack);
+              final memory = _memoryForMemArg(instruction);
+              final address = _addressFromStack(stack, instruction);
+              memory.storeI8(address, value.asI32());
+              pc++;
+
+            case Opcodes.i32Store16:
+              final value = _pop(stack);
+              final memory = _memoryForMemArg(instruction);
+              final address = _addressFromStack(stack, instruction);
+              memory.storeI16(address, value.asI32());
+              pc++;
+
             case Opcodes.i64Store:
             case Opcodes.f32Store:
             case Opcodes.f64Store:
-            case Opcodes.i32Store8:
-            case Opcodes.i32Store16:
             case Opcodes.i64Store8:
             case Opcodes.i64Store16:
             case Opcodes.i64Store32:
@@ -1771,42 +1958,76 @@ final class WasmVm {
               pc++;
 
             case Opcodes.i32Const:
-              stack.add(WasmValue.i32(instruction.immediate!));
+              stack.add(
+                instruction.runtimeCachedValue ??= WasmValue.i32(
+                  instruction.immediate!,
+                ),
+              );
               pc++;
 
             case Opcodes.i64Const:
+              final cachedValue = instruction.runtimeCachedValue;
+              if (cachedValue != null) {
+                stack.add(cachedValue);
+                pc++;
+                continue;
+              }
               final wideImmediate = instruction.wideImmediate;
               if (wideImmediate == null) {
                 throw StateError('Malformed i64.const immediate.');
               }
-              stack.add(WasmValue.i64(wideImmediate));
+              stack.add(
+                instruction.runtimeCachedValue = WasmValue.i64(wideImmediate),
+              );
               pc++;
 
             case Opcodes.f32Const:
+              final cachedValue = instruction.runtimeCachedValue;
+              if (cachedValue != null) {
+                stack.add(cachedValue);
+                pc++;
+                continue;
+              }
               final floatBytes = instruction.floatBytesImmediate;
               if (floatBytes != null && floatBytes.length == 4) {
                 final bits = ByteData.sublistView(
                   floatBytes,
                 ).getUint32(0, Endian.little);
-                stack.add(WasmValue.f32Bits(bits));
+                stack.add(
+                  instruction.runtimeCachedValue = WasmValue.f32Bits(bits),
+                );
               } else {
-                stack.add(WasmValue.f32(instruction.floatImmediate!));
+                stack.add(
+                  instruction.runtimeCachedValue = WasmValue.f32(
+                    instruction.floatImmediate!,
+                  ),
+                );
               }
               pc++;
 
             case Opcodes.f64Const:
+              final cachedValue = instruction.runtimeCachedValue;
+              if (cachedValue != null) {
+                stack.add(cachedValue);
+                pc++;
+                continue;
+              }
               final floatBytes = instruction.floatBytesImmediate;
               if (floatBytes != null && floatBytes.length == 8) {
                 final data = ByteData.sublistView(floatBytes);
                 final low = data.getUint32(0, Endian.little);
                 final high = data.getUint32(4, Endian.little);
                 stack.add(
-                  WasmValue.f64Bits(
+                  instruction.runtimeCachedValue = WasmValue.f64Bits(
                     WasmI64.fromU32PairUnsigned(low: low, high: high),
                   ),
                 );
               } else {
-                stack.add(WasmValue.f64(instruction.floatImmediate!));
+                stack.add(
+                  instruction.runtimeCachedValue = WasmValue.f64(
+                    instruction.floatImmediate!,
+                  ),
+                );
               }
               pc++;
 
@@ -1815,7 +2036,11 @@ final class WasmVm {
               if (laneBytes == null || laneBytes.length != 16) {
                 throw StateError('Malformed v128.const immediate.');
               }
-              stack.add(WasmValue.i32(_internV128(laneBytes)));
+              stack.add(
+                instruction.runtimeCachedValue ??= WasmValue.i32(
+                  _internV128(laneBytes),
+                ),
+              );
               pc++;
 
             case Opcodes.v128Load:
@@ -2801,7 +3026,9 @@ final class WasmVm {
               pc++;
 
             case Opcodes.refNull:
-              stack.add(WasmValue.i32(_nullRef));
+              stack.add(
+                instruction.runtimeCachedValue ??= WasmValue.i32(_nullRef),
+              );
               pc++;
 
             case Opcodes.refFunc:
@@ -3868,12 +4095,16 @@ final class WasmVm {
     );
     final target = labels[targetPosition];
 
-    RuntimeControlOps.rebaseStackForBranch(
-      stack: stack,
-      branchTypes: target.branchTypes,
-      stackBaseHeight: target.stackHeight,
-      context: 'branch',
-    );
+    if (target.branchTypes.isEmpty) {
+      _truncateStackToHeight(stack, target.stackHeight, context: 'branch');
+    } else {
+      RuntimeControlOps.rebaseStackForBranch(
+        stack: stack,
+        branchTypes: target.branchTypes,
+        stackBaseHeight: target.stackHeight,
+        context: 'branch',
+      );
+    }
 
     if (target.kind == _LabelKind.loop) {
       if (targetPosition + 1 < labels.length) {
@@ -3894,6 +4125,10 @@ final class WasmVm {
   }
 
   void _exitLabel(_LabelFrame label, List<WasmValue> stack) {
+    if (label.endTypes.isEmpty) {
+      _truncateStackToHeight(stack, label.stackHeight, context: 'end');
+      return;
+    }
     RuntimeControlOps.leaveFrameDropExtra(
       stack: stack,
       stackBaseHeight: label.stackHeight,
@@ -4316,7 +4551,9 @@ final class WasmVm {
     if (memArg == null) {
       throw StateError('Missing memarg for opcode 0x${instruction.opcode}.');
     }
-    return _requireMemory(memArg.memoryIndex);
+    return instruction.runtimeCachedMemory ??= _requireMemory(
+      memArg.memoryIndex,
+    );
   }
 
   bool _functionTypeEquals(WasmFunctionType a, WasmFunctionType b) {
@@ -8978,18 +9215,59 @@ final class WasmVm {
     return stack.removeLast();
   }
 
-  int _popI32(List<WasmValue> stack) =>
-      _pop(stack).castTo(WasmValueType.i32).asI32();
-  BigInt _popI64(List<WasmValue> stack) =>
-      _pop(stack).castTo(WasmValueType.i64).asI64();
-  double _popF32(List<WasmValue> stack) =>
-      _pop(stack).castTo(WasmValueType.f32).asF32();
-  double _popF64(List<WasmValue> stack) =>
-      _pop(stack).castTo(WasmValueType.f64).asF64();
-  int _popF32Bits(List<WasmValue> stack) =>
-      _pop(stack).castTo(WasmValueType.f32).asF32Bits();
-  BigInt _popF64Bits(List<WasmValue> stack) =>
-      _pop(stack).castTo(WasmValueType.f64).asF64Bits();
+  @pragma('vm:prefer-inline')
+  int _popI32(List<WasmValue> stack) {
+    final value = _pop(stack);
+    if (value.type != WasmValueType.i32) {
+      throw StateError('Expected ${WasmValueType.i32} but got ${value.type}.');
+    }
+    return value.raw as int;
+  }
+
+  @pragma('vm:prefer-inline')
+  BigInt _popI64(List<WasmValue> stack) {
+    final value = _pop(stack);
+    if (value.type != WasmValueType.i64) {
+      throw StateError('Expected ${WasmValueType.i64} but got ${value.type}.');
+    }
+    return WasmI64.signed(value.raw);
+  }
+
+  @pragma('vm:prefer-inline')
+  double _popF32(List<WasmValue> stack) {
+    final value = _pop(stack);
+    if (value.type != WasmValueType.f32) {
+      throw StateError('Expected ${WasmValueType.f32} but got ${value.type}.');
+    }
+    return WasmValue.fromF32Bits(value.raw as int);
+  }
+
+  @pragma('vm:prefer-inline')
+  double _popF64(List<WasmValue> stack) {
+    final value = _pop(stack);
+    if (value.type != WasmValueType.f64) {
+      throw StateError('Expected ${WasmValueType.f64} but got ${value.type}.');
+    }
+    return WasmValue.fromF64Bits(value.raw);
+  }
+
+  @pragma('vm:prefer-inline')
+  int _popF32Bits(List<WasmValue> stack) {
+    final value = _pop(stack);
+    if (value.type != WasmValueType.f32) {
+      throw StateError('Expected ${WasmValueType.f32} but got ${value.type}.');
+    }
+    return value.raw as int;
+  }
+
+  @pragma('vm:prefer-inline')
+  BigInt _popF64Bits(List<WasmValue> stack) {
+    final value = _pop(stack);
+    if (value.type != WasmValueType.f64) {
+      throw StateError('Expected ${WasmValueType.f64} but got ${value.type}.');
+    }
+    return WasmI64.unsigned(value.raw);
+  }
 
   int? _popRef(List<WasmValue> stack) {
     final raw = _popI32(stack);
@@ -9010,6 +9288,7 @@ final class WasmVm {
     return target;
   }
 
+  @pragma('vm:prefer-inline')
   void _pushRef(List<WasmValue> stack, int? value) {
     stack.add(WasmValue.i32(value ?? _nullRef));
   }
@@ -9019,10 +9298,17 @@ final class WasmVm {
     if (memArg == null) {
       throw StateError('Missing memarg for opcode 0x${instruction.opcode}.');
     }
-    final base = _popUnsignedMemoryOperand(
-      stack,
-      memoryIndex: memArg.memoryIndex,
+    final isMemory64 = instruction.runtimeCachedMemory64 ??= _isMemory64(
+      memArg.memoryIndex,
     );
+    if (!isMemory64) {
+      return _toLinearMemoryValueU32(
+        _popI32(stack),
+        offset: memArg.offset,
+        label: 'memory address',
+      );
+    }
+    final base = _toU64(_popI64(stack));
     final address = base + BigInt.from(memArg.offset);
     return _toLinearMemoryValue(address, label: 'memory address');
   }
@@ -9441,19 +9727,40 @@ final class WasmVm {
     return value.toInt();
   }
 
+  @pragma('vm:prefer-inline')
+  int _toLinearMemoryValueU32(
+    int value, {
+    required int offset,
+    required String label,
+  }) {
+    final address = value.toUnsigned(32) + offset;
+    if (address < 0) {
+      throw RangeError('Negative $label: $address.');
+    }
+    if (address > wasmAddressSpaceBytes) {
+      throw RangeError(
+        '$label exceeds supported linear-memory range: '
+        '$address > $wasmAddressSpaceBytes.',
+      );
+    }
+    return address;
+  }
+
   static int _toU32(int value) => value.toUnsigned(32);
   static int _mulI32(int lhs, int rhs) {
-    final product =
-        (BigInt.from(lhs.toSigned(32)) * BigInt.from(rhs.toSigned(32))) &
-        _u32MaskBigInt;
-    return product.toInt().toSigned(32);
+    return _mulU32(lhs, rhs).toSigned(32);
   }
 
   static int _mulU32(int lhs, int rhs) {
-    final product =
-        (BigInt.from(lhs.toUnsigned(32)) * BigInt.from(rhs.toUnsigned(32))) &
-        _u32MaskBigInt;
-    return product.toInt();
+    final a = lhs.toUnsigned(32);
+    final b = rhs.toUnsigned(32);
+    final a0 = a & 0xffff;
+    final a1 = a >>> 16;
+    final b0 = b & 0xffff;
+    final b1 = b >>> 16;
+    final low = a0 * b0;
+    final cross = ((a1 * b0) + (a0 * b1)) & 0xffff;
+    return (low + (cross << 16)).toUnsigned(32);
   }
 
   static BigInt _toU64(Object value) => WasmI64.unsigned(value);

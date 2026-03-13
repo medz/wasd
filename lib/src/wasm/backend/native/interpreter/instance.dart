@@ -156,6 +156,8 @@ final class WasmInstance {
   final int _functionRefNamespace;
   final bool _hasAsyncOnlyHostImports;
   final WasmVm _vm;
+  late final List<bool> _asyncSubsetRequiredByFunction =
+      _computeAsyncSubsetRequiredByFunction();
   final Map<int, _AsyncSubsetThrownException> _asyncExceptionObjects =
       <int, _AsyncSubsetThrownException>{};
   int _nextAsyncExceptionRef = 1;
@@ -241,6 +243,7 @@ final class WasmInstance {
                   _functionTypeDepth(module, typeIndex),
               callback: syncCallback,
               asyncCallback: asyncCallback,
+              supportsSync: callback != null,
             ),
           );
 
@@ -777,7 +780,9 @@ final class WasmInstance {
   ]) async {
     final prepared = _prepareInvoke(exportName, args);
     final function = functions[prepared.functionIndex];
-    if (function is HostRuntimeFunction && function.asyncCallback != null) {
+    if (function is HostRuntimeFunction &&
+        function.asyncCallback != null &&
+        !function.supportsSync) {
       final externalArgs = prepared.typedArgs
           .map((value) => value.toExternal())
           .toList(growable: false);
@@ -790,7 +795,8 @@ final class WasmInstance {
       );
       return _externalizeResults(results);
     }
-    if (function is DefinedRuntimeFunction && _hasAsyncOnlyHostImports) {
+    if (function is DefinedRuntimeFunction &&
+        _requiresAsyncSubset(prepared.functionIndex)) {
       final results = await _invokeFunctionAsyncSubset(
         prepared.functionIndex,
         prepared.typedArgs,
@@ -869,6 +875,10 @@ final class WasmInstance {
 
     final function = functions[functionIndex];
     final normalizedArgs = _normalizeArgsForType(args, function.type.params);
+    if (!_requiresAsyncSubset(functionIndex)) {
+      return _vm.invokeFunction(functionIndex, normalizedArgs);
+    }
+
     if (function is HostRuntimeFunction) {
       final externalArgs = normalizedArgs
           .map((value) => value.toExternal())
@@ -5018,11 +5028,13 @@ final class WasmInstance {
               target.type.params,
               context: 'call',
             );
-            final callResults = await _invokeFunctionAsyncSubset(
-              targetIndex,
-              callArgs,
-              depth: depth + 1,
-            );
+            final callResults = _requiresAsyncSubset(targetIndex)
+                ? await _invokeFunctionAsyncSubset(
+                    targetIndex,
+                    callArgs,
+                    depth: depth + 1,
+                  )
+                : _vm.invokeFunction(targetIndex, callArgs);
             stack.addAll(callResults);
             pc++;
 
@@ -5057,11 +5069,13 @@ final class WasmInstance {
               expectedType.params,
               context: 'call_ref',
             );
-            final callResults = await _invokeFunctionAsyncSubset(
-              targetIndex,
-              callArgs,
-              depth: depth + 1,
-            );
+            final callResults = _requiresAsyncSubset(targetIndex)
+                ? await _invokeFunctionAsyncSubset(
+                    targetIndex,
+                    callArgs,
+                    depth: depth + 1,
+                  )
+                : _vm.invokeFunction(targetIndex, callArgs);
             stack.addAll(callResults);
             pc++;
 
@@ -5102,11 +5116,13 @@ final class WasmInstance {
               expectedType.params,
               context: 'call_indirect',
             );
-            final callResults = await _invokeFunctionAsyncSubset(
-              targetIndex,
-              callArgs,
-              depth: depth + 1,
-            );
+            final callResults = _requiresAsyncSubset(targetIndex)
+                ? await _invokeFunctionAsyncSubset(
+                    targetIndex,
+                    callArgs,
+                    depth: depth + 1,
+                  )
+                : _vm.invokeFunction(targetIndex, callArgs);
             stack.addAll(callResults);
             pc++;
 
@@ -5121,11 +5137,14 @@ final class WasmInstance {
               target.type.params,
               context: 'return_call',
             );
-            return _invokeFunctionAsyncSubset(
-              targetIndex,
-              callArgs,
-              depth: depth + 1,
-            );
+            if (_requiresAsyncSubset(targetIndex)) {
+              return _invokeFunctionAsyncSubset(
+                targetIndex,
+                callArgs,
+                depth: depth + 1,
+              );
+            }
+            return _vm.invokeFunction(targetIndex, callArgs);
 
           case Opcodes.returnCallRef:
             final typeIndex = instruction.immediate!;
@@ -5160,11 +5179,14 @@ final class WasmInstance {
               expectedType.params,
               context: 'return_call_ref',
             );
-            return _invokeFunctionAsyncSubset(
-              targetIndex,
-              callArgs,
-              depth: depth + 1,
-            );
+            if (_requiresAsyncSubset(targetIndex)) {
+              return _invokeFunctionAsyncSubset(
+                targetIndex,
+                callArgs,
+                depth: depth + 1,
+              );
+            }
+            return _vm.invokeFunction(targetIndex, callArgs);
 
           case Opcodes.returnCallIndirect:
             final typeIndex = instruction.immediate!;
@@ -5203,11 +5225,14 @@ final class WasmInstance {
               expectedType.params,
               context: 'return_call_indirect',
             );
-            return _invokeFunctionAsyncSubset(
-              targetIndex,
-              callArgs,
-              depth: depth + 1,
-            );
+            if (_requiresAsyncSubset(targetIndex)) {
+              return _invokeFunctionAsyncSubset(
+                targetIndex,
+                callArgs,
+                depth: depth + 1,
+              );
+            }
+            return _vm.invokeFunction(targetIndex, callArgs);
 
           case Opcodes.return_:
             return _collectAsyncSubsetResults(
@@ -5251,6 +5276,65 @@ final class WasmInstance {
     throw StateError(
       'Function execution ended without `end` in invokeAsync subset.',
     );
+  }
+
+  bool _requiresAsyncSubset(int functionIndex) =>
+      _hasAsyncOnlyHostImports && _asyncSubsetRequiredByFunction[functionIndex];
+
+  List<bool> _computeAsyncSubsetRequiredByFunction() {
+    final required = List<bool>.filled(functions.length, false);
+    if (!_hasAsyncOnlyHostImports) {
+      return required;
+    }
+
+    var changed = true;
+    while (changed) {
+      changed = false;
+      for (var index = 0; index < functions.length; index++) {
+        if (required[index]) {
+          continue;
+        }
+        final function = functions[index];
+        final next = switch (function) {
+          HostRuntimeFunction() =>
+            function.asyncCallback != null && !function.supportsSync,
+          DefinedRuntimeFunction() => _definedFunctionRequiresAsyncSubset(
+            function,
+            required,
+          ),
+        };
+        if (next) {
+          required[index] = true;
+          changed = true;
+        }
+      }
+    }
+    return required;
+  }
+
+  bool _definedFunctionRequiresAsyncSubset(
+    DefinedRuntimeFunction function,
+    List<bool> required,
+  ) {
+    for (final instruction in function.instructions) {
+      switch (instruction.opcode) {
+        case Opcodes.call:
+        case Opcodes.returnCall:
+          final targetIndex = instruction.immediate;
+          if (targetIndex != null &&
+              targetIndex >= 0 &&
+              targetIndex < required.length &&
+              required[targetIndex]) {
+            return true;
+          }
+        case Opcodes.callRef:
+        case Opcodes.callIndirect:
+        case Opcodes.returnCallRef:
+        case Opcodes.returnCallIndirect:
+          return true;
+      }
+    }
+    return false;
   }
 
   void _leaveAsyncSubsetControlFrame(

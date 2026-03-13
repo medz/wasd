@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:isolate_manager/isolate_manager.dart';
 
+import 'doom_native_input_channel.dart';
 import 'doom_shared_input_queue.dart';
 import 'doom_runtime.dart';
 import 'doom_worker.dart';
@@ -18,7 +19,7 @@ final class DoomRunnerClient {
   DoomSharedInputQueue? _webInputQueue;
   ReceivePort? _nativeMessagePort;
   StreamSubscription<Object?>? _nativeMessageSubscription;
-  SendPort? _nativeInputPort;
+  DoomNativeInputClient? _nativeInputClient;
   bool _stopped = false;
 
   Future<void> start({
@@ -71,11 +72,11 @@ final class DoomRunnerClient {
       inputQueue.enqueue(event);
       return;
     }
-    final nativeInputPort = _nativeInputPort;
-    if (nativeInputPort == null || _stopped) {
+    final nativeInputClient = _nativeInputClient;
+    if (nativeInputClient == null || _stopped) {
       return;
     }
-    nativeInputPort.send(event.toNativeMessage());
+    nativeInputClient.send(event);
   }
 
   Future<void> stop() async {
@@ -88,7 +89,9 @@ final class DoomRunnerClient {
     await nativeSubscription?.cancel();
     _nativeMessagePort?.close();
     _nativeMessagePort = null;
-    _nativeInputPort = null;
+    final nativeInputClient = _nativeInputClient;
+    _nativeInputClient = null;
+    await nativeInputClient?.close();
     await manager?.stop();
     await _messagesController.close();
   }
@@ -110,11 +113,8 @@ final class DoomRunnerClient {
 
   void _handleNativeMessage(Object? rawMessage) {
     final message = normalizeDoomRunnerMessage(rawMessage);
-    if (message['type'] == doomRunnerMessageInputPort) {
-      final port = message['port'];
-      if (port is SendPort) {
-        _nativeInputPort = port;
-      }
+    if (message['type'] == doomRunnerMessageInputChannel) {
+      unawaited(_connectNativeInputChannel(message['channel']));
       return;
     }
     _emit(message);
@@ -122,16 +122,23 @@ final class DoomRunnerClient {
 
   bool _handleWorkerMessage(Object? rawMessage) {
     final message = normalizeDoomRunnerMessage(rawMessage);
-    if (message['type'] == doomRunnerMessageInputPort) {
-      final port = message['port'];
-      if (port is SendPort) {
-        _nativeInputPort = port;
-      }
+    if (message['type'] == doomRunnerMessageInputChannel) {
+      unawaited(_connectNativeInputChannel(message['channel']));
       return false;
     }
     _emit(message);
     final type = message['type'];
     return type == doomRunnerMessageExit || type == doomRunnerMessageError;
+  }
+
+  Future<void> _connectNativeInputChannel(Object? handle) async {
+    if (_stopped) {
+      return;
+    }
+    final existing = _nativeInputClient;
+    _nativeInputClient = null;
+    await existing?.close();
+    _nativeInputClient = await DoomNativeInputClient.connect(handle);
   }
 
   void _emit(DoomRunnerMessage message) {

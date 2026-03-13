@@ -4,8 +4,10 @@ import 'dart:typed_data';
 
 import 'byte_reader.dart';
 import 'features.dart';
+import 'memory.dart';
 import 'module.dart';
 import 'opcode.dart';
+import 'value.dart';
 
 final class MemArg {
   const MemArg({
@@ -97,6 +99,9 @@ final class Instruction {
   int? delegateDepth;
   int? endIndex;
   int? elseIndex;
+  WasmValue? runtimeCachedValue;
+  WasmMemory? runtimeCachedMemory;
+  bool? runtimeCachedMemory64;
 }
 
 final class GcRefTypeImmediate {
