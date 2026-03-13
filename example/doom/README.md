@@ -1,11 +1,5 @@
 # DOOM Example
 
-This example uses a single `isolate_manager` worker model on every platform.
-
-- native/IO targets use the `main`-style DOOM transport path:
-  `SendPort` keyboard input + `rgba` frame transfer
-- web keeps the current worker path with `SharedArrayBuffer` keyboard input
-
 ## Run (macOS)
 
 ```sh

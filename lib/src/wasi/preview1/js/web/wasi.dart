@@ -207,10 +207,6 @@ class WASI implements wasi.WASI {
         }
         final argvPtr = _asInt(args[0]);
         final argvBufPtr = _asInt(args[1]);
-        if (_traceSyscalls) {
-          print('[wasi:args_get] args=${_debugArgs(_argsData)}');
-        }
-
         final result = _writeStringVector(
           strings: _argsData,
           ptrTable: argvPtr,
@@ -987,14 +983,6 @@ class WASI implements wasi.WASI {
 
   bool _isVirtualDirectory(String guestPath) =>
       _virtualDirectoryPaths.contains(_normalizeGuestPath(guestPath));
-
-  String _debugArgs(List<Uint8List> args) => args
-      .map((entry) {
-        final zero = entry.indexOf(0);
-        final bytes = zero == -1 ? entry : entry.sublist(0, zero);
-        return utf8.decode(bytes, allowMalformed: true);
-      })
-      .join(' | ');
 
   String _readCString(Uint8List bytes, int ptr) {
     if (ptr < 0 || ptr >= bytes.length) {

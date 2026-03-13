@@ -12,7 +12,6 @@ const String doomRunnerMessageFrame = 'frame';
 const String doomRunnerMessageExit = 'exit';
 const String doomRunnerMessageError = 'error';
 const String doomRunnerMessageInputChannel = 'input-channel';
-const String doomRunnerMessageProfile = 'profile';
 const String doomFrameFormatBmp = 'bmp';
 const String doomFrameFormatRgba = 'rgba';
 const String doomFrameFormatNone = 'none';
@@ -39,8 +38,6 @@ const bool usesJsInterop = bool.fromEnvironment('dart.library.js_interop');
 typedef DoomRunnerMessage = Map<String, Object?>;
 
 enum DoomFrameTransport { none, bmp, rgba }
-
-typedef DoomProfileMap = Map<String, Map<String, int>>;
 
 DoomRunnerMessage normalizeDoomRunnerMessage(Object? value) {
   if (value is Map<String, Object?>) {
@@ -85,7 +82,6 @@ final class DoomRuntime {
     required this.frameTransport,
     this.frameIntervalUs = 0,
     this.maxFrames = 0,
-    this.enableProfiling = false,
   }) : _emit = emit,
        _drainInput = null;
 
@@ -94,7 +90,6 @@ final class DoomRuntime {
     required this.frameTransport,
     this.frameIntervalUs = 0,
     this.maxFrames = 0,
-    this.enableProfiling = false,
     void Function(Queue<DoomInputEvent> queue)? drainInput,
   }) : _emit = emit,
        _drainInput = drainInput;
@@ -104,11 +99,8 @@ final class DoomRuntime {
   final DoomFrameTransport frameTransport;
   final int frameIntervalUs;
   final int maxFrames;
-  final bool enableProfiling;
   final Queue<DoomInputEvent> _queuedEvents = Queue<DoomInputEvent>();
   final Stopwatch _frameClock = Stopwatch()..start();
-  final Map<String, _DoomProfileCounter> _profile =
-      <String, _DoomProfileCounter>{};
 
   Memory? _memory;
   _PaletteData? _palette;
@@ -139,7 +131,7 @@ final class DoomRuntime {
         },
       );
 
-      final imports = _instrumentImports(<String, ModuleImports>{
+      final imports = <String, ModuleImports>{
         ...wasi.imports,
         'env': <String, ImportValue>{
           'ZwareDoomOpenWindow': ImportExportKind.function(_onOpenWindow),
@@ -148,7 +140,7 @@ final class DoomRuntime {
           'ZwareDoomPendingEvent': ImportExportKind.function(_onPendingEvent),
           'ZwareDoomNextEvent': ImportExportKind.function(_onNextEvent),
         },
-      });
+      };
 
       _emit(<String, Object?>{
         'type': 'log',
@@ -166,89 +158,16 @@ final class DoomRuntime {
         wasi.finalizeBindings(result.instance);
       }
       final exit = wasi.start(result.instance);
-      _emitProfile();
       _emit(<String, Object?>{'type': doomRunnerMessageExit, 'code': exit});
     } on _DoomBenchmarkStop {
-      _emitProfile();
       _emit(<String, Object?>{'type': doomRunnerMessageExit, 'code': 0});
     } catch (error, stackTrace) {
-      _emitProfile();
       _emit(<String, Object?>{
         'type': doomRunnerMessageError,
         'error': '$error',
         'stack': '$stackTrace',
       });
     }
-  }
-
-  Imports _instrumentImports(Imports imports) {
-    if (!enableProfiling) {
-      return imports;
-    }
-    final instrumented = <String, ModuleImports>{};
-    for (final moduleEntry in imports.entries) {
-      final moduleName = moduleEntry.key;
-      final values = <String, ImportValue>{};
-      for (final importEntry in moduleEntry.value.entries) {
-        final importName = importEntry.key;
-        final importValue = importEntry.value;
-        switch (importValue) {
-          case FunctionImportExportValue(:final ref):
-            values[importName] = ImportExportKind.function((args) {
-              final startedUs = _frameClock.elapsedMicroseconds;
-              var completedSynchronously = false;
-              try {
-                final result = ref(args);
-                if (result is Future<Object?>) {
-                  return result.whenComplete(() {
-                    _recordProfile(
-                      '$moduleName.$importName',
-                      _frameClock.elapsedMicroseconds - startedUs,
-                    );
-                  });
-                }
-                completedSynchronously = true;
-                return result;
-              } finally {
-                if (completedSynchronously) {
-                  _recordProfile(
-                    '$moduleName.$importName',
-                    _frameClock.elapsedMicroseconds - startedUs,
-                  );
-                }
-              }
-            });
-          default:
-            values[importName] = importValue;
-        }
-      }
-      instrumented[moduleName] = values;
-    }
-    return instrumented;
-  }
-
-  void _recordProfile(String key, int elapsedUs) {
-    final counter = _profile.putIfAbsent(key, _DoomProfileCounter.new);
-    counter.count++;
-    counter.totalUs += elapsedUs;
-  }
-
-  void _emitProfile() {
-    if (!enableProfiling || _profile.isEmpty) {
-      return;
-    }
-    final entries = _profile.entries.toList()
-      ..sort((a, b) => b.value.totalUs.compareTo(a.value.totalUs));
-    _emit(<String, Object?>{
-      'type': doomRunnerMessageProfile,
-      'imports': <String, Map<String, int>>{
-        for (final entry in entries)
-          entry.key: <String, int>{
-            'count': entry.value.count,
-            'totalUs': entry.value.totalUs,
-          },
-      },
-    });
   }
 
   Object? _onOpenWindow(List<Object?> args) {
@@ -667,9 +586,4 @@ final class _PaletteData {
 
 final class _DoomBenchmarkStop {
   const _DoomBenchmarkStop();
-}
-
-final class _DoomProfileCounter {
-  int count = 0;
-  int totalUs = 0;
 }

@@ -22,7 +22,6 @@ async function main() {
   const timedemo = opts.timedemo ?? DEFAULTS.timedemo;
   const frameDir = opts['frame-dir'] ?? DEFAULTS.frameDir;
   const writeFrames = parsePositiveInt(opts['write-frames'], DEFAULTS.writeFrames);
-  const debug = opts.debug === 'true';
   const mode = opts.mode ?? 'start';
   if (mode !== 'instantiate' && mode !== 'start') {
     throw new Error(`Invalid --mode value: ${mode}`);
@@ -60,54 +59,6 @@ async function main() {
     },
   });
 
-  let debugArgc = 0;
-  let debugMemory = null;
-  if (debug) {
-    for (const name of [
-      'args_sizes_get',
-      'args_get',
-      'environ_sizes_get',
-      'environ_get',
-      'path_open',
-      'path_filestat_get',
-      'fd_prestat_get',
-      'fd_prestat_dir_name',
-    ]) {
-      const original = wasi.wasiImport[name];
-      if (typeof original !== 'function') continue;
-      wasi.wasiImport[name] = (...fnArgs) => {
-        const result = original(...fnArgs);
-        console.error(`[debug] ${name}(${fnArgs.join(', ')}) => ${result}`);
-        if (name === 'args_sizes_get' && result === 0 && debugMemory) {
-          const data = new DataView(debugMemory.buffer);
-          const argcPtr = fnArgs[0];
-          debugArgc = data.getUint32(argcPtr, true);
-          const argvBufSize = data.getUint32(fnArgs[1], true);
-          console.error(`[debug] argc=${debugArgc} argv_buf_size=${argvBufSize}`);
-        }
-        if (name === 'args_get' && result === 0 && debugMemory && debugArgc > 0) {
-          const memoryBytes = new Uint8Array(debugMemory.buffer);
-          const data = new DataView(debugMemory.buffer);
-          const argvPtr = fnArgs[0];
-          const values = [];
-          for (let i = 0; i < debugArgc; i += 1) {
-            const p = data.getUint32(argvPtr + i * 4, true);
-            values.push(readCString(memoryBytes, p));
-          }
-          console.error(`[debug] argv=${JSON.stringify(values)}`);
-        }
-        if ((name === 'path_open' || name === 'path_filestat_get') && debugMemory) {
-          const pathPtr = fnArgs[2];
-          const pathLen = fnArgs[3];
-          const memoryBytes = new Uint8Array(debugMemory.buffer);
-          const pathValue = readCStringBounded(memoryBytes, pathPtr, pathLen);
-          console.error(`[debug] ${name}.path=${JSON.stringify(pathValue)} dirfd=${fnArgs[0]}`);
-        }
-        return result;
-      };
-    }
-  }
-
   const { instance } = await WebAssembly.instantiate(wasmBytes, {
     wasi_snapshot_preview1: wasi.wasiImport,
     env: {
@@ -121,7 +72,6 @@ async function main() {
 
   if (instance.exports.memory instanceof WebAssembly.Memory) {
     monitor.bindMemory(instance.exports.memory);
-    debugMemory = instance.exports.memory;
   }
 
   const reportPath = path.join(frameDir, 'report.json');
@@ -473,30 +423,6 @@ function fnv1a32(bytes) {
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   return hash >>> 0;
-}
-
-function readCString(bytes, ptr) {
-  if (!Number.isFinite(ptr) || ptr < 0 || ptr >= bytes.length) {
-    return '';
-  }
-  let end = ptr;
-  while (end < bytes.length && bytes[end] !== 0) {
-    end += 1;
-  }
-  return Buffer.from(bytes.slice(ptr, end)).toString('utf8');
-}
-
-function readCStringBounded(bytes, ptr, len) {
-  if (
-    !Number.isFinite(ptr) ||
-    !Number.isFinite(len) ||
-    ptr < 0 ||
-    len < 0 ||
-    ptr + len > bytes.length
-  ) {
-    return '';
-  }
-  return Buffer.from(bytes.slice(ptr, ptr + len)).toString('utf8');
 }
 
 main().catch((error) => {

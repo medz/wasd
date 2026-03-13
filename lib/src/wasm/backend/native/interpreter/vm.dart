@@ -142,112 +142,6 @@ final class _WasmThrownException implements Exception {
   final int exceptionRef;
 }
 
-final class WasmVmProfileEntry {
-  const WasmVmProfileEntry({
-    required this.functionIndex,
-    required this.callCount,
-    required this.instructionCount,
-    required this.maxDepth,
-  });
-
-  final int functionIndex;
-  final int callCount;
-  final int instructionCount;
-  final int maxDepth;
-}
-
-final class WasmVmProfileSnapshot {
-  const WasmVmProfileSnapshot({
-    required this.totalCallCount,
-    required this.totalInstructionCount,
-    required this.maxDepth,
-    required this.functions,
-  });
-
-  final int totalCallCount;
-  final int totalInstructionCount;
-  final int maxDepth;
-  final List<WasmVmProfileEntry> functions;
-}
-
-final class WasmVmProfiler {
-  static _WasmVmProfilerState? _active;
-
-  static bool get isEnabled => _active != null;
-
-  static void start() {
-    _active = _WasmVmProfilerState();
-  }
-
-  static WasmVmProfileSnapshot stop() {
-    final state = _active ?? _WasmVmProfilerState();
-    _active = null;
-    return state.snapshot();
-  }
-}
-
-final class _WasmVmProfilerState {
-  final Map<int, _WasmVmMutableProfileEntry> _entries =
-      <int, _WasmVmMutableProfileEntry>{};
-  int totalCallCount = 0;
-  int totalInstructionCount = 0;
-  int maxDepth = 0;
-
-  void recordFunctionEntry(int functionIndex, int depth) {
-    totalCallCount++;
-    if (depth > maxDepth) {
-      maxDepth = depth;
-    }
-    final entry = _entries.putIfAbsent(
-      functionIndex,
-      () => _WasmVmMutableProfileEntry(functionIndex),
-    );
-    entry.callCount++;
-    if (depth > entry.maxDepth) {
-      entry.maxDepth = depth;
-    }
-  }
-
-  void recordInstructionCount(int functionIndex, int count) {
-    totalInstructionCount += count;
-    final entry = _entries.putIfAbsent(
-      functionIndex,
-      () => _WasmVmMutableProfileEntry(functionIndex),
-    );
-    entry.instructionCount += count;
-  }
-
-  WasmVmProfileSnapshot snapshot() {
-    final functions =
-        _entries.values
-            .map(
-              (entry) => WasmVmProfileEntry(
-                functionIndex: entry.functionIndex,
-                callCount: entry.callCount,
-                instructionCount: entry.instructionCount,
-                maxDepth: entry.maxDepth,
-              ),
-            )
-            .toList(growable: false)
-          ..sort((a, b) => b.instructionCount.compareTo(a.instructionCount));
-    return WasmVmProfileSnapshot(
-      totalCallCount: totalCallCount,
-      totalInstructionCount: totalInstructionCount,
-      maxDepth: maxDepth,
-      functions: functions,
-    );
-  }
-}
-
-final class _WasmVmMutableProfileEntry {
-  _WasmVmMutableProfileEntry(this.functionIndex);
-
-  final int functionIndex;
-  int callCount = 0;
-  int instructionCount = 0;
-  int maxDepth = 0;
-}
-
 final class WasmVm {
   WasmVm({
     required List<RuntimeFunction> functions,
@@ -632,8 +526,6 @@ final class WasmVm {
     while (true) {
       _checkFunctionIndex(currentFunctionIndex);
       final function = _functions[currentFunctionIndex];
-      final profiler = WasmVmProfiler._active;
-      profiler?.recordFunctionEntry(currentFunctionIndex, depth);
 
       if (currentArgs.length != function.type.params.length) {
         throw ArgumentError(
@@ -651,7 +543,6 @@ final class WasmVm {
             .map((value) => value.toExternal())
             .toList(growable: false);
         final hostResult = function.callback(externalArgs);
-        profiler?.recordInstructionCount(currentFunctionIndex, 0);
         return WasmValue.decodeResults(function.type.results, hostResult);
       }
 
@@ -690,11 +581,9 @@ final class WasmVm {
         ),
       );
       var pc = 0;
-      var executedInstructions = 0;
 
       while (pc < instructions.length) {
         final instruction = instructions[pc];
-        executedInstructions++;
 
         try {
           switch (instruction.opcode) {
@@ -846,20 +735,12 @@ final class WasmVm {
                 final label = labels.removeLast();
                 _exitLabel(label, stack);
                 if (labels.isEmpty) {
-                  profiler?.recordInstructionCount(
-                    currentFunctionIndex,
-                    executedInstructions,
-                  );
                   return _collectResults(function.type.results, stack);
                 }
                 pc++;
                 continue;
               }
 
-              profiler?.recordInstructionCount(
-                currentFunctionIndex,
-                executedInstructions,
-              );
               return _collectResults(function.type.results, stack);
 
             case Opcodes.br:
@@ -909,10 +790,6 @@ final class WasmVm {
               pc = _branch(branchDepth, labels, stack);
 
             case Opcodes.return_:
-              profiler?.recordInstructionCount(
-                currentFunctionIndex,
-                executedInstructions,
-              );
               return _collectResults(function.type.results, stack);
 
             case Opcodes.throwTag:
@@ -981,10 +858,6 @@ final class WasmVm {
                 instruction.runtimeCachedObject = target;
               }
               final callArgs = _popDirectCallArgs(stack, target.type.params);
-              profiler?.recordInstructionCount(
-                currentFunctionIndex,
-                executedInstructions,
-              );
               currentFunctionIndex = targetIndex;
               currentArgs = callArgs;
               currentArgsNormalized = true;
@@ -1012,19 +885,11 @@ final class WasmVm {
               }
               final callArgs = _popArgs(stack, expectedType.params);
               if (identical(target.vm, this)) {
-                profiler?.recordInstructionCount(
-                  currentFunctionIndex,
-                  executedInstructions,
-                );
                 currentFunctionIndex = target.functionIndex;
                 currentArgs = callArgs;
                 currentArgsNormalized = true;
                 continue executionLoop;
               }
-              profiler?.recordInstructionCount(
-                currentFunctionIndex,
-                executedInstructions,
-              );
               return target.vm._execute(
                 target.functionIndex,
                 callArgs,
@@ -1116,19 +981,11 @@ final class WasmVm {
 
               final callArgs = _popArgs(stack, expectedType.params);
               if (identical(target.vm, this)) {
-                profiler?.recordInstructionCount(
-                  currentFunctionIndex,
-                  executedInstructions,
-                );
                 currentFunctionIndex = target.functionIndex;
                 currentArgs = callArgs;
                 currentArgsNormalized = true;
                 continue executionLoop;
               }
-              profiler?.recordInstructionCount(
-                currentFunctionIndex,
-                executedInstructions,
-              );
               return target.vm._execute(
                 target.functionIndex,
                 callArgs,

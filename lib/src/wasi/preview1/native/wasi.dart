@@ -204,10 +204,6 @@ class WASI implements wasi_iface.WASI {
         }
         final argvPtr = _asInt(args[0]);
         final argvBufPtr = _asInt(args[1]);
-        if (_traceSyscalls) {
-          io.stderr.writeln('[wasi:args_get] args=${_debugArgs(_argsData)}');
-        }
-
         final result = _writeStringVector(
           strings: _argsData,
           ptrTable: argvPtr,
@@ -276,10 +272,6 @@ class WASI implements wasi_iface.WASI {
         }
         final environPtr = _asInt(args[0]);
         final environBufPtr = _asInt(args[1]);
-        if (_traceSyscalls) {
-          io.stderr.writeln('[wasi:environ_get] env=${_debugArgs(_envData)}');
-        }
-
         return _writeStringVector(
           strings: _envData,
           ptrTable: environPtr,
@@ -991,14 +983,6 @@ class WASI implements wasi_iface.WASI {
     }
     return null;
   }
-
-  String _debugArgs(List<Uint8List> args) => args
-      .map((entry) {
-        final zero = entry.indexOf(0);
-        final bytes = zero == -1 ? entry : entry.sublist(0, zero);
-        return utf8.decode(bytes, allowMalformed: true);
-      })
-      .join(' | ');
 
   String _readCString(Uint8List bytes, int ptr) {
     if (ptr < 0 || ptr >= bytes.length) {

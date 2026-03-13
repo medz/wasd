@@ -79,36 +79,6 @@ Future<void> main() async {
 Uint8List loadYourModuleBytes() => throw UnimplementedError();
 ```
 
-## DOOM CLI and Runtime Parity
-
-Prepare Doom fixtures:
-
-```bash
-tool/setup_test_fixtures.sh --doom-only
-```
-
-Run the CLI baseline (native Dart runtime):
-
-```bash
-dart run example/doom_cli.dart --mode=instantiate
-```
-
-Run VM vs dart2js/Node parity matrix (same CLI entry):
-
-```bash
-dart run tool/doom_runtime_matrix.dart --mode=instantiate
-```
-
-You can switch to `--mode=start` to exercise `_start` behavior as the preview1 surface grows.
-
-Capture and monitor the first rendered DOOM frame (Node.js runtime):
-
-```bash
-node tool/doom_node_monitor.mjs
-```
-
-This command writes a frame image (`.bmp`) and `report.json` under `.dart_tool/doom_node_monitor/frames/`.
-
 ## Host Function Imports
 
 Provide host callbacks with `Imports` and `ImportExportKind.function`:
@@ -182,35 +152,11 @@ Future<void> main() async {
 Uint8List loadYourModuleBytes() => throw UnimplementedError();
 ```
 
-## Project Structure
-
-- `lib/wasd.dart`: public package entrypoint
-- `lib/src/`: runtime, VM, module decoder, validator, WASI, component model
-- `test/`: regression and behavior tests
-- `example/`: runnable examples (`wasm_cli.dart`, `doom_cli.dart`, `doom/`)
-- `tool/`: conformance runners and toolchain scripts
-- `third_party/`: vendored Wasm spec/component testsuites
-
-## Conformance & Tooling
+## Verification
 
 ```bash
-git submodule update --init --recursive
-tool/ensure_toolchains.sh --check
-dart run tool/spec_runner.dart --target=vm --suite=all
-```
-
-Spec reports are written under `.dart_tool/spec_runner/`.
-
-## Development
-
-```bash
-dart pub get
-tool/setup_test_fixtures.sh
 dart analyze
-dart test
-dart test test/doom_smoke_test.dart test/doom_e2e_node_test.dart
 dart test test/wasi_test.dart test/wasm_test.dart
-dart run example/wasm_cli.dart
 ```
 
 ## Compatibility Snapshot
