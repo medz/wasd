@@ -173,8 +173,8 @@ dart test test/wasi_test.dart test/wasm_test.dart
 ## Limitations
 
 - Some proposal/component forms are intentionally guarded and may return `UnsupportedError` until implemented.
-- JS runtime behavior is environment-dependent: Node.js uses `node:wasi`; browsers provide a minimal `wasi_snapshot_preview1` shim for command-style flows (`proc_exit`, `args_*`, `environ_*`, `random_get`, `fd_read`, `fd_write`, `fd_fdstat_get`, `fd_filestat_get`, `fd_prestat_*`, `fd_close`, `clock_time_get`) and virtual filesystem basics (`fd_seek`, `path_open`, `path_filestat_get`), with explicit `ENOSYS` stubs for unsupported calls (for example `path_unlink_file`, `proc_raise`, `sock_*`).
-- Native preview1 host support intentionally tracks the same minimal surface as the browser shim: command-style flows plus virtual filesystem basics (`fd_seek`, `path_open`, `path_filestat_get`), while unsupported preview1 syscalls stay as explicit `ENOSYS` stubs.
+- JS runtime behavior is environment-dependent: Node.js uses `node:wasi`; browsers provide a minimal `wasi_snapshot_preview1` shim for command-style flows (`proc_exit`, `args_*`, `environ_*`, `random_get`, configured-stdin `fd_read`, `fd_write`, `fd_fdstat_get`, `fd_filestat_get`, `fd_prestat_*`, `fd_close`, `clock_time_get`) and virtual filesystem basics (`fd_seek`, `path_open`, `path_filestat_get`), with explicit `ENOSYS` stubs for unsupported calls (for example `path_unlink_file`, `proc_raise`, `sock_*`).
+- Native preview1 host support intentionally tracks the same minimal surface as the browser shim: command-style flows, configured-stdin `fd_read`, and virtual filesystem basics (`fd_seek`, `path_open`, `path_filestat_get`), while unsupported preview1 syscalls stay as explicit `ENOSYS` stubs.
 
 Contributions for missing features and edge-case regressions are welcome.
 

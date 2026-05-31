@@ -20,6 +20,7 @@ class WASI implements wasi_iface.WASI {
     Map<String, Uint8List> files = const {},
     bool returnOnExit = true,
     int stdin = 0,
+    List<int> stdinData = const <int>[],
     int stdout = 1,
     int stderr = 2,
     wasi_iface.WASIVersion version = wasi_iface.WASIVersion.preview1,

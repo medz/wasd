@@ -20,6 +20,7 @@ abstract interface class WASI {
     Map<String, Uint8List> files,
     bool returnOnExit,
     int stdin,
+    List<int> stdinData,
     int stdout,
     int stderr,
     WASIVersion version,

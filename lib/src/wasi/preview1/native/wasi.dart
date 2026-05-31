@@ -19,6 +19,7 @@ class WASI implements wasi_iface.WASI {
     Map<String, Uint8List> files = const {},
     bool returnOnExit = true,
     int stdin = 0,
+    List<int> stdinData = const <int>[],
     int stdout = 1,
     int stderr = 2,
     wasi_iface.WASIVersion version = wasi_iface.WASIVersion.preview1,
@@ -33,6 +34,9 @@ class WASI implements wasi_iface.WASI {
          files: files,
        ),
        _stdinFd = stdin,
+       _stdinInput = wasi_vfs.Preview1VirtualOpenFile(
+         Uint8List.fromList(stdinData),
+       ),
        _stdoutFd = stdout,
        _stderrFd = stderr;
 
@@ -41,6 +45,7 @@ class WASI implements wasi_iface.WASI {
   final List<Uint8List> _envData;
   final wasi_vfs.Preview1VirtualFileSystem _vfs;
   final int _stdinFd;
+  final wasi_vfs.Preview1VirtualOpenFile _stdinInput;
   final int _stdoutFd;
   final int _stderrFd;
   final math.Random _secureRandom = math.Random.secure();
@@ -300,8 +305,9 @@ class WASI implements wasi_iface.WASI {
         final iovsLen = _asInt(args[2]);
         final nreadPtr = _asInt(args[3]);
         final opened = _vfs.openFileForFd(fd);
+        final input = fd == _stdinFd ? _stdinInput : opened;
         final isDirectory = _vfs.isOpenDirectoryFd(fd);
-        if (fd != _stdinFd && opened == null) {
+        if (input == null) {
           return _errnoBadf;
         }
         if (isDirectory) {
@@ -334,15 +340,8 @@ class WASI implements wasi_iface.WASI {
             return _errnoInval;
           }
 
-          if (opened != null && len > 0) {
-            final available = opened.bytes.length - opened.offset;
-            if (available <= 0) {
-              continue;
-            }
-            final toRead = math.min(len, available);
-            bytes.setRange(buf, buf + toRead, opened.bytes, opened.offset);
-            opened.offset += toRead;
-            totalRead += toRead;
+          if (len > 0) {
+            totalRead += input.readInto(bytes, buf, len);
           }
         }
 
@@ -350,11 +349,7 @@ class WASI implements wasi_iface.WASI {
           if (nreadPtr + 4 > bytes.length) {
             return _errnoInval;
           }
-          data.setUint32(
-            nreadPtr,
-            opened == null ? 0 : totalRead,
-            Endian.little,
-          );
+          data.setUint32(nreadPtr, totalRead, Endian.little);
         }
         return _errnoSuccess;
       });

@@ -435,6 +435,53 @@ void main() {
       );
 
       test(
+        'fd_read reads configured stdin bytes and advances offset',
+        () async {
+          final inputWasi = WASI(stdinData: utf8.encode('hello stdin'));
+          final inputResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            inputWasi.imports,
+          );
+          final inputInstance = inputResult.instance;
+          final preview1 = inputWasi.imports['wasi_snapshot_preview1']!;
+          final fdRead = preview1['fd_read'] as FunctionImportExportValue;
+          final memory =
+              (inputInstance.exports['memory'] as MemoryImportExportValue).ref;
+          inputWasi.finalizeBindings(inputInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const iovPtr = 1408;
+          const firstBufferPtr = 1440;
+          const secondBufferPtr = 1450;
+          const nreadPtr = 1460;
+
+          data.setUint32(iovPtr, firstBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 5, Endian.little);
+          data.setUint32(iovPtr + 8, secondBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 12, 6, Endian.little);
+
+          expect(fdRead.ref([0, iovPtr, 2, nreadPtr]), 0);
+          expect(data.getUint32(nreadPtr, Endian.little), 11);
+          expect(
+            utf8.decode(bytes.sublist(firstBufferPtr, firstBufferPtr + 5)),
+            'hello',
+          );
+          expect(
+            utf8.decode(bytes.sublist(secondBufferPtr, secondBufferPtr + 6)),
+            ' stdin',
+          );
+
+          data.setUint32(nreadPtr, 123, Endian.little);
+          expect(fdRead.ref([0, iovPtr, 2, nreadPtr]), 0);
+          expect(data.getUint32(nreadPtr, Endian.little), 0);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; fd_read behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'fd_read returns badf for unknown descriptors',
         () {
           final preview1 = wasi.imports['wasi_snapshot_preview1']!;

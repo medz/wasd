@@ -20,6 +20,7 @@ class WASI implements wasi.WASI {
     Map<String, Uint8List> files = const {},
     bool returnOnExit = true,
     int stdin = 0,
+    List<int> stdinData = const <int>[],
     int stdout = 1,
     int stderr = 2,
     wasi.WASIVersion version = wasi.WASIVersion.preview1,
@@ -34,6 +35,9 @@ class WASI implements wasi.WASI {
          files: files,
        ),
        _stdin = stdin,
+       _stdinInput = wasi_vfs.Preview1VirtualOpenFile(
+         Uint8List.fromList(stdinData),
+       ),
        _stdout = stdout,
        _stderr = stderr;
 
@@ -42,6 +46,7 @@ class WASI implements wasi.WASI {
   final List<Uint8List> _envData;
   final wasi_vfs.Preview1VirtualFileSystem _vfs;
   final int _stdin;
+  final wasi_vfs.Preview1VirtualOpenFile _stdinInput;
   final int _stdout;
   final int _stderr;
   static const int _maxWebCryptoGetRandomValuesLength = 65536;
@@ -307,8 +312,9 @@ class WASI implements wasi.WASI {
         final iovsLen = _asInt(args[2]);
         final nreadPtr = _asInt(args[3]);
         final opened = _vfs.openFileForFd(fd);
+        final input = fd == _stdin ? _stdinInput : opened;
         final isDirectory = _vfs.isOpenDirectoryFd(fd);
-        if (fd != _stdin && opened == null) {
+        if (input == null) {
           return _errnoBadf;
         }
         if (isDirectory) {
@@ -339,15 +345,8 @@ class WASI implements wasi.WASI {
             return _errnoInval;
           }
 
-          if (opened != null && len > 0) {
-            final available = opened.bytes.length - opened.offset;
-            if (available <= 0) {
-              continue;
-            }
-            final toRead = math.min(len, available);
-            bytes.setRange(buf, buf + toRead, opened.bytes, opened.offset);
-            opened.offset += toRead;
-            totalRead += toRead;
+          if (len > 0) {
+            totalRead += input.readInto(bytes, buf, len);
           }
         }
 
@@ -355,11 +354,7 @@ class WASI implements wasi.WASI {
           if (nreadPtr + 4 > bytes.length) {
             return _errnoInval;
           }
-          data.setUint32(
-            nreadPtr,
-            opened == null ? 0 : totalRead,
-            Endian.little,
-          );
+          data.setUint32(nreadPtr, totalRead, Endian.little);
         }
         return _errnoSuccess;
       });

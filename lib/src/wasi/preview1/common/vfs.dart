@@ -121,6 +121,17 @@ final class Preview1VirtualOpenFile {
 
   final Uint8List bytes;
   int offset = 0;
+
+  int readInto(Uint8List target, int start, int length) {
+    final available = bytes.length - offset;
+    if (length <= 0 || available <= 0) {
+      return 0;
+    }
+    final count = length < available ? length : available;
+    target.setRange(start, start + count, bytes, offset);
+    offset += count;
+    return count;
+  }
 }
 
 enum Preview1VirtualOpenKind { file, directory, missing }

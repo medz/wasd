@@ -18,6 +18,7 @@ class WASI implements wasi_iface.WASI {
     Map<String, Uint8List> files = const {},
     bool returnOnExit = true,
     int stdin = 0,
+    List<int> stdinData = const <int>[],
     int stdout = 1,
     int stderr = 2,
     wasi_iface.WASIVersion version = wasi_iface.WASIVersion.preview1,
@@ -28,6 +29,7 @@ class WASI implements wasi_iface.WASI {
          files: files,
          returnOnExit: returnOnExit,
          stdin: stdin,
+         stdinData: stdinData,
          stdout: stdout,
          stderr: stderr,
          version: version,
@@ -53,20 +55,13 @@ class WASI implements wasi_iface.WASI {
 }
 
 bool _isNodeJs() {
-  final hasWindow = globalContext.getProperty<JSAny?>('window'.toJS) != null;
-  if (hasWindow) {
-    return false;
-  }
-  final hasDocument =
-      globalContext.getProperty<JSAny?>('document'.toJS) != null;
-  if (hasDocument) {
-    return false;
-  }
   final process = globalContext.getProperty<JSAny?>('process'.toJS);
   if (process == null) return false;
   final versions = (process as JSObject).getProperty<JSAny?>('versions'.toJS);
   if (versions == null) return false;
-  return (versions as JSObject).getProperty<JSAny?>('node'.toJS) != null;
+  final nodeVersion = (versions as JSObject).getProperty<JSAny?>('node'.toJS);
+  if (nodeVersion == null) return false;
+  return globalContext.getProperty<JSAny?>('require'.toJS) != null;
 }
 
 wasi_iface.WASI _createDelegate({
@@ -76,6 +71,7 @@ wasi_iface.WASI _createDelegate({
   required Map<String, Uint8List> files,
   required bool returnOnExit,
   required int stdin,
+  required List<int> stdinData,
   required int stdout,
   required int stderr,
   required wasi_iface.WASIVersion version,
@@ -92,6 +88,7 @@ wasi_iface.WASI _createDelegate({
       files: files,
       returnOnExit: returnOnExit,
       stdin: stdin,
+      stdinData: stdinData,
       stdout: stdout,
       stderr: stderr,
       version: version,
@@ -104,6 +101,7 @@ wasi_iface.WASI _createDelegate({
     files: files,
     returnOnExit: returnOnExit,
     stdin: stdin,
+    stdinData: stdinData,
     stdout: stdout,
     stderr: stderr,
     version: version,
