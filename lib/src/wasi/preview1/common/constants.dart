@@ -3,8 +3,12 @@ const int iovecEntrySize = 8;
 const int errnoSuccess = 0;
 const int errnoInval = 28;
 const int errnoBadf = 8;
+const int errnoExist = 20;
+const int errnoIsdir = 31;
 const int errnoNoent = 44;
 const int errnoNosys = 52;
+const int errnoNotdir = 54;
+const int errnoNotempty = 55;
 const int prestatSize = 8;
 const int preopenTypeDir = 0;
 const int fdstatSize = 24;
@@ -22,14 +26,10 @@ const List<String> preview1NosysImports = <String>[
   'fd_readdir',
   'fd_renumber',
   'fd_sync',
-  'path_create_directory',
   'path_filestat_set_times',
   'path_link',
   'path_readlink',
-  'path_remove_directory',
-  'path_rename',
   'path_symlink',
-  'path_unlink_file',
   'proc_raise',
   'sock_accept',
   'sock_recv',

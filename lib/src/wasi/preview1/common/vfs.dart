@@ -41,9 +41,9 @@ final class Preview1VirtualFileSystem {
       <int, Preview1VirtualOpenFile>{};
   final Map<int, String> _openDirectoriesByFd = <int, String>{};
 
-  late final Map<String, Preview1VirtualFile> _filesByLowerGuestPath;
-  late final Map<String, Preview1VirtualFile> _filesByBasenameLower;
-  late final Map<String, Preview1VirtualFile> _filesByBasenameCompact;
+  late Map<String, Preview1VirtualFile> _filesByLowerGuestPath;
+  late Map<String, Preview1VirtualFile> _filesByBasenameLower;
+  late Map<String, Preview1VirtualFile> _filesByBasenameCompact;
   late final Set<String> _virtualDirectoryPaths;
   int _nextVirtualFd;
 
@@ -97,6 +97,111 @@ final class Preview1VirtualFileSystem {
   bool isDirectoryPath(String guestPath) =>
       _virtualDirectoryPaths.contains(normalizeGuestPath(guestPath));
 
+  Preview1PathMutationResult createDirectory(String guestPath) {
+    final normalized = normalizeGuestPath(guestPath);
+    if (normalized == '/' ||
+        _filesByGuestPath.containsKey(normalized) ||
+        _virtualDirectoryPaths.contains(normalized)) {
+      return Preview1PathMutationResult.exists;
+    }
+
+    final parent = dirnameOfGuestPath(normalized);
+    if (_filesByGuestPath.containsKey(parent)) {
+      return Preview1PathMutationResult.notDirectory;
+    }
+    if (!_virtualDirectoryPaths.contains(parent)) {
+      return Preview1PathMutationResult.noEntry;
+    }
+
+    _virtualDirectoryPaths.add(normalized);
+    return Preview1PathMutationResult.success;
+  }
+
+  Preview1PathMutationResult removeDirectory(String guestPath) {
+    final normalized = normalizeGuestPath(guestPath);
+    if (_filesByGuestPath.containsKey(normalized)) {
+      return Preview1PathMutationResult.notDirectory;
+    }
+    if (!_virtualDirectoryPaths.contains(normalized)) {
+      return Preview1PathMutationResult.noEntry;
+    }
+    if (normalized == '/' || _preopenGuestPathsByFd.containsValue(normalized)) {
+      return Preview1PathMutationResult.notEmpty;
+    }
+
+    final childPrefix = '$normalized/';
+    final hasFileChildren = _filesByGuestPath.keys.any(
+      (path) => path.startsWith(childPrefix),
+    );
+    final hasDirectoryChildren = _virtualDirectoryPaths.any(
+      (path) => path != normalized && path.startsWith(childPrefix),
+    );
+    if (hasFileChildren || hasDirectoryChildren) {
+      return Preview1PathMutationResult.notEmpty;
+    }
+
+    _virtualDirectoryPaths.remove(normalized);
+    _openDirectoriesByFd.removeWhere((_, path) => path == normalized);
+    return Preview1PathMutationResult.success;
+  }
+
+  Preview1PathMutationResult unlinkFile(String guestPath) {
+    final normalized = normalizeGuestPath(guestPath);
+    if (_virtualDirectoryPaths.contains(normalized)) {
+      return Preview1PathMutationResult.isDirectory;
+    }
+    if (_filesByGuestPath.remove(normalized) == null) {
+      return Preview1PathMutationResult.noEntry;
+    }
+
+    _rebuildFileIndexes();
+    return Preview1PathMutationResult.success;
+  }
+
+  Preview1PathMutationResult renamePath({
+    required String oldPath,
+    required String newPath,
+  }) {
+    final oldNormalized = normalizeGuestPath(oldPath);
+    final newNormalized = normalizeGuestPath(newPath);
+    final newParent = dirnameOfGuestPath(newNormalized);
+    if (_filesByGuestPath.containsKey(newParent)) {
+      return Preview1PathMutationResult.notDirectory;
+    }
+    if (!_virtualDirectoryPaths.contains(newParent)) {
+      return Preview1PathMutationResult.noEntry;
+    }
+
+    final oldFile = _filesByGuestPath[oldNormalized];
+    if (oldFile != null) {
+      if (_virtualDirectoryPaths.contains(newNormalized)) {
+        return Preview1PathMutationResult.isDirectory;
+      }
+      _filesByGuestPath.remove(oldNormalized);
+      _filesByGuestPath[newNormalized] = oldFile;
+      _rebuildFileIndexes();
+      return Preview1PathMutationResult.success;
+    }
+
+    if (!_virtualDirectoryPaths.contains(oldNormalized)) {
+      return Preview1PathMutationResult.noEntry;
+    }
+    if (oldNormalized == '/' ||
+        _preopenGuestPathsByFd.containsValue(oldNormalized) ||
+        _isChildPath(newNormalized, oldNormalized)) {
+      return Preview1PathMutationResult.invalid;
+    }
+    if (_filesByGuestPath.containsKey(newNormalized)) {
+      return Preview1PathMutationResult.notDirectory;
+    }
+    if (_virtualDirectoryPaths.contains(newNormalized)) {
+      return Preview1PathMutationResult.exists;
+    }
+
+    _renameDirectory(oldNormalized, newNormalized);
+    return Preview1PathMutationResult.success;
+  }
+
   Preview1VirtualOpenResult openPath(String guestPath) {
     final normalized = normalizeGuestPath(guestPath);
     final file = lookupFile(normalized);
@@ -113,6 +218,50 @@ final class Preview1VirtualFileSystem {
     }
 
     return const Preview1VirtualOpenResult.missing();
+  }
+
+  void _renameDirectory(String oldPath, String newPath) {
+    final renamedDirectories = <String>{};
+    for (final path in _virtualDirectoryPaths) {
+      if (path == oldPath || _isChildPath(path, oldPath)) {
+        renamedDirectories.add('$newPath${path.substring(oldPath.length)}');
+      }
+    }
+    _virtualDirectoryPaths.removeWhere(
+      (path) => path == oldPath || _isChildPath(path, oldPath),
+    );
+    _virtualDirectoryPaths.addAll(renamedDirectories);
+
+    final renamedFiles = <String, Preview1VirtualFile>{};
+    _filesByGuestPath.removeWhere((path, file) {
+      if (!_isChildPath(path, oldPath)) {
+        return false;
+      }
+      renamedFiles['$newPath${path.substring(oldPath.length)}'] = file;
+      return true;
+    });
+    _filesByGuestPath.addAll(renamedFiles);
+
+    for (final entry in _openDirectoriesByFd.entries.toList()) {
+      final path = entry.value;
+      if (path == oldPath || _isChildPath(path, oldPath)) {
+        _openDirectoriesByFd[entry.key] =
+            '$newPath${path.substring(oldPath.length)}';
+      }
+    }
+    _rebuildFileIndexes();
+  }
+
+  void _rebuildFileIndexes() {
+    _filesByLowerGuestPath = _indexFilesByLowerPath(_filesByGuestPath);
+    _filesByBasenameLower = _indexFilesByBasename(
+      _filesByGuestPath,
+      compact: false,
+    );
+    _filesByBasenameCompact = _indexFilesByBasename(
+      _filesByGuestPath,
+      compact: true,
+    );
   }
 }
 
@@ -220,6 +369,16 @@ final class Preview1VirtualOpenFile {
 
 enum Preview1VirtualOpenKind { file, directory, missing }
 
+enum Preview1PathMutationResult {
+  success,
+  invalid,
+  noEntry,
+  exists,
+  isDirectory,
+  notDirectory,
+  notEmpty,
+}
+
 final class Preview1VirtualOpenResult {
   const Preview1VirtualOpenResult._(this.kind, this.fd);
 
@@ -299,6 +458,15 @@ String basenameOfGuestPath(String path) {
   return slash == -1 ? normalized : normalized.substring(slash + 1);
 }
 
+String dirnameOfGuestPath(String path) {
+  final normalized = normalizeGuestPath(path);
+  if (normalized == '/') {
+    return '/';
+  }
+  final slash = normalized.lastIndexOf('/');
+  return slash <= 0 ? '/' : normalized.substring(0, slash);
+}
+
 String compactPathToken(String value) =>
     value.replaceAll(RegExp(r'[^a-z0-9]'), '');
 
@@ -371,4 +539,13 @@ Set<String> _buildVirtualDirectorySet({
     addParentDirectories(filePath);
   }
   return directories;
+}
+
+bool _isChildPath(String path, String parent) {
+  final normalizedPath = normalizeGuestPath(path);
+  final normalizedParent = normalizeGuestPath(parent);
+  if (normalizedParent == '/') {
+    return normalizedPath != '/';
+  }
+  return normalizedPath.startsWith('$normalizedParent/');
 }

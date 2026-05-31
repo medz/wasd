@@ -83,8 +83,12 @@ class WASI implements wasi_iface.WASI {
       'sched_yield': _schedYieldImport,
       'fd_prestat_get': _fdPrestatGetImport,
       'fd_prestat_dir_name': _fdPrestatDirNameImport,
+      'path_create_directory': _pathCreateDirectoryImport,
       'path_filestat_get': _pathFilestatGetImport,
       'path_open': _pathOpenImport,
+      'path_remove_directory': _pathRemoveDirectoryImport,
+      'path_rename': _pathRenameImport,
+      'path_unlink_file': _pathUnlinkFileImport,
       'poll_oneoff': _pollOneoffImport,
     };
     return {'wasi_snapshot_preview1': preview1};
@@ -699,6 +703,24 @@ class WASI implements wasi_iface.WASI {
         return _errnoSuccess;
       });
 
+  wasm.FunctionImportExportValue get _pathCreateDirectoryImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 3) {
+          return _errnoInval;
+        }
+        final resolved = _resolvePath(
+          dirFd: _asInt(args[0]),
+          pathPtr: _asInt(args[1]),
+          pathLen: _asInt(args[2]),
+        );
+        if (resolved.errno != _errnoSuccess) {
+          return resolved.errno;
+        }
+        return _errnoFromPathMutationResult(
+          _vfs.createDirectory(resolved.path!),
+        );
+      });
+
   wasm.FunctionImportExportValue
   get _pathOpenImport => wasm.ImportExportKind.function((List<Object?> args) {
     if (args.length < 9) {
@@ -758,6 +780,67 @@ class WASI implements wasi_iface.WASI {
         return _errnoNoent;
     }
   });
+
+  wasm.FunctionImportExportValue get _pathRemoveDirectoryImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 3) {
+          return _errnoInval;
+        }
+        final resolved = _resolvePath(
+          dirFd: _asInt(args[0]),
+          pathPtr: _asInt(args[1]),
+          pathLen: _asInt(args[2]),
+        );
+        if (resolved.errno != _errnoSuccess) {
+          return resolved.errno;
+        }
+        return _errnoFromPathMutationResult(
+          _vfs.removeDirectory(resolved.path!),
+        );
+      });
+
+  wasm.FunctionImportExportValue get _pathRenameImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 6) {
+          return _errnoInval;
+        }
+        final oldPath = _resolvePath(
+          dirFd: _asInt(args[0]),
+          pathPtr: _asInt(args[1]),
+          pathLen: _asInt(args[2]),
+        );
+        if (oldPath.errno != _errnoSuccess) {
+          return oldPath.errno;
+        }
+        final newPath = _resolvePath(
+          dirFd: _asInt(args[3]),
+          pathPtr: _asInt(args[4]),
+          pathLen: _asInt(args[5]),
+        );
+        if (newPath.errno != _errnoSuccess) {
+          return newPath.errno;
+        }
+
+        return _errnoFromPathMutationResult(
+          _vfs.renamePath(oldPath: oldPath.path!, newPath: newPath.path!),
+        );
+      });
+
+  wasm.FunctionImportExportValue get _pathUnlinkFileImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 3) {
+          return _errnoInval;
+        }
+        final resolved = _resolvePath(
+          dirFd: _asInt(args[0]),
+          pathPtr: _asInt(args[1]),
+          pathLen: _asInt(args[2]),
+        );
+        if (resolved.errno != _errnoSuccess) {
+          return resolved.errno;
+        }
+        return _errnoFromPathMutationResult(_vfs.unlinkFile(resolved.path!));
+      });
 
   wasm.FunctionImportExportValue
   get _pathFilestatGetImport => wasm.ImportExportKind.function((
@@ -869,6 +952,37 @@ class WASI implements wasi_iface.WASI {
         }
         return _errnoSuccess;
       });
+
+  _ResolvedPath _resolvePath({
+    required int dirFd,
+    required int pathPtr,
+    required int pathLen,
+  }) {
+    final baseDirectory = _vfs.directoryPathForFd(dirFd);
+    if (baseDirectory == null) {
+      return const _ResolvedPath.error(_errnoBadf);
+    }
+
+    final view = _memoryView();
+    if (view == null) {
+      return const _ResolvedPath.error(_errnoInval);
+    }
+    final bytes = view.bytes;
+    if (pathPtr < 0 || pathLen < 0 || pathPtr + pathLen > bytes.length) {
+      return const _ResolvedPath.error(_errnoInval);
+    }
+
+    final guestPath = wasi_vfs.resolveGuestPath(
+      bytes: bytes,
+      preopenPath: baseDirectory,
+      pathPtr: pathPtr,
+      pathLen: pathLen,
+    );
+    if (guestPath == null) {
+      return const _ResolvedPath.error(_errnoInval);
+    }
+    return _ResolvedPath.path(wasi_vfs.normalizeGuestPath(guestPath));
+  }
 
   int _writePollEvents({
     required Uint8List bytes,
@@ -1205,8 +1319,12 @@ const int _subscriptionClockAbstime = 1;
 const int _errnoSuccess = wasi_common.errnoSuccess;
 const int _errnoInval = wasi_common.errnoInval;
 const int _errnoBadf = wasi_common.errnoBadf;
+const int _errnoExist = wasi_common.errnoExist;
+const int _errnoIsdir = wasi_common.errnoIsdir;
 const int _errnoNoent = wasi_common.errnoNoent;
 const int _errnoNosys = wasi_common.errnoNosys;
+const int _errnoNotdir = wasi_common.errnoNotdir;
+const int _errnoNotempty = wasi_common.errnoNotempty;
 const int _prestatSize = wasi_common.prestatSize;
 const int _preopenTypeDir = wasi_common.preopenTypeDir;
 const int _fdstatSize = wasi_common.fdstatSize;
@@ -1218,6 +1336,17 @@ const int _allRightsMask = 0xffffffff;
 const List<String> _preview1NosysImports = wasi_common.preview1NosysImports;
 
 bool _isU32InBounds(int ptr, int length) => ptr >= 0 && ptr + 4 <= length;
+
+int _errnoFromPathMutationResult(wasi_vfs.Preview1PathMutationResult result) =>
+    switch (result) {
+      wasi_vfs.Preview1PathMutationResult.success => _errnoSuccess,
+      wasi_vfs.Preview1PathMutationResult.invalid => _errnoInval,
+      wasi_vfs.Preview1PathMutationResult.noEntry => _errnoNoent,
+      wasi_vfs.Preview1PathMutationResult.exists => _errnoExist,
+      wasi_vfs.Preview1PathMutationResult.isDirectory => _errnoIsdir,
+      wasi_vfs.Preview1PathMutationResult.notDirectory => _errnoNotdir,
+      wasi_vfs.Preview1PathMutationResult.notEmpty => _errnoNotempty,
+    };
 
 int _asInt(Object? value) {
   if (value is int) {
@@ -1270,6 +1399,15 @@ final class _MemoryView {
 
   final Uint8List bytes;
   final ByteData data;
+}
+
+final class _ResolvedPath {
+  const _ResolvedPath.path(this.path) : errno = _errnoSuccess;
+
+  const _ResolvedPath.error(this.errno) : path = null;
+
+  final String? path;
+  final int errno;
 }
 
 final class _WasiExit extends Error {

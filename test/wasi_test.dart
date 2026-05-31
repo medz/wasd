@@ -725,8 +725,7 @@ void main() {
               preview1['sched_yield'] as FunctionImportExportValue;
           final pollOneoff =
               preview1['poll_oneoff'] as FunctionImportExportValue;
-          final pathUnlinkFile =
-              preview1['path_unlink_file'] as FunctionImportExportValue;
+          final pathLink = preview1['path_link'] as FunctionImportExportValue;
           final procRaise = preview1['proc_raise'] as FunctionImportExportValue;
           final memory =
               (instance.exports['memory'] as MemoryImportExportValue).ref;
@@ -751,7 +750,7 @@ void main() {
           expect(data.getUint32(outPtr, Endian.little), 0x11223344);
           expect(data.getUint32(outPtr + 4, Endian.little), 0x55667788);
           expect(data.getUint8(outPtr + 10), 0);
-          expect(pathUnlinkFile.ref([3, 0, 0]), 52);
+          expect(pathLink.ref([3, 0, 0, 0, 3, 0, 0]), 52);
           expect(procRaise.ref([15]), 52);
         },
         skip: _skipOnNode(
@@ -1081,6 +1080,104 @@ void main() {
         },
         skip: _skipOnNode(
           'Skipping on Node.js; path_open/fd_read behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'path_create_directory, path_rename, path_unlink_file, and path_remove_directory update virtual paths',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/source.txt': Uint8List.fromList(utf8.encode('hello')),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathCreateDirectory =
+              preview1['path_create_directory'] as FunctionImportExportValue;
+          final pathRename =
+              preview1['path_rename'] as FunctionImportExportValue;
+          final pathUnlinkFile =
+              preview1['path_unlink_file'] as FunctionImportExportValue;
+          final pathRemoveDirectory =
+              preview1['path_remove_directory'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          const pathPtr = 2688;
+          const newPathPtr = 2720;
+          const filestatPtr = 2760;
+
+          final dirPath = utf8.encode('work');
+          bytes.setAll(pathPtr, dirPath);
+          expect(pathCreateDirectory.ref([3, pathPtr, dirPath.length]), 0);
+          expect(
+            pathFilestatGet.ref([3, 0, pathPtr, dirPath.length, filestatPtr]),
+            0,
+          );
+          expect(bytes[filestatPtr + 16], 3);
+
+          final oldPath = utf8.encode('source.txt');
+          final renamedPath = utf8.encode('work/renamed.txt');
+          bytes.setAll(pathPtr, oldPath);
+          bytes.setAll(newPathPtr, renamedPath);
+          expect(
+            pathRename.ref([
+              3,
+              pathPtr,
+              oldPath.length,
+              3,
+              newPathPtr,
+              renamedPath.length,
+            ]),
+            0,
+          );
+          expect(
+            pathFilestatGet.ref([3, 0, pathPtr, oldPath.length, filestatPtr]),
+            44,
+          );
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              newPathPtr,
+              renamedPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(bytes[filestatPtr + 16], 4);
+
+          expect(pathUnlinkFile.ref([3, newPathPtr, renamedPath.length]), 0);
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              newPathPtr,
+              renamedPath.length,
+              filestatPtr,
+            ]),
+            44,
+          );
+
+          bytes.setAll(pathPtr, dirPath);
+          expect(pathRemoveDirectory.ref([3, pathPtr, dirPath.length]), 0);
+          expect(
+            pathFilestatGet.ref([3, 0, pathPtr, dirPath.length, filestatPtr]),
+            44,
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; path mutation behavior is delegated to node:wasi.',
         ),
       );
 
