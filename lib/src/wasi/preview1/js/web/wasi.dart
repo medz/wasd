@@ -75,10 +75,13 @@ class WASI implements wasi.WASI {
       'fd_write': _fdWriteImport,
       'fd_pread': _fdPreadImport,
       'fd_pwrite': _fdPwriteImport,
+      'fd_allocate': _fdAllocateImport,
       'fd_fdstat_get': _fdFdstatGetImport,
       'fd_filestat_get': _fdFilestatGetImport,
+      'fd_filestat_set_size': _fdFilestatSetSizeImport,
       'fd_close': _fdCloseImport,
       'fd_seek': _fdSeekImport,
+      'fd_tell': _fdTellImport,
       'clock_time_get': _clockTimeGetImport,
       'sched_yield': _schedYieldImport,
       'fd_prestat_get': _fdPrestatGetImport,
@@ -388,6 +391,26 @@ class WASI implements wasi.WASI {
         );
       });
 
+  wasm.FunctionImportExportValue get _fdAllocateImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 3) {
+          return _errnoInval;
+        }
+        final fd = _asInt(args[0]);
+        final offset = _asInt64(args[1]);
+        final len = _asInt64(args[2]);
+        final opened = _vfs.openFileForFd(fd);
+        if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
+          return _errnoBadf;
+        }
+        if (offset < 0 || len < 0 || offset + len < offset) {
+          return _errnoInval;
+        }
+
+        opened.allocate(offset, len);
+        return _errnoSuccess;
+      });
+
   wasm.FunctionImportExportValue
   get _fdFdstatGetImport => wasm.ImportExportKind.function((
     List<Object?> args,
@@ -471,6 +494,25 @@ class WASI implements wasi.WASI {
         return _errnoSuccess;
       });
 
+  wasm.FunctionImportExportValue get _fdFilestatSetSizeImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 2) {
+          return _errnoInval;
+        }
+        final fd = _asInt(args[0]);
+        final size = _asInt64(args[1]);
+        final opened = _vfs.openFileForFd(fd);
+        if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
+          return _errnoBadf;
+        }
+        if (size < 0) {
+          return _errnoInval;
+        }
+
+        opened.setLength(size);
+        return _errnoSuccess;
+      });
+
   wasm.FunctionImportExportValue get _fdCloseImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
         if (args.isEmpty) {
@@ -525,6 +567,30 @@ class WASI implements wasi.WASI {
         }
         opened.offset = next;
         _setUint64(data, newOffsetPtr, next);
+        return _errnoSuccess;
+      });
+
+  wasm.FunctionImportExportValue get _fdTellImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 2) {
+          return _errnoInval;
+        }
+        final fd = _asInt(args[0]);
+        final offsetPtr = _asInt(args[1]);
+        final opened = _vfs.openFileForFd(fd);
+        if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
+          return _errnoBadf;
+        }
+
+        final view = _memoryView();
+        if (view == null) {
+          return _errnoInval;
+        }
+        if (offsetPtr < 0 || offsetPtr + 8 > view.bytes.length) {
+          return _errnoInval;
+        }
+
+        _setUint64(view.data, offsetPtr, opened.offset);
         return _errnoSuccess;
       });
 

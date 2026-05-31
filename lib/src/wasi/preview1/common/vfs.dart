@@ -161,6 +161,25 @@ final class Preview1VirtualFile {
     _bytes.setRange(fileOffset, end, source, sourceStart);
     return length;
   }
+
+  void setLength(int length) {
+    if (length == _bytes.length) {
+      return;
+    }
+    final resized = Uint8List(length);
+    final copyLength = length < _bytes.length ? length : _bytes.length;
+    if (copyLength > 0) {
+      resized.setRange(0, copyLength, _bytes);
+    }
+    _bytes = resized;
+  }
+
+  void allocate(int offset, int length) {
+    final requiredLength = offset + length;
+    if (requiredLength > _bytes.length) {
+      setLength(requiredLength);
+    }
+  }
 }
 
 final class Preview1VirtualOpenFile {
@@ -193,6 +212,10 @@ final class Preview1VirtualOpenFile {
 
   int writeAtFrom(Uint8List source, int start, int length, int fileOffset) =>
       file.writeAtFrom(source, start, length, fileOffset);
+
+  void setLength(int length) => file.setLength(length);
+
+  void allocate(int offset, int length) => file.allocate(offset, length);
 }
 
 enum Preview1VirtualOpenKind { file, directory, missing }

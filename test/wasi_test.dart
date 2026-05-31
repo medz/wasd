@@ -905,6 +905,105 @@ void main() {
       );
 
       test(
+        'fd_tell, fd_filestat_set_size, and fd_allocate update file size',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/data.bin': Uint8List.fromList(utf8.encode('abcdef')),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdSeek = preview1['fd_seek'] as FunctionImportExportValue;
+          final fdTell = preview1['fd_tell'] as FunctionImportExportValue;
+          final fdFilestatGet =
+              preview1['fd_filestat_get'] as FunctionImportExportValue;
+          final fdFilestatSetSize =
+              preview1['fd_filestat_set_size'] as FunctionImportExportValue;
+          final fdAllocate =
+              preview1['fd_allocate'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final relativePath = utf8.encode('data.bin');
+          const pathPtr = 2448;
+          const openedFdPtr = 2480;
+          const offsetPtr = 2496;
+          const filestatPtr = 2528;
+          const iovPtr = 2600;
+          const readBufferPtr = 2624;
+          const readCountPtr = 2656;
+
+          bytes.setAll(pathPtr, relativePath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              relativePath.length,
+              0,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final fd = data.getUint32(openedFdPtr, Endian.little);
+
+          expect(fdSeek.ref([fd, 4, 0, offsetPtr]), 0);
+          expect(fdTell.ref([fd, offsetPtr]), 0);
+          expect(_getUint64Le(data, offsetPtr), 4);
+
+          expect(fdFilestatGet.ref([fd, filestatPtr]), 0);
+          expect(_getUint64Le(data, filestatPtr + 32), 6);
+
+          expect(fdFilestatSetSize.ref([fd, 3]), 0);
+          expect(fdFilestatGet.ref([fd, filestatPtr]), 0);
+          expect(_getUint64Le(data, filestatPtr + 32), 3);
+
+          data.setUint32(iovPtr, readBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 6, Endian.little);
+          expect(fdPread.ref([fd, iovPtr, 1, 0, readCountPtr]), 0);
+          expect(data.getUint32(readCountPtr, Endian.little), 3);
+          expect(
+            utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + 3)),
+            'abc',
+          );
+
+          bytes.fillRange(readBufferPtr, readBufferPtr + 12, 0xff);
+          expect(fdAllocate.ref([fd, 8, 4]), 0);
+          expect(fdFilestatGet.ref([fd, filestatPtr]), 0);
+          expect(_getUint64Le(data, filestatPtr + 32), 12);
+          expect(fdTell.ref([fd, offsetPtr]), 0);
+          expect(_getUint64Le(data, offsetPtr), 4);
+
+          data.setUint32(iovPtr, readBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 12, Endian.little);
+          expect(fdPread.ref([fd, iovPtr, 1, 0, readCountPtr]), 0);
+          expect(data.getUint32(readCountPtr, Endian.little), 12);
+          expect(bytes.sublist(readBufferPtr, readBufferPtr + 3), [97, 98, 99]);
+          expect(
+            bytes.sublist(readBufferPtr + 3, readBufferPtr + 12),
+            List<int>.filled(9, 0),
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; file size behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'path_open opens virtual directories and resolves nested files',
         () async {
           final fileWasi = WASI(
