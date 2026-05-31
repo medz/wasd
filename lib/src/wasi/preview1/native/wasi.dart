@@ -8,6 +8,7 @@ import '../../../wasm/memory.dart' as wasm;
 import '../../../wasm/module.dart' as wasm;
 import '../../wasi.dart' as wasi_iface;
 import '../common/constants.dart' as wasi_common;
+import '../common/vfs.dart' as wasi_vfs;
 
 class WASI implements wasi_iface.WASI {
   // ignore: avoid_unused_constructor_parameters
@@ -22,23 +23,15 @@ class WASI implements wasi_iface.WASI {
     int stderr = 2,
     wasi_iface.WASIVersion version = wasi_iface.WASIVersion.preview1,
   }) : _returnOnExit = returnOnExit,
-       _argsData = [for (final arg in args) _nulTerminated(arg)],
+       _argsData = [for (final arg in args) wasi_vfs.nulTerminated(arg)],
        _envData = [
          for (final entry in env.entries)
-           _nulTerminated('${entry.key}=${entry.value}'),
+           wasi_vfs.nulTerminated('${entry.key}=${entry.value}'),
        ],
-       _preopensByFd = {
-         for (final indexed in preopens.keys.toList().asMap().entries)
-           indexed.key + 3: _pathBytes(indexed.value),
-       },
-       _preopenGuestPathsByFd = {
-         for (final indexed in preopens.keys.toList().asMap().entries)
-           indexed.key + 3: indexed.value,
-       },
-       _filesByGuestPath = {
-         for (final entry in files.entries)
-           _normalizeGuestPath(entry.key): entry.value,
-       },
+       _vfs = wasi_vfs.Preview1VirtualFileSystem(
+         preopens: preopens,
+         files: files,
+       ),
        _stdinFd = stdin,
        _stdoutFd = stdout,
        _stderrFd = stderr;
@@ -46,17 +39,12 @@ class WASI implements wasi_iface.WASI {
   final bool _returnOnExit;
   final List<Uint8List> _argsData;
   final List<Uint8List> _envData;
-  final Map<int, Uint8List> _preopensByFd;
-  final Map<int, String> _preopenGuestPathsByFd;
-  final Map<String, Uint8List> _filesByGuestPath;
+  final wasi_vfs.Preview1VirtualFileSystem _vfs;
   final int _stdinFd;
   final int _stdoutFd;
   final int _stderrFd;
   final math.Random _secureRandom = math.Random.secure();
   final Stopwatch _monotonicClock = Stopwatch()..start();
-  final Map<int, _VirtualOpenFile> _openFilesByFd = <int, _VirtualOpenFile>{};
-  final Map<int, String> _openDirectoriesByFd = <int, String>{};
-  int _nextVirtualFd = 64;
   final bool _traceSyscalls =
       const bool.fromEnvironment('WASI_TRACE') ||
       _isTruthyEnv(io.Platform.environment['WASI_TRACE']);
@@ -311,8 +299,8 @@ class WASI implements wasi_iface.WASI {
         final iovs = _asInt(args[1]);
         final iovsLen = _asInt(args[2]);
         final nreadPtr = _asInt(args[3]);
-        final opened = _openFilesByFd[fd];
-        final isDirectory = _openDirectoriesByFd.containsKey(fd);
+        final opened = _vfs.openFileForFd(fd);
+        final isDirectory = _vfs.isOpenDirectoryFd(fd);
         if (fd != _stdinFd && opened == null) {
           return _errnoBadf;
         }
@@ -381,10 +369,8 @@ class WASI implements wasi_iface.WASI {
     final fd = _asInt(args[0]);
     final fdstatPtr = _asInt(args[1]);
     final isStdio = fd == _stdinFd || fd == _stdoutFd || fd == _stderrFd;
-    final isDir =
-        _preopenGuestPathsByFd.containsKey(fd) ||
-        _openDirectoriesByFd.containsKey(fd);
-    final isFile = _openFilesByFd.containsKey(fd);
+    final isDir = _vfs.isDirectoryFd(fd);
+    final isFile = _vfs.openFileForFd(fd) != null;
     if (_traceSyscalls) {
       io.stderr.writeln(
         '[wasi:fd_fdstat_get] fd=$fd isStdio=$isStdio isDir=$isDir isFile=$isFile',
@@ -436,18 +422,18 @@ class WASI implements wasi_iface.WASI {
           return _errnoInval;
         }
 
-        final opened = _openFilesByFd[fd];
-        final openedDirectory = _openDirectoriesByFd[fd];
+        final opened = _vfs.openFileForFd(fd);
+        final openedDirectory = _vfs.isOpenDirectoryFd(fd);
         final isStdio = fd == _stdinFd || fd == _stdoutFd || fd == _stderrFd;
-        final isDir = _preopenGuestPathsByFd.containsKey(fd);
-        if (opened == null && openedDirectory == null && !isStdio && !isDir) {
+        final isDir = _vfs.isPreopenDirectoryFd(fd);
+        if (opened == null && !openedDirectory && !isStdio && !isDir) {
           return _errnoBadf;
         }
 
         bytes.fillRange(bufPtr, bufPtr + _filestatSize, 0);
         bytes[bufPtr + 16] = opened != null
             ? _filetypeRegularFile
-            : (isDir || openedDirectory != null)
+            : (isDir || openedDirectory)
             ? _filetypeDirectory
             : _filetypeCharacterDevice;
         if (opened != null) {
@@ -465,10 +451,7 @@ class WASI implements wasi_iface.WASI {
         if (fd == _stdinFd || fd == _stdoutFd || fd == _stderrFd) {
           return _errnoSuccess;
         }
-        if (_openFilesByFd.remove(fd) != null) {
-          return _errnoSuccess;
-        }
-        if (_openDirectoriesByFd.remove(fd) != null) {
+        if (_vfs.close(fd)) {
           return _errnoSuccess;
         }
         return _errnoBadf;
@@ -483,7 +466,7 @@ class WASI implements wasi_iface.WASI {
         final offset = _asInt64(args[1]);
         final whence = _asInt(args[2]);
         final newOffsetPtr = _asInt(args[3]);
-        final opened = _openFilesByFd[fd];
+        final opened = _vfs.openFileForFd(fd);
         if (opened == null) {
           return _errnoBadf;
         }
@@ -574,7 +557,7 @@ class WASI implements wasi_iface.WASI {
         if (_traceSyscalls) {
           io.stderr.writeln('[wasi:fd_prestat_get] fd=$fd');
         }
-        final path = _preopensByFd[fd];
+        final path = _vfs.preopenPathBytesForFd(fd);
         if (path == null) {
           return _errnoBadf;
         }
@@ -608,7 +591,7 @@ class WASI implements wasi_iface.WASI {
             '[wasi:fd_prestat_dir_name] fd=$fd pathLen=$pathLen',
           );
         }
-        final path = _preopensByFd[fd];
+        final path = _vfs.preopenPathBytesForFd(fd);
         if (path == null) {
           return _errnoBadf;
         }
@@ -637,7 +620,7 @@ class WASI implements wasi_iface.WASI {
     final pathPtr = _asInt(args[2]);
     final pathLen = _asInt(args[3]);
     final openedFdPtr = _asInt(args[8]);
-    final baseDirectory = _directoryPathForFd(dirFd);
+    final baseDirectory = _vfs.directoryPathForFd(dirFd);
     if (baseDirectory == null) {
       return _errnoBadf;
     }
@@ -656,7 +639,7 @@ class WASI implements wasi_iface.WASI {
       return _errnoInval;
     }
 
-    final guestPath = _resolveGuestPath(
+    final guestPath = wasi_vfs.resolveGuestPath(
       bytes: bytes,
       preopenPath: baseDirectory,
       pathPtr: pathPtr,
@@ -670,28 +653,22 @@ class WASI implements wasi_iface.WASI {
     if (guestPath == null) {
       return _errnoInval;
     }
-    final normalizedPath = _normalizeGuestPath(guestPath);
-    final fileBytes = _lookupVirtualFile(normalizedPath);
+    final normalizedPath = wasi_vfs.normalizeGuestPath(guestPath);
+    final fileBytes = _vfs.lookupFile(normalizedPath);
     if (_traceSyscalls) {
       io.stderr.writeln(
         '[wasi:path_open] guest=$normalizedPath found=${fileBytes != null}',
       );
     }
-    if (fileBytes != null) {
-      final fd = _nextVirtualFd++;
-      _openFilesByFd[fd] = _VirtualOpenFile(fileBytes);
-      data.setUint32(openedFdPtr, fd, Endian.little);
-      return _errnoSuccess;
+    final opened = _vfs.openPath(normalizedPath);
+    switch (opened.kind) {
+      case wasi_vfs.Preview1VirtualOpenKind.file:
+      case wasi_vfs.Preview1VirtualOpenKind.directory:
+        data.setUint32(openedFdPtr, opened.fd!, Endian.little);
+        return _errnoSuccess;
+      case wasi_vfs.Preview1VirtualOpenKind.missing:
+        return _errnoNoent;
     }
-
-    if (_isVirtualDirectory(normalizedPath)) {
-      final fd = _nextVirtualFd++;
-      _openDirectoriesByFd[fd] = normalizedPath;
-      data.setUint32(openedFdPtr, fd, Endian.little);
-      return _errnoSuccess;
-    }
-
-    return _errnoNoent;
   });
 
   wasm.FunctionImportExportValue
@@ -705,7 +682,7 @@ class WASI implements wasi_iface.WASI {
     final pathPtr = _asInt(args[2]);
     final pathLen = _asInt(args[3]);
     final filestatPtr = _asInt(args[4]);
-    final baseDirectory = _directoryPathForFd(dirFd);
+    final baseDirectory = _vfs.directoryPathForFd(dirFd);
     if (baseDirectory == null) {
       return _errnoBadf;
     }
@@ -719,7 +696,7 @@ class WASI implements wasi_iface.WASI {
     if (filestatPtr < 0 || filestatPtr + _filestatSize > bytes.length) {
       return _errnoInval;
     }
-    final guestPath = _resolveGuestPath(
+    final guestPath = wasi_vfs.resolveGuestPath(
       bytes: bytes,
       preopenPath: baseDirectory,
       pathPtr: pathPtr,
@@ -734,9 +711,9 @@ class WASI implements wasi_iface.WASI {
       return _errnoInval;
     }
 
-    final normalizedPath = _normalizeGuestPath(guestPath);
-    final fileBytes = _lookupVirtualFile(normalizedPath);
-    final isDirectory = _isVirtualDirectory(normalizedPath);
+    final normalizedPath = wasi_vfs.normalizeGuestPath(guestPath);
+    final fileBytes = _vfs.lookupFile(normalizedPath);
+    final isDirectory = _vfs.isDirectoryPath(normalizedPath);
     if (fileBytes == null && !isDirectory) {
       return _errnoNoent;
     }
@@ -940,75 +917,6 @@ class WASI implements wasi_iface.WASI {
     return _MemoryView(Uint8List.view(buffer), ByteData.view(buffer));
   }
 
-  String? _resolveGuestPath({
-    required Uint8List bytes,
-    required String preopenPath,
-    required int pathPtr,
-    required int pathLen,
-  }) {
-    if (pathPtr < 0 || pathLen < 0 || pathPtr + pathLen > bytes.length) {
-      return null;
-    }
-    final decoded = utf8.decode(
-      bytes.sublist(pathPtr, pathPtr + pathLen),
-      allowMalformed: true,
-    );
-    final nul = decoded.indexOf('\u0000');
-    final normalizedPath = nul == -1 ? decoded : decoded.substring(0, nul);
-    return _joinGuestPath(preopenPath, normalizedPath);
-  }
-
-  bool _isVirtualDirectory(String guestPath) {
-    final normalized = _normalizeGuestPath(guestPath);
-    if (normalized == '/') {
-      return true;
-    }
-    for (final preopen in _preopenGuestPathsByFd.values) {
-      if (_normalizeGuestPath(preopen) == normalized) {
-        return true;
-      }
-    }
-    final prefix = '$normalized/';
-    for (final filePath in _filesByGuestPath.keys) {
-      if (filePath.startsWith(prefix)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  String? _directoryPathForFd(int fd) =>
-      _preopenGuestPathsByFd[fd] ?? _openDirectoriesByFd[fd];
-
-  Uint8List? _lookupVirtualFile(String guestPath) {
-    final normalized = _normalizeGuestPath(guestPath);
-    final direct = _filesByGuestPath[normalized];
-    if (direct != null) {
-      return direct;
-    }
-    final lower = normalized.toLowerCase();
-    for (final entry in _filesByGuestPath.entries) {
-      if (entry.key.toLowerCase() == lower) {
-        return entry.value;
-      }
-    }
-    final basename = _basename(normalized);
-    if (basename.isEmpty) {
-      return null;
-    }
-    final basenameLower = basename.toLowerCase();
-    final basenameCompact = _compactPathToken(basenameLower);
-    for (final entry in _filesByGuestPath.entries) {
-      final candidateBase = _basename(entry.key);
-      if (candidateBase == basename ||
-          candidateBase.toLowerCase() == basenameLower ||
-          _compactPathToken(candidateBase.toLowerCase()) == basenameCompact) {
-        return entry.value;
-      }
-    }
-    return null;
-  }
-
   String _readCString(Uint8List bytes, int ptr) {
     if (ptr < 0 || ptr >= bytes.length) {
       return '';
@@ -1171,71 +1079,11 @@ bool _isTruthyEnv(String? value) {
   return normalized == '1' || normalized == 'true' || normalized == 'yes';
 }
 
-String _normalizeGuestPath(String path) {
-  if (path.isEmpty) {
-    return '/';
-  }
-  final sanitized = path.replaceAll('\\', '/');
-  final segments = <String>[];
-  for (final segment in sanitized.split('/')) {
-    if (segment.isEmpty || segment == '.') {
-      continue;
-    }
-    if (segment == '..') {
-      if (segments.isNotEmpty) {
-        segments.removeLast();
-      }
-      continue;
-    }
-    segments.add(segment);
-  }
-  if (segments.isEmpty) {
-    return '/';
-  }
-  return '/${segments.join('/')}';
-}
-
-String _joinGuestPath(String preopen, String relative) {
-  if (relative.startsWith('/')) {
-    return _normalizeGuestPath(relative);
-  }
-  final base = _normalizeGuestPath(preopen);
-  final rel = relative.trim();
-  if (rel.isEmpty || rel == '.') {
-    return base;
-  }
-  if (base == '/') {
-    return _normalizeGuestPath('/$rel');
-  }
-  return _normalizeGuestPath('$base/$rel');
-}
-
-String _basename(String path) {
-  final normalized = _normalizeGuestPath(path);
-  final slash = normalized.lastIndexOf('/');
-  return slash == -1 ? normalized : normalized.substring(slash + 1);
-}
-
-String _compactPathToken(String value) =>
-    value.replaceAll(RegExp(r'[^a-z0-9]'), '');
-
-Uint8List _nulTerminated(String value) =>
-    Uint8List.fromList(<int>[...utf8.encode(value), 0]);
-
-Uint8List _pathBytes(String value) => Uint8List.fromList(utf8.encode(value));
-
 final class _MemoryView {
   _MemoryView(this.bytes, this.data);
 
   final Uint8List bytes;
   final ByteData data;
-}
-
-final class _VirtualOpenFile {
-  _VirtualOpenFile(this.bytes);
-
-  final Uint8List bytes;
-  int offset = 0;
 }
 
 final class _WasiExit extends Error {

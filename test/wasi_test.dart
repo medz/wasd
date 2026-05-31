@@ -769,6 +769,87 @@ void main() {
       );
 
       test(
+        'path_open opens virtual directories and resolves nested files',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/assets/doom1.wad': Uint8List.fromList([7, 8, 9]),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdFdstatGet =
+              preview1['fd_fdstat_get'] as FunctionImportExportValue;
+          final fdRead = preview1['fd_read'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 2048;
+          const openedFdPtr = 2080;
+          const fdstatPtr = 2096;
+          const iovPtr = 2160;
+          const bufferPtr = 2176;
+          const nreadPtr = 2192;
+
+          final dirPath = utf8.encode('assets');
+          bytes.setAll(pathPtr, dirPath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              dirPath.length,
+              0,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final dirFd = data.getUint32(openedFdPtr, Endian.little);
+          expect(fdFdstatGet.ref([dirFd, fdstatPtr]), 0);
+          expect(bytes[fdstatPtr], 3);
+
+          final nestedPath = utf8.encode('./doom1.wad');
+          bytes.setAll(pathPtr, nestedPath);
+          expect(
+            pathOpen.ref([
+              dirFd,
+              0,
+              pathPtr,
+              nestedPath.length,
+              0,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final fileFd = data.getUint32(openedFdPtr, Endian.little);
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 3, Endian.little);
+
+          expect(fdRead.ref([fileFd, iovPtr, 1, nreadPtr]), 0);
+          expect(data.getUint32(nreadPtr, Endian.little), 3);
+          expect(bytes.sublist(bufferPtr, bufferPtr + 3), [7, 8, 9]);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; path_open/fd_read behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'path_filestat_get reports file, directory, and missing paths',
         () async {
           final fileWasi = WASI(
