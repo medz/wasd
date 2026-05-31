@@ -816,6 +816,95 @@ void main() {
       );
 
       test(
+        'fd_pread, fd_pwrite, and fd_write update virtual files',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/data.txt': Uint8List.fromList(utf8.encode('abcdef')),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final fdPwrite = preview1['fd_pwrite'] as FunctionImportExportValue;
+          final fdWrite = preview1['fd_write'] as FunctionImportExportValue;
+          final fdSeek = preview1['fd_seek'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final relativePath = utf8.encode('data.txt');
+          const pathPtr = 2240;
+          const openedFdPtr = 2260;
+          const writeIovPtr = 2272;
+          const writeBufferPtr = 2304;
+          const writeCountPtr = 2336;
+          const readIovPtr = 2352;
+          const readBufferPtr = 2384;
+          const readCountPtr = 2416;
+          const offsetPtr = 2432;
+
+          bytes.setAll(pathPtr, relativePath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              relativePath.length,
+              0,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final fd = data.getUint32(openedFdPtr, Endian.little);
+
+          bytes.setAll(writeBufferPtr, utf8.encode('XY'));
+          data.setUint32(writeIovPtr, writeBufferPtr, Endian.little);
+          data.setUint32(writeIovPtr + 4, 2, Endian.little);
+          expect(fdPwrite.ref([fd, writeIovPtr, 1, 2, writeCountPtr]), 0);
+          expect(data.getUint32(writeCountPtr, Endian.little), 2);
+
+          data.setUint32(readIovPtr, readBufferPtr, Endian.little);
+          data.setUint32(readIovPtr + 4, 6, Endian.little);
+          expect(fdPread.ref([fd, readIovPtr, 1, 0, readCountPtr]), 0);
+          expect(data.getUint32(readCountPtr, Endian.little), 6);
+          expect(
+            utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + 6)),
+            'abXYef',
+          );
+
+          expect(fdSeek.ref([fd, 0, 1, offsetPtr]), 0);
+          expect(_getUint64Le(data, offsetPtr), 0);
+
+          bytes.setAll(writeBufferPtr, utf8.encode('zz'));
+          expect(fdWrite.ref([fd, writeIovPtr, 1, writeCountPtr]), 0);
+          expect(data.getUint32(writeCountPtr, Endian.little), 2);
+          expect(fdSeek.ref([fd, 0, 1, offsetPtr]), 0);
+          expect(_getUint64Le(data, offsetPtr), 2);
+
+          expect(fdPread.ref([fd, readIovPtr, 1, 0, readCountPtr]), 0);
+          expect(
+            utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + 6)),
+            'zzXYef',
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; file IO behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'path_open opens virtual directories and resolves nested files',
         () async {
           final fileWasi = WASI(

@@ -34,7 +34,7 @@ class WASI implements wasi_iface.WASI {
          files: files,
        ),
        _stdinFd = stdin,
-       _stdinInput = wasi_vfs.Preview1VirtualOpenFile(
+       _stdinInput = wasi_vfs.Preview1VirtualOpenFile.fromBytes(
          Uint8List.fromList(stdinData),
        ),
        _stdoutFd = stdout,
@@ -70,6 +70,8 @@ class WASI implements wasi_iface.WASI {
       'clock_res_get': _clockResGetImport,
       'fd_read': _fdReadImport,
       'fd_write': _fdWriteImport,
+      'fd_pread': _fdPreadImport,
+      'fd_pwrite': _fdPwriteImport,
       'fd_fdstat_get': _fdFdstatGetImport,
       'fd_filestat_get': _fdFilestatGetImport,
       'fd_close': _fdCloseImport,
@@ -100,8 +102,17 @@ class WASI implements wasi_iface.WASI {
         final iovsLen = _asInt(args[2]);
         final nwrittenPtr = _asInt(args[3]);
 
+        final opened = _vfs.openFileForFd(fd);
         if (fd != _stdoutFd && fd != _stderrFd) {
-          return _errnoBadf;
+          if (opened == null) {
+            return _errnoBadf;
+          }
+          return _writeOpenFileFromIov(
+            opened: opened,
+            iovs: iovs,
+            iovsLen: iovsLen,
+            nwrittenPtr: nwrittenPtr,
+          );
         }
 
         final memory = _boundMemory;
@@ -314,44 +325,60 @@ class WASI implements wasi_iface.WASI {
           return _errnoBadf;
         }
 
-        final memory = _boundMemory;
-        if (memory == null) {
+        return _readOpenFileIntoIov(
+          opened: input,
+          iovs: iovs,
+          iovsLen: iovsLen,
+          nreadPtr: nreadPtr,
+        );
+      });
+
+  wasm.FunctionImportExportValue get _fdPreadImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 5) {
           return _errnoInval;
         }
+        final fd = _asInt(args[0]);
+        final iovs = _asInt(args[1]);
+        final iovsLen = _asInt(args[2]);
+        final offset = _asInt64(args[3]);
+        final nreadPtr = _asInt(args[4]);
+        final opened = _vfs.openFileForFd(fd);
+        if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
+          return _errnoBadf;
+        }
 
-        final buffer = memory.buffer;
-        if (iovs < 0 || iovsLen < 0 || nreadPtr < 0) {
+        return _readOpenFileIntoIov(
+          opened: opened,
+          iovs: iovs,
+          iovsLen: iovsLen,
+          nreadPtr: nreadPtr,
+          fileOffset: offset,
+        );
+      });
+
+  wasm.FunctionImportExportValue get _fdPwriteImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 5) {
           return _errnoInval;
         }
-
-        final bytes = Uint8List.view(buffer);
-        final data = ByteData.view(buffer);
-        var totalRead = 0;
-
-        for (var index = 0; index < iovsLen; index++) {
-          final entry = iovs + index * _iovecEntrySize;
-          if (entry + _iovecEntrySize > bytes.length) {
-            return _errnoInval;
-          }
-
-          final buf = data.getUint32(entry, Endian.little);
-          final len = data.getUint32(entry + 4, Endian.little);
-          if (len > 0 && buf + len > bytes.length) {
-            return _errnoInval;
-          }
-
-          if (len > 0) {
-            totalRead += input.readInto(bytes, buf, len);
-          }
+        final fd = _asInt(args[0]);
+        final iovs = _asInt(args[1]);
+        final iovsLen = _asInt(args[2]);
+        final offset = _asInt64(args[3]);
+        final nwrittenPtr = _asInt(args[4]);
+        final opened = _vfs.openFileForFd(fd);
+        if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
+          return _errnoBadf;
         }
 
-        if (nreadPtr != 0) {
-          if (nreadPtr + 4 > bytes.length) {
-            return _errnoInval;
-          }
-          data.setUint32(nreadPtr, totalRead, Endian.little);
-        }
-        return _errnoSuccess;
+        return _writeOpenFileFromIov(
+          opened: opened,
+          iovs: iovs,
+          iovsLen: iovsLen,
+          nwrittenPtr: nwrittenPtr,
+          fileOffset: offset,
+        );
       });
 
   wasm.FunctionImportExportValue
@@ -900,6 +927,104 @@ class WASI implements wasi_iface.WASI {
       writeOffset += entry.length;
     }
 
+    return _errnoSuccess;
+  }
+
+  int _readOpenFileIntoIov({
+    required wasi_vfs.Preview1VirtualOpenFile opened,
+    required int iovs,
+    required int iovsLen,
+    required int nreadPtr,
+    int? fileOffset,
+  }) {
+    final view = _memoryView();
+    if (view == null) {
+      return _errnoInval;
+    }
+    final bytes = view.bytes;
+    final data = view.data;
+    if (iovs < 0 ||
+        iovsLen < 0 ||
+        nreadPtr < 0 ||
+        (fileOffset != null && fileOffset < 0)) {
+      return _errnoInval;
+    }
+
+    var totalRead = 0;
+    for (var index = 0; index < iovsLen; index++) {
+      final entry = iovs + index * _iovecEntrySize;
+      if (entry + _iovecEntrySize > bytes.length) {
+        return _errnoInval;
+      }
+
+      final buf = data.getUint32(entry, Endian.little);
+      final len = data.getUint32(entry + 4, Endian.little);
+      if (len > 0 && buf + len > bytes.length) {
+        return _errnoInval;
+      }
+
+      if (len > 0) {
+        totalRead += fileOffset == null
+            ? opened.readInto(bytes, buf, len)
+            : opened.readAtInto(bytes, buf, len, fileOffset + totalRead);
+      }
+    }
+
+    if (nreadPtr != 0) {
+      if (nreadPtr + 4 > bytes.length) {
+        return _errnoInval;
+      }
+      data.setUint32(nreadPtr, totalRead, Endian.little);
+    }
+    return _errnoSuccess;
+  }
+
+  int _writeOpenFileFromIov({
+    required wasi_vfs.Preview1VirtualOpenFile opened,
+    required int iovs,
+    required int iovsLen,
+    required int nwrittenPtr,
+    int? fileOffset,
+  }) {
+    final view = _memoryView();
+    if (view == null) {
+      return _errnoInval;
+    }
+    final bytes = view.bytes;
+    final data = view.data;
+    if (iovs < 0 ||
+        iovsLen < 0 ||
+        nwrittenPtr < 0 ||
+        (fileOffset != null && fileOffset < 0)) {
+      return _errnoInval;
+    }
+
+    var totalWritten = 0;
+    for (var index = 0; index < iovsLen; index++) {
+      final entry = iovs + index * _iovecEntrySize;
+      if (entry + _iovecEntrySize > bytes.length) {
+        return _errnoInval;
+      }
+
+      final buf = data.getUint32(entry, Endian.little);
+      final len = data.getUint32(entry + 4, Endian.little);
+      if (len > 0 && buf + len > bytes.length) {
+        return _errnoInval;
+      }
+
+      if (len > 0) {
+        totalWritten += fileOffset == null
+            ? opened.writeFrom(bytes, buf, len)
+            : opened.writeAtFrom(bytes, buf, len, fileOffset + totalWritten);
+      }
+    }
+
+    if (nwrittenPtr != 0) {
+      if (nwrittenPtr + 4 > bytes.length) {
+        return _errnoInval;
+      }
+      data.setUint32(nwrittenPtr, totalWritten, Endian.little);
+    }
     return _errnoSuccess;
   }
 

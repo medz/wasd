@@ -21,8 +21,6 @@ const List<String> preview1NosysImports = <String>[
   'fd_fdstat_set_rights',
   'fd_filestat_set_size',
   'fd_filestat_set_times',
-  'fd_pread',
-  'fd_pwrite',
   'fd_readdir',
   'fd_renumber',
   'fd_sync',

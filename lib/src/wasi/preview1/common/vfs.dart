@@ -17,7 +17,7 @@ final class Preview1VirtualFileSystem {
        },
        _filesByGuestPath = {
          for (final entry in files.entries)
-           normalizeGuestPath(entry.key): entry.value,
+           normalizeGuestPath(entry.key): Preview1VirtualFile(entry.value),
        } {
     _filesByLowerGuestPath = _indexFilesByLowerPath(_filesByGuestPath);
     _filesByBasenameLower = _indexFilesByBasename(
@@ -36,14 +36,14 @@ final class Preview1VirtualFileSystem {
 
   final Map<int, Uint8List> _preopenPathBytesByFd;
   final Map<int, String> _preopenGuestPathsByFd;
-  final Map<String, Uint8List> _filesByGuestPath;
+  final Map<String, Preview1VirtualFile> _filesByGuestPath;
   final Map<int, Preview1VirtualOpenFile> _openFilesByFd =
       <int, Preview1VirtualOpenFile>{};
   final Map<int, String> _openDirectoriesByFd = <int, String>{};
 
-  late final Map<String, Uint8List> _filesByLowerGuestPath;
-  late final Map<String, Uint8List> _filesByBasenameLower;
-  late final Map<String, Uint8List> _filesByBasenameCompact;
+  late final Map<String, Preview1VirtualFile> _filesByLowerGuestPath;
+  late final Map<String, Preview1VirtualFile> _filesByBasenameLower;
+  late final Map<String, Preview1VirtualFile> _filesByBasenameCompact;
   late final Set<String> _virtualDirectoryPaths;
   int _nextVirtualFd;
 
@@ -65,7 +65,7 @@ final class Preview1VirtualFileSystem {
       _openFilesByFd.remove(fd) != null ||
       _openDirectoriesByFd.remove(fd) != null;
 
-  Uint8List? lookupFile(String guestPath) {
+  Preview1VirtualFile? lookupFile(String guestPath) {
     final normalized = normalizeGuestPath(guestPath);
     final direct = _filesByGuestPath[normalized];
     if (direct != null) {
@@ -99,10 +99,10 @@ final class Preview1VirtualFileSystem {
 
   Preview1VirtualOpenResult openPath(String guestPath) {
     final normalized = normalizeGuestPath(guestPath);
-    final fileBytes = lookupFile(normalized);
-    if (fileBytes != null) {
+    final file = lookupFile(normalized);
+    if (file != null) {
       final fd = _nextVirtualFd++;
-      _openFilesByFd[fd] = Preview1VirtualOpenFile(fileBytes);
+      _openFilesByFd[fd] = Preview1VirtualOpenFile(file);
       return Preview1VirtualOpenResult.file(fd);
     }
 
@@ -116,22 +116,83 @@ final class Preview1VirtualFileSystem {
   }
 }
 
-final class Preview1VirtualOpenFile {
-  Preview1VirtualOpenFile(this.bytes);
+final class Preview1VirtualFile {
+  Preview1VirtualFile(Uint8List bytes) : _bytes = Uint8List.fromList(bytes);
 
-  final Uint8List bytes;
-  int offset = 0;
+  Uint8List _bytes;
 
-  int readInto(Uint8List target, int start, int length) {
-    final available = bytes.length - offset;
-    if (length <= 0 || available <= 0) {
+  Uint8List get bytes => _bytes;
+
+  int get length => _bytes.length;
+
+  int readAtInto(
+    Uint8List target,
+    int targetStart,
+    int length,
+    int fileOffset,
+  ) {
+    final available = _bytes.length - fileOffset;
+    if (length <= 0 || fileOffset < 0 || available <= 0) {
       return 0;
     }
     final count = length < available ? length : available;
-    target.setRange(start, start + count, bytes, offset);
+    target.setRange(targetStart, targetStart + count, _bytes, fileOffset);
+    return count;
+  }
+
+  int writeAtFrom(
+    Uint8List source,
+    int sourceStart,
+    int length,
+    int fileOffset,
+  ) {
+    if (length <= 0) {
+      return 0;
+    }
+    final end = fileOffset + length;
+    if (fileOffset < 0 || end < fileOffset) {
+      return 0;
+    }
+    if (end > _bytes.length) {
+      final resized = Uint8List(end);
+      resized.setAll(0, _bytes);
+      _bytes = resized;
+    }
+    _bytes.setRange(fileOffset, end, source, sourceStart);
+    return length;
+  }
+}
+
+final class Preview1VirtualOpenFile {
+  Preview1VirtualOpenFile(this.file);
+
+  Preview1VirtualOpenFile.fromBytes(Uint8List bytes)
+    : this(Preview1VirtualFile(bytes));
+
+  final Preview1VirtualFile file;
+  int offset = 0;
+
+  Uint8List get bytes => file.bytes;
+
+  int get length => file.length;
+
+  int readInto(Uint8List target, int start, int length) {
+    final count = readAtInto(target, start, length, offset);
     offset += count;
     return count;
   }
+
+  int readAtInto(Uint8List target, int start, int length, int fileOffset) =>
+      file.readAtInto(target, start, length, fileOffset);
+
+  int writeFrom(Uint8List source, int start, int length) {
+    final written = writeAtFrom(source, start, length, offset);
+    offset += written;
+    return written;
+  }
+
+  int writeAtFrom(Uint8List source, int start, int length, int fileOffset) =>
+      file.writeAtFrom(source, start, length, fileOffset);
 }
 
 enum Preview1VirtualOpenKind { file, directory, missing }
@@ -223,21 +284,21 @@ Uint8List nulTerminated(String value) =>
 
 Uint8List pathBytes(String value) => Uint8List.fromList(utf8.encode(value));
 
-Map<String, Uint8List> _indexFilesByLowerPath(
-  Map<String, Uint8List> filesByGuestPath,
+Map<String, Preview1VirtualFile> _indexFilesByLowerPath(
+  Map<String, Preview1VirtualFile> filesByGuestPath,
 ) {
-  final indexed = <String, Uint8List>{};
+  final indexed = <String, Preview1VirtualFile>{};
   for (final entry in filesByGuestPath.entries) {
     indexed.putIfAbsent(entry.key.toLowerCase(), () => entry.value);
   }
   return indexed;
 }
 
-Map<String, Uint8List> _indexFilesByBasename(
-  Map<String, Uint8List> filesByGuestPath, {
+Map<String, Preview1VirtualFile> _indexFilesByBasename(
+  Map<String, Preview1VirtualFile> filesByGuestPath, {
   required bool compact,
 }) {
-  final indexed = <String, Uint8List>{};
+  final indexed = <String, Preview1VirtualFile>{};
   for (final entry in filesByGuestPath.entries) {
     final basenameLower = basenameOfGuestPath(entry.key).toLowerCase();
     if (basenameLower.isEmpty) {
@@ -254,7 +315,7 @@ Map<String, Uint8List> _indexFilesByBasename(
 
 Set<String> _buildVirtualDirectorySet({
   required Map<int, String> preopenGuestPathsByFd,
-  required Map<String, Uint8List> filesByGuestPath,
+  required Map<String, Preview1VirtualFile> filesByGuestPath,
 }) {
   final directories = <String>{'/'};
 
