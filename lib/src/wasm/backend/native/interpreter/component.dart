@@ -396,6 +396,221 @@ final class WasmComponentCanonicalDefinition {
   final bool isShared;
 }
 
+enum WasmComponentTypeKind {
+  definedValue,
+  function,
+  component,
+  instance,
+  resource,
+}
+
+final class WasmComponentTypeDefinition {
+  const WasmComponentTypeDefinition({
+    required this.kind,
+    this.definedValue,
+    this.function,
+    this.component,
+    this.instance,
+    this.resource,
+  });
+
+  final WasmComponentTypeKind kind;
+  final WasmComponentDefinedValueType? definedValue;
+  final WasmComponentFunctionType? function;
+  final WasmComponentComponentType? component;
+  final WasmComponentInstanceType? instance;
+  final WasmComponentResourceType? resource;
+}
+
+enum WasmComponentDefinedValueTypeKind {
+  primitive,
+  record,
+  variant,
+  list,
+  fixedList,
+  tuple,
+  flags,
+  enumeration,
+  option,
+  result,
+  own,
+  borrow,
+  stream,
+  future,
+}
+
+final class WasmComponentDefinedValueType {
+  const WasmComponentDefinedValueType({
+    required this.kind,
+    this.primitive,
+    this.fields = const <WasmComponentLabeledValueType>[],
+    this.cases = const <WasmComponentVariantCase>[],
+    this.elementType,
+    this.fixedLength,
+    this.types = const <WasmComponentValueType>[],
+    this.labels = const <String>[],
+    this.okType,
+    this.errorType,
+    this.typeIndex,
+  });
+
+  final WasmComponentDefinedValueTypeKind kind;
+  final WasmComponentPrimitiveValueType? primitive;
+  final List<WasmComponentLabeledValueType> fields;
+  final List<WasmComponentVariantCase> cases;
+  final WasmComponentValueType? elementType;
+  final int? fixedLength;
+  final List<WasmComponentValueType> types;
+  final List<String> labels;
+  final WasmComponentValueType? okType;
+  final WasmComponentValueType? errorType;
+  final int? typeIndex;
+}
+
+final class WasmComponentLabeledValueType {
+  const WasmComponentLabeledValueType({
+    required this.label,
+    required this.type,
+  });
+
+  final String label;
+  final WasmComponentValueType type;
+}
+
+final class WasmComponentVariantCase {
+  const WasmComponentVariantCase({required this.label, this.type});
+
+  final String label;
+  final WasmComponentValueType? type;
+}
+
+final class WasmComponentFunctionType {
+  const WasmComponentFunctionType({
+    required this.params,
+    this.result,
+    this.isAsync = false,
+  });
+
+  final List<WasmComponentLabeledValueType> params;
+  final WasmComponentValueType? result;
+  final bool isAsync;
+}
+
+final class WasmComponentComponentType {
+  const WasmComponentComponentType({required this.declarations});
+
+  final List<WasmComponentTypeDeclaration> declarations;
+}
+
+final class WasmComponentInstanceType {
+  const WasmComponentInstanceType({required this.declarations});
+
+  final List<WasmComponentTypeDeclaration> declarations;
+}
+
+final class WasmComponentResourceType {
+  const WasmComponentResourceType({
+    required this.representationTypeCode,
+    this.destructorFunctionIndex,
+    this.callbackFunctionIndex,
+    this.isAsync = false,
+  });
+
+  final int representationTypeCode;
+  final int? destructorFunctionIndex;
+  final int? callbackFunctionIndex;
+  final bool isAsync;
+}
+
+enum WasmComponentTypeDeclarationKind { coreType, type, alias, import, export }
+
+final class WasmComponentTypeDeclaration {
+  const WasmComponentTypeDeclaration({
+    required this.kind,
+    this.coreType,
+    this.type,
+    this.alias,
+    this.import,
+    this.export,
+  });
+
+  final WasmComponentTypeDeclarationKind kind;
+  final WasmComponentCoreType? coreType;
+  final WasmComponentTypeDefinition? type;
+  final WasmComponentAlias? alias;
+  final WasmComponentImport? import;
+  final WasmComponentTypeExport? export;
+}
+
+final class WasmComponentTypeExport {
+  const WasmComponentTypeExport({
+    required this.name,
+    required this.descriptor,
+    this.versionSuffix,
+  });
+
+  final String name;
+  final String? versionSuffix;
+  final WasmComponentExternDescriptor descriptor;
+}
+
+enum WasmComponentCoreTypeKind {
+  function,
+  struct,
+  array,
+  recursive,
+  subtype,
+  module,
+}
+
+final class WasmComponentCoreType {
+  const WasmComponentCoreType({
+    required this.kind,
+    this.types = const <WasmComponentCoreType>[],
+    this.declarations = const <WasmComponentCoreTypeDeclaration>[],
+    this.superTypeIndices = const <int>[],
+  });
+
+  final WasmComponentCoreTypeKind kind;
+  final List<WasmComponentCoreType> types;
+  final List<WasmComponentCoreTypeDeclaration> declarations;
+  final List<int> superTypeIndices;
+}
+
+enum WasmComponentCoreTypeDeclarationKind { import, type, alias, export }
+
+final class WasmComponentCoreTypeDeclaration {
+  const WasmComponentCoreTypeDeclaration({
+    required this.kind,
+    this.module,
+    this.name,
+    this.coreType,
+    this.descriptor,
+    this.alias,
+  });
+
+  final WasmComponentCoreTypeDeclarationKind kind;
+  final String? module;
+  final String? name;
+  final WasmComponentCoreType? coreType;
+  final WasmComponentCoreExternDescriptor? descriptor;
+  final WasmComponentAlias? alias;
+}
+
+final class WasmComponentCoreExternDescriptor {
+  const WasmComponentCoreExternDescriptor({
+    required this.kind,
+    this.typeIndex,
+    this.limits,
+    this.mutable,
+  });
+
+  final WasmComponentCoreSortKind kind;
+  final int? typeIndex;
+  final WasmLimits? limits;
+  final bool? mutable;
+}
+
 final class WasmComponent {
   const WasmComponent({
     required this.sections,
@@ -408,6 +623,7 @@ final class WasmComponent {
     required this.aliases,
     required this.starts,
     required this.canonicalDefinitions,
+    required this.typeDefinitions,
   });
 
   final List<WasmComponentSection> sections;
@@ -420,6 +636,7 @@ final class WasmComponent {
   final List<WasmComponentAlias> aliases;
   final List<WasmComponentStart> starts;
   final List<WasmComponentCanonicalDefinition> canonicalDefinitions;
+  final List<WasmComponentTypeDefinition> typeDefinitions;
 
   static bool hasComponentPreamble(List<int> bytes) {
     return bytes.length >= 8 &&
@@ -472,6 +689,7 @@ final class WasmComponent {
     final aliases = <WasmComponentAlias>[];
     final starts = <WasmComponentStart>[];
     final canonicalDefinitions = <WasmComponentCanonicalDefinition>[];
+    final typeDefinitions = <WasmComponentTypeDefinition>[];
     while (!reader.isEOF) {
       final sectionOffset = reader.offset;
       final sectionId = reader.readByte();
@@ -504,6 +722,8 @@ final class WasmComponent {
           instances.addAll(_decodeInstances(payload));
         case _aliasSectionId:
           aliases.addAll(_decodeAliases(payload));
+        case _typeSectionId:
+          typeDefinitions.addAll(_decodeTypeDefinitions(payload));
         case _canonicalSectionId:
           canonicalDefinitions.addAll(_decodeCanonicalDefinitions(payload));
         case _startSectionId:
@@ -526,6 +746,7 @@ final class WasmComponent {
       aliases: List.unmodifiable(aliases),
       starts: List.unmodifiable(starts),
       canonicalDefinitions: List.unmodifiable(canonicalDefinitions),
+      typeDefinitions: List.unmodifiable(typeDefinitions),
     );
   }
 
@@ -544,6 +765,7 @@ const int _coreModuleSectionId = 1;
 const int _coreInstanceSectionId = 2;
 const int _instanceSectionId = 5;
 const int _aliasSectionId = 6;
+const int _typeSectionId = 7;
 const int _canonicalSectionId = 8;
 const int _startSectionId = 9;
 
@@ -691,6 +913,724 @@ WasmComponentStart _decodeStart(Uint8List payload) {
     arguments: List.unmodifiable(arguments),
     resultCount: resultCount,
   );
+}
+
+List<WasmComponentTypeDefinition> _decodeTypeDefinitions(Uint8List payload) {
+  final reader = ByteReader(payload);
+  final count = reader.readVarUint32();
+  final types = <WasmComponentTypeDefinition>[];
+  for (var i = 0; i < count; i++) {
+    types.add(_readComponentTypeDefinition(reader));
+  }
+  reader.expectEof();
+  return types;
+}
+
+WasmComponentTypeDefinition _readComponentTypeDefinition(ByteReader reader) {
+  final lead = reader.readByte();
+  switch (lead) {
+    case 0x40:
+      return WasmComponentTypeDefinition(
+        kind: WasmComponentTypeKind.function,
+        function: _readComponentFunctionType(reader),
+      );
+    case 0x43:
+      return WasmComponentTypeDefinition(
+        kind: WasmComponentTypeKind.function,
+        function: _readComponentFunctionType(reader, isAsync: true),
+      );
+    case 0x41:
+      return WasmComponentTypeDefinition(
+        kind: WasmComponentTypeKind.component,
+        component: _readComponentType(reader),
+      );
+    case 0x42:
+      return WasmComponentTypeDefinition(
+        kind: WasmComponentTypeKind.instance,
+        instance: _readInstanceType(reader),
+      );
+    case 0x3f:
+    case 0x3e:
+      return WasmComponentTypeDefinition(
+        kind: WasmComponentTypeKind.resource,
+        resource: _readResourceType(reader, lead),
+      );
+    default:
+      return WasmComponentTypeDefinition(
+        kind: WasmComponentTypeKind.definedValue,
+        definedValue: _readDefinedValueTypeWithLead(reader, lead),
+      );
+  }
+}
+
+WasmComponentDefinedValueType _readDefinedValueTypeWithLead(
+  ByteReader reader,
+  int lead,
+) {
+  final primitive = _primitiveValueTypeForByte(lead);
+  if (primitive != null) {
+    return WasmComponentDefinedValueType(
+      kind: WasmComponentDefinedValueTypeKind.primitive,
+      primitive: primitive,
+    );
+  }
+
+  switch (lead) {
+    case 0x72:
+      final fieldCount = reader.readVarUint32();
+      final fields = <WasmComponentLabeledValueType>[];
+      for (var i = 0; i < fieldCount; i++) {
+        fields.add(_readLabelValueType(reader));
+      }
+      return WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.record,
+        fields: List.unmodifiable(fields),
+      );
+    case 0x71:
+      final caseCount = reader.readVarUint32();
+      final cases = <WasmComponentVariantCase>[];
+      for (var i = 0; i < caseCount; i++) {
+        cases.add(_readVariantCase(reader));
+      }
+      return WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.variant,
+        cases: List.unmodifiable(cases),
+      );
+    case 0x70:
+      return WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.list,
+        elementType: _readComponentValueType(reader),
+      );
+    case 0x67:
+      return WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.fixedList,
+        elementType: _readComponentValueType(reader),
+        fixedLength: reader.readVarUint32(),
+      );
+    case 0x6f:
+      return WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.tuple,
+        types: _readComponentValueTypeVector(reader),
+      );
+    case 0x6e:
+      return WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.flags,
+        labels: _readComponentLabels(reader),
+      );
+    case 0x6d:
+      return WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.enumeration,
+        labels: _readComponentLabels(reader),
+      );
+    case 0x6b:
+      return WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.option,
+        elementType: _readComponentValueType(reader),
+      );
+    case 0x6a:
+      return WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.result,
+        okType: _readOptionalComponentValueType(reader),
+        errorType: _readOptionalComponentValueType(reader),
+      );
+    case 0x69:
+      return WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.own,
+        typeIndex: reader.readVarUint32(),
+      );
+    case 0x68:
+      return WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.borrow,
+        typeIndex: reader.readVarUint32(),
+      );
+    case 0x66:
+      return WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.stream,
+        elementType: _readOptionalComponentValueType(reader),
+      );
+    case 0x65:
+      return WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.future,
+        elementType: _readOptionalComponentValueType(reader),
+      );
+    default:
+      throw FormatException(
+        'Unsupported Wasm component defined value type: 0x${lead.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentLabeledValueType _readLabelValueType(ByteReader reader) {
+  return WasmComponentLabeledValueType(
+    label: reader.readName(),
+    type: _readComponentValueType(reader),
+  );
+}
+
+WasmComponentVariantCase _readVariantCase(ByteReader reader) {
+  final label = reader.readName();
+  final type = _readOptionalComponentValueType(reader);
+  final reserved = reader.readByte();
+  if (reserved != 0x00) {
+    throw FormatException(
+      'Unsupported Wasm component variant case reserved byte: 0x${reserved.toRadixString(16)}.',
+    );
+  }
+  return WasmComponentVariantCase(label: label, type: type);
+}
+
+List<WasmComponentValueType> _readComponentValueTypeVector(ByteReader reader) {
+  final count = reader.readVarUint32();
+  final types = <WasmComponentValueType>[];
+  for (var i = 0; i < count; i++) {
+    types.add(_readComponentValueType(reader));
+  }
+  return List.unmodifiable(types);
+}
+
+List<String> _readComponentLabels(ByteReader reader) {
+  final count = reader.readVarUint32();
+  final labels = <String>[];
+  for (var i = 0; i < count; i++) {
+    labels.add(reader.readName());
+  }
+  return List.unmodifiable(labels);
+}
+
+WasmComponentValueType? _readOptionalComponentValueType(ByteReader reader) {
+  final tag = reader.readByte();
+  switch (tag) {
+    case 0x00:
+      return null;
+    case 0x01:
+      return _readComponentValueType(reader);
+    default:
+      throw FormatException(
+        'Unsupported Wasm component optional value type tag: 0x${tag.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentResourceType _readResourceType(ByteReader reader, int lead) {
+  final rep = reader.readByte();
+  if (lead == 0x3f) {
+    return WasmComponentResourceType(
+      representationTypeCode: rep,
+      destructorFunctionIndex: _readOptionalComponentIndex(reader),
+    );
+  }
+  return WasmComponentResourceType(
+    representationTypeCode: rep,
+    isAsync: true,
+    destructorFunctionIndex: reader.readVarUint32(),
+    callbackFunctionIndex: _readOptionalComponentIndex(reader),
+  );
+}
+
+int? _readOptionalComponentIndex(ByteReader reader) {
+  final tag = reader.readByte();
+  switch (tag) {
+    case 0x00:
+      return null;
+    case 0x01:
+      return reader.readVarUint32();
+    default:
+      throw FormatException(
+        'Unsupported Wasm component optional index tag: 0x${tag.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentFunctionType _readComponentFunctionType(
+  ByteReader reader, {
+  bool isAsync = false,
+}) {
+  final paramCount = reader.readVarUint32();
+  final params = <WasmComponentLabeledValueType>[];
+  for (var i = 0; i < paramCount; i++) {
+    params.add(_readLabelValueType(reader));
+  }
+  return WasmComponentFunctionType(
+    params: List.unmodifiable(params),
+    result: _readComponentFunctionResult(reader),
+    isAsync: isAsync,
+  );
+}
+
+WasmComponentValueType? _readComponentFunctionResult(ByteReader reader) {
+  final tag = reader.readByte();
+  switch (tag) {
+    case 0x00:
+      return _readComponentValueType(reader);
+    case 0x01:
+      final empty = reader.readByte();
+      if (empty != 0x00) {
+        throw FormatException(
+          'Unsupported Wasm component function result payload: 0x${empty.toRadixString(16)}.',
+        );
+      }
+      return null;
+    default:
+      throw FormatException(
+        'Unsupported Wasm component function result tag: 0x${tag.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentComponentType _readComponentType(ByteReader reader) {
+  final declarationCount = reader.readVarUint32();
+  final declarations = <WasmComponentTypeDeclaration>[];
+  for (var i = 0; i < declarationCount; i++) {
+    declarations.add(_readComponentTypeDeclaration(reader));
+  }
+  return WasmComponentComponentType(
+    declarations: List.unmodifiable(declarations),
+  );
+}
+
+WasmComponentInstanceType _readInstanceType(ByteReader reader) {
+  final declarationCount = reader.readVarUint32();
+  final declarations = <WasmComponentTypeDeclaration>[];
+  for (var i = 0; i < declarationCount; i++) {
+    declarations.add(_readInstanceTypeDeclaration(reader));
+  }
+  return WasmComponentInstanceType(
+    declarations: List.unmodifiable(declarations),
+  );
+}
+
+WasmComponentTypeDeclaration _readComponentTypeDeclaration(ByteReader reader) {
+  final kind = reader.readByte();
+  if (kind == 0x03) {
+    return WasmComponentTypeDeclaration(
+      kind: WasmComponentTypeDeclarationKind.import,
+      import: _readExternWithName(
+        reader,
+        'type import',
+        (name, versionSuffix) => WasmComponentImport(
+          name: name,
+          versionSuffix: versionSuffix,
+          descriptor: _readExternDescriptor(reader),
+        ),
+      ),
+    );
+  }
+  return _readInstanceTypeDeclarationWithLead(reader, kind);
+}
+
+WasmComponentTypeDeclaration _readInstanceTypeDeclaration(ByteReader reader) {
+  return _readInstanceTypeDeclarationWithLead(reader, reader.readByte());
+}
+
+WasmComponentTypeDeclaration _readInstanceTypeDeclarationWithLead(
+  ByteReader reader,
+  int kind,
+) {
+  switch (kind) {
+    case 0x00:
+      return WasmComponentTypeDeclaration(
+        kind: WasmComponentTypeDeclarationKind.coreType,
+        coreType: _readComponentCoreType(reader),
+      );
+    case 0x01:
+      return WasmComponentTypeDeclaration(
+        kind: WasmComponentTypeDeclarationKind.type,
+        type: _readComponentTypeDefinition(reader),
+      );
+    case 0x02:
+      return WasmComponentTypeDeclaration(
+        kind: WasmComponentTypeDeclarationKind.alias,
+        alias: _readAlias(reader),
+      );
+    case 0x04:
+      return WasmComponentTypeDeclaration(
+        kind: WasmComponentTypeDeclarationKind.export,
+        export: _readComponentTypeExport(reader),
+      );
+    default:
+      throw FormatException(
+        'Unsupported Wasm component type declaration: 0x${kind.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentTypeExport _readComponentTypeExport(ByteReader reader) {
+  return _readExternWithName(
+    reader,
+    'type export',
+    (name, versionSuffix) => WasmComponentTypeExport(
+      name: name,
+      versionSuffix: versionSuffix,
+      descriptor: _readExternDescriptor(reader),
+    ),
+  );
+}
+
+WasmComponentCoreType _readComponentCoreType(ByteReader reader) {
+  final lead = reader.readByte();
+  if (lead == 0x50) {
+    return _readCoreModuleType(reader);
+  }
+  if (lead == 0x00) {
+    final subtype = reader.readByte();
+    if (subtype != 0x50) {
+      throw FormatException(
+        'Unsupported Wasm component prefixed core type: 0x${subtype.toRadixString(16)}.',
+      );
+    }
+    return _readCoreSubtype(reader, subtype);
+  }
+  return _readCoreRecursiveType(reader, lead);
+}
+
+WasmComponentCoreType _readCoreModuleType(ByteReader reader) {
+  final declarationCount = reader.readVarUint32();
+  final declarations = <WasmComponentCoreTypeDeclaration>[];
+  for (var i = 0; i < declarationCount; i++) {
+    declarations.add(_readCoreModuleTypeDeclaration(reader));
+  }
+  return WasmComponentCoreType(
+    kind: WasmComponentCoreTypeKind.module,
+    declarations: List.unmodifiable(declarations),
+  );
+}
+
+WasmComponentCoreTypeDeclaration _readCoreModuleTypeDeclaration(
+  ByteReader reader,
+) {
+  final kind = reader.readByte();
+  switch (kind) {
+    case 0x00:
+      final module = reader.readName();
+      final name = reader.readName();
+      return WasmComponentCoreTypeDeclaration(
+        kind: WasmComponentCoreTypeDeclarationKind.import,
+        module: module,
+        name: name,
+        descriptor: _readCoreExternDescriptor(reader),
+      );
+    case 0x01:
+      return WasmComponentCoreTypeDeclaration(
+        kind: WasmComponentCoreTypeDeclarationKind.type,
+        coreType: _readComponentCoreType(reader),
+      );
+    case 0x02:
+      return WasmComponentCoreTypeDeclaration(
+        kind: WasmComponentCoreTypeDeclarationKind.alias,
+        alias: _readCoreTypeAlias(reader),
+      );
+    case 0x03:
+      final name = reader.readName();
+      return WasmComponentCoreTypeDeclaration(
+        kind: WasmComponentCoreTypeDeclarationKind.export,
+        name: name,
+        descriptor: _readCoreExternDescriptor(reader),
+      );
+    default:
+      throw FormatException(
+        'Unsupported Wasm component core module type declaration: 0x${kind.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentAlias _readCoreTypeAlias(ByteReader reader) {
+  return WasmComponentAlias(
+    sort: WasmComponentSort(
+      kind: WasmComponentSortKind.core,
+      coreKind: _readCoreSortKind(reader),
+    ),
+    target: _readCoreOuterAliasTarget(reader),
+  );
+}
+
+WasmComponentAliasTarget _readCoreOuterAliasTarget(ByteReader reader) {
+  final kind = reader.readByte();
+  if (kind != 0x01) {
+    throw FormatException(
+      'Unsupported Wasm component core alias target: 0x${kind.toRadixString(16)}.',
+    );
+  }
+  return WasmComponentAliasTarget.outer(
+    componentDepth: reader.readVarUint32(),
+    index: reader.readVarUint32(),
+  );
+}
+
+WasmComponentCoreType _readCoreRecursiveType(ByteReader reader, int lead) {
+  if (lead == 0x4e) {
+    final count = reader.readVarUint32();
+    final types = <WasmComponentCoreType>[];
+    for (var i = 0; i < count; i++) {
+      types.add(_readCoreSubtype(reader, reader.readByte()));
+    }
+    return WasmComponentCoreType(
+      kind: WasmComponentCoreTypeKind.recursive,
+      types: List.unmodifiable(types),
+    );
+  }
+  return _readCoreSubtype(reader, lead);
+}
+
+WasmComponentCoreType _readCoreSubtype(ByteReader reader, int lead) {
+  var form = lead;
+  final superTypeIndices = <int>[];
+  while (true) {
+    switch (form) {
+      case 0x50:
+      case 0x4f:
+        final superCount = reader.readVarUint32();
+        for (var i = 0; i < superCount; i++) {
+          superTypeIndices.add(reader.readVarUint32());
+        }
+        form = reader.readByte();
+        continue;
+      case 0x4c:
+      case 0x4d:
+        reader.readVarUint32();
+        form = reader.readByte();
+        continue;
+      default:
+        final composite = _readCoreCompositeType(reader, form);
+        if (superTypeIndices.isEmpty) {
+          return composite;
+        }
+        return WasmComponentCoreType(
+          kind: WasmComponentCoreTypeKind.subtype,
+          types: <WasmComponentCoreType>[composite],
+          superTypeIndices: List.unmodifiable(superTypeIndices),
+        );
+    }
+  }
+}
+
+WasmComponentCoreType _readCoreCompositeType(ByteReader reader, int form) {
+  switch (form) {
+    case 0x60:
+      _readCoreValueTypeVector(reader);
+      _readCoreValueTypeVector(reader);
+      return const WasmComponentCoreType(
+        kind: WasmComponentCoreTypeKind.function,
+      );
+    case 0x5f:
+      final fieldCount = reader.readVarUint32();
+      for (var i = 0; i < fieldCount; i++) {
+        _readCoreFieldType(reader);
+      }
+      return const WasmComponentCoreType(
+        kind: WasmComponentCoreTypeKind.struct,
+      );
+    case 0x5e:
+      _readCoreFieldType(reader);
+      return const WasmComponentCoreType(kind: WasmComponentCoreTypeKind.array);
+    default:
+      throw FormatException(
+        'Unsupported Wasm component core composite type: 0x${form.toRadixString(16)}.',
+      );
+  }
+}
+
+void _readCoreValueTypeVector(ByteReader reader) {
+  final count = reader.readVarUint32();
+  for (var i = 0; i < count; i++) {
+    _readCoreValueType(reader);
+  }
+}
+
+void _readCoreFieldType(ByteReader reader) {
+  final lead = reader.readByte();
+  if (lead != 0x78 && lead != 0x77) {
+    _readCoreValueTypeWithLead(reader, lead);
+  }
+  final mutability = reader.readByte();
+  if (mutability != 0x00 && mutability != 0x01) {
+    throw FormatException(
+      'Unsupported Wasm component core field mutability: 0x${mutability.toRadixString(16)}.',
+    );
+  }
+}
+
+WasmComponentCoreExternDescriptor _readCoreExternDescriptor(ByteReader reader) {
+  final kind = reader.readByte();
+  switch (kind) {
+    case 0x00:
+    case 0x20:
+      return WasmComponentCoreExternDescriptor(
+        kind: WasmComponentCoreSortKind.function,
+        typeIndex: reader.readVarUint32(),
+      );
+    case 0x01:
+      _readCoreTableType(reader);
+      return const WasmComponentCoreExternDescriptor(
+        kind: WasmComponentCoreSortKind.table,
+      );
+    case 0x02:
+      final limits = _readCoreMemoryType(reader);
+      return WasmComponentCoreExternDescriptor(
+        kind: WasmComponentCoreSortKind.memory,
+        limits: limits,
+      );
+    case 0x03:
+      _readCoreGlobalType(reader);
+      return const WasmComponentCoreExternDescriptor(
+        kind: WasmComponentCoreSortKind.global,
+      );
+    case 0x04:
+      _readCoreTagType(reader);
+      return const WasmComponentCoreExternDescriptor(
+        kind: WasmComponentCoreSortKind.tag,
+      );
+    default:
+      throw FormatException(
+        'Unsupported Wasm component core extern descriptor: 0x${kind.toRadixString(16)}.',
+      );
+  }
+}
+
+void _readCoreTableType(ByteReader reader) {
+  _readCoreReferenceType(reader);
+  _readCoreLimits(reader);
+}
+
+WasmLimits _readCoreMemoryType(ByteReader reader) => _readCoreLimits(reader);
+
+void _readCoreGlobalType(ByteReader reader) {
+  _readCoreValueType(reader);
+  final mutability = reader.readByte();
+  if (mutability != 0x00 && mutability != 0x01) {
+    throw FormatException(
+      'Unsupported Wasm component core global mutability: 0x${mutability.toRadixString(16)}.',
+    );
+  }
+}
+
+void _readCoreTagType(ByteReader reader) {
+  final attribute = reader.readByte();
+  if (attribute != 0x00) {
+    throw FormatException(
+      'Unsupported Wasm component core tag attribute: 0x${attribute.toRadixString(16)}.',
+    );
+  }
+  reader.readVarUint32();
+}
+
+WasmLimits _readCoreLimits(ByteReader reader) {
+  final flags = reader.readByte();
+  if ((flags & ~0x0f) != 0) {
+    throw FormatException(
+      'Unsupported Wasm component core limits flags: 0x${flags.toRadixString(16)}.',
+    );
+  }
+  final hasMax = (flags & 0x01) != 0;
+  final shared = (flags & 0x02) != 0;
+  final memory64 = (flags & 0x04) != 0;
+  final hasPageSize = (flags & 0x08) != 0;
+  final min = memory64 ? reader.readVarUint64() : reader.readVarUint32();
+  final max = hasMax
+      ? (memory64 ? reader.readVarUint64() : reader.readVarUint32())
+      : null;
+  return WasmLimits(
+    min: min,
+    max: max,
+    shared: shared,
+    memory64: memory64,
+    pageSizeLog2: hasPageSize ? reader.readVarUint32() : 16,
+  );
+}
+
+void _readCoreValueType(ByteReader reader) {
+  _readCoreValueTypeWithLead(reader, reader.readByte());
+}
+
+void _readCoreValueTypeWithLead(ByteReader reader, int lead) {
+  switch (lead) {
+    case 0x7f:
+    case 0x7e:
+    case 0x7d:
+    case 0x7c:
+    case 0x7b:
+      return;
+    case 0x63:
+    case 0x64:
+    case 0x62:
+    case 0x61:
+      _readCoreHeapType(reader);
+      return;
+    default:
+      if (_isCoreLegacyHeapType(lead)) {
+        return;
+      }
+      if (lead <= 0x60 || lead >= 0x80) {
+        _readSignedLebContinuation(reader, lead);
+        return;
+      }
+      throw FormatException(
+        'Unsupported Wasm component core value type: 0x${lead.toRadixString(16)}.',
+      );
+  }
+}
+
+void _readCoreReferenceType(ByteReader reader) {
+  final lead = reader.readByte();
+  if (_isCoreLegacyHeapType(lead)) {
+    return;
+  }
+  if (lead == 0x63 || lead == 0x64 || lead == 0x62 || lead == 0x61) {
+    _readCoreHeapType(reader);
+    return;
+  }
+  if (lead <= 0x60 || lead >= 0x80) {
+    _readSignedLebContinuation(reader, lead);
+    return;
+  }
+  throw FormatException(
+    'Unsupported Wasm component core reference type: 0x${lead.toRadixString(16)}.',
+  );
+}
+
+void _readCoreHeapType(ByteReader reader) {
+  var lead = reader.readByte();
+  if (lead == 0x62 || lead == 0x61) {
+    lead = reader.readByte();
+  }
+  if (_isCoreLegacyHeapType(lead)) {
+    return;
+  }
+  _readSignedLebContinuation(reader, lead);
+}
+
+bool _isCoreLegacyHeapType(int code) {
+  return switch (code & 0xff) {
+    0x65 ||
+    0x66 ||
+    0x67 ||
+    0x68 ||
+    0x69 ||
+    0x6a ||
+    0x6b ||
+    0x6c ||
+    0x6d ||
+    0x6e ||
+    0x6f ||
+    0x70 ||
+    0x71 ||
+    0x72 ||
+    0x73 ||
+    0x74 ||
+    0x75 => true,
+    _ => false,
+  };
+}
+
+void _readSignedLebContinuation(ByteReader reader, int firstByte) {
+  var byte = firstByte;
+  var count = 1;
+  while ((byte & 0x80) != 0) {
+    if (count >= 5) {
+      throw const FormatException('Invalid signed LEB encoding.');
+    }
+    byte = reader.readByte();
+    count++;
+  }
 }
 
 List<WasmComponentCanonicalDefinition> _decodeCanonicalDefinitions(

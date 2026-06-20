@@ -272,6 +272,68 @@ void main() {
       expect(lower.options, isEmpty);
     });
 
+    test('decodes component type definitions', () {
+      final component = WasmComponent.decode(_typeDefinitionsComponentBytes());
+
+      expect(component.typeDefinitions, hasLength(5));
+      final tuple = component.typeDefinitions[0].definedValue!;
+      expect(tuple.kind, WasmComponentDefinedValueTypeKind.tuple);
+      expect(tuple.types.map((type) => type.primitive), [
+        WasmComponentPrimitiveValueType.u8,
+        WasmComponentPrimitiveValueType.u32,
+      ]);
+
+      final function = component.typeDefinitions[1].function!;
+      expect(function.params.single.label, 'x');
+      expect(
+        function.params.single.type.primitive,
+        WasmComponentPrimitiveValueType.string,
+      );
+      expect(function.result!.typeIndex, 0);
+
+      final record = component.typeDefinitions[2].definedValue!;
+      expect(record.kind, WasmComponentDefinedValueTypeKind.record);
+      expect(record.fields.map((field) => field.label), ['a', 'b']);
+
+      final variant = component.typeDefinitions[3].definedValue!;
+      expect(variant.kind, WasmComponentDefinedValueTypeKind.variant);
+      expect(variant.cases.map((case_) => case_.label), ['a', 'b']);
+
+      final resource = component.typeDefinitions[4].resource!;
+      expect(resource.representationTypeCode, 0x7f);
+      expect(resource.destructorFunctionIndex, isNull);
+    });
+
+    test('decodes component and instance type declarations', () {
+      final component = WasmComponent.decode(
+        _componentInstanceTypesComponentBytes(),
+      );
+
+      expect(component.typeDefinitions, hasLength(2));
+      final instance = component.typeDefinitions.first.instance!;
+      expect(instance.declarations, hasLength(2));
+      expect(
+        instance.declarations.first.kind,
+        WasmComponentTypeDeclarationKind.type,
+      );
+      final instanceExport = instance.declarations.last.export!;
+      expect(instanceExport.name, 'a');
+      expect(instanceExport.descriptor.kind, WasmComponentExternKind.function);
+
+      final componentType = component.typeDefinitions.last.component!;
+      expect(componentType.declarations, hasLength(4));
+      expect(
+        componentType.declarations.first.kind,
+        WasmComponentTypeDeclarationKind.type,
+      );
+      final componentImport = componentType.declarations[1].import!;
+      expect(componentImport.name, 'a');
+      expect(componentImport.descriptor.kind, WasmComponentExternKind.function);
+      final componentExport = componentType.declarations.last.export!;
+      expect(componentExport.name, 'b');
+      expect(componentExport.descriptor.kind, WasmComponentExternKind.function);
+    });
+
     test('decodes component starts', () {
       final component = WasmComponent.decode(_startComponentBytes());
 
@@ -1313,6 +1375,105 @@ Uint8List _canonicalLiftLowerComponentBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x66,
 ]);
+
+Uint8List _typeDefinitionsComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x22,
+  0x05,
+  0x6f,
+  0x02,
+  0x7d,
+  0x79,
+  0x40,
+  0x01,
+  0x01,
+  0x78,
+  0x73,
+  0x00,
+  0x00,
+  0x72,
+  0x02,
+  0x01,
+  0x61,
+  0x73,
+  0x01,
+  0x62,
+  0x79,
+  0x71,
+  0x02,
+  0x01,
+  0x61,
+  0x01,
+  0x73,
+  0x00,
+  0x01,
+  0x62,
+  0x00,
+  0x00,
+  0x3f,
+  0x7f,
+  0x00,
+]);
+
+Uint8List _componentInstanceTypesComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x26,
+      0x02,
+      0x42,
+      0x02,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x04,
+      0x00,
+      0x01,
+      0x61,
+      0x01,
+      0x00,
+      0x41,
+      0x04,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x03,
+      0x00,
+      0x01,
+      0x61,
+      0x01,
+      0x00,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x04,
+      0x00,
+      0x01,
+      0x62,
+      0x01,
+      0x01,
+    ]);
 
 Uint8List _startComponentBytes() => Uint8List.fromList(const <int>[
   0x00,

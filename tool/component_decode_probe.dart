@@ -433,6 +433,9 @@ Set<String> _collectComponentBinaryFilenames({
       continue;
     }
     final command = rawCommand.cast<Object?, Object?>();
+    if (command['type'] == 'assert_malformed') {
+      continue;
+    }
     final names = <String>{};
     final filename = command['filename'];
     if (filename is String && filename.isNotEmpty) {
