@@ -381,6 +381,15 @@ void main() {
       );
     });
 
+    test('validates local component type declaration value indexes', () {
+      expect(
+        WasmComponent.decode(
+          _typeDeclarationLocalValueTypeComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
+    });
+
     test('decodes component starts', () {
       final component = WasmComponent.decode(_startComponentBytes());
 
@@ -3098,6 +3107,30 @@ Uint8List _typeDeclarationExportBeforeTypeComponentBytes() =>
       0x40,
       0x00,
       0x01,
+      0x00,
+    ]);
+
+Uint8List _typeDeclarationLocalValueTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x0a,
+      0x01,
+      0x42,
+      0x02,
+      0x01,
+      0x73,
+      0x01,
+      0x40,
+      0x00,
+      0x00,
       0x00,
     ]);
 

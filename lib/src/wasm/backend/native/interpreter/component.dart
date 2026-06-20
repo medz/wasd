@@ -1140,25 +1140,39 @@ final class _WasmComponentValidationContext {
 
   void validateComponentTypeDefinition(
     WasmComponentTypeDefinition type,
-    String path,
-  ) {
+    String path, {
+    List<WasmComponentTypeDefinition>? scopedTypeDefinitions,
+  }) {
     final definedValue = type.definedValue;
     if (type.kind == WasmComponentTypeKind.definedValue &&
         definedValue != null) {
-      validateDefinedValueType(definedValue, path);
+      validateDefinedValueType(
+        definedValue,
+        path,
+        scopedTypeDefinitions: scopedTypeDefinitions,
+      );
       return;
     }
 
     final function = type.function;
     if (type.kind == WasmComponentTypeKind.function && function != null) {
       for (var i = 0; i < function.params.length; i++) {
-        validateComponentValueType(function.params[i].type, '$path.params[$i]');
+        validateComponentValueType(
+          function.params[i].type,
+          '$path.params[$i]',
+          scopedTypeDefinitions: scopedTypeDefinitions,
+        );
       }
-      validateComponentValueType(function.result, '$path.result');
+      validateComponentValueType(
+        function.result,
+        '$path.result',
+        scopedTypeDefinitions: scopedTypeDefinitions,
+      );
       validateValueTypeDoesNotContainBorrow(
         function.result,
         '$path.result',
         'function result type',
+        scopedTypeDefinitions: scopedTypeDefinitions,
       );
     }
 
@@ -1265,8 +1279,9 @@ final class _WasmComponentValidationContext {
 
   void validateDefinedValueType(
     WasmComponentDefinedValueType type,
-    String path,
-  ) {
+    String path, {
+    List<WasmComponentTypeDefinition>? scopedTypeDefinitions,
+  }) {
     switch (type.kind) {
       case WasmComponentDefinedValueTypeKind.record:
         _validateUniqueLabels(
@@ -1276,7 +1291,11 @@ final class _WasmComponentValidationContext {
           errors,
         );
         for (var i = 0; i < type.fields.length; i++) {
-          validateComponentValueType(type.fields[i].type, '$path.fields[$i]');
+          validateComponentValueType(
+            type.fields[i].type,
+            '$path.fields[$i]',
+            scopedTypeDefinitions: scopedTypeDefinitions,
+          );
         }
       case WasmComponentDefinedValueTypeKind.variant:
         _validateUniqueLabels(
@@ -1286,45 +1305,87 @@ final class _WasmComponentValidationContext {
           errors,
         );
         for (var i = 0; i < type.cases.length; i++) {
-          validateComponentValueType(type.cases[i].type, '$path.cases[$i]');
+          validateComponentValueType(
+            type.cases[i].type,
+            '$path.cases[$i]',
+            scopedTypeDefinitions: scopedTypeDefinitions,
+          );
         }
       case WasmComponentDefinedValueTypeKind.list:
-        validateComponentValueType(type.elementType, '$path.element');
+        validateComponentValueType(
+          type.elementType,
+          '$path.element',
+          scopedTypeDefinitions: scopedTypeDefinitions,
+        );
       case WasmComponentDefinedValueTypeKind.fixedList:
-        validateComponentValueType(type.elementType, '$path.element');
+        validateComponentValueType(
+          type.elementType,
+          '$path.element',
+          scopedTypeDefinitions: scopedTypeDefinitions,
+        );
       case WasmComponentDefinedValueTypeKind.tuple:
         for (var i = 0; i < type.types.length; i++) {
-          validateComponentValueType(type.types[i], '$path.items[$i]');
+          validateComponentValueType(
+            type.types[i],
+            '$path.items[$i]',
+            scopedTypeDefinitions: scopedTypeDefinitions,
+          );
         }
       case WasmComponentDefinedValueTypeKind.flags:
         _validateUniqueLabels(type.labels, '$path.flags', 'flags', errors);
       case WasmComponentDefinedValueTypeKind.enumeration:
         _validateUniqueLabels(type.labels, '$path.enum', 'enum', errors);
       case WasmComponentDefinedValueTypeKind.option:
-        validateComponentValueType(type.elementType, '$path.some');
+        validateComponentValueType(
+          type.elementType,
+          '$path.some',
+          scopedTypeDefinitions: scopedTypeDefinitions,
+        );
       case WasmComponentDefinedValueTypeKind.result:
-        validateComponentValueType(type.okType, '$path.ok');
-        validateComponentValueType(type.errorType, '$path.error');
+        validateComponentValueType(
+          type.okType,
+          '$path.ok',
+          scopedTypeDefinitions: scopedTypeDefinitions,
+        );
+        validateComponentValueType(
+          type.errorType,
+          '$path.error',
+          scopedTypeDefinitions: scopedTypeDefinitions,
+        );
       case WasmComponentDefinedValueTypeKind.stream:
-        validateComponentValueType(type.elementType, '$path.stream');
+        validateComponentValueType(
+          type.elementType,
+          '$path.stream',
+          scopedTypeDefinitions: scopedTypeDefinitions,
+        );
         validateStreamElementType(type.elementType, '$path.stream');
         validateValueTypeDoesNotContainBorrow(
           type.elementType,
           '$path.stream',
           'stream element type',
+          scopedTypeDefinitions: scopedTypeDefinitions,
         );
       case WasmComponentDefinedValueTypeKind.future:
-        validateComponentValueType(type.elementType, '$path.future');
+        validateComponentValueType(
+          type.elementType,
+          '$path.future',
+          scopedTypeDefinitions: scopedTypeDefinitions,
+        );
         validateValueTypeDoesNotContainBorrow(
           type.elementType,
           '$path.future',
           'future element type',
+          scopedTypeDefinitions: scopedTypeDefinitions,
         );
       case WasmComponentDefinedValueTypeKind.primitive:
         break;
       case WasmComponentDefinedValueTypeKind.own:
       case WasmComponentDefinedValueTypeKind.borrow:
-        validateComponentResourceTypeIndex(type.typeIndex, '$path.resource');
+        validateComponentResourceTypeIndex(
+          type.typeIndex,
+          '$path.resource',
+          scopedTypeDefinitions: scopedTypeDefinitions,
+        );
     }
   }
 
@@ -1332,7 +1393,7 @@ final class _WasmComponentValidationContext {
     List<WasmComponentTypeDeclaration> declarations,
     String path,
   ) {
-    final localTypeKinds = <WasmComponentTypeKind>[];
+    final localTypeDefinitions = <WasmComponentTypeDefinition>[];
     for (var i = 0; i < declarations.length; i++) {
       final declaration = declarations[i];
       switch (declaration.kind) {
@@ -1341,19 +1402,23 @@ final class _WasmComponentValidationContext {
           if (nestedType == null) {
             break;
           }
-          validateComponentTypeDefinition(nestedType, '$path.declarations[$i]');
-          localTypeKinds.add(nestedType.kind);
+          validateComponentTypeDefinition(
+            nestedType,
+            '$path.declarations[$i]',
+            scopedTypeDefinitions: localTypeDefinitions,
+          );
+          localTypeDefinitions.add(nestedType);
         case WasmComponentTypeDeclarationKind.import:
           validateTypeDeclarationExternDescriptor(
             declaration.import?.descriptor,
             '$path.declarations[$i].import.descriptor',
-            localTypeKinds,
+            localTypeDefinitions,
           );
         case WasmComponentTypeDeclarationKind.export:
           validateTypeDeclarationExternDescriptor(
             declaration.export?.descriptor,
             '$path.declarations[$i].export.descriptor',
-            localTypeKinds,
+            localTypeDefinitions,
           );
         case WasmComponentTypeDeclarationKind.coreType:
         case WasmComponentTypeDeclarationKind.alias:
@@ -1365,7 +1430,7 @@ final class _WasmComponentValidationContext {
   void validateTypeDeclarationExternDescriptor(
     WasmComponentExternDescriptor? descriptor,
     String path,
-    List<WasmComponentTypeKind> localTypeKinds,
+    List<WasmComponentTypeDefinition> localTypeDefinitions,
   ) {
     if (descriptor == null) {
       return;
@@ -1376,7 +1441,7 @@ final class _WasmComponentValidationContext {
         validateLocalComponentTypeIndex(
           descriptor.typeIndex,
           path,
-          localTypeKinds,
+          localTypeDefinitions,
           WasmComponentTypeKind.function,
           indexDescription: 'function type',
           targetDescription: 'a function type',
@@ -1385,7 +1450,7 @@ final class _WasmComponentValidationContext {
         validateLocalComponentTypeIndex(
           descriptor.typeIndex,
           path,
-          localTypeKinds,
+          localTypeDefinitions,
           WasmComponentTypeKind.component,
           indexDescription: 'component type',
           targetDescription: 'a component type',
@@ -1394,7 +1459,7 @@ final class _WasmComponentValidationContext {
         validateLocalComponentTypeIndex(
           descriptor.typeIndex,
           path,
-          localTypeKinds,
+          localTypeDefinitions,
           WasmComponentTypeKind.instance,
           indexDescription: 'instance type',
           targetDescription: 'an instance type',
@@ -1409,14 +1474,14 @@ final class _WasmComponentValidationContext {
   void validateLocalComponentTypeIndex(
     int? typeIndex,
     String path,
-    List<WasmComponentTypeKind> localTypeKinds,
+    List<WasmComponentTypeDefinition> localTypeDefinitions,
     WasmComponentTypeKind expectedKind, {
     required String indexDescription,
     required String targetDescription,
   }) {
     if (typeIndex == null ||
         typeIndex < 0 ||
-        typeIndex >= localTypeKinds.length) {
+        typeIndex >= localTypeDefinitions.length) {
       errors.add(
         WasmComponentValidationError(
           path: path,
@@ -1427,7 +1492,10 @@ final class _WasmComponentValidationContext {
       return;
     }
 
-    if (localTypeKinds[typeIndex] != expectedKind) {
+    if (!componentTypeDefinitionMatches(
+      localTypeDefinitions[typeIndex],
+      expectedKind,
+    )) {
       errors.add(
         WasmComponentValidationError(
           path: path,
@@ -1441,9 +1509,13 @@ final class _WasmComponentValidationContext {
   void validateValueTypeDoesNotContainBorrow(
     WasmComponentValueType? valueType,
     String path,
-    String description,
-  ) {
-    if (valueTypeContainsBorrow(valueType)) {
+    String description, {
+    List<WasmComponentTypeDefinition>? scopedTypeDefinitions,
+  }) {
+    if (valueTypeContainsBorrow(
+      valueType,
+      scopedTypeDefinitions: scopedTypeDefinitions,
+    )) {
       errors.add(
         WasmComponentValidationError(
           path: path,
@@ -1453,90 +1525,172 @@ final class _WasmComponentValidationContext {
     }
   }
 
-  bool valueTypeContainsBorrow(WasmComponentValueType? valueType) {
+  bool valueTypeContainsBorrow(
+    WasmComponentValueType? valueType, {
+    List<WasmComponentTypeDefinition>? scopedTypeDefinitions,
+  }) {
+    if (scopedTypeDefinitions != null) {
+      return valueTypeContainsBorrowInDefinitions(
+        valueType,
+        scopedTypeDefinitions,
+        <int, bool>{},
+        <int>{},
+      );
+    }
+
+    return valueTypeContainsBorrowInDefinitions(
+      valueType,
+      typeDefinitions,
+      _valueTypeContainsBorrowMemo,
+      _valueTypeContainsBorrowVisiting,
+    );
+  }
+
+  bool valueTypeContainsBorrowInDefinitions(
+    WasmComponentValueType? valueType,
+    List<WasmComponentTypeDefinition> definitions,
+    Map<int, bool> memo,
+    Set<int> visiting,
+  ) {
     if (valueType == null ||
         valueType.kind == WasmComponentValueTypeKind.primitive) {
       return false;
     }
 
     final typeIndex = valueType.typeIndex;
-    if (typeIndex == null ||
-        typeIndex < 0 ||
-        typeIndex >= typeDefinitions.length) {
+    if (typeIndex == null || typeIndex < 0 || typeIndex >= definitions.length) {
       return false;
     }
 
-    final cached = _valueTypeContainsBorrowMemo[typeIndex];
+    final cached = memo[typeIndex];
     if (cached != null) {
       return cached;
     }
-    if (!_valueTypeContainsBorrowVisiting.add(typeIndex)) {
+    if (!visiting.add(typeIndex)) {
       return false;
     }
 
-    final definition = typeDefinitions[typeIndex];
+    final definition = definitions[typeIndex];
     final definedValue = definition.definedValue;
-    final contains =
-        definition.kind == WasmComponentTypeKind.definedValue &&
-        definedValue != null &&
-        definedValueTypeContainsBorrow(definedValue);
+    if (definition.kind != WasmComponentTypeKind.definedValue ||
+        definedValue == null) {
+      visiting.remove(typeIndex);
+      memo[typeIndex] = false;
+      return false;
+    }
 
-    _valueTypeContainsBorrowVisiting.remove(typeIndex);
-    _valueTypeContainsBorrowMemo[typeIndex] = contains;
-    return contains;
-  }
-
-  bool definedValueTypeContainsBorrow(WasmComponentDefinedValueType type) {
-    return switch (type.kind) {
+    final contains = switch (definedValue.kind) {
       WasmComponentDefinedValueTypeKind.borrow => true,
-      WasmComponentDefinedValueTypeKind.record => type.fields.any(
-        (field) => valueTypeContainsBorrow(field.type),
+      WasmComponentDefinedValueTypeKind.record => definedValue.fields.any(
+        (field) => valueTypeContainsBorrowInDefinitions(
+          field.type,
+          definitions,
+          memo,
+          visiting,
+        ),
       ),
-      WasmComponentDefinedValueTypeKind.variant => type.cases.any(
-        (case_) => valueTypeContainsBorrow(case_.type),
+      WasmComponentDefinedValueTypeKind.variant => definedValue.cases.any(
+        (case_) => valueTypeContainsBorrowInDefinitions(
+          case_.type,
+          definitions,
+          memo,
+          visiting,
+        ),
       ),
       WasmComponentDefinedValueTypeKind.list ||
       WasmComponentDefinedValueTypeKind.fixedList ||
       WasmComponentDefinedValueTypeKind.option ||
       WasmComponentDefinedValueTypeKind.stream ||
-      WasmComponentDefinedValueTypeKind.future => valueTypeContainsBorrow(
-        type.elementType,
-      ),
-      WasmComponentDefinedValueTypeKind.tuple => type.types.any(
-        valueTypeContainsBorrow,
+      WasmComponentDefinedValueTypeKind.future =>
+        valueTypeContainsBorrowInDefinitions(
+          definedValue.elementType,
+          definitions,
+          memo,
+          visiting,
+        ),
+      WasmComponentDefinedValueTypeKind.tuple => definedValue.types.any(
+        (type) => valueTypeContainsBorrowInDefinitions(
+          type,
+          definitions,
+          memo,
+          visiting,
+        ),
       ),
       WasmComponentDefinedValueTypeKind.result =>
-        valueTypeContainsBorrow(type.okType) ||
-            valueTypeContainsBorrow(type.errorType),
+        valueTypeContainsBorrowInDefinitions(
+              definedValue.okType,
+              definitions,
+              memo,
+              visiting,
+            ) ||
+            valueTypeContainsBorrowInDefinitions(
+              definedValue.errorType,
+              definitions,
+              memo,
+              visiting,
+            ),
       WasmComponentDefinedValueTypeKind.primitive ||
       WasmComponentDefinedValueTypeKind.flags ||
       WasmComponentDefinedValueTypeKind.enumeration ||
       WasmComponentDefinedValueTypeKind.own => false,
     };
+
+    visiting.remove(typeIndex);
+    memo[typeIndex] = contains;
+    return contains;
   }
 
   void validateComponentValueType(
     WasmComponentValueType? valueType,
-    String path,
-  ) {
+    String path, {
+    List<WasmComponentTypeDefinition>? scopedTypeDefinitions,
+  }) {
     if (valueType == null ||
         valueType.kind == WasmComponentValueTypeKind.primitive) {
       return;
     }
 
-    validateComponentTypeIndex(
+    if (scopedTypeDefinitions == null) {
+      validateComponentTypeIndex(
+        valueType.typeIndex,
+        path,
+        WasmComponentTypeKind.definedValue,
+        indexDescription: 'value type',
+        targetDescription: 'a value type',
+      );
+      return;
+    }
+
+    validateComponentTypeIndexInDefinitions(
       valueType.typeIndex,
       path,
+      scopedTypeDefinitions,
       WasmComponentTypeKind.definedValue,
       indexDescription: 'value type',
       targetDescription: 'a value type',
     );
   }
 
-  void validateComponentResourceTypeIndex(int? typeIndex, String path) {
-    validateComponentTypeIndex(
+  void validateComponentResourceTypeIndex(
+    int? typeIndex,
+    String path, {
+    List<WasmComponentTypeDefinition>? scopedTypeDefinitions,
+  }) {
+    if (scopedTypeDefinitions == null) {
+      validateComponentTypeIndex(
+        typeIndex,
+        path,
+        WasmComponentTypeKind.resource,
+        indexDescription: 'resource type',
+        targetDescription: 'a resource type',
+      );
+      return;
+    }
+
+    validateComponentTypeIndexInDefinitions(
       typeIndex,
       path,
+      scopedTypeDefinitions,
       WasmComponentTypeKind.resource,
       indexDescription: 'resource type',
       targetDescription: 'a resource type',
@@ -1640,6 +1794,36 @@ final class _WasmComponentValidationContext {
       typeDefinitions[typeIndex],
       expectedKind,
     )) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component $indexDescription index $typeIndex does not refer to $targetDescription.',
+        ),
+      );
+    }
+  }
+
+  void validateComponentTypeIndexInDefinitions(
+    int? typeIndex,
+    String path,
+    List<WasmComponentTypeDefinition> definitions,
+    WasmComponentTypeKind expectedKind, {
+    required String indexDescription,
+    required String targetDescription,
+  }) {
+    if (typeIndex == null || typeIndex < 0 || typeIndex >= definitions.length) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Unknown Wasm component $indexDescription index: $typeIndex.',
+        ),
+      );
+      return;
+    }
+
+    if (!componentTypeDefinitionMatches(definitions[typeIndex], expectedKind)) {
       errors.add(
         WasmComponentValidationError(
           path: path,
