@@ -1158,6 +1158,16 @@ final class _WasmComponentValidationContext {
         'function result type',
       );
     }
+
+    final component = type.component;
+    if (type.kind == WasmComponentTypeKind.component && component != null) {
+      validateComponentTypeDeclarations(component.declarations, path);
+    }
+
+    final instance = type.instance;
+    if (type.kind == WasmComponentTypeKind.instance && instance != null) {
+      validateComponentTypeDeclarations(instance.declarations, path);
+    }
   }
 
   void validateDefinedValueType(
@@ -1222,6 +1232,116 @@ final class _WasmComponentValidationContext {
       case WasmComponentDefinedValueTypeKind.own:
       case WasmComponentDefinedValueTypeKind.borrow:
         validateComponentResourceTypeIndex(type.typeIndex, '$path.resource');
+    }
+  }
+
+  void validateComponentTypeDeclarations(
+    List<WasmComponentTypeDeclaration> declarations,
+    String path,
+  ) {
+    final localTypeKinds = <WasmComponentTypeKind>[];
+    for (var i = 0; i < declarations.length; i++) {
+      final declaration = declarations[i];
+      switch (declaration.kind) {
+        case WasmComponentTypeDeclarationKind.type:
+          final nestedType = declaration.type;
+          if (nestedType == null) {
+            break;
+          }
+          validateComponentTypeDefinition(nestedType, '$path.declarations[$i]');
+          localTypeKinds.add(nestedType.kind);
+        case WasmComponentTypeDeclarationKind.import:
+          validateTypeDeclarationExternDescriptor(
+            declaration.import?.descriptor,
+            '$path.declarations[$i].import.descriptor',
+            localTypeKinds,
+          );
+        case WasmComponentTypeDeclarationKind.export:
+          validateTypeDeclarationExternDescriptor(
+            declaration.export?.descriptor,
+            '$path.declarations[$i].export.descriptor',
+            localTypeKinds,
+          );
+        case WasmComponentTypeDeclarationKind.coreType:
+        case WasmComponentTypeDeclarationKind.alias:
+          break;
+      }
+    }
+  }
+
+  void validateTypeDeclarationExternDescriptor(
+    WasmComponentExternDescriptor? descriptor,
+    String path,
+    List<WasmComponentTypeKind> localTypeKinds,
+  ) {
+    if (descriptor == null) {
+      return;
+    }
+
+    switch (descriptor.kind) {
+      case WasmComponentExternKind.function:
+        validateLocalComponentTypeIndex(
+          descriptor.typeIndex,
+          path,
+          localTypeKinds,
+          WasmComponentTypeKind.function,
+          indexDescription: 'function type',
+          targetDescription: 'a function type',
+        );
+      case WasmComponentExternKind.component:
+        validateLocalComponentTypeIndex(
+          descriptor.typeIndex,
+          path,
+          localTypeKinds,
+          WasmComponentTypeKind.component,
+          indexDescription: 'component type',
+          targetDescription: 'a component type',
+        );
+      case WasmComponentExternKind.instance:
+        validateLocalComponentTypeIndex(
+          descriptor.typeIndex,
+          path,
+          localTypeKinds,
+          WasmComponentTypeKind.instance,
+          indexDescription: 'instance type',
+          targetDescription: 'an instance type',
+        );
+      case WasmComponentExternKind.coreModule:
+      case WasmComponentExternKind.value:
+      case WasmComponentExternKind.componentType:
+        break;
+    }
+  }
+
+  void validateLocalComponentTypeIndex(
+    int? typeIndex,
+    String path,
+    List<WasmComponentTypeKind> localTypeKinds,
+    WasmComponentTypeKind expectedKind, {
+    required String indexDescription,
+    required String targetDescription,
+  }) {
+    if (typeIndex == null ||
+        typeIndex < 0 ||
+        typeIndex >= localTypeKinds.length) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Unknown Wasm component $indexDescription index: $typeIndex.',
+        ),
+      );
+      return;
+    }
+
+    if (localTypeKinds[typeIndex] != expectedKind) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component $indexDescription index $typeIndex does not refer to $targetDescription.',
+        ),
+      );
     }
   }
 

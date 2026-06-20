@@ -357,6 +357,18 @@ void main() {
       expect(componentExport.descriptor.kind, WasmComponentExternKind.function);
     });
 
+    test('reports invalid component type declaration indexes', () {
+      final errors = WasmComponent.decode(
+        _typeDeclarationExportBeforeTypeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('Unknown Wasm component function type index'),
+      );
+    });
+
     test('decodes component starts', () {
       final component = WasmComponent.decode(_startComponentBytes());
 
@@ -3019,6 +3031,34 @@ Uint8List _componentInstanceTypesComponentBytes() =>
       0x62,
       0x01,
       0x01,
+    ]);
+
+Uint8List _typeDeclarationExportBeforeTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x0e,
+      0x01,
+      0x42,
+      0x02,
+      0x04,
+      0x00,
+      0x01,
+      0x61,
+      0x01,
+      0x00,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
     ]);
 
 Uint8List _startComponentBytes() => Uint8List.fromList(const <int>[
