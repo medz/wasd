@@ -687,6 +687,7 @@ final class WasmComponentValidationError {
 
 enum _WasmComponentDefinitionEventKind {
   import,
+  export,
   alias,
   canonical,
   start,
@@ -696,6 +697,9 @@ enum _WasmComponentDefinitionEventKind {
 final class _WasmComponentDefinitionEvent {
   const _WasmComponentDefinitionEvent.import(this.index)
     : kind = _WasmComponentDefinitionEventKind.import;
+
+  const _WasmComponentDefinitionEvent.export(this.index)
+    : kind = _WasmComponentDefinitionEventKind.export;
 
   const _WasmComponentDefinitionEvent.alias(this.index)
     : kind = _WasmComponentDefinitionEventKind.alias;
@@ -777,6 +781,7 @@ final class WasmComponent {
     context.validateDefinitionEvents(
       _definitionEvents,
       imports: imports,
+      exports: exports,
       aliases: aliases,
       canonicalDefinitions: canonicalDefinitions,
       starts: starts,
@@ -918,7 +923,13 @@ final class WasmComponent {
             );
           }
         case _exportSectionId:
-          exports.addAll(_decodeExports(payload));
+          final decodedExports = _decodeExports(payload);
+          for (final export in decodedExports) {
+            exports.add(export);
+            definitionEvents.add(
+              _WasmComponentDefinitionEvent.export(exports.length - 1),
+            );
+          }
         case _valueSectionId:
           final decodedValueDefinitions = _decodeValueDefinitions(
             payload,
@@ -1404,6 +1415,7 @@ final class _WasmComponentValidationContext {
   void validateDefinitionEvents(
     List<_WasmComponentDefinitionEvent> events, {
     required List<WasmComponentImport> imports,
+    required List<WasmComponentExport> exports,
     required List<WasmComponentAlias> aliases,
     required List<WasmComponentCanonicalDefinition> canonicalDefinitions,
     required List<WasmComponentStart> starts,
@@ -1438,6 +1450,13 @@ final class _WasmComponentValidationContext {
                   : descriptor.valueType,
             );
           }
+        case _WasmComponentDefinitionEventKind.export:
+          validateExportDefinition(
+            exports[event.index],
+            'export[${event.index}]',
+            functionTypes: functionTypes,
+            valueTypes: valueTypes,
+          );
         case _WasmComponentDefinitionEventKind.alias:
           final sort = aliases[event.index].sort;
           if (sort.kind == WasmComponentSortKind.function) {
@@ -1470,6 +1489,37 @@ final class _WasmComponentValidationContext {
         case _WasmComponentDefinitionEventKind.value:
           valueTypes.add(valueDefinitions[event.index].type);
       }
+    }
+  }
+
+  void validateExportDefinition(
+    WasmComponentExport export,
+    String path, {
+    required List<WasmComponentFunctionType?> functionTypes,
+    required List<WasmComponentValueType?> valueTypes,
+  }) {
+    switch (export.sort.kind) {
+      case WasmComponentSortKind.function:
+        validateComponentFunctionIndex(
+          export.sort.index,
+          '$path.sort',
+          functionTypes.length,
+        );
+        functionTypes.add(
+          componentFunctionTypeAt(functionTypes, export.sort.index),
+        );
+      case WasmComponentSortKind.value:
+        validateComponentValueIndex(
+          export.sort.index,
+          '$path.sort',
+          valueTypes.length,
+        );
+        valueTypes.add(componentValueTypeAt(valueTypes, export.sort.index));
+      case WasmComponentSortKind.core:
+      case WasmComponentSortKind.componentType:
+      case WasmComponentSortKind.component:
+      case WasmComponentSortKind.instance:
+        break;
     }
   }
 

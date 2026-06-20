@@ -558,6 +558,32 @@ void main() {
       );
     });
 
+    test('validates component export sort indexes in definition order', () {
+      expect(WasmComponent.decode(_exportComponentBytes()).validate(), isEmpty);
+      expect(
+        WasmComponent.decode(_exportFunctionAliasComponentBytes()).validate(),
+        isEmpty,
+      );
+
+      final beforeDefinition = WasmComponent.decode(
+        _exportFunctionBeforeDefinitionComponentBytes(),
+      ).validate();
+      expect(beforeDefinition, hasLength(1));
+      expect(
+        beforeDefinition.single.message,
+        contains('Unknown Wasm component function index'),
+      );
+
+      final valueBeforeDefinition = WasmComponent.decode(
+        _exportValueBeforeDefinitionComponentBytes(),
+      ).validate();
+      expect(valueBeforeDefinition, hasLength(1));
+      expect(
+        valueBeforeDefinition.single.message,
+        contains('Unknown Wasm component value index'),
+      );
+    });
+
     test('reports value import equality indexes before definition', () {
       final errors = WasmComponent.decode(
         _valueImportEqualityBeforeDefinitionComponentBytes(),
@@ -1078,6 +1104,140 @@ Uint8List _exportComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x00,
 ]);
+
+Uint8List _exportFunctionAliasComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x0e,
+      0x01,
+      0x00,
+      0x09,
+      0x68,
+      0x6f,
+      0x73,
+      0x74,
+      0x2d,
+      0x66,
+      0x75,
+      0x6e,
+      0x63,
+      0x01,
+      0x00,
+      0x0b,
+      0x0d,
+      0x02,
+      0x00,
+      0x01,
+      0x61,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      0x62,
+      0x01,
+      0x01,
+      0x00,
+    ]);
+
+Uint8List _exportFunctionBeforeDefinitionComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x0b,
+      0x0f,
+      0x01,
+      0x00,
+      0x09,
+      0x68,
+      0x6f,
+      0x73,
+      0x74,
+      0x2d,
+      0x66,
+      0x75,
+      0x6e,
+      0x63,
+      0x01,
+      0x00,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x0e,
+      0x01,
+      0x00,
+      0x09,
+      0x68,
+      0x6f,
+      0x73,
+      0x74,
+      0x2d,
+      0x66,
+      0x75,
+      0x6e,
+      0x63,
+      0x01,
+      0x00,
+    ]);
+
+Uint8List _exportValueBeforeDefinitionComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x0b,
+      0x07,
+      0x01,
+      0x00,
+      0x01,
+      0x76,
+      0x02,
+      0x00,
+      0x00,
+      0x0a,
+      0x09,
+      0x01,
+      0x00,
+      0x04,
+      0x6e,
+      0x61,
+      0x6d,
+      0x65,
+      0x02,
+      0x73,
+    ]);
 
 Uint8List _exportWithDescriptorComponentBytes() =>
     Uint8List.fromList(const <int>[
