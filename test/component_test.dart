@@ -114,6 +114,48 @@ void main() {
       expect(module.codes, hasLength(1));
     });
 
+    test('decodes instantiated core instances', () {
+      final component = WasmComponent.decode(
+        _coreInstanceInstantiateComponentBytes(),
+      );
+
+      expect(component.coreInstances, hasLength(1));
+      final instance = component.coreInstances.single;
+      expect(instance.kind, WasmComponentCoreInstanceKind.instantiate);
+      expect(instance.moduleIndex, 0);
+      expect(instance.arguments, isEmpty);
+    });
+
+    test('decodes core instances with inline exports', () {
+      final component = WasmComponent.decode(
+        _coreInstanceInlineComponentBytes(),
+      );
+
+      expect(component.coreInstances, hasLength(2));
+      final instance = component.coreInstances.last;
+      expect(instance.kind, WasmComponentCoreInstanceKind.inlineExports);
+      expect(instance.exports, hasLength(1));
+      expect(instance.exports.single.name, 'mem');
+      expect(
+        instance.exports.single.sort.kind,
+        WasmComponentCoreSortKind.memory,
+      );
+      expect(instance.exports.single.sort.index, 0);
+    });
+
+    test('decodes core instantiation arguments', () {
+      final component = WasmComponent.decode(
+        _coreInstanceArgumentComponentBytes(),
+      );
+
+      final instance = component.coreInstances.single;
+      expect(instance.kind, WasmComponentCoreInstanceKind.instantiate);
+      expect(instance.moduleIndex, 0);
+      expect(instance.arguments, hasLength(1));
+      expect(instance.arguments.single.name, 'dep');
+      expect(instance.arguments.single.instanceIndex, 0);
+    });
+
     test('decodes inline component instances', () {
       final component = WasmComponent.decode(_inlineInstanceComponentBytes());
 
@@ -542,6 +584,135 @@ Uint8List _coreModuleComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x0b,
 ]);
+
+Uint8List _coreInstanceInstantiateComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x01,
+      0x16,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x05,
+      0x03,
+      0x01,
+      0x00,
+      0x01,
+      0x07,
+      0x07,
+      0x01,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x02,
+      0x00,
+      0x02,
+      0x04,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _coreInstanceInlineComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x01,
+  0x16,
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x05,
+  0x03,
+  0x01,
+  0x00,
+  0x01,
+  0x07,
+  0x07,
+  0x01,
+  0x03,
+  0x6d,
+  0x65,
+  0x6d,
+  0x02,
+  0x00,
+  0x02,
+  0x04,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x06,
+  0x09,
+  0x01,
+  0x00,
+  0x02,
+  0x01,
+  0x00,
+  0x03,
+  0x6d,
+  0x65,
+  0x6d,
+  0x02,
+  0x09,
+  0x01,
+  0x01,
+  0x01,
+  0x03,
+  0x6d,
+  0x65,
+  0x6d,
+  0x02,
+  0x00,
+]);
+
+Uint8List _coreInstanceArgumentComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x02,
+      0x0a,
+      0x01,
+      0x00,
+      0x00,
+      0x01,
+      0x03,
+      0x64,
+      0x65,
+      0x70,
+      0x12,
+      0x00,
+    ]);
 
 Uint8List _inlineInstanceComponentBytes() => Uint8List.fromList(const <int>[
   0x00,

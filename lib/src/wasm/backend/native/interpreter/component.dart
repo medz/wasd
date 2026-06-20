@@ -72,6 +72,13 @@ final class WasmComponentSort {
   final WasmComponentCoreSortKind? coreKind;
 }
 
+final class WasmComponentCoreSortIndex {
+  const WasmComponentCoreSortIndex({required this.kind, required this.index});
+
+  final WasmComponentCoreSortKind kind;
+  final int index;
+}
+
 final class WasmComponentExternDescriptor {
   const WasmComponentExternDescriptor({
     required this.kind,
@@ -158,6 +165,43 @@ final class WasmComponentInlineExport {
   final WasmComponentSortIndex sort;
 }
 
+enum WasmComponentCoreInstanceKind { instantiate, inlineExports }
+
+final class WasmComponentCoreInstance {
+  const WasmComponentCoreInstance.instantiate({
+    required this.moduleIndex,
+    required this.arguments,
+  }) : kind = WasmComponentCoreInstanceKind.instantiate,
+       exports = const <WasmComponentCoreInlineExport>[];
+
+  const WasmComponentCoreInstance.inlineExports({required this.exports})
+    : kind = WasmComponentCoreInstanceKind.inlineExports,
+      moduleIndex = null,
+      arguments = const <WasmComponentCoreInstantiationArgument>[];
+
+  final WasmComponentCoreInstanceKind kind;
+  final int? moduleIndex;
+  final List<WasmComponentCoreInstantiationArgument> arguments;
+  final List<WasmComponentCoreInlineExport> exports;
+}
+
+final class WasmComponentCoreInstantiationArgument {
+  const WasmComponentCoreInstantiationArgument({
+    required this.name,
+    required this.instanceIndex,
+  });
+
+  final String name;
+  final int instanceIndex;
+}
+
+final class WasmComponentCoreInlineExport {
+  const WasmComponentCoreInlineExport({required this.name, required this.sort});
+
+  final String name;
+  final WasmComponentCoreSortIndex sort;
+}
+
 enum WasmComponentAliasTargetKind { export, coreExport, outer }
 
 final class WasmComponentAlias {
@@ -207,6 +251,7 @@ final class WasmComponent {
     required this.exports,
     required this.components,
     required this.coreModules,
+    required this.coreInstances,
     required this.instances,
     required this.aliases,
   });
@@ -216,6 +261,7 @@ final class WasmComponent {
   final List<WasmComponentExport> exports;
   final List<WasmComponent> components;
   final List<WasmModule> coreModules;
+  final List<WasmComponentCoreInstance> coreInstances;
   final List<WasmComponentInstance> instances;
   final List<WasmComponentAlias> aliases;
 
@@ -265,6 +311,7 @@ final class WasmComponent {
     final exports = <WasmComponentExport>[];
     final components = <WasmComponent>[];
     final coreModules = <WasmModule>[];
+    final coreInstances = <WasmComponentCoreInstance>[];
     final instances = <WasmComponentInstance>[];
     final aliases = <WasmComponentAlias>[];
     while (!reader.isEOF) {
@@ -291,6 +338,8 @@ final class WasmComponent {
       switch (sectionId) {
         case _coreModuleSectionId:
           coreModules.add(WasmModule.decode(payload, features: features));
+        case _coreInstanceSectionId:
+          coreInstances.addAll(_decodeCoreInstances(payload));
         case _componentSectionId:
           components.add(WasmComponent.decode(payload, features: features));
         case _instanceSectionId:
@@ -310,6 +359,7 @@ final class WasmComponent {
       exports: List.unmodifiable(exports),
       components: List.unmodifiable(components),
       coreModules: List.unmodifiable(coreModules),
+      coreInstances: List.unmodifiable(coreInstances),
       instances: List.unmodifiable(instances),
       aliases: List.unmodifiable(aliases),
     );
@@ -327,6 +377,7 @@ const int _importSectionId = 10;
 const int _exportSectionId = 11;
 const int _componentSectionId = 4;
 const int _coreModuleSectionId = 1;
+const int _coreInstanceSectionId = 2;
 const int _instanceSectionId = 5;
 const int _aliasSectionId = 6;
 
@@ -382,6 +433,70 @@ List<WasmComponentInstance> _decodeInstances(Uint8List payload) {
   }
   reader.expectEof();
   return instances;
+}
+
+List<WasmComponentCoreInstance> _decodeCoreInstances(Uint8List payload) {
+  final reader = ByteReader(payload);
+  final count = reader.readVarUint32();
+  final instances = <WasmComponentCoreInstance>[];
+  for (var i = 0; i < count; i++) {
+    instances.add(_readCoreInstance(reader));
+  }
+  reader.expectEof();
+  return instances;
+}
+
+WasmComponentCoreInstance _readCoreInstance(ByteReader reader) {
+  final kind = reader.readByte();
+  switch (kind) {
+    case 0x00:
+      final moduleIndex = reader.readVarUint32();
+      final argumentCount = reader.readVarUint32();
+      final arguments = <WasmComponentCoreInstantiationArgument>[];
+      for (var i = 0; i < argumentCount; i++) {
+        arguments.add(_readCoreInstantiationArgument(reader));
+      }
+      return WasmComponentCoreInstance.instantiate(
+        moduleIndex: moduleIndex,
+        arguments: List.unmodifiable(arguments),
+      );
+    case 0x01:
+      final exportCount = reader.readVarUint32();
+      final exports = <WasmComponentCoreInlineExport>[];
+      for (var i = 0; i < exportCount; i++) {
+        exports.add(_readCoreInlineExport(reader));
+      }
+      return WasmComponentCoreInstance.inlineExports(
+        exports: List.unmodifiable(exports),
+      );
+    default:
+      throw FormatException(
+        'Unsupported Wasm component core instance expression: 0x${kind.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentCoreInstantiationArgument _readCoreInstantiationArgument(
+  ByteReader reader,
+) {
+  final name = reader.readName();
+  final sort = reader.readByte();
+  if (sort != 0x12) {
+    throw FormatException(
+      'Unsupported Wasm component core instantiation argument sort: 0x${sort.toRadixString(16)}.',
+    );
+  }
+  return WasmComponentCoreInstantiationArgument(
+    name: name,
+    instanceIndex: reader.readVarUint32(),
+  );
+}
+
+WasmComponentCoreInlineExport _readCoreInlineExport(ByteReader reader) {
+  return WasmComponentCoreInlineExport(
+    name: reader.readName(),
+    sort: _readCoreSortIndex(reader),
+  );
 }
 
 List<WasmComponentAlias> _decodeAliases(Uint8List payload) {
@@ -516,6 +631,13 @@ WasmComponentSortIndex _readSortIndex(ByteReader reader) {
   return WasmComponentSortIndex(
     kind: sort.kind,
     coreKind: sort.coreKind,
+    index: reader.readVarUint32(),
+  );
+}
+
+WasmComponentCoreSortIndex _readCoreSortIndex(ByteReader reader) {
+  return WasmComponentCoreSortIndex(
+    kind: _readCoreSortKind(reader),
     index: reader.readVarUint32(),
   );
 }
