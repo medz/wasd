@@ -112,11 +112,13 @@ final class WasmComponent {
     required this.sections,
     required this.imports,
     required this.exports,
+    required this.components,
   });
 
   final List<WasmComponentSection> sections;
   final List<WasmComponentImport> imports;
   final List<WasmComponentExport> exports;
+  final List<WasmComponent> components;
 
   static bool hasComponentPreamble(List<int> bytes) {
     return bytes.length >= 8 &&
@@ -162,6 +164,7 @@ final class WasmComponent {
     final sections = <WasmComponentSection>[];
     final imports = <WasmComponentImport>[];
     final exports = <WasmComponentExport>[];
+    final components = <WasmComponent>[];
     while (!reader.isEOF) {
       final sectionOffset = reader.offset;
       final sectionId = reader.readByte();
@@ -184,6 +187,8 @@ final class WasmComponent {
         ),
       );
       switch (sectionId) {
+        case _componentSectionId:
+          components.add(WasmComponent.decode(payload, features: features));
         case _importSectionId:
           imports.addAll(_decodeImports(payload));
         case _exportSectionId:
@@ -195,6 +200,7 @@ final class WasmComponent {
       sections: List.unmodifiable(sections),
       imports: List.unmodifiable(imports),
       exports: List.unmodifiable(exports),
+      components: List.unmodifiable(components),
     );
   }
 
@@ -208,6 +214,7 @@ final class WasmComponent {
 
 const int _importSectionId = 10;
 const int _exportSectionId = 11;
+const int _componentSectionId = 4;
 
 List<WasmComponentImport> _decodeImports(Uint8List payload) {
   final reader = ByteReader(payload);

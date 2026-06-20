@@ -87,6 +87,22 @@ void main() {
       expect(export.descriptor!.typeIndex, 0);
     });
 
+    test('decodes nested components', () {
+      final component = WasmComponent.decode(_nestedComponentBytes());
+
+      expect(component.imports, isEmpty);
+      expect(component.exports, isEmpty);
+      expect(component.components, hasLength(1));
+      final child = component.components.single;
+      expect(child.sections.map((section) => section.id), [7, 10]);
+      expect(child.imports.single.name, 'child-func');
+      expect(
+        child.imports.single.descriptor.kind,
+        WasmComponentExternKind.function,
+      );
+      expect(child.imports.single.descriptor.typeIndex, 0);
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -344,6 +360,51 @@ Uint8List _exportWithDescriptorComponentBytes() =>
       0x01,
       0x00,
     ]);
+
+Uint8List _nestedComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x04,
+  0x20,
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x05,
+  0x01,
+  0x40,
+  0x00,
+  0x01,
+  0x00,
+  0x0a,
+  0x0f,
+  0x01,
+  0x00,
+  0x0a,
+  0x63,
+  0x68,
+  0x69,
+  0x6c,
+  0x64,
+  0x2d,
+  0x66,
+  0x75,
+  0x6e,
+  0x63,
+  0x01,
+  0x00,
+]);
 
 Uint8List _truncatedSectionComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
