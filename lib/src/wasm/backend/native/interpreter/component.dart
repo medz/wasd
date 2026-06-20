@@ -1278,7 +1278,55 @@ final class _WasmComponentValidationContext {
       validateComponentResourceTypeIndex(definition.typeIndex, '$path.type');
     }
 
+    validateCanonicalOptions(definition.options, '$path.options');
     validateComponentValueType(definition.result?.valueType, '$path.result');
+  }
+
+  void validateCanonicalOptions(
+    List<WasmComponentCanonicalOption> options,
+    String path,
+  ) {
+    final seenKinds = <WasmComponentCanonicalOptionKind>{};
+    WasmComponentCanonicalOptionKind? stringEncoding;
+
+    for (var i = 0; i < options.length; i++) {
+      final optionKind = options[i].kind;
+      if (canonicalOptionIsStringEncoding(optionKind)) {
+        if (stringEncoding == null) {
+          stringEncoding = optionKind;
+          continue;
+        }
+
+        errors.add(
+          WasmComponentValidationError(
+            path: '$path[$i]',
+            message: stringEncoding == optionKind
+                ? 'Duplicate Wasm component canonical string encoding option: ${optionKind.name}.'
+                : 'Conflicting Wasm component canonical string encoding option: ${stringEncoding.name} and ${optionKind.name}.',
+          ),
+        );
+        continue;
+      }
+
+      if (!seenKinds.add(optionKind)) {
+        errors.add(
+          WasmComponentValidationError(
+            path: '$path[$i]',
+            message:
+                'Duplicate Wasm component canonical option: ${optionKind.name}.',
+          ),
+        );
+      }
+    }
+  }
+
+  bool canonicalOptionIsStringEncoding(
+    WasmComponentCanonicalOptionKind optionKind,
+  ) {
+    return optionKind == WasmComponentCanonicalOptionKind.stringEncodingUtf8 ||
+        optionKind == WasmComponentCanonicalOptionKind.stringEncodingUtf16 ||
+        optionKind ==
+            WasmComponentCanonicalOptionKind.stringEncodingLatin1Utf16;
   }
 
   bool canonicalDefinitionUsesResourceType(WasmComponentCanonicalKind kind) {

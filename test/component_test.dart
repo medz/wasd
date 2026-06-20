@@ -615,6 +615,26 @@ void main() {
       );
     });
 
+    test('reports duplicate and conflicting canonical options', () {
+      final conflictingStringEncoding = WasmComponent.decode(
+        _canonicalConflictingStringEncodingComponentBytes(),
+      ).validate();
+      expect(conflictingStringEncoding, hasLength(1));
+      expect(
+        conflictingStringEncoding.single.message,
+        contains('Conflicting Wasm component canonical string encoding option'),
+      );
+
+      final duplicateMemory = WasmComponent.decode(
+        _canonicalDuplicateMemoryOptionComponentBytes(),
+      ).validate();
+      expect(duplicateMemory, hasLength(1));
+      expect(
+        duplicateMemory.single.message,
+        contains('Duplicate Wasm component canonical option'),
+      );
+    });
+
     test('reports invalid component stream char element types', () {
       expect(
         WasmComponent.decode(_streamStringTypeComponentBytes()).validate(),
@@ -1914,6 +1934,50 @@ Uint8List _canonicalLiftOutOfRangeTypeIndexComponentBytes() =>
       0x00,
       0x00,
       0x00,
+    ]);
+
+Uint8List _canonicalConflictingStringEncodingComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x07,
+      0x01,
+      0x01,
+      0x00,
+      0x00,
+      0x02,
+      0x00,
+      0x01,
+    ]);
+
+Uint8List _canonicalDuplicateMemoryOptionComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x09,
+      0x01,
+      0x01,
+      0x00,
+      0x00,
+      0x02,
+      0x03,
+      0x00,
+      0x03,
+      0x01,
     ]);
 
 Uint8List _typeDefinitionsComponentBytes() => Uint8List.fromList(const <int>[
