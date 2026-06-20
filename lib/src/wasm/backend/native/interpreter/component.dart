@@ -930,6 +930,11 @@ final class _WasmComponentValidationContext {
         validateComponentValueType(function.params[i].type, '$path.params[$i]');
       }
       validateComponentValueType(function.result, '$path.result');
+      validateValueTypeDoesNotContainBorrow(
+        function.result,
+        '$path.result',
+        'function result type',
+      );
     }
   }
 
