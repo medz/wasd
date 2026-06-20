@@ -1516,6 +1516,18 @@ final class _WasmComponentValidationContext {
     List<WasmComponentTypeDefinition> localTypeDefinitions,
     List<List<WasmComponentTypeDefinition>> typeScopes,
   ) {
+    if (alias.sort.kind != WasmComponentSortKind.componentType &&
+        alias.sort.kind != WasmComponentSortKind.instance) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Unsupported Wasm component type declaration alias sort: ${alias.sort.kind.name}.',
+        ),
+      );
+      return;
+    }
+
     if (alias.sort.kind != WasmComponentSortKind.componentType ||
         alias.target.kind != WasmComponentAliasTargetKind.outer) {
       return;

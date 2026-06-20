@@ -476,6 +476,18 @@ void main() {
       );
     });
 
+    test('rejects unsupported type declaration alias sorts', () {
+      final errors = WasmComponent.decode(
+        _typeDeclarationFunctionAliasComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('Unsupported Wasm component type declaration alias sort'),
+      );
+    });
+
     test('decodes component starts', () {
       final component = WasmComponent.decode(_startComponentBytes());
 
@@ -3459,6 +3471,28 @@ Uint8List _typeDeclarationOuterAliasDepthOutOfRangeComponentBytes() =>
       0x03,
       0x02,
       0x02,
+      0x00,
+    ]);
+
+Uint8List _typeDeclarationFunctionAliasComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x08,
+      0x01,
+      0x42,
+      0x01,
+      0x02,
+      0x01,
+      0x02,
+      0x00,
       0x00,
     ]);
 
