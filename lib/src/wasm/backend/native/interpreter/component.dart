@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'byte_reader.dart';
 import 'features.dart';
+import 'module.dart';
 
 final class WasmComponentSection {
   const WasmComponentSection({
@@ -113,12 +114,14 @@ final class WasmComponent {
     required this.imports,
     required this.exports,
     required this.components,
+    required this.coreModules,
   });
 
   final List<WasmComponentSection> sections;
   final List<WasmComponentImport> imports;
   final List<WasmComponentExport> exports;
   final List<WasmComponent> components;
+  final List<WasmModule> coreModules;
 
   static bool hasComponentPreamble(List<int> bytes) {
     return bytes.length >= 8 &&
@@ -165,6 +168,7 @@ final class WasmComponent {
     final imports = <WasmComponentImport>[];
     final exports = <WasmComponentExport>[];
     final components = <WasmComponent>[];
+    final coreModules = <WasmModule>[];
     while (!reader.isEOF) {
       final sectionOffset = reader.offset;
       final sectionId = reader.readByte();
@@ -187,6 +191,8 @@ final class WasmComponent {
         ),
       );
       switch (sectionId) {
+        case _coreModuleSectionId:
+          coreModules.add(WasmModule.decode(payload, features: features));
         case _componentSectionId:
           components.add(WasmComponent.decode(payload, features: features));
         case _importSectionId:
@@ -201,6 +207,7 @@ final class WasmComponent {
       imports: List.unmodifiable(imports),
       exports: List.unmodifiable(exports),
       components: List.unmodifiable(components),
+      coreModules: List.unmodifiable(coreModules),
     );
   }
 
@@ -215,6 +222,7 @@ final class WasmComponent {
 const int _importSectionId = 10;
 const int _exportSectionId = 11;
 const int _componentSectionId = 4;
+const int _coreModuleSectionId = 1;
 
 List<WasmComponentImport> _decodeImports(Uint8List payload) {
   final reader = ByteReader(payload);

@@ -103,6 +103,17 @@ void main() {
       expect(child.imports.single.descriptor.typeIndex, 0);
     });
 
+    test('decodes embedded core modules', () {
+      final component = WasmComponent.decode(_coreModuleComponentBytes());
+
+      expect(component.coreModules, hasLength(1));
+      final module = component.coreModules.single;
+      expect(module.types, hasLength(1));
+      expect(module.exports.single.name, 'run');
+      expect(module.functionTypeIndices, [0]);
+      expect(module.codes, hasLength(1));
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -404,6 +415,52 @@ Uint8List _nestedComponentBytes() => Uint8List.fromList(const <int>[
   0x63,
   0x01,
   0x00,
+]);
+
+Uint8List _coreModuleComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x01,
+  0x21,
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x04,
+  0x01,
+  0x60,
+  0x00,
+  0x00,
+  0x03,
+  0x02,
+  0x01,
+  0x00,
+  0x07,
+  0x07,
+  0x01,
+  0x03,
+  0x72,
+  0x75,
+  0x6e,
+  0x00,
+  0x00,
+  0x0a,
+  0x04,
+  0x01,
+  0x02,
+  0x00,
+  0x0b,
 ]);
 
 Uint8List _truncatedSectionComponentBytes() => Uint8List.fromList(const <int>[
