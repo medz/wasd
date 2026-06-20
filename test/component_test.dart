@@ -689,6 +689,26 @@ void main() {
       );
     });
 
+    test('reports component start signature mismatches', () {
+      final argumentCount = WasmComponent.decode(
+        _startArgumentCountMismatchComponentBytes(),
+      ).validate();
+      expect(argumentCount, hasLength(1));
+      expect(argumentCount.single.message, contains('start argument count'));
+
+      final argumentType = WasmComponent.decode(
+        _startArgumentTypeMismatchComponentBytes(),
+      ).validate();
+      expect(argumentType, hasLength(1));
+      expect(argumentType.single.message, contains('start argument type'));
+
+      final resultCount = WasmComponent.decode(
+        _startResultCountMismatchComponentBytes(),
+      ).validate();
+      expect(resultCount, hasLength(1));
+      expect(resultCount.single.message, contains('start result count'));
+    });
+
     test('reports invalid component stream char element types', () {
       expect(
         WasmComponent.decode(_streamStringTypeComponentBytes()).validate(),
@@ -2285,12 +2305,15 @@ Uint8List _startOutOfRangeValueArgumentComponentBytes() =>
       0x01,
       0x00,
       0x07,
-      0x05,
+      0x08,
       0x01,
       0x40,
+      0x01,
+      0x01,
+      0x78,
+      0x7f,
+      0x01,
       0x00,
-      0x00,
-      0x73,
       0x0a,
       0x06,
       0x01,
@@ -2318,12 +2341,15 @@ Uint8List _startArgumentDefinedAfterStartComponentBytes() =>
       0x01,
       0x00,
       0x07,
-      0x05,
+      0x08,
       0x01,
       0x40,
+      0x01,
+      0x01,
+      0x78,
+      0x7f,
+      0x01,
       0x00,
-      0x00,
-      0x73,
       0x0a,
       0x06,
       0x01,
@@ -2378,6 +2404,117 @@ Uint8List _canonicalLowerFunctionDefinedAfterComponentBytes() =>
       0x66,
       0x01,
       0x00,
+    ]);
+
+Uint8List _startArgumentCountMismatchComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x08,
+      0x01,
+      0x40,
+      0x01,
+      0x01,
+      0x78,
+      0x79,
+      0x01,
+      0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x09,
+      0x03,
+      0x00,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _startArgumentTypeMismatchComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x08,
+      0x01,
+      0x40,
+      0x01,
+      0x01,
+      0x78,
+      0x79,
+      0x01,
+      0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x76,
+      0x02,
+      0x73,
+      0x09,
+      0x04,
+      0x00,
+      0x01,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _startResultCountMismatchComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x09,
+      0x03,
+      0x00,
+      0x00,
+      0x01,
     ]);
 
 Uint8List _valueDefinitionsComponentBytes() => Uint8List.fromList(const <int>[

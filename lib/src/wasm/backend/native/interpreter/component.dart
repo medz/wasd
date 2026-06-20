@@ -780,6 +780,7 @@ final class WasmComponent {
       aliases: aliases,
       canonicalDefinitions: canonicalDefinitions,
       starts: starts,
+      valueDefinitions: valueDefinitions,
     );
     for (var i = 0; i < components.length; i++) {
       for (final error in components[i].validate()) {
@@ -1406,33 +1407,43 @@ final class _WasmComponentValidationContext {
     required List<WasmComponentAlias> aliases,
     required List<WasmComponentCanonicalDefinition> canonicalDefinitions,
     required List<WasmComponentStart> starts,
+    required List<WasmComponentValueDefinition> valueDefinitions,
   }) {
-    var functionCount = 0;
-    var valueCount = 0;
+    final functionTypes = <WasmComponentFunctionType?>[];
+    final valueTypes = <WasmComponentValueType?>[];
 
     for (final event in events) {
       switch (event.kind) {
         case _WasmComponentDefinitionEventKind.import:
           final descriptor = imports[event.index].descriptor;
+          WasmComponentValueType? equalityValueType;
           if (descriptor.kind == WasmComponentExternKind.value &&
               descriptor.boundKind == WasmComponentExternBoundKind.equality) {
             validateComponentValueIndex(
               descriptor.valueIndex,
               'import[${event.index}].descriptor.value',
-              valueCount,
+              valueTypes.length,
+            );
+            equalityValueType = componentValueTypeAt(
+              valueTypes,
+              descriptor.valueIndex,
             );
           }
           if (descriptor.kind == WasmComponentExternKind.function) {
-            functionCount++;
+            functionTypes.add(componentFunctionType(descriptor.typeIndex));
           } else if (descriptor.kind == WasmComponentExternKind.value) {
-            valueCount++;
+            valueTypes.add(
+              descriptor.boundKind == WasmComponentExternBoundKind.equality
+                  ? equalityValueType
+                  : descriptor.valueType,
+            );
           }
         case _WasmComponentDefinitionEventKind.alias:
           final sort = aliases[event.index].sort;
           if (sort.kind == WasmComponentSortKind.function) {
-            functionCount++;
+            functionTypes.add(null);
           } else if (sort.kind == WasmComponentSortKind.value) {
-            valueCount++;
+            valueTypes.add(null);
           }
         case _WasmComponentDefinitionEventKind.canonical:
           final definition = canonicalDefinitions[event.index];
@@ -1440,46 +1451,147 @@ final class _WasmComponentValidationContext {
             validateComponentFunctionIndex(
               definition.functionIndex,
               'canonical[${event.index}].function',
-              functionCount,
+              functionTypes.length,
             );
           }
           if (definition.kind == WasmComponentCanonicalKind.lift) {
-            functionCount++;
+            functionTypes.add(componentFunctionType(definition.typeIndex));
           }
         case _WasmComponentDefinitionEventKind.start:
           final start = starts[event.index];
-          validateStartDefinition(
-            start,
-            'start[${event.index}]',
-            functionCount: functionCount,
-            valueCount: valueCount,
+          valueTypes.addAll(
+            validateStartDefinition(
+              start,
+              'start[${event.index}]',
+              functionTypes: functionTypes,
+              valueTypes: valueTypes,
+            ),
           );
-          valueCount += start.resultCount;
         case _WasmComponentDefinitionEventKind.value:
-          valueCount++;
+          valueTypes.add(valueDefinitions[event.index].type);
       }
     }
   }
 
-  void validateStartDefinition(
+  Iterable<WasmComponentValueType?> validateStartDefinition(
     WasmComponentStart start,
     String path, {
-    required int functionCount,
-    required int valueCount,
+    required List<WasmComponentFunctionType?> functionTypes,
+    required List<WasmComponentValueType?> valueTypes,
   }) {
     validateComponentFunctionIndex(
       start.functionIndex,
       '$path.function',
-      functionCount,
+      functionTypes.length,
     );
 
     for (var i = 0; i < start.arguments.length; i++) {
       validateComponentValueIndex(
         start.arguments[i],
         '$path.arguments[$i]',
-        valueCount,
+        valueTypes.length,
       );
     }
+
+    final functionType = componentFunctionTypeAt(
+      functionTypes,
+      start.functionIndex,
+    );
+    if (functionType == null) {
+      return List<WasmComponentValueType?>.filled(start.resultCount, null);
+    }
+
+    if (start.arguments.length != functionType.params.length) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.arguments',
+          message:
+              'Wasm component start argument count does not match function parameter count: expected ${functionType.params.length}, got ${start.arguments.length}.',
+        ),
+      );
+    }
+
+    final comparableArgumentCount =
+        start.arguments.length < functionType.params.length
+        ? start.arguments.length
+        : functionType.params.length;
+    for (var i = 0; i < comparableArgumentCount; i++) {
+      final valueType = componentValueTypeAt(valueTypes, start.arguments[i]);
+      final parameterType = functionType.params[i].type;
+      if (valueType != null &&
+          !componentValueTypesMatch(parameterType, valueType)) {
+        errors.add(
+          WasmComponentValidationError(
+            path: '$path.arguments[$i]',
+            message:
+                'Wasm component start argument type does not match function parameter type.',
+          ),
+        );
+      }
+    }
+
+    final expectedResultCount = functionType.result == null ? 0 : 1;
+    if (start.resultCount != expectedResultCount) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.result',
+          message:
+              'Wasm component start result count does not match function result count: expected $expectedResultCount, got ${start.resultCount}.',
+        ),
+      );
+      return List<WasmComponentValueType?>.filled(start.resultCount, null);
+    }
+
+    final resultType = functionType.result;
+    return resultType == null
+        ? const <WasmComponentValueType?>[]
+        : <WasmComponentValueType?>[resultType];
+  }
+
+  WasmComponentFunctionType? componentFunctionType(int? typeIndex) {
+    if (typeIndex == null ||
+        typeIndex < 0 ||
+        typeIndex >= typeDefinitions.length) {
+      return null;
+    }
+    final definition = typeDefinitions[typeIndex];
+    if (definition.kind != WasmComponentTypeKind.function) {
+      return null;
+    }
+    return definition.function;
+  }
+
+  WasmComponentFunctionType? componentFunctionTypeAt(
+    List<WasmComponentFunctionType?> functionTypes,
+    int? functionIndex,
+  ) {
+    if (functionIndex == null ||
+        functionIndex < 0 ||
+        functionIndex >= functionTypes.length) {
+      return null;
+    }
+    return functionTypes[functionIndex];
+  }
+
+  WasmComponentValueType? componentValueTypeAt(
+    List<WasmComponentValueType?> valueTypes,
+    int? valueIndex,
+  ) {
+    if (valueIndex == null ||
+        valueIndex < 0 ||
+        valueIndex >= valueTypes.length) {
+      return null;
+    }
+    return valueTypes[valueIndex];
+  }
+
+  bool componentValueTypesMatch(
+    WasmComponentValueType expected,
+    WasmComponentValueType actual,
+  ) {
+    return expected.kind == actual.kind &&
+        expected.primitive == actual.primitive &&
+        expected.typeIndex == actual.typeIndex;
   }
 
   void validateComponentFunctionIndex(
