@@ -1,5 +1,6 @@
 // ignore_for_file: public_member_api_docs
 
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'byte_reader.dart';
@@ -611,6 +612,40 @@ final class WasmComponentCoreExternDescriptor {
   final bool? mutable;
 }
 
+enum WasmComponentValueDataKind { boolean, integer, floatingPoint, string, raw }
+
+final class WasmComponentValueData {
+  WasmComponentValueData({
+    required this.kind,
+    required this.rawBytes,
+    this.boolean,
+    this.integer,
+    this.floatingPoint,
+    this.string,
+  });
+
+  final WasmComponentValueDataKind kind;
+  final Uint8List rawBytes;
+  final bool? boolean;
+  final Object? integer;
+  final double? floatingPoint;
+  final String? string;
+}
+
+final class WasmComponentValueDefinition {
+  const WasmComponentValueDefinition({
+    required this.type,
+    required this.payloadSize,
+    required this.rawBytes,
+    required this.value,
+  });
+
+  final WasmComponentValueType type;
+  final int payloadSize;
+  final Uint8List rawBytes;
+  final WasmComponentValueData value;
+}
+
 final class WasmComponent {
   const WasmComponent({
     required this.sections,
@@ -625,6 +660,7 @@ final class WasmComponent {
     required this.starts,
     required this.canonicalDefinitions,
     required this.typeDefinitions,
+    required this.valueDefinitions,
   });
 
   final List<WasmComponentSection> sections;
@@ -639,6 +675,7 @@ final class WasmComponent {
   final List<WasmComponentStart> starts;
   final List<WasmComponentCanonicalDefinition> canonicalDefinitions;
   final List<WasmComponentTypeDefinition> typeDefinitions;
+  final List<WasmComponentValueDefinition> valueDefinitions;
 
   static bool hasComponentPreamble(List<int> bytes) {
     return bytes.length >= 8 &&
@@ -693,6 +730,7 @@ final class WasmComponent {
     final starts = <WasmComponentStart>[];
     final canonicalDefinitions = <WasmComponentCanonicalDefinition>[];
     final typeDefinitions = <WasmComponentTypeDefinition>[];
+    final valueDefinitions = <WasmComponentValueDefinition>[];
     while (!reader.isEOF) {
       final sectionOffset = reader.offset;
       final sectionId = reader.readByte();
@@ -737,6 +775,8 @@ final class WasmComponent {
           imports.addAll(_decodeImports(payload));
         case _exportSectionId:
           exports.addAll(_decodeExports(payload));
+        case _valueSectionId:
+          valueDefinitions.addAll(_decodeValueDefinitions(payload));
       }
     }
 
@@ -753,6 +793,7 @@ final class WasmComponent {
       starts: List.unmodifiable(starts),
       canonicalDefinitions: List.unmodifiable(canonicalDefinitions),
       typeDefinitions: List.unmodifiable(typeDefinitions),
+      valueDefinitions: List.unmodifiable(valueDefinitions),
     );
   }
 
@@ -775,6 +816,7 @@ const int _aliasSectionId = 6;
 const int _typeSectionId = 7;
 const int _canonicalSectionId = 8;
 const int _startSectionId = 9;
+const int _valueSectionId = 12;
 
 List<WasmComponentImport> _decodeImports(Uint8List payload) {
   final reader = ByteReader(payload);
@@ -931,6 +973,161 @@ WasmComponentStart _decodeStart(Uint8List payload) {
     arguments: List.unmodifiable(arguments),
     resultCount: resultCount,
   );
+}
+
+List<WasmComponentValueDefinition> _decodeValueDefinitions(Uint8List payload) {
+  final reader = ByteReader(payload);
+  final count = reader.readVarUint32();
+  final values = <WasmComponentValueDefinition>[];
+  for (var i = 0; i < count; i++) {
+    values.add(_readValueDefinition(reader));
+  }
+  reader.expectEof();
+  return values;
+}
+
+WasmComponentValueDefinition _readValueDefinition(ByteReader reader) {
+  final type = _readComponentValueType(reader);
+  final payloadSize = reader.readVarUint32();
+  final rawBytes = reader.readBytes(payloadSize);
+  return WasmComponentValueDefinition(
+    type: type,
+    payloadSize: payloadSize,
+    rawBytes: rawBytes,
+    value: _decodeComponentValueData(type, rawBytes),
+  );
+}
+
+WasmComponentValueData _decodeComponentValueData(
+  WasmComponentValueType type,
+  Uint8List rawBytes,
+) {
+  final primitive = type.primitive;
+  if (primitive == null) {
+    return WasmComponentValueData(
+      kind: WasmComponentValueDataKind.raw,
+      rawBytes: rawBytes,
+    );
+  }
+
+  switch (primitive) {
+    case WasmComponentPrimitiveValueType.boolean:
+      _expectComponentValuePayloadSize(rawBytes, 1, 'bool');
+      final byte = rawBytes.single;
+      if (byte != 0x00 && byte != 0x01) {
+        throw FormatException(
+          'Invalid Wasm component bool value: 0x${byte.toRadixString(16)}.',
+        );
+      }
+      return WasmComponentValueData(
+        kind: WasmComponentValueDataKind.boolean,
+        rawBytes: rawBytes,
+        boolean: byte == 0x01,
+      );
+    case WasmComponentPrimitiveValueType.s8:
+      _expectComponentValuePayloadSize(rawBytes, 1, 's8');
+      return _componentIntegerValue(rawBytes, rawBytes.single.toSigned(8));
+    case WasmComponentPrimitiveValueType.u8:
+      _expectComponentValuePayloadSize(rawBytes, 1, 'u8');
+      return _componentIntegerValue(rawBytes, rawBytes.single);
+    case WasmComponentPrimitiveValueType.s16:
+      _expectComponentValuePayloadSize(rawBytes, 2, 's16');
+      return _componentIntegerValue(
+        rawBytes,
+        ByteData.sublistView(rawBytes).getInt16(0, Endian.little),
+      );
+    case WasmComponentPrimitiveValueType.u16:
+      _expectComponentValuePayloadSize(rawBytes, 2, 'u16');
+      return _componentIntegerValue(
+        rawBytes,
+        ByteData.sublistView(rawBytes).getUint16(0, Endian.little),
+      );
+    case WasmComponentPrimitiveValueType.s32:
+      _expectComponentValuePayloadSize(rawBytes, 4, 's32');
+      return _componentIntegerValue(
+        rawBytes,
+        ByteData.sublistView(rawBytes).getInt32(0, Endian.little),
+      );
+    case WasmComponentPrimitiveValueType.u32:
+      _expectComponentValuePayloadSize(rawBytes, 4, 'u32');
+      return _componentIntegerValue(
+        rawBytes,
+        ByteData.sublistView(rawBytes).getUint32(0, Endian.little),
+      );
+    case WasmComponentPrimitiveValueType.s64:
+      _expectComponentValuePayloadSize(rawBytes, 8, 's64');
+      return _componentIntegerValue(
+        rawBytes,
+        ByteData.sublistView(rawBytes).getInt64(0, Endian.little),
+      );
+    case WasmComponentPrimitiveValueType.u64:
+      _expectComponentValuePayloadSize(rawBytes, 8, 'u64');
+      return _componentIntegerValue(
+        rawBytes,
+        ByteData.sublistView(rawBytes).getUint64(0, Endian.little),
+      );
+    case WasmComponentPrimitiveValueType.f32:
+      _expectComponentValuePayloadSize(rawBytes, 4, 'f32');
+      return WasmComponentValueData(
+        kind: WasmComponentValueDataKind.floatingPoint,
+        rawBytes: rawBytes,
+        floatingPoint: ByteData.sublistView(
+          rawBytes,
+        ).getFloat32(0, Endian.little),
+      );
+    case WasmComponentPrimitiveValueType.f64:
+      _expectComponentValuePayloadSize(rawBytes, 8, 'f64');
+      return WasmComponentValueData(
+        kind: WasmComponentValueDataKind.floatingPoint,
+        rawBytes: rawBytes,
+        floatingPoint: ByteData.sublistView(
+          rawBytes,
+        ).getFloat64(0, Endian.little),
+      );
+    case WasmComponentPrimitiveValueType.char:
+      return WasmComponentValueData(
+        kind: WasmComponentValueDataKind.string,
+        rawBytes: rawBytes,
+        string: utf8.decode(rawBytes),
+      );
+    case WasmComponentPrimitiveValueType.string:
+      final reader = ByteReader(rawBytes);
+      final value = reader.readName();
+      reader.expectEof();
+      return WasmComponentValueData(
+        kind: WasmComponentValueDataKind.string,
+        rawBytes: rawBytes,
+        string: value,
+      );
+    case WasmComponentPrimitiveValueType.errorContext:
+      return WasmComponentValueData(
+        kind: WasmComponentValueDataKind.raw,
+        rawBytes: rawBytes,
+      );
+  }
+}
+
+WasmComponentValueData _componentIntegerValue(
+  Uint8List rawBytes,
+  Object value,
+) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.integer,
+    rawBytes: rawBytes,
+    integer: value,
+  );
+}
+
+void _expectComponentValuePayloadSize(
+  Uint8List rawBytes,
+  int expected,
+  String label,
+) {
+  if (rawBytes.length != expected) {
+    throw FormatException(
+      'Invalid Wasm component $label value payload size: ${rawBytes.length}, expected $expected.',
+    );
+  }
 }
 
 List<WasmComponentTypeDefinition> _decodeTypeDefinitions(Uint8List payload) {

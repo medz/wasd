@@ -376,6 +376,26 @@ void main() {
       expect(start.resultCount, 4);
     });
 
+    test('decodes component value definitions', () {
+      final component = WasmComponent.decode(_valueDefinitionsComponentBytes());
+
+      expect(component.valueDefinitions, hasLength(3));
+      final boolean = component.valueDefinitions[0];
+      expect(boolean.type.primitive, WasmComponentPrimitiveValueType.boolean);
+      expect(boolean.value.kind, WasmComponentValueDataKind.boolean);
+      expect(boolean.value.boolean, isTrue);
+
+      final integer = component.valueDefinitions[1];
+      expect(integer.type.primitive, WasmComponentPrimitiveValueType.u32);
+      expect(integer.value.kind, WasmComponentValueDataKind.integer);
+      expect(integer.value.integer, 3);
+
+      final string = component.valueDefinitions[2];
+      expect(string.type.primitive, WasmComponentPrimitiveValueType.string);
+      expect(string.value.kind, WasmComponentValueDataKind.string);
+      expect(string.value.string, 'hi');
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -1627,6 +1647,34 @@ Uint8List _startArgumentsComponentBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x02,
   0x04,
+]);
+
+Uint8List _valueDefinitionsComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x0c,
+  0x0f,
+  0x03,
+  0x7f,
+  0x01,
+  0x01,
+  0x79,
+  0x04,
+  0x03,
+  0x00,
+  0x00,
+  0x00,
+  0x73,
+  0x03,
+  0x02,
+  0x68,
+  0x69,
 ]);
 
 Uint8List _truncatedSectionComponentBytes() => Uint8List.fromList(const <int>[
