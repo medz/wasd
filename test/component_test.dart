@@ -921,6 +921,12 @@ void main() {
         WasmComponent.decode(_coreInstanceInlineComponentBytes()).validate(),
         isEmpty,
       );
+      expect(
+        WasmComponent.decode(
+          _coreModuleExportAliasInstantiateComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
 
       final beforeModule = WasmComponent.decode(
         _coreInstanceBeforeModuleComponentBytes(),
@@ -2333,6 +2339,58 @@ Uint8List _coreInstanceArgumentComponentBytes() =>
       0x65,
       0x70,
       0x12,
+      0x00,
+    ]);
+
+Uint8List _coreModuleExportAliasInstantiateComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x01,
+      0x16,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x05,
+      0x03,
+      0x01,
+      0x00,
+      0x01,
+      0x07,
+      0x07,
+      0x01,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x02,
+      0x00,
+      0x0b,
+      0x08,
+      0x01,
+      0x00,
+      0x01,
+      0x6d,
+      0x00,
+      0x11,
+      0x00,
+      0x00,
+      0x02,
+      0x04,
+      0x01,
+      0x00,
+      0x01,
       0x00,
     ]);
 

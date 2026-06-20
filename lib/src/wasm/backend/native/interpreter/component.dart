@@ -2804,6 +2804,7 @@ final class _WasmComponentValidationContext {
             'export[${event.index}]',
             functionTypes: functionTypes,
             valueEntries: valueEntries,
+            coreCounts: coreCounts,
             visibleTypeDefinitions: visibleTypeDefinitions,
             componentCount: componentCount,
             instanceCount: instanceCount,
@@ -2812,6 +2813,9 @@ final class _WasmComponentValidationContext {
             componentCount++;
           } else if (export.sort.kind == WasmComponentSortKind.instance) {
             instanceCount++;
+          } else if (export.sort.kind == WasmComponentSortKind.core &&
+              export.sort.coreKind != null) {
+            coreCounts.add(export.sort.coreKind!);
           } else if (export.sort.kind == WasmComponentSortKind.componentType) {
             final exportedTypeDefinition = componentTypeDefinitionAt(
               visibleTypeDefinitions,
@@ -3007,6 +3011,7 @@ final class _WasmComponentValidationContext {
     String path, {
     required List<WasmComponentFunctionType?> functionTypes,
     required List<_WasmComponentValueIndexEntry> valueEntries,
+    required _WasmComponentCoreIndexCounts coreCounts,
     required List<WasmComponentTypeDefinition> visibleTypeDefinitions,
     required int componentCount,
     required int instanceCount,
@@ -3035,6 +3040,15 @@ final class _WasmComponentValidationContext {
           ),
         );
       case WasmComponentSortKind.core:
+        final coreKind = export.sort.coreKind;
+        if (coreKind != null) {
+          validateCoreSortIndex(
+            export.sort.index,
+            '$path.sort',
+            coreKind,
+            coreCounts,
+          );
+        }
         break;
       case WasmComponentSortKind.componentType:
         validateAnyComponentTypeIndexInMaybeDefinitions(
