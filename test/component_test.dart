@@ -558,6 +558,18 @@ void main() {
       );
     });
 
+    test('reports invalid canonical result value type indexes', () {
+      final errors = WasmComponent.decode(
+        _canonicalResultOutOfRangeTypeIndexComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('Unknown Wasm component value type index'),
+      );
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -1683,6 +1695,25 @@ Uint8List _canonicalLiftLowerComponentBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x66,
 ]);
+
+Uint8List _canonicalResultOutOfRangeTypeIndexComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x05,
+      0x01,
+      0x09,
+      0x00,
+      0x00,
+      0x00,
+    ]);
 
 Uint8List _typeDefinitionsComponentBytes() => Uint8List.fromList(const <int>[
   0x00,

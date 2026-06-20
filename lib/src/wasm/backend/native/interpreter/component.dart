@@ -744,6 +744,14 @@ final class WasmComponent {
         errors,
       );
     }
+    for (var i = 0; i < canonicalDefinitions.length; i++) {
+      _validateCanonicalDefinition(
+        canonicalDefinitions[i],
+        'canonical[$i]',
+        typeDefinitions,
+        errors,
+      );
+    }
     for (var i = 0; i < components.length; i++) {
       for (final error in components[i].validate()) {
         errors.add(
@@ -1253,6 +1261,20 @@ void _validateCoreModuleTypeIndex(
       ),
     );
   }
+}
+
+void _validateCanonicalDefinition(
+  WasmComponentCanonicalDefinition definition,
+  String path,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+  List<WasmComponentValidationError> errors,
+) {
+  _validateComponentValueType(
+    definition.result?.valueType,
+    '$path.result',
+    typeDefinitions,
+    errors,
+  );
 }
 
 void _validateUniqueLabels(
