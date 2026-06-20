@@ -1030,6 +1030,7 @@ void _validateDefinedValueType(
         typeDefinitions,
         errors,
       );
+      _validateStreamElementType(type.elementType, '$path.stream', errors);
     case WasmComponentDefinedValueTypeKind.future:
       _validateComponentValueType(
         type.elementType,
@@ -1088,6 +1089,21 @@ void _validateComponentResourceTypeIndex(
     targetDescription: 'a resource type',
     errors: errors,
   );
+}
+
+void _validateStreamElementType(
+  WasmComponentValueType? valueType,
+  String path,
+  List<WasmComponentValidationError> errors,
+) {
+  if (valueType?.primitive == WasmComponentPrimitiveValueType.char) {
+    errors.add(
+      WasmComponentValidationError(
+        path: path,
+        message: 'Wasm component stream element type cannot be char.',
+      ),
+    );
+  }
 }
 
 void _validateExternDescriptor(

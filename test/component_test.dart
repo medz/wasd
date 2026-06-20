@@ -615,6 +615,21 @@ void main() {
       );
     });
 
+    test('reports invalid component stream char element types', () {
+      expect(
+        WasmComponent.decode(_streamStringTypeComponentBytes()).validate(),
+        isEmpty,
+      );
+
+      final errors = WasmComponent.decode(
+        _streamCharTypeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(errors.single.message, contains('stream element type'));
+      expect(errors.single.message, contains('char'));
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -2342,6 +2357,12 @@ Uint8List _ownedWrongSortTypeIndexComponentBytes() =>
 
 Uint8List _borrowedOutOfRangeTypeIndexComponentBytes() =>
     _componentWithSingleTypeDefinitionBytes(const <int>[0x68, 0x01]);
+
+Uint8List _streamStringTypeComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[0x66, 0x01, 0x73]);
+
+Uint8List _streamCharTypeComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[0x66, 0x01, 0x74]);
 
 Uint8List _componentWithSingleTypeDefinitionBytes(List<int> typeBytes) =>
     _componentWithTypeDefinitionsBytes(typeBytes, count: 1);
