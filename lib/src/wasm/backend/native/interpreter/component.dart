@@ -244,6 +244,18 @@ final class WasmComponentAliasTarget {
   final int? index;
 }
 
+final class WasmComponentStart {
+  const WasmComponentStart({
+    required this.functionIndex,
+    required this.arguments,
+    required this.resultCount,
+  });
+
+  final int functionIndex;
+  final List<int> arguments;
+  final int resultCount;
+}
+
 final class WasmComponent {
   const WasmComponent({
     required this.sections,
@@ -254,6 +266,7 @@ final class WasmComponent {
     required this.coreInstances,
     required this.instances,
     required this.aliases,
+    required this.starts,
   });
 
   final List<WasmComponentSection> sections;
@@ -264,6 +277,7 @@ final class WasmComponent {
   final List<WasmComponentCoreInstance> coreInstances;
   final List<WasmComponentInstance> instances;
   final List<WasmComponentAlias> aliases;
+  final List<WasmComponentStart> starts;
 
   static bool hasComponentPreamble(List<int> bytes) {
     return bytes.length >= 8 &&
@@ -314,6 +328,7 @@ final class WasmComponent {
     final coreInstances = <WasmComponentCoreInstance>[];
     final instances = <WasmComponentInstance>[];
     final aliases = <WasmComponentAlias>[];
+    final starts = <WasmComponentStart>[];
     while (!reader.isEOF) {
       final sectionOffset = reader.offset;
       final sectionId = reader.readByte();
@@ -346,6 +361,8 @@ final class WasmComponent {
           instances.addAll(_decodeInstances(payload));
         case _aliasSectionId:
           aliases.addAll(_decodeAliases(payload));
+        case _startSectionId:
+          starts.add(_decodeStart(payload));
         case _importSectionId:
           imports.addAll(_decodeImports(payload));
         case _exportSectionId:
@@ -362,6 +379,7 @@ final class WasmComponent {
       coreInstances: List.unmodifiable(coreInstances),
       instances: List.unmodifiable(instances),
       aliases: List.unmodifiable(aliases),
+      starts: List.unmodifiable(starts),
     );
   }
 
@@ -380,6 +398,7 @@ const int _coreModuleSectionId = 1;
 const int _coreInstanceSectionId = 2;
 const int _instanceSectionId = 5;
 const int _aliasSectionId = 6;
+const int _startSectionId = 9;
 
 List<WasmComponentImport> _decodeImports(Uint8List payload) {
   final reader = ByteReader(payload);
@@ -508,6 +527,23 @@ List<WasmComponentAlias> _decodeAliases(Uint8List payload) {
   }
   reader.expectEof();
   return aliases;
+}
+
+WasmComponentStart _decodeStart(Uint8List payload) {
+  final reader = ByteReader(payload);
+  final functionIndex = reader.readVarUint32();
+  final argumentCount = reader.readVarUint32();
+  final arguments = <int>[];
+  for (var i = 0; i < argumentCount; i++) {
+    arguments.add(reader.readVarUint32());
+  }
+  final resultCount = reader.readVarUint32();
+  reader.expectEof();
+  return WasmComponentStart(
+    functionIndex: functionIndex,
+    arguments: List.unmodifiable(arguments),
+    resultCount: resultCount,
+  );
 }
 
 WasmComponentAlias _readAlias(ByteReader reader) {

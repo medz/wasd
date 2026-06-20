@@ -236,6 +236,25 @@ void main() {
       expect(alias.target.index, 0);
     });
 
+    test('decodes component starts', () {
+      final component = WasmComponent.decode(_startComponentBytes());
+
+      expect(component.starts, hasLength(1));
+      final start = component.starts.single;
+      expect(start.functionIndex, 0);
+      expect(start.arguments, isEmpty);
+      expect(start.resultCount, 1);
+    });
+
+    test('decodes component start value arguments', () {
+      final component = WasmComponent.decode(_startArgumentsComponentBytes());
+
+      final start = component.starts.single;
+      expect(start.functionIndex, 3);
+      expect(start.arguments, [1, 2]);
+      expect(start.resultCount, 4);
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -1041,6 +1060,79 @@ Uint8List _outerAliasComponentBytes() => Uint8List.fromList(const <int>[
   0x02,
   0x01,
   0x00,
+]);
+
+Uint8List _startComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x05,
+  0x01,
+  0x40,
+  0x00,
+  0x00,
+  0x73,
+  0x0a,
+  0x06,
+  0x01,
+  0x00,
+  0x01,
+  0x66,
+  0x01,
+  0x00,
+  0x09,
+  0x03,
+  0x00,
+  0x00,
+  0x01,
+  0x00,
+  0x16,
+  0x0e,
+  0x63,
+  0x6f,
+  0x6d,
+  0x70,
+  0x6f,
+  0x6e,
+  0x65,
+  0x6e,
+  0x74,
+  0x2d,
+  0x6e,
+  0x61,
+  0x6d,
+  0x65,
+  0x01,
+  0x05,
+  0x01,
+  0x01,
+  0x00,
+  0x01,
+  0x66,
+]);
+
+Uint8List _startArgumentsComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x09,
+  0x05,
+  0x03,
+  0x02,
+  0x01,
+  0x02,
+  0x04,
 ]);
 
 Uint8List _truncatedSectionComponentBytes() => Uint8List.fromList(const <int>[
