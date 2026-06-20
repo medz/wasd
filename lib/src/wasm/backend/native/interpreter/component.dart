@@ -1475,6 +1475,16 @@ final class _WasmComponentValidationContext {
           if (nestedType == null) {
             break;
           }
+          if (nestedType.kind == WasmComponentTypeKind.resource) {
+            errors.add(
+              WasmComponentValidationError(
+                path: '$path.declarations[$i]',
+                message:
+                    'Wasm component component and instance types cannot define resource types.',
+              ),
+            );
+            break;
+          }
           validateComponentTypeDefinition(
             nestedType,
             '$path.declarations[$i]',

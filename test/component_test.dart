@@ -543,6 +543,15 @@ void main() {
       );
     });
 
+    test('rejects direct resource type declarations in component types', () {
+      final errors = WasmComponent.decode(
+        _typeDeclarationDirectResourceTypeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(errors.single.message, contains('cannot define resource types'));
+    });
+
     test('decodes component starts', () {
       final component = WasmComponent.decode(_startComponentBytes());
 
@@ -3731,6 +3740,27 @@ Uint8List _typeDeclarationExportIntroducesResourceTypeComponentBytes() =>
       0x01,
       0x01,
       0x69,
+      0x00,
+    ]);
+
+Uint8List _typeDeclarationDirectResourceTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x07,
+      0x01,
+      0x42,
+      0x01,
+      0x01,
+      0x3f,
+      0x7f,
       0x00,
     ]);
 
