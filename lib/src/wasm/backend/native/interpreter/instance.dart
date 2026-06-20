@@ -179,8 +179,11 @@ final class WasmInstance {
     WasmModule module, {
     WasmImports imports = const WasmImports(),
     WasmFeatureSet features = const WasmFeatureSet(),
+    bool validate = true,
   }) {
-    WasmValidator.validateModule(module, features: features);
+    if (validate) {
+      WasmValidator.validateModule(module, features: features);
+    }
 
     final functionRefNamespace = WasmVm.allocateFunctionRefNamespace();
     final functions = <RuntimeFunction>[];

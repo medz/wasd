@@ -16,6 +16,7 @@ class Instance implements wasm.Instance {
       _runtime = ir_instance.WasmInstance.fromModule(
         (module as native_module.Module).decoded,
         imports: _buildImports(imports),
+        validate: false,
       );
     } on WasmError {
       rethrow;

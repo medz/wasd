@@ -16,6 +16,11 @@ Uint8List directCallModuleBytes() => Uint8List.fromList(_directCallModuleBytes);
 /// Returns a module that exercises loop and branch control-flow semantics.
 Uint8List loopBranchModuleBytes() => Uint8List.fromList(_loopBranchModuleBytes);
 
+/// Returns an invalid module where a loop back-edge does not satisfy the
+/// enclosing function result.
+Uint8List loopBackWithoutFunctionResultModuleBytes() =>
+    Uint8List.fromList(_loopBackWithoutFunctionResultModuleBytes);
+
 const List<int> _simpleAddModuleBytes = <int>[
   0x00,
   0x61,
@@ -391,5 +396,38 @@ const List<int> _loopBranchModuleBytes = <int>[
   0x0b,
   0x20,
   0x01,
+  0x0b,
+];
+
+const List<int> _loopBackWithoutFunctionResultModuleBytes = <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x05,
+  0x01,
+  0x60,
+  0x00,
+  0x01,
+  0x7f,
+  0x03,
+  0x02,
+  0x01,
+  0x00,
+  0x0a,
+  0x09,
+  0x01,
+  0x07,
+  0x00,
+  0x03,
+  0x40,
+  0x0c,
+  0x00,
+  0x0b,
   0x0b,
 ];

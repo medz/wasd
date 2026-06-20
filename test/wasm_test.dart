@@ -8,6 +8,8 @@ final _wasmBytes = simpleAddModuleBytes();
 final _localSetTeeBytes = localSetTeeModuleBytes();
 final _directCallBytes = directCallModuleBytes();
 final _loopBranchBytes = loopBranchModuleBytes();
+final _loopBackWithoutFunctionResultBytes =
+    loopBackWithoutFunctionResultModuleBytes();
 
 final _invalidBytes = Uint8List.fromList([0x00, 0x00, 0x00, 0x00]);
 
@@ -31,6 +33,13 @@ void main() {
     test('throws CompileError for invalid bytes', () async {
       await expectLater(
         WebAssembly.compile(_invalidBytes.buffer),
+        throwsA(isA<CompileError>()),
+      );
+    });
+
+    test('rejects loop back-edge without enclosing function result', () async {
+      await expectLater(
+        WebAssembly.compile(_loopBackWithoutFunctionResultBytes.buffer),
         throwsA(isA<CompileError>()),
       );
     });

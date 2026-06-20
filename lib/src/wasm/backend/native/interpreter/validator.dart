@@ -42,7 +42,6 @@ final class _SimpleControlFrame {
   bool seenElse = false;
   bool inLegacyCatch = false;
   bool hasEndReachability = false;
-  bool loopBackUnreachable = false;
 }
 
 abstract final class WasmValidator {
@@ -1959,11 +1958,10 @@ abstract final class WasmValidator {
       );
     }
 
-    void markPolymorphic({bool loopBack = false}) {
+    void markPolymorphic() {
       final frame = controlStack.last;
       stack.length = frame.stackHeight;
       frame.polymorphic = true;
-      frame.loopBackUnreachable = frame.loopBackUnreachable || loopBack;
     }
 
     _SimpleControlFrame frameForDepth(int depth, String label) {
@@ -2199,7 +2197,6 @@ abstract final class WasmValidator {
           stack.addAll(tagParamSignatures(tagIndex));
           frame
             ..polymorphic = false
-            ..loopBackUnreachable = false
             ..inLegacyCatch = true;
 
         case Opcodes.catchAll:
@@ -2217,7 +2214,6 @@ abstract final class WasmValidator {
           stack.length = frame.stackHeight;
           frame
             ..polymorphic = false
-            ..loopBackUnreachable = false
             ..inLegacyCatch = true;
 
         case Opcodes.delegate:
@@ -2286,9 +2282,7 @@ abstract final class WasmValidator {
           }
           final hasConcreteResult = validateFrameEnd(frame, 'end');
           stack.length = frame.stackHeight;
-          final canMaterializePolymorphicResults =
-              frame.polymorphic &&
-              (!frame.isLoop || !frame.loopBackUnreachable);
+          final canMaterializePolymorphicResults = frame.polymorphic;
           final propagateUnreachableToParent =
               frame.polymorphic &&
               !hasConcreteResult &&
@@ -2316,7 +2310,7 @@ abstract final class WasmValidator {
             labelFrame.hasEndReachability = true;
           }
           popLabelValues(labelFrame.labelSignatures, 'br operand');
-          markPolymorphic(loopBack: depth == 0 && labelFrame.isLoop);
+          markPolymorphic();
 
         case Opcodes.brIf:
           final depth = instruction.immediate!;
@@ -2336,9 +2330,6 @@ abstract final class WasmValidator {
           }
           List<String>? commonSignatures;
           final enforceTargetTypes = !controlStack.last.polymorphic;
-          final currentFrame = controlStack.last;
-          final loopBackOnly =
-              currentFrame.isLoop && depths.every((depth) => depth == 0);
           for (final depth in depths) {
             final labelFrame = frameForDepth(depth, 'br_table');
             if (!labelFrame.isLoop && (depth == 0 || crossesLoopFrame(depth))) {
@@ -2385,7 +2376,7 @@ abstract final class WasmValidator {
             }
           }
           popLabelValues(commonSignatures!, 'br_table operand');
-          markPolymorphic(loopBack: loopBackOnly);
+          markPolymorphic();
 
         case Opcodes.brOnNull:
           final depth = instruction.immediate!;

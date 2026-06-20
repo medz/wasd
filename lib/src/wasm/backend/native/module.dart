@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import '../../errors.dart';
 import '../../module.dart' as wasm;
 import 'interpreter/module.dart' as native_ir;
+import 'interpreter/validator.dart' as native_validator;
 
 class Module implements wasm.Module {
   Module(ByteBuffer bytes) : _bytes = bytes, decoded = _decode(bytes);
@@ -12,7 +13,9 @@ class Module implements wasm.Module {
 
   static native_ir.WasmModule _decode(ByteBuffer bytes) {
     try {
-      return native_ir.WasmModule.decode(bytes.asUint8List());
+      final module = native_ir.WasmModule.decode(bytes.asUint8List());
+      native_validator.WasmValidator.validateModule(module);
+      return module;
     } on FormatException catch (e) {
       throw CompileError(e.message, cause: e);
     } on UnsupportedError catch (e) {
