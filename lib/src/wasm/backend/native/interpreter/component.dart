@@ -688,6 +688,9 @@ final class WasmComponentValidationError {
 enum _WasmComponentDefinitionEventKind {
   import,
   export,
+  coreType,
+  coreModule,
+  coreInstance,
   component,
   instance,
   alias,
@@ -702,6 +705,15 @@ final class _WasmComponentDefinitionEvent {
 
   const _WasmComponentDefinitionEvent.export(this.index)
     : kind = _WasmComponentDefinitionEventKind.export;
+
+  const _WasmComponentDefinitionEvent.coreType(this.index)
+    : kind = _WasmComponentDefinitionEventKind.coreType;
+
+  const _WasmComponentDefinitionEvent.coreModule(this.index)
+    : kind = _WasmComponentDefinitionEventKind.coreModule;
+
+  const _WasmComponentDefinitionEvent.coreInstance(this.index)
+    : kind = _WasmComponentDefinitionEventKind.coreInstance;
 
   const _WasmComponentDefinitionEvent.component(this.index)
     : kind = _WasmComponentDefinitionEventKind.component;
@@ -736,6 +748,51 @@ final class _WasmComponentValueIndexEntry {
   final WasmComponentValueType? type;
   bool consumed = false;
   final bool requiresConsumption;
+}
+
+final class _WasmComponentCoreIndexCounts {
+  var functions = 0;
+  var tables = 0;
+  var memories = 0;
+  var globals = 0;
+  var tags = 0;
+  var types = 0;
+  var modules = 0;
+  var instances = 0;
+
+  int count(WasmComponentCoreSortKind kind) {
+    return switch (kind) {
+      WasmComponentCoreSortKind.function => functions,
+      WasmComponentCoreSortKind.table => tables,
+      WasmComponentCoreSortKind.memory => memories,
+      WasmComponentCoreSortKind.global => globals,
+      WasmComponentCoreSortKind.tag => tags,
+      WasmComponentCoreSortKind.type => types,
+      WasmComponentCoreSortKind.module => modules,
+      WasmComponentCoreSortKind.instance => instances,
+    };
+  }
+
+  void add(WasmComponentCoreSortKind kind) {
+    switch (kind) {
+      case WasmComponentCoreSortKind.function:
+        functions++;
+      case WasmComponentCoreSortKind.table:
+        tables++;
+      case WasmComponentCoreSortKind.memory:
+        memories++;
+      case WasmComponentCoreSortKind.global:
+        globals++;
+      case WasmComponentCoreSortKind.tag:
+        tags++;
+      case WasmComponentCoreSortKind.type:
+        types++;
+      case WasmComponentCoreSortKind.module:
+        modules++;
+      case WasmComponentCoreSortKind.instance:
+        instances++;
+    }
+  }
 }
 
 final class WasmComponent {
@@ -803,6 +860,7 @@ final class WasmComponent {
       _definitionEvents,
       imports: imports,
       exports: exports,
+      coreInstances: coreInstances,
       instances: instances,
       aliases: aliases,
       canonicalDefinitions: canonicalDefinitions,
@@ -901,10 +959,27 @@ final class WasmComponent {
       switch (sectionId) {
         case _coreModuleSectionId:
           coreModules.add(WasmModule.decode(payload, features: features));
+          definitionEvents.add(
+            _WasmComponentDefinitionEvent.coreModule(coreModules.length - 1),
+          );
         case _coreInstanceSectionId:
-          coreInstances.addAll(_decodeCoreInstances(payload));
+          final decodedCoreInstances = _decodeCoreInstances(payload);
+          for (final coreInstance in decodedCoreInstances) {
+            coreInstances.add(coreInstance);
+            definitionEvents.add(
+              _WasmComponentDefinitionEvent.coreInstance(
+                coreInstances.length - 1,
+              ),
+            );
+          }
         case _coreTypeSectionId:
-          coreTypes.addAll(_decodeCoreTypes(payload));
+          final decodedCoreTypes = _decodeCoreTypes(payload);
+          for (final coreType in decodedCoreTypes) {
+            coreTypes.add(coreType);
+            definitionEvents.add(
+              _WasmComponentDefinitionEvent.coreType(coreTypes.length - 1),
+            );
+          }
         case _componentSectionId:
           components.add(WasmComponent.decode(payload, features: features));
           definitionEvents.add(
@@ -1447,6 +1522,7 @@ final class _WasmComponentValidationContext {
     List<_WasmComponentDefinitionEvent> events, {
     required List<WasmComponentImport> imports,
     required List<WasmComponentExport> exports,
+    required List<WasmComponentCoreInstance> coreInstances,
     required List<WasmComponentInstance> instances,
     required List<WasmComponentAlias> aliases,
     required List<WasmComponentCanonicalDefinition> canonicalDefinitions,
@@ -1455,6 +1531,7 @@ final class _WasmComponentValidationContext {
   }) {
     final functionTypes = <WasmComponentFunctionType?>[];
     final valueEntries = <_WasmComponentValueIndexEntry>[];
+    final coreCounts = _WasmComponentCoreIndexCounts();
     var componentCount = 0;
     var instanceCount = 0;
     for (final event in events) {
@@ -1487,6 +1564,8 @@ final class _WasmComponentValidationContext {
                     : descriptor.valueType,
               ),
             );
+          } else if (descriptor.kind == WasmComponentExternKind.coreModule) {
+            coreCounts.add(WasmComponentCoreSortKind.module);
           } else if (descriptor.kind == WasmComponentExternKind.component) {
             componentCount++;
           } else if (descriptor.kind == WasmComponentExternKind.instance) {
@@ -1507,6 +1586,17 @@ final class _WasmComponentValidationContext {
           } else if (export.sort.kind == WasmComponentSortKind.instance) {
             instanceCount++;
           }
+        case _WasmComponentDefinitionEventKind.coreType:
+          coreCounts.add(WasmComponentCoreSortKind.type);
+        case _WasmComponentDefinitionEventKind.coreModule:
+          coreCounts.add(WasmComponentCoreSortKind.module);
+        case _WasmComponentDefinitionEventKind.coreInstance:
+          validateCoreInstanceDefinition(
+            coreInstances[event.index],
+            'coreInstance[${event.index}]',
+            coreCounts: coreCounts,
+          );
+          coreCounts.add(WasmComponentCoreSortKind.instance);
         case _WasmComponentDefinitionEventKind.component:
           componentCount++;
         case _WasmComponentDefinitionEventKind.instance:
@@ -1520,7 +1610,17 @@ final class _WasmComponentValidationContext {
           );
           instanceCount++;
         case _WasmComponentDefinitionEventKind.alias:
-          final sort = aliases[event.index].sort;
+          final alias = aliases[event.index];
+          validateAliasDefinition(
+            alias,
+            'alias[${event.index}]',
+            coreCounts: coreCounts,
+          );
+          final sort = alias.sort;
+          if (sort.kind == WasmComponentSortKind.core &&
+              sort.coreKind != null) {
+            coreCounts.add(sort.coreKind!);
+          }
           if (sort.kind == WasmComponentSortKind.function) {
             functionTypes.add(null);
           } else if (sort.kind == WasmComponentSortKind.value) {
@@ -1536,12 +1636,21 @@ final class _WasmComponentValidationContext {
           }
         case _WasmComponentDefinitionEventKind.canonical:
           final definition = canonicalDefinitions[event.index];
+          if (definition.kind == WasmComponentCanonicalKind.lift) {
+            validateCoreSortIndex(
+              definition.coreFunctionIndex,
+              'canonical[${event.index}].coreFunction',
+              WasmComponentCoreSortKind.function,
+              coreCounts,
+            );
+          }
           if (definition.kind == WasmComponentCanonicalKind.lower) {
             validateComponentFunctionIndex(
               definition.functionIndex,
               'canonical[${event.index}].function',
               functionTypes.length,
             );
+            coreCounts.add(WasmComponentCoreSortKind.function);
           }
           if (definition.kind == WasmComponentCanonicalKind.lift) {
             functionTypes.add(componentFunctionType(definition.typeIndex));
@@ -1680,6 +1789,74 @@ final class _WasmComponentValidationContext {
       case WasmComponentSortKind.core:
       case WasmComponentSortKind.componentType:
         break;
+    }
+  }
+
+  void validateCoreInstanceDefinition(
+    WasmComponentCoreInstance instance,
+    String path, {
+    required _WasmComponentCoreIndexCounts coreCounts,
+  }) {
+    switch (instance.kind) {
+      case WasmComponentCoreInstanceKind.instantiate:
+        validateCoreSortIndex(
+          instance.moduleIndex,
+          '$path.module',
+          WasmComponentCoreSortKind.module,
+          coreCounts,
+        );
+        for (var i = 0; i < instance.arguments.length; i++) {
+          validateCoreSortIndex(
+            instance.arguments[i].instanceIndex,
+            '$path.arguments[$i].instance',
+            WasmComponentCoreSortKind.instance,
+            coreCounts,
+          );
+        }
+      case WasmComponentCoreInstanceKind.inlineExports:
+        for (var i = 0; i < instance.exports.length; i++) {
+          final sort = instance.exports[i].sort;
+          validateCoreSortIndex(
+            sort.index,
+            '$path.exports[$i].sort',
+            sort.kind,
+            coreCounts,
+          );
+        }
+    }
+  }
+
+  void validateAliasDefinition(
+    WasmComponentAlias alias,
+    String path, {
+    required _WasmComponentCoreIndexCounts coreCounts,
+  }) {
+    if (alias.sort.kind != WasmComponentSortKind.core ||
+        alias.target.kind != WasmComponentAliasTargetKind.coreExport) {
+      return;
+    }
+
+    validateCoreSortIndex(
+      alias.target.coreInstanceIndex,
+      '$path.target.coreInstance',
+      WasmComponentCoreSortKind.instance,
+      coreCounts,
+    );
+  }
+
+  void validateCoreSortIndex(
+    int? index,
+    String path,
+    WasmComponentCoreSortKind kind,
+    _WasmComponentCoreIndexCounts coreCounts,
+  ) {
+    if (index == null || index < 0 || index >= coreCounts.count(kind)) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message: 'Unknown Wasm component core ${kind.name} index: $index.',
+        ),
+      );
     }
   }
 

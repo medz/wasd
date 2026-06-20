@@ -639,6 +639,46 @@ void main() {
       expect(duplicate.single.message, contains('already consumed'));
     });
 
+    test('validates core instance indexes in definition order', () {
+      expect(
+        WasmComponent.decode(
+          _coreInstanceInstantiateComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
+      expect(
+        WasmComponent.decode(_coreInstanceInlineComponentBytes()).validate(),
+        isEmpty,
+      );
+
+      final beforeModule = WasmComponent.decode(
+        _coreInstanceBeforeModuleComponentBytes(),
+      ).validate();
+      expect(beforeModule, hasLength(1));
+      expect(
+        beforeModule.single.message,
+        contains('Unknown Wasm component core module index'),
+      );
+
+      final undefinedArgument = WasmComponent.decode(
+        _coreInstanceUndefinedArgumentComponentBytes(),
+      ).validate();
+      expect(undefinedArgument, hasLength(1));
+      expect(
+        undefinedArgument.single.message,
+        contains('Unknown Wasm component core instance index'),
+      );
+
+      final undefinedInlineExport = WasmComponent.decode(
+        _coreInlineInstanceUndefinedMemoryComponentBytes(),
+      ).validate();
+      expect(undefinedInlineExport, hasLength(1));
+      expect(
+        undefinedInlineExport.single.message,
+        contains('Unknown Wasm component core memory index'),
+      );
+    });
+
     test('reports invalid canonical result value type indexes', () {
       final errors = WasmComponent.decode(
         _canonicalResultOutOfRangeTypeIndexComponentBytes(),
@@ -680,19 +720,24 @@ void main() {
       final wrongSort = WasmComponent.decode(
         _canonicalLiftWrongSortTypeIndexComponentBytes(),
       ).validate();
-      expect(wrongSort, hasLength(1));
       expect(
-        wrongSort.single.message,
-        contains('does not refer to a function type'),
+        wrongSort.any(
+          (error) =>
+              error.message.contains('does not refer to a function type'),
+        ),
+        isTrue,
       );
 
       final outOfRange = WasmComponent.decode(
         _canonicalLiftOutOfRangeTypeIndexComponentBytes(),
       ).validate();
-      expect(outOfRange, hasLength(1));
       expect(
-        outOfRange.single.message,
-        contains('Unknown Wasm component function type index'),
+        outOfRange.any(
+          (error) => error.message.contains(
+            'Unknown Wasm component function type index',
+          ),
+        ),
+        isTrue,
       );
     });
 
@@ -1807,6 +1852,119 @@ Uint8List _coreInstanceArgumentComponentBytes() =>
       0x65,
       0x70,
       0x12,
+      0x00,
+    ]);
+
+Uint8List _coreInstanceBeforeModuleComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x02,
+      0x04,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      0x16,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x05,
+      0x03,
+      0x01,
+      0x00,
+      0x01,
+      0x07,
+      0x07,
+      0x01,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x02,
+      0x00,
+    ]);
+
+Uint8List _coreInstanceUndefinedArgumentComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x01,
+      0x16,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x05,
+      0x03,
+      0x01,
+      0x00,
+      0x01,
+      0x07,
+      0x07,
+      0x01,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x02,
+      0x00,
+      0x02,
+      0x0a,
+      0x01,
+      0x00,
+      0x00,
+      0x01,
+      0x03,
+      0x64,
+      0x65,
+      0x70,
+      0x12,
+      0x00,
+    ]);
+
+Uint8List _coreInlineInstanceUndefinedMemoryComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x02,
+      0x09,
+      0x01,
+      0x01,
+      0x01,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x02,
       0x00,
     ]);
 
