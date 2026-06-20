@@ -1269,6 +1269,18 @@ void _validateCanonicalDefinition(
   List<WasmComponentTypeDefinition> typeDefinitions,
   List<WasmComponentValidationError> errors,
 ) {
+  if (definition.kind == WasmComponentCanonicalKind.lift) {
+    _validateComponentTypeIndex(
+      definition.typeIndex,
+      '$path.type',
+      typeDefinitions,
+      WasmComponentTypeKind.function,
+      indexDescription: 'function type',
+      targetDescription: 'a function type',
+      errors: errors,
+    );
+  }
+
   if (_canonicalDefinitionUsesResourceType(definition.kind)) {
     _validateComponentResourceTypeIndex(
       definition.typeIndex,

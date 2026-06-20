@@ -595,6 +595,26 @@ void main() {
       );
     });
 
+    test('reports invalid canonical lift function type indexes', () {
+      final wrongSort = WasmComponent.decode(
+        _canonicalLiftWrongSortTypeIndexComponentBytes(),
+      ).validate();
+      expect(wrongSort, hasLength(1));
+      expect(
+        wrongSort.single.message,
+        contains('does not refer to a function type'),
+      );
+
+      final outOfRange = WasmComponent.decode(
+        _canonicalLiftOutOfRangeTypeIndexComponentBytes(),
+      ).validate();
+      expect(outOfRange, hasLength(1));
+      expect(
+        outOfRange.single.message,
+        contains('Unknown Wasm component function type index'),
+      );
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -1798,6 +1818,50 @@ Uint8List _canonicalResourceOutOfRangeTypeIndexComponentBytes() =>
       0x03,
       0x01,
       0x02,
+      0x00,
+    ]);
+
+Uint8List _canonicalLiftWrongSortTypeIndexComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x02,
+      0x01,
+      0x7f,
+      0x08,
+      0x06,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _canonicalLiftOutOfRangeTypeIndexComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x06,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
       0x00,
     ]);
 
