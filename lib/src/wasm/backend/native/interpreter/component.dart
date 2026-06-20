@@ -767,6 +767,16 @@ final class _WasmComponentValueIndexEntry {
   final bool requiresConsumption;
 }
 
+final class _WasmComponentInstanceExportEntry {
+  const _WasmComponentInstanceExportEntry({required this.sort, this.function});
+
+  final WasmComponentSortIndex sort;
+  final WasmComponentFunctionType? function;
+}
+
+typedef _WasmComponentInstanceExportMap =
+    Map<String, _WasmComponentInstanceExportEntry>;
+
 final class _WasmComponentCoreIndexCounts {
   var functions = 0;
   var tables = 0;
@@ -2720,7 +2730,7 @@ final class _WasmComponentValidationContext {
   }) {
     final functionTypes = <WasmComponentFunctionType?>[];
     final valueEntries = <_WasmComponentValueIndexEntry>[];
-    final instanceExportMaps = <Map<String, WasmComponentSortIndex>?>[];
+    final instanceExportMaps = <_WasmComponentInstanceExportMap?>[];
     List<WasmComponentTypeDefinition>? materializedTypeDefinitions;
     var decodedTypeDefinitionCount = 0;
     List<WasmComponentTypeDefinition> visibleTypeDefinitionsForRead() {
@@ -2874,7 +2884,9 @@ final class _WasmComponentValidationContext {
             componentCount: componentCount,
             instanceCount: instanceCount,
           );
-          instanceExportMaps.add(componentInstanceExportMap(instance));
+          instanceExportMaps.add(
+            componentInstanceExportMap(instance, functionTypes: functionTypes),
+          );
           instanceCount++;
         case _WasmComponentDefinitionEventKind.typeCount:
           if (event.index > decodedTypeDefinitionCount) {
@@ -2914,7 +2926,12 @@ final class _WasmComponentValidationContext {
             coreCounts.add(sort.coreKind!);
           }
           if (sort.kind == WasmComponentSortKind.function) {
-            functionTypes.add(null);
+            functionTypes.add(
+              knownComponentInstanceExportAliasEntry(
+                alias,
+                instanceExportMaps,
+              )?.function,
+            );
           } else if (sort.kind == WasmComponentSortKind.value) {
             valueEntries.add(
               _WasmComponentValueIndexEntry(
@@ -3124,15 +3141,22 @@ final class _WasmComponentValidationContext {
     }
   }
 
-  Map<String, WasmComponentSortIndex>? componentInstanceExportMap(
-    WasmComponentInstance instance,
-  ) {
+  _WasmComponentInstanceExportMap? componentInstanceExportMap(
+    WasmComponentInstance instance, {
+    required List<WasmComponentFunctionType?> functionTypes,
+  }) {
     if (instance.kind != WasmComponentInstanceKind.inlineExports) {
       return null;
     }
 
-    return <String, WasmComponentSortIndex>{
-      for (final export in instance.exports) export.name: export.sort,
+    return <String, _WasmComponentInstanceExportEntry>{
+      for (final export in instance.exports)
+        export.name: _WasmComponentInstanceExportEntry(
+          sort: export.sort,
+          function: export.sort.kind == WasmComponentSortKind.function
+              ? componentFunctionTypeAt(functionTypes, export.sort.index)
+              : null,
+        ),
     };
   }
 
@@ -3198,7 +3222,7 @@ final class _WasmComponentValidationContext {
     String path, {
     required _WasmComponentCoreIndexCounts coreCounts,
     required int instanceCount,
-    required List<Map<String, WasmComponentSortIndex>?> instanceExportMaps,
+    required List<_WasmComponentInstanceExportMap?> instanceExportMaps,
     required _WasmComponentOuterAliasScope currentOuterAliasScope,
   }) {
     if (alias.target.kind == WasmComponentAliasTargetKind.export) {
@@ -3236,7 +3260,7 @@ final class _WasmComponentValidationContext {
   bool validateKnownComponentInstanceExportAliasTarget(
     WasmComponentAlias alias,
     String path,
-    List<Map<String, WasmComponentSortIndex>?> instanceExportMaps,
+    List<_WasmComponentInstanceExportMap?> instanceExportMaps,
   ) {
     final instanceIndex = alias.target.instanceIndex;
     final name = alias.target.name;
@@ -3252,8 +3276,8 @@ final class _WasmComponentValidationContext {
       return true;
     }
 
-    final exportSort = exports[name];
-    if (exportSort == null) {
+    final exportEntry = exports[name];
+    if (exportEntry == null) {
       errors.add(
         WasmComponentValidationError(
           path: '$path.target.name',
@@ -3263,7 +3287,7 @@ final class _WasmComponentValidationContext {
       return false;
     }
 
-    if (!componentAliasSortMatchesSortIndex(alias.sort, exportSort)) {
+    if (!componentAliasSortMatchesSortIndex(alias.sort, exportEntry.sort)) {
       errors.add(
         WasmComponentValidationError(
           path: path,
@@ -3276,6 +3300,24 @@ final class _WasmComponentValidationContext {
     }
 
     return true;
+  }
+
+  _WasmComponentInstanceExportEntry? knownComponentInstanceExportAliasEntry(
+    WasmComponentAlias alias,
+    List<_WasmComponentInstanceExportMap?> instanceExportMaps,
+  ) {
+    if (alias.target.kind != WasmComponentAliasTargetKind.export) {
+      return null;
+    }
+    final instanceIndex = alias.target.instanceIndex;
+    final name = alias.target.name;
+    if (instanceIndex == null ||
+        name == null ||
+        instanceIndex < 0 ||
+        instanceIndex >= instanceExportMaps.length) {
+      return null;
+    }
+    return instanceExportMaps[instanceIndex]?[name];
   }
 
   bool componentAliasSortMatchesSortIndex(

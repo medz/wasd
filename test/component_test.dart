@@ -1192,6 +1192,15 @@ void main() {
       ).validate();
       expect(resultCount, hasLength(1));
       expect(resultCount.single.message, contains('start result count'));
+
+      final aliasedFunctionArgumentCount = WasmComponent.decode(
+        _startAliasedFunctionArgumentCountMismatchComponentBytes(),
+      ).validate();
+      expect(aliasedFunctionArgumentCount, hasLength(1));
+      expect(
+        aliasedFunctionArgumentCount.single.message,
+        contains('start argument count'),
+      );
     });
 
     test('reports invalid component stream char element types', () {
@@ -4246,6 +4255,59 @@ Uint8List _startOutOfRangeFunctionIndexComponentBytes() =>
       0x09,
       0x03,
       0x00,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _startAliasedFunctionArgumentCountMismatchComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x08,
+      0x01,
+      0x40,
+      0x01,
+      0x01,
+      0x78,
+      0x7f,
+      0x01,
+      0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x05,
+      0x08,
+      0x01,
+      0x01,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x06,
+      0x06,
+      0x01,
+      0x01,
+      0x00,
+      0x00,
+      0x01,
+      0x66,
+      0x09,
+      0x03,
+      0x01,
       0x00,
       0x00,
     ]);
