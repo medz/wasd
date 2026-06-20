@@ -612,7 +612,16 @@ final class WasmComponentCoreExternDescriptor {
   final bool? mutable;
 }
 
-enum WasmComponentValueDataKind { boolean, integer, floatingPoint, string, raw }
+enum WasmComponentValueDataKind {
+  boolean,
+  integer,
+  floatingPoint,
+  string,
+  tuple,
+  record,
+  list,
+  raw,
+}
 
 final class WasmComponentValueData {
   WasmComponentValueData({
@@ -622,6 +631,7 @@ final class WasmComponentValueData {
     this.integer,
     this.floatingPoint,
     this.string,
+    this.items = const <WasmComponentValueData>[],
   });
 
   final WasmComponentValueDataKind kind;
@@ -630,6 +640,7 @@ final class WasmComponentValueData {
   final Object? integer;
   final double? floatingPoint;
   final String? string;
+  final List<WasmComponentValueData> items;
 }
 
 final class WasmComponentValueDefinition {
@@ -776,7 +787,9 @@ final class WasmComponent {
         case _exportSectionId:
           exports.addAll(_decodeExports(payload));
         case _valueSectionId:
-          valueDefinitions.addAll(_decodeValueDefinitions(payload));
+          valueDefinitions.addAll(
+            _decodeValueDefinitions(payload, typeDefinitions),
+          );
       }
     }
 
@@ -975,18 +988,24 @@ WasmComponentStart _decodeStart(Uint8List payload) {
   );
 }
 
-List<WasmComponentValueDefinition> _decodeValueDefinitions(Uint8List payload) {
+List<WasmComponentValueDefinition> _decodeValueDefinitions(
+  Uint8List payload,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+) {
   final reader = ByteReader(payload);
   final count = reader.readVarUint32();
   final values = <WasmComponentValueDefinition>[];
   for (var i = 0; i < count; i++) {
-    values.add(_readValueDefinition(reader));
+    values.add(_readValueDefinition(reader, typeDefinitions));
   }
   reader.expectEof();
   return values;
 }
 
-WasmComponentValueDefinition _readValueDefinition(ByteReader reader) {
+WasmComponentValueDefinition _readValueDefinition(
+  ByteReader reader,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+) {
   final type = _readComponentValueType(reader);
   final payloadSize = reader.readVarUint32();
   final rawBytes = reader.readBytes(payloadSize);
@@ -994,19 +1013,37 @@ WasmComponentValueDefinition _readValueDefinition(ByteReader reader) {
     type: type,
     payloadSize: payloadSize,
     rawBytes: rawBytes,
-    value: _decodeComponentValueData(type, rawBytes),
+    value: _decodeComponentValueData(type, rawBytes, typeDefinitions),
   );
 }
 
 WasmComponentValueData _decodeComponentValueData(
   WasmComponentValueType type,
   Uint8List rawBytes,
+  List<WasmComponentTypeDefinition> typeDefinitions,
 ) {
   final primitive = type.primitive;
   if (primitive == null) {
-    return WasmComponentValueData(
-      kind: WasmComponentValueDataKind.raw,
-      rawBytes: rawBytes,
+    final typeIndex = type.typeIndex;
+    if (typeIndex == null ||
+        typeIndex < 0 ||
+        typeIndex >= typeDefinitions.length) {
+      throw FormatException(
+        'Unknown Wasm component value type index: $typeIndex.',
+      );
+    }
+    final definition = typeDefinitions[typeIndex];
+    final definedValue = definition.definedValue;
+    if (definition.kind != WasmComponentTypeKind.definedValue ||
+        definedValue == null) {
+      throw FormatException(
+        'Wasm component value type index $typeIndex does not refer to a value type.',
+      );
+    }
+    return _decodeDefinedComponentValueData(
+      definedValue,
+      rawBytes,
+      typeDefinitions,
     );
   }
 
@@ -1105,6 +1142,211 @@ WasmComponentValueData _decodeComponentValueData(
         rawBytes: rawBytes,
       );
   }
+}
+
+WasmComponentValueData _decodeDefinedComponentValueData(
+  WasmComponentDefinedValueType type,
+  Uint8List rawBytes,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+) {
+  switch (type.kind) {
+    case WasmComponentDefinedValueTypeKind.primitive:
+      final primitive = type.primitive;
+      if (primitive == null) {
+        throw const FormatException(
+          'Wasm component primitive value type is missing its primitive kind.',
+        );
+      }
+      return _decodeComponentValueData(
+        WasmComponentValueType.primitive(primitive),
+        rawBytes,
+        typeDefinitions,
+      );
+    case WasmComponentDefinedValueTypeKind.tuple:
+      return _decodeSequentialComponentValues(
+        rawBytes,
+        type.types,
+        typeDefinitions,
+        WasmComponentValueDataKind.tuple,
+      );
+    case WasmComponentDefinedValueTypeKind.record:
+      return _decodeSequentialComponentValues(
+        rawBytes,
+        type.fields.map((field) => field.type).toList(growable: false),
+        typeDefinitions,
+        WasmComponentValueDataKind.record,
+      );
+    case WasmComponentDefinedValueTypeKind.list:
+      final elementType = type.elementType;
+      if (elementType == null) {
+        throw const FormatException(
+          'Wasm component list value type is missing its element type.',
+        );
+      }
+      return _decodeListComponentValue(rawBytes, elementType, typeDefinitions);
+    case WasmComponentDefinedValueTypeKind.fixedList:
+    case WasmComponentDefinedValueTypeKind.variant:
+    case WasmComponentDefinedValueTypeKind.flags:
+    case WasmComponentDefinedValueTypeKind.enumeration:
+    case WasmComponentDefinedValueTypeKind.option:
+    case WasmComponentDefinedValueTypeKind.result:
+    case WasmComponentDefinedValueTypeKind.own:
+    case WasmComponentDefinedValueTypeKind.borrow:
+    case WasmComponentDefinedValueTypeKind.stream:
+    case WasmComponentDefinedValueTypeKind.future:
+      return WasmComponentValueData(
+        kind: WasmComponentValueDataKind.raw,
+        rawBytes: rawBytes,
+      );
+  }
+}
+
+WasmComponentValueData _decodeSequentialComponentValues(
+  Uint8List rawBytes,
+  List<WasmComponentValueType> types,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+  WasmComponentValueDataKind kind,
+) {
+  final reader = ByteReader(rawBytes);
+  final items = <WasmComponentValueData>[];
+  for (final type in types) {
+    items.add(_readComponentValuePayload(reader, type, typeDefinitions));
+  }
+  reader.expectEof();
+  return WasmComponentValueData(
+    kind: kind,
+    rawBytes: rawBytes,
+    items: List.unmodifiable(items),
+  );
+}
+
+WasmComponentValueData _decodeListComponentValue(
+  Uint8List rawBytes,
+  WasmComponentValueType elementType,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+) {
+  final reader = ByteReader(rawBytes);
+  final count = reader.readVarUint32();
+  final items = <WasmComponentValueData>[];
+  for (var i = 0; i < count; i++) {
+    items.add(_readComponentValuePayload(reader, elementType, typeDefinitions));
+  }
+  reader.expectEof();
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.list,
+    rawBytes: rawBytes,
+    items: List.unmodifiable(items),
+  );
+}
+
+WasmComponentValueData _readComponentValuePayload(
+  ByteReader reader,
+  WasmComponentValueType type,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+) {
+  final length = _componentValuePayloadByteLength(type, typeDefinitions);
+  if (length == null) {
+    throw const FormatException(
+      'Cannot decode variable-size Wasm component value without an enclosing length.',
+    );
+  }
+  final rawBytes = reader.readBytes(length);
+  return _decodeComponentValueData(type, rawBytes, typeDefinitions);
+}
+
+int? _componentValuePayloadByteLength(
+  WasmComponentValueType type,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+) {
+  final primitive = type.primitive;
+  if (primitive != null) {
+    return _primitiveComponentValuePayloadByteLength(primitive);
+  }
+  final typeIndex = type.typeIndex;
+  if (typeIndex == null ||
+      typeIndex < 0 ||
+      typeIndex >= typeDefinitions.length) {
+    return null;
+  }
+  final definedValue = typeDefinitions[typeIndex].definedValue;
+  if (definedValue == null) {
+    return null;
+  }
+  switch (definedValue.kind) {
+    case WasmComponentDefinedValueTypeKind.primitive:
+      final primitive = definedValue.primitive;
+      return primitive == null
+          ? null
+          : _primitiveComponentValuePayloadByteLength(primitive);
+    case WasmComponentDefinedValueTypeKind.tuple:
+      return _componentValuePayloadByteLengthSum(
+        definedValue.types,
+        typeDefinitions,
+      );
+    case WasmComponentDefinedValueTypeKind.record:
+      return _componentValuePayloadByteLengthSum(
+        definedValue.fields.map((field) => field.type),
+        typeDefinitions,
+      );
+    case WasmComponentDefinedValueTypeKind.fixedList:
+      final elementType = definedValue.elementType;
+      final fixedLength = definedValue.fixedLength;
+      if (elementType == null || fixedLength == null) {
+        return null;
+      }
+      final elementLength = _componentValuePayloadByteLength(
+        elementType,
+        typeDefinitions,
+      );
+      return elementLength == null ? null : elementLength * fixedLength;
+    case WasmComponentDefinedValueTypeKind.list:
+    case WasmComponentDefinedValueTypeKind.variant:
+    case WasmComponentDefinedValueTypeKind.flags:
+    case WasmComponentDefinedValueTypeKind.enumeration:
+    case WasmComponentDefinedValueTypeKind.option:
+    case WasmComponentDefinedValueTypeKind.result:
+    case WasmComponentDefinedValueTypeKind.own:
+    case WasmComponentDefinedValueTypeKind.borrow:
+    case WasmComponentDefinedValueTypeKind.stream:
+    case WasmComponentDefinedValueTypeKind.future:
+      return null;
+  }
+}
+
+int? _componentValuePayloadByteLengthSum(
+  Iterable<WasmComponentValueType> types,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+) {
+  var total = 0;
+  for (final type in types) {
+    final length = _componentValuePayloadByteLength(type, typeDefinitions);
+    if (length == null) {
+      return null;
+    }
+    total += length;
+  }
+  return total;
+}
+
+int? _primitiveComponentValuePayloadByteLength(
+  WasmComponentPrimitiveValueType primitive,
+) {
+  return switch (primitive) {
+    WasmComponentPrimitiveValueType.boolean ||
+    WasmComponentPrimitiveValueType.s8 ||
+    WasmComponentPrimitiveValueType.u8 => 1,
+    WasmComponentPrimitiveValueType.s16 ||
+    WasmComponentPrimitiveValueType.u16 => 2,
+    WasmComponentPrimitiveValueType.s32 ||
+    WasmComponentPrimitiveValueType.u32 ||
+    WasmComponentPrimitiveValueType.f32 => 4,
+    WasmComponentPrimitiveValueType.s64 ||
+    WasmComponentPrimitiveValueType.u64 ||
+    WasmComponentPrimitiveValueType.f64 => 8,
+    WasmComponentPrimitiveValueType.char ||
+    WasmComponentPrimitiveValueType.string ||
+    WasmComponentPrimitiveValueType.errorContext => null,
+  };
 }
 
 WasmComponentValueData _componentIntegerValue(

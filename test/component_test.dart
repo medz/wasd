@@ -396,6 +396,17 @@ void main() {
       expect(string.value.string, 'hi');
     });
 
+    test('resolves type-indexed component value definitions', () {
+      final component = WasmComponent.decode(
+        _typedValueDefinitionsComponentBytes(),
+      );
+
+      final value = component.valueDefinitions.single;
+      expect(value.type.typeIndex, 0);
+      expect(value.value.kind, WasmComponentValueDataKind.tuple);
+      expect(value.value.items.map((item) => item.integer), [5, 0x1234]);
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -1676,6 +1687,33 @@ Uint8List _valueDefinitionsComponentBytes() => Uint8List.fromList(const <int>[
   0x68,
   0x69,
 ]);
+
+Uint8List _typedValueDefinitionsComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x6f,
+      0x02,
+      0x7d,
+      0x7b,
+      0x0c,
+      0x06,
+      0x01,
+      0x00,
+      0x03,
+      0x05,
+      0x34,
+      0x12,
+    ]);
 
 Uint8List _truncatedSectionComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
