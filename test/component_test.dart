@@ -457,6 +457,25 @@ void main() {
       );
     });
 
+    test('validates nested type declaration outer aliases', () {
+      expect(
+        WasmComponent.decode(
+          _typeDeclarationNestedOuterAliasComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
+
+      final errors = WasmComponent.decode(
+        _typeDeclarationOuterAliasDepthOutOfRangeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('Unknown Wasm component type scope'),
+      );
+    });
+
     test('decodes component starts', () {
       final component = WasmComponent.decode(_startComponentBytes());
 
@@ -3379,6 +3398,67 @@ Uint8List _typeDeclarationAliasBeforeTypeComponentBytes() =>
       0x03,
       0x02,
       0x00,
+      0x00,
+    ]);
+
+Uint8List _typeDeclarationNestedOuterAliasComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x16,
+      0x01,
+      0x42,
+      0x02,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x01,
+      0x42,
+      0x02,
+      0x02,
+      0x03,
+      0x02,
+      0x01,
+      0x00,
+      0x04,
+      0x00,
+      0x01,
+      0x61,
+      0x01,
+      0x00,
+    ]);
+
+Uint8List _typeDeclarationOuterAliasDepthOutOfRangeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x0b,
+      0x01,
+      0x42,
+      0x01,
+      0x01,
+      0x42,
+      0x01,
+      0x02,
+      0x03,
+      0x02,
+      0x02,
       0x00,
     ]);
 

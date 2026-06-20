@@ -1142,6 +1142,8 @@ final class _WasmComponentValidationContext {
     WasmComponentTypeDefinition type,
     String path, {
     List<WasmComponentTypeDefinition>? scopedTypeDefinitions,
+    List<List<WasmComponentTypeDefinition>> outerTypeScopes =
+        const <List<WasmComponentTypeDefinition>>[],
   }) {
     final definedValue = type.definedValue;
     if (type.kind == WasmComponentTypeKind.definedValue &&
@@ -1178,12 +1180,20 @@ final class _WasmComponentValidationContext {
 
     final component = type.component;
     if (type.kind == WasmComponentTypeKind.component && component != null) {
-      validateComponentTypeDeclarations(component.declarations, path);
+      validateComponentTypeDeclarations(
+        component.declarations,
+        path,
+        outerTypeScopes: outerTypeScopes,
+      );
     }
 
     final instance = type.instance;
     if (type.kind == WasmComponentTypeKind.instance && instance != null) {
-      validateComponentTypeDeclarations(instance.declarations, path);
+      validateComponentTypeDeclarations(
+        instance.declarations,
+        path,
+        outerTypeScopes: outerTypeScopes,
+      );
     }
   }
 
@@ -1438,10 +1448,16 @@ final class _WasmComponentValidationContext {
 
   void validateComponentTypeDeclarations(
     List<WasmComponentTypeDeclaration> declarations,
-    String path,
-  ) {
+    String path, {
+    List<List<WasmComponentTypeDefinition>> outerTypeScopes =
+        const <List<WasmComponentTypeDefinition>>[],
+  }) {
     final localTypeDefinitions = <WasmComponentTypeDefinition>[];
     final localCoreTypeKinds = <WasmComponentCoreTypeKind>[];
+    final typeScopes = <List<WasmComponentTypeDefinition>>[
+      localTypeDefinitions,
+      ...outerTypeScopes,
+    ];
     for (var i = 0; i < declarations.length; i++) {
       final declaration = declarations[i];
       switch (declaration.kind) {
@@ -1454,6 +1470,7 @@ final class _WasmComponentValidationContext {
             nestedType,
             '$path.declarations[$i]',
             scopedTypeDefinitions: localTypeDefinitions,
+            outerTypeScopes: typeScopes,
           );
           localTypeDefinitions.add(nestedType);
         case WasmComponentTypeDeclarationKind.import:
@@ -1486,6 +1503,7 @@ final class _WasmComponentValidationContext {
             alias,
             '$path.declarations[$i]',
             localTypeDefinitions,
+            typeScopes,
           );
           break;
       }
@@ -1496,17 +1514,31 @@ final class _WasmComponentValidationContext {
     WasmComponentAlias alias,
     String path,
     List<WasmComponentTypeDefinition> localTypeDefinitions,
+    List<List<WasmComponentTypeDefinition>> typeScopes,
   ) {
     if (alias.sort.kind != WasmComponentSortKind.componentType ||
-        alias.target.kind != WasmComponentAliasTargetKind.outer ||
-        alias.target.componentDepth != 0) {
+        alias.target.kind != WasmComponentAliasTargetKind.outer) {
       return;
     }
 
+    final componentDepth = alias.target.componentDepth;
+    if (componentDepth == null ||
+        componentDepth < 0 ||
+        componentDepth >= typeScopes.length) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.target',
+          message: 'Unknown Wasm component type scope: $componentDepth.',
+        ),
+      );
+      return;
+    }
+
+    final targetTypeDefinitions = typeScopes[componentDepth];
     final typeIndex = alias.target.index;
     if (typeIndex == null ||
         typeIndex < 0 ||
-        typeIndex >= localTypeDefinitions.length) {
+        typeIndex >= targetTypeDefinitions.length) {
       errors.add(
         WasmComponentValidationError(
           path: '$path.target',
@@ -1516,7 +1548,7 @@ final class _WasmComponentValidationContext {
       return;
     }
 
-    localTypeDefinitions.add(localTypeDefinitions[typeIndex]);
+    localTypeDefinitions.add(targetTypeDefinitions[typeIndex]);
   }
 
   void validateTypeDeclarationExternDescriptor(
