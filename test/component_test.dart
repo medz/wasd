@@ -330,6 +330,13 @@ void main() {
       );
     });
 
+    test('validates outer type aliases before nested component imports', () {
+      expect(
+        WasmComponent.decode(_outerTypeAliasImportComponentBytes()).validate(),
+        isEmpty,
+      );
+    });
+
     test('decodes canonical lift and lower definitions', () {
       final component = WasmComponent.decode(
         _canonicalLiftLowerComponentBytes(),
@@ -2798,6 +2805,50 @@ Uint8List _outerAliasComponentIndexOutOfRangeComponentBytes() =>
       0x02,
       0x01,
       0x01,
+    ]);
+
+Uint8List _outerTypeAliasImportComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x04,
+      0x17,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x06,
+      0x05,
+      0x01,
+      0x03,
+      0x02,
+      0x01,
+      0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
     ]);
 
 Uint8List _canonicalLiftLowerComponentBytes() => Uint8List.fromList(const <int>[

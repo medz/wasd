@@ -814,18 +814,18 @@ final class _WasmComponentCoreIndexCounts {
 
 final class _WasmComponentOuterAliasScope {
   const _WasmComponentOuterAliasScope({
-    required this.typeCount,
+    required this.typeDefinitions,
     required this.coreModuleCount,
     required this.componentCount,
   });
 
-  final int typeCount;
+  final List<WasmComponentTypeDefinition> typeDefinitions;
   final int coreModuleCount;
   final int componentCount;
 
   int? count(WasmComponentSort sort) {
     if (sort.kind == WasmComponentSortKind.componentType) {
-      return typeCount;
+      return typeDefinitions.length;
     }
     if (sort.kind == WasmComponentSortKind.component) {
       return componentCount;
@@ -835,6 +835,13 @@ final class _WasmComponentOuterAliasScope {
       return coreModuleCount;
     }
     return null;
+  }
+
+  WasmComponentTypeDefinition? typeDefinitionAt(int? index) {
+    if (index == null || index < 0 || index >= typeDefinitions.length) {
+      return null;
+    }
+    return typeDefinitions[index];
   }
 }
 
@@ -924,24 +931,6 @@ final class WasmComponent {
             crossesComponentBoundary: true,
           ),
         ],
-      );
-    }
-    for (var i = 0; i < imports.length; i++) {
-      context.validateExternDescriptor(
-        imports[i].descriptor,
-        'import[$i].descriptor',
-      );
-    }
-    for (var i = 0; i < exports.length; i++) {
-      context.validateExternDescriptor(
-        exports[i].descriptor,
-        'export[$i].descriptor',
-      );
-    }
-    for (var i = 0; i < canonicalDefinitions.length; i++) {
-      context.validateCanonicalDefinition(
-        canonicalDefinitions[i],
-        'canonical[$i]',
       );
     }
     context.validateDefinitionEvents(
@@ -2314,8 +2303,9 @@ final class _WasmComponentValidationContext {
 
   void validateExternDescriptor(
     WasmComponentExternDescriptor? descriptor,
-    String path,
-  ) {
+    String path, {
+    List<WasmComponentTypeDefinition>? visibleTypeDefinitions,
+  }) {
     if (descriptor == null) {
       return;
     }
@@ -2324,38 +2314,98 @@ final class _WasmComponentValidationContext {
       case WasmComponentExternKind.coreModule:
         validateCoreModuleTypeIndex(descriptor.typeIndex, '$path.type');
       case WasmComponentExternKind.function:
-        validateComponentTypeIndex(
+        validateComponentTypeIndexInMaybeDefinitions(
           descriptor.typeIndex,
           '$path.type',
           WasmComponentTypeKind.function,
+          visibleTypeDefinitions,
           indexDescription: 'function type',
           targetDescription: 'a function type',
         );
       case WasmComponentExternKind.value:
         if (descriptor.boundKind == WasmComponentExternBoundKind.valueType) {
-          validateComponentValueType(descriptor.valueType, '$path.valueType');
+          validateComponentValueType(
+            descriptor.valueType,
+            '$path.valueType',
+            scopedTypeDefinitions: visibleTypeDefinitions,
+          );
         }
       case WasmComponentExternKind.componentType:
         if (descriptor.boundKind == WasmComponentExternBoundKind.equality) {
-          validateAnyComponentTypeIndex(descriptor.typeIndex, '$path.type');
+          validateAnyComponentTypeIndexInMaybeDefinitions(
+            descriptor.typeIndex,
+            '$path.type',
+            visibleTypeDefinitions,
+          );
         }
       case WasmComponentExternKind.component:
-        validateComponentTypeIndex(
+        validateComponentTypeIndexInMaybeDefinitions(
           descriptor.typeIndex,
           '$path.type',
           WasmComponentTypeKind.component,
+          visibleTypeDefinitions,
           indexDescription: 'component type',
           targetDescription: 'a component type',
         );
       case WasmComponentExternKind.instance:
-        validateComponentTypeIndex(
+        validateComponentTypeIndexInMaybeDefinitions(
           descriptor.typeIndex,
           '$path.type',
           WasmComponentTypeKind.instance,
+          visibleTypeDefinitions,
           indexDescription: 'instance type',
           targetDescription: 'an instance type',
         );
     }
+  }
+
+  void validateAnyComponentTypeIndexInMaybeDefinitions(
+    int? typeIndex,
+    String path,
+    List<WasmComponentTypeDefinition>? definitions,
+  ) {
+    if (definitions == null) {
+      validateAnyComponentTypeIndex(typeIndex, path);
+      return;
+    }
+
+    if (typeIndex == null || typeIndex < 0 || typeIndex >= definitions.length) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message: 'Unknown Wasm component type index: $typeIndex.',
+        ),
+      );
+    }
+  }
+
+  void validateComponentTypeIndexInMaybeDefinitions(
+    int? typeIndex,
+    String path,
+    WasmComponentTypeKind expectedKind,
+    List<WasmComponentTypeDefinition>? definitions, {
+    required String indexDescription,
+    required String targetDescription,
+  }) {
+    if (definitions == null) {
+      validateComponentTypeIndex(
+        typeIndex,
+        path,
+        expectedKind,
+        indexDescription: indexDescription,
+        targetDescription: targetDescription,
+      );
+      return;
+    }
+
+    validateComponentTypeIndexInDefinitions(
+      typeIndex,
+      path,
+      definitions,
+      expectedKind,
+      indexDescription: indexDescription,
+      targetDescription: targetDescription,
+    );
   }
 
   void validateAnyComponentTypeIndex(int? typeIndex, String path) {
@@ -2500,6 +2550,38 @@ final class _WasmComponentValidationContext {
     }
   }
 
+  void validateDefinedValueKindIndexInDefinitions(
+    int? typeIndex,
+    String path,
+    WasmComponentDefinedValueTypeKind expectedKind,
+    List<WasmComponentTypeDefinition> definitions, {
+    required String indexDescription,
+    required String targetDescription,
+  }) {
+    if (typeIndex == null || typeIndex < 0 || typeIndex >= definitions.length) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Unknown Wasm component $indexDescription index: $typeIndex.',
+        ),
+      );
+      return;
+    }
+
+    final definition = definitions[typeIndex];
+    if (definition.kind != WasmComponentTypeKind.definedValue ||
+        definition.definedValue?.kind != expectedKind) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component $indexDescription index $typeIndex does not refer to $targetDescription.',
+        ),
+      );
+    }
+  }
+
   bool componentTypeDefinitionMatches(
     WasmComponentTypeDefinition definition,
     WasmComponentTypeKind expectedKind,
@@ -2547,24 +2629,34 @@ final class _WasmComponentValidationContext {
 
   void validateCanonicalDefinition(
     WasmComponentCanonicalDefinition definition,
-    String path,
-  ) {
+    String path, {
+    List<WasmComponentTypeDefinition>? visibleTypeDefinitions,
+  }) {
     if (definition.kind == WasmComponentCanonicalKind.lift) {
-      validateComponentTypeIndex(
+      validateComponentTypeIndexInMaybeDefinitions(
         definition.typeIndex,
         '$path.type',
         WasmComponentTypeKind.function,
+        visibleTypeDefinitions,
         indexDescription: 'function type',
         targetDescription: 'a function type',
       );
     }
 
     if (canonicalDefinitionUsesResourceType(definition.kind)) {
-      validateComponentResourceTypeIndex(definition.typeIndex, '$path.type');
+      validateComponentResourceTypeIndex(
+        definition.typeIndex,
+        '$path.type',
+        scopedTypeDefinitions: visibleTypeDefinitions,
+      );
     }
 
     validateCanonicalOptions(definition.options, '$path.options');
-    validateComponentValueType(definition.result?.valueType, '$path.result');
+    validateComponentValueType(
+      definition.result?.valueType,
+      '$path.result',
+      scopedTypeDefinitions: visibleTypeDefinitions,
+    );
   }
 
   void validateCanonicalOptions(
@@ -2628,14 +2720,39 @@ final class _WasmComponentValidationContext {
   }) {
     final functionTypes = <WasmComponentFunctionType?>[];
     final valueEntries = <_WasmComponentValueIndexEntry>[];
+    List<WasmComponentTypeDefinition>? materializedTypeDefinitions;
+    var decodedTypeDefinitionCount = 0;
+    List<WasmComponentTypeDefinition> visibleTypeDefinitionsForRead() {
+      final materialized = materializedTypeDefinitions;
+      if (materialized != null) {
+        return materialized;
+      }
+      if (decodedTypeDefinitionCount == typeDefinitions.length) {
+        return typeDefinitions;
+      }
+      return typeDefinitions.sublist(0, decodedTypeDefinitionCount);
+    }
+
+    List<WasmComponentTypeDefinition> materializeVisibleTypeDefinitions() {
+      return materializedTypeDefinitions ??= typeDefinitions.sublist(
+        0,
+        decodedTypeDefinitionCount,
+      );
+    }
+
     final coreCounts = _WasmComponentCoreIndexCounts();
     var componentCount = 0;
     var instanceCount = 0;
-    var typeCount = 0;
     for (final event in events) {
       switch (event.kind) {
         case _WasmComponentDefinitionEventKind.import:
           final descriptor = imports[event.index].descriptor;
+          final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
+          validateExternDescriptor(
+            descriptor,
+            'import[${event.index}].descriptor',
+            visibleTypeDefinitions: visibleTypeDefinitions,
+          );
           WasmComponentValueType? equalityValueType;
           if (descriptor.kind == WasmComponentExternKind.value &&
               descriptor.boundKind == WasmComponentExternBoundKind.equality) {
@@ -2650,7 +2767,12 @@ final class _WasmComponentValidationContext {
             );
           }
           if (descriptor.kind == WasmComponentExternKind.function) {
-            functionTypes.add(componentFunctionType(descriptor.typeIndex));
+            functionTypes.add(
+              componentFunctionType(
+                descriptor.typeIndex,
+                definitions: visibleTypeDefinitions,
+              ),
+            );
           } else if (descriptor.kind == WasmComponentExternKind.value) {
             valueEntries.add(
               _WasmComponentValueIndexEntry(
@@ -2671,6 +2793,12 @@ final class _WasmComponentValidationContext {
           }
         case _WasmComponentDefinitionEventKind.export:
           final export = exports[event.index];
+          final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
+          validateExternDescriptor(
+            export.descriptor,
+            'export[${event.index}].descriptor',
+            visibleTypeDefinitions: visibleTypeDefinitions,
+          );
           validateExportDefinition(
             export,
             'export[${event.index}]',
@@ -2696,9 +2824,12 @@ final class _WasmComponentValidationContext {
           );
           coreCounts.add(WasmComponentCoreSortKind.instance);
         case _WasmComponentDefinitionEventKind.component:
+          final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
           final childOuterAliasScopes = <_WasmComponentOuterAliasScope>[
             _WasmComponentOuterAliasScope(
-              typeCount: typeCount,
+              typeDefinitions: List<WasmComponentTypeDefinition>.unmodifiable(
+                visibleTypeDefinitions,
+              ),
               coreModuleCount: coreCounts.count(
                 WasmComponentCoreSortKind.module,
               ),
@@ -2728,7 +2859,12 @@ final class _WasmComponentValidationContext {
           );
           instanceCount++;
         case _WasmComponentDefinitionEventKind.typeCount:
-          typeCount = event.index;
+          if (event.index > decodedTypeDefinitionCount) {
+            materializedTypeDefinitions?.addAll(
+              typeDefinitions.getRange(decodedTypeDefinitionCount, event.index),
+            );
+            decodedTypeDefinitionCount = event.index;
+          }
         case _WasmComponentDefinitionEventKind.type:
           validateTypeDefinitionFunctionIndexes(
             typeDefinitions[event.index],
@@ -2737,18 +2873,18 @@ final class _WasmComponentValidationContext {
           );
         case _WasmComponentDefinitionEventKind.alias:
           final alias = aliases[event.index];
+          final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
+          final currentOuterAliasScope = _WasmComponentOuterAliasScope(
+            typeDefinitions: visibleTypeDefinitions,
+            coreModuleCount: coreCounts.count(WasmComponentCoreSortKind.module),
+            componentCount: componentCount,
+          );
           final aliasIsValid = validateAliasDefinition(
             alias,
             'alias[${event.index}]',
             coreCounts: coreCounts,
             instanceCount: instanceCount,
-            currentOuterAliasScope: _WasmComponentOuterAliasScope(
-              typeCount: typeCount,
-              coreModuleCount: coreCounts.count(
-                WasmComponentCoreSortKind.module,
-              ),
-              componentCount: componentCount,
-            ),
+            currentOuterAliasScope: currentOuterAliasScope,
           );
           if (!aliasIsValid) {
             break;
@@ -2771,8 +2907,21 @@ final class _WasmComponentValidationContext {
           } else if (sort.kind == WasmComponentSortKind.instance) {
             instanceCount++;
           }
+          final aliasedTypeDefinition = outerAliasTypeDefinition(
+            alias,
+            currentOuterAliasScope,
+          );
+          if (aliasedTypeDefinition != null) {
+            materializeVisibleTypeDefinitions().add(aliasedTypeDefinition);
+          }
         case _WasmComponentDefinitionEventKind.canonical:
           final definition = canonicalDefinitions[event.index];
+          final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
+          validateCanonicalDefinition(
+            definition,
+            'canonical[${event.index}]',
+            visibleTypeDefinitions: visibleTypeDefinitions,
+          );
           if (definition.kind == WasmComponentCanonicalKind.lift) {
             validateCoreSortIndex(
               definition.coreFunctionIndex,
@@ -2801,13 +2950,18 @@ final class _WasmComponentValidationContext {
           validateCanonicalDirectTypeIndexSpaces(
             definition,
             'canonical[${event.index}]',
-            typeCount,
+            visibleTypeDefinitions,
           );
           if (definition.kind == WasmComponentCanonicalKind.lower) {
             coreCounts.add(WasmComponentCoreSortKind.function);
           }
           if (definition.kind == WasmComponentCanonicalKind.lift) {
-            functionTypes.add(componentFunctionType(definition.typeIndex));
+            functionTypes.add(
+              componentFunctionType(
+                definition.typeIndex,
+                definitions: visibleTypeDefinitions,
+              ),
+            );
           }
         case _WasmComponentDefinitionEventKind.start:
           final start = starts[event.index];
@@ -3075,6 +3229,27 @@ final class _WasmComponentValidationContext {
     return true;
   }
 
+  WasmComponentTypeDefinition? outerAliasTypeDefinition(
+    WasmComponentAlias alias,
+    _WasmComponentOuterAliasScope currentOuterAliasScope,
+  ) {
+    if (alias.sort.kind != WasmComponentSortKind.componentType ||
+        alias.target.kind != WasmComponentAliasTargetKind.outer) {
+      return null;
+    }
+
+    final componentDepth = alias.target.componentDepth;
+    if (componentDepth == null) {
+      return null;
+    }
+
+    final targetScope = outerAliasScopeAt(
+      componentDepth,
+      currentOuterAliasScope,
+    );
+    return targetScope?.typeDefinitionAt(alias.target.index);
+  }
+
   _WasmComponentOuterAliasScope? outerAliasScopeAt(
     int componentDepth,
     _WasmComponentOuterAliasScope currentOuterAliasScope,
@@ -3206,14 +3381,14 @@ final class _WasmComponentValidationContext {
   void validateCanonicalDirectTypeIndexSpaces(
     WasmComponentCanonicalDefinition definition,
     String path,
-    int typeCount,
+    List<WasmComponentTypeDefinition> visibleTypeDefinitions,
   ) {
     if (canonicalDefinitionUsesStreamType(definition.kind)) {
-      validateDefinedValueKindIndex(
+      validateDefinedValueKindIndexInDefinitions(
         definition.typeIndex,
         '$path.type',
         WasmComponentDefinedValueTypeKind.stream,
-        typeCount,
+        visibleTypeDefinitions,
         indexDescription: 'stream type',
         targetDescription: 'a stream type',
       );
@@ -3221,11 +3396,11 @@ final class _WasmComponentValidationContext {
     }
 
     if (canonicalDefinitionUsesFutureType(definition.kind)) {
-      validateDefinedValueKindIndex(
+      validateDefinedValueKindIndexInDefinitions(
         definition.typeIndex,
         '$path.type',
         WasmComponentDefinedValueTypeKind.future,
-        typeCount,
+        visibleTypeDefinitions,
         indexDescription: 'future type',
         targetDescription: 'a future type',
       );
@@ -3233,11 +3408,11 @@ final class _WasmComponentValidationContext {
     }
 
     if (canonicalDefinitionUsesFunctionType(definition.kind)) {
-      validateComponentTypeIndexInCount(
+      validateComponentTypeIndexInDefinitions(
         definition.typeIndex,
         '$path.type',
+        visibleTypeDefinitions,
         WasmComponentTypeKind.function,
-        typeCount,
         indexDescription: 'function type',
         targetDescription: 'a function type',
       );
@@ -3319,13 +3494,17 @@ final class _WasmComponentValidationContext {
         : <WasmComponentValueType?>[resultType];
   }
 
-  WasmComponentFunctionType? componentFunctionType(int? typeIndex) {
+  WasmComponentFunctionType? componentFunctionType(
+    int? typeIndex, {
+    List<WasmComponentTypeDefinition>? definitions,
+  }) {
+    final resolvedDefinitions = definitions ?? typeDefinitions;
     if (typeIndex == null ||
         typeIndex < 0 ||
-        typeIndex >= typeDefinitions.length) {
+        typeIndex >= resolvedDefinitions.length) {
       return null;
     }
-    final definition = typeDefinitions[typeIndex];
+    final definition = resolvedDefinitions[typeIndex];
     if (definition.kind != WasmComponentTypeKind.function) {
       return null;
     }
