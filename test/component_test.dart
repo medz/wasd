@@ -428,6 +428,54 @@ void main() {
       expect(value.value.items.map((item) => item.integer), [1, 2, 3]);
     });
 
+    test('decodes enum and flags component value definitions', () {
+      final component = WasmComponent.decode(
+        _enumFlagsValueDefinitionsComponentBytes(),
+      );
+
+      final enumValue = component.valueDefinitions[0].value;
+      expect(enumValue.kind, WasmComponentValueDataKind.enumeration);
+      expect(enumValue.index, 2);
+      expect(enumValue.label, 'c');
+
+      final flagsValue = component.valueDefinitions[1].value;
+      expect(flagsValue.kind, WasmComponentValueDataKind.flags);
+      expect(flagsValue.labels, ['a', 'c']);
+    });
+
+    test('decodes option and result component value definitions', () {
+      final component = WasmComponent.decode(
+        _optionResultValueDefinitionsComponentBytes(),
+      );
+
+      final optionValue = component.valueDefinitions[0].value;
+      expect(optionValue.kind, WasmComponentValueDataKind.option);
+      expect(optionValue.isSome, isTrue);
+      expect(optionValue.associatedValue!.string, 'hi');
+
+      final okValue = component.valueDefinitions[1].value;
+      expect(okValue.kind, WasmComponentValueDataKind.result);
+      expect(okValue.isOk, isTrue);
+      expect(okValue.associatedValue!.integer, 7);
+
+      final errorValue = component.valueDefinitions[2].value;
+      expect(errorValue.kind, WasmComponentValueDataKind.result);
+      expect(errorValue.isOk, isFalse);
+      expect(errorValue.associatedValue!.string, 'no');
+    });
+
+    test('decodes variant component value definitions', () {
+      final component = WasmComponent.decode(
+        _variantValueDefinitionsComponentBytes(),
+      );
+
+      final value = component.valueDefinitions.single.value;
+      expect(value.kind, WasmComponentValueDataKind.variant);
+      expect(value.index, 1);
+      expect(value.label, 'num');
+      expect(value.associatedValue!.integer, 9);
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -1788,6 +1836,131 @@ Uint8List _fixedListValueDefinitionsComponentBytes() =>
       0x01,
       0x02,
       0x03,
+    ]);
+
+Uint8List _enumFlagsValueDefinitionsComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x11,
+      0x02,
+      0x6d,
+      0x03,
+      0x01,
+      0x61,
+      0x01,
+      0x62,
+      0x01,
+      0x63,
+      0x6e,
+      0x03,
+      0x01,
+      0x61,
+      0x01,
+      0x62,
+      0x01,
+      0x63,
+      0x0c,
+      0x0a,
+      0x02,
+      0x00,
+      0x04,
+      0x02,
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      0x01,
+      0x05,
+    ]);
+
+Uint8List _optionResultValueDefinitionsComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x08,
+      0x02,
+      0x6b,
+      0x73,
+      0x6a,
+      0x01,
+      0x7d,
+      0x01,
+      0x73,
+      0x0c,
+      0x11,
+      0x03,
+      0x00,
+      0x04,
+      0x01,
+      0x02,
+      0x68,
+      0x69,
+      0x01,
+      0x02,
+      0x00,
+      0x07,
+      0x01,
+      0x04,
+      0x01,
+      0x02,
+      0x6e,
+      0x6f,
+    ]);
+
+Uint8List _variantValueDefinitionsComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x11,
+      0x01,
+      0x71,
+      0x02,
+      0x04,
+      0x6e,
+      0x6f,
+      0x6e,
+      0x65,
+      0x00,
+      0x00,
+      0x03,
+      0x6e,
+      0x75,
+      0x6d,
+      0x01,
+      0x7d,
+      0x00,
+      0x0c,
+      0x08,
+      0x01,
+      0x00,
+      0x05,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x09,
     ]);
 
 Uint8List _truncatedSectionComponentBytes() => Uint8List.fromList(const <int>[

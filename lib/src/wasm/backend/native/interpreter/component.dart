@@ -621,6 +621,11 @@ enum WasmComponentValueDataKind {
   record,
   list,
   fixedList,
+  variant,
+  flags,
+  enumeration,
+  option,
+  result,
   raw,
 }
 
@@ -633,6 +638,12 @@ final class WasmComponentValueData {
     this.floatingPoint,
     this.string,
     this.items = const <WasmComponentValueData>[],
+    this.index,
+    this.label,
+    this.labels = const <String>[],
+    this.associatedValue,
+    this.isSome,
+    this.isOk,
   });
 
   final WasmComponentValueDataKind kind;
@@ -642,6 +653,12 @@ final class WasmComponentValueData {
   final double? floatingPoint;
   final String? string;
   final List<WasmComponentValueData> items;
+  final int? index;
+  final String? label;
+  final List<String> labels;
+  final WasmComponentValueData? associatedValue;
+  final bool? isSome;
+  final bool? isOk;
 }
 
 final class WasmComponentValueDefinition {
@@ -1276,10 +1293,125 @@ WasmComponentValueData _readDefinedComponentValueData(
         items: List.unmodifiable(items),
       );
     case WasmComponentDefinedValueTypeKind.variant:
+      final index = _readComponentCoreU32Value(reader);
+      if (index >= type.cases.length) {
+        throw FormatException(
+          'Invalid Wasm component variant case index: $index.',
+        );
+      }
+      final case_ = type.cases[index];
+      final caseType = case_.type;
+      final value = caseType == null
+          ? null
+          : _readComponentValueData(
+              reader,
+              caseType,
+              typeDefinitions,
+              allowRemainderRaw: false,
+            );
+      return WasmComponentValueData(
+        kind: WasmComponentValueDataKind.variant,
+        rawBytes: _componentValueRawBytes(reader, start),
+        index: index,
+        label: case_.label,
+        associatedValue: value,
+      );
     case WasmComponentDefinedValueTypeKind.flags:
+      final bytes = reader.readBytes((type.labels.length + 7) ~/ 8);
+      if (bytes.isNotEmpty) {
+        final unusedBits = bytes.length * 8 - type.labels.length;
+        if (unusedBits > 0) {
+          final unusedMask = (0xff << (8 - unusedBits)) & 0xff;
+          if ((bytes.last & unusedMask) != 0) {
+            throw const FormatException(
+              'Invalid Wasm component flags value: unused bits are set.',
+            );
+          }
+        }
+      }
+      final labels = <String>[];
+      for (var i = 0; i < type.labels.length; i++) {
+        if ((bytes[i ~/ 8] & (1 << (i % 8))) != 0) {
+          labels.add(type.labels[i]);
+        }
+      }
+      return WasmComponentValueData(
+        kind: WasmComponentValueDataKind.flags,
+        rawBytes: _componentValueRawBytes(reader, start),
+        labels: List.unmodifiable(labels),
+      );
     case WasmComponentDefinedValueTypeKind.enumeration:
+      final index = _readComponentCoreU32Value(reader);
+      if (index >= type.labels.length) {
+        throw FormatException(
+          'Invalid Wasm component enum case index: $index.',
+        );
+      }
+      return WasmComponentValueData(
+        kind: WasmComponentValueDataKind.enumeration,
+        rawBytes: _componentValueRawBytes(reader, start),
+        index: index,
+        label: type.labels[index],
+      );
     case WasmComponentDefinedValueTypeKind.option:
+      final tag = reader.readByte();
+      switch (tag) {
+        case 0x00:
+          return WasmComponentValueData(
+            kind: WasmComponentValueDataKind.option,
+            rawBytes: _componentValueRawBytes(reader, start),
+            isSome: false,
+          );
+        case 0x01:
+          final elementType = type.elementType;
+          if (elementType == null) {
+            throw const FormatException(
+              'Wasm component option value type is missing its element type.',
+            );
+          }
+          final value = _readComponentValueData(
+            reader,
+            elementType,
+            typeDefinitions,
+            allowRemainderRaw: false,
+          );
+          return WasmComponentValueData(
+            kind: WasmComponentValueDataKind.option,
+            rawBytes: _componentValueRawBytes(reader, start),
+            associatedValue: value,
+            isSome: true,
+          );
+        default:
+          throw FormatException(
+            'Invalid Wasm component option value tag: 0x${tag.toRadixString(16)}.',
+          );
+      }
     case WasmComponentDefinedValueTypeKind.result:
+      final tag = reader.readByte();
+      switch (tag) {
+        case 0x00:
+        case 0x01:
+          final isOk = tag == 0x00;
+          final valueType = isOk ? type.okType : type.errorType;
+          final value = valueType == null
+              ? null
+              : _readComponentValueData(
+                  reader,
+                  valueType,
+                  typeDefinitions,
+                  allowRemainderRaw: false,
+                );
+          return WasmComponentValueData(
+            kind: WasmComponentValueDataKind.result,
+            rawBytes: _componentValueRawBytes(reader, start),
+            associatedValue: value,
+            isOk: isOk,
+          );
+        default:
+          throw FormatException(
+            'Invalid Wasm component result value tag: 0x${tag.toRadixString(16)}.',
+          );
+      }
     case WasmComponentDefinedValueTypeKind.own:
     case WasmComponentDefinedValueTypeKind.borrow:
     case WasmComponentDefinedValueTypeKind.stream:
@@ -1350,6 +1482,11 @@ WasmComponentValueData _readListComponentValue(
 
 Uint8List _componentValueRawBytes(ByteReader reader, int start) {
   return Uint8List.fromList(reader.bytes.sublist(start, reader.offset));
+}
+
+int _readComponentCoreU32Value(ByteReader reader) {
+  final rawBytes = reader.readBytes(4);
+  return ByteData.sublistView(rawBytes).getUint32(0, Endian.little);
 }
 
 Uint8List _readUtf8CodePointBytes(ByteReader reader) {
