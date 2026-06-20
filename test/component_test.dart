@@ -165,6 +165,23 @@ void main() {
       );
     });
 
+    test('validates core module type declaration aliases', () {
+      expect(
+        WasmComponent.decode(_coreModuleTypeAliasComponentBytes()).validate(),
+        isEmpty,
+      );
+
+      final errors = WasmComponent.decode(
+        _coreModuleTypeAliasBeforeTypeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('Unknown Wasm component core type index'),
+      );
+    });
+
     test('decodes instantiated core instances', () {
       final component = WasmComponent.decode(
         _coreInstanceInstantiateComponentBytes(),
@@ -1916,6 +1933,61 @@ Uint8List _coreModuleTypeExportBeforeTypeComponentBytes() =>
       0x00,
       0x01,
       0x60,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _coreModuleTypeAliasComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x03,
+      0x13,
+      0x01,
+      0x50,
+      0x03,
+      0x01,
+      0x60,
+      0x00,
+      0x00,
+      0x02,
+      0x10,
+      0x01,
+      0x00,
+      0x00,
+      0x03,
+      0x03,
+      0x72,
+      0x75,
+      0x6e,
+      0x00,
+      0x01,
+    ]);
+
+Uint8List _coreModuleTypeAliasBeforeTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x03,
+      0x08,
+      0x01,
+      0x50,
+      0x01,
+      0x02,
+      0x10,
+      0x01,
       0x00,
       0x00,
     ]);
