@@ -693,6 +693,7 @@ enum _WasmComponentDefinitionEventKind {
   coreInstance,
   component,
   instance,
+  typeCount,
   type,
   alias,
   canonical,
@@ -721,6 +722,9 @@ final class _WasmComponentDefinitionEvent {
 
   const _WasmComponentDefinitionEvent.instance(this.index)
     : kind = _WasmComponentDefinitionEventKind.instance;
+
+  const _WasmComponentDefinitionEvent.typeCount(this.index)
+    : kind = _WasmComponentDefinitionEventKind.typeCount;
 
   const _WasmComponentDefinitionEvent.type(this.index)
     : kind = _WasmComponentDefinitionEventKind.type;
@@ -1026,6 +1030,11 @@ final class WasmComponent {
                 _WasmComponentDefinitionEvent.type(typeDefinitions.length - 1),
               );
             }
+          }
+          if (decodedTypeDefinitions.isNotEmpty) {
+            definitionEvents.add(
+              _WasmComponentDefinitionEvent.typeCount(typeDefinitions.length),
+            );
           }
         case _canonicalSectionId:
           final decodedCanonicalDefinitions = _decodeCanonicalDefinitions(
@@ -1428,6 +1437,71 @@ final class _WasmComponentValidationContext {
     }
   }
 
+  void validateComponentTypeIndexInCount(
+    int? typeIndex,
+    String path,
+    WasmComponentTypeKind expectedKind,
+    int typeCount, {
+    required String indexDescription,
+    required String targetDescription,
+  }) {
+    if (typeIndex == null || typeIndex < 0 || typeIndex >= typeCount) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Unknown Wasm component $indexDescription index: $typeIndex.',
+        ),
+      );
+      return;
+    }
+
+    if (!componentTypeDefinitionMatches(
+      typeDefinitions[typeIndex],
+      expectedKind,
+    )) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component $indexDescription index $typeIndex does not refer to $targetDescription.',
+        ),
+      );
+    }
+  }
+
+  void validateDefinedValueKindIndex(
+    int? typeIndex,
+    String path,
+    WasmComponentDefinedValueTypeKind expectedKind,
+    int typeCount, {
+    required String indexDescription,
+    required String targetDescription,
+  }) {
+    if (typeIndex == null || typeIndex < 0 || typeIndex >= typeCount) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Unknown Wasm component $indexDescription index: $typeIndex.',
+        ),
+      );
+      return;
+    }
+
+    final definition = typeDefinitions[typeIndex];
+    if (definition.kind != WasmComponentTypeKind.definedValue ||
+        definition.definedValue?.kind != expectedKind) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component $indexDescription index $typeIndex does not refer to $targetDescription.',
+        ),
+      );
+    }
+  }
+
   bool componentTypeDefinitionMatches(
     WasmComponentTypeDefinition definition,
     WasmComponentTypeKind expectedKind,
@@ -1558,6 +1632,7 @@ final class _WasmComponentValidationContext {
     final coreCounts = _WasmComponentCoreIndexCounts();
     var componentCount = 0;
     var instanceCount = 0;
+    var typeCount = 0;
     for (final event in events) {
       switch (event.kind) {
         case _WasmComponentDefinitionEventKind.import:
@@ -1633,6 +1708,8 @@ final class _WasmComponentValidationContext {
             instanceCount: instanceCount,
           );
           instanceCount++;
+        case _WasmComponentDefinitionEventKind.typeCount:
+          typeCount = event.index;
         case _WasmComponentDefinitionEventKind.type:
           validateTypeDefinitionFunctionIndexes(
             typeDefinitions[event.index],
@@ -1691,6 +1768,11 @@ final class _WasmComponentValidationContext {
             definition,
             'canonical[${event.index}]',
             coreCounts,
+          );
+          validateCanonicalDirectTypeIndexSpaces(
+            definition,
+            'canonical[${event.index}]',
+            typeCount,
           );
           if (definition.kind == WasmComponentCanonicalKind.lower) {
             coreCounts.add(WasmComponentCoreSortKind.function);
@@ -1996,6 +2078,47 @@ final class _WasmComponentValidationContext {
     }
   }
 
+  void validateCanonicalDirectTypeIndexSpaces(
+    WasmComponentCanonicalDefinition definition,
+    String path,
+    int typeCount,
+  ) {
+    if (canonicalDefinitionUsesStreamType(definition.kind)) {
+      validateDefinedValueKindIndex(
+        definition.typeIndex,
+        '$path.type',
+        WasmComponentDefinedValueTypeKind.stream,
+        typeCount,
+        indexDescription: 'stream type',
+        targetDescription: 'a stream type',
+      );
+      return;
+    }
+
+    if (canonicalDefinitionUsesFutureType(definition.kind)) {
+      validateDefinedValueKindIndex(
+        definition.typeIndex,
+        '$path.type',
+        WasmComponentDefinedValueTypeKind.future,
+        typeCount,
+        indexDescription: 'future type',
+        targetDescription: 'a future type',
+      );
+      return;
+    }
+
+    if (canonicalDefinitionUsesFunctionType(definition.kind)) {
+      validateComponentTypeIndexInCount(
+        definition.typeIndex,
+        '$path.type',
+        WasmComponentTypeKind.function,
+        typeCount,
+        indexDescription: 'function type',
+        targetDescription: 'a function type',
+      );
+    }
+  }
+
   Iterable<WasmComponentValueType?> validateStartDefinition(
     WasmComponentStart start,
     String path, {
@@ -2230,6 +2353,32 @@ final class _WasmComponentValidationContext {
     return kind == WasmComponentCanonicalKind.resourceNew ||
         kind == WasmComponentCanonicalKind.resourceDrop ||
         kind == WasmComponentCanonicalKind.resourceRep;
+  }
+
+  bool canonicalDefinitionUsesStreamType(WasmComponentCanonicalKind kind) {
+    return kind == WasmComponentCanonicalKind.streamNew ||
+        kind == WasmComponentCanonicalKind.streamRead ||
+        kind == WasmComponentCanonicalKind.streamWrite ||
+        kind == WasmComponentCanonicalKind.streamCancelRead ||
+        kind == WasmComponentCanonicalKind.streamCancelWrite ||
+        kind == WasmComponentCanonicalKind.streamDropReadable ||
+        kind == WasmComponentCanonicalKind.streamDropWritable;
+  }
+
+  bool canonicalDefinitionUsesFutureType(WasmComponentCanonicalKind kind) {
+    return kind == WasmComponentCanonicalKind.futureNew ||
+        kind == WasmComponentCanonicalKind.futureRead ||
+        kind == WasmComponentCanonicalKind.futureWrite ||
+        kind == WasmComponentCanonicalKind.futureCancelRead ||
+        kind == WasmComponentCanonicalKind.futureCancelWrite ||
+        kind == WasmComponentCanonicalKind.futureDropReadable ||
+        kind == WasmComponentCanonicalKind.futureDropWritable;
+  }
+
+  bool canonicalDefinitionUsesFunctionType(WasmComponentCanonicalKind kind) {
+    return kind == WasmComponentCanonicalKind.threadNewIndirect ||
+        kind == WasmComponentCanonicalKind.threadSpawnRef ||
+        kind == WasmComponentCanonicalKind.threadSpawnIndirect;
   }
 }
 

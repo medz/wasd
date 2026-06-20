@@ -813,10 +813,37 @@ void main() {
       final table = WasmComponent.decode(
         _canonicalThreadNewIndirectTableOutOfRangeComponentBytes(),
       ).validate();
-      expect(table, hasLength(1));
       expect(
-        table.single.message,
-        contains('Unknown Wasm component core table index'),
+        table.any(
+          (error) =>
+              error.message.contains('Unknown Wasm component core table index'),
+        ),
+        isTrue,
+      );
+    });
+
+    test('reports invalid canonical direct type indexes', () {
+      expect(
+        WasmComponent.decode(_canonicalStreamNewComponentBytes()).validate(),
+        isEmpty,
+      );
+
+      final stream = WasmComponent.decode(
+        _canonicalStreamNewTypeOutOfRangeComponentBytes(),
+      ).validate();
+      expect(stream, hasLength(1));
+      expect(
+        stream.single.message,
+        contains('Unknown Wasm component stream type index'),
+      );
+
+      final future = WasmComponent.decode(
+        _canonicalFutureNewWrongSortTypeComponentBytes(),
+      ).validate();
+      expect(future, hasLength(1));
+      expect(
+        future.single.message,
+        contains('does not refer to a future type'),
       );
     });
 
@@ -2829,6 +2856,69 @@ Uint8List _canonicalThreadNewIndirectTableOutOfRangeComponentBytes() =>
       0x01,
       0x27,
       0x00,
+      0x00,
+    ]);
+
+Uint8List _canonicalStreamNewComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x04,
+  0x01,
+  0x66,
+  0x01,
+  0x73,
+  0x08,
+  0x03,
+  0x01,
+  0x0e,
+  0x00,
+]);
+
+Uint8List _canonicalStreamNewTypeOutOfRangeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x03,
+      0x01,
+      0x0e,
+      0x00,
+    ]);
+
+Uint8List _canonicalFutureNewWrongSortTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x03,
+      0x01,
+      0x15,
       0x00,
     ]);
 
