@@ -717,6 +717,19 @@ final class _WasmComponentDefinitionEvent {
   final int index;
 }
 
+final class _WasmComponentValueIndexEntry {
+  _WasmComponentValueIndexEntry({
+    required this.originPath,
+    this.type,
+    this.requiresConsumption = true,
+  });
+
+  final String originPath;
+  final WasmComponentValueType? type;
+  bool consumed = false;
+  final bool requiresConsumption;
+}
+
 final class WasmComponent {
   const WasmComponent._({
     required this.sections,
@@ -1422,8 +1435,7 @@ final class _WasmComponentValidationContext {
     required List<WasmComponentValueDefinition> valueDefinitions,
   }) {
     final functionTypes = <WasmComponentFunctionType?>[];
-    final valueTypes = <WasmComponentValueType?>[];
-
+    final valueEntries = <_WasmComponentValueIndexEntry>[];
     for (final event in events) {
       switch (event.kind) {
         case _WasmComponentDefinitionEventKind.import:
@@ -1434,20 +1446,25 @@ final class _WasmComponentValidationContext {
             validateComponentValueIndex(
               descriptor.valueIndex,
               'import[${event.index}].descriptor.value',
-              valueTypes.length,
+              valueEntries.length,
             );
             equalityValueType = componentValueTypeAt(
-              valueTypes,
+              valueEntries,
               descriptor.valueIndex,
             );
           }
           if (descriptor.kind == WasmComponentExternKind.function) {
             functionTypes.add(componentFunctionType(descriptor.typeIndex));
           } else if (descriptor.kind == WasmComponentExternKind.value) {
-            valueTypes.add(
-              descriptor.boundKind == WasmComponentExternBoundKind.equality
-                  ? equalityValueType
-                  : descriptor.valueType,
+            valueEntries.add(
+              _WasmComponentValueIndexEntry(
+                originPath: 'import[${event.index}]',
+                type:
+                    descriptor.boundKind ==
+                        WasmComponentExternBoundKind.equality
+                    ? equalityValueType
+                    : descriptor.valueType,
+              ),
             );
           }
         case _WasmComponentDefinitionEventKind.export:
@@ -1455,14 +1472,18 @@ final class _WasmComponentValidationContext {
             exports[event.index],
             'export[${event.index}]',
             functionTypes: functionTypes,
-            valueTypes: valueTypes,
+            valueEntries: valueEntries,
           );
         case _WasmComponentDefinitionEventKind.alias:
           final sort = aliases[event.index].sort;
           if (sort.kind == WasmComponentSortKind.function) {
             functionTypes.add(null);
           } else if (sort.kind == WasmComponentSortKind.value) {
-            valueTypes.add(null);
+            valueEntries.add(
+              _WasmComponentValueIndexEntry(
+                originPath: 'alias[${event.index}]',
+              ),
+            );
           }
         case _WasmComponentDefinitionEventKind.canonical:
           final definition = canonicalDefinitions[event.index];
@@ -1478,17 +1499,31 @@ final class _WasmComponentValidationContext {
           }
         case _WasmComponentDefinitionEventKind.start:
           final start = starts[event.index];
-          valueTypes.addAll(
+          valueEntries.addAll(
             validateStartDefinition(
               start,
               'start[${event.index}]',
               functionTypes: functionTypes,
-              valueTypes: valueTypes,
+              valueEntries: valueEntries,
+            ).map(
+              (type) => _WasmComponentValueIndexEntry(
+                originPath: 'start[${event.index}].result',
+                type: type,
+              ),
             ),
           );
         case _WasmComponentDefinitionEventKind.value:
-          valueTypes.add(valueDefinitions[event.index].type);
+          valueEntries.add(
+            _WasmComponentValueIndexEntry(
+              originPath: 'value[${event.index}]',
+              type: valueDefinitions[event.index].type,
+            ),
+          );
       }
+    }
+
+    if (errors.isEmpty) {
+      validateConsumedValues(valueEntries);
     }
   }
 
@@ -1496,7 +1531,7 @@ final class _WasmComponentValidationContext {
     WasmComponentExport export,
     String path, {
     required List<WasmComponentFunctionType?> functionTypes,
-    required List<WasmComponentValueType?> valueTypes,
+    required List<_WasmComponentValueIndexEntry> valueEntries,
   }) {
     switch (export.sort.kind) {
       case WasmComponentSortKind.function:
@@ -1509,12 +1544,18 @@ final class _WasmComponentValidationContext {
           componentFunctionTypeAt(functionTypes, export.sort.index),
         );
       case WasmComponentSortKind.value:
-        validateComponentValueIndex(
+        final valueType = consumeComponentValueIndex(
           export.sort.index,
           '$path.sort',
-          valueTypes.length,
+          valueEntries,
         );
-        valueTypes.add(componentValueTypeAt(valueTypes, export.sort.index));
+        valueEntries.add(
+          _WasmComponentValueIndexEntry(
+            originPath: path,
+            type: valueType,
+            requiresConsumption: false,
+          ),
+        );
       case WasmComponentSortKind.core:
       case WasmComponentSortKind.componentType:
       case WasmComponentSortKind.component:
@@ -1527,7 +1568,7 @@ final class _WasmComponentValidationContext {
     WasmComponentStart start,
     String path, {
     required List<WasmComponentFunctionType?> functionTypes,
-    required List<WasmComponentValueType?> valueTypes,
+    required List<_WasmComponentValueIndexEntry> valueEntries,
   }) {
     validateComponentFunctionIndex(
       start.functionIndex,
@@ -1536,10 +1577,10 @@ final class _WasmComponentValidationContext {
     );
 
     for (var i = 0; i < start.arguments.length; i++) {
-      validateComponentValueIndex(
+      consumeComponentValueIndex(
         start.arguments[i],
         '$path.arguments[$i]',
-        valueTypes.length,
+        valueEntries,
       );
     }
 
@@ -1566,7 +1607,7 @@ final class _WasmComponentValidationContext {
         ? start.arguments.length
         : functionType.params.length;
     for (var i = 0; i < comparableArgumentCount; i++) {
-      final valueType = componentValueTypeAt(valueTypes, start.arguments[i]);
+      final valueType = componentValueTypeAt(valueEntries, start.arguments[i]);
       final parameterType = functionType.params[i].type;
       if (valueType != null &&
           !componentValueTypesMatch(parameterType, valueType)) {
@@ -1624,15 +1665,58 @@ final class _WasmComponentValidationContext {
   }
 
   WasmComponentValueType? componentValueTypeAt(
-    List<WasmComponentValueType?> valueTypes,
+    List<_WasmComponentValueIndexEntry> valueEntries,
     int? valueIndex,
   ) {
     if (valueIndex == null ||
         valueIndex < 0 ||
-        valueIndex >= valueTypes.length) {
+        valueIndex >= valueEntries.length) {
       return null;
     }
-    return valueTypes[valueIndex];
+    return valueEntries[valueIndex].type;
+  }
+
+  WasmComponentValueType? consumeComponentValueIndex(
+    int? valueIndex,
+    String path,
+    List<_WasmComponentValueIndexEntry> valueEntries,
+  ) {
+    validateComponentValueIndex(valueIndex, path, valueEntries.length);
+    if (valueIndex == null ||
+        valueIndex < 0 ||
+        valueIndex >= valueEntries.length) {
+      return null;
+    }
+
+    final entry = valueEntries[valueIndex];
+    if (entry.consumed) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component value index $valueIndex was already consumed.',
+        ),
+      );
+    } else {
+      entry.consumed = true;
+    }
+    return entry.type;
+  }
+
+  void validateConsumedValues(
+    List<_WasmComponentValueIndexEntry> valueEntries,
+  ) {
+    for (var i = 0; i < valueEntries.length; i++) {
+      final entry = valueEntries[i];
+      if (entry.requiresConsumption && !entry.consumed) {
+        errors.add(
+          WasmComponentValidationError(
+            path: entry.originPath,
+            message: 'Wasm component value index $i was not consumed.',
+          ),
+        );
+      }
+    }
   }
 
   bool componentValueTypesMatch(
