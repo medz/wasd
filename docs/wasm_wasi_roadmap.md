@@ -44,6 +44,10 @@ Status date: 2026-06-21.
 
 - Validation must be linear in the decoded component graph wherever possible.
   Recursive graph checks must use memoization and visiting sets.
+- Component decode and validation changes should be measured with
+  `dart run tool/component_benchmark.dart --json`. The synthetic benchmark
+  exercises repeated `stream<T>` definitions over a shared borrow-containing
+  type graph, which is the current stress case for component validation.
 - Test runners must report elapsed time and peak memory for heavy paths, at
   minimum the spec runner and DOOM runtime tests.
 - Heavy external-process tests should be grouped behind explicit runner modes so
