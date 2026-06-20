@@ -675,6 +675,16 @@ final class WasmComponentValueDefinition {
   final WasmComponentValueData value;
 }
 
+final class WasmComponentValidationError {
+  const WasmComponentValidationError({
+    required this.path,
+    required this.message,
+  });
+
+  final String path;
+  final String message;
+}
+
 final class WasmComponent {
   const WasmComponent({
     required this.sections,
@@ -705,6 +715,24 @@ final class WasmComponent {
   final List<WasmComponentCanonicalDefinition> canonicalDefinitions;
   final List<WasmComponentTypeDefinition> typeDefinitions;
   final List<WasmComponentValueDefinition> valueDefinitions;
+
+  List<WasmComponentValidationError> validate() {
+    final errors = <WasmComponentValidationError>[];
+    for (var i = 0; i < typeDefinitions.length; i++) {
+      _validateComponentTypeDefinition(typeDefinitions[i], 'type[$i]', errors);
+    }
+    for (var i = 0; i < components.length; i++) {
+      for (final error in components[i].validate()) {
+        errors.add(
+          WasmComponentValidationError(
+            path: 'component[$i].${error.path}',
+            message: error.message,
+          ),
+        );
+      }
+    }
+    return List.unmodifiable(errors);
+  }
 
   static bool hasComponentPreamble(List<int> bytes) {
     return bytes.length >= 8 &&
@@ -848,6 +876,74 @@ const int _typeSectionId = 7;
 const int _canonicalSectionId = 8;
 const int _startSectionId = 9;
 const int _valueSectionId = 12;
+
+void _validateComponentTypeDefinition(
+  WasmComponentTypeDefinition type,
+  String path,
+  List<WasmComponentValidationError> errors,
+) {
+  final definedValue = type.definedValue;
+  if (type.kind == WasmComponentTypeKind.definedValue && definedValue != null) {
+    _validateDefinedValueType(definedValue, path, errors);
+  }
+}
+
+void _validateDefinedValueType(
+  WasmComponentDefinedValueType type,
+  String path,
+  List<WasmComponentValidationError> errors,
+) {
+  switch (type.kind) {
+    case WasmComponentDefinedValueTypeKind.record:
+      _validateUniqueLabels(
+        type.fields.map((field) => field.label),
+        '$path.fields',
+        'record field',
+        errors,
+      );
+    case WasmComponentDefinedValueTypeKind.variant:
+      _validateUniqueLabels(
+        type.cases.map((case_) => case_.label),
+        '$path.cases',
+        'variant case',
+        errors,
+      );
+    case WasmComponentDefinedValueTypeKind.flags:
+      _validateUniqueLabels(type.labels, '$path.flags', 'flags', errors);
+    case WasmComponentDefinedValueTypeKind.enumeration:
+      _validateUniqueLabels(type.labels, '$path.enum', 'enum', errors);
+    case WasmComponentDefinedValueTypeKind.primitive:
+    case WasmComponentDefinedValueTypeKind.list:
+    case WasmComponentDefinedValueTypeKind.fixedList:
+    case WasmComponentDefinedValueTypeKind.tuple:
+    case WasmComponentDefinedValueTypeKind.option:
+    case WasmComponentDefinedValueTypeKind.result:
+    case WasmComponentDefinedValueTypeKind.own:
+    case WasmComponentDefinedValueTypeKind.borrow:
+    case WasmComponentDefinedValueTypeKind.stream:
+    case WasmComponentDefinedValueTypeKind.future:
+      break;
+  }
+}
+
+void _validateUniqueLabels(
+  Iterable<String> labels,
+  String path,
+  String kind,
+  List<WasmComponentValidationError> errors,
+) {
+  final seen = <String>{};
+  for (final label in labels) {
+    if (!seen.add(label)) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message: 'Duplicate Wasm component $kind label: "$label".',
+        ),
+      );
+    }
+  }
+}
 
 List<WasmComponentImport> _decodeImports(Uint8List payload) {
   final reader = ByteReader(payload);

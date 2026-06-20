@@ -476,6 +476,21 @@ void main() {
       expect(value.associatedValue!.integer, 9);
     });
 
+    test('reports duplicate component defined value type labels', () {
+      final invalidTypes = <Uint8List>[
+        _duplicateRecordLabelsTypeComponentBytes(),
+        _duplicateVariantLabelsTypeComponentBytes(),
+        _duplicateFlagsLabelsTypeComponentBytes(),
+        _duplicateEnumLabelsTypeComponentBytes(),
+      ];
+
+      for (final bytes in invalidTypes) {
+        final errors = WasmComponent.decode(bytes).validate();
+        expect(errors, hasLength(1));
+        expect(errors.single.message, contains('Duplicate Wasm component'));
+      }
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -1961,6 +1976,68 @@ Uint8List _variantValueDefinitionsComponentBytes() =>
       0x00,
       0x00,
       0x09,
+    ]);
+
+Uint8List _duplicateRecordLabelsTypeComponentBytes() =>
+    _singleDefinedValueTypeComponentBytes(const <int>[
+      0x72,
+      0x02,
+      0x01,
+      0x61,
+      0x7d,
+      0x01,
+      0x61,
+      0x7b,
+    ]);
+
+Uint8List _duplicateVariantLabelsTypeComponentBytes() =>
+    _singleDefinedValueTypeComponentBytes(const <int>[
+      0x71,
+      0x02,
+      0x01,
+      0x61,
+      0x00,
+      0x00,
+      0x01,
+      0x61,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _duplicateFlagsLabelsTypeComponentBytes() =>
+    _singleDefinedValueTypeComponentBytes(const <int>[
+      0x6e,
+      0x02,
+      0x01,
+      0x61,
+      0x01,
+      0x61,
+    ]);
+
+Uint8List _duplicateEnumLabelsTypeComponentBytes() =>
+    _singleDefinedValueTypeComponentBytes(const <int>[
+      0x6d,
+      0x02,
+      0x01,
+      0x61,
+      0x01,
+      0x61,
+    ]);
+
+Uint8List _singleDefinedValueTypeComponentBytes(List<int> typeBytes) =>
+    Uint8List.fromList(<int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      typeBytes.length + 1,
+      0x01,
+      ...typeBytes,
     ]);
 
 Uint8List _truncatedSectionComponentBytes() => Uint8List.fromList(const <int>[
