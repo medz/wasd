@@ -719,7 +719,12 @@ final class WasmComponent {
   List<WasmComponentValidationError> validate() {
     final errors = <WasmComponentValidationError>[];
     for (var i = 0; i < typeDefinitions.length; i++) {
-      _validateComponentTypeDefinition(typeDefinitions[i], 'type[$i]', errors);
+      _validateComponentTypeDefinition(
+        typeDefinitions[i],
+        'type[$i]',
+        typeDefinitions,
+        errors,
+      );
     }
     for (var i = 0; i < components.length; i++) {
       for (final error in components[i].validate()) {
@@ -880,17 +885,38 @@ const int _valueSectionId = 12;
 void _validateComponentTypeDefinition(
   WasmComponentTypeDefinition type,
   String path,
+  List<WasmComponentTypeDefinition> typeDefinitions,
   List<WasmComponentValidationError> errors,
 ) {
   final definedValue = type.definedValue;
   if (type.kind == WasmComponentTypeKind.definedValue && definedValue != null) {
-    _validateDefinedValueType(definedValue, path, errors);
+    _validateDefinedValueType(definedValue, path, typeDefinitions, errors);
+    return;
+  }
+
+  final function = type.function;
+  if (type.kind == WasmComponentTypeKind.function && function != null) {
+    for (var i = 0; i < function.params.length; i++) {
+      _validateComponentValueType(
+        function.params[i].type,
+        '$path.params[$i]',
+        typeDefinitions,
+        errors,
+      );
+    }
+    _validateComponentValueType(
+      function.result,
+      '$path.result',
+      typeDefinitions,
+      errors,
+    );
   }
 }
 
 void _validateDefinedValueType(
   WasmComponentDefinedValueType type,
   String path,
+  List<WasmComponentTypeDefinition> typeDefinitions,
   List<WasmComponentValidationError> errors,
 ) {
   switch (type.kind) {
@@ -901,6 +927,14 @@ void _validateDefinedValueType(
         'record field',
         errors,
       );
+      for (var i = 0; i < type.fields.length; i++) {
+        _validateComponentValueType(
+          type.fields[i].type,
+          '$path.fields[$i]',
+          typeDefinitions,
+          errors,
+        );
+      }
     case WasmComponentDefinedValueTypeKind.variant:
       _validateUniqueLabels(
         type.cases.map((case_) => case_.label),
@@ -908,21 +942,115 @@ void _validateDefinedValueType(
         'variant case',
         errors,
       );
+      for (var i = 0; i < type.cases.length; i++) {
+        _validateComponentValueType(
+          type.cases[i].type,
+          '$path.cases[$i]',
+          typeDefinitions,
+          errors,
+        );
+      }
+    case WasmComponentDefinedValueTypeKind.list:
+      _validateComponentValueType(
+        type.elementType,
+        '$path.element',
+        typeDefinitions,
+        errors,
+      );
+    case WasmComponentDefinedValueTypeKind.fixedList:
+      _validateComponentValueType(
+        type.elementType,
+        '$path.element',
+        typeDefinitions,
+        errors,
+      );
+    case WasmComponentDefinedValueTypeKind.tuple:
+      for (var i = 0; i < type.types.length; i++) {
+        _validateComponentValueType(
+          type.types[i],
+          '$path.items[$i]',
+          typeDefinitions,
+          errors,
+        );
+      }
     case WasmComponentDefinedValueTypeKind.flags:
       _validateUniqueLabels(type.labels, '$path.flags', 'flags', errors);
     case WasmComponentDefinedValueTypeKind.enumeration:
       _validateUniqueLabels(type.labels, '$path.enum', 'enum', errors);
-    case WasmComponentDefinedValueTypeKind.primitive:
-    case WasmComponentDefinedValueTypeKind.list:
-    case WasmComponentDefinedValueTypeKind.fixedList:
-    case WasmComponentDefinedValueTypeKind.tuple:
     case WasmComponentDefinedValueTypeKind.option:
+      _validateComponentValueType(
+        type.elementType,
+        '$path.some',
+        typeDefinitions,
+        errors,
+      );
     case WasmComponentDefinedValueTypeKind.result:
+      _validateComponentValueType(
+        type.okType,
+        '$path.ok',
+        typeDefinitions,
+        errors,
+      );
+      _validateComponentValueType(
+        type.errorType,
+        '$path.error',
+        typeDefinitions,
+        errors,
+      );
+    case WasmComponentDefinedValueTypeKind.stream:
+      _validateComponentValueType(
+        type.elementType,
+        '$path.stream',
+        typeDefinitions,
+        errors,
+      );
+    case WasmComponentDefinedValueTypeKind.future:
+      _validateComponentValueType(
+        type.elementType,
+        '$path.future',
+        typeDefinitions,
+        errors,
+      );
+    case WasmComponentDefinedValueTypeKind.primitive:
     case WasmComponentDefinedValueTypeKind.own:
     case WasmComponentDefinedValueTypeKind.borrow:
-    case WasmComponentDefinedValueTypeKind.stream:
-    case WasmComponentDefinedValueTypeKind.future:
       break;
+  }
+}
+
+void _validateComponentValueType(
+  WasmComponentValueType? valueType,
+  String path,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+  List<WasmComponentValidationError> errors,
+) {
+  if (valueType == null ||
+      valueType.kind == WasmComponentValueTypeKind.primitive) {
+    return;
+  }
+
+  final typeIndex = valueType.typeIndex;
+  if (typeIndex == null ||
+      typeIndex < 0 ||
+      typeIndex >= typeDefinitions.length) {
+    errors.add(
+      WasmComponentValidationError(
+        path: path,
+        message: 'Unknown Wasm component value type index: $typeIndex.',
+      ),
+    );
+    return;
+  }
+
+  if (typeDefinitions[typeIndex].kind != WasmComponentTypeKind.definedValue ||
+      typeDefinitions[typeIndex].definedValue == null) {
+    errors.add(
+      WasmComponentValidationError(
+        path: path,
+        message:
+            'Wasm component value type index $typeIndex does not refer to a value type.',
+      ),
+    );
   }
 }
 

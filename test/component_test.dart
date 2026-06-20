@@ -491,6 +491,26 @@ void main() {
       }
     });
 
+    test('reports invalid component value type indexes', () {
+      final wrongSort = WasmComponent.decode(
+        _functionResultWrongSortTypeIndexComponentBytes(),
+      ).validate();
+      expect(wrongSort, hasLength(1));
+      expect(
+        wrongSort.single.message,
+        contains('does not refer to a value type'),
+      );
+
+      final outOfRange = WasmComponent.decode(
+        _listElementOutOfRangeTypeIndexComponentBytes(),
+      ).validate();
+      expect(outOfRange, hasLength(1));
+      expect(
+        outOfRange.single.message,
+        contains('Unknown Wasm component value type index'),
+      );
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -2023,6 +2043,12 @@ Uint8List _duplicateEnumLabelsTypeComponentBytes() =>
       0x01,
       0x61,
     ]);
+
+Uint8List _functionResultWrongSortTypeIndexComponentBytes() =>
+    _singleDefinedValueTypeComponentBytes(const <int>[0x40, 0x00, 0x00, 0x00]);
+
+Uint8List _listElementOutOfRangeTypeIndexComponentBytes() =>
+    _singleDefinedValueTypeComponentBytes(const <int>[0x70, 0x01]);
 
 Uint8List _singleDefinedValueTypeComponentBytes(List<int> typeBytes) =>
     Uint8List.fromList(<int>[
