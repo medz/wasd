@@ -688,6 +688,8 @@ final class WasmComponentValidationError {
 enum _WasmComponentDefinitionEventKind {
   import,
   export,
+  component,
+  instance,
   alias,
   canonical,
   start,
@@ -700,6 +702,12 @@ final class _WasmComponentDefinitionEvent {
 
   const _WasmComponentDefinitionEvent.export(this.index)
     : kind = _WasmComponentDefinitionEventKind.export;
+
+  const _WasmComponentDefinitionEvent.component(this.index)
+    : kind = _WasmComponentDefinitionEventKind.component;
+
+  const _WasmComponentDefinitionEvent.instance(this.index)
+    : kind = _WasmComponentDefinitionEventKind.instance;
 
   const _WasmComponentDefinitionEvent.alias(this.index)
     : kind = _WasmComponentDefinitionEventKind.alias;
@@ -795,6 +803,7 @@ final class WasmComponent {
       _definitionEvents,
       imports: imports,
       exports: exports,
+      instances: instances,
       aliases: aliases,
       canonicalDefinitions: canonicalDefinitions,
       starts: starts,
@@ -898,8 +907,17 @@ final class WasmComponent {
           coreTypes.addAll(_decodeCoreTypes(payload));
         case _componentSectionId:
           components.add(WasmComponent.decode(payload, features: features));
+          definitionEvents.add(
+            _WasmComponentDefinitionEvent.component(components.length - 1),
+          );
         case _instanceSectionId:
-          instances.addAll(_decodeInstances(payload));
+          final decodedInstances = _decodeInstances(payload);
+          for (final instance in decodedInstances) {
+            instances.add(instance);
+            definitionEvents.add(
+              _WasmComponentDefinitionEvent.instance(instances.length - 1),
+            );
+          }
         case _aliasSectionId:
           final decodedAliases = _decodeAliases(payload);
           for (final alias in decodedAliases) {
@@ -1429,6 +1447,7 @@ final class _WasmComponentValidationContext {
     List<_WasmComponentDefinitionEvent> events, {
     required List<WasmComponentImport> imports,
     required List<WasmComponentExport> exports,
+    required List<WasmComponentInstance> instances,
     required List<WasmComponentAlias> aliases,
     required List<WasmComponentCanonicalDefinition> canonicalDefinitions,
     required List<WasmComponentStart> starts,
@@ -1436,6 +1455,8 @@ final class _WasmComponentValidationContext {
   }) {
     final functionTypes = <WasmComponentFunctionType?>[];
     final valueEntries = <_WasmComponentValueIndexEntry>[];
+    var componentCount = 0;
+    var instanceCount = 0;
     for (final event in events) {
       switch (event.kind) {
         case _WasmComponentDefinitionEventKind.import:
@@ -1466,14 +1487,38 @@ final class _WasmComponentValidationContext {
                     : descriptor.valueType,
               ),
             );
+          } else if (descriptor.kind == WasmComponentExternKind.component) {
+            componentCount++;
+          } else if (descriptor.kind == WasmComponentExternKind.instance) {
+            instanceCount++;
           }
         case _WasmComponentDefinitionEventKind.export:
+          final export = exports[event.index];
           validateExportDefinition(
-            exports[event.index],
+            export,
             'export[${event.index}]',
             functionTypes: functionTypes,
             valueEntries: valueEntries,
+            componentCount: componentCount,
+            instanceCount: instanceCount,
           );
+          if (export.sort.kind == WasmComponentSortKind.component) {
+            componentCount++;
+          } else if (export.sort.kind == WasmComponentSortKind.instance) {
+            instanceCount++;
+          }
+        case _WasmComponentDefinitionEventKind.component:
+          componentCount++;
+        case _WasmComponentDefinitionEventKind.instance:
+          validateInstanceDefinition(
+            instances[event.index],
+            'instance[${event.index}]',
+            functionTypes: functionTypes,
+            valueEntries: valueEntries,
+            componentCount: componentCount,
+            instanceCount: instanceCount,
+          );
+          instanceCount++;
         case _WasmComponentDefinitionEventKind.alias:
           final sort = aliases[event.index].sort;
           if (sort.kind == WasmComponentSortKind.function) {
@@ -1484,6 +1529,10 @@ final class _WasmComponentValidationContext {
                 originPath: 'alias[${event.index}]',
               ),
             );
+          } else if (sort.kind == WasmComponentSortKind.component) {
+            componentCount++;
+          } else if (sort.kind == WasmComponentSortKind.instance) {
+            instanceCount++;
           }
         case _WasmComponentDefinitionEventKind.canonical:
           final definition = canonicalDefinitions[event.index];
@@ -1532,6 +1581,8 @@ final class _WasmComponentValidationContext {
     String path, {
     required List<WasmComponentFunctionType?> functionTypes,
     required List<_WasmComponentValueIndexEntry> valueEntries,
+    required int componentCount,
+    required int instanceCount,
   }) {
     switch (export.sort.kind) {
       case WasmComponentSortKind.function:
@@ -1558,8 +1609,76 @@ final class _WasmComponentValidationContext {
         );
       case WasmComponentSortKind.core:
       case WasmComponentSortKind.componentType:
+        break;
       case WasmComponentSortKind.component:
+        validateComponentIndex(export.sort.index, '$path.sort', componentCount);
       case WasmComponentSortKind.instance:
+        validateComponentInstanceIndex(
+          export.sort.index,
+          '$path.sort',
+          instanceCount,
+        );
+    }
+  }
+
+  void validateInstanceDefinition(
+    WasmComponentInstance instance,
+    String path, {
+    required List<WasmComponentFunctionType?> functionTypes,
+    required List<_WasmComponentValueIndexEntry> valueEntries,
+    required int componentCount,
+    required int instanceCount,
+  }) {
+    switch (instance.kind) {
+      case WasmComponentInstanceKind.instantiate:
+        validateComponentIndex(
+          instance.componentIndex,
+          '$path.component',
+          componentCount,
+        );
+        for (var i = 0; i < instance.arguments.length; i++) {
+          validateComponentSortIndex(
+            instance.arguments[i].sort,
+            '$path.arguments[$i].sort',
+            functionTypes: functionTypes,
+            valueEntries: valueEntries,
+            componentCount: componentCount,
+            instanceCount: instanceCount,
+          );
+        }
+      case WasmComponentInstanceKind.inlineExports:
+        for (var i = 0; i < instance.exports.length; i++) {
+          validateComponentSortIndex(
+            instance.exports[i].sort,
+            '$path.exports[$i].sort',
+            functionTypes: functionTypes,
+            valueEntries: valueEntries,
+            componentCount: componentCount,
+            instanceCount: instanceCount,
+          );
+        }
+    }
+  }
+
+  void validateComponentSortIndex(
+    WasmComponentSortIndex sort,
+    String path, {
+    required List<WasmComponentFunctionType?> functionTypes,
+    required List<_WasmComponentValueIndexEntry> valueEntries,
+    required int componentCount,
+    required int instanceCount,
+  }) {
+    switch (sort.kind) {
+      case WasmComponentSortKind.function:
+        validateComponentFunctionIndex(sort.index, path, functionTypes.length);
+      case WasmComponentSortKind.value:
+        consumeComponentValueIndex(sort.index, path, valueEntries);
+      case WasmComponentSortKind.component:
+        validateComponentIndex(sort.index, path, componentCount);
+      case WasmComponentSortKind.instance:
+        validateComponentInstanceIndex(sort.index, path, instanceCount);
+      case WasmComponentSortKind.core:
+      case WasmComponentSortKind.componentType:
         break;
     }
   }
@@ -1755,6 +1874,40 @@ final class _WasmComponentValidationContext {
         WasmComponentValidationError(
           path: path,
           message: 'Unknown Wasm component value index: $valueIndex.',
+        ),
+      );
+    }
+  }
+
+  void validateComponentIndex(
+    int? componentIndex,
+    String path,
+    int componentCount,
+  ) {
+    if (componentIndex == null ||
+        componentIndex < 0 ||
+        componentIndex >= componentCount) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message: 'Unknown Wasm component component index: $componentIndex.',
+        ),
+      );
+    }
+  }
+
+  void validateComponentInstanceIndex(
+    int? instanceIndex,
+    String path,
+    int instanceCount,
+  ) {
+    if (instanceIndex == null ||
+        instanceIndex < 0 ||
+        instanceIndex >= instanceCount) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message: 'Unknown Wasm component instance index: $instanceIndex.',
         ),
       );
     }

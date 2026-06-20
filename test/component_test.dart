@@ -615,6 +615,30 @@ void main() {
       expect(duplicate.single.message, contains('already consumed'));
     });
 
+    test('validates component instantiation indexes and value arguments', () {
+      expect(
+        WasmComponent.decode(
+          _instantiateValueArgumentComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
+
+      final beforeDefinition = WasmComponent.decode(
+        _instantiateComponentBeforeDefinitionComponentBytes(),
+      ).validate();
+      expect(beforeDefinition, hasLength(1));
+      expect(
+        beforeDefinition.single.message,
+        contains('Unknown Wasm component component index'),
+      );
+
+      final duplicate = WasmComponent.decode(
+        _instantiateDuplicateValueArgumentComponentBytes(),
+      ).validate();
+      expect(duplicate, hasLength(1));
+      expect(duplicate.single.message, contains('already consumed'));
+    });
+
     test('reports invalid canonical result value type indexes', () {
       final errors = WasmComponent.decode(
         _canonicalResultOutOfRangeTypeIndexComponentBytes(),
@@ -1106,6 +1130,130 @@ Uint8List _valueImportExportComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x00,
 ]);
+
+Uint8List _instantiateComponentBeforeDefinitionComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x05,
+      0x04,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x04,
+      0x08,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+    ]);
+
+Uint8List _instantiateValueArgumentComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x09,
+      0x01,
+      0x00,
+      0x04,
+      0x6e,
+      0x61,
+      0x6d,
+      0x65,
+      0x02,
+      0x73,
+      0x04,
+      0x08,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x05,
+      0x0a,
+      0x01,
+      0x00,
+      0x00,
+      0x01,
+      0x03,
+      0x64,
+      0x65,
+      0x70,
+      0x02,
+      0x00,
+    ]);
+
+Uint8List _instantiateDuplicateValueArgumentComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x09,
+      0x01,
+      0x00,
+      0x04,
+      0x6e,
+      0x61,
+      0x6d,
+      0x65,
+      0x02,
+      0x73,
+      0x04,
+      0x08,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x05,
+      0x10,
+      0x01,
+      0x00,
+      0x00,
+      0x02,
+      0x03,
+      0x64,
+      0x65,
+      0x70,
+      0x02,
+      0x00,
+      0x03,
+      0x64,
+      0x75,
+      0x70,
+      0x02,
+      0x00,
+    ]);
 
 Uint8List _valueImportDuplicateExportComponentBytes() =>
     Uint8List.fromList(const <int>[
