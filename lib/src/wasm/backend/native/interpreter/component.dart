@@ -812,6 +812,32 @@ final class _WasmComponentCoreIndexCounts {
   }
 }
 
+final class _WasmComponentOuterAliasScope {
+  const _WasmComponentOuterAliasScope({
+    required this.typeCount,
+    required this.coreModuleCount,
+    required this.componentCount,
+  });
+
+  final int typeCount;
+  final int coreModuleCount;
+  final int componentCount;
+
+  int? count(WasmComponentSort sort) {
+    if (sort.kind == WasmComponentSortKind.componentType) {
+      return typeCount;
+    }
+    if (sort.kind == WasmComponentSortKind.component) {
+      return componentCount;
+    }
+    if (sort.kind == WasmComponentSortKind.core &&
+        sort.coreKind == WasmComponentCoreSortKind.module) {
+      return coreModuleCount;
+    }
+    return null;
+  }
+}
+
 bool _componentTypeDefinitionNeedsFunctionIndexValidation(
   WasmComponentTypeDefinition type,
 ) {
@@ -855,11 +881,17 @@ final class WasmComponent {
   final List<WasmComponentValueDefinition> valueDefinitions;
   final List<_WasmComponentDefinitionEvent> _definitionEvents;
 
-  List<WasmComponentValidationError> validate() {
+  List<WasmComponentValidationError> validate() => _validate();
+
+  List<WasmComponentValidationError> _validate({
+    List<_WasmComponentOuterAliasScope> outerAliasScopes =
+        const <_WasmComponentOuterAliasScope>[],
+  }) {
     final errors = <WasmComponentValidationError>[];
     final context = _WasmComponentValidationContext(
       typeDefinitions: typeDefinitions,
       coreTypes: coreTypes,
+      outerAliasScopes: outerAliasScopes,
       errors: errors,
     );
     for (var i = 0; i < coreTypes.length; i++) {
@@ -894,19 +926,10 @@ final class WasmComponent {
       instances: instances,
       aliases: aliases,
       canonicalDefinitions: canonicalDefinitions,
+      components: components,
       starts: starts,
       valueDefinitions: valueDefinitions,
     );
-    for (var i = 0; i < components.length; i++) {
-      for (final error in components[i].validate()) {
-        errors.add(
-          WasmComponentValidationError(
-            path: 'component[$i].${error.path}',
-            message: error.message,
-          ),
-        );
-      }
-    }
     return List.unmodifiable(errors);
   }
 
@@ -1138,11 +1161,13 @@ final class _WasmComponentValidationContext {
   _WasmComponentValidationContext({
     required this.typeDefinitions,
     required this.coreTypes,
+    required this.outerAliasScopes,
     required this.errors,
   });
 
   final List<WasmComponentTypeDefinition> typeDefinitions;
   final List<WasmComponentCoreType> coreTypes;
+  final List<_WasmComponentOuterAliasScope> outerAliasScopes;
   final List<WasmComponentValidationError> errors;
   final Map<int, bool> _valueTypeContainsBorrowMemo = <int, bool>{};
   final Set<int> _valueTypeContainsBorrowVisiting = <int>{};
@@ -2266,6 +2291,7 @@ final class _WasmComponentValidationContext {
     required List<WasmComponentInstance> instances,
     required List<WasmComponentAlias> aliases,
     required List<WasmComponentCanonicalDefinition> canonicalDefinitions,
+    required List<WasmComponent> components,
     required List<WasmComponentStart> starts,
     required List<WasmComponentValueDefinition> valueDefinitions,
   }) {
@@ -2339,6 +2365,26 @@ final class _WasmComponentValidationContext {
           );
           coreCounts.add(WasmComponentCoreSortKind.instance);
         case _WasmComponentDefinitionEventKind.component:
+          final childOuterAliasScopes = <_WasmComponentOuterAliasScope>[
+            _WasmComponentOuterAliasScope(
+              typeCount: typeCount,
+              coreModuleCount: coreCounts.count(
+                WasmComponentCoreSortKind.module,
+              ),
+              componentCount: componentCount,
+            ),
+            ...outerAliasScopes,
+          ];
+          for (final error in components[event.index]._validate(
+            outerAliasScopes: childOuterAliasScopes,
+          )) {
+            errors.add(
+              WasmComponentValidationError(
+                path: 'component[${event.index}].${error.path}',
+                message: error.message,
+              ),
+            );
+          }
           componentCount++;
         case _WasmComponentDefinitionEventKind.instance:
           validateInstanceDefinition(
@@ -2360,12 +2406,22 @@ final class _WasmComponentValidationContext {
           );
         case _WasmComponentDefinitionEventKind.alias:
           final alias = aliases[event.index];
-          validateAliasDefinition(
+          final aliasIsValid = validateAliasDefinition(
             alias,
             'alias[${event.index}]',
             coreCounts: coreCounts,
             instanceCount: instanceCount,
+            currentOuterAliasScope: _WasmComponentOuterAliasScope(
+              typeCount: typeCount,
+              coreModuleCount: coreCounts.count(
+                WasmComponentCoreSortKind.module,
+              ),
+              componentCount: componentCount,
+            ),
           );
+          if (!aliasIsValid) {
+            break;
+          }
           final sort = alias.sort;
           if (sort.kind == WasmComponentSortKind.core &&
               sort.coreKind != null) {
@@ -2593,11 +2649,12 @@ final class _WasmComponentValidationContext {
     }
   }
 
-  void validateAliasDefinition(
+  bool validateAliasDefinition(
     WasmComponentAlias alias,
     String path, {
     required _WasmComponentCoreIndexCounts coreCounts,
     required int instanceCount,
+    required _WasmComponentOuterAliasScope currentOuterAliasScope,
   }) {
     if (alias.target.kind == WasmComponentAliasTargetKind.export) {
       validateComponentInstanceIndex(
@@ -2616,6 +2673,101 @@ final class _WasmComponentValidationContext {
         coreCounts,
       );
     }
+
+    if (alias.target.kind == WasmComponentAliasTargetKind.outer) {
+      return validateOuterAliasDefinition(alias, path, currentOuterAliasScope);
+    }
+
+    return true;
+  }
+
+  bool validateOuterAliasDefinition(
+    WasmComponentAlias alias,
+    String path,
+    _WasmComponentOuterAliasScope currentOuterAliasScope,
+  ) {
+    final currentSortCount = currentOuterAliasScope.count(alias.sort);
+    if (currentSortCount == null) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Unsupported Wasm component outer alias sort: '
+              '${outerAliasSortDescription(alias.sort)}.',
+        ),
+      );
+      return false;
+    }
+
+    final componentDepth = alias.target.componentDepth;
+    if (componentDepth == null || componentDepth < 0) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.target',
+          message: 'Unknown Wasm component outer alias scope: $componentDepth.',
+        ),
+      );
+      return false;
+    }
+
+    final targetScope = outerAliasScopeAt(
+      componentDepth,
+      currentOuterAliasScope,
+    );
+    if (targetScope == null) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.target',
+          message: 'Unknown Wasm component outer alias scope: $componentDepth.',
+        ),
+      );
+      return false;
+    }
+
+    final targetSortCount = targetScope.count(alias.sort);
+    final index = alias.target.index;
+    if (targetSortCount == null ||
+        index == null ||
+        index < 0 ||
+        index >= targetSortCount) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.target',
+          message:
+              'Unknown Wasm component outer alias '
+              '${outerAliasSortDescription(alias.sort)} index: $index.',
+        ),
+      );
+      return false;
+    }
+
+    return true;
+  }
+
+  _WasmComponentOuterAliasScope? outerAliasScopeAt(
+    int componentDepth,
+    _WasmComponentOuterAliasScope currentOuterAliasScope,
+  ) {
+    if (componentDepth == 0) {
+      return currentOuterAliasScope;
+    }
+
+    final outerIndex = componentDepth - 1;
+    if (outerIndex < 0 || outerIndex >= outerAliasScopes.length) {
+      return null;
+    }
+    return outerAliasScopes[outerIndex];
+  }
+
+  String outerAliasSortDescription(WasmComponentSort sort) {
+    if (sort.kind == WasmComponentSortKind.core) {
+      final coreKind = sort.coreKind;
+      return coreKind == null ? 'core' : 'core ${coreKind.name}';
+    }
+    if (sort.kind == WasmComponentSortKind.componentType) {
+      return 'type';
+    }
+    return sort.kind.name;
   }
 
   void validateCoreSortIndex(

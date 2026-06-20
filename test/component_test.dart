@@ -307,6 +307,7 @@ void main() {
       final component = WasmComponent.decode(_outerAliasComponentBytes());
 
       expect(component.components, hasLength(2));
+      expect(component.validate(), isEmpty);
       final child = component.components.last;
       expect(child.aliases, hasLength(1));
       final alias = child.aliases.single;
@@ -314,6 +315,19 @@ void main() {
       expect(alias.target.kind, WasmComponentAliasTargetKind.outer);
       expect(alias.target.componentDepth, 1);
       expect(alias.target.index, 0);
+    });
+
+    test('reports invalid outer alias component indexes', () {
+      final errors = WasmComponent.decode(
+        _outerAliasComponentIndexOutOfRangeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(errors.single.path, 'component[1].alias[0].target');
+      expect(
+        errors.single.message,
+        contains('Unknown Wasm component outer alias component index'),
+      );
     });
 
     test('decodes canonical lift and lower definitions', () {
@@ -2719,6 +2733,45 @@ Uint8List _outerAliasComponentBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x00,
 ]);
+
+Uint8List _outerAliasComponentIndexOutOfRangeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x04,
+      0x08,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x04,
+      0x0f,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x06,
+      0x05,
+      0x01,
+      0x04,
+      0x02,
+      0x01,
+      0x01,
+    ]);
 
 Uint8List _canonicalLiftLowerComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
