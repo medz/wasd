@@ -768,10 +768,15 @@ final class _WasmComponentValueIndexEntry {
 }
 
 final class _WasmComponentInstanceExportEntry {
-  const _WasmComponentInstanceExportEntry({required this.sort, this.function});
+  const _WasmComponentInstanceExportEntry({
+    required this.sort,
+    this.function,
+    this.value,
+  });
 
   final WasmComponentSortIndex sort;
   final WasmComponentFunctionType? function;
+  final WasmComponentValueType? value;
 }
 
 typedef _WasmComponentInstanceExportMap =
@@ -2885,7 +2890,11 @@ final class _WasmComponentValidationContext {
             instanceCount: instanceCount,
           );
           instanceExportMaps.add(
-            componentInstanceExportMap(instance, functionTypes: functionTypes),
+            componentInstanceExportMap(
+              instance,
+              functionTypes: functionTypes,
+              valueEntries: valueEntries,
+            ),
           );
           instanceCount++;
         case _WasmComponentDefinitionEventKind.typeCount:
@@ -2925,17 +2934,17 @@ final class _WasmComponentValidationContext {
               sort.coreKind != null) {
             coreCounts.add(sort.coreKind!);
           }
+          final knownAliasEntry = knownComponentInstanceExportAliasEntry(
+            alias,
+            instanceExportMaps,
+          );
           if (sort.kind == WasmComponentSortKind.function) {
-            functionTypes.add(
-              knownComponentInstanceExportAliasEntry(
-                alias,
-                instanceExportMaps,
-              )?.function,
-            );
+            functionTypes.add(knownAliasEntry?.function);
           } else if (sort.kind == WasmComponentSortKind.value) {
             valueEntries.add(
               _WasmComponentValueIndexEntry(
                 originPath: 'alias[${event.index}]',
+                type: knownAliasEntry?.value,
               ),
             );
           } else if (sort.kind == WasmComponentSortKind.component) {
@@ -3144,6 +3153,7 @@ final class _WasmComponentValidationContext {
   _WasmComponentInstanceExportMap? componentInstanceExportMap(
     WasmComponentInstance instance, {
     required List<WasmComponentFunctionType?> functionTypes,
+    required List<_WasmComponentValueIndexEntry> valueEntries,
   }) {
     if (instance.kind != WasmComponentInstanceKind.inlineExports) {
       return null;
@@ -3155,6 +3165,9 @@ final class _WasmComponentValidationContext {
           sort: export.sort,
           function: export.sort.kind == WasmComponentSortKind.function
               ? componentFunctionTypeAt(functionTypes, export.sort.index)
+              : null,
+          value: export.sort.kind == WasmComponentSortKind.value
+              ? componentValueTypeAt(valueEntries, export.sort.index)
               : null,
         ),
     };
