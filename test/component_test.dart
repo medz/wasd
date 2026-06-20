@@ -754,10 +754,25 @@ void main() {
       final duplicateMemory = WasmComponent.decode(
         _canonicalDuplicateMemoryOptionComponentBytes(),
       ).validate();
-      expect(duplicateMemory, hasLength(1));
       expect(
-        duplicateMemory.single.message,
-        contains('Duplicate Wasm component canonical option'),
+        duplicateMemory.any(
+          (error) => error.message.contains(
+            'Duplicate Wasm component canonical option',
+          ),
+        ),
+        isTrue,
+      );
+    });
+
+    test('reports invalid canonical option core indexes', () {
+      final errors = WasmComponent.decode(
+        _canonicalMemoryOptionOutOfRangeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('Unknown Wasm component core memory index'),
       );
     });
 
@@ -2660,6 +2675,42 @@ Uint8List _canonicalDuplicateMemoryOptionComponentBytes() =>
       0x00,
       0x03,
       0x01,
+    ]);
+
+Uint8List _canonicalMemoryOptionOutOfRangeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x00,
+      0x73,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x08,
+      0x07,
+      0x01,
+      0x01,
+      0x00,
+      0x00,
+      0x01,
+      0x03,
+      0x00,
     ]);
 
 Uint8List _typeDefinitionsComponentBytes() => Uint8List.fromList(const <int>[

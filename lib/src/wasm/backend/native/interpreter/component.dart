@@ -1650,6 +1650,13 @@ final class _WasmComponentValidationContext {
               'canonical[${event.index}].function',
               functionTypes.length,
             );
+          }
+          validateCanonicalOptionIndexSpaces(
+            definition.options,
+            'canonical[${event.index}].options',
+            coreCounts,
+          );
+          if (definition.kind == WasmComponentCanonicalKind.lower) {
             coreCounts.add(WasmComponentCoreSortKind.function);
           }
           if (definition.kind == WasmComponentCanonicalKind.lift) {
@@ -1857,6 +1864,39 @@ final class _WasmComponentValidationContext {
           message: 'Unknown Wasm component core ${kind.name} index: $index.',
         ),
       );
+    }
+  }
+
+  void validateCanonicalOptionIndexSpaces(
+    List<WasmComponentCanonicalOption> options,
+    String path,
+    _WasmComponentCoreIndexCounts coreCounts,
+  ) {
+    for (var i = 0; i < options.length; i++) {
+      final option = options[i];
+      switch (option.kind) {
+        case WasmComponentCanonicalOptionKind.memory:
+          validateCoreSortIndex(
+            option.index,
+            '$path[$i]',
+            WasmComponentCoreSortKind.memory,
+            coreCounts,
+          );
+        case WasmComponentCanonicalOptionKind.realloc:
+        case WasmComponentCanonicalOptionKind.postReturn:
+        case WasmComponentCanonicalOptionKind.callback:
+          validateCoreSortIndex(
+            option.index,
+            '$path[$i]',
+            WasmComponentCoreSortKind.function,
+            coreCounts,
+          );
+        case WasmComponentCanonicalOptionKind.stringEncodingUtf8:
+        case WasmComponentCanonicalOptionKind.stringEncodingUtf16:
+        case WasmComponentCanonicalOptionKind.stringEncodingLatin1Utf16:
+        case WasmComponentCanonicalOptionKind.async:
+          break;
+      }
     }
   }
 
