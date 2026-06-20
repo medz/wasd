@@ -1012,9 +1012,15 @@ void _validateDefinedValueType(
         errors,
       );
     case WasmComponentDefinedValueTypeKind.primitive:
+      break;
     case WasmComponentDefinedValueTypeKind.own:
     case WasmComponentDefinedValueTypeKind.borrow:
-      break;
+      _validateComponentResourceTypeIndex(
+        type.typeIndex,
+        '$path.resource',
+        typeDefinitions,
+        errors,
+      );
   }
 }
 
@@ -1049,6 +1055,36 @@ void _validateComponentValueType(
         path: path,
         message:
             'Wasm component value type index $typeIndex does not refer to a value type.',
+      ),
+    );
+  }
+}
+
+void _validateComponentResourceTypeIndex(
+  int? typeIndex,
+  String path,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+  List<WasmComponentValidationError> errors,
+) {
+  if (typeIndex == null ||
+      typeIndex < 0 ||
+      typeIndex >= typeDefinitions.length) {
+    errors.add(
+      WasmComponentValidationError(
+        path: path,
+        message: 'Unknown Wasm component resource type index: $typeIndex.',
+      ),
+    );
+    return;
+  }
+
+  if (typeDefinitions[typeIndex].kind != WasmComponentTypeKind.resource ||
+      typeDefinitions[typeIndex].resource == null) {
+    errors.add(
+      WasmComponentValidationError(
+        path: path,
+        message:
+            'Wasm component resource type index $typeIndex does not refer to a resource type.',
       ),
     );
   }

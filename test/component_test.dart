@@ -511,6 +511,31 @@ void main() {
       );
     });
 
+    test('reports invalid component resource type indexes', () {
+      expect(
+        WasmComponent.decode(_ownedResourceTypeComponentBytes()).validate(),
+        isEmpty,
+      );
+
+      final wrongSort = WasmComponent.decode(
+        _ownedWrongSortTypeIndexComponentBytes(),
+      ).validate();
+      expect(wrongSort, hasLength(1));
+      expect(
+        wrongSort.single.message,
+        contains('does not refer to a resource type'),
+      );
+
+      final outOfRange = WasmComponent.decode(
+        _borrowedOutOfRangeTypeIndexComponentBytes(),
+      ).validate();
+      expect(outOfRange, hasLength(1));
+      expect(
+        outOfRange.single.message,
+        contains('Unknown Wasm component resource type index'),
+      );
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -1999,7 +2024,7 @@ Uint8List _variantValueDefinitionsComponentBytes() =>
     ]);
 
 Uint8List _duplicateRecordLabelsTypeComponentBytes() =>
-    _singleDefinedValueTypeComponentBytes(const <int>[
+    _componentWithSingleTypeDefinitionBytes(const <int>[
       0x72,
       0x02,
       0x01,
@@ -2011,7 +2036,7 @@ Uint8List _duplicateRecordLabelsTypeComponentBytes() =>
     ]);
 
 Uint8List _duplicateVariantLabelsTypeComponentBytes() =>
-    _singleDefinedValueTypeComponentBytes(const <int>[
+    _componentWithSingleTypeDefinitionBytes(const <int>[
       0x71,
       0x02,
       0x01,
@@ -2025,7 +2050,7 @@ Uint8List _duplicateVariantLabelsTypeComponentBytes() =>
     ]);
 
 Uint8List _duplicateFlagsLabelsTypeComponentBytes() =>
-    _singleDefinedValueTypeComponentBytes(const <int>[
+    _componentWithSingleTypeDefinitionBytes(const <int>[
       0x6e,
       0x02,
       0x01,
@@ -2035,7 +2060,7 @@ Uint8List _duplicateFlagsLabelsTypeComponentBytes() =>
     ]);
 
 Uint8List _duplicateEnumLabelsTypeComponentBytes() =>
-    _singleDefinedValueTypeComponentBytes(const <int>[
+    _componentWithSingleTypeDefinitionBytes(const <int>[
       0x6d,
       0x02,
       0x01,
@@ -2045,26 +2070,51 @@ Uint8List _duplicateEnumLabelsTypeComponentBytes() =>
     ]);
 
 Uint8List _functionResultWrongSortTypeIndexComponentBytes() =>
-    _singleDefinedValueTypeComponentBytes(const <int>[0x40, 0x00, 0x00, 0x00]);
+    _componentWithSingleTypeDefinitionBytes(const <int>[
+      0x40,
+      0x00,
+      0x00,
+      0x00,
+    ]);
 
 Uint8List _listElementOutOfRangeTypeIndexComponentBytes() =>
-    _singleDefinedValueTypeComponentBytes(const <int>[0x70, 0x01]);
+    _componentWithSingleTypeDefinitionBytes(const <int>[0x70, 0x01]);
 
-Uint8List _singleDefinedValueTypeComponentBytes(List<int> typeBytes) =>
-    Uint8List.fromList(<int>[
+Uint8List _ownedResourceTypeComponentBytes() =>
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x3f,
+      0x7f,
       0x00,
-      0x61,
-      0x73,
-      0x6d,
-      0x0d,
+      0x69,
       0x00,
-      0x01,
-      0x00,
-      0x07,
-      typeBytes.length + 1,
-      0x01,
-      ...typeBytes,
-    ]);
+    ], count: 2);
+
+Uint8List _ownedWrongSortTypeIndexComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[0x69, 0x00]);
+
+Uint8List _borrowedOutOfRangeTypeIndexComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[0x68, 0x01]);
+
+Uint8List _componentWithSingleTypeDefinitionBytes(List<int> typeBytes) =>
+    _componentWithTypeDefinitionsBytes(typeBytes, count: 1);
+
+Uint8List _componentWithTypeDefinitionsBytes(
+  List<int> typeBytes, {
+  required int count,
+}) => Uint8List.fromList(<int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  typeBytes.length + 1,
+  count,
+  ...typeBytes,
+]);
 
 Uint8List _truncatedSectionComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
