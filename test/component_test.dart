@@ -570,6 +570,31 @@ void main() {
       );
     });
 
+    test('reports invalid canonical resource type indexes', () {
+      expect(
+        WasmComponent.decode(_canonicalResourceTypeComponentBytes()).validate(),
+        isEmpty,
+      );
+
+      final wrongSort = WasmComponent.decode(
+        _canonicalResourceWrongSortTypeIndexComponentBytes(),
+      ).validate();
+      expect(wrongSort, hasLength(1));
+      expect(
+        wrongSort.single.message,
+        contains('does not refer to a resource type'),
+      );
+
+      final outOfRange = WasmComponent.decode(
+        _canonicalResourceOutOfRangeTypeIndexComponentBytes(),
+      ).validate();
+      expect(outOfRange, hasLength(1));
+      expect(
+        outOfRange.single.message,
+        contains('Unknown Wasm component resource type index'),
+      );
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -1712,6 +1737,67 @@ Uint8List _canonicalResultOutOfRangeTypeIndexComponentBytes() =>
       0x09,
       0x00,
       0x00,
+      0x00,
+    ]);
+
+Uint8List _canonicalResourceTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x3f,
+      0x7f,
+      0x00,
+      0x08,
+      0x03,
+      0x01,
+      0x02,
+      0x00,
+    ]);
+
+Uint8List _canonicalResourceWrongSortTypeIndexComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x02,
+      0x01,
+      0x7f,
+      0x08,
+      0x03,
+      0x01,
+      0x02,
+      0x00,
+    ]);
+
+Uint8List _canonicalResourceOutOfRangeTypeIndexComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x03,
+      0x01,
+      0x02,
       0x00,
     ]);
 

@@ -1269,12 +1269,27 @@ void _validateCanonicalDefinition(
   List<WasmComponentTypeDefinition> typeDefinitions,
   List<WasmComponentValidationError> errors,
 ) {
+  if (_canonicalDefinitionUsesResourceType(definition.kind)) {
+    _validateComponentResourceTypeIndex(
+      definition.typeIndex,
+      '$path.type',
+      typeDefinitions,
+      errors,
+    );
+  }
+
   _validateComponentValueType(
     definition.result?.valueType,
     '$path.result',
     typeDefinitions,
     errors,
   );
+}
+
+bool _canonicalDefinitionUsesResourceType(WasmComponentCanonicalKind kind) {
+  return kind == WasmComponentCanonicalKind.resourceNew ||
+      kind == WasmComponentCanonicalKind.resourceDrop ||
+      kind == WasmComponentCanonicalKind.resourceRep;
 }
 
 void _validateUniqueLabels(
