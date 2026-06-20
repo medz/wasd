@@ -1569,7 +1569,13 @@ final class _WasmComponentValidationContext {
     WasmComponentExternDescriptor? descriptor,
     List<WasmComponentTypeDefinition> localTypeDefinitions,
   ) {
-    if (descriptor?.kind != WasmComponentExternKind.function) {
+    final expectedKind = switch (descriptor?.kind) {
+      WasmComponentExternKind.function => WasmComponentTypeKind.function,
+      WasmComponentExternKind.component => WasmComponentTypeKind.component,
+      WasmComponentExternKind.instance => WasmComponentTypeKind.instance,
+      _ => null,
+    };
+    if (expectedKind == null) {
       return;
     }
 
@@ -1581,10 +1587,7 @@ final class _WasmComponentValidationContext {
     }
 
     final typeDefinition = localTypeDefinitions[typeIndex];
-    if (!componentTypeDefinitionMatches(
-      typeDefinition,
-      WasmComponentTypeKind.function,
-    )) {
+    if (!componentTypeDefinitionMatches(typeDefinition, expectedKind)) {
       return;
     }
 
