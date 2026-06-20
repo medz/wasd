@@ -1041,6 +1041,15 @@ void main() {
       );
     });
 
+    test('reports missing canonical option requirements', () {
+      final errors = WasmComponent.decode(
+        _canonicalLowerAsyncWithoutMemoryComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(errors.single.message, contains('requires a memory option'));
+    });
+
     test('reports invalid canonical option core indexes', () {
       final errors = WasmComponent.decode(
         _canonicalMemoryOptionOutOfRangeComponentBytes(),
@@ -3476,6 +3485,41 @@ Uint8List _canonicalMemoryOptionOutOfRangeComponentBytes() =>
       0x01,
       0x03,
       0x00,
+    ]);
+
+Uint8List _canonicalLowerAsyncWithoutMemoryComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x08,
+      0x06,
+      0x01,
+      0x01,
+      0x00,
+      0x00,
+      0x01,
+      0x06,
     ]);
 
 Uint8List _canonicalWaitableSetWaitMemoryOutOfRangeComponentBytes() =>

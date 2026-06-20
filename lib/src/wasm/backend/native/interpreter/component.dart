@@ -2667,6 +2667,7 @@ final class _WasmComponentValidationContext {
     }
 
     validateCanonicalOptions(definition.options, '$path.options');
+    validateCanonicalOptionRequirements(definition, path);
     validateComponentValueType(
       definition.result?.valueType,
       '$path.result',
@@ -2710,6 +2711,37 @@ final class _WasmComponentValidationContext {
         );
       }
     }
+  }
+
+  void validateCanonicalOptionRequirements(
+    WasmComponentCanonicalDefinition definition,
+    String path,
+  ) {
+    final options = definition.options;
+    if (definition.kind == WasmComponentCanonicalKind.lower &&
+        canonicalOptionsContain(
+          options,
+          WasmComponentCanonicalOptionKind.async,
+        ) &&
+        !canonicalOptionsContain(
+          options,
+          WasmComponentCanonicalOptionKind.memory,
+        )) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.options',
+          message:
+              'Wasm component canon lower with async option requires a memory option.',
+        ),
+      );
+    }
+  }
+
+  bool canonicalOptionsContain(
+    List<WasmComponentCanonicalOption> options,
+    WasmComponentCanonicalOptionKind kind,
+  ) {
+    return options.any((option) => option.kind == kind);
   }
 
   bool canonicalOptionIsStringEncoding(
