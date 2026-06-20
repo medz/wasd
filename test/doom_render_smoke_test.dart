@@ -26,6 +26,7 @@ void main() {
         reason: 'stdout:\n${result.stdout}\nstderr:\n${result.stderr}',
       );
     },
+    tags: const <String>['doom', 'slow'],
     timeout: const Timeout(Duration(minutes: 5)),
     skip: _skipReason(),
   );
