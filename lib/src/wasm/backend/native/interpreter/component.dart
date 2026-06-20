@@ -256,6 +256,144 @@ final class WasmComponentStart {
   final int resultCount;
 }
 
+enum WasmComponentPrimitiveValueType {
+  boolean,
+  s8,
+  u8,
+  s16,
+  u16,
+  s32,
+  u32,
+  s64,
+  u64,
+  f32,
+  f64,
+  char,
+  string,
+  errorContext,
+}
+
+enum WasmComponentValueTypeKind { primitive, typeIndex }
+
+final class WasmComponentValueType {
+  const WasmComponentValueType.primitive(this.primitive)
+    : kind = WasmComponentValueTypeKind.primitive,
+      typeIndex = null;
+
+  const WasmComponentValueType.typeIndex(this.typeIndex)
+    : kind = WasmComponentValueTypeKind.typeIndex,
+      primitive = null;
+
+  final WasmComponentValueTypeKind kind;
+  final WasmComponentPrimitiveValueType? primitive;
+  final int? typeIndex;
+}
+
+final class WasmComponentCanonicalResult {
+  const WasmComponentCanonicalResult.none() : valueType = null;
+
+  const WasmComponentCanonicalResult.value(this.valueType);
+
+  final WasmComponentValueType? valueType;
+}
+
+enum WasmComponentCanonicalOptionKind {
+  stringEncodingUtf8,
+  stringEncodingUtf16,
+  stringEncodingLatin1Utf16,
+  memory,
+  realloc,
+  postReturn,
+  async,
+  callback,
+}
+
+final class WasmComponentCanonicalOption {
+  const WasmComponentCanonicalOption({required this.kind, this.index});
+
+  final WasmComponentCanonicalOptionKind kind;
+  final int? index;
+}
+
+enum WasmComponentCanonicalKind {
+  lift,
+  lower,
+  resourceNew,
+  resourceDrop,
+  resourceRep,
+  backpressureSet,
+  backpressureInc,
+  backpressureDec,
+  taskReturn,
+  taskCancel,
+  contextGet,
+  contextSet,
+  threadYield,
+  subtaskCancel,
+  subtaskDrop,
+  streamNew,
+  streamRead,
+  streamWrite,
+  streamCancelRead,
+  streamCancelWrite,
+  streamDropReadable,
+  streamDropWritable,
+  futureNew,
+  futureRead,
+  futureWrite,
+  futureCancelRead,
+  futureCancelWrite,
+  futureDropReadable,
+  futureDropWritable,
+  errorContextNew,
+  errorContextDebugMessage,
+  errorContextDrop,
+  waitableSetNew,
+  waitableSetWait,
+  waitableSetPoll,
+  waitableSetDrop,
+  waitableJoin,
+  threadIndex,
+  threadNewIndirect,
+  threadSwitchTo,
+  threadSuspend,
+  threadResumeLater,
+  threadYieldTo,
+  threadSpawnRef,
+  threadSpawnIndirect,
+  threadAvailableParallelism,
+}
+
+final class WasmComponentCanonicalDefinition {
+  const WasmComponentCanonicalDefinition({
+    required this.kind,
+    this.coreFunctionIndex,
+    this.functionIndex,
+    this.typeIndex,
+    this.tableIndex,
+    this.memoryIndex,
+    this.contextIndex,
+    this.options = const <WasmComponentCanonicalOption>[],
+    this.result,
+    this.isAsync = false,
+    this.isCancellable = false,
+    this.isShared = false,
+  });
+
+  final WasmComponentCanonicalKind kind;
+  final int? coreFunctionIndex;
+  final int? functionIndex;
+  final int? typeIndex;
+  final int? tableIndex;
+  final int? memoryIndex;
+  final int? contextIndex;
+  final List<WasmComponentCanonicalOption> options;
+  final WasmComponentCanonicalResult? result;
+  final bool isAsync;
+  final bool isCancellable;
+  final bool isShared;
+}
+
 final class WasmComponent {
   const WasmComponent({
     required this.sections,
@@ -267,6 +405,7 @@ final class WasmComponent {
     required this.instances,
     required this.aliases,
     required this.starts,
+    required this.canonicalDefinitions,
   });
 
   final List<WasmComponentSection> sections;
@@ -278,6 +417,7 @@ final class WasmComponent {
   final List<WasmComponentInstance> instances;
   final List<WasmComponentAlias> aliases;
   final List<WasmComponentStart> starts;
+  final List<WasmComponentCanonicalDefinition> canonicalDefinitions;
 
   static bool hasComponentPreamble(List<int> bytes) {
     return bytes.length >= 8 &&
@@ -329,6 +469,7 @@ final class WasmComponent {
     final instances = <WasmComponentInstance>[];
     final aliases = <WasmComponentAlias>[];
     final starts = <WasmComponentStart>[];
+    final canonicalDefinitions = <WasmComponentCanonicalDefinition>[];
     while (!reader.isEOF) {
       final sectionOffset = reader.offset;
       final sectionId = reader.readByte();
@@ -361,6 +502,8 @@ final class WasmComponent {
           instances.addAll(_decodeInstances(payload));
         case _aliasSectionId:
           aliases.addAll(_decodeAliases(payload));
+        case _canonicalSectionId:
+          canonicalDefinitions.addAll(_decodeCanonicalDefinitions(payload));
         case _startSectionId:
           starts.add(_decodeStart(payload));
         case _importSectionId:
@@ -380,6 +523,7 @@ final class WasmComponent {
       instances: List.unmodifiable(instances),
       aliases: List.unmodifiable(aliases),
       starts: List.unmodifiable(starts),
+      canonicalDefinitions: List.unmodifiable(canonicalDefinitions),
     );
   }
 
@@ -398,6 +542,7 @@ const int _coreModuleSectionId = 1;
 const int _coreInstanceSectionId = 2;
 const int _instanceSectionId = 5;
 const int _aliasSectionId = 6;
+const int _canonicalSectionId = 8;
 const int _startSectionId = 9;
 
 List<WasmComponentImport> _decodeImports(Uint8List payload) {
@@ -544,6 +689,470 @@ WasmComponentStart _decodeStart(Uint8List payload) {
     arguments: List.unmodifiable(arguments),
     resultCount: resultCount,
   );
+}
+
+List<WasmComponentCanonicalDefinition> _decodeCanonicalDefinitions(
+  Uint8List payload,
+) {
+  final reader = ByteReader(payload);
+  final count = reader.readVarUint32();
+  final definitions = <WasmComponentCanonicalDefinition>[];
+  for (var i = 0; i < count; i++) {
+    definitions.add(_readCanonicalDefinition(reader));
+  }
+  reader.expectEof();
+  return definitions;
+}
+
+WasmComponentCanonicalDefinition _readCanonicalDefinition(ByteReader reader) {
+  final opcode = reader.readByte();
+  switch (opcode) {
+    case 0x00:
+      _expectCanonicalFunctionSort(reader);
+      final coreFunctionIndex = reader.readVarUint32();
+      final options = _readCanonicalOptions(reader);
+      return WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.lift,
+        coreFunctionIndex: coreFunctionIndex,
+        options: options,
+        typeIndex: reader.readVarUint32(),
+      );
+    case 0x01:
+      _expectCanonicalFunctionSort(reader);
+      return WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.lower,
+        functionIndex: reader.readVarUint32(),
+        options: _readCanonicalOptions(reader),
+      );
+    case 0x02:
+      return _readCanonicalTypeIndex(
+        reader,
+        WasmComponentCanonicalKind.resourceNew,
+      );
+    case 0x03:
+      return _readCanonicalTypeIndex(
+        reader,
+        WasmComponentCanonicalKind.resourceDrop,
+      );
+    case 0x04:
+      return _readCanonicalTypeIndex(
+        reader,
+        WasmComponentCanonicalKind.resourceRep,
+      );
+    case 0x08:
+      return const WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.backpressureSet,
+      );
+    case 0x24:
+      return const WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.backpressureInc,
+      );
+    case 0x25:
+      return const WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.backpressureDec,
+      );
+    case 0x09:
+      return WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.taskReturn,
+        result: _readCanonicalResult(reader),
+        options: _readCanonicalOptions(reader),
+      );
+    case 0x05:
+      return const WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.taskCancel,
+      );
+    case 0x0a:
+      return _readContextCanonical(
+        reader,
+        WasmComponentCanonicalKind.contextGet,
+      );
+    case 0x0b:
+      return _readContextCanonical(
+        reader,
+        WasmComponentCanonicalKind.contextSet,
+      );
+    case 0x0c:
+      return _readCancellableCanonical(
+        reader,
+        WasmComponentCanonicalKind.threadYield,
+      );
+    case 0x06:
+      return _readAsyncCanonical(
+        reader,
+        WasmComponentCanonicalKind.subtaskCancel,
+      );
+    case 0x0d:
+      return const WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.subtaskDrop,
+      );
+    case 0x0e:
+      return _readCanonicalTypeIndex(
+        reader,
+        WasmComponentCanonicalKind.streamNew,
+      );
+    case 0x0f:
+      return _readTypedOptionsCanonical(
+        reader,
+        WasmComponentCanonicalKind.streamRead,
+      );
+    case 0x10:
+      return _readTypedOptionsCanonical(
+        reader,
+        WasmComponentCanonicalKind.streamWrite,
+      );
+    case 0x11:
+      return _readTypedAsyncCanonical(
+        reader,
+        WasmComponentCanonicalKind.streamCancelRead,
+      );
+    case 0x12:
+      return _readTypedAsyncCanonical(
+        reader,
+        WasmComponentCanonicalKind.streamCancelWrite,
+      );
+    case 0x13:
+      return _readCanonicalTypeIndex(
+        reader,
+        WasmComponentCanonicalKind.streamDropReadable,
+      );
+    case 0x14:
+      return _readCanonicalTypeIndex(
+        reader,
+        WasmComponentCanonicalKind.streamDropWritable,
+      );
+    case 0x15:
+      return _readCanonicalTypeIndex(
+        reader,
+        WasmComponentCanonicalKind.futureNew,
+      );
+    case 0x16:
+      return _readTypedOptionsCanonical(
+        reader,
+        WasmComponentCanonicalKind.futureRead,
+      );
+    case 0x17:
+      return _readTypedOptionsCanonical(
+        reader,
+        WasmComponentCanonicalKind.futureWrite,
+      );
+    case 0x18:
+      return _readTypedAsyncCanonical(
+        reader,
+        WasmComponentCanonicalKind.futureCancelRead,
+      );
+    case 0x19:
+      return _readTypedAsyncCanonical(
+        reader,
+        WasmComponentCanonicalKind.futureCancelWrite,
+      );
+    case 0x1a:
+      return _readCanonicalTypeIndex(
+        reader,
+        WasmComponentCanonicalKind.futureDropReadable,
+      );
+    case 0x1b:
+      return _readCanonicalTypeIndex(
+        reader,
+        WasmComponentCanonicalKind.futureDropWritable,
+      );
+    case 0x1c:
+      return WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.errorContextNew,
+        options: _readCanonicalOptions(reader),
+      );
+    case 0x1d:
+      return WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.errorContextDebugMessage,
+        options: _readCanonicalOptions(reader),
+      );
+    case 0x1e:
+      return const WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.errorContextDrop,
+      );
+    case 0x1f:
+      return const WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.waitableSetNew,
+      );
+    case 0x20:
+      return _readCancellableMemoryCanonical(
+        reader,
+        WasmComponentCanonicalKind.waitableSetWait,
+      );
+    case 0x21:
+      return _readCancellableMemoryCanonical(
+        reader,
+        WasmComponentCanonicalKind.waitableSetPoll,
+      );
+    case 0x22:
+      return const WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.waitableSetDrop,
+      );
+    case 0x23:
+      return const WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.waitableJoin,
+      );
+    case 0x26:
+      return const WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.threadIndex,
+      );
+    case 0x27:
+      return WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.threadNewIndirect,
+        typeIndex: reader.readVarUint32(),
+        tableIndex: reader.readVarUint32(),
+      );
+    case 0x28:
+      return _readCancellableCanonical(
+        reader,
+        WasmComponentCanonicalKind.threadSwitchTo,
+      );
+    case 0x29:
+      return _readCancellableCanonical(
+        reader,
+        WasmComponentCanonicalKind.threadSuspend,
+      );
+    case 0x2a:
+      return const WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.threadResumeLater,
+      );
+    case 0x2b:
+      return _readCancellableCanonical(
+        reader,
+        WasmComponentCanonicalKind.threadYieldTo,
+      );
+    case 0x40:
+      return WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.threadSpawnRef,
+        isShared: _readCanonicalFlag(reader, 'shared'),
+        typeIndex: reader.readVarUint32(),
+      );
+    case 0x41:
+      return WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.threadSpawnIndirect,
+        isShared: _readCanonicalFlag(reader, 'shared'),
+        typeIndex: reader.readVarUint32(),
+        tableIndex: reader.readVarUint32(),
+      );
+    case 0x42:
+      return WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.threadAvailableParallelism,
+        isShared: _readCanonicalFlag(reader, 'shared'),
+      );
+    default:
+      throw FormatException(
+        'Unsupported Wasm component canonical definition: 0x${opcode.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentCanonicalDefinition _readCanonicalTypeIndex(
+  ByteReader reader,
+  WasmComponentCanonicalKind kind,
+) {
+  return WasmComponentCanonicalDefinition(
+    kind: kind,
+    typeIndex: reader.readVarUint32(),
+  );
+}
+
+WasmComponentCanonicalDefinition _readTypedOptionsCanonical(
+  ByteReader reader,
+  WasmComponentCanonicalKind kind,
+) {
+  return WasmComponentCanonicalDefinition(
+    kind: kind,
+    typeIndex: reader.readVarUint32(),
+    options: _readCanonicalOptions(reader),
+  );
+}
+
+WasmComponentCanonicalDefinition _readTypedAsyncCanonical(
+  ByteReader reader,
+  WasmComponentCanonicalKind kind,
+) {
+  return WasmComponentCanonicalDefinition(
+    kind: kind,
+    typeIndex: reader.readVarUint32(),
+    isAsync: _readCanonicalFlag(reader, 'async'),
+  );
+}
+
+WasmComponentCanonicalDefinition _readContextCanonical(
+  ByteReader reader,
+  WasmComponentCanonicalKind kind,
+) {
+  final valueType = reader.readByte();
+  if (valueType != 0x7f) {
+    throw FormatException(
+      'Unsupported Wasm component canonical context value type: 0x${valueType.toRadixString(16)}.',
+    );
+  }
+  return WasmComponentCanonicalDefinition(
+    kind: kind,
+    contextIndex: reader.readVarUint32(),
+  );
+}
+
+WasmComponentCanonicalDefinition _readAsyncCanonical(
+  ByteReader reader,
+  WasmComponentCanonicalKind kind,
+) {
+  return WasmComponentCanonicalDefinition(
+    kind: kind,
+    isAsync: _readCanonicalFlag(reader, 'async'),
+  );
+}
+
+WasmComponentCanonicalDefinition _readCancellableCanonical(
+  ByteReader reader,
+  WasmComponentCanonicalKind kind,
+) {
+  return WasmComponentCanonicalDefinition(
+    kind: kind,
+    isCancellable: _readCanonicalFlag(reader, 'cancel'),
+  );
+}
+
+WasmComponentCanonicalDefinition _readCancellableMemoryCanonical(
+  ByteReader reader,
+  WasmComponentCanonicalKind kind,
+) {
+  return WasmComponentCanonicalDefinition(
+    kind: kind,
+    isCancellable: _readCanonicalFlag(reader, 'cancel'),
+    memoryIndex: reader.readVarUint32(),
+  );
+}
+
+void _expectCanonicalFunctionSort(ByteReader reader) {
+  final sort = reader.readByte();
+  if (sort != 0x00) {
+    throw FormatException(
+      'Unsupported Wasm component canonical function sort: 0x${sort.toRadixString(16)}.',
+    );
+  }
+}
+
+List<WasmComponentCanonicalOption> _readCanonicalOptions(ByteReader reader) {
+  final count = reader.readVarUint32();
+  final options = <WasmComponentCanonicalOption>[];
+  for (var i = 0; i < count; i++) {
+    options.add(_readCanonicalOption(reader));
+  }
+  return List.unmodifiable(options);
+}
+
+WasmComponentCanonicalOption _readCanonicalOption(ByteReader reader) {
+  final kind = reader.readByte();
+  switch (kind) {
+    case 0x00:
+      return const WasmComponentCanonicalOption(
+        kind: WasmComponentCanonicalOptionKind.stringEncodingUtf8,
+      );
+    case 0x01:
+      return const WasmComponentCanonicalOption(
+        kind: WasmComponentCanonicalOptionKind.stringEncodingUtf16,
+      );
+    case 0x02:
+      return const WasmComponentCanonicalOption(
+        kind: WasmComponentCanonicalOptionKind.stringEncodingLatin1Utf16,
+      );
+    case 0x03:
+      return WasmComponentCanonicalOption(
+        kind: WasmComponentCanonicalOptionKind.memory,
+        index: reader.readVarUint32(),
+      );
+    case 0x04:
+      return WasmComponentCanonicalOption(
+        kind: WasmComponentCanonicalOptionKind.realloc,
+        index: reader.readVarUint32(),
+      );
+    case 0x05:
+      return WasmComponentCanonicalOption(
+        kind: WasmComponentCanonicalOptionKind.postReturn,
+        index: reader.readVarUint32(),
+      );
+    case 0x06:
+      return const WasmComponentCanonicalOption(
+        kind: WasmComponentCanonicalOptionKind.async,
+      );
+    case 0x07:
+      return WasmComponentCanonicalOption(
+        kind: WasmComponentCanonicalOptionKind.callback,
+        index: reader.readVarUint32(),
+      );
+    default:
+      throw FormatException(
+        'Unsupported Wasm component canonical option: 0x${kind.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentCanonicalResult _readCanonicalResult(ByteReader reader) {
+  final tag = reader.readByte();
+  switch (tag) {
+    case 0x00:
+      return WasmComponentCanonicalResult.value(
+        _readComponentValueType(reader),
+      );
+    case 0x01:
+      final empty = reader.readByte();
+      if (empty != 0x00) {
+        throw FormatException(
+          'Unsupported Wasm component empty result list payload: 0x${empty.toRadixString(16)}.',
+        );
+      }
+      return const WasmComponentCanonicalResult.none();
+    default:
+      throw FormatException(
+        'Unsupported Wasm component result list tag: 0x${tag.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentValueType _readComponentValueType(ByteReader reader) {
+  final offset = reader.offset;
+  final lead = reader.readByte();
+  final primitive = _primitiveValueTypeForByte(lead);
+  if (primitive != null) {
+    return WasmComponentValueType.primitive(primitive);
+  }
+  reader.offset = offset;
+  return WasmComponentValueType.typeIndex(reader.readVarUint32());
+}
+
+WasmComponentPrimitiveValueType? _primitiveValueTypeForByte(int byte) {
+  return switch (byte) {
+    0x7f => WasmComponentPrimitiveValueType.boolean,
+    0x7e => WasmComponentPrimitiveValueType.s8,
+    0x7d => WasmComponentPrimitiveValueType.u8,
+    0x7c => WasmComponentPrimitiveValueType.s16,
+    0x7b => WasmComponentPrimitiveValueType.u16,
+    0x7a => WasmComponentPrimitiveValueType.s32,
+    0x79 => WasmComponentPrimitiveValueType.u32,
+    0x78 => WasmComponentPrimitiveValueType.s64,
+    0x77 => WasmComponentPrimitiveValueType.u64,
+    0x76 => WasmComponentPrimitiveValueType.f32,
+    0x75 => WasmComponentPrimitiveValueType.f64,
+    0x74 => WasmComponentPrimitiveValueType.char,
+    0x73 => WasmComponentPrimitiveValueType.string,
+    0x64 => WasmComponentPrimitiveValueType.errorContext,
+    _ => null,
+  };
+}
+
+bool _readCanonicalFlag(ByteReader reader, String context) {
+  final flag = reader.readByte();
+  switch (flag) {
+    case 0x00:
+      return false;
+    case 0x01:
+      return true;
+    default:
+      throw FormatException(
+        'Unsupported Wasm component canonical $context flag: 0x${flag.toRadixString(16)}.',
+      );
+  }
 }
 
 WasmComponentAlias _readAlias(ByteReader reader) {
