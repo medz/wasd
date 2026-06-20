@@ -407,6 +407,27 @@ void main() {
       expect(value.value.items.map((item) => item.integer), [5, 0x1234]);
     });
 
+    test('decodes variable-size typed component values', () {
+      final component = WasmComponent.decode(
+        _variableSizeValueDefinitionsComponentBytes(),
+      );
+
+      final value = component.valueDefinitions.single;
+      expect(value.value.kind, WasmComponentValueDataKind.tuple);
+      expect(value.value.items[0].integer, 5);
+      expect(value.value.items[1].string, 'hi');
+    });
+
+    test('decodes fixed-list component value definitions', () {
+      final component = WasmComponent.decode(
+        _fixedListValueDefinitionsComponentBytes(),
+      );
+
+      final value = component.valueDefinitions.single;
+      expect(value.value.kind, WasmComponentValueDataKind.fixedList);
+      expect(value.value.items.map((item) => item.integer), [1, 2, 3]);
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -1713,6 +1734,60 @@ Uint8List _typedValueDefinitionsComponentBytes() =>
       0x05,
       0x34,
       0x12,
+    ]);
+
+Uint8List _variableSizeValueDefinitionsComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x6f,
+      0x02,
+      0x7d,
+      0x73,
+      0x0c,
+      0x07,
+      0x01,
+      0x00,
+      0x04,
+      0x05,
+      0x02,
+      0x68,
+      0x69,
+    ]);
+
+Uint8List _fixedListValueDefinitionsComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x67,
+      0x7d,
+      0x03,
+      0x0c,
+      0x06,
+      0x01,
+      0x00,
+      0x03,
+      0x01,
+      0x02,
+      0x03,
     ]);
 
 Uint8List _truncatedSectionComponentBytes() => Uint8List.fromList(const <int>[
