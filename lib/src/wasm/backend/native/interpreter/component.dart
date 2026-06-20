@@ -618,6 +618,7 @@ final class WasmComponent {
     required this.exports,
     required this.components,
     required this.coreModules,
+    required this.coreTypes,
     required this.coreInstances,
     required this.instances,
     required this.aliases,
@@ -631,6 +632,7 @@ final class WasmComponent {
   final List<WasmComponentExport> exports;
   final List<WasmComponent> components;
   final List<WasmModule> coreModules;
+  final List<WasmComponentCoreType> coreTypes;
   final List<WasmComponentCoreInstance> coreInstances;
   final List<WasmComponentInstance> instances;
   final List<WasmComponentAlias> aliases;
@@ -684,6 +686,7 @@ final class WasmComponent {
     final exports = <WasmComponentExport>[];
     final components = <WasmComponent>[];
     final coreModules = <WasmModule>[];
+    final coreTypes = <WasmComponentCoreType>[];
     final coreInstances = <WasmComponentCoreInstance>[];
     final instances = <WasmComponentInstance>[];
     final aliases = <WasmComponentAlias>[];
@@ -716,6 +719,8 @@ final class WasmComponent {
           coreModules.add(WasmModule.decode(payload, features: features));
         case _coreInstanceSectionId:
           coreInstances.addAll(_decodeCoreInstances(payload));
+        case _coreTypeSectionId:
+          coreTypes.addAll(_decodeCoreTypes(payload));
         case _componentSectionId:
           components.add(WasmComponent.decode(payload, features: features));
         case _instanceSectionId:
@@ -741,6 +746,7 @@ final class WasmComponent {
       exports: List.unmodifiable(exports),
       components: List.unmodifiable(components),
       coreModules: List.unmodifiable(coreModules),
+      coreTypes: List.unmodifiable(coreTypes),
       coreInstances: List.unmodifiable(coreInstances),
       instances: List.unmodifiable(instances),
       aliases: List.unmodifiable(aliases),
@@ -763,6 +769,7 @@ const int _exportSectionId = 11;
 const int _componentSectionId = 4;
 const int _coreModuleSectionId = 1;
 const int _coreInstanceSectionId = 2;
+const int _coreTypeSectionId = 3;
 const int _instanceSectionId = 5;
 const int _aliasSectionId = 6;
 const int _typeSectionId = 7;
@@ -832,6 +839,17 @@ List<WasmComponentCoreInstance> _decodeCoreInstances(Uint8List payload) {
   }
   reader.expectEof();
   return instances;
+}
+
+List<WasmComponentCoreType> _decodeCoreTypes(Uint8List payload) {
+  final reader = ByteReader(payload);
+  final count = reader.readVarUint32();
+  final types = <WasmComponentCoreType>[];
+  for (var i = 0; i < count; i++) {
+    types.add(_readComponentCoreType(reader));
+  }
+  reader.expectEof();
+  return types;
 }
 
 WasmComponentCoreInstance _readCoreInstance(ByteReader reader) {

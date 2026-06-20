@@ -130,6 +130,29 @@ void main() {
       expect(module.codes, hasLength(1));
     });
 
+    test('decodes component core type sections', () {
+      final component = WasmComponent.decode(_coreTypeComponentBytes());
+
+      expect(component.coreTypes, hasLength(2));
+      expect(
+        component.coreTypes.first.kind,
+        WasmComponentCoreTypeKind.function,
+      );
+
+      final moduleType = component.coreTypes.last;
+      expect(moduleType.kind, WasmComponentCoreTypeKind.module);
+      expect(moduleType.declarations, hasLength(2));
+      expect(
+        moduleType.declarations.first.kind,
+        WasmComponentCoreTypeDeclarationKind.type,
+      );
+      final export = moduleType.declarations.last;
+      expect(export.kind, WasmComponentCoreTypeDeclarationKind.export);
+      expect(export.name, 'run');
+      expect(export.descriptor!.kind, WasmComponentCoreSortKind.function);
+      expect(export.descriptor!.typeIndex, 0);
+    });
+
     test('decodes instantiated core instances', () {
       final component = WasmComponent.decode(
         _coreInstanceInstantiateComponentBytes(),
@@ -749,6 +772,64 @@ Uint8List _coreModuleComponentBytes() => Uint8List.fromList(const <int>[
   0x02,
   0x00,
   0x0b,
+]);
+
+Uint8List _coreTypeComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x03,
+  0x11,
+  0x02,
+  0x60,
+  0x00,
+  0x00,
+  0x50,
+  0x02,
+  0x01,
+  0x60,
+  0x00,
+  0x00,
+  0x03,
+  0x03,
+  0x72,
+  0x75,
+  0x6e,
+  0x00,
+  0x00,
+  0x00,
+  0x1a,
+  0x0e,
+  0x63,
+  0x6f,
+  0x6d,
+  0x70,
+  0x6f,
+  0x6e,
+  0x65,
+  0x6e,
+  0x74,
+  0x2d,
+  0x6e,
+  0x61,
+  0x6d,
+  0x65,
+  0x01,
+  0x09,
+  0x00,
+  0x10,
+  0x02,
+  0x00,
+  0x01,
+  0x66,
+  0x01,
+  0x01,
+  0x6d,
 ]);
 
 Uint8List _coreInstanceInstantiateComponentBytes() =>
