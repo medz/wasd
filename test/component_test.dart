@@ -114,6 +114,37 @@ void main() {
       expect(module.codes, hasLength(1));
     });
 
+    test('decodes inline component instances', () {
+      final component = WasmComponent.decode(_inlineInstanceComponentBytes());
+
+      expect(component.instances, hasLength(1));
+      final instance = component.instances.single;
+      expect(instance.kind, WasmComponentInstanceKind.inlineExports);
+      expect(instance.exports, hasLength(1));
+      expect(instance.exports.single.name, 'f');
+      expect(instance.exports.single.sort.kind, WasmComponentSortKind.function);
+      expect(instance.exports.single.sort.index, 0);
+    });
+
+    test('decodes component instantiation arguments', () {
+      final component = WasmComponent.decode(
+        _instantiateInstanceComponentBytes(),
+      );
+
+      expect(component.components, hasLength(1));
+      expect(component.instances, hasLength(2));
+      final instance = component.instances.last;
+      expect(instance.kind, WasmComponentInstanceKind.instantiate);
+      expect(instance.componentIndex, 0);
+      expect(instance.arguments, hasLength(1));
+      expect(instance.arguments.single.name, 'dep');
+      expect(
+        instance.arguments.single.sort.kind,
+        WasmComponentSortKind.instance,
+      );
+      expect(instance.arguments.single.sort.index, 0);
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -462,6 +493,147 @@ Uint8List _coreModuleComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x0b,
 ]);
+
+Uint8List _inlineInstanceComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x05,
+  0x01,
+  0x40,
+  0x00,
+  0x01,
+  0x00,
+  0x0a,
+  0x06,
+  0x01,
+  0x00,
+  0x01,
+  0x66,
+  0x01,
+  0x00,
+  0x05,
+  0x08,
+  0x01,
+  0x01,
+  0x01,
+  0x00,
+  0x01,
+  0x66,
+  0x01,
+  0x00,
+]);
+
+Uint8List _instantiateInstanceComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x04,
+      0x2c,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x03,
+      0x01,
+      0x42,
+      0x00,
+      0x0a,
+      0x08,
+      0x01,
+      0x00,
+      0x03,
+      0x64,
+      0x65,
+      0x70,
+      0x05,
+      0x00,
+      0x00,
+      0x13,
+      0x0e,
+      0x63,
+      0x6f,
+      0x6d,
+      0x70,
+      0x6f,
+      0x6e,
+      0x65,
+      0x6e,
+      0x74,
+      0x2d,
+      0x6e,
+      0x61,
+      0x6d,
+      0x65,
+      0x00,
+      0x02,
+      0x01,
+      0x63,
+      0x05,
+      0x0c,
+      0x02,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      0x03,
+      0x64,
+      0x65,
+      0x70,
+      0x05,
+      0x00,
+      0x00,
+      0x1f,
+      0x0e,
+      0x63,
+      0x6f,
+      0x6d,
+      0x70,
+      0x6f,
+      0x6e,
+      0x65,
+      0x6e,
+      0x74,
+      0x2d,
+      0x6e,
+      0x61,
+      0x6d,
+      0x65,
+      0x01,
+      0x05,
+      0x04,
+      0x01,
+      0x00,
+      0x01,
+      0x63,
+      0x01,
+      0x07,
+      0x05,
+      0x01,
+      0x00,
+      0x03,
+      0x64,
+      0x65,
+      0x70,
+    ]);
 
 Uint8List _truncatedSectionComponentBytes() => Uint8List.fromList(const <int>[
   0x00,

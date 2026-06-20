@@ -108,6 +108,48 @@ final class WasmComponentExport {
   final WasmComponentExternDescriptor? descriptor;
 }
 
+enum WasmComponentInstanceKind { instantiate, inlineExports }
+
+final class WasmComponentInstance {
+  const WasmComponentInstance.instantiate({
+    required this.componentIndex,
+    required this.arguments,
+  }) : kind = WasmComponentInstanceKind.instantiate,
+       exports = const <WasmComponentInlineExport>[];
+
+  const WasmComponentInstance.inlineExports({required this.exports})
+    : kind = WasmComponentInstanceKind.inlineExports,
+      componentIndex = null,
+      arguments = const <WasmComponentInstantiationArgument>[];
+
+  final WasmComponentInstanceKind kind;
+  final int? componentIndex;
+  final List<WasmComponentInstantiationArgument> arguments;
+  final List<WasmComponentInlineExport> exports;
+}
+
+final class WasmComponentInstantiationArgument {
+  const WasmComponentInstantiationArgument({
+    required this.name,
+    required this.sort,
+  });
+
+  final String name;
+  final WasmComponentSortIndex sort;
+}
+
+final class WasmComponentInlineExport {
+  const WasmComponentInlineExport({
+    required this.name,
+    required this.sort,
+    this.versionSuffix,
+  });
+
+  final String name;
+  final String? versionSuffix;
+  final WasmComponentSortIndex sort;
+}
+
 final class WasmComponent {
   const WasmComponent({
     required this.sections,
@@ -115,6 +157,7 @@ final class WasmComponent {
     required this.exports,
     required this.components,
     required this.coreModules,
+    required this.instances,
   });
 
   final List<WasmComponentSection> sections;
@@ -122,6 +165,7 @@ final class WasmComponent {
   final List<WasmComponentExport> exports;
   final List<WasmComponent> components;
   final List<WasmModule> coreModules;
+  final List<WasmComponentInstance> instances;
 
   static bool hasComponentPreamble(List<int> bytes) {
     return bytes.length >= 8 &&
@@ -169,6 +213,7 @@ final class WasmComponent {
     final exports = <WasmComponentExport>[];
     final components = <WasmComponent>[];
     final coreModules = <WasmModule>[];
+    final instances = <WasmComponentInstance>[];
     while (!reader.isEOF) {
       final sectionOffset = reader.offset;
       final sectionId = reader.readByte();
@@ -195,6 +240,8 @@ final class WasmComponent {
           coreModules.add(WasmModule.decode(payload, features: features));
         case _componentSectionId:
           components.add(WasmComponent.decode(payload, features: features));
+        case _instanceSectionId:
+          instances.addAll(_decodeInstances(payload));
         case _importSectionId:
           imports.addAll(_decodeImports(payload));
         case _exportSectionId:
@@ -208,6 +255,7 @@ final class WasmComponent {
       exports: List.unmodifiable(exports),
       components: List.unmodifiable(components),
       coreModules: List.unmodifiable(coreModules),
+      instances: List.unmodifiable(instances),
     );
   }
 
@@ -223,6 +271,7 @@ const int _importSectionId = 10;
 const int _exportSectionId = 11;
 const int _componentSectionId = 4;
 const int _coreModuleSectionId = 1;
+const int _instanceSectionId = 5;
 
 List<WasmComponentImport> _decodeImports(Uint8List payload) {
   final reader = ByteReader(payload);
@@ -265,6 +314,68 @@ List<WasmComponentExport> _decodeExports(Uint8List payload) {
   }
   reader.expectEof();
   return exports;
+}
+
+List<WasmComponentInstance> _decodeInstances(Uint8List payload) {
+  final reader = ByteReader(payload);
+  final count = reader.readVarUint32();
+  final instances = <WasmComponentInstance>[];
+  for (var i = 0; i < count; i++) {
+    instances.add(_readInstance(reader));
+  }
+  reader.expectEof();
+  return instances;
+}
+
+WasmComponentInstance _readInstance(ByteReader reader) {
+  final kind = reader.readByte();
+  switch (kind) {
+    case 0x00:
+      final componentIndex = reader.readVarUint32();
+      final argumentCount = reader.readVarUint32();
+      final arguments = <WasmComponentInstantiationArgument>[];
+      for (var i = 0; i < argumentCount; i++) {
+        arguments.add(_readInstantiationArgument(reader));
+      }
+      return WasmComponentInstance.instantiate(
+        componentIndex: componentIndex,
+        arguments: List.unmodifiable(arguments),
+      );
+    case 0x01:
+      final exportCount = reader.readVarUint32();
+      final exports = <WasmComponentInlineExport>[];
+      for (var i = 0; i < exportCount; i++) {
+        exports.add(_readInlineExport(reader));
+      }
+      return WasmComponentInstance.inlineExports(
+        exports: List.unmodifiable(exports),
+      );
+    default:
+      throw FormatException(
+        'Unsupported Wasm component instance expression: 0x${kind.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentInstantiationArgument _readInstantiationArgument(
+  ByteReader reader,
+) {
+  return WasmComponentInstantiationArgument(
+    name: reader.readName(),
+    sort: _readSortIndex(reader),
+  );
+}
+
+WasmComponentInlineExport _readInlineExport(ByteReader reader) {
+  return _readExternWithName(
+    reader,
+    'inline export',
+    (name, versionSuffix) => WasmComponentInlineExport(
+      name: name,
+      versionSuffix: versionSuffix,
+      sort: _readSortIndex(reader),
+    ),
+  );
 }
 
 T _readExternWithName<T>(
