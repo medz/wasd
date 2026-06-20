@@ -1615,6 +1615,7 @@ final class _WasmComponentValidationContext {
             alias,
             'alias[${event.index}]',
             coreCounts: coreCounts,
+            instanceCount: instanceCount,
           );
           final sort = alias.sort;
           if (sort.kind == WasmComponentSortKind.core &&
@@ -1842,18 +1843,25 @@ final class _WasmComponentValidationContext {
     WasmComponentAlias alias,
     String path, {
     required _WasmComponentCoreIndexCounts coreCounts,
+    required int instanceCount,
   }) {
-    if (alias.sort.kind != WasmComponentSortKind.core ||
-        alias.target.kind != WasmComponentAliasTargetKind.coreExport) {
-      return;
+    if (alias.target.kind == WasmComponentAliasTargetKind.export) {
+      validateComponentInstanceIndex(
+        alias.target.instanceIndex,
+        '$path.target.instance',
+        instanceCount,
+      );
     }
 
-    validateCoreSortIndex(
-      alias.target.coreInstanceIndex,
-      '$path.target.coreInstance',
-      WasmComponentCoreSortKind.instance,
-      coreCounts,
-    );
+    if (alias.sort.kind == WasmComponentSortKind.core &&
+        alias.target.kind == WasmComponentAliasTargetKind.coreExport) {
+      validateCoreSortIndex(
+        alias.target.coreInstanceIndex,
+        '$path.target.coreInstance',
+        WasmComponentCoreSortKind.instance,
+        coreCounts,
+      );
+    }
   }
 
   void validateCoreSortIndex(

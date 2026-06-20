@@ -839,6 +839,15 @@ void main() {
         lowerBeforeFunction.single.message,
         contains('Unknown Wasm component function index'),
       );
+
+      final aliasBeforeInstance = WasmComponent.decode(
+        _aliasTargetInstanceDefinedAfterComponentBytes(),
+      ).validate();
+      expect(aliasBeforeInstance, hasLength(1));
+      expect(
+        aliasBeforeInstance.single.message,
+        contains('Unknown Wasm component instance index'),
+      );
     });
 
     test('reports component start signature mismatches', () {
@@ -2187,6 +2196,36 @@ Uint8List _exportAliasComponentBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x66,
 ]);
+
+Uint8List _aliasTargetInstanceDefinedAfterComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x06,
+      0x06,
+      0x01,
+      0x01,
+      0x00,
+      0x00,
+      0x01,
+      0x66,
+      0x05,
+      0x08,
+      0x01,
+      0x01,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+    ]);
 
 Uint8List _coreExportAliasComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
