@@ -390,6 +390,25 @@ void main() {
       );
     });
 
+    test('validates local core module type declaration indexes', () {
+      expect(
+        WasmComponent.decode(
+          _typeDeclarationLocalCoreModuleImportComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
+
+      final errors = WasmComponent.decode(
+        _typeDeclarationCoreModuleImportBeforeCoreTypeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('Unknown Wasm component core module type index'),
+      );
+    });
+
     test('decodes component starts', () {
       final component = WasmComponent.decode(_startComponentBytes());
 
@@ -3131,6 +3150,57 @@ Uint8List _typeDeclarationLocalValueTypeComponentBytes() =>
       0x40,
       0x00,
       0x00,
+      0x00,
+    ]);
+
+Uint8List _typeDeclarationLocalCoreModuleImportComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x0d,
+      0x01,
+      0x41,
+      0x02,
+      0x00,
+      0x50,
+      0x00,
+      0x03,
+      0x00,
+      0x01,
+      0x6d,
+      0x00,
+      0x11,
+      0x00,
+    ]);
+
+Uint8List _typeDeclarationCoreModuleImportBeforeCoreTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x0a,
+      0x01,
+      0x41,
+      0x01,
+      0x03,
+      0x00,
+      0x01,
+      0x6d,
+      0x00,
+      0x11,
       0x00,
     ]);
 

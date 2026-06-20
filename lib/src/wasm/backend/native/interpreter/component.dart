@@ -1394,6 +1394,7 @@ final class _WasmComponentValidationContext {
     String path,
   ) {
     final localTypeDefinitions = <WasmComponentTypeDefinition>[];
+    final localCoreTypeKinds = <WasmComponentCoreTypeKind>[];
     for (var i = 0; i < declarations.length; i++) {
       final declaration = declarations[i];
       switch (declaration.kind) {
@@ -1413,14 +1414,22 @@ final class _WasmComponentValidationContext {
             declaration.import?.descriptor,
             '$path.declarations[$i].import.descriptor',
             localTypeDefinitions,
+            localCoreTypeKinds,
           );
         case WasmComponentTypeDeclarationKind.export:
           validateTypeDeclarationExternDescriptor(
             declaration.export?.descriptor,
             '$path.declarations[$i].export.descriptor',
             localTypeDefinitions,
+            localCoreTypeKinds,
           );
         case WasmComponentTypeDeclarationKind.coreType:
+          final coreType = declaration.coreType;
+          if (coreType == null) {
+            break;
+          }
+          validateCoreTypeDefinition(coreType, '$path.declarations[$i]');
+          localCoreTypeKinds.add(coreType.kind);
         case WasmComponentTypeDeclarationKind.alias:
           break;
       }
@@ -1431,6 +1440,7 @@ final class _WasmComponentValidationContext {
     WasmComponentExternDescriptor? descriptor,
     String path,
     List<WasmComponentTypeDefinition> localTypeDefinitions,
+    List<WasmComponentCoreTypeKind> localCoreTypeKinds,
   ) {
     if (descriptor == null) {
       return;
@@ -1465,6 +1475,14 @@ final class _WasmComponentValidationContext {
           targetDescription: 'an instance type',
         );
       case WasmComponentExternKind.coreModule:
+        validateLocalCoreTypeIndex(
+          descriptor.typeIndex,
+          path,
+          localCoreTypeKinds,
+          WasmComponentCoreTypeKind.module,
+          indexDescription: 'core module type',
+          targetDescription: 'a core module type',
+        );
       case WasmComponentExternKind.value:
       case WasmComponentExternKind.componentType:
         break;
