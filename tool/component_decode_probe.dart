@@ -7,25 +7,7 @@ import 'dart:typed_data';
 import '_native_wasm_bridge.dart' as _native;
 
 typedef WasmFeatureSet = _native.WasmFeatureSet;
-typedef WasmModule = _native.WasmModule;
-
-final class WasmComponent {
-  const WasmComponent._();
-
-  static WasmModule decode(
-    Uint8List bytes, {
-    WasmFeatureSet features = const WasmFeatureSet(componentModel: true),
-  }) {
-    return WasmModule.decode(bytes, features: features);
-  }
-
-  static WasmModule decodeBestEffort(
-    Uint8List bytes, {
-    WasmFeatureSet features = const WasmFeatureSet(componentModel: true),
-  }) {
-    return WasmModule.decode(bytes, features: features);
-  }
-}
+typedef WasmComponent = _native.WasmComponent;
 
 const String _defaultTestsuiteDir = 'third_party/component-model-tests/test';
 const String _defaultJsonPath =
@@ -303,7 +285,7 @@ Future<void> main(List<String> args) async {
         final bytes = File('${work.path}/$filename').readAsBytesSync();
         try {
           if (bestEffort) {
-            WasmComponent.decodeBestEffort(
+            WasmComponent.decode(
               Uint8List.fromList(bytes),
               features: const WasmFeatureSet(componentModel: true),
             );

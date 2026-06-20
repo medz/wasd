@@ -1,5 +1,7 @@
 import 'package:wasd/src/wasm/backend/native/interpreter/features.dart'
     as _native_features;
+import 'package:wasd/src/wasm/backend/native/interpreter/component.dart'
+    as _native_component;
 import 'package:wasd/src/wasm/backend/native/interpreter/imports.dart'
     as _native_imports;
 import 'package:wasd/src/wasm/backend/native/interpreter/instance.dart'
@@ -20,6 +22,8 @@ import 'package:wasd/src/wasm/backend/native/interpreter/vm.dart' as _native_vm;
 
 typedef WasmFeatureSet = _native_features.WasmFeatureSet;
 typedef WasmFeatureProfile = _native_features.WasmFeatureProfile;
+typedef WasmComponent = _native_component.WasmComponent;
+typedef WasmComponentSection = _native_component.WasmComponentSection;
 typedef WasmInstance = _native_instance.WasmInstance;
 typedef WasmImports = _native_imports.WasmImports;
 typedef WasmHostFunction = _native_imports.WasmHostFunction;

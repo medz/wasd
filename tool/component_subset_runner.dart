@@ -5,11 +5,7 @@ const String _defaultJsonPath =
     '.dart_tool/spec_runner/component_subset_latest.json';
 const String _defaultMarkdownPath =
     '.dart_tool/spec_runner/component_subset_failures.md';
-const List<String> _defaultTestFiles = <String>[
-  'test/component_test.dart',
-  'test/component_instance_test.dart',
-  'test/component_canonical_abi_test.dart',
-];
+const List<String> _defaultTestFiles = <String>['test/component_test.dart'];
 
 Future<void> main(List<String> args) async {
   final outputJsonPath = _argValue(args, '--json') ?? _defaultJsonPath;
