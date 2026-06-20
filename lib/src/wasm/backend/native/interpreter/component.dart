@@ -693,6 +693,7 @@ enum _WasmComponentDefinitionEventKind {
   coreInstance,
   component,
   instance,
+  type,
   alias,
   canonical,
   start,
@@ -720,6 +721,9 @@ final class _WasmComponentDefinitionEvent {
 
   const _WasmComponentDefinitionEvent.instance(this.index)
     : kind = _WasmComponentDefinitionEventKind.instance;
+
+  const _WasmComponentDefinitionEvent.type(this.index)
+    : kind = _WasmComponentDefinitionEventKind.type;
 
   const _WasmComponentDefinitionEvent.alias(this.index)
     : kind = _WasmComponentDefinitionEventKind.alias;
@@ -793,6 +797,16 @@ final class _WasmComponentCoreIndexCounts {
         instances++;
     }
   }
+}
+
+bool _componentTypeDefinitionNeedsFunctionIndexValidation(
+  WasmComponentTypeDefinition type,
+) {
+  final resource = type.resource;
+  return type.kind == WasmComponentTypeKind.resource &&
+      resource != null &&
+      (resource.destructorFunctionIndex != null ||
+          resource.callbackFunctionIndex != null);
 }
 
 final class WasmComponent {
@@ -1002,7 +1016,17 @@ final class WasmComponent {
             );
           }
         case _typeSectionId:
-          typeDefinitions.addAll(_decodeTypeDefinitions(payload));
+          final decodedTypeDefinitions = _decodeTypeDefinitions(payload);
+          for (final typeDefinition in decodedTypeDefinitions) {
+            typeDefinitions.add(typeDefinition);
+            if (_componentTypeDefinitionNeedsFunctionIndexValidation(
+              typeDefinition,
+            )) {
+              definitionEvents.add(
+                _WasmComponentDefinitionEvent.type(typeDefinitions.length - 1),
+              );
+            }
+          }
         case _canonicalSectionId:
           final decodedCanonicalDefinitions = _decodeCanonicalDefinitions(
             payload,
@@ -1609,6 +1633,12 @@ final class _WasmComponentValidationContext {
             instanceCount: instanceCount,
           );
           instanceCount++;
+        case _WasmComponentDefinitionEventKind.type:
+          validateTypeDefinitionFunctionIndexes(
+            typeDefinitions[event.index],
+            'type[${event.index}]',
+            functionTypes: functionTypes,
+          );
         case _WasmComponentDefinitionEventKind.alias:
           final alias = aliases[event.index];
           validateAliasDefinition(
@@ -1876,6 +1906,35 @@ final class _WasmComponentValidationContext {
           path: path,
           message: 'Unknown Wasm component core ${kind.name} index: $index.',
         ),
+      );
+    }
+  }
+
+  void validateTypeDefinitionFunctionIndexes(
+    WasmComponentTypeDefinition type,
+    String path, {
+    required List<WasmComponentFunctionType?> functionTypes,
+  }) {
+    final resource = type.resource;
+    if (type.kind != WasmComponentTypeKind.resource || resource == null) {
+      return;
+    }
+
+    final destructorFunctionIndex = resource.destructorFunctionIndex;
+    if (destructorFunctionIndex != null) {
+      validateComponentFunctionIndex(
+        destructorFunctionIndex,
+        '$path.resource.destructor',
+        functionTypes.length,
+      );
+    }
+
+    final callbackFunctionIndex = resource.callbackFunctionIndex;
+    if (callbackFunctionIndex != null) {
+      validateComponentFunctionIndex(
+        callbackFunctionIndex,
+        '$path.resource.callback',
+        functionTypes.length,
       );
     }
   }

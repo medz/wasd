@@ -516,6 +516,12 @@ void main() {
         WasmComponent.decode(_ownedResourceTypeComponentBytes()).validate(),
         isEmpty,
       );
+      expect(
+        WasmComponent.decode(
+          _resourceDestructorFunctionComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
 
       final wrongSort = WasmComponent.decode(
         _ownedWrongSortTypeIndexComponentBytes(),
@@ -533,6 +539,24 @@ void main() {
       expect(
         outOfRange.single.message,
         contains('Unknown Wasm component resource type index'),
+      );
+
+      final invalidDestructor = WasmComponent.decode(
+        _resourceDestructorOutOfRangeFunctionComponentBytes(),
+      ).validate();
+      expect(invalidDestructor, hasLength(1));
+      expect(
+        invalidDestructor.single.message,
+        contains('Unknown Wasm component function index'),
+      );
+
+      final invalidCallback = WasmComponent.decode(
+        _asyncResourceCallbackOutOfRangeFunctionComponentBytes(),
+      ).validate();
+      expect(invalidCallback, hasLength(1));
+      expect(
+        invalidCallback.single.message,
+        contains('Unknown Wasm component function index'),
       );
     });
 
@@ -3550,6 +3574,83 @@ Uint8List _ownedResourceTypeComponentBytes() =>
       0x69,
       0x00,
     ], count: 2);
+
+Uint8List _resourceDestructorFunctionComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x3f,
+      0x7f,
+      0x01,
+      0x00,
+    ]);
+
+Uint8List _resourceDestructorOutOfRangeFunctionComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[
+      0x3f,
+      0x7f,
+      0x01,
+      0x00,
+    ]);
+
+Uint8List _asyncResourceCallbackOutOfRangeFunctionComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x07,
+      0x06,
+      0x01,
+      0x3e,
+      0x7f,
+      0x00,
+      0x01,
+      0x01,
+    ]);
 
 Uint8List _ownedWrongSortTypeIndexComponentBytes() =>
     _componentWithSingleTypeDefinitionBytes(const <int>[0x69, 0x00]);
