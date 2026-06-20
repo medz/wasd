@@ -558,6 +558,18 @@ void main() {
       );
     });
 
+    test('reports value import equality indexes before definition', () {
+      final errors = WasmComponent.decode(
+        _valueImportEqualityBeforeDefinitionComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('Unknown Wasm component value index'),
+      );
+    });
+
     test('reports invalid canonical result value type indexes', () {
       final errors = WasmComponent.decode(
         _canonicalResultOutOfRangeTypeIndexComponentBytes(),
@@ -654,6 +666,26 @@ void main() {
       expect(
         invalidArgument.single.message,
         contains('Unknown Wasm component value index'),
+      );
+    });
+
+    test('reports component index references before definition', () {
+      final startBeforeValue = WasmComponent.decode(
+        _startArgumentDefinedAfterStartComponentBytes(),
+      ).validate();
+      expect(startBeforeValue, hasLength(1));
+      expect(
+        startBeforeValue.single.message,
+        contains('Unknown Wasm component value index'),
+      );
+
+      final lowerBeforeFunction = WasmComponent.decode(
+        _canonicalLowerFunctionDefinedAfterComponentBytes(),
+      ).validate();
+      expect(lowerBeforeFunction, hasLength(1));
+      expect(
+        lowerBeforeFunction.single.message,
+        contains('Unknown Wasm component function index'),
       );
     });
 
@@ -952,6 +984,27 @@ Uint8List _valueImportOutOfRangeTypeIndexComponentBytes() =>
       0x76,
       0x02,
       0x01,
+      0x00,
+    ]);
+
+Uint8List _valueImportEqualityBeforeDefinitionComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x07,
+      0x01,
+      0x00,
+      0x01,
+      0x76,
+      0x02,
+      0x00,
       0x00,
     ]);
 
@@ -1968,6 +2021,21 @@ Uint8List _canonicalConflictingStringEncodingComponentBytes() =>
       0x00,
       0x01,
       0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x00,
+      0x73,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
       0x08,
       0x07,
       0x01,
@@ -1987,6 +2055,21 @@ Uint8List _canonicalDuplicateMemoryOptionComponentBytes() =>
       0x6d,
       0x0d,
       0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x00,
+      0x73,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
       0x01,
       0x00,
       0x08,
@@ -2221,6 +2304,79 @@ Uint8List _startOutOfRangeValueArgumentComponentBytes() =>
       0x00,
       0x01,
       0x00,
+      0x00,
+    ]);
+
+Uint8List _startArgumentDefinedAfterStartComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x00,
+      0x73,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x09,
+      0x04,
+      0x00,
+      0x01,
+      0x00,
+      0x00,
+      0x0c,
+      0x04,
+      0x01,
+      0x7f,
+      0x01,
+      0x01,
+    ]);
+
+Uint8List _canonicalLowerFunctionDefinedAfterComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x05,
+      0x01,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x00,
+      0x73,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
       0x00,
     ]);
 

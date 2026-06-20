@@ -685,8 +685,36 @@ final class WasmComponentValidationError {
   final String message;
 }
 
+enum _WasmComponentDefinitionEventKind {
+  import,
+  alias,
+  canonical,
+  start,
+  value,
+}
+
+final class _WasmComponentDefinitionEvent {
+  const _WasmComponentDefinitionEvent.import(this.index)
+    : kind = _WasmComponentDefinitionEventKind.import;
+
+  const _WasmComponentDefinitionEvent.alias(this.index)
+    : kind = _WasmComponentDefinitionEventKind.alias;
+
+  const _WasmComponentDefinitionEvent.canonical(this.index)
+    : kind = _WasmComponentDefinitionEventKind.canonical;
+
+  const _WasmComponentDefinitionEvent.start(this.index)
+    : kind = _WasmComponentDefinitionEventKind.start;
+
+  const _WasmComponentDefinitionEvent.value(this.index)
+    : kind = _WasmComponentDefinitionEventKind.value;
+
+  final _WasmComponentDefinitionEventKind kind;
+  final int index;
+}
+
 final class WasmComponent {
-  const WasmComponent({
+  const WasmComponent._({
     required this.sections,
     required this.imports,
     required this.exports,
@@ -700,7 +728,8 @@ final class WasmComponent {
     required this.canonicalDefinitions,
     required this.typeDefinitions,
     required this.valueDefinitions,
-  });
+    required List<_WasmComponentDefinitionEvent> definitionEvents,
+  }) : _definitionEvents = definitionEvents;
 
   final List<WasmComponentSection> sections;
   final List<WasmComponentImport> imports;
@@ -715,6 +744,7 @@ final class WasmComponent {
   final List<WasmComponentCanonicalDefinition> canonicalDefinitions;
   final List<WasmComponentTypeDefinition> typeDefinitions;
   final List<WasmComponentValueDefinition> valueDefinitions;
+  final List<_WasmComponentDefinitionEvent> _definitionEvents;
 
   List<WasmComponentValidationError> validate() {
     final errors = <WasmComponentValidationError>[];
@@ -744,25 +774,13 @@ final class WasmComponent {
         'canonical[$i]',
       );
     }
-    final functionCount = _componentFunctionIndexCount(
+    context.validateDefinitionEvents(
+      _definitionEvents,
       imports: imports,
       aliases: aliases,
       canonicalDefinitions: canonicalDefinitions,
+      starts: starts,
     );
-    var valueCount = _componentValueIndexCount(
-      imports: imports,
-      aliases: aliases,
-      valueDefinitions: valueDefinitions,
-    );
-    for (var i = 0; i < starts.length; i++) {
-      context.validateStartDefinition(
-        starts[i],
-        'start[$i]',
-        functionCount: functionCount,
-        valueCount: valueCount,
-      );
-      valueCount += starts[i].resultCount;
-    }
     for (var i = 0; i < components.length; i++) {
       for (final error in components[i].validate()) {
         errors.add(
@@ -830,6 +848,7 @@ final class WasmComponent {
     final canonicalDefinitions = <WasmComponentCanonicalDefinition>[];
     final typeDefinitions = <WasmComponentTypeDefinition>[];
     final valueDefinitions = <WasmComponentValueDefinition>[];
+    final definitionEvents = <_WasmComponentDefinitionEvent>[];
     while (!reader.isEOF) {
       final sectionOffset = reader.offset;
       final sectionId = reader.readByte();
@@ -863,25 +882,57 @@ final class WasmComponent {
         case _instanceSectionId:
           instances.addAll(_decodeInstances(payload));
         case _aliasSectionId:
-          aliases.addAll(_decodeAliases(payload));
+          final decodedAliases = _decodeAliases(payload);
+          for (final alias in decodedAliases) {
+            aliases.add(alias);
+            definitionEvents.add(
+              _WasmComponentDefinitionEvent.alias(aliases.length - 1),
+            );
+          }
         case _typeSectionId:
           typeDefinitions.addAll(_decodeTypeDefinitions(payload));
         case _canonicalSectionId:
-          canonicalDefinitions.addAll(_decodeCanonicalDefinitions(payload));
+          final decodedCanonicalDefinitions = _decodeCanonicalDefinitions(
+            payload,
+          );
+          for (final canonicalDefinition in decodedCanonicalDefinitions) {
+            canonicalDefinitions.add(canonicalDefinition);
+            definitionEvents.add(
+              _WasmComponentDefinitionEvent.canonical(
+                canonicalDefinitions.length - 1,
+              ),
+            );
+          }
         case _startSectionId:
           starts.add(_decodeStart(payload));
+          definitionEvents.add(
+            _WasmComponentDefinitionEvent.start(starts.length - 1),
+          );
         case _importSectionId:
-          imports.addAll(_decodeImports(payload));
+          final decodedImports = _decodeImports(payload);
+          for (final import in decodedImports) {
+            imports.add(import);
+            definitionEvents.add(
+              _WasmComponentDefinitionEvent.import(imports.length - 1),
+            );
+          }
         case _exportSectionId:
           exports.addAll(_decodeExports(payload));
         case _valueSectionId:
-          valueDefinitions.addAll(
-            _decodeValueDefinitions(payload, typeDefinitions),
+          final decodedValueDefinitions = _decodeValueDefinitions(
+            payload,
+            typeDefinitions,
           );
+          for (final valueDefinition in decodedValueDefinitions) {
+            valueDefinitions.add(valueDefinition);
+            definitionEvents.add(
+              _WasmComponentDefinitionEvent.value(valueDefinitions.length - 1),
+            );
+          }
       }
     }
 
-    return WasmComponent(
+    return WasmComponent._(
       sections: List.unmodifiable(sections),
       imports: List.unmodifiable(imports),
       exports: List.unmodifiable(exports),
@@ -895,6 +946,7 @@ final class WasmComponent {
       canonicalDefinitions: List.unmodifiable(canonicalDefinitions),
       typeDefinitions: List.unmodifiable(typeDefinitions),
       valueDefinitions: List.unmodifiable(valueDefinitions),
+      definitionEvents: List.unmodifiable(definitionEvents),
     );
   }
 
@@ -1348,6 +1400,67 @@ final class _WasmComponentValidationContext {
             WasmComponentCanonicalOptionKind.stringEncodingLatin1Utf16;
   }
 
+  void validateDefinitionEvents(
+    List<_WasmComponentDefinitionEvent> events, {
+    required List<WasmComponentImport> imports,
+    required List<WasmComponentAlias> aliases,
+    required List<WasmComponentCanonicalDefinition> canonicalDefinitions,
+    required List<WasmComponentStart> starts,
+  }) {
+    var functionCount = 0;
+    var valueCount = 0;
+
+    for (final event in events) {
+      switch (event.kind) {
+        case _WasmComponentDefinitionEventKind.import:
+          final descriptor = imports[event.index].descriptor;
+          if (descriptor.kind == WasmComponentExternKind.value &&
+              descriptor.boundKind == WasmComponentExternBoundKind.equality) {
+            validateComponentValueIndex(
+              descriptor.valueIndex,
+              'import[${event.index}].descriptor.value',
+              valueCount,
+            );
+          }
+          if (descriptor.kind == WasmComponentExternKind.function) {
+            functionCount++;
+          } else if (descriptor.kind == WasmComponentExternKind.value) {
+            valueCount++;
+          }
+        case _WasmComponentDefinitionEventKind.alias:
+          final sort = aliases[event.index].sort;
+          if (sort.kind == WasmComponentSortKind.function) {
+            functionCount++;
+          } else if (sort.kind == WasmComponentSortKind.value) {
+            valueCount++;
+          }
+        case _WasmComponentDefinitionEventKind.canonical:
+          final definition = canonicalDefinitions[event.index];
+          if (definition.kind == WasmComponentCanonicalKind.lower) {
+            validateComponentFunctionIndex(
+              definition.functionIndex,
+              'canonical[${event.index}].function',
+              functionCount,
+            );
+          }
+          if (definition.kind == WasmComponentCanonicalKind.lift) {
+            functionCount++;
+          }
+        case _WasmComponentDefinitionEventKind.start:
+          final start = starts[event.index];
+          validateStartDefinition(
+            start,
+            'start[${event.index}]',
+            functionCount: functionCount,
+            valueCount: valueCount,
+          );
+          valueCount += start.resultCount;
+        case _WasmComponentDefinitionEventKind.value:
+          valueCount++;
+      }
+    }
+  }
+
   void validateStartDefinition(
     WasmComponentStart start,
     String path, {
@@ -1370,11 +1483,13 @@ final class _WasmComponentValidationContext {
   }
 
   void validateComponentFunctionIndex(
-    int functionIndex,
+    int? functionIndex,
     String path,
     int functionCount,
   ) {
-    if (functionIndex < 0 || functionIndex >= functionCount) {
+    if (functionIndex == null ||
+        functionIndex < 0 ||
+        functionIndex >= functionCount) {
       errors.add(
         WasmComponentValidationError(
           path: path,
@@ -1385,11 +1500,11 @@ final class _WasmComponentValidationContext {
   }
 
   void validateComponentValueIndex(
-    int valueIndex,
+    int? valueIndex,
     String path,
     int valueCount,
   ) {
-    if (valueIndex < 0 || valueIndex >= valueCount) {
+    if (valueIndex == null || valueIndex < 0 || valueIndex >= valueCount) {
       errors.add(
         WasmComponentValidationError(
           path: path,
@@ -1404,49 +1519,6 @@ final class _WasmComponentValidationContext {
         kind == WasmComponentCanonicalKind.resourceDrop ||
         kind == WasmComponentCanonicalKind.resourceRep;
   }
-}
-
-int _componentFunctionIndexCount({
-  required List<WasmComponentImport> imports,
-  required List<WasmComponentAlias> aliases,
-  required List<WasmComponentCanonicalDefinition> canonicalDefinitions,
-}) {
-  var count = 0;
-  for (final import in imports) {
-    if (import.descriptor.kind == WasmComponentExternKind.function) {
-      count++;
-    }
-  }
-  for (final alias in aliases) {
-    if (alias.sort.kind == WasmComponentSortKind.function) {
-      count++;
-    }
-  }
-  for (final definition in canonicalDefinitions) {
-    if (definition.kind == WasmComponentCanonicalKind.lift) {
-      count++;
-    }
-  }
-  return count;
-}
-
-int _componentValueIndexCount({
-  required List<WasmComponentImport> imports,
-  required List<WasmComponentAlias> aliases,
-  required List<WasmComponentValueDefinition> valueDefinitions,
-}) {
-  var count = valueDefinitions.length;
-  for (final import in imports) {
-    if (import.descriptor.kind == WasmComponentExternKind.value) {
-      count++;
-    }
-  }
-  for (final alias in aliases) {
-    if (alias.sort.kind == WasmComponentSortKind.value) {
-      count++;
-    }
-  }
-  return count;
 }
 
 void _validateUniqueLabels(
