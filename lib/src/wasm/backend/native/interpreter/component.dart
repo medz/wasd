@@ -1431,9 +1431,45 @@ final class _WasmComponentValidationContext {
           validateCoreTypeDefinition(coreType, '$path.declarations[$i]');
           localCoreTypeKinds.add(coreType.kind);
         case WasmComponentTypeDeclarationKind.alias:
+          final alias = declaration.alias;
+          if (alias == null) {
+            break;
+          }
+          validateTypeDeclarationAlias(
+            alias,
+            '$path.declarations[$i]',
+            localTypeDefinitions,
+          );
           break;
       }
     }
+  }
+
+  void validateTypeDeclarationAlias(
+    WasmComponentAlias alias,
+    String path,
+    List<WasmComponentTypeDefinition> localTypeDefinitions,
+  ) {
+    if (alias.sort.kind != WasmComponentSortKind.componentType ||
+        alias.target.kind != WasmComponentAliasTargetKind.outer ||
+        alias.target.componentDepth != 0) {
+      return;
+    }
+
+    final typeIndex = alias.target.index;
+    if (typeIndex == null ||
+        typeIndex < 0 ||
+        typeIndex >= localTypeDefinitions.length) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.target',
+          message: 'Unknown Wasm component type index: $typeIndex.',
+        ),
+      );
+      return;
+    }
+
+    localTypeDefinitions.add(localTypeDefinitions[typeIndex]);
   }
 
   void validateTypeDeclarationExternDescriptor(
