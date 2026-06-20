@@ -1154,6 +1154,26 @@ void main() {
       );
     });
 
+    test('validates inline instance export aliases', () {
+      final missingName = WasmComponent.decode(
+        _exportAliasMissingNameComponentBytes(),
+      ).validate();
+      expect(missingName, hasLength(1));
+      expect(
+        missingName.single.message,
+        contains('Unknown Wasm component instance export'),
+      );
+
+      final wrongSort = WasmComponent.decode(
+        _exportAliasWrongSortComponentBytes(),
+      ).validate();
+      expect(wrongSort, hasLength(1));
+      expect(
+        wrongSort.single.message,
+        contains('does not refer to a value export'),
+      );
+    });
+
     test('reports component start signature mismatches', () {
       final argumentCount = WasmComponent.decode(
         _startArgumentCountMismatchComponentBytes(),
@@ -2691,6 +2711,96 @@ Uint8List _exportAliasComponentBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x66,
 ]);
+
+Uint8List _exportAliasMissingNameComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x05,
+      0x08,
+      0x01,
+      0x01,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x06,
+      0x06,
+      0x01,
+      0x01,
+      0x00,
+      0x00,
+      0x01,
+      0x67,
+    ]);
+
+Uint8List _exportAliasWrongSortComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x05,
+      0x08,
+      0x01,
+      0x01,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x06,
+      0x06,
+      0x01,
+      0x02,
+      0x00,
+      0x00,
+      0x01,
+      0x66,
+    ]);
 
 Uint8List _aliasTargetInstanceDefinedAfterComponentBytes() =>
     Uint8List.fromList(const <int>[
