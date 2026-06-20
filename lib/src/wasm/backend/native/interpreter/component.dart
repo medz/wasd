@@ -86,6 +86,7 @@ final class WasmComponentExternDescriptor {
     this.coreKind,
     this.typeIndex,
     this.valueIndex,
+    this.valueType,
     this.valueTypeCode,
   });
 
@@ -94,6 +95,7 @@ final class WasmComponentExternDescriptor {
   final WasmComponentCoreSortKind? coreKind;
   final int? typeIndex;
   final int? valueIndex;
+  final WasmComponentValueType? valueType;
   final int? valueTypeCode;
 }
 
@@ -1396,6 +1398,7 @@ WasmComponentExternDescriptor _readExternDescriptor(ByteReader reader) {
 }
 
 WasmComponentExternDescriptor _readValueExternDescriptor(ByteReader reader) {
+  final boundOffset = reader.offset;
   final bound = reader.readByte();
   switch (bound) {
     case 0x00:
@@ -1405,16 +1408,46 @@ WasmComponentExternDescriptor _readValueExternDescriptor(ByteReader reader) {
         valueIndex: reader.readVarUint32(),
       );
     case 0x01:
+      final valueType = _readComponentValueType(reader);
       return WasmComponentExternDescriptor(
         kind: WasmComponentExternKind.value,
         boundKind: WasmComponentExternBoundKind.valueType,
-        valueTypeCode: reader.readVarInt32(),
+        valueType: valueType,
+        valueTypeCode: _valueTypeCode(valueType),
       );
     default:
-      throw FormatException(
-        'Unsupported Wasm component value bound: 0x${bound.toRadixString(16)}.',
+      reader.offset = boundOffset;
+      final valueType = _readComponentValueType(reader);
+      return WasmComponentExternDescriptor(
+        kind: WasmComponentExternKind.value,
+        boundKind: WasmComponentExternBoundKind.valueType,
+        valueType: valueType,
+        valueTypeCode: _valueTypeCode(valueType),
       );
   }
+}
+
+int? _valueTypeCode(WasmComponentValueType valueType) {
+  final primitive = valueType.primitive;
+  if (primitive == null) {
+    return valueType.typeIndex;
+  }
+  return switch (primitive) {
+    WasmComponentPrimitiveValueType.boolean => 0x7f,
+    WasmComponentPrimitiveValueType.s8 => 0x7e,
+    WasmComponentPrimitiveValueType.u8 => 0x7d,
+    WasmComponentPrimitiveValueType.s16 => 0x7c,
+    WasmComponentPrimitiveValueType.u16 => 0x7b,
+    WasmComponentPrimitiveValueType.s32 => 0x7a,
+    WasmComponentPrimitiveValueType.u32 => 0x79,
+    WasmComponentPrimitiveValueType.s64 => 0x78,
+    WasmComponentPrimitiveValueType.u64 => 0x77,
+    WasmComponentPrimitiveValueType.f32 => 0x76,
+    WasmComponentPrimitiveValueType.f64 => 0x75,
+    WasmComponentPrimitiveValueType.char => 0x74,
+    WasmComponentPrimitiveValueType.string => 0x73,
+    WasmComponentPrimitiveValueType.errorContext => 0x64,
+  };
 }
 
 WasmComponentExternDescriptor _readTypeExternDescriptor(ByteReader reader) {

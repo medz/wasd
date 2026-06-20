@@ -48,6 +48,22 @@ void main() {
       expect(import.descriptor.typeIndex, 0);
     });
 
+    test('decodes value imports with direct value types', () {
+      final component = WasmComponent.decode(_valueImportComponentBytes());
+
+      final import = component.imports.single;
+      expect(import.name, 'name');
+      expect(import.descriptor.kind, WasmComponentExternKind.value);
+      expect(
+        import.descriptor.boundKind,
+        WasmComponentExternBoundKind.valueType,
+      );
+      expect(
+        import.descriptor.valueType!.primitive,
+        WasmComponentPrimitiveValueType.string,
+      );
+    });
+
     test('decodes legacy component import name prefixes', () {
       final component = WasmComponent.decode(
         _legacyPrefixedImportComponentBytes(),
@@ -399,6 +415,55 @@ Uint8List _versionedImportComponentBytes() => Uint8List.fromList(const <int>[
   0x30,
   0x01,
   0x00,
+]);
+
+Uint8List _valueImportComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x0a,
+  0x09,
+  0x01,
+  0x00,
+  0x04,
+  0x6e,
+  0x61,
+  0x6d,
+  0x65,
+  0x02,
+  0x73,
+  0x00,
+  0x19,
+  0x0e,
+  0x63,
+  0x6f,
+  0x6d,
+  0x70,
+  0x6f,
+  0x6e,
+  0x65,
+  0x6e,
+  0x74,
+  0x2d,
+  0x6e,
+  0x61,
+  0x6d,
+  0x65,
+  0x01,
+  0x08,
+  0x02,
+  0x01,
+  0x00,
+  0x04,
+  0x6e,
+  0x61,
+  0x6d,
+  0x65,
 ]);
 
 Uint8List _legacyPrefixedImportComponentBytes() =>
