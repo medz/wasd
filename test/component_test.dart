@@ -534,6 +534,15 @@ void main() {
       );
     });
 
+    test('validates fresh resource types introduced by exports', () {
+      expect(
+        WasmComponent.decode(
+          _typeDeclarationExportIntroducesResourceTypeComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
+    });
+
     test('decodes component starts', () {
       final component = WasmComponent.decode(_startComponentBytes());
 
@@ -3696,6 +3705,32 @@ Uint8List _typeDeclarationEqualityTypeExportBeforeTypeComponentBytes() =>
       0x74,
       0x03,
       0x00,
+      0x00,
+    ]);
+
+Uint8List _typeDeclarationExportIntroducesResourceTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x0c,
+      0x01,
+      0x42,
+      0x02,
+      0x04,
+      0x00,
+      0x01,
+      0x72,
+      0x03,
+      0x01,
+      0x01,
+      0x69,
       0x00,
     ]);
 

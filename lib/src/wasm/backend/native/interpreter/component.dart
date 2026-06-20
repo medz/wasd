@@ -515,12 +515,21 @@ final class WasmComponentResourceType {
     this.destructorFunctionIndex,
     this.callbackFunctionIndex,
     this.isAsync = false,
+    this.isAbstract = false,
   });
 
-  final int representationTypeCode;
+  const WasmComponentResourceType.abstract()
+    : representationTypeCode = null,
+      destructorFunctionIndex = null,
+      callbackFunctionIndex = null,
+      isAsync = false,
+      isAbstract = true;
+
+  final int? representationTypeCode;
   final int? destructorFunctionIndex;
   final int? callbackFunctionIndex;
   final bool isAsync;
+  final bool isAbstract;
 }
 
 enum WasmComponentTypeDeclarationKind { coreType, type, alias, import, export }
@@ -1593,7 +1602,19 @@ final class _WasmComponentValidationContext {
     }
 
     if (descriptor?.kind != WasmComponentExternKind.componentType ||
-        descriptor?.boundKind != WasmComponentExternBoundKind.equality) {
+        (descriptor?.boundKind != WasmComponentExternBoundKind.equality &&
+            descriptor?.boundKind !=
+                WasmComponentExternBoundKind.subtypeResource)) {
+      return;
+    }
+
+    if (descriptor?.boundKind == WasmComponentExternBoundKind.subtypeResource) {
+      localTypeDefinitions.add(
+        const WasmComponentTypeDefinition(
+          kind: WasmComponentTypeKind.resource,
+          resource: WasmComponentResourceType.abstract(),
+        ),
+      );
       return;
     }
 
