@@ -145,6 +145,55 @@ void main() {
       expect(instance.arguments.single.sort.index, 0);
     });
 
+    test('decodes component export aliases', () {
+      final component = WasmComponent.decode(_exportAliasComponentBytes());
+
+      expect(component.aliases, hasLength(1));
+      final alias = component.aliases.single;
+      expect(alias.sort.kind, WasmComponentSortKind.function);
+      expect(alias.target.kind, WasmComponentAliasTargetKind.export);
+      expect(alias.target.instanceIndex, 0);
+      expect(alias.target.name, 'f');
+    });
+
+    test('decodes core export aliases', () {
+      final component = WasmComponent.decode(_coreExportAliasComponentBytes());
+
+      expect(component.aliases, hasLength(1));
+      final alias = component.aliases.single;
+      expect(alias.sort.kind, WasmComponentSortKind.core);
+      expect(alias.sort.coreKind, WasmComponentCoreSortKind.memory);
+      expect(alias.target.kind, WasmComponentAliasTargetKind.coreExport);
+      expect(alias.target.coreInstanceIndex, 0);
+      expect(alias.target.name, 'mem');
+    });
+
+    test('decodes core tag export aliases', () {
+      final component = WasmComponent.decode(
+        _coreTagExportAliasComponentBytes(),
+      );
+
+      final alias = component.aliases.single;
+      expect(alias.sort.kind, WasmComponentSortKind.core);
+      expect(alias.sort.coreKind, WasmComponentCoreSortKind.tag);
+      expect(alias.target.kind, WasmComponentAliasTargetKind.coreExport);
+      expect(alias.target.coreInstanceIndex, 0);
+      expect(alias.target.name, 'e');
+    });
+
+    test('decodes outer aliases in nested components', () {
+      final component = WasmComponent.decode(_outerAliasComponentBytes());
+
+      expect(component.components, hasLength(2));
+      final child = component.components.last;
+      expect(child.aliases, hasLength(1));
+      final alias = child.aliases.single;
+      expect(alias.sort.kind, WasmComponentSortKind.component);
+      expect(alias.target.kind, WasmComponentAliasTargetKind.outer);
+      expect(alias.target.componentDepth, 1);
+      expect(alias.target.index, 0);
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -634,6 +683,194 @@ Uint8List _instantiateInstanceComponentBytes() =>
       0x65,
       0x70,
     ]);
+
+Uint8List _exportAliasComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x05,
+  0x01,
+  0x40,
+  0x00,
+  0x01,
+  0x00,
+  0x0a,
+  0x06,
+  0x01,
+  0x00,
+  0x01,
+  0x66,
+  0x01,
+  0x00,
+  0x05,
+  0x08,
+  0x01,
+  0x01,
+  0x01,
+  0x00,
+  0x01,
+  0x66,
+  0x01,
+  0x00,
+  0x06,
+  0x06,
+  0x01,
+  0x01,
+  0x00,
+  0x00,
+  0x01,
+  0x66,
+]);
+
+Uint8List _coreExportAliasComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x01,
+  0x16,
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x05,
+  0x03,
+  0x01,
+  0x00,
+  0x01,
+  0x07,
+  0x07,
+  0x01,
+  0x03,
+  0x6d,
+  0x65,
+  0x6d,
+  0x02,
+  0x00,
+  0x02,
+  0x04,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x06,
+  0x09,
+  0x01,
+  0x00,
+  0x02,
+  0x01,
+  0x00,
+  0x03,
+  0x6d,
+  0x65,
+  0x6d,
+]);
+
+Uint8List _coreTagExportAliasComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x01,
+  0x1a,
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x04,
+  0x01,
+  0x60,
+  0x00,
+  0x00,
+  0x0d,
+  0x03,
+  0x01,
+  0x00,
+  0x00,
+  0x07,
+  0x05,
+  0x01,
+  0x01,
+  0x65,
+  0x04,
+  0x00,
+  0x02,
+  0x04,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x06,
+  0x07,
+  0x01,
+  0x00,
+  0x04,
+  0x01,
+  0x00,
+  0x01,
+  0x65,
+]);
+
+Uint8List _outerAliasComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x04,
+  0x08,
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x04,
+  0x0f,
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x06,
+  0x05,
+  0x01,
+  0x04,
+  0x02,
+  0x01,
+  0x00,
+]);
 
 Uint8List _truncatedSectionComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
