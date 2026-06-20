@@ -1211,6 +1211,16 @@ final class _WasmComponentValidationContext {
           if (coreType == null) {
             break;
           }
+          if (coreType.kind == WasmComponentCoreTypeKind.module) {
+            errors.add(
+              WasmComponentValidationError(
+                path: '$path.declarations[$i]',
+                message:
+                    'Wasm component core module type declarations cannot define core module types.',
+              ),
+            );
+            break;
+          }
           validateCoreTypeDefinition(coreType, '$path.declarations[$i]');
           localCoreTypeKinds.add(coreType.kind);
         case WasmComponentCoreTypeDeclarationKind.import:

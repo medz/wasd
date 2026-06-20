@@ -182,6 +182,18 @@ void main() {
       );
     });
 
+    test('rejects core module type declarations defining module types', () {
+      final errors = WasmComponent.decode(
+        _coreModuleTypeNestedModuleTypeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('cannot define core module types'),
+      );
+    });
+
     test('decodes instantiated core instances', () {
       final component = WasmComponent.decode(
         _coreInstanceInstantiateComponentBytes(),
@@ -1989,6 +2001,26 @@ Uint8List _coreModuleTypeAliasBeforeTypeComponentBytes() =>
       0x10,
       0x01,
       0x00,
+      0x00,
+    ]);
+
+Uint8List _coreModuleTypeNestedModuleTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x03,
+      0x06,
+      0x01,
+      0x50,
+      0x01,
+      0x01,
+      0x50,
       0x00,
     ]);
 
