@@ -1656,6 +1656,11 @@ final class _WasmComponentValidationContext {
             'canonical[${event.index}].options',
             coreCounts,
           );
+          validateCanonicalDirectCoreIndexSpaces(
+            definition,
+            'canonical[${event.index}]',
+            coreCounts,
+          );
           if (definition.kind == WasmComponentCanonicalKind.lower) {
             coreCounts.add(WasmComponentCoreSortKind.function);
           }
@@ -1897,6 +1902,30 @@ final class _WasmComponentValidationContext {
         case WasmComponentCanonicalOptionKind.async:
           break;
       }
+    }
+  }
+
+  void validateCanonicalDirectCoreIndexSpaces(
+    WasmComponentCanonicalDefinition definition,
+    String path,
+    _WasmComponentCoreIndexCounts coreCounts,
+  ) {
+    if (definition.memoryIndex != null) {
+      validateCoreSortIndex(
+        definition.memoryIndex,
+        '$path.memory',
+        WasmComponentCoreSortKind.memory,
+        coreCounts,
+      );
+    }
+
+    if (definition.tableIndex != null) {
+      validateCoreSortIndex(
+        definition.tableIndex,
+        '$path.table',
+        WasmComponentCoreSortKind.table,
+        coreCounts,
+      );
     }
   }
 

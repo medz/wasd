@@ -776,6 +776,26 @@ void main() {
       );
     });
 
+    test('reports invalid canonical direct core indexes', () {
+      final memory = WasmComponent.decode(
+        _canonicalWaitableSetWaitMemoryOutOfRangeComponentBytes(),
+      ).validate();
+      expect(memory, hasLength(1));
+      expect(
+        memory.single.message,
+        contains('Unknown Wasm component core memory index'),
+      );
+
+      final table = WasmComponent.decode(
+        _canonicalThreadNewIndirectTableOutOfRangeComponentBytes(),
+      ).validate();
+      expect(table, hasLength(1));
+      expect(
+        table.single.message,
+        contains('Unknown Wasm component core table index'),
+      );
+    });
+
     test('reports invalid component start indexes', () {
       expect(
         WasmComponent.decode(_startNoResultComponentBytes()).validate(),
@@ -2710,6 +2730,42 @@ Uint8List _canonicalMemoryOptionOutOfRangeComponentBytes() =>
       0x00,
       0x01,
       0x03,
+      0x00,
+    ]);
+
+Uint8List _canonicalWaitableSetWaitMemoryOutOfRangeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x04,
+      0x01,
+      0x20,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _canonicalThreadNewIndirectTableOutOfRangeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x04,
+      0x01,
+      0x27,
+      0x00,
       0x00,
     ]);
 
