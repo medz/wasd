@@ -21,10 +21,102 @@ final class WasmComponentSection {
   final String? customName;
 }
 
+enum WasmComponentCoreSortKind {
+  function,
+  table,
+  memory,
+  global,
+  type,
+  module,
+  instance,
+}
+
+enum WasmComponentSortKind {
+  core,
+  function,
+  value,
+  componentType,
+  component,
+  instance,
+}
+
+enum WasmComponentExternKind {
+  coreModule,
+  function,
+  value,
+  componentType,
+  component,
+  instance,
+}
+
+enum WasmComponentExternBoundKind { none, equality, subtypeResource, valueType }
+
+final class WasmComponentSortIndex {
+  const WasmComponentSortIndex({
+    required this.kind,
+    required this.index,
+    this.coreKind,
+  });
+
+  final WasmComponentSortKind kind;
+  final int index;
+  final WasmComponentCoreSortKind? coreKind;
+}
+
+final class WasmComponentExternDescriptor {
+  const WasmComponentExternDescriptor({
+    required this.kind,
+    this.boundKind = WasmComponentExternBoundKind.none,
+    this.coreKind,
+    this.typeIndex,
+    this.valueIndex,
+    this.valueTypeCode,
+  });
+
+  final WasmComponentExternKind kind;
+  final WasmComponentExternBoundKind boundKind;
+  final WasmComponentCoreSortKind? coreKind;
+  final int? typeIndex;
+  final int? valueIndex;
+  final int? valueTypeCode;
+}
+
+final class WasmComponentImport {
+  const WasmComponentImport({
+    required this.name,
+    required this.descriptor,
+    this.versionSuffix,
+  });
+
+  final String name;
+  final String? versionSuffix;
+  final WasmComponentExternDescriptor descriptor;
+}
+
+final class WasmComponentExport {
+  const WasmComponentExport({
+    required this.name,
+    required this.sort,
+    this.versionSuffix,
+    this.descriptor,
+  });
+
+  final String name;
+  final String? versionSuffix;
+  final WasmComponentSortIndex sort;
+  final WasmComponentExternDescriptor? descriptor;
+}
+
 final class WasmComponent {
-  const WasmComponent({required this.sections});
+  const WasmComponent({
+    required this.sections,
+    required this.imports,
+    required this.exports,
+  });
 
   final List<WasmComponentSection> sections;
+  final List<WasmComponentImport> imports;
+  final List<WasmComponentExport> exports;
 
   static bool hasComponentPreamble(List<int> bytes) {
     return bytes.length >= 8 &&
@@ -68,6 +160,8 @@ final class WasmComponent {
     }
 
     final sections = <WasmComponentSection>[];
+    final imports = <WasmComponentImport>[];
+    final exports = <WasmComponentExport>[];
     while (!reader.isEOF) {
       final sectionOffset = reader.offset;
       final sectionId = reader.readByte();
@@ -89,9 +183,19 @@ final class WasmComponent {
           customName: sectionId == 0 ? _customSectionName(payload) : null,
         ),
       );
+      switch (sectionId) {
+        case _importSectionId:
+          imports.addAll(_decodeImports(payload));
+        case _exportSectionId:
+          exports.addAll(_decodeExports(payload));
+      }
     }
 
-    return WasmComponent(sections: List.unmodifiable(sections));
+    return WasmComponent(
+      sections: List.unmodifiable(sections),
+      imports: List.unmodifiable(imports),
+      exports: List.unmodifiable(exports),
+    );
   }
 
   static String _customSectionName(Uint8List payload) {
@@ -99,5 +203,249 @@ final class WasmComponent {
     final name = reader.readName();
     reader.readRemainingBytes();
     return name;
+  }
+}
+
+const int _importSectionId = 10;
+const int _exportSectionId = 11;
+
+List<WasmComponentImport> _decodeImports(Uint8List payload) {
+  final reader = ByteReader(payload);
+  final count = reader.readVarUint32();
+  final imports = <WasmComponentImport>[];
+  for (var i = 0; i < count; i++) {
+    imports.add(
+      _readExternWithName(
+        reader,
+        'import',
+        (name, versionSuffix) => WasmComponentImport(
+          name: name,
+          versionSuffix: versionSuffix,
+          descriptor: _readExternDescriptor(reader),
+        ),
+      ),
+    );
+  }
+  reader.expectEof();
+  return imports;
+}
+
+List<WasmComponentExport> _decodeExports(Uint8List payload) {
+  final reader = ByteReader(payload);
+  final count = reader.readVarUint32();
+  final exports = <WasmComponentExport>[];
+  for (var i = 0; i < count; i++) {
+    exports.add(
+      _readExternWithName(
+        reader,
+        'export',
+        (name, versionSuffix) => WasmComponentExport(
+          name: name,
+          versionSuffix: versionSuffix,
+          sort: _readSortIndex(reader),
+          descriptor: _readOptionalExternDescriptor(reader),
+        ),
+      ),
+    );
+  }
+  reader.expectEof();
+  return exports;
+}
+
+T _readExternWithName<T>(
+  ByteReader reader,
+  String context,
+  T Function(String name, String? versionSuffix) readRemainder,
+) {
+  final tag = reader.readByte();
+  switch (tag) {
+    case 0x00:
+      return readRemainder(reader.readName(), null);
+    case 0x01:
+      final name = reader.readName();
+      final afterNameOffset = reader.offset;
+      try {
+        return readRemainder(name, reader.readName());
+      } on FormatException catch (error) {
+        if (!_isUnexpectedEof(error)) {
+          rethrow;
+        }
+        // Older component binaries used this prefix without a version suffix.
+        reader.offset = afterNameOffset;
+        return readRemainder(name, null);
+      }
+    default:
+      throw FormatException(
+        'Unsupported Wasm component $context name tag: 0x${tag.toRadixString(16)}.',
+      );
+  }
+}
+
+bool _isUnexpectedEof(FormatException error) {
+  return error.message.startsWith('Unexpected EOF');
+}
+
+WasmComponentSortIndex _readSortIndex(ByteReader reader) {
+  final sort = reader.readByte();
+  switch (sort) {
+    case 0x00:
+      return WasmComponentSortIndex(
+        kind: WasmComponentSortKind.core,
+        coreKind: _readCoreSortKind(reader),
+        index: reader.readVarUint32(),
+      );
+    case 0x01:
+      return WasmComponentSortIndex(
+        kind: WasmComponentSortKind.function,
+        index: reader.readVarUint32(),
+      );
+    case 0x02:
+      return WasmComponentSortIndex(
+        kind: WasmComponentSortKind.value,
+        index: reader.readVarUint32(),
+      );
+    case 0x03:
+      return WasmComponentSortIndex(
+        kind: WasmComponentSortKind.componentType,
+        index: reader.readVarUint32(),
+      );
+    case 0x04:
+      return WasmComponentSortIndex(
+        kind: WasmComponentSortKind.component,
+        index: reader.readVarUint32(),
+      );
+    case 0x05:
+      return WasmComponentSortIndex(
+        kind: WasmComponentSortKind.instance,
+        index: reader.readVarUint32(),
+      );
+    default:
+      throw FormatException(
+        'Unsupported Wasm component sort: 0x${sort.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentCoreSortKind _readCoreSortKind(ByteReader reader) {
+  final sort = reader.readByte();
+  switch (sort) {
+    case 0x00:
+      return WasmComponentCoreSortKind.function;
+    case 0x01:
+      return WasmComponentCoreSortKind.table;
+    case 0x02:
+      return WasmComponentCoreSortKind.memory;
+    case 0x03:
+      return WasmComponentCoreSortKind.global;
+    case 0x10:
+      return WasmComponentCoreSortKind.type;
+    case 0x11:
+      return WasmComponentCoreSortKind.module;
+    case 0x12:
+      return WasmComponentCoreSortKind.instance;
+    default:
+      throw FormatException(
+        'Unsupported Wasm component core sort: 0x${sort.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentExternDescriptor? _readOptionalExternDescriptor(
+  ByteReader reader,
+) {
+  final present = reader.readByte();
+  switch (present) {
+    case 0x00:
+      return null;
+    case 0x01:
+      return _readExternDescriptor(reader);
+    default:
+      throw FormatException(
+        'Unsupported Wasm component optional extern descriptor tag: 0x${present.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentExternDescriptor _readExternDescriptor(ByteReader reader) {
+  final kind = reader.readByte();
+  switch (kind) {
+    case 0x00:
+      final coreKind = _readCoreSortKind(reader);
+      if (coreKind != WasmComponentCoreSortKind.module) {
+        throw FormatException(
+          'Unsupported Wasm component core extern descriptor kind: $coreKind.',
+        );
+      }
+      return WasmComponentExternDescriptor(
+        kind: WasmComponentExternKind.coreModule,
+        coreKind: coreKind,
+        typeIndex: reader.readVarUint32(),
+      );
+    case 0x01:
+      return WasmComponentExternDescriptor(
+        kind: WasmComponentExternKind.function,
+        typeIndex: reader.readVarUint32(),
+      );
+    case 0x02:
+      return _readValueExternDescriptor(reader);
+    case 0x03:
+      return _readTypeExternDescriptor(reader);
+    case 0x04:
+      return WasmComponentExternDescriptor(
+        kind: WasmComponentExternKind.component,
+        typeIndex: reader.readVarUint32(),
+      );
+    case 0x05:
+      return WasmComponentExternDescriptor(
+        kind: WasmComponentExternKind.instance,
+        typeIndex: reader.readVarUint32(),
+      );
+    default:
+      throw FormatException(
+        'Unsupported Wasm component extern descriptor: 0x${kind.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentExternDescriptor _readValueExternDescriptor(ByteReader reader) {
+  final bound = reader.readByte();
+  switch (bound) {
+    case 0x00:
+      return WasmComponentExternDescriptor(
+        kind: WasmComponentExternKind.value,
+        boundKind: WasmComponentExternBoundKind.equality,
+        valueIndex: reader.readVarUint32(),
+      );
+    case 0x01:
+      return WasmComponentExternDescriptor(
+        kind: WasmComponentExternKind.value,
+        boundKind: WasmComponentExternBoundKind.valueType,
+        valueTypeCode: reader.readVarInt32(),
+      );
+    default:
+      throw FormatException(
+        'Unsupported Wasm component value bound: 0x${bound.toRadixString(16)}.',
+      );
+  }
+}
+
+WasmComponentExternDescriptor _readTypeExternDescriptor(ByteReader reader) {
+  final bound = reader.readByte();
+  switch (bound) {
+    case 0x00:
+      return WasmComponentExternDescriptor(
+        kind: WasmComponentExternKind.componentType,
+        boundKind: WasmComponentExternBoundKind.equality,
+        typeIndex: reader.readVarUint32(),
+      );
+    case 0x01:
+      return const WasmComponentExternDescriptor(
+        kind: WasmComponentExternKind.componentType,
+        boundKind: WasmComponentExternBoundKind.subtypeResource,
+      );
+    default:
+      throw FormatException(
+        'Unsupported Wasm component type bound: 0x${bound.toRadixString(16)}.',
+      );
   }
 }
