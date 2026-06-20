@@ -23,6 +23,31 @@ Status date: 2026-06-21.
 - wasmCloud keeps P3 behind a `wasip3` feature and registers P3 implementations
   alongside P2 while keeping P2 stable by default.
   Reference: https://wasmcloud.com/docs/runtime/
+- jco includes a dedicated `preview3-shim` package for mapping WASI Preview 3 to
+  Node.js while reusing the broader component-tooling pipeline.
+  Reference: https://github.com/bytecodealliance/jco
+
+## Implementation Baselines
+
+wasd should learn from these projects at the architecture-boundary level, not by
+copying their internals directly.
+
+- Wasmtime proves the first stable boundary should be the component runtime:
+  generated bindings, interface-group modules, per-store context, and a resource
+  table. For wasd, this means P3 work must start with component validation,
+  canonical ABI semantics, resource ownership, and async lifecycle primitives
+  before broad host APIs are advertised.
+- wasmCloud proves P3 can coexist with P2 when the host registration layer is
+  versioned. For wasd, Preview 1, WASI 0.2, and WASI 0.3 adapters should be
+  separate modules over shared low-level host primitives.
+- jco proves JavaScript support needs an explicit shim boundary instead of
+  leaking Node or browser behavior into the core model. For wasd, JS runtime
+  support should route through small Preview-specific bridges while preserving
+  the same component and WASI semantics as the Dart VM runtime.
+- WASI.dev's 0.3 roadmap makes stream/future performance part of the API design,
+  not a later optimization. For wasd, stream/future forwarding, cancellation,
+  and buffering must get benchmarks and resource-lifetime tests as they are
+  implemented.
 
 ## Architecture Direction
 
