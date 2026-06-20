@@ -490,6 +490,33 @@ void main() {
       );
     });
 
+    test(
+      'validates type declaration aliases to containing component types',
+      () {
+        expect(
+          WasmComponent.decode(
+            _typeDeclarationContainingComponentOuterAliasComponentBytes(),
+          ).validate(),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'rejects type declaration resource aliases across component boundaries',
+      () {
+        final errors = WasmComponent.decode(
+          _typeDeclarationOuterResourceAliasComponentBytes(),
+        ).validate();
+
+        expect(errors, hasLength(1));
+        expect(
+          errors.single.message,
+          contains('cannot alias resource-containing types'),
+        );
+      },
+    );
+
     test('rejects unsupported type declaration alias sorts', () {
       final errors = WasmComponent.decode(
         _typeDeclarationFunctionAliasComponentBytes(),
@@ -3587,9 +3614,35 @@ Uint8List _typeDeclarationOuterAliasDepthOutOfRangeComponentBytes() =>
       0x02,
       0x03,
       0x02,
-      0x02,
+      0x03,
       0x00,
     ]);
+
+Uint8List _typeDeclarationContainingComponentOuterAliasComponentBytes() =>
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x73,
+      0x42,
+      0x01,
+      0x02,
+      0x03,
+      0x02,
+      0x01,
+      0x00,
+    ], count: 2);
+
+Uint8List _typeDeclarationOuterResourceAliasComponentBytes() =>
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x3f,
+      0x7f,
+      0x00,
+      0x42,
+      0x01,
+      0x02,
+      0x03,
+      0x02,
+      0x01,
+      0x00,
+    ], count: 2);
 
 Uint8List _typeDeclarationFunctionAliasComponentBytes() =>
     Uint8List.fromList(const <int>[

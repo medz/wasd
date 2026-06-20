@@ -838,6 +838,22 @@ final class _WasmComponentOuterAliasScope {
   }
 }
 
+final class _WasmComponentTypeAliasScope {
+  const _WasmComponentTypeAliasScope({
+    required this.definitions,
+    required this.crossesComponentBoundary,
+    this.visibleCount,
+  });
+
+  final List<WasmComponentTypeDefinition> definitions;
+  final bool crossesComponentBoundary;
+  final int? visibleCount;
+
+  int get length => visibleCount ?? definitions.length;
+
+  WasmComponentTypeDefinition operator [](int index) => definitions[index];
+}
+
 bool _componentTypeDefinitionNeedsFunctionIndexValidation(
   WasmComponentTypeDefinition type,
 ) {
@@ -898,7 +914,17 @@ final class WasmComponent {
       context.validateCoreTypeDefinition(coreTypes[i], 'coreType[$i]');
     }
     for (var i = 0; i < typeDefinitions.length; i++) {
-      context.validateComponentTypeDefinition(typeDefinitions[i], 'type[$i]');
+      context.validateComponentTypeDefinition(
+        typeDefinitions[i],
+        'type[$i]',
+        outerTypeScopes: <_WasmComponentTypeAliasScope>[
+          _WasmComponentTypeAliasScope(
+            definitions: typeDefinitions,
+            visibleCount: i,
+            crossesComponentBoundary: true,
+          ),
+        ],
+      );
     }
     for (var i = 0; i < imports.length; i++) {
       context.validateExternDescriptor(
@@ -1176,8 +1202,8 @@ final class _WasmComponentValidationContext {
     WasmComponentTypeDefinition type,
     String path, {
     List<WasmComponentTypeDefinition>? scopedTypeDefinitions,
-    List<List<WasmComponentTypeDefinition>> outerTypeScopes =
-        const <List<WasmComponentTypeDefinition>>[],
+    List<_WasmComponentTypeAliasScope> outerTypeScopes =
+        const <_WasmComponentTypeAliasScope>[],
   }) {
     final definedValue = type.definedValue;
     if (type.kind == WasmComponentTypeKind.definedValue &&
@@ -1483,13 +1509,16 @@ final class _WasmComponentValidationContext {
   void validateComponentTypeDeclarations(
     List<WasmComponentTypeDeclaration> declarations,
     String path, {
-    List<List<WasmComponentTypeDefinition>> outerTypeScopes =
-        const <List<WasmComponentTypeDefinition>>[],
+    List<_WasmComponentTypeAliasScope> outerTypeScopes =
+        const <_WasmComponentTypeAliasScope>[],
   }) {
     final localTypeDefinitions = <WasmComponentTypeDefinition>[];
     final localCoreTypeKinds = <WasmComponentCoreTypeKind>[];
-    final typeScopes = <List<WasmComponentTypeDefinition>>[
-      localTypeDefinitions,
+    final typeScopes = <_WasmComponentTypeAliasScope>[
+      _WasmComponentTypeAliasScope(
+        definitions: localTypeDefinitions,
+        crossesComponentBoundary: false,
+      ),
       ...outerTypeScopes,
     ];
     for (var i = 0; i < declarations.length; i++) {
@@ -1560,7 +1589,7 @@ final class _WasmComponentValidationContext {
     WasmComponentAlias alias,
     String path,
     List<WasmComponentTypeDefinition> localTypeDefinitions,
-    List<List<WasmComponentTypeDefinition>> typeScopes,
+    List<_WasmComponentTypeAliasScope> typeScopes,
   ) {
     if (alias.sort.kind != WasmComponentSortKind.componentType &&
         alias.sort.kind != WasmComponentSortKind.instance) {
@@ -1592,11 +1621,11 @@ final class _WasmComponentValidationContext {
       return;
     }
 
-    final targetTypeDefinitions = typeScopes[componentDepth];
+    final targetTypeScope = typeScopes[componentDepth];
     final typeIndex = alias.target.index;
     if (typeIndex == null ||
         typeIndex < 0 ||
-        typeIndex >= targetTypeDefinitions.length) {
+        typeIndex >= targetTypeScope.length) {
       errors.add(
         WasmComponentValidationError(
           path: '$path.target',
@@ -1606,7 +1635,309 @@ final class _WasmComponentValidationContext {
       return;
     }
 
-    localTypeDefinitions.add(targetTypeDefinitions[typeIndex]);
+    if (targetTypeScope.crossesComponentBoundary &&
+        componentTypeAliasScopeDefinitionContainsResource(
+          targetTypeScope,
+          typeIndex,
+        )) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.target',
+          message:
+              'Wasm component type declaration aliases cannot alias '
+              'resource-containing types across component boundaries.',
+        ),
+      );
+      return;
+    }
+
+    localTypeDefinitions.add(targetTypeScope[typeIndex]);
+  }
+
+  bool componentTypeAliasScopeDefinitionContainsResource(
+    _WasmComponentTypeAliasScope scope,
+    int typeIndex, {
+    Map<int, bool>? memo,
+    Set<int>? visiting,
+  }) {
+    if (typeIndex < 0 || typeIndex >= scope.length) {
+      return false;
+    }
+
+    final resolvedMemo = memo ?? <int, bool>{};
+    final cached = resolvedMemo[typeIndex];
+    if (cached != null) {
+      return cached;
+    }
+
+    final resolvedVisiting = visiting ?? <int>{};
+    if (!resolvedVisiting.add(typeIndex)) {
+      return false;
+    }
+
+    final contains = componentTypeDefinitionContainsResource(
+      scope[typeIndex],
+      scope,
+      resolvedMemo,
+      resolvedVisiting,
+    );
+    resolvedVisiting.remove(typeIndex);
+    resolvedMemo[typeIndex] = contains;
+    return contains;
+  }
+
+  bool componentTypeDefinitionContainsResource(
+    WasmComponentTypeDefinition definition,
+    _WasmComponentTypeAliasScope scope,
+    Map<int, bool> memo,
+    Set<int> visiting,
+  ) {
+    switch (definition.kind) {
+      case WasmComponentTypeKind.resource:
+        return definition.resource != null;
+      case WasmComponentTypeKind.definedValue:
+        final definedValue = definition.definedValue;
+        return definedValue != null &&
+            componentDefinedValueTypeContainsResource(
+              definedValue,
+              scope,
+              memo,
+              visiting,
+            );
+      case WasmComponentTypeKind.function:
+        final function = definition.function;
+        return function != null &&
+            (function.params.any(
+                  (param) => componentValueTypeContainsResource(
+                    param.type,
+                    scope,
+                    memo,
+                    visiting,
+                  ),
+                ) ||
+                componentValueTypeContainsResource(
+                  function.result,
+                  scope,
+                  memo,
+                  visiting,
+                ));
+      case WasmComponentTypeKind.component:
+        final component = definition.component;
+        return component != null &&
+            componentTypeDeclarationsContainResource(
+              component.declarations,
+              <_WasmComponentTypeAliasScope>[scope],
+            );
+      case WasmComponentTypeKind.instance:
+        final instance = definition.instance;
+        return instance != null &&
+            componentTypeDeclarationsContainResource(
+              instance.declarations,
+              <_WasmComponentTypeAliasScope>[scope],
+            );
+    }
+  }
+
+  bool componentDefinedValueTypeContainsResource(
+    WasmComponentDefinedValueType definedValue,
+    _WasmComponentTypeAliasScope scope,
+    Map<int, bool> memo,
+    Set<int> visiting,
+  ) {
+    switch (definedValue.kind) {
+      case WasmComponentDefinedValueTypeKind.own:
+      case WasmComponentDefinedValueTypeKind.borrow:
+        return true;
+      case WasmComponentDefinedValueTypeKind.record:
+        return definedValue.fields.any(
+          (field) => componentValueTypeContainsResource(
+            field.type,
+            scope,
+            memo,
+            visiting,
+          ),
+        );
+      case WasmComponentDefinedValueTypeKind.variant:
+        return definedValue.cases.any(
+          (case_) => componentValueTypeContainsResource(
+            case_.type,
+            scope,
+            memo,
+            visiting,
+          ),
+        );
+      case WasmComponentDefinedValueTypeKind.list:
+      case WasmComponentDefinedValueTypeKind.fixedList:
+      case WasmComponentDefinedValueTypeKind.option:
+      case WasmComponentDefinedValueTypeKind.stream:
+      case WasmComponentDefinedValueTypeKind.future:
+        return componentValueTypeContainsResource(
+          definedValue.elementType,
+          scope,
+          memo,
+          visiting,
+        );
+      case WasmComponentDefinedValueTypeKind.tuple:
+        return definedValue.types.any(
+          (type) =>
+              componentValueTypeContainsResource(type, scope, memo, visiting),
+        );
+      case WasmComponentDefinedValueTypeKind.result:
+        return componentValueTypeContainsResource(
+              definedValue.okType,
+              scope,
+              memo,
+              visiting,
+            ) ||
+            componentValueTypeContainsResource(
+              definedValue.errorType,
+              scope,
+              memo,
+              visiting,
+            );
+      case WasmComponentDefinedValueTypeKind.primitive:
+      case WasmComponentDefinedValueTypeKind.flags:
+      case WasmComponentDefinedValueTypeKind.enumeration:
+        return false;
+    }
+  }
+
+  bool componentValueTypeContainsResource(
+    WasmComponentValueType? valueType,
+    _WasmComponentTypeAliasScope scope,
+    Map<int, bool> memo,
+    Set<int> visiting,
+  ) {
+    if (valueType == null ||
+        valueType.kind == WasmComponentValueTypeKind.primitive) {
+      return false;
+    }
+
+    final typeIndex = valueType.typeIndex;
+    return typeIndex != null &&
+        componentTypeAliasScopeDefinitionContainsResource(
+          scope,
+          typeIndex,
+          memo: memo,
+          visiting: visiting,
+        );
+  }
+
+  bool componentTypeDeclarationsContainResource(
+    List<WasmComponentTypeDeclaration> declarations,
+    List<_WasmComponentTypeAliasScope> outerScopes,
+  ) {
+    final localTypeDefinitions = <WasmComponentTypeDefinition>[];
+    final localScope = _WasmComponentTypeAliasScope(
+      definitions: localTypeDefinitions,
+      crossesComponentBoundary: false,
+    );
+    final scopes = <_WasmComponentTypeAliasScope>[localScope, ...outerScopes];
+
+    for (final declaration in declarations) {
+      final nestedType = declaration.type;
+      if (declaration.kind == WasmComponentTypeDeclarationKind.type &&
+          nestedType != null) {
+        if (componentTypeDefinitionContainsResource(
+          nestedType,
+          localScope,
+          <int, bool>{},
+          <int>{},
+        )) {
+          return true;
+        }
+        localTypeDefinitions.add(nestedType);
+        continue;
+      }
+
+      final alias = declaration.alias;
+      if (declaration.kind == WasmComponentTypeDeclarationKind.alias &&
+          alias != null &&
+          alias.sort.kind == WasmComponentSortKind.componentType &&
+          alias.target.kind == WasmComponentAliasTargetKind.outer) {
+        final componentDepth = alias.target.componentDepth;
+        final typeIndex = alias.target.index;
+        if (componentDepth == null || typeIndex == null) {
+          continue;
+        }
+        final targetScope = typeAliasScopeAt(scopes, componentDepth);
+        if (targetScope == null || typeIndex >= targetScope.length) {
+          continue;
+        }
+        if (componentTypeAliasScopeDefinitionContainsResource(
+          targetScope,
+          typeIndex,
+        )) {
+          return true;
+        }
+        localTypeDefinitions.add(targetScope[typeIndex]);
+        continue;
+      }
+
+      final descriptor = switch (declaration.kind) {
+        WasmComponentTypeDeclarationKind.import =>
+          declaration.import?.descriptor,
+        WasmComponentTypeDeclarationKind.export =>
+          declaration.export?.descriptor,
+        _ => null,
+      };
+      if (componentExternDescriptorContainsResource(descriptor, localScope)) {
+        return true;
+      }
+      introduceTypeDeclarationExport(descriptor, localTypeDefinitions);
+    }
+
+    return false;
+  }
+
+  _WasmComponentTypeAliasScope? typeAliasScopeAt(
+    List<_WasmComponentTypeAliasScope> scopes,
+    int componentDepth,
+  ) {
+    if (componentDepth < 0 || componentDepth >= scopes.length) {
+      return null;
+    }
+    return scopes[componentDepth];
+  }
+
+  bool componentExternDescriptorContainsResource(
+    WasmComponentExternDescriptor? descriptor,
+    _WasmComponentTypeAliasScope localScope,
+  ) {
+    if (descriptor == null) {
+      return false;
+    }
+    if (descriptor.kind == WasmComponentExternKind.componentType &&
+        descriptor.boundKind == WasmComponentExternBoundKind.subtypeResource) {
+      return true;
+    }
+
+    if (descriptor.kind == WasmComponentExternKind.value) {
+      return componentValueTypeContainsResource(
+        descriptor.valueType,
+        localScope,
+        <int, bool>{},
+        <int>{},
+      );
+    }
+
+    final referencesComponentType =
+        descriptor.kind == WasmComponentExternKind.function ||
+        descriptor.kind == WasmComponentExternKind.component ||
+        descriptor.kind == WasmComponentExternKind.instance ||
+        (descriptor.kind == WasmComponentExternKind.componentType &&
+            descriptor.boundKind == WasmComponentExternBoundKind.equality);
+    if (!referencesComponentType) {
+      return false;
+    }
+    final typeIndex = descriptor.typeIndex;
+    if (typeIndex == null) {
+      return false;
+    }
+    return componentTypeAliasScopeDefinitionContainsResource(
+      localScope,
+      typeIndex,
+    );
   }
 
   void introduceTypeDeclarationExport(
