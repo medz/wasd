@@ -635,6 +635,28 @@ void main() {
       );
     });
 
+    test('reports invalid component start indexes', () {
+      expect(WasmComponent.decode(_startComponentBytes()).validate(), isEmpty);
+
+      final invalidFunction = WasmComponent.decode(
+        _startOutOfRangeFunctionIndexComponentBytes(),
+      ).validate();
+      expect(invalidFunction, hasLength(1));
+      expect(
+        invalidFunction.single.message,
+        contains('Unknown Wasm component function index'),
+      );
+
+      final invalidArgument = WasmComponent.decode(
+        _startOutOfRangeValueArgumentComponentBytes(),
+      ).validate();
+      expect(invalidArgument, hasLength(1));
+      expect(
+        invalidArgument.single.message,
+        contains('Unknown Wasm component value index'),
+      );
+    });
+
     test('reports invalid component stream char element types', () {
       expect(
         WasmComponent.decode(_streamStringTypeComponentBytes()).validate(),
@@ -2151,6 +2173,56 @@ Uint8List _startArgumentsComponentBytes() => Uint8List.fromList(const <int>[
   0x02,
   0x04,
 ]);
+
+Uint8List _startOutOfRangeFunctionIndexComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x09,
+      0x03,
+      0x00,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _startOutOfRangeValueArgumentComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x00,
+      0x73,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x09,
+      0x04,
+      0x00,
+      0x01,
+      0x00,
+      0x00,
+    ]);
 
 Uint8List _valueDefinitionsComponentBytes() => Uint8List.fromList(const <int>[
   0x00,

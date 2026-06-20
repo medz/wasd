@@ -744,6 +744,25 @@ final class WasmComponent {
         'canonical[$i]',
       );
     }
+    final functionCount = _componentFunctionIndexCount(
+      imports: imports,
+      aliases: aliases,
+      canonicalDefinitions: canonicalDefinitions,
+    );
+    var valueCount = _componentValueIndexCount(
+      imports: imports,
+      aliases: aliases,
+      valueDefinitions: valueDefinitions,
+    );
+    for (var i = 0; i < starts.length; i++) {
+      context.validateStartDefinition(
+        starts[i],
+        'start[$i]',
+        functionCount: functionCount,
+        valueCount: valueCount,
+      );
+      valueCount += starts[i].resultCount;
+    }
     for (var i = 0; i < components.length; i++) {
       for (final error in components[i].validate()) {
         errors.add(
@@ -1329,11 +1348,105 @@ final class _WasmComponentValidationContext {
             WasmComponentCanonicalOptionKind.stringEncodingLatin1Utf16;
   }
 
+  void validateStartDefinition(
+    WasmComponentStart start,
+    String path, {
+    required int functionCount,
+    required int valueCount,
+  }) {
+    validateComponentFunctionIndex(
+      start.functionIndex,
+      '$path.function',
+      functionCount,
+    );
+
+    for (var i = 0; i < start.arguments.length; i++) {
+      validateComponentValueIndex(
+        start.arguments[i],
+        '$path.arguments[$i]',
+        valueCount,
+      );
+    }
+  }
+
+  void validateComponentFunctionIndex(
+    int functionIndex,
+    String path,
+    int functionCount,
+  ) {
+    if (functionIndex < 0 || functionIndex >= functionCount) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message: 'Unknown Wasm component function index: $functionIndex.',
+        ),
+      );
+    }
+  }
+
+  void validateComponentValueIndex(
+    int valueIndex,
+    String path,
+    int valueCount,
+  ) {
+    if (valueIndex < 0 || valueIndex >= valueCount) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message: 'Unknown Wasm component value index: $valueIndex.',
+        ),
+      );
+    }
+  }
+
   bool canonicalDefinitionUsesResourceType(WasmComponentCanonicalKind kind) {
     return kind == WasmComponentCanonicalKind.resourceNew ||
         kind == WasmComponentCanonicalKind.resourceDrop ||
         kind == WasmComponentCanonicalKind.resourceRep;
   }
+}
+
+int _componentFunctionIndexCount({
+  required List<WasmComponentImport> imports,
+  required List<WasmComponentAlias> aliases,
+  required List<WasmComponentCanonicalDefinition> canonicalDefinitions,
+}) {
+  var count = 0;
+  for (final import in imports) {
+    if (import.descriptor.kind == WasmComponentExternKind.function) {
+      count++;
+    }
+  }
+  for (final alias in aliases) {
+    if (alias.sort.kind == WasmComponentSortKind.function) {
+      count++;
+    }
+  }
+  for (final definition in canonicalDefinitions) {
+    if (definition.kind == WasmComponentCanonicalKind.lift) {
+      count++;
+    }
+  }
+  return count;
+}
+
+int _componentValueIndexCount({
+  required List<WasmComponentImport> imports,
+  required List<WasmComponentAlias> aliases,
+  required List<WasmComponentValueDefinition> valueDefinitions,
+}) {
+  var count = valueDefinitions.length;
+  for (final import in imports) {
+    if (import.descriptor.kind == WasmComponentExternKind.value) {
+      count++;
+    }
+  }
+  for (final alias in aliases) {
+    if (alias.sort.kind == WasmComponentSortKind.value) {
+      count++;
+    }
+  }
+  return count;
 }
 
 void _validateUniqueLabels(
