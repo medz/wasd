@@ -726,6 +726,24 @@ final class WasmComponent {
         errors,
       );
     }
+    for (var i = 0; i < imports.length; i++) {
+      _validateExternDescriptor(
+        imports[i].descriptor,
+        'import[$i].descriptor',
+        typeDefinitions,
+        coreTypes,
+        errors,
+      );
+    }
+    for (var i = 0; i < exports.length; i++) {
+      _validateExternDescriptor(
+        exports[i].descriptor,
+        'export[$i].descriptor',
+        typeDefinitions,
+        coreTypes,
+        errors,
+      );
+    }
     for (var i = 0; i < components.length; i++) {
       for (final error in components[i].validate()) {
         errors.add(
@@ -1036,31 +1054,105 @@ void _validateComponentValueType(
   }
 
   final typeIndex = valueType.typeIndex;
-  if (typeIndex == null ||
-      typeIndex < 0 ||
-      typeIndex >= typeDefinitions.length) {
-    errors.add(
-      WasmComponentValidationError(
-        path: path,
-        message: 'Unknown Wasm component value type index: $typeIndex.',
-      ),
-    );
-    return;
-  }
-
-  if (typeDefinitions[typeIndex].kind != WasmComponentTypeKind.definedValue ||
-      typeDefinitions[typeIndex].definedValue == null) {
-    errors.add(
-      WasmComponentValidationError(
-        path: path,
-        message:
-            'Wasm component value type index $typeIndex does not refer to a value type.',
-      ),
-    );
-  }
+  _validateComponentTypeIndex(
+    typeIndex,
+    path,
+    typeDefinitions,
+    WasmComponentTypeKind.definedValue,
+    indexDescription: 'value type',
+    targetDescription: 'a value type',
+    errors: errors,
+  );
 }
 
 void _validateComponentResourceTypeIndex(
+  int? typeIndex,
+  String path,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+  List<WasmComponentValidationError> errors,
+) {
+  _validateComponentTypeIndex(
+    typeIndex,
+    path,
+    typeDefinitions,
+    WasmComponentTypeKind.resource,
+    indexDescription: 'resource type',
+    targetDescription: 'a resource type',
+    errors: errors,
+  );
+}
+
+void _validateExternDescriptor(
+  WasmComponentExternDescriptor? descriptor,
+  String path,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+  List<WasmComponentCoreType> coreTypes,
+  List<WasmComponentValidationError> errors,
+) {
+  if (descriptor == null) {
+    return;
+  }
+
+  switch (descriptor.kind) {
+    case WasmComponentExternKind.coreModule:
+      _validateCoreModuleTypeIndex(
+        descriptor.typeIndex,
+        '$path.type',
+        coreTypes,
+        errors,
+      );
+    case WasmComponentExternKind.function:
+      _validateComponentTypeIndex(
+        descriptor.typeIndex,
+        '$path.type',
+        typeDefinitions,
+        WasmComponentTypeKind.function,
+        indexDescription: 'function type',
+        targetDescription: 'a function type',
+        errors: errors,
+      );
+    case WasmComponentExternKind.value:
+      if (descriptor.boundKind == WasmComponentExternBoundKind.valueType) {
+        _validateComponentValueType(
+          descriptor.valueType,
+          '$path.valueType',
+          typeDefinitions,
+          errors,
+        );
+      }
+    case WasmComponentExternKind.componentType:
+      if (descriptor.boundKind == WasmComponentExternBoundKind.equality) {
+        _validateAnyComponentTypeIndex(
+          descriptor.typeIndex,
+          '$path.type',
+          typeDefinitions,
+          errors,
+        );
+      }
+    case WasmComponentExternKind.component:
+      _validateComponentTypeIndex(
+        descriptor.typeIndex,
+        '$path.type',
+        typeDefinitions,
+        WasmComponentTypeKind.component,
+        indexDescription: 'component type',
+        targetDescription: 'a component type',
+        errors: errors,
+      );
+    case WasmComponentExternKind.instance:
+      _validateComponentTypeIndex(
+        descriptor.typeIndex,
+        '$path.type',
+        typeDefinitions,
+        WasmComponentTypeKind.instance,
+        indexDescription: 'instance type',
+        targetDescription: 'an instance type',
+        errors: errors,
+      );
+  }
+}
+
+void _validateAnyComponentTypeIndex(
   int? typeIndex,
   String path,
   List<WasmComponentTypeDefinition> typeDefinitions,
@@ -1072,19 +1164,92 @@ void _validateComponentResourceTypeIndex(
     errors.add(
       WasmComponentValidationError(
         path: path,
-        message: 'Unknown Wasm component resource type index: $typeIndex.',
+        message: 'Unknown Wasm component type index: $typeIndex.',
+      ),
+    );
+  }
+}
+
+void _validateComponentTypeIndex(
+  int? typeIndex,
+  String path,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+  WasmComponentTypeKind expectedKind, {
+  required String indexDescription,
+  required String targetDescription,
+  required List<WasmComponentValidationError> errors,
+}) {
+  if (typeIndex == null ||
+      typeIndex < 0 ||
+      typeIndex >= typeDefinitions.length) {
+    errors.add(
+      WasmComponentValidationError(
+        path: path,
+        message: 'Unknown Wasm component $indexDescription index: $typeIndex.',
       ),
     );
     return;
   }
 
-  if (typeDefinitions[typeIndex].kind != WasmComponentTypeKind.resource ||
-      typeDefinitions[typeIndex].resource == null) {
+  if (!_componentTypeDefinitionMatches(
+    typeDefinitions[typeIndex],
+    expectedKind,
+  )) {
     errors.add(
       WasmComponentValidationError(
         path: path,
         message:
-            'Wasm component resource type index $typeIndex does not refer to a resource type.',
+            'Wasm component $indexDescription index $typeIndex does not refer to $targetDescription.',
+      ),
+    );
+  }
+}
+
+bool _componentTypeDefinitionMatches(
+  WasmComponentTypeDefinition definition,
+  WasmComponentTypeKind expectedKind,
+) {
+  return switch (expectedKind) {
+    WasmComponentTypeKind.definedValue =>
+      definition.kind == WasmComponentTypeKind.definedValue &&
+          definition.definedValue != null,
+    WasmComponentTypeKind.function =>
+      definition.kind == WasmComponentTypeKind.function &&
+          definition.function != null,
+    WasmComponentTypeKind.component =>
+      definition.kind == WasmComponentTypeKind.component &&
+          definition.component != null,
+    WasmComponentTypeKind.instance =>
+      definition.kind == WasmComponentTypeKind.instance &&
+          definition.instance != null,
+    WasmComponentTypeKind.resource =>
+      definition.kind == WasmComponentTypeKind.resource &&
+          definition.resource != null,
+  };
+}
+
+void _validateCoreModuleTypeIndex(
+  int? typeIndex,
+  String path,
+  List<WasmComponentCoreType> coreTypes,
+  List<WasmComponentValidationError> errors,
+) {
+  if (typeIndex == null || typeIndex < 0 || typeIndex >= coreTypes.length) {
+    errors.add(
+      WasmComponentValidationError(
+        path: path,
+        message: 'Unknown Wasm component core module type index: $typeIndex.',
+      ),
+    );
+    return;
+  }
+
+  if (coreTypes[typeIndex].kind != WasmComponentCoreTypeKind.module) {
+    errors.add(
+      WasmComponentValidationError(
+        path: path,
+        message:
+            'Wasm component core module type index $typeIndex does not refer to a core module type.',
       ),
     );
   }

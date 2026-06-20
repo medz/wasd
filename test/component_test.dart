@@ -536,6 +536,28 @@ void main() {
       );
     });
 
+    test('reports invalid component import descriptor type indexes', () {
+      expect(WasmComponent.decode(_importComponentBytes()).validate(), isEmpty);
+
+      final wrongSort = WasmComponent.decode(
+        _functionImportWrongSortTypeIndexComponentBytes(),
+      ).validate();
+      expect(wrongSort, hasLength(1));
+      expect(
+        wrongSort.single.message,
+        contains('does not refer to a function type'),
+      );
+
+      final invalidValueType = WasmComponent.decode(
+        _valueImportOutOfRangeTypeIndexComponentBytes(),
+      ).validate();
+      expect(invalidValueType, hasLength(1));
+      expect(
+        invalidValueType.single.message,
+        contains('Unknown Wasm component value type index'),
+      );
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -734,6 +756,51 @@ Uint8List _legacyPrefixedImportComponentBytes() =>
       0x01,
       0x01,
       0x61,
+      0x01,
+      0x00,
+    ]);
+
+Uint8List _functionImportWrongSortTypeIndexComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x02,
+      0x01,
+      0x7f,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+    ]);
+
+Uint8List _valueImportOutOfRangeTypeIndexComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x07,
+      0x01,
+      0x00,
+      0x01,
+      0x76,
+      0x02,
       0x01,
       0x00,
     ]);
