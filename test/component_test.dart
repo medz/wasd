@@ -488,6 +488,15 @@ void main() {
       );
     });
 
+    test('validates function type indexes introduced by exports', () {
+      expect(
+        WasmComponent.decode(
+          _typeDeclarationExportIntroducesFunctionTypeComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
+    });
+
     test('decodes component starts', () {
       final component = WasmComponent.decode(_startComponentBytes());
 
@@ -3494,6 +3503,40 @@ Uint8List _typeDeclarationFunctionAliasComponentBytes() =>
       0x02,
       0x00,
       0x00,
+    ]);
+
+Uint8List _typeDeclarationExportIntroducesFunctionTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x14,
+      0x01,
+      0x42,
+      0x03,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x04,
+      0x00,
+      0x01,
+      0x61,
+      0x01,
+      0x00,
+      0x04,
+      0x00,
+      0x01,
+      0x62,
+      0x01,
+      0x01,
     ]);
 
 Uint8List _startComponentBytes() => Uint8List.fromList(const <int>[

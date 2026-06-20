@@ -1481,12 +1481,14 @@ final class _WasmComponentValidationContext {
             localCoreTypeKinds,
           );
         case WasmComponentTypeDeclarationKind.export:
+          final descriptor = declaration.export?.descriptor;
           validateTypeDeclarationExternDescriptor(
-            declaration.export?.descriptor,
+            descriptor,
             '$path.declarations[$i].export.descriptor',
             localTypeDefinitions,
             localCoreTypeKinds,
           );
+          introduceTypeDeclarationExport(descriptor, localTypeDefinitions);
         case WasmComponentTypeDeclarationKind.coreType:
           final coreType = declaration.coreType;
           if (coreType == null) {
@@ -1561,6 +1563,32 @@ final class _WasmComponentValidationContext {
     }
 
     localTypeDefinitions.add(targetTypeDefinitions[typeIndex]);
+  }
+
+  void introduceTypeDeclarationExport(
+    WasmComponentExternDescriptor? descriptor,
+    List<WasmComponentTypeDefinition> localTypeDefinitions,
+  ) {
+    if (descriptor?.kind != WasmComponentExternKind.function) {
+      return;
+    }
+
+    final typeIndex = descriptor!.typeIndex;
+    if (typeIndex == null ||
+        typeIndex < 0 ||
+        typeIndex >= localTypeDefinitions.length) {
+      return;
+    }
+
+    final typeDefinition = localTypeDefinitions[typeIndex];
+    if (!componentTypeDefinitionMatches(
+      typeDefinition,
+      WasmComponentTypeKind.function,
+    )) {
+      return;
+    }
+
+    localTypeDefinitions.add(typeDefinition);
   }
 
   void validateTypeDeclarationExternDescriptor(
