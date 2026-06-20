@@ -515,6 +515,25 @@ void main() {
       },
     );
 
+    test('validates equality type indexes introduced by exports', () {
+      expect(
+        WasmComponent.decode(
+          _typeDeclarationExportIntroducesEqualityTypeComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
+
+      final errors = WasmComponent.decode(
+        _typeDeclarationEqualityTypeExportBeforeTypeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('Unknown Wasm component type index'),
+      );
+    });
+
     test('decodes component starts', () {
       final component = WasmComponent.decode(_startComponentBytes());
 
@@ -3619,6 +3638,65 @@ Uint8List _typeDeclarationExportIntroducesInstanceTypeComponentBytes() =>
       0x62,
       0x05,
       0x01,
+    ]);
+
+Uint8List _typeDeclarationExportIntroducesEqualityTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x15,
+      0x01,
+      0x42,
+      0x03,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x04,
+      0x00,
+      0x01,
+      0x74,
+      0x03,
+      0x00,
+      0x00,
+      0x04,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x01,
+    ]);
+
+Uint8List _typeDeclarationEqualityTypeExportBeforeTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x0a,
+      0x01,
+      0x42,
+      0x01,
+      0x04,
+      0x00,
+      0x01,
+      0x74,
+      0x03,
+      0x00,
+      0x00,
     ]);
 
 Uint8List _startComponentBytes() => Uint8List.fromList(const <int>[

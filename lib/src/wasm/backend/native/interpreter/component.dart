@@ -1575,7 +1575,25 @@ final class _WasmComponentValidationContext {
       WasmComponentExternKind.instance => WasmComponentTypeKind.instance,
       _ => null,
     };
-    if (expectedKind == null) {
+    if (expectedKind != null) {
+      final typeIndex = descriptor!.typeIndex;
+      if (typeIndex == null ||
+          typeIndex < 0 ||
+          typeIndex >= localTypeDefinitions.length) {
+        return;
+      }
+
+      final typeDefinition = localTypeDefinitions[typeIndex];
+      if (!componentTypeDefinitionMatches(typeDefinition, expectedKind)) {
+        return;
+      }
+
+      localTypeDefinitions.add(typeDefinition);
+      return;
+    }
+
+    if (descriptor?.kind != WasmComponentExternKind.componentType ||
+        descriptor?.boundKind != WasmComponentExternBoundKind.equality) {
       return;
     }
 
@@ -1587,10 +1605,6 @@ final class _WasmComponentValidationContext {
     }
 
     final typeDefinition = localTypeDefinitions[typeIndex];
-    if (!componentTypeDefinitionMatches(typeDefinition, expectedKind)) {
-      return;
-    }
-
     localTypeDefinitions.add(typeDefinition);
   }
 
@@ -1643,7 +1657,31 @@ final class _WasmComponentValidationContext {
         );
       case WasmComponentExternKind.value:
       case WasmComponentExternKind.componentType:
+        if (descriptor.boundKind == WasmComponentExternBoundKind.equality) {
+          validateAnyLocalComponentTypeIndex(
+            descriptor.typeIndex,
+            path,
+            localTypeDefinitions,
+          );
+        }
         break;
+    }
+  }
+
+  void validateAnyLocalComponentTypeIndex(
+    int? typeIndex,
+    String path,
+    List<WasmComponentTypeDefinition> localTypeDefinitions,
+  ) {
+    if (typeIndex == null ||
+        typeIndex < 0 ||
+        typeIndex >= localTypeDefinitions.length) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message: 'Unknown Wasm component type index: $typeIndex.',
+        ),
+      );
     }
   }
 
