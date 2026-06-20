@@ -630,6 +630,27 @@ void main() {
       expect(errors.single.message, contains('char'));
     });
 
+    test('reports stream and future element types containing borrow', () {
+      expect(
+        WasmComponent.decode(_streamOwnTypeComponentBytes()).validate(),
+        isEmpty,
+      );
+
+      final stream = WasmComponent.decode(
+        _streamBorrowTypeComponentBytes(),
+      ).validate();
+      expect(stream, hasLength(1));
+      expect(stream.single.message, contains('stream element type'));
+      expect(stream.single.message, contains('borrow'));
+
+      final future = WasmComponent.decode(
+        _futureBorrowTypeComponentBytes(),
+      ).validate();
+      expect(future, hasLength(1));
+      expect(future.single.message, contains('future element type'));
+      expect(future.single.message, contains('borrow'));
+    });
+
     test('rejects component decoding when the feature is disabled', () {
       expect(
         () => WasmComponent.decode(
@@ -2363,6 +2384,35 @@ Uint8List _streamStringTypeComponentBytes() =>
 
 Uint8List _streamCharTypeComponentBytes() =>
     _componentWithSingleTypeDefinitionBytes(const <int>[0x66, 0x01, 0x74]);
+
+Uint8List _streamOwnTypeComponentBytes() => _componentWithTypeDefinitionsBytes(
+  const <int>[0x3f, 0x7f, 0x00, 0x69, 0x00, 0x66, 0x01, 0x01],
+  count: 3,
+);
+
+Uint8List _streamBorrowTypeComponentBytes() =>
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x3f,
+      0x7f,
+      0x00,
+      0x68,
+      0x00,
+      0x66,
+      0x01,
+      0x01,
+    ], count: 3);
+
+Uint8List _futureBorrowTypeComponentBytes() =>
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x3f,
+      0x7f,
+      0x00,
+      0x68,
+      0x00,
+      0x65,
+      0x01,
+      0x01,
+    ], count: 3);
 
 Uint8List _componentWithSingleTypeDefinitionBytes(List<int> typeBytes) =>
     _componentWithTypeDefinitionsBytes(typeBytes, count: 1);
