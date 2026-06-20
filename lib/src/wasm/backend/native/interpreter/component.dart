@@ -853,6 +853,9 @@ final class WasmComponent {
       coreTypes: coreTypes,
       errors: errors,
     );
+    for (var i = 0; i < coreTypes.length; i++) {
+      context.validateCoreTypeDefinition(coreTypes[i], 'coreType[$i]');
+    }
     for (var i = 0; i < typeDefinitions.length; i++) {
       context.validateComponentTypeDefinition(typeDefinitions[i], 'type[$i]');
     }
@@ -1167,6 +1170,96 @@ final class _WasmComponentValidationContext {
     final instance = type.instance;
     if (type.kind == WasmComponentTypeKind.instance && instance != null) {
       validateComponentTypeDeclarations(instance.declarations, path);
+    }
+  }
+
+  void validateCoreTypeDefinition(WasmComponentCoreType type, String path) {
+    if (type.kind == WasmComponentCoreTypeKind.module) {
+      validateCoreModuleTypeDeclarations(type.declarations, path);
+      return;
+    }
+
+    for (var i = 0; i < type.types.length; i++) {
+      validateCoreTypeDefinition(type.types[i], '$path.types[$i]');
+    }
+  }
+
+  void validateCoreModuleTypeDeclarations(
+    List<WasmComponentCoreTypeDeclaration> declarations,
+    String path,
+  ) {
+    final localCoreTypeKinds = <WasmComponentCoreTypeKind>[];
+    for (var i = 0; i < declarations.length; i++) {
+      final declaration = declarations[i];
+      switch (declaration.kind) {
+        case WasmComponentCoreTypeDeclarationKind.type:
+          final coreType = declaration.coreType;
+          if (coreType == null) {
+            break;
+          }
+          validateCoreTypeDefinition(coreType, '$path.declarations[$i]');
+          localCoreTypeKinds.add(coreType.kind);
+        case WasmComponentCoreTypeDeclarationKind.import:
+        case WasmComponentCoreTypeDeclarationKind.export:
+          validateCoreTypeDeclarationExternDescriptor(
+            declaration.descriptor,
+            '$path.declarations[$i].descriptor',
+            localCoreTypeKinds,
+          );
+        case WasmComponentCoreTypeDeclarationKind.alias:
+          break;
+      }
+    }
+  }
+
+  void validateCoreTypeDeclarationExternDescriptor(
+    WasmComponentCoreExternDescriptor? descriptor,
+    String path,
+    List<WasmComponentCoreTypeKind> localCoreTypeKinds,
+  ) {
+    if (descriptor?.kind != WasmComponentCoreSortKind.function) {
+      return;
+    }
+
+    validateLocalCoreTypeIndex(
+      descriptor!.typeIndex,
+      path,
+      localCoreTypeKinds,
+      WasmComponentCoreTypeKind.function,
+      indexDescription: 'core function type',
+      targetDescription: 'a core function type',
+    );
+  }
+
+  void validateLocalCoreTypeIndex(
+    int? typeIndex,
+    String path,
+    List<WasmComponentCoreTypeKind> localCoreTypeKinds,
+    WasmComponentCoreTypeKind expectedKind, {
+    required String indexDescription,
+    required String targetDescription,
+  }) {
+    if (typeIndex == null ||
+        typeIndex < 0 ||
+        typeIndex >= localCoreTypeKinds.length) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Unknown Wasm component $indexDescription index: $typeIndex.',
+        ),
+      );
+      return;
+    }
+
+    if (localCoreTypeKinds[typeIndex] != expectedKind) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component $indexDescription index $typeIndex does not refer to $targetDescription.',
+        ),
+      );
     }
   }
 

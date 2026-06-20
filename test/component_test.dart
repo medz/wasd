@@ -153,6 +153,18 @@ void main() {
       expect(export.descriptor!.typeIndex, 0);
     });
 
+    test('reports invalid core module type declaration indexes', () {
+      final errors = WasmComponent.decode(
+        _coreModuleTypeExportBeforeTypeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('Unknown Wasm component core function type index'),
+      );
+    });
+
     test('decodes instantiated core instances', () {
       final component = WasmComponent.decode(
         _coreInstanceInstantiateComponentBytes(),
@@ -1832,6 +1844,34 @@ Uint8List _coreTypeComponentBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x6d,
 ]);
+
+Uint8List _coreModuleTypeExportBeforeTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x03,
+      0x0e,
+      0x01,
+      0x50,
+      0x02,
+      0x03,
+      0x03,
+      0x72,
+      0x75,
+      0x6e,
+      0x00,
+      0x00,
+      0x01,
+      0x60,
+      0x00,
+      0x00,
+    ]);
 
 Uint8List _coreInstanceInstantiateComponentBytes() =>
     Uint8List.fromList(const <int>[
