@@ -2804,6 +2804,7 @@ final class _WasmComponentValidationContext {
             'export[${event.index}]',
             functionTypes: functionTypes,
             valueEntries: valueEntries,
+            visibleTypeDefinitions: visibleTypeDefinitions,
             componentCount: componentCount,
             instanceCount: instanceCount,
           );
@@ -2811,6 +2812,14 @@ final class _WasmComponentValidationContext {
             componentCount++;
           } else if (export.sort.kind == WasmComponentSortKind.instance) {
             instanceCount++;
+          } else if (export.sort.kind == WasmComponentSortKind.componentType) {
+            final exportedTypeDefinition = componentTypeDefinitionAt(
+              visibleTypeDefinitions,
+              export.sort.index,
+            );
+            if (exportedTypeDefinition != null) {
+              materializeVisibleTypeDefinitions().add(exportedTypeDefinition);
+            }
           }
         case _WasmComponentDefinitionEventKind.coreType:
           coreCounts.add(WasmComponentCoreSortKind.type);
@@ -2998,6 +3007,7 @@ final class _WasmComponentValidationContext {
     String path, {
     required List<WasmComponentFunctionType?> functionTypes,
     required List<_WasmComponentValueIndexEntry> valueEntries,
+    required List<WasmComponentTypeDefinition> visibleTypeDefinitions,
     required int componentCount,
     required int instanceCount,
   }) {
@@ -3025,7 +3035,13 @@ final class _WasmComponentValidationContext {
           ),
         );
       case WasmComponentSortKind.core:
+        break;
       case WasmComponentSortKind.componentType:
+        validateAnyComponentTypeIndexInMaybeDefinitions(
+          export.sort.index,
+          '$path.sort',
+          visibleTypeDefinitions,
+        );
         break;
       case WasmComponentSortKind.component:
         validateComponentIndex(export.sort.index, '$path.sort', componentCount);
@@ -3036,6 +3052,16 @@ final class _WasmComponentValidationContext {
           instanceCount,
         );
     }
+  }
+
+  WasmComponentTypeDefinition? componentTypeDefinitionAt(
+    List<WasmComponentTypeDefinition> definitions,
+    int? typeIndex,
+  ) {
+    if (typeIndex == null || typeIndex < 0 || typeIndex >= definitions.length) {
+      return null;
+    }
+    return definitions[typeIndex];
   }
 
   void validateInstanceDefinition(
