@@ -679,13 +679,11 @@ final class WASIComponentCanonicalAsyncHandleProgram {
         );
       case WasmComponentCanonicalKind.futureWrite:
         _expectArity(canonicalIndex, args, 2);
-        return operation
-            .futureWriteHandleFromMemory(
-              _expectHandle(canonicalIndex, args[0], 'writable'),
-              memory,
-              _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
-            )
-            .packedResult;
+        return operation.futureWriteHandleFromMemoryEvent(
+          _expectHandle(canonicalIndex, args[0], 'writable'),
+          memory,
+          _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
+        );
       default:
         return invoke(canonicalIndex, args);
     }
@@ -1150,6 +1148,20 @@ final class WASIComponentCanonicalAsyncOperation {
   ) {
     _requireKind(WasmComponentCanonicalKind.futureWrite);
     return _requireValueType().futureWriteHandleFromMemory(
+      writable,
+      memory,
+      pointer,
+    );
+  }
+
+  /// Starts handle-backed `future.write` from memory and publishes an event.
+  int futureWriteHandleFromMemoryEvent(
+    int writable,
+    wasm.Memory memory,
+    int pointer,
+  ) {
+    _requireKind(WasmComponentCanonicalKind.futureWrite);
+    return _requireValueType().futureWriteHandleFromMemoryEvent(
       writable,
       memory,
       pointer,
@@ -1990,6 +2002,52 @@ final class _RegisteredAsyncValueType<T> {
         );
   }
 
+  int futureWriteHandleFromMemoryEvent(
+    int writable,
+    wasm.Memory memory,
+    int pointer,
+  ) {
+    final waitable = _existingEndpointWaitable(writable);
+    return table.borrow<WASIComponentWritableFuture<T>, int>(
+      writableFutureType!,
+      writable,
+      (future) {
+        final value = _readFixedWidthValueFromMemory<T>(
+          valueValidator,
+          name,
+          memory,
+          pointer,
+        );
+        if (!future.canComplete) {
+          future.complete(value);
+          return WASIComponentAsyncCopyResult.completed(0).packedResult;
+        }
+        if (future.hasPendingReader) {
+          future.complete(value);
+          return WASIComponentAsyncCopyResult.completed(0).packedResult;
+        }
+
+        waitable.beginCopy();
+        final pending = table
+            .borrowAsync<
+              WASIComponentWritableFuture<T>,
+              WASIComponentAsyncCopyResult
+            >(writableFutureType!, writable, (future) {
+              return future.completeWhenRead(value).then((_) {
+                return WASIComponentAsyncCopyResult.completed(0);
+              });
+            });
+        _publishCopyEvent(
+          waitable,
+          WASIComponentWaitableEventCode.futureWrite,
+          writable,
+          pending,
+        );
+        return wasiComponentAsyncBlocked;
+      },
+    );
+  }
+
   void futureCancelRead(Object? readable) {
     _requireKind(_WASIComponentAsyncValueKind.future);
     _expectReadableFuture(readable).cancel();
@@ -2029,7 +2087,7 @@ final class _RegisteredAsyncValueType<T> {
           writableFutureType!,
           writable,
           (future) {
-            future.cancel();
+            future.cancelWriteDelivery();
           },
         );
       },

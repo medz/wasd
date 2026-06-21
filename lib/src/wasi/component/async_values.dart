@@ -223,6 +223,7 @@ final class WASIComponentReadableFuture<T> {
     if (!_state.isReady) {
       throw StateError('WASI component future ${_state.name} is not ready.');
     }
+    _state.markValueObserved();
     return _state.value as T;
   }
 
@@ -255,6 +256,15 @@ final class WASIComponentWritableFuture<T> {
   /// Whether the future has been completed.
   bool get isCompleted => _state.isReady;
 
+  /// Whether a reader is currently waiting for this future.
+  bool get hasPendingReader => _state.hasPendingReadWaiters;
+
+  /// Whether this endpoint can still complete the future.
+  bool get canComplete => _state.canComplete;
+
+  /// Whether a completed value is waiting for the first reader observation.
+  bool get hasPendingWriteDelivery => _state.hasPendingWriteDelivery;
+
   /// Whether the future has been cancelled.
   bool get isCancelled => _state.isCancelled;
 
@@ -266,9 +276,19 @@ final class WASIComponentWritableFuture<T> {
     _state.complete(value);
   }
 
+  /// Completes the future and waits until a reader observes the value.
+  Future<void> completeWhenRead(T value) {
+    return _state.completeWhenRead(value);
+  }
+
   /// Cancels the future while it is still pending.
   void cancel() {
     _state.cancel();
+  }
+
+  /// Cancels an active write delivery copy.
+  void cancelWriteDelivery() {
+    _state.cancelWriteDelivery();
   }
 
   /// Drops this endpoint.
@@ -927,15 +947,28 @@ final class _WASIComponentFutureState<T> {
   _WASIComponentFutureStatus status = _WASIComponentFutureStatus.pending;
   T? value;
   List<Completer<T>>? readWaiters;
+  List<Completer<void>>? writeDeliveryWaiters;
   bool readDropped = false;
   bool writeDropped = false;
   bool _dropCalled = false;
+  bool _valueObserved = false;
 
   bool get isReady => status == _WASIComponentFutureStatus.ready;
 
   bool get isCancelled => status == _WASIComponentFutureStatus.cancelled;
 
   bool get isDropped => readDropped && writeDropped;
+
+  bool get hasPendingReadWaiters =>
+      readWaiters != null && readWaiters!.isNotEmpty;
+
+  bool get hasPendingWriteDelivery =>
+      writeDeliveryWaiters != null && writeDeliveryWaiters!.isNotEmpty;
+
+  bool get canComplete =>
+      status == _WASIComponentFutureStatus.pending &&
+      !readDropped &&
+      !writeDropped;
 
   void requireReadable() {
     if (readDropped) {
@@ -949,6 +982,7 @@ final class _WASIComponentFutureState<T> {
   Future<T> readWhenReady() {
     requireReadable();
     if (isReady) {
+      markValueObserved();
       return Future<T>.value(value as T);
     }
 
@@ -962,7 +996,10 @@ final class _WASIComponentFutureState<T> {
       throw StateError('WASI component future $name writable was dropped.');
     }
     if (readDropped) {
-      throw StateError('WASI component future $name readable was dropped.');
+      throw WASIComponentAsyncEndpointStateError(
+        WASIComponentAsyncEndpointFailure.dropped,
+        'WASI component future $name readable was dropped.',
+      );
     }
     if (status != _WASIComponentFutureStatus.pending) {
       throw StateError('WASI component future $name is not pending.');
@@ -972,6 +1009,16 @@ final class _WASIComponentFutureState<T> {
     if (readWaiters != null) {
       _completeReadWaiters(completedValue);
     }
+  }
+
+  Future<void> completeWhenRead(T completedValue) {
+    complete(completedValue);
+    if (_valueObserved) {
+      return Future<void>.value();
+    }
+    final completer = Completer<void>();
+    (writeDeliveryWaiters ??= <Completer<void>>[]).add(completer);
+    return completer.future;
   }
 
   void cancel() {
@@ -984,6 +1031,29 @@ final class _WASIComponentFutureState<T> {
         StateError('WASI component future $name was cancelled.'),
       );
     }
+    if (writeDeliveryWaiters != null) {
+      _failWriteDeliveryWaiters(
+        WASIComponentAsyncEndpointStateError(
+          WASIComponentAsyncEndpointFailure.cancelled,
+          'WASI component future $name was cancelled.',
+        ),
+      );
+    }
+  }
+
+  void cancelWriteDelivery() {
+    if (!hasPendingWriteDelivery) {
+      cancel();
+      return;
+    }
+    status = _WASIComponentFutureStatus.cancelled;
+    value = null;
+    _failWriteDeliveryWaiters(
+      WASIComponentAsyncEndpointStateError(
+        WASIComponentAsyncEndpointFailure.cancelled,
+        'WASI component future $name write was cancelled.',
+      ),
+    );
   }
 
   void dropReadable() {
@@ -994,6 +1064,14 @@ final class _WASIComponentFutureState<T> {
     if (readWaiters != null) {
       _failReadWaiters(
         StateError('WASI component future $name readable was dropped.'),
+      );
+    }
+    if (writeDeliveryWaiters != null) {
+      _failWriteDeliveryWaiters(
+        WASIComponentAsyncEndpointStateError(
+          WASIComponentAsyncEndpointFailure.dropped,
+          'WASI component future $name readable was dropped.',
+        ),
       );
     }
     _maybeDrop();
@@ -1021,9 +1099,27 @@ final class _WASIComponentFutureState<T> {
       return;
     }
     readWaiters = null;
+    markValueObserved();
     for (final waiter in waiters) {
       if (!waiter.isCompleted) {
         waiter.complete(completedValue);
+      }
+    }
+  }
+
+  void markValueObserved() {
+    if (_valueObserved) {
+      return;
+    }
+    _valueObserved = true;
+    final waiters = writeDeliveryWaiters;
+    if (waiters == null || waiters.isEmpty) {
+      return;
+    }
+    writeDeliveryWaiters = null;
+    for (final waiter in waiters) {
+      if (!waiter.isCompleted) {
+        waiter.complete();
       }
     }
   }
@@ -1034,6 +1130,19 @@ final class _WASIComponentFutureState<T> {
       return;
     }
     readWaiters = null;
+    for (final waiter in waiters) {
+      if (!waiter.isCompleted) {
+        waiter.completeError(error);
+      }
+    }
+  }
+
+  void _failWriteDeliveryWaiters(Object error) {
+    final waiters = writeDeliveryWaiters;
+    if (waiters == null || waiters.isEmpty) {
+      return;
+    }
+    writeDeliveryWaiters = null;
     for (final waiter in waiters) {
       if (!waiter.isCompleted) {
         waiter.completeError(error);

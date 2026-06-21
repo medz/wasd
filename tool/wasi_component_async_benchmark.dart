@@ -912,6 +912,34 @@ Future<_Metric> _benchmarkHandleMemoryProgramInvokeEvent(
     futureWaitables.waitableJoin(futureHandles.readable, 0);
     futureProgram.invoke(3, <Object?>[futureHandles.readable]);
     futureProgram.invoke(4, <Object?>[futureHandles.writable]);
+
+    final futureWriteHandles = _unpackEndpointHandles(
+      futureProgram.invoke(0, const <Object?>[]),
+      'future.new',
+    );
+    futureWaitables.waitableJoin(futureWriteHandles.writable, futureSet);
+    final blockedFutureWrite = futureProgram.invokeWithMemoryEvent(
+      1,
+      memory,
+      <Object?>[futureWriteHandles.writable, futureInputPointer],
+    );
+    if (blockedFutureWrite != wasiComponentAsyncBlocked) {
+      throw StateError('future write event did not block: $blockedFutureWrite');
+    }
+    futureProgram.invokeWithMemory(2, memory, <Object?>[
+      futureWriteHandles.readable,
+      futureOutputPointer,
+    ]);
+    checksum += await futureWaitables.waitableSetWaitToMemory(
+      futureSet,
+      memory,
+      eventPointer,
+    );
+    checksum += data.getUint32(eventPointer, Endian.little);
+    checksum += data.getUint32(eventPointer + 4, Endian.little);
+    futureWaitables.waitableJoin(futureWriteHandles.writable, 0);
+    futureProgram.invoke(3, <Object?>[futureWriteHandles.readable]);
+    futureProgram.invoke(4, <Object?>[futureWriteHandles.writable]);
   }
   watch.stop();
 
@@ -919,7 +947,7 @@ Future<_Metric> _benchmarkHandleMemoryProgramInvokeEvent(
   futureWaitables.waitableSetDrop(futureSet);
   programs.expectNoLeaks();
   return _Metric(
-    operations: options.iterations * 26,
+    operations: options.iterations * 34,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );

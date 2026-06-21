@@ -1607,6 +1607,49 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('publishes handle-backed future write memory events', () async {
+      final component = WasmComponent.decode(_futureU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 610, Endian.little);
+      final host = WASIComponentAsyncHost();
+      final waitableHost = WASIComponentWaitableHost(
+        table: host.table,
+        waitableResolvers: [host.waitableForHandle],
+      );
+      host.defineFutureTypeFromComponent<int>(component, 0, 'u32-future');
+      final program = _futureU32MemoryHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final waitableSet = waitableHost.waitableSetNew();
+      waitableHost.waitableJoin(handles.writable, waitableSet);
+
+      expect(
+        program.invokeWithMemoryEvent(1, memory, <Object?>[
+          handles.writable,
+          32,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invokeWithMemory(2, memory, <Object?>[handles.readable, 96]),
+        0,
+      );
+
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(5),
+      );
+      expect(data.getUint32(96, Endian.little), 610);
+      expect(data.getUint32(128, Endian.little), handles.writable);
+      expect(data.getUint32(132, Endian.little), 0);
+      waitableHost.waitableJoin(handles.writable, 0);
+      waitableHost.waitableSetDrop(waitableSet);
+      expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test('cancels handle-backed future read memory events', () async {
       final component = WasmComponent.decode(_futureU32TypeComponentBytes());
       expect(component.validate(), isEmpty);
@@ -1650,6 +1693,95 @@ void main() {
       expect(program.invoke(6, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
+
+    test('cancels handle-backed future write memory events', () async {
+      final component = WasmComponent.decode(_futureU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 610, Endian.little);
+      final host = WASIComponentAsyncHost();
+      final waitableHost = WASIComponentWaitableHost(
+        table: host.table,
+        waitableResolvers: [host.waitableForHandle],
+      );
+      host.defineFutureTypeFromComponent<int>(component, 0, 'u32-future');
+      final program = _futureU32MemoryCancelHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final waitableSet = waitableHost.waitableSetNew();
+      waitableHost.waitableJoin(handles.writable, waitableSet);
+
+      expect(
+        program.invokeWithMemoryEvent(1, memory, <Object?>[
+          handles.writable,
+          32,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invoke(4, <Object?>[handles.writable]),
+        wasiComponentAsyncBlocked,
+      );
+
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(5),
+      );
+      expect(data.getUint32(128, Endian.little), handles.writable);
+      expect(
+        data.getUint32(132, Endian.little),
+        WASIComponentAsyncCopyResult.cancelled().packedResult,
+      );
+      waitableHost.waitableJoin(handles.writable, 0);
+      waitableHost.waitableSetDrop(waitableSet);
+      expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
+    test(
+      'publishes dropped handle-backed future write memory events',
+      () async {
+        final component = WasmComponent.decode(_futureU32TypeComponentBytes());
+        expect(component.validate(), isEmpty);
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final data = ByteData.view(memory.buffer);
+        data.setUint32(32, 610, Endian.little);
+        final host = WASIComponentAsyncHost();
+        final waitableHost = WASIComponentWaitableHost(
+          table: host.table,
+          waitableResolvers: [host.waitableForHandle],
+        );
+        host.defineFutureTypeFromComponent<int>(component, 0, 'u32-future');
+        final program = _futureU32MemoryHandleProgram(host);
+        final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+        final waitableSet = waitableHost.waitableSetNew();
+        waitableHost.waitableJoin(handles.writable, waitableSet);
+
+        expect(
+          program.invokeWithMemoryEvent(1, memory, <Object?>[
+            handles.writable,
+            32,
+          ]),
+          wasiComponentAsyncBlocked,
+        );
+        expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+
+        await expectLater(
+          waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+          completion(5),
+        );
+        expect(data.getUint32(128, Endian.little), handles.writable);
+        expect(
+          data.getUint32(132, Endian.little),
+          WASIComponentAsyncCopyStatus.dropped.code,
+        );
+        waitableHost.waitableJoin(handles.writable, 0);
+        waitableHost.waitableSetDrop(waitableSet);
+        expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+        expect(host.table.activeCount, 0);
+      },
+    );
 
     test('does not cancel completed future read memory events', () async {
       final component = WasmComponent.decode(_futureU32TypeComponentBytes());

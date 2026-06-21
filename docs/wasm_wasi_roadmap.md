@@ -155,23 +155,28 @@ This is the implementation state as of 2026-06-21 on `main`.
   endpoints are now lazily resolvable as waitables, so canonical
   `waitable.join(endpoint, set)` can target the same endpoint handle without
   adding waitable allocation cost to ordinary handle paths. Handle-backed
-  fixed-width `stream.read`, bounded `stream.write`, and `future.read` memory
-  copies also have a canonical event-start path: immediate copies return the
-  packed copy payload, pending copies return `0xffffffff` (`BLOCKED`) and later
-  publish the corresponding waitable event with the endpoint handle and packed
-  copy result. Pending event-start copies mark the endpoint waitable as owning
-  an active copy until the event is delivered, so duplicate starts and drops
-  trap instead of racing the pending copy. Cancelling a pending handle-backed
-  copy now follows the Canonical ABI cancel-copy shape for handle-backed
-  stream read, bounded stream write, and future read events: the first
-  asynchronous cancellation returns `BLOCKED` when the event is not immediately
-  ready, repeated cancellation traps while the copy is being cancelled, and the
-  usual waitable event returns either the cancelled payload or a completed
-  payload when a future read already resolved before cancellation was observed.
+  fixed-width `stream.read`, bounded `stream.write`, `future.read`, and
+  `future.write` memory copies also have a canonical event-start path:
+  immediate copies return the packed copy payload, pending copies return
+  `0xffffffff` (`BLOCKED`) and later publish the corresponding waitable event
+  with the endpoint handle and packed copy result. Pending event-start copies
+  mark the endpoint waitable as owning an active copy until the event is
+  delivered, so duplicate starts and drops trap instead of racing the pending
+  copy. Cancelling a pending handle-backed copy now follows the Canonical ABI
+  cancel-copy shape for handle-backed stream read, bounded stream write, future
+  read, and future write events: the first asynchronous cancellation returns
+  `BLOCKED` when the event is not immediately ready, repeated cancellation
+  traps while the copy is being cancelled, and the usual waitable event returns
+  either the cancelled payload or a completed payload when a future read already
+  resolved before cancellation was observed.
   Stream copy events also distinguish dropped peers from cancellation: pending
   stream reads report `DROPPED` when the writable end is dropped, and pending
   bounded stream writes report `DROPPED` when the readable end is dropped,
-  while explicit same-end copy cancellation still reports `CANCELLED`.
+  while explicit same-end copy cancellation still reports `CANCELLED`. Future
+  write events also wait for the first read observation before reporting
+  `COMPLETED`, report `DROPPED` when the readable end is dropped before that
+  observation, and report `CANCELLED` when the writable end cancels the active
+  copy.
   Subtask/thread event production is still future integration work, but
   stream/future copy event delivery is no longer a placeholder.
   Internal
