@@ -243,6 +243,54 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('copies primitive futures through decoded core memory options', () {
+      final component = WasmComponent.decode(
+        _canonicalFutureMemoryProgramBytes(),
+      );
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 987, Endian.little);
+      final host = WASIComponentHost();
+
+      final plan = host.prepareComponent(component);
+
+      expect(component.validate(), isEmpty);
+      expect(plan.canBind, isTrue);
+      expect(plan.asyncValueBindings, hasLength(1));
+      expect(
+        plan.asyncValueBindings.single.kind,
+        WASIComponentAsyncValueBindingKind.future,
+      );
+      expect(
+        plan.asyncValueBindings.single.fixedWidthMemoryLayout!.byteLength,
+        4,
+      );
+
+      final binding = plan.bind();
+      final handles = WASIComponentAsyncEndpointHandles.unpack(
+        binding.program.invoke(0, const <Object?>[])! as int,
+      );
+
+      expect(
+        binding.program.invokeWithMemory(2, memory, <Object?>[
+          handles.writable,
+          32,
+        ]),
+        0,
+      );
+      expect(
+        binding.program.invokeWithMemory(1, memory, <Object?>[
+          handles.readable,
+          96,
+        ]),
+        0,
+      );
+      expect(data.getUint32(96, Endian.little), 987);
+      expect(binding.program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(binding.program.invoke(4, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test('reports unsupported composite stream bindings before binding', () {
       final component = WasmComponent.decode(
         _streamIndexedCompositeCanonicalBytes(),
@@ -532,6 +580,101 @@ Uint8List _canonicalFutureProgramBytes() => Uint8List.fromList(const <int>[
   0x1b,
   0x00,
 ]);
+
+Uint8List _canonicalFutureMemoryProgramBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x01,
+      0x16,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x05,
+      0x03,
+      0x01,
+      0x00,
+      0x01,
+      0x07,
+      0x07,
+      0x01,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x02,
+      0x00,
+      0x02,
+      0x04,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x65,
+      0x01,
+      0x79,
+      0x08,
+      0x03,
+      0x01,
+      0x15,
+      0x00,
+      0x06,
+      0x09,
+      0x01,
+      0x00,
+      0x02,
+      0x01,
+      0x00,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x08,
+      0x06,
+      0x01,
+      0x16,
+      0x00,
+      0x01,
+      0x03,
+      0x00,
+      0x06,
+      0x09,
+      0x01,
+      0x00,
+      0x02,
+      0x01,
+      0x00,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x08,
+      0x0a,
+      0x03,
+      0x17,
+      0x00,
+      0x01,
+      0x03,
+      0x01,
+      0x1a,
+      0x00,
+      0x1b,
+      0x00,
+    ]);
 
 Uint8List _streamIndexedCompositeCanonicalBytes() =>
     Uint8List.fromList(const <int>[

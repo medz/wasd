@@ -369,12 +369,12 @@ This is the implementation state as of 2026-06-21 on `main`.
 - Component resource table canonical `resource.new`/`resource.rep`/
   `resource.drop`, decoded resource-only canonical program invocation,
   component resource binding extraction from decoded type index spaces,
-  component-host binding startup with resource, stream, and decoded core-memory
-  primitive stream-copy round trips, mixed canonical-host program invocation
-  over shared component state, error-context canonical lifecycle invocation,
-  error-context canonical string memory adapter invocation with result records,
-  nominal typed lookup, synchronous/asynchronous borrow, and drop behavior are
-  measured by
+  component-host binding startup with resource, stream, decoded core-memory
+  primitive stream-copy, and decoded core-memory primitive future-copy round
+  trips, mixed canonical-host program invocation over shared component state,
+  error-context canonical lifecycle invocation, error-context canonical string
+  memory adapter invocation with result records, nominal typed lookup,
+  synchronous/asynchronous borrow, and drop behavior are measured by
   `dart run tool/wasi_resource_table_benchmark.dart --json`.
 
 ## Near-Term Slices

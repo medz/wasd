@@ -40,6 +40,8 @@ Future<void> main(List<String> args) async {
   );
   final componentHostStreamMemoryBinding =
       _benchmarkComponentHostStreamMemoryBinding(options.iterations);
+  final componentHostFutureMemoryBinding =
+      _benchmarkComponentHostFutureMemoryBinding(options.iterations);
   final canonicalHostProgram = _benchmarkCanonicalHostProgram(
     options.iterations,
   );
@@ -58,6 +60,8 @@ Future<void> main(List<String> args) async {
     'component_host_binding': componentHostBinding.toJson(),
     'component_host_stream_binding': componentHostStreamBinding.toJson(),
     'component_host_stream_memory_binding': componentHostStreamMemoryBinding
+        .toJson(),
+    'component_host_future_memory_binding': componentHostFutureMemoryBinding
         .toJson(),
     'canonical_host_program': canonicalHostProgram.toJson(),
     'error_context_program': errorContextProgram.toJson(),
@@ -81,6 +85,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentHostBinding(_warmupIterations);
   _benchmarkComponentHostStreamBinding(_warmupIterations);
   _benchmarkComponentHostStreamMemoryBinding(_warmupIterations);
+  _benchmarkComponentHostFutureMemoryBinding(_warmupIterations);
   _benchmarkCanonicalHostProgram(_warmupIterations);
   _benchmarkErrorContextProgram(_warmupIterations);
   _benchmarkErrorContextMemory(_warmupIterations);
@@ -383,6 +388,52 @@ _Metric _benchmarkComponentHostStreamMemoryBinding(int iterations) {
   );
 }
 
+_Metric _benchmarkComponentHostFutureMemoryBinding(int iterations) {
+  final component = WasmComponent.decode(_futureMemoryProgramBytes());
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    data.setUint32(32, i & 0xffffffff, Endian.little);
+    final host = WASIComponentHost();
+    final binding = host.bindComponent(component);
+    final packed = binding.program.invoke(0, const <Object?>[]);
+    if (packed is! int) {
+      throw StateError('component host future.new returned non-i64');
+    }
+    final handles = WASIComponentAsyncEndpointHandles.unpack(packed);
+    checksum +=
+        binding.program.invokeWithMemory(2, memory, <Object?>[
+              handles.writable,
+              32,
+            ])
+            as int;
+    checksum +=
+        binding.program.invokeWithMemory(1, memory, <Object?>[
+              handles.readable,
+              96,
+            ])
+            as int;
+    checksum += data.getUint32(96, Endian.little);
+    binding.program.invoke(3, <Object?>[handles.readable]);
+    binding.program.invoke(4, <Object?>[handles.writable]);
+    if (host.table.activeCount != 0) {
+      throw StateError(
+        'component host future memory table leaked ${host.table.activeCount} resources',
+      );
+    }
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkCanonicalHostProgram(int iterations) {
   final host = WASIComponentCanonicalHost(availableParallelism: 4);
   host.resourceHost.defineResourceType<int>(0, 'resource');
@@ -620,6 +671,7 @@ void _printText(Map<String, Object?> payload) {
     'component_host_binding',
     'component_host_stream_binding',
     'component_host_stream_memory_binding',
+    'component_host_future_memory_binding',
     'canonical_host_program',
     'error_context_program',
     'error_context_memory',
@@ -786,6 +838,100 @@ Uint8List _streamMemoryProgramBytes() => Uint8List.fromList(const <int>[
   0x13,
   0x00,
   0x14,
+  0x00,
+]);
+
+Uint8List _futureMemoryProgramBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x01,
+  0x16,
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x05,
+  0x03,
+  0x01,
+  0x00,
+  0x01,
+  0x07,
+  0x07,
+  0x01,
+  0x03,
+  0x6d,
+  0x65,
+  0x6d,
+  0x02,
+  0x00,
+  0x02,
+  0x04,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x07,
+  0x04,
+  0x01,
+  0x65,
+  0x01,
+  0x79,
+  0x08,
+  0x03,
+  0x01,
+  0x15,
+  0x00,
+  0x06,
+  0x09,
+  0x01,
+  0x00,
+  0x02,
+  0x01,
+  0x00,
+  0x03,
+  0x6d,
+  0x65,
+  0x6d,
+  0x08,
+  0x06,
+  0x01,
+  0x16,
+  0x00,
+  0x01,
+  0x03,
+  0x00,
+  0x06,
+  0x09,
+  0x01,
+  0x00,
+  0x02,
+  0x01,
+  0x00,
+  0x03,
+  0x6d,
+  0x65,
+  0x6d,
+  0x08,
+  0x0a,
+  0x03,
+  0x17,
+  0x00,
+  0x01,
+  0x03,
+  0x01,
+  0x1a,
+  0x00,
+  0x1b,
   0x00,
 ]);
 
