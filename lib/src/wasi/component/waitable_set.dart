@@ -93,7 +93,8 @@ final class WASIComponentWaitable {
   WASIComponentWaitableSet? _set;
   WASIComponentWaitableEvent Function()? _pendingEvent;
   bool _hasSyncWaiter = false;
-  bool _hasActiveCopy = false;
+  _WASIComponentWaitableCopyState _copyState =
+      _WASIComponentWaitableCopyState.idle;
 
   /// Debug label used in diagnostics.
   String get name => _name;
@@ -108,11 +109,11 @@ final class WASIComponentWaitable {
   bool get hasSyncWaiter => _hasSyncWaiter;
 
   /// Whether an async copy is active and waiting for event delivery.
-  bool get hasActiveCopy => _hasActiveCopy;
+  bool get hasActiveCopy => _copyState != _WASIComponentWaitableCopyState.idle;
 
   /// Validates this waitable can be dropped.
   void requireDroppable() {
-    if (_hasActiveCopy) {
+    if (hasActiveCopy) {
       throw StateError('WASI component waitable $name has an active copy.');
     }
     if (hasPendingEvent) {
@@ -127,10 +128,45 @@ final class WASIComponentWaitable {
 
   /// Marks this waitable as owning an active async copy.
   void beginCopy() {
-    if (_hasActiveCopy || hasPendingEvent) {
+    if (hasActiveCopy || hasPendingEvent) {
       throw StateError('WASI component waitable $name is not idle.');
     }
-    _hasActiveCopy = true;
+    _copyState = _WASIComponentWaitableCopyState.copying;
+  }
+
+  /// Requests cancellation of the active async copy.
+  ///
+  /// Returns the pending event if cancellation can be delivered immediately, or
+  /// null when an asynchronous caller must wait for the usual waitable event.
+  WASIComponentWaitableEvent? cancelCopy({
+    required bool asynchronous,
+    required void Function() cancel,
+  }) {
+    if (_copyState != _WASIComponentWaitableCopyState.copying ||
+        _hasSyncWaiter) {
+      throw StateError(
+        'WASI component waitable $name has no cancellable active copy.',
+      );
+    }
+    if (inWaitableSet && !asynchronous) {
+      throw StateError('WASI component waitable $name is in a waitable set.');
+    }
+    if (!asynchronous && !hasPendingEvent) {
+      throw UnsupportedError(
+        'Synchronous WASI component copy cancellation waits are not supported.',
+      );
+    }
+    _copyState = _WASIComponentWaitableCopyState.cancellingCopy;
+    if (!hasPendingEvent) {
+      cancel();
+    }
+    if (!hasPendingEvent) {
+      if (asynchronous) {
+        return null;
+      }
+      throw StateError('WASI component waitable $name has no cancel event.');
+    }
+    return takePendingEvent();
   }
 
   /// Sets the pending event delivered by the next wait or poll.
@@ -164,7 +200,7 @@ final class WASIComponentWaitable {
       throw StateError('WASI component waitable $name has no pending event.');
     }
     _pendingEvent = null;
-    _hasActiveCopy = false;
+    _copyState = _WASIComponentWaitableCopyState.idle;
     return event();
   }
 
@@ -193,6 +229,8 @@ final class WASIComponentWaitable {
     join(null);
   }
 }
+
+enum _WASIComponentWaitableCopyState { idle, copying, cancellingCopy }
 
 /// A Component Model waitable set.
 final class WASIComponentWaitableSet {

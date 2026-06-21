@@ -162,10 +162,14 @@ This is the implementation state as of 2026-06-21 on `main`.
   copy result. Pending event-start copies mark the endpoint waitable as owning
   an active copy until the event is delivered, so duplicate starts and drops
   trap instead of racing the pending copy. Cancelling a pending handle-backed
-  stream read publishes the canonical cancelled copy result through the same
-  waitable-event path. Subtask/thread event production is still future
-  integration work, but stream/future copy event delivery is no longer a
-  placeholder.
+  copy now follows the Canonical ABI cancel-copy shape for handle-backed
+  stream read, bounded stream write, and future read events: the first
+  asynchronous cancellation returns `BLOCKED` when the event is not immediately
+  ready, repeated cancellation traps while the copy is being cancelled, and the
+  usual waitable event returns either the cancelled payload or a completed
+  payload when a future read already resolved before cancellation was observed.
+  Subtask/thread event production is still future integration work, but
+  stream/future copy event delivery is no longer a placeholder.
   Internal
   error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`
