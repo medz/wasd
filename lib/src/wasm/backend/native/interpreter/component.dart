@@ -2667,6 +2667,7 @@ final class _WasmComponentValidationContext {
     }
 
     validateCanonicalOptions(definition.options, '$path.options');
+    validateCanonicalAllowedOptions(definition, path);
     validateCanonicalOptionRequirements(
       definition,
       path,
@@ -2715,6 +2716,35 @@ final class _WasmComponentValidationContext {
         );
       }
     }
+  }
+
+  void validateCanonicalAllowedOptions(
+    WasmComponentCanonicalDefinition definition,
+    String path,
+  ) {
+    if (definition.kind != WasmComponentCanonicalKind.taskReturn) {
+      return;
+    }
+
+    for (var i = 0; i < definition.options.length; i++) {
+      final optionKind = definition.options[i].kind;
+      if (canonicalTaskReturnAllowsOption(optionKind)) {
+        continue;
+      }
+
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.options[$i]',
+          message:
+              'Wasm component task.return cannot use ${optionKind.name} option.',
+        ),
+      );
+    }
+  }
+
+  bool canonicalTaskReturnAllowsOption(WasmComponentCanonicalOptionKind kind) {
+    return canonicalOptionIsStringEncoding(kind) ||
+        kind == WasmComponentCanonicalOptionKind.memory;
   }
 
   void validateCanonicalOptionRequirements(
