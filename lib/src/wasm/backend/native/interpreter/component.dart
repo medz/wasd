@@ -2667,7 +2667,11 @@ final class _WasmComponentValidationContext {
     }
 
     validateCanonicalOptions(definition.options, '$path.options');
-    validateCanonicalOptionRequirements(definition, path);
+    validateCanonicalOptionRequirements(
+      definition,
+      path,
+      visibleTypeDefinitions: visibleTypeDefinitions,
+    );
     validateComponentValueType(
       definition.result?.valueType,
       '$path.result',
@@ -2715,18 +2719,20 @@ final class _WasmComponentValidationContext {
 
   void validateCanonicalOptionRequirements(
     WasmComponentCanonicalDefinition definition,
-    String path,
-  ) {
-    final options = definition.options;
+    String path, {
+    List<WasmComponentTypeDefinition>? visibleTypeDefinitions,
+  }) {
+    final hasMemory = canonicalOptionsContain(
+      definition.options,
+      WasmComponentCanonicalOptionKind.memory,
+    );
+    final hasAsync = canonicalOptionsContain(
+      definition.options,
+      WasmComponentCanonicalOptionKind.async,
+    );
     if (definition.kind == WasmComponentCanonicalKind.lower &&
-        canonicalOptionsContain(
-          options,
-          WasmComponentCanonicalOptionKind.async,
-        ) &&
-        !canonicalOptionsContain(
-          options,
-          WasmComponentCanonicalOptionKind.memory,
-        )) {
+        hasAsync &&
+        !hasMemory) {
       errors.add(
         WasmComponentValidationError(
           path: '$path.options',
@@ -2735,6 +2741,60 @@ final class _WasmComponentValidationContext {
         ),
       );
     }
+
+    if (!hasMemory &&
+        visibleTypeDefinitions != null &&
+        canonicalDefinitionUsesStreamOrFutureCopy(definition.kind) &&
+        canonicalStreamOrFutureType(
+              definition,
+              visibleTypeDefinitions,
+            )?.elementType !=
+            null) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.options',
+          message:
+              'Wasm component stream or future copy definition with an element type requires a memory option.',
+        ),
+      );
+    }
+  }
+
+  WasmComponentDefinedValueType? canonicalStreamOrFutureType(
+    WasmComponentCanonicalDefinition definition,
+    List<WasmComponentTypeDefinition> visibleTypeDefinitions,
+  ) {
+    final typeIndex = definition.typeIndex;
+    if (typeIndex == null ||
+        typeIndex < 0 ||
+        typeIndex >= visibleTypeDefinitions.length) {
+      return null;
+    }
+
+    final typeDefinition = visibleTypeDefinitions[typeIndex];
+    if (typeDefinition.kind != WasmComponentTypeKind.definedValue) {
+      return null;
+    }
+
+    final definedValue = typeDefinition.definedValue;
+    if (definedValue == null) {
+      return null;
+    }
+
+    final expectedKind = switch (definition.kind) {
+      WasmComponentCanonicalKind.streamRead ||
+      WasmComponentCanonicalKind.streamWrite =>
+        WasmComponentDefinedValueTypeKind.stream,
+      WasmComponentCanonicalKind.futureRead ||
+      WasmComponentCanonicalKind.futureWrite =>
+        WasmComponentDefinedValueTypeKind.future,
+      _ => null,
+    };
+    if (definedValue.kind != expectedKind) {
+      return null;
+    }
+
+    return definedValue;
   }
 
   bool canonicalOptionsContain(
@@ -3900,6 +3960,15 @@ final class _WasmComponentValidationContext {
         kind == WasmComponentCanonicalKind.futureCancelWrite ||
         kind == WasmComponentCanonicalKind.futureDropReadable ||
         kind == WasmComponentCanonicalKind.futureDropWritable;
+  }
+
+  bool canonicalDefinitionUsesStreamOrFutureCopy(
+    WasmComponentCanonicalKind kind,
+  ) {
+    return kind == WasmComponentCanonicalKind.streamRead ||
+        kind == WasmComponentCanonicalKind.streamWrite ||
+        kind == WasmComponentCanonicalKind.futureRead ||
+        kind == WasmComponentCanonicalKind.futureWrite;
   }
 
   bool canonicalDefinitionUsesFunctionType(WasmComponentCanonicalKind kind) {

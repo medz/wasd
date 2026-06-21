@@ -1048,6 +1048,13 @@ void main() {
 
       expect(errors, hasLength(1));
       expect(errors.single.message, contains('requires a memory option'));
+
+      final stream = WasmComponent.decode(
+        _canonicalStreamReadWithoutMemoryComponentBytes(),
+      ).validate();
+
+      expect(stream, hasLength(1));
+      expect(stream.single.message, contains('requires a memory option'));
     });
 
     test('reports invalid canonical option core indexes', () {
@@ -3579,6 +3586,30 @@ Uint8List _canonicalStreamNewComponentBytes() => Uint8List.fromList(const <int>[
   0x0e,
   0x00,
 ]);
+
+Uint8List _canonicalStreamReadWithoutMemoryComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x66,
+      0x01,
+      0x73,
+      0x08,
+      0x04,
+      0x01,
+      0x0f,
+      0x00,
+      0x00,
+    ]);
 
 Uint8List _canonicalStreamNewTypeOutOfRangeComponentBytes() =>
     Uint8List.fromList(const <int>[
