@@ -23,13 +23,10 @@ const int filetypeRegularFile = 4;
 
 /// Preview1 imports that should exist and return `ENOSYS` when unsupported.
 const List<String> preview1NosysImports = <String>[
-  'fd_advise',
-  'fd_datasync',
   'fd_fdstat_set_flags',
   'fd_fdstat_set_rights',
   'fd_filestat_set_times',
   'fd_renumber',
-  'fd_sync',
   'path_filestat_set_times',
   'path_readlink',
   'path_symlink',

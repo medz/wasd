@@ -1032,6 +1032,66 @@ void main() {
       );
 
       test(
+        'fd_advise, fd_datasync, and fd_sync validate virtual descriptors',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/data.bin': Uint8List.fromList(utf8.encode('abcdef')),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdAdvise = preview1['fd_advise'] as FunctionImportExportValue;
+          final fdDatasync =
+              preview1['fd_datasync'] as FunctionImportExportValue;
+          final fdSync = preview1['fd_sync'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final relativePath = utf8.encode('data.bin');
+          const pathPtr = 2816;
+          const openedFdPtr = 2848;
+
+          bytes.setAll(pathPtr, relativePath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              relativePath.length,
+              0,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final fd = data.getUint32(openedFdPtr, Endian.little);
+
+          expect(fdAdvise.ref([fd, 0, 6, 0]), 0);
+          expect(fdDatasync.ref([fd]), 0);
+          expect(fdSync.ref([fd]), 0);
+          expect(fdAdvise.ref([fd, 0, 6, 99]), 28);
+          expect(fdAdvise.ref([999, 0, 6, 0]), 8);
+          expect(fdDatasync.ref([999]), 8);
+          expect(fdSync.ref([999]), 8);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; descriptor sync behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'path_open opens virtual directories and resolves nested files',
         () async {
           final fileWasi = WASI(

@@ -70,9 +70,12 @@ class WASI implements wasi_iface.WASI {
       'clock_res_get': _clockResGetImport,
       'fd_read': _fdReadImport,
       'fd_write': _fdWriteImport,
+      'fd_advise': _fdAdviseImport,
+      'fd_datasync': _fdDatasyncImport,
       'fd_pread': _fdPreadImport,
       'fd_pwrite': _fdPwriteImport,
       'fd_readdir': _fdReaddirImport,
+      'fd_sync': _fdSyncImport,
       'fd_allocate': _fdAllocateImport,
       'fd_fdstat_get': _fdFdstatGetImport,
       'fd_filestat_get': _fdFilestatGetImport,
@@ -342,6 +345,32 @@ class WASI implements wasi_iface.WASI {
         );
       });
 
+  wasm.FunctionImportExportValue get _fdAdviseImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 4) {
+          return _errnoInval;
+        }
+        final fd = _asInt(args[0]);
+        final offset = _asInt64(args[1]);
+        final len = _asInt64(args[2]);
+        final advice = _asInt(args[3]);
+        if (!_isOpenDescriptor(fd)) {
+          return _errnoBadf;
+        }
+        if (offset < 0 || len < 0 || advice < 0 || advice > 5) {
+          return _errnoInval;
+        }
+        return _errnoSuccess;
+      });
+
+  wasm.FunctionImportExportValue get _fdDatasyncImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.isEmpty) {
+          return _errnoInval;
+        }
+        return _isOpenDescriptor(_asInt(args[0])) ? _errnoSuccess : _errnoBadf;
+      });
+
   wasm.FunctionImportExportValue get _fdPreadImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
         if (args.length < 5) {
@@ -432,6 +461,14 @@ class WASI implements wasi_iface.WASI {
         );
         data.setUint32(bufferUsedPtr, written, Endian.little);
         return _errnoSuccess;
+      });
+
+  wasm.FunctionImportExportValue get _fdSyncImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.isEmpty) {
+          return _errnoInval;
+        }
+        return _isOpenDescriptor(_asInt(args[0])) ? _errnoSuccess : _errnoBadf;
       });
 
   wasm.FunctionImportExportValue get _fdAllocateImport =>
@@ -1025,6 +1062,13 @@ class WASI implements wasi_iface.WASI {
         }
         return _errnoSuccess;
       });
+
+  bool _isOpenDescriptor(int fd) =>
+      fd == _stdinFd ||
+      fd == _stdoutFd ||
+      fd == _stderrFd ||
+      _vfs.openFileForFd(fd) != null ||
+      _vfs.isDirectoryFd(fd);
 
   _ResolvedPath _resolvePath({
     required int dirFd,
