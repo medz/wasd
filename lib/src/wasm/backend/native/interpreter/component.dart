@@ -2767,6 +2767,7 @@ final class _WasmComponentValidationContext {
     WasmComponentCanonicalDefinition definition,
     String path, {
     List<WasmComponentTypeDefinition>? visibleTypeDefinitions,
+    List<WasmComponentFunctionType?>? functionTypes,
   }) {
     if (definition.kind == WasmComponentCanonicalKind.lift) {
       validateComponentTypeIndexInMaybeDefinitions(
@@ -2793,6 +2794,7 @@ final class _WasmComponentValidationContext {
       definition,
       path,
       visibleTypeDefinitions: visibleTypeDefinitions,
+      functionTypes: functionTypes,
     );
     validateComponentValueType(
       definition.result?.valueType,
@@ -2868,10 +2870,37 @@ final class _WasmComponentValidationContext {
         kind == WasmComponentCanonicalOptionKind.memory;
   }
 
+  bool canonicalLowerParametersRequireMemory(
+    WasmComponentCanonicalDefinition definition, {
+    List<WasmComponentTypeDefinition>? visibleTypeDefinitions,
+    List<WasmComponentFunctionType?>? functionTypes,
+  }) {
+    if (definition.kind != WasmComponentCanonicalKind.lower ||
+        functionTypes == null) {
+      return false;
+    }
+
+    final functionType = componentFunctionTypeAt(
+      functionTypes,
+      definition.functionIndex,
+    );
+    if (functionType == null) {
+      return false;
+    }
+
+    return functionType.params.any(
+      (param) => valueTypeContainsListOrString(
+        param.type,
+        scopedTypeDefinitions: visibleTypeDefinitions,
+      ),
+    );
+  }
+
   void validateCanonicalOptionRequirements(
     WasmComponentCanonicalDefinition definition,
     String path, {
     List<WasmComponentTypeDefinition>? visibleTypeDefinitions,
+    List<WasmComponentFunctionType?>? functionTypes,
   }) {
     final hasMemory = canonicalOptionsContain(
       definition.options,
@@ -2919,6 +2948,21 @@ final class _WasmComponentValidationContext {
           path: '$path.options',
           message:
               'Wasm component task.return result type requires a memory option.',
+        ),
+      );
+    }
+
+    if (!hasMemory &&
+        canonicalLowerParametersRequireMemory(
+          definition,
+          visibleTypeDefinitions: visibleTypeDefinitions,
+          functionTypes: functionTypes,
+        )) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.options',
+          message:
+              'Wasm component canon lower parameter lowering requires a memory option.',
         ),
       );
     }
@@ -3270,6 +3314,7 @@ final class _WasmComponentValidationContext {
             definition,
             'canonical[${event.index}]',
             visibleTypeDefinitions: visibleTypeDefinitions,
+            functionTypes: functionTypes,
           );
           if (definition.kind == WasmComponentCanonicalKind.lift) {
             validateCoreSortIndex(
