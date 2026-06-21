@@ -2743,6 +2743,17 @@ final class _WasmComponentValidationContext {
     }
 
     if (!hasMemory &&
+        canonicalDefinitionRequiresMemoryOption(definition.kind)) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.options',
+          message:
+              'Wasm component ${canonicalDefinitionDescription(definition.kind)} requires a memory option.',
+        ),
+      );
+    }
+
+    if (!hasMemory &&
         visibleTypeDefinitions != null &&
         canonicalDefinitionUsesStreamOrFutureCopy(definition.kind) &&
         canonicalStreamOrFutureType(
@@ -2802,6 +2813,15 @@ final class _WasmComponentValidationContext {
     WasmComponentCanonicalOptionKind kind,
   ) {
     return options.any((option) => option.kind == kind);
+  }
+
+  String canonicalDefinitionDescription(WasmComponentCanonicalKind kind) {
+    return switch (kind) {
+      WasmComponentCanonicalKind.errorContextNew => 'error-context.new',
+      WasmComponentCanonicalKind.errorContextDebugMessage =>
+        'error-context.debug-message',
+      _ => kind.name,
+    };
   }
 
   bool canonicalOptionIsStringEncoding(
@@ -3969,6 +3989,13 @@ final class _WasmComponentValidationContext {
         kind == WasmComponentCanonicalKind.streamWrite ||
         kind == WasmComponentCanonicalKind.futureRead ||
         kind == WasmComponentCanonicalKind.futureWrite;
+  }
+
+  bool canonicalDefinitionRequiresMemoryOption(
+    WasmComponentCanonicalKind kind,
+  ) {
+    return kind == WasmComponentCanonicalKind.errorContextNew ||
+        kind == WasmComponentCanonicalKind.errorContextDebugMessage;
   }
 
   bool canonicalDefinitionUsesFunctionType(WasmComponentCanonicalKind kind) {

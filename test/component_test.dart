@@ -1055,6 +1055,13 @@ void main() {
 
       expect(stream, hasLength(1));
       expect(stream.single.message, contains('requires a memory option'));
+
+      final errorContext = WasmComponent.decode(
+        _canonicalErrorContextNewWithoutMemoryComponentBytes(),
+      ).validate();
+
+      expect(errorContext, hasLength(1));
+      expect(errorContext.single.message, contains('requires a memory option'));
     });
 
     test('reports invalid canonical option core indexes', () {
@@ -3527,6 +3534,23 @@ Uint8List _canonicalLowerAsyncWithoutMemoryComponentBytes() =>
       0x00,
       0x01,
       0x06,
+    ]);
+
+Uint8List _canonicalErrorContextNewWithoutMemoryComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x03,
+      0x01,
+      0x1c,
+      0x00,
     ]);
 
 Uint8List _canonicalWaitableSetWaitMemoryOutOfRangeComponentBytes() =>
