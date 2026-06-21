@@ -98,6 +98,49 @@ void main() {
       expect(outerGet.contextGet(), 11);
     });
 
+    test('keeps overlapping async contexts isolated', () async {
+      final host = WASIComponentContextHost();
+      final contextGet = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.contextGet,
+          contextIndex: 0,
+        ),
+      );
+      final left = WASIComponentContext(name: 'left', initialSlots: [10]);
+      final right = WASIComponentContext(name: 'right', initialSlots: [20]);
+      final leftEntered = Completer<void>();
+      final releaseLeft = Completer<void>();
+      final rightEntered = Completer<void>();
+      final releaseRight = Completer<void>();
+
+      final leftResult = host.runWithContextAsync(left, () async {
+        expect(contextGet.contextGet(), 10);
+        leftEntered.complete();
+        await releaseLeft.future;
+        return contextGet.contextGet();
+      });
+      await leftEntered.future;
+
+      final rightResult = host.runWithContextAsync(right, () async {
+        expect(contextGet.contextGet(), 20);
+        rightEntered.complete();
+        await releaseRight.future;
+        return contextGet.contextGet();
+      });
+      await rightEntered.future;
+
+      try {
+        releaseLeft.complete();
+        expect(await leftResult, 10);
+      } finally {
+        if (!releaseRight.isCompleted) {
+          releaseRight.complete();
+        }
+      }
+      expect(await rightResult, 20);
+      expect(contextGet.contextGet(), 0);
+    });
+
     test('validates context indexes, values, and invocation arity', () {
       final host = WASIComponentContextHost();
       final set0 = host.bindCanonicalDefinition(

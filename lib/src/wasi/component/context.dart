@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import '../../wasm/backend/native/interpreter/component.dart';
 
 /// Current Canonical ABI limit for `context.get/set` indexes.
 const int wasiComponentContextSlotCount = 2;
 
 const int _maxU32 = 0xffffffff;
+final Object _currentContextZoneKey = Object();
 
 /// Thread-local storage for Component Model `context.get/set`.
 final class WASIComponentContext {
@@ -61,18 +64,32 @@ final class WASIComponentContextHost {
     : _currentContext = context ?? WASIComponentContext();
 
   WASIComponentContext _currentContext;
+  int _syncContextDepth = 0;
 
   /// Current thread-local context.
-  WASIComponentContext get currentContext => _currentContext;
+  WASIComponentContext get currentContext {
+    if (_syncContextDepth > 0) {
+      return _currentContext;
+    }
+    if (!identical(Zone.current, Zone.root)) {
+      final context = Zone.current[_currentContextZoneKey];
+      if (context is WASIComponentContext) {
+        return context;
+      }
+    }
+    return _currentContext;
+  }
 
   /// Runs [callback] with [context] as the current thread-local context.
   T runWithContext<T>(WASIComponentContext context, T Function() callback) {
     final previous = _currentContext;
     _currentContext = context;
+    _syncContextDepth++;
     try {
       return callback();
     } finally {
       _currentContext = previous;
+      _syncContextDepth--;
     }
   }
 
@@ -81,23 +98,20 @@ final class WASIComponentContextHost {
     WASIComponentContext context,
     Future<T> Function() callback,
   ) async {
-    final previous = _currentContext;
-    _currentContext = context;
-    try {
-      return await callback();
-    } finally {
-      _currentContext = previous;
-    }
+    return await runZoned<Future<T>>(
+      callback,
+      zoneValues: <Object?, Object?>{_currentContextZoneKey: context},
+    );
   }
 
   /// Executes `context.get`.
   int contextGet(int index) {
-    return _currentContext.get(index);
+    return currentContext.get(index);
   }
 
   /// Executes `context.set`.
   void contextSet(int index, int value) {
-    _currentContext.set(index, value);
+    currentContext.set(index, value);
   }
 
   /// Binds a decoded canonical context definition.

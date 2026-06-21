@@ -8,6 +8,7 @@ import 'package:wasd/src/wasi/component/backpressure.dart';
 import 'package:wasd/src/wasi/component/context.dart';
 import 'package:wasd/src/wasi/component/subtask.dart';
 import 'package:wasd/src/wasi/component/task.dart';
+import 'package:wasd/src/wasi/component/thread.dart';
 import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
@@ -39,6 +40,9 @@ Future<void> main(List<String> args) async {
       await _benchmarkFuturePendingReadCompletion(options.iterations);
   final backpressureCounter = _benchmarkBackpressureCounter(options.iterations);
   final contextGetSet = _benchmarkContextGetSet(options.iterations);
+  final threadIdentityContext = _benchmarkThreadIdentityContext(
+    options.iterations,
+  );
   final waitableSetDelivery = await _benchmarkWaitableSetDelivery(
     options.iterations,
   );
@@ -77,6 +81,7 @@ Future<void> main(List<String> args) async {
     'future_pending_read_completion': futurePendingReadCompletion.toJson(),
     'backpressure_counter': backpressureCounter.toJson(),
     'context_get_set': contextGetSet.toJson(),
+    'thread_identity_context': threadIdentityContext.toJson(),
     'waitable_set_delivery': waitableSetDelivery.toJson(),
     'waitable_set_task_cancellation': waitableSetTaskCancellation.toJson(),
     'subtask_cancel_delivery': subtaskCancelDelivery.toJson(),
@@ -112,6 +117,7 @@ Future<void> _runWarmup(_Options options) async {
   await _benchmarkFuturePendingReadCompletion(_warmupIterations);
   _benchmarkBackpressureCounter(_warmupIterations);
   _benchmarkContextGetSet(_warmupIterations);
+  _benchmarkThreadIdentityContext(_warmupIterations);
   await _benchmarkWaitableSetDelivery(_warmupIterations);
   await _benchmarkWaitableSetTaskCancellation(_warmupIterations);
   await _benchmarkSubtaskCancelDelivery(_warmupIterations);
@@ -396,6 +402,61 @@ _Metric _benchmarkContextGetSet(int iterations) {
 
   return _Metric(
     operations: iterations * 4,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkThreadIdentityContext(int iterations) {
+  final contextHost = WASIComponentContextHost();
+  final threadHost = WASIComponentThreadHost(
+    contextHost: contextHost,
+    availableParallelism: 4,
+  );
+  final get0 = contextHost.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.contextGet,
+      contextIndex: 0,
+    ),
+  );
+  final set0 = contextHost.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.contextSet,
+      contextIndex: 0,
+    ),
+  );
+  final index = threadHost.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.threadIndex,
+    ),
+  );
+  final availableParallelism = threadHost.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.threadAvailableParallelism,
+    ),
+  );
+  final worker = threadHost.createThread(
+    name: 'benchmark-worker',
+    context: WASIComponentContext(name: 'benchmark-worker-context'),
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    set0.contextSet(i);
+    checksum += index.threadIndex();
+    checksum += get0.contextGet();
+    checksum += availableParallelism.threadAvailableParallelism();
+
+    checksum += threadHost.runWithThread(worker, () {
+      set0.contextSet(i ^ 0xffff);
+      return index.threadIndex() + get0.contextGet();
+    });
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 7,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
@@ -1743,6 +1804,7 @@ void _printText(Map<String, Object?> payload) {
     'future_pending_read_completion',
     'backpressure_counter',
     'context_get_set',
+    'thread_identity_context',
     'waitable_set_delivery',
     'waitable_set_task_cancellation',
     'subtask_cancel_delivery',
