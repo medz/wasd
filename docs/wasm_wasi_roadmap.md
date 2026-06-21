@@ -140,12 +140,13 @@ This is the implementation state as of 2026-06-21 on `main`.
   streams/futures. Streams also support optional bounded buffering for
   backpressure, and canonical async programs can await pending `stream.read`,
   `stream.write`, and `future.read` operations through `invokeAsync`. The async
-  host can also copy fixed-size `stream<T>` and `future<T>` values between
-  guest memory and async endpoints for canonical `stream.read`/`stream.write`
-  and `future.read`/`future.write` adapters, and handle-backed canonical
-  programs expose an ABI-shaped memory invocation path for fixed-size copies:
-  `stream.{read,write}` use `(handle, ptr, n)` and
-  `future.{read,write}` use `(handle, ptr)`, returning the canonical packed copy
+  host can also copy fixed-size and primitive string `stream<T>`/`future<T>`
+  values between guest memory and async endpoints for canonical
+  `stream.read`/`stream.write` and `future.read`/`future.write` adapters.
+  Handle-backed canonical programs expose an ABI-shaped memory invocation path:
+  `stream.{read,write}` use `(handle, ptr, n)` and `future.{read,write}` use
+  `(handle, ptr)`, string read paths accept a canonical `realloc` callback for
+  lowering payloads, and completed operations return the canonical packed copy
   result. The same handle-backed memory invocation path also has an awaited
   form for pending stream reads, bounded stream writes, and future reads, still
   returning canonical packed copy results after completion. Handle-backed
@@ -251,12 +252,16 @@ This is the implementation state as of 2026-06-21 on `main`.
   `memory`. Primitive `string` `stream.write`/`future.write` now read
   canonical `(ptr, len)` string records from guest memory through the same
   UTF-8, UTF-16, and Latin1+UTF-16 adapter used by error-context memory paths,
-  so guest-to-host string copy is no longer a placeholder. Dynamic
-  `stream.read`/`future.read`, list values, and composites containing dynamic
-  values still stop at component-host binding because executable
-  realloc-backed dynamic value lowering remains a binding gap. This is an
-  adapter boundary for future P2/P3 version modules, not a public support
-  claim.
+  and direct/handle-backed primitive `string` `stream.read`/`future.read`
+  paths can lower host strings back into guest memory through a canonical
+  `realloc` callback plus `(ptr, len)` result records. This makes both
+  directions of primitive string async memory copy executable in the internal
+  async host. Component-host binding for decoded dynamic `stream.read`/
+  `future.read` definitions still stops before binding because the adapter
+  does not yet wire decoded core realloc exports into the program invocation
+  path. List values and composites containing dynamic values remain unsupported
+  for executable memory copy. This is an adapter boundary for future P2/P3
+  version modules, not a public support claim.
   Internal
   error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`

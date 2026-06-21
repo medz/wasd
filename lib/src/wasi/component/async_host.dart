@@ -760,15 +760,17 @@ final class WASIComponentCanonicalAsyncHandleProgram {
 
   /// Invokes a handle-backed canonical async memory-copy operation.
   ///
-  /// This uses the core Canonical ABI argument shape for fixed-size
-  /// stream/future copies: `stream.{read,write}` receive `(handle, ptr, n)`,
-  /// and `future.{read,write}` receive `(handle, ptr)`. Completed copy results
-  /// are returned in their canonical packed integer representation.
+  /// This uses the core Canonical ABI argument shape for stream/future copies:
+  /// `stream.{read,write}` receive `(handle, ptr, n)`, and
+  /// `future.{read,write}` receive `(handle, ptr)`. Dynamic string read paths
+  /// use [realloc] to lower host strings into guest memory. Completed copy
+  /// results are returned in their canonical packed integer representation.
   Object? invokeWithMemory(
     int canonicalIndex,
     wasm.Memory memory,
-    List<Object?> args,
-  ) {
+    List<Object?> args, {
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
     if (canonicalIndex < 0 || canonicalIndex >= operations.length) {
       throw StateError(
         'Unknown WASI component canonical async index: $canonicalIndex.',
@@ -785,6 +787,7 @@ final class WASIComponentCanonicalAsyncHandleProgram {
               memory,
               _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
               _expectNonNegativeInt(canonicalIndex, args[2], 'maxElements'),
+              realloc,
             )
             .packedResult;
       case WasmComponentCanonicalKind.streamWrite:
@@ -804,6 +807,7 @@ final class WASIComponentCanonicalAsyncHandleProgram {
               _expectHandle(canonicalIndex, args[0], 'readable'),
               memory,
               _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
+              realloc,
             )
             .packedResult;
       case WasmComponentCanonicalKind.futureWrite:
@@ -829,8 +833,9 @@ final class WASIComponentCanonicalAsyncHandleProgram {
   Object? invokeWithMemoryEvent(
     int canonicalIndex,
     wasm.Memory memory,
-    List<Object?> args,
-  ) {
+    List<Object?> args, {
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
     if (canonicalIndex < 0 || canonicalIndex >= operations.length) {
       throw StateError(
         'Unknown WASI component canonical async index: $canonicalIndex.',
@@ -846,6 +851,7 @@ final class WASIComponentCanonicalAsyncHandleProgram {
           memory,
           _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
           _expectNonNegativeInt(canonicalIndex, args[2], 'maxElements'),
+          realloc,
         );
       case WasmComponentCanonicalKind.streamWrite:
         _expectArity(canonicalIndex, args, 3);
@@ -861,6 +867,7 @@ final class WASIComponentCanonicalAsyncHandleProgram {
           _expectHandle(canonicalIndex, args[0], 'readable'),
           memory,
           _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
+          realloc,
         );
       case WasmComponentCanonicalKind.futureWrite:
         _expectArity(canonicalIndex, args, 2);
@@ -879,8 +886,9 @@ final class WASIComponentCanonicalAsyncHandleProgram {
   Future<Object?> invokeWithMemoryAsync(
     int canonicalIndex,
     wasm.Memory memory,
-    List<Object?> args,
-  ) async {
+    List<Object?> args, {
+    WASIComponentCanonicalRealloc? realloc,
+  }) async {
     if (canonicalIndex < 0 || canonicalIndex >= operations.length) {
       throw StateError(
         'Unknown WASI component canonical async index: $canonicalIndex.',
@@ -896,6 +904,7 @@ final class WASIComponentCanonicalAsyncHandleProgram {
           memory,
           _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
           _expectNonNegativeInt(canonicalIndex, args[2], 'maxElements'),
+          realloc,
         );
         return result.packedResult;
       case WasmComponentCanonicalKind.streamWrite:
@@ -913,10 +922,11 @@ final class WASIComponentCanonicalAsyncHandleProgram {
           _expectHandle(canonicalIndex, args[0], 'readable'),
           memory,
           _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
+          realloc,
         );
         return result.packedResult;
       default:
-        return invokeWithMemory(canonicalIndex, memory, args);
+        return invokeWithMemory(canonicalIndex, memory, args, realloc: realloc);
     }
   }
 }
@@ -1100,35 +1110,41 @@ final class WASIComponentCanonicalAsyncOperation {
     );
   }
 
-  /// Executes `stream.read` and writes fixed-size elements to [memory].
+  /// Executes `stream.read` and writes elements to [memory].
   WASIComponentAsyncCopyResult streamReadToMemory(
     Object? readable,
     wasm.Memory memory,
     int pointer,
-    int maxElements,
-  ) {
+    int maxElements, [
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     _requireKind(WasmComponentCanonicalKind.streamRead);
     return _requireValueType().streamReadToMemory(
       readable,
       memory,
       pointer,
       maxElements,
+      stringEncoding,
+      realloc,
     );
   }
 
-  /// Executes handle-backed `stream.read` into fixed-size memory elements.
+  /// Executes handle-backed `stream.read` into memory elements.
   WASIComponentAsyncCopyResult streamReadHandleToMemory(
     int readable,
     wasm.Memory memory,
     int pointer,
-    int maxElements,
-  ) {
+    int maxElements, [
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     _requireKind(WasmComponentCanonicalKind.streamRead);
     return _requireValueType().streamReadHandleToMemory(
       readable,
       memory,
       pointer,
       maxElements,
+      stringEncoding,
+      realloc,
     );
   }
 
@@ -1137,14 +1153,17 @@ final class WASIComponentCanonicalAsyncOperation {
     int readable,
     wasm.Memory memory,
     int pointer,
-    int maxElements,
-  ) {
+    int maxElements, [
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     _requireKind(WasmComponentCanonicalKind.streamRead);
     return _requireValueType().streamReadHandleToMemoryWhenAvailable(
       readable,
       memory,
       pointer,
       maxElements,
+      stringEncoding,
+      realloc,
     );
   }
 
@@ -1153,14 +1172,17 @@ final class WASIComponentCanonicalAsyncOperation {
     int readable,
     wasm.Memory memory,
     int pointer,
-    int maxElements,
-  ) {
+    int maxElements, [
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     _requireKind(WasmComponentCanonicalKind.streamRead);
     return _requireValueType().streamReadHandleToMemoryEvent(
       readable,
       memory,
       pointer,
       maxElements,
+      stringEncoding,
+      realloc,
     );
   }
 
@@ -1280,27 +1302,37 @@ final class WASIComponentCanonicalAsyncOperation {
     return _requireValueType().futureReadHandleWhenReady(readable);
   }
 
-  /// Executes `future.read` and writes a fixed-size value to [memory].
+  /// Executes `future.read` and writes a value to [memory].
   WASIComponentAsyncCopyResult futureReadToMemory(
     Object? readable,
     wasm.Memory memory,
-    int pointer,
-  ) {
+    int pointer, [
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     _requireKind(WasmComponentCanonicalKind.futureRead);
-    return _requireValueType().futureReadToMemory(readable, memory, pointer);
+    return _requireValueType().futureReadToMemory(
+      readable,
+      memory,
+      pointer,
+      stringEncoding,
+      realloc,
+    );
   }
 
-  /// Executes handle-backed `future.read` into fixed-size memory.
+  /// Executes handle-backed `future.read` into memory.
   WASIComponentAsyncCopyResult futureReadHandleToMemory(
     int readable,
     wasm.Memory memory,
-    int pointer,
-  ) {
+    int pointer, [
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     _requireKind(WasmComponentCanonicalKind.futureRead);
     return _requireValueType().futureReadHandleToMemory(
       readable,
       memory,
       pointer,
+      stringEncoding,
+      realloc,
     );
   }
 
@@ -1308,13 +1340,16 @@ final class WASIComponentCanonicalAsyncOperation {
   Future<WASIComponentAsyncCopyResult> futureReadHandleToMemoryWhenReady(
     int readable,
     wasm.Memory memory,
-    int pointer,
-  ) {
+    int pointer, [
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     _requireKind(WasmComponentCanonicalKind.futureRead);
     return _requireValueType().futureReadHandleToMemoryWhenReady(
       readable,
       memory,
       pointer,
+      stringEncoding,
+      realloc,
     );
   }
 
@@ -1322,13 +1357,16 @@ final class WASIComponentCanonicalAsyncOperation {
   int futureReadHandleToMemoryEvent(
     int readable,
     wasm.Memory memory,
-    int pointer,
-  ) {
+    int pointer, [
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     _requireKind(WasmComponentCanonicalKind.futureRead);
     return _requireValueType().futureReadHandleToMemoryEvent(
       readable,
       memory,
       pointer,
+      stringEncoding,
+      realloc,
     );
   }
 
@@ -1869,16 +1907,21 @@ final class _RegisteredAsyncValueType<T> {
     Object? readable,
     wasm.Memory memory,
     int pointer,
-    int maxElements,
-  ) {
+    int maxElements, [
+    WASIComponentCanonicalStringEncoding stringEncoding =
+        WASIComponentCanonicalStringEncoding.utf8,
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
     final values = _expectReadableStream(readable).read(maxElements);
-    _writeFixedWidthValuesToMemory(
+    _writeValuesToMemory(
       valueValidator,
       name,
       memory,
       pointer,
       values,
+      stringEncoding,
+      realloc,
     );
     return WASIComponentAsyncCopyResult.completed(values.length);
   }
@@ -1887,20 +1930,25 @@ final class _RegisteredAsyncValueType<T> {
     int readable,
     wasm.Memory memory,
     int pointer,
-    int maxElements,
-  ) {
+    int maxElements, [
+    WASIComponentCanonicalStringEncoding stringEncoding =
+        WASIComponentCanonicalStringEncoding.utf8,
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     return table
         .borrow<WASIComponentReadableStream<T>, WASIComponentAsyncCopyResult>(
           readableStreamType!,
           readable,
           (stream) {
             final values = stream.read(maxElements);
-            _writeFixedWidthValuesToMemory(
+            _writeValuesToMemory(
               valueValidator,
               name,
               memory,
               pointer,
               values,
+              stringEncoding,
+              realloc,
             );
             return WASIComponentAsyncCopyResult.completed(values.length);
           },
@@ -1911,8 +1959,11 @@ final class _RegisteredAsyncValueType<T> {
     int readable,
     wasm.Memory memory,
     int pointer,
-    int maxElements,
-  ) {
+    int maxElements, [
+    WASIComponentCanonicalStringEncoding stringEncoding =
+        WASIComponentCanonicalStringEncoding.utf8,
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     return table.borrowAsync<
       WASIComponentReadableStream<T>,
       WASIComponentAsyncCopyResult
@@ -1920,12 +1971,14 @@ final class _RegisteredAsyncValueType<T> {
       return stream
           .readWhenAvailable(maxElements)
           .then<WASIComponentAsyncCopyResult>((values) {
-            _writeFixedWidthValuesToMemory(
+            _writeValuesToMemory(
               valueValidator,
               name,
               memory,
               pointer,
               values,
+              stringEncoding,
+              realloc,
             );
             return WASIComponentAsyncCopyResult.completed(values.length);
           });
@@ -1936,8 +1989,11 @@ final class _RegisteredAsyncValueType<T> {
     int readable,
     wasm.Memory memory,
     int pointer,
-    int maxElements,
-  ) {
+    int maxElements, [
+    WASIComponentCanonicalStringEncoding stringEncoding =
+        WASIComponentCanonicalStringEncoding.utf8,
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     final waitable = _existingEndpointWaitable(readable);
     return table.borrow<WASIComponentReadableStream<T>, int>(
       readableStreamType!,
@@ -1945,12 +2001,14 @@ final class _RegisteredAsyncValueType<T> {
       (stream) {
         if (maxElements == 0 || stream.hasQueuedValues) {
           final values = stream.read(maxElements);
-          _writeFixedWidthValuesToMemory(
+          _writeValuesToMemory(
             valueValidator,
             name,
             memory,
             pointer,
             values,
+            stringEncoding,
+            realloc,
           );
           return WASIComponentAsyncCopyResult.completed(
             values.length,
@@ -1966,12 +2024,14 @@ final class _RegisteredAsyncValueType<T> {
               return stream
                   .readWhenAvailable(maxElements)
                   .then<WASIComponentAsyncCopyResult>((values) {
-                    _writeFixedWidthValuesToMemory(
+                    _writeValuesToMemory(
                       valueValidator,
                       name,
                       memory,
                       pointer,
                       values,
+                      stringEncoding,
+                      realloc,
                     );
                     return WASIComponentAsyncCopyResult.completed(
                       values.length,
@@ -2145,30 +2205,46 @@ final class _RegisteredAsyncValueType<T> {
   WASIComponentAsyncCopyResult futureReadToMemory(
     Object? readable,
     wasm.Memory memory,
-    int pointer,
-  ) {
+    int pointer, [
+    WASIComponentCanonicalStringEncoding stringEncoding =
+        WASIComponentCanonicalStringEncoding.utf8,
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     _requireKind(_WASIComponentAsyncValueKind.future);
     final value = _expectReadableFuture(readable).readForCopy();
-    _writeFixedWidthValueToMemory(valueValidator, name, memory, pointer, value);
+    _writeValueToMemory(
+      valueValidator,
+      name,
+      memory,
+      pointer,
+      value,
+      stringEncoding,
+      realloc,
+    );
     return WASIComponentAsyncCopyResult.completed(0);
   }
 
   WASIComponentAsyncCopyResult futureReadHandleToMemory(
     int readable,
     wasm.Memory memory,
-    int pointer,
-  ) {
+    int pointer, [
+    WASIComponentCanonicalStringEncoding stringEncoding =
+        WASIComponentCanonicalStringEncoding.utf8,
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     return table
         .borrow<WASIComponentReadableFuture<T>, WASIComponentAsyncCopyResult>(
           readableFutureType!,
           readable,
           (future) {
-            _writeFixedWidthValueToMemory(
+            _writeValueToMemory(
               valueValidator,
               name,
               memory,
               pointer,
               future.readForCopy(),
+              stringEncoding,
+              realloc,
             );
             return WASIComponentAsyncCopyResult.completed(0);
           },
@@ -2178,8 +2254,11 @@ final class _RegisteredAsyncValueType<T> {
   Future<WASIComponentAsyncCopyResult> futureReadHandleToMemoryWhenReady(
     int readable,
     wasm.Memory memory,
-    int pointer,
-  ) {
+    int pointer, [
+    WASIComponentCanonicalStringEncoding stringEncoding =
+        WASIComponentCanonicalStringEncoding.utf8,
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     return table.borrowAsync<
       WASIComponentReadableFuture<T>,
       WASIComponentAsyncCopyResult
@@ -2187,12 +2266,14 @@ final class _RegisteredAsyncValueType<T> {
       return future.readWhenReadyForCopy().then<WASIComponentAsyncCopyResult>((
         value,
       ) {
-        _writeFixedWidthValueToMemory(
+        _writeValueToMemory(
           valueValidator,
           name,
           memory,
           pointer,
           value,
+          stringEncoding,
+          realloc,
         );
         return WASIComponentAsyncCopyResult.completed(0);
       });
@@ -2202,20 +2283,25 @@ final class _RegisteredAsyncValueType<T> {
   int futureReadHandleToMemoryEvent(
     int readable,
     wasm.Memory memory,
-    int pointer,
-  ) {
+    int pointer, [
+    WASIComponentCanonicalStringEncoding stringEncoding =
+        WASIComponentCanonicalStringEncoding.utf8,
+    WASIComponentCanonicalRealloc? realloc,
+  ]) {
     final waitable = _existingEndpointWaitable(readable);
     return table.borrow<WASIComponentReadableFuture<T>, int>(
       readableFutureType!,
       readable,
       (future) {
         if (future.isReady) {
-          _writeFixedWidthValueToMemory(
+          _writeValueToMemory(
             valueValidator,
             name,
             memory,
             pointer,
             future.readForCopy(),
+            stringEncoding,
+            realloc,
           );
           return WASIComponentAsyncCopyResult.completed(0).packedResult;
         }
@@ -2229,12 +2315,14 @@ final class _RegisteredAsyncValueType<T> {
               return future
                   .readWhenReadyForCopy()
                   .then<WASIComponentAsyncCopyResult>((value) {
-                    _writeFixedWidthValueToMemory(
+                    _writeValueToMemory(
                       valueValidator,
                       name,
                       memory,
                       pointer,
                       value,
+                      stringEncoding,
+                      realloc,
                     );
                     return WASIComponentAsyncCopyResult.completed(0);
                   });
@@ -2916,6 +3004,83 @@ T _readStringValueFromMemory<T>(
     return value as T;
   }
   throw StateError('WASI component async type $name expected $T value.');
+}
+
+void _writeValuesToMemory(
+  _WASIComponentAsyncValueValidator validator,
+  String name,
+  wasm.Memory memory,
+  int pointer,
+  List<Object?> values,
+  WASIComponentCanonicalStringEncoding stringEncoding,
+  WASIComponentCanonicalRealloc? realloc,
+) {
+  if (validator.primitive == WasmComponentPrimitiveValueType.string) {
+    _checkCopyElementCount(values.length);
+    validator.validateAll(name, values);
+    checkWASIComponentCanonicalStringRecordRange(
+      memory,
+      pointer,
+      values.length,
+    );
+    if (values.isEmpty) {
+      return;
+    }
+    final canonicalRealloc = _requireStringRealloc(name, realloc);
+    for (var index = 0; index < values.length; index++) {
+      final memoryString = writeWASIComponentCanonicalString(
+        memory,
+        canonicalRealloc,
+        values[index] as String,
+        stringEncoding,
+      );
+      writeWASIComponentMemoryStringRecord(
+        memory,
+        pointer + index * 8,
+        memoryString,
+      );
+    }
+    return;
+  }
+  _writeFixedWidthValuesToMemory(validator, name, memory, pointer, values);
+}
+
+void _writeValueToMemory(
+  _WASIComponentAsyncValueValidator validator,
+  String name,
+  wasm.Memory memory,
+  int pointer,
+  Object? value,
+  WASIComponentCanonicalStringEncoding stringEncoding,
+  WASIComponentCanonicalRealloc? realloc,
+) {
+  if (validator.primitive == WasmComponentPrimitiveValueType.string) {
+    final canonicalRealloc = _requireStringRealloc(name, realloc);
+    validator.validate(name, value);
+    checkWASIComponentCanonicalStringRecordRange(memory, pointer, 1);
+    final memoryString = writeWASIComponentCanonicalString(
+      memory,
+      canonicalRealloc,
+      value as String,
+      stringEncoding,
+    );
+    writeWASIComponentMemoryStringRecord(memory, pointer, memoryString);
+    return;
+  }
+  _writeFixedWidthValueToMemory(validator, name, memory, pointer, value);
+}
+
+WASIComponentCanonicalRealloc _requireStringRealloc(
+  String name,
+  WASIComponentCanonicalRealloc? realloc,
+) {
+  if (realloc != null) {
+    return realloc;
+  }
+  throw UnsupportedError(
+    'WASI component async type $name requires a canonical realloc callback '
+    'to write string values to memory.',
+  );
 }
 
 List<T> _readFixedWidthValuesFromMemory<T>(
