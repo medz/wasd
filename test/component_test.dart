@@ -1044,6 +1044,21 @@ void main() {
       );
     });
 
+    test('reports invalid canonical option placements', () {
+      final lower = WasmComponent.decode(
+        _canonicalLowerWithPostReturnComponentBytes(),
+      ).validate();
+
+      expect(
+        lower.any(
+          (error) => error.message.contains(
+            'canon lower cannot use postReturn option',
+          ),
+        ),
+        isTrue,
+      );
+    });
+
     test('reports missing canonical option requirements', () {
       final errors = WasmComponent.decode(
         _canonicalLowerAsyncWithoutMemoryComponentBytes(),
@@ -3543,6 +3558,42 @@ Uint8List _canonicalDuplicateMemoryOptionComponentBytes() =>
       0x00,
       0x03,
       0x01,
+    ]);
+
+Uint8List _canonicalLowerWithPostReturnComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x00,
+      0x73,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x08,
+      0x07,
+      0x01,
+      0x01,
+      0x00,
+      0x00,
+      0x01,
+      0x05,
+      0x00,
     ]);
 
 Uint8List _canonicalMemoryOptionOutOfRangeComponentBytes() =>

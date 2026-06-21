@@ -2845,29 +2845,40 @@ final class _WasmComponentValidationContext {
     WasmComponentCanonicalDefinition definition,
     String path,
   ) {
-    if (definition.kind != WasmComponentCanonicalKind.taskReturn) {
-      return;
-    }
-
     for (var i = 0; i < definition.options.length; i++) {
       final optionKind = definition.options[i].kind;
-      if (canonicalTaskReturnAllowsOption(optionKind)) {
-        continue;
+      if (definition.kind == WasmComponentCanonicalKind.taskReturn &&
+          !canonicalTaskReturnAllowsOption(optionKind)) {
+        errors.add(
+          WasmComponentValidationError(
+            path: '$path.options[$i]',
+            message:
+                'Wasm component task.return cannot use ${optionKind.name} option.',
+          ),
+        );
       }
 
-      errors.add(
-        WasmComponentValidationError(
-          path: '$path.options[$i]',
-          message:
-              'Wasm component task.return cannot use ${optionKind.name} option.',
-        ),
-      );
+      if (definition.kind == WasmComponentCanonicalKind.lower &&
+          canonicalLowerDisallowsOption(optionKind)) {
+        errors.add(
+          WasmComponentValidationError(
+            path: '$path.options[$i]',
+            message:
+                'Wasm component canon lower cannot use ${optionKind.name} option.',
+          ),
+        );
+      }
     }
   }
 
   bool canonicalTaskReturnAllowsOption(WasmComponentCanonicalOptionKind kind) {
     return canonicalOptionIsStringEncoding(kind) ||
         kind == WasmComponentCanonicalOptionKind.memory;
+  }
+
+  bool canonicalLowerDisallowsOption(WasmComponentCanonicalOptionKind kind) {
+    return kind == WasmComponentCanonicalOptionKind.postReturn ||
+        kind == WasmComponentCanonicalOptionKind.callback;
   }
 
   bool canonicalLowerParametersRequireMemory(
