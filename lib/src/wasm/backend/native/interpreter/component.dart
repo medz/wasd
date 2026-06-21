@@ -1807,6 +1807,10 @@ final class _WasmComponentValidationContext {
             localTypeDefinitions,
             localCoreTypeKinds,
           );
+          final descriptor = import?.descriptor;
+          if (descriptor != null) {
+            introduceComponentTypeImport(descriptor, localTypeDefinitions);
+          }
         case WasmComponentTypeDeclarationKind.export:
           final descriptor = declaration.export?.descriptor;
           validateTypeDeclarationExternDescriptor(
@@ -2138,7 +2142,12 @@ final class _WasmComponentValidationContext {
       if (componentExternDescriptorContainsResource(descriptor, localScope)) {
         return true;
       }
-      introduceTypeDeclarationExport(descriptor, localTypeDefinitions);
+      if (declaration.kind == WasmComponentTypeDeclarationKind.import &&
+          descriptor != null) {
+        introduceComponentTypeImport(descriptor, localTypeDefinitions);
+      } else {
+        introduceTypeDeclarationExport(descriptor, localTypeDefinitions);
+      }
     }
 
     return false;

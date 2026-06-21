@@ -484,6 +484,15 @@ void main() {
       );
     });
 
+    test('validates resource imports introduced by type declarations', () {
+      expect(
+        WasmComponent.decode(
+          _typeDeclarationResourceImportComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
+    });
+
     test('validates local core module type declaration indexes', () {
       expect(
         WasmComponent.decode(
@@ -4458,6 +4467,21 @@ Uint8List _typeDeclarationLocalValueTypeComponentBytes() =>
       0x00,
       0x00,
     ]);
+
+Uint8List _typeDeclarationResourceImportComponentBytes() =>
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x41,
+      0x02,
+      0x03,
+      0x00,
+      0x01,
+      0x72,
+      0x03,
+      0x01,
+      0x01,
+      0x68,
+      0x00,
+    ], count: 1);
 
 Uint8List _typeDeclarationLocalCoreModuleImportComponentBytes() =>
     Uint8List.fromList(const <int>[
