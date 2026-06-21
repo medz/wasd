@@ -254,20 +254,33 @@ List<WASIComponentHostBindingError> _componentHostBindingErrors(
         continue;
       }
       if (_componentHostNeedsAsyncMemoryLayout(definition.kind) &&
-          !binding.isUnit &&
-          binding.fixedWidthMemoryLayout == null) {
+          !_componentHostSupportsAsyncMemoryCopy(definition.kind, binding)) {
         errors.add(
           WASIComponentHostBindingError(
             canonicalIndex: index,
             definition: definition,
             reason:
-                'component host cannot derive a fixed-size stream/future memory layout',
+                'component host cannot derive a supported stream/future memory representation',
           ),
         );
       }
     }
   }
   return List<WASIComponentHostBindingError>.unmodifiable(errors);
+}
+
+bool _componentHostSupportsAsyncMemoryCopy(
+  WasmComponentCanonicalKind kind,
+  WASIComponentAsyncValueBinding binding,
+) {
+  if (binding.isUnit || binding.fixedWidthMemoryLayout != null) {
+    return true;
+  }
+  final isGuestToHostStringCopy =
+      (kind == WasmComponentCanonicalKind.streamWrite ||
+          kind == WasmComponentCanonicalKind.futureWrite) &&
+      binding.primitive == WasmComponentPrimitiveValueType.string;
+  return isGuestToHostStringCopy;
 }
 
 bool _componentHostNeedsAsyncValueBinding(WasmComponentCanonicalKind kind) {

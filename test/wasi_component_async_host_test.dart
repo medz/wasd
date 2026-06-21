@@ -1322,7 +1322,48 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
-    test('rejects unsupported and unaligned stream memory copies', () {
+    test('copies decoded string stream values from canonical memory', () {
+      final stringComponent = WasmComponent.decode(
+        _streamStringTypeComponentBytes(),
+      );
+      expect(stringComponent.validate(), isEmpty);
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<Object>(stringComponent, 0, 'strings');
+      final stringWrite = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamWrite,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.stringEncodingUtf16,
+            ),
+          ],
+        ),
+      );
+      final stringStream = WASIComponentStream<Object>('strings');
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint16(96, 0x68, Endian.little);
+      data.setUint16(98, 0xe9, Endian.little);
+      data.setUint32(32, 96, Endian.little);
+      data.setUint32(36, 2, Endian.little);
+
+      final result = stringWrite.streamWriteFromMemory(
+        stringStream.writable,
+        memory,
+        32,
+        1,
+      );
+
+      expect(result.packedResult, 1 << 4);
+      expect(stringStream.readable.read(1), ['hé']);
+    });
+
+    test('rejects out-of-bounds string stream record ranges', () {
       final stringComponent = WasmComponent.decode(
         _streamStringTypeComponentBytes(),
       );
@@ -1348,12 +1389,15 @@ void main() {
         () => stringWrite.streamWriteFromMemory(
           stringStream.writable,
           memory,
-          32,
-          1,
+          0,
+          memory.buffer.lengthInBytes ~/ 8 + 1,
         ),
-        throwsUnsupportedError,
+        throwsRangeError,
       );
+      expect(stringStream.readable.read(1), isEmpty);
+    });
 
+    test('rejects unaligned stream memory copies', () {
       final u32Component = WasmComponent.decode(_streamU32TypeComponentBytes());
       expect(u32Component.validate(), isEmpty);
       final numberHost = WASIComponentAsyncHost();
@@ -1375,6 +1419,7 @@ void main() {
         ),
       );
       final numberStream = WASIComponentStream<int>('u32-stream');
+      final memory = Memory(const MemoryDescriptor(initial: 1));
 
       expect(
         () => u32Write.streamWriteFromMemory(
@@ -2003,7 +2048,7 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
-    test('rejects unsupported and unaligned future memory copies', () {
+    test('copies decoded string future values from canonical memory', () {
       final stringComponent = WasmComponent.decode(
         _futureStringTypeComponentBytes(),
       );
@@ -2024,16 +2069,23 @@ void main() {
       );
       final stringFuture = WASIComponentFuture<Object>('strings');
       final memory = Memory(const MemoryDescriptor(initial: 1));
+      final bytes = Uint8List.view(memory.buffer);
+      final data = ByteData.view(memory.buffer);
+      bytes.setAll(96, 'ready'.codeUnits);
+      data.setUint32(32, 96, Endian.little);
+      data.setUint32(36, 5, Endian.little);
 
-      expect(
-        () => stringWrite.futureWriteFromMemory(
-          stringFuture.writable,
-          memory,
-          32,
-        ),
-        throwsUnsupportedError,
+      final result = stringWrite.futureWriteFromMemory(
+        stringFuture.writable,
+        memory,
+        32,
       );
 
+      expect(result.packedResult, 0);
+      expect(stringFuture.readable.read(), 'ready');
+    });
+
+    test('rejects unaligned future memory copies', () {
       final u32Component = WasmComponent.decode(_futureU32TypeComponentBytes());
       expect(u32Component.validate(), isEmpty);
       final numberHost = WASIComponentAsyncHost();
@@ -2055,6 +2107,7 @@ void main() {
         ),
       );
       final numberFuture = WASIComponentFuture<int>('u32-future');
+      final memory = Memory(const MemoryDescriptor(initial: 1));
 
       expect(
         () => u32Write.futureWriteFromMemory(numberFuture.writable, memory, 33),

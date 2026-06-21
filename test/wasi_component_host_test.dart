@@ -537,6 +537,47 @@ void main() {
       );
     });
 
+    test('copies string stream writes through decoded core memory options', () {
+      final component = WasmComponent.decode(
+        _canonicalStringStreamWriteMemoryProgramBytes(),
+      );
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final bytes = Uint8List.view(memory.buffer);
+      final data = ByteData.view(memory.buffer);
+      bytes.setAll(96, 'host'.codeUnits);
+      data.setUint32(32, 96, Endian.little);
+      data.setUint32(36, 4, Endian.little);
+      final host = WASIComponentHost();
+
+      final plan = host.prepareComponent(component);
+
+      expect(component.validate(), isEmpty);
+      expect(plan.canBind, isTrue);
+      expect(plan.asyncValueBindings, hasLength(1));
+      expect(
+        plan.asyncValueBindings.single.primitive,
+        WasmComponentPrimitiveValueType.string,
+      );
+      expect(plan.asyncValueBindings.single.fixedWidthMemoryLayout, isNull);
+
+      final binding = plan.bind();
+      final handles = WASIComponentAsyncEndpointHandles.unpack(
+        binding.program.invoke(0, const <Object?>[])! as int,
+      );
+
+      expect(
+        binding.program.invokeWithMemory(1, memory, <Object?>[
+          handles.writable,
+          32,
+          1,
+        ]),
+        1 << 4,
+      );
+      expect(binding.program.invoke(2, <Object?>[handles.readable]), isNull);
+      expect(binding.program.invoke(3, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test('reports dynamic stream memory copies before binding', () {
       final component = WasmComponent.decode(
         _canonicalStringStreamMemoryProgramBytes(),
@@ -553,10 +594,9 @@ void main() {
         WasmComponentPrimitiveValueType.string,
       );
       expect(plan.asyncValueBindings.single.fixedWidthMemoryLayout, isNull);
-      expect(plan.bindingErrors, hasLength(2));
+      expect(plan.bindingErrors, hasLength(1));
       expect(plan.bindingErrors.map((error) => error.kind), [
         WasmComponentCanonicalKind.streamRead,
-        WasmComponentCanonicalKind.streamWrite,
       ]);
       expect(
         () => plan.bind(),
@@ -564,7 +604,7 @@ void main() {
           isA<WASIComponentHostBindingException>().having(
             (error) => error.toString(),
             'message',
-            contains('fixed-size stream/future memory layout'),
+            contains('supported stream/future memory representation'),
           ),
         ),
       );
@@ -1013,6 +1053,79 @@ Uint8List _canonicalStringStreamMemoryProgramBytes() =>
       0x00,
       0x01,
       0x03,
+      0x00,
+    ]);
+
+Uint8List _canonicalStringStreamWriteMemoryProgramBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x01,
+      0x16,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x05,
+      0x03,
+      0x01,
+      0x00,
+      0x01,
+      0x07,
+      0x07,
+      0x01,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x02,
+      0x00,
+      0x02,
+      0x04,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x06,
+      0x09,
+      0x01,
+      0x00,
+      0x02,
+      0x01,
+      0x00,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x07,
+      0x04,
+      0x01,
+      0x66,
+      0x01,
+      0x73,
+      0x08,
+      0x0c,
+      0x04,
+      0x0e,
+      0x00,
+      0x10,
+      0x00,
+      0x01,
+      0x03,
+      0x00,
+      0x13,
+      0x00,
+      0x14,
       0x00,
     ]);
 
