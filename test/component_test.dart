@@ -1117,6 +1117,17 @@ void main() {
         ),
         isTrue,
       );
+
+      final liftParam = WasmComponent.decode(
+        _canonicalLiftStringParamWithoutReallocComponentBytes(),
+      ).validate();
+
+      expect(
+        liftParam.any(
+          (error) => error.message.contains('requires a realloc option'),
+        ),
+        isTrue,
+      );
     });
 
     test('reports invalid canonical option core indexes', () {
@@ -3741,6 +3752,36 @@ Uint8List _canonicalLowerStringResultWithoutReallocComponentBytes() =>
       0x05,
       0x01,
       0x01,
+      0x00,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _canonicalLiftStringParamWithoutReallocComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x08,
+      0x01,
+      0x40,
+      0x01,
+      0x01,
+      0x78,
+      0x73,
+      0x01,
+      0x00,
+      0x08,
+      0x06,
+      0x01,
+      0x00,
+      0x00,
       0x00,
       0x00,
       0x00,
