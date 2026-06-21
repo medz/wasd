@@ -1,12 +1,10 @@
-import 'dart:async';
-
 import '../../wasm/backend/native/interpreter/component.dart';
+import 'current.dart';
 
 /// Current Canonical ABI limit for `context.get/set` indexes.
 const int wasiComponentContextSlotCount = 2;
 
 const int _maxU32 = 0xffffffff;
-final Object _currentContextZoneKey = Object();
 
 /// Thread-local storage for Component Model `context.get/set`.
 final class WASIComponentContext {
@@ -61,36 +59,18 @@ final class WASIComponentContext {
 final class WASIComponentContextHost {
   /// Creates a context host with a default current context.
   WASIComponentContextHost({WASIComponentContext? context})
-    : _currentContext = context ?? WASIComponentContext();
+    : _currentContext = WASIComponentCurrent<WASIComponentContext>(
+        context ?? WASIComponentContext(),
+      );
 
-  WASIComponentContext _currentContext;
-  int _syncContextDepth = 0;
+  final WASIComponentCurrent<WASIComponentContext> _currentContext;
 
   /// Current thread-local context.
-  WASIComponentContext get currentContext {
-    if (_syncContextDepth > 0) {
-      return _currentContext;
-    }
-    if (!identical(Zone.current, Zone.root)) {
-      final context = Zone.current[_currentContextZoneKey];
-      if (context is WASIComponentContext) {
-        return context;
-      }
-    }
-    return _currentContext;
-  }
+  WASIComponentContext get currentContext => _currentContext.current!;
 
   /// Runs [callback] with [context] as the current thread-local context.
   T runWithContext<T>(WASIComponentContext context, T Function() callback) {
-    final previous = _currentContext;
-    _currentContext = context;
-    _syncContextDepth++;
-    try {
-      return callback();
-    } finally {
-      _currentContext = previous;
-      _syncContextDepth--;
-    }
+    return _currentContext.run(context, callback);
   }
 
   /// Runs [callback] with [context] as the current context until it completes.
@@ -98,10 +78,7 @@ final class WASIComponentContextHost {
     WASIComponentContext context,
     Future<T> Function() callback,
   ) async {
-    return await runZoned<Future<T>>(
-      callback,
-      zoneValues: <Object?, Object?>{_currentContextZoneKey: context},
-    );
+    return await _currentContext.runAsync(context, callback);
   }
 
   /// Executes `context.get`.

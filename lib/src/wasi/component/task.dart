@@ -1,10 +1,7 @@
-import 'dart:async';
-
 import '../../wasm/backend/native/interpreter/component.dart';
+import 'current.dart';
 import 'subtask.dart';
 import 'waitable_set.dart';
-
-final Object _currentTaskZoneKey = Object();
 
 /// Callee-side Component Model task state.
 enum WASIComponentTaskState {
@@ -163,22 +160,11 @@ final class WASIComponentTaskHost {
     : _waitableHost = waitableHost;
 
   final WASIComponentWaitableHost? _waitableHost;
-  WASIComponentTask? _currentTask;
-  int _syncTaskDepth = 0;
+  final WASIComponentCurrent<WASIComponentTask> _currentTask =
+      WASIComponentCurrent<WASIComponentTask>();
 
   /// The task currently executing canonical `task.*` operations.
-  WASIComponentTask? get currentTask {
-    if (_syncTaskDepth > 0) {
-      return _currentTask;
-    }
-    if (!identical(Zone.current, Zone.root)) {
-      final task = Zone.current[_currentTaskZoneKey];
-      if (task is WASIComponentTask) {
-        return task;
-      }
-    }
-    return _currentTask;
-  }
+  WASIComponentTask? get currentTask => _currentTask.current;
 
   /// Creates a task linked to [subtask] and this host's cancellation delivery.
   WASIComponentTask createTask({
@@ -194,15 +180,7 @@ final class WASIComponentTaskHost {
 
   /// Runs [callback] with [task] as the current task.
   T runWithTask<T>(WASIComponentTask task, T Function() callback) {
-    final previous = _currentTask;
-    _currentTask = task;
-    _syncTaskDepth++;
-    try {
-      return callback();
-    } finally {
-      _currentTask = previous;
-      _syncTaskDepth--;
-    }
+    return _currentTask.run(task, callback);
   }
 
   /// Runs [callback] with [task] as the current task until it completes.
@@ -210,10 +188,7 @@ final class WASIComponentTaskHost {
     WASIComponentTask task,
     Future<T> Function() callback,
   ) async {
-    return await runZoned<Future<T>>(
-      callback,
-      zoneValues: <Object?, Object?>{_currentTaskZoneKey: task},
-    );
+    return await _currentTask.runAsync(task, callback);
   }
 
   /// Executes `task.return` on the current task.

@@ -1,10 +1,8 @@
-import 'dart:async';
-
 import '../../wasm/backend/native/interpreter/component.dart';
 import 'context.dart';
+import 'current.dart';
 
 const int _maxU32 = 0xffffffff;
-final Object _currentThreadZoneKey = Object();
 
 /// Host-side Component Model thread identity.
 final class WASIComponentThread {
@@ -40,34 +38,23 @@ final class WASIComponentThreadHost {
       'availableParallelism',
     );
     _availableParallelism = availableParallelism;
-    _currentThread = _registerThread(
+    final thread = _registerThread(
       name: 'implicit-thread',
       context: this.contextHost.currentContext,
     );
+    _currentThread = WASIComponentCurrent<WASIComponentThread>(thread);
   }
 
   /// Context host used by current-thread execution.
   final WASIComponentContextHost contextHost;
 
   final Map<int, WASIComponentThread> _threads = <int, WASIComponentThread>{};
-  late WASIComponentThread _currentThread;
+  late final WASIComponentCurrent<WASIComponentThread> _currentThread;
   late final int _availableParallelism;
   int _nextThreadIndex = 0;
-  int _syncThreadDepth = 0;
 
   /// Current thread.
-  WASIComponentThread get currentThread {
-    if (_syncThreadDepth > 0) {
-      return _currentThread;
-    }
-    if (!identical(Zone.current, Zone.root)) {
-      final thread = Zone.current[_currentThreadZoneKey];
-      if (thread is WASIComponentThread) {
-        return thread;
-      }
-    }
-    return _currentThread;
-  }
+  WASIComponentThread get currentThread => _currentThread.current!;
 
   /// Number of registered threads.
   int get threadCount => _threads.length;
@@ -86,15 +73,10 @@ final class WASIComponentThreadHost {
   /// Runs [callback] with [thread] as the current thread and context.
   T runWithThread<T>(WASIComponentThread thread, T Function() callback) {
     _requireRegistered(thread);
-    final previous = _currentThread;
-    _currentThread = thread;
-    _syncThreadDepth++;
-    try {
-      return contextHost.runWithContext(thread.context, callback);
-    } finally {
-      _currentThread = previous;
-      _syncThreadDepth--;
-    }
+    return _currentThread.run(
+      thread,
+      () => contextHost.runWithContext(thread.context, callback),
+    );
   }
 
   /// Runs [callback] with [thread] as the current thread until it completes.
@@ -103,9 +85,9 @@ final class WASIComponentThreadHost {
     Future<T> Function() callback,
   ) async {
     _requireRegistered(thread);
-    return await runZoned<Future<T>>(
+    return await _currentThread.runAsync(
+      thread,
       () => contextHost.runWithContextAsync(thread.context, callback),
-      zoneValues: <Object?, Object?>{_currentThreadZoneKey: thread},
     );
   }
 
