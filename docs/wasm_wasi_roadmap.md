@@ -82,12 +82,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   paths.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
-  `lib/src/wasi/component/resource_table.dart` now provides an internal typed
-  resource table with table-local nominal resource type tokens, stale-handle
-  guards, borrow/drop guards, and internal canonical `resource.new`,
-  `resource.rep`, and `resource.drop` operations. P2/P3 host instantiation, WIT
-  ingestion, canonical ABI lowering/lifting, and async stream/future execution
-  are not production-supported yet.
+  `lib/src/wasi/component/` now provides an internal typed resource table plus
+  a resource host that binds decoded canonical `resource.new`, `resource.rep`,
+  and `resource.drop` definitions to table-local nominal resource type tokens.
+  P2/P3 host instantiation, WIT ingestion, full canonical ABI lowering/lifting,
+  and async stream/future execution are not production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
   for component-model WASI versions. This is an intentional version boundary,
@@ -119,9 +118,9 @@ This is the implementation state as of 2026-06-21 on `main`.
    versioned adapters over shared descriptor, resource, clock, random,
    filesystem, and socket primitives. Do not extend `wasi_snapshot_preview1`
    types into component worlds.
-3. Wire the resource table into component host adapters and canonical ABI
-   ownership/drop behavior before adding WIT ingestion and generated binding
-   support.
+3. Expand the resource host into a component host adapter for imports, exports,
+   and canonical lift/lower ownership before adding WIT ingestion and generated
+   binding support.
 
 ## Performance Direction
 
@@ -164,8 +163,8 @@ This is the implementation state as of 2026-06-21 on `main`.
    conversion hot spots, then add timing and caching where it changes actual
    runtime cost.
 4. Keep closing component-model validation gaps that are local and
-   deterministic, then wire validated resource, borrow, stream, and future
-   shapes into runtime host state.
+   deterministic, then wire validated borrow, stream, and future shapes into
+   runtime host state.
 5. Introduce explicit WASI version modules for future P2/P3 work instead of
    extending Preview 1 host types in place.
 6. Add WIT/interface ingestion only after the versioned host boundary and
