@@ -2730,6 +2730,10 @@ final class _WasmComponentValidationContext {
       definition.options,
       WasmComponentCanonicalOptionKind.async,
     );
+    final hasRealloc = canonicalOptionsContain(
+      definition.options,
+      WasmComponentCanonicalOptionKind.realloc,
+    );
     if (definition.kind == WasmComponentCanonicalKind.lower &&
         hasAsync &&
         !hasMemory) {
@@ -2749,6 +2753,17 @@ final class _WasmComponentValidationContext {
           path: '$path.options',
           message:
               'Wasm component ${canonicalDefinitionDescription(definition.kind)} requires a memory option.',
+        ),
+      );
+    }
+
+    if (!hasRealloc &&
+        canonicalDefinitionRequiresReallocOption(definition.kind)) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.options',
+          message:
+              'Wasm component ${canonicalDefinitionDescription(definition.kind)} requires a realloc option.',
         ),
       );
     }
@@ -3996,6 +4011,12 @@ final class _WasmComponentValidationContext {
   ) {
     return kind == WasmComponentCanonicalKind.errorContextNew ||
         kind == WasmComponentCanonicalKind.errorContextDebugMessage;
+  }
+
+  bool canonicalDefinitionRequiresReallocOption(
+    WasmComponentCanonicalKind kind,
+  ) {
+    return kind == WasmComponentCanonicalKind.errorContextDebugMessage;
   }
 
   bool canonicalDefinitionUsesFunctionType(WasmComponentCanonicalKind kind) {

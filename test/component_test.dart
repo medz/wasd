@@ -1062,6 +1062,16 @@ void main() {
 
       expect(errorContext, hasLength(1));
       expect(errorContext.single.message, contains('requires a memory option'));
+
+      final debugMessage = WasmComponent.decode(
+        _canonicalErrorContextDebugMessageWithoutReallocComponentBytes(),
+      ).validate();
+
+      expect(debugMessage, hasLength(1));
+      expect(
+        debugMessage.single.message,
+        contains('requires a realloc option'),
+      );
     });
 
     test('reports invalid canonical option core indexes', () {
@@ -3550,6 +3560,18 @@ Uint8List _canonicalErrorContextNewWithoutMemoryComponentBytes() =>
       0x03,
       0x01,
       0x1c,
+      0x00,
+    ]);
+
+Uint8List _canonicalErrorContextDebugMessageWithoutReallocComponentBytes() =>
+    Uint8List.fromList(<int>[
+      ..._coreExportAliasComponentBytes(),
+      0x08,
+      0x05,
+      0x01,
+      0x1d,
+      0x01,
+      0x03,
       0x00,
     ]);
 
