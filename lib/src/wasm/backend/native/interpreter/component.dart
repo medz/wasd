@@ -772,6 +772,18 @@ final class _WasmComponentValueIndexEntry {
   final bool requiresConsumption;
 }
 
+final class _WasmComponentMaterializedIndexSpaces {
+  const _WasmComponentMaterializedIndexSpaces({
+    required this.typeDefinitions,
+    required this.functionTypes,
+    required this.valueTypes,
+  });
+
+  final List<WasmComponentTypeDefinition> typeDefinitions;
+  final List<WasmComponentFunctionType?> functionTypes;
+  final List<WasmComponentValueType?> valueTypes;
+}
+
 final class _WasmComponentInstanceExportEntry {
   const _WasmComponentInstanceExportEntry({
     required this.sort,
@@ -926,17 +938,30 @@ final class WasmComponent {
   final List<WasmComponentValueDefinition> valueDefinitions;
   final List<_WasmComponentDefinitionEvent> _definitionEvents;
 
+  late final _WasmComponentMaterializedIndexSpaces _indexSpaces =
+      _buildComponentIndexSpaces();
+
   /// Locally materialized component type index definitions in definition order.
   ///
   /// This includes type-section definitions, component-type imports/exports,
   /// and component-type aliases of known instance exports that can be resolved
   /// without a parent component scope.
-  late final List<WasmComponentTypeDefinition> componentTypeIndexDefinitions =
-      _buildComponentTypeIndexDefinitions();
+  List<WasmComponentTypeDefinition> get componentTypeIndexDefinitions =>
+      _indexSpaces.typeDefinitions;
 
-  List<WasmComponentTypeDefinition> _buildComponentTypeIndexDefinitions() {
+  /// Locally materialized component function index types in definition order.
+  List<WasmComponentFunctionType?> get componentFunctionIndexTypes =>
+      _indexSpaces.functionTypes;
+
+  /// Locally materialized component value index types in definition order.
+  List<WasmComponentValueType?> get componentValueIndexTypes =>
+      _indexSpaces.valueTypes;
+
+  _WasmComponentMaterializedIndexSpaces _buildComponentIndexSpaces() {
     final visibleTypeDefinitions = <WasmComponentTypeDefinition>[];
     final visibleComponents = <WasmComponent>[];
+    final functionTypes = <WasmComponentFunctionType?>[];
+    final valueTypes = <WasmComponentValueType?>[];
     final instanceExportMaps = <_WasmComponentInstanceExportMap?>[];
     var decodedTypeDefinitionCount = 0;
 
@@ -950,20 +975,61 @@ final class WasmComponent {
       decodedTypeDefinitionCount = count;
     }
 
+    void addStartResults(WasmComponentStart start) {
+      final functionType = _componentFunctionTypeAt(
+        functionTypes,
+        start.functionIndex,
+      );
+      if (functionType == null) {
+        valueTypes.addAll(
+          List<WasmComponentValueType?>.filled(start.resultCount, null),
+        );
+        return;
+      }
+      final resultType = functionType.result;
+      if (resultType != null) {
+        valueTypes.add(resultType);
+      }
+    }
+
     for (final event in _definitionEvents) {
       switch (event.kind) {
         case _WasmComponentDefinitionEventKind.import:
-          final introducedTypeDefinition =
-              _componentTypeImportDefinitionIntroducedBy(
-                imports[event.index].descriptor,
+          final descriptor = imports[event.index].descriptor;
+          if (descriptor.kind == WasmComponentExternKind.function) {
+            functionTypes.add(
+              _componentFunctionTypeFromDefinitions(
                 visibleTypeDefinitions,
-              );
-          if (introducedTypeDefinition != null) {
-            visibleTypeDefinitions.add(introducedTypeDefinition);
+                descriptor.typeIndex,
+              ),
+            );
+          } else if (descriptor.kind == WasmComponentExternKind.value) {
+            valueTypes.add(
+              descriptor.boundKind == WasmComponentExternBoundKind.equality
+                  ? _componentValueTypeAt(valueTypes, descriptor.valueIndex)
+                  : descriptor.valueType,
+            );
+          } else if (descriptor.kind == WasmComponentExternKind.componentType) {
+            final introducedTypeDefinition =
+                _componentTypeImportDefinitionIntroducedBy(
+                  descriptor,
+                  visibleTypeDefinitions,
+                );
+            if (introducedTypeDefinition != null) {
+              visibleTypeDefinitions.add(introducedTypeDefinition);
+            }
           }
         case _WasmComponentDefinitionEventKind.export:
           final export = exports[event.index];
-          if (export.sort.kind == WasmComponentSortKind.componentType) {
+          if (export.sort.kind == WasmComponentSortKind.function) {
+            functionTypes.add(
+              _componentFunctionTypeAt(functionTypes, export.sort.index),
+            );
+          } else if (export.sort.kind == WasmComponentSortKind.value) {
+            valueTypes.add(
+              _componentValueTypeAt(valueTypes, export.sort.index),
+            );
+          } else if (export.sort.kind == WasmComponentSortKind.componentType) {
             final exportedTypeDefinition = _componentTypeDefinitionAt(
               visibleTypeDefinitions,
               export.sort.index,
@@ -980,16 +1046,40 @@ final class WasmComponent {
               instances[event.index],
               visibleTypeDefinitions,
               visibleComponents,
+              functionTypes,
+              valueTypes,
             ),
           );
         case _WasmComponentDefinitionEventKind.alias:
-          final aliasTypeDefinition = _componentInstanceExportAliasDefinition(
-            aliases[event.index],
+          final alias = aliases[event.index];
+          final aliasEntry = _componentInstanceExportAliasEntry(
+            alias,
             instanceExportMaps,
           );
-          if (aliasTypeDefinition != null) {
-            visibleTypeDefinitions.add(aliasTypeDefinition);
+          if (alias.sort.kind == WasmComponentSortKind.function) {
+            functionTypes.add(aliasEntry?.function);
+          } else if (alias.sort.kind == WasmComponentSortKind.value) {
+            valueTypes.add(aliasEntry?.value);
+          } else if (alias.sort.kind == WasmComponentSortKind.componentType) {
+            final typeDefinition = aliasEntry?.typeDefinition;
+            if (typeDefinition != null) {
+              visibleTypeDefinitions.add(typeDefinition);
+            }
           }
+        case _WasmComponentDefinitionEventKind.canonical:
+          final definition = canonicalDefinitions[event.index];
+          if (definition.kind == WasmComponentCanonicalKind.lift) {
+            functionTypes.add(
+              _componentFunctionTypeFromDefinitions(
+                visibleTypeDefinitions,
+                definition.typeIndex,
+              ),
+            );
+          }
+        case _WasmComponentDefinitionEventKind.start:
+          addStartResults(starts[event.index]);
+        case _WasmComponentDefinitionEventKind.value:
+          valueTypes.add(valueDefinitions[event.index].type);
         case _WasmComponentDefinitionEventKind.typeCount:
           includeDecodedTypeDefinitionsTo(event.index);
         default:
@@ -997,8 +1087,14 @@ final class WasmComponent {
       }
     }
 
-    return List<WasmComponentTypeDefinition>.unmodifiable(
-      visibleTypeDefinitions,
+    return _WasmComponentMaterializedIndexSpaces(
+      typeDefinitions: List<WasmComponentTypeDefinition>.unmodifiable(
+        visibleTypeDefinitions,
+      ),
+      functionTypes: List<WasmComponentFunctionType?>.unmodifiable(
+        functionTypes,
+      ),
+      valueTypes: List<WasmComponentValueType?>.unmodifiable(valueTypes),
     );
   }
 
@@ -1303,6 +1399,8 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
   WasmComponentInstance instance,
   List<WasmComponentTypeDefinition> visibleTypeDefinitions,
   List<WasmComponent> visibleComponents,
+  List<WasmComponentFunctionType?> functionTypes,
+  List<WasmComponentValueType?> valueTypes,
 ) {
   switch (instance.kind) {
     case WasmComponentInstanceKind.inlineExports:
@@ -1310,6 +1408,12 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
         for (final export in instance.exports)
           export.name: _WasmComponentInstanceExportEntry(
             sort: export.sort,
+            function: export.sort.kind == WasmComponentSortKind.function
+                ? _componentFunctionTypeAt(functionTypes, export.sort.index)
+                : null,
+            value: export.sort.kind == WasmComponentSortKind.value
+                ? _componentValueTypeAt(valueTypes, export.sort.index)
+                : null,
             typeDefinition: _componentTypeSortIndexDefinition(
               export.sort,
               visibleTypeDefinitions,
@@ -1334,6 +1438,18 @@ _WasmComponentInstanceExportMap _componentExportTypeMap(
     for (final export in component.exports)
       export.name: _WasmComponentInstanceExportEntry(
         sort: export.sort,
+        function: export.sort.kind == WasmComponentSortKind.function
+            ? _componentFunctionTypeAt(
+                component.componentFunctionIndexTypes,
+                export.sort.index,
+              )
+            : null,
+        value: export.sort.kind == WasmComponentSortKind.value
+            ? _componentValueTypeAt(
+                component.componentValueIndexTypes,
+                export.sort.index,
+              )
+            : null,
         typeDefinition: _componentTypeSortIndexDefinition(
           export.sort,
           component.componentTypeIndexDefinitions,
@@ -1352,12 +1468,60 @@ WasmComponentTypeDefinition? _componentTypeSortIndexDefinition(
   return _componentTypeDefinitionAt(visibleTypeDefinitions, sort.index);
 }
 
+WasmComponentFunctionType? _componentFunctionTypeFromDefinitions(
+  List<WasmComponentTypeDefinition> definitions,
+  int? typeIndex,
+) {
+  if (typeIndex == null || typeIndex < 0 || typeIndex >= definitions.length) {
+    return null;
+  }
+  final definition = definitions[typeIndex];
+  if (definition.kind != WasmComponentTypeKind.function) {
+    return null;
+  }
+  return definition.function;
+}
+
+WasmComponentFunctionType? _componentFunctionTypeAt(
+  List<WasmComponentFunctionType?> functionTypes,
+  int? functionIndex,
+) {
+  if (functionIndex == null ||
+      functionIndex < 0 ||
+      functionIndex >= functionTypes.length) {
+    return null;
+  }
+  return functionTypes[functionIndex];
+}
+
+WasmComponentValueType? _componentValueTypeAt(
+  List<WasmComponentValueType?> valueTypes,
+  int? valueIndex,
+) {
+  if (valueIndex == null || valueIndex < 0 || valueIndex >= valueTypes.length) {
+    return null;
+  }
+  return valueTypes[valueIndex];
+}
+
 WasmComponentTypeDefinition? _componentInstanceExportAliasDefinition(
   WasmComponentAlias alias,
   List<_WasmComponentInstanceExportMap?> instanceExportMaps,
 ) {
-  if (alias.sort.kind != WasmComponentSortKind.componentType ||
-      alias.target.kind != WasmComponentAliasTargetKind.export) {
+  if (alias.sort.kind != WasmComponentSortKind.componentType) {
+    return null;
+  }
+  return _componentInstanceExportAliasEntry(
+    alias,
+    instanceExportMaps,
+  )?.typeDefinition;
+}
+
+_WasmComponentInstanceExportEntry? _componentInstanceExportAliasEntry(
+  WasmComponentAlias alias,
+  List<_WasmComponentInstanceExportMap?> instanceExportMaps,
+) {
+  if (alias.target.kind != WasmComponentAliasTargetKind.export) {
     return null;
   }
   final instanceIndex = alias.target.instanceIndex;
@@ -1368,7 +1532,7 @@ WasmComponentTypeDefinition? _componentInstanceExportAliasDefinition(
       instanceIndex >= instanceExportMaps.length) {
     return null;
   }
-  return instanceExportMaps[instanceIndex]?[name]?.typeDefinition;
+  return instanceExportMaps[instanceIndex]?[name];
 }
 
 final class _WasmComponentValidationContext {
