@@ -81,9 +81,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   send/recv, socket polling readiness, and socket renumber/close descriptor
   paths.
 - Component decoding and validation exist under
-  `lib/src/wasm/backend/native/interpreter/component.dart`, but P2/P3 host
-  instantiation, WIT ingestion, resource tables, canonical ABI lowering/lifting,
-  and async stream/future execution are not production-supported yet.
+  `lib/src/wasm/backend/native/interpreter/component.dart`, and
+  `lib/src/wasi/component/resource_table.dart` now provides an internal typed
+  resource table with stale-handle and borrow/drop guards. P2/P3 host
+  instantiation, WIT ingestion, canonical ABI lowering/lifting, and async
+  stream/future execution are not production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
   for component-model WASI versions. This is an intentional version boundary,
@@ -115,8 +117,9 @@ This is the implementation state as of 2026-06-21 on `main`.
    versioned adapters over shared descriptor, resource, clock, random,
    filesystem, and socket primitives. Do not extend `wasi_snapshot_preview1`
    types into component worlds.
-3. Add WIT ingestion and generated binding support only after the resource table
-   and canonical ABI ownership model are in place.
+3. Wire the resource table into component host adapters and canonical ABI
+   ownership/drop behavior before adding WIT ingestion and generated binding
+   support.
 
 ## Performance Direction
 
@@ -154,13 +157,13 @@ This is the implementation state as of 2026-06-21 on `main`.
 3. Audit `tool/spec_runner.dart` and DOOM tests for process-spawn and fixture
    conversion hot spots, then add timing and caching where it changes actual
    runtime cost.
-4. Finish component-model validation gaps that are local and deterministic:
-   resource type references, function/result restrictions, borrow containment,
-   canonical options, and start/import/export index validation.
+4. Keep closing component-model validation gaps that are local and
+   deterministic, then wire validated resource, borrow, stream, and future
+   shapes into runtime host state.
 5. Introduce explicit WASI version modules for future P2/P3 work instead of
    extending Preview 1 host types in place.
 6. Add WIT/interface ingestion only after the versioned host boundary and
-   resource-table model are in place.
+   resource table are wired into canonical ABI ownership behavior.
 
 ## Completion Bar
 
