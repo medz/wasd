@@ -1,7 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/resource_table.dart';
+import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 
 const int _defaultIterations = 100000;
 const int _defaultResources = 1024;
@@ -19,6 +22,7 @@ void main(List<String> args) {
   final insertGetDrop = _benchmarkInsertGetDrop(options.iterations);
   final borrow = _benchmarkBorrow(options);
   final dropCallbacks = _benchmarkDropCallbacks(options.iterations);
+  final programInvoke = _benchmarkProgramInvoke(options.iterations);
 
   final payload = <String, Object?>{
     'iterations': options.iterations,
@@ -26,6 +30,7 @@ void main(List<String> args) {
     'insert_get_drop': insertGetDrop.toJson(),
     'borrow': borrow.toJson(),
     'drop_callbacks': dropCallbacks.toJson(),
+    'program_invoke': programInvoke.toJson(),
   };
 
   if (options.json) {
@@ -39,6 +44,7 @@ void _runWarmup(_Options options) {
   _benchmarkInsertGetDrop(_warmupIterations);
   _benchmarkBorrow(options.copyWith(iterations: _warmupIterations));
   _benchmarkDropCallbacks(_warmupIterations);
+  _benchmarkProgramInvoke(_warmupIterations);
 }
 
 _Metric _benchmarkInsertGetDrop(int iterations) {
@@ -125,6 +131,40 @@ _Metric _benchmarkDropCallbacks(int iterations) {
   );
 }
 
+_Metric _benchmarkProgramInvoke(int iterations) {
+  final component = WasmComponent.decode(_resourceProgramBytes());
+  final host = WASIComponentResourceHost();
+  host.defineResourceTypeFromComponent<int>(component, 0, 'resource');
+  final program = host.bindCanonicalDefinitions(component);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final handle = program.invoke(0, <Object?>[i]);
+    if (handle is! int) {
+      throw StateError('resource.new returned non-handle: $handle');
+    }
+    final representation = program.invoke(1, <Object?>[handle]);
+    if (representation is! int) {
+      throw StateError('resource.rep returned non-int: $representation');
+    }
+    checksum += representation;
+    program.invoke(2, <Object?>[handle]);
+  }
+  watch.stop();
+
+  if (host.table.activeCount != 0) {
+    throw StateError(
+      'resource host table leaked ${host.table.activeCount} resources',
+    );
+  }
+  return _Metric(
+    operations: iterations * 3,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _printText(Map<String, Object?> payload) {
   stdout
     ..writeln('WASI component resource table benchmark')
@@ -134,6 +174,7 @@ void _printText(Map<String, Object?> payload) {
     'insert_get_drop',
     'borrow',
     'drop_callbacks',
+    'program_invoke',
   ]) {
     final metric = payload[name]! as Map<String, Object?>;
     stdout
@@ -142,6 +183,32 @@ void _printText(Map<String, Object?> payload) {
       ..writeln('  $name per operation us: ${metric['per_operation_us']}');
   }
 }
+
+Uint8List _resourceProgramBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x04,
+  0x01,
+  0x3f,
+  0x7f,
+  0x00,
+  0x08,
+  0x07,
+  0x03,
+  0x02,
+  0x00,
+  0x04,
+  0x00,
+  0x03,
+  0x00,
+]);
 
 void _printUsage() {
   stdout.writeln('''

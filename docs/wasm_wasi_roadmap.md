@@ -152,8 +152,8 @@ This is the implementation state as of 2026-06-21 on `main`.
   async forwarding case from WASI 0.3 must be a first-class benchmark, not only
   a functional test.
 - Component resource table canonical `resource.new`/`resource.rep`/
-  `resource.drop`, nominal typed lookup, borrow, and drop behavior are measured
-  by
+  `resource.drop`, decoded resource-only canonical program invocation, nominal
+  typed lookup, borrow, and drop behavior are measured by
   `dart run tool/wasi_resource_table_benchmark.dart --json`.
 
 ## Near-Term Slices
