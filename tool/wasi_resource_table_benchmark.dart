@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/error_context.dart';
 import 'package:wasd/src/wasi/component/host.dart';
@@ -34,6 +35,9 @@ Future<void> main(List<String> args) async {
   final componentHostBinding = _benchmarkComponentHostBinding(
     options.iterations,
   );
+  final componentHostStreamBinding = _benchmarkComponentHostStreamBinding(
+    options.iterations,
+  );
   final canonicalHostProgram = _benchmarkCanonicalHostProgram(
     options.iterations,
   );
@@ -50,6 +54,7 @@ Future<void> main(List<String> args) async {
     'program_invoke': programInvoke.toJson(),
     'component_resource_bindings': componentResourceBindings.toJson(),
     'component_host_binding': componentHostBinding.toJson(),
+    'component_host_stream_binding': componentHostStreamBinding.toJson(),
     'canonical_host_program': canonicalHostProgram.toJson(),
     'error_context_program': errorContextProgram.toJson(),
     'error_context_memory': errorContextMemory.toJson(),
@@ -70,6 +75,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkProgramInvoke(_warmupIterations);
   _benchmarkComponentResourceBindings(_warmupIterations);
   _benchmarkComponentHostBinding(_warmupIterations);
+  _benchmarkComponentHostStreamBinding(_warmupIterations);
   _benchmarkCanonicalHostProgram(_warmupIterations);
   _benchmarkErrorContextProgram(_warmupIterations);
   _benchmarkErrorContextMemory(_warmupIterations);
@@ -270,6 +276,46 @@ _Metric _benchmarkComponentHostBinding(int iterations) {
     if (host.table.activeCount != 0) {
       throw StateError(
         'component host table leaked ${host.table.activeCount} resources',
+      );
+    }
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentHostStreamBinding(int iterations) {
+  final component = WasmComponent.decode(_streamProgramBytes());
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final host = WASIComponentHost();
+    final binding = host.bindComponent(component);
+    final packed = binding.program.invoke(0, const <Object?>[]);
+    if (packed is! int) {
+      throw StateError('component host stream.new returned non-i64');
+    }
+    final handles = WASIComponentAsyncEndpointHandles.unpack(packed);
+    checksum +=
+        binding.program.invoke(2, <Object?>[
+              handles.writable,
+              <Object?>[null],
+            ])
+            as int;
+    final values =
+        binding.program.invoke(1, <Object?>[handles.readable, 1])
+            as List<Object?>;
+    checksum += values.length;
+    binding.program.invoke(5, <Object?>[handles.readable]);
+    binding.program.invoke(6, <Object?>[handles.writable]);
+    if (host.table.activeCount != 0) {
+      throw StateError(
+        'component host stream table leaked ${host.table.activeCount} resources',
       );
     }
   }
@@ -517,6 +563,7 @@ void _printText(Map<String, Object?> payload) {
     'program_invoke',
     'component_resource_bindings',
     'component_host_binding',
+    'component_host_stream_binding',
     'canonical_host_program',
     'error_context_program',
     'error_context_memory',
@@ -552,6 +599,43 @@ Uint8List _resourceProgramBytes() => Uint8List.fromList(const <int>[
   0x04,
   0x00,
   0x03,
+  0x00,
+]);
+
+Uint8List _streamProgramBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x03,
+  0x01,
+  0x66,
+  0x00,
+  0x08,
+  0x13,
+  0x07,
+  0x0e,
+  0x00,
+  0x0f,
+  0x00,
+  0x00,
+  0x10,
+  0x00,
+  0x00,
+  0x11,
+  0x00,
+  0x00,
+  0x12,
+  0x00,
+  0x00,
+  0x13,
+  0x00,
+  0x14,
   0x00,
 ]);
 

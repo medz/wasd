@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
@@ -67,32 +68,112 @@ void main() {
       );
     });
 
-    test('reports missing stream and future binding state before binding', () {
+    test('binds decoded stream async values before canonical builtins', () {
       final component = WasmComponent.decode(_canonicalStreamProgramBytes());
+      final host = WASIComponentHost();
+      final dropped = <String>[];
+
+      final plan = host.prepareComponent(component);
+
+      expect(component.validate(), isEmpty);
+      expect(plan.canBind, isTrue);
+      expect(plan.validationErrors, isEmpty);
+      expect(plan.unsupportedDefinitions, isEmpty);
+      expect(plan.bindingErrors, isEmpty);
+      expect(plan.asyncValueBindings, hasLength(1));
+      expect(
+        plan.asyncValueBindings.single.kind,
+        WASIComponentAsyncValueBindingKind.stream,
+      );
+      expect(plan.asyncValueBindings.single.isUnit, isTrue);
+
+      final binding = plan.bind(
+        asyncValueName: (value) => 'component-${value.name}',
+        onAsyncValueDrop: (value) => dropped.add(value.name),
+      );
+
+      expect(binding.asyncValueBindings.single.name, 'stream[0]');
+
+      final packed = binding.program.invoke(0, const <Object?>[])! as int;
+      final handles = WASIComponentAsyncEndpointHandles.unpack(packed);
+
+      expect(
+        binding.program.invoke(2, <Object?>[
+          handles.writable,
+          <Object?>[null, null],
+        ]),
+        2,
+      );
+      expect(
+        binding.program.invoke(1, <Object?>[handles.readable, 1]),
+        <Object?>[null],
+      );
+      expect(
+        binding.program.invoke(1, <Object?>[handles.readable, 2]),
+        <Object?>[null],
+      );
+
+      expect(binding.program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(dropped, isEmpty);
+      expect(binding.program.invoke(6, <Object?>[handles.writable]), isNull);
+      expect(dropped, ['stream[0]']);
+      expect(host.table.activeCount, 0);
+    });
+
+    test('binds decoded future async values before canonical builtins', () {
+      final component = WasmComponent.decode(_canonicalFutureProgramBytes());
+      final host = WASIComponentHost();
+
+      final plan = host.prepareComponent(component);
+
+      expect(component.validate(), isEmpty);
+      expect(plan.canBind, isTrue);
+      expect(plan.asyncValueBindings, hasLength(1));
+      expect(
+        plan.asyncValueBindings.single.kind,
+        WASIComponentAsyncValueBindingKind.future,
+      );
+      expect(plan.asyncValueBindings.single.isUnit, isTrue);
+
+      final binding = plan.bind();
+      final packed = binding.program.invoke(0, const <Object?>[])! as int;
+      final handles = WASIComponentAsyncEndpointHandles.unpack(packed);
+
+      expect(
+        binding.program.invoke(2, <Object?>[handles.writable, null]),
+        isNull,
+      );
+      expect(binding.program.invoke(1, <Object?>[handles.readable]), isNull);
+      expect(binding.program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(binding.program.invoke(6, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
+    test('reports unsupported composite stream bindings before binding', () {
+      final component = WasmComponent.decode(
+        _streamIndexedCompositeCanonicalBytes(),
+      );
       final host = WASIComponentHost();
 
       final plan = host.prepareComponent(component);
 
       expect(component.validate(), isEmpty);
       expect(plan.canBind, isFalse);
-      expect(plan.validationErrors, isEmpty);
-      expect(plan.unsupportedDefinitions, isEmpty);
-      expect(plan.bindingErrors, hasLength(7));
-      expect(plan.bindingErrors.first.canonicalIndex, 0);
+      expect(plan.asyncValueBindings, isEmpty);
+      expect(plan.bindingErrors, hasLength(1));
+      expect(plan.bindingErrors.single.canonicalIndex, 0);
       expect(
-        plan.bindingErrors.first.kind,
+        plan.bindingErrors.single.kind,
         WasmComponentCanonicalKind.streamNew,
       );
       expect(
         () => plan.bind(),
         throwsA(
-          isA<WASIComponentHostBindingException>()
-              .having((error) => error.errors, 'errors', hasLength(7))
-              .having(
-                (error) => error.toString(),
-                'message',
-                contains('stream/future async value bindings'),
-              ),
+          isA<WASIComponentHostBindingException>().having(
+            (error) => error.toString(),
+            'message',
+            contains('supported stream/future async value binding'),
+          ),
         ),
       );
     });
@@ -191,3 +272,65 @@ Uint8List _canonicalStreamProgramBytes() => Uint8List.fromList(const <int>[
   0x14,
   0x00,
 ]);
+
+Uint8List _canonicalFutureProgramBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x03,
+  0x01,
+  0x65,
+  0x00,
+  0x08,
+  0x13,
+  0x07,
+  0x15,
+  0x00,
+  0x16,
+  0x00,
+  0x00,
+  0x17,
+  0x00,
+  0x00,
+  0x18,
+  0x00,
+  0x00,
+  0x19,
+  0x00,
+  0x00,
+  0x1a,
+  0x00,
+  0x1b,
+  0x00,
+]);
+
+Uint8List _streamIndexedCompositeCanonicalBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x06,
+      0x02,
+      0x70,
+      0x73,
+      0x66,
+      0x01,
+      0x00,
+      0x08,
+      0x03,
+      0x01,
+      0x0e,
+      0x01,
+    ]);

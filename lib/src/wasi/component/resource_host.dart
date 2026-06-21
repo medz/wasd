@@ -135,7 +135,7 @@ final class WASIComponentResourceHost {
     final bindingList = bindings is List<WASIComponentResourceBinding>
         ? bindings
         : bindings.toList(growable: false);
-    _checkResourceBindingsAvailable(bindingList);
+    checkResourceBindingsAvailable(bindingList);
     final types = <WASIComponentResourceType<T>>[];
     for (final binding in bindingList) {
       types.add(
@@ -152,8 +152,9 @@ final class WASIComponentResourceHost {
     return List<WASIComponentResourceType<T>>.unmodifiable(types);
   }
 
-  void _checkResourceBindingsAvailable(
-    List<WASIComponentResourceBinding> bindings,
+  /// Throws if [bindings] cannot be defined without mutating this host.
+  void checkResourceBindingsAvailable(
+    Iterable<WASIComponentResourceBinding> bindings,
   ) {
     final seen = <int>{};
     for (final binding in bindings) {

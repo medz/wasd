@@ -1,4 +1,5 @@
 import '../../wasm/backend/native/interpreter/component.dart';
+import 'async_host.dart';
 import 'canonical_host.dart';
 import 'resource_host.dart';
 import 'resource_table.dart';
@@ -31,13 +32,20 @@ final class WASIComponentHost {
     final resourceBindings = canonicalPlan.validationErrors.isEmpty
         ? canonicalHost.resourceHost.componentResourceBindings(component)
         : const <WASIComponentResourceBinding>[];
+    final asyncValueBindings = canonicalPlan.validationErrors.isEmpty
+        ? canonicalHost.asyncHost.componentAsyncValueBindings(component)
+        : const <WASIComponentAsyncValueBinding>[];
     final bindingErrors = canonicalPlan.validationErrors.isEmpty
-        ? _componentHostBindingErrors(canonicalPlan.canonicalDefinitions)
+        ? _componentHostBindingErrors(
+            canonicalPlan.canonicalDefinitions,
+            asyncValueBindings,
+          )
         : const <WASIComponentHostBindingError>[];
     return WASIComponentHostBindingPlan._(
       host: this,
       canonicalPlan: canonicalPlan,
       resourceBindings: resourceBindings,
+      asyncValueBindings: asyncValueBindings,
       bindingErrors: bindingErrors,
     );
   }
@@ -49,11 +57,18 @@ final class WASIComponentHost {
     String Function(WASIComponentResourceBinding binding)? resourceName,
     void Function(WASIComponentResourceBinding binding, Object resource)?
     onResourceDrop,
+    String Function(WASIComponentAsyncValueBinding binding)? asyncValueName,
+    int? Function(WASIComponentAsyncValueBinding binding)?
+    maxBufferedElementsForStream,
+    void Function(WASIComponentAsyncValueBinding binding)? onAsyncValueDrop,
   }) {
-    return prepareComponent(
-      component,
-      validate: validate,
-    ).bind(resourceName: resourceName, onResourceDrop: onResourceDrop);
+    return prepareComponent(component, validate: validate).bind(
+      resourceName: resourceName,
+      onResourceDrop: onResourceDrop,
+      asyncValueName: asyncValueName,
+      maxBufferedElementsForStream: maxBufferedElementsForStream,
+      onAsyncValueDrop: onAsyncValueDrop,
+    );
   }
 }
 
@@ -63,6 +78,7 @@ final class WASIComponentHostBindingPlan {
     required WASIComponentHost host,
     required this.canonicalPlan,
     required this.resourceBindings,
+    required this.asyncValueBindings,
     required this.bindingErrors,
   }) : _host = host;
 
@@ -73,6 +89,9 @@ final class WASIComponentHostBindingPlan {
 
   /// Component resource bindings captured before host binding.
   final List<WASIComponentResourceBinding> resourceBindings;
+
+  /// Component async stream/future bindings captured before host binding.
+  final List<WASIComponentAsyncValueBinding> asyncValueBindings;
 
   /// Host-specific binding gaps that must be wired before binding.
   final List<WASIComponentHostBindingError> bindingErrors;
@@ -93,6 +112,10 @@ final class WASIComponentHostBindingPlan {
     String Function(WASIComponentResourceBinding binding)? resourceName,
     void Function(WASIComponentResourceBinding binding, Object resource)?
     onResourceDrop,
+    String Function(WASIComponentAsyncValueBinding binding)? asyncValueName,
+    int? Function(WASIComponentAsyncValueBinding binding)?
+    maxBufferedElementsForStream,
+    void Function(WASIComponentAsyncValueBinding binding)? onAsyncValueDrop,
   }) {
     if (validationErrors.isNotEmpty) {
       throw WASIComponentCanonicalHostValidationException(validationErrors);
@@ -105,15 +128,28 @@ final class WASIComponentHostBindingPlan {
     if (bindingErrors.isNotEmpty) {
       throw WASIComponentHostBindingException(bindingErrors);
     }
+    _host.canonicalHost.resourceHost.checkResourceBindingsAvailable(
+      resourceBindings,
+    );
+    _host.canonicalHost.asyncHost.checkAsyncValueBindingsAvailable(
+      asyncValueBindings,
+    );
     final resourceTypes = _host.canonicalHost.resourceHost
         .defineResourceBindings<Object>(
           resourceBindings,
           nameForBinding: resourceName,
           onDrop: onResourceDrop,
         );
+    _host.canonicalHost.asyncHost.defineAsyncValueBindings<Object?>(
+      asyncValueBindings,
+      nameForBinding: asyncValueName,
+      maxBufferedElementsForStream: maxBufferedElementsForStream,
+      onDrop: onAsyncValueDrop,
+    );
     return WASIComponentHostBinding._(
       host: _host,
       resourceTypes: resourceTypes,
+      asyncValueBindings: asyncValueBindings,
       program: canonicalPlan.bind(),
     );
   }
@@ -173,6 +209,7 @@ final class WASIComponentHostBinding {
   const WASIComponentHostBinding._({
     required this.host,
     required this.resourceTypes,
+    required this.asyncValueBindings,
     required this.program,
   });
 
@@ -182,23 +219,34 @@ final class WASIComponentHostBinding {
   /// Resource types defined for this component binding.
   final List<WASIComponentResourceType<Object>> resourceTypes;
 
+  /// Async value bindings defined for this component binding.
+  final List<WASIComponentAsyncValueBinding> asyncValueBindings;
+
   /// Canonical-indexed builtin program for this component.
   final WASIComponentCanonicalProgram program;
 }
 
 List<WASIComponentHostBindingError> _componentHostBindingErrors(
   List<WasmComponentCanonicalDefinition> definitions,
+  List<WASIComponentAsyncValueBinding> asyncValueBindings,
 ) {
   final errors = <WASIComponentHostBindingError>[];
+  final asyncTypeIndexes = {
+    for (final binding in asyncValueBindings) binding.componentTypeIndex,
+  };
   for (var index = 0; index < definitions.length; index++) {
     final definition = definitions[index];
     if (_componentHostNeedsAsyncValueBinding(definition.kind)) {
+      final typeIndex = definition.typeIndex;
+      if (typeIndex != null && asyncTypeIndexes.contains(typeIndex)) {
+        continue;
+      }
       errors.add(
         WASIComponentHostBindingError(
           canonicalIndex: index,
           definition: definition,
           reason:
-              'component host does not yet derive stream/future async value bindings',
+              'component host cannot derive a supported stream/future async value binding',
         ),
       );
     }

@@ -228,11 +228,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   captures component validation errors, unsupported canonical definitions, and
   the canonical definition snapshot once before any operation table is built.
   An internal component host adapter now combines that canonical plan with the
-  decoded component resource binding list, defines component resources on the
-  shared table only after validation and capability checks pass, and returns the
-  canonical-indexed program from the same shared host state. It also reports
-  stream/future async value bindings as component-host binding gaps until those
-  bindings are derived from decoded component type definitions.
+  decoded component resource and async value binding lists, defines component
+  resources plus supported unit/primitive `stream<T>` and `future<T>` values on
+  the shared table only after validation and capability checks pass, and returns
+  the canonical-indexed program from the same shared host state. Composite
+  stream/future element lowering remains a component-host binding gap.
   This is an adapter boundary for future P2/P3 version modules, not a public
   support claim.
   Internal
@@ -365,7 +365,7 @@ This is the implementation state as of 2026-06-21 on `main`.
 - Component resource table canonical `resource.new`/`resource.rep`/
   `resource.drop`, decoded resource-only canonical program invocation,
   component resource binding extraction from decoded type index spaces,
-  component-host binding startup with a resource round trip, mixed
+  component-host binding startup with resource and stream round trips, mixed
   canonical-host program invocation over shared component state, error-context
   canonical lifecycle invocation, error-context canonical string memory adapter
   invocation with result records, nominal typed lookup, synchronous/asynchronous

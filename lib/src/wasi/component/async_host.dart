@@ -122,6 +122,109 @@ final class WASIComponentAsyncHost {
     );
   }
 
+  /// Returns supported component stream/future bindings in type-index order.
+  List<WASIComponentAsyncValueBinding> componentAsyncValueBindings(
+    WasmComponent component,
+  ) {
+    final bindings = <WASIComponentAsyncValueBinding>[];
+    final definitions = component.componentTypeIndexDefinitions;
+    for (
+      var componentTypeIndex = 0;
+      componentTypeIndex < definitions.length;
+      componentTypeIndex++
+    ) {
+      final definition = definitions[componentTypeIndex];
+      final definedValue = definition.definedValue;
+      if (definition.kind != WasmComponentTypeKind.definedValue ||
+          definedValue == null) {
+        continue;
+      }
+      final kind = switch (definedValue.kind) {
+        WasmComponentDefinedValueTypeKind.stream =>
+          WASIComponentAsyncValueBindingKind.stream,
+        WasmComponentDefinedValueTypeKind.future =>
+          WASIComponentAsyncValueBindingKind.future,
+        _ => null,
+      };
+      if (kind == null) {
+        continue;
+      }
+      final validator = _supportedAsyncValueValidatorForElementType(
+        definedValue.elementType,
+        definitions,
+      );
+      if (validator == null) {
+        continue;
+      }
+      bindings.add(
+        WASIComponentAsyncValueBinding._(
+          componentTypeIndex: componentTypeIndex,
+          name: '${kind.name}[$componentTypeIndex]',
+          kind: kind,
+          valueValidator: validator,
+        ),
+      );
+    }
+    return List<WASIComponentAsyncValueBinding>.unmodifiable(bindings);
+  }
+
+  /// Defines async value types from a prepared component async binding list.
+  void defineAsyncValueBindings<T>(
+    Iterable<WASIComponentAsyncValueBinding> bindings, {
+    String Function(WASIComponentAsyncValueBinding binding)? nameForBinding,
+    int? Function(WASIComponentAsyncValueBinding binding)?
+    maxBufferedElementsForStream,
+    void Function(WASIComponentAsyncValueBinding binding)? onDrop,
+  }) {
+    final bindingList = bindings is List<WASIComponentAsyncValueBinding>
+        ? bindings
+        : bindings.toList(growable: false);
+    checkAsyncValueBindingsAvailable(bindingList);
+    for (final binding in bindingList) {
+      _defineType<T>(
+        binding.componentTypeIndex,
+        nameForBinding?.call(binding) ?? binding.name,
+        kind: switch (binding.kind) {
+          WASIComponentAsyncValueBindingKind.stream =>
+            _WASIComponentAsyncValueKind.stream,
+          WASIComponentAsyncValueBindingKind.future =>
+            _WASIComponentAsyncValueKind.future,
+        },
+        valueValidator: binding._valueValidator,
+        maxBufferedElements:
+            binding.kind == WASIComponentAsyncValueBindingKind.stream
+            ? maxBufferedElementsForStream?.call(binding)
+            : null,
+        onDrop: onDrop == null ? null : () => onDrop(binding),
+      );
+    }
+  }
+
+  /// Throws if [bindings] cannot be defined without mutating this host.
+  void checkAsyncValueBindingsAvailable(
+    Iterable<WASIComponentAsyncValueBinding> bindings,
+  ) {
+    final seen = <int>{};
+    for (final binding in bindings) {
+      final componentTypeIndex = binding.componentTypeIndex;
+      if (componentTypeIndex < 0) {
+        throw StateError(
+          'WASI component async type index $componentTypeIndex is invalid.',
+        );
+      }
+      if (!seen.add(componentTypeIndex)) {
+        throw StateError(
+          'WASI component async type index $componentTypeIndex is bound more than once.',
+        );
+      }
+      if (_valueTypes.containsKey(componentTypeIndex)) {
+        throw StateError(
+          'WASI component async type index $componentTypeIndex is already bound.',
+        );
+      }
+    }
+  }
+
   void _defineType<T>(
     int componentTypeIndex,
     String name, {
@@ -212,6 +315,42 @@ final class WASIComponentAsyncHost {
       ]),
     );
   }
+}
+
+/// Supported async value binding kind.
+enum WASIComponentAsyncValueBindingKind {
+  /// Component `stream<T>`.
+  stream,
+
+  /// Component `future<T>`.
+  future,
+}
+
+/// A decoded component stream/future type that can be bound to the async host.
+final class WASIComponentAsyncValueBinding {
+  const WASIComponentAsyncValueBinding._({
+    required this.componentTypeIndex,
+    required this.name,
+    required this.kind,
+    required _WASIComponentAsyncValueValidator valueValidator,
+  }) : _valueValidator = valueValidator;
+
+  final _WASIComponentAsyncValueValidator _valueValidator;
+
+  /// Component type index of the stream/future value.
+  final int componentTypeIndex;
+
+  /// Stable debug name for this async value type.
+  final String name;
+
+  /// Stream/future binding kind.
+  final WASIComponentAsyncValueBindingKind kind;
+
+  /// Whether this stream/future carries unit values.
+  bool get isUnit => _valueValidator.kind == _WASIComponentAsyncValueShape.unit;
+
+  /// Primitive element type when this binding carries primitive values.
+  WasmComponentPrimitiveValueType? get primitive => _valueValidator.primitive;
 }
 
 /// Executable stream/future-only canonical program for a decoded component.
@@ -2557,6 +2696,17 @@ _WASIComponentAsyncValueValidator _asyncValueValidatorForElementType(
     kind: _WASIComponentAsyncValueShape.primitive,
     primitive: primitive,
   );
+}
+
+_WASIComponentAsyncValueValidator? _supportedAsyncValueValidatorForElementType(
+  WasmComponentValueType? elementType,
+  List<WasmComponentTypeDefinition> definitions,
+) {
+  try {
+    return _asyncValueValidatorForElementType(elementType, definitions);
+  } on UnsupportedError {
+    return null;
+  }
 }
 
 WasmComponentPrimitiveValueType? _primitiveElementType(
