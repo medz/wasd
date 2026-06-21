@@ -221,8 +221,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   diagnostics instead of runtime-only host errors. It also reports all
   unsupported canonical definitions before building any operation table, so
   versioned adapters can surface real capability gaps without partially bound
-  programs. This is an adapter boundary for future P2/P3 version modules, not a
-  public support claim.
+  programs. The same facade can also prepare a reusable binding plan that
+  captures component validation errors, unsupported canonical definitions, and
+  the canonical definition snapshot once before any operation table is built.
+  This is an adapter boundary for future P2/P3 version modules, not a public
+  support claim.
   Internal
   error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`

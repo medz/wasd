@@ -221,13 +221,64 @@ void main() {
       );
     });
 
+    test('prepares a reusable component binding plan', () {
+      final component = WasmComponent.decode(_canonicalContextGetBytes());
+      final host = WASIComponentCanonicalHost();
+
+      expect(component.validate(), isEmpty);
+
+      final plan = host.prepareComponent(component);
+
+      expect(plan.canBind, isTrue);
+      expect(plan.validationErrors, isEmpty);
+      expect(plan.unsupportedDefinitions, isEmpty);
+      expect(plan.canonicalDefinitions.map((definition) => definition.kind), [
+        WasmComponentCanonicalKind.contextGet,
+      ]);
+      expect(
+        () => plan.canonicalDefinitions.add(
+          const WasmComponentCanonicalDefinition(
+            kind: WasmComponentCanonicalKind.contextSet,
+            contextIndex: 0,
+          ),
+        ),
+        throwsUnsupportedError,
+      );
+
+      final program = plan.bind();
+      final secondProgram = plan.bind();
+
+      expect(program.operations.map((operation) => operation.kind), [
+        WasmComponentCanonicalKind.contextGet,
+      ]);
+      expect(secondProgram, isNot(same(program)));
+      expect(program.invoke(0, const <Object?>[]), 0);
+      expect(secondProgram.invoke(0, const <Object?>[]), 0);
+    });
+
     test('validates decoded components before canonical binding', () {
       final component = WasmComponent.decode(
         _canonicalContextGetOutOfRangeComponentBytes(),
       );
       final host = WASIComponentCanonicalHost();
+      final plan = host.prepareComponent(component);
 
       expect(component.validate(), isNotEmpty);
+      expect(plan.canBind, isFalse);
+      expect(plan.validationErrors, hasLength(1));
+      expect(plan.unsupportedDefinitions, isEmpty);
+      expect(
+        () => plan.bind(),
+        throwsA(
+          isA<WASIComponentCanonicalHostValidationException>()
+              .having((error) => error.errors, 'errors', hasLength(1))
+              .having(
+                (error) => error.errors.single.path,
+                'path',
+                'canonical[0].context',
+              ),
+        ),
+      );
       expect(
         () => host.bindComponent(component),
         throwsA(
@@ -266,3 +317,20 @@ Uint8List _canonicalContextGetOutOfRangeComponentBytes() =>
       0x7f,
       0x02,
     ]);
+
+Uint8List _canonicalContextGetBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x08,
+  0x04,
+  0x01,
+  0x0a,
+  0x7f,
+  0x00,
+]);

@@ -78,13 +78,29 @@ final class WASIComponentCanonicalHost {
     WasmComponent component, {
     bool validate = true,
   }) {
-    if (validate) {
-      final errors = component.validate();
-      if (errors.isNotEmpty) {
-        throw WASIComponentCanonicalHostValidationException(errors);
-      }
-    }
-    return bindCanonicalDefinitions(component.canonicalDefinitions);
+    return prepareComponent(component, validate: validate).bind();
+  }
+
+  /// Builds a reusable component binding plan without partially binding.
+  WASIComponentCanonicalBindingPlan prepareComponent(
+    WasmComponent component, {
+    bool validate = true,
+  }) {
+    final definitions = List<WasmComponentCanonicalDefinition>.unmodifiable(
+      component.canonicalDefinitions,
+    );
+    final validationErrors = validate
+        ? component.validate()
+        : const <WasmComponentValidationError>[];
+    final unsupported = unsupportedCanonicalDefinitions(definitions);
+    return WASIComponentCanonicalBindingPlan._(
+      host: this,
+      canonicalDefinitions: definitions,
+      validationErrors: List<WasmComponentValidationError>.unmodifiable(
+        validationErrors,
+      ),
+      unsupportedDefinitions: unsupported,
+    );
   }
 
   /// Binds canonical definitions in their decoded canonical index order.
@@ -98,8 +114,14 @@ final class WASIComponentCanonicalHost {
     if (unsupported.isNotEmpty) {
       throw WASIComponentCanonicalHostUnsupportedException(unsupported);
     }
+    return _bindSupportedCanonicalDefinitions(definitionList);
+  }
+
+  WASIComponentCanonicalProgram _bindSupportedCanonicalDefinitions(
+    List<WasmComponentCanonicalDefinition> definitions,
+  ) {
     final operations = <WASIComponentCanonicalOperation>[];
-    for (final definition in definitionList) {
+    for (final definition in definitions) {
       operations.add(_bindSupportedCanonicalDefinition(definition));
     }
     return WASIComponentCanonicalProgram(
@@ -326,6 +348,45 @@ final class WASIComponentCanonicalHost {
       kind: definition.kind,
       invoke: (args) => program.invoke(0, args),
     );
+  }
+}
+
+/// Prepared canonical binding report for a decoded component.
+final class WASIComponentCanonicalBindingPlan {
+  const WASIComponentCanonicalBindingPlan._({
+    required WASIComponentCanonicalHost host,
+    required this.canonicalDefinitions,
+    required this.validationErrors,
+    required this.unsupportedDefinitions,
+  }) : _host = host;
+
+  final WASIComponentCanonicalHost _host;
+
+  /// Canonical definitions captured when the plan was prepared.
+  final List<WasmComponentCanonicalDefinition> canonicalDefinitions;
+
+  /// Component validation errors that must be fixed before binding.
+  final List<WasmComponentValidationError> validationErrors;
+
+  /// Unsupported canonical definitions that this host cannot bind.
+  final List<WASIComponentCanonicalHostUnsupportedDefinition>
+  unsupportedDefinitions;
+
+  /// Whether [bind] can build a canonical program without throwing.
+  bool get canBind =>
+      validationErrors.isEmpty && unsupportedDefinitions.isEmpty;
+
+  /// Builds the canonical program after validation and capability preflight.
+  WASIComponentCanonicalProgram bind() {
+    if (validationErrors.isNotEmpty) {
+      throw WASIComponentCanonicalHostValidationException(validationErrors);
+    }
+    if (unsupportedDefinitions.isNotEmpty) {
+      throw WASIComponentCanonicalHostUnsupportedException(
+        unsupportedDefinitions,
+      );
+    }
+    return _host._bindSupportedCanonicalDefinitions(canonicalDefinitions);
   }
 }
 
