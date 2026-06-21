@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
 import 'package:wasd/src/wasi/component/backpressure.dart';
+import 'package:wasd/src/wasi/component/subtask.dart';
 import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
@@ -40,6 +41,9 @@ Future<void> main(List<String> args) async {
   );
   final waitableSetTaskCancellation =
       await _benchmarkWaitableSetTaskCancellation(options.iterations);
+  final subtaskCancelDelivery = await _benchmarkSubtaskCancelDelivery(
+    options.iterations,
+  );
   final programInvoke = _benchmarkProgramInvoke(options);
   final unitProgramInvoke = _benchmarkUnitProgramInvoke(options);
   final handleProgramInvoke = _benchmarkHandleProgramInvoke(options);
@@ -68,6 +72,7 @@ Future<void> main(List<String> args) async {
     'backpressure_counter': backpressureCounter.toJson(),
     'waitable_set_delivery': waitableSetDelivery.toJson(),
     'waitable_set_task_cancellation': waitableSetTaskCancellation.toJson(),
+    'subtask_cancel_delivery': subtaskCancelDelivery.toJson(),
     'program_invoke': programInvoke.toJson(),
     'unit_program_invoke': unitProgramInvoke.toJson(),
     'handle_program_invoke': handleProgramInvoke.toJson(),
@@ -100,6 +105,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkBackpressureCounter(_warmupIterations);
   await _benchmarkWaitableSetDelivery(_warmupIterations);
   await _benchmarkWaitableSetTaskCancellation(_warmupIterations);
+  await _benchmarkSubtaskCancelDelivery(_warmupIterations);
   _benchmarkProgramInvoke(warmup);
   _benchmarkUnitProgramInvoke(warmup);
   _benchmarkHandleProgramInvoke(warmup);
@@ -431,6 +437,83 @@ Future<_Metric> _benchmarkWaitableSetTaskCancellation(int iterations) async {
   }
   return _Metric(
     operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+Future<_Metric> _benchmarkSubtaskCancelDelivery(int iterations) async {
+  final host = WASIComponentSubtaskHost();
+  final waitableHost = WASIComponentWaitableHost(
+    table: host.table,
+    waitableResolvers: [host.waitableForHandle],
+  );
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  const outputPointer = 3072;
+  final set = waitableHost.waitableSetNew();
+  final asyncCancel = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.subtaskCancel,
+      isAsync: true,
+    ),
+  );
+  final syncCancel = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.subtaskCancel,
+    ),
+  );
+  final drop = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.subtaskDrop,
+    ),
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final returned = host.createSubtask(
+      name: 'benchmark-returned',
+      state: WASIComponentSubtaskState.returned,
+    );
+    checksum += asyncCancel.subtaskCancel(returned);
+    drop.subtaskDrop(returned);
+
+    final asyncSubtask = WASIComponentSubtask(name: 'benchmark-async-cancel');
+    final asyncHandle = host.insertSubtask(asyncSubtask);
+    waitableHost.waitableJoin(asyncHandle, set);
+    final blocked = asyncCancel.subtaskCancel(asyncHandle);
+    if (blocked != wasiComponentSubtaskBlocked) {
+      throw StateError('subtask async cancel did not block: $blocked');
+    }
+    asyncSubtask.cancelBeforeStarted();
+    checksum += await waitableHost.waitableSetWaitToMemory(
+      set,
+      memory,
+      outputPointer,
+    );
+    checksum += data.getUint32(outputPointer, Endian.little);
+    checksum += data.getUint32(outputPointer + 4, Endian.little);
+    waitableHost.waitableJoin(asyncHandle, 0);
+    drop.subtaskDrop(asyncHandle);
+
+    final syncSubtask = WASIComponentSubtask(name: 'benchmark-sync-cancel');
+    final syncHandle = host.insertSubtask(syncSubtask);
+    final pending = syncCancel.subtaskCancelWhenReady(syncHandle);
+    syncSubtask.cancelBeforeStarted();
+    checksum += await pending;
+    drop.subtaskDrop(syncHandle);
+  }
+  watch.stop();
+
+  waitableHost.waitableSetDrop(set);
+  if (host.table.activeCount != 0) {
+    throw StateError(
+      'subtask benchmark leaked ${host.table.activeCount} handles',
+    );
+  }
+  return _Metric(
+    operations: iterations * 8,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
@@ -1488,6 +1571,7 @@ void _printText(Map<String, Object?> payload) {
     'backpressure_counter',
     'waitable_set_delivery',
     'waitable_set_task_cancellation',
+    'subtask_cancel_delivery',
     'program_invoke',
     'unit_program_invoke',
     'handle_program_invoke',

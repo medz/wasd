@@ -187,8 +187,14 @@ This is the implementation state as of 2026-06-21 on `main`.
   endpoint moves to a done state after a completed canonical copy and rejects
   duplicate read/write copy starts while still allowing the required endpoint
   drop.
-  Subtask/thread event production is still future integration work, but
-  stream/future copy event delivery is no longer a placeholder.
+  Internal subtask support now models table-backed caller-side subtasks,
+  canonical subtask state codes, `subtask.cancel`, `subtask.drop`, async
+  `BLOCKED` cancellation, waitable-set `SUBTASK` event delivery, and non-async
+  cancellation through an `invokeAsync` path that waits past intermediate
+  `STARTED` progress until the final subtask state is available. Full async
+  lowering, task spawning, thread event production, and WIT-generated world
+  integration remain future work, but stream/future copy and subtask event
+  delivery are no longer placeholders.
   Internal
   error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`
@@ -288,6 +294,12 @@ This is the implementation state as of 2026-06-21 on `main`.
   poll readiness, plus file, directory, and socket descriptor renumber/close
   over large directory and descriptor sets. Keep optimizing against benchmark
   data instead of test suite heat alone.
+- Component async host paths are measured by
+  `dart run tool/wasi_component_async_benchmark.dart --json`, including
+  canonical async stream/future copies, waitable-set event delivery, task
+  cancellation delivery, and subtask cancellation delivery. Add new async
+  lifecycle work to this benchmark before treating hot test behavior as an
+  implementation detail.
 - P2/P3 streams and futures need latency, allocation, and cancellation
   benchmarks before they are advertised as production-ready. The "sandwich"
   async forwarding case from WASI 0.3 must be a first-class benchmark, not only
