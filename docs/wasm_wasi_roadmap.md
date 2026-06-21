@@ -87,7 +87,7 @@ This is the implementation state as of 2026-06-21 on `main`.
   The benchmark entrypoint is `dart run tool/wasi_vfs_benchmark.dart --json`;
   it also covers socket multi-iov peek/waitall, datagram truncation, socket
   send/recv, socket polling readiness including zero-length datagram
-  readiness, and socket renumber/close descriptor paths.
+  readiness and queued accepts, and socket renumber/close descriptor paths.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/` now provides an internal typed resource table plus

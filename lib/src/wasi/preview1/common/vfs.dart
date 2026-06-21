@@ -214,10 +214,15 @@ final class Preview1VirtualFileSystem {
             nbytes: socket.nextReceiveMessageLength,
           );
         }
-      } else if (socket.remainingReceiveLength > 0) {
-        return Preview1FdPollReadiness.ready(
-          nbytes: socket.remainingReceiveLength,
-        );
+      } else {
+        if (socket.hasPendingAccept) {
+          return const Preview1FdPollReadiness.ready();
+        }
+        if (socket.remainingReceiveLength > 0) {
+          return Preview1FdPollReadiness.ready(
+            nbytes: socket.remainingReceiveLength,
+          );
+        }
       }
       if (socket.receiveShutdown) {
         return const Preview1FdPollReadiness.ready(
@@ -1503,6 +1508,8 @@ final class Preview1VirtualSocket {
   bool get isStream => socket.isStream;
 
   bool get hasReceiveMessage => socket.hasReceiveMessage;
+
+  bool get hasPendingAccept => socket.hasPendingAccept;
 
   int get nextReceiveMessageLength => socket.nextReceiveMessageLength;
 

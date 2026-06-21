@@ -77,6 +77,9 @@ final class WASIPreview1Socket {
   /// Whether a datagram message is queued for receive.
   bool get hasReceiveMessage => _receiveMessages.isNotEmpty;
 
+  /// Whether a future `sock_accept` call can return an accepted stream.
+  bool get hasPendingAccept => _pendingAccepted.isNotEmpty;
+
   /// Length of the next queued datagram receive message.
   int get nextReceiveMessageLength =>
       _receiveMessages.isEmpty ? 0 : _receiveMessages.first.length;

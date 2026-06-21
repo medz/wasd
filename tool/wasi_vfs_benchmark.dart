@@ -622,8 +622,9 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
   final waiting = WASIPreview1Socket();
   final closed = WASIPreview1Socket();
   closed.shutdown(receive: true, send: false);
+  final listener = WASIPreview1Socket(pendingAccepted: [WASIPreview1Socket()]);
   final vfs = Preview1VirtualFileSystem(
-    sockets: {64: readable, 65: waiting, 66: closed},
+    sockets: {64: readable, 65: waiting, 66: closed, 67: listener},
   );
 
   var checksum = 0;
@@ -662,10 +663,19 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
       throw StateError('closed socket hangup poll failed at iteration $i');
     }
     checksum += closedEvent.flags;
+
+    final acceptEvent = vfs.pollFdReadWrite(fd: 67, eventType: eventTypeFdRead);
+    if (!acceptEvent.ready ||
+        acceptEvent.nbytes != 0 ||
+        acceptEvent.flags != 0 ||
+        acceptEvent.errno != errnoSuccess) {
+      throw StateError('queued accept socket poll failed at iteration $i');
+    }
+    checksum++;
   }
   watch.stop();
   return _Metric(
-    operations: options.iterations * 4,
+    operations: options.iterations * 5,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );

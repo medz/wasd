@@ -1146,6 +1146,75 @@ void main() {
       );
 
       test(
+        'poll_oneoff reports queued socket accepts as readable',
+        () async {
+          final accepted = WASIPreview1Socket(
+            receiveData: utf8.encode('client'),
+          );
+          final listener = WASIPreview1Socket(pendingAccepted: [accepted]);
+          final socketWasi = WASI(sockets: {28: listener});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final pollOneoff =
+              preview1['poll_oneoff'] as FunctionImportExportValue;
+          final sockAccept =
+              preview1['sock_accept'] as FunctionImportExportValue;
+          final fdFdstatGet =
+              preview1['fd_fdstat_get'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const inPtr = 3280;
+          const outPtr = 3392;
+          const neventsPtr = 3504;
+          const acceptedFdPtr = 3520;
+          const fdstatPtr = 3536;
+
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0x8808,
+            tag: _eventTypeFdRead,
+            fd: 28,
+          );
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]),
+            ),
+            0,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0x8808);
+          expect(data.getUint16(outPtr + _eventErrorOffset, Endian.little), 0);
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeFdRead);
+          expect(_getUint64Le(data, outPtr + _eventFdReadwriteNbytesOffset), 0);
+          expect(
+            data.getUint16(
+              outPtr + _eventFdReadwriteFlagsOffset,
+              Endian.little,
+            ),
+            0,
+          );
+
+          expect(sockAccept.ref([28, 0, acceptedFdPtr]), 0);
+          final acceptedFd = data.getUint32(acceptedFdPtr, Endian.little);
+          expect(acceptedFd, greaterThanOrEqualTo(64));
+          expect(fdFdstatGet.ref([acceptedFd, fdstatPtr]), 0);
+          expect(bytes[fdstatPtr], _filetypeSocketStream);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'sock_recv and sock_send use configured preview1 stream sockets',
         () async {
           final socket = WASIPreview1Socket(receiveData: utf8.encode('hello'));
