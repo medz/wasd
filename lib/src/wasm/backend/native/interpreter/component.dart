@@ -2868,6 +2868,17 @@ final class _WasmComponentValidationContext {
           ),
         );
       }
+
+      if (canonicalDefinitionUsesStreamOrFutureCopy(definition.kind) &&
+          canonicalStreamOrFutureCopyDisallowsOption(optionKind)) {
+        errors.add(
+          WasmComponentValidationError(
+            path: '$path.options[$i]',
+            message:
+                'Wasm component stream or future copy cannot use ${optionKind.name} option.',
+          ),
+        );
+      }
     }
   }
 
@@ -2879,6 +2890,13 @@ final class _WasmComponentValidationContext {
   bool canonicalLowerDisallowsOption(WasmComponentCanonicalOptionKind kind) {
     return kind == WasmComponentCanonicalOptionKind.postReturn ||
         kind == WasmComponentCanonicalOptionKind.callback;
+  }
+
+  bool canonicalStreamOrFutureCopyDisallowsOption(
+    WasmComponentCanonicalOptionKind kind,
+  ) {
+    return kind != WasmComponentCanonicalOptionKind.memory &&
+        kind != WasmComponentCanonicalOptionKind.async;
   }
 
   bool canonicalLowerParametersRequireMemory(

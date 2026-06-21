@@ -1057,6 +1057,19 @@ void main() {
         ),
         isTrue,
       );
+
+      final streamRead = WasmComponent.decode(
+        _canonicalStreamReadWithReallocComponentBytes(),
+      ).validate();
+
+      expect(
+        streamRead.any(
+          (error) => error.message.contains(
+            'stream or future copy cannot use realloc option',
+          ),
+        ),
+        isTrue,
+      );
     });
 
     test('reports missing canonical option requirements', () {
@@ -3955,6 +3968,32 @@ Uint8List _canonicalStreamReadWithoutMemoryComponentBytes() =>
       0x01,
       0x0f,
       0x00,
+      0x00,
+    ]);
+
+Uint8List _canonicalStreamReadWithReallocComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x66,
+      0x01,
+      0x73,
+      0x08,
+      0x06,
+      0x01,
+      0x0f,
+      0x00,
+      0x01,
+      0x04,
       0x00,
     ]);
 
