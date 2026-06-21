@@ -1007,6 +1007,21 @@ int readSocketIntoIov({
 
   var totalRead = 0;
   final peek = (flags & riflagRecvPeek) != 0;
+  final waitAll = (flags & riflagRecvWaitall) != 0;
+  if (waitAll) {
+    final capacity = _socketIovCapacity(
+      bytes: bytes,
+      data: data,
+      iovs: iovs,
+      iovsLen: iovsLen,
+    );
+    if (capacity < 0) {
+      return errnoInval;
+    }
+    if (!socket.receiveShutdown && socket.remainingReceiveLength < capacity) {
+      return errnoAgain;
+    }
+  }
   for (var index = 0; index < iovsLen; index++) {
     final entry = iovs + index * iovecEntrySize;
     if (entry + iovecEntrySize > bytes.length) {
@@ -1037,6 +1052,28 @@ int readSocketIntoIov({
   data.setUint32(nreadPtr, totalRead, Endian.little);
   data.setUint16(roFlagsPtr, 0, Endian.little);
   return errnoSuccess;
+}
+
+int _socketIovCapacity({
+  required Uint8List bytes,
+  required ByteData data,
+  required int iovs,
+  required int iovsLen,
+}) {
+  var capacity = 0;
+  for (var index = 0; index < iovsLen; index++) {
+    final entry = iovs + index * iovecEntrySize;
+    if (entry + iovecEntrySize > bytes.length) {
+      return -1;
+    }
+    final buf = data.getUint32(entry, Endian.little);
+    final len = data.getUint32(entry + 4, Endian.little);
+    if (len > 0 && buf + len > bytes.length) {
+      return -1;
+    }
+    capacity += len;
+  }
+  return capacity;
 }
 
 int writeSocketFromIov({
@@ -1232,6 +1269,10 @@ final class Preview1VirtualSocket {
   }
 
   bool get sendShutdown => socket.sendShutdown;
+
+  bool get receiveShutdown => socket.receiveShutdown;
+
+  int get remainingReceiveLength => socket.remainingReceiveLength;
 }
 
 enum Preview1VirtualOpenKind { file, directory, missing }

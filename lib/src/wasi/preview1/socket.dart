@@ -40,6 +40,9 @@ final class WASIPreview1Socket {
     return result;
   }
 
+  /// Number of currently unread receive bytes.
+  int get remainingReceiveLength => _receiveBytes.length - _receiveOffset;
+
   /// Appends bytes that future `sock_recv` calls can consume.
   void addReceiveData(List<int> data) {
     if (data.isEmpty) {

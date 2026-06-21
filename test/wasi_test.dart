@@ -19,6 +19,7 @@ const int _rightSockShutdown = 1 << 28;
 const int _rightSockAccept = 1 << 29;
 const int _rightsAll = (1 << 30) - 1;
 const int _filetypeSocketStream = 6;
+const int _errnoAgain = 6;
 const int _errnoPipe = 64;
 
 void _setUint64Le(ByteData data, int offset, int value) {
@@ -992,6 +993,85 @@ void main() {
             'abcdef',
           );
           expect(socket.remainingReceiveData, isEmpty);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'sock_recv waitall returns again without consuming partial stream data',
+        () async {
+          final socket = WASIPreview1Socket(receiveData: utf8.encode('abc'));
+          final socketWasi = WASI(sockets: {13: socket});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const iovPtr = 3696;
+          const bufferPtr = 3728;
+          const countPtr = 3760;
+          const flagsPtr = 3776;
+
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 4, Endian.little);
+          expect(
+            sockRecv.ref([13, iovPtr, 1, 2, countPtr, flagsPtr]),
+            _errnoAgain,
+          );
+          expect(utf8.decode(socket.remainingReceiveData), 'abc');
+
+          socket.addReceiveData(utf8.encode('d'));
+          expect(sockRecv.ref([13, iovPtr, 1, 2, countPtr, flagsPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 4);
+          expect(data.getUint16(flagsPtr, Endian.little), 0);
+          expect(utf8.decode(bytes.sublist(bufferPtr, bufferPtr + 4)), 'abcd');
+          expect(socket.remainingReceiveData, isEmpty);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'sock_recv keeps truncation flag clear for byte-stream partial reads',
+        () async {
+          final socket = WASIPreview1Socket(receiveData: utf8.encode('abcdef'));
+          final socketWasi = WASI(sockets: {14: socket});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const iovPtr = 3792;
+          const bufferPtr = 3824;
+          const countPtr = 3856;
+          const flagsPtr = 3872;
+
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 3, Endian.little);
+          expect(sockRecv.ref([14, iovPtr, 1, 0, countPtr, flagsPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 3);
+          expect(data.getUint16(flagsPtr, Endian.little), 0);
+          expect(utf8.decode(bytes.sublist(bufferPtr, bufferPtr + 3)), 'abc');
+          expect(utf8.decode(socket.remainingReceiveData), 'def');
         },
         skip: _skipOnNode(
           'Skipping on Node.js; socket behavior is delegated to node:wasi.',

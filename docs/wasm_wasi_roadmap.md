@@ -75,7 +75,7 @@ This is the implementation state as of 2026-06-21 on `main`.
 - Preview 1 directory entries are indexed through per-directory child maps so
   common path/link/symlink mutation paths rebuild only affected directories.
   The benchmark entrypoint is `dart run tool/wasi_vfs_benchmark.dart --json`;
-  it also covers socket multi-iov peek, socket send/recv, and socket
+  it also covers socket multi-iov peek/waitall, socket send/recv, and socket
   renumber/close descriptor paths.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, but P2/P3 host
@@ -130,9 +130,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   and socket descriptor paths are measured by
   `dart run tool/wasi_vfs_benchmark.dart --json`, covering `path_open`,
   `fd_readdir`, link/symlink mutation, rights checks, socket multi-iov
-  `RECV_PEEK`, socket send/recv, and socket renumber/close over large directory
-  and descriptor sets. Keep optimizing against benchmark data instead of test
-  suite heat alone.
+  `RECV_PEEK`/`RECV_WAITALL`, socket send/recv, and socket renumber/close over
+  large directory and descriptor sets. Keep optimizing against benchmark data
+  instead of test suite heat alone.
 - P2/P3 streams and futures need latency, allocation, and cancellation
   benchmarks before they are advertised as production-ready. The "sandwich"
   async forwarding case from WASI 0.3 must be a first-class benchmark, not only
@@ -141,7 +141,7 @@ This is the implementation state as of 2026-06-21 on `main`.
 ## Near-Term Slices
 
 1. Extend Preview 1 socket coverage toward conformance edge cases that are not
-   covered yet: `RECV_WAITALL`, truncation flags, and native adapter boundaries.
+   covered yet: datagram truncation flags and native adapter boundaries.
 2. Extend the VFS/descriptor benchmark with descriptor renumbering and larger
    conformance-shaped path distributions, then use it as the gate for further
    VFS optimizations.

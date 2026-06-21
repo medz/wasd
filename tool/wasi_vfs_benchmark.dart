@@ -33,6 +33,7 @@ void main(List<String> args) {
   final rights = _benchmarkRightsChecks(baselineFiles, options);
   final mutations = _benchmarkMutations(baselineFiles, options);
   final socketRecvPeek = _benchmarkSocketRecvPeek(options);
+  final socketRecvWaitall = _benchmarkSocketRecvWaitall(options);
   final socketSendRecv = _benchmarkSocketSendRecv(options);
   final socketRenumberClose = _benchmarkSocketRenumberClose(options);
 
@@ -48,6 +49,7 @@ void main(List<String> args) {
     'rights_checks': rights.toJson(),
     'mutations_benchmark': mutations.toJson(),
     'socket_recv_peek': socketRecvPeek.toJson(),
+    'socket_recv_waitall': socketRecvWaitall.toJson(),
     'socket_send_recv': socketSendRecv.toJson(),
     'socket_renumber_close': socketRenumberClose.toJson(),
   };
@@ -94,6 +96,7 @@ void _runWarmup(Map<String, Uint8List> files, _Options options) {
   _benchmarkRightsChecks(files, warmupOptions);
   _benchmarkMutations(files, warmupOptions);
   _benchmarkSocketRecvPeek(warmupOptions);
+  _benchmarkSocketRecvWaitall(warmupOptions);
   _benchmarkSocketSendRecv(warmupOptions);
   _benchmarkSocketRenumberClose(warmupOptions);
 }
@@ -287,6 +290,85 @@ _Metric _benchmarkSocketRecvPeek(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketRecvWaitall(_Options options) {
+  final satisfiedSocket = WASIPreview1Socket(
+    receiveData: List<int>.generate(
+      options.iterations * _socketChunkSize,
+      (index) => index & 0xff,
+    ),
+  );
+  final againSocket = WASIPreview1Socket(
+    receiveData: List<int>.generate(_socketChunkSize - 1, (index) => index),
+  );
+  final vfs = Preview1VirtualFileSystem(
+    sockets: {64: satisfiedSocket, 65: againSocket},
+  );
+  final satisfiedDescriptor = vfs.socketForFd(64);
+  final againDescriptor = vfs.socketForFd(65);
+  if (satisfiedDescriptor == null || againDescriptor == null) {
+    throw StateError('socket descriptor missing for waitall benchmark');
+  }
+  final bytes = Uint8List(256);
+  final data = ByteData.view(bytes.buffer);
+  const iovPtr = 0;
+  const firstBufferPtr = 32;
+  const secondBufferPtr = 96;
+  const countPtr = 160;
+  const flagsPtr = 168;
+  _writeTwoIovs(
+    data: data,
+    iovPtr: iovPtr,
+    firstBufferPtr: firstBufferPtr,
+    firstLength: _socketIovSize,
+    secondBufferPtr: secondBufferPtr,
+    secondLength: _socketIovSize,
+  );
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final satisfiedErrno = readSocketIntoIov(
+      socket: satisfiedDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 2,
+      flags: riflagRecvWaitall,
+      nreadPtr: countPtr,
+      roFlagsPtr: flagsPtr,
+    );
+    if (satisfiedErrno != errnoSuccess) {
+      throw StateError(
+        'socket waitall satisfied recv failed at iteration $i: '
+        '$satisfiedErrno',
+      );
+    }
+    checksum += data.getUint32(countPtr, Endian.little);
+    final againErrno = readSocketIntoIov(
+      socket: againDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 2,
+      flags: riflagRecvWaitall,
+      nreadPtr: countPtr,
+      roFlagsPtr: flagsPtr,
+    );
+    if (againErrno != errnoAgain) {
+      throw StateError(
+        'socket waitall again recv failed at iteration $i: $againErrno',
+      );
+    }
+    checksum += againErrno;
+  }
+  watch.stop();
+  return _Metric(
+    operations: options.iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkSocketSendRecv(_Options options) {
   final socket = WASIPreview1Socket(
     receiveData: List<int>.generate(
@@ -436,6 +518,7 @@ void _printText(Map<String, Object?> payload) {
   _printMetric('rights checks', payload['rights_checks']);
   _printMetric('mutations', payload['mutations_benchmark']);
   _printMetric('socket recv peek', payload['socket_recv_peek']);
+  _printMetric('socket recv waitall', payload['socket_recv_waitall']);
   _printMetric('socket send/recv', payload['socket_send_recv']);
   _printMetric('socket renumber/close', payload['socket_renumber_close']);
 }
