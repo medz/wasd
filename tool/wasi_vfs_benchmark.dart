@@ -35,6 +35,7 @@ void main(List<String> args) {
   final socketRecvPeek = _benchmarkSocketRecvPeek(options);
   final socketRecvWaitall = _benchmarkSocketRecvWaitall(options);
   final socketSendRecv = _benchmarkSocketSendRecv(options);
+  final socketDgramTruncation = _benchmarkSocketDatagramTruncation(options);
   final socketRenumberClose = _benchmarkSocketRenumberClose(options);
 
   final payload = <String, Object?>{
@@ -51,6 +52,7 @@ void main(List<String> args) {
     'socket_recv_peek': socketRecvPeek.toJson(),
     'socket_recv_waitall': socketRecvWaitall.toJson(),
     'socket_send_recv': socketSendRecv.toJson(),
+    'socket_dgram_truncation': socketDgramTruncation.toJson(),
     'socket_renumber_close': socketRenumberClose.toJson(),
   };
 
@@ -98,6 +100,7 @@ void _runWarmup(Map<String, Uint8List> files, _Options options) {
   _benchmarkSocketRecvPeek(warmupOptions);
   _benchmarkSocketRecvWaitall(warmupOptions);
   _benchmarkSocketSendRecv(warmupOptions);
+  _benchmarkSocketDatagramTruncation(warmupOptions);
   _benchmarkSocketRenumberClose(warmupOptions);
 }
 
@@ -450,6 +453,60 @@ _Metric _benchmarkSocketSendRecv(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketDatagramTruncation(_Options options) {
+  final socket = WASIPreview1Socket.datagram(
+    receiveMessages: List<List<int>>.generate(
+      options.iterations,
+      (index) => List<int>.generate(
+        _socketChunkSize,
+        (byteIndex) => (index + byteIndex) & 0xff,
+      ),
+    ),
+  );
+  final vfs = Preview1VirtualFileSystem(sockets: {64: socket});
+  final descriptor = vfs.socketForFd(64);
+  if (descriptor == null) {
+    throw StateError('socket descriptor missing for datagram benchmark');
+  }
+  final bytes = Uint8List(128);
+  final data = ByteData.view(bytes.buffer);
+  const iovPtr = 0;
+  const bufferPtr = 32;
+  const countPtr = 96;
+  const flagsPtr = 104;
+  data.setUint32(iovPtr, bufferPtr, Endian.little);
+  data.setUint32(iovPtr + 4, _socketIovSize, Endian.little);
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final errno = readSocketIntoIov(
+      socket: descriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 1,
+      flags: 0,
+      nreadPtr: countPtr,
+      roFlagsPtr: flagsPtr,
+    );
+    if (errno != errnoSuccess) {
+      throw StateError('socket datagram recv failed at iteration $i: $errno');
+    }
+    final roflags = data.getUint16(flagsPtr, Endian.little);
+    if (roflags != roflagRecvDataTruncated) {
+      throw StateError('socket datagram truncation missing at iteration $i');
+    }
+    checksum += data.getUint32(countPtr, Endian.little) + roflags;
+  }
+  watch.stop();
+  return _Metric(
+    operations: options.iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkSocketRenumberClose(_Options options) {
   const fromBase = 1000;
   const toBase = 100000;
@@ -520,6 +577,10 @@ void _printText(Map<String, Object?> payload) {
   _printMetric('socket recv peek', payload['socket_recv_peek']);
   _printMetric('socket recv waitall', payload['socket_recv_waitall']);
   _printMetric('socket send/recv', payload['socket_send_recv']);
+  _printMetric(
+    'socket datagram truncation',
+    payload['socket_dgram_truncation'],
+  );
   _printMetric('socket renumber/close', payload['socket_renumber_close']);
 }
 

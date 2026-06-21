@@ -23,6 +23,7 @@ const int direntTypeOffset = 20;
 const int filetypeCharacterDevice = 2;
 const int filetypeDirectory = 3;
 const int filetypeRegularFile = 4;
+const int filetypeSocketDgram = 5;
 const int filetypeSocketStream = 6;
 const int filetypeSymbolicLink = 7;
 const int lookupflagSymlinkFollow = 1;

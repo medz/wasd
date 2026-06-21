@@ -48,10 +48,10 @@ copying their internals directly.
   leaking Node or browser behavior into the core model. For wasd, JS runtime
   support should route through small Preview-specific bridges while preserving
   the same component and WASI semantics as the Dart VM runtime.
-- WASI.dev's 0.3 roadmap makes stream/future performance part of the API design,
-  not a later optimization. For wasd, stream/future forwarding, cancellation,
-  and buffering must get benchmarks and resource-lifetime tests as they are
-  implemented.
+- WASI.dev's 0.3 release makes stream/future performance part of the API
+  design, not a later optimization. For wasd, stream/future forwarding,
+  cancellation, and buffering must get benchmarks and resource-lifetime tests as
+  they are implemented.
 
 ## Current wasd Baseline
 
@@ -59,24 +59,25 @@ This is the implementation state as of 2026-06-21 on `main`.
 
 - Preview 1 is real but still incomplete. Native and browser hosts share
   `lib/src/wasi/preview1/common/vfs.dart` for virtual files, directories,
-  readdir state, hard links, symlinks/readlink, configured stream sockets,
-  descriptor flags, descriptor rights, descriptor times, descriptor sync/advice
-  validation, and descriptor renumbering. Node still delegates Preview 1
-  behavior to `node:wasi`.
+  readdir state, hard links, symlinks/readlink, configured stream/datagram
+  sockets, descriptor flags, descriptor rights, descriptor times, descriptor
+  sync/advice validation, and descriptor renumbering. Node still delegates
+  Preview 1 behavior to `node:wasi`.
 - The remaining explicit Preview 1 `ENOSYS` list is `proc_raise`. This list is
   intentionally in code at `lib/src/wasi/preview1/common/constants.dart`;
   README support claims must stay aligned with it.
-- Preview 1 stdio descriptors, virtual files, configured stream sockets, open
-  directories, and preopens now live in one VFS descriptor/capability table
-  with base rights, inheriting rights, descriptor flags, renumbering, and close
-  state. Preview1 does not define socket creation syscalls, so native/browser
-  socket support is host-provided descriptor injection through
+- Preview 1 stdio descriptors, virtual files, configured stream/datagram
+  sockets, open directories, and preopens now live in one VFS
+  descriptor/capability table with base rights, inheriting rights, descriptor
+  flags, renumbering, and close state. Preview1 does not define socket creation
+  syscalls, so native/browser socket support is host-provided descriptor
+  injection through
   `WASIPreview1Socket`, not raw networking.
 - Preview 1 directory entries are indexed through per-directory child maps so
   common path/link/symlink mutation paths rebuild only affected directories.
   The benchmark entrypoint is `dart run tool/wasi_vfs_benchmark.dart --json`;
-  it also covers socket multi-iov peek/waitall, socket send/recv, and socket
-  renumber/close descriptor paths.
+  it also covers socket multi-iov peek/waitall, datagram truncation, socket
+  send/recv, and socket renumber/close descriptor paths.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, but P2/P3 host
   instantiation, WIT ingestion, resource tables, canonical ABI lowering/lifting,
@@ -130,9 +131,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   and socket descriptor paths are measured by
   `dart run tool/wasi_vfs_benchmark.dart --json`, covering `path_open`,
   `fd_readdir`, link/symlink mutation, rights checks, socket multi-iov
-  `RECV_PEEK`/`RECV_WAITALL`, socket send/recv, and socket renumber/close over
-  large directory and descriptor sets. Keep optimizing against benchmark data
-  instead of test suite heat alone.
+  `RECV_PEEK`/`RECV_WAITALL`, datagram truncation, socket send/recv, and socket
+  renumber/close over large directory and descriptor sets. Keep optimizing
+  against benchmark data instead of test suite heat alone.
 - P2/P3 streams and futures need latency, allocation, and cancellation
   benchmarks before they are advertised as production-ready. The "sandwich"
   async forwarding case from WASI 0.3 must be a first-class benchmark, not only
@@ -141,7 +142,7 @@ This is the implementation state as of 2026-06-21 on `main`.
 ## Near-Term Slices
 
 1. Extend Preview 1 socket coverage toward conformance edge cases that are not
-   covered yet: datagram truncation flags and native adapter boundaries.
+   covered yet: native adapter boundaries and polling readiness.
 2. Extend the VFS/descriptor benchmark with descriptor renumbering and larger
    conformance-shaped path distributions, then use it as the gate for further
    VFS optimizations.

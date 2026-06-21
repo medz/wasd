@@ -352,12 +352,16 @@ class WASI implements wasi_iface.WASI {
         if ((flags & ~_fdflagKnownMask) != 0) {
           return _errnoInval;
         }
-        if (_vfs.socketForFd(fd) == null) {
+        final socket = _vfs.socketForFd(fd);
+        if (socket == null) {
           return _errnoBadf;
         }
         final right = _checkDescriptorRight(fd, _rightSockAccept);
         if (right != _errnoSuccess) {
           return right;
+        }
+        if (!socket.isStream) {
+          return _errnoInval;
         }
 
         final view = _memoryView();
@@ -683,7 +687,8 @@ class WASI implements wasi_iface.WASI {
         descriptorKind == wasi_vfs.Preview1DescriptorKind.stderr;
     final isDir = _vfs.isDirectoryFd(fd);
     final isFile = _vfs.openFileForFd(fd) != null;
-    final isSocket = _vfs.socketForFd(fd) != null;
+    final socket = _vfs.socketForFd(fd);
+    final isSocket = socket != null;
     if (_traceSyscalls) {
       io.stderr.writeln(
         '[wasi:fd_fdstat_get] fd=$fd isStdio=$isStdio isDir=$isDir isFile=$isFile isSocket=$isSocket',
@@ -707,7 +712,7 @@ class WASI implements wasi_iface.WASI {
     bytes[fdstatPtr] = isFile
         ? _filetypeRegularFile
         : isSocket
-        ? _filetypeSocketStream
+        ? socket.fileType
         : isDir
         ? _filetypeDirectory
         : _filetypeCharacterDevice;
@@ -797,7 +802,7 @@ class WASI implements wasi_iface.WASI {
         bytes[bufPtr + 16] = opened != null
             ? _filetypeRegularFile
             : socket != null
-            ? _filetypeSocketStream
+            ? socket.fileType
             : (isDir || openedDirectory)
             ? _filetypeDirectory
             : _filetypeCharacterDevice;
@@ -2040,7 +2045,6 @@ const int _fdstatSize = wasi_common.fdstatSize;
 const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
 const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
-const int _filetypeSocketStream = wasi_common.filetypeSocketStream;
 const int _fdflagKnownMask = wasi_common.fdflagKnownMask;
 const int _riflagKnownMask = wasi_common.riflagKnownMask;
 const int _sdflagRd = wasi_common.sdflagRd;

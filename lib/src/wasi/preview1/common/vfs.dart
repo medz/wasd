@@ -718,8 +718,11 @@ final class Preview1VirtualFileSystem {
 
   int acceptSocket({required int fd, required int descriptorFlags}) {
     final listener = socketForFd(fd);
-    final accepted = listener?.socket.accept();
-    if (listener == null || accepted == null) {
+    if (listener == null || !listener.isStream) {
+      return -1;
+    }
+    final accepted = listener.socket.accept();
+    if (accepted == null) {
       return -1;
     }
     final acceptedFd = _allocateVirtualFd();
@@ -1007,6 +1010,18 @@ int readSocketIntoIov({
 
   var totalRead = 0;
   final peek = (flags & riflagRecvPeek) != 0;
+  if (socket.isDatagram) {
+    return _readDatagramSocketIntoIov(
+      socket: socket,
+      bytes: bytes,
+      data: data,
+      iovs: iovs,
+      iovsLen: iovsLen,
+      peek: peek,
+      nreadPtr: nreadPtr,
+      roFlagsPtr: roFlagsPtr,
+    );
+  }
   final waitAll = (flags & riflagRecvWaitall) != 0;
   if (waitAll) {
     final capacity = _socketIovCapacity(
@@ -1054,6 +1069,63 @@ int readSocketIntoIov({
   return errnoSuccess;
 }
 
+int _readDatagramSocketIntoIov({
+  required Preview1VirtualSocket socket,
+  required Uint8List bytes,
+  required ByteData data,
+  required int iovs,
+  required int iovsLen,
+  required bool peek,
+  required int nreadPtr,
+  required int roFlagsPtr,
+}) {
+  final capacity = _socketIovCapacity(
+    bytes: bytes,
+    data: data,
+    iovs: iovs,
+    iovsLen: iovsLen,
+  );
+  if (capacity < 0) {
+    return errnoInval;
+  }
+  if (socket.receiveShutdown || !socket.hasReceiveMessage) {
+    data.setUint32(nreadPtr, 0, Endian.little);
+    data.setUint16(roFlagsPtr, 0, Endian.little);
+    return errnoSuccess;
+  }
+
+  var totalRead = 0;
+  for (var index = 0; index < iovsLen; index++) {
+    final entry = iovs + index * iovecEntrySize;
+    final buf = data.getUint32(entry, Endian.little);
+    final len = data.getUint32(entry + 4, Endian.little);
+    if (len > 0) {
+      final read = socket.readMessageInto(
+        bytes,
+        buf,
+        len,
+        messageOffset: totalRead,
+      );
+      totalRead += read;
+      if (read < len) {
+        break;
+      }
+    }
+  }
+
+  final truncated = totalRead < socket.nextReceiveMessageLength;
+  if (!peek) {
+    socket.consumeReceiveMessage();
+  }
+  data.setUint32(nreadPtr, totalRead, Endian.little);
+  data.setUint16(
+    roFlagsPtr,
+    truncated ? roflagRecvDataTruncated : 0,
+    Endian.little,
+  );
+  return errnoSuccess;
+}
+
 int _socketIovCapacity({
   required Uint8List bytes,
   required ByteData data,
@@ -1090,6 +1162,16 @@ int writeSocketFromIov({
       nwrittenPtr + 4 > bytes.length) {
     return errnoInval;
   }
+  if (socket.isDatagram) {
+    return _writeDatagramSocketFromIov(
+      socket: socket,
+      bytes: bytes,
+      data: data,
+      iovs: iovs,
+      iovsLen: iovsLen,
+      nwrittenPtr: nwrittenPtr,
+    );
+  }
 
   var totalWritten = 0;
   for (var index = 0; index < iovsLen; index++) {
@@ -1110,6 +1192,38 @@ int writeSocketFromIov({
   }
 
   data.setUint32(nwrittenPtr, totalWritten, Endian.little);
+  return errnoSuccess;
+}
+
+int _writeDatagramSocketFromIov({
+  required Preview1VirtualSocket socket,
+  required Uint8List bytes,
+  required ByteData data,
+  required int iovs,
+  required int iovsLen,
+  required int nwrittenPtr,
+}) {
+  final capacity = _socketIovCapacity(
+    bytes: bytes,
+    data: data,
+    iovs: iovs,
+    iovsLen: iovsLen,
+  );
+  if (capacity < 0) {
+    return errnoInval;
+  }
+  final message = Uint8List(capacity);
+  var offset = 0;
+  for (var index = 0; index < iovsLen; index++) {
+    final entry = iovs + index * iovecEntrySize;
+    final buf = data.getUint32(entry, Endian.little);
+    final len = data.getUint32(entry + 4, Endian.little);
+    if (len > 0) {
+      message.setRange(offset, offset + len, bytes, buf);
+      offset += len;
+    }
+  }
+  data.setUint32(nwrittenPtr, socket.writeMessage(message), Endian.little);
   return errnoSuccess;
 }
 
@@ -1264,6 +1378,24 @@ final class Preview1VirtualSocket {
   int writeFrom(Uint8List source, int start, int length) =>
       socket.writeFrom(source, start, length);
 
+  int writeMessage(List<int> data) => socket.writeMessage(data);
+
+  int readMessageInto(
+    Uint8List target,
+    int start,
+    int length, {
+    int messageOffset = 0,
+  }) => socket.readMessageInto(
+    target,
+    start,
+    length,
+    messageOffset: messageOffset,
+  );
+
+  void consumeReceiveMessage() {
+    socket.consumeReceiveMessage();
+  }
+
   void shutdown({required bool receive, required bool send}) {
     socket.shutdown(receive: receive, send: send);
   }
@@ -1273,6 +1405,17 @@ final class Preview1VirtualSocket {
   bool get receiveShutdown => socket.receiveShutdown;
 
   int get remainingReceiveLength => socket.remainingReceiveLength;
+
+  bool get isDatagram => socket.isDatagram;
+
+  bool get isStream => socket.isStream;
+
+  bool get hasReceiveMessage => socket.hasReceiveMessage;
+
+  int get nextReceiveMessageLength => socket.nextReceiveMessageLength;
+
+  int get fileType =>
+      socket.isDatagram ? filetypeSocketDgram : filetypeSocketStream;
 }
 
 enum Preview1VirtualOpenKind { file, directory, missing }
