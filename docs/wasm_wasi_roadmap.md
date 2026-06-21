@@ -90,13 +90,15 @@ This is the implementation state as of 2026-06-21 on `main`.
   component type index space used by canonical resource definitions; component
   type validation also treats type-declaration `componentType` imports as local
   type introductions, so WIT-shaped worlds can reference imported resources in
-  later local value/function types. The resource host can
-  bind those imported abstract resources with an unconstrained host
-  representation. Resource host bindings also read decoded resource
-  representation types and validate `resource.new` representation values, and
-  resource-only canonical programs can be invoked by canonical index. P2/P3
-  host instantiation, WIT ingestion, full canonical ABI lowering/lifting, and
-  async stream/future execution are not production-supported yet.
+  later local value/function types. Component-type aliases of known inline
+  instance exports are also materialized, including resource aliases used by
+  canonical resource definitions. The resource host can bind those imported or
+  aliased abstract resources with an unconstrained host representation.
+  Resource host bindings also read decoded resource representation types and
+  validate `resource.new` representation values, and resource-only canonical
+  programs can be invoked by canonical index. P2/P3 host instantiation, WIT
+  ingestion, full canonical ABI lowering/lifting, and async stream/future
+  execution are not production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
   for component-model WASI versions. This is an intentional version boundary,

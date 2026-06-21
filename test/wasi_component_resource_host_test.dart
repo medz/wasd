@@ -95,6 +95,31 @@ void main() {
       expect(dropped, [55]);
     });
 
+    test(
+      'binds canonical operations for aliased instance resource exports',
+      () {
+        final component = WasmComponent.decode(
+          _aliasedInstanceResourceCanonicalProgramBytes(),
+        );
+        expect(component.validate(), isEmpty);
+        final host = WASIComponentResourceHost();
+        final dropped = <int>[];
+        host.defineResourceTypeFromComponent<int>(
+          component,
+          1,
+          'aliased-resource',
+          onDrop: dropped.add,
+        );
+
+        final program = host.bindCanonicalDefinitions(component);
+        final handle = program.invoke(0, <Object?>[89]);
+
+        expect(program.invoke(1, <Object?>[handle]), 89);
+        expect(program.invoke(2, <Object?>[handle]), isNull);
+        expect(dropped, [89]);
+      },
+    );
+
     test('invokes decoded canonical resource program operations by index', () {
       final component = WasmComponent.decode(_canonicalResourceProgramBytes());
       final host = WASIComponentResourceHost();
@@ -279,6 +304,51 @@ Uint8List _importedResourceCanonicalProgramBytes() =>
       0x00,
       0x03,
       0x00,
+    ]);
+
+Uint8List _aliasedInstanceResourceCanonicalProgramBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x3f,
+      0x7f,
+      0x00,
+      0x05,
+      0x08,
+      0x01,
+      0x01,
+      0x01,
+      0x00,
+      0x01,
+      0x72,
+      0x03,
+      0x00,
+      0x06,
+      0x06,
+      0x01,
+      0x03,
+      0x00,
+      0x00,
+      0x01,
+      0x72,
+      0x08,
+      0x07,
+      0x03,
+      0x02,
+      0x01,
+      0x04,
+      0x01,
+      0x03,
+      0x01,
     ]);
 
 Uint8List _canonicalMixedResourceBytes() => Uint8List.fromList(const <int>[
