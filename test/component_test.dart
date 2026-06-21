@@ -1022,10 +1022,13 @@ void main() {
       final conflictingStringEncoding = WasmComponent.decode(
         _canonicalConflictingStringEncodingComponentBytes(),
       ).validate();
-      expect(conflictingStringEncoding, hasLength(1));
       expect(
-        conflictingStringEncoding.single.message,
-        contains('Conflicting Wasm component canonical string encoding option'),
+        conflictingStringEncoding.any(
+          (error) => error.message.contains(
+            'Conflicting Wasm component canonical string encoding option',
+          ),
+        ),
+        isTrue,
       );
 
       final duplicateMemory = WasmComponent.decode(
@@ -1103,6 +1106,17 @@ void main() {
 
       expect(lowerParam, hasLength(1));
       expect(lowerParam.single.message, contains('requires a memory option'));
+
+      final lowerResult = WasmComponent.decode(
+        _canonicalLowerStringResultWithoutReallocComponentBytes(),
+      ).validate();
+
+      expect(
+        lowerResult.any(
+          (error) => error.message.contains('requires a realloc option'),
+        ),
+        isTrue,
+      );
     });
 
     test('reports invalid canonical option core indexes', () {
@@ -1110,10 +1124,13 @@ void main() {
         _canonicalMemoryOptionOutOfRangeComponentBytes(),
       ).validate();
 
-      expect(errors, hasLength(1));
       expect(
-        errors.single.message,
-        contains('Unknown Wasm component core memory index'),
+        errors.any(
+          (error) => error.message.contains(
+            'Unknown Wasm component core memory index',
+          ),
+        ),
+        isTrue,
       );
     });
 
@@ -3678,6 +3695,40 @@ Uint8List _canonicalLowerStringParamWithoutMemoryComponentBytes() =>
       0x73,
       0x01,
       0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x08,
+      0x05,
+      0x01,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _canonicalLowerStringResultWithoutReallocComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x00,
+      0x73,
       0x0a,
       0x06,
       0x01,

@@ -2896,6 +2896,30 @@ final class _WasmComponentValidationContext {
     );
   }
 
+  bool canonicalLowerResultRequiresRealloc(
+    WasmComponentCanonicalDefinition definition, {
+    List<WasmComponentTypeDefinition>? visibleTypeDefinitions,
+    List<WasmComponentFunctionType?>? functionTypes,
+  }) {
+    if (definition.kind != WasmComponentCanonicalKind.lower ||
+        functionTypes == null) {
+      return false;
+    }
+
+    final functionType = componentFunctionTypeAt(
+      functionTypes,
+      definition.functionIndex,
+    );
+    if (functionType == null) {
+      return false;
+    }
+
+    return valueTypeContainsListOrString(
+      functionType.result,
+      scopedTypeDefinitions: visibleTypeDefinitions,
+    );
+  }
+
   void validateCanonicalOptionRequirements(
     WasmComponentCanonicalDefinition definition,
     String path, {
@@ -2963,6 +2987,21 @@ final class _WasmComponentValidationContext {
           path: '$path.options',
           message:
               'Wasm component canon lower parameter lowering requires a memory option.',
+        ),
+      );
+    }
+
+    if (!hasRealloc &&
+        canonicalLowerResultRequiresRealloc(
+          definition,
+          visibleTypeDefinitions: visibleTypeDefinitions,
+          functionTypes: functionTypes,
+        )) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.options',
+          message:
+              'Wasm component canon lower result lifting requires a realloc option.',
         ),
       );
     }
