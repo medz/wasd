@@ -99,9 +99,12 @@ This is the implementation state as of 2026-06-21 on `main`.
   or aliased abstract resources with an unconstrained host representation.
   Resource host bindings also read decoded resource representation types and
   validate `resource.new` representation values, and resource-only canonical
-  programs can be invoked by canonical index. P2/P3 host instantiation, WIT
-  ingestion, full canonical ABI lowering/lifting, and async stream/future
-  execution are not production-supported yet.
+  programs can be invoked by canonical index. `lib/src/wasi/component/` also
+  contains internal `stream<T>` and `future<T>` runtime primitives with separate
+  readable/writable endpoints, cancellation, drop callbacks, and benchmark
+  coverage. P2/P3 host instantiation, WIT ingestion, full canonical ABI
+  lowering/lifting, and async stream/future execution are not
+  production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
   for component-model WASI versions. This is an intentional version boundary,
@@ -166,6 +169,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   benchmarks before they are advertised as production-ready. The "sandwich"
   async forwarding case from WASI 0.3 must be a first-class benchmark, not only
   a functional test.
+- Internal component stream/future endpoint round-trip, cancellation, and
+  completion/drop costs are measured by
+  `dart run tool/wasi_component_async_benchmark.dart --json`.
 - Component resource table canonical `resource.new`/`resource.rep`/
   `resource.drop`, decoded resource-only canonical program invocation, nominal
   typed lookup, borrow, and drop behavior are measured by
@@ -184,9 +190,11 @@ This is the implementation state as of 2026-06-21 on `main`.
 4. Keep closing component-model validation gaps that are local and
    deterministic, then wire validated borrow, stream, and future shapes into
    runtime host state.
-5. Introduce explicit WASI version modules for future P2/P3 work instead of
+5. Bind decoded canonical `stream.*` and `future.*` definitions to the internal
+   stream/future endpoint primitives before adding public P3 API claims.
+6. Introduce explicit WASI version modules for future P2/P3 work instead of
    extending Preview 1 host types in place.
-6. Add WIT/interface ingestion only after the versioned host boundary and
+7. Add WIT/interface ingestion only after the versioned host boundary and
    resource table are wired into canonical ABI ownership behavior.
 
 ## Completion Bar
