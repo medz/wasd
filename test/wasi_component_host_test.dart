@@ -68,6 +68,51 @@ void main() {
       );
     });
 
+    test('reports async value memory layouts before binding', () {
+      final u32Component = WasmComponent.decode(_streamU32TypeComponentBytes());
+      final stringComponent = WasmComponent.decode(
+        _streamStringTypeComponentBytes(),
+      );
+      final host = WASIComponentHost();
+
+      final u32Plan = host.prepareComponent(u32Component);
+      final stringPlan = host.prepareComponent(stringComponent);
+
+      expect(u32Plan.canBind, isTrue);
+      expect(u32Plan.asyncValueBindings, hasLength(1));
+      expect(
+        u32Plan.asyncValueBindings.single.kind,
+        WASIComponentAsyncValueBindingKind.stream,
+      );
+      expect(
+        u32Plan.asyncValueBindings.single.primitive,
+        WasmComponentPrimitiveValueType.u32,
+      );
+      expect(
+        u32Plan.asyncValueBindings.single.fixedWidthMemoryLayout,
+        isNotNull,
+      );
+      expect(
+        u32Plan.asyncValueBindings.single.fixedWidthMemoryLayout!.byteLength,
+        4,
+      );
+      expect(
+        u32Plan.asyncValueBindings.single.fixedWidthMemoryLayout!.alignment,
+        4,
+      );
+
+      expect(stringPlan.canBind, isTrue);
+      expect(stringPlan.asyncValueBindings, hasLength(1));
+      expect(
+        stringPlan.asyncValueBindings.single.primitive,
+        WasmComponentPrimitiveValueType.string,
+      );
+      expect(
+        stringPlan.asyncValueBindings.single.fixedWidthMemoryLayout,
+        isNull,
+      );
+    });
+
     test('binds decoded stream async values before canonical builtins', () {
       final component = WasmComponent.decode(_canonicalStreamProgramBytes());
       final host = WASIComponentHost();
@@ -234,6 +279,40 @@ Uint8List _canonicalMixedResourceBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x00,
   0x00,
+]);
+
+Uint8List _streamU32TypeComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x04,
+  0x01,
+  0x66,
+  0x01,
+  0x79,
+]);
+
+Uint8List _streamStringTypeComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x04,
+  0x01,
+  0x66,
+  0x01,
+  0x73,
 ]);
 
 Uint8List _canonicalStreamProgramBytes() => Uint8List.fromList(const <int>[

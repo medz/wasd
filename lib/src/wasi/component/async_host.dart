@@ -328,12 +328,13 @@ enum WASIComponentAsyncValueBindingKind {
 
 /// A decoded component stream/future type that can be bound to the async host.
 final class WASIComponentAsyncValueBinding {
-  const WASIComponentAsyncValueBinding._({
+  WASIComponentAsyncValueBinding._({
     required this.componentTypeIndex,
     required this.name,
     required this.kind,
     required _WASIComponentAsyncValueValidator valueValidator,
-  }) : _valueValidator = valueValidator;
+  }) : _valueValidator = valueValidator,
+       fixedWidthMemoryLayout = _fixedWidthMemoryLayoutFor(valueValidator);
 
   final _WASIComponentAsyncValueValidator _valueValidator;
 
@@ -351,6 +352,26 @@ final class WASIComponentAsyncValueBinding {
 
   /// Primitive element type when this binding carries primitive values.
   WasmComponentPrimitiveValueType? get primitive => _valueValidator.primitive;
+
+  /// Fixed-width Canonical ABI memory-copy layout for primitive payloads.
+  ///
+  /// Returns `null` for unit payloads and primitives such as `string` that do
+  /// not have a fixed-width stream/future memory representation.
+  final WASIComponentAsyncValueMemoryLayout? fixedWidthMemoryLayout;
+}
+
+/// Canonical ABI fixed-width memory-copy layout for an async value payload.
+final class WASIComponentAsyncValueMemoryLayout {
+  const WASIComponentAsyncValueMemoryLayout._({
+    required this.byteLength,
+    required this.alignment,
+  });
+
+  /// Number of guest-memory bytes per stream/future element.
+  final int byteLength;
+
+  /// Required guest-memory alignment for the element pointer.
+  final int alignment;
 }
 
 /// Executable stream/future-only canonical program for a decoded component.
@@ -2901,8 +2922,37 @@ void _writeFixedWidthValueToMemory(
   );
 }
 
+WASIComponentAsyncValueMemoryLayout? _fixedWidthMemoryLayoutFor(
+  _WASIComponentAsyncValueValidator validator,
+) {
+  final primitive = validator.primitive;
+  if (primitive == null) {
+    return null;
+  }
+  final layout = _fixedWidthLayoutOrNull(primitive);
+  if (layout == null) {
+    return null;
+  }
+  return WASIComponentAsyncValueMemoryLayout._(
+    byteLength: layout.byteLength,
+    alignment: layout.alignment,
+  );
+}
+
 _FixedWidthLayout _fixedWidthLayout(
   String name,
+  WasmComponentPrimitiveValueType primitive,
+) {
+  final layout = _fixedWidthLayoutOrNull(primitive);
+  if (layout != null) {
+    return layout;
+  }
+  throw UnsupportedError(
+    'WASI component async type $name does not support fixed-width ${primitive.name} memory copies.',
+  );
+}
+
+_FixedWidthLayout? _fixedWidthLayoutOrNull(
   WasmComponentPrimitiveValueType primitive,
 ) {
   return switch (primitive) {
@@ -2931,9 +2981,7 @@ _FixedWidthLayout _fixedWidthLayout(
       alignment: 8,
     ),
     WasmComponentPrimitiveValueType.string ||
-    WasmComponentPrimitiveValueType.errorContext => throw UnsupportedError(
-      'WASI component async type $name does not support fixed-width ${primitive.name} memory copies.',
-    ),
+    WasmComponentPrimitiveValueType.errorContext => null,
   };
 }
 

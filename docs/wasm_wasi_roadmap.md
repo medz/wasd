@@ -231,8 +231,12 @@ This is the implementation state as of 2026-06-21 on `main`.
   decoded component resource and async value binding lists, defines component
   resources plus supported unit/primitive `stream<T>` and `future<T>` values on
   the shared table only after validation and capability checks pass, and returns
-  the canonical-indexed program from the same shared host state. Composite
-  stream/future element lowering remains a component-host binding gap.
+  the canonical-indexed program from the same shared host state. Async value
+  bindings now also expose the fixed-width Canonical ABI memory-copy layout for
+  primitive payloads, so future P3 adapters can route stream/future memory
+  lowering without re-deriving byte widths and alignments separately from the
+  executable copy path. Composite stream/future element lowering remains a
+  component-host binding gap.
   This is an adapter boundary for future P2/P3 version modules, not a public
   support claim.
   Internal
