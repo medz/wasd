@@ -20,6 +20,8 @@ const int direntTypeOffset = 20;
 const int filetypeCharacterDevice = 2;
 const int filetypeDirectory = 3;
 const int filetypeRegularFile = 4;
+const int filetypeSymbolicLink = 7;
+const int lookupflagSymlinkFollow = 1;
 const int fdflagAppend = 1;
 const int fdflagDsync = 2;
 const int fdflagNonblock = 4;
@@ -32,8 +34,6 @@ const int fdflagKnownMask =
 const List<String> preview1NosysImports = <String>[
   'fd_fdstat_set_rights',
   'fd_renumber',
-  'path_readlink',
-  'path_symlink',
   'proc_raise',
   'sock_accept',
   'sock_recv',

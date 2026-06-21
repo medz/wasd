@@ -25,7 +25,8 @@ final class Preview1VirtualFileSystem {
        _filesByGuestPath = {
          for (final entry in files.entries)
            normalizeGuestPath(entry.key): Preview1VirtualFile(entry.value),
-       } {
+       },
+       _symlinksByGuestPath = <String, Preview1VirtualSymlink>{} {
     _filesByLowerGuestPath = _indexFilesByLowerPath(_filesByGuestPath);
     _filesByBasenameLower = _indexFilesByBasename(
       _filesByGuestPath,
@@ -46,6 +47,7 @@ final class Preview1VirtualFileSystem {
     _directoryEntriesByGuestPath = _buildDirectoryEntriesByPath(
       directories: _virtualDirectoryPaths,
       filesByGuestPath: _filesByGuestPath,
+      symlinksByGuestPath: _symlinksByGuestPath,
     );
   }
 
@@ -53,6 +55,7 @@ final class Preview1VirtualFileSystem {
   final Map<int, String> _preopenGuestPathsByFd;
   final Map<int, int> _preopenDirectoryFlagsByFd;
   final Map<String, Preview1VirtualFile> _filesByGuestPath;
+  final Map<String, Preview1VirtualSymlink> _symlinksByGuestPath;
   final Map<int, Preview1VirtualOpenFile> _openFilesByFd =
       <int, Preview1VirtualOpenFile>{};
   final Map<int, String> _openDirectoriesByFd = <int, String>{};
@@ -127,12 +130,67 @@ final class Preview1VirtualFileSystem {
   }
 
   Preview1VirtualNodeMetadata? metadataForPath(String guestPath) {
-    final normalized = normalizeGuestPath(guestPath);
-    final file = lookupFile(normalized);
-    if (file != null) {
-      return file.metadata;
+    return pathEntry(guestPath)?.metadata;
+  }
+
+  Preview1VirtualSymlink? symlinkForPath(String guestPath) {
+    return _symlinksByGuestPath[normalizeGuestPath(guestPath)];
+  }
+
+  Preview1VirtualPathEntry? pathEntry(
+    String guestPath, {
+    bool followSymlinks = false,
+  }) {
+    final resolved = followSymlinks
+        ? resolveSymlinkPath(guestPath)
+        : normalizeGuestPath(guestPath);
+    if (resolved == null) {
+      return null;
     }
-    return _directoryMetadataByGuestPath[normalized];
+
+    final file = lookupFile(resolved);
+    if (file != null) {
+      return Preview1VirtualPathEntry(
+        kind: Preview1VirtualPathEntryKind.file,
+        metadata: file.metadata,
+        size: file.length,
+      );
+    }
+
+    final directoryMetadata = _directoryMetadataByGuestPath[resolved];
+    if (directoryMetadata != null) {
+      return Preview1VirtualPathEntry(
+        kind: Preview1VirtualPathEntryKind.directory,
+        metadata: directoryMetadata,
+      );
+    }
+
+    final symlink = _symlinksByGuestPath[resolved];
+    if (symlink != null) {
+      return Preview1VirtualPathEntry(
+        kind: Preview1VirtualPathEntryKind.symlink,
+        metadata: symlink.metadata,
+        size: symlink.targetBytes.length,
+      );
+    }
+
+    return null;
+  }
+
+  String? resolveSymlinkPath(String guestPath, {int maxDepth = 16}) {
+    var current = normalizeGuestPath(guestPath);
+    for (var depth = 0; depth < maxDepth; depth++) {
+      final symlink = _symlinksByGuestPath[current];
+      if (symlink == null) {
+        return current;
+      }
+      current = normalizeGuestPath(
+        symlink.target.startsWith('/')
+            ? symlink.target
+            : joinGuestPath(dirnameOfGuestPath(current), symlink.target),
+      );
+    }
+    return null;
   }
 
   bool close(int fd) {
@@ -182,12 +240,14 @@ final class Preview1VirtualFileSystem {
     final normalized = normalizeGuestPath(guestPath);
     if (normalized == '/' ||
         _filesByGuestPath.containsKey(normalized) ||
+        _symlinksByGuestPath.containsKey(normalized) ||
         _virtualDirectoryPaths.contains(normalized)) {
       return Preview1PathMutationResult.exists;
     }
 
     final parent = dirnameOfGuestPath(normalized);
-    if (_filesByGuestPath.containsKey(parent)) {
+    if (_filesByGuestPath.containsKey(parent) ||
+        _symlinksByGuestPath.containsKey(parent)) {
       return Preview1PathMutationResult.notDirectory;
     }
     if (!_virtualDirectoryPaths.contains(parent)) {
@@ -202,7 +262,8 @@ final class Preview1VirtualFileSystem {
 
   Preview1PathMutationResult removeDirectory(String guestPath) {
     final normalized = normalizeGuestPath(guestPath);
-    if (_filesByGuestPath.containsKey(normalized)) {
+    if (_filesByGuestPath.containsKey(normalized) ||
+        _symlinksByGuestPath.containsKey(normalized)) {
       return Preview1PathMutationResult.notDirectory;
     }
     if (!_virtualDirectoryPaths.contains(normalized)) {
@@ -216,10 +277,13 @@ final class Preview1VirtualFileSystem {
     final hasFileChildren = _filesByGuestPath.keys.any(
       (path) => path.startsWith(childPrefix),
     );
+    final hasSymlinkChildren = _symlinksByGuestPath.keys.any(
+      (path) => path.startsWith(childPrefix),
+    );
     final hasDirectoryChildren = _virtualDirectoryPaths.any(
       (path) => path != normalized && path.startsWith(childPrefix),
     );
-    if (hasFileChildren || hasDirectoryChildren) {
+    if (hasFileChildren || hasSymlinkChildren || hasDirectoryChildren) {
       return Preview1PathMutationResult.notEmpty;
     }
 
@@ -238,6 +302,10 @@ final class Preview1VirtualFileSystem {
     if (_virtualDirectoryPaths.contains(normalized)) {
       return Preview1PathMutationResult.isDirectory;
     }
+    if (_symlinksByGuestPath.remove(normalized) != null) {
+      _rebuildDirectoryEntries();
+      return Preview1PathMutationResult.success;
+    }
     if (_filesByGuestPath.remove(normalized) == null) {
       return Preview1PathMutationResult.noEntry;
     }
@@ -254,7 +322,8 @@ final class Preview1VirtualFileSystem {
     final oldNormalized = normalizeGuestPath(oldPath);
     final newNormalized = normalizeGuestPath(newPath);
     final newParent = dirnameOfGuestPath(newNormalized);
-    if (_filesByGuestPath.containsKey(newParent)) {
+    if (_filesByGuestPath.containsKey(newParent) ||
+        _symlinksByGuestPath.containsKey(newParent)) {
       return Preview1PathMutationResult.notDirectory;
     }
     if (!_virtualDirectoryPaths.contains(newParent)) {
@@ -266,9 +335,25 @@ final class Preview1VirtualFileSystem {
       if (_virtualDirectoryPaths.contains(newNormalized)) {
         return Preview1PathMutationResult.isDirectory;
       }
+      if (_symlinksByGuestPath.containsKey(newNormalized)) {
+        return Preview1PathMutationResult.exists;
+      }
       _filesByGuestPath.remove(oldNormalized);
       _filesByGuestPath[newNormalized] = oldFile;
       _rebuildFileIndexes();
+      _rebuildDirectoryEntries();
+      return Preview1PathMutationResult.success;
+    }
+
+    final oldSymlink = _symlinksByGuestPath[oldNormalized];
+    if (oldSymlink != null) {
+      if (_filesByGuestPath.containsKey(newNormalized) ||
+          _symlinksByGuestPath.containsKey(newNormalized) ||
+          _virtualDirectoryPaths.contains(newNormalized)) {
+        return Preview1PathMutationResult.exists;
+      }
+      _symlinksByGuestPath.remove(oldNormalized);
+      _symlinksByGuestPath[newNormalized] = oldSymlink;
       _rebuildDirectoryEntries();
       return Preview1PathMutationResult.success;
     }
@@ -281,7 +366,8 @@ final class Preview1VirtualFileSystem {
         _isChildPath(newNormalized, oldNormalized)) {
       return Preview1PathMutationResult.invalid;
     }
-    if (_filesByGuestPath.containsKey(newNormalized)) {
+    if (_filesByGuestPath.containsKey(newNormalized) ||
+        _symlinksByGuestPath.containsKey(newNormalized)) {
       return Preview1PathMutationResult.notDirectory;
     }
     if (_virtualDirectoryPaths.contains(newNormalized)) {
@@ -299,13 +385,15 @@ final class Preview1VirtualFileSystem {
     final oldNormalized = normalizeGuestPath(oldPath);
     final newNormalized = normalizeGuestPath(newPath);
     final newParent = dirnameOfGuestPath(newNormalized);
-    if (_filesByGuestPath.containsKey(newParent)) {
+    if (_filesByGuestPath.containsKey(newParent) ||
+        _symlinksByGuestPath.containsKey(newParent)) {
       return Preview1PathMutationResult.notDirectory;
     }
     if (!_virtualDirectoryPaths.contains(newParent)) {
       return Preview1PathMutationResult.noEntry;
     }
     if (_filesByGuestPath.containsKey(newNormalized) ||
+        _symlinksByGuestPath.containsKey(newNormalized) ||
         _virtualDirectoryPaths.contains(newNormalized)) {
       return Preview1PathMutationResult.exists;
     }
@@ -320,6 +408,32 @@ final class Preview1VirtualFileSystem {
 
     _filesByGuestPath[newNormalized] = oldFile;
     _rebuildFileIndexes();
+    _rebuildDirectoryEntries();
+    return Preview1PathMutationResult.success;
+  }
+
+  Preview1PathMutationResult createSymlink({
+    required String target,
+    required String linkPath,
+  }) {
+    final normalized = normalizeGuestPath(linkPath);
+    if (normalized == '/' ||
+        _filesByGuestPath.containsKey(normalized) ||
+        _symlinksByGuestPath.containsKey(normalized) ||
+        _virtualDirectoryPaths.contains(normalized)) {
+      return Preview1PathMutationResult.exists;
+    }
+
+    final parent = dirnameOfGuestPath(normalized);
+    if (_filesByGuestPath.containsKey(parent) ||
+        _symlinksByGuestPath.containsKey(parent)) {
+      return Preview1PathMutationResult.notDirectory;
+    }
+    if (!_virtualDirectoryPaths.contains(parent)) {
+      return Preview1PathMutationResult.noEntry;
+    }
+
+    _symlinksByGuestPath[normalized] = Preview1VirtualSymlink(target);
     _rebuildDirectoryEntries();
     return Preview1PathMutationResult.success;
   }
@@ -376,6 +490,16 @@ final class Preview1VirtualFileSystem {
     });
     _filesByGuestPath.addAll(renamedFiles);
 
+    final renamedSymlinks = <String, Preview1VirtualSymlink>{};
+    _symlinksByGuestPath.removeWhere((path, symlink) {
+      if (!_isChildPath(path, oldPath)) {
+        return false;
+      }
+      renamedSymlinks['$newPath${path.substring(oldPath.length)}'] = symlink;
+      return true;
+    });
+    _symlinksByGuestPath.addAll(renamedSymlinks);
+
     for (final entry in _openDirectoriesByFd.entries.toList()) {
       final path = entry.value;
       if (path == oldPath || _isChildPath(path, oldPath)) {
@@ -403,6 +527,7 @@ final class Preview1VirtualFileSystem {
     _directoryEntriesByGuestPath = _buildDirectoryEntriesByPath(
       directories: _virtualDirectoryPaths,
       filesByGuestPath: _filesByGuestPath,
+      symlinksByGuestPath: _symlinksByGuestPath,
     );
   }
 }
@@ -419,6 +544,26 @@ final class Preview1DirectoryEntry {
 final class Preview1VirtualNodeMetadata {
   int accessTimeNanos = 0;
   int modificationTimeNanos = 0;
+}
+
+enum Preview1VirtualPathEntryKind { file, directory, symlink }
+
+final class Preview1VirtualPathEntry {
+  const Preview1VirtualPathEntry({
+    required this.kind,
+    required this.metadata,
+    this.size = 0,
+  });
+
+  final Preview1VirtualPathEntryKind kind;
+  final Preview1VirtualNodeMetadata metadata;
+  final int size;
+
+  int get fileType => switch (kind) {
+    Preview1VirtualPathEntryKind.file => filetypeRegularFile,
+    Preview1VirtualPathEntryKind.directory => filetypeDirectory,
+    Preview1VirtualPathEntryKind.symlink => filetypeSymbolicLink,
+  };
 }
 
 int writeDirectoryEntries({
@@ -530,6 +675,14 @@ final class Preview1VirtualFile {
       setLength(requiredLength);
     }
   }
+}
+
+final class Preview1VirtualSymlink {
+  Preview1VirtualSymlink(this.target) : targetBytes = pathBytes(target);
+
+  final String target;
+  final Uint8List targetBytes;
+  final Preview1VirtualNodeMetadata metadata = Preview1VirtualNodeMetadata();
 }
 
 final class Preview1VirtualOpenFile {
@@ -760,6 +913,7 @@ bool _isChildPath(String path, String parent) {
 Map<String, List<Preview1DirectoryEntry>> _buildDirectoryEntriesByPath({
   required Set<String> directories,
   required Map<String, Preview1VirtualFile> filesByGuestPath,
+  required Map<String, Preview1VirtualSymlink> symlinksByGuestPath,
 }) {
   final childrenByDirectory = <String, Map<String, Preview1DirectoryEntry>>{
     for (final directory in directories)
@@ -796,6 +950,13 @@ Map<String, List<Preview1DirectoryEntry>> _buildDirectoryEntriesByPath({
       parent: dirnameOfGuestPath(filePath),
       name: basenameOfGuestPath(filePath),
       fileType: filetypeRegularFile,
+    );
+  }
+  for (final symlinkPath in symlinksByGuestPath.keys) {
+    addChild(
+      parent: dirnameOfGuestPath(symlinkPath),
+      name: basenameOfGuestPath(symlinkPath),
+      fileType: filetypeSymbolicLink,
     );
   }
 

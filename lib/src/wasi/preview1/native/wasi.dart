@@ -94,8 +94,10 @@ class WASI implements wasi_iface.WASI {
       'path_filestat_set_times': _pathFilestatSetTimesImport,
       'path_link': _pathLinkImport,
       'path_open': _pathOpenImport,
+      'path_readlink': _pathReadlinkImport,
       'path_remove_directory': _pathRemoveDirectoryImport,
       'path_rename': _pathRenameImport,
+      'path_symlink': _pathSymlinkImport,
       'path_unlink_file': _pathUnlinkFileImport,
       'poll_oneoff': _pollOneoffImport,
     };
@@ -851,9 +853,13 @@ class WASI implements wasi_iface.WASI {
       return _errnoInval;
     }
     final dirFd = _asInt(args[0]);
+    final lookupFlags = _asInt(args[1]);
     final pathPtr = _asInt(args[2]);
     final pathLen = _asInt(args[3]);
     final openedFdPtr = _asInt(args[8]);
+    if ((lookupFlags & ~_lookupflagKnownMask) != 0) {
+      return _errnoInval;
+    }
     final baseDirectory = _vfs.directoryPathForFd(dirFd);
     if (baseDirectory == null) {
       return _errnoBadf;
@@ -888,13 +894,19 @@ class WASI implements wasi_iface.WASI {
       return _errnoInval;
     }
     final normalizedPath = wasi_vfs.normalizeGuestPath(guestPath);
-    final fileBytes = _vfs.lookupFile(normalizedPath);
+    final openPath = (lookupFlags & _lookupflagSymlinkFollow) == 0
+        ? normalizedPath
+        : _vfs.resolveSymlinkPath(normalizedPath);
+    if (openPath == null) {
+      return _errnoNoent;
+    }
+    final fileBytes = _vfs.lookupFile(openPath);
     if (_traceSyscalls) {
       io.stderr.writeln(
-        '[wasi:path_open] guest=$normalizedPath found=${fileBytes != null}',
+        '[wasi:path_open] guest=$normalizedPath open=$openPath found=${fileBytes != null}',
       );
     }
-    final opened = _vfs.openPath(normalizedPath);
+    final opened = _vfs.openPath(openPath);
     switch (opened.kind) {
       case wasi_vfs.Preview1VirtualOpenKind.file:
       case wasi_vfs.Preview1VirtualOpenKind.directory:
@@ -955,6 +967,10 @@ class WASI implements wasi_iface.WASI {
         if (args.length < 7) {
           return _errnoInval;
         }
+        final lookupFlags = _asInt(args[1]);
+        if ((lookupFlags & ~_lookupflagKnownMask) != 0) {
+          return _errnoInval;
+        }
         final oldPath = _resolvePath(
           dirFd: _asInt(args[0]),
           pathPtr: _asInt(args[2]),
@@ -971,9 +987,104 @@ class WASI implements wasi_iface.WASI {
         if (newPath.errno != _errnoSuccess) {
           return newPath.errno;
         }
+        final oldLinkPath = (lookupFlags & _lookupflagSymlinkFollow) == 0
+            ? oldPath.path!
+            : _vfs.resolveSymlinkPath(oldPath.path!);
+        if (oldLinkPath == null) {
+          return _errnoNoent;
+        }
 
         return _errnoFromPathMutationResult(
-          _vfs.linkPath(oldPath: oldPath.path!, newPath: newPath.path!),
+          _vfs.linkPath(oldPath: oldLinkPath, newPath: newPath.path!),
+        );
+      });
+
+  wasm.FunctionImportExportValue get _pathReadlinkImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 6) {
+          return _errnoInval;
+        }
+        final resolved = _resolvePath(
+          dirFd: _asInt(args[0]),
+          pathPtr: _asInt(args[1]),
+          pathLen: _asInt(args[2]),
+        );
+        if (resolved.errno != _errnoSuccess) {
+          return resolved.errno;
+        }
+
+        final bufferPtr = _asInt(args[3]);
+        final bufferLength = _asInt(args[4]);
+        final bufferUsedPtr = _asInt(args[5]);
+        final view = _memoryView();
+        if (view == null) {
+          return _errnoInval;
+        }
+        final bytes = view.bytes;
+        final data = view.data;
+        if (bufferPtr < 0 ||
+            bufferLength < 0 ||
+            bufferPtr + bufferLength > bytes.length ||
+            bufferUsedPtr < 0 ||
+            bufferUsedPtr + 4 > bytes.length) {
+          return _errnoInval;
+        }
+
+        final symlink = _vfs.symlinkForPath(resolved.path!);
+        if (symlink == null) {
+          return _vfs.pathEntry(resolved.path!) == null
+              ? _errnoNoent
+              : _errnoInval;
+        }
+
+        final bytesToWrite = math.min(bufferLength, symlink.targetBytes.length);
+        if (bytesToWrite > 0) {
+          bytes.setRange(
+            bufferPtr,
+            bufferPtr + bytesToWrite,
+            symlink.targetBytes,
+          );
+        }
+        data.setUint32(bufferUsedPtr, bytesToWrite, Endian.little);
+        return _errnoSuccess;
+      });
+
+  wasm.FunctionImportExportValue get _pathSymlinkImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 5) {
+          return _errnoInval;
+        }
+        final targetPtr = _asInt(args[0]);
+        final targetLength = _asInt(args[1]);
+        final view = _memoryView();
+        if (view == null) {
+          return _errnoInval;
+        }
+        final bytes = view.bytes;
+        if (targetPtr < 0 ||
+            targetLength < 0 ||
+            targetPtr + targetLength > bytes.length) {
+          return _errnoInval;
+        }
+        final decodedTarget = utf8.decode(
+          bytes.sublist(targetPtr, targetPtr + targetLength),
+          allowMalformed: true,
+        );
+        final nul = decodedTarget.indexOf('\u0000');
+        final target = nul == -1
+            ? decodedTarget
+            : decodedTarget.substring(0, nul);
+
+        final linkPath = _resolvePath(
+          dirFd: _asInt(args[2]),
+          pathPtr: _asInt(args[3]),
+          pathLen: _asInt(args[4]),
+        );
+        if (linkPath.errno != _errnoSuccess) {
+          return linkPath.errno;
+        }
+        return _errnoFromPathMutationResult(
+          _vfs.createSymlink(target: target, linkPath: linkPath.path!),
         );
       });
 
@@ -1001,9 +1112,13 @@ class WASI implements wasi_iface.WASI {
       return _errnoInval;
     }
     final dirFd = _asInt(args[0]);
+    final lookupFlags = _asInt(args[1]);
     final pathPtr = _asInt(args[2]);
     final pathLen = _asInt(args[3]);
     final filestatPtr = _asInt(args[4]);
+    if ((lookupFlags & ~_lookupflagKnownMask) != 0) {
+      return _errnoInval;
+    }
     final baseDirectory = _vfs.directoryPathForFd(dirFd);
     if (baseDirectory == null) {
       return _errnoBadf;
@@ -1034,29 +1149,28 @@ class WASI implements wasi_iface.WASI {
     }
 
     final normalizedPath = wasi_vfs.normalizeGuestPath(guestPath);
-    final fileBytes = _vfs.lookupFile(normalizedPath);
-    final isDirectory = _vfs.isDirectoryPath(normalizedPath);
-    if (fileBytes == null && !isDirectory) {
+    final entry = _vfs.pathEntry(
+      normalizedPath,
+      followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
+    );
+    if (entry == null) {
       return _errnoNoent;
     }
 
     bytes.fillRange(filestatPtr, filestatPtr + _filestatSize, 0);
-    bytes[filestatPtr + 16] = isDirectory
-        ? _filetypeDirectory
-        : _filetypeRegularFile;
-    if (fileBytes != null) {
-      _setUint64(data, filestatPtr + 32, fileBytes.length);
-    }
-    final metadata = _vfs.metadataForPath(normalizedPath);
-    if (metadata != null) {
-      _writeFilestatTimes(data, filestatPtr, metadata);
-    }
+    bytes[filestatPtr + 16] = entry.fileType;
+    _setUint64(data, filestatPtr + 32, entry.size);
+    _writeFilestatTimes(data, filestatPtr, entry.metadata);
     return _errnoSuccess;
   });
 
   wasm.FunctionImportExportValue get _pathFilestatSetTimesImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
         if (args.length < 7) {
+          return _errnoInval;
+        }
+        final lookupFlags = _asInt(args[1]);
+        if ((lookupFlags & ~_lookupflagKnownMask) != 0) {
           return _errnoInval;
         }
         final resolved = _resolvePath(
@@ -1067,12 +1181,15 @@ class WASI implements wasi_iface.WASI {
         if (resolved.errno != _errnoSuccess) {
           return resolved.errno;
         }
-        final metadata = _vfs.metadataForPath(resolved.path!);
-        if (metadata == null) {
+        final entry = _vfs.pathEntry(
+          resolved.path!,
+          followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
+        );
+        if (entry == null) {
           return _errnoNoent;
         }
         return _applyFilestatTimes(
-          metadata: metadata,
+          metadata: entry.metadata,
           accessTimeNanos: _asInt64(args[4]),
           modificationTimeNanos: _asInt64(args[5]),
           flags: _asInt(args[6]),
@@ -1573,6 +1690,8 @@ const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
 const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
 const int _fdflagKnownMask = wasi_common.fdflagKnownMask;
+const int _lookupflagSymlinkFollow = wasi_common.lookupflagSymlinkFollow;
+const int _lookupflagKnownMask = _lookupflagSymlinkFollow;
 const int _filestatSize = 64;
 const int _filestatAccessTimeOffset = 40;
 const int _filestatModificationTimeOffset = 48;
