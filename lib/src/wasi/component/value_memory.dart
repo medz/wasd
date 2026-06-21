@@ -44,6 +44,13 @@ final class WASIComponentCanonicalValueMemoryCodec {
     return _layout.load(ByteData.view(memory.buffer), bytes, pointer);
   }
 
+  /// Loads one typed value from [memory] at [pointer].
+  T loadAs<T>(wasm.Memory memory, int pointer, String name) {
+    final bytes = Uint8List.view(memory.buffer);
+    _checkMemoryRange(bytes, pointer, _layout.byteLength, _layout.alignment);
+    return _loadAs<T>(ByteData.view(memory.buffer), bytes, pointer, name);
+  }
+
   /// Loads [elementCount] contiguous values from [memory].
   List<Object?> loadMany(wasm.Memory memory, int pointer, int elementCount) {
     RangeError.checkNotNegative(elementCount, 'elementCount');
@@ -60,6 +67,30 @@ final class WASIComponentCanonicalValueMemoryCodec {
       values.add(_layout.load(data, bytes, pointer + i * _layout.byteLength));
     }
     return values;
+  }
+
+  /// Loads [elementCount] typed contiguous values from [memory].
+  List<T> loadManyAs<T>(
+    wasm.Memory memory,
+    int pointer,
+    int elementCount,
+    String name,
+  ) {
+    RangeError.checkNotNegative(elementCount, 'elementCount');
+    final bytes = Uint8List.view(memory.buffer);
+    _checkMemoryRange(
+      bytes,
+      pointer,
+      elementCount * _layout.byteLength,
+      _layout.alignment,
+    );
+    final data = ByteData.view(memory.buffer);
+    return List<T>.generate(
+      elementCount,
+      (index) =>
+          _loadAs<T>(data, bytes, pointer + index * _layout.byteLength, name),
+      growable: false,
+    );
   }
 
   /// Stores one [value] into [memory] at [pointer].
@@ -87,6 +118,15 @@ final class WASIComponentCanonicalValueMemoryCodec {
   /// Validates [value] against this canonical value shape.
   void validate(String name, Object? value) {
     _layout.validate(name, value);
+  }
+
+  T _loadAs<T>(ByteData data, Uint8List bytes, int pointer, String name) {
+    final value = _layout.load(data, bytes, pointer);
+    // Layout loads either produce the canonical shape or throw while decoding.
+    if (value is T) {
+      return value;
+    }
+    throw StateError('WASI component canonical value $name expected $T.');
   }
 }
 

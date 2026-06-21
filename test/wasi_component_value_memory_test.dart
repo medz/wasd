@@ -52,6 +52,26 @@ void main() {
       expect(data.getUint16(100, Endian.little), 13);
     });
 
+    test('loads typed primitive batches', () {
+      final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+        const WasmComponentValueType.primitive(
+          WasmComponentPrimitiveValueType.u32,
+        ),
+        const <WasmComponentTypeDefinition>[],
+      )!;
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 7, Endian.little);
+      data.setUint32(36, 8, Endian.little);
+      data.setUint32(40, 9, Endian.little);
+
+      expect(codec.loadManyAs<int>(memory, 32, 3, 'items'), [7, 8, 9]);
+      expect(
+        () => codec.loadManyAs<String>(memory, 32, 1, 'items'),
+        throwsStateError,
+      );
+    });
+
     test('packs flags through the smallest canonical integer width', () {
       final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
         const WasmComponentValueType.typeIndex(0),

@@ -2836,16 +2836,7 @@ List<T> _readFixedWidthValuesFromMemory<T>(
       'WASI component async type $name does not have a fixed-size memory element type.',
     );
   }
-  final loaded = codec.loadMany(memory, pointer, elementCount);
-  final values = <T>[];
-  for (final value in loaded) {
-    validator.validate(name, value);
-    if (value is! T) {
-      throw StateError('WASI component async type $name expected $T value.');
-    }
-    values.add(value);
-  }
-  return values;
+  return codec.loadManyAs<T>(memory, pointer, elementCount, name);
 }
 
 T _readFixedWidthValueFromMemory<T>(
@@ -2866,12 +2857,7 @@ T _readFixedWidthValueFromMemory<T>(
       'WASI component async type $name does not have a fixed-size memory element type.',
     );
   }
-  final value = codec.load(memory, pointer);
-  validator.validate(name, value);
-  if (value is! T) {
-    throw StateError('WASI component async type $name expected $T value.');
-  }
-  return value;
+  return codec.loadAs<T>(memory, pointer, name);
 }
 
 void _writeFixedWidthValuesToMemory(
