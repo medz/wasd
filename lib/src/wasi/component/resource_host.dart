@@ -153,6 +153,40 @@ final class WASIComponentCanonicalResourceProgram {
 
   /// Resource operations in component canonical definition order.
   final List<WASIComponentCanonicalResourceOperation> operations;
+
+  /// Invokes the canonical resource operation at [canonicalIndex].
+  Object? invoke(int canonicalIndex, List<Object?> args) {
+    if (canonicalIndex < 0 || canonicalIndex >= operations.length) {
+      throw StateError(
+        'Unknown WASI component canonical resource index: $canonicalIndex.',
+      );
+    }
+    final operation = operations[canonicalIndex];
+    switch (operation.kind) {
+      case WasmComponentCanonicalKind.resourceNew:
+        _expectArity(canonicalIndex, args, 1);
+        final representation = args.single;
+        if (representation == null) {
+          throw StateError(
+            'WASI component canonical resource.new requires a representation.',
+          );
+        }
+        return operation.resourceNew(representation);
+      case WasmComponentCanonicalKind.resourceRep:
+        _expectArity(canonicalIndex, args, 1);
+        return operation.resourceRep(
+          _expectHandle(canonicalIndex, args.single),
+        );
+      case WasmComponentCanonicalKind.resourceDrop:
+        _expectArity(canonicalIndex, args, 1);
+        operation.resourceDrop(_expectHandle(canonicalIndex, args.single));
+        return null;
+      default:
+        throw UnsupportedError(
+          'Wasm component canonical ${operation.kind.name} is not executable by the resource program.',
+        );
+    }
+  }
 }
 
 /// Executable form of a canonical resource operation.
@@ -278,5 +312,23 @@ void _validateRepresentation(
   }
   throw StateError(
     'WASI component resource $name expected ${representation.name} representation.',
+  );
+}
+
+void _expectArity(int canonicalIndex, List<Object?> args, int expected) {
+  if (args.length != expected) {
+    throw StateError(
+      'WASI component canonical resource index $canonicalIndex expected '
+      '$expected arguments, got ${args.length}.',
+    );
+  }
+}
+
+int _expectHandle(int canonicalIndex, Object? value) {
+  if (value is int) {
+    return value;
+  }
+  throw StateError(
+    'WASI component canonical resource index $canonicalIndex expected an i32 handle.',
   );
 }

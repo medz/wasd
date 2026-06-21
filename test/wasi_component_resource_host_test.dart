@@ -73,6 +73,29 @@ void main() {
       expect(dropped, [21]);
     });
 
+    test('invokes decoded canonical resource program operations by index', () {
+      final component = WasmComponent.decode(_canonicalResourceProgramBytes());
+      final host = WASIComponentResourceHost();
+      final dropped = <int>[];
+      host.defineResourceTypeFromComponent<int>(
+        component,
+        0,
+        'descriptor',
+        onDrop: dropped.add,
+      );
+      final program = host.bindCanonicalDefinitions(component);
+
+      final handle = program.invoke(0, <Object?>[34]);
+
+      expect(handle, isA<int>());
+      expect(program.invoke(1, <Object?>[handle]), 34);
+      expect(program.invoke(2, <Object?>[handle]), isNull);
+      expect(dropped, [34]);
+      expect(() => program.invoke(3, const <Object?>[]), throwsStateError);
+      expect(() => program.invoke(0, const <Object?>[]), throwsStateError);
+      expect(() => program.invoke(1, const <Object?>['bad']), throwsStateError);
+    });
+
     test('rejects non-resource canonical definitions in resource programs', () {
       final component = WasmComponent.decode(_canonicalMixedResourceBytes());
       final host = WASIComponentResourceHost();

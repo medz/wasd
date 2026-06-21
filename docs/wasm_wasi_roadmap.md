@@ -87,8 +87,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   and `resource.drop` definitions, in canonical definition order, to
   table-local nominal resource type tokens. Resource host bindings also read
   decoded resource representation types and validate `resource.new`
-  representation values. P2/P3 host instantiation, WIT ingestion, full
-  canonical ABI lowering/lifting, and async stream/future execution are not
+  representation values, and resource-only canonical programs can be invoked by
+  canonical index. P2/P3 host instantiation, WIT ingestion, full canonical ABI
+  lowering/lifting, and async stream/future execution are not
   production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
