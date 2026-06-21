@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:wasd/src/wasi/preview1/common/constants.dart';
 import 'package:wasd/src/wasi/preview1/common/vfs.dart';
+import 'package:wasd/src/wasi/preview1/socket.dart';
 
 const int _defaultDirectories = 64;
 const int _defaultFilesPerDirectory = 32;
@@ -11,6 +12,8 @@ const int _defaultIterations = 2000;
 const int _defaultOpenFds = 512;
 const int _defaultMutations = 200;
 const int _warmupIterations = 50;
+const int _socketChunkSize = 64;
+const int _socketIovSize = 32;
 
 void main(List<String> args) {
   final options = _Options.parse(args);
@@ -29,6 +32,9 @@ void main(List<String> args) {
   final readdir = _benchmarkReaddir(baselineFiles, options);
   final rights = _benchmarkRightsChecks(baselineFiles, options);
   final mutations = _benchmarkMutations(baselineFiles, options);
+  final socketRecvPeek = _benchmarkSocketRecvPeek(options);
+  final socketSendRecv = _benchmarkSocketSendRecv(options);
+  final socketRenumberClose = _benchmarkSocketRenumberClose(options);
 
   final payload = <String, Object?>{
     'directories': options.directories,
@@ -41,6 +47,9 @@ void main(List<String> args) {
     'readdir': readdir.toJson(),
     'rights_checks': rights.toJson(),
     'mutations_benchmark': mutations.toJson(),
+    'socket_recv_peek': socketRecvPeek.toJson(),
+    'socket_send_recv': socketSendRecv.toJson(),
+    'socket_renumber_close': socketRenumberClose.toJson(),
   };
 
   if (options.json) {
@@ -84,6 +93,9 @@ void _runWarmup(Map<String, Uint8List> files, _Options options) {
   _benchmarkReaddir(files, warmupOptions);
   _benchmarkRightsChecks(files, warmupOptions);
   _benchmarkMutations(files, warmupOptions);
+  _benchmarkSocketRecvPeek(warmupOptions);
+  _benchmarkSocketSendRecv(warmupOptions);
+  _benchmarkSocketRenumberClose(warmupOptions);
 }
 
 _Metric _benchmarkPathOpenClose(
@@ -224,6 +236,186 @@ _Metric _benchmarkMutations(Map<String, Uint8List> files, _Options options) {
   );
 }
 
+_Metric _benchmarkSocketRecvPeek(_Options options) {
+  final socket = WASIPreview1Socket(
+    receiveData: List<int>.generate(_socketChunkSize, (index) => index & 0xff),
+  );
+  final vfs = Preview1VirtualFileSystem(sockets: {64: socket});
+  final descriptor = vfs.socketForFd(64);
+  if (descriptor == null) {
+    throw StateError('socket descriptor missing for peek benchmark');
+  }
+  final bytes = Uint8List(256);
+  final data = ByteData.view(bytes.buffer);
+  const iovPtr = 0;
+  const firstBufferPtr = 32;
+  const secondBufferPtr = 96;
+  const countPtr = 160;
+  const flagsPtr = 168;
+  _writeTwoIovs(
+    data: data,
+    iovPtr: iovPtr,
+    firstBufferPtr: firstBufferPtr,
+    firstLength: _socketIovSize,
+    secondBufferPtr: secondBufferPtr,
+    secondLength: _socketIovSize,
+  );
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final errno = readSocketIntoIov(
+      socket: descriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 2,
+      flags: riflagRecvPeek,
+      nreadPtr: countPtr,
+      roFlagsPtr: flagsPtr,
+    );
+    if (errno != errnoSuccess) {
+      throw StateError('socket recv peek failed at iteration $i: $errno');
+    }
+    checksum += data.getUint32(countPtr, Endian.little);
+  }
+  watch.stop();
+  return _Metric(
+    operations: options.iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkSocketSendRecv(_Options options) {
+  final socket = WASIPreview1Socket(
+    receiveData: List<int>.generate(
+      options.iterations * _socketChunkSize,
+      (index) => index & 0xff,
+    ),
+  );
+  final vfs = Preview1VirtualFileSystem(sockets: {64: socket});
+  final descriptor = vfs.socketForFd(64);
+  if (descriptor == null) {
+    throw StateError('socket descriptor missing for send/recv benchmark');
+  }
+  final bytes = Uint8List(384);
+  final data = ByteData.view(bytes.buffer);
+  const recvIovPtr = 0;
+  const recvFirstBufferPtr = 32;
+  const recvSecondBufferPtr = 96;
+  const sendIovPtr = 160;
+  const sendFirstBufferPtr = 192;
+  const sendSecondBufferPtr = 256;
+  const countPtr = 320;
+  const flagsPtr = 328;
+  _writeTwoIovs(
+    data: data,
+    iovPtr: recvIovPtr,
+    firstBufferPtr: recvFirstBufferPtr,
+    firstLength: _socketIovSize,
+    secondBufferPtr: recvSecondBufferPtr,
+    secondLength: _socketIovSize,
+  );
+  _writeTwoIovs(
+    data: data,
+    iovPtr: sendIovPtr,
+    firstBufferPtr: sendFirstBufferPtr,
+    firstLength: _socketIovSize,
+    secondBufferPtr: sendSecondBufferPtr,
+    secondLength: _socketIovSize,
+  );
+  for (var i = 0; i < _socketIovSize; i++) {
+    bytes[sendFirstBufferPtr + i] = i & 0xff;
+    bytes[sendSecondBufferPtr + i] = (i + _socketIovSize) & 0xff;
+  }
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final recvErrno = readSocketIntoIov(
+      socket: descriptor,
+      bytes: bytes,
+      data: data,
+      iovs: recvIovPtr,
+      iovsLen: 2,
+      flags: 0,
+      nreadPtr: countPtr,
+      roFlagsPtr: flagsPtr,
+    );
+    if (recvErrno != errnoSuccess) {
+      throw StateError('socket recv failed at iteration $i: $recvErrno');
+    }
+    checksum += data.getUint32(countPtr, Endian.little);
+    final sendErrno = writeSocketFromIov(
+      socket: descriptor,
+      bytes: bytes,
+      data: data,
+      iovs: sendIovPtr,
+      iovsLen: 2,
+      nwrittenPtr: countPtr,
+    );
+    if (sendErrno != errnoSuccess) {
+      throw StateError('socket send failed at iteration $i: $sendErrno');
+    }
+    checksum += data.getUint32(countPtr, Endian.little);
+  }
+  watch.stop();
+  return _Metric(
+    operations: options.iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkSocketRenumberClose(_Options options) {
+  const fromBase = 1000;
+  const toBase = 100000;
+  final sockets = <int, WASIPreview1Socket>{};
+  for (var i = 0; i < options.iterations; i++) {
+    sockets[fromBase + i] = WASIPreview1Socket(receiveData: [i & 0xff]);
+    sockets[toBase + i] = WASIPreview1Socket();
+  }
+  final vfs = Preview1VirtualFileSystem(sockets: sockets);
+
+  var successfulOperations = 0;
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final toFd = toBase + i;
+    final result = vfs.renumberDescriptor(fromFd: fromBase + i, toFd: toFd);
+    if (result != Preview1FdRenumberResult.success) {
+      throw StateError('socket renumber failed at iteration $i: $result');
+    }
+    successfulOperations++;
+    if (!vfs.close(toFd)) {
+      throw StateError('socket close failed at iteration $i');
+    }
+    successfulOperations++;
+    checksum += toFd;
+  }
+  watch.stop();
+  return _Metric(
+    operations: successfulOperations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+void _writeTwoIovs({
+  required ByteData data,
+  required int iovPtr,
+  required int firstBufferPtr,
+  required int firstLength,
+  required int secondBufferPtr,
+  required int secondLength,
+}) {
+  data.setUint32(iovPtr, firstBufferPtr, Endian.little);
+  data.setUint32(iovPtr + 4, firstLength, Endian.little);
+  data.setUint32(iovPtr + 8, secondBufferPtr, Endian.little);
+  data.setUint32(iovPtr + 12, secondLength, Endian.little);
+}
+
 void _expectPathMutation(Preview1PathMutationResult result, String operation) {
   if (result != Preview1PathMutationResult.success) {
     throw StateError('$operation failed: $result');
@@ -243,6 +435,9 @@ void _printText(Map<String, Object?> payload) {
   _printMetric('readdir', payload['readdir']);
   _printMetric('rights checks', payload['rights_checks']);
   _printMetric('mutations', payload['mutations_benchmark']);
+  _printMetric('socket recv peek', payload['socket_recv_peek']);
+  _printMetric('socket send/recv', payload['socket_send_recv']);
+  _printMetric('socket renumber/close', payload['socket_renumber_close']);
 }
 
 void _printMetric(String label, Object? raw) {

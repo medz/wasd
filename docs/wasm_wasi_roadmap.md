@@ -74,7 +74,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   `WASIPreview1Socket`, not raw networking.
 - Preview 1 directory entries are indexed through per-directory child maps so
   common path/link/symlink mutation paths rebuild only affected directories.
-  The benchmark entrypoint is `dart run tool/wasi_vfs_benchmark.dart --json`.
+  The benchmark entrypoint is `dart run tool/wasi_vfs_benchmark.dart --json`;
+  it also covers socket multi-iov peek, socket send/recv, and socket
+  renumber/close descriptor paths.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, but P2/P3 host
   instantiation, WIT ingestion, resource tables, canonical ABI lowering/lifting,
@@ -124,9 +126,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   default validation remains useful without hiding performance regressions.
 - Any new conformance runner should cache toolchain discovery, generated
   bundles, and fixture conversion results by input hash.
-- Preview 1 VFS path resolution and directory-entry rebuilding are measured by
+- Preview 1 VFS path resolution, directory-entry rebuilding, descriptor rights,
+  and socket descriptor paths are measured by
   `dart run tool/wasi_vfs_benchmark.dart --json`, covering `path_open`,
-  `fd_readdir`, link/symlink mutation, and rights checks over large directory
+  `fd_readdir`, link/symlink mutation, rights checks, socket multi-iov
+  `RECV_PEEK`, socket send/recv, and socket renumber/close over large directory
   and descriptor sets. Keep optimizing against benchmark data instead of test
   suite heat alone.
 - P2/P3 streams and futures need latency, allocation, and cancellation
@@ -136,8 +140,8 @@ This is the implementation state as of 2026-06-21 on `main`.
 
 ## Near-Term Slices
 
-1. Extend Preview 1 socket regression coverage and benchmarks around multi-iov
-   `RECV_PEEK`, shutdown/send error paths, and fd renumber/close interactions.
+1. Extend Preview 1 socket coverage toward conformance edge cases that are not
+   covered yet: `RECV_WAITALL`, truncation flags, and native adapter boundaries.
 2. Extend the VFS/descriptor benchmark with descriptor renumbering and larger
    conformance-shaped path distributions, then use it as the gate for further
    VFS optimizations.
