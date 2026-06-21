@@ -196,7 +196,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   Heavy process-based verification now uses a shared measured-process helper:
   `tool/spec_runner.dart` records elapsed time and sampled peak RSS per step in
   its JSON/Markdown reports, and the DOOM smoke tests include the same metrics
-  in failure diagnostics.
+  in failure diagnostics. The spec testsuite runner also caches `.wast`
+  conversion outputs by converter/input hash under `.dart_tool/spec_runner`,
+  then copies cached outputs into fresh execution directories so repeated
+  conformance runs avoid redundant external converter work without reusing
+  mutable execution state.
   P2/P3 host instantiation, WIT ingestion, full canonical ABI
   lowering/lifting, memory-backed typed stream/future copy, and full async
   stream/future execution are not production-supported yet.
@@ -254,7 +258,9 @@ This is the implementation state as of 2026-06-21 on `main`.
 - Heavy external-process tests should be grouped behind explicit runner modes so
   default validation remains useful without hiding performance regressions.
 - Any new conformance runner should cache toolchain discovery, generated
-  bundles, and fixture conversion results by input hash.
+  bundles, and fixture conversion results by input hash. The current
+  spec-testsuite runner caches converter outputs but still executes each file
+  from a fresh work directory to preserve isolation.
 - Preview 1 VFS path resolution, directory-entry rebuilding, descriptor rights,
   and socket descriptor paths are measured by
   `dart run tool/wasi_vfs_benchmark.dart --json`, covering `path_open`,

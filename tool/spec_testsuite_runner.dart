@@ -65,6 +65,20 @@ final class _WastConverter {
   };
 }
 
+final class _WastConversionResult {
+  const _WastConversionResult({
+    required this.exitCode,
+    required this.stdout,
+    required this.stderr,
+    required this.cacheHit,
+  });
+
+  final int exitCode;
+  final String stdout;
+  final String stderr;
+  final bool cacheHit;
+}
+
 enum _TextModuleParserKind { wasmToolsParse, wabtWat2Wasm }
 
 final class _TextModuleParser {
@@ -225,6 +239,7 @@ final class _FileResult {
     required this.commandsSkipped,
     required this.skipReasonCounts,
     required this.passed,
+    this.conversionCacheHit = false,
     this.firstFailureLine,
     this.firstFailureReason,
     this.firstFailureDetails,
@@ -240,6 +255,7 @@ final class _FileResult {
   final int commandsSkipped;
   final Map<String, int> skipReasonCounts;
   final bool passed;
+  final bool conversionCacheHit;
   final int? firstFailureLine;
   final String? firstFailureReason;
   final String? firstFailureDetails;
@@ -255,6 +271,7 @@ final class _FileResult {
     'commands_failed': commandsFailed,
     'commands_skipped': commandsSkipped,
     'skip_reason_counts': skipReasonCounts,
+    'conversion_cache_hit': conversionCacheHit,
     'first_failure_line': firstFailureLine,
     'first_failure_reason': firstFailureReason,
     'first_failure_details': firstFailureDetails,
@@ -1942,6 +1959,7 @@ Future<void> _runVmMode(List<String> args) async {
       _argValue(args, '--output-md') ?? defaultOutputMarkdown;
   final maxFilesRaw = _argValue(args, '--max-files');
   final maxFiles = maxFilesRaw == null ? null : int.tryParse(maxFilesRaw);
+  final conversionCacheDir = _conversionCacheDir(args);
 
   final converter = await _resolveWastConverter(
     jsonFromWast: _argValue(args, '--json-from-wast'),
@@ -1985,6 +2003,7 @@ Future<void> _runVmMode(List<String> args) async {
         textModuleParsers: textModuleParsers,
         legacyTextModuleParsers: legacyTextModuleParsers,
       ),
+      conversionCacheDir: conversionCacheDir,
     );
     results.add(result);
     _accumulateStats(
@@ -2055,6 +2074,7 @@ Future<void> _runPrepareManifestMode(
   final maxFilesRaw = _argValue(args, '--max-files');
   final maxFiles = maxFilesRaw == null ? null : int.tryParse(maxFilesRaw);
   final prepareRoot = _argValue(args, '--prepare-root') ?? defaultPrepareRoot;
+  final conversionCacheDir = _conversionCacheDir(args);
 
   final converter = await _resolveWastConverter(
     jsonFromWast: _argValue(args, '--json-from-wast'),
@@ -2096,17 +2116,15 @@ Future<void> _runPrepareManifestMode(
       converter: converter,
       legacyConverter: legacyConverter,
     );
-    final conversion = await Process.run(
-      fileConverter.binary,
-      fileConverter.command(
-        wastFile: file,
-        outputJsonPath: jsonPath,
-        wasmDir: slot.path,
-      ),
+    final conversion = await _convertWastFile(
+      file: file,
+      converter: fileConverter,
+      workDirPath: slot.path,
+      conversionCacheDir: conversionCacheDir,
     );
     if (conversion.exitCode != 0) {
       stderr.writeln('failed to convert: $file');
-      stderr.writeln(((conversion.stderr as String?) ?? '').trim());
+      stderr.writeln(conversion.stderr.trim());
       exitCode = 1;
       return;
     }
@@ -2218,6 +2236,7 @@ Future<void> _runPlayerMode(String manifestPath) async {
         group: group,
         commandsRaw: commandsRaw,
         state: state,
+        conversionCacheHit: false,
       );
       results.add(result);
       _accumulateStats(
@@ -2266,17 +2285,16 @@ Future<_FileResult> _runWastFile({
   required String group,
   required _WastConverter converter,
   required List<_TextModuleParser> textModuleParsers,
+  required String? conversionCacheDir,
 }) async {
   final tempDir = await Directory.systemTemp.createTemp('wasd-spec-');
   try {
     final jsonPath = '${tempDir.path}/script.json';
-    final conversion = await Process.run(
-      converter.binary,
-      converter.command(
-        wastFile: file,
-        outputJsonPath: jsonPath,
-        wasmDir: tempDir.path,
-      ),
+    final conversion = await _convertWastFile(
+      file: file,
+      converter: converter,
+      workDirPath: tempDir.path,
+      conversionCacheDir: conversionCacheDir,
     );
     if (conversion.exitCode != 0) {
       return _FileResult(
@@ -2289,12 +2307,11 @@ Future<_FileResult> _runWastFile({
         skipReasonCounts: const <String, int>{},
         passed: false,
         firstFailureReason: 'wast-convert-failed',
-        firstFailureDetails:
-            ((conversion.stderr as String?) ?? '').trim().isEmpty
-            ? ((conversion.stdout as String?) ?? '').trim()
-            : ((conversion.stderr as String?) ?? '').trim(),
-        wast2jsonStdout: (conversion.stdout as String?) ?? '',
-        wast2jsonStderr: (conversion.stderr as String?) ?? '',
+        firstFailureDetails: conversion.stderr.trim().isEmpty
+            ? conversion.stdout.trim()
+            : conversion.stderr.trim(),
+        wast2jsonStdout: conversion.stdout,
+        wast2jsonStderr: conversion.stderr,
       );
     }
 
@@ -2346,10 +2363,151 @@ Future<_FileResult> _runWastFile({
       group: group,
       commandsRaw: commandsRaw,
       state: state,
+      conversionCacheHit: conversion.cacheHit,
     );
   } finally {
     await tempDir.delete(recursive: true);
   }
+}
+
+String? _conversionCacheDir(List<String> args) {
+  if (args.contains('--no-conversion-cache')) {
+    return null;
+  }
+  return _argValue(args, '--conversion-cache-dir') ??
+      '.dart_tool/spec_runner/conversion_cache';
+}
+
+Future<_WastConversionResult> _convertWastFile({
+  required String file,
+  required _WastConverter converter,
+  required String workDirPath,
+  required String? conversionCacheDir,
+}) async {
+  if (conversionCacheDir == null) {
+    return _runWastConverter(
+      file: file,
+      converter: converter,
+      workDirPath: workDirPath,
+    );
+  }
+
+  final key = await _conversionCacheKey(file: file, converter: converter);
+  final cacheDir = Directory('$conversionCacheDir/$key');
+  final completeMarker = File('${cacheDir.path}/.complete');
+  final cacheHit = completeMarker.existsSync();
+  if (!cacheHit) {
+    final parent = Directory(conversionCacheDir);
+    await parent.create(recursive: true);
+    final tempCacheDir = Directory(
+      '$conversionCacheDir/.tmp-$key-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    await tempCacheDir.create(recursive: true);
+    final conversion = await _runWastConverter(
+      file: file,
+      converter: converter,
+      workDirPath: tempCacheDir.path,
+    );
+    if (conversion.exitCode != 0) {
+      await tempCacheDir.delete(recursive: true);
+      return conversion;
+    }
+    await File('${tempCacheDir.path}/.complete').writeAsString('ok\n');
+    if (cacheDir.existsSync()) {
+      await cacheDir.delete(recursive: true);
+    }
+    await tempCacheDir.rename(cacheDir.path);
+  }
+
+  await _copyDirectory(cacheDir, Directory(workDirPath));
+  return _WastConversionResult(
+    exitCode: 0,
+    stdout: '',
+    stderr: '',
+    cacheHit: cacheHit,
+  );
+}
+
+Future<_WastConversionResult> _runWastConverter({
+  required String file,
+  required _WastConverter converter,
+  required String workDirPath,
+}) async {
+  final result = await Process.run(
+    converter.binary,
+    converter.command(
+      wastFile: file,
+      outputJsonPath: '$workDirPath/script.json',
+      wasmDir: workDirPath,
+    ),
+  );
+  return _WastConversionResult(
+    exitCode: result.exitCode,
+    stdout: (result.stdout as String?) ?? '',
+    stderr: (result.stderr as String?) ?? '',
+    cacheHit: false,
+  );
+}
+
+Future<String> _conversionCacheKey({
+  required String file,
+  required _WastConverter converter,
+}) async {
+  var hash = _FNV64();
+  hash.addString('wasd-spec-conversion-cache-v1');
+  hash.addString(converter.kind.name);
+  hash.addString(converter.binary);
+  final converterFile = File(converter.binary);
+  if (converterFile.existsSync()) {
+    final stat = await converterFile.stat();
+    hash.addString('${stat.size}:${stat.modified.toUtc().toIso8601String()}');
+  }
+  final wastFile = File(file);
+  final stat = await wastFile.stat();
+  hash.addString(wastFile.absolute.path);
+  hash.addString('${stat.size}:${stat.modified.toUtc().toIso8601String()}');
+  hash.addBytes(await wastFile.readAsBytes());
+  return hash.hex;
+}
+
+Future<void> _copyDirectory(Directory source, Directory target) async {
+  await target.create(recursive: true);
+  await for (final entity in source.list(recursive: true, followLinks: false)) {
+    final relativePath = entity.path.substring(source.path.length + 1);
+    final targetPath = '${target.path}/$relativePath';
+    if (entity is Directory) {
+      await Directory(targetPath).create(recursive: true);
+    } else if (entity is File) {
+      await File(targetPath).parent.create(recursive: true);
+      await entity.copy(targetPath);
+    }
+  }
+}
+
+final class _FNV64 {
+  static const int _mask = 0xffffffffffffffff;
+  static const int _offset = 0xcbf29ce484222325;
+  static const int _prime = 0x100000001b3;
+
+  int _value = _offset;
+
+  void addString(String value) {
+    addBytes(utf8.encode(value));
+    addByte(0);
+  }
+
+  void addBytes(List<int> bytes) {
+    for (final byte in bytes) {
+      addByte(byte);
+    }
+  }
+
+  void addByte(int byte) {
+    _value ^= byte & 0xff;
+    _value = (_value * _prime) & _mask;
+  }
+
+  String get hex => _value.toRadixString(16).padLeft(16, '0');
 }
 
 Future<void> _annotatePreparedScriptTextMalformedAssertions({
@@ -2443,6 +2601,7 @@ _FileResult _executeCommands({
   required String group,
   required List commandsRaw,
   required _ScriptExecutionState state,
+  required bool conversionCacheHit,
 }) {
   var commandsSeen = 0;
   var commandsPassed = 0;
@@ -2492,6 +2651,7 @@ _FileResult _executeCommands({
     commandsSkipped: commandsSkipped,
     skipReasonCounts: skipReasonCounts,
     passed: commandsFailed == 0,
+    conversionCacheHit: conversionCacheHit,
     firstFailureLine: firstFailureLine,
     firstFailureReason: firstFailureReason,
     firstFailureDetails: firstFailureDetails,
@@ -2550,6 +2710,10 @@ Map<String, Object?> _buildPayload({
     0,
     (acc, r) => acc + r.commandsSkipped,
   );
+  final conversionCacheHits = results
+      .where((result) => result.conversionCacheHit)
+      .length;
+  final conversionCacheMisses = results.length - conversionCacheHits;
 
   return <String, Object?>{
     'started_at_utc': startedAt.toIso8601String(),
@@ -2568,6 +2732,8 @@ Map<String, Object?> _buildPayload({
       'commands_passed': commandsPassed,
       'commands_failed': commandsFailed,
       'commands_skipped': commandsSkipped,
+      'conversion_cache_hits': conversionCacheHits,
+      'conversion_cache_misses': conversionCacheMisses,
     },
     'group_stats': groupStats,
     'reason_counts': reasonCounts,
@@ -2716,6 +2882,8 @@ String _renderMarkdown({
     ..writeln('- Commands passed: ${totals['commands_passed']}')
     ..writeln('- Commands failed: ${totals['commands_failed']}')
     ..writeln('- Commands skipped: ${totals['commands_skipped']}')
+    ..writeln('- Conversion cache hits: ${totals['conversion_cache_hits']}')
+    ..writeln('- Conversion cache misses: ${totals['conversion_cache_misses']}')
     ..writeln()
     ..writeln('## Groups')
     ..writeln()
@@ -3065,6 +3233,8 @@ void _printUsage() {
     '[--output-json=<path>] '
     '[--output-md=<path>] '
     '[--max-files=<n>] '
+    '[--conversion-cache-dir=<path>] '
+    '[--no-conversion-cache] '
     '[--json-from-wast=<path>] '
     '[--wast2json=<path>] '
     '[--prepare-manifest=<path>] '
