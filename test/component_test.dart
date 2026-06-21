@@ -774,6 +774,18 @@ void main() {
       expect(errors.single.message, contains('cannot have more than 32 flags'));
     });
 
+    test('reports empty component function parameter names', () {
+      final errors = WasmComponent.decode(
+        _emptyFunctionParameterNameTypeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('function parameter name cannot be empty'),
+      );
+    });
+
     test('reports invalid component value type indexes', () {
       final wrongSort = WasmComponent.decode(
         _functionResultWrongSortTypeIndexComponentBytes(),
@@ -5409,6 +5421,16 @@ Uint8List _tooManyFlagsTypeComponentBytes() {
   }
   return _componentWithSingleTypeDefinitionBytes(typeBytes);
 }
+
+Uint8List _emptyFunctionParameterNameTypeComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[
+      0x40,
+      0x01,
+      0x00,
+      0x73,
+      0x01,
+      0x00,
+    ]);
 
 Uint8List _functionResultWrongSortTypeIndexComponentBytes() =>
     _componentWithSingleTypeDefinitionBytes(const <int>[

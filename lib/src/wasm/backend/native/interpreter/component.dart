@@ -1225,6 +1225,10 @@ final class _WasmComponentValidationContext {
     final function = type.function;
     if (type.kind == WasmComponentTypeKind.function && function != null) {
       for (var i = 0; i < function.params.length; i++) {
+        validateComponentFunctionParameterName(
+          function.params[i].label,
+          '$path.params[$i].name',
+        );
         validateComponentValueType(
           function.params[i].type,
           '$path.params[$i]',
@@ -1398,6 +1402,19 @@ final class _WasmComponentValidationContext {
         ),
       );
     }
+  }
+
+  void validateComponentFunctionParameterName(String name, String path) {
+    if (name.isNotEmpty) {
+      return;
+    }
+
+    errors.add(
+      WasmComponentValidationError(
+        path: path,
+        message: 'Wasm component function parameter name cannot be empty.',
+      ),
+    );
   }
 
   void validateDefinedValueType(
