@@ -2768,6 +2768,16 @@ final class _WasmComponentValidationContext {
       );
     }
 
+    if (hasAsync && canonicalDefinitionDisallowsAsyncOption(definition.kind)) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.options',
+          message:
+              'Wasm component ${canonicalDefinitionDescription(definition.kind)} cannot use async option.',
+        ),
+      );
+    }
+
     if (!hasMemory &&
         visibleTypeDefinitions != null &&
         canonicalDefinitionUsesStreamOrFutureCopy(definition.kind) &&
@@ -4017,6 +4027,13 @@ final class _WasmComponentValidationContext {
     WasmComponentCanonicalKind kind,
   ) {
     return kind == WasmComponentCanonicalKind.errorContextDebugMessage;
+  }
+
+  bool canonicalDefinitionDisallowsAsyncOption(
+    WasmComponentCanonicalKind kind,
+  ) {
+    return kind == WasmComponentCanonicalKind.errorContextNew ||
+        kind == WasmComponentCanonicalKind.errorContextDebugMessage;
   }
 
   bool canonicalDefinitionUsesFunctionType(WasmComponentCanonicalKind kind) {

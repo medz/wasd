@@ -1072,6 +1072,13 @@ void main() {
         debugMessage.single.message,
         contains('requires a realloc option'),
       );
+
+      final asyncErrorContext = WasmComponent.decode(
+        _canonicalErrorContextNewWithAsyncComponentBytes(),
+      ).validate();
+
+      expect(asyncErrorContext, hasLength(1));
+      expect(asyncErrorContext.single.message, contains('cannot use async'));
     });
 
     test('reports invalid canonical option core indexes', () {
@@ -3573,6 +3580,19 @@ Uint8List _canonicalErrorContextDebugMessageWithoutReallocComponentBytes() =>
       0x01,
       0x03,
       0x00,
+    ]);
+
+Uint8List _canonicalErrorContextNewWithAsyncComponentBytes() =>
+    Uint8List.fromList(<int>[
+      ..._coreExportAliasComponentBytes(),
+      0x08,
+      0x06,
+      0x01,
+      0x1c,
+      0x02,
+      0x03,
+      0x00,
+      0x06,
     ]);
 
 Uint8List _canonicalWaitableSetWaitMemoryOutOfRangeComponentBytes() =>
