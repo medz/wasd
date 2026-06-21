@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import '../tool/src/measured_process.dart';
+
 const String _doomWasmPath = 'test/fixtures/doom/doom.wasm';
 const String _doomIwadPath = 'test/fixtures/doom/doom1.wad';
 
@@ -11,7 +13,8 @@ void main() {
   test(
     'doom cli runtime matrix is consistent between dart-vm and dart2js/node',
     () async {
-      final result = await Process.run('dart', <String>[
+      final result = await runMeasuredProcess(<String>[
+        'dart',
         'run',
         'tool/doom_runtime_matrix.dart',
         '--mode=instantiate',
@@ -22,13 +25,13 @@ void main() {
       expect(
         result.exitCode,
         0,
-        reason: 'stdout:\n${result.stdout}\nstderr:\n${result.stderr}',
+        reason: result.diagnostics('doom runtime matrix failed'),
       );
 
       expect(
-        '${result.stdout}',
+        result.stdout,
         contains('RUNTIME MATRIX PASS'),
-        reason: 'stdout:\n${result.stdout}\nstderr:\n${result.stderr}',
+        reason: result.diagnostics('doom runtime matrix did not pass'),
       );
     },
     tags: const <String>['doom', 'slow'],

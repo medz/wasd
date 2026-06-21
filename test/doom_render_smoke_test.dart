@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import '../tool/src/measured_process.dart';
+
 const String _doomWasmPath = 'test/fixtures/doom/doom.wasm';
 const String _doomIwadPath = 'test/fixtures/doom/doom1.wad';
 
@@ -9,7 +11,8 @@ void main() {
   test(
     'doom node monitor captures first frame image',
     () async {
-      final result = await Process.run('node', <String>[
+      final result = await runMeasuredProcess(<String>[
+        'node',
         'tool/doom_node_monitor.mjs',
         '--wasm=$_doomWasmPath',
         '--iwad=$_doomIwadPath',
@@ -18,12 +21,12 @@ void main() {
       expect(
         result.exitCode,
         0,
-        reason: 'stdout:\n${result.stdout}\nstderr:\n${result.stderr}',
+        reason: result.diagnostics('doom render smoke failed'),
       );
       expect(
-        '${result.stdout}',
+        result.stdout,
         contains('DOOM NODE MONITOR PASS'),
-        reason: 'stdout:\n${result.stdout}\nstderr:\n${result.stderr}',
+        reason: result.diagnostics('doom render smoke did not pass'),
       );
     },
     tags: const <String>['doom', 'slow'],

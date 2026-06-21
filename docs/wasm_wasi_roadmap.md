@@ -193,6 +193,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   `realloc` callback, and writing canonical `(ptr, len)` result records.
   Integration with real core realloc exports remains future canonical ABI
   adapter work.
+  Heavy process-based verification now uses a shared measured-process helper:
+  `tool/spec_runner.dart` records elapsed time and sampled peak RSS per step in
+  its JSON/Markdown reports, and the DOOM smoke tests include the same metrics
+  in failure diagnostics.
   P2/P3 host instantiation, WIT ingestion, full canonical ABI
   lowering/lifting, memory-backed typed stream/future copy, and full async
   stream/future execution are not production-supported yet.
@@ -243,8 +247,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   `dart run tool/component_benchmark.dart --json`. The synthetic benchmark
   exercises repeated `stream<T>` definitions over a shared borrow-containing
   type graph, which is the current stress case for component validation.
-- Test runners must report elapsed time and peak memory for heavy paths, at
-  minimum the spec runner and DOOM runtime tests.
+- Test runners must report elapsed time and peak memory for heavy paths. The
+  spec runner and DOOM smoke tests use the shared measured-process helper for
+  elapsed time and sampled child-process peak RSS; future heavy runners should
+  reuse the same helper instead of open-coding process timing.
 - Heavy external-process tests should be grouped behind explicit runner modes so
   default validation remains useful without hiding performance regressions.
 - Any new conformance runner should cache toolchain discovery, generated

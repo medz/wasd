@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'src/measured_process.dart';
+
 enum RunnerTarget { vm, js, wasm, all }
 
 enum RunnerSuite { core, proposal, all }
@@ -31,6 +33,7 @@ final class StepResult {
     required this.command,
     required this.exitCode,
     required this.durationMs,
+    required this.peakRssBytes,
     required this.stdout,
     required this.stderr,
     this.optional = false,
@@ -40,6 +43,7 @@ final class StepResult {
   final List<String> command;
   final int exitCode;
   final int durationMs;
+  final int? peakRssBytes;
   final String stdout;
   final String stderr;
   final bool optional;
@@ -51,6 +55,7 @@ final class StepResult {
     'command': command,
     'exit_code': exitCode,
     'duration_ms': durationMs,
+    'peak_rss_bytes': peakRssBytes,
     'optional': optional,
     'success': success,
     'stdout': stdout,
@@ -462,6 +467,7 @@ Future<List<StepResult>> _runJsSuite(
         command: const ['node', '--version'],
         exitCode: 1,
         durationMs: 0,
+        peakRssBytes: null,
         stdout: '',
         stderr: 'Node.js is required for --target=js.',
       ),
@@ -591,6 +597,7 @@ Future<List<StepResult>> _runWasmSuite(
         command: const ['node', '--version'],
         exitCode: 1,
         durationMs: 0,
+        peakRssBytes: null,
         stdout: '',
         stderr: 'Node.js is required to run --target=wasm checks.',
       ),
@@ -738,6 +745,7 @@ List<StepResult> _prefixTargetSteps(
           command: step.command,
           exitCode: step.exitCode,
           durationMs: step.durationMs,
+          peakRssBytes: step.peakRssBytes,
           stdout: step.stdout,
           stderr: step.stderr,
           optional: step.optional,
@@ -813,6 +821,7 @@ Future<StepResult> _runCrossTargetConsistencyStep(RunnerSuite suite) async {
         command: const <String>['internal', 'cross-target-consistency'],
         exitCode: 1,
         durationMs: ended.difference(started).inMilliseconds,
+        peakRssBytes: null,
         stdout: '',
         stderr: mismatches.join('\n'),
       );
@@ -822,6 +831,7 @@ Future<StepResult> _runCrossTargetConsistencyStep(RunnerSuite suite) async {
       command: const <String>['internal', 'cross-target-consistency'],
       exitCode: 0,
       durationMs: ended.difference(started).inMilliseconds,
+      peakRssBytes: null,
       stdout: 'VM/JS/Wasm totals match for requested suites.',
       stderr: '',
     );
@@ -832,6 +842,7 @@ Future<StepResult> _runCrossTargetConsistencyStep(RunnerSuite suite) async {
       command: const <String>['internal', 'cross-target-consistency'],
       exitCode: 1,
       durationMs: ended.difference(started).inMilliseconds,
+      peakRssBytes: null,
       stdout: '',
       stderr: '$error\n$stackTrace',
     );
@@ -1070,16 +1081,15 @@ Future<StepResult> _runStep({
   required List<String> command,
   bool optional = false,
 }) async {
-  final started = DateTime.now();
-  final result = await Process.run(command.first, command.sublist(1));
-  final ended = DateTime.now();
+  final result = await runMeasuredProcess(command);
   return StepResult(
     name: name,
     command: command,
     exitCode: result.exitCode,
-    durationMs: ended.difference(started).inMilliseconds,
-    stdout: (result.stdout as String?) ?? '',
-    stderr: (result.stderr as String?) ?? '',
+    durationMs: result.durationMs,
+    peakRssBytes: result.peakRssBytes,
+    stdout: result.stdout,
+    stderr: result.stderr,
     optional: optional,
   );
 }
@@ -1271,15 +1281,15 @@ String _renderMarkdownReport({
     ..writeln()
     ..writeln('## Step Results')
     ..writeln()
-    ..writeln('| Step | Status | Duration (ms) | Command |')
-    ..writeln('| --- | --- | ---: | --- |');
+    ..writeln('| Step | Status | Duration (ms) | Peak RSS | Command |')
+    ..writeln('| --- | --- | ---: | ---: | --- |');
 
   for (final step in steps) {
     final status = step.success
         ? 'passed'
         : (step.optional ? 'optional-failed' : 'failed');
     b.writeln(
-      '| ${step.name} | $status | ${step.durationMs} | `${step.command.join(' ')}` |',
+      '| ${step.name} | $status | ${step.durationMs} | ${_formatBytes(step.peakRssBytes)} | `${step.command.join(' ')}` |',
     );
   }
 
@@ -1387,6 +1397,20 @@ String _renderMarkdownReport({
   );
 
   return b.toString();
+}
+
+String _formatBytes(int? bytes) {
+  if (bytes == null) {
+    return 'n/a';
+  }
+  if (bytes < 1024) {
+    return '$bytes B';
+  }
+  final kib = bytes / 1024;
+  if (kib < 1024) {
+    return '${kib.toStringAsFixed(1)} KiB';
+  }
+  return '${(kib / 1024).toStringAsFixed(1)} MiB';
 }
 
 void _printUsage() {
