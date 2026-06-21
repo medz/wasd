@@ -56,6 +56,9 @@ final class WASIComponentReadableStream<T> {
   /// Whether this endpoint has been dropped.
   bool get isDropped => _state.readDropped;
 
+  /// Whether at least one value is currently queued for reading.
+  bool get hasQueuedValues => _state.queue.isNotEmpty;
+
   /// Reads up to [maxElements] queued values.
   ///
   /// This is non-blocking: an empty list means no values are currently queued.
@@ -112,6 +115,11 @@ final class WASIComponentWritableStream<T> {
 
   /// Whether this endpoint has been dropped.
   bool get isDropped => _state.writeDropped;
+
+  /// Whether [elementCount] values can be written without waiting.
+  bool canWriteImmediately(int elementCount) {
+    return _state.canWriteImmediately(elementCount);
+  }
 
   /// Writes one value to the stream.
   void write(T value) {
@@ -308,6 +316,12 @@ final class _WASIComponentStreamState<T> {
       _WASIComponentStreamReadWaiter<T>(maxElements, completer),
     );
     return completer.future;
+  }
+
+  bool canWriteImmediately(int elementCount) {
+    RangeError.checkNotNegative(elementCount, 'elementCount');
+    final available = _availableWriteCapacity;
+    return available == null || elementCount <= available;
   }
 
   void write(T value) {

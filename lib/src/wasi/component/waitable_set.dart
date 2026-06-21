@@ -6,6 +6,10 @@ import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
 import 'resource_table.dart';
 
+/// Resolves an externally owned component handle to a waitable, when possible.
+typedef WASIComponentWaitableResolver =
+    WASIComponentWaitable? Function(int handle);
+
 /// Component Model waitable event codes.
 ///
 /// These integer values are the Canonical ABI event discriminants returned by
@@ -102,6 +106,18 @@ final class WASIComponentWaitable {
   /// Whether a synchronous canonical operation is waiting on this waitable.
   bool get hasSyncWaiter => _hasSyncWaiter;
 
+  /// Validates this waitable can be dropped.
+  void requireDroppable() {
+    if (hasPendingEvent) {
+      throw StateError('WASI component waitable $name has a pending event.');
+    }
+    if (_hasSyncWaiter) {
+      throw StateError(
+        'WASI component waitable $name has a synchronous waiter.',
+      );
+    }
+  }
+
   /// Sets the pending event delivered by the next wait or poll.
   void setPendingEvent(WASIComponentWaitableEvent Function() event) {
     _pendingEvent = event;
@@ -157,14 +173,7 @@ final class WASIComponentWaitable {
 
   /// Drops this waitable after validating it has no pending event or waiter.
   void drop() {
-    if (hasPendingEvent) {
-      throw StateError('WASI component waitable $name has a pending event.');
-    }
-    if (_hasSyncWaiter) {
-      throw StateError(
-        'WASI component waitable $name has a synchronous waiter.',
-      );
-    }
+    requireDroppable();
     join(null);
   }
 }
@@ -259,8 +268,13 @@ final class WASIComponentWaitableSet {
 /// Table-backed host for canonical waitable-set operations.
 final class WASIComponentWaitableHost {
   /// Creates a waitable host backed by [table] or a new resource table.
-  WASIComponentWaitableHost({WASIComponentResourceTable? table})
-    : table = table ?? WASIComponentResourceTable() {
+  WASIComponentWaitableHost({
+    WASIComponentResourceTable? table,
+    Iterable<WASIComponentWaitableResolver> waitableResolvers = const [],
+  }) : table = table ?? WASIComponentResourceTable(),
+       _waitableResolvers = <WASIComponentWaitableResolver>[
+         ...waitableResolvers,
+       ] {
     _waitableType = this.table.defineType<WASIComponentWaitable>('waitable');
     _waitableSetType = this.table.defineType<WASIComponentWaitableSet>(
       'waitable-set',
@@ -273,6 +287,12 @@ final class WASIComponentWaitableHost {
   late final WASIComponentResourceType<WASIComponentWaitable> _waitableType;
   late final WASIComponentResourceType<WASIComponentWaitableSet>
   _waitableSetType;
+  final List<WASIComponentWaitableResolver> _waitableResolvers;
+
+  /// Adds a resolver for waitables owned by another component host layer.
+  void addWaitableResolver(WASIComponentWaitableResolver resolver) {
+    _waitableResolvers.add(resolver);
+  }
 
   /// Inserts a waitable and returns its component table handle.
   int insertWaitable(WASIComponentWaitable waitable) {
@@ -322,17 +342,27 @@ final class WASIComponentWaitableHost {
 
   /// Executes `waitable.join`.
   void waitableJoin(int waitable, int waitableSet) {
-    table.borrow<WASIComponentWaitable, void>(_waitableType, waitable, (value) {
+    final value = _waitableForHandle(waitable);
+    if (value == null) {
+      throw StateError('Unknown WASI component waitable handle: $waitable.');
+    }
+    void join(WASIComponentWaitableSet? set) {
       if (waitableSet == 0) {
         value.join(null);
         return;
       }
+      value.join(set);
+    }
+
+    if (waitableSet == 0) {
+      join(null);
+    } else {
       table.borrow<WASIComponentWaitableSet, void>(
         _waitableSetType,
         waitableSet,
-        value.join,
+        join,
       );
-    });
+    }
   }
 
   /// Executes `waitable-set.poll`.
@@ -389,6 +419,19 @@ final class WASIComponentWaitableHost {
   ) {
     event.writePayloadToMemory(memory, pointer);
     return event.code.value;
+  }
+
+  WASIComponentWaitable? _waitableForHandle(int handle) {
+    if (table.containsType<WASIComponentWaitable>(_waitableType, handle)) {
+      return table.get<WASIComponentWaitable>(_waitableType, handle);
+    }
+    for (final resolver in _waitableResolvers) {
+      final waitable = resolver(handle);
+      if (waitable != null) {
+        return waitable;
+      }
+    }
+    return null;
   }
 }
 

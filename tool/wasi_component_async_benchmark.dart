@@ -46,6 +46,8 @@ Future<void> main(List<String> args) async {
   );
   final handleMemoryProgramInvokeAsync =
       await _benchmarkHandleMemoryProgramInvokeAsync(options);
+  final handleMemoryProgramInvokeEvent =
+      await _benchmarkHandleMemoryProgramInvokeEvent(options);
   final streamMemoryCopy = _benchmarkStreamMemoryCopy(options);
   final futureMemoryCopy = _benchmarkFutureMemoryCopy(options.iterations);
 
@@ -66,6 +68,8 @@ Future<void> main(List<String> args) async {
     'handle_program_invoke': handleProgramInvoke.toJson(),
     'handle_memory_program_invoke': handleMemoryProgramInvoke.toJson(),
     'handle_memory_program_invoke_async': handleMemoryProgramInvokeAsync
+        .toJson(),
+    'handle_memory_program_invoke_event': handleMemoryProgramInvokeEvent
         .toJson(),
     'stream_memory_copy': streamMemoryCopy.toJson(),
     'future_memory_copy': futureMemoryCopy.toJson(),
@@ -94,6 +98,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkHandleProgramInvoke(warmup);
   _benchmarkHandleMemoryProgramInvoke(warmup);
   await _benchmarkHandleMemoryProgramInvokeAsync(warmup);
+  await _benchmarkHandleMemoryProgramInvokeEvent(warmup);
   _benchmarkStreamMemoryCopy(warmup);
   _benchmarkFutureMemoryCopy(_warmupIterations);
 }
@@ -780,6 +785,146 @@ Future<_Metric> _benchmarkHandleMemoryProgramInvokeAsync(
   );
 }
 
+Future<_Metric> _benchmarkHandleMemoryProgramInvokeEvent(
+  _Options options,
+) async {
+  final programs = _createHandleMemoryPrograms(maxBufferedElements: 1);
+  final streamProgram = programs.streamProgram;
+  final futureProgram = programs.futureProgram;
+  final streamWaitables = WASIComponentWaitableHost(
+    table: programs.streamHost.table,
+    waitableResolvers: [programs.streamHost.waitableForHandle],
+  );
+  final futureWaitables = WASIComponentWaitableHost(
+    table: programs.futureHost.table,
+    waitableResolvers: [programs.futureHost.waitableForHandle],
+  );
+  final streamSet = streamWaitables.waitableSetNew();
+  final futureSet = futureWaitables.waitableSetNew();
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  const streamInputPointer = 1024;
+  const streamSecondInputPointer = 2048;
+  const streamOutputPointer = 4096;
+  const streamSecondOutputPointer = 5120;
+  const futureInputPointer = 8192;
+  const futureOutputPointer = 12288;
+  const eventPointer = 16384;
+  data.setUint32(streamInputPointer, 0x21, Endian.little);
+  data.setUint32(streamSecondInputPointer, 0x33, Endian.little);
+  data.setUint32(futureInputPointer, 0x55aa55aa, Endian.little);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final readHandles = _unpackEndpointHandles(
+      streamProgram.invoke(0, const <Object?>[]),
+      'stream.new',
+    );
+    streamWaitables.waitableJoin(readHandles.readable, streamSet);
+    final blockedRead = streamProgram.invokeWithMemoryEvent(
+      2,
+      memory,
+      <Object?>[readHandles.readable, streamOutputPointer, 1],
+    );
+    if (blockedRead != wasiComponentAsyncBlocked) {
+      throw StateError('stream read event did not block: $blockedRead');
+    }
+    streamProgram.invokeWithMemory(1, memory, <Object?>[
+      readHandles.writable,
+      streamInputPointer,
+      1,
+    ]);
+    checksum += await streamWaitables.waitableSetWaitToMemory(
+      streamSet,
+      memory,
+      eventPointer,
+    );
+    checksum += data.getUint32(eventPointer, Endian.little);
+    checksum += data.getUint32(eventPointer + 4, Endian.little);
+    streamWaitables.waitableJoin(readHandles.readable, 0);
+    streamProgram.invoke(3, <Object?>[readHandles.readable]);
+    streamProgram.invoke(4, <Object?>[readHandles.writable]);
+
+    final writeHandles = _unpackEndpointHandles(
+      streamProgram.invoke(0, const <Object?>[]),
+      'stream.new',
+    );
+    streamProgram.invokeWithMemory(1, memory, <Object?>[
+      writeHandles.writable,
+      streamInputPointer,
+      1,
+    ]);
+    streamWaitables.waitableJoin(writeHandles.writable, streamSet);
+    final blockedWrite = streamProgram.invokeWithMemoryEvent(
+      1,
+      memory,
+      <Object?>[writeHandles.writable, streamSecondInputPointer, 1],
+    );
+    if (blockedWrite != wasiComponentAsyncBlocked) {
+      throw StateError('stream write event did not block: $blockedWrite');
+    }
+    streamProgram.invokeWithMemory(2, memory, <Object?>[
+      writeHandles.readable,
+      streamOutputPointer,
+      1,
+    ]);
+    checksum += await streamWaitables.waitableSetWaitToMemory(
+      streamSet,
+      memory,
+      eventPointer,
+    );
+    checksum += data.getUint32(eventPointer, Endian.little);
+    checksum += data.getUint32(eventPointer + 4, Endian.little);
+    streamWaitables.waitableJoin(writeHandles.writable, 0);
+    streamProgram.invokeWithMemory(2, memory, <Object?>[
+      writeHandles.readable,
+      streamSecondOutputPointer,
+      1,
+    ]);
+    streamProgram.invoke(3, <Object?>[writeHandles.readable]);
+    streamProgram.invoke(4, <Object?>[writeHandles.writable]);
+
+    final futureHandles = _unpackEndpointHandles(
+      futureProgram.invoke(0, const <Object?>[]),
+      'future.new',
+    );
+    futureWaitables.waitableJoin(futureHandles.readable, futureSet);
+    final blockedFuture = futureProgram.invokeWithMemoryEvent(
+      2,
+      memory,
+      <Object?>[futureHandles.readable, futureOutputPointer],
+    );
+    if (blockedFuture != wasiComponentAsyncBlocked) {
+      throw StateError('future read event did not block: $blockedFuture');
+    }
+    futureProgram.invokeWithMemory(1, memory, <Object?>[
+      futureHandles.writable,
+      futureInputPointer,
+    ]);
+    checksum += await futureWaitables.waitableSetWaitToMemory(
+      futureSet,
+      memory,
+      eventPointer,
+    );
+    checksum += data.getUint32(eventPointer, Endian.little);
+    checksum += data.getUint32(eventPointer + 4, Endian.little);
+    futureWaitables.waitableJoin(futureHandles.readable, 0);
+    futureProgram.invoke(3, <Object?>[futureHandles.readable]);
+    futureProgram.invoke(4, <Object?>[futureHandles.writable]);
+  }
+  watch.stop();
+
+  streamWaitables.waitableSetDrop(streamSet);
+  futureWaitables.waitableSetDrop(futureSet);
+  programs.expectNoLeaks();
+  return _Metric(
+    operations: options.iterations * 26,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _HandleMemoryPrograms _createHandleMemoryPrograms({int? maxBufferedElements}) {
   final streamComponent = WasmComponent.decode(_streamU32TypeComponentBytes());
   final streamHost = WASIComponentAsyncHost()
@@ -1097,6 +1242,7 @@ void _printText(Map<String, Object?> payload) {
     'handle_program_invoke',
     'handle_memory_program_invoke',
     'handle_memory_program_invoke_async',
+    'handle_memory_program_invoke_event',
     'stream_memory_copy',
     'future_memory_copy',
   ]) {

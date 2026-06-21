@@ -151,9 +151,17 @@ This is the implementation state as of 2026-06-21 on `main`.
   waitable-set support now models table-backed waitables and waitable sets,
   canonical event codes, `waitable-set.{poll,wait}` payload writes to memory,
   `waitable.join` transfer/removal with `0` as the removal sentinel, and drop
-  guards for non-empty or actively waited sets. Stream/future/subtask event
-  production is still future integration work, but the ownership and event
-  delivery layer is no longer a placeholder. Internal
+  guards for non-empty or actively waited sets. Handle-backed stream/future
+  endpoints are now lazily resolvable as waitables, so canonical
+  `waitable.join(endpoint, set)` can target the same endpoint handle without
+  adding waitable allocation cost to ordinary handle paths. Handle-backed
+  fixed-width `stream.read`, bounded `stream.write`, and `future.read` memory
+  copies also have a canonical event-start path: immediate copies return the
+  packed copy payload, pending copies return `0xffffffff` (`BLOCKED`) and later
+  publish the corresponding waitable event with the endpoint handle and packed
+  copy result. Subtask/thread event production is still future integration
+  work, but stream/future copy event delivery is no longer a placeholder.
+  Internal
   error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`
   as table-backed handles with real stale-handle/drop validation. It also has
@@ -236,9 +244,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   backpressure counter operations, waitable-set event delivery and memory
   payload writes, decoded canonical async program invocation, decoded unit
   stream/future program invocation, and resource-table-backed borrowed handle
-  invocation costs, synchronous and awaited handle-program fixed-width
-  memory-copy invocation costs, plus fixed-width primitive stream/future
-  memory-copy costs, are measured by
+  invocation costs, synchronous, awaited, and waitable-event handle-program
+  fixed-width memory-copy invocation costs, plus fixed-width primitive
+  stream/future memory-copy costs, are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`.
 - Component resource table canonical `resource.new`/`resource.rep`/
   `resource.drop`, decoded resource-only canonical program invocation,
