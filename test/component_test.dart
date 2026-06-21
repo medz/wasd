@@ -1086,6 +1086,16 @@ void main() {
 
       expect(taskReturn, hasLength(1));
       expect(taskReturn.single.message, contains('cannot use async option'));
+
+      final stringTaskReturn = WasmComponent.decode(
+        _canonicalTaskReturnStringWithoutMemoryComponentBytes(),
+      ).validate();
+
+      expect(stringTaskReturn, hasLength(1));
+      expect(
+        stringTaskReturn.single.message,
+        contains('requires a memory option'),
+      );
     });
 
     test('reports invalid canonical option core indexes', () {
@@ -3620,6 +3630,25 @@ Uint8List _canonicalTaskReturnWithAsyncComponentBytes() =>
       0x00,
       0x01,
       0x06,
+    ]);
+
+Uint8List _canonicalTaskReturnStringWithoutMemoryComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x05,
+      0x01,
+      0x09,
+      0x00,
+      0x73,
+      0x00,
     ]);
 
 Uint8List _canonicalWaitableSetWaitMemoryOutOfRangeComponentBytes() =>

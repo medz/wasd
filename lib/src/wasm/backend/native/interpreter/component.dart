@@ -1201,6 +1201,8 @@ final class _WasmComponentValidationContext {
   final List<WasmComponentValidationError> errors;
   final Map<int, bool> _valueTypeContainsBorrowMemo = <int, bool>{};
   final Set<int> _valueTypeContainsBorrowVisiting = <int>{};
+  final Map<int, bool> _valueTypeContainsListOrStringMemo = <int, bool>{};
+  final Set<int> _valueTypeContainsListOrStringVisiting = <int>{};
 
   void validateComponentTypeDefinition(
     WasmComponentTypeDefinition type,
@@ -2245,6 +2247,125 @@ final class _WasmComponentValidationContext {
     return contains;
   }
 
+  bool valueTypeContainsListOrString(
+    WasmComponentValueType? valueType, {
+    List<WasmComponentTypeDefinition>? scopedTypeDefinitions,
+  }) {
+    if (scopedTypeDefinitions != null) {
+      return valueTypeContainsListOrStringInDefinitions(
+        valueType,
+        scopedTypeDefinitions,
+        <int, bool>{},
+        <int>{},
+      );
+    }
+
+    return valueTypeContainsListOrStringInDefinitions(
+      valueType,
+      typeDefinitions,
+      _valueTypeContainsListOrStringMemo,
+      _valueTypeContainsListOrStringVisiting,
+    );
+  }
+
+  bool valueTypeContainsListOrStringInDefinitions(
+    WasmComponentValueType? valueType,
+    List<WasmComponentTypeDefinition> definitions,
+    Map<int, bool> memo,
+    Set<int> visiting,
+  ) {
+    if (valueType == null) {
+      return false;
+    }
+
+    if (valueType.kind == WasmComponentValueTypeKind.primitive) {
+      return valueType.primitive == WasmComponentPrimitiveValueType.string;
+    }
+
+    final typeIndex = valueType.typeIndex;
+    if (typeIndex == null || typeIndex < 0 || typeIndex >= definitions.length) {
+      return false;
+    }
+
+    final cached = memo[typeIndex];
+    if (cached != null) {
+      return cached;
+    }
+    if (!visiting.add(typeIndex)) {
+      return false;
+    }
+
+    final definition = definitions[typeIndex];
+    final definedValue = definition.definedValue;
+    if (definition.kind != WasmComponentTypeKind.definedValue ||
+        definedValue == null) {
+      visiting.remove(typeIndex);
+      memo[typeIndex] = false;
+      return false;
+    }
+
+    final contains = switch (definedValue.kind) {
+      WasmComponentDefinedValueTypeKind.primitive =>
+        definedValue.primitive == WasmComponentPrimitiveValueType.string,
+      WasmComponentDefinedValueTypeKind.list => true,
+      WasmComponentDefinedValueTypeKind.record => definedValue.fields.any(
+        (field) => valueTypeContainsListOrStringInDefinitions(
+          field.type,
+          definitions,
+          memo,
+          visiting,
+        ),
+      ),
+      WasmComponentDefinedValueTypeKind.variant => definedValue.cases.any(
+        (case_) => valueTypeContainsListOrStringInDefinitions(
+          case_.type,
+          definitions,
+          memo,
+          visiting,
+        ),
+      ),
+      WasmComponentDefinedValueTypeKind.fixedList ||
+      WasmComponentDefinedValueTypeKind.option =>
+        valueTypeContainsListOrStringInDefinitions(
+          definedValue.elementType,
+          definitions,
+          memo,
+          visiting,
+        ),
+      WasmComponentDefinedValueTypeKind.tuple => definedValue.types.any(
+        (type) => valueTypeContainsListOrStringInDefinitions(
+          type,
+          definitions,
+          memo,
+          visiting,
+        ),
+      ),
+      WasmComponentDefinedValueTypeKind.result =>
+        valueTypeContainsListOrStringInDefinitions(
+              definedValue.okType,
+              definitions,
+              memo,
+              visiting,
+            ) ||
+            valueTypeContainsListOrStringInDefinitions(
+              definedValue.errorType,
+              definitions,
+              memo,
+              visiting,
+            ),
+      WasmComponentDefinedValueTypeKind.flags ||
+      WasmComponentDefinedValueTypeKind.enumeration ||
+      WasmComponentDefinedValueTypeKind.own ||
+      WasmComponentDefinedValueTypeKind.borrow ||
+      WasmComponentDefinedValueTypeKind.stream ||
+      WasmComponentDefinedValueTypeKind.future => false,
+    };
+
+    visiting.remove(typeIndex);
+    memo[typeIndex] = contains;
+    return contains;
+  }
+
   void validateComponentValueType(
     WasmComponentValueType? valueType,
     String path, {
@@ -2783,6 +2904,21 @@ final class _WasmComponentValidationContext {
           path: '$path.options',
           message:
               'Wasm component ${canonicalDefinitionDescription(definition.kind)} requires a memory option.',
+        ),
+      );
+    }
+
+    if (!hasMemory &&
+        definition.kind == WasmComponentCanonicalKind.taskReturn &&
+        valueTypeContainsListOrString(
+          definition.result?.valueType,
+          scopedTypeDefinitions: visibleTypeDefinitions,
+        )) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.options',
+          message:
+              'Wasm component task.return result type requires a memory option.',
         ),
       );
     }
