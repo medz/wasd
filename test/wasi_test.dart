@@ -1092,6 +1092,117 @@ void main() {
       );
 
       test(
+        'fd_filestat_set_times and path_filestat_set_times persist virtual timestamps',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/data.bin': Uint8List.fromList(utf8.encode('abcdef')),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdFilestatGet =
+              preview1['fd_filestat_get'] as FunctionImportExportValue;
+          final fdFilestatSetTimes =
+              preview1['fd_filestat_set_times'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
+          final pathFilestatSetTimes =
+              preview1['path_filestat_set_times'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final filePath = utf8.encode('data.bin');
+          final dirPath = utf8.encode('.');
+          const pathPtr = 2864;
+          const dirPathPtr = 2880;
+          const openedFdPtr = 2896;
+          const filestatPtr = 2928;
+          const atime = 123456789;
+          const mtime = 987654321;
+          const updatedAtime = 222222222;
+          const updatedMtime = 333333333;
+
+          bytes.setAll(pathPtr, filePath);
+          bytes.setAll(dirPathPtr, dirPath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              filePath.length,
+              0,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final fd = data.getUint32(openedFdPtr, Endian.little);
+
+          expect(fdFilestatSetTimes.ref([fd, atime, mtime, 1 | 4]), 0);
+          expect(fdFilestatGet.ref([fd, filestatPtr]), 0);
+          expect(_getUint64Le(data, filestatPtr + 40), atime);
+          expect(_getUint64Le(data, filestatPtr + 48), mtime);
+
+          expect(
+            pathFilestatSetTimes.ref([
+              3,
+              0,
+              dirPathPtr,
+              dirPath.length,
+              updatedAtime,
+              updatedMtime,
+              1 | 4,
+            ]),
+            0,
+          );
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              dirPathPtr,
+              dirPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(_getUint64Le(data, filestatPtr + 40), updatedAtime);
+          expect(_getUint64Le(data, filestatPtr + 48), updatedMtime);
+
+          expect(fdFilestatSetTimes.ref([fd, 1, 2, 1 | 2]), 28);
+          expect(fdFilestatSetTimes.ref([999, 1, 2, 1 | 4]), 8);
+          final missingPath = utf8.encode('missing.bin');
+          bytes.setAll(pathPtr, missingPath);
+          expect(
+            pathFilestatSetTimes.ref([
+              3,
+              0,
+              pathPtr,
+              missingPath.length,
+              1,
+              2,
+              1 | 4,
+            ]),
+            44,
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; filestat time behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'path_open opens virtual directories and resolves nested files',
         () async {
           final fileWasi = WASI(

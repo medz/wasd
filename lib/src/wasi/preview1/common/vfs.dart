@@ -35,6 +35,10 @@ final class Preview1VirtualFileSystem {
       preopenGuestPathsByFd: _preopenGuestPathsByFd,
       filesByGuestPath: _filesByGuestPath,
     );
+    _directoryMetadataByGuestPath = {
+      for (final path in _virtualDirectoryPaths)
+        path: Preview1VirtualNodeMetadata(),
+    };
     _directoryEntriesByGuestPath = _buildDirectoryEntriesByPath(
       directories: _virtualDirectoryPaths,
       filesByGuestPath: _filesByGuestPath,
@@ -52,6 +56,7 @@ final class Preview1VirtualFileSystem {
   late Map<String, Preview1VirtualFile> _filesByBasenameLower;
   late Map<String, Preview1VirtualFile> _filesByBasenameCompact;
   late final Set<String> _virtualDirectoryPaths;
+  late Map<String, Preview1VirtualNodeMetadata> _directoryMetadataByGuestPath;
   late Map<String, List<Preview1DirectoryEntry>> _directoryEntriesByGuestPath;
   int _nextVirtualFd;
 
@@ -76,6 +81,27 @@ final class Preview1VirtualFileSystem {
     }
     return _directoryEntriesByGuestPath[normalizeGuestPath(directoryPath)] ??
         const <Preview1DirectoryEntry>[];
+  }
+
+  Preview1VirtualNodeMetadata? metadataForFd(int fd) {
+    final opened = openFileForFd(fd);
+    if (opened != null) {
+      return opened.metadata;
+    }
+    final directoryPath = directoryPathForFd(fd);
+    if (directoryPath == null) {
+      return null;
+    }
+    return _directoryMetadataByGuestPath[normalizeGuestPath(directoryPath)];
+  }
+
+  Preview1VirtualNodeMetadata? metadataForPath(String guestPath) {
+    final normalized = normalizeGuestPath(guestPath);
+    final file = lookupFile(normalized);
+    if (file != null) {
+      return file.metadata;
+    }
+    return _directoryMetadataByGuestPath[normalized];
   }
 
   bool close(int fd) =>
@@ -131,6 +157,7 @@ final class Preview1VirtualFileSystem {
     }
 
     _virtualDirectoryPaths.add(normalized);
+    _directoryMetadataByGuestPath[normalized] = Preview1VirtualNodeMetadata();
     _rebuildDirectoryEntries();
     return Preview1PathMutationResult.success;
   }
@@ -159,6 +186,7 @@ final class Preview1VirtualFileSystem {
     }
 
     _virtualDirectoryPaths.remove(normalized);
+    _directoryMetadataByGuestPath.remove(normalized);
     _openDirectoriesByFd.removeWhere((_, path) => path == normalized);
     _rebuildDirectoryEntries();
     return Preview1PathMutationResult.success;
@@ -285,6 +313,17 @@ final class Preview1VirtualFileSystem {
     );
     _virtualDirectoryPaths.addAll(renamedDirectories);
 
+    final renamedDirectoryMetadata = <String, Preview1VirtualNodeMetadata>{};
+    _directoryMetadataByGuestPath.removeWhere((path, metadata) {
+      if (path == oldPath || _isChildPath(path, oldPath)) {
+        renamedDirectoryMetadata['$newPath${path.substring(oldPath.length)}'] =
+            metadata;
+        return true;
+      }
+      return false;
+    });
+    _directoryMetadataByGuestPath.addAll(renamedDirectoryMetadata);
+
     final renamedFiles = <String, Preview1VirtualFile>{};
     _filesByGuestPath.removeWhere((path, file) {
       if (!_isChildPath(path, oldPath)) {
@@ -335,6 +374,11 @@ final class Preview1DirectoryEntry {
   final int fileType;
 }
 
+final class Preview1VirtualNodeMetadata {
+  int accessTimeNanos = 0;
+  int modificationTimeNanos = 0;
+}
+
 int writeDirectoryEntries({
   required List<Preview1DirectoryEntry> entries,
   required Uint8List bytes,
@@ -383,6 +427,7 @@ final class Preview1VirtualFile {
   Preview1VirtualFile(Uint8List bytes) : _bytes = Uint8List.fromList(bytes);
 
   Uint8List _bytes;
+  final Preview1VirtualNodeMetadata metadata = Preview1VirtualNodeMetadata();
 
   Uint8List get bytes => _bytes;
 
@@ -457,6 +502,8 @@ final class Preview1VirtualOpenFile {
   Uint8List get bytes => file.bytes;
 
   int get length => file.length;
+
+  Preview1VirtualNodeMetadata get metadata => file.metadata;
 
   int readInto(Uint8List target, int start, int length) {
     final count = readAtInto(target, start, length, offset);

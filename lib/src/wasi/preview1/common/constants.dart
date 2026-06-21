@@ -25,9 +25,7 @@ const int filetypeRegularFile = 4;
 const List<String> preview1NosysImports = <String>[
   'fd_fdstat_set_flags',
   'fd_fdstat_set_rights',
-  'fd_filestat_set_times',
   'fd_renumber',
-  'path_filestat_set_times',
   'path_readlink',
   'path_symlink',
   'proc_raise',

@@ -83,6 +83,7 @@ class WASI implements wasi.WASI {
       'fd_fdstat_get': _fdFdstatGetImport,
       'fd_filestat_get': _fdFilestatGetImport,
       'fd_filestat_set_size': _fdFilestatSetSizeImport,
+      'fd_filestat_set_times': _fdFilestatSetTimesImport,
       'fd_close': _fdCloseImport,
       'fd_seek': _fdSeekImport,
       'fd_tell': _fdTellImport,
@@ -92,6 +93,7 @@ class WASI implements wasi.WASI {
       'fd_prestat_dir_name': _fdPrestatDirNameImport,
       'path_create_directory': _pathCreateDirectoryImport,
       'path_filestat_get': _pathFilestatGetImport,
+      'path_filestat_set_times': _pathFilestatSetTimesImport,
       'path_link': _pathLinkImport,
       'path_open': _pathOpenImport,
       'path_remove_directory': _pathRemoveDirectoryImport,
@@ -578,6 +580,10 @@ class WASI implements wasi.WASI {
         if (opened != null) {
           _setUint64(data, bufPtr + 32, opened.bytes.length);
         }
+        final metadata = _vfs.metadataForFd(fd);
+        if (metadata != null) {
+          _writeFilestatTimes(data, bufPtr, metadata);
+        }
         return _errnoSuccess;
       });
 
@@ -598,6 +604,23 @@ class WASI implements wasi.WASI {
 
         opened.setLength(size);
         return _errnoSuccess;
+      });
+
+  wasm.FunctionImportExportValue get _fdFilestatSetTimesImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 4) {
+          return _errnoInval;
+        }
+        final metadata = _vfs.metadataForFd(_asInt(args[0]));
+        if (metadata == null) {
+          return _errnoBadf;
+        }
+        return _applyFilestatTimes(
+          metadata: metadata,
+          accessTimeNanos: _asInt64(args[1]),
+          modificationTimeNanos: _asInt64(args[2]),
+          flags: _asInt(args[3]),
+        );
       });
 
   wasm.FunctionImportExportValue get _fdCloseImport =>
@@ -1011,8 +1034,37 @@ class WASI implements wasi.WASI {
     if (fileBytes != null) {
       _setUint64(data, filestatPtr + 32, fileBytes.length);
     }
+    final metadata = _vfs.metadataForPath(normalizedPath);
+    if (metadata != null) {
+      _writeFilestatTimes(data, filestatPtr, metadata);
+    }
     return _errnoSuccess;
   });
+
+  wasm.FunctionImportExportValue get _pathFilestatSetTimesImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 7) {
+          return _errnoInval;
+        }
+        final resolved = _resolvePath(
+          dirFd: _asInt(args[0]),
+          pathPtr: _asInt(args[2]),
+          pathLen: _asInt(args[3]),
+        );
+        if (resolved.errno != _errnoSuccess) {
+          return resolved.errno;
+        }
+        final metadata = _vfs.metadataForPath(resolved.path!);
+        if (metadata == null) {
+          return _errnoNoent;
+        }
+        return _applyFilestatTimes(
+          metadata: metadata,
+          accessTimeNanos: _asInt64(args[4]),
+          modificationTimeNanos: _asInt64(args[5]),
+          flags: _asInt(args[6]),
+        );
+      });
 
   wasm.FunctionImportExportValue get _pollOneoffImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
@@ -1063,6 +1115,60 @@ class WASI implements wasi.WASI {
       fd == _stderr ||
       _vfs.openFileForFd(fd) != null ||
       _vfs.isDirectoryFd(fd);
+
+  int _applyFilestatTimes({
+    required wasi_vfs.Preview1VirtualNodeMetadata metadata,
+    required int accessTimeNanos,
+    required int modificationTimeNanos,
+    required int flags,
+  }) {
+    if ((flags & ~_filestatTimeKnownFlags) != 0 ||
+        (flags & _filestatSetAccessTime) != 0 &&
+            (flags & _filestatSetAccessTimeNow) != 0 ||
+        (flags & _filestatSetModificationTime) != 0 &&
+            (flags & _filestatSetModificationTimeNow) != 0) {
+      return _errnoInval;
+    }
+    if ((flags & _filestatSetAccessTime) != 0 && accessTimeNanos < 0 ||
+        (flags & _filestatSetModificationTime) != 0 &&
+            modificationTimeNanos < 0) {
+      return _errnoInval;
+    }
+
+    final now =
+        ((flags & _filestatSetAccessTimeNow) != 0 ||
+            (flags & _filestatSetModificationTimeNow) != 0)
+        ? _clockNowNanos(_clockRealtime)
+        : 0;
+    if ((flags & _filestatSetAccessTime) != 0) {
+      metadata.accessTimeNanos = accessTimeNanos;
+    } else if ((flags & _filestatSetAccessTimeNow) != 0) {
+      metadata.accessTimeNanos = now;
+    }
+    if ((flags & _filestatSetModificationTime) != 0) {
+      metadata.modificationTimeNanos = modificationTimeNanos;
+    } else if ((flags & _filestatSetModificationTimeNow) != 0) {
+      metadata.modificationTimeNanos = now;
+    }
+    return _errnoSuccess;
+  }
+
+  void _writeFilestatTimes(
+    ByteData data,
+    int filestatPtr,
+    wasi_vfs.Preview1VirtualNodeMetadata metadata,
+  ) {
+    _setUint64(
+      data,
+      filestatPtr + _filestatAccessTimeOffset,
+      metadata.accessTimeNanos,
+    );
+    _setUint64(
+      data,
+      filestatPtr + _filestatModificationTimeOffset,
+      metadata.modificationTimeNanos,
+    );
+  }
 
   int _writePollEvents({
     required Uint8List bytes,
@@ -1447,6 +1553,17 @@ const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
 const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
 const int _filestatSize = 64;
+const int _filestatAccessTimeOffset = 40;
+const int _filestatModificationTimeOffset = 48;
+const int _filestatSetAccessTime = 1;
+const int _filestatSetAccessTimeNow = 2;
+const int _filestatSetModificationTime = 4;
+const int _filestatSetModificationTimeNow = 8;
+const int _filestatTimeKnownFlags =
+    _filestatSetAccessTime |
+    _filestatSetAccessTimeNow |
+    _filestatSetModificationTime |
+    _filestatSetModificationTimeNow;
 const int _allRightsMask = 0xffffffff;
 const List<String> _preview1NosysImports = wasi_common.preview1NosysImports;
 
