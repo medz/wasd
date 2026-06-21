@@ -171,10 +171,12 @@ This is the implementation state as of 2026-06-21 on `main`.
   `waitable.join(endpoint, set)` can target the same endpoint handle without
   adding waitable allocation cost to ordinary handle paths. Handle-backed
   fixed-size `stream.read`, bounded `stream.write`, `future.read`, and
-  `future.write` memory copies also have a canonical event-start path:
-  immediate copies return the packed copy payload, pending copies return
-  `0xffffffff` (`BLOCKED`) and later publish the corresponding waitable event
-  with the endpoint handle and packed copy result. Pending event-start copies
+  `future.write` memory copies, plus primitive string `stream.read`,
+  `future.read`, and `future.write` memory copies, also have a canonical
+  event-start path: immediate copies return the packed copy payload, pending
+  copies return `0xffffffff` (`BLOCKED`) and later publish the corresponding
+  waitable event with the endpoint handle and packed copy result.
+  Pending event-start copies
   mark the endpoint waitable as owning an active copy until the event is
   delivered, so duplicate starts and drops trap instead of racing the pending
   copy. Cancelling a pending handle-backed copy now follows the Canonical ABI
@@ -244,10 +246,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   byte widths, alignments, and padding separately from the executable copy path.
   Component-host tests now also exercise decoded core-memory primitive
   `stream<T>`/`future<T>` copy paths through synchronous Canonical ABI calls,
-  pending read completion through waitable events, and fixed-size record plus
-  primitive string `stream<T>`/`future<T>` round trips through decoded
-  core-memory copy
-  definitions. Component validation now follows the Canonical ABI stream/future
+  pending fixed-size and primitive string completion through waitable events,
+  and fixed-size record plus primitive string `stream<T>`/`future<T>` round
+  trips through decoded core-memory copy definitions. Component validation now
+  follows the Canonical ABI stream/future
   copy option split: `stream.read`/`future.read` require `realloc` for dynamic
   list/string elements, `stream.write`/`future.write` do not, `memory` is still
   required when an element type is present, and `realloc` itself requires

@@ -5,6 +5,7 @@ import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
+import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
 
@@ -321,7 +322,10 @@ void main() {
           2 << 4,
         );
 
-        await expectLater(pending, completion(2));
+        await expectLater(
+          pending,
+          completion(WASIComponentWaitableEventCode.streamRead.value),
+        );
         expect(completed, isTrue);
         expect(data.getUint32(96, Endian.little), 144);
         expect(data.getUint32(100, Endian.little), 233);
@@ -495,7 +499,7 @@ void main() {
 
         await expectLater(
           waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
-          completion(4),
+          completion(WASIComponentWaitableEventCode.futureRead.value),
         );
         expect(data.getUint32(96, Endian.little), 1597);
         expect(data.getUint32(128, Endian.little), handles.readable);
@@ -603,15 +607,7 @@ void main() {
       expect(plan.bindingErrors, isEmpty);
 
       final binding = plan.bind();
-      final handles = host.canonicalHost.asyncHost
-          .bindCanonicalDefinition(
-            const WasmComponentCanonicalDefinition(
-              kind: WasmComponentCanonicalKind.streamNew,
-              typeIndex: 0,
-            ),
-          )
-          .streamNewPackedHandles();
-      final endpoints = WASIComponentAsyncEndpointHandles.unpack(handles);
+      final endpoints = _newStreamEndpointHandles(host);
       expect(
         binding.program.invokeWithMemory(1, memory, <Object?>[
           endpoints.writable,
@@ -646,24 +642,69 @@ void main() {
       expect(data.getUint32(64, Endian.little), 128);
       expect(data.getUint32(68, Endian.little), 4);
       expect(String.fromCharCodes(bytes.sublist(128, 132)), 'host');
-      host.canonicalHost.asyncHost
-          .bindCanonicalDefinition(
-            const WasmComponentCanonicalDefinition(
-              kind: WasmComponentCanonicalKind.streamDropReadable,
-              typeIndex: 0,
-            ),
-          )
-          .streamDropReadableHandle(endpoints.readable);
-      host.canonicalHost.asyncHost
-          .bindCanonicalDefinition(
-            const WasmComponentCanonicalDefinition(
-              kind: WasmComponentCanonicalKind.streamDropWritable,
-              typeIndex: 0,
-            ),
-          )
-          .streamDropWritableHandle(endpoints.writable);
+      _dropStreamEndpointHandles(host, endpoints);
       expect(host.table.activeCount, 0);
     });
+
+    test(
+      'publishes string stream read events through decoded core memory options',
+      () async {
+        final component = WasmComponent.decode(
+          _canonicalStringStreamMemoryProgramBytes(),
+        );
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final bytes = Uint8List.view(memory.buffer);
+        final data = ByteData.view(memory.buffer);
+        bytes.setAll(96, 'host'.codeUnits);
+        data.setUint32(32, 96, Endian.little);
+        data.setUint32(36, 4, Endian.little);
+        final host = WASIComponentHost();
+
+        final binding = host.bindComponent(component);
+        final endpoints = _newStreamEndpointHandles(host);
+        final waitableHost = host.canonicalHost.waitableHost;
+        final waitableSet = waitableHost.waitableSetNew();
+        waitableHost.waitableJoin(endpoints.readable, waitableSet);
+
+        expect(
+          binding.program.invokeWithMemoryEvent(
+            0,
+            memory,
+            <Object?>[endpoints.readable, 64, 1],
+            realloc: (oldPointer, oldSize, alignment, newSize) {
+              expect(oldPointer, 0);
+              expect(oldSize, 0);
+              expect(alignment, 1);
+              expect(newSize, 4);
+              return 128;
+            },
+          ),
+          wasiComponentAsyncBlocked,
+        );
+        expect(
+          binding.program.invokeWithMemory(1, memory, <Object?>[
+            endpoints.writable,
+            32,
+            1,
+          ]),
+          1 << 4,
+        );
+
+        await expectLater(
+          waitableHost.waitableSetWaitToMemory(waitableSet, memory, 160),
+          completion(WASIComponentWaitableEventCode.streamRead.value),
+        );
+        expect(data.getUint32(64, Endian.little), 128);
+        expect(data.getUint32(68, Endian.little), 4);
+        expect(String.fromCharCodes(bytes.sublist(128, 132)), 'host');
+        expect(data.getUint32(160, Endian.little), endpoints.readable);
+        expect(data.getUint32(164, Endian.little), 1 << 4);
+        waitableHost.waitableJoin(endpoints.readable, 0);
+        waitableHost.waitableSetDrop(waitableSet);
+        _dropStreamEndpointHandles(host, endpoints);
+        expect(host.table.activeCount, 0);
+      },
+    );
 
     test('copies string futures through decoded core memory options', () {
       final component = WasmComponent.decode(
@@ -694,15 +735,7 @@ void main() {
       expect(plan.bindingErrors, isEmpty);
 
       final binding = plan.bind();
-      final handles = host.canonicalHost.asyncHost
-          .bindCanonicalDefinition(
-            const WasmComponentCanonicalDefinition(
-              kind: WasmComponentCanonicalKind.futureNew,
-              typeIndex: 0,
-            ),
-          )
-          .futureNewPackedHandles();
-      final endpoints = WASIComponentAsyncEndpointHandles.unpack(handles);
+      final endpoints = _newFutureEndpointHandles(host);
       expect(
         binding.program.invokeWithMemory(1, memory, <Object?>[
           endpoints.writable,
@@ -735,25 +768,200 @@ void main() {
       expect(data.getUint32(64, Endian.little), 128);
       expect(data.getUint32(68, Endian.little), 4);
       expect(String.fromCharCodes(bytes.sublist(128, 132)), 'done');
-      host.canonicalHost.asyncHost
-          .bindCanonicalDefinition(
-            const WasmComponentCanonicalDefinition(
-              kind: WasmComponentCanonicalKind.futureDropReadable,
-              typeIndex: 0,
-            ),
-          )
-          .futureDropReadableHandle(endpoints.readable);
-      host.canonicalHost.asyncHost
-          .bindCanonicalDefinition(
-            const WasmComponentCanonicalDefinition(
-              kind: WasmComponentCanonicalKind.futureDropWritable,
-              typeIndex: 0,
-            ),
-          )
-          .futureDropWritableHandle(endpoints.writable);
+      _dropFutureEndpointHandles(host, endpoints);
       expect(host.table.activeCount, 0);
     });
+
+    test(
+      'publishes string future read events through decoded core memory options',
+      () async {
+        final component = WasmComponent.decode(
+          _canonicalStringFutureMemoryProgramBytes(),
+        );
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final bytes = Uint8List.view(memory.buffer);
+        final data = ByteData.view(memory.buffer);
+        bytes.setAll(96, 'done'.codeUnits);
+        data.setUint32(32, 96, Endian.little);
+        data.setUint32(36, 4, Endian.little);
+        final host = WASIComponentHost();
+
+        final binding = host.bindComponent(component);
+        final endpoints = _newFutureEndpointHandles(host);
+        final waitableHost = host.canonicalHost.waitableHost;
+        final waitableSet = waitableHost.waitableSetNew();
+        waitableHost.waitableJoin(endpoints.readable, waitableSet);
+
+        expect(
+          binding.program.invokeWithMemoryEvent(
+            0,
+            memory,
+            <Object?>[endpoints.readable, 64],
+            realloc: (oldPointer, oldSize, alignment, newSize) {
+              expect(oldPointer, 0);
+              expect(oldSize, 0);
+              expect(alignment, 1);
+              expect(newSize, 4);
+              return 128;
+            },
+          ),
+          wasiComponentAsyncBlocked,
+        );
+        expect(
+          binding.program.invokeWithMemory(1, memory, <Object?>[
+            endpoints.writable,
+            32,
+          ]),
+          0,
+        );
+
+        await expectLater(
+          waitableHost.waitableSetWaitToMemory(waitableSet, memory, 160),
+          completion(WASIComponentWaitableEventCode.futureRead.value),
+        );
+        expect(data.getUint32(64, Endian.little), 128);
+        expect(data.getUint32(68, Endian.little), 4);
+        expect(String.fromCharCodes(bytes.sublist(128, 132)), 'done');
+        expect(data.getUint32(160, Endian.little), endpoints.readable);
+        expect(data.getUint32(164, Endian.little), 0);
+        waitableHost.waitableJoin(endpoints.readable, 0);
+        waitableHost.waitableSetDrop(waitableSet);
+        _dropFutureEndpointHandles(host, endpoints);
+        expect(host.table.activeCount, 0);
+      },
+    );
+
+    test(
+      'publishes string future write events through decoded core memory options',
+      () async {
+        final component = WasmComponent.decode(
+          _canonicalStringFutureMemoryProgramBytes(),
+        );
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final bytes = Uint8List.view(memory.buffer);
+        final data = ByteData.view(memory.buffer);
+        bytes.setAll(96, 'done'.codeUnits);
+        data.setUint32(32, 96, Endian.little);
+        data.setUint32(36, 4, Endian.little);
+        final host = WASIComponentHost();
+
+        final binding = host.bindComponent(component);
+        final endpoints = _newFutureEndpointHandles(host);
+        final waitableHost = host.canonicalHost.waitableHost;
+        final waitableSet = waitableHost.waitableSetNew();
+        waitableHost.waitableJoin(endpoints.writable, waitableSet);
+
+        expect(
+          binding.program.invokeWithMemoryEvent(1, memory, <Object?>[
+            endpoints.writable,
+            32,
+          ]),
+          wasiComponentAsyncBlocked,
+        );
+        expect(
+          binding.program.invokeWithMemory(
+            0,
+            memory,
+            <Object?>[endpoints.readable, 64],
+            realloc: (oldPointer, oldSize, alignment, newSize) {
+              expect(oldPointer, 0);
+              expect(oldSize, 0);
+              expect(alignment, 1);
+              expect(newSize, 4);
+              return 128;
+            },
+          ),
+          0,
+        );
+
+        await expectLater(
+          waitableHost.waitableSetWaitToMemory(waitableSet, memory, 160),
+          completion(WASIComponentWaitableEventCode.futureWrite.value),
+        );
+        expect(data.getUint32(64, Endian.little), 128);
+        expect(data.getUint32(68, Endian.little), 4);
+        expect(String.fromCharCodes(bytes.sublist(128, 132)), 'done');
+        expect(data.getUint32(160, Endian.little), endpoints.writable);
+        expect(data.getUint32(164, Endian.little), 0);
+        waitableHost.waitableJoin(endpoints.writable, 0);
+        waitableHost.waitableSetDrop(waitableSet);
+        _dropFutureEndpointHandles(host, endpoints);
+        expect(host.table.activeCount, 0);
+      },
+    );
   });
+}
+
+WASIComponentAsyncEndpointHandles _newStreamEndpointHandles(
+  WASIComponentHost host,
+) {
+  final handles = host.canonicalHost.asyncHost
+      .bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamNew,
+          typeIndex: 0,
+        ),
+      )
+      .streamNewPackedHandles();
+  return WASIComponentAsyncEndpointHandles.unpack(handles);
+}
+
+void _dropStreamEndpointHandles(
+  WASIComponentHost host,
+  WASIComponentAsyncEndpointHandles endpoints,
+) {
+  host.canonicalHost.asyncHost
+      .bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamDropReadable,
+          typeIndex: 0,
+        ),
+      )
+      .streamDropReadableHandle(endpoints.readable);
+  host.canonicalHost.asyncHost
+      .bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamDropWritable,
+          typeIndex: 0,
+        ),
+      )
+      .streamDropWritableHandle(endpoints.writable);
+}
+
+WASIComponentAsyncEndpointHandles _newFutureEndpointHandles(
+  WASIComponentHost host,
+) {
+  final handles = host.canonicalHost.asyncHost
+      .bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureNew,
+          typeIndex: 0,
+        ),
+      )
+      .futureNewPackedHandles();
+  return WASIComponentAsyncEndpointHandles.unpack(handles);
+}
+
+void _dropFutureEndpointHandles(
+  WASIComponentHost host,
+  WASIComponentAsyncEndpointHandles endpoints,
+) {
+  host.canonicalHost.asyncHost
+      .bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureDropReadable,
+          typeIndex: 0,
+        ),
+      )
+      .futureDropReadableHandle(endpoints.readable);
+  host.canonicalHost.asyncHost
+      .bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureDropWritable,
+          typeIndex: 0,
+        ),
+      )
+      .futureDropWritableHandle(endpoints.writable);
 }
 
 Uint8List _canonicalResourceProgramBytes() => Uint8List.fromList(const <int>[
