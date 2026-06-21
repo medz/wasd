@@ -86,8 +86,8 @@ This is the implementation state as of 2026-06-21 on `main`.
   common path/link/symlink mutation paths rebuild only affected directories.
   The benchmark entrypoint is `dart run tool/wasi_vfs_benchmark.dart --json`;
   it also covers socket multi-iov peek/waitall, datagram truncation, socket
-  send/recv, socket polling readiness, and socket renumber/close descriptor
-  paths.
+  send/recv, socket polling readiness including zero-length datagram
+  readiness, and socket renumber/close descriptor paths.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/` now provides an internal typed resource table plus

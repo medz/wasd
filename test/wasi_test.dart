@@ -1078,6 +1078,74 @@ void main() {
       );
 
       test(
+        'poll_oneoff treats queued zero-length datagrams as readable',
+        () async {
+          final datagram = WASIPreview1Socket.datagram(
+            receiveMessages: const <List<int>>[<int>[]],
+          );
+          final socketWasi = WASI(sockets: {27: datagram});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final pollOneoff =
+              preview1['poll_oneoff'] as FunctionImportExportValue;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const inPtr = 2944;
+          const outPtr = 3056;
+          const neventsPtr = 3168;
+          const iovPtr = 3184;
+          const bufferPtr = 3216;
+          const countPtr = 3248;
+          const flagsPtr = 3264;
+
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0x7707,
+            tag: _eventTypeFdRead,
+            fd: 27,
+          );
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]),
+            ),
+            0,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0x7707);
+          expect(data.getUint16(outPtr + _eventErrorOffset, Endian.little), 0);
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeFdRead);
+          expect(_getUint64Le(data, outPtr + _eventFdReadwriteNbytesOffset), 0);
+          expect(
+            data.getUint16(
+              outPtr + _eventFdReadwriteFlagsOffset,
+              Endian.little,
+            ),
+            0,
+          );
+
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 4, Endian.little);
+          expect(sockRecv.ref([27, iovPtr, 1, 0, countPtr, flagsPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 0);
+          expect(data.getUint16(flagsPtr, Endian.little), 0);
+          expect(datagram.remainingReceiveMessages, isEmpty);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'sock_recv and sock_send use configured preview1 stream sockets',
         () async {
           final socket = WASIPreview1Socket(receiveData: utf8.encode('hello'));
