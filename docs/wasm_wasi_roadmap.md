@@ -244,8 +244,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   byte widths, alignments, and padding separately from the executable copy path.
   Component-host tests now also exercise decoded core-memory primitive
   `stream<T>`/`future<T>` copy paths through synchronous Canonical ABI calls,
-  pending read completion through waitable events, and fixed-size record
-  `stream<T>`/`future<T>` round trips through decoded core-memory copy
+  pending read completion through waitable events, and fixed-size record plus
+  primitive string `stream<T>`/`future<T>` round trips through decoded
+  core-memory copy
   definitions. Component validation now follows the Canonical ABI stream/future
   copy option split: `stream.read`/`future.read` require `realloc` for dynamic
   list/string elements, `stream.write`/`future.write` do not, `memory` is still
@@ -259,8 +260,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   directions of primitive string async memory copy executable in the internal
   async host. The canonical-indexed component program now also passes an
   explicit `realloc` callback through memory-backed invocation paths, so
-  decoded component-host primitive string `stream.read`/`stream.write` round
-  trips can execute through the same `(handle, ptr, n)` core-memory call shape.
+  decoded component-host primitive string `stream.read`/`stream.write` and
+  `future.read`/`future.write` round trips can execute through their respective
+  `(handle, ptr, n)` and `(handle, ptr)` core-memory call shapes.
   The adapter still does not automatically invoke decoded core realloc exports;
   callers must provide the realloc callback at invocation time. List values and
   composites containing dynamic values remain unsupported for executable memory

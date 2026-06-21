@@ -664,6 +664,95 @@ void main() {
           .streamDropWritableHandle(endpoints.writable);
       expect(host.table.activeCount, 0);
     });
+
+    test('copies string futures through decoded core memory options', () {
+      final component = WasmComponent.decode(
+        _canonicalStringFutureMemoryProgramBytes(),
+      );
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final bytes = Uint8List.view(memory.buffer);
+      final data = ByteData.view(memory.buffer);
+      bytes.setAll(96, 'done'.codeUnits);
+      data.setUint32(32, 96, Endian.little);
+      data.setUint32(36, 4, Endian.little);
+      final host = WASIComponentHost();
+
+      final plan = host.prepareComponent(component);
+
+      expect(component.validate(), isEmpty);
+      expect(plan.canBind, isTrue);
+      expect(plan.asyncValueBindings, hasLength(1));
+      expect(
+        plan.asyncValueBindings.single.kind,
+        WASIComponentAsyncValueBindingKind.future,
+      );
+      expect(
+        plan.asyncValueBindings.single.primitive,
+        WasmComponentPrimitiveValueType.string,
+      );
+      expect(plan.asyncValueBindings.single.fixedWidthMemoryLayout, isNull);
+      expect(plan.bindingErrors, isEmpty);
+
+      final binding = plan.bind();
+      final handles = host.canonicalHost.asyncHost
+          .bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.futureNew,
+              typeIndex: 0,
+            ),
+          )
+          .futureNewPackedHandles();
+      final endpoints = WASIComponentAsyncEndpointHandles.unpack(handles);
+      expect(
+        binding.program.invokeWithMemory(1, memory, <Object?>[
+          endpoints.writable,
+          32,
+        ]),
+        0,
+      );
+      expect(
+        () => binding.program.invokeWithMemory(0, memory, <Object?>[
+          endpoints.readable,
+          64,
+        ]),
+        throwsUnsupportedError,
+      );
+      expect(
+        binding.program.invokeWithMemory(
+          0,
+          memory,
+          <Object?>[endpoints.readable, 64],
+          realloc: (oldPointer, oldSize, alignment, newSize) {
+            expect(oldPointer, 0);
+            expect(oldSize, 0);
+            expect(alignment, 1);
+            expect(newSize, 4);
+            return 128;
+          },
+        ),
+        0,
+      );
+      expect(data.getUint32(64, Endian.little), 128);
+      expect(data.getUint32(68, Endian.little), 4);
+      expect(String.fromCharCodes(bytes.sublist(128, 132)), 'done');
+      host.canonicalHost.asyncHost
+          .bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.futureDropReadable,
+              typeIndex: 0,
+            ),
+          )
+          .futureDropReadableHandle(endpoints.readable);
+      host.canonicalHost.asyncHost
+          .bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.futureDropWritable,
+              typeIndex: 0,
+            ),
+          )
+          .futureDropWritableHandle(endpoints.writable);
+      expect(host.table.activeCount, 0);
+    });
   });
 }
 
@@ -1181,6 +1270,125 @@ Uint8List _canonicalStringStreamWriteMemoryProgramBytes() =>
       0x13,
       0x00,
       0x14,
+      0x00,
+    ]);
+
+Uint8List _canonicalStringFutureMemoryProgramBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x01,
+      0x37,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      0x09,
+      0x01,
+      0x60,
+      0x04,
+      0x7f,
+      0x7f,
+      0x7f,
+      0x7f,
+      0x01,
+      0x7f,
+      0x03,
+      0x02,
+      0x01,
+      0x00,
+      0x05,
+      0x03,
+      0x01,
+      0x00,
+      0x01,
+      0x07,
+      0x11,
+      0x02,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x02,
+      0x00,
+      0x07,
+      0x72,
+      0x65,
+      0x61,
+      0x6c,
+      0x6c,
+      0x6f,
+      0x63,
+      0x00,
+      0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x04,
+      0x00,
+      0x41,
+      0x00,
+      0x0b,
+      0x02,
+      0x04,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x06,
+      0x15,
+      0x02,
+      0x00,
+      0x02,
+      0x01,
+      0x00,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x00,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x72,
+      0x65,
+      0x61,
+      0x6c,
+      0x6c,
+      0x6f,
+      0x63,
+      0x07,
+      0x04,
+      0x01,
+      0x65,
+      0x01,
+      0x73,
+      0x08,
+      0x0d,
+      0x02,
+      0x16,
+      0x00,
+      0x02,
+      0x03,
+      0x00,
+      0x04,
+      0x00,
+      0x17,
+      0x00,
+      0x01,
+      0x03,
       0x00,
     ]);
 
