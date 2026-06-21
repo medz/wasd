@@ -205,7 +205,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   the preferred loop for hot files such as `memory_copy.wast`,
   `table_copy.wast`, and SIMD stress cases. Native table copying now delegates
   to Dart range-copy semantics instead of a manual element loop while preserving
-  same-table overlapping copy behavior.
+  same-table overlapping copy behavior. Native memory bulk operations now avoid
+  BigInt allocation for memory32 operands on the hot VM path and cache stable
+  per-instruction memory/index-type metadata for repeated `memory.copy` and
+  `memory.fill` execution.
   P2/P3 host instantiation, WIT ingestion, full canonical ABI
   lowering/lifting, memory-backed typed stream/future copy, and full async
   stream/future execution are not production-supported yet.

@@ -4387,6 +4387,18 @@ final class WasmVm {
     return _memory64ByIndex[memoryIndex];
   }
 
+  bool _memoryCopyIndexType(int destinationMemoryIndex, int sourceMemoryIndex) {
+    final destinationMemory64 = _isMemory64(destinationMemoryIndex);
+    final sourceMemory64 = _isMemory64(sourceMemoryIndex);
+    if (destinationMemory64 != sourceMemory64) {
+      throw StateError(
+        'memory.copy source and destination memories must have matching '
+        'index types.',
+      );
+    }
+    return destinationMemory64;
+  }
+
   bool _isTable64(int tableIndex) {
     if (tableIndex < 0 || tableIndex >= _table64ByIndex.length) {
       throw RangeError(
@@ -4396,23 +4408,28 @@ final class WasmVm {
     return _table64ByIndex[tableIndex];
   }
 
-  BigInt _popUnsignedMemoryOperand(
-    List<WasmValue> stack, {
-    required int memoryIndex,
-  }) {
-    if (_isMemory64(memoryIndex)) {
-      return _toU64(_popI64(stack));
-    }
-    return BigInt.from(_toU32(_popI32(stack)));
-  }
-
   int _popMemoryOperand(
     List<WasmValue> stack, {
     required int memoryIndex,
     required String label,
   }) {
-    final operand = _popUnsignedMemoryOperand(stack, memoryIndex: memoryIndex);
-    return _toLinearMemoryValue(operand, label: label);
+    return _popMemoryOperandForIndexType(
+      stack,
+      memory64: _isMemory64(memoryIndex),
+      label: label,
+    );
+  }
+
+  @pragma('vm:prefer-inline')
+  int _popMemoryOperandForIndexType(
+    List<WasmValue> stack, {
+    required bool memory64,
+    required String label,
+  }) {
+    if (memory64) {
+      return _toLinearMemoryValue(_toU64(_popI64(stack)), label: label);
+    }
+    return _toLinearMemoryValueU32(_popI32(stack), offset: 0, label: label);
   }
 
   int _popUnsignedI32Operand(List<WasmValue> stack, {required String label}) {
@@ -4422,25 +4439,7 @@ final class WasmVm {
         'Type mismatch: expected i32 for $label, got ${value.type}.',
       );
     }
-    return _toLinearMemoryValue(
-      BigInt.from(_toU32(value.asI32())),
-      label: label,
-    );
-  }
-
-  int _popMemoryOperationLength(
-    List<WasmValue> stack, {
-    required String label,
-  }) {
-    final value = _pop(stack);
-    final unsigned = switch (value.type) {
-      WasmValueType.i32 => BigInt.from(_toU32(value.asI32())),
-      WasmValueType.i64 => _toU64(value.asI64()),
-      _ => throw StateError(
-        'Type mismatch: expected i32/i64 length for $label, got ${value.type}.',
-      ),
-    };
-    return _toLinearMemoryValue(unsigned, label: label);
+    return _toLinearMemoryValueU32(value.raw as int, offset: 0, label: label);
   }
 
   BigInt _popUnsignedTableOperand(
@@ -9440,29 +9439,31 @@ final class WasmVm {
   void _memoryCopy(Instruction instruction, List<WasmValue> stack) {
     final destinationMemoryIndex = instruction.immediate!;
     final sourceMemoryIndex = instruction.secondaryImmediate!;
-    final destinationMemory = _requireMemory(destinationMemoryIndex);
-    final sourceMemory = _requireMemory(sourceMemoryIndex);
-    final destinationMemory64 = _isMemory64(destinationMemoryIndex);
-    final sourceMemory64 = _isMemory64(sourceMemoryIndex);
-    if (destinationMemory64 != sourceMemory64) {
-      throw StateError(
-        'memory.copy source and destination memories must have matching '
-        'index types.',
-      );
+    final destinationMemory = instruction.runtimeCachedMemory ??=
+        _requireMemory(destinationMemoryIndex);
+    var sourceMemory = instruction.runtimeCachedObject as WasmMemory?;
+    if (sourceMemory == null) {
+      sourceMemory = _requireMemory(sourceMemoryIndex);
+      instruction.runtimeCachedObject = sourceMemory;
     }
+    final memory64 = instruction.runtimeCachedMemory64 ??= _memoryCopyIndexType(
+      destinationMemoryIndex,
+      sourceMemoryIndex,
+    );
 
-    final length = _popMemoryOperationLength(
+    final length = _popMemoryOperandForIndexType(
       stack,
+      memory64: memory64,
       label: 'memory.copy length',
     );
-    final sourceOffset = _popMemoryOperand(
+    final sourceOffset = _popMemoryOperandForIndexType(
       stack,
-      memoryIndex: sourceMemoryIndex,
+      memory64: memory64,
       label: 'memory.copy source offset',
     );
-    final destinationOffset = _popMemoryOperand(
+    final destinationOffset = _popMemoryOperandForIndexType(
       stack,
-      memoryIndex: destinationMemoryIndex,
+      memory64: memory64,
       label: 'memory.copy destination offset',
     );
 
@@ -9477,19 +9478,26 @@ final class WasmVm {
 
   void _memoryFill(Instruction instruction, List<WasmValue> stack) {
     final memoryIndex = instruction.immediate!;
-    final length = _popMemoryOperationLength(
+    final memory = instruction.runtimeCachedMemory ??= _requireMemory(
+      memoryIndex,
+    );
+    final memory64 = instruction.runtimeCachedMemory64 ??= _isMemory64(
+      memoryIndex,
+    );
+    final length = _popMemoryOperandForIndexType(
       stack,
+      memory64: memory64,
       label: 'memory.fill length',
     );
     final fillValue = _popI32(stack);
-    final destinationOffset = _popMemoryOperand(
+    final destinationOffset = _popMemoryOperandForIndexType(
       stack,
-      memoryIndex: memoryIndex,
+      memory64: memory64,
       label: 'memory.fill destination offset',
     );
 
     RuntimeMemoryOps.fill(
-      memory: _requireMemory(memoryIndex),
+      memory: memory,
       destinationOffset: destinationOffset,
       value: fillValue,
       length: length,
