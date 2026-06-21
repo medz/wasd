@@ -431,6 +431,18 @@ void main() {
       expect(componentExport.descriptor.kind, WasmComponentExternKind.function);
     });
 
+    test('reports duplicate component type import names', () {
+      final errors = WasmComponent.decode(
+        _duplicateTypeDeclarationImportNamesComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('import name a conflicts with previous import name a'),
+      );
+    });
+
     test('reports invalid component type declaration indexes', () {
       final errors = WasmComponent.decode(
         _typeDeclarationExportBeforeTypeComponentBytes(),
@@ -4245,6 +4257,35 @@ Uint8List _componentInstanceTypesComponentBytes() =>
       0x62,
       0x01,
       0x01,
+    ]);
+
+Uint8List _duplicateTypeDeclarationImportNamesComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x0f,
+      0x01,
+      0x41,
+      0x02,
+      0x03,
+      0x00,
+      0x01,
+      0x61,
+      0x02,
+      0x73,
+      0x03,
+      0x00,
+      0x01,
+      0x61,
+      0x02,
+      0x73,
     ]);
 
 Uint8List _typeDeclarationExportBeforeTypeComponentBytes() =>

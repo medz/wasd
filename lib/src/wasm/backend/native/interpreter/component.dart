@@ -1617,6 +1617,7 @@ final class _WasmComponentValidationContext {
   }) {
     final localTypeDefinitions = <WasmComponentTypeDefinition>[];
     final localCoreTypeKinds = <WasmComponentCoreTypeKind>[];
+    Map<String, String>? importNames;
     final typeScopes = <_WasmComponentTypeAliasScope>[
       _WasmComponentTypeAliasScope(
         definitions: localTypeDefinitions,
@@ -1650,8 +1651,16 @@ final class _WasmComponentValidationContext {
           );
           localTypeDefinitions.add(nestedType);
         case WasmComponentTypeDeclarationKind.import:
+          final import = declaration.import;
+          if (import != null) {
+            validateImportName(
+              import,
+              '$path.declarations[$i].import.name',
+              importNames ??= <String, String>{},
+            );
+          }
           validateTypeDeclarationExternDescriptor(
-            declaration.import?.descriptor,
+            import?.descriptor,
             '$path.declarations[$i].import.descriptor',
             localTypeDefinitions,
             localCoreTypeKinds,
