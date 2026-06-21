@@ -936,6 +936,7 @@ final class WasmComponent {
 
   List<WasmComponentTypeDefinition> _buildComponentTypeIndexDefinitions() {
     final visibleTypeDefinitions = <WasmComponentTypeDefinition>[];
+    final visibleComponents = <WasmComponent>[];
     final instanceExportMaps = <_WasmComponentInstanceExportMap?>[];
     var decodedTypeDefinitionCount = 0;
 
@@ -971,11 +972,14 @@ final class WasmComponent {
               visibleTypeDefinitions.add(exportedTypeDefinition);
             }
           }
+        case _WasmComponentDefinitionEventKind.component:
+          visibleComponents.add(components[event.index]);
         case _WasmComponentDefinitionEventKind.instance:
           instanceExportMaps.add(
             _componentInstanceExportTypeMap(
               instances[event.index],
               visibleTypeDefinitions,
+              visibleComponents,
             ),
           );
         case _WasmComponentDefinitionEventKind.alias:
@@ -1298,18 +1302,41 @@ WasmComponentTypeDefinition? _componentTypeDefinitionAt(
 _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
   WasmComponentInstance instance,
   List<WasmComponentTypeDefinition> visibleTypeDefinitions,
+  List<WasmComponent> visibleComponents,
 ) {
-  if (instance.kind != WasmComponentInstanceKind.inlineExports) {
-    return null;
+  switch (instance.kind) {
+    case WasmComponentInstanceKind.inlineExports:
+      return <String, _WasmComponentInstanceExportEntry>{
+        for (final export in instance.exports)
+          export.name: _WasmComponentInstanceExportEntry(
+            sort: export.sort,
+            typeDefinition: _componentTypeSortIndexDefinition(
+              export.sort,
+              visibleTypeDefinitions,
+            ),
+          ),
+      };
+    case WasmComponentInstanceKind.instantiate:
+      final componentIndex = instance.componentIndex;
+      if (componentIndex == null ||
+          componentIndex < 0 ||
+          componentIndex >= visibleComponents.length) {
+        return null;
+      }
+      return _componentExportTypeMap(visibleComponents[componentIndex]);
   }
+}
 
+_WasmComponentInstanceExportMap _componentExportTypeMap(
+  WasmComponent component,
+) {
   return <String, _WasmComponentInstanceExportEntry>{
-    for (final export in instance.exports)
+    for (final export in component.exports)
       export.name: _WasmComponentInstanceExportEntry(
         sort: export.sort,
         typeDefinition: _componentTypeSortIndexDefinition(
           export.sort,
-          visibleTypeDefinitions,
+          component.componentTypeIndexDefinitions,
         ),
       ),
   };
@@ -3729,6 +3756,8 @@ final class _WasmComponentValidationContext {
           instanceExportMaps.add(
             componentInstanceExportMap(
               instance,
+              components: components,
+              componentCount: componentCount,
               functionTypes: functionTypes,
               valueEntries: valueEntries,
               visibleTypeDefinitions: visibleTypeDefinitions,
@@ -4020,30 +4049,39 @@ final class _WasmComponentValidationContext {
 
   _WasmComponentInstanceExportMap? componentInstanceExportMap(
     WasmComponentInstance instance, {
+    required List<WasmComponent> components,
+    required int componentCount,
     required List<WasmComponentFunctionType?> functionTypes,
     required List<_WasmComponentValueIndexEntry> valueEntries,
     required List<WasmComponentTypeDefinition> visibleTypeDefinitions,
   }) {
-    if (instance.kind != WasmComponentInstanceKind.inlineExports) {
-      return null;
+    switch (instance.kind) {
+      case WasmComponentInstanceKind.instantiate:
+        final componentIndex = instance.componentIndex;
+        if (componentIndex == null ||
+            componentIndex < 0 ||
+            componentIndex >= componentCount) {
+          return null;
+        }
+        return _componentExportTypeMap(components[componentIndex]);
+      case WasmComponentInstanceKind.inlineExports:
+        return <String, _WasmComponentInstanceExportEntry>{
+          for (final export in instance.exports)
+            export.name: _WasmComponentInstanceExportEntry(
+              sort: export.sort,
+              function: export.sort.kind == WasmComponentSortKind.function
+                  ? componentFunctionTypeAt(functionTypes, export.sort.index)
+                  : null,
+              value: export.sort.kind == WasmComponentSortKind.value
+                  ? componentValueTypeAt(valueEntries, export.sort.index)
+                  : null,
+              typeDefinition: _componentTypeSortIndexDefinition(
+                export.sort,
+                visibleTypeDefinitions,
+              ),
+            ),
+        };
     }
-
-    return <String, _WasmComponentInstanceExportEntry>{
-      for (final export in instance.exports)
-        export.name: _WasmComponentInstanceExportEntry(
-          sort: export.sort,
-          function: export.sort.kind == WasmComponentSortKind.function
-              ? componentFunctionTypeAt(functionTypes, export.sort.index)
-              : null,
-          value: export.sort.kind == WasmComponentSortKind.value
-              ? componentValueTypeAt(valueEntries, export.sort.index)
-              : null,
-          typeDefinition: _componentTypeSortIndexDefinition(
-            export.sort,
-            visibleTypeDefinitions,
-          ),
-        ),
-    };
   }
 
   void validateComponentSortIndex(
