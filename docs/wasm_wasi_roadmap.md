@@ -151,7 +151,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   waitable-set support now models table-backed waitables and waitable sets,
   canonical event codes, `waitable-set.{poll,wait}` payload writes to memory,
   `waitable.join` transfer/removal with `0` as the removal sentinel, and drop
-  guards for non-empty or actively waited sets. Handle-backed stream/future
+  guards for non-empty or actively waited sets. Cancellable
+  `waitable-set.{poll,wait}` can now observe an internal pending task
+  cancellation once and write the canonical `TASK_CANCELLED` event payload.
+  Handle-backed stream/future
   endpoints are now lazily resolvable as waitables, so canonical
   `waitable.join(endpoint, set)` can target the same endpoint handle without
   adding waitable allocation cost to ordinary handle paths. Handle-backed
@@ -295,10 +298,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   backpressure counter operations, waitable-set event delivery and memory
   payload writes, decoded canonical async program invocation, decoded unit
   stream/future program invocation, and resource-table-backed borrowed handle
-  invocation costs, synchronous, awaited, and waitable-event handle-program
-  fixed-width memory-copy invocation costs, synchronous handle-program
-  cancel-copy wait costs, plus fixed-width primitive stream/future memory-copy
-  costs, are measured by
+  invocation costs, waitable-set task-cancellation delivery, synchronous,
+  awaited, and waitable-event handle-program fixed-width memory-copy invocation
+  costs, synchronous handle-program cancel-copy wait costs, plus fixed-width
+  primitive stream/future memory-copy costs, are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`. Keep active-copy
   state checks on the waitable-event path so ordinary handle and memory
   invocations do not pay for event lifecycle enforcement.

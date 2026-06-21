@@ -156,6 +156,62 @@ void main() {
       host.dropWaitable(waitableHandle);
       expect(host.table.activeCount, 0);
     });
+
+    test('reports pending task cancellation to cancellable poll once', () {
+      final host = WASIComponentWaitableHost();
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      final set = host.waitableSetNew();
+
+      host.requestTaskCancellation();
+
+      expect(host.waitableSetPollToMemory(set, memory, 48), 0);
+      expect(host.hasPendingTaskCancellation, isTrue);
+      expect(
+        host.waitableSetPollToMemory(set, memory, 48, cancellable: true),
+        6,
+      );
+      expect(data.getUint32(48, Endian.little), 0);
+      expect(data.getUint32(52, Endian.little), 0);
+      expect(host.hasPendingTaskCancellation, isFalse);
+      expect(
+        host.waitableSetPollToMemory(set, memory, 48, cancellable: true),
+        0,
+      );
+
+      host.waitableSetDrop(set);
+      expect(host.table.activeCount, 0);
+    });
+
+    test(
+      'completes cancellable waits when task cancellation is requested',
+      () async {
+        final host = WASIComponentWaitableHost();
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final data = ByteData.view(memory.buffer);
+        final set = host.waitableSetNew();
+        var completed = false;
+
+        final pending =
+            host.waitableSetWaitToMemory(set, memory, 56, cancellable: true)
+              ..then((_) {
+                completed = true;
+              });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(completed, isFalse);
+        expect(() => host.waitableSetDrop(set), throwsStateError);
+
+        host.requestTaskCancellation();
+
+        await expectLater(pending, completion(6));
+        expect(completed, isTrue);
+        expect(data.getUint32(56, Endian.little), 0);
+        expect(data.getUint32(60, Endian.little), 0);
+        host.waitableSetDrop(set);
+        expect(host.table.activeCount, 0);
+      },
+    );
   });
 
   group('WASIComponentCanonicalWaitableProgram', () {
@@ -206,6 +262,60 @@ void main() {
       host.dropWaitable(waitableHandle);
       expect(host.table.activeCount, 0);
     });
+
+    test(
+      'passes cancellable flags to waitable poll and wait operations',
+      () async {
+        final host = WASIComponentWaitableHost();
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final data = ByteData.view(memory.buffer);
+        final program = WASIComponentCanonicalWaitableProgram(
+          operations: [
+            host.bindCanonicalDefinition(
+              const WasmComponentCanonicalDefinition(
+                kind: WasmComponentCanonicalKind.waitableSetNew,
+              ),
+            ),
+            host.bindCanonicalDefinition(
+              const WasmComponentCanonicalDefinition(
+                kind: WasmComponentCanonicalKind.waitableSetPoll,
+                isCancellable: true,
+              ),
+            ),
+            host.bindCanonicalDefinition(
+              const WasmComponentCanonicalDefinition(
+                kind: WasmComponentCanonicalKind.waitableSetWait,
+                isCancellable: true,
+              ),
+            ),
+            host.bindCanonicalDefinition(
+              const WasmComponentCanonicalDefinition(
+                kind: WasmComponentCanonicalKind.waitableSetDrop,
+              ),
+            ),
+          ],
+        );
+        final set = program.invoke(0, const <Object?>[])! as int;
+
+        host.requestTaskCancellation();
+        expect(program.invokeWithMemory(1, memory, <Object?>[set, 72]), 6);
+        expect(data.getUint32(72, Endian.little), 0);
+        expect(data.getUint32(76, Endian.little), 0);
+
+        final pending = program.invokeWithMemoryAsync(2, memory, <Object?>[
+          set,
+          80,
+        ]);
+        await Future<void>.delayed(Duration.zero);
+        host.requestTaskCancellation();
+
+        await expectLater(pending, completion(6));
+        expect(data.getUint32(80, Endian.little), 0);
+        expect(data.getUint32(84, Endian.little), 0);
+        expect(program.invoke(3, <Object?>[set]), isNull);
+        expect(host.table.activeCount, 0);
+      },
+    );
 
     test('rejects non-waitable canonical definitions', () {
       final host = WASIComponentWaitableHost();

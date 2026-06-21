@@ -329,6 +329,30 @@ final class WASIComponentWaitableSet {
     return completer.future;
   }
 
+  /// Waits until a member has a pending event or [interrupt] completes.
+  ///
+  /// If [interrupt] wins, the internal set waiter is removed so the set can be
+  /// dropped once the interrupt event has been delivered.
+  Future<WASIComponentWaitableEvent> waitUntil(
+    Future<WASIComponentWaitableEvent> interrupt,
+  ) {
+    final event = poll();
+    if (!event.isNone) {
+      return Future<WASIComponentWaitableEvent>.value(event);
+    }
+
+    final completer = Completer<WASIComponentWaitableEvent>();
+    _waiters.addLast(completer);
+    return Future.any<WASIComponentWaitableEvent>(
+      <Future<WASIComponentWaitableEvent>>[completer.future, interrupt],
+    ).then((event) {
+      if (!completer.isCompleted) {
+        _waiters.remove(completer);
+      }
+      return event;
+    });
+  }
+
   /// Validates this set can be dropped.
   void requireDroppable() {
     if (_waitables.isNotEmpty) {
@@ -395,6 +419,20 @@ final class WASIComponentWaitableHost {
   late final WASIComponentResourceType<WASIComponentWaitableSet>
   _waitableSetType;
   final List<WASIComponentWaitableResolver> _waitableResolvers;
+  bool _taskCancellationPending = false;
+  Completer<void>? _taskCancellationWaiter;
+
+  /// Whether a cancellable wait or poll can observe task cancellation.
+  bool get hasPendingTaskCancellation => _taskCancellationPending;
+
+  /// Requests cancellation of the current component task.
+  void requestTaskCancellation() {
+    _taskCancellationPending = true;
+    final waiter = _taskCancellationWaiter;
+    if (waiter != null && !waiter.isCompleted) {
+      waiter.complete();
+    }
+  }
 
   /// Adds a resolver for waitables owned by another component host layer.
   void addWaitableResolver(WASIComponentWaitableResolver resolver) {
@@ -476,13 +514,14 @@ final class WASIComponentWaitableHost {
   int waitableSetPollToMemory(
     int waitableSet,
     wasm.Memory memory,
-    int pointer,
-  ) {
+    int pointer, {
+    bool cancellable = false,
+  }) {
     final event = table
         .borrow<WASIComponentWaitableSet, WASIComponentWaitableEvent>(
           _waitableSetType,
           waitableSet,
-          (set) => set.poll(),
+          (set) => _pollWaitableSet(set, cancellable: cancellable),
         );
     return _writeEventToMemory(event, memory, pointer);
   }
@@ -491,13 +530,14 @@ final class WASIComponentWaitableHost {
   Future<int> waitableSetWaitToMemory(
     int waitableSet,
     wasm.Memory memory,
-    int pointer,
-  ) async {
+    int pointer, {
+    bool cancellable = false,
+  }) async {
     final event = await table
         .borrowAsync<WASIComponentWaitableSet, WASIComponentWaitableEvent>(
           _waitableSetType,
           waitableSet,
-          (set) => set.wait(),
+          (set) => _waitForWaitableSet(set, cancellable: cancellable),
         );
     return _writeEventToMemory(event, memory, pointer);
   }
@@ -526,6 +566,62 @@ final class WASIComponentWaitableHost {
   ) {
     event.writePayloadToMemory(memory, pointer);
     return event.code.value;
+  }
+
+  WASIComponentWaitableEvent _pollWaitableSet(
+    WASIComponentWaitableSet set, {
+    required bool cancellable,
+  }) {
+    if (cancellable && _consumeTaskCancellation()) {
+      return WASIComponentWaitableEvent.taskCancelled;
+    }
+    return set.poll();
+  }
+
+  Future<WASIComponentWaitableEvent> _waitForWaitableSet(
+    WASIComponentWaitableSet set, {
+    required bool cancellable,
+  }) {
+    final immediate = _pollWaitableSet(set, cancellable: cancellable);
+    if (!immediate.isNone) {
+      return Future<WASIComponentWaitableEvent>.value(immediate);
+    }
+    if (!cancellable) {
+      return set.wait();
+    }
+    if (_taskCancellationWaiter != null) {
+      throw StateError(
+        'WASI component task cancellation already has a cancellable waiter.',
+      );
+    }
+
+    final waiter = Completer<void>();
+    _taskCancellationWaiter = waiter;
+    return set
+        .waitUntil(
+          waiter.future.then<WASIComponentWaitableEvent>(
+            (_) => WASIComponentWaitableEvent.taskCancelled,
+          ),
+        )
+        .then((event) {
+          if (event.code == WASIComponentWaitableEventCode.taskCancelled) {
+            _consumeTaskCancellation();
+          }
+          return event;
+        })
+        .whenComplete(() {
+          if (identical(_taskCancellationWaiter, waiter)) {
+            _taskCancellationWaiter = null;
+          }
+        });
+  }
+
+  bool _consumeTaskCancellation() {
+    if (!_taskCancellationPending) {
+      return false;
+    }
+    _taskCancellationPending = false;
+    return true;
   }
 
   WASIComponentWaitable? _waitableForHandle(int handle) {
@@ -654,7 +750,12 @@ final class WASIComponentCanonicalWaitableOperation {
     int pointer,
   ) {
     _requireKind(WasmComponentCanonicalKind.waitableSetPoll);
-    return _host.waitableSetPollToMemory(waitableSet, memory, pointer);
+    return _host.waitableSetPollToMemory(
+      waitableSet,
+      memory,
+      pointer,
+      cancellable: cancellable,
+    );
   }
 
   /// Executes `waitable-set.wait`.
@@ -664,7 +765,12 @@ final class WASIComponentCanonicalWaitableOperation {
     int pointer,
   ) {
     _requireKind(WasmComponentCanonicalKind.waitableSetWait);
-    return _host.waitableSetWaitToMemory(waitableSet, memory, pointer);
+    return _host.waitableSetWaitToMemory(
+      waitableSet,
+      memory,
+      pointer,
+      cancellable: cancellable,
+    );
   }
 
   /// Executes `waitable-set.drop`.
