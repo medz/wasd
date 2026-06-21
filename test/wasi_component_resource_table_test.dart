@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/resource_table.dart';
 
@@ -124,6 +126,29 @@ void main() {
         throwsStateError,
       );
 
+      table.drop<String>(fileType, handle);
+      expect(table.activeCount, 0);
+    });
+
+    test('prevents dropping asynchronously borrowed resources', () async {
+      final table = WASIComponentResourceTable();
+      final fileType = table.defineType<String>('file');
+      final handle = table.insert<String>(fileType, 'file');
+      final completer = Completer<String>();
+
+      final borrowed = table.borrowAsync<String, String>(fileType, handle, (
+        resource,
+      ) {
+        expect(resource, 'file');
+        return completer.future;
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(() => table.drop<String>(fileType, handle), throwsStateError);
+
+      completer.complete('done');
+
+      await expectLater(borrowed, completion('done'));
       table.drop<String>(fileType, handle);
       expect(table.activeCount, 0);
     });

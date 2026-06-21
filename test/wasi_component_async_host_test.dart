@@ -54,6 +54,40 @@ void main() {
       expect(dropped, <String>['numbers']);
     });
 
+    test(
+      'awaits pending stream reads through async program invocation',
+      () async {
+        final component = WasmComponent.decode(_canonicalStreamProgramBytes());
+        expect(component.validate(), isEmpty);
+        final host = WASIComponentAsyncHost();
+        host.defineStreamTypeFromComponent<int>(component, 0, 'numbers');
+        final program = host.bindCanonicalDefinitions(component);
+        final stream =
+            program.invoke(0, const <Object?>[])! as WASIComponentStream<int>;
+        var completed = false;
+
+        final pending = program.invokeAsync(1, <Object?>[stream.readable, 2])
+          ..then((_) {
+            completed = true;
+          });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(completed, isFalse);
+
+        expect(
+          program.invoke(2, <Object?>[
+            stream.writable,
+            <int>[1, 2, 3],
+          ]),
+          3,
+        );
+
+        await expectLater(pending, completion(<int>[1, 2]));
+        expect(completed, isTrue);
+        expect(program.invoke(1, <Object?>[stream.readable, 2]), <int>[3]);
+      },
+    );
+
     test('invokes decoded canonical stream definitions with handles', () {
       final component = WasmComponent.decode(_canonicalStreamProgramBytes());
       expect(component.validate(), isEmpty);
@@ -99,6 +133,49 @@ void main() {
         throwsStateError,
       );
     });
+
+    test(
+      'awaits pending stream reads through async handle invocation',
+      () async {
+        final component = WasmComponent.decode(_canonicalStreamProgramBytes());
+        expect(component.validate(), isEmpty);
+        final host = WASIComponentAsyncHost();
+        host.defineStreamTypeFromComponent<int>(component, 0, 'numbers');
+
+        final program = host.bindCanonicalDefinitionsToHandles(component);
+        final handles =
+            program.invoke(0, const <Object?>[])!
+                as WASIComponentAsyncEndpointHandles;
+        var completed = false;
+
+        final pending = program.invokeAsync(1, <Object?>[handles.readable, 2])
+          ..then((_) {
+            completed = true;
+          });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(completed, isFalse);
+        expect(
+          () => program.invoke(5, <Object?>[handles.readable]),
+          throwsStateError,
+        );
+
+        expect(
+          program.invoke(2, <Object?>[
+            handles.writable,
+            <int>[1, 2, 3],
+          ]),
+          3,
+        );
+
+        await expectLater(pending, completion(<int>[1, 2]));
+        expect(completed, isTrue);
+        expect(program.invoke(1, <Object?>[handles.readable, 2]), <int>[3]);
+        expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+        expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+        expect(host.table.activeCount, 0);
+      },
+    );
 
     test('borrows stream endpoint handles during handle-backed writes', () {
       final component = WasmComponent.decode(_canonicalStreamProgramBytes());
@@ -249,6 +326,10 @@ void main() {
         await Future<void>.delayed(Duration.zero);
 
         expect(completed, isFalse);
+        expect(
+          () => program.invoke(5, <Object?>[handles.readable]),
+          throwsStateError,
+        );
 
         expect(program.invoke(2, <Object?>[handles.writable, 'ready']), isNull);
 

@@ -256,6 +256,12 @@ final class WASIComponentCanonicalAsyncProgram {
 
     final operation = operations[canonicalIndex];
     switch (operation.kind) {
+      case WasmComponentCanonicalKind.streamRead:
+        _expectArity(canonicalIndex, args, 2);
+        return operation.streamReadWhenAvailable(
+          args[0],
+          _expectNonNegativeInt(canonicalIndex, args[1], 'maxElements'),
+        );
       case WasmComponentCanonicalKind.futureRead:
         _expectArity(canonicalIndex, args, 1);
         return operation.futureReadWhenReady(args.single);
@@ -394,6 +400,12 @@ final class WASIComponentCanonicalAsyncHandleProgram {
 
     final operation = operations[canonicalIndex];
     switch (operation.kind) {
+      case WasmComponentCanonicalKind.streamRead:
+        _expectArity(canonicalIndex, args, 2);
+        return operation.streamReadHandleWhenAvailable(
+          _expectHandle(canonicalIndex, args[0], 'readable'),
+          _expectNonNegativeInt(canonicalIndex, args[1], 'maxElements'),
+        );
       case WasmComponentCanonicalKind.futureRead:
         _expectArity(canonicalIndex, args, 1);
         return operation.futureReadHandleWhenReady(
@@ -439,10 +451,29 @@ final class WASIComponentCanonicalAsyncOperation {
     return _valueType.streamRead(readable, maxElements);
   }
 
+  /// Executes `stream.read` and waits if the stream has no queued values.
+  Future<List<Object>> streamReadWhenAvailable(
+    Object? readable,
+    int maxElements,
+  ) {
+    _requireKind(WasmComponentCanonicalKind.streamRead);
+    return _valueType.streamReadWhenAvailable(readable, maxElements);
+  }
+
   /// Executes `stream.read` with a readable endpoint handle.
   List<Object> streamReadHandle(int readable, int maxElements) {
     _requireKind(WasmComponentCanonicalKind.streamRead);
     return _valueType.streamReadHandle(readable, maxElements);
+  }
+
+  /// Executes `stream.read` with a readable endpoint handle and waits if the
+  /// stream has no queued values.
+  Future<List<Object>> streamReadHandleWhenAvailable(
+    int readable,
+    int maxElements,
+  ) {
+    _requireKind(WasmComponentCanonicalKind.streamRead);
+    return _valueType.streamReadHandleWhenAvailable(readable, maxElements);
   }
 
   /// Executes `stream.write`.
@@ -721,11 +752,34 @@ final class _RegisteredAsyncValueType<T extends Object> {
     return stream.read(maxElements);
   }
 
+  Future<List<Object>> streamReadWhenAvailable(
+    Object? readable,
+    int maxElements,
+  ) {
+    _requireKind(_WASIComponentAsyncValueKind.stream);
+    return _expectReadableStream(
+      readable,
+    ).readWhenAvailable(maxElements).then<List<Object>>((values) => values);
+  }
+
   List<Object> streamReadHandle(int readable, int maxElements) {
     return table.borrow<WASIComponentReadableStream<T>, List<Object>>(
       readableStreamType!,
       readable,
       (stream) => stream.read(maxElements),
+    );
+  }
+
+  Future<List<Object>> streamReadHandleWhenAvailable(
+    int readable,
+    int maxElements,
+  ) {
+    return table.borrowAsync<WASIComponentReadableStream<T>, List<Object>>(
+      readableStreamType!,
+      readable,
+      (stream) => stream
+          .readWhenAvailable(maxElements)
+          .then<List<Object>>((values) => values),
     );
   }
 
@@ -835,7 +889,7 @@ final class _RegisteredAsyncValueType<T extends Object> {
   }
 
   Future<Object> futureReadHandleWhenReady(int readable) {
-    return table.borrow<WASIComponentReadableFuture<T>, Future<Object>>(
+    return table.borrowAsync<WASIComponentReadableFuture<T>, Object>(
       readableFutureType!,
       readable,
       (future) => future.readWhenReady(),

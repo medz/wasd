@@ -10,17 +10,18 @@ const int _defaultIterations = 100000;
 const int _defaultResources = 1024;
 const int _warmupIterations = 1000;
 
-void main(List<String> args) {
+Future<void> main(List<String> args) async {
   final options = _Options.parse(args);
   if (options.help) {
     _printUsage();
     return;
   }
 
-  _runWarmup(options);
+  await _runWarmup(options);
 
   final insertGetDrop = _benchmarkInsertGetDrop(options.iterations);
   final borrow = _benchmarkBorrow(options);
+  final borrowAsync = await _benchmarkBorrowAsync(options);
   final dropCallbacks = _benchmarkDropCallbacks(options.iterations);
   final programInvoke = _benchmarkProgramInvoke(options.iterations);
 
@@ -29,6 +30,7 @@ void main(List<String> args) {
     'resources': options.resources,
     'insert_get_drop': insertGetDrop.toJson(),
     'borrow': borrow.toJson(),
+    'borrow_async': borrowAsync.toJson(),
     'drop_callbacks': dropCallbacks.toJson(),
     'program_invoke': programInvoke.toJson(),
   };
@@ -40,9 +42,10 @@ void main(List<String> args) {
   }
 }
 
-void _runWarmup(_Options options) {
+Future<void> _runWarmup(_Options options) async {
   _benchmarkInsertGetDrop(_warmupIterations);
   _benchmarkBorrow(options.copyWith(iterations: _warmupIterations));
+  await _benchmarkBorrowAsync(options.copyWith(iterations: _warmupIterations));
   _benchmarkDropCallbacks(_warmupIterations);
   _benchmarkProgramInvoke(_warmupIterations);
 }
@@ -88,6 +91,39 @@ _Metric _benchmarkBorrow(_Options options) {
     table.borrow<int, void>(resourceType, handle, (resource) {
       checksum += resource;
     });
+  }
+  watch.stop();
+
+  for (final handle in handles) {
+    table.drop<int>(resourceType, handle);
+  }
+  if (table.activeCount != 0) {
+    throw StateError('resource table leaked ${table.activeCount} resources');
+  }
+  return _Metric(
+    operations: options.iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+Future<_Metric> _benchmarkBorrowAsync(_Options options) async {
+  final table = WASIComponentResourceTable();
+  final resourceType = table.defineType<int>('resource');
+  final handles = <int>[];
+  for (var i = 0; i < options.resources; i++) {
+    handles.add(table.insert<int>(resourceType, i));
+  }
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final handle = handles[i % handles.length];
+    checksum += await table.borrowAsync<int, int>(
+      resourceType,
+      handle,
+      Future<int>.value,
+    );
   }
   watch.stop();
 
@@ -173,6 +209,7 @@ void _printText(Map<String, Object?> payload) {
   for (final name in const <String>[
     'insert_get_drop',
     'borrow',
+    'borrow_async',
     'drop_callbacks',
     'program_invoke',
   ]) {

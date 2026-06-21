@@ -119,6 +119,28 @@ final class WASIComponentResourceTable {
     }
   }
 
+  /// Runs async [callback] with the resource for [handle] while it is borrowed.
+  ///
+  /// The borrow is held until the returned future completes, preventing drops
+  /// from invalidating resources that are still used by pending canonical async
+  /// operations.
+  Future<R> borrowAsync<T extends Object, R>(
+    WASIComponentResourceType<T> type,
+    int handle,
+    Future<R> Function(T resource) callback,
+  ) {
+    final entry = _typedEntry<T>(type, handle);
+    entry.borrowCount++;
+    try {
+      return callback(entry.resource).whenComplete(() {
+        entry.borrowCount--;
+      });
+    } catch (_) {
+      entry.borrowCount--;
+      rethrow;
+    }
+  }
+
   /// Drops the resource for [handle].
   ///
   /// The optional `onDrop` callback passed to [defineType] is invoked at most

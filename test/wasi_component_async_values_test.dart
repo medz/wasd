@@ -43,6 +43,54 @@ void main() {
       expect(() => stream.writable.write('late'), throwsStateError);
       expect(() => stream.readable.read(1), throwsStateError);
     });
+
+    test(
+      'completes pending readable stream waits when values arrive',
+      () async {
+        final stream = WASIComponentStream<int>('numbers');
+        var completed = false;
+
+        final pending = stream.readable.readWhenAvailable(2)
+          ..then((_) {
+            completed = true;
+          });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(completed, isFalse);
+
+        stream.writable.writeAll(<int>[1, 2, 3]);
+
+        await expectLater(pending, completion(<int>[1, 2]));
+        expect(completed, isTrue);
+        expect(stream.readable.read(2), <int>[3]);
+      },
+    );
+
+    test('completes pending readable stream waits on close', () async {
+      final stream = WASIComponentStream<int>('numbers');
+      final pending = stream.readable.readWhenAvailable(2);
+
+      stream.writable.close();
+
+      await expectLater(pending, completion(isEmpty));
+      expect(stream.writable.isClosed, isTrue);
+    });
+
+    test('fails pending readable stream waits on cancel or drop', () async {
+      final cancelled = WASIComponentStream<String>('cancelled');
+      final cancelledRead = cancelled.readable.readWhenAvailable(1);
+
+      cancelled.readable.cancel();
+
+      await expectLater(cancelledRead, throwsStateError);
+
+      final dropped = WASIComponentStream<String>('dropped');
+      final droppedRead = dropped.readable.readWhenAvailable(1);
+
+      dropped.readable.drop();
+
+      await expectLater(droppedRead, throwsStateError);
+    });
   });
 
   group('WASIComponentFuture', () {
