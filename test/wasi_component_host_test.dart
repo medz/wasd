@@ -6,6 +6,7 @@ import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
+import 'package:wasd/src/wasm/memory.dart';
 
 void main() {
   group('WASIComponentHost', () {
@@ -162,6 +163,54 @@ void main() {
       expect(dropped, isEmpty);
       expect(binding.program.invoke(6, <Object?>[handles.writable]), isNull);
       expect(dropped, ['stream[0]']);
+      expect(host.table.activeCount, 0);
+    });
+
+    test('copies primitive streams through decoded core memory options', () {
+      final component = WasmComponent.decode(
+        _canonicalStreamMemoryProgramBytes(),
+      );
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 55, Endian.little);
+      data.setUint32(36, 89, Endian.little);
+      final host = WASIComponentHost();
+
+      final plan = host.prepareComponent(component);
+
+      expect(component.validate(), isEmpty);
+      expect(plan.canBind, isTrue);
+      expect(plan.asyncValueBindings, hasLength(1));
+      expect(
+        plan.asyncValueBindings.single.fixedWidthMemoryLayout!.byteLength,
+        4,
+      );
+
+      final binding = plan.bind();
+      final handles = WASIComponentAsyncEndpointHandles.unpack(
+        binding.program.invoke(0, const <Object?>[])! as int,
+      );
+
+      expect(
+        binding.program.invokeWithMemory(2, memory, <Object?>[
+          handles.writable,
+          32,
+          2,
+        ]),
+        2 << 4,
+      );
+      expect(
+        binding.program.invokeWithMemory(1, memory, <Object?>[
+          handles.readable,
+          96,
+          2,
+        ]),
+        2 << 4,
+      );
+      expect(data.getUint32(96, Endian.little), 55);
+      expect(data.getUint32(100, Endian.little), 89);
+      expect(binding.program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(binding.program.invoke(4, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
 
@@ -351,6 +400,101 @@ Uint8List _canonicalStreamProgramBytes() => Uint8List.fromList(const <int>[
   0x14,
   0x00,
 ]);
+
+Uint8List _canonicalStreamMemoryProgramBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x01,
+      0x16,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x05,
+      0x03,
+      0x01,
+      0x00,
+      0x01,
+      0x07,
+      0x07,
+      0x01,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x02,
+      0x00,
+      0x02,
+      0x04,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x66,
+      0x01,
+      0x79,
+      0x08,
+      0x03,
+      0x01,
+      0x0e,
+      0x00,
+      0x06,
+      0x09,
+      0x01,
+      0x00,
+      0x02,
+      0x01,
+      0x00,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x08,
+      0x06,
+      0x01,
+      0x0f,
+      0x00,
+      0x01,
+      0x03,
+      0x00,
+      0x06,
+      0x09,
+      0x01,
+      0x00,
+      0x02,
+      0x01,
+      0x00,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x08,
+      0x0a,
+      0x03,
+      0x10,
+      0x00,
+      0x01,
+      0x03,
+      0x01,
+      0x13,
+      0x00,
+      0x14,
+      0x00,
+    ]);
 
 Uint8List _canonicalFutureProgramBytes() => Uint8List.fromList(const <int>[
   0x00,
