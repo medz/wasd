@@ -91,16 +91,72 @@ final class WASIComponentCanonicalHost {
   WASIComponentCanonicalProgram bindCanonicalDefinitions(
     Iterable<WasmComponentCanonicalDefinition> definitions,
   ) {
+    final definitionList = definitions is List<WasmComponentCanonicalDefinition>
+        ? definitions
+        : definitions.toList(growable: false);
+    final unsupported = unsupportedCanonicalDefinitions(definitionList);
+    if (unsupported.isNotEmpty) {
+      throw WASIComponentCanonicalHostUnsupportedException(unsupported);
+    }
+    final operations = <WASIComponentCanonicalOperation>[];
+    for (final definition in definitionList) {
+      operations.add(_bindSupportedCanonicalDefinition(definition));
+    }
     return WASIComponentCanonicalProgram(
-      operations: List<WASIComponentCanonicalOperation>.unmodifiable([
-        for (final definition in definitions)
-          bindCanonicalDefinition(definition),
-      ]),
+      operations: List<WASIComponentCanonicalOperation>.unmodifiable(
+        operations,
+      ),
+    );
+  }
+
+  /// Returns `true` when this host can bind canonical [kind].
+  bool supportsCanonicalKind(WasmComponentCanonicalKind kind) {
+    return _unsupportedCanonicalKindReason(kind) == null;
+  }
+
+  /// Reports unsupported definitions without partially binding a program.
+  List<WASIComponentCanonicalHostUnsupportedDefinition>
+  unsupportedCanonicalDefinitions(
+    Iterable<WasmComponentCanonicalDefinition> definitions,
+  ) {
+    final unsupported = <WASIComponentCanonicalHostUnsupportedDefinition>[];
+    var canonicalIndex = 0;
+    for (final definition in definitions) {
+      final reason = _unsupportedCanonicalKindReason(definition.kind);
+      if (reason != null) {
+        unsupported.add(
+          WASIComponentCanonicalHostUnsupportedDefinition(
+            canonicalIndex: canonicalIndex,
+            definition: definition,
+            reason: reason,
+          ),
+        );
+      }
+      canonicalIndex++;
+    }
+    return List<WASIComponentCanonicalHostUnsupportedDefinition>.unmodifiable(
+      unsupported,
     );
   }
 
   /// Binds one decoded canonical definition.
   WASIComponentCanonicalOperation bindCanonicalDefinition(
+    WasmComponentCanonicalDefinition definition,
+  ) {
+    final unsupportedReason = _unsupportedCanonicalKindReason(definition.kind);
+    if (unsupportedReason != null) {
+      throw UnsupportedError(
+        _unsupportedCanonicalDefinitionMessage(
+          0,
+          definition.kind,
+          unsupportedReason,
+        ),
+      );
+    }
+    return _bindSupportedCanonicalDefinition(definition);
+  }
+
+  WASIComponentCanonicalOperation _bindSupportedCanonicalDefinition(
     WasmComponentCanonicalDefinition definition,
   ) {
     switch (definition.kind) {
@@ -158,8 +214,8 @@ final class WASIComponentCanonicalHost {
       case WasmComponentCanonicalKind.threadYieldTo:
       case WasmComponentCanonicalKind.threadSpawnRef:
       case WasmComponentCanonicalKind.threadSpawnIndirect:
-        throw UnsupportedError(
-          'Wasm component canonical ${definition.kind.name} is not supported by the internal canonical host.',
+        throw StateError(
+          'Unsupported canonical ${definition.kind.name} reached binding after preflight.',
         );
     }
   }
@@ -273,6 +329,65 @@ final class WASIComponentCanonicalHost {
   }
 }
 
+/// One unsupported canonical definition found during host capability preflight.
+final class WASIComponentCanonicalHostUnsupportedDefinition {
+  /// Creates an unsupported-definition report.
+  const WASIComponentCanonicalHostUnsupportedDefinition({
+    required this.canonicalIndex,
+    required this.definition,
+    required this.reason,
+  });
+
+  /// Canonical definition index in the decoded component.
+  final int canonicalIndex;
+
+  /// Decoded canonical definition that cannot be bound.
+  final WasmComponentCanonicalDefinition definition;
+
+  /// Why this host cannot bind [definition].
+  final String reason;
+
+  /// Canonical kind that cannot be bound.
+  WasmComponentCanonicalKind get kind => definition.kind;
+
+  @override
+  String toString() {
+    return _unsupportedCanonicalDefinitionMessage(
+      canonicalIndex,
+      definition.kind,
+      reason,
+    );
+  }
+}
+
+/// Thrown when canonical definitions require unsupported host capabilities.
+final class WASIComponentCanonicalHostUnsupportedException
+    implements Exception {
+  /// Creates an exception from unsupported [definitions].
+  WASIComponentCanonicalHostUnsupportedException(
+    Iterable<WASIComponentCanonicalHostUnsupportedDefinition> definitions,
+  ) : definitions =
+          List<WASIComponentCanonicalHostUnsupportedDefinition>.unmodifiable(
+            definitions,
+          );
+
+  /// Unsupported definitions that blocked binding.
+  final List<WASIComponentCanonicalHostUnsupportedDefinition> definitions;
+
+  @override
+  String toString() {
+    final buffer = StringBuffer(
+      'WASI component canonical host cannot bind unsupported definitions',
+    );
+    for (final definition in definitions) {
+      buffer
+        ..write('\n')
+        ..write(definition);
+    }
+    return buffer.toString();
+  }
+}
+
 /// Thrown when a decoded component fails validation before canonical binding.
 final class WASIComponentCanonicalHostValidationException implements Exception {
   /// Creates a validation exception with component validation [errors].
@@ -295,6 +410,68 @@ final class WASIComponentCanonicalHostValidationException implements Exception {
     }
     return buffer.toString();
   }
+}
+
+String? _unsupportedCanonicalKindReason(WasmComponentCanonicalKind kind) {
+  switch (kind) {
+    case WasmComponentCanonicalKind.resourceNew:
+    case WasmComponentCanonicalKind.resourceDrop:
+    case WasmComponentCanonicalKind.resourceRep:
+    case WasmComponentCanonicalKind.backpressureSet:
+    case WasmComponentCanonicalKind.backpressureInc:
+    case WasmComponentCanonicalKind.backpressureDec:
+    case WasmComponentCanonicalKind.streamNew:
+    case WasmComponentCanonicalKind.streamRead:
+    case WasmComponentCanonicalKind.streamWrite:
+    case WasmComponentCanonicalKind.streamCancelRead:
+    case WasmComponentCanonicalKind.streamCancelWrite:
+    case WasmComponentCanonicalKind.streamDropReadable:
+    case WasmComponentCanonicalKind.streamDropWritable:
+    case WasmComponentCanonicalKind.futureNew:
+    case WasmComponentCanonicalKind.futureRead:
+    case WasmComponentCanonicalKind.futureWrite:
+    case WasmComponentCanonicalKind.futureCancelRead:
+    case WasmComponentCanonicalKind.futureCancelWrite:
+    case WasmComponentCanonicalKind.futureDropReadable:
+    case WasmComponentCanonicalKind.futureDropWritable:
+    case WasmComponentCanonicalKind.waitableSetNew:
+    case WasmComponentCanonicalKind.waitableSetWait:
+    case WasmComponentCanonicalKind.waitableSetPoll:
+    case WasmComponentCanonicalKind.waitableSetDrop:
+    case WasmComponentCanonicalKind.waitableJoin:
+    case WasmComponentCanonicalKind.subtaskCancel:
+    case WasmComponentCanonicalKind.subtaskDrop:
+    case WasmComponentCanonicalKind.taskReturn:
+    case WasmComponentCanonicalKind.taskCancel:
+    case WasmComponentCanonicalKind.contextGet:
+    case WasmComponentCanonicalKind.contextSet:
+    case WasmComponentCanonicalKind.threadIndex:
+    case WasmComponentCanonicalKind.threadAvailableParallelism:
+    case WasmComponentCanonicalKind.errorContextNew:
+    case WasmComponentCanonicalKind.errorContextDebugMessage:
+    case WasmComponentCanonicalKind.errorContextDrop:
+      return null;
+    case WasmComponentCanonicalKind.lift:
+    case WasmComponentCanonicalKind.lower:
+      return 'canonical lift/lower require typed core function adapter generation';
+    case WasmComponentCanonicalKind.threadYield:
+    case WasmComponentCanonicalKind.threadNewIndirect:
+    case WasmComponentCanonicalKind.threadSwitchTo:
+    case WasmComponentCanonicalKind.threadSuspend:
+    case WasmComponentCanonicalKind.threadResumeLater:
+    case WasmComponentCanonicalKind.threadYieldTo:
+    case WasmComponentCanonicalKind.threadSpawnRef:
+    case WasmComponentCanonicalKind.threadSpawnIndirect:
+      return 'scheduler-dependent canonical thread operations require component task scheduling';
+  }
+}
+
+String _unsupportedCanonicalDefinitionMessage(
+  int canonicalIndex,
+  WasmComponentCanonicalKind kind,
+  String reason,
+) {
+  return 'canonical[$canonicalIndex].${kind.name}: $reason';
 }
 
 /// Bound canonical program preserving component canonical index order.

@@ -134,6 +134,14 @@ void main() {
       final host = WASIComponentCanonicalHost();
 
       expect(
+        host.supportsCanonicalKind(WasmComponentCanonicalKind.threadIndex),
+        isTrue,
+      );
+      expect(
+        host.supportsCanonicalKind(WasmComponentCanonicalKind.threadSuspend),
+        isFalse,
+      );
+      expect(
         () => host.bindCanonicalDefinition(
           const WasmComponentCanonicalDefinition(
             kind: WasmComponentCanonicalKind.threadSuspend,
@@ -148,6 +156,68 @@ void main() {
           ),
         ),
         throwsUnsupportedError,
+      );
+    });
+
+    test('reports all unsupported canonical definitions before binding', () {
+      final host = WASIComponentCanonicalHost();
+      final definitions = const [
+        WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.threadIndex,
+        ),
+        WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.lower,
+          functionIndex: 0,
+          typeIndex: 0,
+        ),
+        WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.threadSuspend,
+        ),
+        WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.errorContextDrop,
+        ),
+      ];
+
+      final unsupported = host.unsupportedCanonicalDefinitions(definitions);
+
+      expect(unsupported, hasLength(2));
+      expect(unsupported.map((definition) => definition.canonicalIndex), [
+        1,
+        2,
+      ]);
+      expect(unsupported.map((definition) => definition.kind), [
+        WasmComponentCanonicalKind.lower,
+        WasmComponentCanonicalKind.threadSuspend,
+      ]);
+      expect(
+        () => host.bindCanonicalDefinitions(definitions),
+        throwsA(
+          isA<WASIComponentCanonicalHostUnsupportedException>()
+              .having(
+                (error) => error.definitions.map(
+                  (definition) => definition.canonicalIndex,
+                ),
+                'canonical indexes',
+                [1, 2],
+              )
+              .having(
+                (error) =>
+                    error.definitions.map((definition) => definition.kind),
+                'canonical kinds',
+                [
+                  WasmComponentCanonicalKind.lower,
+                  WasmComponentCanonicalKind.threadSuspend,
+                ],
+              )
+              .having(
+                (error) => error.toString(),
+                'message',
+                allOf(
+                  contains('canonical[1].lower'),
+                  contains('canonical[2].threadSuspend'),
+                ),
+              ),
+        ),
       );
     });
 

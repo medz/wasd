@@ -218,8 +218,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   waitable-set, subtask, and error-context hosts behind one canonical-indexed
   binding layer. It validates decoded components before binding canonical
   definitions so future P2/P3 adapters fail with component validation
-  diagnostics instead of runtime-only host errors. This is an adapter boundary
-  for future P2/P3 version modules, not a public support claim.
+  diagnostics instead of runtime-only host errors. It also reports all
+  unsupported canonical definitions before building any operation table, so
+  versioned adapters can surface real capability gaps without partially bound
+  programs. This is an adapter boundary for future P2/P3 version modules, not a
+  public support claim.
   Internal
   error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`
