@@ -235,6 +235,87 @@ void main() {
       expect(() => cancelOperation.taskCancel(), throwsStateError);
     });
 
+    test('keeps overlapping async tasks isolated', () async {
+      final host = WASIComponentTaskHost();
+      final returnOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.taskReturn,
+          result: WasmComponentCanonicalResult.value(
+            WasmComponentValueType.primitive(
+              WasmComponentPrimitiveValueType.u32,
+            ),
+          ),
+        ),
+      );
+      final cancelOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.taskCancel,
+        ),
+      );
+      final leftTask = host.createTask(name: 'left-task');
+      final rightTask = host.createTask(name: 'right-task');
+      final leftEntered = Completer<void>();
+      final releaseLeft = Completer<void>();
+      final rightEntered = Completer<void>();
+      final releaseRight = Completer<void>();
+
+      rightTask.markStarted();
+      rightTask.requestCancellation();
+
+      final leftResult = host.runWithTaskAsync(leftTask, () async {
+        expect(host.currentTask, same(leftTask));
+        leftEntered.complete();
+        await releaseLeft.future;
+        expect(host.currentTask, same(leftTask));
+        returnOperation.taskReturn(result: 7);
+        return host.currentTask;
+      });
+      await leftEntered.future;
+
+      final rightResult = host.runWithTaskAsync(rightTask, () async {
+        expect(host.currentTask, same(rightTask));
+        rightEntered.complete();
+        await releaseRight.future;
+        expect(host.currentTask, same(rightTask));
+        cancelOperation.taskCancel();
+        return host.currentTask;
+      });
+      await rightEntered.future;
+
+      try {
+        releaseLeft.complete();
+        expect(await leftResult, same(leftTask));
+      } finally {
+        if (!releaseRight.isCompleted) {
+          releaseRight.complete();
+        }
+      }
+      expect(await rightResult, same(rightTask));
+      expect(host.currentTask, isNull);
+      expect(leftTask.state, WASIComponentTaskState.returned);
+      expect(leftTask.result, 7);
+      expect(rightTask.state, WASIComponentTaskState.cancelled);
+    });
+
+    test('lets synchronous task scopes override async current tasks', () async {
+      final host = WASIComponentTaskHost();
+      final outer = host.createTask(name: 'outer-task');
+      final nested = host.createTask(name: 'nested-task');
+
+      await host.runWithTaskAsync(outer, () async {
+        expect(host.currentTask, same(outer));
+
+        final nestedResult = host.runWithTask(nested, () {
+          return host.currentTask;
+        });
+
+        expect(nestedResult, same(nested));
+        expect(host.currentTask, same(outer));
+      });
+
+      expect(host.currentTask, isNull);
+    });
+
     test(
       'validates return arity, cancellation request, and active borrows',
       () {

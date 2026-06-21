@@ -54,6 +54,7 @@ Future<void> main(List<String> args) async {
   final taskReturnCancelDelivery = await _benchmarkTaskReturnCancelDelivery(
     options.iterations,
   );
+  final taskCurrentScope = await _benchmarkTaskCurrentScope(options.iterations);
   final programInvoke = _benchmarkProgramInvoke(options);
   final unitProgramInvoke = _benchmarkUnitProgramInvoke(options);
   final handleProgramInvoke = _benchmarkHandleProgramInvoke(options);
@@ -86,6 +87,7 @@ Future<void> main(List<String> args) async {
     'waitable_set_task_cancellation': waitableSetTaskCancellation.toJson(),
     'subtask_cancel_delivery': subtaskCancelDelivery.toJson(),
     'task_return_cancel_delivery': taskReturnCancelDelivery.toJson(),
+    'task_current_scope': taskCurrentScope.toJson(),
     'program_invoke': programInvoke.toJson(),
     'unit_program_invoke': unitProgramInvoke.toJson(),
     'handle_program_invoke': handleProgramInvoke.toJson(),
@@ -122,6 +124,7 @@ Future<void> _runWarmup(_Options options) async {
   await _benchmarkWaitableSetTaskCancellation(_warmupIterations);
   await _benchmarkSubtaskCancelDelivery(_warmupIterations);
   await _benchmarkTaskReturnCancelDelivery(_warmupIterations);
+  await _benchmarkTaskCurrentScope(_warmupIterations);
   _benchmarkProgramInvoke(warmup);
   _benchmarkUnitProgramInvoke(warmup);
   _benchmarkHandleProgramInvoke(warmup);
@@ -748,6 +751,46 @@ Future<_Metric> _benchmarkTaskReturnCancelDelivery(int iterations) async {
   }
   return _Metric(
     operations: iterations * 18,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+Future<_Metric> _benchmarkTaskCurrentScope(int iterations) async {
+  final host = WASIComponentTaskHost();
+  final outer = host.createTask(name: 'benchmark-outer-task');
+  final nested = host.createTask(name: 'benchmark-nested-task');
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    checksum += await host.runWithTaskAsync(outer, () async {
+      if (!identical(host.currentTask, outer)) {
+        throw StateError('outer task was not current before nested scope');
+      }
+      final nestedLength = host.runWithTask(nested, () {
+        if (!identical(host.currentTask, nested)) {
+          throw StateError('nested task was not current');
+        }
+        return host.currentTask!.name.length;
+      });
+      if (!identical(host.currentTask, outer)) {
+        throw StateError('outer task was not restored after nested scope');
+      }
+      await Future<void>.value();
+      if (!identical(host.currentTask, outer)) {
+        throw StateError('outer task was not restored after await');
+      }
+      return host.currentTask!.name.length + nestedLength + i;
+    });
+    if (host.currentTask != null) {
+      throw StateError('task scope leaked after async run');
+    }
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 7,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
@@ -1809,6 +1852,7 @@ void _printText(Map<String, Object?> payload) {
     'waitable_set_task_cancellation',
     'subtask_cancel_delivery',
     'task_return_cancel_delivery',
+    'task_current_scope',
     'program_invoke',
     'unit_program_invoke',
     'handle_program_invoke',

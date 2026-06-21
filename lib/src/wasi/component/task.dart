@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import '../../wasm/backend/native/interpreter/component.dart';
 import 'subtask.dart';
 import 'waitable_set.dart';
+
+final Object _currentTaskZoneKey = Object();
 
 /// Callee-side Component Model task state.
 enum WASIComponentTaskState {
@@ -160,9 +164,21 @@ final class WASIComponentTaskHost {
 
   final WASIComponentWaitableHost? _waitableHost;
   WASIComponentTask? _currentTask;
+  int _syncTaskDepth = 0;
 
   /// The task currently executing canonical `task.*` operations.
-  WASIComponentTask? get currentTask => _currentTask;
+  WASIComponentTask? get currentTask {
+    if (_syncTaskDepth > 0) {
+      return _currentTask;
+    }
+    if (!identical(Zone.current, Zone.root)) {
+      final task = Zone.current[_currentTaskZoneKey];
+      if (task is WASIComponentTask) {
+        return task;
+      }
+    }
+    return _currentTask;
+  }
 
   /// Creates a task linked to [subtask] and this host's cancellation delivery.
   WASIComponentTask createTask({
@@ -180,10 +196,12 @@ final class WASIComponentTaskHost {
   T runWithTask<T>(WASIComponentTask task, T Function() callback) {
     final previous = _currentTask;
     _currentTask = task;
+    _syncTaskDepth++;
     try {
       return callback();
     } finally {
       _currentTask = previous;
+      _syncTaskDepth--;
     }
   }
 
@@ -192,13 +210,10 @@ final class WASIComponentTaskHost {
     WASIComponentTask task,
     Future<T> Function() callback,
   ) async {
-    final previous = _currentTask;
-    _currentTask = task;
-    try {
-      return await callback();
-    } finally {
-      _currentTask = previous;
-    }
+    return await runZoned<Future<T>>(
+      callback,
+      zoneValues: <Object?, Object?>{_currentTaskZoneKey: task},
+    );
   }
 
   /// Executes `task.return` on the current task.
@@ -240,7 +255,7 @@ final class WASIComponentTaskHost {
   }
 
   WASIComponentTask _requireCurrentTask() {
-    final task = _currentTask;
+    final task = currentTask;
     if (task == null) {
       throw StateError('No current WASI component task.');
     }

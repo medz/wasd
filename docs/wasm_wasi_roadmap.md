@@ -199,10 +199,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   `BLOCKED` cancellation, waitable-set `SUBTASK` event delivery, and non-async
   cancellation through an `invokeAsync` path that waits past intermediate
   `STARTED` progress until the final subtask state is available. Internal
-  callee-side task support now models `task.return`, `task.cancel`, current-task
-  execution context, active-borrow return/cancel guards, caller-side subtask
-  result storage, and cancellation propagation from `subtask.cancel` into
-  cancellable `waitable-set.wait` through the shared waitable host. Internal
+  callee-side task support now models `task.return`, `task.cancel`,
+  async-local current-task execution context, active-borrow return/cancel
+  guards, caller-side subtask result storage, and cancellation propagation from
+  `subtask.cancel` into cancellable `waitable-set.wait` through the shared
+  waitable host. Internal
   context support now models the current Canonical ABI `i32` thread-local
   `context.get`/`context.set` cells with scoped current-context execution and
   fixed slot validation. Internal thread support now models implicit/current
@@ -315,9 +316,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   `dart run tool/wasi_component_async_benchmark.dart --json`, including
   canonical async stream/future copies, context get/set TLS operations,
   thread identity/context switching, waitable-set event delivery, task
-  cancellation delivery, subtask cancellation delivery, and task return/cancel
-  delivery. Add new async lifecycle work to this benchmark before treating hot
-  test behavior as an implementation detail.
+  cancellation delivery, subtask cancellation delivery, task return/cancel
+  delivery, and async current-task scope switching. Add new async lifecycle work
+  to this benchmark before treating hot test behavior as an implementation
+  detail.
 - P2/P3 streams and futures need latency, allocation, and cancellation
   benchmarks before they are advertised as production-ready. The "sandwich"
   async forwarding case from WASI 0.3 must be a first-class benchmark, not only
@@ -329,10 +331,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   payload writes, decoded canonical async program invocation, decoded unit
   stream/future program invocation, and resource-table-backed borrowed handle
   invocation costs, context get/set TLS operations, thread identity/context
-  switching, waitable-set task-cancellation delivery, synchronous, awaited, and
-  waitable-event handle-program fixed-width memory-copy invocation costs,
-  synchronous handle-program cancel-copy wait costs, subtask cancellation
-  delivery, task return/cancel delivery, plus fixed-width
+  switching, waitable-set task-cancellation delivery, async current-task scope
+  switching, synchronous, awaited, and waitable-event handle-program
+  fixed-width memory-copy invocation costs, synchronous handle-program
+  cancel-copy wait costs, subtask cancellation delivery, task return/cancel
+  delivery, plus fixed-width
   primitive stream/future memory-copy costs, are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`. Keep active-copy
   state checks on the waitable-event path so ordinary handle and memory
