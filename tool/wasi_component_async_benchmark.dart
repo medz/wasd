@@ -27,6 +27,7 @@ Future<void> main(List<String> args) async {
       await _benchmarkStreamPendingReadCompletion(options);
   final streamPendingWriteCompletion =
       await _benchmarkStreamPendingWriteCompletion(options);
+  final streamForwardSandwich = await _benchmarkStreamForwardSandwich(options);
   final futureCompleteReadDrop = _benchmarkFutureCompleteReadDrop(
     options.iterations,
   );
@@ -51,6 +52,7 @@ Future<void> main(List<String> args) async {
     'stream_cancel': streamCancel.toJson(),
     'stream_pending_read_completion': streamPendingReadCompletion.toJson(),
     'stream_pending_write_completion': streamPendingWriteCompletion.toJson(),
+    'stream_forward_sandwich': streamForwardSandwich.toJson(),
     'future_complete_read_drop': futureCompleteReadDrop.toJson(),
     'future_pending_read_completion': futurePendingReadCompletion.toJson(),
     'backpressure_counter': backpressureCounter.toJson(),
@@ -77,6 +79,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkStreamCancel(warmup);
   await _benchmarkStreamPendingReadCompletion(warmup);
   await _benchmarkStreamPendingWriteCompletion(warmup);
+  await _benchmarkStreamForwardSandwich(warmup);
   _benchmarkFutureCompleteReadDrop(_warmupIterations);
   await _benchmarkFuturePendingReadCompletion(_warmupIterations);
   _benchmarkBackpressureCounter(_warmupIterations);
@@ -188,6 +191,70 @@ Future<_Metric> _benchmarkStreamPendingWriteCompletion(_Options options) async {
 
   return _Metric(
     operations: options.iterations * (options.batchSize + 6),
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+Future<_Metric> _benchmarkStreamForwardSandwich(_Options options) async {
+  final batch = List<int>.generate(options.batchSize, (index) => index);
+  final input = WASIComponentStream<int>(
+    'benchmark-forward-input',
+    maxBufferedElements: options.batchSize,
+  );
+  final middle = WASIComponentStream<int>(
+    'benchmark-forward-middle',
+    maxBufferedElements: options.batchSize,
+  );
+  final output = WASIComponentStream<int>(
+    'benchmark-forward-output',
+    maxBufferedElements: options.batchSize,
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    input.writable.writeAll(batch);
+    final firstForward = await input.readable.forwardTo(
+      middle.writable,
+      options.batchSize,
+      chunkSize: options.batchSize,
+    );
+    final secondForward = await middle.readable.forwardTo(
+      output.writable,
+      options.batchSize,
+      chunkSize: options.batchSize,
+    );
+    if (firstForward != options.batchSize ||
+        secondForward != options.batchSize) {
+      throw StateError(
+        'stream sandwich forwarded $firstForward/$secondForward values',
+      );
+    }
+    final values = output.readable.read(options.batchSize);
+    for (final value in values) {
+      checksum += value;
+    }
+  }
+  watch.stop();
+
+  if (input.queuedLength != 0 ||
+      middle.queuedLength != 0 ||
+      output.queuedLength != 0) {
+    throw StateError(
+      'stream sandwich retained '
+      '${input.queuedLength}/${middle.queuedLength}/${output.queuedLength} values',
+    );
+  }
+  input.readable.drop();
+  input.writable.drop();
+  middle.readable.drop();
+  middle.writable.drop();
+  output.readable.drop();
+  output.writable.drop();
+
+  return _Metric(
+    operations: options.iterations * options.batchSize * 4,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
@@ -962,6 +1029,7 @@ void _printText(Map<String, Object?> payload) {
     'stream_cancel',
     'stream_pending_read_completion',
     'stream_pending_write_completion',
+    'stream_forward_sandwich',
     'future_complete_read_drop',
     'future_pending_read_completion',
     'backpressure_counter',

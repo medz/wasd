@@ -143,7 +143,12 @@ This is the implementation state as of 2026-06-21 on `main`.
   pairs for internal use. The async host also binds decoded `backpressure.set`,
   `backpressure.inc`, and
   `backpressure.dec` canonical definitions to an internal bounded counter with
-  overflow/underflow checks. Internal error-context support now models
+  overflow/underflow checks. Internal stream readable endpoints also expose a
+  forwarding primitive that moves queued values directly into another writable
+  endpoint and falls back to the shared async read/write wait paths for pending
+  source values or bounded destination capacity, giving the WASI 0.3
+  "sandwich" forwarding case one reusable execution path. Internal
+  error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`
   as table-backed handles with real stale-handle/drop validation. It also has
   an internal canonical string memory adapter covering UTF-8, UTF-16, and
@@ -221,11 +226,12 @@ This is the implementation state as of 2026-06-21 on `main`.
   a functional test.
 - Internal component stream/future endpoint round-trip, cancellation,
   completion/drop, pending stream/future-read completion, bounded stream-write
-  backpressure completion, backpressure counter operations, decoded canonical
-  async program invocation, decoded unit stream/future program invocation, and
-  resource-table-backed borrowed handle invocation costs, synchronous and
-  awaited handle-program fixed-width memory-copy invocation costs, plus
-  fixed-width primitive stream/future memory-copy costs, are measured by
+  backpressure completion, stream forwarding "sandwich" throughput,
+  backpressure counter operations, decoded canonical async program invocation,
+  decoded unit stream/future program invocation, and resource-table-backed
+  borrowed handle invocation costs, synchronous and awaited handle-program
+  fixed-width memory-copy invocation costs, plus fixed-width primitive
+  stream/future memory-copy costs, are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`.
 - Component resource table canonical `resource.new`/`resource.rep`/
   `resource.drop`, decoded resource-only canonical program invocation,

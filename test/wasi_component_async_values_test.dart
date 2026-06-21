@@ -118,6 +118,131 @@ void main() {
       },
     );
 
+    test(
+      'forwards queued stream values without retaining source values',
+      () async {
+        final source = WASIComponentStream<int>(
+          'source',
+          maxBufferedElements: 3,
+        );
+        final target = WASIComponentStream<int>('target');
+        source.writable.writeAll(<int>[1, 2, 3]);
+        final pendingSourceWrite = source.writable.writeWhenAvailable(<int>[4]);
+
+        expect(await source.readable.forwardTo(target.writable, 3), 3);
+
+        await expectLater(pendingSourceWrite, completion(1));
+        expect(source.queuedLength, 1);
+        expect(target.queuedLength, 3);
+        expect(target.readable.read(4), <int>[1, 2, 3]);
+        expect(source.readable.read(1), <int>[4]);
+      },
+    );
+
+    test('awaits bounded stream forwarding destination capacity', () async {
+      final source = WASIComponentStream<int>('source');
+      final target = WASIComponentStream<int>('target', maxBufferedElements: 1);
+      source.writable.writeAll(<int>[1, 2]);
+      target.writable.write(0);
+      var completed = false;
+
+      final pending = source.readable.forwardTo(target.writable, 2)
+        ..then((_) {
+          completed = true;
+        });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(completed, isFalse);
+      expect(source.queuedLength, 2);
+      expect(target.readable.read(1), <int>[0]);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(completed, isFalse);
+      expect(source.queuedLength, 1);
+      expect(target.readable.read(1), <int>[1]);
+      await expectLater(pending, completion(2));
+      expect(completed, isTrue);
+      expect(target.readable.read(1), <int>[2]);
+      expect(source.queuedLength, 0);
+    });
+
+    test('does not bypass pending bounded writes while forwarding', () async {
+      final source = WASIComponentStream<int>('source');
+      final target = WASIComponentStream<int>('target', maxBufferedElements: 1);
+      target.writable.write(0);
+      final pendingWrite = target.writable.writeWhenAvailable(<int>[1]);
+      source.writable.write(2);
+      var completed = false;
+
+      final pendingForward = source.readable.forwardTo(target.writable, 1)
+        ..then((_) {
+          completed = true;
+        });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(source.queuedLength, 1);
+      expect(completed, isFalse);
+      expect(target.readable.read(1), <int>[0]);
+      await expectLater(pendingWrite, completion(1));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(source.queuedLength, 1);
+      expect(completed, isFalse);
+      expect(target.readable.read(1), <int>[1]);
+      await expectLater(pendingForward, completion(1));
+      expect(completed, isTrue);
+      expect(target.readable.read(1), <int>[2]);
+    });
+
+    test('stops stream forwarding when the source closes', () async {
+      final source = WASIComponentStream<int>('source');
+      final target = WASIComponentStream<int>('target');
+      source.writable.write(7);
+      source.writable.close();
+
+      expect(await source.readable.forwardTo(target.writable, 3), 1);
+      expect(await source.readable.forwardTo(target.writable, 3), 0);
+      expect(target.readable.read(3), <int>[7]);
+    });
+
+    test('rejects invalid stream forwarding operations', () async {
+      final source = WASIComponentStream<int>('source');
+      final target = WASIComponentStream<int>('target');
+
+      await expectLater(
+        source.readable.forwardTo(source.writable, 1),
+        throwsStateError,
+      );
+      await expectLater(
+        source.readable.forwardTo(target.writable, -1),
+        throwsRangeError,
+      );
+      await expectLater(
+        source.readable.forwardTo(target.writable, 1, chunkSize: 0),
+        throwsRangeError,
+      );
+    });
+
+    test(
+      'fails pending stream forwarding when the destination drops',
+      () async {
+        final source = WASIComponentStream<int>('source');
+        final target = WASIComponentStream<int>(
+          'target',
+          maxBufferedElements: 1,
+        );
+        source.writable.write(1);
+        target.writable.write(0);
+
+        final pending = source.readable.forwardTo(target.writable, 1);
+        await Future<void>.delayed(Duration.zero);
+
+        target.writable.drop();
+
+        await expectLater(pending, throwsStateError);
+      },
+    );
+
     test('fails pending bounded stream writes on cancel or drop', () async {
       final cancelled = WASIComponentStream<String>(
         'cancelled',
