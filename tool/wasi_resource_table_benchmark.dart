@@ -266,6 +266,8 @@ _Metric _benchmarkErrorContextMemory(int iterations) {
   final bytes = Uint8List.view(memory.buffer);
   final inputPointer = 1024;
   final outputPointer = 4096;
+  final resultPointer = 8192;
+  final resultView = ByteData.view(memory.buffer);
   final inputBytes = utf8.encode('canonical error-context');
   final host = WASIComponentErrorContextHost();
   final newOperation = host.bindCanonicalDefinition(
@@ -315,12 +317,14 @@ _Metric _benchmarkErrorContextMemory(int iterations) {
       inputPointer,
       inputBytes.length,
     );
-    final result = debugOperation.debugMessageToMemory(
+    final result = debugOperation.debugMessageIntoMemory(
       handle,
       memory,
+      resultPointer,
       (oldPointer, oldSize, alignment, newSize) => outputPointer,
     );
-    checksum += result.length;
+    checksum += result.byteLength;
+    checksum += resultView.getUint32(resultPointer + 4, Endian.little);
     checksum += bytes[outputPointer];
     dropOperation.drop(handle);
   }
@@ -332,7 +336,7 @@ _Metric _benchmarkErrorContextMemory(int iterations) {
     );
   }
   return _Metric(
-    operations: iterations * 5,
+    operations: iterations * 7,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
