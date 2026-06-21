@@ -235,8 +235,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   bindings now also expose the fixed-width Canonical ABI memory-copy layout for
   primitive payloads, so future P3 adapters can route stream/future memory
   lowering without re-deriving byte widths and alignments separately from the
-  executable copy path. Composite stream/future element lowering remains a
-  component-host binding gap.
+  executable copy path. Component-host tests now also exercise decoded
+  core-memory primitive `stream<T>`/`future<T>` copy paths through synchronous
+  Canonical ABI calls and pending read completion through waitable events.
+  Composite stream/future element lowering remains a component-host binding gap.
   This is an adapter boundary for future P2/P3 version modules, not a public
   support claim.
   Internal

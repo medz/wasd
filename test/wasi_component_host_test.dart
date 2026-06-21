@@ -214,6 +214,70 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test(
+      'publishes primitive stream read events through decoded core memory options',
+      () async {
+        final component = WasmComponent.decode(
+          _canonicalStreamMemoryProgramBytes(),
+        );
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final data = ByteData.view(memory.buffer);
+        data.setUint32(32, 144, Endian.little);
+        data.setUint32(36, 233, Endian.little);
+        final host = WASIComponentHost();
+
+        final binding = host.bindComponent(component);
+        final handles = WASIComponentAsyncEndpointHandles.unpack(
+          binding.program.invoke(0, const <Object?>[])! as int,
+        );
+        final waitableHost = host.canonicalHost.waitableHost;
+        final waitableSet = waitableHost.waitableSetNew();
+        waitableHost.waitableJoin(handles.readable, waitableSet);
+        var completed = false;
+
+        expect(
+          binding.program.invokeWithMemoryEvent(1, memory, <Object?>[
+            handles.readable,
+            96,
+            2,
+          ]),
+          wasiComponentAsyncBlocked,
+        );
+        final pending =
+            waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128)
+              ..then((_) {
+                completed = true;
+              });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(completed, isFalse);
+        expect(
+          () => binding.program.invoke(3, <Object?>[handles.readable]),
+          throwsStateError,
+        );
+        expect(
+          binding.program.invokeWithMemory(2, memory, <Object?>[
+            handles.writable,
+            32,
+            2,
+          ]),
+          2 << 4,
+        );
+
+        await expectLater(pending, completion(2));
+        expect(completed, isTrue);
+        expect(data.getUint32(96, Endian.little), 144);
+        expect(data.getUint32(100, Endian.little), 233);
+        expect(data.getUint32(128, Endian.little), handles.readable);
+        expect(data.getUint32(132, Endian.little), 2 << 4);
+        waitableHost.waitableJoin(handles.readable, 0);
+        waitableHost.waitableSetDrop(waitableSet);
+        expect(binding.program.invoke(3, <Object?>[handles.readable]), isNull);
+        expect(binding.program.invoke(4, <Object?>[handles.writable]), isNull);
+        expect(host.table.activeCount, 0);
+      },
+    );
+
     test('binds decoded future async values before canonical builtins', () {
       final component = WasmComponent.decode(_canonicalFutureProgramBytes());
       final host = WASIComponentHost();
@@ -290,6 +354,55 @@ void main() {
       expect(binding.program.invoke(4, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
+
+    test(
+      'publishes primitive future read events through decoded core memory options',
+      () async {
+        final component = WasmComponent.decode(
+          _canonicalFutureMemoryProgramBytes(),
+        );
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final data = ByteData.view(memory.buffer);
+        data.setUint32(32, 1597, Endian.little);
+        final host = WASIComponentHost();
+
+        final binding = host.bindComponent(component);
+        final handles = WASIComponentAsyncEndpointHandles.unpack(
+          binding.program.invoke(0, const <Object?>[])! as int,
+        );
+        final waitableHost = host.canonicalHost.waitableHost;
+        final waitableSet = waitableHost.waitableSetNew();
+        waitableHost.waitableJoin(handles.readable, waitableSet);
+
+        expect(
+          binding.program.invokeWithMemoryEvent(1, memory, <Object?>[
+            handles.readable,
+            96,
+          ]),
+          wasiComponentAsyncBlocked,
+        );
+        expect(
+          binding.program.invokeWithMemory(2, memory, <Object?>[
+            handles.writable,
+            32,
+          ]),
+          0,
+        );
+
+        await expectLater(
+          waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+          completion(4),
+        );
+        expect(data.getUint32(96, Endian.little), 1597);
+        expect(data.getUint32(128, Endian.little), handles.readable);
+        expect(data.getUint32(132, Endian.little), 0);
+        waitableHost.waitableJoin(handles.readable, 0);
+        waitableHost.waitableSetDrop(waitableSet);
+        expect(binding.program.invoke(3, <Object?>[handles.readable]), isNull);
+        expect(binding.program.invoke(4, <Object?>[handles.writable]), isNull);
+        expect(host.table.activeCount, 0);
+      },
+    );
 
     test('reports unsupported composite stream bindings before binding', () {
       final component = WasmComponent.decode(
