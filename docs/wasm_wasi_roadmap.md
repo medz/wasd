@@ -268,9 +268,10 @@ This is the implementation state as of 2026-06-21 on `main`.
 - Any new conformance runner should cache toolchain discovery, generated
   bundles, and fixture conversion results by input hash. The current
   spec-testsuite runner caches converter outputs but still executes each file
-  from a fresh work directory to preserve isolation. Use `--file=<path>` for
-  targeted hot-file verification before running broader conformance smoke
-  checks.
+  from a fresh work directory to preserve isolation. It also records per-file
+  elapsed time and emits a Top Slow Files table in Markdown reports so hot paths
+  can be selected from data. Use `--file=<path>` for targeted hot-file
+  verification before running broader conformance smoke checks.
 - Preview 1 VFS path resolution, directory-entry rebuilding, descriptor rights,
   and socket descriptor paths are measured by
   `dart run tool/wasi_vfs_benchmark.dart --json`, covering `path_open`,

@@ -239,6 +239,7 @@ final class _FileResult {
     required this.commandsSkipped,
     required this.skipReasonCounts,
     required this.passed,
+    this.durationMs = 0,
     this.conversionCacheHit = false,
     this.firstFailureLine,
     this.firstFailureReason,
@@ -255,6 +256,7 @@ final class _FileResult {
   final int commandsSkipped;
   final Map<String, int> skipReasonCounts;
   final bool passed;
+  int durationMs;
   final bool conversionCacheHit;
   final int? firstFailureLine;
   final String? firstFailureReason;
@@ -270,6 +272,7 @@ final class _FileResult {
     'commands_passed': commandsPassed,
     'commands_failed': commandsFailed,
     'commands_skipped': commandsSkipped,
+    'duration_ms': durationMs,
     'skip_reason_counts': skipReasonCounts,
     'conversion_cache_hit': conversionCacheHit,
     'first_failure_line': firstFailureLine,
@@ -2292,6 +2295,7 @@ Future<_FileResult> _runWastFile({
   required String? conversionCacheDir,
 }) async {
   final tempDir = await Directory.systemTemp.createTemp('wasd-spec-');
+  final stopwatch = Stopwatch()..start();
   try {
     final jsonPath = '${tempDir.path}/script.json';
     final conversion = await _convertWastFile(
@@ -2301,7 +2305,7 @@ Future<_FileResult> _runWastFile({
       conversionCacheDir: conversionCacheDir,
     );
     if (conversion.exitCode != 0) {
-      return _FileResult(
+      final result = _FileResult(
         path: file,
         group: group,
         commandsSeen: 0,
@@ -2317,12 +2321,14 @@ Future<_FileResult> _runWastFile({
         wast2jsonStdout: conversion.stdout,
         wast2jsonStderr: conversion.stderr,
       );
+      result.durationMs = stopwatch.elapsedMilliseconds;
+      return result;
     }
 
     final scriptJson = File(jsonPath);
     final decoded = json.decode(await scriptJson.readAsString());
     if (decoded is! Map) {
-      return _FileResult(
+      final result = _FileResult(
         path: file,
         group: group,
         commandsSeen: 0,
@@ -2334,10 +2340,12 @@ Future<_FileResult> _runWastFile({
         firstFailureReason: 'invalid-json-root',
         firstFailureDetails: 'converter output root is not an object',
       );
+      result.durationMs = stopwatch.elapsedMilliseconds;
+      return result;
     }
     final commandsRaw = decoded['commands'];
     if (commandsRaw is! List) {
-      return _FileResult(
+      final result = _FileResult(
         path: file,
         group: group,
         commandsSeen: 0,
@@ -2349,6 +2357,8 @@ Future<_FileResult> _runWastFile({
         firstFailureReason: 'invalid-commands',
         firstFailureDetails: 'converter output does not contain command list',
       );
+      result.durationMs = stopwatch.elapsedMilliseconds;
+      return result;
     }
 
     final state = _ScriptExecutionState(
@@ -2362,14 +2372,17 @@ Future<_FileResult> _runWastFile({
         parsers: textModuleParsers,
       );
     }
-    return _executeCommands(
+    final result = _executeCommands(
       path: file,
       group: group,
       commandsRaw: commandsRaw,
       state: state,
       conversionCacheHit: conversion.cacheHit,
     );
+    result.durationMs = stopwatch.elapsedMilliseconds;
+    return result;
   } finally {
+    stopwatch.stop();
     await tempDir.delete(recursive: true);
   }
 }
@@ -2944,6 +2957,25 @@ String _renderMarkdown({
     b.writeln(
       '| $group | ${stats['total'] ?? 0} | ${stats['passed'] ?? 0} | ${stats['failed'] ?? 0} |',
     );
+  }
+
+  final slowestFiles =
+      results.where((result) => result.durationMs > 0).toList(growable: false)
+        ..sort((a, b) => b.durationMs.compareTo(a.durationMs));
+  if (slowestFiles.isNotEmpty) {
+    b.writeln();
+    b.writeln('## Top Slow Files');
+    b.writeln();
+    b.writeln('| Group | File | Duration ms | Commands | Cache |');
+    b.writeln('| --- | --- | ---: | ---: | --- |');
+    final limit = slowestFiles.length < 10 ? slowestFiles.length : 10;
+    for (var i = 0; i < limit; i++) {
+      final file = slowestFiles[i];
+      final cache = file.conversionCacheHit ? 'hit' : 'miss';
+      b.writeln(
+        '| ${file.group} | `${_markdownEscape(file.path)}` | ${file.durationMs} | ${file.commandsSeen} | $cache |',
+      );
+    }
   }
 
   if (reasonCounts.isNotEmpty) {
