@@ -100,6 +100,32 @@ void main() {
       );
     });
 
+    test('borrows stream endpoint handles during handle-backed writes', () {
+      final component = WasmComponent.decode(_canonicalStreamProgramBytes());
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<int>(component, 0, 'numbers');
+
+      final program = host.bindCanonicalDefinitionsToHandles(component);
+      final handles =
+          program.invoke(0, const <Object?>[])!
+              as WASIComponentAsyncEndpointHandles;
+      final values = _DropDuringIteration(
+        onFirstValue: () {
+          expect(
+            () => program.invoke(6, <Object?>[handles.writable]),
+            throwsStateError,
+          );
+        },
+      );
+
+      expect(program.invoke(2, <Object?>[handles.writable, values]), 2);
+      expect(program.invoke(1, <Object?>[handles.readable, 2]), <int>[1, 2]);
+      expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test('binds decoded canonical future definitions as a program', () {
       final component = WasmComponent.decode(_canonicalFutureProgramBytes());
       expect(component.validate(), isEmpty);
@@ -487,3 +513,31 @@ Uint8List _streamIndexedCompositeElementTypeComponentBytes() =>
       0x01,
       0x00,
     ]);
+
+final class _DropDuringIteration extends Iterable<int> {
+  _DropDuringIteration({required this.onFirstValue});
+
+  final void Function() onFirstValue;
+
+  @override
+  Iterator<int> get iterator => _DropDuringIterationIterator(onFirstValue);
+}
+
+final class _DropDuringIterationIterator implements Iterator<int> {
+  _DropDuringIterationIterator(this._onFirstValue);
+
+  final void Function() _onFirstValue;
+  int _index = -1;
+
+  @override
+  int get current => _index + 1;
+
+  @override
+  bool moveNext() {
+    _index++;
+    if (_index == 0) {
+      _onFirstValue();
+    }
+    return _index < 2;
+  }
+}

@@ -107,8 +107,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   resource-table-backed integer endpoint handles. Host async bindings now read
   decoded direct or type-indexed primitive stream/future element types and
   validate Dart values against those component-level primitive constraints
-  before writing. P2/P3 host instantiation, WIT ingestion, full canonical ABI
-  lowering/lifting, and async stream/future execution are not
+  before writing. Handle-backed async operations borrow endpoint resources while
+  executing read/write/cancel paths, so reentrant drops cannot invalidate an
+  endpoint during host-side canonical execution. P2/P3 host instantiation, WIT
+  ingestion, full canonical ABI lowering/lifting, and async stream/future
+  execution are not
   production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
@@ -176,7 +179,7 @@ This is the implementation state as of 2026-06-21 on `main`.
   a functional test.
 - Internal component stream/future endpoint round-trip, cancellation,
   completion/drop, decoded canonical async program invocation, and
-  resource-table-backed handle invocation costs are measured by
+  resource-table-backed borrowed handle invocation costs are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`.
 - Component resource table canonical `resource.new`/`resource.rep`/
   `resource.drop`, decoded resource-only canonical program invocation, nominal

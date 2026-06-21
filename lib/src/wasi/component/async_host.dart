@@ -670,9 +670,11 @@ final class _RegisteredAsyncValueType<T extends Object> {
   }
 
   List<Object> streamReadHandle(int readable, int maxElements) {
-    return table
-        .get<WASIComponentReadableStream<T>>(readableStreamType!, readable)
-        .read(maxElements);
+    return table.borrow<WASIComponentReadableStream<T>, List<Object>>(
+      readableStreamType!,
+      readable,
+      (stream) => stream.read(maxElements),
+    );
   }
 
   int streamWrite(Object? writable, Object? values) {
@@ -684,11 +686,15 @@ final class _RegisteredAsyncValueType<T extends Object> {
   }
 
   int streamWriteHandle(int writable, Object? values) {
-    final typedValues = _expectIterableValues(values);
-    table
-        .get<WASIComponentWritableStream<T>>(writableStreamType!, writable)
-        .writeAll(typedValues);
-    return typedValues.length;
+    return table.borrow<WASIComponentWritableStream<T>, int>(
+      writableStreamType!,
+      writable,
+      (stream) {
+        final typedValues = _expectIterableValues(values);
+        stream.writeAll(typedValues);
+        return typedValues.length;
+      },
+    );
   }
 
   void streamCancelRead(Object? readable) {
@@ -697,9 +703,13 @@ final class _RegisteredAsyncValueType<T extends Object> {
   }
 
   void streamCancelReadHandle(int readable) {
-    table
-        .get<WASIComponentReadableStream<T>>(readableStreamType!, readable)
-        .cancel();
+    table.borrow<WASIComponentReadableStream<T>, void>(
+      readableStreamType!,
+      readable,
+      (stream) {
+        stream.cancel();
+      },
+    );
   }
 
   void streamCancelWrite(Object? writable) {
@@ -708,9 +718,13 @@ final class _RegisteredAsyncValueType<T extends Object> {
   }
 
   void streamCancelWriteHandle(int writable) {
-    table
-        .get<WASIComponentWritableStream<T>>(writableStreamType!, writable)
-        .cancel();
+    table.borrow<WASIComponentWritableStream<T>, void>(
+      writableStreamType!,
+      writable,
+      (stream) {
+        stream.cancel();
+      },
+    );
   }
 
   void streamDropReadable(Object? readable) {
@@ -756,9 +770,11 @@ final class _RegisteredAsyncValueType<T extends Object> {
   }
 
   Object futureReadHandle(int readable) {
-    return table
-        .get<WASIComponentReadableFuture<T>>(readableFutureType!, readable)
-        .read();
+    return table.borrow<WASIComponentReadableFuture<T>, Object>(
+      readableFutureType!,
+      readable,
+      (future) => future.read(),
+    );
   }
 
   void futureWrite(Object? writable, Object? value) {
@@ -771,13 +787,19 @@ final class _RegisteredAsyncValueType<T extends Object> {
   }
 
   void futureWriteHandle(int writable, Object? value) {
-    if (value is! T) {
-      throw StateError('WASI component async type $name expected $T value.');
-    }
-    valueValidator.validate(name, value);
-    table
-        .get<WASIComponentWritableFuture<T>>(writableFutureType!, writable)
-        .complete(value);
+    table.borrow<WASIComponentWritableFuture<T>, void>(
+      writableFutureType!,
+      writable,
+      (future) {
+        if (value is! T) {
+          throw StateError(
+            'WASI component async type $name expected $T value.',
+          );
+        }
+        valueValidator.validate(name, value);
+        future.complete(value);
+      },
+    );
   }
 
   void futureCancelRead(Object? readable) {
@@ -786,9 +808,13 @@ final class _RegisteredAsyncValueType<T extends Object> {
   }
 
   void futureCancelReadHandle(int readable) {
-    table
-        .get<WASIComponentReadableFuture<T>>(readableFutureType!, readable)
-        .cancel();
+    table.borrow<WASIComponentReadableFuture<T>, void>(
+      readableFutureType!,
+      readable,
+      (future) {
+        future.cancel();
+      },
+    );
   }
 
   void futureCancelWrite(Object? writable) {
@@ -797,9 +823,13 @@ final class _RegisteredAsyncValueType<T extends Object> {
   }
 
   void futureCancelWriteHandle(int writable) {
-    table
-        .get<WASIComponentWritableFuture<T>>(writableFutureType!, writable)
-        .cancel();
+    table.borrow<WASIComponentWritableFuture<T>, void>(
+      writableFutureType!,
+      writable,
+      (future) {
+        future.cancel();
+      },
+    );
   }
 
   void futureDropReadable(Object? readable) {
