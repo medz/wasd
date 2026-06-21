@@ -1475,6 +1475,7 @@ final class _WasmComponentValidationContext {
           '$path.flags',
           'Wasm component flags type must have at least one entry.',
         );
+        validateFlagsEntryCount(type.labels.length, '$path.flags');
         _validateUniqueLabels(type.labels, '$path.flags', 'flags', errors);
       case WasmComponentDefinedValueTypeKind.enumeration:
         validateNonEmptyDefinedValueType(
@@ -1547,6 +1548,19 @@ final class _WasmComponentValidationContext {
     }
 
     errors.add(WasmComponentValidationError(path: path, message: message));
+  }
+
+  void validateFlagsEntryCount(int length, String path) {
+    if (length <= 32) {
+      return;
+    }
+
+    errors.add(
+      WasmComponentValidationError(
+        path: path,
+        message: 'Wasm component flags type cannot have more than 32 flags.',
+      ),
+    );
   }
 
   void validateComponentTypeDeclarations(

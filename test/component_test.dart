@@ -765,6 +765,15 @@ void main() {
       }
     });
 
+    test('reports too many component flags entries', () {
+      final errors = WasmComponent.decode(
+        _tooManyFlagsTypeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(errors.single.message, contains('cannot have more than 32 flags'));
+    });
+
     test('reports invalid component value type indexes', () {
       final wrongSort = WasmComponent.decode(
         _functionResultWrongSortTypeIndexComponentBytes(),
@@ -5389,6 +5398,17 @@ Uint8List _emptyEnumTypeComponentBytes() =>
 
 Uint8List _emptyTupleTypeComponentBytes() =>
     _componentWithSingleTypeDefinitionBytes(const <int>[0x6f, 0x00]);
+
+Uint8List _tooManyFlagsTypeComponentBytes() {
+  final typeBytes = <int>[0x6e, 0x21];
+  for (var i = 1; i <= 33; i++) {
+    final label = 'f$i'.codeUnits;
+    typeBytes
+      ..add(label.length)
+      ..addAll(label);
+  }
+  return _componentWithSingleTypeDefinitionBytes(typeBytes);
+}
 
 Uint8List _functionResultWrongSortTypeIndexComponentBytes() =>
     _componentWithSingleTypeDefinitionBytes(const <int>[
