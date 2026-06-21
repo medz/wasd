@@ -2944,6 +2944,28 @@ final class _WasmComponentValidationContext {
     );
   }
 
+  bool canonicalLiftResultRequiresMemory(
+    WasmComponentCanonicalDefinition definition, {
+    List<WasmComponentTypeDefinition>? visibleTypeDefinitions,
+  }) {
+    if (definition.kind != WasmComponentCanonicalKind.lift) {
+      return false;
+    }
+
+    final functionType = componentFunctionType(
+      definition.typeIndex,
+      definitions: visibleTypeDefinitions,
+    );
+    if (functionType == null) {
+      return false;
+    }
+
+    return valueTypeContainsListOrString(
+      functionType.result,
+      scopedTypeDefinitions: visibleTypeDefinitions,
+    );
+  }
+
   void validateCanonicalOptionRequirements(
     WasmComponentCanonicalDefinition definition,
     String path, {
@@ -2996,6 +3018,20 @@ final class _WasmComponentValidationContext {
           path: '$path.options',
           message:
               'Wasm component task.return result type requires a memory option.',
+        ),
+      );
+    }
+
+    if (!hasMemory &&
+        canonicalLiftResultRequiresMemory(
+          definition,
+          visibleTypeDefinitions: visibleTypeDefinitions,
+        )) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.options',
+          message:
+              'Wasm component canon lift result lowering requires a memory option.',
         ),
       );
     }

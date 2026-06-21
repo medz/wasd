@@ -1128,6 +1128,17 @@ void main() {
         ),
         isTrue,
       );
+
+      final liftResult = WasmComponent.decode(
+        _canonicalLiftStringResultWithoutMemoryComponentBytes(),
+      ).validate();
+
+      expect(
+        liftResult.any(
+          (error) => error.message.contains('requires a memory option'),
+        ),
+        isTrue,
+      );
     });
 
     test('reports invalid canonical option core indexes', () {
@@ -3777,6 +3788,33 @@ Uint8List _canonicalLiftStringParamWithoutReallocComponentBytes() =>
       0x73,
       0x01,
       0x00,
+      0x08,
+      0x06,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _canonicalLiftStringResultWithoutMemoryComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x00,
+      0x73,
       0x08,
       0x06,
       0x01,
