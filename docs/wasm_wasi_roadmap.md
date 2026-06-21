@@ -71,6 +71,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   now live in one VFS descriptor/capability table with base rights, inheriting
   rights, descriptor flags, renumbering, and close state. Future sockets should
   join that table instead of adding another host-side special case.
+- Preview 1 directory entries are indexed through per-directory child maps so
+  common path/link/symlink mutation paths rebuild only affected directories.
+  The benchmark entrypoint is `dart run tool/wasi_vfs_benchmark.dart --json`.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, but P2/P3 host
   instantiation, WIT ingestion, resource tables, canonical ABI lowering/lifting,
@@ -124,11 +127,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   default validation remains useful without hiding performance regressions.
 - Any new conformance runner should cache toolchain discovery, generated
   bundles, and fixture conversion results by input hash.
-- Preview 1 VFS path resolution and directory-entry rebuilding are acceptable as
-  simple maps while the fixture set is small. Before broader conformance or real
-  package workloads, add a VFS benchmark that covers `path_open`, `fd_readdir`,
-  link/symlink mutation, descriptor renumbering, and rights checks over large
-  directory and descriptor sets.
+- Preview 1 VFS path resolution and directory-entry rebuilding are measured by
+  `dart run tool/wasi_vfs_benchmark.dart --json`, covering `path_open`,
+  `fd_readdir`, link/symlink mutation, and rights checks over large directory
+  and descriptor sets. Keep optimizing against benchmark data instead of test
+  suite heat alone.
 - P2/P3 streams and futures need latency, allocation, and cancellation
   benchmarks before they are advertised as production-ready. The "sandwich"
   async forwarding case from WASI 0.3 must be a first-class benchmark, not only
@@ -139,9 +142,9 @@ This is the implementation state as of 2026-06-21 on `main`.
 1. Extend the Preview 1 descriptor/capability table to future socket
    descriptors, then implement `sock_accept`, `sock_recv`, `sock_send`, and
    `sock_shutdown` with runtime-specific browser behavior documented and tested.
-2. Add a VFS/descriptor benchmark that covers path lookup, directory cache
-   rebuilds, descriptor renumbering, and rights checks over large descriptor and
-   directory sets.
+2. Extend the VFS/descriptor benchmark with descriptor renumbering and larger
+   conformance-shaped path distributions, then use it as the gate for further
+   VFS optimizations.
 3. Audit `tool/spec_runner.dart` and DOOM tests for process-spawn and fixture
    conversion hot spots, then add timing and caching where it changes actual
    runtime cost.
