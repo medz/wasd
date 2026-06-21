@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/error_context.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/resource_table.dart';
@@ -26,6 +27,9 @@ Future<void> main(List<String> args) async {
   final borrowAsync = await _benchmarkBorrowAsync(options);
   final dropCallbacks = _benchmarkDropCallbacks(options.iterations);
   final programInvoke = _benchmarkProgramInvoke(options.iterations);
+  final canonicalHostProgram = _benchmarkCanonicalHostProgram(
+    options.iterations,
+  );
   final errorContextProgram = _benchmarkErrorContextProgram(options.iterations);
   final errorContextMemory = _benchmarkErrorContextMemory(options.iterations);
 
@@ -37,6 +41,7 @@ Future<void> main(List<String> args) async {
     'borrow_async': borrowAsync.toJson(),
     'drop_callbacks': dropCallbacks.toJson(),
     'program_invoke': programInvoke.toJson(),
+    'canonical_host_program': canonicalHostProgram.toJson(),
     'error_context_program': errorContextProgram.toJson(),
     'error_context_memory': errorContextMemory.toJson(),
   };
@@ -54,6 +59,7 @@ Future<void> _runWarmup(_Options options) async {
   await _benchmarkBorrowAsync(options.copyWith(iterations: _warmupIterations));
   _benchmarkDropCallbacks(_warmupIterations);
   _benchmarkProgramInvoke(_warmupIterations);
+  _benchmarkCanonicalHostProgram(_warmupIterations);
   _benchmarkErrorContextProgram(_warmupIterations);
   _benchmarkErrorContextMemory(_warmupIterations);
 }
@@ -209,6 +215,95 @@ _Metric _benchmarkProgramInvoke(int iterations) {
   );
 }
 
+_Metric _benchmarkCanonicalHostProgram(int iterations) {
+  final host = WASIComponentCanonicalHost(availableParallelism: 4);
+  host.resourceHost.defineResourceType<int>(0, 'resource');
+  final program = host.bindCanonicalDefinitions(const [
+    WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.resourceNew,
+      typeIndex: 0,
+    ),
+    WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.resourceRep,
+      typeIndex: 0,
+    ),
+    WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.contextSet,
+      contextIndex: 0,
+    ),
+    WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.contextGet,
+      contextIndex: 0,
+    ),
+    WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.threadIndex,
+    ),
+    WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.threadAvailableParallelism,
+    ),
+    WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.errorContextNew,
+    ),
+    WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.errorContextDebugMessage,
+    ),
+    WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.errorContextDrop,
+    ),
+    WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.resourceDrop,
+      typeIndex: 0,
+    ),
+  ]);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final handle = program.invoke(0, <Object?>[i]);
+    if (handle is! int) {
+      throw StateError('canonical resource.new returned non-handle: $handle');
+    }
+    final representation = program.invoke(1, <Object?>[handle]);
+    if (representation is! int) {
+      throw StateError(
+        'canonical resource.rep returned non-int: $representation',
+      );
+    }
+    checksum += representation;
+    program.invoke(2, <Object?>[i]);
+    checksum += program.invoke(3, const <Object?>[]) as int;
+    checksum += program.invoke(4, const <Object?>[]) as int;
+    checksum += program.invoke(5, const <Object?>[]) as int;
+    final errorContext = program.invoke(6, <Object?>['error-$i']);
+    if (errorContext is! int) {
+      throw StateError(
+        'canonical error-context.new returned non-handle: $errorContext',
+      );
+    }
+    final message = program.invoke(7, <Object?>[errorContext]);
+    if (message is! String) {
+      throw StateError(
+        'canonical error-context.debug-message returned non-string: $message',
+      );
+    }
+    checksum += message.length;
+    program.invoke(8, <Object?>[errorContext]);
+    program.invoke(9, <Object?>[handle]);
+  }
+  watch.stop();
+
+  if (host.table.activeCount != 0) {
+    throw StateError(
+      'canonical host table leaked ${host.table.activeCount} resources',
+    );
+  }
+  return _Metric(
+    operations: iterations * 10,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkErrorContextProgram(int iterations) {
   final host = WASIComponentErrorContextHost();
   final program = WASIComponentCanonicalErrorContextProgram(
@@ -353,6 +448,7 @@ void _printText(Map<String, Object?> payload) {
     'borrow_async',
     'drop_callbacks',
     'program_invoke',
+    'canonical_host_program',
     'error_context_program',
     'error_context_memory',
   ]) {

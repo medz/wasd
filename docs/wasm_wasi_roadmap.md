@@ -213,6 +213,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   WIT-generated world integration remain future work, but stream/future copy
   plus task/subtask/context/thread identity runtime pieces are no longer
   placeholders.
+  An internal canonical host facade now shares the component resource table,
+  waitable resolvers, current context, task, thread, resource, async,
+  waitable-set, subtask, and error-context hosts behind one canonical-indexed
+  binding layer. This is an adapter boundary for future P2/P3 version modules,
+  not a public support claim.
   Internal
   error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`
@@ -342,6 +347,7 @@ This is the implementation state as of 2026-06-21 on `main`.
   invocations do not pay for event lifecycle enforcement.
 - Component resource table canonical `resource.new`/`resource.rep`/
   `resource.drop`, decoded resource-only canonical program invocation,
+  mixed canonical-host program invocation over shared component state,
   error-context canonical lifecycle invocation, error-context canonical string
   memory adapter invocation with result records, nominal typed lookup,
   synchronous/asynchronous borrow, and drop behavior are measured by
