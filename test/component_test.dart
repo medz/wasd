@@ -177,6 +177,26 @@ void main() {
       );
     });
 
+    test('reports duplicate core module type import and export names', () {
+      final duplicateImport = WasmComponent.decode(
+        _coreModuleTypeDuplicateImportComponentBytes(),
+      ).validate();
+      expect(duplicateImport, hasLength(1));
+      expect(
+        duplicateImport.single.message,
+        contains('duplicate core module import name :a'),
+      );
+
+      final duplicateExport = WasmComponent.decode(
+        _coreModuleTypeDuplicateExportComponentBytes(),
+      ).validate();
+      expect(duplicateExport, hasLength(1));
+      expect(
+        duplicateExport.single.message,
+        contains('core module export name a already defined'),
+      );
+    });
+
     test('validates core module type declaration aliases', () {
       expect(
         WasmComponent.decode(_coreModuleTypeAliasComponentBytes()).validate(),
@@ -2425,6 +2445,70 @@ Uint8List _coreModuleTypeExportBeforeTypeComponentBytes() =>
       0x00,
       0x01,
       0x60,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _coreModuleTypeDuplicateImportComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x03,
+      0x13,
+      0x01,
+      0x50,
+      0x03,
+      0x01,
+      0x60,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      0x61,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      0x61,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _coreModuleTypeDuplicateExportComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x03,
+      0x11,
+      0x01,
+      0x50,
+      0x03,
+      0x01,
+      0x60,
+      0x00,
+      0x00,
+      0x03,
+      0x01,
+      0x61,
+      0x00,
+      0x00,
+      0x03,
+      0x01,
+      0x61,
       0x00,
       0x00,
     ]);

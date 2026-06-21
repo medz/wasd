@@ -1280,6 +1280,8 @@ final class _WasmComponentValidationContext {
     String path,
   ) {
     final localCoreTypeKinds = <WasmComponentCoreTypeKind>[];
+    Map<String, Set<String>>? importNames;
+    Set<String>? exportNames;
     for (var i = 0; i < declarations.length; i++) {
       final declaration = declarations[i];
       switch (declaration.kind) {
@@ -1301,7 +1303,22 @@ final class _WasmComponentValidationContext {
           validateCoreTypeDefinition(coreType, '$path.declarations[$i]');
           localCoreTypeKinds.add(coreType.kind);
         case WasmComponentCoreTypeDeclarationKind.import:
+          validateCoreModuleTypeImportName(
+            declaration,
+            '$path.declarations[$i].name',
+            importNames ??= <String, Set<String>>{},
+          );
+          validateCoreTypeDeclarationExternDescriptor(
+            declaration.descriptor,
+            '$path.declarations[$i].descriptor',
+            localCoreTypeKinds,
+          );
         case WasmComponentCoreTypeDeclarationKind.export:
+          validateCoreModuleTypeExportName(
+            declaration,
+            '$path.declarations[$i].name',
+            exportNames ??= <String>{},
+          );
           validateCoreTypeDeclarationExternDescriptor(
             declaration.descriptor,
             '$path.declarations[$i].descriptor',
@@ -1315,6 +1332,42 @@ final class _WasmComponentValidationContext {
           );
           break;
       }
+    }
+  }
+
+  void validateCoreModuleTypeImportName(
+    WasmComponentCoreTypeDeclaration declaration,
+    String path,
+    Map<String, Set<String>> seenImports,
+  ) {
+    final module = declaration.module ?? '';
+    final name = declaration.name ?? '';
+    final moduleImports = seenImports[module] ??= <String>{};
+    if (!moduleImports.add(name)) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component duplicate core module import name $module:$name.',
+        ),
+      );
+    }
+  }
+
+  void validateCoreModuleTypeExportName(
+    WasmComponentCoreTypeDeclaration declaration,
+    String path,
+    Set<String> seenExports,
+  ) {
+    final name = declaration.name ?? '';
+    if (!seenExports.add(name)) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component core module export name $name already defined.',
+        ),
+      );
     }
   }
 
