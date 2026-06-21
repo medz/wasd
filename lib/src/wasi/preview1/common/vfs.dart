@@ -223,6 +223,38 @@ final class Preview1VirtualFileSystem {
     return Preview1PathMutationResult.success;
   }
 
+  Preview1PathMutationResult linkPath({
+    required String oldPath,
+    required String newPath,
+  }) {
+    final oldNormalized = normalizeGuestPath(oldPath);
+    final newNormalized = normalizeGuestPath(newPath);
+    final newParent = dirnameOfGuestPath(newNormalized);
+    if (_filesByGuestPath.containsKey(newParent)) {
+      return Preview1PathMutationResult.notDirectory;
+    }
+    if (!_virtualDirectoryPaths.contains(newParent)) {
+      return Preview1PathMutationResult.noEntry;
+    }
+    if (_filesByGuestPath.containsKey(newNormalized) ||
+        _virtualDirectoryPaths.contains(newNormalized)) {
+      return Preview1PathMutationResult.exists;
+    }
+
+    final oldFile = _filesByGuestPath[oldNormalized];
+    if (oldFile == null) {
+      if (_virtualDirectoryPaths.contains(oldNormalized)) {
+        return Preview1PathMutationResult.isDirectory;
+      }
+      return Preview1PathMutationResult.noEntry;
+    }
+
+    _filesByGuestPath[newNormalized] = oldFile;
+    _rebuildFileIndexes();
+    _rebuildDirectoryEntries();
+    return Preview1PathMutationResult.success;
+  }
+
   Preview1VirtualOpenResult openPath(String guestPath) {
     final normalized = normalizeGuestPath(guestPath);
     final file = lookupFile(normalized);

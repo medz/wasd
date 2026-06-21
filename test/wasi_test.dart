@@ -753,7 +753,8 @@ void main() {
               preview1['sched_yield'] as FunctionImportExportValue;
           final pollOneoff =
               preview1['poll_oneoff'] as FunctionImportExportValue;
-          final pathLink = preview1['path_link'] as FunctionImportExportValue;
+          final pathReadlink =
+              preview1['path_readlink'] as FunctionImportExportValue;
           final procRaise = preview1['proc_raise'] as FunctionImportExportValue;
           final memory =
               (instance.exports['memory'] as MemoryImportExportValue).ref;
@@ -778,7 +779,7 @@ void main() {
           expect(data.getUint32(outPtr, Endian.little), 0x11223344);
           expect(data.getUint32(outPtr + 4, Endian.little), 0x55667788);
           expect(data.getUint8(outPtr + 10), 0);
-          expect(pathLink.ref([3, 0, 0, 0, 3, 0, 0]), 52);
+          expect(pathReadlink.ref([3, 0, 0, 0, 0, 0]), 52);
           expect(procRaise.ref([15]), 52);
         },
         skip: _skipOnNode(
@@ -1313,6 +1314,133 @@ void main() {
         },
         skip: _skipOnNode(
           'Skipping on Node.js; path mutation behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'path_link creates hard links to virtual files',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/source.txt': Uint8List.fromList(utf8.encode('hello')),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathLink = preview1['path_link'] as FunctionImportExportValue;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final pathUnlinkFile =
+              preview1['path_unlink_file'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final fdPwrite = preview1['fd_pwrite'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const oldPathPtr = 2848;
+          const newPathPtr = 2880;
+          const openedFdPtr = 2912;
+          const filestatPtr = 2928;
+          const iovPtr = 3000;
+          const readBufferPtr = 3024;
+          const readCountPtr = 3056;
+          const writeBufferPtr = 3072;
+
+          final oldPath = utf8.encode('source.txt');
+          final newPath = utf8.encode('linked.txt');
+          bytes.setAll(oldPathPtr, oldPath);
+          bytes.setAll(newPathPtr, newPath);
+          expect(
+            pathLink.ref([
+              3,
+              0,
+              oldPathPtr,
+              oldPath.length,
+              3,
+              newPathPtr,
+              newPath.length,
+            ]),
+            0,
+          );
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              newPathPtr,
+              newPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(bytes[filestatPtr + 16], 4);
+
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              oldPathPtr,
+              oldPath.length,
+              0,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final oldFd = data.getUint32(openedFdPtr, Endian.little);
+          bytes[writeBufferPtr] = 'J'.codeUnitAt(0);
+          data.setUint32(iovPtr, writeBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 1, Endian.little);
+          expect(fdPwrite.ref([oldFd, iovPtr, 1, 0, readCountPtr]), 0);
+          expect(data.getUint32(readCountPtr, Endian.little), 1);
+
+          expect(pathUnlinkFile.ref([3, oldPathPtr, oldPath.length]), 0);
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              oldPathPtr,
+              oldPath.length,
+              filestatPtr,
+            ]),
+            44,
+          );
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              newPathPtr,
+              newPath.length,
+              0,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final fd = data.getUint32(openedFdPtr, Endian.little);
+          data.setUint32(iovPtr, readBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 5, Endian.little);
+          expect(fdPread.ref([fd, iovPtr, 1, 0, readCountPtr]), 0);
+          expect(data.getUint32(readCountPtr, Endian.little), 5);
+          expect(
+            utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + 5)),
+            'Jello',
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; path_link behavior is delegated to node:wasi.',
         ),
       );
 

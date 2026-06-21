@@ -86,6 +86,7 @@ class WASI implements wasi_iface.WASI {
       'fd_prestat_dir_name': _fdPrestatDirNameImport,
       'path_create_directory': _pathCreateDirectoryImport,
       'path_filestat_get': _pathFilestatGetImport,
+      'path_link': _pathLinkImport,
       'path_open': _pathOpenImport,
       'path_remove_directory': _pathRemoveDirectoryImport,
       'path_rename': _pathRenameImport,
@@ -868,6 +869,33 @@ class WASI implements wasi_iface.WASI {
 
         return _errnoFromPathMutationResult(
           _vfs.renamePath(oldPath: oldPath.path!, newPath: newPath.path!),
+        );
+      });
+
+  wasm.FunctionImportExportValue get _pathLinkImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 7) {
+          return _errnoInval;
+        }
+        final oldPath = _resolvePath(
+          dirFd: _asInt(args[0]),
+          pathPtr: _asInt(args[2]),
+          pathLen: _asInt(args[3]),
+        );
+        if (oldPath.errno != _errnoSuccess) {
+          return oldPath.errno;
+        }
+        final newPath = _resolvePath(
+          dirFd: _asInt(args[4]),
+          pathPtr: _asInt(args[5]),
+          pathLen: _asInt(args[6]),
+        );
+        if (newPath.errno != _errnoSuccess) {
+          return newPath.errno;
+        }
+
+        return _errnoFromPathMutationResult(
+          _vfs.linkPath(oldPath: oldPath.path!, newPath: newPath.path!),
         );
       });
 

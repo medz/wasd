@@ -31,7 +31,6 @@ const List<String> preview1NosysImports = <String>[
   'fd_renumber',
   'fd_sync',
   'path_filestat_set_times',
-  'path_link',
   'path_readlink',
   'path_symlink',
   'proc_raise',
