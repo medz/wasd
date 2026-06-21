@@ -37,6 +37,7 @@ Future<void> main(List<String> args) async {
   final unitProgramInvoke = _benchmarkUnitProgramInvoke(options);
   final handleProgramInvoke = _benchmarkHandleProgramInvoke(options);
   final streamMemoryCopy = _benchmarkStreamMemoryCopy(options);
+  final futureMemoryCopy = _benchmarkFutureMemoryCopy(options.iterations);
 
   final payload = <String, Object?>{
     'iterations': options.iterations,
@@ -52,6 +53,7 @@ Future<void> main(List<String> args) async {
     'unit_program_invoke': unitProgramInvoke.toJson(),
     'handle_program_invoke': handleProgramInvoke.toJson(),
     'stream_memory_copy': streamMemoryCopy.toJson(),
+    'future_memory_copy': futureMemoryCopy.toJson(),
   };
 
   if (options.json) {
@@ -74,6 +76,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkUnitProgramInvoke(warmup);
   _benchmarkHandleProgramInvoke(warmup);
   _benchmarkStreamMemoryCopy(warmup);
+  _benchmarkFutureMemoryCopy(_warmupIterations);
 }
 
 _Metric _benchmarkStreamRoundTrip(_Options options) {
@@ -491,6 +494,75 @@ _Metric _benchmarkStreamMemoryCopy(_Options options) {
   );
 }
 
+_Metric _benchmarkFutureMemoryCopy(int iterations) {
+  final component = WasmComponent.decode(_futureU32TypeComponentBytes());
+  final host = WASIComponentAsyncHost()
+    ..defineFutureTypeFromComponent<int>(component, 0, 'benchmark-u32-future');
+  final newOperation = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.futureNew,
+      typeIndex: 0,
+    ),
+  );
+  final readOperation = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.futureRead,
+      typeIndex: 0,
+      options: [
+        WasmComponentCanonicalOption(
+          kind: WasmComponentCanonicalOptionKind.memory,
+          index: 0,
+        ),
+      ],
+    ),
+  );
+  final writeOperation = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.futureWrite,
+      typeIndex: 0,
+      options: [
+        WasmComponentCanonicalOption(
+          kind: WasmComponentCanonicalOptionKind.memory,
+          index: 0,
+        ),
+      ],
+    ),
+  );
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  const inputPointer = 1024;
+  const outputPointer = 4096;
+  data.setUint32(inputPointer, 0x55aa55aa, Endian.little);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final future = newOperation.futureNew() as WASIComponentFuture<int>;
+    final writeResult = writeOperation.futureWriteFromMemory(
+      future.writable,
+      memory,
+      inputPointer,
+    );
+    final readResult = readOperation.futureReadToMemory(
+      future.readable,
+      memory,
+      outputPointer,
+    );
+    checksum += writeResult.packedResult;
+    checksum += readResult.packedResult;
+    checksum += data.getUint32(outputPointer, Endian.little);
+    future.readable.drop();
+    future.writable.drop();
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 4,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _printText(Map<String, Object?> payload) {
   stdout
     ..writeln('WASI component async benchmark')
@@ -508,6 +580,7 @@ void _printText(Map<String, Object?> payload) {
     'unit_program_invoke',
     'handle_program_invoke',
     'stream_memory_copy',
+    'future_memory_copy',
   ]) {
     final metric = payload[name]! as Map<String, Object?>;
     stdout
@@ -612,6 +685,23 @@ Uint8List _streamU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x04,
   0x01,
   0x66,
+  0x01,
+  0x79,
+]);
+
+Uint8List _futureU32TypeComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x04,
+  0x01,
+  0x65,
   0x01,
   0x79,
 ]);

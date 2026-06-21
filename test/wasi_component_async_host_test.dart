@@ -841,6 +841,197 @@ void main() {
       );
     });
 
+    test('copies decoded primitive future values through canonical memory', () {
+      final component = WasmComponent.decode(_futureU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 0xffffffff, Endian.little);
+      final host = WASIComponentAsyncHost();
+      host.defineFutureTypeFromComponent<int>(component, 0, 'u32-future');
+      final newOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureNew,
+          typeIndex: 0,
+        ),
+      );
+      final readOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureRead,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+      final writeOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureWrite,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+      final future = newOperation.futureNew() as WASIComponentFuture<int>;
+
+      final writeResult = writeOperation.futureWriteFromMemory(
+        future.writable,
+        memory,
+        32,
+      );
+      final readResult = readOperation.futureReadToMemory(
+        future.readable,
+        memory,
+        96,
+      );
+
+      expect(writeResult.status, WASIComponentAsyncCopyStatus.completed);
+      expect(writeResult.copiedElements, 0);
+      expect(writeResult.packedResult, 0);
+      expect(readResult.status, WASIComponentAsyncCopyStatus.completed);
+      expect(readResult.copiedElements, 0);
+      expect(readResult.packedResult, 0);
+      expect(data.getUint32(96, Endian.little), 0xffffffff);
+    });
+
+    test('copies handle-backed primitive future values through memory', () {
+      final component = WasmComponent.decode(_futureU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 377, Endian.little);
+      final host = WASIComponentAsyncHost();
+      host.defineFutureTypeFromComponent<int>(component, 0, 'u32-future');
+      final newOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureNew,
+          typeIndex: 0,
+        ),
+      );
+      final readOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureRead,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+      final writeOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureWrite,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+      final dropReadableOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureDropReadable,
+          typeIndex: 0,
+        ),
+      );
+      final dropWritableOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureDropWritable,
+          typeIndex: 0,
+        ),
+      );
+      final handles = newOperation.futureNewHandles();
+
+      final writeResult = writeOperation.futureWriteHandleFromMemory(
+        handles.writable,
+        memory,
+        32,
+      );
+      final readResult = readOperation.futureReadHandleToMemory(
+        handles.readable,
+        memory,
+        96,
+      );
+
+      expect(writeResult.packedResult, 0);
+      expect(readResult.packedResult, 0);
+      expect(data.getUint32(96, Endian.little), 377);
+      expect(host.table.activeCount, 2);
+      dropReadableOperation.futureDropReadableHandle(handles.readable);
+      dropWritableOperation.futureDropWritableHandle(handles.writable);
+      expect(host.table.activeCount, 0);
+    });
+
+    test('rejects unsupported and unaligned future memory copies', () {
+      final stringComponent = WasmComponent.decode(
+        _futureStringTypeComponentBytes(),
+      );
+      expect(stringComponent.validate(), isEmpty);
+      final host = WASIComponentAsyncHost();
+      host.defineFutureTypeFromComponent<Object>(stringComponent, 0, 'strings');
+      final stringWrite = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureWrite,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+      final stringFuture = WASIComponentFuture<Object>('strings');
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+
+      expect(
+        () => stringWrite.futureWriteFromMemory(
+          stringFuture.writable,
+          memory,
+          32,
+        ),
+        throwsUnsupportedError,
+      );
+
+      final u32Component = WasmComponent.decode(_futureU32TypeComponentBytes());
+      expect(u32Component.validate(), isEmpty);
+      final numberHost = WASIComponentAsyncHost();
+      numberHost.defineFutureTypeFromComponent<int>(
+        u32Component,
+        0,
+        'u32-future',
+      );
+      final u32Write = numberHost.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureWrite,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+      final numberFuture = WASIComponentFuture<int>('u32-future');
+
+      expect(
+        () => u32Write.futureWriteFromMemory(numberFuture.writable, memory, 33),
+        throwsStateError,
+      );
+    });
+
     test('validates indexed primitive stream element values', () {
       final component = WasmComponent.decode(
         _streamIndexedPrimitiveElementTypeComponentBytes(),
@@ -1015,6 +1206,23 @@ Uint8List _futureU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x65,
   0x01,
   0x79,
+]);
+
+Uint8List _futureStringTypeComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x04,
+  0x01,
+  0x65,
+  0x01,
+  0x73,
 ]);
 
 Uint8List _streamBoolTypeComponentBytes() => Uint8List.fromList(const <int>[

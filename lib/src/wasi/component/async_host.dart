@@ -767,16 +767,64 @@ final class WASIComponentCanonicalAsyncOperation {
     return _requireValueType().futureReadHandleWhenReady(readable);
   }
 
+  /// Executes `future.read` and writes a fixed-width value to [memory].
+  WASIComponentAsyncCopyResult futureReadToMemory(
+    Object? readable,
+    wasm.Memory memory,
+    int pointer,
+  ) {
+    _requireKind(WasmComponentCanonicalKind.futureRead);
+    return _requireValueType().futureReadToMemory(readable, memory, pointer);
+  }
+
+  /// Executes handle-backed `future.read` into fixed-width memory.
+  WASIComponentAsyncCopyResult futureReadHandleToMemory(
+    int readable,
+    wasm.Memory memory,
+    int pointer,
+  ) {
+    _requireKind(WasmComponentCanonicalKind.futureRead);
+    return _requireValueType().futureReadHandleToMemory(
+      readable,
+      memory,
+      pointer,
+    );
+  }
+
   /// Executes `future.write`.
   void futureWrite(Object? writable, Object? value) {
     _requireKind(WasmComponentCanonicalKind.futureWrite);
     _requireValueType().futureWrite(writable, value);
   }
 
+  /// Executes `future.write` by reading a fixed-width value from [memory].
+  WASIComponentAsyncCopyResult futureWriteFromMemory(
+    Object? writable,
+    wasm.Memory memory,
+    int pointer,
+  ) {
+    _requireKind(WasmComponentCanonicalKind.futureWrite);
+    return _requireValueType().futureWriteFromMemory(writable, memory, pointer);
+  }
+
   /// Executes `future.write` with a writable endpoint handle.
   void futureWriteHandle(int writable, Object? value) {
     _requireKind(WasmComponentCanonicalKind.futureWrite);
     _requireValueType().futureWriteHandle(writable, value);
+  }
+
+  /// Executes handle-backed `future.write` from fixed-width memory.
+  WASIComponentAsyncCopyResult futureWriteHandleFromMemory(
+    int writable,
+    wasm.Memory memory,
+    int pointer,
+  ) {
+    _requireKind(WasmComponentCanonicalKind.futureWrite);
+    return _requireValueType().futureWriteHandleFromMemory(
+      writable,
+      memory,
+      pointer,
+    );
   }
 
   /// Executes `future.cancel-read`.
@@ -1259,6 +1307,39 @@ final class _RegisteredAsyncValueType<T> {
     );
   }
 
+  WASIComponentAsyncCopyResult futureReadToMemory(
+    Object? readable,
+    wasm.Memory memory,
+    int pointer,
+  ) {
+    _requireKind(_WASIComponentAsyncValueKind.future);
+    final value = _expectReadableFuture(readable).read();
+    _writeFixedWidthValueToMemory(valueValidator, name, memory, pointer, value);
+    return WASIComponentAsyncCopyResult.completed(0);
+  }
+
+  WASIComponentAsyncCopyResult futureReadHandleToMemory(
+    int readable,
+    wasm.Memory memory,
+    int pointer,
+  ) {
+    return table
+        .borrow<WASIComponentReadableFuture<T>, WASIComponentAsyncCopyResult>(
+          readableFutureType!,
+          readable,
+          (future) {
+            _writeFixedWidthValueToMemory(
+              valueValidator,
+              name,
+              memory,
+              pointer,
+              future.read(),
+            );
+            return WASIComponentAsyncCopyResult.completed(0);
+          },
+        );
+  }
+
   void futureWrite(Object? writable, Object? value) {
     _requireKind(_WASIComponentAsyncValueKind.future);
     if (value is! T) {
@@ -1266,6 +1347,22 @@ final class _RegisteredAsyncValueType<T> {
     }
     valueValidator.validate(name, value);
     _expectWritableFuture(writable).complete(value);
+  }
+
+  WASIComponentAsyncCopyResult futureWriteFromMemory(
+    Object? writable,
+    wasm.Memory memory,
+    int pointer,
+  ) {
+    _requireKind(_WASIComponentAsyncValueKind.future);
+    final value = _readFixedWidthValueFromMemory<T>(
+      valueValidator,
+      name,
+      memory,
+      pointer,
+    );
+    _expectWritableFuture(writable).complete(value);
+    return WASIComponentAsyncCopyResult.completed(0);
   }
 
   void futureWriteHandle(int writable, Object? value) {
@@ -1282,6 +1379,28 @@ final class _RegisteredAsyncValueType<T> {
         future.complete(value);
       },
     );
+  }
+
+  WASIComponentAsyncCopyResult futureWriteHandleFromMemory(
+    int writable,
+    wasm.Memory memory,
+    int pointer,
+  ) {
+    return table
+        .borrow<WASIComponentWritableFuture<T>, WASIComponentAsyncCopyResult>(
+          writableFutureType!,
+          writable,
+          (future) {
+            final value = _readFixedWidthValueFromMemory<T>(
+              valueValidator,
+              name,
+              memory,
+              pointer,
+            );
+            future.complete(value);
+            return WASIComponentAsyncCopyResult.completed(0);
+          },
+        );
   }
 
   void futureCancelRead(Object? readable) {
@@ -1576,6 +1695,40 @@ List<T> _readFixedWidthValuesFromMemory<T>(
   return values;
 }
 
+T _readFixedWidthValueFromMemory<T>(
+  _WASIComponentAsyncValueValidator validator,
+  String name,
+  wasm.Memory memory,
+  int pointer,
+) {
+  if (validator.kind == _WASIComponentAsyncValueShape.unit) {
+    if (null is! T) {
+      throw StateError('WASI component async type $name expected $T value.');
+    }
+    return null as T;
+  }
+  final primitive = validator.primitive;
+  if (validator.kind != _WASIComponentAsyncValueShape.primitive ||
+      primitive == null) {
+    throw UnsupportedError(
+      'WASI component async type $name does not have a fixed-width memory element type.',
+    );
+  }
+  final layout = _fixedWidthLayout(name, primitive);
+  final bytes = Uint8List.view(memory.buffer);
+  _checkMemoryElementRange(bytes, pointer, 1, layout);
+  final value = _readFixedWidthValue(
+    ByteData.view(memory.buffer),
+    pointer,
+    primitive,
+  );
+  validator.validate(name, value);
+  if (value is! T) {
+    throw StateError('WASI component async type $name expected $T value.');
+  }
+  return value as T;
+}
+
 void _writeFixedWidthValuesToMemory(
   _WASIComponentAsyncValueValidator validator,
   String name,
@@ -1607,6 +1760,35 @@ void _writeFixedWidthValuesToMemory(
       values[i],
     );
   }
+}
+
+void _writeFixedWidthValueToMemory(
+  _WASIComponentAsyncValueValidator validator,
+  String name,
+  wasm.Memory memory,
+  int pointer,
+  Object? value,
+) {
+  validator.validate(name, value);
+  if (validator.kind == _WASIComponentAsyncValueShape.unit) {
+    return;
+  }
+  final primitive = validator.primitive;
+  if (validator.kind != _WASIComponentAsyncValueShape.primitive ||
+      primitive == null) {
+    throw UnsupportedError(
+      'WASI component async type $name does not have a fixed-width memory element type.',
+    );
+  }
+  final layout = _fixedWidthLayout(name, primitive);
+  final bytes = Uint8List.view(memory.buffer);
+  _checkMemoryElementRange(bytes, pointer, 1, layout);
+  _writeFixedWidthValue(
+    ByteData.view(memory.buffer),
+    pointer,
+    primitive,
+    value,
+  );
 }
 
 _FixedWidthLayout _fixedWidthLayout(
