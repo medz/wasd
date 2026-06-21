@@ -84,11 +84,12 @@ This is the implementation state as of 2026-06-21 on `main`.
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/` now provides an internal typed resource table plus
   a resource host that binds decoded canonical `resource.new`, `resource.rep`,
-  and `resource.drop` definitions to table-local nominal resource type tokens.
-  Resource host bindings also read decoded resource representation types and
-  validate `resource.new` representation values. P2/P3 host instantiation, WIT
-  ingestion, full canonical ABI lowering/lifting, and async stream/future
-  execution are not production-supported yet.
+  and `resource.drop` definitions, in canonical definition order, to
+  table-local nominal resource type tokens. Resource host bindings also read
+  decoded resource representation types and validate `resource.new`
+  representation values. P2/P3 host instantiation, WIT ingestion, full
+  canonical ABI lowering/lifting, and async stream/future execution are not
+  production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
   for component-model WASI versions. This is an intentional version boundary,

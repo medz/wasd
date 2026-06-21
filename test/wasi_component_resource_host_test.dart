@@ -45,6 +45,45 @@ void main() {
       },
     );
 
+    test('binds decoded canonical resource definitions as a program', () {
+      final component = WasmComponent.decode(_canonicalResourceProgramBytes());
+      final host = WASIComponentResourceHost();
+      final dropped = <int>[];
+      host.defineResourceTypeFromComponent<int>(
+        component,
+        0,
+        'descriptor',
+        onDrop: dropped.add,
+      );
+
+      final program = host.bindCanonicalDefinitions(component);
+
+      expect(program.operations, hasLength(3));
+      expect(program.operations.map((operation) => operation.kind), [
+        WasmComponentCanonicalKind.resourceNew,
+        WasmComponentCanonicalKind.resourceRep,
+        WasmComponentCanonicalKind.resourceDrop,
+      ]);
+      expect(() => program.operations.clear(), throwsUnsupportedError);
+
+      final handle = program.operations[0].resourceNew(21);
+
+      expect(program.operations[1].resourceRep(handle), 21);
+      program.operations[2].resourceDrop(handle);
+      expect(dropped, [21]);
+    });
+
+    test('rejects non-resource canonical definitions in resource programs', () {
+      final component = WasmComponent.decode(_canonicalMixedResourceBytes());
+      final host = WASIComponentResourceHost();
+      host.defineResourceTypeFromComponent<int>(component, 0, 'descriptor');
+
+      expect(
+        () => host.bindCanonicalDefinitions(component),
+        throwsUnsupportedError,
+      );
+    });
+
     test('rejects unbound type indexes and non-resource definitions', () {
       final host = WASIComponentResourceHost();
 
@@ -139,5 +178,61 @@ Uint8List _canonicalResourceNewBytes() => Uint8List.fromList(const <int>[
   0x03,
   0x01,
   0x02,
+  0x00,
+]);
+
+Uint8List _canonicalResourceProgramBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x04,
+  0x01,
+  0x3f,
+  0x7f,
+  0x00,
+  0x08,
+  0x07,
+  0x03,
+  0x02,
+  0x00,
+  0x04,
+  0x00,
+  0x03,
+  0x00,
+]);
+
+Uint8List _canonicalMixedResourceBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x08,
+  0x02,
+  0x3f,
+  0x7f,
+  0x00,
+  0x40,
+  0x00,
+  0x01,
+  0x00,
+  0x08,
+  0x07,
+  0x02,
+  0x02,
+  0x00,
+  0x01,
+  0x00,
+  0x00,
   0x00,
 ]);

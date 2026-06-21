@@ -132,6 +132,27 @@ final class WASIComponentResourceHost {
       resourceType: resourceType,
     );
   }
+
+  /// Binds all decoded canonical resource definitions in [component].
+  WASIComponentCanonicalResourceProgram bindCanonicalDefinitions(
+    WasmComponent component,
+  ) {
+    return WASIComponentCanonicalResourceProgram(
+      operations: List<WASIComponentCanonicalResourceOperation>.unmodifiable([
+        for (final definition in component.canonicalDefinitions)
+          bindCanonicalDefinition(definition),
+      ]),
+    );
+  }
+}
+
+/// Executable resource-only canonical program for a decoded component.
+final class WASIComponentCanonicalResourceProgram {
+  /// Creates a canonical resource program from ordered [operations].
+  const WASIComponentCanonicalResourceProgram({required this.operations});
+
+  /// Resource operations in component canonical definition order.
+  final List<WASIComponentCanonicalResourceOperation> operations;
 }
 
 /// Executable form of a canonical resource operation.
