@@ -1,0 +1,223 @@
+import 'dart:typed_data';
+
+import 'package:test/test.dart';
+import 'package:wasd/src/wasi/component/async_host.dart';
+import 'package:wasd/src/wasi/component/async_values.dart';
+import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
+
+void main() {
+  group('WASIComponentAsyncHost', () {
+    test('binds decoded canonical stream definitions as a program', () {
+      final component = WasmComponent.decode(_canonicalStreamProgramBytes());
+      expect(component.validate(), isEmpty);
+      final dropped = <String>[];
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<int>(
+        component,
+        0,
+        'numbers',
+        onDrop: () => dropped.add('numbers'),
+      );
+
+      final program = host.bindCanonicalDefinitions(component);
+
+      expect(program.operations.map((operation) => operation.kind), [
+        WasmComponentCanonicalKind.streamNew,
+        WasmComponentCanonicalKind.streamRead,
+        WasmComponentCanonicalKind.streamWrite,
+        WasmComponentCanonicalKind.streamCancelRead,
+        WasmComponentCanonicalKind.streamCancelWrite,
+        WasmComponentCanonicalKind.streamDropReadable,
+        WasmComponentCanonicalKind.streamDropWritable,
+      ]);
+
+      final stream = program.invoke(0, const <Object?>[]);
+      expect(stream, isA<WASIComponentStream<int>>());
+      final typedStream = stream! as WASIComponentStream<int>;
+
+      expect(
+        program.invoke(2, <Object?>[
+          typedStream.writable,
+          <int>[1, 2, 3],
+        ]),
+        3,
+      );
+      expect(program.invoke(1, <Object?>[typedStream.readable, 2]), <int>[
+        1,
+        2,
+      ]);
+      expect(program.invoke(1, <Object?>[typedStream.readable, 4]), <int>[3]);
+
+      expect(program.invoke(5, <Object?>[typedStream.readable]), isNull);
+      expect(dropped, isEmpty);
+      expect(program.invoke(6, <Object?>[typedStream.writable]), isNull);
+      expect(dropped, <String>['numbers']);
+    });
+
+    test('binds decoded canonical future definitions as a program', () {
+      final component = WasmComponent.decode(_canonicalFutureProgramBytes());
+      expect(component.validate(), isEmpty);
+      final dropped = <String>[];
+      final host = WASIComponentAsyncHost();
+      host.defineFutureTypeFromComponent<String>(
+        component,
+        0,
+        'message',
+        onDrop: () => dropped.add('message'),
+      );
+
+      final program = host.bindCanonicalDefinitions(component);
+
+      expect(program.operations.map((operation) => operation.kind), [
+        WasmComponentCanonicalKind.futureNew,
+        WasmComponentCanonicalKind.futureRead,
+        WasmComponentCanonicalKind.futureWrite,
+        WasmComponentCanonicalKind.futureCancelRead,
+        WasmComponentCanonicalKind.futureCancelWrite,
+        WasmComponentCanonicalKind.futureDropReadable,
+        WasmComponentCanonicalKind.futureDropWritable,
+      ]);
+
+      final future = program.invoke(0, const <Object?>[]);
+      expect(future, isA<WASIComponentFuture<String>>());
+      final typedFuture = future! as WASIComponentFuture<String>;
+
+      expect(
+        program.invoke(2, <Object?>[typedFuture.writable, 'ready']),
+        isNull,
+      );
+      expect(program.invoke(1, <Object?>[typedFuture.readable]), 'ready');
+      expect(program.invoke(5, <Object?>[typedFuture.readable]), isNull);
+      expect(dropped, isEmpty);
+      expect(program.invoke(6, <Object?>[typedFuture.writable]), isNull);
+      expect(dropped, <String>['message']);
+    });
+
+    test('rejects non-async definitions and mismatched type bindings', () {
+      final component = WasmComponent.decode(_canonicalStreamProgramBytes());
+      final host = WASIComponentAsyncHost();
+
+      expect(
+        () => host.bindCanonicalDefinition(
+          const WasmComponentCanonicalDefinition(
+            kind: WasmComponentCanonicalKind.resourceNew,
+            typeIndex: 0,
+          ),
+        ),
+        throwsUnsupportedError,
+      );
+      expect(
+        () =>
+            host.bindCanonicalDefinition(component.canonicalDefinitions.first),
+        throwsStateError,
+      );
+
+      host.defineFutureType<String>(0, 'wrong-kind');
+
+      expect(
+        () =>
+            host.bindCanonicalDefinition(component.canonicalDefinitions.first),
+        throwsStateError,
+      );
+    });
+
+    test('validates host value and endpoint types', () {
+      final component = WasmComponent.decode(_canonicalStreamProgramBytes());
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<int>(component, 0, 'numbers');
+      final program = host.bindCanonicalDefinitions(component);
+      final stream =
+          program.invoke(0, const <Object?>[])! as WASIComponentStream<int>;
+
+      expect(
+        () => program.invoke(2, <Object?>[
+          stream.writable,
+          <Object?>[1, 'bad'],
+        ]),
+        throwsStateError,
+      );
+      expect(
+        () => program.invoke(1, <Object?>[stream.writable, 1]),
+        throwsStateError,
+      );
+      expect(
+        () => host.defineFutureTypeFromComponent<String>(component, 0, 'wrong'),
+        throwsStateError,
+      );
+    });
+  });
+}
+
+Uint8List _canonicalStreamProgramBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x03,
+  0x01,
+  0x66,
+  0x00,
+  0x08,
+  0x13,
+  0x07,
+  0x0e,
+  0x00,
+  0x0f,
+  0x00,
+  0x00,
+  0x10,
+  0x00,
+  0x00,
+  0x11,
+  0x00,
+  0x00,
+  0x12,
+  0x00,
+  0x00,
+  0x13,
+  0x00,
+  0x14,
+  0x00,
+]);
+
+Uint8List _canonicalFutureProgramBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x03,
+  0x01,
+  0x65,
+  0x00,
+  0x08,
+  0x13,
+  0x07,
+  0x15,
+  0x00,
+  0x16,
+  0x00,
+  0x00,
+  0x17,
+  0x00,
+  0x00,
+  0x18,
+  0x00,
+  0x00,
+  0x19,
+  0x00,
+  0x00,
+  0x1a,
+  0x00,
+  0x1b,
+  0x00,
+]);

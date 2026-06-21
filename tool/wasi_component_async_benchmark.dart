@@ -1,7 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
+import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 
 const int _defaultIterations = 50000;
 const int _defaultBatchSize = 32;
@@ -21,6 +24,7 @@ void main(List<String> args) {
   final futureCompleteReadDrop = _benchmarkFutureCompleteReadDrop(
     options.iterations,
   );
+  final programInvoke = _benchmarkProgramInvoke(options);
 
   final payload = <String, Object?>{
     'iterations': options.iterations,
@@ -28,6 +32,7 @@ void main(List<String> args) {
     'stream_round_trip': streamRoundTrip.toJson(),
     'stream_cancel': streamCancel.toJson(),
     'future_complete_read_drop': futureCompleteReadDrop.toJson(),
+    'program_invoke': programInvoke.toJson(),
   };
 
   if (options.json) {
@@ -42,6 +47,7 @@ void _runWarmup(_Options options) {
   _benchmarkStreamRoundTrip(warmup);
   _benchmarkStreamCancel(warmup);
   _benchmarkFutureCompleteReadDrop(_warmupIterations);
+  _benchmarkProgramInvoke(warmup);
 }
 
 _Metric _benchmarkStreamRoundTrip(_Options options) {
@@ -114,6 +120,60 @@ _Metric _benchmarkFutureCompleteReadDrop(int iterations) {
   );
 }
 
+_Metric _benchmarkProgramInvoke(_Options options) {
+  final component = WasmComponent.decode(_asyncProgramBytes());
+  final host = WASIComponentAsyncHost()
+    ..defineStreamTypeFromComponent<int>(component, 0, 'benchmark-stream')
+    ..defineFutureTypeFromComponent<int>(component, 1, 'benchmark-future');
+  final program = host.bindCanonicalDefinitions(component);
+  final batch = List<int>.generate(options.batchSize, (index) => index);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final stream = program.invoke(0, const <Object?>[]);
+    if (stream is! WASIComponentStream<int>) {
+      throw StateError('stream.new returned non-stream: $stream');
+    }
+    final written = program.invoke(2, <Object?>[stream.writable, batch]);
+    if (written != batch.length) {
+      throw StateError('stream.write wrote $written values');
+    }
+    final values = program.invoke(1, <Object?>[stream.readable, batch.length]);
+    if (values is! List) {
+      throw StateError('stream.read returned non-list: $values');
+    }
+    for (final value in values) {
+      if (value is! int) {
+        throw StateError('stream.read returned non-int: $value');
+      }
+      checksum += value;
+    }
+    stream.readable.drop();
+    stream.writable.drop();
+
+    final future = program.invoke(3, const <Object?>[]);
+    if (future is! WASIComponentFuture<int>) {
+      throw StateError('future.new returned non-future: $future');
+    }
+    program.invoke(5, <Object?>[future.writable, i]);
+    final value = program.invoke(4, <Object?>[future.readable]);
+    if (value is! int) {
+      throw StateError('future.read returned non-int: $value');
+    }
+    checksum += value;
+    future.readable.drop();
+    future.writable.drop();
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: options.iterations * (options.batchSize * 2 + 5),
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _printText(Map<String, Object?> payload) {
   stdout
     ..writeln('WASI component async benchmark')
@@ -123,6 +183,7 @@ void _printText(Map<String, Object?> payload) {
     'stream_round_trip',
     'stream_cancel',
     'future_complete_read_drop',
+    'program_invoke',
   ]) {
     final metric = payload[name]! as Map<String, Object?>;
     stdout
@@ -131,6 +192,43 @@ void _printText(Map<String, Object?> payload) {
       ..writeln('  $name per operation us: ${metric['per_operation_us']}');
   }
 }
+
+Uint8List _asyncProgramBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x05,
+  0x02,
+  0x66,
+  0x00,
+  0x65,
+  0x00,
+  0x08,
+  0x11,
+  0x06,
+  0x0e,
+  0x00,
+  0x0f,
+  0x00,
+  0x00,
+  0x10,
+  0x00,
+  0x00,
+  0x15,
+  0x01,
+  0x16,
+  0x01,
+  0x00,
+  0x17,
+  0x01,
+  0x00,
+]);
 
 void _printUsage() {
   stdout.writeln('''
