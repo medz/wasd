@@ -43,13 +43,14 @@ void _runWarmup(_Options options) {
 
 _Metric _benchmarkInsertGetDrop(int iterations) {
   final table = WASIComponentResourceTable();
+  final resourceType = table.defineType<int>('resource');
   var checksum = 0;
 
   final watch = Stopwatch()..start();
   for (var i = 0; i < iterations; i++) {
-    final handle = table.insert<int>(i);
-    checksum += table.get<int>(handle);
-    table.drop<int>(handle);
+    final handle = table.insert<int>(resourceType, i);
+    checksum += table.get<int>(resourceType, handle);
+    table.drop<int>(resourceType, handle);
     if (table.contains(handle)) {
       throw StateError('stale handle remained live: $handle');
     }
@@ -68,23 +69,24 @@ _Metric _benchmarkInsertGetDrop(int iterations) {
 
 _Metric _benchmarkBorrow(_Options options) {
   final table = WASIComponentResourceTable();
+  final resourceType = table.defineType<int>('resource');
   final handles = <int>[];
   for (var i = 0; i < options.resources; i++) {
-    handles.add(table.insert<int>(i));
+    handles.add(table.insert<int>(resourceType, i));
   }
 
   var checksum = 0;
   final watch = Stopwatch()..start();
   for (var i = 0; i < options.iterations; i++) {
     final handle = handles[i % handles.length];
-    table.borrow<int, void>(handle, (resource) {
+    table.borrow<int, void>(resourceType, handle, (resource) {
       checksum += resource;
     });
   }
   watch.stop();
 
   for (final handle in handles) {
-    table.drop<int>(handle);
+    table.drop<int>(resourceType, handle);
   }
   if (table.activeCount != 0) {
     throw StateError('resource table leaked ${table.activeCount} resources');
@@ -98,17 +100,19 @@ _Metric _benchmarkBorrow(_Options options) {
 
 _Metric _benchmarkDropCallbacks(int iterations) {
   final table = WASIComponentResourceTable();
+  final resourceType = table.defineType<int>('resource');
   var checksum = 0;
 
   final watch = Stopwatch()..start();
   for (var i = 0; i < iterations; i++) {
     final handle = table.insert<int>(
+      resourceType,
       i,
       onDrop: (resource) {
         checksum += resource;
       },
     );
-    table.drop<int>(handle);
+    table.drop<int>(resourceType, handle);
   }
   watch.stop();
 

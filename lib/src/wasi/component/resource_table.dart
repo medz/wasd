@@ -1,26 +1,60 @@
+/// A nominal resource type for future WASI component hosts.
+///
+/// Component Model resources are nominal, so two resource definitions with the
+/// same Dart representation type must still have different handle spaces.
+final class WASIComponentResourceType<T extends Object> {
+  const WASIComponentResourceType._(this._tableId, this.id, this.name);
+
+  final int _tableId;
+
+  /// Table-local resource type identifier.
+  final int id;
+
+  /// Debug label used in diagnostics.
+  final String name;
+
+  @override
+  String toString() => name;
+}
+
 /// A typed resource table for future WASI component hosts.
 ///
 /// Component resources are represented as opaque integer handles. The table
 /// keeps the host objects typed, rejects stale handles, and prevents dropping a
 /// resource while it is borrowed by host code.
 final class WASIComponentResourceTable {
+  static int _nextTableId = 0;
+
+  final int _tableId = _nextTableId++;
   final List<_WASIComponentResourceSlot> _slots =
       <_WASIComponentResourceSlot>[];
   final List<int> _freeSlots = <int>[];
+  int _nextResourceTypeId = 0;
   int _activeCount = 0;
 
   /// Number of live resources in the table.
   int get activeCount => _activeCount;
 
+  /// Defines a nominal component resource type backed by Dart values of [T].
+  WASIComponentResourceType<T> defineType<T extends Object>(String name) {
+    return WASIComponentResourceType<T>._(
+      _tableId,
+      _nextResourceTypeId++,
+      name,
+    );
+  }
+
   /// Inserts [resource] and returns an opaque component handle.
   int insert<T extends Object>(
+    WASIComponentResourceType<T> type,
     T resource, {
     void Function(T resource)? onDrop,
   }) {
+    _validateResourceType(type);
     final slotIndex = _allocateSlot();
     final slot = _slots[slotIndex];
     slot.generation++;
-    slot.entry = _WASIComponentResourceEntry<T>(resource, onDrop);
+    slot.entry = _WASIComponentResourceEntry<T>(type, resource, onDrop);
     _activeCount++;
     return _handleFor(slotIndex, slot.generation);
   }
@@ -28,12 +62,27 @@ final class WASIComponentResourceTable {
   /// Returns `true` when [handle] currently refers to a live resource.
   bool contains(int handle) => _entryForHandle(handle) != null;
 
+  /// Returns `true` when [handle] currently refers to a live [type] resource.
+  bool containsType<T extends Object>(
+    WASIComponentResourceType<T> type,
+    int handle,
+  ) {
+    _validateResourceType(type);
+    final entry = _entryForHandle(handle);
+    return entry != null && identical(entry.type, type);
+  }
+
   /// Returns the resource for [handle] when it has type [T].
-  T get<T extends Object>(int handle) => _typedEntry<T>(handle).resource;
+  T get<T extends Object>(WASIComponentResourceType<T> type, int handle) =>
+      _typedEntry<T>(type, handle).resource;
 
   /// Runs [callback] with the resource for [handle] while marking it borrowed.
-  R borrow<T extends Object, R>(int handle, R Function(T resource) callback) {
-    final entry = _typedEntry<T>(handle);
+  R borrow<T extends Object, R>(
+    WASIComponentResourceType<T> type,
+    int handle,
+    R Function(T resource) callback,
+  ) {
+    final entry = _typedEntry<T>(type, handle);
     entry.borrowCount++;
     try {
       return callback(entry.resource);
@@ -45,8 +94,8 @@ final class WASIComponentResourceTable {
   /// Drops the resource for [handle].
   ///
   /// The optional `onDrop` callback passed to [insert] is invoked at most once.
-  void drop<T extends Object>(int handle) {
-    final entry = _typedEntry<T>(handle);
+  void drop<T extends Object>(WASIComponentResourceType<T> type, int handle) {
+    final entry = _typedEntry<T>(type, handle);
     if (entry.borrowCount != 0) {
       throw StateError(
         'Cannot drop borrowed WASI component resource: $handle.',
@@ -83,17 +132,29 @@ final class WASIComponentResourceTable {
     return slot.entry;
   }
 
-  _WASIComponentResourceEntry<T> _typedEntry<T extends Object>(int handle) {
+  _WASIComponentResourceEntry<T> _typedEntry<T extends Object>(
+    WASIComponentResourceType<T> type,
+    int handle,
+  ) {
+    _validateResourceType(type);
     final entry = _entryForHandle(handle);
     if (entry == null) {
       throw StateError('Unknown WASI component resource handle: $handle.');
     }
-    if (entry is! _WASIComponentResourceEntry<T>) {
+    if (!identical(entry.type, type)) {
       throw StateError(
-        'WASI component resource handle $handle does not contain $T.',
+        'WASI component resource handle $handle does not contain $type.',
       );
     }
-    return entry;
+    return entry as _WASIComponentResourceEntry<T>;
+  }
+
+  void _validateResourceType(WASIComponentResourceType<Object> type) {
+    if (type._tableId != _tableId) {
+      throw StateError(
+        'WASI component resource type ${type.name} belongs to another table.',
+      );
+    }
   }
 }
 
@@ -112,8 +173,9 @@ final class _WASIComponentResourceSlot {
 }
 
 final class _WASIComponentResourceEntry<T extends Object> {
-  _WASIComponentResourceEntry(this.resource, this.onDrop);
+  _WASIComponentResourceEntry(this.type, this.resource, this.onDrop);
 
+  final WASIComponentResourceType<T> type;
   final T resource;
   final void Function(T resource)? onDrop;
   int borrowCount = 0;
