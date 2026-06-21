@@ -48,6 +48,8 @@ Future<void> main(List<String> args) async {
       await _benchmarkHandleMemoryProgramInvokeAsync(options);
   final handleMemoryProgramInvokeEvent =
       await _benchmarkHandleMemoryProgramInvokeEvent(options);
+  final handleMemoryProgramSyncCancel =
+      await _benchmarkHandleMemoryProgramSyncCancel(options);
   final streamMemoryCopy = _benchmarkStreamMemoryCopy(options);
   final futureMemoryCopy = _benchmarkFutureMemoryCopy(options.iterations);
 
@@ -71,6 +73,7 @@ Future<void> main(List<String> args) async {
         .toJson(),
     'handle_memory_program_invoke_event': handleMemoryProgramInvokeEvent
         .toJson(),
+    'handle_memory_program_sync_cancel': handleMemoryProgramSyncCancel.toJson(),
     'stream_memory_copy': streamMemoryCopy.toJson(),
     'future_memory_copy': futureMemoryCopy.toJson(),
   };
@@ -99,6 +102,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkHandleMemoryProgramInvoke(warmup);
   await _benchmarkHandleMemoryProgramInvokeAsync(warmup);
   await _benchmarkHandleMemoryProgramInvokeEvent(warmup);
+  await _benchmarkHandleMemoryProgramSyncCancel(warmup);
   _benchmarkStreamMemoryCopy(warmup);
   _benchmarkFutureMemoryCopy(_warmupIterations);
 }
@@ -953,7 +957,143 @@ Future<_Metric> _benchmarkHandleMemoryProgramInvokeEvent(
   );
 }
 
-_HandleMemoryPrograms _createHandleMemoryPrograms({int? maxBufferedElements}) {
+Future<_Metric> _benchmarkHandleMemoryProgramSyncCancel(
+  _Options options,
+) async {
+  final programs = _createHandleMemoryPrograms(
+    maxBufferedElements: 1,
+    includeCancel: true,
+    cancelIsAsync: false,
+  );
+  final streamProgram = programs.streamProgram;
+  final futureProgram = programs.futureProgram;
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  const streamInputPointer = 1024;
+  const streamSecondInputPointer = 2048;
+  const streamOutputPointer = 4096;
+  const futureInputPointer = 8192;
+  const futureOutputPointer = 12288;
+  data.setUint32(streamInputPointer, 0x21, Endian.little);
+  data.setUint32(streamSecondInputPointer, 0x33, Endian.little);
+  data.setUint32(futureInputPointer, 0x55aa55aa, Endian.little);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final readHandles = _unpackEndpointHandles(
+      streamProgram.invoke(0, const <Object?>[]),
+      'stream.new',
+    );
+    final blockedRead = streamProgram.invokeWithMemoryEvent(
+      2,
+      memory,
+      <Object?>[readHandles.readable, streamOutputPointer, 1],
+    );
+    if (blockedRead != wasiComponentAsyncBlocked) {
+      throw StateError('stream read cancel benchmark did not block.');
+    }
+    checksum += await _expectPackedResult(
+      streamProgram.invokeAsync(3, <Object?>[readHandles.readable]),
+      'stream.cancel-read',
+    );
+    streamProgram.invoke(5, <Object?>[readHandles.readable]);
+    streamProgram.invoke(6, <Object?>[readHandles.writable]);
+
+    final writeHandles = _unpackEndpointHandles(
+      streamProgram.invoke(0, const <Object?>[]),
+      'stream.new',
+    );
+    checksum += _expectPackedValue(
+      streamProgram.invokeWithMemory(1, memory, <Object?>[
+        writeHandles.writable,
+        streamInputPointer,
+        1,
+      ]),
+      'stream.write',
+    );
+    final blockedWrite = streamProgram.invokeWithMemoryEvent(
+      1,
+      memory,
+      <Object?>[writeHandles.writable, streamSecondInputPointer, 1],
+    );
+    if (blockedWrite != wasiComponentAsyncBlocked) {
+      throw StateError('stream write cancel benchmark did not block.');
+    }
+    checksum += await _expectPackedResult(
+      streamProgram.invokeAsync(4, <Object?>[writeHandles.writable]),
+      'stream.cancel-write',
+    );
+    streamProgram.invoke(5, <Object?>[writeHandles.readable]);
+    streamProgram.invoke(6, <Object?>[writeHandles.writable]);
+
+    final futureReadHandles = _unpackEndpointHandles(
+      futureProgram.invoke(0, const <Object?>[]),
+      'future.new',
+    );
+    final blockedFutureRead = futureProgram.invokeWithMemoryEvent(
+      2,
+      memory,
+      <Object?>[futureReadHandles.readable, futureOutputPointer],
+    );
+    if (blockedFutureRead != wasiComponentAsyncBlocked) {
+      throw StateError('future read cancel benchmark did not block.');
+    }
+    checksum += await _expectPackedResult(
+      futureProgram.invokeAsync(3, <Object?>[futureReadHandles.readable]),
+      'future.cancel-read',
+    );
+    futureProgram.invoke(5, <Object?>[futureReadHandles.readable]);
+    futureProgram.invoke(6, <Object?>[futureReadHandles.writable]);
+
+    final futureWriteHandles = _unpackEndpointHandles(
+      futureProgram.invoke(0, const <Object?>[]),
+      'future.new',
+    );
+    final blockedFutureWrite = futureProgram.invokeWithMemoryEvent(
+      1,
+      memory,
+      <Object?>[futureWriteHandles.writable, futureInputPointer],
+    );
+    if (blockedFutureWrite != wasiComponentAsyncBlocked) {
+      throw StateError('future write cancel benchmark did not block.');
+    }
+    checksum += await _expectPackedResult(
+      futureProgram.invokeAsync(4, <Object?>[futureWriteHandles.writable]),
+      'future.cancel-write',
+    );
+    futureProgram.invoke(5, <Object?>[futureWriteHandles.readable]);
+    futureProgram.invoke(6, <Object?>[futureWriteHandles.writable]);
+  }
+  watch.stop();
+
+  programs.expectNoLeaks();
+  return _Metric(
+    operations: options.iterations * 21,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+Future<int> _expectPackedResult(
+  Future<Object?> result,
+  String operation,
+) async {
+  return _expectPackedValue(await result, operation);
+}
+
+int _expectPackedValue(Object? value, String operation) {
+  if (value is! int) {
+    throw StateError('$operation returned non-packed result: $value');
+  }
+  return value;
+}
+
+_HandleMemoryPrograms _createHandleMemoryPrograms({
+  int? maxBufferedElements,
+  bool includeCancel = false,
+  bool cancelIsAsync = true,
+}) {
   final streamComponent = WasmComponent.decode(_streamU32TypeComponentBytes());
   final streamHost = WASIComponentAsyncHost()
     ..defineStreamTypeFromComponent<int>(
@@ -994,6 +1134,22 @@ _HandleMemoryPrograms _createHandleMemoryPrograms({int? maxBufferedElements}) {
           ],
         ),
       ),
+      if (includeCancel) ...[
+        streamHost.bindCanonicalDefinition(
+          WasmComponentCanonicalDefinition(
+            kind: WasmComponentCanonicalKind.streamCancelRead,
+            typeIndex: 0,
+            isAsync: cancelIsAsync,
+          ),
+        ),
+        streamHost.bindCanonicalDefinition(
+          WasmComponentCanonicalDefinition(
+            kind: WasmComponentCanonicalKind.streamCancelWrite,
+            typeIndex: 0,
+            isAsync: cancelIsAsync,
+          ),
+        ),
+      ],
       streamHost.bindCanonicalDefinition(
         const WasmComponentCanonicalDefinition(
           kind: WasmComponentCanonicalKind.streamDropReadable,
@@ -1048,6 +1204,22 @@ _HandleMemoryPrograms _createHandleMemoryPrograms({int? maxBufferedElements}) {
           ],
         ),
       ),
+      if (includeCancel) ...[
+        futureHost.bindCanonicalDefinition(
+          WasmComponentCanonicalDefinition(
+            kind: WasmComponentCanonicalKind.futureCancelRead,
+            typeIndex: 0,
+            isAsync: cancelIsAsync,
+          ),
+        ),
+        futureHost.bindCanonicalDefinition(
+          WasmComponentCanonicalDefinition(
+            kind: WasmComponentCanonicalKind.futureCancelWrite,
+            typeIndex: 0,
+            isAsync: cancelIsAsync,
+          ),
+        ),
+      ],
       futureHost.bindCanonicalDefinition(
         const WasmComponentCanonicalDefinition(
           kind: WasmComponentCanonicalKind.futureDropReadable,
@@ -1271,6 +1443,7 @@ void _printText(Map<String, Object?> payload) {
     'handle_memory_program_invoke',
     'handle_memory_program_invoke_async',
     'handle_memory_program_invoke_event',
+    'handle_memory_program_sync_cancel',
     'stream_memory_copy',
     'future_memory_copy',
   ]) {

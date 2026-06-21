@@ -168,7 +168,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   `BLOCKED` when the event is not immediately ready, repeated cancellation
   traps while the copy is being cancelled, and the usual waitable event returns
   either the cancelled payload or a completed payload when a future read already
-  resolved before cancellation was observed.
+  resolved before cancellation was observed. Non-async handle-backed
+  cancel-copy definitions can also be invoked through `invokeAsync`, where the
+  host waits for the pending copy event and returns the canonical packed
+  payload instead of reporting an unsupported synchronous wait.
   Stream copy events also distinguish dropped peers from cancellation: pending
   stream reads report `DROPPED` when the writable end is dropped, and pending
   bounded stream writes report `DROPPED` when the readable end is dropped,
@@ -293,8 +296,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   payload writes, decoded canonical async program invocation, decoded unit
   stream/future program invocation, and resource-table-backed borrowed handle
   invocation costs, synchronous, awaited, and waitable-event handle-program
-  fixed-width memory-copy invocation costs, plus fixed-width primitive
-  stream/future memory-copy costs, are measured by
+  fixed-width memory-copy invocation costs, synchronous handle-program
+  cancel-copy wait costs, plus fixed-width primitive stream/future memory-copy
+  costs, are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`. Keep active-copy
   state checks on the waitable-event path so ordinary handle and memory
   invocations do not pay for event lifecycle enforcement.

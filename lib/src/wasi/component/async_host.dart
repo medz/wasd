@@ -568,6 +568,26 @@ final class WASIComponentCanonicalAsyncHandleProgram {
           _expectHandle(canonicalIndex, args[0], 'writable'),
           args[1],
         );
+      case WasmComponentCanonicalKind.streamCancelRead:
+        _expectArity(canonicalIndex, args, 1);
+        return operation.streamCancelReadHandleWhenReady(
+          _expectHandle(canonicalIndex, args.single, 'readable'),
+        );
+      case WasmComponentCanonicalKind.streamCancelWrite:
+        _expectArity(canonicalIndex, args, 1);
+        return operation.streamCancelWriteHandleWhenReady(
+          _expectHandle(canonicalIndex, args.single, 'writable'),
+        );
+      case WasmComponentCanonicalKind.futureCancelRead:
+        _expectArity(canonicalIndex, args, 1);
+        return operation.futureCancelReadHandleWhenReady(
+          _expectHandle(canonicalIndex, args.single, 'readable'),
+        );
+      case WasmComponentCanonicalKind.futureCancelWrite:
+        _expectArity(canonicalIndex, args, 1);
+        return operation.futureCancelWriteHandleWhenReady(
+          _expectHandle(canonicalIndex, args.single, 'writable'),
+        );
       default:
         return invoke(canonicalIndex, args);
     }
@@ -985,6 +1005,16 @@ final class WASIComponentCanonicalAsyncOperation {
     );
   }
 
+  /// Executes `stream.cancel-read` with a readable endpoint handle, waiting
+  /// for the copy event when the canonical operation is synchronous.
+  Future<int> streamCancelReadHandleWhenReady(int readable) {
+    _requireKind(WasmComponentCanonicalKind.streamCancelRead);
+    return _requireValueType().streamCancelReadHandleWhenReady(
+      readable,
+      isAsync: isAsync,
+    );
+  }
+
   /// Executes `stream.cancel-write`.
   void streamCancelWrite(Object? writable) {
     _requireKind(WasmComponentCanonicalKind.streamCancelWrite);
@@ -995,6 +1025,16 @@ final class WASIComponentCanonicalAsyncOperation {
   int streamCancelWriteHandle(int writable) {
     _requireKind(WasmComponentCanonicalKind.streamCancelWrite);
     return _requireValueType().streamCancelWriteHandle(
+      writable,
+      isAsync: isAsync,
+    );
+  }
+
+  /// Executes `stream.cancel-write` with a writable endpoint handle, waiting
+  /// for the copy event when the canonical operation is synchronous.
+  Future<int> streamCancelWriteHandleWhenReady(int writable) {
+    _requireKind(WasmComponentCanonicalKind.streamCancelWrite);
+    return _requireValueType().streamCancelWriteHandleWhenReady(
       writable,
       isAsync: isAsync,
     );
@@ -1183,6 +1223,16 @@ final class WASIComponentCanonicalAsyncOperation {
     );
   }
 
+  /// Executes `future.cancel-read` with a readable endpoint handle, waiting
+  /// for the copy event when the canonical operation is synchronous.
+  Future<int> futureCancelReadHandleWhenReady(int readable) {
+    _requireKind(WasmComponentCanonicalKind.futureCancelRead);
+    return _requireValueType().futureCancelReadHandleWhenReady(
+      readable,
+      isAsync: isAsync,
+    );
+  }
+
   /// Executes `future.cancel-write`.
   void futureCancelWrite(Object? writable) {
     _requireKind(WasmComponentCanonicalKind.futureCancelWrite);
@@ -1193,6 +1243,16 @@ final class WASIComponentCanonicalAsyncOperation {
   int futureCancelWriteHandle(int writable) {
     _requireKind(WasmComponentCanonicalKind.futureCancelWrite);
     return _requireValueType().futureCancelWriteHandle(
+      writable,
+      isAsync: isAsync,
+    );
+  }
+
+  /// Executes `future.cancel-write` with a writable endpoint handle, waiting
+  /// for the copy event when the canonical operation is synchronous.
+  Future<int> futureCancelWriteHandleWhenReady(int writable) {
+    _requireKind(WasmComponentCanonicalKind.futureCancelWrite);
+    return _requireValueType().futureCancelWriteHandleWhenReady(
       writable,
       isAsync: isAsync,
     );
@@ -1742,6 +1802,26 @@ final class _RegisteredAsyncValueType<T> {
     );
   }
 
+  Future<int> streamCancelReadHandleWhenReady(
+    int readable, {
+    required bool isAsync,
+  }) {
+    return _cancelCopyWhenReady(
+      handle: readable,
+      eventCode: WASIComponentWaitableEventCode.streamRead,
+      isAsync: isAsync,
+      cancel: () {
+        table.borrow<WASIComponentReadableStream<T>, void>(
+          readableStreamType!,
+          readable,
+          (stream) {
+            stream.cancel();
+          },
+        );
+      },
+    );
+  }
+
   void streamCancelWrite(Object? writable) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
     _expectWritableStream(writable).cancel();
@@ -1749,6 +1829,26 @@ final class _RegisteredAsyncValueType<T> {
 
   int streamCancelWriteHandle(int writable, {required bool isAsync}) {
     return _cancelCopy(
+      handle: writable,
+      eventCode: WASIComponentWaitableEventCode.streamWrite,
+      isAsync: isAsync,
+      cancel: () {
+        table.borrow<WASIComponentWritableStream<T>, void>(
+          writableStreamType!,
+          writable,
+          (stream) {
+            stream.cancel();
+          },
+        );
+      },
+    );
+  }
+
+  Future<int> streamCancelWriteHandleWhenReady(
+    int writable, {
+    required bool isAsync,
+  }) {
+    return _cancelCopyWhenReady(
       handle: writable,
       eventCode: WASIComponentWaitableEventCode.streamWrite,
       isAsync: isAsync,
@@ -2074,6 +2174,28 @@ final class _RegisteredAsyncValueType<T> {
     );
   }
 
+  Future<int> futureCancelReadHandleWhenReady(
+    int readable, {
+    required bool isAsync,
+  }) {
+    return _cancelCopyWhenReady(
+      handle: readable,
+      eventCode: WASIComponentWaitableEventCode.futureRead,
+      isAsync: isAsync,
+      cancel: () {
+        table.borrow<WASIComponentReadableFuture<T>, void>(
+          readableFutureType!,
+          readable,
+          (future) {
+            if (!future.isReady) {
+              future.cancel();
+            }
+          },
+        );
+      },
+    );
+  }
+
   void futureCancelWrite(Object? writable) {
     _requireKind(_WASIComponentAsyncValueKind.future);
     _expectWritableFuture(writable).cancel();
@@ -2081,6 +2203,26 @@ final class _RegisteredAsyncValueType<T> {
 
   int futureCancelWriteHandle(int writable, {required bool isAsync}) {
     return _cancelCopy(
+      handle: writable,
+      eventCode: WASIComponentWaitableEventCode.futureWrite,
+      isAsync: isAsync,
+      cancel: () {
+        table.borrow<WASIComponentWritableFuture<T>, void>(
+          writableFutureType!,
+          writable,
+          (future) {
+            future.cancelWriteDelivery();
+          },
+        );
+      },
+    );
+  }
+
+  Future<int> futureCancelWriteHandleWhenReady(
+    int writable, {
+    required bool isAsync,
+  }) {
+    return _cancelCopyWhenReady(
       handle: writable,
       eventCode: WASIComponentWaitableEventCode.futureWrite,
       isAsync: isAsync,
@@ -2180,6 +2322,44 @@ final class _RegisteredAsyncValueType<T> {
     if (event == null) {
       return wasiComponentAsyncBlocked;
     }
+    return _expectCopyEventPayload(
+      waitable: waitable,
+      event: event,
+      eventCode: eventCode,
+      handle: handle,
+    );
+  }
+
+  Future<int> _cancelCopyWhenReady({
+    required int handle,
+    required WASIComponentWaitableEventCode eventCode,
+    required bool isAsync,
+    required void Function() cancel,
+  }) async {
+    if (isAsync) {
+      return _cancelCopy(
+        handle: handle,
+        eventCode: eventCode,
+        isAsync: isAsync,
+        cancel: cancel,
+      );
+    }
+    final waitable = _existingEndpointWaitable(handle);
+    final event = await waitable.cancelCopyWhenReady(cancel: cancel);
+    return _expectCopyEventPayload(
+      waitable: waitable,
+      event: event,
+      eventCode: eventCode,
+      handle: handle,
+    );
+  }
+
+  int _expectCopyEventPayload({
+    required WASIComponentWaitable waitable,
+    required WASIComponentWaitableEvent event,
+    required WASIComponentWaitableEventCode eventCode,
+    required int handle,
+  }) {
     if (event.code != eventCode || event.payload1 != handle) {
       throw StateError(
         'WASI component waitable ${waitable.name} produced ${event.code.name} '

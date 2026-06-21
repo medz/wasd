@@ -92,6 +92,7 @@ final class WASIComponentWaitable {
   final String _name;
   WASIComponentWaitableSet? _set;
   WASIComponentWaitableEvent Function()? _pendingEvent;
+  Completer<void>? _pendingEventWaiter;
   bool _hasSyncWaiter = false;
   _WASIComponentWaitableCopyState _copyState =
       _WASIComponentWaitableCopyState.idle;
@@ -169,9 +170,39 @@ final class WASIComponentWaitable {
     return takePendingEvent();
   }
 
+  /// Requests cancellation and waits for the resulting copy event.
+  Future<WASIComponentWaitableEvent> cancelCopyWhenReady({
+    required void Function() cancel,
+  }) async {
+    if (_copyState != _WASIComponentWaitableCopyState.copying ||
+        _hasSyncWaiter) {
+      throw StateError(
+        'WASI component waitable $name has no cancellable active copy.',
+      );
+    }
+    if (inWaitableSet) {
+      throw StateError('WASI component waitable $name is in a waitable set.');
+    }
+    _copyState = _WASIComponentWaitableCopyState.cancellingCopy;
+    if (!hasPendingEvent) {
+      cancel();
+    }
+    if (hasPendingEvent) {
+      return takePendingEvent();
+    }
+    return withSyncWaiter(waitForPendingEvent);
+  }
+
   /// Sets the pending event delivered by the next wait or poll.
   void setPendingEvent(WASIComponentWaitableEvent Function() event) {
     _pendingEvent = event;
+    final waiter = _pendingEventWaiter;
+    if (waiter != null) {
+      _pendingEventWaiter = null;
+      if (!waiter.isCompleted) {
+        waiter.complete();
+      }
+    }
     _set?._completePendingWaiters();
   }
 
@@ -191,6 +222,28 @@ final class WASIComponentWaitable {
     } finally {
       _hasSyncWaiter = false;
     }
+  }
+
+  /// Waits until this waitable has a pending event, then delivers it.
+  Future<WASIComponentWaitableEvent> waitForPendingEvent() async {
+    if (hasPendingEvent) {
+      return takePendingEvent();
+    }
+    if (_pendingEventWaiter != null) {
+      throw StateError(
+        'WASI component waitable $name already has a pending event waiter.',
+      );
+    }
+    final waiter = Completer<void>();
+    _pendingEventWaiter = waiter;
+    try {
+      await waiter.future;
+    } finally {
+      if (identical(_pendingEventWaiter, waiter)) {
+        _pendingEventWaiter = null;
+      }
+    }
+    return takePendingEvent();
   }
 
   /// Delivers and clears the pending event.
