@@ -159,8 +159,13 @@ This is the implementation state as of 2026-06-21 on `main`.
   copies also have a canonical event-start path: immediate copies return the
   packed copy payload, pending copies return `0xffffffff` (`BLOCKED`) and later
   publish the corresponding waitable event with the endpoint handle and packed
-  copy result. Subtask/thread event production is still future integration
-  work, but stream/future copy event delivery is no longer a placeholder.
+  copy result. Pending event-start copies mark the endpoint waitable as owning
+  an active copy until the event is delivered, so duplicate starts and drops
+  trap instead of racing the pending copy. Cancelling a pending handle-backed
+  stream read publishes the canonical cancelled copy result through the same
+  waitable-event path. Subtask/thread event production is still future
+  integration work, but stream/future copy event delivery is no longer a
+  placeholder.
   Internal
   error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`
@@ -247,7 +252,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   invocation costs, synchronous, awaited, and waitable-event handle-program
   fixed-width memory-copy invocation costs, plus fixed-width primitive
   stream/future memory-copy costs, are measured by
-  `dart run tool/wasi_component_async_benchmark.dart --json`.
+  `dart run tool/wasi_component_async_benchmark.dart --json`. Keep active-copy
+  state checks on the waitable-event path so ordinary handle and memory
+  invocations do not pay for event lifecycle enforcement.
 - Component resource table canonical `resource.new`/`resource.rep`/
   `resource.drop`, decoded resource-only canonical program invocation,
   error-context canonical lifecycle invocation, error-context canonical string

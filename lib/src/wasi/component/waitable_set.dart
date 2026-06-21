@@ -93,6 +93,7 @@ final class WASIComponentWaitable {
   WASIComponentWaitableSet? _set;
   WASIComponentWaitableEvent Function()? _pendingEvent;
   bool _hasSyncWaiter = false;
+  bool _hasActiveCopy = false;
 
   /// Debug label used in diagnostics.
   String get name => _name;
@@ -106,8 +107,14 @@ final class WASIComponentWaitable {
   /// Whether a synchronous canonical operation is waiting on this waitable.
   bool get hasSyncWaiter => _hasSyncWaiter;
 
+  /// Whether an async copy is active and waiting for event delivery.
+  bool get hasActiveCopy => _hasActiveCopy;
+
   /// Validates this waitable can be dropped.
   void requireDroppable() {
+    if (_hasActiveCopy) {
+      throw StateError('WASI component waitable $name has an active copy.');
+    }
     if (hasPendingEvent) {
       throw StateError('WASI component waitable $name has a pending event.');
     }
@@ -116,6 +123,14 @@ final class WASIComponentWaitable {
         'WASI component waitable $name has a synchronous waiter.',
       );
     }
+  }
+
+  /// Marks this waitable as owning an active async copy.
+  void beginCopy() {
+    if (_hasActiveCopy || hasPendingEvent) {
+      throw StateError('WASI component waitable $name is not idle.');
+    }
+    _hasActiveCopy = true;
   }
 
   /// Sets the pending event delivered by the next wait or poll.
@@ -149,6 +164,7 @@ final class WASIComponentWaitable {
       throw StateError('WASI component waitable $name has no pending event.');
     }
     _pendingEvent = null;
+    _hasActiveCopy = false;
     return event();
   }
 

@@ -1529,6 +1529,7 @@ final class _RegisteredAsyncValueType<T> {
           ).packedResult;
         }
 
+        waitable.beginCopy();
         final pending = table
             .borrowAsync<
               WASIComponentWritableStream<T>,
@@ -1652,6 +1653,7 @@ final class _RegisteredAsyncValueType<T> {
           ).packedResult;
         }
 
+        waitable.beginCopy();
         final pending = table
             .borrowAsync<
               WASIComponentReadableStream<T>,
@@ -1858,6 +1860,7 @@ final class _RegisteredAsyncValueType<T> {
           return WASIComponentAsyncCopyResult.completed(0).packedResult;
         }
 
+        waitable.beginCopy();
         final pending = table
             .borrowAsync<
               WASIComponentReadableFuture<T>,
