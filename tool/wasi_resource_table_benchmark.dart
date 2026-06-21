@@ -6,6 +6,7 @@ import 'package:wasd/src/wasi/component/error_context.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/resource_table.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
+import 'package:wasd/src/wasm/memory.dart';
 
 const int _defaultIterations = 100000;
 const int _defaultResources = 1024;
@@ -26,6 +27,7 @@ Future<void> main(List<String> args) async {
   final dropCallbacks = _benchmarkDropCallbacks(options.iterations);
   final programInvoke = _benchmarkProgramInvoke(options.iterations);
   final errorContextProgram = _benchmarkErrorContextProgram(options.iterations);
+  final errorContextMemory = _benchmarkErrorContextMemory(options.iterations);
 
   final payload = <String, Object?>{
     'iterations': options.iterations,
@@ -36,6 +38,7 @@ Future<void> main(List<String> args) async {
     'drop_callbacks': dropCallbacks.toJson(),
     'program_invoke': programInvoke.toJson(),
     'error_context_program': errorContextProgram.toJson(),
+    'error_context_memory': errorContextMemory.toJson(),
   };
 
   if (options.json) {
@@ -52,6 +55,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkDropCallbacks(_warmupIterations);
   _benchmarkProgramInvoke(_warmupIterations);
   _benchmarkErrorContextProgram(_warmupIterations);
+  _benchmarkErrorContextMemory(_warmupIterations);
 }
 
 _Metric _benchmarkInsertGetDrop(int iterations) {
@@ -257,6 +261,83 @@ _Metric _benchmarkErrorContextProgram(int iterations) {
   );
 }
 
+_Metric _benchmarkErrorContextMemory(int iterations) {
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final bytes = Uint8List.view(memory.buffer);
+  final inputPointer = 1024;
+  final outputPointer = 4096;
+  final inputBytes = utf8.encode('canonical error-context');
+  final host = WASIComponentErrorContextHost();
+  final newOperation = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.errorContextNew,
+      options: [
+        WasmComponentCanonicalOption(
+          kind: WasmComponentCanonicalOptionKind.stringEncodingUtf8,
+        ),
+        WasmComponentCanonicalOption(
+          kind: WasmComponentCanonicalOptionKind.memory,
+          index: 0,
+        ),
+      ],
+    ),
+  );
+  final debugOperation = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.errorContextDebugMessage,
+      options: [
+        WasmComponentCanonicalOption(
+          kind: WasmComponentCanonicalOptionKind.stringEncodingUtf8,
+        ),
+        WasmComponentCanonicalOption(
+          kind: WasmComponentCanonicalOptionKind.memory,
+          index: 0,
+        ),
+        WasmComponentCanonicalOption(
+          kind: WasmComponentCanonicalOptionKind.realloc,
+          index: 0,
+        ),
+      ],
+    ),
+  );
+  final dropOperation = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.errorContextDrop,
+    ),
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    bytes.setRange(inputPointer, inputPointer + inputBytes.length, inputBytes);
+    final handle = newOperation.createFromMemory(
+      memory,
+      inputPointer,
+      inputBytes.length,
+    );
+    final result = debugOperation.debugMessageToMemory(
+      handle,
+      memory,
+      (oldPointer, oldSize, alignment, newSize) => outputPointer,
+    );
+    checksum += result.length;
+    checksum += bytes[outputPointer];
+    dropOperation.drop(handle);
+  }
+  watch.stop();
+
+  if (host.table.activeCount != 0) {
+    throw StateError(
+      'error-context memory host leaked ${host.table.activeCount} contexts',
+    );
+  }
+  return _Metric(
+    operations: iterations * 5,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _printText(Map<String, Object?> payload) {
   stdout
     ..writeln('WASI component resource table benchmark')
@@ -269,6 +350,7 @@ void _printText(Map<String, Object?> payload) {
     'drop_callbacks',
     'program_invoke',
     'error_context_program',
+    'error_context_memory',
   ]) {
     final metric = payload[name]! as Map<String, Object?>;
     stdout

@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/error_context.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
+import 'package:wasd/src/wasm/memory.dart';
 
 void main() {
   group('WASIComponentErrorContextHost', () {
@@ -81,6 +83,142 @@ void main() {
       expect(debugOperation.debugMessage(handle), 'component failed');
       dropOperation.drop(handle);
       expect(() => debugOperation.debugMessage(handle), throwsStateError);
+    });
+
+    test('reads error-context.new messages from canonical UTF-8 memory', () {
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final bytes = Uint8List.view(memory.buffer);
+      final messageBytes = utf8.encode('héllo component');
+      bytes.setRange(32, 32 + messageBytes.length, messageBytes);
+      final host = WASIComponentErrorContextHost();
+      final operation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.errorContextNew,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.stringEncodingUtf8,
+            ),
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+
+      final handle = operation.createFromMemory(
+        memory,
+        32,
+        messageBytes.length,
+      );
+
+      expect(host.debugMessage(handle), 'héllo component');
+    });
+
+    test('writes debug-message results to canonical UTF-8 memory', () {
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final host = WASIComponentErrorContextHost();
+      final newOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.errorContextNew,
+        ),
+      );
+      final debugOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.errorContextDebugMessage,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.stringEncodingUtf8,
+            ),
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.realloc,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+      final handle = newOperation.create('component failed');
+      var nextPointer = 128;
+
+      final result = debugOperation.debugMessageToMemory(handle, memory, (
+        oldPointer,
+        oldSize,
+        alignment,
+        newSize,
+      ) {
+        expect(oldPointer, 0);
+        expect(oldSize, 0);
+        expect(alignment, 1);
+        final pointer = nextPointer;
+        nextPointer += newSize;
+        return pointer;
+      });
+
+      expect(result.pointer, 128);
+      expect(result.length, utf8.encode('component failed').length);
+      final bytes = Uint8List.view(memory.buffer);
+      expect(
+        utf8.decode(
+          bytes.sublist(result.pointer, result.pointer + result.length),
+        ),
+        'component failed',
+      );
+    });
+
+    test('rejects out-of-bounds canonical string memory ranges', () {
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final host = WASIComponentErrorContextHost();
+      final newOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.errorContextNew,
+        ),
+      );
+      final debugOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.errorContextDebugMessage,
+        ),
+      );
+      final handle = newOperation.create('too large');
+
+      expect(
+        () => newOperation.createFromMemory(
+          memory,
+          memory.buffer.lengthInBytes - 2,
+          4,
+        ),
+        throwsRangeError,
+      );
+      expect(
+        () => debugOperation.debugMessageToMemory(
+          handle,
+          memory,
+          (oldPointer, oldSize, alignment, newSize) =>
+              memory.buffer.lengthInBytes - 1,
+        ),
+        throwsRangeError,
+      );
+    });
+
+    test('rejects non-UTF-8 canonical string encodings', () {
+      final host = WASIComponentErrorContextHost();
+
+      expect(
+        () => host.bindCanonicalDefinition(
+          const WasmComponentCanonicalDefinition(
+            kind: WasmComponentCanonicalKind.errorContextNew,
+            options: [
+              WasmComponentCanonicalOption(
+                kind: WasmComponentCanonicalOptionKind.stringEncodingUtf16,
+              ),
+            ],
+          ),
+        ),
+        throwsUnsupportedError,
+      );
     });
 
     test('invokes manual canonical debug-message programs', () {

@@ -121,8 +121,12 @@ This is the implementation state as of 2026-06-21 on `main`.
   `backpressure.dec` canonical definitions to an internal bounded counter with
   overflow/underflow checks. Internal error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`
-  as table-backed handles with real stale-handle/drop validation, while
-  string memory lowering/lifting remains a future canonical ABI adapter step.
+  as table-backed handles with real stale-handle/drop validation. It also has
+  an internal UTF-8 canonical string memory adapter for reading
+  `error-context.new` messages from guest memory and writing
+  `error-context.debug-message` results through a canonical-style `realloc`
+  callback. Full string encoding coverage and integration with real core
+  realloc exports remain future canonical ABI adapter work.
   P2/P3 host instantiation, WIT ingestion, full canonical ABI
   lowering/lifting, memory-backed typed stream/future copy, and full async
   stream/future execution are not production-supported yet.
@@ -198,8 +202,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   `dart run tool/wasi_component_async_benchmark.dart --json`.
 - Component resource table canonical `resource.new`/`resource.rep`/
   `resource.drop`, decoded resource-only canonical program invocation,
-  error-context canonical lifecycle invocation, nominal typed lookup,
-  synchronous/asynchronous borrow, and drop behavior are measured by
+  error-context canonical lifecycle invocation, error-context UTF-8 memory
+  adapter invocation, nominal typed lookup, synchronous/asynchronous borrow,
+  and drop behavior are measured by
   `dart run tool/wasi_resource_table_benchmark.dart --json`.
 
 ## Near-Term Slices
