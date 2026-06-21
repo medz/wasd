@@ -216,8 +216,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   An internal canonical host facade now shares the component resource table,
   waitable resolvers, current context, task, thread, resource, async,
   waitable-set, subtask, and error-context hosts behind one canonical-indexed
-  binding layer. This is an adapter boundary for future P2/P3 version modules,
-  not a public support claim.
+  binding layer. It validates decoded components before binding canonical
+  definitions so future P2/P3 adapters fail with component validation
+  diagnostics instead of runtime-only host errors. This is an adapter boundary
+  for future P2/P3 version modules, not a public support claim.
   Internal
   error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`

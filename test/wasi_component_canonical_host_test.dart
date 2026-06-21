@@ -150,5 +150,49 @@ void main() {
         throwsUnsupportedError,
       );
     });
+
+    test('validates decoded components before canonical binding', () {
+      final component = WasmComponent.decode(
+        _canonicalContextGetOutOfRangeComponentBytes(),
+      );
+      final host = WASIComponentCanonicalHost();
+
+      expect(component.validate(), isNotEmpty);
+      expect(
+        () => host.bindComponent(component),
+        throwsA(
+          isA<WASIComponentCanonicalHostValidationException>()
+              .having((error) => error.errors, 'errors', hasLength(1))
+              .having(
+                (error) => error.errors.single.path,
+                'path',
+                'canonical[0].context',
+              )
+              .having(
+                (error) => error.toString(),
+                'message',
+                contains('context index must be less than 2'),
+              ),
+        ),
+      );
+    });
   });
 }
+
+Uint8List _canonicalContextGetOutOfRangeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x04,
+      0x01,
+      0x0a,
+      0x7f,
+      0x02,
+    ]);

@@ -74,7 +74,16 @@ final class WASIComponentCanonicalHost {
   late final WASIComponentErrorContextHost errorContextHost;
 
   /// Binds decoded canonical definitions from [component].
-  WASIComponentCanonicalProgram bindComponent(WasmComponent component) {
+  WASIComponentCanonicalProgram bindComponent(
+    WasmComponent component, {
+    bool validate = true,
+  }) {
+    if (validate) {
+      final errors = component.validate();
+      if (errors.isNotEmpty) {
+        throw WASIComponentCanonicalHostValidationException(errors);
+      }
+    }
     return bindCanonicalDefinitions(component.canonicalDefinitions);
   }
 
@@ -261,6 +270,30 @@ final class WASIComponentCanonicalHost {
       kind: definition.kind,
       invoke: (args) => program.invoke(0, args),
     );
+  }
+}
+
+/// Thrown when a decoded component fails validation before canonical binding.
+final class WASIComponentCanonicalHostValidationException implements Exception {
+  /// Creates a validation exception with component validation [errors].
+  const WASIComponentCanonicalHostValidationException(this.errors);
+
+  /// Component validation errors that blocked binding.
+  final List<WasmComponentValidationError> errors;
+
+  @override
+  String toString() {
+    final buffer = StringBuffer(
+      'WASI component canonical host cannot bind invalid component',
+    );
+    for (final error in errors) {
+      buffer
+        ..write('\n')
+        ..write(error.path)
+        ..write(': ')
+        ..write(error.message);
+    }
+    return buffer.toString();
   }
 }
 
