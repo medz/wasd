@@ -932,27 +932,53 @@ _WASIComponentAsyncValueValidator _expectDecodedAsyncType(
       'WASI component type index $componentTypeIndex is not a ${expected.name} type.',
     );
   }
-  return _asyncValueValidatorForElementType(definedValue.elementType);
+  return _asyncValueValidatorForElementType(
+    definedValue.elementType,
+    component.componentTypeIndexDefinitions,
+  );
 }
 
 _WASIComponentAsyncValueValidator _asyncValueValidatorForElementType(
   WasmComponentValueType? elementType,
+  List<WasmComponentTypeDefinition> definitions,
 ) {
   if (elementType == null) {
     return _WASIComponentAsyncValueValidator.unconstrained;
   }
-  if (elementType.kind != WasmComponentValueTypeKind.primitive ||
-      elementType.primitive == null) {
+  final primitive = _primitiveElementType(elementType, definitions);
+  if (primitive == null) {
     throw UnsupportedError(
-      'WASI component async host currently supports only direct primitive stream/future element types.',
+      'WASI component async host currently supports only primitive stream/future element types.',
     );
   }
-  if (elementType.primitive == WasmComponentPrimitiveValueType.errorContext) {
+  if (primitive == WasmComponentPrimitiveValueType.errorContext) {
     throw UnsupportedError(
       'WASI component async host does not support error-context stream/future element values yet.',
     );
   }
-  return _WASIComponentAsyncValueValidator._(elementType.primitive);
+  return _WASIComponentAsyncValueValidator._(primitive);
+}
+
+WasmComponentPrimitiveValueType? _primitiveElementType(
+  WasmComponentValueType elementType,
+  List<WasmComponentTypeDefinition> definitions,
+) {
+  if (elementType.kind == WasmComponentValueTypeKind.primitive) {
+    return elementType.primitive;
+  }
+
+  final typeIndex = elementType.typeIndex;
+  if (typeIndex == null || typeIndex < 0 || typeIndex >= definitions.length) {
+    return null;
+  }
+  final definition = definitions[typeIndex];
+  final definedValue = definition.definedValue;
+  if (definition.kind != WasmComponentTypeKind.definedValue ||
+      definedValue == null ||
+      definedValue.kind != WasmComponentDefinedValueTypeKind.primitive) {
+    return null;
+  }
+  return definedValue.primitive;
 }
 
 bool _primitiveValueMatches(

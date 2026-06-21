@@ -105,10 +105,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   coverage, plus an internal async host that binds decoded canonical `stream.*`
   and `future.*` definitions to executable endpoint operations and
   resource-table-backed integer endpoint handles. Host async bindings now read
-  decoded primitive stream/future element types and validate Dart values against
-  those component-level primitive constraints before writing. P2/P3 host
-  instantiation, WIT ingestion, full canonical ABI lowering/lifting, and async
-  stream/future execution are not production-supported yet.
+  decoded direct or type-indexed primitive stream/future element types and
+  validate Dart values against those component-level primitive constraints
+  before writing. P2/P3 host instantiation, WIT ingestion, full canonical ABI
+  lowering/lifting, and async stream/future execution are not
+  production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
   for component-model WASI versions. This is an intentional version boundary,
@@ -199,8 +200,8 @@ This is the implementation state as of 2026-06-21 on `main`.
    scheduling around the internal async host before adding public P3 API claims.
 6. Introduce explicit WASI version modules for future P2/P3 work instead of
    extending Preview 1 host types in place.
-7. Extend async host value validation beyond direct primitive element types
-   only when composite value lowering/lifting support is implemented.
+7. Extend async host value validation beyond primitive element aliases only
+   when composite value lowering/lifting support is implemented.
 8. Add WIT/interface ingestion only after the versioned host boundary and
    resource table are wired into canonical ABI ownership behavior.
 

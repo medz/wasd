@@ -290,25 +290,54 @@ void main() {
       );
     });
 
-    test(
-      'rejects indexed stream element types until lowering is supported',
-      () {
-        final component = WasmComponent.decode(
-          _streamIndexedElementTypeComponentBytes(),
-        );
-        expect(component.validate(), isEmpty);
-        final host = WASIComponentAsyncHost();
+    test('validates indexed primitive stream element values', () {
+      final component = WasmComponent.decode(
+        _streamIndexedPrimitiveElementTypeComponentBytes(),
+      );
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<Object>(
+        component,
+        1,
+        'indexed-stream',
+      );
+      final newOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamNew,
+          typeIndex: 1,
+        ),
+      );
+      final writeOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamWrite,
+          typeIndex: 1,
+        ),
+      );
+      final stream = newOperation.streamNew() as WASIComponentStream<Object>;
 
-        expect(
-          () => host.defineStreamTypeFromComponent<Object>(
-            component,
-            1,
-            'indexed-stream',
-          ),
-          throwsUnsupportedError,
-        );
-      },
-    );
+      expect(writeOperation.streamWrite(stream.writable, <Object>['ok']), 1);
+      expect(
+        () => writeOperation.streamWrite(stream.writable, <Object>[7]),
+        throwsStateError,
+      );
+    });
+
+    test('rejects indexed composite stream element types', () {
+      final component = WasmComponent.decode(
+        _streamIndexedCompositeElementTypeComponentBytes(),
+      );
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentAsyncHost();
+
+      expect(
+        () => host.defineStreamTypeFromComponent<Object>(
+          component,
+          1,
+          'indexed-stream',
+        ),
+        throwsUnsupportedError,
+      );
+    });
   });
 }
 
@@ -420,7 +449,7 @@ Uint8List _futureU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x79,
 ]);
 
-Uint8List _streamIndexedElementTypeComponentBytes() =>
+Uint8List _streamIndexedPrimitiveElementTypeComponentBytes() =>
     Uint8List.fromList(const <int>[
       0x00,
       0x61,
@@ -433,6 +462,26 @@ Uint8List _streamIndexedElementTypeComponentBytes() =>
       0x07,
       0x05,
       0x02,
+      0x73,
+      0x66,
+      0x01,
+      0x00,
+    ]);
+
+Uint8List _streamIndexedCompositeElementTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x06,
+      0x02,
+      0x70,
       0x73,
       0x66,
       0x01,
