@@ -12,6 +12,11 @@ final _wasiBytes = wasiStartModuleBytes();
 
 Object? _skipOnNode(String reason) => isNodeJsRuntime ? reason : false;
 
+const int _rightFdRead = 1 << 1;
+const int _rightFdWrite = 1 << 6;
+const int _rightFdFdstatGet = 1 << 21;
+const int _rightsAll = (1 << 30) - 1;
+
 void _setUint64Le(ByteData data, int offset, int value) {
   final normalized = value.toUnsigned(64);
   data.setUint32(offset, normalized & 0xffffffff, Endian.little);
@@ -825,8 +830,8 @@ void main() {
               pathPtr,
               relativePath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               openedFdPtr,
             ]),
@@ -890,8 +895,8 @@ void main() {
               pathPtr,
               relativePath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               openedFdPtr,
             ]),
@@ -983,8 +988,8 @@ void main() {
               sourcePathPtr,
               sourcePath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               sourceFdPtr,
             ]),
@@ -997,8 +1002,8 @@ void main() {
               targetPathPtr,
               targetPath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               targetFdPtr,
             ]),
@@ -1033,8 +1038,8 @@ void main() {
               targetPathPtr,
               targetPath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               sourceFdPtr,
             ]),
@@ -1054,6 +1059,110 @@ void main() {
         },
         skip: _skipOnNode(
           'Skipping on Node.js; fd_renumber behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'fd_fdstat_set_rights persists and enforces descriptor rights',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/data.txt': Uint8List.fromList(utf8.encode('abcdef')),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdFdstatGet =
+              preview1['fd_fdstat_get'] as FunctionImportExportValue;
+          final fdFdstatSetRights =
+              preview1['fd_fdstat_set_rights'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final fdPwrite = preview1['fd_pwrite'] as FunctionImportExportValue;
+          final fdWrite = preview1['fd_write'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final path = utf8.encode('data.txt');
+          const pathPtr = 2672;
+          const fdPtr = 2704;
+          const fdstatPtr = 2720;
+          const iovPtr = 2752;
+          const bufferPtr = 2784;
+          const countPtr = 2816;
+          const filestatPtr = 2832;
+          const zeroFdPtr = 2912;
+
+          bytes.setAll(pathPtr, path);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              path.length,
+              0,
+              _rightsAll,
+              _rightsAll,
+              0,
+              fdPtr,
+            ]),
+            0,
+          );
+          final fd = data.getUint32(fdPtr, Endian.little);
+
+          expect(
+            pathOpen.ref([3, 0, pathPtr, path.length, 0, 0, 0, 0, zeroFdPtr]),
+            0,
+          );
+          final zeroFd = data.getUint32(zeroFdPtr, Endian.little);
+          expect(fdFdstatGet.ref([zeroFd, fdstatPtr]), 0);
+          expect(_getUint64Le(data, fdstatPtr + 8), 0);
+          expect(_getUint64Le(data, fdstatPtr + 16), 0);
+          expect(fdPread.ref([zeroFd, iovPtr, 1, 0, countPtr]), 76);
+
+          expect(fdFdstatGet.ref([fd, fdstatPtr]), 0);
+          expect(
+            fdFdstatSetRights.ref([fd, _rightFdRead | _rightFdFdstatGet, 0]),
+            0,
+          );
+          expect(fdFdstatGet.ref([fd, fdstatPtr]), 0);
+          expect(
+            _getUint64Le(data, fdstatPtr + 8),
+            _rightFdRead | _rightFdFdstatGet,
+          );
+          expect(_getUint64Le(data, fdstatPtr + 16), 0);
+
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 3, Endian.little);
+          expect(fdPread.ref([fd, iovPtr, 1, 0, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 3);
+          expect(fdPwrite.ref([fd, iovPtr, 1, 0, countPtr]), 76);
+          expect(fdFdstatSetRights.ref([fd, _rightFdWrite, 0]), 76);
+
+          expect(fdFdstatSetRights.ref([1, 0, 0]), 0);
+          expect(fdWrite.ref([1, iovPtr, 1, countPtr]), 76);
+
+          expect(
+            fdFdstatSetRights.ref([3, _rightFdFdstatGet, _rightFdRead]),
+            0,
+          );
+          expect(
+            pathFilestatGet.ref([3, 0, pathPtr, path.length, filestatPtr]),
+            76,
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; descriptor rights behavior is delegated to node:wasi.',
         ),
       );
 
@@ -1105,8 +1214,8 @@ void main() {
               pathPtr,
               relativePath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               openedFdPtr,
             ]),
@@ -1194,8 +1303,8 @@ void main() {
               pathPtr,
               relativePath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               openedFdPtr,
             ]),
@@ -1263,8 +1372,8 @@ void main() {
               pathPtr,
               relativePath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               openedFdPtr,
             ]),
@@ -1350,8 +1459,8 @@ void main() {
               pathPtr,
               filePath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               openedFdPtr,
             ]),
@@ -1452,8 +1561,8 @@ void main() {
               pathPtr,
               dirPath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               openedFdPtr,
             ]),
@@ -1472,8 +1581,8 @@ void main() {
               pathPtr,
               nestedPath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               openedFdPtr,
             ]),
@@ -1533,8 +1642,8 @@ void main() {
               pathPtr,
               dirPath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               openedFdPtr,
             ]),
@@ -1770,8 +1879,8 @@ void main() {
               oldPathPtr,
               oldPath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               openedFdPtr,
             ]),
@@ -1802,8 +1911,8 @@ void main() {
               newPathPtr,
               newPath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               openedFdPtr,
             ]),
@@ -2002,8 +2111,8 @@ void main() {
               linkPathPtr,
               linkPath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               openedFdPtr,
             ]),
@@ -2026,8 +2135,8 @@ void main() {
               hardLinkPathPtr,
               hardLinkPath.length,
               0,
-              0,
-              0,
+              _rightsAll,
+              _rightsAll,
               0,
               openedFdPtr,
             ]),

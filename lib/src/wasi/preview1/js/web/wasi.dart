@@ -33,22 +33,19 @@ class WASI implements wasi.WASI {
        _vfs = wasi_vfs.Preview1VirtualFileSystem(
          preopens: preopens,
          files: files,
+         stdinFd: stdin,
+         stdoutFd: stdout,
+         stderrFd: stderr,
        ),
-       _stdin = stdin,
        _stdinInput = wasi_vfs.Preview1VirtualOpenFile.fromBytes(
          Uint8List.fromList(stdinData),
-       ),
-       _stdout = stdout,
-       _stderr = stderr;
+       );
 
   final bool _returnOnExit;
   final List<Uint8List> _argsData;
   final List<Uint8List> _envData;
   final wasi_vfs.Preview1VirtualFileSystem _vfs;
-  final int _stdin;
   final wasi_vfs.Preview1VirtualOpenFile _stdinInput;
-  final int _stdout;
-  final int _stderr;
   static const int _maxWebCryptoGetRandomValuesLength = 65536;
 
   final Stopwatch _monotonicClock = Stopwatch()..start();
@@ -83,6 +80,7 @@ class WASI implements wasi.WASI {
       'fd_allocate': _fdAllocateImport,
       'fd_fdstat_get': _fdFdstatGetImport,
       'fd_fdstat_set_flags': _fdFdstatSetFlagsImport,
+      'fd_fdstat_set_rights': _fdFdstatSetRightsImport,
       'fd_filestat_get': _fdFilestatGetImport,
       'fd_filestat_set_size': _fdFilestatSetSizeImport,
       'fd_filestat_set_times': _fdFilestatSetTimesImport,
@@ -124,9 +122,17 @@ class WASI implements wasi.WASI {
         final nwrittenPtr = _asInt(args[3]);
 
         final opened = _vfs.openFileForFd(fd);
-        if (fd != _stdout && fd != _stderr) {
+        final stdioKind = _vfs.stdioKindForFd(fd);
+        final isOutput =
+            stdioKind == wasi_vfs.Preview1StdioDescriptorKind.stdout ||
+            stdioKind == wasi_vfs.Preview1StdioDescriptorKind.stderr;
+        if (!isOutput) {
           if (opened == null) {
             return _errnoBadf;
+          }
+          final right = _checkDescriptorRight(fd, _rightFdWrite);
+          if (right != _errnoSuccess) {
+            return right;
           }
           return _writeOpenFileFromIov(
             opened: opened,
@@ -134,6 +140,10 @@ class WASI implements wasi.WASI {
             iovsLen: iovsLen,
             nwrittenPtr: nwrittenPtr,
           );
+        }
+        final right = _checkDescriptorRight(fd, _rightFdWrite);
+        if (right != _errnoSuccess) {
+          return right;
         }
 
         final view = _memoryView();
@@ -341,13 +351,21 @@ class WASI implements wasi.WASI {
         final iovsLen = _asInt(args[2]);
         final nreadPtr = _asInt(args[3]);
         final opened = _vfs.openFileForFd(fd);
-        final input = fd == _stdin ? _stdinInput : opened;
+        final input =
+            _vfs.stdioKindForFd(fd) ==
+                wasi_vfs.Preview1StdioDescriptorKind.stdin
+            ? _stdinInput
+            : opened;
         final isDirectory = _vfs.isOpenDirectoryFd(fd);
         if (input == null) {
           return _errnoBadf;
         }
         if (isDirectory) {
           return _errnoBadf;
+        }
+        final right = _checkDescriptorRight(fd, _rightFdRead);
+        if (right != _errnoSuccess) {
+          return right;
         }
 
         return _readOpenFileIntoIov(
@@ -367,8 +385,9 @@ class WASI implements wasi.WASI {
         final offset = _asInt64(args[1]);
         final len = _asInt64(args[2]);
         final advice = _asInt(args[3]);
-        if (!_isOpenDescriptor(fd)) {
-          return _errnoBadf;
+        final right = _checkDescriptorRight(fd, _rightFdAdvise);
+        if (right != _errnoSuccess) {
+          return right;
         }
         if (offset < 0 || len < 0 || advice < 0 || advice > 5) {
           return _errnoInval;
@@ -381,7 +400,7 @@ class WASI implements wasi.WASI {
         if (args.isEmpty) {
           return _errnoInval;
         }
-        return _isOpenDescriptor(_asInt(args[0])) ? _errnoSuccess : _errnoBadf;
+        return _checkDescriptorRight(_asInt(args[0]), _rightFdDatasync);
       });
 
   wasm.FunctionImportExportValue get _fdPreadImport =>
@@ -397,6 +416,10 @@ class WASI implements wasi.WASI {
         final opened = _vfs.openFileForFd(fd);
         if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
           return _errnoBadf;
+        }
+        final right = _checkDescriptorRight(fd, _rightFdRead);
+        if (right != _errnoSuccess) {
+          return right;
         }
 
         return _readOpenFileIntoIov(
@@ -422,6 +445,10 @@ class WASI implements wasi.WASI {
         if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
           return _errnoBadf;
         }
+        final right = _checkDescriptorRight(fd, _rightFdWrite);
+        if (right != _errnoSuccess) {
+          return right;
+        }
 
         return _writeOpenFileFromIov(
           opened: opened,
@@ -445,6 +472,10 @@ class WASI implements wasi.WASI {
         final entries = _vfs.directoryEntriesForFd(fd);
         if (entries == null) {
           return _errnoBadf;
+        }
+        final right = _checkDescriptorRight(fd, _rightFdReaddir);
+        if (right != _errnoSuccess) {
+          return right;
         }
         if (cookie < 0) {
           return _errnoInval;
@@ -481,7 +512,7 @@ class WASI implements wasi.WASI {
         if (args.isEmpty) {
           return _errnoInval;
         }
-        return _isOpenDescriptor(_asInt(args[0])) ? _errnoSuccess : _errnoBadf;
+        return _checkDescriptorRight(_asInt(args[0]), _rightFdSync);
       });
 
   wasm.FunctionImportExportValue get _fdAllocateImport =>
@@ -495,6 +526,10 @@ class WASI implements wasi.WASI {
         final opened = _vfs.openFileForFd(fd);
         if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
           return _errnoBadf;
+        }
+        final right = _checkDescriptorRight(fd, _rightFdAllocate);
+        if (right != _errnoSuccess) {
+          return right;
         }
         if (offset < 0 || len < 0 || offset + len < offset) {
           return _errnoInval;
@@ -513,7 +548,11 @@ class WASI implements wasi.WASI {
     }
     final fd = _asInt(args[0]);
     final fdstatPtr = _asInt(args[1]);
-    final isStdio = fd == _stdin || fd == _stdout || fd == _stderr;
+    final descriptorKind = _vfs.descriptorKindForFd(fd);
+    final isStdio =
+        descriptorKind == wasi_vfs.Preview1DescriptorKind.stdin ||
+        descriptorKind == wasi_vfs.Preview1DescriptorKind.stdout ||
+        descriptorKind == wasi_vfs.Preview1DescriptorKind.stderr;
     final isDir = _vfs.isDirectoryFd(fd);
     final isFile = _vfs.openFileForFd(fd) != null;
     if (_traceSyscalls) {
@@ -546,8 +585,12 @@ class WASI implements wasi.WASI {
       _vfs.descriptorFlagsForFd(fd) ?? 0,
       Endian.little,
     );
-    final rightsBase = _allRightsMask;
-    final rightsInheriting = isDir ? _allRightsMask : 0;
+    final rights = _vfs.descriptorRightsForFd(fd);
+    if (rights == null) {
+      return _errnoBadf;
+    }
+    final rightsBase = rights.base;
+    final rightsInheriting = rights.inheriting;
     _setUint64(data, fdstatPtr + 8, rightsBase);
     _setUint64(data, fdstatPtr + 16, rightsInheriting);
     return _errnoSuccess;
@@ -563,7 +606,25 @@ class WASI implements wasi.WASI {
         if ((flags & ~_fdflagKnownMask) != 0) {
           return _errnoInval;
         }
+        final right = _checkDescriptorRight(fd, _rightFdFdstatSetFlags);
+        if (right != _errnoSuccess) {
+          return right;
+        }
         return _vfs.setDescriptorFlags(fd, flags) ? _errnoSuccess : _errnoBadf;
+      });
+
+  wasm.FunctionImportExportValue get _fdFdstatSetRightsImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 3) {
+          return _errnoInval;
+        }
+        return _errnoFromFdRightsResult(
+          _vfs.setDescriptorRights(
+            fd: _asInt(args[0]),
+            rightsBase: _asInt64(args[1]),
+            rightsInheriting: _asInt64(args[2]),
+          ),
+        );
       });
 
   wasm.FunctionImportExportValue get _fdFilestatGetImport =>
@@ -586,10 +647,14 @@ class WASI implements wasi.WASI {
 
         final opened = _vfs.openFileForFd(fd);
         final openedDirectory = _vfs.isOpenDirectoryFd(fd);
-        final isStdio = fd == _stdin || fd == _stdout || fd == _stderr;
+        final isStdio = _vfs.stdioKindForFd(fd) != null;
         final isDir = _vfs.isPreopenDirectoryFd(fd);
         if (opened == null && !openedDirectory && !isStdio && !isDir) {
           return _errnoBadf;
+        }
+        final right = _checkDescriptorRight(fd, _rightFdFilestatGet);
+        if (right != _errnoSuccess) {
+          return right;
         }
 
         bytes.fillRange(bufPtr, bufPtr + _filestatSize, 0);
@@ -619,6 +684,10 @@ class WASI implements wasi.WASI {
         if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
           return _errnoBadf;
         }
+        final right = _checkDescriptorRight(fd, _rightFdFilestatSetSize);
+        if (right != _errnoSuccess) {
+          return right;
+        }
         if (size < 0) {
           return _errnoInval;
         }
@@ -636,6 +705,13 @@ class WASI implements wasi.WASI {
         if (metadata == null) {
           return _errnoBadf;
         }
+        final right = _checkDescriptorRight(
+          _asInt(args[0]),
+          _rightFdFilestatSetTimes,
+        );
+        if (right != _errnoSuccess) {
+          return right;
+        }
         return _applyFilestatTimes(
           metadata: metadata,
           accessTimeNanos: _asInt64(args[1]),
@@ -650,9 +726,6 @@ class WASI implements wasi.WASI {
           return _errnoInval;
         }
         final fd = _asInt(args.first);
-        if (fd == _stdin || fd == _stdout || fd == _stderr) {
-          return _errnoSuccess;
-        }
         if (_vfs.close(fd)) {
           return _errnoSuccess;
         }
@@ -686,6 +759,10 @@ class WASI implements wasi.WASI {
         final opened = _vfs.openFileForFd(fd);
         if (opened == null) {
           return _errnoBadf;
+        }
+        final right = _checkDescriptorRight(fd, _rightFdSeek);
+        if (right != _errnoSuccess) {
+          return right;
         }
 
         final view = _memoryView();
@@ -726,6 +803,10 @@ class WASI implements wasi.WASI {
         final opened = _vfs.openFileForFd(fd);
         if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
           return _errnoBadf;
+        }
+        final right = _checkDescriptorRight(fd, _rightFdTell);
+        if (right != _errnoSuccess) {
+          return right;
         }
 
         final view = _memoryView();
@@ -863,6 +944,13 @@ class WASI implements wasi.WASI {
         if (resolved.errno != _errnoSuccess) {
           return resolved.errno;
         }
+        final right = _checkDescriptorRight(
+          _asInt(args[0]),
+          _rightPathCreateDirectory,
+        );
+        if (right != _errnoSuccess) {
+          return right;
+        }
         return _errnoFromPathMutationResult(
           _vfs.createDirectory(resolved.path!),
         );
@@ -884,6 +972,10 @@ class WASI implements wasi.WASI {
     final baseDirectory = _vfs.directoryPathForFd(dirFd);
     if (baseDirectory == null) {
       return _errnoBadf;
+    }
+    final right = _checkDescriptorRight(dirFd, _rightPathOpen);
+    if (right != _errnoSuccess) {
+      return right;
     }
 
     final view = _memoryView();
@@ -927,7 +1019,34 @@ class WASI implements wasi.WASI {
         '[wasi:path_open] normalized=$normalizedPath open=$openPath found=${fileBytes != null}',
       );
     }
-    final opened = _vfs.openPath(openPath);
+    final requestedRightsBase = _asInt64(args[5]);
+    final requestedRightsInheriting = _asInt64(args[6]);
+    final descriptorFlags = _asInt(args[7]);
+    if ((descriptorFlags & ~_fdflagKnownMask) != 0 ||
+        requestedRightsBase < 0 ||
+        requestedRightsInheriting < 0 ||
+        (requestedRightsBase & ~_rightsKnownMask) != 0 ||
+        (requestedRightsInheriting & ~_rightsKnownMask) != 0) {
+      return _errnoInval;
+    }
+    final parentRights = _vfs.descriptorRightsForFd(dirFd);
+    if (parentRights == null) {
+      return _errnoBadf;
+    }
+    if (requestedRightsBase != 0 &&
+            (requestedRightsBase | parentRights.inheriting) !=
+                parentRights.inheriting ||
+        requestedRightsInheriting != 0 &&
+            (requestedRightsInheriting | parentRights.inheriting) !=
+                parentRights.inheriting) {
+      return _errnoNotcapable;
+    }
+    final opened = _vfs.openPath(
+      openPath,
+      rightsBase: requestedRightsBase,
+      rightsInheriting: requestedRightsInheriting,
+      descriptorFlags: descriptorFlags,
+    );
     switch (opened.kind) {
       case wasi_vfs.Preview1VirtualOpenKind.file:
       case wasi_vfs.Preview1VirtualOpenKind.directory:
@@ -950,6 +1069,13 @@ class WASI implements wasi.WASI {
         );
         if (resolved.errno != _errnoSuccess) {
           return resolved.errno;
+        }
+        final right = _checkDescriptorRight(
+          _asInt(args[0]),
+          _rightPathRemoveDirectory,
+        );
+        if (right != _errnoSuccess) {
+          return right;
         }
         return _errnoFromPathMutationResult(
           _vfs.removeDirectory(resolved.path!),
@@ -977,6 +1103,20 @@ class WASI implements wasi.WASI {
         if (newPath.errno != _errnoSuccess) {
           return newPath.errno;
         }
+        final oldRight = _checkDescriptorRight(
+          _asInt(args[0]),
+          _rightPathRenameSource,
+        );
+        if (oldRight != _errnoSuccess) {
+          return oldRight;
+        }
+        final newRight = _checkDescriptorRight(
+          _asInt(args[3]),
+          _rightPathRenameTarget,
+        );
+        if (newRight != _errnoSuccess) {
+          return newRight;
+        }
 
         return _errnoFromPathMutationResult(
           _vfs.renamePath(oldPath: oldPath.path!, newPath: newPath.path!),
@@ -1000,6 +1140,13 @@ class WASI implements wasi.WASI {
         if (oldPath.errno != _errnoSuccess) {
           return oldPath.errno;
         }
+        final oldRight = _checkDescriptorRight(
+          _asInt(args[0]),
+          _rightPathLinkSource,
+        );
+        if (oldRight != _errnoSuccess) {
+          return oldRight;
+        }
         final newPath = _resolvePath(
           dirFd: _asInt(args[4]),
           pathPtr: _asInt(args[5]),
@@ -1007,6 +1154,13 @@ class WASI implements wasi.WASI {
         );
         if (newPath.errno != _errnoSuccess) {
           return newPath.errno;
+        }
+        final newRight = _checkDescriptorRight(
+          _asInt(args[4]),
+          _rightPathLinkTarget,
+        );
+        if (newRight != _errnoSuccess) {
+          return newRight;
         }
         final oldLinkPath = (lookupFlags & _lookupflagSymlinkFollow) == 0
             ? oldPath.path!
@@ -1032,6 +1186,13 @@ class WASI implements wasi.WASI {
         );
         if (resolved.errno != _errnoSuccess) {
           return resolved.errno;
+        }
+        final right = _checkDescriptorRight(
+          _asInt(args[0]),
+          _rightPathReadlink,
+        );
+        if (right != _errnoSuccess) {
+          return right;
         }
 
         final bufferPtr = _asInt(args[3]);
@@ -1104,6 +1265,10 @@ class WASI implements wasi.WASI {
         if (linkPath.errno != _errnoSuccess) {
           return linkPath.errno;
         }
+        final right = _checkDescriptorRight(_asInt(args[2]), _rightPathSymlink);
+        if (right != _errnoSuccess) {
+          return right;
+        }
         return _errnoFromPathMutationResult(
           _vfs.createSymlink(target: target, linkPath: linkPath.path!),
         );
@@ -1121,6 +1286,13 @@ class WASI implements wasi.WASI {
         );
         if (resolved.errno != _errnoSuccess) {
           return resolved.errno;
+        }
+        final right = _checkDescriptorRight(
+          _asInt(args[0]),
+          _rightPathUnlinkFile,
+        );
+        if (right != _errnoSuccess) {
+          return right;
         }
         return _errnoFromPathMutationResult(_vfs.unlinkFile(resolved.path!));
       });
@@ -1143,6 +1315,10 @@ class WASI implements wasi.WASI {
     final baseDirectory = _vfs.directoryPathForFd(dirFd);
     if (baseDirectory == null) {
       return _errnoBadf;
+    }
+    final right = _checkDescriptorRight(dirFd, _rightPathFilestatGet);
+    if (right != _errnoSuccess) {
+      return right;
     }
 
     final view = _memoryView();
@@ -1202,6 +1378,13 @@ class WASI implements wasi.WASI {
         if (resolved.errno != _errnoSuccess) {
           return resolved.errno;
         }
+        final right = _checkDescriptorRight(
+          _asInt(args[0]),
+          _rightPathFilestatSetTimes,
+        );
+        if (right != _errnoSuccess) {
+          return right;
+        }
         final entry = _vfs.pathEntry(
           resolved.path!,
           followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
@@ -1260,12 +1443,16 @@ class WASI implements wasi.WASI {
         return _errnoSuccess;
       });
 
-  bool _isOpenDescriptor(int fd) =>
-      fd == _stdin ||
-      fd == _stdout ||
-      fd == _stderr ||
-      _vfs.openFileForFd(fd) != null ||
-      _vfs.isDirectoryFd(fd);
+  bool _isOpenDescriptor(int fd) => _vfs.descriptorKindForFd(fd) != null;
+
+  int _checkDescriptorRight(int fd, int right) {
+    if (!_isOpenDescriptor(fd)) {
+      return _errnoBadf;
+    }
+    return _vfs.descriptorHasRight(fd, right)
+        ? _errnoSuccess
+        : _errnoNotcapable;
+  }
 
   int _applyFilestatTimes({
     required wasi_vfs.Preview1VirtualNodeMetadata metadata,
@@ -1697,6 +1884,7 @@ const int _errnoNoent = wasi_common.errnoNoent;
 const int _errnoNosys = wasi_common.errnoNosys;
 const int _errnoNotdir = wasi_common.errnoNotdir;
 const int _errnoNotempty = wasi_common.errnoNotempty;
+const int _errnoNotcapable = wasi_common.errnoNotcapable;
 const int _prestatSize = wasi_common.prestatSize;
 const int _preopenTypeDir = wasi_common.preopenTypeDir;
 const int _fdstatSize = wasi_common.fdstatSize;
@@ -1718,7 +1906,32 @@ const int _filestatTimeKnownFlags =
     _filestatSetAccessTimeNow |
     _filestatSetModificationTime |
     _filestatSetModificationTimeNow;
-const int _allRightsMask = 0xffffffff;
+const int _rightFdDatasync = wasi_common.rightFdDatasync;
+const int _rightFdRead = wasi_common.rightFdRead;
+const int _rightFdSeek = wasi_common.rightFdSeek;
+const int _rightFdFdstatSetFlags = wasi_common.rightFdFdstatSetFlags;
+const int _rightFdSync = wasi_common.rightFdSync;
+const int _rightFdTell = wasi_common.rightFdTell;
+const int _rightFdWrite = wasi_common.rightFdWrite;
+const int _rightFdAdvise = wasi_common.rightFdAdvise;
+const int _rightFdAllocate = wasi_common.rightFdAllocate;
+const int _rightPathCreateDirectory = wasi_common.rightPathCreateDirectory;
+const int _rightPathLinkSource = wasi_common.rightPathLinkSource;
+const int _rightPathLinkTarget = wasi_common.rightPathLinkTarget;
+const int _rightPathOpen = wasi_common.rightPathOpen;
+const int _rightFdReaddir = wasi_common.rightFdReaddir;
+const int _rightPathReadlink = wasi_common.rightPathReadlink;
+const int _rightPathRenameSource = wasi_common.rightPathRenameSource;
+const int _rightPathRenameTarget = wasi_common.rightPathRenameTarget;
+const int _rightPathFilestatGet = wasi_common.rightPathFilestatGet;
+const int _rightPathFilestatSetTimes = wasi_common.rightPathFilestatSetTimes;
+const int _rightFdFilestatGet = wasi_common.rightFdFilestatGet;
+const int _rightFdFilestatSetSize = wasi_common.rightFdFilestatSetSize;
+const int _rightFdFilestatSetTimes = wasi_common.rightFdFilestatSetTimes;
+const int _rightPathSymlink = wasi_common.rightPathSymlink;
+const int _rightPathRemoveDirectory = wasi_common.rightPathRemoveDirectory;
+const int _rightPathUnlinkFile = wasi_common.rightPathUnlinkFile;
+const int _rightsKnownMask = wasi_common.rightsKnownMask;
 const List<String> _preview1NosysImports = wasi_common.preview1NosysImports;
 
 bool _isU32InBounds(int ptr, int length) => ptr >= 0 && ptr + 4 <= length;
@@ -1732,6 +1945,14 @@ int _errnoFromPathMutationResult(wasi_vfs.Preview1PathMutationResult result) =>
       wasi_vfs.Preview1PathMutationResult.isDirectory => _errnoIsdir,
       wasi_vfs.Preview1PathMutationResult.notDirectory => _errnoNotdir,
       wasi_vfs.Preview1PathMutationResult.notEmpty => _errnoNotempty,
+    };
+
+int _errnoFromFdRightsResult(wasi_vfs.Preview1FdRightsResult result) =>
+    switch (result) {
+      wasi_vfs.Preview1FdRightsResult.success => _errnoSuccess,
+      wasi_vfs.Preview1FdRightsResult.invalid => _errnoInval,
+      wasi_vfs.Preview1FdRightsResult.badf => _errnoBadf,
+      wasi_vfs.Preview1FdRightsResult.notCapable => _errnoNotcapable,
     };
 
 int _asInt(Object? value) {

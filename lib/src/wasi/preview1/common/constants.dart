@@ -9,6 +9,7 @@ const int errnoNoent = 44;
 const int errnoNosys = 52;
 const int errnoNotdir = 54;
 const int errnoNotempty = 55;
+const int errnoNotcapable = 76;
 const int prestatSize = 8;
 const int preopenTypeDir = 0;
 const int fdstatSize = 24;
@@ -29,10 +30,41 @@ const int fdflagRsync = 8;
 const int fdflagSync = 16;
 const int fdflagKnownMask =
     fdflagAppend | fdflagDsync | fdflagNonblock | fdflagRsync | fdflagSync;
+const int rightFdDatasync = 1 << 0;
+const int rightFdRead = 1 << 1;
+const int rightFdSeek = 1 << 2;
+const int rightFdFdstatSetFlags = 1 << 3;
+const int rightFdSync = 1 << 4;
+const int rightFdTell = 1 << 5;
+const int rightFdWrite = 1 << 6;
+const int rightFdAdvise = 1 << 7;
+const int rightFdAllocate = 1 << 8;
+const int rightPathCreateDirectory = 1 << 9;
+const int rightPathCreateFile = 1 << 10;
+const int rightPathLinkSource = 1 << 11;
+const int rightPathLinkTarget = 1 << 12;
+const int rightPathOpen = 1 << 13;
+const int rightFdReaddir = 1 << 14;
+const int rightPathReadlink = 1 << 15;
+const int rightPathRenameSource = 1 << 16;
+const int rightPathRenameTarget = 1 << 17;
+const int rightPathFilestatGet = 1 << 18;
+const int rightPathFilestatSetSize = 1 << 19;
+const int rightPathFilestatSetTimes = 1 << 20;
+const int rightFdFilestatGet = 1 << 21;
+const int rightFdFilestatSetSize = 1 << 22;
+const int rightFdFilestatSetTimes = 1 << 23;
+const int rightPathSymlink = 1 << 24;
+const int rightPathRemoveDirectory = 1 << 25;
+const int rightPathUnlinkFile = 1 << 26;
+const int rightPollFdReadwrite = 1 << 27;
+const int rightSockShutdown = 1 << 28;
+const int rightSockAccept = 1 << 29;
+const int rightsKnownMask = (1 << 30) - 1;
+const int rightsAll = rightsKnownMask;
 
 /// Preview1 imports that should exist and return `ENOSYS` when unsupported.
 const List<String> preview1NosysImports = <String>[
-  'fd_fdstat_set_rights',
   'proc_raise',
   'sock_accept',
   'sock_recv',

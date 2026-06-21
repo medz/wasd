@@ -9,7 +9,15 @@ final class Preview1VirtualFileSystem {
     Map<String, String> preopens = const <String, String>{},
     Map<String, Uint8List> files = const <String, Uint8List>{},
     int firstVirtualFd = 64,
+    int stdinFd = 0,
+    int stdoutFd = 1,
+    int stderrFd = 2,
   }) : _nextVirtualFd = firstVirtualFd,
+       _stdioDescriptorsByFd = _buildStdioDescriptors(
+         stdinFd: stdinFd,
+         stdoutFd: stdoutFd,
+         stderrFd: stderrFd,
+       ),
        _preopenPathBytesByFd = {
          for (final indexed in preopens.keys.toList().asMap().entries)
            indexed.key + 3: pathBytes(indexed.value),
@@ -22,11 +30,20 @@ final class Preview1VirtualFileSystem {
          for (final indexed in preopens.keys.toList().asMap().entries)
            indexed.key + 3: 0,
        },
+       _preopenDirectoryRightsByFd = {
+         for (final indexed in preopens.keys.toList().asMap().entries)
+           indexed.key + 3: Preview1DescriptorRights.directory(),
+       },
        _filesByGuestPath = {
          for (final entry in files.entries)
            normalizeGuestPath(entry.key): Preview1VirtualFile(entry.value),
        },
        _symlinksByGuestPath = <String, Preview1VirtualSymlink>{} {
+    _stdioRightsByFd = {
+      for (final fd in _stdioDescriptorsByFd.keys)
+        fd: Preview1DescriptorRights.file(),
+    };
+    _stdioFlagsByFd = {for (final fd in _stdioDescriptorsByFd.keys) fd: 0};
     _filesByLowerGuestPath = _indexFilesByLowerPath(_filesByGuestPath);
     _filesByBasenameLower = _indexFilesByBasename(
       _filesByGuestPath,
@@ -54,12 +71,18 @@ final class Preview1VirtualFileSystem {
   final Map<int, Uint8List> _preopenPathBytesByFd;
   final Map<int, String> _preopenGuestPathsByFd;
   final Map<int, int> _preopenDirectoryFlagsByFd;
+  final Map<int, Preview1DescriptorRights> _preopenDirectoryRightsByFd;
+  final Map<int, Preview1StdioDescriptorKind> _stdioDescriptorsByFd;
+  late Map<int, Preview1DescriptorRights> _stdioRightsByFd;
+  late Map<int, int> _stdioFlagsByFd;
   final Map<String, Preview1VirtualFile> _filesByGuestPath;
   final Map<String, Preview1VirtualSymlink> _symlinksByGuestPath;
   final Map<int, Preview1VirtualOpenFile> _openFilesByFd =
       <int, Preview1VirtualOpenFile>{};
   final Map<int, String> _openDirectoriesByFd = <int, String>{};
   final Map<int, int> _openDirectoryFlagsByFd = <int, int>{};
+  final Map<int, Preview1DescriptorRights> _openDirectoryRightsByFd =
+      <int, Preview1DescriptorRights>{};
 
   late Map<String, Preview1VirtualFile> _filesByLowerGuestPath;
   late Map<String, Preview1VirtualFile> _filesByBasenameLower;
@@ -76,12 +99,78 @@ final class Preview1VirtualFileSystem {
 
   Preview1VirtualOpenFile? openFileForFd(int fd) => _openFilesByFd[fd];
 
+  Preview1DescriptorKind? descriptorKindForFd(int fd) {
+    final stdioKind = _stdioDescriptorsByFd[fd];
+    if (stdioKind != null) {
+      return switch (stdioKind) {
+        Preview1StdioDescriptorKind.stdin => Preview1DescriptorKind.stdin,
+        Preview1StdioDescriptorKind.stdout => Preview1DescriptorKind.stdout,
+        Preview1StdioDescriptorKind.stderr => Preview1DescriptorKind.stderr,
+      };
+    }
+    if (_openFilesByFd.containsKey(fd)) {
+      return Preview1DescriptorKind.file;
+    }
+    if (_openDirectoriesByFd.containsKey(fd)) {
+      return Preview1DescriptorKind.openDirectory;
+    }
+    if (_preopenGuestPathsByFd.containsKey(fd)) {
+      return Preview1DescriptorKind.preopenDirectory;
+    }
+    return null;
+  }
+
+  Preview1StdioDescriptorKind? stdioKindForFd(int fd) =>
+      _stdioDescriptorsByFd[fd];
+
+  Preview1DescriptorRights? descriptorRightsForFd(int fd) {
+    final opened = openFileForFd(fd);
+    if (opened != null) {
+      return opened.rights;
+    }
+    return _openDirectoryRightsByFd[fd] ??
+        _preopenDirectoryRightsByFd[fd] ??
+        _stdioRightsByFd[fd];
+  }
+
+  bool descriptorHasRight(int fd, int right) {
+    final rights = descriptorRightsForFd(fd);
+    return rights != null && (rights.base & right) == right;
+  }
+
+  Preview1FdRightsResult setDescriptorRights({
+    required int fd,
+    required int rightsBase,
+    required int rightsInheriting,
+  }) {
+    if (fd < 0 ||
+        rightsBase < 0 ||
+        rightsInheriting < 0 ||
+        (rightsBase & ~rightsKnownMask) != 0 ||
+        (rightsInheriting & ~rightsKnownMask) != 0) {
+      return Preview1FdRightsResult.invalid;
+    }
+    final rights = descriptorRightsForFd(fd);
+    if (rights == null) {
+      return Preview1FdRightsResult.badf;
+    }
+    if ((rightsBase | rights.base) != rights.base ||
+        (rightsInheriting | rights.inheriting) != rights.inheriting) {
+      return Preview1FdRightsResult.notCapable;
+    }
+    rights.base = rightsBase;
+    rights.inheriting = rightsInheriting;
+    return Preview1FdRightsResult.success;
+  }
+
   int? descriptorFlagsForFd(int fd) {
     final opened = openFileForFd(fd);
     if (opened != null) {
       return opened.descriptorFlags;
     }
-    return _openDirectoryFlagsByFd[fd] ?? _preopenDirectoryFlagsByFd[fd];
+    return _openDirectoryFlagsByFd[fd] ??
+        _preopenDirectoryFlagsByFd[fd] ??
+        _stdioFlagsByFd[fd];
   }
 
   bool setDescriptorFlags(int fd, int flags) {
@@ -96,6 +185,10 @@ final class Preview1VirtualFileSystem {
     }
     if (_preopenDirectoryFlagsByFd.containsKey(fd)) {
       _preopenDirectoryFlagsByFd[fd] = flags;
+      return true;
+    }
+    if (_stdioDescriptorsByFd.containsKey(fd)) {
+      _stdioFlagsByFd[fd] = flags;
       return true;
     }
     return false;
@@ -115,6 +208,20 @@ final class Preview1VirtualFileSystem {
       return Preview1FdRenumberResult.success;
     }
 
+    final stdioDescriptor = _stdioDescriptorsByFd.remove(fromFd);
+    if (stdioDescriptor != null) {
+      final rights = _stdioRightsByFd.remove(fromFd);
+      final flags = _stdioFlagsByFd.remove(fromFd) ?? 0;
+      _closeDescriptor(toFd);
+      _stdioDescriptorsByFd[toFd] = stdioDescriptor;
+      if (rights != null) {
+        _stdioRightsByFd[toFd] = rights;
+      }
+      _stdioFlagsByFd[toFd] = flags;
+      _advanceNextVirtualFdPast(toFd);
+      return Preview1FdRenumberResult.success;
+    }
+
     final openFile = _openFilesByFd.remove(fromFd);
     if (openFile != null) {
       _closeDescriptor(toFd);
@@ -126,9 +233,13 @@ final class Preview1VirtualFileSystem {
     final openDirectory = _openDirectoriesByFd.remove(fromFd);
     if (openDirectory != null) {
       final flags = _openDirectoryFlagsByFd.remove(fromFd) ?? 0;
+      final rights =
+          _openDirectoryRightsByFd.remove(fromFd) ??
+          Preview1DescriptorRights.directory();
       _closeDescriptor(toFd);
       _openDirectoriesByFd[toFd] = openDirectory;
       _openDirectoryFlagsByFd[toFd] = flags;
+      _openDirectoryRightsByFd[toFd] = rights;
       _advanceNextVirtualFdPast(toFd);
       return Preview1FdRenumberResult.success;
     }
@@ -137,12 +248,16 @@ final class Preview1VirtualFileSystem {
     if (preopenDirectory != null) {
       final pathBytes = _preopenPathBytesByFd.remove(fromFd);
       final flags = _preopenDirectoryFlagsByFd.remove(fromFd) ?? 0;
+      final rights =
+          _preopenDirectoryRightsByFd.remove(fromFd) ??
+          Preview1DescriptorRights.directory();
       _closeDescriptor(toFd);
       _preopenGuestPathsByFd[toFd] = preopenDirectory;
       if (pathBytes != null) {
         _preopenPathBytesByFd[toFd] = pathBytes;
       }
       _preopenDirectoryFlagsByFd[toFd] = flags;
+      _preopenDirectoryRightsByFd[toFd] = rights;
       _advanceNextVirtualFdPast(toFd);
       return Preview1FdRenumberResult.success;
     }
@@ -243,11 +358,17 @@ final class Preview1VirtualFileSystem {
   }
 
   bool close(int fd) {
+    if (_stdioDescriptorsByFd.remove(fd) != null) {
+      _stdioRightsByFd.remove(fd);
+      _stdioFlagsByFd.remove(fd);
+      return true;
+    }
     if (_openFilesByFd.remove(fd) != null) {
       return true;
     }
     if (_openDirectoriesByFd.remove(fd) != null) {
       _openDirectoryFlagsByFd.remove(fd);
+      _openDirectoryRightsByFd.remove(fd);
       return true;
     }
     return false;
@@ -340,6 +461,9 @@ final class Preview1VirtualFileSystem {
     _directoryMetadataByGuestPath.remove(normalized);
     _openDirectoriesByFd.removeWhere((_, path) => path == normalized);
     _openDirectoryFlagsByFd.removeWhere(
+      (fd, _) => !_openDirectoriesByFd.containsKey(fd),
+    );
+    _openDirectoryRightsByFd.removeWhere(
       (fd, _) => !_openDirectoriesByFd.containsKey(fd),
     );
     _rebuildDirectoryEntries();
@@ -487,19 +611,35 @@ final class Preview1VirtualFileSystem {
     return Preview1PathMutationResult.success;
   }
 
-  Preview1VirtualOpenResult openPath(String guestPath) {
+  Preview1VirtualOpenResult openPath(
+    String guestPath, {
+    int? rightsBase,
+    int? rightsInheriting,
+    int descriptorFlags = 0,
+  }) {
     final normalized = normalizeGuestPath(guestPath);
     final file = lookupFile(normalized);
     if (file != null) {
       final fd = _allocateVirtualFd();
-      _openFilesByFd[fd] = Preview1VirtualOpenFile(file);
+      _openFilesByFd[fd] = Preview1VirtualOpenFile(
+        file,
+        rights: Preview1DescriptorRights.file(
+          base: rightsBase,
+          inheriting: rightsInheriting,
+        ),
+        descriptorFlags: descriptorFlags,
+      );
       return Preview1VirtualOpenResult.file(fd);
     }
 
     if (isDirectoryPath(normalized)) {
       final fd = _allocateVirtualFd();
       _openDirectoriesByFd[fd] = normalized;
-      _openDirectoryFlagsByFd[fd] = 0;
+      _openDirectoryFlagsByFd[fd] = descriptorFlags;
+      _openDirectoryRightsByFd[fd] = Preview1DescriptorRights.directory(
+        base: rightsBase,
+        inheriting: rightsInheriting,
+      );
       return Preview1VirtualOpenResult.directory(fd);
     }
 
@@ -596,15 +736,21 @@ final class Preview1VirtualFileSystem {
   bool _hasDescriptor(int fd) =>
       _openFilesByFd.containsKey(fd) ||
       _openDirectoriesByFd.containsKey(fd) ||
-      _preopenGuestPathsByFd.containsKey(fd);
+      _preopenGuestPathsByFd.containsKey(fd) ||
+      _stdioDescriptorsByFd.containsKey(fd);
 
   void _closeDescriptor(int fd) {
+    _stdioDescriptorsByFd.remove(fd);
+    _stdioRightsByFd.remove(fd);
+    _stdioFlagsByFd.remove(fd);
     _openFilesByFd.remove(fd);
     _openDirectoriesByFd.remove(fd);
     _openDirectoryFlagsByFd.remove(fd);
+    _openDirectoryRightsByFd.remove(fd);
     _preopenPathBytesByFd.remove(fd);
     _preopenGuestPathsByFd.remove(fd);
     _preopenDirectoryFlagsByFd.remove(fd);
+    _preopenDirectoryRightsByFd.remove(fd);
   }
 }
 
@@ -620,6 +766,30 @@ final class Preview1DirectoryEntry {
 final class Preview1VirtualNodeMetadata {
   int accessTimeNanos = 0;
   int modificationTimeNanos = 0;
+}
+
+enum Preview1StdioDescriptorKind { stdin, stdout, stderr }
+
+enum Preview1DescriptorKind {
+  stdin,
+  stdout,
+  stderr,
+  file,
+  openDirectory,
+  preopenDirectory,
+}
+
+final class Preview1DescriptorRights {
+  Preview1DescriptorRights({required this.base, required this.inheriting});
+
+  Preview1DescriptorRights.file({int? base, int? inheriting})
+    : this(base: base ?? rightsAll, inheriting: inheriting ?? 0);
+
+  Preview1DescriptorRights.directory({int? base, int? inheriting})
+    : this(base: base ?? rightsAll, inheriting: inheriting ?? rightsAll);
+
+  int base;
+  int inheriting;
 }
 
 enum Preview1VirtualPathEntryKind { file, directory, symlink }
@@ -762,14 +932,19 @@ final class Preview1VirtualSymlink {
 }
 
 final class Preview1VirtualOpenFile {
-  Preview1VirtualOpenFile(this.file);
+  Preview1VirtualOpenFile(
+    this.file, {
+    Preview1DescriptorRights? rights,
+    this.descriptorFlags = 0,
+  }) : rights = rights ?? Preview1DescriptorRights.file();
 
   Preview1VirtualOpenFile.fromBytes(Uint8List bytes)
     : this(Preview1VirtualFile(bytes));
 
   final Preview1VirtualFile file;
+  final Preview1DescriptorRights rights;
   int offset = 0;
-  int descriptorFlags = 0;
+  int descriptorFlags;
 
   Uint8List get bytes => file.bytes;
 
@@ -816,6 +991,8 @@ enum Preview1PathMutationResult {
 }
 
 enum Preview1FdRenumberResult { success, invalid, badf }
+
+enum Preview1FdRightsResult { success, invalid, badf, notCapable }
 
 final class Preview1VirtualOpenResult {
   const Preview1VirtualOpenResult._(this.kind, this.fd);
@@ -940,6 +1117,18 @@ Map<String, Preview1VirtualFile> _indexFilesByBasename(
     indexed.putIfAbsent(key, () => entry.value);
   }
   return indexed;
+}
+
+Map<int, Preview1StdioDescriptorKind> _buildStdioDescriptors({
+  required int stdinFd,
+  required int stdoutFd,
+  required int stderrFd,
+}) {
+  return <int, Preview1StdioDescriptorKind>{
+    stdinFd: Preview1StdioDescriptorKind.stdin,
+    stdoutFd: Preview1StdioDescriptorKind.stdout,
+    stderrFd: Preview1StdioDescriptorKind.stderr,
+  };
 }
 
 Set<String> _buildVirtualDirectorySet({

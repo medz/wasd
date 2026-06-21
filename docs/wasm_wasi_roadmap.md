@@ -60,18 +60,17 @@ This is the implementation state as of 2026-06-21 on `main`.
 - Preview 1 is real but still incomplete. Native and browser hosts share
   `lib/src/wasi/preview1/common/vfs.dart` for virtual files, directories,
   readdir state, hard links, symlinks/readlink, descriptor flags, descriptor
-  times, descriptor sync/advice validation, and descriptor renumbering. Node
-  still delegates Preview 1 behavior to `node:wasi`.
+  rights, descriptor times, descriptor sync/advice validation, and descriptor
+  renumbering. Node still delegates Preview 1 behavior to `node:wasi`.
 - The remaining explicit Preview 1 `ENOSYS` list is
-  `fd_fdstat_set_rights`, `proc_raise`, `sock_accept`, `sock_recv`,
-  `sock_send`, and `sock_shutdown`. This list is intentionally in code at
+  `proc_raise`, `sock_accept`, `sock_recv`, `sock_send`, and `sock_shutdown`.
+  This list is intentionally in code at
   `lib/src/wasi/preview1/common/constants.dart`; README support claims must
   stay aligned with it.
-- Preview 1 stdio descriptors are still host-level fields, while virtual files,
-  directories, and preopens live in the VFS descriptor table. Full rights
-  support should not be added as another host-side special case; it needs a
-  unified descriptor/capability table that can represent stdio, preopens, files,
-  directories, future sockets, rights, inheriting rights, and close state.
+- Preview 1 stdio descriptors, virtual files, open directories, and preopens
+  now live in one VFS descriptor/capability table with base rights, inheriting
+  rights, descriptor flags, renumbering, and close state. Future sockets should
+  join that table instead of adding another host-side special case.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, but P2/P3 host
   instantiation, WIT ingestion, resource tables, canonical ABI lowering/lifting,
@@ -95,10 +94,9 @@ This is the implementation state as of 2026-06-21 on `main`.
 
 ## Next Implementation Order
 
-1. Finish the Preview 1 descriptor/capability model before removing more
-   syscall stubs. Move stdio into the same descriptor table as VFS descriptors,
-   add base and inheriting rights, implement `fd_fdstat_set_rights`, and enforce
-   rights at every host entrypoint that touches descriptors or paths.
+1. Finish the remaining Preview 1 process and socket stubs without bypassing
+   the descriptor/capability model. Socket descriptors should join the same VFS
+   table with close, renumber, base rights, and inheriting rights semantics.
 2. Decide whether Preview 1 sockets are in-process virtual sockets, real host
    sockets, or an explicit capability-gated native-only feature. Do not expose
    `sock_*` as supported until accept/recv/send/shutdown have cross-runtime
@@ -138,9 +136,9 @@ This is the implementation state as of 2026-06-21 on `main`.
 
 ## Near-Term Slices
 
-1. Refactor Preview 1 stdio, preopens, files, and directories into one
-   descriptor/capability table. Add rights state, rights inheritance, and
-   enforcement before removing `fd_fdstat_set_rights` from the ENOSYS list.
+1. Extend the Preview 1 descriptor/capability table to future socket
+   descriptors, then implement `sock_accept`, `sock_recv`, `sock_send`, and
+   `sock_shutdown` with runtime-specific browser behavior documented and tested.
 2. Add a VFS/descriptor benchmark that covers path lookup, directory cache
    rebuilds, descriptor renumbering, and rights checks over large descriptor and
    directory sets.
