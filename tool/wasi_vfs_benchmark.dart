@@ -32,6 +32,8 @@ void main(List<String> args) {
   final readdir = _benchmarkReaddir(baselineFiles, options);
   final rights = _benchmarkRightsChecks(baselineFiles, options);
   final mutations = _benchmarkMutations(baselineFiles, options);
+  final fileRenumberClose = _benchmarkFileRenumberClose(baselineFiles, options);
+  final directoryRenumberClose = _benchmarkDirectoryRenumberClose(options);
   final socketRecvPeek = _benchmarkSocketRecvPeek(options);
   final socketRecvWaitall = _benchmarkSocketRecvWaitall(options);
   final socketSendRecv = _benchmarkSocketSendRecv(options);
@@ -50,6 +52,8 @@ void main(List<String> args) {
     'readdir': readdir.toJson(),
     'rights_checks': rights.toJson(),
     'mutations_benchmark': mutations.toJson(),
+    'file_renumber_close': fileRenumberClose.toJson(),
+    'directory_renumber_close': directoryRenumberClose.toJson(),
     'socket_recv_peek': socketRecvPeek.toJson(),
     'socket_recv_waitall': socketRecvWaitall.toJson(),
     'socket_send_recv': socketSendRecv.toJson(),
@@ -99,6 +103,8 @@ void _runWarmup(Map<String, Uint8List> files, _Options options) {
   _benchmarkReaddir(files, warmupOptions);
   _benchmarkRightsChecks(files, warmupOptions);
   _benchmarkMutations(files, warmupOptions);
+  _benchmarkFileRenumberClose(files, warmupOptions);
+  _benchmarkDirectoryRenumberClose(warmupOptions);
   _benchmarkSocketRecvPeek(warmupOptions);
   _benchmarkSocketRecvWaitall(warmupOptions);
   _benchmarkSocketSendRecv(warmupOptions);
@@ -242,6 +248,105 @@ _Metric _benchmarkMutations(Map<String, Uint8List> files, _Options options) {
     operations: successfulOperations,
     totalMicros: watch.elapsedMicroseconds,
     checksum: successfulOperations,
+  );
+}
+
+_Metric _benchmarkFileRenumberClose(
+  Map<String, Uint8List> files,
+  _Options options,
+) {
+  final vfs = _newVfs(files);
+  final paths = files.keys.toList(growable: false);
+  final sourceFds = <int>[];
+  final targetFds = <int>[];
+  for (var i = 0; i < options.iterations; i++) {
+    sourceFds.add(
+      _openBenchmarkPath(
+        vfs,
+        paths[i % paths.length],
+        label: 'file renumber source',
+      ),
+    );
+    targetFds.add(
+      _openBenchmarkPath(
+        vfs,
+        paths[(i + options.iterations) % paths.length],
+        label: 'file renumber target',
+      ),
+    );
+  }
+
+  var successfulOperations = 0;
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final toFd = targetFds[i];
+    final result = vfs.renumberDescriptor(fromFd: sourceFds[i], toFd: toFd);
+    if (result != Preview1FdRenumberResult.success) {
+      throw StateError('file renumber failed at iteration $i: $result');
+    }
+    successfulOperations++;
+    if (!vfs.close(toFd)) {
+      throw StateError('file close failed at iteration $i');
+    }
+    successfulOperations++;
+    checksum += toFd;
+  }
+  watch.stop();
+  return _Metric(
+    operations: successfulOperations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkDirectoryRenumberClose(_Options options) {
+  final vfs = _newVfs(
+    _buildFiles(
+      directories: options.directories,
+      filesPerDirectory: options.filesPerDirectory,
+    ),
+  );
+  final sourceFds = <int>[];
+  final targetFds = <int>[];
+  for (var i = 0; i < options.iterations; i++) {
+    sourceFds.add(
+      _openBenchmarkPath(
+        vfs,
+        '/sandbox/dir${i % options.directories}',
+        label: 'directory renumber source',
+      ),
+    );
+    targetFds.add(
+      _openBenchmarkPath(
+        vfs,
+        '/sandbox/dir${(i + 1) % options.directories}',
+        label: 'directory renumber target',
+      ),
+    );
+  }
+
+  var successfulOperations = 0;
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final toFd = targetFds[i];
+    final result = vfs.renumberDescriptor(fromFd: sourceFds[i], toFd: toFd);
+    if (result != Preview1FdRenumberResult.success) {
+      throw StateError('directory renumber failed at iteration $i: $result');
+    }
+    successfulOperations++;
+    if (!vfs.close(toFd)) {
+      throw StateError('directory close failed at iteration $i');
+    }
+    successfulOperations++;
+    checksum += toFd;
+  }
+  watch.stop();
+  return _Metric(
+    operations: successfulOperations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
   );
 }
 
@@ -620,6 +725,23 @@ void _expectPathMutation(Preview1PathMutationResult result, String operation) {
   }
 }
 
+int _openBenchmarkPath(
+  Preview1VirtualFileSystem vfs,
+  String path, {
+  required String label,
+}) {
+  final result = vfs.openPath(
+    path,
+    rightsBase: rightsAll,
+    rightsInheriting: rightsAll,
+  );
+  final fd = result.fd;
+  if (fd == null) {
+    throw StateError('$label open failed for `$path`');
+  }
+  return fd;
+}
+
 void _printText(Map<String, Object?> payload) {
   stdout
     ..writeln('wasi vfs benchmark')
@@ -633,6 +755,8 @@ void _printText(Map<String, Object?> payload) {
   _printMetric('readdir', payload['readdir']);
   _printMetric('rights checks', payload['rights_checks']);
   _printMetric('mutations', payload['mutations_benchmark']);
+  _printMetric('file renumber/close', payload['file_renumber_close']);
+  _printMetric('directory renumber/close', payload['directory_renumber_close']);
   _printMetric('socket recv peek', payload['socket_recv_peek']);
   _printMetric('socket recv waitall', payload['socket_recv_waitall']);
   _printMetric('socket send/recv', payload['socket_send_recv']);

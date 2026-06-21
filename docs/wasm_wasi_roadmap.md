@@ -279,8 +279,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   `dart run tool/wasi_vfs_benchmark.dart --json`, covering `path_open`,
   `fd_readdir`, link/symlink mutation, rights checks, socket multi-iov
   `RECV_PEEK`/`RECV_WAITALL`, datagram truncation, socket send/recv, and socket
-  poll readiness and renumber/close over large directory and descriptor sets.
-  Keep optimizing against benchmark data instead of test suite heat alone.
+  poll readiness, plus file, directory, and socket descriptor renumber/close
+  over large directory and descriptor sets. Keep optimizing against benchmark
+  data instead of test suite heat alone.
 - P2/P3 streams and futures need latency, allocation, and cancellation
   benchmarks before they are advertised as production-ready. The "sandwich"
   async forwarding case from WASI 0.3 must be a first-class benchmark, not only
@@ -308,9 +309,8 @@ This is the implementation state as of 2026-06-21 on `main`.
 
 1. Extend Preview 1 socket coverage toward conformance edge cases that are not
    covered yet: native adapter boundaries and externally backed readiness.
-2. Extend the VFS/descriptor benchmark with descriptor renumbering and larger
-   conformance-shaped path distributions, then use it as the gate for further
-   VFS optimizations.
+2. Extend the VFS/descriptor benchmark with larger conformance-shaped path
+   distributions, then use it as the gate for further VFS optimizations.
 3. Audit `tool/spec_runner.dart` and DOOM tests for process-spawn and fixture
    conversion hot spots, then add timing and caching where it changes actual
    runtime cost.
