@@ -103,9 +103,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   contains internal `stream<T>` and `future<T>` runtime primitives with separate
   readable/writable endpoints, cancellation, drop callbacks, and benchmark
   coverage, plus an internal async host that binds decoded canonical `stream.*`
-  and `future.*` definitions to executable endpoint operations. P2/P3 host
-  instantiation, WIT ingestion, full canonical ABI lowering/lifting, and async
-  stream/future execution are not production-supported yet.
+  and `future.*` definitions to executable endpoint operations and
+  resource-table-backed integer endpoint handles. P2/P3 host instantiation, WIT
+  ingestion, full canonical ABI lowering/lifting, and async stream/future
+  execution are not production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
   for component-model WASI versions. This is an intentional version boundary,
@@ -171,8 +172,8 @@ This is the implementation state as of 2026-06-21 on `main`.
   async forwarding case from WASI 0.3 must be a first-class benchmark, not only
   a functional test.
 - Internal component stream/future endpoint round-trip, cancellation,
-  completion/drop, and decoded canonical async program invocation costs are
-  measured by
+  completion/drop, decoded canonical async program invocation, and
+  resource-table-backed handle invocation costs are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`.
 - Component resource table canonical `resource.new`/`resource.rep`/
   `resource.drop`, decoded resource-only canonical program invocation, nominal

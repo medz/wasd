@@ -54,6 +54,52 @@ void main() {
       expect(dropped, <String>['numbers']);
     });
 
+    test('invokes decoded canonical stream definitions with handles', () {
+      final component = WasmComponent.decode(_canonicalStreamProgramBytes());
+      expect(component.validate(), isEmpty);
+      final dropped = <String>[];
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<int>(
+        component,
+        0,
+        'numbers',
+        onDrop: () => dropped.add('numbers'),
+      );
+
+      final program = host.bindCanonicalDefinitionsToHandles(component);
+      final handles = program.invoke(0, const <Object?>[]);
+
+      expect(handles, isA<WASIComponentAsyncEndpointHandles>());
+      final streamHandles = handles! as WASIComponentAsyncEndpointHandles;
+      expect(host.table.activeCount, 2);
+      expect(
+        program.invoke(2, <Object?>[
+          streamHandles.writable,
+          <int>[5, 8, 13],
+        ]),
+        3,
+      );
+      expect(program.invoke(1, <Object?>[streamHandles.readable, 2]), <int>[
+        5,
+        8,
+      ]);
+      expect(
+        () => program.invoke(1, <Object?>[streamHandles.writable, 1]),
+        throwsStateError,
+      );
+
+      expect(program.invoke(5, <Object?>[streamHandles.readable]), isNull);
+      expect(host.table.activeCount, 1);
+      expect(dropped, isEmpty);
+      expect(program.invoke(6, <Object?>[streamHandles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+      expect(dropped, <String>['numbers']);
+      expect(
+        () => program.invoke(1, <Object?>[streamHandles.readable, 1]),
+        throwsStateError,
+      );
+    });
+
     test('binds decoded canonical future definitions as a program', () {
       final component = WasmComponent.decode(_canonicalFutureProgramBytes());
       expect(component.validate(), isEmpty);
@@ -90,6 +136,42 @@ void main() {
       expect(program.invoke(5, <Object?>[typedFuture.readable]), isNull);
       expect(dropped, isEmpty);
       expect(program.invoke(6, <Object?>[typedFuture.writable]), isNull);
+      expect(dropped, <String>['message']);
+    });
+
+    test('invokes decoded canonical future definitions with handles', () {
+      final component = WasmComponent.decode(_canonicalFutureProgramBytes());
+      expect(component.validate(), isEmpty);
+      final dropped = <String>[];
+      final host = WASIComponentAsyncHost();
+      host.defineFutureTypeFromComponent<String>(
+        component,
+        0,
+        'message',
+        onDrop: () => dropped.add('message'),
+      );
+
+      final program = host.bindCanonicalDefinitionsToHandles(component);
+      final handles = program.invoke(0, const <Object?>[]);
+
+      expect(handles, isA<WASIComponentAsyncEndpointHandles>());
+      final futureHandles = handles! as WASIComponentAsyncEndpointHandles;
+      expect(host.table.activeCount, 2);
+      expect(
+        program.invoke(2, <Object?>[futureHandles.writable, 'ready']),
+        isNull,
+      );
+      expect(program.invoke(1, <Object?>[futureHandles.readable]), 'ready');
+      expect(
+        () => program.invoke(1, <Object?>[futureHandles.writable]),
+        throwsStateError,
+      );
+
+      expect(program.invoke(5, <Object?>[futureHandles.readable]), isNull);
+      expect(host.table.activeCount, 1);
+      expect(dropped, isEmpty);
+      expect(program.invoke(6, <Object?>[futureHandles.writable]), isNull);
+      expect(host.table.activeCount, 0);
       expect(dropped, <String>['message']);
     });
 

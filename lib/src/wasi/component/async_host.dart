@@ -1,5 +1,6 @@
 import '../../wasm/backend/native/interpreter/component.dart';
 import 'async_values.dart';
+import 'resource_table.dart';
 
 /// Binds decoded canonical stream/future definitions to executable primitives.
 ///
@@ -8,6 +9,13 @@ import 'async_values.dart';
 /// validated `stream.*` and `future.*` definitions to typed Dart endpoint
 /// primitives so later P3 host adapters can reuse one execution model.
 final class WASIComponentAsyncHost {
+  /// Creates an async host backed by [table] or a new resource table.
+  WASIComponentAsyncHost({WASIComponentResourceTable? table})
+    : table = table ?? WASIComponentResourceTable();
+
+  /// Resource table used for handle-backed stream/future endpoints.
+  final WASIComponentResourceTable table;
+
   final Map<int, _RegisteredAsyncValueType> _valueTypes =
       <int, _RegisteredAsyncValueType>{};
 
@@ -81,6 +89,7 @@ final class WASIComponentAsyncHost {
       );
     }
     _valueTypes[componentTypeIndex] = _RegisteredAsyncValueType<T>(
+      table: table,
       name: name,
       kind: kind,
       onDrop: onDrop,
@@ -122,6 +131,18 @@ final class WASIComponentAsyncHost {
     WasmComponent component,
   ) {
     return WASIComponentCanonicalAsyncProgram(
+      operations: List<WASIComponentCanonicalAsyncOperation>.unmodifiable([
+        for (final definition in component.canonicalDefinitions)
+          bindCanonicalDefinition(definition),
+      ]),
+    );
+  }
+
+  /// Binds all decoded canonical stream/future definitions to integer handles.
+  WASIComponentCanonicalAsyncHandleProgram bindCanonicalDefinitionsToHandles(
+    WasmComponent component,
+  ) {
+    return WASIComponentCanonicalAsyncHandleProgram(
       operations: List<WASIComponentCanonicalAsyncOperation>.unmodifiable([
         for (final definition in component.canonicalDefinitions)
           bindCanonicalDefinition(definition),
@@ -210,6 +231,125 @@ final class WASIComponentCanonicalAsyncProgram {
   }
 }
 
+/// Pair of canonical readable and writable endpoint handles.
+final class WASIComponentAsyncEndpointHandles {
+  /// Creates an endpoint handle pair.
+  const WASIComponentAsyncEndpointHandles({
+    required this.readable,
+    required this.writable,
+  });
+
+  /// Readable endpoint handle.
+  final int readable;
+
+  /// Writable endpoint handle.
+  final int writable;
+}
+
+/// Handle-backed stream/future-only canonical program for a decoded component.
+final class WASIComponentCanonicalAsyncHandleProgram {
+  /// Creates a canonical async handle program from ordered [operations].
+  const WASIComponentCanonicalAsyncHandleProgram({required this.operations});
+
+  /// Stream/future operations in component canonical definition order.
+  final List<WASIComponentCanonicalAsyncOperation> operations;
+
+  /// Invokes the canonical async operation at [canonicalIndex] with handles.
+  Object? invoke(int canonicalIndex, List<Object?> args) {
+    if (canonicalIndex < 0 || canonicalIndex >= operations.length) {
+      throw StateError(
+        'Unknown WASI component canonical async index: $canonicalIndex.',
+      );
+    }
+
+    final operation = operations[canonicalIndex];
+    switch (operation.kind) {
+      case WasmComponentCanonicalKind.streamNew:
+        _expectArity(canonicalIndex, args, 0);
+        return operation.streamNewHandles();
+      case WasmComponentCanonicalKind.streamRead:
+        _expectArity(canonicalIndex, args, 2);
+        return operation.streamReadHandle(
+          _expectHandle(canonicalIndex, args[0], 'readable'),
+          _expectNonNegativeInt(canonicalIndex, args[1], 'maxElements'),
+        );
+      case WasmComponentCanonicalKind.streamWrite:
+        _expectArity(canonicalIndex, args, 2);
+        return operation.streamWriteHandle(
+          _expectHandle(canonicalIndex, args[0], 'writable'),
+          args[1],
+        );
+      case WasmComponentCanonicalKind.streamCancelRead:
+        _expectArity(canonicalIndex, args, 1);
+        operation.streamCancelReadHandle(
+          _expectHandle(canonicalIndex, args.single, 'readable'),
+        );
+        return null;
+      case WasmComponentCanonicalKind.streamCancelWrite:
+        _expectArity(canonicalIndex, args, 1);
+        operation.streamCancelWriteHandle(
+          _expectHandle(canonicalIndex, args.single, 'writable'),
+        );
+        return null;
+      case WasmComponentCanonicalKind.streamDropReadable:
+        _expectArity(canonicalIndex, args, 1);
+        operation.streamDropReadableHandle(
+          _expectHandle(canonicalIndex, args.single, 'readable'),
+        );
+        return null;
+      case WasmComponentCanonicalKind.streamDropWritable:
+        _expectArity(canonicalIndex, args, 1);
+        operation.streamDropWritableHandle(
+          _expectHandle(canonicalIndex, args.single, 'writable'),
+        );
+        return null;
+      case WasmComponentCanonicalKind.futureNew:
+        _expectArity(canonicalIndex, args, 0);
+        return operation.futureNewHandles();
+      case WasmComponentCanonicalKind.futureRead:
+        _expectArity(canonicalIndex, args, 1);
+        return operation.futureReadHandle(
+          _expectHandle(canonicalIndex, args.single, 'readable'),
+        );
+      case WasmComponentCanonicalKind.futureWrite:
+        _expectArity(canonicalIndex, args, 2);
+        operation.futureWriteHandle(
+          _expectHandle(canonicalIndex, args[0], 'writable'),
+          args[1],
+        );
+        return null;
+      case WasmComponentCanonicalKind.futureCancelRead:
+        _expectArity(canonicalIndex, args, 1);
+        operation.futureCancelReadHandle(
+          _expectHandle(canonicalIndex, args.single, 'readable'),
+        );
+        return null;
+      case WasmComponentCanonicalKind.futureCancelWrite:
+        _expectArity(canonicalIndex, args, 1);
+        operation.futureCancelWriteHandle(
+          _expectHandle(canonicalIndex, args.single, 'writable'),
+        );
+        return null;
+      case WasmComponentCanonicalKind.futureDropReadable:
+        _expectArity(canonicalIndex, args, 1);
+        operation.futureDropReadableHandle(
+          _expectHandle(canonicalIndex, args.single, 'readable'),
+        );
+        return null;
+      case WasmComponentCanonicalKind.futureDropWritable:
+        _expectArity(canonicalIndex, args, 1);
+        operation.futureDropWritableHandle(
+          _expectHandle(canonicalIndex, args.single, 'writable'),
+        );
+        return null;
+      default:
+        throw UnsupportedError(
+          'Wasm component canonical ${operation.kind.name} is not executable by the async handle program.',
+        );
+    }
+  }
+}
+
 /// Executable form of a canonical stream/future operation.
 final class WASIComponentCanonicalAsyncOperation {
   const WASIComponentCanonicalAsyncOperation._({
@@ -232,10 +372,22 @@ final class WASIComponentCanonicalAsyncOperation {
     return _valueType.streamNew();
   }
 
+  /// Executes `stream.new` and returns endpoint handles.
+  WASIComponentAsyncEndpointHandles streamNewHandles() {
+    _requireKind(WasmComponentCanonicalKind.streamNew);
+    return _valueType.streamNewHandles();
+  }
+
   /// Executes `stream.read`.
   List<Object> streamRead(Object? readable, int maxElements) {
     _requireKind(WasmComponentCanonicalKind.streamRead);
     return _valueType.streamRead(readable, maxElements);
+  }
+
+  /// Executes `stream.read` with a readable endpoint handle.
+  List<Object> streamReadHandle(int readable, int maxElements) {
+    _requireKind(WasmComponentCanonicalKind.streamRead);
+    return _valueType.streamReadHandle(readable, maxElements);
   }
 
   /// Executes `stream.write`.
@@ -244,10 +396,22 @@ final class WASIComponentCanonicalAsyncOperation {
     return _valueType.streamWrite(writable, values);
   }
 
+  /// Executes `stream.write` with a writable endpoint handle.
+  int streamWriteHandle(int writable, Object? values) {
+    _requireKind(WasmComponentCanonicalKind.streamWrite);
+    return _valueType.streamWriteHandle(writable, values);
+  }
+
   /// Executes `stream.cancel-read`.
   void streamCancelRead(Object? readable) {
     _requireKind(WasmComponentCanonicalKind.streamCancelRead);
     _valueType.streamCancelRead(readable);
+  }
+
+  /// Executes `stream.cancel-read` with a readable endpoint handle.
+  void streamCancelReadHandle(int readable) {
+    _requireKind(WasmComponentCanonicalKind.streamCancelRead);
+    _valueType.streamCancelReadHandle(readable);
   }
 
   /// Executes `stream.cancel-write`.
@@ -256,10 +420,22 @@ final class WASIComponentCanonicalAsyncOperation {
     _valueType.streamCancelWrite(writable);
   }
 
+  /// Executes `stream.cancel-write` with a writable endpoint handle.
+  void streamCancelWriteHandle(int writable) {
+    _requireKind(WasmComponentCanonicalKind.streamCancelWrite);
+    _valueType.streamCancelWriteHandle(writable);
+  }
+
   /// Executes `stream.drop-readable`.
   void streamDropReadable(Object? readable) {
     _requireKind(WasmComponentCanonicalKind.streamDropReadable);
     _valueType.streamDropReadable(readable);
+  }
+
+  /// Executes `stream.drop-readable` with a readable endpoint handle.
+  void streamDropReadableHandle(int readable) {
+    _requireKind(WasmComponentCanonicalKind.streamDropReadable);
+    _valueType.streamDropReadableHandle(readable);
   }
 
   /// Executes `stream.drop-writable`.
@@ -268,10 +444,22 @@ final class WASIComponentCanonicalAsyncOperation {
     _valueType.streamDropWritable(writable);
   }
 
+  /// Executes `stream.drop-writable` with a writable endpoint handle.
+  void streamDropWritableHandle(int writable) {
+    _requireKind(WasmComponentCanonicalKind.streamDropWritable);
+    _valueType.streamDropWritableHandle(writable);
+  }
+
   /// Executes `future.new`.
   Object futureNew() {
     _requireKind(WasmComponentCanonicalKind.futureNew);
     return _valueType.futureNew();
+  }
+
+  /// Executes `future.new` and returns endpoint handles.
+  WASIComponentAsyncEndpointHandles futureNewHandles() {
+    _requireKind(WasmComponentCanonicalKind.futureNew);
+    return _valueType.futureNewHandles();
   }
 
   /// Executes `future.read`.
@@ -280,10 +468,22 @@ final class WASIComponentCanonicalAsyncOperation {
     return _valueType.futureRead(readable);
   }
 
+  /// Executes `future.read` with a readable endpoint handle.
+  Object futureReadHandle(int readable) {
+    _requireKind(WasmComponentCanonicalKind.futureRead);
+    return _valueType.futureReadHandle(readable);
+  }
+
   /// Executes `future.write`.
   void futureWrite(Object? writable, Object? value) {
     _requireKind(WasmComponentCanonicalKind.futureWrite);
     _valueType.futureWrite(writable, value);
+  }
+
+  /// Executes `future.write` with a writable endpoint handle.
+  void futureWriteHandle(int writable, Object? value) {
+    _requireKind(WasmComponentCanonicalKind.futureWrite);
+    _valueType.futureWriteHandle(writable, value);
   }
 
   /// Executes `future.cancel-read`.
@@ -292,10 +492,22 @@ final class WASIComponentCanonicalAsyncOperation {
     _valueType.futureCancelRead(readable);
   }
 
+  /// Executes `future.cancel-read` with a readable endpoint handle.
+  void futureCancelReadHandle(int readable) {
+    _requireKind(WasmComponentCanonicalKind.futureCancelRead);
+    _valueType.futureCancelReadHandle(readable);
+  }
+
   /// Executes `future.cancel-write`.
   void futureCancelWrite(Object? writable) {
     _requireKind(WasmComponentCanonicalKind.futureCancelWrite);
     _valueType.futureCancelWrite(writable);
+  }
+
+  /// Executes `future.cancel-write` with a writable endpoint handle.
+  void futureCancelWriteHandle(int writable) {
+    _requireKind(WasmComponentCanonicalKind.futureCancelWrite);
+    _valueType.futureCancelWriteHandle(writable);
   }
 
   /// Executes `future.drop-readable`.
@@ -304,10 +516,22 @@ final class WASIComponentCanonicalAsyncOperation {
     _valueType.futureDropReadable(readable);
   }
 
+  /// Executes `future.drop-readable` with a readable endpoint handle.
+  void futureDropReadableHandle(int readable) {
+    _requireKind(WasmComponentCanonicalKind.futureDropReadable);
+    _valueType.futureDropReadableHandle(readable);
+  }
+
   /// Executes `future.drop-writable`.
   void futureDropWritable(Object? writable) {
     _requireKind(WasmComponentCanonicalKind.futureDropWritable);
     _valueType.futureDropWritable(writable);
+  }
+
+  /// Executes `future.drop-writable` with a writable endpoint handle.
+  void futureDropWritableHandle(int writable) {
+    _requireKind(WasmComponentCanonicalKind.futureDropWritable);
+    _valueType.futureDropWritableHandle(writable);
   }
 
   void _requireKind(WasmComponentCanonicalKind expected) {
@@ -322,25 +546,86 @@ final class WASIComponentCanonicalAsyncOperation {
 enum _WASIComponentAsyncValueKind { stream, future }
 
 final class _RegisteredAsyncValueType<T extends Object> {
-  const _RegisteredAsyncValueType({
+  _RegisteredAsyncValueType({
+    required this.table,
     required this.name,
     required this.kind,
     this.onDrop,
-  });
+  }) : readableStreamType = kind == _WASIComponentAsyncValueKind.stream
+           ? table.defineType<WASIComponentReadableStream<T>>(
+               '$name.readable',
+               onDrop: (endpoint) {
+                 endpoint.drop();
+               },
+             )
+           : null,
+       writableStreamType = kind == _WASIComponentAsyncValueKind.stream
+           ? table.defineType<WASIComponentWritableStream<T>>(
+               '$name.writable',
+               onDrop: (endpoint) {
+                 endpoint.drop();
+               },
+             )
+           : null,
+       readableFutureType = kind == _WASIComponentAsyncValueKind.future
+           ? table.defineType<WASIComponentReadableFuture<T>>(
+               '$name.readable',
+               onDrop: (endpoint) {
+                 endpoint.drop();
+               },
+             )
+           : null,
+       writableFutureType = kind == _WASIComponentAsyncValueKind.future
+           ? table.defineType<WASIComponentWritableFuture<T>>(
+               '$name.writable',
+               onDrop: (endpoint) {
+                 endpoint.drop();
+               },
+             )
+           : null;
 
+  final WASIComponentResourceTable table;
   final String name;
   final _WASIComponentAsyncValueKind kind;
   final void Function()? onDrop;
+  final WASIComponentResourceType<WASIComponentReadableStream<T>>?
+  readableStreamType;
+  final WASIComponentResourceType<WASIComponentWritableStream<T>>?
+  writableStreamType;
+  final WASIComponentResourceType<WASIComponentReadableFuture<T>>?
+  readableFutureType;
+  final WASIComponentResourceType<WASIComponentWritableFuture<T>>?
+  writableFutureType;
 
   Object streamNew() {
     _requireKind(_WASIComponentAsyncValueKind.stream);
     return WASIComponentStream<T>(name, onDrop: onDrop);
   }
 
+  WASIComponentAsyncEndpointHandles streamNewHandles() {
+    final stream = streamNew() as WASIComponentStream<T>;
+    return WASIComponentAsyncEndpointHandles(
+      readable: table.insert<WASIComponentReadableStream<T>>(
+        readableStreamType!,
+        stream.readable,
+      ),
+      writable: table.insert<WASIComponentWritableStream<T>>(
+        writableStreamType!,
+        stream.writable,
+      ),
+    );
+  }
+
   List<Object> streamRead(Object? readable, int maxElements) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
     final stream = _expectReadableStream(readable);
     return stream.read(maxElements);
+  }
+
+  List<Object> streamReadHandle(int readable, int maxElements) {
+    return table
+        .get<WASIComponentReadableStream<T>>(readableStreamType!, readable)
+        .read(maxElements);
   }
 
   int streamWrite(Object? writable, Object? values) {
@@ -351,9 +636,23 @@ final class _RegisteredAsyncValueType<T extends Object> {
     return typedValues.length;
   }
 
+  int streamWriteHandle(int writable, Object? values) {
+    final typedValues = _expectIterableValues(values);
+    table
+        .get<WASIComponentWritableStream<T>>(writableStreamType!, writable)
+        .writeAll(typedValues);
+    return typedValues.length;
+  }
+
   void streamCancelRead(Object? readable) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
     _expectReadableStream(readable).cancel();
+  }
+
+  void streamCancelReadHandle(int readable) {
+    table
+        .get<WASIComponentReadableStream<T>>(readableStreamType!, readable)
+        .cancel();
   }
 
   void streamCancelWrite(Object? writable) {
@@ -361,9 +660,19 @@ final class _RegisteredAsyncValueType<T extends Object> {
     _expectWritableStream(writable).cancel();
   }
 
+  void streamCancelWriteHandle(int writable) {
+    table
+        .get<WASIComponentWritableStream<T>>(writableStreamType!, writable)
+        .cancel();
+  }
+
   void streamDropReadable(Object? readable) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
     _expectReadableStream(readable).drop();
+  }
+
+  void streamDropReadableHandle(int readable) {
+    table.drop<WASIComponentReadableStream<T>>(readableStreamType!, readable);
   }
 
   void streamDropWritable(Object? writable) {
@@ -371,14 +680,38 @@ final class _RegisteredAsyncValueType<T extends Object> {
     _expectWritableStream(writable).drop();
   }
 
+  void streamDropWritableHandle(int writable) {
+    table.drop<WASIComponentWritableStream<T>>(writableStreamType!, writable);
+  }
+
   Object futureNew() {
     _requireKind(_WASIComponentAsyncValueKind.future);
     return WASIComponentFuture<T>(name, onDrop: onDrop);
   }
 
+  WASIComponentAsyncEndpointHandles futureNewHandles() {
+    final future = futureNew() as WASIComponentFuture<T>;
+    return WASIComponentAsyncEndpointHandles(
+      readable: table.insert<WASIComponentReadableFuture<T>>(
+        readableFutureType!,
+        future.readable,
+      ),
+      writable: table.insert<WASIComponentWritableFuture<T>>(
+        writableFutureType!,
+        future.writable,
+      ),
+    );
+  }
+
   Object futureRead(Object? readable) {
     _requireKind(_WASIComponentAsyncValueKind.future);
     return _expectReadableFuture(readable).read();
+  }
+
+  Object futureReadHandle(int readable) {
+    return table
+        .get<WASIComponentReadableFuture<T>>(readableFutureType!, readable)
+        .read();
   }
 
   void futureWrite(Object? writable, Object? value) {
@@ -389,9 +722,24 @@ final class _RegisteredAsyncValueType<T extends Object> {
     _expectWritableFuture(writable).complete(value);
   }
 
+  void futureWriteHandle(int writable, Object? value) {
+    if (value is! T) {
+      throw StateError('WASI component async type $name expected $T value.');
+    }
+    table
+        .get<WASIComponentWritableFuture<T>>(writableFutureType!, writable)
+        .complete(value);
+  }
+
   void futureCancelRead(Object? readable) {
     _requireKind(_WASIComponentAsyncValueKind.future);
     _expectReadableFuture(readable).cancel();
+  }
+
+  void futureCancelReadHandle(int readable) {
+    table
+        .get<WASIComponentReadableFuture<T>>(readableFutureType!, readable)
+        .cancel();
   }
 
   void futureCancelWrite(Object? writable) {
@@ -399,14 +747,28 @@ final class _RegisteredAsyncValueType<T extends Object> {
     _expectWritableFuture(writable).cancel();
   }
 
+  void futureCancelWriteHandle(int writable) {
+    table
+        .get<WASIComponentWritableFuture<T>>(writableFutureType!, writable)
+        .cancel();
+  }
+
   void futureDropReadable(Object? readable) {
     _requireKind(_WASIComponentAsyncValueKind.future);
     _expectReadableFuture(readable).drop();
   }
 
+  void futureDropReadableHandle(int readable) {
+    table.drop<WASIComponentReadableFuture<T>>(readableFutureType!, readable);
+  }
+
   void futureDropWritable(Object? writable) {
     _requireKind(_WASIComponentAsyncValueKind.future);
     _expectWritableFuture(writable).drop();
+  }
+
+  void futureDropWritableHandle(int writable) {
+    table.drop<WASIComponentWritableFuture<T>>(writableFutureType!, writable);
   }
 
   WASIComponentReadableStream<T> _expectReadableStream(Object? value) {
@@ -446,6 +808,9 @@ final class _RegisteredAsyncValueType<T extends Object> {
   }
 
   List<T> _expectIterableValues(Object? values) {
+    if (values is List<T>) {
+      return values;
+    }
     if (values is! Iterable) {
       throw StateError(
         'WASI component async type $name expected iterable stream values.',
@@ -533,5 +898,14 @@ int _expectNonNegativeInt(int canonicalIndex, Object? value, String name) {
   }
   throw StateError(
     'WASI component canonical async index $canonicalIndex expected non-negative $name.',
+  );
+}
+
+int _expectHandle(int canonicalIndex, Object? value, String name) {
+  if (value is int) {
+    return value;
+  }
+  throw StateError(
+    'WASI component canonical async index $canonicalIndex expected $name handle.',
   );
 }

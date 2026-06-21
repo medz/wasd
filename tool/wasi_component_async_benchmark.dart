@@ -25,6 +25,7 @@ void main(List<String> args) {
     options.iterations,
   );
   final programInvoke = _benchmarkProgramInvoke(options);
+  final handleProgramInvoke = _benchmarkHandleProgramInvoke(options);
 
   final payload = <String, Object?>{
     'iterations': options.iterations,
@@ -33,6 +34,7 @@ void main(List<String> args) {
     'stream_cancel': streamCancel.toJson(),
     'future_complete_read_drop': futureCompleteReadDrop.toJson(),
     'program_invoke': programInvoke.toJson(),
+    'handle_program_invoke': handleProgramInvoke.toJson(),
   };
 
   if (options.json) {
@@ -48,6 +50,7 @@ void _runWarmup(_Options options) {
   _benchmarkStreamCancel(warmup);
   _benchmarkFutureCompleteReadDrop(_warmupIterations);
   _benchmarkProgramInvoke(warmup);
+  _benchmarkHandleProgramInvoke(warmup);
 }
 
 _Metric _benchmarkStreamRoundTrip(_Options options) {
@@ -174,6 +177,69 @@ _Metric _benchmarkProgramInvoke(_Options options) {
   );
 }
 
+_Metric _benchmarkHandleProgramInvoke(_Options options) {
+  final component = WasmComponent.decode(_asyncHandleProgramBytes());
+  final host = WASIComponentAsyncHost()
+    ..defineStreamTypeFromComponent<int>(component, 0, 'benchmark-stream')
+    ..defineFutureTypeFromComponent<int>(component, 1, 'benchmark-future');
+  final program = host.bindCanonicalDefinitionsToHandles(component);
+  final batch = List<int>.generate(options.batchSize, (index) => index);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final streamHandles = program.invoke(0, const <Object?>[]);
+    if (streamHandles is! WASIComponentAsyncEndpointHandles) {
+      throw StateError('stream.new returned non-handle pair: $streamHandles');
+    }
+    final written = program.invoke(2, <Object?>[streamHandles.writable, batch]);
+    if (written != batch.length) {
+      throw StateError('stream.write wrote $written values');
+    }
+    final values = program.invoke(1, <Object?>[
+      streamHandles.readable,
+      batch.length,
+    ]);
+    if (values is! List) {
+      throw StateError('stream.read returned non-list: $values');
+    }
+    for (final value in values) {
+      if (value is! int) {
+        throw StateError('stream.read returned non-int: $value');
+      }
+      checksum += value;
+    }
+    program.invoke(3, <Object?>[streamHandles.readable]);
+    program.invoke(4, <Object?>[streamHandles.writable]);
+
+    final futureHandles = program.invoke(5, const <Object?>[]);
+    if (futureHandles is! WASIComponentAsyncEndpointHandles) {
+      throw StateError('future.new returned non-handle pair: $futureHandles');
+    }
+    program.invoke(7, <Object?>[futureHandles.writable, i]);
+    final value = program.invoke(6, <Object?>[futureHandles.readable]);
+    if (value is! int) {
+      throw StateError('future.read returned non-int: $value');
+    }
+    checksum += value;
+    program.invoke(8, <Object?>[futureHandles.readable]);
+    program.invoke(9, <Object?>[futureHandles.writable]);
+  }
+  watch.stop();
+
+  if (host.table.activeCount != 0) {
+    throw StateError(
+      'async handle program leaked ${host.table.activeCount} endpoints',
+    );
+  }
+
+  return _Metric(
+    operations: options.iterations * (options.batchSize * 2 + 5),
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _printText(Map<String, Object?> payload) {
   stdout
     ..writeln('WASI component async benchmark')
@@ -184,6 +250,7 @@ void _printText(Map<String, Object?> payload) {
     'stream_cancel',
     'future_complete_read_drop',
     'program_invoke',
+    'handle_program_invoke',
   ]) {
     final metric = payload[name]! as Map<String, Object?>;
     stdout
@@ -228,6 +295,51 @@ Uint8List _asyncProgramBytes() => Uint8List.fromList(const <int>[
   0x17,
   0x01,
   0x00,
+]);
+
+Uint8List _asyncHandleProgramBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x05,
+  0x02,
+  0x66,
+  0x00,
+  0x65,
+  0x00,
+  0x08,
+  0x19,
+  0x0a,
+  0x0e,
+  0x00,
+  0x0f,
+  0x00,
+  0x00,
+  0x10,
+  0x00,
+  0x00,
+  0x13,
+  0x00,
+  0x14,
+  0x00,
+  0x15,
+  0x01,
+  0x16,
+  0x01,
+  0x00,
+  0x17,
+  0x01,
+  0x00,
+  0x1a,
+  0x01,
+  0x1b,
+  0x01,
 ]);
 
 void _printUsage() {
