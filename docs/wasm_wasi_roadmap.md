@@ -131,10 +131,13 @@ This is the implementation state as of 2026-06-21 on `main`.
   `stream.write`, and `future.read` operations through `invokeAsync`. The async
   host can also copy fixed-width primitive `stream<T>` and `future<T>` values
   between guest memory and async endpoints for canonical `stream.read`/
-  `stream.write` and `future.read`/`future.write` adapters. Handle-backed
-  canonical `stream.new` and `future.new` invocation returns the Canonical ABI
-  packed `i64` handle pair while operation-level helpers keep typed Dart handle
-  pairs for internal use. The async host also
+  `stream.write` and `future.read`/`future.write` adapters, and handle-backed
+  canonical programs expose an ABI-shaped memory invocation path for fixed-width
+  copies: `stream.{read,write}` use `(handle, ptr, n)` and
+  `future.{read,write}` use `(handle, ptr)`, returning the canonical packed copy
+  result. Handle-backed canonical `stream.new` and `future.new` invocation
+  returns the Canonical ABI packed `i64` handle pair while operation-level
+  helpers keep typed Dart handle pairs for internal use. The async host also
   binds decoded `backpressure.set`, `backpressure.inc`, and
   `backpressure.dec` canonical definitions to an internal bounded counter with
   overflow/underflow checks. Internal error-context support now models
@@ -217,8 +220,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   completion/drop, pending stream/future-read completion, bounded stream-write
   backpressure completion, backpressure counter operations, decoded canonical
   async program invocation, decoded unit stream/future program invocation, and
-  resource-table-backed borrowed handle invocation costs, plus fixed-width
-  primitive stream/future memory-copy costs, are measured by
+  resource-table-backed borrowed handle invocation costs, handle-program
+  fixed-width memory-copy invocation costs, plus fixed-width primitive
+  stream/future memory-copy costs, are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`.
 - Component resource table canonical `resource.new`/`resource.rep`/
   `resource.drop`, decoded resource-only canonical program invocation,

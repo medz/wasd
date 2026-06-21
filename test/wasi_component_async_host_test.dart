@@ -725,6 +725,78 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('invokes handle-backed stream memory copies with core ABI args', () {
+      final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 55, Endian.little);
+      data.setUint32(36, 89, Endian.little);
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<int>(component, 0, 'u32-stream');
+      final program = WASIComponentCanonicalAsyncHandleProgram(
+        operations: [
+          host.bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.streamNew,
+              typeIndex: 0,
+            ),
+          ),
+          host.bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.streamWrite,
+              typeIndex: 0,
+              options: [
+                WasmComponentCanonicalOption(
+                  kind: WasmComponentCanonicalOptionKind.memory,
+                  index: 0,
+                ),
+              ],
+            ),
+          ),
+          host.bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.streamRead,
+              typeIndex: 0,
+              options: [
+                WasmComponentCanonicalOption(
+                  kind: WasmComponentCanonicalOptionKind.memory,
+                  index: 0,
+                ),
+              ],
+            ),
+          ),
+          host.bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.streamDropReadable,
+              typeIndex: 0,
+            ),
+          ),
+          host.bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.streamDropWritable,
+              typeIndex: 0,
+            ),
+          ),
+        ],
+      );
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32, 2]),
+        2 << 4,
+      );
+      expect(
+        program.invokeWithMemory(2, memory, <Object?>[handles.readable, 96, 2]),
+        2 << 4,
+      );
+      expect(data.getUint32(96, Endian.little), 55);
+      expect(data.getUint32(100, Endian.little), 89);
+      expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test('rejects unsupported and unaligned stream memory copies', () {
       final stringComponent = WasmComponent.decode(
         _streamStringTypeComponentBytes(),
@@ -991,6 +1063,76 @@ void main() {
       expect(host.table.activeCount, 2);
       dropReadableOperation.futureDropReadableHandle(handles.readable);
       dropWritableOperation.futureDropWritableHandle(handles.writable);
+      expect(host.table.activeCount, 0);
+    });
+
+    test('invokes handle-backed future memory copies with core ABI args', () {
+      final component = WasmComponent.decode(_futureU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 987, Endian.little);
+      final host = WASIComponentAsyncHost();
+      host.defineFutureTypeFromComponent<int>(component, 0, 'u32-future');
+      final program = WASIComponentCanonicalAsyncHandleProgram(
+        operations: [
+          host.bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.futureNew,
+              typeIndex: 0,
+            ),
+          ),
+          host.bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.futureWrite,
+              typeIndex: 0,
+              options: [
+                WasmComponentCanonicalOption(
+                  kind: WasmComponentCanonicalOptionKind.memory,
+                  index: 0,
+                ),
+              ],
+            ),
+          ),
+          host.bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.futureRead,
+              typeIndex: 0,
+              options: [
+                WasmComponentCanonicalOption(
+                  kind: WasmComponentCanonicalOptionKind.memory,
+                  index: 0,
+                ),
+              ],
+            ),
+          ),
+          host.bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.futureDropReadable,
+              typeIndex: 0,
+            ),
+          ),
+          host.bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.futureDropWritable,
+              typeIndex: 0,
+            ),
+          ),
+        ],
+      );
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32]),
+        0,
+      );
+      expect(
+        program.invokeWithMemory(2, memory, <Object?>[handles.readable, 96]),
+        0,
+      );
+      expect(data.getUint32(96, Endian.little), 987);
+      expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(4, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
 

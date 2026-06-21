@@ -538,6 +538,68 @@ final class WASIComponentCanonicalAsyncHandleProgram {
         return invoke(canonicalIndex, args);
     }
   }
+
+  /// Invokes a handle-backed canonical async memory-copy operation.
+  ///
+  /// This uses the core Canonical ABI argument shape for fixed-width
+  /// stream/future copies: `stream.{read,write}` receive `(handle, ptr, n)`,
+  /// and `future.{read,write}` receive `(handle, ptr)`. Completed copy results
+  /// are returned in their canonical packed integer representation.
+  Object? invokeWithMemory(
+    int canonicalIndex,
+    wasm.Memory memory,
+    List<Object?> args,
+  ) {
+    if (canonicalIndex < 0 || canonicalIndex >= operations.length) {
+      throw StateError(
+        'Unknown WASI component canonical async index: $canonicalIndex.',
+      );
+    }
+
+    final operation = operations[canonicalIndex];
+    switch (operation.kind) {
+      case WasmComponentCanonicalKind.streamRead:
+        _expectArity(canonicalIndex, args, 3);
+        return operation
+            .streamReadHandleToMemory(
+              _expectHandle(canonicalIndex, args[0], 'readable'),
+              memory,
+              _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
+              _expectNonNegativeInt(canonicalIndex, args[2], 'maxElements'),
+            )
+            .packedResult;
+      case WasmComponentCanonicalKind.streamWrite:
+        _expectArity(canonicalIndex, args, 3);
+        return operation
+            .streamWriteHandleFromMemory(
+              _expectHandle(canonicalIndex, args[0], 'writable'),
+              memory,
+              _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
+              _expectNonNegativeInt(canonicalIndex, args[2], 'elementCount'),
+            )
+            .packedResult;
+      case WasmComponentCanonicalKind.futureRead:
+        _expectArity(canonicalIndex, args, 2);
+        return operation
+            .futureReadHandleToMemory(
+              _expectHandle(canonicalIndex, args[0], 'readable'),
+              memory,
+              _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
+            )
+            .packedResult;
+      case WasmComponentCanonicalKind.futureWrite:
+        _expectArity(canonicalIndex, args, 2);
+        return operation
+            .futureWriteHandleFromMemory(
+              _expectHandle(canonicalIndex, args[0], 'writable'),
+              memory,
+              _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
+            )
+            .packedResult;
+      default:
+        return invoke(canonicalIndex, args);
+    }
+  }
 }
 
 /// Executable form of a canonical stream/future operation.

@@ -36,6 +36,9 @@ Future<void> main(List<String> args) async {
   final programInvoke = _benchmarkProgramInvoke(options);
   final unitProgramInvoke = _benchmarkUnitProgramInvoke(options);
   final handleProgramInvoke = _benchmarkHandleProgramInvoke(options);
+  final handleMemoryProgramInvoke = _benchmarkHandleMemoryProgramInvoke(
+    options,
+  );
   final streamMemoryCopy = _benchmarkStreamMemoryCopy(options);
   final futureMemoryCopy = _benchmarkFutureMemoryCopy(options.iterations);
 
@@ -52,6 +55,7 @@ Future<void> main(List<String> args) async {
     'program_invoke': programInvoke.toJson(),
     'unit_program_invoke': unitProgramInvoke.toJson(),
     'handle_program_invoke': handleProgramInvoke.toJson(),
+    'handle_memory_program_invoke': handleMemoryProgramInvoke.toJson(),
     'stream_memory_copy': streamMemoryCopy.toJson(),
     'future_memory_copy': futureMemoryCopy.toJson(),
   };
@@ -75,6 +79,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkProgramInvoke(warmup);
   _benchmarkUnitProgramInvoke(warmup);
   _benchmarkHandleProgramInvoke(warmup);
+  _benchmarkHandleMemoryProgramInvoke(warmup);
   _benchmarkStreamMemoryCopy(warmup);
   _benchmarkFutureMemoryCopy(_warmupIterations);
 }
@@ -431,6 +436,207 @@ _Metric _benchmarkHandleProgramInvoke(_Options options) {
   );
 }
 
+_Metric _benchmarkHandleMemoryProgramInvoke(_Options options) {
+  final streamComponent = WasmComponent.decode(_streamU32TypeComponentBytes());
+  final streamHost = WASIComponentAsyncHost()
+    ..defineStreamTypeFromComponent<int>(
+      streamComponent,
+      0,
+      'benchmark-u32-stream',
+    );
+  final streamProgram = WASIComponentCanonicalAsyncHandleProgram(
+    operations: [
+      streamHost.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamNew,
+          typeIndex: 0,
+        ),
+      ),
+      streamHost.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamWrite,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      ),
+      streamHost.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamRead,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      ),
+      streamHost.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamDropReadable,
+          typeIndex: 0,
+        ),
+      ),
+      streamHost.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamDropWritable,
+          typeIndex: 0,
+        ),
+      ),
+    ],
+  );
+
+  final futureComponent = WasmComponent.decode(_futureU32TypeComponentBytes());
+  final futureHost = WASIComponentAsyncHost()
+    ..defineFutureTypeFromComponent<int>(
+      futureComponent,
+      0,
+      'benchmark-u32-future',
+    );
+  final futureProgram = WASIComponentCanonicalAsyncHandleProgram(
+    operations: [
+      futureHost.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureNew,
+          typeIndex: 0,
+        ),
+      ),
+      futureHost.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureWrite,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      ),
+      futureHost.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureRead,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      ),
+      futureHost.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureDropReadable,
+          typeIndex: 0,
+        ),
+      ),
+      futureHost.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureDropWritable,
+          typeIndex: 0,
+        ),
+      ),
+    ],
+  );
+
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  const streamInputPointer = 1024;
+  const streamOutputPointer = 4096;
+  const futureInputPointer = 8192;
+  const futureOutputPointer = 12288;
+  for (var i = 0; i < options.batchSize; i++) {
+    data.setUint32(streamInputPointer + i * 4, i, Endian.little);
+  }
+  data.setUint32(futureInputPointer, 0x55aa55aa, Endian.little);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final packedStreamHandles = streamProgram.invoke(0, const <Object?>[]);
+    if (packedStreamHandles is! int) {
+      throw StateError(
+        'stream.new returned non-packed handles: $packedStreamHandles',
+      );
+    }
+    final streamHandles = WASIComponentAsyncEndpointHandles.unpack(
+      packedStreamHandles,
+    );
+    final streamWrite = streamProgram.invokeWithMemory(1, memory, <Object?>[
+      streamHandles.writable,
+      streamInputPointer,
+      options.batchSize,
+    ]);
+    final streamRead = streamProgram.invokeWithMemory(2, memory, <Object?>[
+      streamHandles.readable,
+      streamOutputPointer,
+      options.batchSize,
+    ]);
+    if (streamWrite is! int || streamRead is! int) {
+      throw StateError(
+        'stream memory copy returned non-packed results: $streamWrite/$streamRead',
+      );
+    }
+    checksum += streamWrite;
+    checksum += streamRead;
+    checksum += data.getUint32(streamOutputPointer, Endian.little);
+    streamProgram.invoke(3, <Object?>[streamHandles.readable]);
+    streamProgram.invoke(4, <Object?>[streamHandles.writable]);
+
+    final packedFutureHandles = futureProgram.invoke(0, const <Object?>[]);
+    if (packedFutureHandles is! int) {
+      throw StateError(
+        'future.new returned non-packed handles: $packedFutureHandles',
+      );
+    }
+    final futureHandles = WASIComponentAsyncEndpointHandles.unpack(
+      packedFutureHandles,
+    );
+    final futureWrite = futureProgram.invokeWithMemory(1, memory, <Object?>[
+      futureHandles.writable,
+      futureInputPointer,
+    ]);
+    final futureRead = futureProgram.invokeWithMemory(2, memory, <Object?>[
+      futureHandles.readable,
+      futureOutputPointer,
+    ]);
+    if (futureWrite is! int || futureRead is! int) {
+      throw StateError(
+        'future memory copy returned non-packed results: $futureWrite/$futureRead',
+      );
+    }
+    checksum += futureWrite;
+    checksum += futureRead;
+    checksum += data.getUint32(futureOutputPointer, Endian.little);
+    futureProgram.invoke(3, <Object?>[futureHandles.readable]);
+    futureProgram.invoke(4, <Object?>[futureHandles.writable]);
+  }
+  watch.stop();
+
+  if (streamHost.table.activeCount != 0) {
+    throw StateError(
+      'stream memory program leaked ${streamHost.table.activeCount} endpoints',
+    );
+  }
+  if (futureHost.table.activeCount != 0) {
+    throw StateError(
+      'future memory program leaked ${futureHost.table.activeCount} endpoints',
+    );
+  }
+
+  return _Metric(
+    operations: options.iterations * (options.batchSize * 2 + 12),
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkStreamMemoryCopy(_Options options) {
   final component = WasmComponent.decode(_streamU32TypeComponentBytes());
   final host = WASIComponentAsyncHost()
@@ -589,6 +795,7 @@ void _printText(Map<String, Object?> payload) {
     'program_invoke',
     'unit_program_invoke',
     'handle_program_invoke',
+    'handle_memory_program_invoke',
     'stream_memory_copy',
     'future_memory_copy',
   ]) {
