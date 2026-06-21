@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/error_context.dart';
+import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/resource_table.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
@@ -30,6 +31,9 @@ Future<void> main(List<String> args) async {
   final componentResourceBindings = _benchmarkComponentResourceBindings(
     options.iterations,
   );
+  final componentHostBinding = _benchmarkComponentHostBinding(
+    options.iterations,
+  );
   final canonicalHostProgram = _benchmarkCanonicalHostProgram(
     options.iterations,
   );
@@ -45,6 +49,7 @@ Future<void> main(List<String> args) async {
     'drop_callbacks': dropCallbacks.toJson(),
     'program_invoke': programInvoke.toJson(),
     'component_resource_bindings': componentResourceBindings.toJson(),
+    'component_host_binding': componentHostBinding.toJson(),
     'canonical_host_program': canonicalHostProgram.toJson(),
     'error_context_program': errorContextProgram.toJson(),
     'error_context_memory': errorContextMemory.toJson(),
@@ -64,6 +69,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkDropCallbacks(_warmupIterations);
   _benchmarkProgramInvoke(_warmupIterations);
   _benchmarkComponentResourceBindings(_warmupIterations);
+  _benchmarkComponentHostBinding(_warmupIterations);
   _benchmarkCanonicalHostProgram(_warmupIterations);
   _benchmarkErrorContextProgram(_warmupIterations);
   _benchmarkErrorContextMemory(_warmupIterations);
@@ -233,6 +239,39 @@ _Metric _benchmarkComponentResourceBindings(int iterations) {
     checksum += binding.name.length;
     checksum += binding.representation.index;
     checksum += binding.isAbstract ? 1 : 0;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentHostBinding(int iterations) {
+  final component = WasmComponent.decode(_resourceProgramBytes());
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final host = WASIComponentHost();
+    final binding = host.bindComponent(component);
+    final handle = binding.program.invoke(0, <Object?>[i]);
+    if (handle is! int) {
+      throw StateError('component host resource.new returned non-handle');
+    }
+    final representation = binding.program.invoke(1, <Object?>[handle]);
+    if (representation is! int) {
+      throw StateError('component host resource.rep returned non-int');
+    }
+    checksum += representation;
+    binding.program.invoke(2, <Object?>[handle]);
+    if (host.table.activeCount != 0) {
+      throw StateError(
+        'component host table leaked ${host.table.activeCount} resources',
+      );
+    }
   }
   watch.stop();
 
@@ -477,6 +516,7 @@ void _printText(Map<String, Object?> payload) {
     'drop_callbacks',
     'program_invoke',
     'component_resource_bindings',
+    'component_host_binding',
     'canonical_host_program',
     'error_context_program',
     'error_context_memory',

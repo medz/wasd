@@ -119,8 +119,25 @@ final class WASIComponentResourceHost {
     String Function(WASIComponentResourceBinding binding)? nameForBinding,
     void Function(WASIComponentResourceBinding binding, T resource)? onDrop,
   }) {
+    return defineResourceBindings<T>(
+      componentResourceBindings(component),
+      nameForBinding: nameForBinding,
+      onDrop: onDrop,
+    );
+  }
+
+  /// Defines resource types from a prepared component resource binding list.
+  List<WASIComponentResourceType<T>> defineResourceBindings<T extends Object>(
+    Iterable<WASIComponentResourceBinding> bindings, {
+    String Function(WASIComponentResourceBinding binding)? nameForBinding,
+    void Function(WASIComponentResourceBinding binding, T resource)? onDrop,
+  }) {
+    final bindingList = bindings is List<WASIComponentResourceBinding>
+        ? bindings
+        : bindings.toList(growable: false);
+    _checkResourceBindingsAvailable(bindingList);
     final types = <WASIComponentResourceType<T>>[];
-    for (final binding in componentResourceBindings(component)) {
+    for (final binding in bindingList) {
       types.add(
         _defineResourceType<T>(
           binding.componentTypeIndex,
@@ -133,6 +150,30 @@ final class WASIComponentResourceHost {
       );
     }
     return List<WASIComponentResourceType<T>>.unmodifiable(types);
+  }
+
+  void _checkResourceBindingsAvailable(
+    List<WASIComponentResourceBinding> bindings,
+  ) {
+    final seen = <int>{};
+    for (final binding in bindings) {
+      final componentTypeIndex = binding.componentTypeIndex;
+      if (componentTypeIndex < 0) {
+        throw StateError(
+          'WASI component resource type index $componentTypeIndex is invalid.',
+        );
+      }
+      if (!seen.add(componentTypeIndex)) {
+        throw StateError(
+          'WASI component resource type index $componentTypeIndex is bound more than once.',
+        );
+      }
+      if (_resourceTypes.containsKey(componentTypeIndex)) {
+        throw StateError(
+          'WASI component resource type index $componentTypeIndex is already bound.',
+        );
+      }
+    }
   }
 
   WASIComponentResourceType<T> _defineResourceType<T extends Object>(

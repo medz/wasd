@@ -159,6 +159,36 @@ void main() {
     });
 
     test(
+      'rejects duplicate prepared bindings before defining resource types',
+      () {
+        final host = WASIComponentResourceHost();
+        final bindings = const [
+          WASIComponentResourceBinding(
+            componentTypeIndex: 0,
+            name: 'first',
+            representation: WASIComponentResourceRepresentation.unconstrained,
+            isAbstract: true,
+          ),
+          WASIComponentResourceBinding(
+            componentTypeIndex: 0,
+            name: 'duplicate',
+            representation: WASIComponentResourceRepresentation.unconstrained,
+            isAbstract: true,
+          ),
+        ];
+
+        expect(
+          () => host.defineResourceBindings<int>(bindings),
+          throwsStateError,
+        );
+        expect(
+          () => host.defineResourceType<int>(0, 'manual-resource'),
+          returnsNormally,
+        );
+      },
+    );
+
+    test(
       'binds canonical operations for aliased instance resource exports',
       () {
         final component = WasmComponent.decode(
