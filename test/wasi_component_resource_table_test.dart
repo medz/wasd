@@ -52,14 +52,13 @@ void main() {
 
     test('drops resources once and invalidates stale handles', () {
       final table = WASIComponentResourceTable();
-      final streamType = table.defineType<String>('stream');
       final dropped = <String>[];
-
-      final handle = table.insert<String>(
-        streamType,
+      final streamType = table.defineType<String>(
         'stream',
         onDrop: dropped.add,
       );
+
+      final handle = table.insert<String>(streamType, 'stream');
 
       table.drop<String>(streamType, handle);
 
@@ -74,6 +73,29 @@ void main() {
       expect(reused, isNot(handle));
       expect(table.get<String>(streamType, reused), 'future');
       expect(() => table.get<String>(streamType, handle), throwsStateError);
+    });
+
+    test('supports canonical resource new, rep, and drop operations', () {
+      final table = WASIComponentResourceTable();
+      final dropped = <int>[];
+      final descriptorType = table.defineType<int>(
+        'descriptor',
+        onDrop: dropped.add,
+      );
+
+      final handle = table.resourceNew<int>(descriptorType, 33);
+
+      expect(table.resourceRep<int>(descriptorType, handle), 33);
+      table.resourceDrop<int>(descriptorType, handle);
+      expect(dropped, [33]);
+      expect(
+        () => table.resourceRep<int>(descriptorType, handle),
+        throwsStateError,
+      );
+      expect(
+        () => table.resourceDrop<int>(descriptorType, handle),
+        throwsStateError,
+      );
     });
 
     test('prevents dropping borrowed resources', () {

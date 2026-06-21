@@ -3,9 +3,15 @@
 /// Component Model resources are nominal, so two resource definitions with the
 /// same Dart representation type must still have different handle spaces.
 final class WASIComponentResourceType<T extends Object> {
-  const WASIComponentResourceType._(this._tableId, this.id, this.name);
+  const WASIComponentResourceType._(
+    this._tableId,
+    this.id,
+    this.name,
+    this._onDrop,
+  );
 
   final int _tableId;
+  final void Function(T resource)? _onDrop;
 
   /// Table-local resource type identifier.
   final int id;
@@ -15,6 +21,10 @@ final class WASIComponentResourceType<T extends Object> {
 
   @override
   String toString() => name;
+
+  void _drop(T resource) {
+    _onDrop?.call(resource);
+  }
 }
 
 /// A typed resource table for future WASI component hosts.
@@ -36,27 +46,37 @@ final class WASIComponentResourceTable {
   int get activeCount => _activeCount;
 
   /// Defines a nominal component resource type backed by Dart values of [T].
-  WASIComponentResourceType<T> defineType<T extends Object>(String name) {
+  ///
+  /// [onDrop] is invoked whenever a handle for this resource type is dropped.
+  WASIComponentResourceType<T> defineType<T extends Object>(
+    String name, {
+    void Function(T resource)? onDrop,
+  }) {
     return WASIComponentResourceType<T>._(
       _tableId,
       _nextResourceTypeId++,
       name,
+      onDrop,
     );
   }
 
   /// Inserts [resource] and returns an opaque component handle.
-  int insert<T extends Object>(
-    WASIComponentResourceType<T> type,
-    T resource, {
-    void Function(T resource)? onDrop,
-  }) {
+  int insert<T extends Object>(WASIComponentResourceType<T> type, T resource) {
     _validateResourceType(type);
     final slotIndex = _allocateSlot();
     final slot = _slots[slotIndex];
     slot.generation++;
-    slot.entry = _WASIComponentResourceEntry<T>(type, resource, onDrop);
+    slot.entry = _WASIComponentResourceEntry<T>(type, resource);
     _activeCount++;
     return _handleFor(slotIndex, slot.generation);
+  }
+
+  /// Implements the canonical ABI `resource.new` operation.
+  int resourceNew<T extends Object>(
+    WASIComponentResourceType<T> type,
+    T representation,
+  ) {
+    return insert<T>(type, representation);
   }
 
   /// Returns `true` when [handle] currently refers to a live resource.
@@ -76,6 +96,14 @@ final class WASIComponentResourceTable {
   T get<T extends Object>(WASIComponentResourceType<T> type, int handle) =>
       _typedEntry<T>(type, handle).resource;
 
+  /// Implements the canonical ABI `resource.rep` operation.
+  T resourceRep<T extends Object>(
+    WASIComponentResourceType<T> type,
+    int handle,
+  ) {
+    return get<T>(type, handle);
+  }
+
   /// Runs [callback] with the resource for [handle] while marking it borrowed.
   R borrow<T extends Object, R>(
     WASIComponentResourceType<T> type,
@@ -93,7 +121,8 @@ final class WASIComponentResourceTable {
 
   /// Drops the resource for [handle].
   ///
-  /// The optional `onDrop` callback passed to [insert] is invoked at most once.
+  /// The optional `onDrop` callback passed to [defineType] is invoked at most
+  /// once per handle.
   void drop<T extends Object>(WASIComponentResourceType<T> type, int handle) {
     final entry = _typedEntry<T>(type, handle);
     if (entry.borrowCount != 0) {
@@ -108,6 +137,14 @@ final class WASIComponentResourceTable {
     _freeSlots.add(slotIndex);
     _activeCount--;
     entry.drop();
+  }
+
+  /// Implements the canonical ABI `resource.drop` operation.
+  void resourceDrop<T extends Object>(
+    WASIComponentResourceType<T> type,
+    int handle,
+  ) {
+    drop<T>(type, handle);
   }
 
   int _allocateSlot() {
@@ -173,14 +210,13 @@ final class _WASIComponentResourceSlot {
 }
 
 final class _WASIComponentResourceEntry<T extends Object> {
-  _WASIComponentResourceEntry(this.type, this.resource, this.onDrop);
+  _WASIComponentResourceEntry(this.type, this.resource);
 
   final WASIComponentResourceType<T> type;
   final T resource;
-  final void Function(T resource)? onDrop;
   int borrowCount = 0;
 
   void drop() {
-    onDrop?.call(resource);
+    type._drop(resource);
   }
 }

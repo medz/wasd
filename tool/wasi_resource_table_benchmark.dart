@@ -48,9 +48,9 @@ _Metric _benchmarkInsertGetDrop(int iterations) {
 
   final watch = Stopwatch()..start();
   for (var i = 0; i < iterations; i++) {
-    final handle = table.insert<int>(resourceType, i);
-    checksum += table.get<int>(resourceType, handle);
-    table.drop<int>(resourceType, handle);
+    final handle = table.resourceNew<int>(resourceType, i);
+    checksum += table.resourceRep<int>(resourceType, handle);
+    table.resourceDrop<int>(resourceType, handle);
     if (table.contains(handle)) {
       throw StateError('stale handle remained live: $handle');
     }
@@ -100,19 +100,18 @@ _Metric _benchmarkBorrow(_Options options) {
 
 _Metric _benchmarkDropCallbacks(int iterations) {
   final table = WASIComponentResourceTable();
-  final resourceType = table.defineType<int>('resource');
   var checksum = 0;
+  final resourceType = table.defineType<int>(
+    'resource',
+    onDrop: (resource) {
+      checksum += resource;
+    },
+  );
 
   final watch = Stopwatch()..start();
   for (var i = 0; i < iterations; i++) {
-    final handle = table.insert<int>(
-      resourceType,
-      i,
-      onDrop: (resource) {
-        checksum += resource;
-      },
-    );
-    table.drop<int>(resourceType, handle);
+    final handle = table.resourceNew<int>(resourceType, i);
+    table.resourceDrop<int>(resourceType, handle);
   }
   watch.stop();
 

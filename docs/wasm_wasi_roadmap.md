@@ -84,9 +84,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/resource_table.dart` now provides an internal typed
   resource table with table-local nominal resource type tokens, stale-handle
-  guards, and borrow/drop guards. P2/P3 host instantiation, WIT ingestion,
-  canonical ABI lowering/lifting, and async stream/future execution are not
-  production-supported yet.
+  guards, borrow/drop guards, and internal canonical `resource.new`,
+  `resource.rep`, and `resource.drop` operations. P2/P3 host instantiation, WIT
+  ingestion, canonical ABI lowering/lifting, and async stream/future execution
+  are not production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
   for component-model WASI versions. This is an intentional version boundary,
@@ -147,8 +148,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   benchmarks before they are advertised as production-ready. The "sandwich"
   async forwarding case from WASI 0.3 must be a first-class benchmark, not only
   a functional test.
-- Component resource table handle allocation, nominal typed lookup, borrow, and
-  drop behavior are measured by
+- Component resource table canonical `resource.new`/`resource.rep`/
+  `resource.drop`, nominal typed lookup, borrow, and drop behavior are measured
+  by
   `dart run tool/wasi_resource_table_benchmark.dart --json`.
 
 ## Near-Term Slices
