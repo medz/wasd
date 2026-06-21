@@ -107,6 +107,17 @@ void main() {
       expect(wasi, isA<WASI>());
     });
 
+    test('constructor rejects unsupported component WASI versions', () {
+      expect(
+        () => WASI(version: WASIVersion.preview2),
+        throwsA(isA<UnsupportedError>()),
+      );
+      expect(
+        () => WASI(version: WASIVersion.preview3),
+        throwsA(isA<UnsupportedError>()),
+      );
+    });
+
     test('process signal codes follow WASI Preview1 numbering', () {
       expect(WASIProcessSignal.none.code, 0);
       expect(WASIProcessSignal.term.code, 15);

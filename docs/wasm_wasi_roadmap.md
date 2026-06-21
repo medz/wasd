@@ -84,6 +84,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   `lib/src/wasm/backend/native/interpreter/component.dart`, but P2/P3 host
   instantiation, WIT ingestion, resource tables, canonical ABI lowering/lifting,
   and async stream/future execution are not production-supported yet.
+- The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
+  `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
+  for component-model WASI versions. This is an intentional version boundary,
+  not a support claim.
 
 ## Architecture Direction
 
@@ -107,10 +111,10 @@ This is the implementation state as of 2026-06-21 on `main`.
    model still has real gaps: native adapter boundaries, externally backed
    readiness, and larger conformance-shaped descriptor distributions before
    adding raw networking APIs.
-2. For P2/P3, add a versioned host boundary first:
-   `preview1`, `preview2`, and `preview3` adapters over shared descriptor,
-   resource, clock, random, filesystem, and socket primitives. Do not extend
-   `wasi_snapshot_preview1` types into component worlds.
+2. For P2/P3, replace the current explicit constructor rejection with real
+   versioned adapters over shared descriptor, resource, clock, random,
+   filesystem, and socket primitives. Do not extend `wasi_snapshot_preview1`
+   types into component worlds.
 3. Add WIT ingestion and generated binding support only after the resource table
    and canonical ABI ownership model are in place.
 

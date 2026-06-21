@@ -132,19 +132,35 @@ enum WASIProcessSignal {
 abstract interface class WASI {
   /// Creates a WASI runtime with the given options.
   factory WASI({
-    List<String> args,
-    Map<String, String> env,
-    Map<String, String> preopens,
-    Map<String, Uint8List> files,
-    bool returnOnExit,
-    int stdin,
-    List<int> stdinData,
-    int stdout,
-    int stderr,
-    Map<int, WASIPreview1Socket> sockets,
+    List<String> args = const [],
+    Map<String, String> env = const {},
+    Map<String, String> preopens = const {},
+    Map<String, Uint8List> files = const {},
+    bool returnOnExit = true,
+    int stdin = 0,
+    List<int> stdinData = const <int>[],
+    int stdout = 1,
+    int stderr = 2,
+    Map<int, WASIPreview1Socket> sockets = const <int, WASIPreview1Socket>{},
     WASIProcRaiseHandler? procRaiseHandler,
-    WASIVersion version,
-  }) = backend.WASI;
+    WASIVersion version = WASIVersion.preview1,
+  }) {
+    _requireSupportedVersion(version);
+    return backend.WASI(
+      args: args,
+      env: env,
+      preopens: preopens,
+      files: files,
+      returnOnExit: returnOnExit,
+      stdin: stdin,
+      stdinData: stdinData,
+      stdout: stdout,
+      stderr: stderr,
+      sockets: sockets,
+      procRaiseHandler: procRaiseHandler,
+      version: version,
+    );
+  }
 
   /// The WASI import object to pass when instantiating a module.
   Imports get imports;
@@ -165,3 +181,19 @@ abstract interface class WASI {
   /// [start] and [initialize] call this automatically when needed.
   void finalizeBindings(Instance instance, {Memory? memory});
 }
+
+void _requireSupportedVersion(WASIVersion version) {
+  if (version == WASIVersion.preview1) {
+    return;
+  }
+  throw UnsupportedError(
+    '${_wasiVersionLabel(version)} requires a component-model WASI host. '
+    'This runtime currently supports only WASI Preview1 host instantiation.',
+  );
+}
+
+String _wasiVersionLabel(WASIVersion version) => switch (version) {
+  WASIVersion.preview1 => 'WASI Preview1',
+  WASIVersion.preview2 => 'WASI 0.2 / Preview2',
+  WASIVersion.preview3 => 'WASI 0.3 / Preview3',
+};
