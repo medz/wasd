@@ -1407,6 +1407,11 @@ final class _WasmComponentValidationContext {
   }) {
     switch (type.kind) {
       case WasmComponentDefinedValueTypeKind.record:
+        validateNonEmptyDefinedValueType(
+          type.fields.length,
+          '$path.fields',
+          'Wasm component record type must have at least one field.',
+        );
         _validateUniqueLabels(
           type.fields.map((field) => field.label),
           '$path.fields',
@@ -1421,6 +1426,11 @@ final class _WasmComponentValidationContext {
           );
         }
       case WasmComponentDefinedValueTypeKind.variant:
+        validateNonEmptyDefinedValueType(
+          type.cases.length,
+          '$path.cases',
+          'Wasm component variant type must have at least one case.',
+        );
         _validateUniqueLabels(
           type.cases.map((case_) => case_.label),
           '$path.cases',
@@ -1447,6 +1457,11 @@ final class _WasmComponentValidationContext {
           scopedTypeDefinitions: scopedTypeDefinitions,
         );
       case WasmComponentDefinedValueTypeKind.tuple:
+        validateNonEmptyDefinedValueType(
+          type.types.length,
+          '$path.items',
+          'Wasm component tuple type must have at least one type.',
+        );
         for (var i = 0; i < type.types.length; i++) {
           validateComponentValueType(
             type.types[i],
@@ -1455,8 +1470,18 @@ final class _WasmComponentValidationContext {
           );
         }
       case WasmComponentDefinedValueTypeKind.flags:
+        validateNonEmptyDefinedValueType(
+          type.labels.length,
+          '$path.flags',
+          'Wasm component flags type must have at least one entry.',
+        );
         _validateUniqueLabels(type.labels, '$path.flags', 'flags', errors);
       case WasmComponentDefinedValueTypeKind.enumeration:
+        validateNonEmptyDefinedValueType(
+          type.labels.length,
+          '$path.enum',
+          'Wasm component enum type must have at least one variant.',
+        );
         _validateUniqueLabels(type.labels, '$path.enum', 'enum', errors);
       case WasmComponentDefinedValueTypeKind.option:
         validateComponentValueType(
@@ -1510,6 +1535,18 @@ final class _WasmComponentValidationContext {
           scopedTypeDefinitions: scopedTypeDefinitions,
         );
     }
+  }
+
+  void validateNonEmptyDefinedValueType(
+    int length,
+    String path,
+    String message,
+  ) {
+    if (length != 0) {
+      return;
+    }
+
+    errors.add(WasmComponentValidationError(path: path, message: message));
   }
 
   void validateComponentTypeDeclarations(

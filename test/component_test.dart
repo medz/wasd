@@ -734,6 +734,37 @@ void main() {
       }
     });
 
+    test('reports empty component defined value type bodies', () {
+      final invalidTypes = <(Uint8List, String)>[
+        (
+          _emptyRecordTypeComponentBytes(),
+          'record type must have at least one field',
+        ),
+        (
+          _emptyVariantTypeComponentBytes(),
+          'variant type must have at least one case',
+        ),
+        (
+          _emptyFlagsTypeComponentBytes(),
+          'flags type must have at least one entry',
+        ),
+        (
+          _emptyEnumTypeComponentBytes(),
+          'enum type must have at least one variant',
+        ),
+        (
+          _emptyTupleTypeComponentBytes(),
+          'tuple type must have at least one type',
+        ),
+      ];
+
+      for (final (bytes, message) in invalidTypes) {
+        final errors = WasmComponent.decode(bytes).validate();
+        expect(errors, hasLength(1));
+        expect(errors.single.message, contains(message));
+      }
+    });
+
     test('reports invalid component value type indexes', () {
       final wrongSort = WasmComponent.decode(
         _functionResultWrongSortTypeIndexComponentBytes(),
@@ -5343,6 +5374,21 @@ Uint8List _duplicateEnumLabelsTypeComponentBytes() =>
       0x01,
       0x61,
     ]);
+
+Uint8List _emptyRecordTypeComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[0x72, 0x00]);
+
+Uint8List _emptyVariantTypeComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[0x71, 0x00]);
+
+Uint8List _emptyFlagsTypeComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[0x6e, 0x00]);
+
+Uint8List _emptyEnumTypeComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[0x6d, 0x00]);
+
+Uint8List _emptyTupleTypeComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[0x6f, 0x00]);
 
 Uint8List _functionResultWrongSortTypeIndexComponentBytes() =>
     _componentWithSingleTypeDefinitionBytes(const <int>[
