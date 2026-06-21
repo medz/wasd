@@ -201,6 +201,10 @@ final class WasmMemory {
     }
 
     final oldPages = pageCount;
+    if (additionalPages == 0) {
+      return oldPages;
+    }
+
     final newPages = oldPages + additionalPages;
     final maxLimit = maxPages ?? _maxPagesForPageSize(pageSizeBytes);
 

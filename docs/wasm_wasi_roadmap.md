@@ -208,7 +208,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   same-table overlapping copy behavior. Native memory bulk operations now avoid
   BigInt allocation for memory32 operands on the hot VM path and cache stable
   per-instruction memory/index-type metadata for repeated `memory.copy` and
-  `memory.fill` execution.
+  `memory.fill` execution. Native linear memory growth also returns immediately
+  for `memory.grow(0)`, avoiding an unnecessary same-size buffer allocation and
+  copy while preserving the required previous-page-count result.
   P2/P3 host instantiation, WIT ingestion, full canonical ABI
   lowering/lifting, memory-backed typed stream/future copy, and full async
   stream/future execution are not production-supported yet.

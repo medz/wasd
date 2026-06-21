@@ -165,6 +165,12 @@ void main() {
         expect(prev, 1); // previous page count
         expect(memory.buffer.lengthInBytes, 65536 * 2);
       });
+
+      test('grow by zero keeps memory size', () {
+        final prev = memory.grow(0);
+        expect(prev, 1);
+        expect(memory.buffer.lengthInBytes, 65536);
+      });
     });
   });
 
