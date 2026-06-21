@@ -8,23 +8,27 @@ Status date: 2026-06-21.
 
 ## External Reference Points
 
-- WASI upstream now describes WASI 0.3 as the current preview, building on
-  WASI 0.2 with component-model-native `async`, `future<T>`, and `stream<T>`.
-  Reference: https://github.com/WebAssembly/WASI
-- WASI.dev states that WASI 0.3.0 was released on 2026-06-11, with support in
-  Wasmtime 43+ and jco. It also notes that `wasi:io` is removed and absorbed
-  into the component model Canonical ABI.
-  Reference: https://wasi.dev/roadmap
-- Wasmtime keeps WASI 0.3 behind a dedicated `p3` crate feature and labels it
-  experimental, unstable, and incomplete. Its p3 layer is split by interface
-  groups (`cli`, `clocks`, `filesystem`, `random`, `sockets`) and linked through
-  per-store `WasiCtx` plus `ResourceTable`.
-  Reference: https://docs.rs/wasmtime-wasi/latest/wasmtime_wasi/p3/
-- wasmCloud keeps P3 behind a `wasip3` feature and registers P3 implementations
-  alongside P2 while keeping P2 stable by default.
+- WASI.dev describes WASI as standards-track APIs for Wasm and explicitly maps
+  the three milestone releases to Preview 1, Preview 2, and Preview 3. WASI 0.3
+  adds Component Model native `async`, `future<T>`, and `stream<T>`.
+  References: https://wasi.dev/ and https://wasi.dev/releases/wasi-p3
+- WASI.dev states that WASI 0.3.0 was released on 2026-06-11. Its current
+  runtime notes say Wasmtime 45 runs the latest release candidate, Wasmtime 46
+  will ship WASI 0.3.0 with Component Model Async enabled by default, and jco
+  supports JavaScript environments. The shared `wasi-testsuite` is the
+  conformance reference for Wasmtime and jco across Linux, macOS, and Windows.
+  Reference: https://wasi.dev/releases/wasi-p3
+- Wasmtime exposes WASI through per-store `WasiCtx`, `WasiCtxView`, and
+  `ResourceTable`, with interface groups for `cli`, `clocks`, `filesystem`,
+  `random`, and `sockets`. That split is a useful boundary for wasd's future
+  P2/P3 host model.
+  Reference: https://docs.rs/wasmtime-wasi/latest/wasmtime_wasi/
+- wasmCloud keeps P3 behind a `wasip3` Cargo feature, registers P3
+  implementations alongside P2, and keeps P2 as the stable default.
   Reference: https://wasmcloud.com/docs/runtime/
 - jco includes a dedicated `preview3-shim` package for mapping WASI Preview 3 to
-  Node.js while reusing the broader component-tooling pipeline.
+  Node.js while reusing the broader component tooling pipeline for building,
+  transpiling, and running WebAssembly components.
   Reference: https://github.com/bytecodealliance/jco
 
 ## Implementation Baselines
@@ -49,6 +53,30 @@ copying their internals directly.
   and buffering must get benchmarks and resource-lifetime tests as they are
   implemented.
 
+## Current wasd Baseline
+
+This is the implementation state as of 2026-06-21 on `main`.
+
+- Preview 1 is real but still incomplete. Native and browser hosts share
+  `lib/src/wasi/preview1/common/vfs.dart` for virtual files, directories,
+  readdir state, hard links, symlinks/readlink, descriptor flags, descriptor
+  times, descriptor sync/advice validation, and descriptor renumbering. Node
+  still delegates Preview 1 behavior to `node:wasi`.
+- The remaining explicit Preview 1 `ENOSYS` list is
+  `fd_fdstat_set_rights`, `proc_raise`, `sock_accept`, `sock_recv`,
+  `sock_send`, and `sock_shutdown`. This list is intentionally in code at
+  `lib/src/wasi/preview1/common/constants.dart`; README support claims must
+  stay aligned with it.
+- Preview 1 stdio descriptors are still host-level fields, while virtual files,
+  directories, and preopens live in the VFS descriptor table. Full rights
+  support should not be added as another host-side special case; it needs a
+  unified descriptor/capability table that can represent stdio, preopens, files,
+  directories, future sockets, rights, inheriting rights, and close state.
+- Component decoding and validation exist under
+  `lib/src/wasm/backend/native/interpreter/component.dart`, but P2/P3 host
+  instantiation, WIT ingestion, resource tables, canonical ABI lowering/lifting,
+  and async stream/future execution are not production-supported yet.
+
 ## Architecture Direction
 
 1. Keep the Wasm core runtime, component decoder, and WASI host layers separate.
@@ -65,6 +93,25 @@ copying their internals directly.
 5. Prefer generated or spec-derived interface bindings once WIT coverage starts.
    Hand-written host shims should stay narrow and tested.
 
+## Next Implementation Order
+
+1. Finish the Preview 1 descriptor/capability model before removing more
+   syscall stubs. Move stdio into the same descriptor table as VFS descriptors,
+   add base and inheriting rights, implement `fd_fdstat_set_rights`, and enforce
+   rights at every host entrypoint that touches descriptors or paths.
+2. Decide whether Preview 1 sockets are in-process virtual sockets, real host
+   sockets, or an explicit capability-gated native-only feature. Do not expose
+   `sock_*` as supported until accept/recv/send/shutdown have cross-runtime
+   tests and a clear browser behavior.
+3. Treat `proc_raise` as process-control capability work, not just a return-code
+   stub. Native and JS behavior need separate semantics and tests.
+4. For P2/P3, add a versioned host boundary first:
+   `preview1`, `preview2`, and `preview3` adapters over shared descriptor,
+   resource, clock, random, filesystem, and socket primitives. Do not extend
+   `wasi_snapshot_preview1` types into component worlds.
+5. Add WIT ingestion and generated binding support only after the resource table
+   and canonical ABI ownership model are in place.
+
 ## Performance Direction
 
 - Validation must be linear in the decoded component graph wherever possible.
@@ -79,20 +126,33 @@ copying their internals directly.
   default validation remains useful without hiding performance regressions.
 - Any new conformance runner should cache toolchain discovery, generated
   bundles, and fixture conversion results by input hash.
+- Preview 1 VFS path resolution and directory-entry rebuilding are acceptable as
+  simple maps while the fixture set is small. Before broader conformance or real
+  package workloads, add a VFS benchmark that covers `path_open`, `fd_readdir`,
+  link/symlink mutation, descriptor renumbering, and rights checks over large
+  directory and descriptor sets.
+- P2/P3 streams and futures need latency, allocation, and cancellation
+  benchmarks before they are advertised as production-ready. The "sandwich"
+  async forwarding case from WASI 0.3 must be a first-class benchmark, not only
+  a functional test.
 
 ## Near-Term Slices
 
-1. Finish component-model validation gaps that are local and deterministic:
-   resource type references, function/result restrictions, borrow containment,
-   canonical options, and start/import/export index validation.
-2. Add a small benchmark harness for component validation and decode paths before
-   broadening official corpus coverage.
+1. Refactor Preview 1 stdio, preopens, files, and directories into one
+   descriptor/capability table. Add rights state, rights inheritance, and
+   enforcement before removing `fd_fdstat_set_rights` from the ENOSYS list.
+2. Add a VFS/descriptor benchmark that covers path lookup, directory cache
+   rebuilds, descriptor renumbering, and rights checks over large descriptor and
+   directory sets.
 3. Audit `tool/spec_runner.dart` and DOOM tests for process-spawn and fixture
    conversion hot spots, then add timing and caching where it changes actual
    runtime cost.
-4. Introduce explicit WASI version modules for future P2/P3 work instead of
+4. Finish component-model validation gaps that are local and deterministic:
+   resource type references, function/result restrictions, borrow containment,
+   canonical options, and start/import/export index validation.
+5. Introduce explicit WASI version modules for future P2/P3 work instead of
    extending Preview 1 host types in place.
-5. Add WIT/interface ingestion only after the versioned host boundary and
+6. Add WIT/interface ingestion only after the versioned host boundary and
    resource-table model are in place.
 
 ## Completion Bar
