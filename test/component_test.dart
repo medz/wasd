@@ -786,6 +786,20 @@ void main() {
       );
     });
 
+    test('reports conflicting component function parameter names', () {
+      final errors = WasmComponent.decode(
+        _conflictingFunctionParameterNamesTypeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains(
+          'function parameter name FOO conflicts with previous parameter name foo',
+        ),
+      );
+    });
+
     test('reports invalid component value type indexes', () {
       final wrongSort = WasmComponent.decode(
         _functionResultWrongSortTypeIndexComponentBytes(),
@@ -5428,6 +5442,24 @@ Uint8List _emptyFunctionParameterNameTypeComponentBytes() =>
       0x01,
       0x00,
       0x73,
+      0x01,
+      0x00,
+    ]);
+
+Uint8List _conflictingFunctionParameterNamesTypeComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[
+      0x40,
+      0x02,
+      0x03,
+      0x66,
+      0x6f,
+      0x6f,
+      0x73,
+      0x03,
+      0x46,
+      0x4f,
+      0x4f,
+      0x79,
       0x01,
       0x00,
     ]);

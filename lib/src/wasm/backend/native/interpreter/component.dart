@@ -1224,11 +1224,8 @@ final class _WasmComponentValidationContext {
 
     final function = type.function;
     if (type.kind == WasmComponentTypeKind.function && function != null) {
+      validateComponentFunctionParameterNames(function.params, '$path.params');
       for (var i = 0; i < function.params.length; i++) {
-        validateComponentFunctionParameterName(
-          function.params[i].label,
-          '$path.params[$i].name',
-        );
         validateComponentValueType(
           function.params[i].type,
           '$path.params[$i]',
@@ -1404,17 +1401,49 @@ final class _WasmComponentValidationContext {
     }
   }
 
-  void validateComponentFunctionParameterName(String name, String path) {
-    if (name.isNotEmpty) {
+  void validateComponentFunctionParameterNames(
+    List<WasmComponentLabeledValueType> params,
+    String path,
+  ) {
+    if (params.length <= 1) {
+      if (params.length == 1 && params.single.label.isEmpty) {
+        errors.add(
+          WasmComponentValidationError(
+            path: '$path[0].name',
+            message: 'Wasm component function parameter name cannot be empty.',
+          ),
+        );
+      }
       return;
     }
 
-    errors.add(
-      WasmComponentValidationError(
-        path: path,
-        message: 'Wasm component function parameter name cannot be empty.',
-      ),
-    );
+    final seenNames = <String, String>{};
+    for (var i = 0; i < params.length; i++) {
+      final name = params[i].label;
+      if (name.isEmpty) {
+        errors.add(
+          WasmComponentValidationError(
+            path: '$path[$i].name',
+            message: 'Wasm component function parameter name cannot be empty.',
+          ),
+        );
+        continue;
+      }
+
+      final foldedName = name.toLowerCase();
+      final previousName = seenNames[foldedName];
+      if (previousName != null) {
+        errors.add(
+          WasmComponentValidationError(
+            path: '$path[$i].name',
+            message:
+                'Wasm component function parameter name $name conflicts with previous parameter name $previousName.',
+          ),
+        );
+        continue;
+      }
+      seenNames[foldedName] = name;
+    }
   }
 
   void validateDefinedValueType(
