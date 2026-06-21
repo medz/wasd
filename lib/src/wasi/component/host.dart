@@ -273,7 +273,7 @@ bool _componentHostSupportsAsyncMemoryCopy(
   WasmComponentCanonicalKind kind,
   WASIComponentAsyncValueBinding binding,
 ) {
-  if (binding.isUnit || binding.fixedWidthMemoryLayout != null) {
+  if (binding.isUnit || binding.memoryLayout != null) {
     return true;
   }
   final isPrimitiveStringCopy =

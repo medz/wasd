@@ -338,7 +338,7 @@ final class WASIComponentAsyncValueBinding {
     required this.kind,
     required _WASIComponentAsyncValueValidator valueValidator,
   }) : _valueValidator = valueValidator,
-       fixedWidthMemoryLayout = _fixedWidthMemoryLayoutFor(valueValidator);
+       memoryLayout = _memoryLayoutFor(valueValidator);
 
   final _WASIComponentAsyncValueValidator _valueValidator;
 
@@ -358,24 +358,24 @@ final class WASIComponentAsyncValueBinding {
   WasmComponentPrimitiveValueType? get primitive =>
       _valueValidator.primitive ?? _valueValidator.memoryCodec?.primitive;
 
-  /// Fixed-size Canonical ABI memory-copy layout for this payload.
+  /// Canonical ABI memory-copy layout for this payload.
   ///
-  /// Returns `null` for unit payloads and values such as `string` that need
-  /// realloc-backed stream/future memory representation.
-  final WASIComponentAsyncValueMemoryLayout? fixedWidthMemoryLayout;
+  /// Returns `null` for unit payloads and values such as `string` that have a
+  /// specialized realloc-backed stream/future memory representation.
+  final WASIComponentAsyncValueMemoryLayout? memoryLayout;
 }
 
-/// Canonical ABI fixed-size memory-copy layout for an async value payload.
+/// Canonical ABI memory-copy layout for an async value payload.
 final class WASIComponentAsyncValueMemoryLayout {
   const WASIComponentAsyncValueMemoryLayout._({
     required this.byteLength,
     required this.alignment,
   });
 
-  /// Number of guest-memory bytes per stream/future element.
+  /// Number of guest-memory bytes per stream/future element record.
   final int byteLength;
 
-  /// Required guest-memory alignment for the element pointer.
+  /// Required guest-memory alignment for the element record pointer.
   final int alignment;
 }
 
@@ -1913,12 +1913,7 @@ final class _RegisteredAsyncValueType<T> {
     WASIComponentCanonicalRealloc? realloc,
   ]) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
-    _requireStringReallocForReadToMemory(
-      valueValidator,
-      name,
-      realloc,
-      maxElements,
-    );
+    _requireReallocForReadToMemory(valueValidator, name, realloc, maxElements);
     final values = _expectReadableStream(readable).read(maxElements);
     _writeValuesToMemory(
       valueValidator,
@@ -1946,7 +1941,7 @@ final class _RegisteredAsyncValueType<T> {
           readableStreamType!,
           readable,
           (stream) {
-            _requireStringReallocForReadToMemory(
+            _requireReallocForReadToMemory(
               valueValidator,
               name,
               realloc,
@@ -1980,7 +1975,7 @@ final class _RegisteredAsyncValueType<T> {
       WASIComponentReadableStream<T>,
       WASIComponentAsyncCopyResult
     >(readableStreamType!, readable, (stream) {
-      _requireStringReallocForReadToMemory(
+      _requireReallocForReadToMemory(
         valueValidator,
         name,
         realloc,
@@ -2017,7 +2012,7 @@ final class _RegisteredAsyncValueType<T> {
       readableStreamType!,
       readable,
       (stream) {
-        _requireStringReallocForReadToMemory(
+        _requireReallocForReadToMemory(
           valueValidator,
           name,
           realloc,
@@ -2235,7 +2230,7 @@ final class _RegisteredAsyncValueType<T> {
     WASIComponentCanonicalRealloc? realloc,
   ]) {
     _requireKind(_WASIComponentAsyncValueKind.future);
-    _requireStringReallocForReadToMemory(valueValidator, name, realloc, 1);
+    _requireReallocForReadToMemory(valueValidator, name, realloc, 1);
     final value = _expectReadableFuture(readable).readForCopy();
     _writeValueToMemory(
       valueValidator,
@@ -2257,22 +2252,24 @@ final class _RegisteredAsyncValueType<T> {
         WASIComponentCanonicalStringEncoding.utf8,
     WASIComponentCanonicalRealloc? realloc,
   ]) {
-    return table.borrow<
-      WASIComponentReadableFuture<T>,
-      WASIComponentAsyncCopyResult
-    >(readableFutureType!, readable, (future) {
-      _requireStringReallocForReadToMemory(valueValidator, name, realloc, 1);
-      _writeValueToMemory(
-        valueValidator,
-        name,
-        memory,
-        pointer,
-        future.readForCopy(),
-        stringEncoding,
-        realloc,
-      );
-      return WASIComponentAsyncCopyResult.completed(0);
-    });
+    return table
+        .borrow<WASIComponentReadableFuture<T>, WASIComponentAsyncCopyResult>(
+          readableFutureType!,
+          readable,
+          (future) {
+            _requireReallocForReadToMemory(valueValidator, name, realloc, 1);
+            _writeValueToMemory(
+              valueValidator,
+              name,
+              memory,
+              pointer,
+              future.readForCopy(),
+              stringEncoding,
+              realloc,
+            );
+            return WASIComponentAsyncCopyResult.completed(0);
+          },
+        );
   }
 
   Future<WASIComponentAsyncCopyResult> futureReadHandleToMemoryWhenReady(
@@ -2287,7 +2284,7 @@ final class _RegisteredAsyncValueType<T> {
       WASIComponentReadableFuture<T>,
       WASIComponentAsyncCopyResult
     >(readableFutureType!, readable, (future) {
-      _requireStringReallocForReadToMemory(valueValidator, name, realloc, 1);
+      _requireReallocForReadToMemory(valueValidator, name, realloc, 1);
       return future.readWhenReadyForCopy().then<WASIComponentAsyncCopyResult>((
         value,
       ) {
@@ -2318,7 +2315,7 @@ final class _RegisteredAsyncValueType<T> {
       readableFutureType!,
       readable,
       (future) {
-        _requireStringReallocForReadToMemory(valueValidator, name, realloc, 1);
+        _requireReallocForReadToMemory(valueValidator, name, realloc, 1);
         if (future.isReady) {
           _writeValueToMemory(
             valueValidator,
@@ -2896,7 +2893,8 @@ _WASIComponentAsyncValueValidator _asyncValueValidatorForElementType(
   );
   if (memoryCodec == null) {
     throw UnsupportedError(
-      'WASI component async host currently supports only fixed-size stream/future element types.',
+      'WASI component async host currently supports only stream/future element '
+      'types with a supported canonical memory layout.',
     );
   }
   return _WASIComponentAsyncValueValidator._(
@@ -2993,7 +2991,7 @@ List<T> _readValuesFromMemory<T>(
       growable: false,
     );
   }
-  return _readFixedWidthValuesFromMemory<T>(
+  return _readCanonicalValuesFromMemory<T>(
     validator,
     name,
     memory,
@@ -3012,7 +3010,7 @@ T _readValueFromMemory<T>(
   if (validator.primitive == WasmComponentPrimitiveValueType.string) {
     return _readStringValueFromMemory<T>(name, memory, pointer, stringEncoding);
   }
-  return _readFixedWidthValueFromMemory<T>(validator, name, memory, pointer);
+  return _readCanonicalValueFromMemory<T>(validator, name, memory, pointer);
 }
 
 T _readStringValueFromMemory<T>(
@@ -3052,7 +3050,7 @@ void _writeValuesToMemory(
     if (values.isEmpty) {
       return;
     }
-    final canonicalRealloc = _requireStringRealloc(name, realloc);
+    final canonicalRealloc = _requireRealloc(name, realloc);
     for (var index = 0; index < values.length; index++) {
       final memoryString = writeWASIComponentCanonicalString(
         memory,
@@ -3068,7 +3066,14 @@ void _writeValuesToMemory(
     }
     return;
   }
-  _writeFixedWidthValuesToMemory(validator, name, memory, pointer, values);
+  _writeCanonicalValuesToMemory(
+    validator,
+    name,
+    memory,
+    pointer,
+    values,
+    realloc,
+  );
 }
 
 void _writeValueToMemory(
@@ -3081,7 +3086,7 @@ void _writeValueToMemory(
   WASIComponentCanonicalRealloc? realloc,
 ) {
   if (validator.primitive == WasmComponentPrimitiveValueType.string) {
-    final canonicalRealloc = _requireStringRealloc(name, realloc);
+    final canonicalRealloc = _requireRealloc(name, realloc);
     validator.validate(name, value);
     checkWASIComponentCanonicalStringRecordRange(memory, pointer, 1);
     final memoryString = writeWASIComponentCanonicalString(
@@ -3093,10 +3098,17 @@ void _writeValueToMemory(
     writeWASIComponentMemoryStringRecord(memory, pointer, memoryString);
     return;
   }
-  _writeFixedWidthValueToMemory(validator, name, memory, pointer, value);
+  _writeCanonicalValueToMemory(
+    validator,
+    name,
+    memory,
+    pointer,
+    value,
+    realloc,
+  );
 }
 
-WASIComponentCanonicalRealloc _requireStringRealloc(
+WASIComponentCanonicalRealloc _requireRealloc(
   String name,
   WASIComponentCanonicalRealloc? realloc,
 ) {
@@ -3105,23 +3117,26 @@ WASIComponentCanonicalRealloc _requireStringRealloc(
   }
   throw UnsupportedError(
     'WASI component async type $name requires a canonical realloc callback '
-    'to write string values to memory.',
+    'to write dynamic values to memory.',
   );
 }
 
-void _requireStringReallocForReadToMemory(
+void _requireReallocForReadToMemory(
   _WASIComponentAsyncValueValidator validator,
   String name,
   WASIComponentCanonicalRealloc? realloc,
   int maxElements,
 ) {
-  if (maxElements > 0 &&
-      validator.primitive == WasmComponentPrimitiveValueType.string) {
-    _requireStringRealloc(name, realloc);
+  if (maxElements <= 0) {
+    return;
+  }
+  if (validator.primitive == WasmComponentPrimitiveValueType.string ||
+      (validator.memoryCodec?.requiresRealloc ?? false)) {
+    _requireRealloc(name, realloc);
   }
 }
 
-List<T> _readFixedWidthValuesFromMemory<T>(
+List<T> _readCanonicalValuesFromMemory<T>(
   _WASIComponentAsyncValueValidator validator,
   String name,
   wasm.Memory memory,
@@ -3138,13 +3153,13 @@ List<T> _readFixedWidthValuesFromMemory<T>(
   final codec = validator.memoryCodec;
   if (codec == null) {
     throw UnsupportedError(
-      'WASI component async type $name does not have a fixed-size memory element type.',
+      'WASI component async type $name does not have a canonical memory element type.',
     );
   }
   return codec.loadManyAs<T>(memory, pointer, elementCount, name);
 }
 
-T _readFixedWidthValueFromMemory<T>(
+T _readCanonicalValueFromMemory<T>(
   _WASIComponentAsyncValueValidator validator,
   String name,
   wasm.Memory memory,
@@ -3159,18 +3174,19 @@ T _readFixedWidthValueFromMemory<T>(
   final codec = validator.memoryCodec;
   if (codec == null) {
     throw UnsupportedError(
-      'WASI component async type $name does not have a fixed-size memory element type.',
+      'WASI component async type $name does not have a canonical memory element type.',
     );
   }
   return codec.loadAs<T>(memory, pointer, name);
 }
 
-void _writeFixedWidthValuesToMemory(
+void _writeCanonicalValuesToMemory(
   _WASIComponentAsyncValueValidator validator,
   String name,
   wasm.Memory memory,
   int pointer,
   List<Object?> values,
+  WASIComponentCanonicalRealloc? realloc,
 ) {
   _checkCopyElementCount(values.length);
   validator.validateAll(name, values);
@@ -3180,18 +3196,19 @@ void _writeFixedWidthValuesToMemory(
   final codec = validator.memoryCodec;
   if (codec == null) {
     throw UnsupportedError(
-      'WASI component async type $name does not have a fixed-size memory element type.',
+      'WASI component async type $name does not have a canonical memory element type.',
     );
   }
-  codec.storeMany(memory, pointer, values);
+  codec.storeMany(memory, pointer, values, realloc: realloc);
 }
 
-void _writeFixedWidthValueToMemory(
+void _writeCanonicalValueToMemory(
   _WASIComponentAsyncValueValidator validator,
   String name,
   wasm.Memory memory,
   int pointer,
   Object? value,
+  WASIComponentCanonicalRealloc? realloc,
 ) {
   validator.validate(name, value);
   if (validator.kind == _WASIComponentAsyncValueShape.unit) {
@@ -3200,13 +3217,13 @@ void _writeFixedWidthValueToMemory(
   final codec = validator.memoryCodec;
   if (codec == null) {
     throw UnsupportedError(
-      'WASI component async type $name does not have a fixed-size memory element type.',
+      'WASI component async type $name does not have a canonical memory element type.',
     );
   }
-  codec.store(memory, pointer, value);
+  codec.store(memory, pointer, value, realloc: realloc);
 }
 
-WASIComponentAsyncValueMemoryLayout? _fixedWidthMemoryLayoutFor(
+WASIComponentAsyncValueMemoryLayout? _memoryLayoutFor(
   _WASIComponentAsyncValueValidator validator,
 ) {
   final codec = validator.memoryCodec;

@@ -149,6 +149,54 @@ void main() {
       expect(loaded.associatedValue!.integer, 0x0102030405060708);
     });
 
+    test('loads and stores lists of fixed-size elements through realloc', () {
+      final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+        const WasmComponentValueType.typeIndex(0),
+        [
+          const WasmComponentTypeDefinition(
+            kind: WasmComponentTypeKind.definedValue,
+            definedValue: WasmComponentDefinedValueType(
+              kind: WasmComponentDefinedValueTypeKind.list,
+              elementType: WasmComponentValueType.primitive(
+                WasmComponentPrimitiveValueType.u32,
+              ),
+            ),
+          ),
+        ],
+      )!;
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(96, 7, Endian.little);
+      data.setUint32(100, 8, Endian.little);
+      data.setUint32(32, 96, Endian.little);
+      data.setUint32(36, 2, Endian.little);
+
+      final loaded = codec.load(memory, 32) as WasmComponentValueData;
+
+      expect(codec.byteLength, 8);
+      expect(codec.alignment, 4);
+      expect(codec.requiresRealloc, isTrue);
+      expect(loaded.kind, WasmComponentValueDataKind.list);
+      expect(loaded.items.map((item) => item.integer), [7, 8]);
+
+      codec.store(
+        memory,
+        64,
+        loaded,
+        realloc: (oldPointer, oldSize, alignment, newSize) {
+          expect(oldPointer, 0);
+          expect(oldSize, 0);
+          expect(alignment, 4);
+          expect(newSize, 8);
+          return 128;
+        },
+      );
+      expect(data.getUint32(64, Endian.little), 128);
+      expect(data.getUint32(68, Endian.little), 2);
+      expect(data.getUint32(128, Endian.little), 7);
+      expect(data.getUint32(132, Endian.little), 8);
+    });
+
     test('does not claim dynamic string memory layout support', () {
       final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
         const WasmComponentValueType.primitive(
