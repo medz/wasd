@@ -12,7 +12,12 @@ void main() {
         final component = WasmComponent.decode(_canonicalResourceNewBytes());
         final host = WASIComponentResourceHost();
         final dropped = <int>[];
-        host.defineResourceType<int>(0, 'descriptor', onDrop: dropped.add);
+        host.defineResourceTypeFromComponent<int>(
+          component,
+          0,
+          'descriptor',
+          onDrop: dropped.add,
+        );
 
         final newOperation = host.bindCanonicalDefinition(
           component.canonicalDefinitions.single,
@@ -75,6 +80,42 @@ void main() {
       );
 
       expect(() => operation.resourceNew('bad'), throwsStateError);
+    });
+
+    test('rejects missing decoded resource type indexes', () {
+      final component = WasmComponent.decode(_canonicalResourceNewBytes());
+      final host = WASIComponentResourceHost();
+
+      expect(
+        () =>
+            host.defineResourceTypeFromComponent<int>(component, 1, 'missing'),
+        throwsStateError,
+      );
+    });
+
+    test('rejects values outside decoded i32 resource representation', () {
+      final component = WasmComponent.decode(_canonicalResourceNewBytes());
+      final host = WASIComponentResourceHost();
+      host.defineResourceTypeFromComponent<int>(component, 0, 'descriptor');
+      final operation = host.bindCanonicalDefinition(
+        component.canonicalDefinitions.single,
+      );
+      final dropOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.resourceDrop,
+          typeIndex: 0,
+        ),
+      );
+
+      final maxHandle = operation.resourceNew(0x7fffffff);
+      final minHandle = operation.resourceNew(-0x80000000);
+
+      expect(maxHandle, isA<int>());
+      expect(minHandle, isA<int>());
+      expect(() => operation.resourceNew(0x80000000), throwsStateError);
+      expect(() => operation.resourceNew(-0x80000001), throwsStateError);
+      dropOperation.resourceDrop(maxHandle);
+      dropOperation.resourceDrop(minHandle);
     });
   });
 }
