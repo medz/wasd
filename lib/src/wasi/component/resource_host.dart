@@ -75,17 +75,14 @@ final class WASIComponentResourceHost {
     void Function(T resource)? onDrop,
   }) {
     final resource = _decodedResourceType(component, componentTypeIndex);
-    if (resource.isAbstract) {
-      throw StateError(
-        'WASI component resource type index $componentTypeIndex is abstract.',
-      );
-    }
     return _defineResourceType<T>(
       componentTypeIndex,
       name,
-      representation: WASIComponentResourceRepresentation.fromCoreValueTypeCode(
-        resource.representationTypeCode,
-      ),
+      representation: resource.isAbstract
+          ? WASIComponentResourceRepresentation.unconstrained
+          : WASIComponentResourceRepresentation.fromCoreValueTypeCode(
+              resource.representationTypeCode,
+            ),
       onDrop: onDrop,
     );
   }
@@ -271,12 +268,13 @@ WasmComponentResourceType _decodedResourceType(
   int componentTypeIndex,
 ) {
   if (componentTypeIndex < 0 ||
-      componentTypeIndex >= component.typeDefinitions.length) {
+      componentTypeIndex >= component.componentTypeIndexDefinitions.length) {
     throw StateError(
       'Unknown WASI component resource type index: $componentTypeIndex.',
     );
   }
-  final definition = component.typeDefinitions[componentTypeIndex];
+  final definition =
+      component.componentTypeIndexDefinitions[componentTypeIndex];
   final resource = definition.resource;
   if (definition.kind != WasmComponentTypeKind.resource || resource == null) {
     throw StateError(

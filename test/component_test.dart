@@ -1083,6 +1083,12 @@ void main() {
         WasmComponent.decode(_canonicalResourceTypeComponentBytes()).validate(),
         isEmpty,
       );
+      expect(
+        WasmComponent.decode(
+          _importedResourceCanonicalProgramComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
 
       final wrongSort = WasmComponent.decode(
         _canonicalResourceWrongSortTypeIndexComponentBytes(),
@@ -3620,6 +3626,35 @@ Uint8List _canonicalResourceTypeComponentBytes() =>
       0x03,
       0x01,
       0x02,
+      0x00,
+    ]);
+
+Uint8List _importedResourceCanonicalProgramComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x72,
+      0x03,
+      0x01,
+      0x08,
+      0x07,
+      0x03,
+      0x02,
+      0x00,
+      0x04,
+      0x00,
+      0x03,
       0x00,
     ]);
 

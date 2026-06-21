@@ -85,10 +85,14 @@ This is the implementation state as of 2026-06-21 on `main`.
   `lib/src/wasi/component/` now provides an internal typed resource table plus
   a resource host that binds decoded canonical `resource.new`, `resource.rep`,
   and `resource.drop` definitions, in canonical definition order, to
-  table-local nominal resource type tokens. Resource host bindings also read
-  decoded resource representation types and validate `resource.new`
-  representation values, and resource-only canonical programs can be invoked by
-  canonical index. P2/P3 host instantiation, WIT ingestion, full canonical ABI
+  table-local nominal resource type tokens. Component validation now
+  materializes `componentType` imports for abstract resources into the same
+  component type index space used by canonical resource definitions, and the
+  resource host can bind those imported abstract resources with an
+  unconstrained host representation. Resource host bindings also read decoded
+  resource representation types and validate `resource.new` representation
+  values, and resource-only canonical programs can be invoked by canonical
+  index. P2/P3 host instantiation, WIT ingestion, full canonical ABI
   lowering/lifting, and async stream/future execution are not
   production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
@@ -130,6 +134,10 @@ This is the implementation state as of 2026-06-21 on `main`.
 
 - Validation must be linear in the decoded component graph wherever possible.
   Recursive graph checks must use memoization and visiting sets.
+- Component type index spaces should be materialized once per decoded
+  component and reused by host binding code; canonical resource invocation must
+  stay on prebound table/type tokens instead of rescanning import/export
+  descriptors.
 - Component decode and validation changes should be measured with
   `dart run tool/component_benchmark.dart --json`. The synthetic benchmark
   exercises repeated `stream<T>` definitions over a shared borrow-containing

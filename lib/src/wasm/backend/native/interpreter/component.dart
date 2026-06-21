@@ -532,6 +532,11 @@ final class WasmComponentResourceType {
   final bool isAbstract;
 }
 
+const _abstractResourceTypeDefinition = WasmComponentTypeDefinition(
+  kind: WasmComponentTypeKind.resource,
+  resource: WasmComponentResourceType.abstract(),
+);
+
 enum WasmComponentTypeDeclarationKind { coreType, type, alias, import, export }
 
 final class WasmComponentTypeDeclaration {
@@ -887,7 +892,7 @@ bool _componentTypeDefinitionNeedsFunctionIndexValidation(
 }
 
 final class WasmComponent {
-  const WasmComponent._({
+  WasmComponent._({
     required this.sections,
     required this.imports,
     required this.exports,
@@ -918,6 +923,61 @@ final class WasmComponent {
   final List<WasmComponentTypeDefinition> typeDefinitions;
   final List<WasmComponentValueDefinition> valueDefinitions;
   final List<_WasmComponentDefinitionEvent> _definitionEvents;
+
+  /// Locally materialized component type index definitions in definition order.
+  ///
+  /// This includes type-section definitions and component-type imports/exports
+  /// that can be resolved without a parent component scope.
+  late final List<WasmComponentTypeDefinition> componentTypeIndexDefinitions =
+      _buildComponentTypeIndexDefinitions();
+
+  List<WasmComponentTypeDefinition> _buildComponentTypeIndexDefinitions() {
+    final visibleTypeDefinitions = <WasmComponentTypeDefinition>[];
+    var decodedTypeDefinitionCount = 0;
+
+    void includeDecodedTypeDefinitionsTo(int count) {
+      if (count <= decodedTypeDefinitionCount) {
+        return;
+      }
+      visibleTypeDefinitions.addAll(
+        typeDefinitions.getRange(decodedTypeDefinitionCount, count),
+      );
+      decodedTypeDefinitionCount = count;
+    }
+
+    for (final event in _definitionEvents) {
+      switch (event.kind) {
+        case _WasmComponentDefinitionEventKind.import:
+          final introducedTypeDefinition =
+              _componentTypeImportDefinitionIntroducedBy(
+                imports[event.index].descriptor,
+                visibleTypeDefinitions,
+              );
+          if (introducedTypeDefinition != null) {
+            visibleTypeDefinitions.add(introducedTypeDefinition);
+          }
+        case _WasmComponentDefinitionEventKind.export:
+          final export = exports[event.index];
+          if (export.sort.kind == WasmComponentSortKind.componentType) {
+            final exportedTypeDefinition = _componentTypeDefinitionAt(
+              visibleTypeDefinitions,
+              export.sort.index,
+            );
+            if (exportedTypeDefinition != null) {
+              visibleTypeDefinitions.add(exportedTypeDefinition);
+            }
+          }
+        case _WasmComponentDefinitionEventKind.typeCount:
+          includeDecodedTypeDefinitionsTo(event.index);
+        default:
+          break;
+      }
+    }
+
+    return List<WasmComponentTypeDefinition>.unmodifiable(
+      visibleTypeDefinitions,
+    );
+  }
 
   List<WasmComponentValidationError> validate() => _validate();
 
@@ -1186,6 +1246,35 @@ const int _typeSectionId = 7;
 const int _canonicalSectionId = 8;
 const int _startSectionId = 9;
 const int _valueSectionId = 12;
+
+WasmComponentTypeDefinition? _componentTypeImportDefinitionIntroducedBy(
+  WasmComponentExternDescriptor descriptor,
+  List<WasmComponentTypeDefinition> visibleTypeDefinitions,
+) {
+  if (descriptor.kind != WasmComponentExternKind.componentType) {
+    return null;
+  }
+  if (descriptor.boundKind == WasmComponentExternBoundKind.subtypeResource) {
+    return _abstractResourceTypeDefinition;
+  }
+  if (descriptor.boundKind != WasmComponentExternBoundKind.equality) {
+    return null;
+  }
+  return _componentTypeDefinitionAt(
+    visibleTypeDefinitions,
+    descriptor.typeIndex,
+  );
+}
+
+WasmComponentTypeDefinition? _componentTypeDefinitionAt(
+  List<WasmComponentTypeDefinition> definitions,
+  int? typeIndex,
+) {
+  if (typeIndex == null || typeIndex < 0 || typeIndex >= definitions.length) {
+    return null;
+  }
+  return definitions[typeIndex];
+}
 
 final class _WasmComponentValidationContext {
   _WasmComponentValidationContext({
@@ -2140,12 +2229,7 @@ final class _WasmComponentValidationContext {
     }
 
     if (descriptor?.boundKind == WasmComponentExternBoundKind.subtypeResource) {
-      localTypeDefinitions.add(
-        const WasmComponentTypeDefinition(
-          kind: WasmComponentTypeKind.resource,
-          resource: WasmComponentResourceType.abstract(),
-        ),
-      );
+      localTypeDefinitions.add(_abstractResourceTypeDefinition);
       return;
     }
 
@@ -2158,6 +2242,20 @@ final class _WasmComponentValidationContext {
 
     final typeDefinition = localTypeDefinitions[typeIndex];
     localTypeDefinitions.add(typeDefinition);
+  }
+
+  void introduceComponentTypeImport(
+    WasmComponentExternDescriptor descriptor,
+    List<WasmComponentTypeDefinition> visibleTypeDefinitions,
+  ) {
+    final introducedTypeDefinition = _componentTypeImportDefinitionIntroducedBy(
+      descriptor,
+      visibleTypeDefinitions,
+    );
+    if (introducedTypeDefinition == null) {
+      return;
+    }
+    visibleTypeDefinitions.add(introducedTypeDefinition);
   }
 
   void validateTypeDeclarationExternDescriptor(
@@ -3462,6 +3560,11 @@ final class _WasmComponentValidationContext {
           } else if (descriptor.kind == WasmComponentExternKind.instance) {
             instanceExportMaps.add(null);
             instanceCount++;
+          } else if (descriptor.kind == WasmComponentExternKind.componentType) {
+            introduceComponentTypeImport(
+              descriptor,
+              materializeVisibleTypeDefinitions(),
+            );
           }
         case _WasmComponentDefinitionEventKind.export:
           final export = exports[event.index];
