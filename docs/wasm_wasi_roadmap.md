@@ -148,6 +148,12 @@ This is the implementation state as of 2026-06-21 on `main`.
   endpoint and falls back to the shared async read/write wait paths for pending
   source values or bounded destination capacity, giving the WASI 0.3
   "sandwich" forwarding case one reusable execution path. Internal
+  waitable-set support now models table-backed waitables and waitable sets,
+  canonical event codes, `waitable-set.{poll,wait}` payload writes to memory,
+  `waitable.join` transfer/removal with `0` as the removal sentinel, and drop
+  guards for non-empty or actively waited sets. Stream/future/subtask event
+  production is still future integration work, but the ownership and event
+  delivery layer is no longer a placeholder. Internal
   error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`
   as table-backed handles with real stale-handle/drop validation. It also has
@@ -227,11 +233,12 @@ This is the implementation state as of 2026-06-21 on `main`.
 - Internal component stream/future endpoint round-trip, cancellation,
   completion/drop, pending stream/future-read completion, bounded stream-write
   backpressure completion, stream forwarding "sandwich" throughput,
-  backpressure counter operations, decoded canonical async program invocation,
-  decoded unit stream/future program invocation, and resource-table-backed
-  borrowed handle invocation costs, synchronous and awaited handle-program
-  fixed-width memory-copy invocation costs, plus fixed-width primitive
-  stream/future memory-copy costs, are measured by
+  backpressure counter operations, waitable-set event delivery and memory
+  payload writes, decoded canonical async program invocation, decoded unit
+  stream/future program invocation, and resource-table-backed borrowed handle
+  invocation costs, synchronous and awaited handle-program fixed-width
+  memory-copy invocation costs, plus fixed-width primitive stream/future
+  memory-copy costs, are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`.
 - Component resource table canonical `resource.new`/`resource.rep`/
   `resource.drop`, decoded resource-only canonical program invocation,

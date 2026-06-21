@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
 import 'package:wasd/src/wasi/component/backpressure.dart';
+import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
 
@@ -34,6 +35,9 @@ Future<void> main(List<String> args) async {
   final futurePendingReadCompletion =
       await _benchmarkFuturePendingReadCompletion(options.iterations);
   final backpressureCounter = _benchmarkBackpressureCounter(options.iterations);
+  final waitableSetDelivery = await _benchmarkWaitableSetDelivery(
+    options.iterations,
+  );
   final programInvoke = _benchmarkProgramInvoke(options);
   final unitProgramInvoke = _benchmarkUnitProgramInvoke(options);
   final handleProgramInvoke = _benchmarkHandleProgramInvoke(options);
@@ -56,6 +60,7 @@ Future<void> main(List<String> args) async {
     'future_complete_read_drop': futureCompleteReadDrop.toJson(),
     'future_pending_read_completion': futurePendingReadCompletion.toJson(),
     'backpressure_counter': backpressureCounter.toJson(),
+    'waitable_set_delivery': waitableSetDelivery.toJson(),
     'program_invoke': programInvoke.toJson(),
     'unit_program_invoke': unitProgramInvoke.toJson(),
     'handle_program_invoke': handleProgramInvoke.toJson(),
@@ -83,6 +88,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkFutureCompleteReadDrop(_warmupIterations);
   await _benchmarkFuturePendingReadCompletion(_warmupIterations);
   _benchmarkBackpressureCounter(_warmupIterations);
+  await _benchmarkWaitableSetDelivery(_warmupIterations);
   _benchmarkProgramInvoke(warmup);
   _benchmarkUnitProgramInvoke(warmup);
   _benchmarkHandleProgramInvoke(warmup);
@@ -314,6 +320,58 @@ _Metric _benchmarkBackpressureCounter(int iterations) {
 
   return _Metric(
     operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+Future<_Metric> _benchmarkWaitableSetDelivery(int iterations) async {
+  final host = WASIComponentWaitableHost();
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  const outputPointer = 1024;
+  final set = host.waitableSetNew();
+  final waitable = WASIComponentWaitable('benchmark-waitable');
+  final waitableHandle = host.insertWaitable(waitable);
+  host.waitableJoin(waitableHandle, set);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    waitable.setPendingEvent(
+      () => WASIComponentWaitableEvent(
+        code: WASIComponentWaitableEventCode.streamRead,
+        payload1: i,
+        payload2: 1 << 4,
+      ),
+    );
+    checksum += host.waitableSetPollToMemory(set, memory, outputPointer);
+    checksum += data.getUint32(outputPointer, Endian.little);
+    checksum += data.getUint32(outputPointer + 4, Endian.little);
+
+    final pending = host.waitableSetWaitToMemory(set, memory, outputPointer);
+    waitable.setPendingEvent(
+      () => WASIComponentWaitableEvent(
+        code: WASIComponentWaitableEventCode.futureRead,
+        payload1: i,
+        payload2: 0,
+      ),
+    );
+    checksum += await pending;
+    checksum += data.getUint32(outputPointer, Endian.little);
+    checksum += data.getUint32(outputPointer + 4, Endian.little);
+  }
+  watch.stop();
+
+  host.waitableJoin(waitableHandle, 0);
+  host.waitableSetDrop(set);
+  host.dropWaitable(waitableHandle);
+  if (host.table.activeCount != 0) {
+    throw StateError('waitable set leaked ${host.table.activeCount} handles');
+  }
+
+  return _Metric(
+    operations: iterations * 10,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
@@ -1033,6 +1091,7 @@ void _printText(Map<String, Object?> payload) {
     'future_complete_read_drop',
     'future_pending_read_completion',
     'backpressure_counter',
+    'waitable_set_delivery',
     'program_invoke',
     'unit_program_invoke',
     'handle_program_invoke',
