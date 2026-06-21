@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
+import 'package:wasd/src/wasi/component/backpressure.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 
 const int _defaultIterations = 50000;
@@ -30,6 +31,7 @@ Future<void> main(List<String> args) async {
   );
   final futurePendingReadCompletion =
       await _benchmarkFuturePendingReadCompletion(options.iterations);
+  final backpressureCounter = _benchmarkBackpressureCounter(options.iterations);
   final programInvoke = _benchmarkProgramInvoke(options);
   final handleProgramInvoke = _benchmarkHandleProgramInvoke(options);
 
@@ -42,6 +44,7 @@ Future<void> main(List<String> args) async {
     'stream_pending_write_completion': streamPendingWriteCompletion.toJson(),
     'future_complete_read_drop': futureCompleteReadDrop.toJson(),
     'future_pending_read_completion': futurePendingReadCompletion.toJson(),
+    'backpressure_counter': backpressureCounter.toJson(),
     'program_invoke': programInvoke.toJson(),
     'handle_program_invoke': handleProgramInvoke.toJson(),
   };
@@ -61,6 +64,7 @@ Future<void> _runWarmup(_Options options) async {
   await _benchmarkStreamPendingWriteCompletion(warmup);
   _benchmarkFutureCompleteReadDrop(_warmupIterations);
   await _benchmarkFuturePendingReadCompletion(_warmupIterations);
+  _benchmarkBackpressureCounter(_warmupIterations);
   _benchmarkProgramInvoke(warmup);
   _benchmarkHandleProgramInvoke(warmup);
 }
@@ -210,6 +214,24 @@ Future<_Metric> _benchmarkFuturePendingReadCompletion(int iterations) async {
   );
 }
 
+_Metric _benchmarkBackpressureCounter(int iterations) {
+  final backpressure = WASIComponentBackpressure();
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    checksum += backpressure.increment();
+    checksum += backpressure.decrement();
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkProgramInvoke(_Options options) {
   final component = WasmComponent.decode(_asyncProgramBytes());
   final host = WASIComponentAsyncHost()
@@ -339,6 +361,7 @@ void _printText(Map<String, Object?> payload) {
     'stream_pending_write_completion',
     'future_complete_read_drop',
     'future_pending_read_completion',
+    'backpressure_counter',
     'program_invoke',
     'handle_program_invoke',
   ]) {

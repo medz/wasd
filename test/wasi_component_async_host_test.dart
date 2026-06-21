@@ -7,6 +7,27 @@ import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 
 void main() {
   group('WASIComponentAsyncHost', () {
+    test('binds decoded canonical backpressure definitions', () {
+      final component = WasmComponent.decode(_canonicalBackpressureBytes());
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentAsyncHost();
+      final program = host.bindCanonicalDefinitions(component);
+
+      expect(program.operations.map((operation) => operation.kind), [
+        WasmComponentCanonicalKind.backpressureSet,
+        WasmComponentCanonicalKind.backpressureInc,
+        WasmComponentCanonicalKind.backpressureDec,
+      ]);
+
+      expect(program.invoke(0, <Object?>[true]), 1);
+      expect(host.backpressure.isActive, isTrue);
+      expect(program.invoke(1, const <Object?>[]), 2);
+      expect(program.invoke(2, const <Object?>[]), 1);
+      expect(program.invoke(0, <Object?>[false]), 0);
+      expect(host.backpressure.isActive, isFalse);
+      expect(() => program.invoke(2, const <Object?>[]), throwsStateError);
+    });
+
     test('binds decoded canonical stream definitions as a program', () {
       final component = WasmComponent.decode(_canonicalStreamProgramBytes());
       expect(component.validate(), isEmpty);
@@ -592,6 +613,23 @@ void main() {
     });
   });
 }
+
+Uint8List _canonicalBackpressureBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x08,
+  0x04,
+  0x03,
+  0x08,
+  0x24,
+  0x25,
+]);
 
 Uint8List _canonicalStreamProgramBytes() => Uint8List.fromList(const <int>[
   0x00,
