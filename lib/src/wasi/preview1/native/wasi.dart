@@ -78,6 +78,7 @@ class WASI implements wasi_iface.WASI {
       'fd_sync': _fdSyncImport,
       'fd_allocate': _fdAllocateImport,
       'fd_fdstat_get': _fdFdstatGetImport,
+      'fd_fdstat_set_flags': _fdFdstatSetFlagsImport,
       'fd_filestat_get': _fdFilestatGetImport,
       'fd_filestat_set_size': _fdFilestatSetSizeImport,
       'fd_filestat_set_times': _fdFilestatSetTimesImport,
@@ -530,13 +531,30 @@ class WASI implements wasi_iface.WASI {
         : isDir
         ? _filetypeDirectory
         : _filetypeCharacterDevice;
-    data.setUint16(fdstatPtr + 2, 0, Endian.little);
+    data.setUint16(
+      fdstatPtr + 2,
+      _vfs.descriptorFlagsForFd(fd) ?? 0,
+      Endian.little,
+    );
     final rightsBase = _allRightsMask;
     final rightsInheriting = isDir ? _allRightsMask : 0;
     _setUint64(data, fdstatPtr + 8, rightsBase);
     _setUint64(data, fdstatPtr + 16, rightsInheriting);
     return _errnoSuccess;
   });
+
+  wasm.FunctionImportExportValue get _fdFdstatSetFlagsImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 2) {
+          return _errnoInval;
+        }
+        final fd = _asInt(args[0]);
+        final flags = _asInt(args[1]);
+        if ((flags & ~_fdflagKnownMask) != 0) {
+          return _errnoInval;
+        }
+        return _vfs.setDescriptorFlags(fd, flags) ? _errnoSuccess : _errnoBadf;
+      });
 
   wasm.FunctionImportExportValue get _fdFilestatGetImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
@@ -1554,6 +1572,7 @@ const int _fdstatSize = wasi_common.fdstatSize;
 const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
 const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
+const int _fdflagKnownMask = wasi_common.fdflagKnownMask;
 const int _filestatSize = 64;
 const int _filestatAccessTimeOffset = 40;
 const int _filestatModificationTimeOffset = 48;

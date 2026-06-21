@@ -18,6 +18,10 @@ final class Preview1VirtualFileSystem {
          for (final indexed in preopens.keys.toList().asMap().entries)
            indexed.key + 3: indexed.value,
        },
+       _preopenDirectoryFlagsByFd = {
+         for (final indexed in preopens.keys.toList().asMap().entries)
+           indexed.key + 3: 0,
+       },
        _filesByGuestPath = {
          for (final entry in files.entries)
            normalizeGuestPath(entry.key): Preview1VirtualFile(entry.value),
@@ -47,10 +51,12 @@ final class Preview1VirtualFileSystem {
 
   final Map<int, Uint8List> _preopenPathBytesByFd;
   final Map<int, String> _preopenGuestPathsByFd;
+  final Map<int, int> _preopenDirectoryFlagsByFd;
   final Map<String, Preview1VirtualFile> _filesByGuestPath;
   final Map<int, Preview1VirtualOpenFile> _openFilesByFd =
       <int, Preview1VirtualOpenFile>{};
   final Map<int, String> _openDirectoriesByFd = <int, String>{};
+  final Map<int, int> _openDirectoryFlagsByFd = <int, int>{};
 
   late Map<String, Preview1VirtualFile> _filesByLowerGuestPath;
   late Map<String, Preview1VirtualFile> _filesByBasenameLower;
@@ -66,6 +72,31 @@ final class Preview1VirtualFileSystem {
       _preopenGuestPathsByFd[fd] ?? _openDirectoriesByFd[fd];
 
   Preview1VirtualOpenFile? openFileForFd(int fd) => _openFilesByFd[fd];
+
+  int? descriptorFlagsForFd(int fd) {
+    final opened = openFileForFd(fd);
+    if (opened != null) {
+      return opened.descriptorFlags;
+    }
+    return _openDirectoryFlagsByFd[fd] ?? _preopenDirectoryFlagsByFd[fd];
+  }
+
+  bool setDescriptorFlags(int fd, int flags) {
+    final opened = openFileForFd(fd);
+    if (opened != null) {
+      opened.descriptorFlags = flags;
+      return true;
+    }
+    if (_openDirectoriesByFd.containsKey(fd)) {
+      _openDirectoryFlagsByFd[fd] = flags;
+      return true;
+    }
+    if (_preopenDirectoryFlagsByFd.containsKey(fd)) {
+      _preopenDirectoryFlagsByFd[fd] = flags;
+      return true;
+    }
+    return false;
+  }
 
   bool isPreopenDirectoryFd(int fd) => _preopenGuestPathsByFd.containsKey(fd);
 
@@ -104,9 +135,16 @@ final class Preview1VirtualFileSystem {
     return _directoryMetadataByGuestPath[normalized];
   }
 
-  bool close(int fd) =>
-      _openFilesByFd.remove(fd) != null ||
-      _openDirectoriesByFd.remove(fd) != null;
+  bool close(int fd) {
+    if (_openFilesByFd.remove(fd) != null) {
+      return true;
+    }
+    if (_openDirectoriesByFd.remove(fd) != null) {
+      _openDirectoryFlagsByFd.remove(fd);
+      return true;
+    }
+    return false;
+  }
 
   Preview1VirtualFile? lookupFile(String guestPath) {
     final normalized = normalizeGuestPath(guestPath);
@@ -188,6 +226,9 @@ final class Preview1VirtualFileSystem {
     _virtualDirectoryPaths.remove(normalized);
     _directoryMetadataByGuestPath.remove(normalized);
     _openDirectoriesByFd.removeWhere((_, path) => path == normalized);
+    _openDirectoryFlagsByFd.removeWhere(
+      (fd, _) => !_openDirectoriesByFd.containsKey(fd),
+    );
     _rebuildDirectoryEntries();
     return Preview1PathMutationResult.success;
   }
@@ -295,6 +336,7 @@ final class Preview1VirtualFileSystem {
     if (isDirectoryPath(normalized)) {
       final fd = _nextVirtualFd++;
       _openDirectoriesByFd[fd] = normalized;
+      _openDirectoryFlagsByFd[fd] = 0;
       return Preview1VirtualOpenResult.directory(fd);
     }
 
@@ -498,6 +540,7 @@ final class Preview1VirtualOpenFile {
 
   final Preview1VirtualFile file;
   int offset = 0;
+  int descriptorFlags = 0;
 
   Uint8List get bytes => file.bytes;
 
@@ -515,8 +558,11 @@ final class Preview1VirtualOpenFile {
       file.readAtInto(target, start, length, fileOffset);
 
   int writeFrom(Uint8List source, int start, int length) {
-    final written = writeAtFrom(source, start, length, offset);
-    offset += written;
+    final fileOffset = (descriptorFlags & fdflagAppend) == 0
+        ? offset
+        : file.length;
+    final written = writeAtFrom(source, start, length, fileOffset);
+    offset = fileOffset + written;
     return written;
   }
 

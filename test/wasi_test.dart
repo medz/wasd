@@ -1092,6 +1092,90 @@ void main() {
       );
 
       test(
+        'fd_fdstat_set_flags persists descriptor flags and append mode',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/data.txt': Uint8List.fromList(utf8.encode('abcdef')),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdFdstatGet =
+              preview1['fd_fdstat_get'] as FunctionImportExportValue;
+          final fdFdstatSetFlags =
+              preview1['fd_fdstat_set_flags'] as FunctionImportExportValue;
+          final fdSeek = preview1['fd_seek'] as FunctionImportExportValue;
+          final fdWrite = preview1['fd_write'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final relativePath = utf8.encode('data.txt');
+          const pathPtr = 3072;
+          const openedFdPtr = 3104;
+          const fdstatPtr = 3120;
+          const offsetPtr = 3160;
+          const iovPtr = 3184;
+          const bufferPtr = 3216;
+          const countPtr = 3248;
+          const readBufferPtr = 3264;
+
+          bytes.setAll(pathPtr, relativePath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              relativePath.length,
+              0,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final fd = data.getUint32(openedFdPtr, Endian.little);
+
+          expect(fdFdstatSetFlags.ref([fd, 1]), 0);
+          expect(fdFdstatGet.ref([fd, fdstatPtr]), 0);
+          expect(data.getUint16(fdstatPtr + 2, Endian.little), 1);
+
+          expect(fdSeek.ref([fd, 0, 0, offsetPtr]), 0);
+          bytes.setAll(bufferPtr, utf8.encode('XY'));
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 2, Endian.little);
+          expect(fdWrite.ref([fd, iovPtr, 1, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 2);
+
+          data.setUint32(iovPtr, readBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 8, Endian.little);
+          expect(fdPread.ref([fd, iovPtr, 1, 0, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 8);
+          expect(
+            utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + 8)),
+            'abcdefXY',
+          );
+
+          expect(fdFdstatSetFlags.ref([fd, 0x20]), 28);
+          expect(fdFdstatSetFlags.ref([999, 1]), 8);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; descriptor flag behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'fd_filestat_set_times and path_filestat_set_times persist virtual timestamps',
         () async {
           final fileWasi = WASI(

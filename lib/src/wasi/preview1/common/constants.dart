@@ -20,10 +20,16 @@ const int direntTypeOffset = 20;
 const int filetypeCharacterDevice = 2;
 const int filetypeDirectory = 3;
 const int filetypeRegularFile = 4;
+const int fdflagAppend = 1;
+const int fdflagDsync = 2;
+const int fdflagNonblock = 4;
+const int fdflagRsync = 8;
+const int fdflagSync = 16;
+const int fdflagKnownMask =
+    fdflagAppend | fdflagDsync | fdflagNonblock | fdflagRsync | fdflagSync;
 
 /// Preview1 imports that should exist and return `ENOSYS` when unsupported.
 const List<String> preview1NosysImports = <String>[
-  'fd_fdstat_set_flags',
   'fd_fdstat_set_rights',
   'fd_renumber',
   'path_readlink',
