@@ -227,6 +227,11 @@ final class WASIComponentReadableFuture<T> {
     return _state.value as T;
   }
 
+  /// Reads the value for a canonical future copy operation.
+  T readForCopy() {
+    return _state.readForCopy();
+  }
+
   /// Returns a Dart future that completes when this component future is ready.
   ///
   /// This is the internal completion primitive used by future WASI 0.3 async
@@ -234,6 +239,11 @@ final class WASIComponentReadableFuture<T> {
   /// host-side canonical operations.
   Future<T> readWhenReady() {
     return _state.readWhenReady();
+  }
+
+  /// Returns a Dart future copy result when this component future is ready.
+  Future<T> readWhenReadyForCopy() {
+    return _state.readWhenReadyForCopy();
   }
 
   /// Cancels the future while it is still pending.
@@ -276,9 +286,19 @@ final class WASIComponentWritableFuture<T> {
     _state.complete(value);
   }
 
+  /// Completes the future for a canonical future copy operation.
+  void completeForCopy(T value) {
+    _state.completeForCopy(value);
+  }
+
   /// Completes the future and waits until a reader observes the value.
   Future<void> completeWhenRead(T value) {
     return _state.completeWhenRead(value);
+  }
+
+  /// Completes a canonical future copy after a reader observes the value.
+  Future<void> completeWhenReadForCopy(T value) {
+    return _state.completeWhenReadForCopy(value);
   }
 
   /// Cancels the future while it is still pending.
@@ -938,6 +958,8 @@ final class _WASIComponentStreamCapacityWaiter {
 
 enum _WASIComponentFutureStatus { pending, ready, cancelled }
 
+enum _WASIComponentFutureCopyStatus { idle, copying, done }
+
 final class _WASIComponentFutureState<T> {
   _WASIComponentFutureState(this.name, this.onDrop);
 
@@ -952,6 +974,10 @@ final class _WASIComponentFutureState<T> {
   bool writeDropped = false;
   bool _dropCalled = false;
   bool _valueObserved = false;
+  _WASIComponentFutureCopyStatus _readCopyStatus =
+      _WASIComponentFutureCopyStatus.idle;
+  _WASIComponentFutureCopyStatus _writeCopyStatus =
+      _WASIComponentFutureCopyStatus.idle;
 
   bool get isReady => status == _WASIComponentFutureStatus.ready;
 
@@ -991,6 +1017,41 @@ final class _WASIComponentFutureState<T> {
     return completer.future;
   }
 
+  T readForCopy() {
+    _beginReadCopy();
+    try {
+      requireReadable();
+      if (!isReady) {
+        throw StateError('WASI component future $name is not ready.');
+      }
+      markValueObserved();
+      _readCopyStatus = _WASIComponentFutureCopyStatus.done;
+      return value as T;
+    } catch (_) {
+      _resetReadCopy();
+      rethrow;
+    }
+  }
+
+  Future<T> readWhenReadyForCopy() {
+    _beginReadCopy();
+    try {
+      return readWhenReady().then(
+        (value) {
+          _readCopyStatus = _WASIComponentFutureCopyStatus.done;
+          return value;
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          _resetReadCopy();
+          Error.throwWithStackTrace(error, stackTrace);
+        },
+      );
+    } catch (_) {
+      _resetReadCopy();
+      rethrow;
+    }
+  }
+
   void complete(T completedValue) {
     if (writeDropped) {
       throw StateError('WASI component future $name writable was dropped.');
@@ -1011,6 +1072,17 @@ final class _WASIComponentFutureState<T> {
     }
   }
 
+  void completeForCopy(T completedValue) {
+    _beginWriteCopy();
+    try {
+      complete(completedValue);
+      _writeCopyStatus = _WASIComponentFutureCopyStatus.done;
+    } catch (_) {
+      _resetWriteCopy();
+      rethrow;
+    }
+  }
+
   Future<void> completeWhenRead(T completedValue) {
     complete(completedValue);
     if (_valueObserved) {
@@ -1019,6 +1091,29 @@ final class _WASIComponentFutureState<T> {
     final completer = Completer<void>();
     (writeDeliveryWaiters ??= <Completer<void>>[]).add(completer);
     return completer.future;
+  }
+
+  Future<void> completeWhenReadForCopy(T completedValue) {
+    _beginWriteCopy();
+    try {
+      return completeWhenRead(completedValue).then(
+        (_) {
+          _writeCopyStatus = _WASIComponentFutureCopyStatus.done;
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (error is WASIComponentAsyncEndpointStateError &&
+              error.failure == WASIComponentAsyncEndpointFailure.dropped) {
+            _writeCopyStatus = _WASIComponentFutureCopyStatus.done;
+          } else {
+            _resetWriteCopy();
+          }
+          Error.throwWithStackTrace(error, stackTrace);
+        },
+      );
+    } catch (_) {
+      _resetWriteCopy();
+      rethrow;
+    }
   }
 
   void cancel() {
@@ -1154,6 +1249,44 @@ final class _WASIComponentFutureState<T> {
     if (!_dropCalled && isDropped) {
       _dropCalled = true;
       onDrop?.call();
+    }
+  }
+
+  void _beginReadCopy() {
+    _requireCopyIdle(_readCopyStatus, 'readable');
+    _readCopyStatus = _WASIComponentFutureCopyStatus.copying;
+  }
+
+  void _beginWriteCopy() {
+    _requireCopyIdle(_writeCopyStatus, 'writable');
+    _writeCopyStatus = _WASIComponentFutureCopyStatus.copying;
+  }
+
+  void _resetReadCopy() {
+    if (_readCopyStatus == _WASIComponentFutureCopyStatus.copying) {
+      _readCopyStatus = _WASIComponentFutureCopyStatus.idle;
+    }
+  }
+
+  void _resetWriteCopy() {
+    if (_writeCopyStatus == _WASIComponentFutureCopyStatus.copying) {
+      _writeCopyStatus = _WASIComponentFutureCopyStatus.idle;
+    }
+  }
+
+  void _requireCopyIdle(
+    _WASIComponentFutureCopyStatus status,
+    String endpoint,
+  ) {
+    switch (status) {
+      case _WASIComponentFutureCopyStatus.idle:
+        return;
+      case _WASIComponentFutureCopyStatus.copying:
+        throw StateError(
+          'WASI component future $name $endpoint copy is already active.',
+        );
+      case _WASIComponentFutureCopyStatus.done:
+        throw StateError('WASI component future $name $endpoint copy is done.');
     }
   }
 }

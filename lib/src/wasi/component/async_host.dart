@@ -1839,7 +1839,7 @@ final class _RegisteredAsyncValueType<T> {
     int pointer,
   ) {
     _requireKind(_WASIComponentAsyncValueKind.future);
-    final value = _expectReadableFuture(readable).read();
+    final value = _expectReadableFuture(readable).readForCopy();
     _writeFixedWidthValueToMemory(valueValidator, name, memory, pointer, value);
     return WASIComponentAsyncCopyResult.completed(0);
   }
@@ -1859,7 +1859,7 @@ final class _RegisteredAsyncValueType<T> {
               name,
               memory,
               pointer,
-              future.read(),
+              future.readForCopy(),
             );
             return WASIComponentAsyncCopyResult.completed(0);
           },
@@ -1875,7 +1875,9 @@ final class _RegisteredAsyncValueType<T> {
       WASIComponentReadableFuture<T>,
       WASIComponentAsyncCopyResult
     >(readableFutureType!, readable, (future) {
-      return future.readWhenReady().then<WASIComponentAsyncCopyResult>((value) {
+      return future.readWhenReadyForCopy().then<WASIComponentAsyncCopyResult>((
+        value,
+      ) {
         _writeFixedWidthValueToMemory(
           valueValidator,
           name,
@@ -1904,7 +1906,7 @@ final class _RegisteredAsyncValueType<T> {
             name,
             memory,
             pointer,
-            future.read(),
+            future.readForCopy(),
           );
           return WASIComponentAsyncCopyResult.completed(0).packedResult;
         }
@@ -1915,18 +1917,18 @@ final class _RegisteredAsyncValueType<T> {
               WASIComponentReadableFuture<T>,
               WASIComponentAsyncCopyResult
             >(readableFutureType!, readable, (future) {
-              return future.readWhenReady().then<WASIComponentAsyncCopyResult>((
-                value,
-              ) {
-                _writeFixedWidthValueToMemory(
-                  valueValidator,
-                  name,
-                  memory,
-                  pointer,
-                  value,
-                );
-                return WASIComponentAsyncCopyResult.completed(0);
-              });
+              return future
+                  .readWhenReadyForCopy()
+                  .then<WASIComponentAsyncCopyResult>((value) {
+                    _writeFixedWidthValueToMemory(
+                      valueValidator,
+                      name,
+                      memory,
+                      pointer,
+                      value,
+                    );
+                    return WASIComponentAsyncCopyResult.completed(0);
+                  });
             });
         _publishCopyEvent(
           waitable,
@@ -1960,7 +1962,7 @@ final class _RegisteredAsyncValueType<T> {
       memory,
       pointer,
     );
-    _expectWritableFuture(writable).complete(value);
+    _expectWritableFuture(writable).completeForCopy(value);
     return WASIComponentAsyncCopyResult.completed(0);
   }
 
@@ -1996,7 +1998,7 @@ final class _RegisteredAsyncValueType<T> {
               memory,
               pointer,
             );
-            future.complete(value);
+            future.completeForCopy(value);
             return WASIComponentAsyncCopyResult.completed(0);
           },
         );
@@ -2019,11 +2021,11 @@ final class _RegisteredAsyncValueType<T> {
           pointer,
         );
         if (!future.canComplete) {
-          future.complete(value);
+          future.completeForCopy(value);
           return WASIComponentAsyncCopyResult.completed(0).packedResult;
         }
         if (future.hasPendingReader) {
-          future.complete(value);
+          future.completeForCopy(value);
           return WASIComponentAsyncCopyResult.completed(0).packedResult;
         }
 
@@ -2033,7 +2035,7 @@ final class _RegisteredAsyncValueType<T> {
               WASIComponentWritableFuture<T>,
               WASIComponentAsyncCopyResult
             >(writableFutureType!, writable, (future) {
-              return future.completeWhenRead(value).then((_) {
+              return future.completeWhenReadForCopy(value).then((_) {
                 return WASIComponentAsyncCopyResult.completed(0);
               });
             });

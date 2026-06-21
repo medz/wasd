@@ -176,7 +176,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   write events also wait for the first read observation before reporting
   `COMPLETED`, report `DROPPED` when the readable end is dropped before that
   observation, and report `CANCELLED` when the writable end cancels the active
-  copy.
+  copy. Future read/write memory copies now track canonical copy consumption
+  separately from the host-side future value, so a handle-backed Future copy
+  endpoint moves to a done state after a completed canonical copy and rejects
+  duplicate read/write copy starts while still allowing the required endpoint
+  drop.
   Subtask/thread event production is still future integration work, but
   stream/future copy event delivery is no longer a placeholder.
   Internal

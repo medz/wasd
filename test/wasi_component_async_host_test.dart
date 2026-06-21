@@ -1499,6 +1499,14 @@ void main() {
       expect(writeResult.packedResult, 0);
       expect(readResult.packedResult, 0);
       expect(data.getUint32(96, Endian.little), 377);
+      expect(
+        () => readOperation.futureReadHandleToMemory(
+          handles.readable,
+          memory,
+          100,
+        ),
+        throwsStateError,
+      );
       expect(host.table.activeCount, 2);
       dropReadableOperation.futureDropReadableHandle(handles.readable);
       dropWritableOperation.futureDropWritableHandle(handles.writable);
@@ -1525,6 +1533,13 @@ void main() {
         0,
       );
       expect(data.getUint32(96, Endian.little), 987);
+      expect(
+        () => program.invokeWithMemory(2, memory, <Object?>[
+          handles.readable,
+          100,
+        ]),
+        throwsStateError,
+      );
       expect(program.invoke(3, <Object?>[handles.readable]), isNull);
       expect(program.invoke(4, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
@@ -1552,6 +1567,13 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(completed, isFalse);
+      await expectLater(
+        program.invokeWithMemoryAsync(2, memory, <Object?>[
+          handles.readable,
+          100,
+        ]),
+        throwsStateError,
+      );
       expect(
         program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32]),
         0,
@@ -1600,6 +1622,13 @@ void main() {
       expect(data.getUint32(96, Endian.little), 1597);
       expect(data.getUint32(128, Endian.little), handles.readable);
       expect(data.getUint32(132, Endian.little), 0);
+      expect(
+        () => program.invokeWithMemory(2, memory, <Object?>[
+          handles.readable,
+          100,
+        ]),
+        throwsStateError,
+      );
       waitableHost.waitableJoin(handles.readable, 0);
       waitableHost.waitableSetDrop(waitableSet);
       expect(program.invoke(3, <Object?>[handles.readable]), isNull);
