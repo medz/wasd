@@ -27,7 +27,7 @@ final class WASIComponentAsyncHost {
       <int, _RegisteredAsyncValueType>{};
 
   /// Defines a component `stream<T>` type for [componentTypeIndex].
-  void defineStreamType<T extends Object>(
+  void defineStreamType<T>(
     int componentTypeIndex,
     String name, {
     int? maxBufferedElements,
@@ -44,7 +44,7 @@ final class WASIComponentAsyncHost {
   }
 
   /// Defines a component `stream<T>` type from a decoded component type.
-  void defineStreamTypeFromComponent<T extends Object>(
+  void defineStreamTypeFromComponent<T>(
     WasmComponent component,
     int componentTypeIndex,
     String name, {
@@ -67,7 +67,7 @@ final class WASIComponentAsyncHost {
   }
 
   /// Defines a component `future<T>` type for [componentTypeIndex].
-  void defineFutureType<T extends Object>(
+  void defineFutureType<T>(
     int componentTypeIndex,
     String name, {
     void Function()? onDrop,
@@ -83,7 +83,7 @@ final class WASIComponentAsyncHost {
   }
 
   /// Defines a component `future<T>` type from a decoded component type.
-  void defineFutureTypeFromComponent<T extends Object>(
+  void defineFutureTypeFromComponent<T>(
     WasmComponent component,
     int componentTypeIndex,
     String name, {
@@ -104,7 +104,7 @@ final class WASIComponentAsyncHost {
     );
   }
 
-  void _defineType<T extends Object>(
+  void _defineType<T>(
     int componentTypeIndex,
     String name, {
     required _WASIComponentAsyncValueKind kind,
@@ -513,13 +513,13 @@ final class WASIComponentCanonicalAsyncOperation {
   }
 
   /// Executes `stream.read`.
-  List<Object> streamRead(Object? readable, int maxElements) {
+  List<Object?> streamRead(Object? readable, int maxElements) {
     _requireKind(WasmComponentCanonicalKind.streamRead);
     return _requireValueType().streamRead(readable, maxElements);
   }
 
   /// Executes `stream.read` and waits if the stream has no queued values.
-  Future<List<Object>> streamReadWhenAvailable(
+  Future<List<Object?>> streamReadWhenAvailable(
     Object? readable,
     int maxElements,
   ) {
@@ -528,14 +528,14 @@ final class WASIComponentCanonicalAsyncOperation {
   }
 
   /// Executes `stream.read` with a readable endpoint handle.
-  List<Object> streamReadHandle(int readable, int maxElements) {
+  List<Object?> streamReadHandle(int readable, int maxElements) {
     _requireKind(WasmComponentCanonicalKind.streamRead);
     return _requireValueType().streamReadHandle(readable, maxElements);
   }
 
   /// Executes `stream.read` with a readable endpoint handle and waits if the
   /// stream has no queued values.
-  Future<List<Object>> streamReadHandleWhenAvailable(
+  Future<List<Object?>> streamReadHandleWhenAvailable(
     int readable,
     int maxElements,
   ) {
@@ -632,26 +632,26 @@ final class WASIComponentCanonicalAsyncOperation {
   }
 
   /// Executes `future.read`.
-  Object futureRead(Object? readable) {
+  Object? futureRead(Object? readable) {
     _requireKind(WasmComponentCanonicalKind.futureRead);
     return _requireValueType().futureRead(readable);
   }
 
   /// Executes `future.read` and waits if the future is still pending.
-  Future<Object> futureReadWhenReady(Object? readable) {
+  Future<Object?> futureReadWhenReady(Object? readable) {
     _requireKind(WasmComponentCanonicalKind.futureRead);
     return _requireValueType().futureReadWhenReady(readable);
   }
 
   /// Executes `future.read` with a readable endpoint handle.
-  Object futureReadHandle(int readable) {
+  Object? futureReadHandle(int readable) {
     _requireKind(WasmComponentCanonicalKind.futureRead);
     return _requireValueType().futureReadHandle(readable);
   }
 
   /// Executes `future.read` with a readable endpoint handle and waits if
   /// pending.
-  Future<Object> futureReadHandleWhenReady(int readable) {
+  Future<Object?> futureReadHandleWhenReady(int readable) {
     _requireKind(WasmComponentCanonicalKind.futureRead);
     return _requireValueType().futureReadHandleWhenReady(readable);
   }
@@ -766,16 +766,24 @@ final class WASIComponentCanonicalAsyncOperation {
 enum _WASIComponentAsyncValueKind { stream, future }
 
 final class _WASIComponentAsyncValueValidator {
-  const _WASIComponentAsyncValueValidator._(this.primitive);
+  const _WASIComponentAsyncValueValidator._({
+    required this.kind,
+    this.primitive,
+  });
 
-  static const unconstrained = _WASIComponentAsyncValueValidator._(null);
+  static const unconstrained = _WASIComponentAsyncValueValidator._(
+    kind: _WASIComponentAsyncValueShape.unconstrained,
+  );
 
+  static const unit = _WASIComponentAsyncValueValidator._(
+    kind: _WASIComponentAsyncValueShape.unit,
+  );
+
+  final _WASIComponentAsyncValueShape kind;
   final WasmComponentPrimitiveValueType? primitive;
 
-  bool get isConstrained => primitive != null;
-
-  void validateAll(String name, Iterable<Object> values) {
-    if (!isConstrained) {
+  void validateAll(String name, Iterable<Object?> values) {
+    if (kind == _WASIComponentAsyncValueShape.unconstrained) {
       return;
     }
     for (final value in values) {
@@ -783,18 +791,34 @@ final class _WASIComponentAsyncValueValidator {
     }
   }
 
-  void validate(String name, Object value) {
-    final expected = primitive;
-    if (expected == null || _primitiveValueMatches(expected, value)) {
-      return;
+  void validate(String name, Object? value) {
+    switch (kind) {
+      case _WASIComponentAsyncValueShape.unconstrained:
+        return;
+      case _WASIComponentAsyncValueShape.unit:
+        if (value == null) {
+          return;
+        }
+        throw StateError(
+          'WASI component async type $name expected unit value.',
+        );
+      case _WASIComponentAsyncValueShape.primitive:
+        final expected = primitive;
+        if (expected != null &&
+            value != null &&
+            _primitiveValueMatches(expected, value)) {
+          return;
+        }
+        throw StateError(
+          'WASI component async type $name expected ${expected?.name} element value.',
+        );
     }
-    throw StateError(
-      'WASI component async type $name expected ${expected.name} element value.',
-    );
   }
 }
 
-final class _RegisteredAsyncValueType<T extends Object> {
+enum _WASIComponentAsyncValueShape { unconstrained, unit, primitive }
+
+final class _RegisteredAsyncValueType<T> {
   _RegisteredAsyncValueType({
     required this.table,
     required this.name,
@@ -873,40 +897,40 @@ final class _RegisteredAsyncValueType<T extends Object> {
     );
   }
 
-  List<Object> streamRead(Object? readable, int maxElements) {
+  List<Object?> streamRead(Object? readable, int maxElements) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
     final stream = _expectReadableStream(readable);
     return stream.read(maxElements);
   }
 
-  Future<List<Object>> streamReadWhenAvailable(
+  Future<List<Object?>> streamReadWhenAvailable(
     Object? readable,
     int maxElements,
   ) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
     return _expectReadableStream(
       readable,
-    ).readWhenAvailable(maxElements).then<List<Object>>((values) => values);
+    ).readWhenAvailable(maxElements).then<List<Object?>>((values) => values);
   }
 
-  List<Object> streamReadHandle(int readable, int maxElements) {
-    return table.borrow<WASIComponentReadableStream<T>, List<Object>>(
+  List<Object?> streamReadHandle(int readable, int maxElements) {
+    return table.borrow<WASIComponentReadableStream<T>, List<Object?>>(
       readableStreamType!,
       readable,
       (stream) => stream.read(maxElements),
     );
   }
 
-  Future<List<Object>> streamReadHandleWhenAvailable(
+  Future<List<Object?>> streamReadHandleWhenAvailable(
     int readable,
     int maxElements,
   ) {
-    return table.borrowAsync<WASIComponentReadableStream<T>, List<Object>>(
+    return table.borrowAsync<WASIComponentReadableStream<T>, List<Object?>>(
       readableStreamType!,
       readable,
       (stream) => stream
           .readWhenAvailable(maxElements)
-          .then<List<Object>>((values) => values),
+          .then<List<Object?>>((values) => values),
     );
   }
 
@@ -1013,26 +1037,26 @@ final class _RegisteredAsyncValueType<T extends Object> {
     );
   }
 
-  Object futureRead(Object? readable) {
+  Object? futureRead(Object? readable) {
     _requireKind(_WASIComponentAsyncValueKind.future);
     return _expectReadableFuture(readable).read();
   }
 
-  Future<Object> futureReadWhenReady(Object? readable) {
+  Future<Object?> futureReadWhenReady(Object? readable) {
     _requireKind(_WASIComponentAsyncValueKind.future);
     return _expectReadableFuture(readable).readWhenReady();
   }
 
-  Object futureReadHandle(int readable) {
-    return table.borrow<WASIComponentReadableFuture<T>, Object>(
+  Object? futureReadHandle(int readable) {
+    return table.borrow<WASIComponentReadableFuture<T>, Object?>(
       readableFutureType!,
       readable,
       (future) => future.read(),
     );
   }
 
-  Future<Object> futureReadHandleWhenReady(int readable) {
-    return table.borrowAsync<WASIComponentReadableFuture<T>, Object>(
+  Future<Object?> futureReadHandleWhenReady(int readable) {
+    return table.borrowAsync<WASIComponentReadableFuture<T>, Object?>(
       readableFutureType!,
       readable,
       (future) => future.readWhenReady(),
@@ -1241,7 +1265,7 @@ _WASIComponentAsyncValueValidator _asyncValueValidatorForElementType(
   List<WasmComponentTypeDefinition> definitions,
 ) {
   if (elementType == null) {
-    return _WASIComponentAsyncValueValidator.unconstrained;
+    return _WASIComponentAsyncValueValidator.unit;
   }
   final primitive = _primitiveElementType(elementType, definitions);
   if (primitive == null) {
@@ -1254,7 +1278,10 @@ _WASIComponentAsyncValueValidator _asyncValueValidatorForElementType(
       'WASI component async host does not support error-context stream/future element values yet.',
     );
   }
-  return _WASIComponentAsyncValueValidator._(primitive);
+  return _WASIComponentAsyncValueValidator._(
+    kind: _WASIComponentAsyncValueShape.primitive,
+    primitive: primitive,
+  );
 }
 
 WasmComponentPrimitiveValueType? _primitiveElementType(

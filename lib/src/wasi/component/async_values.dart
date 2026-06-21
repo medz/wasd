@@ -8,7 +8,7 @@ import 'dart:collection';
 /// so canonical `stream.new`, `stream.read`, `stream.write`, cancellation, and
 /// drop operations can be layered on top without mixing ownership rules into
 /// the queue implementation.
-final class WASIComponentStream<T extends Object> {
+final class WASIComponentStream<T> {
   /// Creates a stream with a debug [name].
   WASIComponentStream(
     String name, {
@@ -45,7 +45,7 @@ final class WASIComponentStream<T extends Object> {
 }
 
 /// Readable endpoint for [WASIComponentStream].
-final class WASIComponentReadableStream<T extends Object> {
+final class WASIComponentReadableStream<T> {
   const WASIComponentReadableStream._(this._state);
 
   final _WASIComponentStreamState<T> _state;
@@ -84,7 +84,7 @@ final class WASIComponentReadableStream<T extends Object> {
 }
 
 /// Writable endpoint for [WASIComponentStream].
-final class WASIComponentWritableStream<T extends Object> {
+final class WASIComponentWritableStream<T> {
   const WASIComponentWritableStream._(this._state);
 
   final _WASIComponentStreamState<T> _state;
@@ -134,7 +134,7 @@ final class WASIComponentWritableStream<T extends Object> {
 }
 
 /// In-memory runtime state for a Component Model `future<T>` value.
-final class WASIComponentFuture<T extends Object> {
+final class WASIComponentFuture<T> {
   /// Creates a future with a debug [name].
   WASIComponentFuture(String name, {void Function()? onDrop})
     : _state = _WASIComponentFutureState<T>(name, onDrop) {
@@ -161,7 +161,7 @@ final class WASIComponentFuture<T extends Object> {
 }
 
 /// Readable endpoint for [WASIComponentFuture].
-final class WASIComponentReadableFuture<T extends Object> {
+final class WASIComponentReadableFuture<T> {
   const WASIComponentReadableFuture._(this._state);
 
   final _WASIComponentFutureState<T> _state;
@@ -205,7 +205,7 @@ final class WASIComponentReadableFuture<T extends Object> {
 }
 
 /// Writable endpoint for [WASIComponentFuture].
-final class WASIComponentWritableFuture<T extends Object> {
+final class WASIComponentWritableFuture<T> {
   const WASIComponentWritableFuture._(this._state);
 
   final _WASIComponentFutureState<T> _state;
@@ -235,7 +235,7 @@ final class WASIComponentWritableFuture<T extends Object> {
   }
 }
 
-final class _WASIComponentStreamState<T extends Object> {
+final class _WASIComponentStreamState<T> {
   _WASIComponentStreamState(this.name, this.onDrop, {int? maxBufferedElements})
     : maxBufferedElements = _validateMaxBufferedElements(maxBufferedElements);
 
@@ -611,7 +611,7 @@ int? _validateMaxBufferedElements(int? maxBufferedElements) {
   throw RangeError.range(maxBufferedElements, 1, null, 'maxBufferedElements');
 }
 
-final class _WASIComponentStreamReadWaiter<T extends Object> {
+final class _WASIComponentStreamReadWaiter<T> {
   const _WASIComponentStreamReadWaiter(this.maxElements, this.completer);
 
   final int maxElements;
@@ -630,7 +630,7 @@ final class _WASIComponentStreamReadWaiter<T extends Object> {
   }
 }
 
-final class _WASIComponentStreamWriteWaiter<T extends Object> {
+final class _WASIComponentStreamWriteWaiter<T> {
   const _WASIComponentStreamWriteWaiter(this.values, this.completer);
 
   final List<T> values;
@@ -651,7 +651,7 @@ final class _WASIComponentStreamWriteWaiter<T extends Object> {
 
 enum _WASIComponentFutureStatus { pending, ready, cancelled }
 
-final class _WASIComponentFutureState<T extends Object> {
+final class _WASIComponentFutureState<T> {
   _WASIComponentFutureState(this.name, this.onDrop);
 
   final String name;

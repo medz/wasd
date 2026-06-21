@@ -160,6 +160,17 @@ void main() {
       expect(() => stream.writable.write(3), throwsStateError);
       expect(stream.readable.read(4), <int>[1, 2]);
     });
+
+    test('moves unit events through nullable stream endpoints', () {
+      final stream = WASIComponentStream<Object?>('ticks');
+
+      stream.writable.write(null);
+      stream.writable.writeAll(<Object?>[null, null]);
+
+      expect(stream.queuedLength, 3);
+      expect(stream.readable.read(2), <Object?>[null, null]);
+      expect(stream.readable.read(2), <Object?>[null]);
+    });
   });
 
   group('WASIComponentFuture', () {
@@ -232,6 +243,16 @@ void main() {
 
       expect(dropped.isCancelled, isTrue);
       await expectLater(droppedRead, throwsStateError);
+    });
+
+    test('completes unit futures with null', () async {
+      final future = WASIComponentFuture<Object?>('ready');
+      final pending = future.readable.readWhenReady();
+
+      future.writable.complete(null);
+
+      await expectLater(pending, completion(isNull));
+      expect(future.readable.read(), isNull);
     });
   });
 }

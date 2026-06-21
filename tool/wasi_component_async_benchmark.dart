@@ -33,6 +33,7 @@ Future<void> main(List<String> args) async {
       await _benchmarkFuturePendingReadCompletion(options.iterations);
   final backpressureCounter = _benchmarkBackpressureCounter(options.iterations);
   final programInvoke = _benchmarkProgramInvoke(options);
+  final unitProgramInvoke = _benchmarkUnitProgramInvoke(options);
   final handleProgramInvoke = _benchmarkHandleProgramInvoke(options);
 
   final payload = <String, Object?>{
@@ -46,6 +47,7 @@ Future<void> main(List<String> args) async {
     'future_pending_read_completion': futurePendingReadCompletion.toJson(),
     'backpressure_counter': backpressureCounter.toJson(),
     'program_invoke': programInvoke.toJson(),
+    'unit_program_invoke': unitProgramInvoke.toJson(),
     'handle_program_invoke': handleProgramInvoke.toJson(),
   };
 
@@ -66,6 +68,7 @@ Future<void> _runWarmup(_Options options) async {
   await _benchmarkFuturePendingReadCompletion(_warmupIterations);
   _benchmarkBackpressureCounter(_warmupIterations);
   _benchmarkProgramInvoke(warmup);
+  _benchmarkUnitProgramInvoke(warmup);
   _benchmarkHandleProgramInvoke(warmup);
 }
 
@@ -235,8 +238,8 @@ _Metric _benchmarkBackpressureCounter(int iterations) {
 _Metric _benchmarkProgramInvoke(_Options options) {
   final component = WasmComponent.decode(_asyncProgramBytes());
   final host = WASIComponentAsyncHost()
-    ..defineStreamTypeFromComponent<int>(component, 0, 'benchmark-stream')
-    ..defineFutureTypeFromComponent<int>(component, 1, 'benchmark-future');
+    ..defineStreamType<int>(0, 'benchmark-stream')
+    ..defineFutureType<int>(1, 'benchmark-future');
   final program = host.bindCanonicalDefinitions(component);
   final batch = List<int>.generate(options.batchSize, (index) => index);
   var checksum = 0;
@@ -286,11 +289,73 @@ _Metric _benchmarkProgramInvoke(_Options options) {
   );
 }
 
+_Metric _benchmarkUnitProgramInvoke(_Options options) {
+  final component = WasmComponent.decode(_asyncProgramBytes());
+  final host = WASIComponentAsyncHost()
+    ..defineStreamTypeFromComponent<Object?>(
+      component,
+      0,
+      'benchmark-unit-stream',
+    )
+    ..defineFutureTypeFromComponent<Object?>(
+      component,
+      1,
+      'benchmark-unit-future',
+    );
+  final program = host.bindCanonicalDefinitions(component);
+  final batch = List<Object?>.filled(options.batchSize, null);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final stream = program.invoke(0, const <Object?>[]);
+    if (stream is! WASIComponentStream<Object?>) {
+      throw StateError('stream.new returned non-stream: $stream');
+    }
+    final written = program.invoke(2, <Object?>[stream.writable, batch]);
+    if (written != batch.length) {
+      throw StateError('stream.write wrote $written unit values');
+    }
+    final values = program.invoke(1, <Object?>[stream.readable, batch.length]);
+    if (values is! List) {
+      throw StateError('stream.read returned non-list: $values');
+    }
+    for (final value in values) {
+      if (value != null) {
+        throw StateError('stream.read returned non-unit value: $value');
+      }
+      checksum++;
+    }
+    stream.readable.drop();
+    stream.writable.drop();
+
+    final future = program.invoke(3, const <Object?>[]);
+    if (future is! WASIComponentFuture<Object?>) {
+      throw StateError('future.new returned non-future: $future');
+    }
+    program.invoke(5, <Object?>[future.writable, null]);
+    final value = program.invoke(4, <Object?>[future.readable]);
+    if (value != null) {
+      throw StateError('future.read returned non-unit value: $value');
+    }
+    checksum++;
+    future.readable.drop();
+    future.writable.drop();
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: options.iterations * (options.batchSize * 2 + 5),
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkHandleProgramInvoke(_Options options) {
   final component = WasmComponent.decode(_asyncHandleProgramBytes());
   final host = WASIComponentAsyncHost()
-    ..defineStreamTypeFromComponent<int>(component, 0, 'benchmark-stream')
-    ..defineFutureTypeFromComponent<int>(component, 1, 'benchmark-future');
+    ..defineStreamType<int>(0, 'benchmark-stream')
+    ..defineFutureType<int>(1, 'benchmark-future');
   final program = host.bindCanonicalDefinitionsToHandles(component);
   final batch = List<int>.generate(options.batchSize, (index) => index);
   var checksum = 0;
@@ -363,6 +428,7 @@ void _printText(Map<String, Object?> payload) {
     'future_pending_read_completion',
     'backpressure_counter',
     'program_invoke',
+    'unit_program_invoke',
     'handle_program_invoke',
   ]) {
     final metric = payload[name]! as Map<String, Object?>;
