@@ -227,6 +227,88 @@ void main() {
         throwsStateError,
       );
     });
+
+    test('validates decoded stream element primitive values', () {
+      final component = WasmComponent.decode(_streamStringTypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<Object>(component, 0, 'strings');
+      final newOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamNew,
+          typeIndex: 0,
+        ),
+      );
+      final writeOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamWrite,
+          typeIndex: 0,
+        ),
+      );
+      final stream = newOperation.streamNew() as WASIComponentStream<Object>;
+
+      expect(
+        writeOperation.streamWrite(stream.writable, <Object>['hello', 'wasi']),
+        2,
+      );
+      expect(
+        () => writeOperation.streamWrite(stream.writable, <Object>['ok', 3]),
+        throwsStateError,
+      );
+    });
+
+    test('validates decoded future element integer bounds', () {
+      final component = WasmComponent.decode(_futureU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentAsyncHost();
+      host.defineFutureTypeFromComponent<int>(component, 0, 'u32-future');
+      final newOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureNew,
+          typeIndex: 0,
+        ),
+      );
+      final writeOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureWrite,
+          typeIndex: 0,
+        ),
+      );
+
+      final accepted = newOperation.futureNew() as WASIComponentFuture<int>;
+      writeOperation.futureWrite(accepted.writable, 0xffffffff);
+      expect(accepted.readable.read(), 0xffffffff);
+
+      final rejected = newOperation.futureNew() as WASIComponentFuture<int>;
+      expect(
+        () => writeOperation.futureWrite(rejected.writable, -1),
+        throwsStateError,
+      );
+      expect(
+        () => writeOperation.futureWrite(rejected.writable, 0x100000000),
+        throwsStateError,
+      );
+    });
+
+    test(
+      'rejects indexed stream element types until lowering is supported',
+      () {
+        final component = WasmComponent.decode(
+          _streamIndexedElementTypeComponentBytes(),
+        );
+        expect(component.validate(), isEmpty);
+        final host = WASIComponentAsyncHost();
+
+        expect(
+          () => host.defineStreamTypeFromComponent<Object>(
+            component,
+            1,
+            'indexed-stream',
+          ),
+          throwsUnsupportedError,
+        );
+      },
+    );
   });
 }
 
@@ -303,3 +385,56 @@ Uint8List _canonicalFutureProgramBytes() => Uint8List.fromList(const <int>[
   0x1b,
   0x00,
 ]);
+
+Uint8List _streamStringTypeComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x04,
+  0x01,
+  0x66,
+  0x01,
+  0x73,
+]);
+
+Uint8List _futureU32TypeComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x04,
+  0x01,
+  0x65,
+  0x01,
+  0x79,
+]);
+
+Uint8List _streamIndexedElementTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x02,
+      0x73,
+      0x66,
+      0x01,
+      0x00,
+    ]);

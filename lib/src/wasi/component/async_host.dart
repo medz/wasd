@@ -29,6 +29,7 @@ final class WASIComponentAsyncHost {
       componentTypeIndex,
       name,
       kind: _WASIComponentAsyncValueKind.stream,
+      valueValidator: _WASIComponentAsyncValueValidator.unconstrained,
       onDrop: onDrop,
     );
   }
@@ -40,12 +41,18 @@ final class WASIComponentAsyncHost {
     String name, {
     void Function()? onDrop,
   }) {
-    _expectDecodedAsyncType(
+    final valueValidator = _expectDecodedAsyncType(
       component,
       componentTypeIndex,
       WasmComponentDefinedValueTypeKind.stream,
     );
-    defineStreamType<T>(componentTypeIndex, name, onDrop: onDrop);
+    _defineType<T>(
+      componentTypeIndex,
+      name,
+      kind: _WASIComponentAsyncValueKind.stream,
+      valueValidator: valueValidator,
+      onDrop: onDrop,
+    );
   }
 
   /// Defines a component `future<T>` type for [componentTypeIndex].
@@ -58,6 +65,7 @@ final class WASIComponentAsyncHost {
       componentTypeIndex,
       name,
       kind: _WASIComponentAsyncValueKind.future,
+      valueValidator: _WASIComponentAsyncValueValidator.unconstrained,
       onDrop: onDrop,
     );
   }
@@ -69,18 +77,25 @@ final class WASIComponentAsyncHost {
     String name, {
     void Function()? onDrop,
   }) {
-    _expectDecodedAsyncType(
+    final valueValidator = _expectDecodedAsyncType(
       component,
       componentTypeIndex,
       WasmComponentDefinedValueTypeKind.future,
     );
-    defineFutureType<T>(componentTypeIndex, name, onDrop: onDrop);
+    _defineType<T>(
+      componentTypeIndex,
+      name,
+      kind: _WASIComponentAsyncValueKind.future,
+      valueValidator: valueValidator,
+      onDrop: onDrop,
+    );
   }
 
   void _defineType<T extends Object>(
     int componentTypeIndex,
     String name, {
     required _WASIComponentAsyncValueKind kind,
+    required _WASIComponentAsyncValueValidator valueValidator,
     void Function()? onDrop,
   }) {
     if (_valueTypes.containsKey(componentTypeIndex)) {
@@ -92,6 +107,7 @@ final class WASIComponentAsyncHost {
       table: table,
       name: name,
       kind: kind,
+      valueValidator: valueValidator,
       onDrop: onDrop,
     );
   }
@@ -545,11 +561,41 @@ final class WASIComponentCanonicalAsyncOperation {
 
 enum _WASIComponentAsyncValueKind { stream, future }
 
+final class _WASIComponentAsyncValueValidator {
+  const _WASIComponentAsyncValueValidator._(this.primitive);
+
+  static const unconstrained = _WASIComponentAsyncValueValidator._(null);
+
+  final WasmComponentPrimitiveValueType? primitive;
+
+  bool get isConstrained => primitive != null;
+
+  void validateAll(String name, Iterable<Object> values) {
+    if (!isConstrained) {
+      return;
+    }
+    for (final value in values) {
+      validate(name, value);
+    }
+  }
+
+  void validate(String name, Object value) {
+    final expected = primitive;
+    if (expected == null || _primitiveValueMatches(expected, value)) {
+      return;
+    }
+    throw StateError(
+      'WASI component async type $name expected ${expected.name} element value.',
+    );
+  }
+}
+
 final class _RegisteredAsyncValueType<T extends Object> {
   _RegisteredAsyncValueType({
     required this.table,
     required this.name,
     required this.kind,
+    required this.valueValidator,
     this.onDrop,
   }) : readableStreamType = kind == _WASIComponentAsyncValueKind.stream
            ? table.defineType<WASIComponentReadableStream<T>>(
@@ -587,6 +633,7 @@ final class _RegisteredAsyncValueType<T extends Object> {
   final WASIComponentResourceTable table;
   final String name;
   final _WASIComponentAsyncValueKind kind;
+  final _WASIComponentAsyncValueValidator valueValidator;
   final void Function()? onDrop;
   final WASIComponentResourceType<WASIComponentReadableStream<T>>?
   readableStreamType;
@@ -719,6 +766,7 @@ final class _RegisteredAsyncValueType<T extends Object> {
     if (value is! T) {
       throw StateError('WASI component async type $name expected $T value.');
     }
+    valueValidator.validate(name, value);
     _expectWritableFuture(writable).complete(value);
   }
 
@@ -726,6 +774,7 @@ final class _RegisteredAsyncValueType<T extends Object> {
     if (value is! T) {
       throw StateError('WASI component async type $name expected $T value.');
     }
+    valueValidator.validate(name, value);
     table
         .get<WASIComponentWritableFuture<T>>(writableFutureType!, writable)
         .complete(value);
@@ -809,6 +858,7 @@ final class _RegisteredAsyncValueType<T extends Object> {
 
   List<T> _expectIterableValues(Object? values) {
     if (values is List<T>) {
+      valueValidator.validateAll(name, values);
       return values;
     }
     if (values is! Iterable) {
@@ -822,6 +872,7 @@ final class _RegisteredAsyncValueType<T extends Object> {
       if (value is! T) {
         throw StateError('WASI component async type $name expected $T value.');
       }
+      valueValidator.validate(name, value);
       typedValues.add(value);
     }
     return typedValues;
@@ -860,7 +911,7 @@ _WASIComponentAsyncValueKind? _asyncValueKindForCanonicalKind(
   };
 }
 
-void _expectDecodedAsyncType(
+_WASIComponentAsyncValueValidator _expectDecodedAsyncType(
   WasmComponent component,
   int componentTypeIndex,
   WasmComponentDefinedValueTypeKind expected,
@@ -881,6 +932,60 @@ void _expectDecodedAsyncType(
       'WASI component type index $componentTypeIndex is not a ${expected.name} type.',
     );
   }
+  return _asyncValueValidatorForElementType(definedValue.elementType);
+}
+
+_WASIComponentAsyncValueValidator _asyncValueValidatorForElementType(
+  WasmComponentValueType? elementType,
+) {
+  if (elementType == null) {
+    return _WASIComponentAsyncValueValidator.unconstrained;
+  }
+  if (elementType.kind != WasmComponentValueTypeKind.primitive ||
+      elementType.primitive == null) {
+    throw UnsupportedError(
+      'WASI component async host currently supports only direct primitive stream/future element types.',
+    );
+  }
+  if (elementType.primitive == WasmComponentPrimitiveValueType.errorContext) {
+    throw UnsupportedError(
+      'WASI component async host does not support error-context stream/future element values yet.',
+    );
+  }
+  return _WASIComponentAsyncValueValidator._(elementType.primitive);
+}
+
+bool _primitiveValueMatches(
+  WasmComponentPrimitiveValueType primitive,
+  Object value,
+) {
+  return switch (primitive) {
+    WasmComponentPrimitiveValueType.boolean => value is bool,
+    WasmComponentPrimitiveValueType.s8 =>
+      value is int && value >= -0x80 && value <= 0x7f,
+    WasmComponentPrimitiveValueType.u8 =>
+      value is int && value >= 0 && value <= 0xff,
+    WasmComponentPrimitiveValueType.s16 =>
+      value is int && value >= -0x8000 && value <= 0x7fff,
+    WasmComponentPrimitiveValueType.u16 =>
+      value is int && value >= 0 && value <= 0xffff,
+    WasmComponentPrimitiveValueType.s32 =>
+      value is int && value >= -0x80000000 && value <= 0x7fffffff,
+    WasmComponentPrimitiveValueType.u32 =>
+      value is int && value >= 0 && value <= 0xffffffff,
+    WasmComponentPrimitiveValueType.s64 =>
+      value is int &&
+          value >= -0x8000000000000000 &&
+          value <= 0x7fffffffffffffff,
+    WasmComponentPrimitiveValueType.u64 =>
+      value is int && value >= 0 && value <= 0xffffffffffffffff,
+    WasmComponentPrimitiveValueType.f32 ||
+    WasmComponentPrimitiveValueType.f64 => value is num,
+    WasmComponentPrimitiveValueType.char =>
+      value is String && value.runes.length == 1,
+    WasmComponentPrimitiveValueType.string => value is String,
+    WasmComponentPrimitiveValueType.errorContext => false,
+  };
 }
 
 void _expectArity(int canonicalIndex, List<Object?> args, int expected) {
