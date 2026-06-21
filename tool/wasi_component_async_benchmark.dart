@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
 import 'package:wasd/src/wasi/component/backpressure.dart';
+import 'package:wasd/src/wasi/component/context.dart';
 import 'package:wasd/src/wasi/component/subtask.dart';
 import 'package:wasd/src/wasi/component/task.dart';
 import 'package:wasd/src/wasi/component/waitable_set.dart';
@@ -37,6 +38,7 @@ Future<void> main(List<String> args) async {
   final futurePendingReadCompletion =
       await _benchmarkFuturePendingReadCompletion(options.iterations);
   final backpressureCounter = _benchmarkBackpressureCounter(options.iterations);
+  final contextGetSet = _benchmarkContextGetSet(options.iterations);
   final waitableSetDelivery = await _benchmarkWaitableSetDelivery(
     options.iterations,
   );
@@ -74,6 +76,7 @@ Future<void> main(List<String> args) async {
     'future_complete_read_drop': futureCompleteReadDrop.toJson(),
     'future_pending_read_completion': futurePendingReadCompletion.toJson(),
     'backpressure_counter': backpressureCounter.toJson(),
+    'context_get_set': contextGetSet.toJson(),
     'waitable_set_delivery': waitableSetDelivery.toJson(),
     'waitable_set_task_cancellation': waitableSetTaskCancellation.toJson(),
     'subtask_cancel_delivery': subtaskCancelDelivery.toJson(),
@@ -108,6 +111,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkFutureCompleteReadDrop(_warmupIterations);
   await _benchmarkFuturePendingReadCompletion(_warmupIterations);
   _benchmarkBackpressureCounter(_warmupIterations);
+  _benchmarkContextGetSet(_warmupIterations);
   await _benchmarkWaitableSetDelivery(_warmupIterations);
   await _benchmarkWaitableSetTaskCancellation(_warmupIterations);
   await _benchmarkSubtaskCancelDelivery(_warmupIterations);
@@ -345,6 +349,53 @@ _Metric _benchmarkBackpressureCounter(int iterations) {
 
   return _Metric(
     operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkContextGetSet(int iterations) {
+  final host = WASIComponentContextHost();
+  final context = WASIComponentContext(name: 'benchmark-context');
+  final get0 = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.contextGet,
+      contextIndex: 0,
+    ),
+  );
+  final set0 = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.contextSet,
+      contextIndex: 0,
+    ),
+  );
+  final get1 = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.contextGet,
+      contextIndex: 1,
+    ),
+  );
+  final set1 = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.contextSet,
+      contextIndex: 1,
+    ),
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  host.runWithContext(context, () {
+    for (var i = 0; i < iterations; i++) {
+      set0.contextSet(i);
+      set1.contextSet(i ^ 0xffff);
+      checksum += get0.contextGet();
+      checksum += get1.contextGet();
+    }
+  });
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 4,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
@@ -1691,6 +1742,7 @@ void _printText(Map<String, Object?> payload) {
     'future_complete_read_drop',
     'future_pending_read_completion',
     'backpressure_counter',
+    'context_get_set',
     'waitable_set_delivery',
     'waitable_set_task_cancellation',
     'subtask_cancel_delivery',

@@ -1209,6 +1209,16 @@ void main() {
       );
     });
 
+    test('reports invalid canonical context indexes', () {
+      final errors = WasmComponent.decode(
+        _canonicalContextGetOutOfRangeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(errors.single.message, contains('context index'));
+      expect(errors.single.message, contains('less than 2'));
+    });
+
     test('reports missing canonical option requirements', () {
       final errors = WasmComponent.decode(
         _canonicalLowerAsyncWithoutMemoryComponentBytes(),
@@ -4125,6 +4135,24 @@ Uint8List _canonicalTaskReturnWithAsyncComponentBytes() =>
       0x00,
       0x01,
       0x06,
+    ]);
+
+Uint8List _canonicalContextGetOutOfRangeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x04,
+      0x01,
+      0x0a,
+      0x7f,
+      0x02,
     ]);
 
 Uint8List _canonicalTaskReturnStringWithoutMemoryComponentBytes() =>

@@ -3313,6 +3313,20 @@ final class _WasmComponentValidationContext {
       );
     }
 
+    if (definition.kind == WasmComponentCanonicalKind.contextGet ||
+        definition.kind == WasmComponentCanonicalKind.contextSet) {
+      final contextIndex = definition.contextIndex;
+      if (contextIndex == null || contextIndex >= 2) {
+        errors.add(
+          WasmComponentValidationError(
+            path: '$path.context',
+            message:
+                'Wasm component ${canonicalDefinitionDescription(definition.kind)} context index must be less than 2.',
+          ),
+        );
+      }
+    }
+
     validateCanonicalOptions(definition.options, '$path.options');
     validateCanonicalAllowedOptions(definition, path);
     validateCanonicalOptionRequirements(
