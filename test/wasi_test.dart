@@ -15,7 +15,10 @@ Object? _skipOnNode(String reason) => isNodeJsRuntime ? reason : false;
 const int _rightFdRead = 1 << 1;
 const int _rightFdWrite = 1 << 6;
 const int _rightFdFdstatGet = 1 << 21;
+const int _rightSockShutdown = 1 << 28;
+const int _rightSockAccept = 1 << 29;
 const int _rightsAll = (1 << 30) - 1;
+const int _filetypeSocketStream = 6;
 
 void _setUint64Le(ByteData data, int offset, int value) {
   final normalized = value.toUnsigned(64);
@@ -754,7 +757,7 @@ void main() {
       );
 
       test(
-        'unsupported syscalls return nosys while basic scheduling syscalls succeed',
+        'unsupported proc_raise returns nosys while basic scheduling syscalls succeed',
         () async {
           final preview1 = wasi.imports['wasi_snapshot_preview1']!;
           final schedYield =
@@ -762,7 +765,6 @@ void main() {
           final pollOneoff =
               preview1['poll_oneoff'] as FunctionImportExportValue;
           final procRaise = preview1['proc_raise'] as FunctionImportExportValue;
-          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
           final memory =
               (instance.exports['memory'] as MemoryImportExportValue).ref;
           wasi.finalizeBindings(instance, memory: memory);
@@ -787,10 +789,206 @@ void main() {
           expect(data.getUint32(outPtr + 4, Endian.little), 0x55667788);
           expect(data.getUint8(outPtr + 10), 0);
           expect(procRaise.ref([15]), 52);
-          expect(sockRecv.ref([0, 0, 0, 0, 0, 0]), 52);
         },
         skip: _skipOnNode(
           'Skipping on Node.js; syscall behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'sock_recv and sock_send use configured preview1 stream sockets',
+        () async {
+          final socket = WASIPreview1Socket(receiveData: utf8.encode('hello'));
+          final socketWasi = WASI(sockets: {10: socket});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final sockSend = preview1['sock_send'] as FunctionImportExportValue;
+          final fdFdstatGet =
+              preview1['fd_fdstat_get'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const recvIovPtr = 2944;
+          const recvBufferPtr = 2960;
+          const recvCountPtr = 2992;
+          const recvFlagsPtr = 3008;
+          const sendIovPtr = 3024;
+          const sendBufferPtr = 3040;
+          const sendCountPtr = 3072;
+          const fdstatPtr = 3088;
+
+          data.setUint32(recvIovPtr, recvBufferPtr, Endian.little);
+          data.setUint32(recvIovPtr + 4, 3, Endian.little);
+          expect(
+            sockRecv.ref([10, recvIovPtr, 1, 0, recvCountPtr, recvFlagsPtr]),
+            0,
+          );
+          expect(data.getUint32(recvCountPtr, Endian.little), 3);
+          expect(data.getUint16(recvFlagsPtr, Endian.little), 0);
+          expect(
+            utf8.decode(bytes.sublist(recvBufferPtr, recvBufferPtr + 3)),
+            'hel',
+          );
+
+          data.setUint32(recvIovPtr + 4, 5, Endian.little);
+          expect(
+            sockRecv.ref([10, recvIovPtr, 1, 1, recvCountPtr, recvFlagsPtr]),
+            0,
+          );
+          expect(data.getUint32(recvCountPtr, Endian.little), 2);
+          expect(
+            utf8.decode(bytes.sublist(recvBufferPtr, recvBufferPtr + 2)),
+            'lo',
+          );
+          expect(
+            sockRecv.ref([10, recvIovPtr, 1, 0, recvCountPtr, recvFlagsPtr]),
+            0,
+          );
+          expect(data.getUint32(recvCountPtr, Endian.little), 2);
+
+          bytes.setAll(sendBufferPtr, utf8.encode('pong'));
+          data.setUint32(sendIovPtr, sendBufferPtr, Endian.little);
+          data.setUint32(sendIovPtr + 4, 4, Endian.little);
+          expect(sockSend.ref([10, sendIovPtr, 1, 0, sendCountPtr]), 0);
+          expect(data.getUint32(sendCountPtr, Endian.little), 4);
+          expect(utf8.decode(socket.sentData), 'pong');
+
+          expect(fdFdstatGet.ref([10, fdstatPtr]), 0);
+          expect(bytes[fdstatPtr], _filetypeSocketStream);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'sock_accept returns queued preview1 stream sockets with inherited rights',
+        () async {
+          final accepted = WASIPreview1Socket(
+            receiveData: utf8.encode('client'),
+          );
+          final listener = WASIPreview1Socket(pendingAccepted: [accepted]);
+          final socketWasi = WASI(sockets: {20: listener});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockAccept =
+              preview1['sock_accept'] as FunctionImportExportValue;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final fdFdstatGet =
+              preview1['fd_fdstat_get'] as FunctionImportExportValue;
+          final fdFdstatSetRights =
+              preview1['fd_fdstat_set_rights'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const acceptedFdPtr = 3120;
+          const fdstatPtr = 3136;
+          const iovPtr = 3168;
+          const bufferPtr = 3200;
+          const countPtr = 3232;
+          const flagsPtr = 3248;
+
+          expect(
+            fdFdstatSetRights.ref([
+              20,
+              _rightSockAccept,
+              _rightFdRead | _rightFdFdstatGet | _rightSockShutdown,
+            ]),
+            0,
+          );
+          expect(sockAccept.ref([20, 4, acceptedFdPtr]), 0);
+          final acceptedFd = data.getUint32(acceptedFdPtr, Endian.little);
+          expect(acceptedFd, greaterThanOrEqualTo(64));
+
+          expect(fdFdstatGet.ref([acceptedFd, fdstatPtr]), 0);
+          expect(bytes[fdstatPtr], _filetypeSocketStream);
+          expect(data.getUint16(fdstatPtr + 2, Endian.little), 4);
+          expect(
+            _getUint64Le(data, fdstatPtr + 8),
+            _rightFdRead | _rightFdFdstatGet | _rightSockShutdown,
+          );
+          expect(_getUint64Le(data, fdstatPtr + 16), 0);
+
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 6, Endian.little);
+          expect(
+            sockRecv.ref([acceptedFd, iovPtr, 1, 0, countPtr, flagsPtr]),
+            0,
+          );
+          expect(data.getUint32(countPtr, Endian.little), 6);
+          expect(
+            utf8.decode(bytes.sublist(bufferPtr, bufferPtr + 6)),
+            'client',
+          );
+          expect(sockAccept.ref([20, 0, acceptedFdPtr]), 6);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'sock_shutdown and descriptor rights are enforced for preview1 sockets',
+        () async {
+          final socket = WASIPreview1Socket(receiveData: utf8.encode('in'));
+          final socketWasi = WASI(sockets: {30: socket});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final sockSend = preview1['sock_send'] as FunctionImportExportValue;
+          final sockShutdown =
+              preview1['sock_shutdown'] as FunctionImportExportValue;
+          final fdFdstatSetRights =
+              preview1['fd_fdstat_set_rights'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const iovPtr = 3264;
+          const bufferPtr = 3296;
+          const countPtr = 3328;
+          const flagsPtr = 3344;
+
+          bytes.setAll(bufferPtr, utf8.encode('out'));
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 3, Endian.little);
+
+          expect(
+            fdFdstatSetRights.ref([30, _rightFdRead | _rightSockShutdown, 0]),
+            0,
+          );
+          expect(sockSend.ref([30, iovPtr, 1, 0, countPtr]), 76);
+          expect(sockRecv.ref([30, iovPtr, 1, 0, countPtr, flagsPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 2);
+          expect(sockShutdown.ref([30, 3]), 0);
+          expect(sockRecv.ref([30, iovPtr, 1, 0, countPtr, flagsPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 0);
+          expect(sockShutdown.ref([30, 8]), 28);
+          expect(sockShutdown.ref([1, 1]), 8);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
         ),
       );
 

@@ -3,6 +3,7 @@ const int iovecEntrySize = 8;
 const int errnoSuccess = 0;
 const int errnoInval = 28;
 const int errnoBadf = 8;
+const int errnoAgain = 6;
 const int errnoExist = 20;
 const int errnoIsdir = 31;
 const int errnoNoent = 44;
@@ -10,6 +11,7 @@ const int errnoNosys = 52;
 const int errnoNotdir = 54;
 const int errnoNotempty = 55;
 const int errnoNotcapable = 76;
+const int errnoPipe = 64;
 const int prestatSize = 8;
 const int preopenTypeDir = 0;
 const int fdstatSize = 24;
@@ -21,6 +23,7 @@ const int direntTypeOffset = 20;
 const int filetypeCharacterDevice = 2;
 const int filetypeDirectory = 3;
 const int filetypeRegularFile = 4;
+const int filetypeSocketStream = 6;
 const int filetypeSymbolicLink = 7;
 const int lookupflagSymlinkFollow = 1;
 const int fdflagAppend = 1;
@@ -30,6 +33,13 @@ const int fdflagRsync = 8;
 const int fdflagSync = 16;
 const int fdflagKnownMask =
     fdflagAppend | fdflagDsync | fdflagNonblock | fdflagRsync | fdflagSync;
+const int riflagRecvPeek = 1;
+const int riflagRecvWaitall = 2;
+const int riflagKnownMask = riflagRecvPeek | riflagRecvWaitall;
+const int roflagRecvDataTruncated = 1;
+const int sdflagRd = 1;
+const int sdflagWr = 2;
+const int sdflagKnownMask = sdflagRd | sdflagWr;
 const int rightFdDatasync = 1 << 0;
 const int rightFdRead = 1 << 1;
 const int rightFdSeek = 1 << 2;
@@ -64,10 +74,4 @@ const int rightsKnownMask = (1 << 30) - 1;
 const int rightsAll = rightsKnownMask;
 
 /// Preview1 imports that should exist and return `ENOSYS` when unsupported.
-const List<String> preview1NosysImports = <String>[
-  'proc_raise',
-  'sock_accept',
-  'sock_recv',
-  'sock_send',
-  'sock_shutdown',
-];
+const List<String> preview1NosysImports = <String>['proc_raise'];

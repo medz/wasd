@@ -9,6 +9,7 @@ import '../../../wasm/module.dart' as wasm;
 import '../../wasi.dart' as wasi_iface;
 import '../common/constants.dart' as wasi_common;
 import '../common/vfs.dart' as wasi_vfs;
+import '../socket.dart';
 
 class WASI implements wasi_iface.WASI {
   // ignore: avoid_unused_constructor_parameters
@@ -22,6 +23,7 @@ class WASI implements wasi_iface.WASI {
     List<int> stdinData = const <int>[],
     int stdout = 1,
     int stderr = 2,
+    Map<int, WASIPreview1Socket> sockets = const <int, WASIPreview1Socket>{},
     wasi_iface.WASIVersion version = wasi_iface.WASIVersion.preview1,
   }) : _returnOnExit = returnOnExit,
        _argsData = [for (final arg in args) wasi_vfs.nulTerminated(arg)],
@@ -35,6 +37,7 @@ class WASI implements wasi_iface.WASI {
          stdinFd: stdin,
          stdoutFd: stdout,
          stderrFd: stderr,
+         sockets: sockets,
        ),
        _stdinInput = wasi_vfs.Preview1VirtualOpenFile.fromBytes(
          Uint8List.fromList(stdinData),
@@ -64,6 +67,10 @@ class WASI implements wasi_iface.WASI {
       'environ_sizes_get': _environSizesGetImport,
       'environ_get': _environGetImport,
       'random_get': _randomGetImport,
+      'sock_accept': _sockAcceptImport,
+      'sock_recv': _sockRecvImport,
+      'sock_send': _sockSendImport,
+      'sock_shutdown': _sockShutdownImport,
       'clock_res_get': _clockResGetImport,
       'fd_read': _fdReadImport,
       'fd_write': _fdWriteImport,
@@ -334,6 +341,134 @@ class WASI implements wasi_iface.WASI {
         return _errnoSuccess;
       });
 
+  wasm.FunctionImportExportValue get _sockAcceptImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 3) {
+          return _errnoInval;
+        }
+        final fd = _asInt(args[0]);
+        final flags = _asInt(args[1]);
+        final acceptedFdPtr = _asInt(args[2]);
+        if ((flags & ~_fdflagKnownMask) != 0) {
+          return _errnoInval;
+        }
+        if (_vfs.socketForFd(fd) == null) {
+          return _errnoBadf;
+        }
+        final right = _checkDescriptorRight(fd, _rightSockAccept);
+        if (right != _errnoSuccess) {
+          return right;
+        }
+
+        final view = _memoryView();
+        if (view == null) {
+          return _errnoInval;
+        }
+        if (acceptedFdPtr < 0 || acceptedFdPtr + 4 > view.bytes.length) {
+          return _errnoInval;
+        }
+
+        final acceptedFd = _vfs.acceptSocket(fd: fd, descriptorFlags: flags);
+        if (acceptedFd < 0) {
+          return _errnoAgain;
+        }
+        view.data.setUint32(acceptedFdPtr, acceptedFd, Endian.little);
+        return _errnoSuccess;
+      });
+
+  wasm.FunctionImportExportValue get _sockRecvImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 6) {
+          return _errnoInval;
+        }
+        final fd = _asInt(args[0]);
+        final socket = _vfs.socketForFd(fd);
+        if (socket == null) {
+          return _errnoBadf;
+        }
+        final right = _checkDescriptorRight(fd, _rightFdRead);
+        if (right != _errnoSuccess) {
+          return right;
+        }
+        final flags = _asInt(args[3]);
+        if ((flags & ~_riflagKnownMask) != 0) {
+          return _errnoInval;
+        }
+        final view = _memoryView();
+        if (view == null) {
+          return _errnoInval;
+        }
+        return wasi_vfs.readSocketIntoIov(
+          socket: socket,
+          bytes: view.bytes,
+          data: view.data,
+          iovs: _asInt(args[1]),
+          iovsLen: _asInt(args[2]),
+          flags: flags,
+          nreadPtr: _asInt(args[4]),
+          roFlagsPtr: _asInt(args[5]),
+        );
+      });
+
+  wasm.FunctionImportExportValue get _sockSendImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 5) {
+          return _errnoInval;
+        }
+        final fd = _asInt(args[0]);
+        final socket = _vfs.socketForFd(fd);
+        if (socket == null) {
+          return _errnoBadf;
+        }
+        final right = _checkDescriptorRight(fd, _rightFdWrite);
+        if (right != _errnoSuccess) {
+          return right;
+        }
+        if (_asInt(args[3]) != 0) {
+          return _errnoInval;
+        }
+        if (socket.sendShutdown) {
+          return _errnoPipe;
+        }
+        final view = _memoryView();
+        if (view == null) {
+          return _errnoInval;
+        }
+        return wasi_vfs.writeSocketFromIov(
+          socket: socket,
+          bytes: view.bytes,
+          data: view.data,
+          iovs: _asInt(args[1]),
+          iovsLen: _asInt(args[2]),
+          nwrittenPtr: _asInt(args[4]),
+        );
+      });
+
+  wasm.FunctionImportExportValue get _sockShutdownImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 2) {
+          return _errnoInval;
+        }
+        final fd = _asInt(args[0]);
+        final socket = _vfs.socketForFd(fd);
+        if (socket == null) {
+          return _errnoBadf;
+        }
+        final how = _asInt(args[1]);
+        if (how == 0 || (how & ~_sdflagKnownMask) != 0) {
+          return _errnoInval;
+        }
+        final right = _checkDescriptorRight(fd, _rightSockShutdown);
+        if (right != _errnoSuccess) {
+          return right;
+        }
+        socket.shutdown(
+          receive: (how & _sdflagRd) != 0,
+          send: (how & _sdflagWr) != 0,
+        );
+        return _errnoSuccess;
+      });
+
   wasm.FunctionImportExportValue get _fdReadImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
         if (args.length < 4) {
@@ -548,12 +683,13 @@ class WASI implements wasi_iface.WASI {
         descriptorKind == wasi_vfs.Preview1DescriptorKind.stderr;
     final isDir = _vfs.isDirectoryFd(fd);
     final isFile = _vfs.openFileForFd(fd) != null;
+    final isSocket = _vfs.socketForFd(fd) != null;
     if (_traceSyscalls) {
       io.stderr.writeln(
-        '[wasi:fd_fdstat_get] fd=$fd isStdio=$isStdio isDir=$isDir isFile=$isFile',
+        '[wasi:fd_fdstat_get] fd=$fd isStdio=$isStdio isDir=$isDir isFile=$isFile isSocket=$isSocket',
       );
     }
-    if (!isStdio && !isDir && !isFile) {
+    if (!isStdio && !isDir && !isFile && !isSocket) {
       return _errnoBadf;
     }
 
@@ -570,6 +706,8 @@ class WASI implements wasi_iface.WASI {
     bytes.fillRange(fdstatPtr, fdstatPtr + _fdstatSize, 0);
     bytes[fdstatPtr] = isFile
         ? _filetypeRegularFile
+        : isSocket
+        ? _filetypeSocketStream
         : isDir
         ? _filetypeDirectory
         : _filetypeCharacterDevice;
@@ -640,9 +778,14 @@ class WASI implements wasi_iface.WASI {
 
         final opened = _vfs.openFileForFd(fd);
         final openedDirectory = _vfs.isOpenDirectoryFd(fd);
+        final socket = _vfs.socketForFd(fd);
         final isStdio = _vfs.stdioKindForFd(fd) != null;
         final isDir = _vfs.isPreopenDirectoryFd(fd);
-        if (opened == null && !openedDirectory && !isStdio && !isDir) {
+        if (opened == null &&
+            socket == null &&
+            !openedDirectory &&
+            !isStdio &&
+            !isDir) {
           return _errnoBadf;
         }
         final right = _checkDescriptorRight(fd, _rightFdFilestatGet);
@@ -653,6 +796,8 @@ class WASI implements wasi_iface.WASI {
         bytes.fillRange(bufPtr, bufPtr + _filestatSize, 0);
         bytes[bufPtr + 16] = opened != null
             ? _filetypeRegularFile
+            : socket != null
+            ? _filetypeSocketStream
             : (isDir || openedDirectory)
             ? _filetypeDirectory
             : _filetypeCharacterDevice;
@@ -1878,6 +2023,7 @@ const int _subscriptionClockTimeoutOffset = 24;
 const int _subscriptionClockFlagsOffset = 40;
 const int _subscriptionClockAbstime = 1;
 const int _errnoSuccess = wasi_common.errnoSuccess;
+const int _errnoAgain = wasi_common.errnoAgain;
 const int _errnoInval = wasi_common.errnoInval;
 const int _errnoBadf = wasi_common.errnoBadf;
 const int _errnoExist = wasi_common.errnoExist;
@@ -1887,13 +2033,19 @@ const int _errnoNosys = wasi_common.errnoNosys;
 const int _errnoNotdir = wasi_common.errnoNotdir;
 const int _errnoNotempty = wasi_common.errnoNotempty;
 const int _errnoNotcapable = wasi_common.errnoNotcapable;
+const int _errnoPipe = wasi_common.errnoPipe;
 const int _prestatSize = wasi_common.prestatSize;
 const int _preopenTypeDir = wasi_common.preopenTypeDir;
 const int _fdstatSize = wasi_common.fdstatSize;
 const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
 const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
+const int _filetypeSocketStream = wasi_common.filetypeSocketStream;
 const int _fdflagKnownMask = wasi_common.fdflagKnownMask;
+const int _riflagKnownMask = wasi_common.riflagKnownMask;
+const int _sdflagRd = wasi_common.sdflagRd;
+const int _sdflagWr = wasi_common.sdflagWr;
+const int _sdflagKnownMask = wasi_common.sdflagKnownMask;
 const int _lookupflagSymlinkFollow = wasi_common.lookupflagSymlinkFollow;
 const int _lookupflagKnownMask = _lookupflagSymlinkFollow;
 const int _filestatSize = 64;
@@ -1933,6 +2085,8 @@ const int _rightFdFilestatSetTimes = wasi_common.rightFdFilestatSetTimes;
 const int _rightPathSymlink = wasi_common.rightPathSymlink;
 const int _rightPathRemoveDirectory = wasi_common.rightPathRemoveDirectory;
 const int _rightPathUnlinkFile = wasi_common.rightPathUnlinkFile;
+const int _rightSockShutdown = wasi_common.rightSockShutdown;
+const int _rightSockAccept = wasi_common.rightSockAccept;
 const int _rightsKnownMask = wasi_common.rightsKnownMask;
 const List<String> _preview1NosysImports = wasi_common.preview1NosysImports;
 

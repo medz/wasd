@@ -59,18 +59,19 @@ This is the implementation state as of 2026-06-21 on `main`.
 
 - Preview 1 is real but still incomplete. Native and browser hosts share
   `lib/src/wasi/preview1/common/vfs.dart` for virtual files, directories,
-  readdir state, hard links, symlinks/readlink, descriptor flags, descriptor
-  rights, descriptor times, descriptor sync/advice validation, and descriptor
-  renumbering. Node still delegates Preview 1 behavior to `node:wasi`.
-- The remaining explicit Preview 1 `ENOSYS` list is
-  `proc_raise`, `sock_accept`, `sock_recv`, `sock_send`, and `sock_shutdown`.
-  This list is intentionally in code at
-  `lib/src/wasi/preview1/common/constants.dart`; README support claims must
-  stay aligned with it.
-- Preview 1 stdio descriptors, virtual files, open directories, and preopens
-  now live in one VFS descriptor/capability table with base rights, inheriting
-  rights, descriptor flags, renumbering, and close state. Future sockets should
-  join that table instead of adding another host-side special case.
+  readdir state, hard links, symlinks/readlink, configured stream sockets,
+  descriptor flags, descriptor rights, descriptor times, descriptor sync/advice
+  validation, and descriptor renumbering. Node still delegates Preview 1
+  behavior to `node:wasi`.
+- The remaining explicit Preview 1 `ENOSYS` list is `proc_raise`. This list is
+  intentionally in code at `lib/src/wasi/preview1/common/constants.dart`;
+  README support claims must stay aligned with it.
+- Preview 1 stdio descriptors, virtual files, configured stream sockets, open
+  directories, and preopens now live in one VFS descriptor/capability table
+  with base rights, inheriting rights, descriptor flags, renumbering, and close
+  state. Preview1 does not define socket creation syscalls, so native/browser
+  socket support is host-provided descriptor injection through
+  `WASIPreview1Socket`, not raw networking.
 - Preview 1 directory entries are indexed through per-directory child maps so
   common path/link/symlink mutation paths rebuild only affected directories.
   The benchmark entrypoint is `dart run tool/wasi_vfs_benchmark.dart --json`.
@@ -97,20 +98,16 @@ This is the implementation state as of 2026-06-21 on `main`.
 
 ## Next Implementation Order
 
-1. Finish the remaining Preview 1 process and socket stubs without bypassing
-   the descriptor/capability model. Socket descriptors should join the same VFS
-   table with close, renumber, base rights, and inheriting rights semantics.
-2. Decide whether Preview 1 sockets are in-process virtual sockets, real host
-   sockets, or an explicit capability-gated native-only feature. Do not expose
-   `sock_*` as supported until accept/recv/send/shutdown have cross-runtime
-   tests and a clear browser behavior.
-3. Treat `proc_raise` as process-control capability work, not just a return-code
+1. Treat `proc_raise` as process-control capability work, not just a return-code
    stub. Native and JS behavior need separate semantics and tests.
-4. For P2/P3, add a versioned host boundary first:
+2. Extend Preview1 socket coverage with conformance-shaped edge cases:
+   multi-iov `RECV_PEEK`, fd renumber/close interactions, shutdown write errors,
+   and larger send/recv benchmarks before adding a native networking adapter.
+3. For P2/P3, add a versioned host boundary first:
    `preview1`, `preview2`, and `preview3` adapters over shared descriptor,
    resource, clock, random, filesystem, and socket primitives. Do not extend
    `wasi_snapshot_preview1` types into component worlds.
-5. Add WIT ingestion and generated binding support only after the resource table
+4. Add WIT ingestion and generated binding support only after the resource table
    and canonical ABI ownership model are in place.
 
 ## Performance Direction
@@ -139,9 +136,8 @@ This is the implementation state as of 2026-06-21 on `main`.
 
 ## Near-Term Slices
 
-1. Extend the Preview 1 descriptor/capability table to future socket
-   descriptors, then implement `sock_accept`, `sock_recv`, `sock_send`, and
-   `sock_shutdown` with runtime-specific browser behavior documented and tested.
+1. Extend Preview 1 socket regression coverage and benchmarks around multi-iov
+   `RECV_PEEK`, shutdown/send error paths, and fd renumber/close interactions.
 2. Extend the VFS/descriptor benchmark with descriptor renumbering and larger
    conformance-shaped path distributions, then use it as the gate for further
    VFS optimizations.

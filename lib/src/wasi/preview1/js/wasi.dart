@@ -7,6 +7,7 @@ import '../../../wasm/instance.dart' as wasm_instance;
 import '../../../wasm/memory.dart' as wasm_memory;
 import '../../../wasm/module.dart' as wasm_module;
 import '../../wasi.dart' as wasi_iface;
+import '../socket.dart';
 import 'node/wasi.dart' as node;
 import 'web/wasi.dart' as web;
 
@@ -21,6 +22,7 @@ class WASI implements wasi_iface.WASI {
     List<int> stdinData = const <int>[],
     int stdout = 1,
     int stderr = 2,
+    Map<int, WASIPreview1Socket> sockets = const <int, WASIPreview1Socket>{},
     wasi_iface.WASIVersion version = wasi_iface.WASIVersion.preview1,
   }) : _delegate = _createDelegate(
          args: args,
@@ -32,6 +34,7 @@ class WASI implements wasi_iface.WASI {
          stdinData: stdinData,
          stdout: stdout,
          stderr: stderr,
+         sockets: sockets,
          version: version,
        );
 
@@ -74,6 +77,7 @@ wasi_iface.WASI _createDelegate({
   required List<int> stdinData,
   required int stdout,
   required int stderr,
+  required Map<int, WASIPreview1Socket> sockets,
   required wasi_iface.WASIVersion version,
 }) {
   final useNode = _isNodeJs();
@@ -91,6 +95,7 @@ wasi_iface.WASI _createDelegate({
       stdinData: stdinData,
       stdout: stdout,
       stderr: stderr,
+      sockets: sockets,
       version: version,
     );
   }
@@ -104,6 +109,7 @@ wasi_iface.WASI _createDelegate({
     stdinData: stdinData,
     stdout: stdout,
     stderr: stderr,
+    sockets: sockets,
     version: version,
   );
 }

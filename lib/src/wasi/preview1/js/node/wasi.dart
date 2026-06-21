@@ -9,6 +9,7 @@ import '../../../../wasm/instance.dart' as wasm;
 import '../../../../wasm/memory.dart' as wasm;
 import '../../../../wasm/module.dart' as wasm;
 import '../../../wasi.dart' as wasi_iface;
+import '../../socket.dart';
 import '../../../../wasm/backend/js/instance.dart' as js_instance;
 import '../../../../wasm/backend/js/memory.dart' as js_memory;
 
@@ -23,6 +24,7 @@ class WASI implements wasi_iface.WASI {
     List<int> stdinData = const <int>[],
     int stdout = 1,
     int stderr = 2,
+    Map<int, WASIPreview1Socket> sockets = const <int, WASIPreview1Socket>{},
     wasi_iface.WASIVersion version = wasi_iface.WASIVersion.preview1,
   }) : _host = _createNodeWasi(
          args: args,

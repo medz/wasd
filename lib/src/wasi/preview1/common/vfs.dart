@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import '../socket.dart';
 import 'constants.dart';
 
 typedef _DirectoryChildrenByPath =
@@ -15,6 +16,7 @@ final class Preview1VirtualFileSystem {
     int stdinFd = 0,
     int stdoutFd = 1,
     int stderrFd = 2,
+    Map<int, WASIPreview1Socket> sockets = const <int, WASIPreview1Socket>{},
   }) : _nextVirtualFd = firstVirtualFd,
        _stdioDescriptorsByFd = _buildStdioDescriptors(
          stdinFd: stdinFd,
@@ -40,6 +42,10 @@ final class Preview1VirtualFileSystem {
        _filesByGuestPath = {
          for (final entry in files.entries)
            normalizeGuestPath(entry.key): Preview1VirtualFile(entry.value),
+       },
+       _socketsByFd = {
+         for (final entry in sockets.entries)
+           entry.key: Preview1VirtualSocket(entry.value),
        },
        _symlinksByGuestPath = <String, Preview1VirtualSymlink>{} {
     _stdioRightsByFd = {
@@ -82,6 +88,7 @@ final class Preview1VirtualFileSystem {
   late Map<int, Preview1DescriptorRights> _stdioRightsByFd;
   late Map<int, int> _stdioFlagsByFd;
   final Map<String, Preview1VirtualFile> _filesByGuestPath;
+  final Map<int, Preview1VirtualSocket> _socketsByFd;
   final Map<String, Preview1VirtualSymlink> _symlinksByGuestPath;
   final Map<int, Preview1VirtualOpenFile> _openFilesByFd =
       <int, Preview1VirtualOpenFile>{};
@@ -118,6 +125,9 @@ final class Preview1VirtualFileSystem {
     if (_openFilesByFd.containsKey(fd)) {
       return Preview1DescriptorKind.file;
     }
+    if (_socketsByFd.containsKey(fd)) {
+      return Preview1DescriptorKind.socket;
+    }
     if (_openDirectoriesByFd.containsKey(fd)) {
       return Preview1DescriptorKind.openDirectory;
     }
@@ -130,10 +140,16 @@ final class Preview1VirtualFileSystem {
   Preview1StdioDescriptorKind? stdioKindForFd(int fd) =>
       _stdioDescriptorsByFd[fd];
 
+  Preview1VirtualSocket? socketForFd(int fd) => _socketsByFd[fd];
+
   Preview1DescriptorRights? descriptorRightsForFd(int fd) {
     final opened = openFileForFd(fd);
     if (opened != null) {
       return opened.rights;
+    }
+    final socket = socketForFd(fd);
+    if (socket != null) {
+      return socket.rights;
     }
     return _openDirectoryRightsByFd[fd] ??
         _preopenDirectoryRightsByFd[fd] ??
@@ -175,6 +191,10 @@ final class Preview1VirtualFileSystem {
     if (opened != null) {
       return opened.descriptorFlags;
     }
+    final socket = socketForFd(fd);
+    if (socket != null) {
+      return socket.descriptorFlags;
+    }
     return _openDirectoryFlagsByFd[fd] ??
         _preopenDirectoryFlagsByFd[fd] ??
         _stdioFlagsByFd[fd];
@@ -184,6 +204,11 @@ final class Preview1VirtualFileSystem {
     final opened = openFileForFd(fd);
     if (opened != null) {
       opened.descriptorFlags = flags;
+      return true;
+    }
+    final socket = socketForFd(fd);
+    if (socket != null) {
+      socket.descriptorFlags = flags;
       return true;
     }
     if (_openDirectoriesByFd.containsKey(fd)) {
@@ -233,6 +258,14 @@ final class Preview1VirtualFileSystem {
     if (openFile != null) {
       _closeDescriptor(toFd);
       _openFilesByFd[toFd] = openFile;
+      _advanceNextVirtualFdPast(toFd);
+      return Preview1FdRenumberResult.success;
+    }
+
+    final socket = _socketsByFd.remove(fromFd);
+    if (socket != null) {
+      _closeDescriptor(toFd);
+      _socketsByFd[toFd] = socket;
       _advanceNextVirtualFdPast(toFd);
       return Preview1FdRenumberResult.success;
     }
@@ -292,6 +325,10 @@ final class Preview1VirtualFileSystem {
     final opened = openFileForFd(fd);
     if (opened != null) {
       return opened.metadata;
+    }
+    final socket = socketForFd(fd);
+    if (socket != null) {
+      return socket.metadata;
     }
     final directoryPath = directoryPathForFd(fd);
     if (directoryPath == null) {
@@ -371,6 +408,9 @@ final class Preview1VirtualFileSystem {
       return true;
     }
     if (_openFilesByFd.remove(fd) != null) {
+      return true;
+    }
+    if (_socketsByFd.remove(fd) != null) {
       return true;
     }
     if (_openDirectoriesByFd.remove(fd) != null) {
@@ -676,6 +716,24 @@ final class Preview1VirtualFileSystem {
     return const Preview1VirtualOpenResult.missing();
   }
 
+  int acceptSocket({required int fd, required int descriptorFlags}) {
+    final listener = socketForFd(fd);
+    final accepted = listener?.socket.accept();
+    if (listener == null || accepted == null) {
+      return -1;
+    }
+    final acceptedFd = _allocateVirtualFd();
+    _socketsByFd[acceptedFd] = Preview1VirtualSocket(
+      accepted,
+      rights: Preview1DescriptorRights.socket(
+        base: listener.rights.inheriting,
+        inheriting: 0,
+      ),
+      descriptorFlags: descriptorFlags,
+    );
+    return acceptedFd;
+  }
+
   void _renameDirectory(String oldPath, String newPath) {
     final renamedDirectories = <String>{};
     for (final path in _virtualDirectoryPaths) {
@@ -801,6 +859,7 @@ final class Preview1VirtualFileSystem {
 
   bool _hasDescriptor(int fd) =>
       _openFilesByFd.containsKey(fd) ||
+      _socketsByFd.containsKey(fd) ||
       _openDirectoriesByFd.containsKey(fd) ||
       _preopenGuestPathsByFd.containsKey(fd) ||
       _stdioDescriptorsByFd.containsKey(fd);
@@ -810,6 +869,7 @@ final class Preview1VirtualFileSystem {
     _stdioRightsByFd.remove(fd);
     _stdioFlagsByFd.remove(fd);
     _openFilesByFd.remove(fd);
+    _socketsByFd.remove(fd);
     _openDirectoriesByFd.remove(fd);
     _openDirectoryFlagsByFd.remove(fd);
     _openDirectoryRightsByFd.remove(fd);
@@ -841,6 +901,7 @@ enum Preview1DescriptorKind {
   stdout,
   stderr,
   file,
+  socket,
   openDirectory,
   preopenDirectory,
 }
@@ -852,6 +913,9 @@ final class Preview1DescriptorRights {
     : this(base: base ?? rightsAll, inheriting: inheriting ?? 0);
 
   Preview1DescriptorRights.directory({int? base, int? inheriting})
+    : this(base: base ?? rightsAll, inheriting: inheriting ?? rightsAll);
+
+  Preview1DescriptorRights.socket({int? base, int? inheriting})
     : this(base: base ?? rightsAll, inheriting: inheriting ?? rightsAll);
 
   int base;
@@ -920,6 +984,96 @@ int writeDirectoryEntries({
     }
   }
   return written;
+}
+
+int readSocketIntoIov({
+  required Preview1VirtualSocket socket,
+  required Uint8List bytes,
+  required ByteData data,
+  required int iovs,
+  required int iovsLen,
+  required int flags,
+  required int nreadPtr,
+  required int roFlagsPtr,
+}) {
+  if (iovs < 0 ||
+      iovsLen < 0 ||
+      nreadPtr < 0 ||
+      roFlagsPtr < 0 ||
+      nreadPtr + 4 > bytes.length ||
+      roFlagsPtr + 2 > bytes.length) {
+    return errnoInval;
+  }
+
+  var totalRead = 0;
+  final peek = (flags & riflagRecvPeek) != 0;
+  for (var index = 0; index < iovsLen; index++) {
+    final entry = iovs + index * iovecEntrySize;
+    if (entry + iovecEntrySize > bytes.length) {
+      return errnoInval;
+    }
+
+    final buf = data.getUint32(entry, Endian.little);
+    final len = data.getUint32(entry + 4, Endian.little);
+    if (len > 0 && buf + len > bytes.length) {
+      return errnoInval;
+    }
+
+    if (len > 0) {
+      final read = socket.readInto(
+        bytes,
+        buf,
+        len,
+        peek: peek,
+        socketOffset: peek ? totalRead : 0,
+      );
+      totalRead += read;
+      if (read < len) {
+        break;
+      }
+    }
+  }
+
+  data.setUint32(nreadPtr, totalRead, Endian.little);
+  data.setUint16(roFlagsPtr, 0, Endian.little);
+  return errnoSuccess;
+}
+
+int writeSocketFromIov({
+  required Preview1VirtualSocket socket,
+  required Uint8List bytes,
+  required ByteData data,
+  required int iovs,
+  required int iovsLen,
+  required int nwrittenPtr,
+}) {
+  if (iovs < 0 ||
+      iovsLen < 0 ||
+      nwrittenPtr < 0 ||
+      nwrittenPtr + 4 > bytes.length) {
+    return errnoInval;
+  }
+
+  var totalWritten = 0;
+  for (var index = 0; index < iovsLen; index++) {
+    final entry = iovs + index * iovecEntrySize;
+    if (entry + iovecEntrySize > bytes.length) {
+      return errnoInval;
+    }
+
+    final buf = data.getUint32(entry, Endian.little);
+    final len = data.getUint32(entry + 4, Endian.little);
+    if (len > 0 && buf + len > bytes.length) {
+      return errnoInval;
+    }
+
+    if (len > 0) {
+      totalWritten += socket.writeFrom(bytes, buf, len);
+    }
+  }
+
+  data.setUint32(nwrittenPtr, totalWritten, Endian.little);
+  return errnoSuccess;
 }
 
 final class Preview1VirtualFile {
@@ -1042,6 +1196,42 @@ final class Preview1VirtualOpenFile {
   void setLength(int length) => file.setLength(length);
 
   void allocate(int offset, int length) => file.allocate(offset, length);
+}
+
+final class Preview1VirtualSocket {
+  Preview1VirtualSocket(
+    this.socket, {
+    Preview1DescriptorRights? rights,
+    this.descriptorFlags = 0,
+  }) : rights = rights ?? Preview1DescriptorRights.socket();
+
+  final WASIPreview1Socket socket;
+  final Preview1DescriptorRights rights;
+  final Preview1VirtualNodeMetadata metadata = Preview1VirtualNodeMetadata();
+  int descriptorFlags;
+
+  int readInto(
+    Uint8List target,
+    int start,
+    int length, {
+    bool peek = false,
+    int socketOffset = 0,
+  }) => socket.readInto(
+    target,
+    start,
+    length,
+    peek: peek,
+    socketOffset: socketOffset,
+  );
+
+  int writeFrom(Uint8List source, int start, int length) =>
+      socket.writeFrom(source, start, length);
+
+  void shutdown({required bool receive, required bool send}) {
+    socket.shutdown(receive: receive, send: send);
+  }
+
+  bool get sendShutdown => socket.sendShutdown;
 }
 
 enum Preview1VirtualOpenKind { file, directory, missing }

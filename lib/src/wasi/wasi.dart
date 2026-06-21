@@ -3,11 +3,13 @@ import 'dart:typed_data';
 import '../wasm/instance.dart';
 import '../wasm/memory.dart';
 import '../wasm/module.dart';
+import 'preview1/socket.dart';
 import 'version.dart';
 import 'preview1/native/wasi.dart'
     if (dart.library.js_interop) 'preview1/js/wasi.dart'
     as backend;
 
+export 'preview1/socket.dart';
 export 'version.dart';
 
 /// Minimal WASI runtime interface.
@@ -23,6 +25,7 @@ abstract interface class WASI {
     List<int> stdinData,
     int stdout,
     int stderr,
+    Map<int, WASIPreview1Socket> sockets,
     WASIVersion version,
   }) = backend.WASI;
 
