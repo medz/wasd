@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:wasd/src/wasi/component/error_context.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/resource_table.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
@@ -24,6 +25,7 @@ Future<void> main(List<String> args) async {
   final borrowAsync = await _benchmarkBorrowAsync(options);
   final dropCallbacks = _benchmarkDropCallbacks(options.iterations);
   final programInvoke = _benchmarkProgramInvoke(options.iterations);
+  final errorContextProgram = _benchmarkErrorContextProgram(options.iterations);
 
   final payload = <String, Object?>{
     'iterations': options.iterations,
@@ -33,6 +35,7 @@ Future<void> main(List<String> args) async {
     'borrow_async': borrowAsync.toJson(),
     'drop_callbacks': dropCallbacks.toJson(),
     'program_invoke': programInvoke.toJson(),
+    'error_context_program': errorContextProgram.toJson(),
   };
 
   if (options.json) {
@@ -48,6 +51,7 @@ Future<void> _runWarmup(_Options options) async {
   await _benchmarkBorrowAsync(options.copyWith(iterations: _warmupIterations));
   _benchmarkDropCallbacks(_warmupIterations);
   _benchmarkProgramInvoke(_warmupIterations);
+  _benchmarkErrorContextProgram(_warmupIterations);
 }
 
 _Metric _benchmarkInsertGetDrop(int iterations) {
@@ -201,6 +205,58 @@ _Metric _benchmarkProgramInvoke(int iterations) {
   );
 }
 
+_Metric _benchmarkErrorContextProgram(int iterations) {
+  final host = WASIComponentErrorContextHost();
+  final program = WASIComponentCanonicalErrorContextProgram(
+    operations: [
+      host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.errorContextNew,
+        ),
+      ),
+      host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.errorContextDebugMessage,
+        ),
+      ),
+      host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.errorContextDrop,
+        ),
+      ),
+    ],
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final handle = program.invoke(0, <Object?>['error-$i']);
+    if (handle is! int) {
+      throw StateError('error-context.new returned non-handle: $handle');
+    }
+    final message = program.invoke(1, <Object?>[handle]);
+    if (message is! String) {
+      throw StateError(
+        'error-context.debug-message returned non-string: $message',
+      );
+    }
+    checksum += message.length;
+    program.invoke(2, <Object?>[handle]);
+  }
+  watch.stop();
+
+  if (host.table.activeCount != 0) {
+    throw StateError(
+      'error-context host leaked ${host.table.activeCount} contexts',
+    );
+  }
+  return _Metric(
+    operations: iterations * 3,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _printText(Map<String, Object?> payload) {
   stdout
     ..writeln('WASI component resource table benchmark')
@@ -212,6 +268,7 @@ void _printText(Map<String, Object?> payload) {
     'borrow_async',
     'drop_callbacks',
     'program_invoke',
+    'error_context_program',
   ]) {
     final metric = payload[name]! as Map<String, Object?>;
     stdout

@@ -119,9 +119,13 @@ This is the implementation state as of 2026-06-21 on `main`.
   `stream.write`, and `future.read` operations through `invokeAsync`. The async
   host also binds decoded `backpressure.set`, `backpressure.inc`, and
   `backpressure.dec` canonical definitions to an internal bounded counter with
-  overflow/underflow checks. P2/P3 host instantiation, WIT ingestion, full
-  canonical ABI lowering/lifting, memory-backed typed stream/future copy, and
-  full async stream/future execution are not production-supported yet.
+  overflow/underflow checks. Internal error-context support now models
+  `error-context.new`, `error-context.debug-message`, and `error-context.drop`
+  as table-backed handles with real stale-handle/drop validation, while
+  string memory lowering/lifting remains a future canonical ABI adapter step.
+  P2/P3 host instantiation, WIT ingestion, full canonical ABI
+  lowering/lifting, memory-backed typed stream/future copy, and full async
+  stream/future execution are not production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
   for component-model WASI versions. This is an intentional version boundary,
@@ -193,9 +197,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   resource-table-backed borrowed handle invocation costs are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`.
 - Component resource table canonical `resource.new`/`resource.rep`/
-  `resource.drop`, decoded resource-only canonical program invocation, nominal
-  typed lookup, synchronous/asynchronous borrow, and drop behavior are measured
-  by
+  `resource.drop`, decoded resource-only canonical program invocation,
+  error-context canonical lifecycle invocation, nominal typed lookup,
+  synchronous/asynchronous borrow, and drop behavior are measured by
   `dart run tool/wasi_resource_table_benchmark.dart --json`.
 
 ## Near-Term Slices
