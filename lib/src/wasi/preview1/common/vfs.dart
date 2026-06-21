@@ -161,6 +161,93 @@ final class Preview1VirtualFileSystem {
     return rights != null && (rights.base & right) == right;
   }
 
+  Preview1FdPollReadiness pollFdReadWrite({
+    required int fd,
+    required int eventType,
+    Preview1VirtualOpenFile? stdinInput,
+  }) {
+    final descriptorKind = descriptorKindForFd(fd);
+    if (descriptorKind == null) {
+      return const Preview1FdPollReadiness.error(errnoBadf);
+    }
+    if (!descriptorHasRight(fd, rightPollFdReadwrite)) {
+      return const Preview1FdPollReadiness.error(errnoNotcapable);
+    }
+
+    return switch (eventType) {
+      eventTypeFdRead => _pollFdRead(fd, descriptorKind, stdinInput),
+      eventTypeFdWrite => _pollFdWrite(fd, descriptorKind),
+      _ => const Preview1FdPollReadiness.error(errnoInval),
+    };
+  }
+
+  Preview1FdPollReadiness _pollFdRead(
+    int fd,
+    Preview1DescriptorKind descriptorKind,
+    Preview1VirtualOpenFile? stdinInput,
+  ) {
+    if (!descriptorHasRight(fd, rightFdRead)) {
+      return const Preview1FdPollReadiness.error(errnoNotcapable);
+    }
+    if (descriptorKind == Preview1DescriptorKind.stdin) {
+      final nbytes = stdinInput == null
+          ? 0
+          : math.max(0, stdinInput.length - stdinInput.offset);
+      return Preview1FdPollReadiness.ready(
+        nbytes: nbytes,
+        flags: nbytes == 0 ? eventrwflagFdReadwriteHangup : 0,
+      );
+    }
+
+    final openFile = openFileForFd(fd);
+    if (openFile != null) {
+      return Preview1FdPollReadiness.ready(
+        nbytes: math.max(0, openFile.length - openFile.offset),
+      );
+    }
+
+    final socket = socketForFd(fd);
+    if (socket != null) {
+      final nbytes = socket.isDatagram
+          ? socket.nextReceiveMessageLength
+          : socket.remainingReceiveLength;
+      if (nbytes > 0) {
+        return Preview1FdPollReadiness.ready(nbytes: nbytes);
+      }
+      if (socket.receiveShutdown) {
+        return const Preview1FdPollReadiness.ready(
+          flags: eventrwflagFdReadwriteHangup,
+        );
+      }
+      return const Preview1FdPollReadiness.notReady();
+    }
+
+    return const Preview1FdPollReadiness.error(errnoBadf);
+  }
+
+  Preview1FdPollReadiness _pollFdWrite(
+    int fd,
+    Preview1DescriptorKind descriptorKind,
+  ) {
+    if (!descriptorHasRight(fd, rightFdWrite)) {
+      return const Preview1FdPollReadiness.error(errnoNotcapable);
+    }
+    if (descriptorKind == Preview1DescriptorKind.stdout ||
+        descriptorKind == Preview1DescriptorKind.stderr ||
+        openFileForFd(fd) != null) {
+      return const Preview1FdPollReadiness.ready();
+    }
+
+    final socket = socketForFd(fd);
+    if (socket != null) {
+      return socket.sendShutdown
+          ? const Preview1FdPollReadiness.notReady()
+          : const Preview1FdPollReadiness.ready();
+    }
+
+    return const Preview1FdPollReadiness.error(errnoBadf);
+  }
+
   Preview1FdRightsResult setDescriptorRights({
     required int fd,
     required int rightsBase,
@@ -1433,6 +1520,29 @@ enum Preview1PathMutationResult {
 enum Preview1FdRenumberResult { success, invalid, badf }
 
 enum Preview1FdRightsResult { success, invalid, badf, notCapable }
+
+final class Preview1FdPollReadiness {
+  const Preview1FdPollReadiness._({
+    required this.ready,
+    required this.errno,
+    required this.nbytes,
+    required this.flags,
+  });
+
+  const Preview1FdPollReadiness.ready({int nbytes = 0, int flags = 0})
+    : this._(ready: true, errno: errnoSuccess, nbytes: nbytes, flags: flags);
+
+  const Preview1FdPollReadiness.notReady()
+    : this._(ready: false, errno: errnoSuccess, nbytes: 0, flags: 0);
+
+  const Preview1FdPollReadiness.error(int errno)
+    : this._(ready: true, errno: errno, nbytes: 0, flags: 0);
+
+  final bool ready;
+  final int errno;
+  final int nbytes;
+  final int flags;
+}
 
 final class Preview1VirtualOpenResult {
   const Preview1VirtualOpenResult._(this.kind, this.fd);

@@ -61,8 +61,8 @@ This is the implementation state as of 2026-06-21 on `main`.
   `lib/src/wasi/preview1/common/vfs.dart` for virtual files, directories,
   readdir state, hard links, symlinks/readlink, configured stream/datagram
   sockets, descriptor flags, descriptor rights, descriptor times, descriptor
-  sync/advice validation, and descriptor renumbering. Node still delegates
-  Preview 1 behavior to `node:wasi`.
+  sync/advice validation, clock/file/socket polling readiness, and descriptor
+  renumbering. Node still delegates Preview 1 behavior to `node:wasi`.
 - The remaining explicit Preview 1 `ENOSYS` list is `proc_raise`. This list is
   intentionally in code at `lib/src/wasi/preview1/common/constants.dart`;
   README support claims must stay aligned with it.
@@ -77,7 +77,8 @@ This is the implementation state as of 2026-06-21 on `main`.
   common path/link/symlink mutation paths rebuild only affected directories.
   The benchmark entrypoint is `dart run tool/wasi_vfs_benchmark.dart --json`;
   it also covers socket multi-iov peek/waitall, datagram truncation, socket
-  send/recv, and socket renumber/close descriptor paths.
+  send/recv, socket polling readiness, and socket renumber/close descriptor
+  paths.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, but P2/P3 host
   instantiation, WIT ingestion, resource tables, canonical ABI lowering/lifting,
@@ -132,8 +133,8 @@ This is the implementation state as of 2026-06-21 on `main`.
   `dart run tool/wasi_vfs_benchmark.dart --json`, covering `path_open`,
   `fd_readdir`, link/symlink mutation, rights checks, socket multi-iov
   `RECV_PEEK`/`RECV_WAITALL`, datagram truncation, socket send/recv, and socket
-  renumber/close over large directory and descriptor sets. Keep optimizing
-  against benchmark data instead of test suite heat alone.
+  poll readiness and renumber/close over large directory and descriptor sets.
+  Keep optimizing against benchmark data instead of test suite heat alone.
 - P2/P3 streams and futures need latency, allocation, and cancellation
   benchmarks before they are advertised as production-ready. The "sandwich"
   async forwarding case from WASI 0.3 must be a first-class benchmark, not only
@@ -142,7 +143,7 @@ This is the implementation state as of 2026-06-21 on `main`.
 ## Near-Term Slices
 
 1. Extend Preview 1 socket coverage toward conformance edge cases that are not
-   covered yet: native adapter boundaries and polling readiness.
+   covered yet: native adapter boundaries and externally backed readiness.
 2. Extend the VFS/descriptor benchmark with descriptor renumbering and larger
    conformance-shaped path distributions, then use it as the gate for further
    VFS optimizations.

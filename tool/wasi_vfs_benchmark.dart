@@ -36,6 +36,7 @@ void main(List<String> args) {
   final socketRecvWaitall = _benchmarkSocketRecvWaitall(options);
   final socketSendRecv = _benchmarkSocketSendRecv(options);
   final socketDgramTruncation = _benchmarkSocketDatagramTruncation(options);
+  final socketPollReadiness = _benchmarkSocketPollReadiness(options);
   final socketRenumberClose = _benchmarkSocketRenumberClose(options);
 
   final payload = <String, Object?>{
@@ -53,6 +54,7 @@ void main(List<String> args) {
     'socket_recv_waitall': socketRecvWaitall.toJson(),
     'socket_send_recv': socketSendRecv.toJson(),
     'socket_dgram_truncation': socketDgramTruncation.toJson(),
+    'socket_poll_readiness': socketPollReadiness.toJson(),
     'socket_renumber_close': socketRenumberClose.toJson(),
   };
 
@@ -101,6 +103,7 @@ void _runWarmup(Map<String, Uint8List> files, _Options options) {
   _benchmarkSocketRecvWaitall(warmupOptions);
   _benchmarkSocketSendRecv(warmupOptions);
   _benchmarkSocketDatagramTruncation(warmupOptions);
+  _benchmarkSocketPollReadiness(warmupOptions);
   _benchmarkSocketRenumberClose(warmupOptions);
 }
 
@@ -507,6 +510,62 @@ _Metric _benchmarkSocketDatagramTruncation(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketPollReadiness(_Options options) {
+  final readable = WASIPreview1Socket(
+    receiveData: List<int>.generate(_socketChunkSize, (index) => index & 0xff),
+  );
+  final waiting = WASIPreview1Socket();
+  final closed = WASIPreview1Socket();
+  closed.shutdown(receive: true, send: false);
+  final vfs = Preview1VirtualFileSystem(
+    sockets: {64: readable, 65: waiting, 66: closed},
+  );
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final readableEvent = vfs.pollFdReadWrite(
+      fd: 64,
+      eventType: eventTypeFdRead,
+    );
+    if (!readableEvent.ready || readableEvent.nbytes != _socketChunkSize) {
+      throw StateError('readable socket poll failed at iteration $i');
+    }
+    checksum += readableEvent.nbytes;
+
+    final waitingEvent = vfs.pollFdReadWrite(
+      fd: 65,
+      eventType: eventTypeFdRead,
+    );
+    if (waitingEvent.ready) {
+      throw StateError('waiting socket reported ready at iteration $i');
+    }
+    checksum += waitingEvent.errno;
+
+    final writableEvent = vfs.pollFdReadWrite(
+      fd: 65,
+      eventType: eventTypeFdWrite,
+    );
+    if (!writableEvent.ready || writableEvent.errno != errnoSuccess) {
+      throw StateError('writable socket poll failed at iteration $i');
+    }
+    checksum += writableEvent.errno;
+
+    final closedEvent = vfs.pollFdReadWrite(fd: 66, eventType: eventTypeFdRead);
+    if (!closedEvent.ready ||
+        closedEvent.flags != eventrwflagFdReadwriteHangup) {
+      throw StateError('closed socket hangup poll failed at iteration $i');
+    }
+    checksum += closedEvent.flags;
+  }
+  watch.stop();
+  return _Metric(
+    operations: options.iterations * 4,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkSocketRenumberClose(_Options options) {
   const fromBase = 1000;
   const toBase = 100000;
@@ -581,6 +640,7 @@ void _printText(Map<String, Object?> payload) {
     'socket datagram truncation',
     payload['socket_dgram_truncation'],
   );
+  _printMetric('socket poll readiness', payload['socket_poll_readiness']);
   _printMetric('socket renumber/close', payload['socket_renumber_close']);
 }
 

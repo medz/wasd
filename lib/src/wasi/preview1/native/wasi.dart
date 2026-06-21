@@ -1708,16 +1708,19 @@ class WASI implements wasi_iface.WASI {
     final nowMonotonic = _clockNowNanos(_clockMonotonic);
     for (var index = 0; index < nsubscriptions; index++) {
       final subscriptionPtr = inPtr + index * _subscriptionSize;
-      final eventPtr = outPtr + index * _eventSize;
-      bytes.fillRange(eventPtr, eventPtr + _eventSize, 0);
 
       final tag = bytes[subscriptionPtr + _subscriptionTagOffset];
+      var errno = _errnoSuccess;
+      var nbytes = 0;
+      var flags = 0;
+      var isReady = true;
       final remainingNanos = switch (tag) {
         _eventTypeClock => _clockSubscriptionWaitNanos(
           data: data,
           subscriptionPtr: subscriptionPtr,
           nowMonotonic: nowMonotonic,
         ),
+        _eventTypeFdRead || _eventTypeFdWrite => 0,
         _ => 0,
       };
       if (remainingNanos > 0) {
@@ -1726,7 +1729,28 @@ class WASI implements wasi_iface.WASI {
         }
         continue;
       }
+      if (tag == _eventTypeFdRead || tag == _eventTypeFdWrite) {
+        final readiness = _vfs.pollFdReadWrite(
+          fd: data.getUint32(
+            subscriptionPtr + _subscriptionFdReadwriteFdOffset,
+            Endian.little,
+          ),
+          eventType: tag,
+          stdinInput: _stdinInput,
+        );
+        isReady = readiness.ready;
+        errno = readiness.errno;
+        nbytes = readiness.nbytes;
+        flags = readiness.flags;
+      } else if (tag != _eventTypeClock) {
+        errno = _errnoInval;
+      }
+      if (!isReady) {
+        continue;
+      }
 
+      final eventPtr = outPtr + eventCount * _eventSize;
+      bytes.fillRange(eventPtr, eventPtr + _eventSize, 0);
       eventCount++;
       data.setUint32(
         eventPtr,
@@ -1739,6 +1763,15 @@ class WASI implements wasi_iface.WASI {
         Endian.little,
       );
       bytes[eventPtr + _eventTypeOffset] = tag;
+      data.setUint16(eventPtr + _eventErrorOffset, errno, Endian.little);
+      if (tag == _eventTypeFdRead || tag == _eventTypeFdWrite) {
+        _setUint64(data, eventPtr + _eventFdReadwriteNbytesOffset, nbytes);
+        data.setUint16(
+          eventPtr + _eventFdReadwriteFlagsOffset,
+          flags,
+          Endian.little,
+        );
+      }
     }
 
     data.setUint32(neventsPtr, eventCount, Endian.little);
@@ -2014,11 +2047,20 @@ class WASI implements wasi_iface.WASI {
 }
 
 const int _iovecEntrySize = wasi_common.iovecEntrySize;
-const int _subscriptionSize = 48;
-const int _subscriptionTagOffset = 8;
-const int _eventSize = 32;
-const int _eventTypeOffset = 10;
-const int _eventTypeClock = 0;
+const int _subscriptionSize = wasi_common.subscriptionSize;
+const int _subscriptionTagOffset = wasi_common.subscriptionTagOffset;
+const int _subscriptionFdReadwriteFdOffset =
+    wasi_common.subscriptionFdReadwriteFdOffset;
+const int _eventSize = wasi_common.eventSize;
+const int _eventErrorOffset = wasi_common.eventErrorOffset;
+const int _eventTypeOffset = wasi_common.eventTypeOffset;
+const int _eventFdReadwriteNbytesOffset =
+    wasi_common.eventFdReadwriteNbytesOffset;
+const int _eventFdReadwriteFlagsOffset =
+    wasi_common.eventFdReadwriteFlagsOffset;
+const int _eventTypeClock = wasi_common.eventTypeClock;
+const int _eventTypeFdRead = wasi_common.eventTypeFdRead;
+const int _eventTypeFdWrite = wasi_common.eventTypeFdWrite;
 const int _clockRealtime = 0;
 const int _clockMonotonic = 1;
 const int _clockProcessCpuTimeId = 2;
