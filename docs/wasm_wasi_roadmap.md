@@ -244,11 +244,14 @@ This is the implementation state as of 2026-06-21 on `main`.
   `stream<T>`/`future<T>` copy paths through synchronous Canonical ABI calls,
   pending read completion through waitable events, and fixed-size record
   `stream<T>`/`future<T>` round trips through decoded core-memory copy
-  definitions. Dynamic string/list stream/future memory copies are rejected
-  before component host binding instead of failing after partial host mutation.
-  Realloc-backed dynamic value lowering remains a component-host binding gap.
-  This is an adapter boundary for future P2/P3 version modules, not a public
-  support claim.
+  definitions. Component validation now follows the Canonical ABI stream/future
+  copy option split: `stream.read`/`future.read` require `realloc` for dynamic
+  list/string elements, `stream.write`/`future.write` do not, `memory` is still
+  required when an element type is present, and `realloc` itself requires
+  `memory`. Spec-valid dynamic string/list stream/future memory copies still
+  stop at component-host binding because executable realloc-backed dynamic
+  value lowering remains a binding gap. This is an adapter boundary for future
+  P2/P3 version modules, not a public support claim.
   Internal
   error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`

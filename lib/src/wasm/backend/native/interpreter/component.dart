@@ -3434,8 +3434,8 @@ final class _WasmComponentValidationContext {
   bool canonicalStreamOrFutureCopyDisallowsOption(
     WasmComponentCanonicalOptionKind kind,
   ) {
-    return kind != WasmComponentCanonicalOptionKind.memory &&
-        kind != WasmComponentCanonicalOptionKind.async;
+    return kind == WasmComponentCanonicalOptionKind.postReturn ||
+        kind == WasmComponentCanonicalOptionKind.callback;
   }
 
   bool canonicalLowerParametersRequireMemory(
@@ -3534,6 +3534,25 @@ final class _WasmComponentValidationContext {
     );
   }
 
+  bool canonicalStreamOrFutureReadRequiresRealloc(
+    WasmComponentCanonicalDefinition definition,
+    List<WasmComponentTypeDefinition> visibleTypeDefinitions,
+  ) {
+    if (definition.kind != WasmComponentCanonicalKind.streamRead &&
+        definition.kind != WasmComponentCanonicalKind.futureRead) {
+      return false;
+    }
+
+    final asyncType = canonicalStreamOrFutureType(
+      definition,
+      visibleTypeDefinitions,
+    );
+    return valueTypeContainsListOrString(
+      asyncType?.elementType,
+      scopedTypeDefinitions: visibleTypeDefinitions,
+    );
+  }
+
   void validateCanonicalOptionRequirements(
     WasmComponentCanonicalDefinition definition,
     String path, {
@@ -3586,6 +3605,16 @@ final class _WasmComponentValidationContext {
           path: '$path.options',
           message:
               'Wasm component task.return result type requires a memory option.',
+        ),
+      );
+    }
+
+    if (hasRealloc && !hasMemory) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.options',
+          message:
+              'Wasm component canonical definition with a realloc option requires a memory option.',
         ),
       );
     }
@@ -3644,6 +3673,21 @@ final class _WasmComponentValidationContext {
           path: '$path.options',
           message:
               'Wasm component canon lower result lifting requires a realloc option.',
+        ),
+      );
+    }
+
+    if (!hasRealloc &&
+        visibleTypeDefinitions != null &&
+        canonicalStreamOrFutureReadRequiresRealloc(
+          definition,
+          visibleTypeDefinitions,
+        )) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.options',
+          message:
+              'Wasm component stream or future read definition with a dynamic element type requires a realloc option.',
         ),
       );
     }
