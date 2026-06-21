@@ -1,19 +1,19 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
 import 'async_values.dart';
 import 'backpressure.dart';
 import 'resource_table.dart';
+import 'value_memory.dart';
 import 'waitable_set.dart';
 
 /// Binds decoded canonical stream/future definitions to executable primitives.
 ///
 /// This is an internal host layer for Component Model async work. It binds
 /// validated `stream.*` and `future.*` definitions to typed Dart endpoint
-/// primitives, including fixed-width primitive stream memory copies, so later
-/// P3 host adapters can reuse one execution model.
+/// primitives, including fixed-size stream/future memory copies, so later P3
+/// host adapters can reuse one execution model.
 final class WASIComponentAsyncHost {
   /// Creates an async host backed by [table] or a new resource table.
   WASIComponentAsyncHost({
@@ -351,16 +351,17 @@ final class WASIComponentAsyncValueBinding {
   bool get isUnit => _valueValidator.kind == _WASIComponentAsyncValueShape.unit;
 
   /// Primitive element type when this binding carries primitive values.
-  WasmComponentPrimitiveValueType? get primitive => _valueValidator.primitive;
+  WasmComponentPrimitiveValueType? get primitive =>
+      _valueValidator.primitive ?? _valueValidator.memoryCodec?.primitive;
 
-  /// Fixed-width Canonical ABI memory-copy layout for primitive payloads.
+  /// Fixed-size Canonical ABI memory-copy layout for this payload.
   ///
-  /// Returns `null` for unit payloads and primitives such as `string` that do
-  /// not have a fixed-width stream/future memory representation.
+  /// Returns `null` for unit payloads and values such as `string` that need
+  /// realloc-backed stream/future memory representation.
   final WASIComponentAsyncValueMemoryLayout? fixedWidthMemoryLayout;
 }
 
-/// Canonical ABI fixed-width memory-copy layout for an async value payload.
+/// Canonical ABI fixed-size memory-copy layout for an async value payload.
 final class WASIComponentAsyncValueMemoryLayout {
   const WASIComponentAsyncValueMemoryLayout._({
     required this.byteLength,
@@ -755,7 +756,7 @@ final class WASIComponentCanonicalAsyncHandleProgram {
 
   /// Invokes a handle-backed canonical async memory-copy operation.
   ///
-  /// This uses the core Canonical ABI argument shape for fixed-width
+  /// This uses the core Canonical ABI argument shape for fixed-size
   /// stream/future copies: `stream.{read,write}` receive `(handle, ptr, n)`,
   /// and `future.{read,write}` receive `(handle, ptr)`. Completed copy results
   /// are returned in their canonical packed integer representation.
@@ -1009,7 +1010,7 @@ final class WASIComponentCanonicalAsyncOperation {
     return _requireValueType().streamWriteWhenAvailable(writable, values);
   }
 
-  /// Executes `stream.write` by reading fixed-width elements from [memory].
+  /// Executes `stream.write` by reading fixed-size elements from [memory].
   WASIComponentAsyncCopyResult streamWriteFromMemory(
     Object? writable,
     wasm.Memory memory,
@@ -1038,7 +1039,7 @@ final class WASIComponentCanonicalAsyncOperation {
     return _requireValueType().streamWriteHandleWhenAvailable(writable, values);
   }
 
-  /// Executes handle-backed `stream.write` from fixed-width memory elements.
+  /// Executes handle-backed `stream.write` from fixed-size memory elements.
   WASIComponentAsyncCopyResult streamWriteHandleFromMemory(
     int writable,
     wasm.Memory memory,
@@ -1086,7 +1087,7 @@ final class WASIComponentCanonicalAsyncOperation {
     );
   }
 
-  /// Executes `stream.read` and writes fixed-width elements to [memory].
+  /// Executes `stream.read` and writes fixed-size elements to [memory].
   WASIComponentAsyncCopyResult streamReadToMemory(
     Object? readable,
     wasm.Memory memory,
@@ -1102,7 +1103,7 @@ final class WASIComponentCanonicalAsyncOperation {
     );
   }
 
-  /// Executes handle-backed `stream.read` into fixed-width memory elements.
+  /// Executes handle-backed `stream.read` into fixed-size memory elements.
   WASIComponentAsyncCopyResult streamReadHandleToMemory(
     int readable,
     wasm.Memory memory,
@@ -1266,7 +1267,7 @@ final class WASIComponentCanonicalAsyncOperation {
     return _requireValueType().futureReadHandleWhenReady(readable);
   }
 
-  /// Executes `future.read` and writes a fixed-width value to [memory].
+  /// Executes `future.read` and writes a fixed-size value to [memory].
   WASIComponentAsyncCopyResult futureReadToMemory(
     Object? readable,
     wasm.Memory memory,
@@ -1276,7 +1277,7 @@ final class WASIComponentCanonicalAsyncOperation {
     return _requireValueType().futureReadToMemory(readable, memory, pointer);
   }
 
-  /// Executes handle-backed `future.read` into fixed-width memory.
+  /// Executes handle-backed `future.read` into fixed-size memory.
   WASIComponentAsyncCopyResult futureReadHandleToMemory(
     int readable,
     wasm.Memory memory,
@@ -1324,7 +1325,7 @@ final class WASIComponentCanonicalAsyncOperation {
     _requireValueType().futureWrite(writable, value);
   }
 
-  /// Executes `future.write` by reading a fixed-width value from [memory].
+  /// Executes `future.write` by reading a fixed-size value from [memory].
   WASIComponentAsyncCopyResult futureWriteFromMemory(
     Object? writable,
     wasm.Memory memory,
@@ -1340,7 +1341,7 @@ final class WASIComponentCanonicalAsyncOperation {
     _requireValueType().futureWriteHandle(writable, value);
   }
 
-  /// Executes handle-backed `future.write` from fixed-width memory.
+  /// Executes handle-backed `future.write` from fixed-size memory.
   WASIComponentAsyncCopyResult futureWriteHandleFromMemory(
     int writable,
     wasm.Memory memory,
@@ -1495,6 +1496,7 @@ final class _WASIComponentAsyncValueValidator {
   const _WASIComponentAsyncValueValidator._({
     required this.kind,
     this.primitive,
+    this.memoryCodec,
   });
 
   static const unconstrained = _WASIComponentAsyncValueValidator._(
@@ -1507,6 +1509,7 @@ final class _WASIComponentAsyncValueValidator {
 
   final _WASIComponentAsyncValueShape kind;
   final WasmComponentPrimitiveValueType? primitive;
+  final WASIComponentCanonicalValueMemoryCodec? memoryCodec;
 
   void validateAll(String name, Iterable<Object?> values) {
     if (kind == _WASIComponentAsyncValueShape.unconstrained) {
@@ -1538,11 +1541,25 @@ final class _WASIComponentAsyncValueValidator {
         throw StateError(
           'WASI component async type $name expected ${expected?.name} element value.',
         );
+      case _WASIComponentAsyncValueShape.canonicalValue:
+        final codec = memoryCodec;
+        if (codec != null) {
+          codec.validate(name, value);
+          return;
+        }
+        throw StateError(
+          'WASI component async type $name does not have a canonical value codec.',
+        );
     }
   }
 }
 
-enum _WASIComponentAsyncValueShape { unconstrained, unit, primitive }
+enum _WASIComponentAsyncValueShape {
+  unconstrained,
+  unit,
+  primitive,
+  canonicalValue,
+}
 
 final class _RegisteredAsyncValueType<T> {
   _RegisteredAsyncValueType({
@@ -2703,19 +2720,33 @@ _WASIComponentAsyncValueValidator _asyncValueValidatorForElementType(
     return _WASIComponentAsyncValueValidator.unit;
   }
   final primitive = _primitiveElementType(elementType, definitions);
-  if (primitive == null) {
-    throw UnsupportedError(
-      'WASI component async host currently supports only primitive stream/future element types.',
-    );
-  }
   if (primitive == WasmComponentPrimitiveValueType.errorContext) {
     throw UnsupportedError(
       'WASI component async host does not support error-context stream/future element values yet.',
     );
   }
+  if (primitive != null) {
+    return _WASIComponentAsyncValueValidator._(
+      kind: _WASIComponentAsyncValueShape.primitive,
+      primitive: primitive,
+      memoryCodec: WASIComponentCanonicalValueMemoryCodec.fromValueType(
+        elementType,
+        definitions,
+      ),
+    );
+  }
+  final memoryCodec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+    elementType,
+    definitions,
+  );
+  if (memoryCodec == null) {
+    throw UnsupportedError(
+      'WASI component async host currently supports only fixed-size stream/future element types.',
+    );
+  }
   return _WASIComponentAsyncValueValidator._(
-    kind: _WASIComponentAsyncValueShape.primitive,
-    primitive: primitive,
+    kind: _WASIComponentAsyncValueShape.canonicalValue,
+    memoryCodec: memoryCodec,
   );
 }
 
@@ -2799,29 +2830,20 @@ List<T> _readFixedWidthValuesFromMemory<T>(
     }
     return List<T>.filled(elementCount, null as T);
   }
-  final primitive = validator.primitive;
-  if (validator.kind != _WASIComponentAsyncValueShape.primitive ||
-      primitive == null) {
+  final codec = validator.memoryCodec;
+  if (codec == null) {
     throw UnsupportedError(
-      'WASI component async type $name does not have a fixed-width memory element type.',
+      'WASI component async type $name does not have a fixed-size memory element type.',
     );
   }
-  final layout = _fixedWidthLayout(name, primitive);
-  final bytes = Uint8List.view(memory.buffer);
-  _checkMemoryElementRange(bytes, pointer, elementCount, layout);
-  final data = ByteData.view(memory.buffer);
+  final loaded = codec.loadMany(memory, pointer, elementCount);
   final values = <T>[];
-  for (var i = 0; i < elementCount; i++) {
-    final value = _readFixedWidthValue(
-      data,
-      pointer + i * layout.byteLength,
-      primitive,
-    );
+  for (final value in loaded) {
     validator.validate(name, value);
     if (value is! T) {
       throw StateError('WASI component async type $name expected $T value.');
     }
-    values.add(value as T);
+    values.add(value);
   }
   return values;
 }
@@ -2838,26 +2860,18 @@ T _readFixedWidthValueFromMemory<T>(
     }
     return null as T;
   }
-  final primitive = validator.primitive;
-  if (validator.kind != _WASIComponentAsyncValueShape.primitive ||
-      primitive == null) {
+  final codec = validator.memoryCodec;
+  if (codec == null) {
     throw UnsupportedError(
-      'WASI component async type $name does not have a fixed-width memory element type.',
+      'WASI component async type $name does not have a fixed-size memory element type.',
     );
   }
-  final layout = _fixedWidthLayout(name, primitive);
-  final bytes = Uint8List.view(memory.buffer);
-  _checkMemoryElementRange(bytes, pointer, 1, layout);
-  final value = _readFixedWidthValue(
-    ByteData.view(memory.buffer),
-    pointer,
-    primitive,
-  );
+  final value = codec.load(memory, pointer);
   validator.validate(name, value);
   if (value is! T) {
     throw StateError('WASI component async type $name expected $T value.');
   }
-  return value as T;
+  return value;
 }
 
 void _writeFixedWidthValuesToMemory(
@@ -2872,25 +2886,13 @@ void _writeFixedWidthValuesToMemory(
   if (validator.kind == _WASIComponentAsyncValueShape.unit) {
     return;
   }
-  final primitive = validator.primitive;
-  if (validator.kind != _WASIComponentAsyncValueShape.primitive ||
-      primitive == null) {
+  final codec = validator.memoryCodec;
+  if (codec == null) {
     throw UnsupportedError(
-      'WASI component async type $name does not have a fixed-width memory element type.',
+      'WASI component async type $name does not have a fixed-size memory element type.',
     );
   }
-  final layout = _fixedWidthLayout(name, primitive);
-  final bytes = Uint8List.view(memory.buffer);
-  _checkMemoryElementRange(bytes, pointer, values.length, layout);
-  final data = ByteData.view(memory.buffer);
-  for (var i = 0; i < values.length; i++) {
-    _writeFixedWidthValue(
-      data,
-      pointer + i * layout.byteLength,
-      primitive,
-      values[i],
-    );
-  }
+  codec.storeMany(memory, pointer, values);
 }
 
 void _writeFixedWidthValueToMemory(
@@ -2904,209 +2906,26 @@ void _writeFixedWidthValueToMemory(
   if (validator.kind == _WASIComponentAsyncValueShape.unit) {
     return;
   }
-  final primitive = validator.primitive;
-  if (validator.kind != _WASIComponentAsyncValueShape.primitive ||
-      primitive == null) {
+  final codec = validator.memoryCodec;
+  if (codec == null) {
     throw UnsupportedError(
-      'WASI component async type $name does not have a fixed-width memory element type.',
+      'WASI component async type $name does not have a fixed-size memory element type.',
     );
   }
-  final layout = _fixedWidthLayout(name, primitive);
-  final bytes = Uint8List.view(memory.buffer);
-  _checkMemoryElementRange(bytes, pointer, 1, layout);
-  _writeFixedWidthValue(
-    ByteData.view(memory.buffer),
-    pointer,
-    primitive,
-    value,
-  );
+  codec.store(memory, pointer, value);
 }
 
 WASIComponentAsyncValueMemoryLayout? _fixedWidthMemoryLayoutFor(
   _WASIComponentAsyncValueValidator validator,
 ) {
-  final primitive = validator.primitive;
-  if (primitive == null) {
-    return null;
-  }
-  final layout = _fixedWidthLayoutOrNull(primitive);
-  if (layout == null) {
+  final codec = validator.memoryCodec;
+  if (codec == null) {
     return null;
   }
   return WASIComponentAsyncValueMemoryLayout._(
-    byteLength: layout.byteLength,
-    alignment: layout.alignment,
+    byteLength: codec.byteLength,
+    alignment: codec.alignment,
   );
-}
-
-_FixedWidthLayout _fixedWidthLayout(
-  String name,
-  WasmComponentPrimitiveValueType primitive,
-) {
-  final layout = _fixedWidthLayoutOrNull(primitive);
-  if (layout != null) {
-    return layout;
-  }
-  throw UnsupportedError(
-    'WASI component async type $name does not support fixed-width ${primitive.name} memory copies.',
-  );
-}
-
-_FixedWidthLayout? _fixedWidthLayoutOrNull(
-  WasmComponentPrimitiveValueType primitive,
-) {
-  return switch (primitive) {
-    WasmComponentPrimitiveValueType.boolean ||
-    WasmComponentPrimitiveValueType.s8 ||
-    WasmComponentPrimitiveValueType.u8 => const _FixedWidthLayout(
-      byteLength: 1,
-      alignment: 1,
-    ),
-    WasmComponentPrimitiveValueType.s16 ||
-    WasmComponentPrimitiveValueType.u16 => const _FixedWidthLayout(
-      byteLength: 2,
-      alignment: 2,
-    ),
-    WasmComponentPrimitiveValueType.s32 ||
-    WasmComponentPrimitiveValueType.u32 ||
-    WasmComponentPrimitiveValueType.f32 ||
-    WasmComponentPrimitiveValueType.char => const _FixedWidthLayout(
-      byteLength: 4,
-      alignment: 4,
-    ),
-    WasmComponentPrimitiveValueType.s64 ||
-    WasmComponentPrimitiveValueType.u64 ||
-    WasmComponentPrimitiveValueType.f64 => const _FixedWidthLayout(
-      byteLength: 8,
-      alignment: 8,
-    ),
-    WasmComponentPrimitiveValueType.string ||
-    WasmComponentPrimitiveValueType.errorContext => null,
-  };
-}
-
-Object _readFixedWidthValue(
-  ByteData data,
-  int offset,
-  WasmComponentPrimitiveValueType primitive,
-) {
-  return switch (primitive) {
-    WasmComponentPrimitiveValueType.boolean => _readCanonicalBool(data, offset),
-    WasmComponentPrimitiveValueType.s8 => data.getInt8(offset),
-    WasmComponentPrimitiveValueType.u8 => data.getUint8(offset),
-    WasmComponentPrimitiveValueType.s16 => data.getInt16(offset, Endian.little),
-    WasmComponentPrimitiveValueType.u16 => data.getUint16(
-      offset,
-      Endian.little,
-    ),
-    WasmComponentPrimitiveValueType.s32 => data.getInt32(offset, Endian.little),
-    WasmComponentPrimitiveValueType.u32 => data.getUint32(
-      offset,
-      Endian.little,
-    ),
-    WasmComponentPrimitiveValueType.s64 => data.getInt64(offset, Endian.little),
-    WasmComponentPrimitiveValueType.u64 => data.getUint64(
-      offset,
-      Endian.little,
-    ),
-    WasmComponentPrimitiveValueType.f32 => data.getFloat32(
-      offset,
-      Endian.little,
-    ),
-    WasmComponentPrimitiveValueType.f64 => data.getFloat64(
-      offset,
-      Endian.little,
-    ),
-    WasmComponentPrimitiveValueType.char => _readCanonicalChar(data, offset),
-    WasmComponentPrimitiveValueType.string ||
-    WasmComponentPrimitiveValueType.errorContext => throw StateError(
-      'Unsupported fixed-width primitive read: ${primitive.name}.',
-    ),
-  };
-}
-
-void _writeFixedWidthValue(
-  ByteData data,
-  int offset,
-  WasmComponentPrimitiveValueType primitive,
-  Object? value,
-) {
-  switch (primitive) {
-    case WasmComponentPrimitiveValueType.boolean:
-      data.setUint8(offset, (value as bool) ? 1 : 0);
-    case WasmComponentPrimitiveValueType.s8:
-      data.setInt8(offset, value as int);
-    case WasmComponentPrimitiveValueType.u8:
-      data.setUint8(offset, value as int);
-    case WasmComponentPrimitiveValueType.s16:
-      data.setInt16(offset, value as int, Endian.little);
-    case WasmComponentPrimitiveValueType.u16:
-      data.setUint16(offset, value as int, Endian.little);
-    case WasmComponentPrimitiveValueType.s32:
-      data.setInt32(offset, value as int, Endian.little);
-    case WasmComponentPrimitiveValueType.u32:
-      data.setUint32(offset, value as int, Endian.little);
-    case WasmComponentPrimitiveValueType.s64:
-      data.setInt64(offset, value as int, Endian.little);
-    case WasmComponentPrimitiveValueType.u64:
-      data.setUint64(offset, value as int, Endian.little);
-    case WasmComponentPrimitiveValueType.f32:
-      data.setFloat32(offset, (value as num).toDouble(), Endian.little);
-    case WasmComponentPrimitiveValueType.f64:
-      data.setFloat64(offset, (value as num).toDouble(), Endian.little);
-    case WasmComponentPrimitiveValueType.char:
-      data.setUint32(offset, (value as String).runes.single, Endian.little);
-    case WasmComponentPrimitiveValueType.string:
-    case WasmComponentPrimitiveValueType.errorContext:
-      throw StateError(
-        'Unsupported fixed-width primitive write: ${primitive.name}.',
-      );
-  }
-}
-
-bool _readCanonicalBool(ByteData data, int offset) {
-  final value = data.getUint8(offset);
-  if (value == 0) {
-    return false;
-  }
-  if (value == 1) {
-    return true;
-  }
-  throw StateError('Canonical bool memory value must be 0 or 1.');
-}
-
-String _readCanonicalChar(ByteData data, int offset) {
-  final value = data.getUint32(offset, Endian.little);
-  if (_isUnicodeScalar(value)) {
-    return String.fromCharCode(value);
-  }
-  throw StateError('Canonical char memory value is not a Unicode scalar.');
-}
-
-bool _isUnicodeScalar(int value) {
-  return value >= 0 && value <= 0x10ffff && (value < 0xd800 || value > 0xdfff);
-}
-
-void _checkMemoryElementRange(
-  Uint8List bytes,
-  int pointer,
-  int elementCount,
-  _FixedWidthLayout layout,
-) {
-  RangeError.checkNotNegative(pointer, 'pointer');
-  _checkCopyElementCount(elementCount);
-  if (layout.alignment > 1 && pointer % layout.alignment != 0) {
-    throw StateError('pointer must be ${layout.alignment}-byte aligned.');
-  }
-  final byteLength = elementCount * layout.byteLength;
-  if (pointer > bytes.length || byteLength > bytes.length - pointer) {
-    throw RangeError.range(
-      pointer + byteLength,
-      0,
-      bytes.length,
-      'pointer + byteLength',
-    );
-  }
 }
 
 const int _maxPackedCopyElements = 0x0fffffff;
@@ -3141,13 +2960,6 @@ int _normalizeI64Bits(int value, String name) {
     throw RangeError.value(value, name, 'does not fit in a signed i64');
   }
   return value.toUnsigned(64);
-}
-
-final class _FixedWidthLayout {
-  const _FixedWidthLayout({required this.byteLength, required this.alignment});
-
-  final int byteLength;
-  final int alignment;
 }
 
 void _expectArity(int canonicalIndex, List<Object?> args, int expected) {

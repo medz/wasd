@@ -127,23 +127,24 @@ This is the implementation state as of 2026-06-21 on `main`.
   decoded canonical `stream.*`
   and `future.*` definitions to executable endpoint operations and
   resource-table-backed integer endpoint handles. Host async bindings now read
-  decoded direct or type-indexed primitive stream/future element types and
-  validate Dart values against those component-level primitive constraints
-  before writing. Handle-backed async operations borrow endpoint resources while
-  executing read/write/cancel paths, so reentrant drops cannot invalidate an
-  endpoint during host-side canonical execution; pending handle-backed reads
-  hold asynchronous resource-table borrows until completion. Internal streams
+  decoded direct or type-indexed stream/future element types, including
+  primitive and fixed-size composite values, and validate Dart values against
+  those component-level constraints before writing. Handle-backed async
+  operations borrow endpoint resources while executing read/write/cancel paths,
+  so reentrant drops cannot invalidate an endpoint during host-side canonical
+  execution; pending handle-backed reads hold asynchronous resource-table
+  borrows until completion. Internal streams
   and futures now expose pending read completion primitives and can represent
   Component Model `stream<>`/`future<>` unit payloads as `null`; decoded unit
   async types reject non-unit payloads instead of acting as unconstrained
   streams/futures. Streams also support optional bounded buffering for
   backpressure, and canonical async programs can await pending `stream.read`,
   `stream.write`, and `future.read` operations through `invokeAsync`. The async
-  host can also copy fixed-width primitive `stream<T>` and `future<T>` values
-  between guest memory and async endpoints for canonical `stream.read`/
-  `stream.write` and `future.read`/`future.write` adapters, and handle-backed
-  canonical programs expose an ABI-shaped memory invocation path for fixed-width
-  copies: `stream.{read,write}` use `(handle, ptr, n)` and
+  host can also copy fixed-size `stream<T>` and `future<T>` values between
+  guest memory and async endpoints for canonical `stream.read`/`stream.write`
+  and `future.read`/`future.write` adapters, and handle-backed canonical
+  programs expose an ABI-shaped memory invocation path for fixed-size copies:
+  `stream.{read,write}` use `(handle, ptr, n)` and
   `future.{read,write}` use `(handle, ptr)`, returning the canonical packed copy
   result. The same handle-backed memory invocation path also has an awaited
   form for pending stream reads, bounded stream writes, and future reads, still
@@ -168,7 +169,7 @@ This is the implementation state as of 2026-06-21 on `main`.
   endpoints are now lazily resolvable as waitables, so canonical
   `waitable.join(endpoint, set)` can target the same endpoint handle without
   adding waitable allocation cost to ordinary handle paths. Handle-backed
-  fixed-width `stream.read`, bounded `stream.write`, `future.read`, and
+  fixed-size `stream.read`, bounded `stream.write`, `future.read`, and
   `future.write` memory copies also have a canonical event-start path:
   immediate copies return the packed copy payload, pending copies return
   `0xffffffff` (`BLOCKED`) and later publish the corresponding waitable event
@@ -229,16 +230,23 @@ This is the implementation state as of 2026-06-21 on `main`.
   the canonical definition snapshot once before any operation table is built.
   An internal component host adapter now combines that canonical plan with the
   decoded component resource and async value binding lists, defines component
-  resources plus supported unit/primitive `stream<T>` and `future<T>` values on
-  the shared table only after validation and capability checks pass, and returns
-  the canonical-indexed program from the same shared host state. Async value
-  bindings now also expose the fixed-width Canonical ABI memory-copy layout for
-  primitive payloads, so future P3 adapters can route stream/future memory
-  lowering without re-deriving byte widths and alignments separately from the
-  executable copy path. Component-host tests now also exercise decoded
-  core-memory primitive `stream<T>`/`future<T>` copy paths through synchronous
-  Canonical ABI calls and pending read completion through waitable events.
-  Composite stream/future element lowering remains a component-host binding gap.
+  resources plus supported unit, primitive, and fixed-size composite
+  `stream<T>` and `future<T>` values on the shared table only after validation
+  and capability checks pass, and returns the canonical-indexed program from the
+  same shared host state. Async value bindings now also expose fixed-size
+  Canonical ABI memory-copy layout through an internal Canonical ABI
+  value-memory codec covering primitive values, records/tuples, fixed lists,
+  flags, variants, options, results, and enums that do not require realloc,
+  handle-table, borrow, or nested async semantics. Future P3 adapters can route
+  stream/future memory lowering through this shared codec without re-deriving
+  byte widths, alignments, and padding separately from the executable copy path.
+  Component-host tests now also exercise decoded core-memory primitive
+  `stream<T>`/`future<T>` copy paths through synchronous Canonical ABI calls,
+  pending read completion through waitable events, and fixed-size record
+  `stream<T>`/`future<T>` round trips through decoded core-memory copy
+  definitions. Dynamic string/list stream/future memory copies are rejected
+  before component host binding instead of failing after partial host mutation.
+  Realloc-backed dynamic value lowering remains a component-host binding gap.
   This is an adapter boundary for future P2/P3 version modules, not a public
   support claim.
   Internal
@@ -361,10 +369,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   invocation costs, context get/set TLS operations, thread identity/context
   switching, waitable-set task-cancellation delivery, async current-task scope
   switching, synchronous, awaited, and waitable-event handle-program
-  fixed-width memory-copy invocation costs, synchronous handle-program
+  fixed-size memory-copy invocation costs, synchronous handle-program
   cancel-copy wait costs, subtask cancellation delivery, task return/cancel
-  delivery, plus fixed-width
-  primitive stream/future memory-copy costs, are measured by
+  delivery, plus fixed-size primitive stream/future memory-copy costs, are
+  measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`. Keep active-copy
   state checks on the waitable-event path so ordinary handle and memory
   invocations do not pay for event lifecycle enforcement.
@@ -372,11 +380,12 @@ This is the implementation state as of 2026-06-21 on `main`.
   `resource.drop`, decoded resource-only canonical program invocation,
   component resource binding extraction from decoded type index spaces,
   component-host binding startup with resource, stream, decoded core-memory
-  primitive stream-copy, and decoded core-memory primitive future-copy round
-  trips, mixed canonical-host program invocation over shared component state,
-  error-context canonical lifecycle invocation, error-context canonical string
-  memory adapter invocation with result records, nominal typed lookup,
-  synchronous/asynchronous borrow, and drop behavior are measured by
+  primitive stream-copy, decoded core-memory fixed-size record stream-copy, and
+  decoded core-memory primitive future-copy round trips, mixed canonical-host
+  program invocation over shared component state, error-context canonical
+  lifecycle invocation, error-context canonical string memory adapter invocation
+  with result records, nominal typed lookup, synchronous/asynchronous borrow,
+  and drop behavior are measured by
   `dart run tool/wasi_resource_table_benchmark.dart --json`.
 
 ## Near-Term Slices

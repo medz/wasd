@@ -1387,7 +1387,7 @@ void main() {
       );
     });
 
-    test('rejects malformed canonical bool stream memory values', () {
+    test('loads nonzero canonical bool stream memory values as true', () {
       final component = WasmComponent.decode(_streamBoolTypeComponentBytes());
       expect(component.validate(), isEmpty);
       final memory = Memory(const MemoryDescriptor(initial: 1));
@@ -1416,14 +1416,12 @@ void main() {
       final stream = newOperation.streamNew() as WASIComponentStream<bool>;
 
       expect(
-        () => writeOperation.streamWriteFromMemory(
-          stream.writable,
-          memory,
-          32,
-          1,
-        ),
-        throwsStateError,
+        writeOperation
+            .streamWriteFromMemory(stream.writable, memory, 32, 1)
+            .packedResult,
+        1 << 4,
       );
+      expect(stream.readable.read(1), [true]);
     });
 
     test('validates decoded future element integer bounds', () {

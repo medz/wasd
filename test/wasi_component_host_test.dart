@@ -214,6 +214,63 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('copies record streams through decoded core memory options', () {
+      final component = WasmComponent.decode(
+        _canonicalRecordStreamMemoryProgramBytes(),
+      );
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 55, Endian.little);
+      data.setUint16(36, 13, Endian.little);
+      data.setUint32(40, 89, Endian.little);
+      data.setUint16(44, 21, Endian.little);
+      final host = WASIComponentHost();
+
+      final plan = host.prepareComponent(component);
+
+      expect(component.validate(), isEmpty);
+      expect(plan.canBind, isTrue);
+      expect(plan.asyncValueBindings, hasLength(1));
+      expect(plan.asyncValueBindings.single.primitive, isNull);
+      expect(
+        plan.asyncValueBindings.single.fixedWidthMemoryLayout!.byteLength,
+        8,
+      );
+      expect(
+        plan.asyncValueBindings.single.fixedWidthMemoryLayout!.alignment,
+        4,
+      );
+
+      final binding = plan.bind();
+      final handles = WASIComponentAsyncEndpointHandles.unpack(
+        binding.program.invoke(0, const <Object?>[])! as int,
+      );
+
+      expect(
+        binding.program.invokeWithMemory(2, memory, <Object?>[
+          handles.writable,
+          32,
+          2,
+        ]),
+        2 << 4,
+      );
+      expect(
+        binding.program.invokeWithMemory(1, memory, <Object?>[
+          handles.readable,
+          96,
+          2,
+        ]),
+        2 << 4,
+      );
+      expect(data.getUint32(96, Endian.little), 55);
+      expect(data.getUint16(100, Endian.little), 13);
+      expect(data.getUint32(104, Endian.little), 89);
+      expect(data.getUint16(108, Endian.little), 21);
+      expect(binding.program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(binding.program.invoke(4, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test(
       'publishes primitive stream read events through decoded core memory options',
       () async {
@@ -355,6 +412,53 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('copies record futures through decoded core memory options', () {
+      final component = WasmComponent.decode(
+        _canonicalRecordFutureMemoryProgramBytes(),
+      );
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 987, Endian.little);
+      data.setUint16(36, 34, Endian.little);
+      final host = WASIComponentHost();
+
+      final plan = host.prepareComponent(component);
+
+      expect(component.validate(), isEmpty);
+      expect(plan.canBind, isTrue);
+      expect(plan.asyncValueBindings, hasLength(1));
+      expect(plan.asyncValueBindings.single.primitive, isNull);
+      expect(
+        plan.asyncValueBindings.single.fixedWidthMemoryLayout!.byteLength,
+        8,
+      );
+
+      final binding = plan.bind();
+      final handles = WASIComponentAsyncEndpointHandles.unpack(
+        binding.program.invoke(0, const <Object?>[])! as int,
+      );
+
+      expect(
+        binding.program.invokeWithMemory(2, memory, <Object?>[
+          handles.writable,
+          32,
+        ]),
+        0,
+      );
+      expect(
+        binding.program.invokeWithMemory(1, memory, <Object?>[
+          handles.readable,
+          96,
+        ]),
+        0,
+      );
+      expect(data.getUint32(96, Endian.little), 987);
+      expect(data.getUint16(100, Endian.little), 34);
+      expect(binding.program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(binding.program.invoke(4, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test(
       'publishes primitive future read events through decoded core memory options',
       () async {
@@ -428,6 +532,39 @@ void main() {
             (error) => error.toString(),
             'message',
             contains('supported stream/future async value binding'),
+          ),
+        ),
+      );
+    });
+
+    test('reports dynamic stream memory copies before binding', () {
+      final component = WasmComponent.decode(
+        _canonicalStringStreamMemoryProgramBytes(),
+      );
+      final host = WASIComponentHost();
+
+      final plan = host.prepareComponent(component);
+
+      expect(component.validate(), isEmpty);
+      expect(plan.canBind, isFalse);
+      expect(plan.asyncValueBindings, hasLength(1));
+      expect(
+        plan.asyncValueBindings.single.primitive,
+        WasmComponentPrimitiveValueType.string,
+      );
+      expect(plan.asyncValueBindings.single.fixedWidthMemoryLayout, isNull);
+      expect(plan.bindingErrors, hasLength(2));
+      expect(plan.bindingErrors.map((error) => error.kind), [
+        WasmComponentCanonicalKind.streamRead,
+        WasmComponentCanonicalKind.streamWrite,
+      ]);
+      expect(
+        () => plan.bind(),
+        throwsA(
+          isA<WASIComponentHostBindingException>().having(
+            (error) => error.toString(),
+            'message',
+            contains('fixed-size stream/future memory layout'),
           ),
         ),
       );
@@ -657,6 +794,119 @@ Uint8List _canonicalStreamMemoryProgramBytes() =>
       0x00,
     ]);
 
+Uint8List _canonicalRecordStreamMemoryProgramBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x01,
+      0x16,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x05,
+      0x03,
+      0x01,
+      0x00,
+      0x01,
+      0x07,
+      0x07,
+      0x01,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x02,
+      0x00,
+      0x02,
+      0x04,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x07,
+      0x0c,
+      0x02,
+      0x72,
+      0x02,
+      0x01,
+      0x61,
+      0x79,
+      0x01,
+      0x62,
+      0x7b,
+      0x66,
+      0x01,
+      0x00,
+      0x08,
+      0x03,
+      0x01,
+      0x0e,
+      0x01,
+      0x06,
+      0x09,
+      0x01,
+      0x00,
+      0x02,
+      0x01,
+      0x00,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x08,
+      0x06,
+      0x01,
+      0x0f,
+      0x01,
+      0x01,
+      0x03,
+      0x00,
+      0x06,
+      0x09,
+      0x01,
+      0x00,
+      0x02,
+      0x01,
+      0x00,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x08,
+      0x0a,
+      0x03,
+      0x10,
+      0x01,
+      0x01,
+      0x03,
+      0x01,
+      0x13,
+      0x01,
+      0x14,
+      0x01,
+    ]);
+
+Uint8List _canonicalStringStreamMemoryProgramBytes() {
+  final bytes = _canonicalStreamMemoryProgramBytes();
+  final typeByteIndex = bytes.indexOf(0x79, 39);
+  if (typeByteIndex < 0) {
+    throw StateError('stream memory fixture no longer contains a u32 type.');
+  }
+  bytes[typeByteIndex] = 0x73;
+  return bytes;
+}
+
 Uint8List _canonicalFutureProgramBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x61,
@@ -787,6 +1037,109 @@ Uint8List _canonicalFutureMemoryProgramBytes() =>
       0x00,
       0x1b,
       0x00,
+    ]);
+
+Uint8List _canonicalRecordFutureMemoryProgramBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x01,
+      0x16,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x05,
+      0x03,
+      0x01,
+      0x00,
+      0x01,
+      0x07,
+      0x07,
+      0x01,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x02,
+      0x00,
+      0x02,
+      0x04,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x07,
+      0x0c,
+      0x02,
+      0x72,
+      0x02,
+      0x01,
+      0x61,
+      0x79,
+      0x01,
+      0x62,
+      0x7b,
+      0x65,
+      0x01,
+      0x00,
+      0x08,
+      0x03,
+      0x01,
+      0x15,
+      0x01,
+      0x06,
+      0x09,
+      0x01,
+      0x00,
+      0x02,
+      0x01,
+      0x00,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x08,
+      0x06,
+      0x01,
+      0x16,
+      0x01,
+      0x01,
+      0x03,
+      0x00,
+      0x06,
+      0x09,
+      0x01,
+      0x00,
+      0x02,
+      0x01,
+      0x00,
+      0x03,
+      0x6d,
+      0x65,
+      0x6d,
+      0x08,
+      0x0a,
+      0x03,
+      0x17,
+      0x01,
+      0x01,
+      0x03,
+      0x01,
+      0x1a,
+      0x01,
+      0x1b,
+      0x01,
     ]);
 
 Uint8List _streamIndexedCompositeCanonicalBytes() =>

@@ -231,24 +231,40 @@ List<WASIComponentHostBindingError> _componentHostBindingErrors(
   List<WASIComponentAsyncValueBinding> asyncValueBindings,
 ) {
   final errors = <WASIComponentHostBindingError>[];
-  final asyncTypeIndexes = {
-    for (final binding in asyncValueBindings) binding.componentTypeIndex,
+  final asyncBindingsByTypeIndex = {
+    for (final binding in asyncValueBindings)
+      binding.componentTypeIndex: binding,
   };
   for (var index = 0; index < definitions.length; index++) {
     final definition = definitions[index];
     if (_componentHostNeedsAsyncValueBinding(definition.kind)) {
       final typeIndex = definition.typeIndex;
-      if (typeIndex != null && asyncTypeIndexes.contains(typeIndex)) {
+      final binding = typeIndex == null
+          ? null
+          : asyncBindingsByTypeIndex[typeIndex];
+      if (binding == null) {
+        errors.add(
+          WASIComponentHostBindingError(
+            canonicalIndex: index,
+            definition: definition,
+            reason:
+                'component host cannot derive a supported stream/future async value binding',
+          ),
+        );
         continue;
       }
-      errors.add(
-        WASIComponentHostBindingError(
-          canonicalIndex: index,
-          definition: definition,
-          reason:
-              'component host cannot derive a supported stream/future async value binding',
-        ),
-      );
+      if (_componentHostNeedsAsyncMemoryLayout(definition.kind) &&
+          !binding.isUnit &&
+          binding.fixedWidthMemoryLayout == null) {
+        errors.add(
+          WASIComponentHostBindingError(
+            canonicalIndex: index,
+            definition: definition,
+            reason:
+                'component host cannot derive a fixed-size stream/future memory layout',
+          ),
+        );
+      }
     }
   }
   return List<WASIComponentHostBindingError>.unmodifiable(errors);
@@ -286,6 +302,59 @@ bool _componentHostNeedsAsyncValueBinding(WasmComponentCanonicalKind kind) {
     case WasmComponentCanonicalKind.threadYield:
     case WasmComponentCanonicalKind.subtaskCancel:
     case WasmComponentCanonicalKind.subtaskDrop:
+    case WasmComponentCanonicalKind.errorContextNew:
+    case WasmComponentCanonicalKind.errorContextDebugMessage:
+    case WasmComponentCanonicalKind.errorContextDrop:
+    case WasmComponentCanonicalKind.waitableSetNew:
+    case WasmComponentCanonicalKind.waitableSetWait:
+    case WasmComponentCanonicalKind.waitableSetPoll:
+    case WasmComponentCanonicalKind.waitableSetDrop:
+    case WasmComponentCanonicalKind.waitableJoin:
+    case WasmComponentCanonicalKind.threadIndex:
+    case WasmComponentCanonicalKind.threadNewIndirect:
+    case WasmComponentCanonicalKind.threadSwitchTo:
+    case WasmComponentCanonicalKind.threadSuspend:
+    case WasmComponentCanonicalKind.threadResumeLater:
+    case WasmComponentCanonicalKind.threadYieldTo:
+    case WasmComponentCanonicalKind.threadSpawnRef:
+    case WasmComponentCanonicalKind.threadSpawnIndirect:
+    case WasmComponentCanonicalKind.threadAvailableParallelism:
+      return false;
+  }
+}
+
+bool _componentHostNeedsAsyncMemoryLayout(WasmComponentCanonicalKind kind) {
+  switch (kind) {
+    case WasmComponentCanonicalKind.streamRead:
+    case WasmComponentCanonicalKind.streamWrite:
+    case WasmComponentCanonicalKind.futureRead:
+    case WasmComponentCanonicalKind.futureWrite:
+      return true;
+    case WasmComponentCanonicalKind.lift:
+    case WasmComponentCanonicalKind.lower:
+    case WasmComponentCanonicalKind.resourceNew:
+    case WasmComponentCanonicalKind.resourceDrop:
+    case WasmComponentCanonicalKind.resourceRep:
+    case WasmComponentCanonicalKind.backpressureSet:
+    case WasmComponentCanonicalKind.backpressureInc:
+    case WasmComponentCanonicalKind.backpressureDec:
+    case WasmComponentCanonicalKind.taskReturn:
+    case WasmComponentCanonicalKind.taskCancel:
+    case WasmComponentCanonicalKind.contextGet:
+    case WasmComponentCanonicalKind.contextSet:
+    case WasmComponentCanonicalKind.threadYield:
+    case WasmComponentCanonicalKind.subtaskCancel:
+    case WasmComponentCanonicalKind.subtaskDrop:
+    case WasmComponentCanonicalKind.streamNew:
+    case WasmComponentCanonicalKind.streamCancelRead:
+    case WasmComponentCanonicalKind.streamCancelWrite:
+    case WasmComponentCanonicalKind.streamDropReadable:
+    case WasmComponentCanonicalKind.streamDropWritable:
+    case WasmComponentCanonicalKind.futureNew:
+    case WasmComponentCanonicalKind.futureCancelRead:
+    case WasmComponentCanonicalKind.futureCancelWrite:
+    case WasmComponentCanonicalKind.futureDropReadable:
+    case WasmComponentCanonicalKind.futureDropWritable:
     case WasmComponentCanonicalKind.errorContextNew:
     case WasmComponentCanonicalKind.errorContextDebugMessage:
     case WasmComponentCanonicalKind.errorContextDrop:

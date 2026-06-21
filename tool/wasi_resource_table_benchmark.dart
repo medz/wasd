@@ -40,6 +40,8 @@ Future<void> main(List<String> args) async {
   );
   final componentHostStreamMemoryBinding =
       _benchmarkComponentHostStreamMemoryBinding(options.iterations);
+  final componentHostRecordStreamMemoryBinding =
+      _benchmarkComponentHostRecordStreamMemoryBinding(options.iterations);
   final componentHostFutureMemoryBinding =
       _benchmarkComponentHostFutureMemoryBinding(options.iterations);
   final canonicalHostProgram = _benchmarkCanonicalHostProgram(
@@ -61,6 +63,8 @@ Future<void> main(List<String> args) async {
     'component_host_stream_binding': componentHostStreamBinding.toJson(),
     'component_host_stream_memory_binding': componentHostStreamMemoryBinding
         .toJson(),
+    'component_host_record_stream_memory_binding':
+        componentHostRecordStreamMemoryBinding.toJson(),
     'component_host_future_memory_binding': componentHostFutureMemoryBinding
         .toJson(),
     'canonical_host_program': canonicalHostProgram.toJson(),
@@ -85,6 +89,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentHostBinding(_warmupIterations);
   _benchmarkComponentHostStreamBinding(_warmupIterations);
   _benchmarkComponentHostStreamMemoryBinding(_warmupIterations);
+  _benchmarkComponentHostRecordStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostFutureMemoryBinding(_warmupIterations);
   _benchmarkCanonicalHostProgram(_warmupIterations);
   _benchmarkErrorContextProgram(_warmupIterations);
@@ -388,6 +393,60 @@ _Metric _benchmarkComponentHostStreamMemoryBinding(int iterations) {
   );
 }
 
+_Metric _benchmarkComponentHostRecordStreamMemoryBinding(int iterations) {
+  final component = WasmComponent.decode(_recordStreamMemoryProgramBytes());
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    data.setUint32(32, i & 0xffffffff, Endian.little);
+    data.setUint16(36, (i + 1) & 0xffff, Endian.little);
+    data.setUint32(40, (i + 2) & 0xffffffff, Endian.little);
+    data.setUint16(44, (i + 3) & 0xffff, Endian.little);
+    final host = WASIComponentHost();
+    final binding = host.bindComponent(component);
+    final packed = binding.program.invoke(0, const <Object?>[]);
+    if (packed is! int) {
+      throw StateError('component host record stream.new returned non-i64');
+    }
+    final handles = WASIComponentAsyncEndpointHandles.unpack(packed);
+    checksum +=
+        binding.program.invokeWithMemory(2, memory, <Object?>[
+              handles.writable,
+              32,
+              2,
+            ])
+            as int;
+    checksum +=
+        binding.program.invokeWithMemory(1, memory, <Object?>[
+              handles.readable,
+              96,
+              2,
+            ])
+            as int;
+    checksum += data.getUint32(96, Endian.little);
+    checksum += data.getUint16(100, Endian.little);
+    checksum += data.getUint32(104, Endian.little);
+    checksum += data.getUint16(108, Endian.little);
+    binding.program.invoke(3, <Object?>[handles.readable]);
+    binding.program.invoke(4, <Object?>[handles.writable]);
+    if (host.table.activeCount != 0) {
+      throw StateError(
+        'component host record stream memory table leaked ${host.table.activeCount} resources',
+      );
+    }
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkComponentHostFutureMemoryBinding(int iterations) {
   final component = WasmComponent.decode(_futureMemoryProgramBytes());
   final memory = Memory(const MemoryDescriptor(initial: 1));
@@ -671,6 +730,7 @@ void _printText(Map<String, Object?> payload) {
     'component_host_binding',
     'component_host_stream_binding',
     'component_host_stream_memory_binding',
+    'component_host_record_stream_memory_binding',
     'component_host_future_memory_binding',
     'canonical_host_program',
     'error_context_program',
@@ -839,6 +899,108 @@ Uint8List _streamMemoryProgramBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x14,
   0x00,
+]);
+
+Uint8List _recordStreamMemoryProgramBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x01,
+  0x16,
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x05,
+  0x03,
+  0x01,
+  0x00,
+  0x01,
+  0x07,
+  0x07,
+  0x01,
+  0x03,
+  0x6d,
+  0x65,
+  0x6d,
+  0x02,
+  0x00,
+  0x02,
+  0x04,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x07,
+  0x0c,
+  0x02,
+  0x72,
+  0x02,
+  0x01,
+  0x61,
+  0x79,
+  0x01,
+  0x62,
+  0x7b,
+  0x66,
+  0x01,
+  0x00,
+  0x08,
+  0x03,
+  0x01,
+  0x0e,
+  0x01,
+  0x06,
+  0x09,
+  0x01,
+  0x00,
+  0x02,
+  0x01,
+  0x00,
+  0x03,
+  0x6d,
+  0x65,
+  0x6d,
+  0x08,
+  0x06,
+  0x01,
+  0x0f,
+  0x01,
+  0x01,
+  0x03,
+  0x00,
+  0x06,
+  0x09,
+  0x01,
+  0x00,
+  0x02,
+  0x01,
+  0x00,
+  0x03,
+  0x6d,
+  0x65,
+  0x6d,
+  0x08,
+  0x0a,
+  0x03,
+  0x10,
+  0x01,
+  0x01,
+  0x03,
+  0x01,
+  0x13,
+  0x01,
+  0x14,
+  0x01,
 ]);
 
 Uint8List _futureMemoryProgramBytes() => Uint8List.fromList(const <int>[
