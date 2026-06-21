@@ -49,6 +49,8 @@ final class WASIComponentSubtask {
   void Function(WASIComponentSubtask subtask)? _onCancel;
   bool _cancellationRequested = false;
   bool _resolveDelivered = false;
+  bool _hasResult = false;
+  Object? _result;
 
   /// Waitable used for `waitable.join` and `SUBTASK` events.
   final WASIComponentWaitable waitable;
@@ -68,9 +70,35 @@ final class WASIComponentSubtask {
   /// Whether the subtask is in a final state.
   bool get resolved => _state.isResolved;
 
+  /// Whether the subtask returned a result value.
+  bool get hasResult => _hasResult;
+
+  /// Result value returned by the callee task.
+  Object? get result {
+    if (!_hasResult) {
+      throw StateError('WASI component subtask $name has no returned result.');
+    }
+    return _result;
+  }
+
   /// Replaces the cancellation callback.
   set onCancel(void Function(WASIComponentSubtask subtask)? callback) {
     _onCancel = callback;
+  }
+
+  /// Adds a cancellation callback without replacing an existing callback.
+  void addCancellationListener(
+    void Function(WASIComponentSubtask subtask) callback,
+  ) {
+    final previous = _onCancel;
+    if (previous == null) {
+      _onCancel = callback;
+      return;
+    }
+    _onCancel = (subtask) {
+      previous(subtask);
+      callback(subtask);
+    };
   }
 
   /// Marks the subtask as started.
@@ -91,8 +119,15 @@ final class WASIComponentSubtask {
   }
 
   /// Resolves the subtask as returned.
-  void markReturned() {
-    _resolve(WASIComponentSubtaskState.returned);
+  void markReturned({Object? result, bool hasResult = false}) {
+    _requireNotDelivered();
+    if (resolved) {
+      throw StateError('WASI component subtask $name is already resolved.');
+    }
+    _hasResult = hasResult;
+    _result = result;
+    _state = WASIComponentSubtaskState.returned;
+    _publishProgress();
   }
 
   /// Confirms cancellation before the subtask started.
