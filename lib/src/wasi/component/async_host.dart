@@ -318,17 +318,35 @@ final class WASIComponentCanonicalAsyncProgram {
 /// Pair of canonical readable and writable endpoint handles.
 final class WASIComponentAsyncEndpointHandles {
   /// Creates an endpoint handle pair.
-  const WASIComponentAsyncEndpointHandles({
+  WASIComponentAsyncEndpointHandles({
     required this.readable,
     required this.writable,
-  });
+  }) {
+    _checkU32Handle(readable, 'readable');
+    _checkU32Handle(writable, 'writable');
+  }
+
+  /// Unpacks the canonical `i64` handle pair used by stream/future.new.
+  factory WASIComponentAsyncEndpointHandles.unpack(int packed) {
+    final bits = _normalizeI64Bits(packed, 'packed');
+    return WASIComponentAsyncEndpointHandles(
+      readable: bits & _u32Mask,
+      writable: (bits >> 32) & _u32Mask,
+    );
+  }
 
   /// Readable endpoint handle.
   final int readable;
 
   /// Writable endpoint handle.
   final int writable;
+
+  /// Canonical signed `i64` with readable in low bits and writable in high bits.
+  int get packed => (readable | (writable << 32)).toSigned(64);
 }
+
+const int _u32Mask = 0xffffffff;
+const int _i64Min = -0x8000000000000000;
 
 /// Status returned by canonical async stream memory copy operations.
 enum WASIComponentAsyncCopyStatus {
@@ -394,7 +412,7 @@ final class WASIComponentCanonicalAsyncHandleProgram {
     switch (operation.kind) {
       case WasmComponentCanonicalKind.streamNew:
         _expectArity(canonicalIndex, args, 0);
-        return operation.streamNewHandles();
+        return operation.streamNewPackedHandles();
       case WasmComponentCanonicalKind.streamRead:
         _expectArity(canonicalIndex, args, 2);
         return operation.streamReadHandle(
@@ -433,7 +451,7 @@ final class WASIComponentCanonicalAsyncHandleProgram {
         return null;
       case WasmComponentCanonicalKind.futureNew:
         _expectArity(canonicalIndex, args, 0);
-        return operation.futureNewHandles();
+        return operation.futureNewPackedHandles();
       case WasmComponentCanonicalKind.futureRead:
         _expectArity(canonicalIndex, args, 1);
         return operation.futureReadHandle(
@@ -557,6 +575,11 @@ final class WASIComponentCanonicalAsyncOperation {
   WASIComponentAsyncEndpointHandles streamNewHandles() {
     _requireKind(WasmComponentCanonicalKind.streamNew);
     return _requireValueType().streamNewHandles();
+  }
+
+  /// Executes `stream.new` and returns the canonical packed handle pair.
+  int streamNewPackedHandles() {
+    return streamNewHandles().packed;
   }
 
   /// Executes `stream.read`.
@@ -740,6 +763,11 @@ final class WASIComponentCanonicalAsyncOperation {
   WASIComponentAsyncEndpointHandles futureNewHandles() {
     _requireKind(WasmComponentCanonicalKind.futureNew);
     return _requireValueType().futureNewHandles();
+  }
+
+  /// Executes `future.new` and returns the canonical packed handle pair.
+  int futureNewPackedHandles() {
+    return futureNewHandles().packed;
   }
 
   /// Executes `future.read`.
@@ -1963,6 +1991,26 @@ void _checkCopyElementCount(int elementCount) {
       'elementCount',
     );
   }
+}
+
+void _checkU32Handle(int handle, String name) {
+  RangeError.checkNotNegative(handle, name);
+  if (handle > _u32Mask) {
+    throw RangeError.range(handle, 0, _u32Mask, name);
+  }
+}
+
+int _normalizeI64Bits(int value, String name) {
+  if (value >= 0) {
+    if (value.bitLength > 64) {
+      throw RangeError.value(value, name, 'does not fit in an unsigned i64');
+    }
+    return value.toUnsigned(64);
+  }
+  if (value < _i64Min) {
+    throw RangeError.value(value, name, 'does not fit in a signed i64');
+  }
+  return value.toUnsigned(64);
 }
 
 final class _FixedWidthLayout {

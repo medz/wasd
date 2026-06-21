@@ -39,7 +39,9 @@ final class WASIComponentResourceTable {
   final List<_WASIComponentResourceSlot> _slots =
       <_WASIComponentResourceSlot>[];
   final List<int> _freeSlots = <int>[];
+  final Map<int, int> _handleToSlot = <int, int>{};
   int _nextResourceTypeId = 0;
+  int _nextHandle = 1;
   int _activeCount = 0;
 
   /// Number of live resources in the table.
@@ -64,11 +66,12 @@ final class WASIComponentResourceTable {
   int insert<T extends Object>(WASIComponentResourceType<T> type, T resource) {
     _validateResourceType(type);
     final slotIndex = _allocateSlot();
+    final handle = _allocateHandle();
     final slot = _slots[slotIndex];
-    slot.generation++;
     slot.entry = _WASIComponentResourceEntry<T>(type, resource);
+    _handleToSlot[handle] = slotIndex;
     _activeCount++;
-    return _handleFor(slotIndex, slot.generation);
+    return handle;
   }
 
   /// Implements the canonical ABI `resource.new` operation.
@@ -153,7 +156,7 @@ final class WASIComponentResourceTable {
       );
     }
 
-    final slotIndex = _slotIndexForHandle(handle);
+    final slotIndex = _handleToSlot.remove(handle)!;
     final slot = _slots[slotIndex];
     slot.entry = null;
     _freeSlots.add(slotIndex);
@@ -177,17 +180,20 @@ final class WASIComponentResourceTable {
     return _slots.length - 1;
   }
 
+  int _allocateHandle() {
+    if (_nextHandle > _maxComponentResourceHandle) {
+      throw StateError('WASI component resource table exhausted u32 handles.');
+    }
+    return _nextHandle++;
+  }
+
   _WASIComponentResourceEntry? _entryForHandle(int handle) {
-    final slotIndex = _slotIndexForHandle(handle);
-    if (slotIndex < 0 || slotIndex >= _slots.length) {
+    final slotIndex = _handleToSlot[handle];
+    if (slotIndex == null) {
       return null;
     }
 
-    final generation = _generationForHandle(handle);
     final slot = _slots[slotIndex];
-    if (slot.generation != generation) {
-      return null;
-    }
     return slot.entry;
   }
 
@@ -217,17 +223,9 @@ final class WASIComponentResourceTable {
   }
 }
 
-const int _slotBase = 1 << 26;
-
-int _handleFor(int slotIndex, int generation) =>
-    generation * _slotBase + slotIndex;
-
-int _slotIndexForHandle(int handle) => handle % _slotBase;
-
-int _generationForHandle(int handle) => handle ~/ _slotBase;
+const int _maxComponentResourceHandle = 0xffffffff;
 
 final class _WASIComponentResourceSlot {
-  int generation = 0;
   _WASIComponentResourceEntry? entry;
 }
 

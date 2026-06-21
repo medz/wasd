@@ -369,10 +369,15 @@ _Metric _benchmarkHandleProgramInvoke(_Options options) {
 
   final watch = Stopwatch()..start();
   for (var i = 0; i < options.iterations; i++) {
-    final streamHandles = program.invoke(0, const <Object?>[]);
-    if (streamHandles is! WASIComponentAsyncEndpointHandles) {
-      throw StateError('stream.new returned non-handle pair: $streamHandles');
+    final packedStreamHandles = program.invoke(0, const <Object?>[]);
+    if (packedStreamHandles is! int) {
+      throw StateError(
+        'stream.new returned non-packed handles: $packedStreamHandles',
+      );
     }
+    final streamHandles = WASIComponentAsyncEndpointHandles.unpack(
+      packedStreamHandles,
+    );
     final written = program.invoke(2, <Object?>[streamHandles.writable, batch]);
     if (written != batch.length) {
       throw StateError('stream.write wrote $written values');
@@ -393,10 +398,15 @@ _Metric _benchmarkHandleProgramInvoke(_Options options) {
     program.invoke(3, <Object?>[streamHandles.readable]);
     program.invoke(4, <Object?>[streamHandles.writable]);
 
-    final futureHandles = program.invoke(5, const <Object?>[]);
-    if (futureHandles is! WASIComponentAsyncEndpointHandles) {
-      throw StateError('future.new returned non-handle pair: $futureHandles');
+    final packedFutureHandles = program.invoke(5, const <Object?>[]);
+    if (packedFutureHandles is! int) {
+      throw StateError(
+        'future.new returned non-packed handles: $packedFutureHandles',
+      );
     }
+    final futureHandles = WASIComponentAsyncEndpointHandles.unpack(
+      packedFutureHandles,
+    );
     program.invoke(7, <Object?>[futureHandles.writable, i]);
     final value = program.invoke(6, <Object?>[futureHandles.readable]);
     if (value is! int) {

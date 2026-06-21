@@ -21,7 +21,9 @@ Status date: 2026-06-21.
 - Wasmtime exposes WASI through per-store `WasiCtx`, `WasiCtxView`, and
   `ResourceTable`, with interface groups for `cli`, `clocks`, `filesystem`,
   `random`, and `sockets`. That split is a useful boundary for wasd's future
-  P2/P3 host model.
+  P2/P3 host model. Its current `p3` module is still documented as
+  experimental, unstable, and incomplete, so wasd should copy the layering
+  discipline rather than overclaiming support.
   Reference: https://docs.rs/wasmtime-wasi/latest/wasmtime_wasi/
 - wasmCloud keeps P3 behind a `wasip3` Cargo feature, registers P3
   implementations alongside P2, and keeps P2 as the stable default.
@@ -52,6 +54,12 @@ copying their internals directly.
   design, not a later optimization. For wasd, stream/future forwarding,
   cancellation, and buffering must get benchmarks and resource-lifetime tests as
   they are implemented.
+- The Component Model Canonical ABI defines `stream.new` and `future.new` as
+  core functions returning a single `i64`, with the readable endpoint in the low
+  32 bits and the writable endpoint in the high 32 bits. wasd handle-program
+  adapters should expose that packed ABI shape at the core boundary while
+  keeping typed Dart endpoint objects inside host operations.
+  Reference: https://github.com/WebAssembly/component-model/blob/main/design/mvp/CanonicalABI.md
 
 ## Current wasd Baseline
 
@@ -99,10 +107,14 @@ This is the implementation state as of 2026-06-21 on `main`.
   or aliased abstract resources with an unconstrained host representation.
   Resource host bindings also read decoded resource representation types and
   validate `resource.new` representation values, and resource-only canonical
-  programs can be invoked by canonical index. `lib/src/wasi/component/` also
-  contains internal `stream<T>` and `future<T>` runtime primitives with separate
-  readable/writable endpoints, cancellation, drop callbacks, and benchmark
-  coverage, plus an internal async host that binds decoded canonical `stream.*`
+  programs can be invoked by canonical index. Resource table handles are
+  monotonically allocated within the canonical u32 range while slots are reused
+  behind an O(1) handle-to-slot map, so hot create/drop paths do not overflow
+  resource handles after a small number of generations.
+  `lib/src/wasi/component/` also contains internal `stream<T>` and `future<T>`
+  runtime primitives with separate readable/writable endpoints, cancellation,
+  drop callbacks, and benchmark coverage, plus an internal async host that binds
+  decoded canonical `stream.*`
   and `future.*` definitions to executable endpoint operations and
   resource-table-backed integer endpoint handles. Host async bindings now read
   decoded direct or type-indexed primitive stream/future element types and
@@ -119,7 +131,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   `stream.write`, and `future.read` operations through `invokeAsync`. The async
   host can also copy fixed-width primitive `stream<T>` and `future<T>` values
   between guest memory and async endpoints for canonical `stream.read`/
-  `stream.write` and `future.read`/`future.write` adapters. The async host also
+  `stream.write` and `future.read`/`future.write` adapters. Handle-backed
+  canonical `stream.new` and `future.new` invocation returns the Canonical ABI
+  packed `i64` handle pair while operation-level helpers keep typed Dart handle
+  pairs for internal use. The async host also
   binds decoded `backpressure.set`, `backpressure.inc`, and
   `backpressure.dec` canonical definitions to an internal bounded counter with
   overflow/underflow checks. Internal error-context support now models

@@ -29,6 +29,35 @@ void main() {
       expect(() => program.invoke(2, const <Object?>[]), throwsStateError);
     });
 
+    test('packs endpoint handles as canonical i64 bit patterns', () {
+      final handles = WASIComponentAsyncEndpointHandles(
+        readable: 0xffffffff,
+        writable: 0x80000000,
+      );
+
+      expect(handles.packed, isNegative);
+
+      final signed = WASIComponentAsyncEndpointHandles.unpack(handles.packed);
+      expect(signed.readable, 0xffffffff);
+      expect(signed.writable, 0x80000000);
+
+      final unsigned = WASIComponentAsyncEndpointHandles.unpack(
+        handles.packed.toUnsigned(64),
+      );
+      expect(unsigned.readable, 0xffffffff);
+      expect(unsigned.writable, 0x80000000);
+
+      expect(
+        () => WASIComponentAsyncEndpointHandles(
+          readable: 0x100000000,
+          writable: 1,
+        ),
+        throwsRangeError,
+      );
+      expect(WASIComponentAsyncEndpointHandles.unpack(-1).readable, 0xffffffff);
+      expect(WASIComponentAsyncEndpointHandles.unpack(-1).writable, 0xffffffff);
+    });
+
     test('binds decoded canonical stream definitions as a program', () {
       final component = WasmComponent.decode(_canonicalStreamProgramBytes());
       expect(component.validate(), isEmpty);
@@ -123,8 +152,8 @@ void main() {
       final program = host.bindCanonicalDefinitionsToHandles(component);
       final handles = program.invoke(0, const <Object?>[]);
 
-      expect(handles, isA<WASIComponentAsyncEndpointHandles>());
-      final streamHandles = handles! as WASIComponentAsyncEndpointHandles;
+      expect(handles, isA<int>());
+      final streamHandles = _unpackHandles(handles);
       expect(host.table.activeCount, 2);
       expect(
         program.invoke(2, <Object?>[
@@ -163,9 +192,7 @@ void main() {
         host.defineStreamType<int>(0, 'numbers');
 
         final program = host.bindCanonicalDefinitionsToHandles(component);
-        final handles =
-            program.invoke(0, const <Object?>[])!
-                as WASIComponentAsyncEndpointHandles;
+        final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
         var completed = false;
 
         final pending = program.invokeAsync(1, <Object?>[handles.readable, 2])
@@ -204,9 +231,7 @@ void main() {
       host.defineStreamType<int>(0, 'numbers');
 
       final program = host.bindCanonicalDefinitionsToHandles(component);
-      final handles =
-          program.invoke(0, const <Object?>[])!
-              as WASIComponentAsyncEndpointHandles;
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
       final values = _DropDuringIteration(
         onFirstValue: () {
           expect(
@@ -270,9 +295,7 @@ void main() {
         host.defineStreamType<int>(0, 'numbers', maxBufferedElements: 2);
 
         final program = host.bindCanonicalDefinitionsToHandles(component);
-        final handles =
-            program.invoke(0, const <Object?>[])!
-                as WASIComponentAsyncEndpointHandles;
+        final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
 
         expect(
           program.invoke(2, <Object?>[
@@ -405,8 +428,8 @@ void main() {
       final program = host.bindCanonicalDefinitionsToHandles(component);
       final handles = program.invoke(0, const <Object?>[]);
 
-      expect(handles, isA<WASIComponentAsyncEndpointHandles>());
-      final futureHandles = handles! as WASIComponentAsyncEndpointHandles;
+      expect(handles, isA<int>());
+      final futureHandles = _unpackHandles(handles);
       expect(host.table.activeCount, 2);
       expect(
         program.invoke(2, <Object?>[futureHandles.writable, 'ready']),
@@ -434,9 +457,7 @@ void main() {
         final host = WASIComponentAsyncHost();
         host.defineFutureType<String>(0, 'message');
         final program = host.bindCanonicalDefinitionsToHandles(component);
-        final handles =
-            program.invoke(0, const <Object?>[])!
-                as WASIComponentAsyncEndpointHandles;
+        final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
         var completed = false;
 
         final pending = program.invokeAsync(1, <Object?>[handles.readable])
@@ -1324,4 +1345,10 @@ final class _DropDuringIterationIterator implements Iterator<int> {
     }
     return _index < 2;
   }
+}
+
+WASIComponentAsyncEndpointHandles _unpackHandles(Object? packed) {
+  final value = packed;
+  expect(value, isA<int>());
+  return WASIComponentAsyncEndpointHandles.unpack(value as int);
 }

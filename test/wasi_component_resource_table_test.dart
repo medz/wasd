@@ -77,6 +77,28 @@ void main() {
       expect(() => table.get<String>(streamType, handle), throwsStateError);
     });
 
+    test('keeps hot reused handles in the canonical u32 range', () {
+      final table = WASIComponentResourceTable();
+      final streamType = table.defineType<int>('stream');
+      final staleHandles = <int>[];
+
+      for (var i = 0; i < 128; i++) {
+        final handle = table.insert<int>(streamType, i);
+
+        expect(handle, inInclusiveRange(1, 0xffffffff));
+        expect(table.get<int>(streamType, handle), i);
+
+        table.drop<int>(streamType, handle);
+        staleHandles.add(handle);
+      }
+
+      for (final handle in staleHandles) {
+        expect(table.contains(handle), isFalse);
+        expect(() => table.get<int>(streamType, handle), throwsStateError);
+      }
+      expect(table.activeCount, 0);
+    });
+
     test('supports canonical resource new, rep, and drop operations', () {
       final table = WASIComponentResourceTable();
       final dropped = <int>[];
