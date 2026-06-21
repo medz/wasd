@@ -1913,6 +1913,12 @@ final class _RegisteredAsyncValueType<T> {
     WASIComponentCanonicalRealloc? realloc,
   ]) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
+    _requireStringReallocForReadToMemory(
+      valueValidator,
+      name,
+      realloc,
+      maxElements,
+    );
     final values = _expectReadableStream(readable).read(maxElements);
     _writeValuesToMemory(
       valueValidator,
@@ -1940,6 +1946,12 @@ final class _RegisteredAsyncValueType<T> {
           readableStreamType!,
           readable,
           (stream) {
+            _requireStringReallocForReadToMemory(
+              valueValidator,
+              name,
+              realloc,
+              maxElements,
+            );
             final values = stream.read(maxElements);
             _writeValuesToMemory(
               valueValidator,
@@ -1968,6 +1980,12 @@ final class _RegisteredAsyncValueType<T> {
       WASIComponentReadableStream<T>,
       WASIComponentAsyncCopyResult
     >(readableStreamType!, readable, (stream) {
+      _requireStringReallocForReadToMemory(
+        valueValidator,
+        name,
+        realloc,
+        maxElements,
+      );
       return stream
           .readWhenAvailable(maxElements)
           .then<WASIComponentAsyncCopyResult>((values) {
@@ -1999,6 +2017,12 @@ final class _RegisteredAsyncValueType<T> {
       readableStreamType!,
       readable,
       (stream) {
+        _requireStringReallocForReadToMemory(
+          valueValidator,
+          name,
+          realloc,
+          maxElements,
+        );
         if (maxElements == 0 || stream.hasQueuedValues) {
           final values = stream.read(maxElements);
           _writeValuesToMemory(
@@ -2211,6 +2235,7 @@ final class _RegisteredAsyncValueType<T> {
     WASIComponentCanonicalRealloc? realloc,
   ]) {
     _requireKind(_WASIComponentAsyncValueKind.future);
+    _requireStringReallocForReadToMemory(valueValidator, name, realloc, 1);
     final value = _expectReadableFuture(readable).readForCopy();
     _writeValueToMemory(
       valueValidator,
@@ -2232,23 +2257,22 @@ final class _RegisteredAsyncValueType<T> {
         WASIComponentCanonicalStringEncoding.utf8,
     WASIComponentCanonicalRealloc? realloc,
   ]) {
-    return table
-        .borrow<WASIComponentReadableFuture<T>, WASIComponentAsyncCopyResult>(
-          readableFutureType!,
-          readable,
-          (future) {
-            _writeValueToMemory(
-              valueValidator,
-              name,
-              memory,
-              pointer,
-              future.readForCopy(),
-              stringEncoding,
-              realloc,
-            );
-            return WASIComponentAsyncCopyResult.completed(0);
-          },
-        );
+    return table.borrow<
+      WASIComponentReadableFuture<T>,
+      WASIComponentAsyncCopyResult
+    >(readableFutureType!, readable, (future) {
+      _requireStringReallocForReadToMemory(valueValidator, name, realloc, 1);
+      _writeValueToMemory(
+        valueValidator,
+        name,
+        memory,
+        pointer,
+        future.readForCopy(),
+        stringEncoding,
+        realloc,
+      );
+      return WASIComponentAsyncCopyResult.completed(0);
+    });
   }
 
   Future<WASIComponentAsyncCopyResult> futureReadHandleToMemoryWhenReady(
@@ -2263,6 +2287,7 @@ final class _RegisteredAsyncValueType<T> {
       WASIComponentReadableFuture<T>,
       WASIComponentAsyncCopyResult
     >(readableFutureType!, readable, (future) {
+      _requireStringReallocForReadToMemory(valueValidator, name, realloc, 1);
       return future.readWhenReadyForCopy().then<WASIComponentAsyncCopyResult>((
         value,
       ) {
@@ -2293,6 +2318,7 @@ final class _RegisteredAsyncValueType<T> {
       readableFutureType!,
       readable,
       (future) {
+        _requireStringReallocForReadToMemory(valueValidator, name, realloc, 1);
         if (future.isReady) {
           _writeValueToMemory(
             valueValidator,
@@ -3081,6 +3107,18 @@ WASIComponentCanonicalRealloc _requireStringRealloc(
     'WASI component async type $name requires a canonical realloc callback '
     'to write string values to memory.',
   );
+}
+
+void _requireStringReallocForReadToMemory(
+  _WASIComponentAsyncValueValidator validator,
+  String name,
+  WASIComponentCanonicalRealloc? realloc,
+  int maxElements,
+) {
+  if (maxElements > 0 &&
+      validator.primitive == WasmComponentPrimitiveValueType.string) {
+    _requireStringRealloc(name, realloc);
+  }
 }
 
 List<T> _readFixedWidthValuesFromMemory<T>(

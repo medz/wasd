@@ -276,11 +276,13 @@ bool _componentHostSupportsAsyncMemoryCopy(
   if (binding.isUnit || binding.fixedWidthMemoryLayout != null) {
     return true;
   }
-  final isGuestToHostStringCopy =
-      (kind == WasmComponentCanonicalKind.streamWrite ||
+  final isPrimitiveStringCopy =
+      (kind == WasmComponentCanonicalKind.streamRead ||
+          kind == WasmComponentCanonicalKind.streamWrite ||
+          kind == WasmComponentCanonicalKind.futureRead ||
           kind == WasmComponentCanonicalKind.futureWrite) &&
       binding.primitive == WasmComponentPrimitiveValueType.string;
-  return isGuestToHostStringCopy;
+  return isPrimitiveStringCopy;
 }
 
 bool _componentHostNeedsAsyncValueBinding(WasmComponentCanonicalKind kind) {

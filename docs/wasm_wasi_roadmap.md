@@ -231,10 +231,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   the canonical definition snapshot once before any operation table is built.
   An internal component host adapter now combines that canonical plan with the
   decoded component resource and async value binding lists, defines component
-  resources plus supported unit, primitive, and fixed-size composite
-  `stream<T>` and `future<T>` values on the shared table only after validation
-  and capability checks pass, and returns the canonical-indexed program from the
-  same shared host state. Async value bindings now also expose fixed-size
+  resources plus supported unit, primitive, fixed-size composite, and primitive
+  string `stream<T>`/`future<T>` values on the shared table only after
+  validation and capability checks pass, and returns the canonical-indexed
+  program from the same shared host state. Async value bindings now also expose
+  fixed-size
   Canonical ABI memory-copy layout through an internal Canonical ABI
   value-memory codec covering primitive values, records/tuples, fixed lists,
   flags, variants, options, results, and enums that do not require realloc,
@@ -256,12 +257,15 @@ This is the implementation state as of 2026-06-21 on `main`.
   paths can lower host strings back into guest memory through a canonical
   `realloc` callback plus `(ptr, len)` result records. This makes both
   directions of primitive string async memory copy executable in the internal
-  async host. Component-host binding for decoded dynamic `stream.read`/
-  `future.read` definitions still stops before binding because the adapter
-  does not yet wire decoded core realloc exports into the program invocation
-  path. List values and composites containing dynamic values remain unsupported
-  for executable memory copy. This is an adapter boundary for future P2/P3
-  version modules, not a public support claim.
+  async host. The canonical-indexed component program now also passes an
+  explicit `realloc` callback through memory-backed invocation paths, so
+  decoded component-host primitive string `stream.read`/`stream.write` round
+  trips can execute through the same `(handle, ptr, n)` core-memory call shape.
+  The adapter still does not automatically invoke decoded core realloc exports;
+  callers must provide the realloc callback at invocation time. List values and
+  composites containing dynamic values remain unsupported for executable memory
+  copy. This is an adapter boundary for future P2/P3 version modules, not a
+  public support claim.
   Internal
   error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`

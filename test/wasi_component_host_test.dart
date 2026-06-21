@@ -578,36 +578,91 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
-    test('reports dynamic stream memory copies before binding', () {
+    test('copies string streams through decoded core memory options', () {
       final component = WasmComponent.decode(
         _canonicalStringStreamMemoryProgramBytes(),
       );
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final bytes = Uint8List.view(memory.buffer);
+      final data = ByteData.view(memory.buffer);
+      bytes.setAll(96, 'host'.codeUnits);
+      data.setUint32(32, 96, Endian.little);
+      data.setUint32(36, 4, Endian.little);
       final host = WASIComponentHost();
 
       final plan = host.prepareComponent(component);
 
       expect(component.validate(), isEmpty);
-      expect(plan.canBind, isFalse);
+      expect(plan.canBind, isTrue);
       expect(plan.asyncValueBindings, hasLength(1));
       expect(
         plan.asyncValueBindings.single.primitive,
         WasmComponentPrimitiveValueType.string,
       );
       expect(plan.asyncValueBindings.single.fixedWidthMemoryLayout, isNull);
-      expect(plan.bindingErrors, hasLength(1));
-      expect(plan.bindingErrors.map((error) => error.kind), [
-        WasmComponentCanonicalKind.streamRead,
-      ]);
+      expect(plan.bindingErrors, isEmpty);
+
+      final binding = plan.bind();
+      final handles = host.canonicalHost.asyncHost
+          .bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.streamNew,
+              typeIndex: 0,
+            ),
+          )
+          .streamNewPackedHandles();
+      final endpoints = WASIComponentAsyncEndpointHandles.unpack(handles);
       expect(
-        () => plan.bind(),
-        throwsA(
-          isA<WASIComponentHostBindingException>().having(
-            (error) => error.toString(),
-            'message',
-            contains('supported stream/future memory representation'),
-          ),
-        ),
+        binding.program.invokeWithMemory(1, memory, <Object?>[
+          endpoints.writable,
+          32,
+          1,
+        ]),
+        1 << 4,
       );
+      expect(
+        () => binding.program.invokeWithMemory(0, memory, <Object?>[
+          endpoints.readable,
+          64,
+          1,
+        ]),
+        throwsUnsupportedError,
+      );
+      expect(
+        binding.program.invokeWithMemory(
+          0,
+          memory,
+          <Object?>[endpoints.readable, 64, 1],
+          realloc: (oldPointer, oldSize, alignment, newSize) {
+            expect(oldPointer, 0);
+            expect(oldSize, 0);
+            expect(alignment, 1);
+            expect(newSize, 4);
+            return 128;
+          },
+        ),
+        1 << 4,
+      );
+      expect(data.getUint32(64, Endian.little), 128);
+      expect(data.getUint32(68, Endian.little), 4);
+      expect(String.fromCharCodes(bytes.sublist(128, 132)), 'host');
+      host.canonicalHost.asyncHost
+          .bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.streamDropReadable,
+              typeIndex: 0,
+            ),
+          )
+          .streamDropReadableHandle(endpoints.readable);
+      host.canonicalHost.asyncHost
+          .bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.streamDropWritable,
+              typeIndex: 0,
+            ),
+          )
+          .streamDropWritableHandle(endpoints.writable);
+      expect(host.table.activeCount, 0);
     });
   });
 }

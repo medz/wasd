@@ -1,5 +1,6 @@
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
+import 'string_memory.dart';
 import 'async_host.dart';
 import 'backpressure.dart';
 import 'context.dart';
@@ -264,12 +265,12 @@ final class WASIComponentCanonicalHost {
       kind: definition.kind,
       invoke: (args) => program.invoke(0, args),
       invokeAsync: (args) => program.invokeAsync(0, args),
-      invokeWithMemory: (memory, args) =>
-          program.invokeWithMemory(0, memory, args),
-      invokeWithMemoryEvent: (memory, args) =>
-          program.invokeWithMemoryEvent(0, memory, args),
-      invokeWithMemoryAsync: (memory, args) =>
-          program.invokeWithMemoryAsync(0, memory, args),
+      invokeWithMemory: (memory, args, realloc) =>
+          program.invokeWithMemory(0, memory, args, realloc: realloc),
+      invokeWithMemoryEvent: (memory, args, realloc) =>
+          program.invokeWithMemoryEvent(0, memory, args, realloc: realloc),
+      invokeWithMemoryAsync: (memory, args, realloc) =>
+          program.invokeWithMemoryAsync(0, memory, args, realloc: realloc),
     );
   }
 
@@ -282,9 +283,9 @@ final class WASIComponentCanonicalHost {
     return WASIComponentCanonicalOperation._(
       kind: definition.kind,
       invoke: (args) => program.invoke(0, args),
-      invokeWithMemory: (memory, args) =>
+      invokeWithMemory: (memory, args, _) =>
           program.invokeWithMemory(0, memory, args),
-      invokeWithMemoryAsync: (memory, args) =>
+      invokeWithMemoryAsync: (memory, args, _) =>
           program.invokeWithMemoryAsync(0, memory, args),
     );
   }
@@ -557,27 +558,36 @@ final class WASIComponentCanonicalProgram {
   Object? invokeWithMemory(
     int canonicalIndex,
     wasm.Memory memory,
-    List<Object?> args,
-  ) {
-    return _operationAt(canonicalIndex).invokeWithMemory(memory, args);
+    List<Object?> args, {
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    return _operationAt(
+      canonicalIndex,
+    ).invokeWithMemory(memory, args, realloc: realloc);
   }
 
   /// Starts a memory-backed canonical event operation.
   Object? invokeWithMemoryEvent(
     int canonicalIndex,
     wasm.Memory memory,
-    List<Object?> args,
-  ) {
-    return _operationAt(canonicalIndex).invokeWithMemoryEvent(memory, args);
+    List<Object?> args, {
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    return _operationAt(
+      canonicalIndex,
+    ).invokeWithMemoryEvent(memory, args, realloc: realloc);
   }
 
   /// Invokes a memory-backed canonical operation and waits if needed.
   Future<Object?> invokeWithMemoryAsync(
     int canonicalIndex,
     wasm.Memory memory,
-    List<Object?> args,
-  ) {
-    return _operationAt(canonicalIndex).invokeWithMemoryAsync(memory, args);
+    List<Object?> args, {
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    return _operationAt(
+      canonicalIndex,
+    ).invokeWithMemoryAsync(memory, args, realloc: realloc);
   }
 
   WASIComponentCanonicalOperation _operationAt(int canonicalIndex) {
@@ -594,9 +604,17 @@ typedef _WASIComponentInvoke = Object? Function(List<Object?> args);
 typedef _WASIComponentInvokeAsync =
     Future<Object?> Function(List<Object?> args);
 typedef _WASIComponentInvokeWithMemory =
-    Object? Function(wasm.Memory memory, List<Object?> args);
+    Object? Function(
+      wasm.Memory memory,
+      List<Object?> args,
+      WASIComponentCanonicalRealloc? realloc,
+    );
 typedef _WASIComponentInvokeWithMemoryAsync =
-    Future<Object?> Function(wasm.Memory memory, List<Object?> args);
+    Future<Object?> Function(
+      wasm.Memory memory,
+      List<Object?> args,
+      WASIComponentCanonicalRealloc? realloc,
+    );
 
 /// Bound canonical operation.
 final class WASIComponentCanonicalOperation {
@@ -637,32 +655,43 @@ final class WASIComponentCanonicalOperation {
   }
 
   /// Invokes this canonical operation with [memory].
-  Object? invokeWithMemory(wasm.Memory memory, List<Object?> args) {
+  Object? invokeWithMemory(
+    wasm.Memory memory,
+    List<Object?> args, {
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
     final invokeWithMemory = _invokeWithMemory;
     if (invokeWithMemory != null) {
-      return invokeWithMemory(memory, args);
+      return invokeWithMemory(memory, args, realloc);
     }
     return invoke(args);
   }
 
   /// Starts this canonical operation's waitable event path with [memory].
-  Object? invokeWithMemoryEvent(wasm.Memory memory, List<Object?> args) {
+  Object? invokeWithMemoryEvent(
+    wasm.Memory memory,
+    List<Object?> args, {
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
     final invokeWithMemoryEvent = _invokeWithMemoryEvent;
     if (invokeWithMemoryEvent != null) {
-      return invokeWithMemoryEvent(memory, args);
+      return invokeWithMemoryEvent(memory, args, realloc);
     }
-    return invokeWithMemory(memory, args);
+    return invokeWithMemory(memory, args, realloc: realloc);
   }
 
   /// Invokes this canonical operation with [memory] and waits when supported.
   Future<Object?> invokeWithMemoryAsync(
     wasm.Memory memory,
-    List<Object?> args,
-  ) {
+    List<Object?> args, {
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
     final invokeWithMemoryAsync = _invokeWithMemoryAsync;
     if (invokeWithMemoryAsync != null) {
-      return invokeWithMemoryAsync(memory, args);
+      return invokeWithMemoryAsync(memory, args, realloc);
     }
-    return Future<Object?>.value(invokeWithMemory(memory, args));
+    return Future<Object?>.value(
+      invokeWithMemory(memory, args, realloc: realloc),
+    );
   }
 }
