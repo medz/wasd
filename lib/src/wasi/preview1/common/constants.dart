@@ -33,7 +33,6 @@ const int fdflagKnownMask =
 /// Preview1 imports that should exist and return `ENOSYS` when unsupported.
 const List<String> preview1NosysImports = <String>[
   'fd_fdstat_set_rights',
-  'fd_renumber',
   'proc_raise',
   'sock_accept',
   'sock_recv',

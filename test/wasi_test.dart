@@ -156,6 +156,7 @@ void main() {
       expect(preview1.containsKey('path_symlink'), isTrue);
       expect(preview1.containsKey('path_unlink_file'), isTrue);
       expect(preview1.containsKey('fd_seek'), isTrue);
+      expect(preview1.containsKey('fd_renumber'), isTrue);
       expect(preview1.containsKey('proc_raise'), isTrue);
       expect(preview1['sched_yield'], isA<FunctionImportExportValue>());
       expect(preview1['path_open'], isA<FunctionImportExportValue>());
@@ -930,6 +931,129 @@ void main() {
         },
         skip: _skipOnNode(
           'Skipping on Node.js; file IO behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'fd_renumber moves virtual descriptors and replaces the target',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/source.txt': Uint8List.fromList(utf8.encode('abcd')),
+              '/sandbox/target.txt': Uint8List.fromList(utf8.encode('WXYZ')),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdRenumber =
+              preview1['fd_renumber'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final fdSeek = preview1['fd_seek'] as FunctionImportExportValue;
+          final fdTell = preview1['fd_tell'] as FunctionImportExportValue;
+          final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final sourcePath = utf8.encode('source.txt');
+          final targetPath = utf8.encode('target.txt');
+          const sourcePathPtr = 2448;
+          const targetPathPtr = 2480;
+          const sourceFdPtr = 2512;
+          const targetFdPtr = 2528;
+          const offsetPtr = 2544;
+          const iovPtr = 2576;
+          const readBufferPtr = 2608;
+          const readCountPtr = 2640;
+
+          bytes.setAll(sourcePathPtr, sourcePath);
+          bytes.setAll(targetPathPtr, targetPath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              sourcePathPtr,
+              sourcePath.length,
+              0,
+              0,
+              0,
+              0,
+              sourceFdPtr,
+            ]),
+            0,
+          );
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              targetPathPtr,
+              targetPath.length,
+              0,
+              0,
+              0,
+              0,
+              targetFdPtr,
+            ]),
+            0,
+          );
+          final sourceFd = data.getUint32(sourceFdPtr, Endian.little);
+          final targetFd = data.getUint32(targetFdPtr, Endian.little);
+          expect(sourceFd, isNot(targetFd));
+
+          expect(fdSeek.ref([sourceFd, 2, 0, offsetPtr]), 0);
+          expect(fdRenumber.ref([sourceFd, targetFd]), 0);
+          expect(fdTell.ref([sourceFd, offsetPtr]), 8);
+          expect(fdTell.ref([targetFd, offsetPtr]), 0);
+          expect(_getUint64Le(data, offsetPtr), 2);
+
+          data.setUint32(iovPtr, readBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 4, Endian.little);
+          expect(fdPread.ref([targetFd, iovPtr, 1, 0, readCountPtr]), 0);
+          expect(data.getUint32(readCountPtr, Endian.little), 4);
+          expect(
+            utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + 4)),
+            'abcd',
+          );
+          expect(fdRenumber.ref([targetFd, targetFd]), 0);
+          expect(fdTell.ref([targetFd, offsetPtr]), 0);
+          expect(_getUint64Le(data, offsetPtr), 2);
+
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              targetPathPtr,
+              targetPath.length,
+              0,
+              0,
+              0,
+              0,
+              sourceFdPtr,
+            ]),
+            0,
+          );
+          final reopenedFd = data.getUint32(sourceFdPtr, Endian.little);
+          expect(fdClose.ref([targetFd]), 0);
+          expect(fdRenumber.ref([reopenedFd, targetFd]), 0);
+          expect(fdTell.ref([reopenedFd, offsetPtr]), 8);
+          bytes.fillRange(readBufferPtr, readBufferPtr + 4, 0);
+          expect(fdPread.ref([targetFd, iovPtr, 1, 0, readCountPtr]), 0);
+          expect(data.getUint32(readCountPtr, Endian.little), 4);
+          expect(
+            utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + 4)),
+            'WXYZ',
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; fd_renumber behavior is delegated to node:wasi.',
         ),
       );
 

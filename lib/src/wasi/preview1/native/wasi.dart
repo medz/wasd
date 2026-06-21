@@ -75,6 +75,7 @@ class WASI implements wasi_iface.WASI {
       'fd_pread': _fdPreadImport,
       'fd_pwrite': _fdPwriteImport,
       'fd_readdir': _fdReaddirImport,
+      'fd_renumber': _fdRenumberImport,
       'fd_sync': _fdSyncImport,
       'fd_allocate': _fdAllocateImport,
       'fd_fdstat_get': _fdFdstatGetImport,
@@ -649,6 +650,21 @@ class WASI implements wasi_iface.WASI {
           return _errnoSuccess;
         }
         return _errnoBadf;
+      });
+
+  wasm.FunctionImportExportValue get _fdRenumberImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 2) {
+          return _errnoInval;
+        }
+        return switch (_vfs.renumberDescriptor(
+          fromFd: _asInt(args[0]),
+          toFd: _asInt(args[1]),
+        )) {
+          wasi_vfs.Preview1FdRenumberResult.success => _errnoSuccess,
+          wasi_vfs.Preview1FdRenumberResult.invalid => _errnoInval,
+          wasi_vfs.Preview1FdRenumberResult.badf => _errnoBadf,
+        };
       });
 
   wasm.FunctionImportExportValue get _fdSeekImport =>

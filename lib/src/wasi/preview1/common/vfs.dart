@@ -101,6 +101,55 @@ final class Preview1VirtualFileSystem {
     return false;
   }
 
+  Preview1FdRenumberResult renumberDescriptor({
+    required int fromFd,
+    required int toFd,
+  }) {
+    if (fromFd < 0 || toFd < 0) {
+      return Preview1FdRenumberResult.invalid;
+    }
+    if (!_hasDescriptor(fromFd)) {
+      return Preview1FdRenumberResult.badf;
+    }
+    if (fromFd == toFd) {
+      return Preview1FdRenumberResult.success;
+    }
+
+    final openFile = _openFilesByFd.remove(fromFd);
+    if (openFile != null) {
+      _closeDescriptor(toFd);
+      _openFilesByFd[toFd] = openFile;
+      _advanceNextVirtualFdPast(toFd);
+      return Preview1FdRenumberResult.success;
+    }
+
+    final openDirectory = _openDirectoriesByFd.remove(fromFd);
+    if (openDirectory != null) {
+      final flags = _openDirectoryFlagsByFd.remove(fromFd) ?? 0;
+      _closeDescriptor(toFd);
+      _openDirectoriesByFd[toFd] = openDirectory;
+      _openDirectoryFlagsByFd[toFd] = flags;
+      _advanceNextVirtualFdPast(toFd);
+      return Preview1FdRenumberResult.success;
+    }
+
+    final preopenDirectory = _preopenGuestPathsByFd.remove(fromFd);
+    if (preopenDirectory != null) {
+      final pathBytes = _preopenPathBytesByFd.remove(fromFd);
+      final flags = _preopenDirectoryFlagsByFd.remove(fromFd) ?? 0;
+      _closeDescriptor(toFd);
+      _preopenGuestPathsByFd[toFd] = preopenDirectory;
+      if (pathBytes != null) {
+        _preopenPathBytesByFd[toFd] = pathBytes;
+      }
+      _preopenDirectoryFlagsByFd[toFd] = flags;
+      _advanceNextVirtualFdPast(toFd);
+      return Preview1FdRenumberResult.success;
+    }
+
+    return Preview1FdRenumberResult.badf;
+  }
+
   bool isPreopenDirectoryFd(int fd) => _preopenGuestPathsByFd.containsKey(fd);
 
   bool isOpenDirectoryFd(int fd) => _openDirectoriesByFd.containsKey(fd);
@@ -442,13 +491,13 @@ final class Preview1VirtualFileSystem {
     final normalized = normalizeGuestPath(guestPath);
     final file = lookupFile(normalized);
     if (file != null) {
-      final fd = _nextVirtualFd++;
+      final fd = _allocateVirtualFd();
       _openFilesByFd[fd] = Preview1VirtualOpenFile(file);
       return Preview1VirtualOpenResult.file(fd);
     }
 
     if (isDirectoryPath(normalized)) {
-      final fd = _nextVirtualFd++;
+      final fd = _allocateVirtualFd();
       _openDirectoriesByFd[fd] = normalized;
       _openDirectoryFlagsByFd[fd] = 0;
       return Preview1VirtualOpenResult.directory(fd);
@@ -529,6 +578,33 @@ final class Preview1VirtualFileSystem {
       filesByGuestPath: _filesByGuestPath,
       symlinksByGuestPath: _symlinksByGuestPath,
     );
+  }
+
+  int _allocateVirtualFd() {
+    while (_hasDescriptor(_nextVirtualFd)) {
+      _nextVirtualFd++;
+    }
+    return _nextVirtualFd++;
+  }
+
+  void _advanceNextVirtualFdPast(int fd) {
+    if (fd >= _nextVirtualFd) {
+      _nextVirtualFd = fd + 1;
+    }
+  }
+
+  bool _hasDescriptor(int fd) =>
+      _openFilesByFd.containsKey(fd) ||
+      _openDirectoriesByFd.containsKey(fd) ||
+      _preopenGuestPathsByFd.containsKey(fd);
+
+  void _closeDescriptor(int fd) {
+    _openFilesByFd.remove(fd);
+    _openDirectoriesByFd.remove(fd);
+    _openDirectoryFlagsByFd.remove(fd);
+    _preopenPathBytesByFd.remove(fd);
+    _preopenGuestPathsByFd.remove(fd);
+    _preopenDirectoryFlagsByFd.remove(fd);
   }
 }
 
@@ -738,6 +814,8 @@ enum Preview1PathMutationResult {
   notDirectory,
   notEmpty,
 }
+
+enum Preview1FdRenumberResult { success, invalid, badf }
 
 final class Preview1VirtualOpenResult {
   const Preview1VirtualOpenResult._(this.kind, this.fd);
