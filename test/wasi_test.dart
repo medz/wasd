@@ -24,6 +24,34 @@ int _getUint64Le(ByteData data, int offset) {
   return low | (high << 32);
 }
 
+List<({String name, int next, int type})> _readDirents(
+  Uint8List bytes,
+  ByteData data,
+  int ptr,
+  int length,
+) {
+  final entries = <({String name, int next, int type})>[];
+  var offset = ptr;
+  final end = ptr + length;
+  while (offset + 24 <= end) {
+    final next = _getUint64Le(data, offset);
+    final nameLen = data.getUint32(offset + 16, Endian.little);
+    final type = bytes[offset + 20];
+    final namePtr = offset + 24;
+    final nameEnd = namePtr + nameLen;
+    if (nameEnd > end) {
+      break;
+    }
+    entries.add((
+      name: utf8.decode(bytes.sublist(namePtr, nameEnd)),
+      next: next,
+      type: type,
+    ));
+    offset = nameEnd;
+  }
+  return entries;
+}
+
 Future<Object?> _awaitMaybeFuture(Object? value) async =>
     value is Future ? await value : value;
 
@@ -1080,6 +1108,113 @@ void main() {
         },
         skip: _skipOnNode(
           'Skipping on Node.js; path_open/fd_read behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'fd_readdir reads virtual directory entries and respects cookies',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/assets/doom1.wad': Uint8List.fromList([7, 8, 9]),
+              '/sandbox/assets/nested/map.wad': Uint8List.fromList([1]),
+              '/sandbox/assets/readme.txt': Uint8List.fromList([2]),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final pathCreateDirectory =
+              preview1['path_create_directory'] as FunctionImportExportValue;
+          final fdReaddir = preview1['fd_readdir'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 2800;
+          const openedFdPtr = 2832;
+          const direntsPtr = 2864;
+          const bufusedPtr = 3040;
+
+          final dirPath = utf8.encode('assets');
+          bytes.setAll(pathPtr, dirPath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              dirPath.length,
+              0,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final dirFd = data.getUint32(openedFdPtr, Endian.little);
+
+          expect(fdReaddir.ref([dirFd, direntsPtr, 160, 0, bufusedPtr]), 0);
+          final bufused = data.getUint32(bufusedPtr, Endian.little);
+          final entries = _readDirents(bytes, data, direntsPtr, bufused);
+          expect(entries.map((entry) => entry.name), [
+            '.',
+            '..',
+            'doom1.wad',
+            'nested',
+            'readme.txt',
+          ]);
+          expect(entries.map((entry) => entry.type), [3, 3, 4, 3, 4]);
+
+          bytes.fillRange(direntsPtr, direntsPtr + 160, 0);
+          expect(
+            fdReaddir.ref([
+              dirFd,
+              direntsPtr,
+              160,
+              entries[2].next,
+              bufusedPtr,
+            ]),
+            0,
+          );
+          final nextBufused = data.getUint32(bufusedPtr, Endian.little);
+          final nextEntries = _readDirents(
+            bytes,
+            data,
+            direntsPtr,
+            nextBufused,
+          );
+          expect(nextEntries.map((entry) => entry.name), [
+            'nested',
+            'readme.txt',
+          ]);
+
+          final newDirPath = utf8.encode('newdir');
+          bytes.setAll(pathPtr, newDirPath);
+          expect(
+            pathCreateDirectory.ref([dirFd, pathPtr, newDirPath.length]),
+            0,
+          );
+          bytes.fillRange(direntsPtr, direntsPtr + 160, 0);
+          expect(fdReaddir.ref([dirFd, direntsPtr, 160, 0, bufusedPtr]), 0);
+          final updatedBufused = data.getUint32(bufusedPtr, Endian.little);
+          final updatedEntries = _readDirents(
+            bytes,
+            data,
+            direntsPtr,
+            updatedBufused,
+          );
+          expect(updatedEntries.map((entry) => entry.name), contains('newdir'));
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; fd_readdir behavior is delegated to node:wasi.',
         ),
       );
 

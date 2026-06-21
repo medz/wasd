@@ -75,6 +75,7 @@ class WASI implements wasi.WASI {
       'fd_write': _fdWriteImport,
       'fd_pread': _fdPreadImport,
       'fd_pwrite': _fdPwriteImport,
+      'fd_readdir': _fdReaddirImport,
       'fd_allocate': _fdAllocateImport,
       'fd_fdstat_get': _fdFdstatGetImport,
       'fd_filestat_get': _fdFilestatGetImport,
@@ -393,6 +394,50 @@ class WASI implements wasi.WASI {
           nwrittenPtr: nwrittenPtr,
           fileOffset: offset,
         );
+      });
+
+  wasm.FunctionImportExportValue get _fdReaddirImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.length < 5) {
+          return _errnoInval;
+        }
+        final fd = _asInt(args[0]);
+        final bufferPtr = _asInt(args[1]);
+        final bufferLength = _asInt(args[2]);
+        final cookie = _asInt64(args[3]);
+        final bufferUsedPtr = _asInt(args[4]);
+        final entries = _vfs.directoryEntriesForFd(fd);
+        if (entries == null) {
+          return _errnoBadf;
+        }
+        if (cookie < 0) {
+          return _errnoInval;
+        }
+
+        final view = _memoryView();
+        if (view == null) {
+          return _errnoInval;
+        }
+        final bytes = view.bytes;
+        final data = view.data;
+        if (bufferPtr < 0 ||
+            bufferLength < 0 ||
+            bufferPtr + bufferLength > bytes.length ||
+            bufferUsedPtr < 0 ||
+            bufferUsedPtr + 4 > bytes.length) {
+          return _errnoInval;
+        }
+
+        final written = wasi_vfs.writeDirectoryEntries(
+          entries: entries,
+          bytes: bytes,
+          data: data,
+          bufferPtr: bufferPtr,
+          bufferLength: bufferLength,
+          cookie: cookie,
+        );
+        data.setUint32(bufferUsedPtr, written, Endian.little);
+        return _errnoSuccess;
       });
 
   wasm.FunctionImportExportValue get _fdAllocateImport =>

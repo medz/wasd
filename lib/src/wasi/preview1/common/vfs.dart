@@ -1,5 +1,8 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
+
+import 'constants.dart';
 
 final class Preview1VirtualFileSystem {
   Preview1VirtualFileSystem({
@@ -32,6 +35,10 @@ final class Preview1VirtualFileSystem {
       preopenGuestPathsByFd: _preopenGuestPathsByFd,
       filesByGuestPath: _filesByGuestPath,
     );
+    _directoryEntriesByGuestPath = _buildDirectoryEntriesByPath(
+      directories: _virtualDirectoryPaths,
+      filesByGuestPath: _filesByGuestPath,
+    );
   }
 
   final Map<int, Uint8List> _preopenPathBytesByFd;
@@ -45,6 +52,7 @@ final class Preview1VirtualFileSystem {
   late Map<String, Preview1VirtualFile> _filesByBasenameLower;
   late Map<String, Preview1VirtualFile> _filesByBasenameCompact;
   late final Set<String> _virtualDirectoryPaths;
+  late Map<String, List<Preview1DirectoryEntry>> _directoryEntriesByGuestPath;
   int _nextVirtualFd;
 
   Uint8List? preopenPathBytesForFd(int fd) => _preopenPathBytesByFd[fd];
@@ -60,6 +68,15 @@ final class Preview1VirtualFileSystem {
 
   bool isDirectoryFd(int fd) =>
       isPreopenDirectoryFd(fd) || isOpenDirectoryFd(fd);
+
+  List<Preview1DirectoryEntry>? directoryEntriesForFd(int fd) {
+    final directoryPath = directoryPathForFd(fd);
+    if (directoryPath == null) {
+      return null;
+    }
+    return _directoryEntriesByGuestPath[normalizeGuestPath(directoryPath)] ??
+        const <Preview1DirectoryEntry>[];
+  }
 
   bool close(int fd) =>
       _openFilesByFd.remove(fd) != null ||
@@ -114,6 +131,7 @@ final class Preview1VirtualFileSystem {
     }
 
     _virtualDirectoryPaths.add(normalized);
+    _rebuildDirectoryEntries();
     return Preview1PathMutationResult.success;
   }
 
@@ -142,6 +160,7 @@ final class Preview1VirtualFileSystem {
 
     _virtualDirectoryPaths.remove(normalized);
     _openDirectoriesByFd.removeWhere((_, path) => path == normalized);
+    _rebuildDirectoryEntries();
     return Preview1PathMutationResult.success;
   }
 
@@ -155,6 +174,7 @@ final class Preview1VirtualFileSystem {
     }
 
     _rebuildFileIndexes();
+    _rebuildDirectoryEntries();
     return Preview1PathMutationResult.success;
   }
 
@@ -180,6 +200,7 @@ final class Preview1VirtualFileSystem {
       _filesByGuestPath.remove(oldNormalized);
       _filesByGuestPath[newNormalized] = oldFile;
       _rebuildFileIndexes();
+      _rebuildDirectoryEntries();
       return Preview1PathMutationResult.success;
     }
 
@@ -250,6 +271,7 @@ final class Preview1VirtualFileSystem {
       }
     }
     _rebuildFileIndexes();
+    _rebuildDirectoryEntries();
   }
 
   void _rebuildFileIndexes() {
@@ -263,6 +285,66 @@ final class Preview1VirtualFileSystem {
       compact: true,
     );
   }
+
+  void _rebuildDirectoryEntries() {
+    _directoryEntriesByGuestPath = _buildDirectoryEntriesByPath(
+      directories: _virtualDirectoryPaths,
+      filesByGuestPath: _filesByGuestPath,
+    );
+  }
+}
+
+final class Preview1DirectoryEntry {
+  Preview1DirectoryEntry({required this.name, required this.fileType})
+    : nameBytes = pathBytes(name);
+
+  final String name;
+  final Uint8List nameBytes;
+  final int fileType;
+}
+
+int writeDirectoryEntries({
+  required List<Preview1DirectoryEntry> entries,
+  required Uint8List bytes,
+  required ByteData data,
+  required int bufferPtr,
+  required int bufferLength,
+  required int cookie,
+}) {
+  final startIndex = cookie <= 0 ? 0 : math.min(cookie, entries.length);
+  var written = 0;
+  for (var index = startIndex; index < entries.length; index++) {
+    final remaining = bufferLength - written;
+    if (remaining < direntSize) {
+      break;
+    }
+
+    final entry = entries[index];
+    final entryPtr = bufferPtr + written;
+    bytes.fillRange(entryPtr, entryPtr + direntSize, 0);
+    _setUint64(data, entryPtr + direntNextOffset, index + 1);
+    _setUint64(data, entryPtr + direntInodeOffset, 0);
+    data.setUint32(
+      entryPtr + direntNameLengthOffset,
+      entry.nameBytes.length,
+      Endian.little,
+    );
+    bytes[entryPtr + direntTypeOffset] = entry.fileType;
+
+    final namePtr = entryPtr + direntSize;
+    final nameBytesToWrite = math.min(
+      entry.nameBytes.length,
+      remaining - direntSize,
+    );
+    if (nameBytesToWrite > 0) {
+      bytes.setRange(namePtr, namePtr + nameBytesToWrite, entry.nameBytes);
+    }
+    written += direntSize + nameBytesToWrite;
+    if (nameBytesToWrite < entry.nameBytes.length) {
+      break;
+    }
+  }
+  return written;
 }
 
 final class Preview1VirtualFile {
@@ -548,4 +630,65 @@ bool _isChildPath(String path, String parent) {
     return normalizedPath != '/';
   }
   return normalizedPath.startsWith('$normalizedParent/');
+}
+
+Map<String, List<Preview1DirectoryEntry>> _buildDirectoryEntriesByPath({
+  required Set<String> directories,
+  required Map<String, Preview1VirtualFile> filesByGuestPath,
+}) {
+  final childrenByDirectory = <String, Map<String, Preview1DirectoryEntry>>{
+    for (final directory in directories)
+      directory: <String, Preview1DirectoryEntry>{},
+  };
+
+  void addChild({
+    required String parent,
+    required String name,
+    required int fileType,
+  }) {
+    final children = childrenByDirectory[parent];
+    if (children == null || name.isEmpty) {
+      return;
+    }
+    children.putIfAbsent(
+      name,
+      () => Preview1DirectoryEntry(name: name, fileType: fileType),
+    );
+  }
+
+  for (final directory in directories) {
+    if (directory == '/') {
+      continue;
+    }
+    addChild(
+      parent: dirnameOfGuestPath(directory),
+      name: basenameOfGuestPath(directory),
+      fileType: filetypeDirectory,
+    );
+  }
+  for (final filePath in filesByGuestPath.keys) {
+    addChild(
+      parent: dirnameOfGuestPath(filePath),
+      name: basenameOfGuestPath(filePath),
+      fileType: filetypeRegularFile,
+    );
+  }
+
+  return {
+    for (final entry in childrenByDirectory.entries)
+      entry.key: <Preview1DirectoryEntry>[
+        Preview1DirectoryEntry(name: '.', fileType: filetypeDirectory),
+        Preview1DirectoryEntry(name: '..', fileType: filetypeDirectory),
+        ...entry.value.values.toList()
+          ..sort((a, b) => a.name.compareTo(b.name)),
+      ],
+  };
+}
+
+void _setUint64(ByteData data, int offset, int value) {
+  final normalized = value.toUnsigned(64);
+  final low = normalized & 0xffffffff;
+  final high = (normalized >> 32) & 0xffffffff;
+  data.setUint32(offset, low, Endian.little);
+  data.setUint32(offset + 4, high, Endian.little);
 }

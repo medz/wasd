@@ -12,6 +12,11 @@ const int errnoNotempty = 55;
 const int prestatSize = 8;
 const int preopenTypeDir = 0;
 const int fdstatSize = 24;
+const int direntSize = 24;
+const int direntNextOffset = 0;
+const int direntInodeOffset = 8;
+const int direntNameLengthOffset = 16;
+const int direntTypeOffset = 20;
 const int filetypeCharacterDevice = 2;
 const int filetypeDirectory = 3;
 const int filetypeRegularFile = 4;
@@ -23,7 +28,6 @@ const List<String> preview1NosysImports = <String>[
   'fd_fdstat_set_flags',
   'fd_fdstat_set_rights',
   'fd_filestat_set_times',
-  'fd_readdir',
   'fd_renumber',
   'fd_sync',
   'path_filestat_set_times',
