@@ -39,6 +39,8 @@ Future<void> main(List<String> args) async {
   final handleMemoryProgramInvoke = _benchmarkHandleMemoryProgramInvoke(
     options,
   );
+  final handleMemoryProgramInvokeAsync =
+      await _benchmarkHandleMemoryProgramInvokeAsync(options);
   final streamMemoryCopy = _benchmarkStreamMemoryCopy(options);
   final futureMemoryCopy = _benchmarkFutureMemoryCopy(options.iterations);
 
@@ -56,6 +58,8 @@ Future<void> main(List<String> args) async {
     'unit_program_invoke': unitProgramInvoke.toJson(),
     'handle_program_invoke': handleProgramInvoke.toJson(),
     'handle_memory_program_invoke': handleMemoryProgramInvoke.toJson(),
+    'handle_memory_program_invoke_async': handleMemoryProgramInvokeAsync
+        .toJson(),
     'stream_memory_copy': streamMemoryCopy.toJson(),
     'future_memory_copy': futureMemoryCopy.toJson(),
   };
@@ -80,6 +84,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkUnitProgramInvoke(warmup);
   _benchmarkHandleProgramInvoke(warmup);
   _benchmarkHandleMemoryProgramInvoke(warmup);
+  await _benchmarkHandleMemoryProgramInvokeAsync(warmup);
   _benchmarkStreamMemoryCopy(warmup);
   _benchmarkFutureMemoryCopy(_warmupIterations);
 }
@@ -437,12 +442,227 @@ _Metric _benchmarkHandleProgramInvoke(_Options options) {
 }
 
 _Metric _benchmarkHandleMemoryProgramInvoke(_Options options) {
+  final programs = _createHandleMemoryPrograms();
+  final streamProgram = programs.streamProgram;
+  final futureProgram = programs.futureProgram;
+
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  const streamInputPointer = 1024;
+  const streamOutputPointer = 4096;
+  const futureInputPointer = 8192;
+  const futureOutputPointer = 12288;
+  for (var i = 0; i < options.batchSize; i++) {
+    data.setUint32(streamInputPointer + i * 4, i, Endian.little);
+  }
+  data.setUint32(futureInputPointer, 0x55aa55aa, Endian.little);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final packedStreamHandles = streamProgram.invoke(0, const <Object?>[]);
+    if (packedStreamHandles is! int) {
+      throw StateError(
+        'stream.new returned non-packed handles: $packedStreamHandles',
+      );
+    }
+    final streamHandles = WASIComponentAsyncEndpointHandles.unpack(
+      packedStreamHandles,
+    );
+    final streamWrite = streamProgram.invokeWithMemory(1, memory, <Object?>[
+      streamHandles.writable,
+      streamInputPointer,
+      options.batchSize,
+    ]);
+    final streamRead = streamProgram.invokeWithMemory(2, memory, <Object?>[
+      streamHandles.readable,
+      streamOutputPointer,
+      options.batchSize,
+    ]);
+    if (streamWrite is! int || streamRead is! int) {
+      throw StateError(
+        'stream memory copy returned non-packed results: $streamWrite/$streamRead',
+      );
+    }
+    checksum += streamWrite;
+    checksum += streamRead;
+    checksum += data.getUint32(streamOutputPointer, Endian.little);
+    streamProgram.invoke(3, <Object?>[streamHandles.readable]);
+    streamProgram.invoke(4, <Object?>[streamHandles.writable]);
+
+    final packedFutureHandles = futureProgram.invoke(0, const <Object?>[]);
+    if (packedFutureHandles is! int) {
+      throw StateError(
+        'future.new returned non-packed handles: $packedFutureHandles',
+      );
+    }
+    final futureHandles = WASIComponentAsyncEndpointHandles.unpack(
+      packedFutureHandles,
+    );
+    final futureWrite = futureProgram.invokeWithMemory(1, memory, <Object?>[
+      futureHandles.writable,
+      futureInputPointer,
+    ]);
+    final futureRead = futureProgram.invokeWithMemory(2, memory, <Object?>[
+      futureHandles.readable,
+      futureOutputPointer,
+    ]);
+    if (futureWrite is! int || futureRead is! int) {
+      throw StateError(
+        'future memory copy returned non-packed results: $futureWrite/$futureRead',
+      );
+    }
+    checksum += futureWrite;
+    checksum += futureRead;
+    checksum += data.getUint32(futureOutputPointer, Endian.little);
+    futureProgram.invoke(3, <Object?>[futureHandles.readable]);
+    futureProgram.invoke(4, <Object?>[futureHandles.writable]);
+  }
+  watch.stop();
+
+  programs.expectNoLeaks();
+
+  return _Metric(
+    operations: options.iterations * (options.batchSize * 2 + 12),
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+Future<_Metric> _benchmarkHandleMemoryProgramInvokeAsync(
+  _Options options,
+) async {
+  final programs = _createHandleMemoryPrograms(maxBufferedElements: 1);
+  final streamProgram = programs.streamProgram;
+  final futureProgram = programs.futureProgram;
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  const streamInputPointer = 1024;
+  const streamSecondInputPointer = 2048;
+  const streamOutputPointer = 4096;
+  const streamSecondOutputPointer = 5120;
+  const futureInputPointer = 8192;
+  const futureOutputPointer = 12288;
+  for (var i = 0; i < options.batchSize; i++) {
+    data.setUint32(streamInputPointer + i * 4, i, Endian.little);
+  }
+  data.setUint32(streamSecondInputPointer, 0x33, Endian.little);
+  data.setUint32(futureInputPointer, 0x55aa55aa, Endian.little);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final readHandles = _unpackEndpointHandles(
+      streamProgram.invoke(0, const <Object?>[]),
+      'stream.new',
+    );
+    final pendingRead = streamProgram.invokeWithMemoryAsync(
+      2,
+      memory,
+      <Object?>[readHandles.readable, streamOutputPointer, 1],
+    );
+    final streamWrite = streamProgram.invokeWithMemory(1, memory, <Object?>[
+      readHandles.writable,
+      streamInputPointer,
+      1,
+    ]);
+    final streamRead = await pendingRead;
+    if (streamWrite is! int || streamRead is! int) {
+      throw StateError(
+        'async stream read returned non-packed results: $streamWrite/$streamRead',
+      );
+    }
+    checksum += streamWrite;
+    checksum += streamRead;
+    checksum += data.getUint32(streamOutputPointer, Endian.little);
+    streamProgram.invoke(3, <Object?>[readHandles.readable]);
+    streamProgram.invoke(4, <Object?>[readHandles.writable]);
+
+    final writeHandles = _unpackEndpointHandles(
+      streamProgram.invoke(0, const <Object?>[]),
+      'stream.new',
+    );
+    final firstWrite = streamProgram.invokeWithMemory(1, memory, <Object?>[
+      writeHandles.writable,
+      streamInputPointer,
+      1,
+    ]);
+    final pendingWrite = streamProgram.invokeWithMemoryAsync(
+      1,
+      memory,
+      <Object?>[writeHandles.writable, streamSecondInputPointer, 1],
+    );
+    final firstRead = streamProgram.invokeWithMemory(2, memory, <Object?>[
+      writeHandles.readable,
+      streamOutputPointer,
+      1,
+    ]);
+    final secondWrite = await pendingWrite;
+    final secondRead = streamProgram.invokeWithMemory(2, memory, <Object?>[
+      writeHandles.readable,
+      streamSecondOutputPointer,
+      1,
+    ]);
+    if (firstWrite is! int ||
+        firstRead is! int ||
+        secondWrite is! int ||
+        secondRead is! int) {
+      throw StateError(
+        'async stream write returned non-packed results: '
+        '$firstWrite/$firstRead/$secondWrite/$secondRead',
+      );
+    }
+    checksum += firstWrite;
+    checksum += firstRead;
+    checksum += secondWrite;
+    checksum += secondRead;
+    checksum += data.getUint32(streamSecondOutputPointer, Endian.little);
+    streamProgram.invoke(3, <Object?>[writeHandles.readable]);
+    streamProgram.invoke(4, <Object?>[writeHandles.writable]);
+
+    final futureHandles = _unpackEndpointHandles(
+      futureProgram.invoke(0, const <Object?>[]),
+      'future.new',
+    );
+    final pendingFutureRead = futureProgram.invokeWithMemoryAsync(
+      2,
+      memory,
+      <Object?>[futureHandles.readable, futureOutputPointer],
+    );
+    final futureWrite = futureProgram.invokeWithMemory(1, memory, <Object?>[
+      futureHandles.writable,
+      futureInputPointer,
+    ]);
+    final futureRead = await pendingFutureRead;
+    if (futureWrite is! int || futureRead is! int) {
+      throw StateError(
+        'async future read returned non-packed results: $futureWrite/$futureRead',
+      );
+    }
+    checksum += futureWrite;
+    checksum += futureRead;
+    checksum += data.getUint32(futureOutputPointer, Endian.little);
+    futureProgram.invoke(3, <Object?>[futureHandles.readable]);
+    futureProgram.invoke(4, <Object?>[futureHandles.writable]);
+  }
+  watch.stop();
+
+  programs.expectNoLeaks();
+  return _Metric(
+    operations: options.iterations * 17,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_HandleMemoryPrograms _createHandleMemoryPrograms({int? maxBufferedElements}) {
   final streamComponent = WasmComponent.decode(_streamU32TypeComponentBytes());
   final streamHost = WASIComponentAsyncHost()
     ..defineStreamTypeFromComponent<int>(
       streamComponent,
       0,
       'benchmark-u32-stream',
+      maxBufferedElements: maxBufferedElements,
     );
   final streamProgram = WASIComponentCanonicalAsyncHandleProgram(
     operations: [
@@ -545,96 +765,49 @@ _Metric _benchmarkHandleMemoryProgramInvoke(_Options options) {
     ],
   );
 
-  final memory = Memory(const MemoryDescriptor(initial: 1));
-  final data = ByteData.view(memory.buffer);
-  const streamInputPointer = 1024;
-  const streamOutputPointer = 4096;
-  const futureInputPointer = 8192;
-  const futureOutputPointer = 12288;
-  for (var i = 0; i < options.batchSize; i++) {
-    data.setUint32(streamInputPointer + i * 4, i, Endian.little);
-  }
-  data.setUint32(futureInputPointer, 0x55aa55aa, Endian.little);
-  var checksum = 0;
-
-  final watch = Stopwatch()..start();
-  for (var i = 0; i < options.iterations; i++) {
-    final packedStreamHandles = streamProgram.invoke(0, const <Object?>[]);
-    if (packedStreamHandles is! int) {
-      throw StateError(
-        'stream.new returned non-packed handles: $packedStreamHandles',
-      );
-    }
-    final streamHandles = WASIComponentAsyncEndpointHandles.unpack(
-      packedStreamHandles,
-    );
-    final streamWrite = streamProgram.invokeWithMemory(1, memory, <Object?>[
-      streamHandles.writable,
-      streamInputPointer,
-      options.batchSize,
-    ]);
-    final streamRead = streamProgram.invokeWithMemory(2, memory, <Object?>[
-      streamHandles.readable,
-      streamOutputPointer,
-      options.batchSize,
-    ]);
-    if (streamWrite is! int || streamRead is! int) {
-      throw StateError(
-        'stream memory copy returned non-packed results: $streamWrite/$streamRead',
-      );
-    }
-    checksum += streamWrite;
-    checksum += streamRead;
-    checksum += data.getUint32(streamOutputPointer, Endian.little);
-    streamProgram.invoke(3, <Object?>[streamHandles.readable]);
-    streamProgram.invoke(4, <Object?>[streamHandles.writable]);
-
-    final packedFutureHandles = futureProgram.invoke(0, const <Object?>[]);
-    if (packedFutureHandles is! int) {
-      throw StateError(
-        'future.new returned non-packed handles: $packedFutureHandles',
-      );
-    }
-    final futureHandles = WASIComponentAsyncEndpointHandles.unpack(
-      packedFutureHandles,
-    );
-    final futureWrite = futureProgram.invokeWithMemory(1, memory, <Object?>[
-      futureHandles.writable,
-      futureInputPointer,
-    ]);
-    final futureRead = futureProgram.invokeWithMemory(2, memory, <Object?>[
-      futureHandles.readable,
-      futureOutputPointer,
-    ]);
-    if (futureWrite is! int || futureRead is! int) {
-      throw StateError(
-        'future memory copy returned non-packed results: $futureWrite/$futureRead',
-      );
-    }
-    checksum += futureWrite;
-    checksum += futureRead;
-    checksum += data.getUint32(futureOutputPointer, Endian.little);
-    futureProgram.invoke(3, <Object?>[futureHandles.readable]);
-    futureProgram.invoke(4, <Object?>[futureHandles.writable]);
-  }
-  watch.stop();
-
-  if (streamHost.table.activeCount != 0) {
-    throw StateError(
-      'stream memory program leaked ${streamHost.table.activeCount} endpoints',
-    );
-  }
-  if (futureHost.table.activeCount != 0) {
-    throw StateError(
-      'future memory program leaked ${futureHost.table.activeCount} endpoints',
-    );
-  }
-
-  return _Metric(
-    operations: options.iterations * (options.batchSize * 2 + 12),
-    totalMicros: watch.elapsedMicroseconds,
-    checksum: checksum,
+  return _HandleMemoryPrograms(
+    streamHost: streamHost,
+    streamProgram: streamProgram,
+    futureHost: futureHost,
+    futureProgram: futureProgram,
   );
+}
+
+WASIComponentAsyncEndpointHandles _unpackEndpointHandles(
+  Object? packed,
+  String operation,
+) {
+  if (packed is! int) {
+    throw StateError('$operation returned non-packed handles: $packed');
+  }
+  return WASIComponentAsyncEndpointHandles.unpack(packed);
+}
+
+final class _HandleMemoryPrograms {
+  const _HandleMemoryPrograms({
+    required this.streamHost,
+    required this.streamProgram,
+    required this.futureHost,
+    required this.futureProgram,
+  });
+
+  final WASIComponentAsyncHost streamHost;
+  final WASIComponentCanonicalAsyncHandleProgram streamProgram;
+  final WASIComponentAsyncHost futureHost;
+  final WASIComponentCanonicalAsyncHandleProgram futureProgram;
+
+  void expectNoLeaks() {
+    if (streamHost.table.activeCount != 0) {
+      throw StateError(
+        'stream memory program leaked ${streamHost.table.activeCount} endpoints',
+      );
+    }
+    if (futureHost.table.activeCount != 0) {
+      throw StateError(
+        'future memory program leaked ${futureHost.table.activeCount} endpoints',
+      );
+    }
+  }
 }
 
 _Metric _benchmarkStreamMemoryCopy(_Options options) {
@@ -796,6 +969,7 @@ void _printText(Map<String, Object?> payload) {
     'unit_program_invoke',
     'handle_program_invoke',
     'handle_memory_program_invoke',
+    'handle_memory_program_invoke_async',
     'stream_memory_copy',
     'future_memory_copy',
   ]) {
