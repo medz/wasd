@@ -146,6 +146,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   benchmarks before they are advertised as production-ready. The "sandwich"
   async forwarding case from WASI 0.3 must be a first-class benchmark, not only
   a functional test.
+- Component resource table handle allocation, typed lookup, borrow, and drop
+  behavior are measured by
+  `dart run tool/wasi_resource_table_benchmark.dart --json`.
 
 ## Near-Term Slices
 
