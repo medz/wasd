@@ -25,8 +25,10 @@ class WASI implements wasi.WASI {
     int stdout = 1,
     int stderr = 2,
     Map<int, WASIPreview1Socket> sockets = const <int, WASIPreview1Socket>{},
+    wasi.WASIProcRaiseHandler? procRaiseHandler,
     wasi.WASIVersion version = wasi.WASIVersion.preview1,
   }) : _returnOnExit = returnOnExit,
+       _procRaiseHandler = procRaiseHandler,
        _argsData = [for (final arg in args) wasi_vfs.nulTerminated(arg)],
        _envData = [
          for (final entry in env.entries)
@@ -45,6 +47,7 @@ class WASI implements wasi.WASI {
        );
 
   final bool _returnOnExit;
+  final wasi.WASIProcRaiseHandler? _procRaiseHandler;
   final List<Uint8List> _argsData;
   final List<Uint8List> _envData;
   final wasi_vfs.Preview1VirtualFileSystem _vfs;
@@ -65,6 +68,7 @@ class WASI implements wasi.WASI {
     final preview1 = <String, wasm.ImportValue>{
       for (final name in _preview1NosysImports) name: _nosysImport,
       'proc_exit': _procExitImport,
+      'proc_raise': _procRaiseImport,
       'args_sizes_get': _argsSizesGetImport,
       'args_get': _argsGetImport,
       'environ_sizes_get': _environSizesGetImport,
@@ -116,6 +120,26 @@ class WASI implements wasi.WASI {
   wasm.FunctionImportExportValue get _procExitImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
         throw _WasiExit(args.isEmpty ? 0 : _asInt(args.first));
+      });
+
+  wasm.FunctionImportExportValue get _procRaiseImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.isEmpty) {
+          return _errnoInval;
+        }
+        final signal = wasi.WASIProcessSignal.fromPreview1Code(
+          _asInt(args.first),
+        );
+        if (signal == null || signal == wasi.WASIProcessSignal.none) {
+          return _errnoInval;
+        }
+
+        final handler = _procRaiseHandler;
+        if (handler == null) {
+          return _errnoNosys;
+        }
+        handler(signal);
+        return _errnoSuccess;
       });
 
   wasm.FunctionImportExportValue get _fdWriteImport =>

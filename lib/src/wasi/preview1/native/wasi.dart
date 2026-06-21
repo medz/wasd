@@ -24,8 +24,10 @@ class WASI implements wasi_iface.WASI {
     int stdout = 1,
     int stderr = 2,
     Map<int, WASIPreview1Socket> sockets = const <int, WASIPreview1Socket>{},
+    wasi_iface.WASIProcRaiseHandler? procRaiseHandler,
     wasi_iface.WASIVersion version = wasi_iface.WASIVersion.preview1,
   }) : _returnOnExit = returnOnExit,
+       _procRaiseHandler = procRaiseHandler,
        _argsData = [for (final arg in args) wasi_vfs.nulTerminated(arg)],
        _envData = [
          for (final entry in env.entries)
@@ -44,6 +46,7 @@ class WASI implements wasi_iface.WASI {
        );
 
   final bool _returnOnExit;
+  final wasi_iface.WASIProcRaiseHandler? _procRaiseHandler;
   final List<Uint8List> _argsData;
   final List<Uint8List> _envData;
   final wasi_vfs.Preview1VirtualFileSystem _vfs;
@@ -62,6 +65,7 @@ class WASI implements wasi_iface.WASI {
     final preview1 = <String, wasm.ImportValue>{
       for (final name in _preview1NosysImports) name: _nosysImport,
       'proc_exit': _procExitImport,
+      'proc_raise': _procRaiseImport,
       'args_sizes_get': _argsSizesGetImport,
       'args_get': _argsGetImport,
       'environ_sizes_get': _environSizesGetImport,
@@ -113,6 +117,26 @@ class WASI implements wasi_iface.WASI {
   wasm.FunctionImportExportValue get _procExitImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
         throw _WasiExit(args.isEmpty ? 0 : _asInt(args.first));
+      });
+
+  wasm.FunctionImportExportValue get _procRaiseImport =>
+      wasm.ImportExportKind.function((List<Object?> args) {
+        if (args.isEmpty) {
+          return _errnoInval;
+        }
+        final signal = wasi_iface.WASIProcessSignal.fromPreview1Code(
+          _asInt(args.first),
+        );
+        if (signal == null || signal == wasi_iface.WASIProcessSignal.none) {
+          return _errnoInval;
+        }
+
+        final handler = _procRaiseHandler;
+        if (handler != null) {
+          handler(signal);
+          return _errnoSuccess;
+        }
+        return _raiseNativeProcessSignal(signal);
       });
 
   wasm.FunctionImportExportValue get _fdWriteImport =>
@@ -2155,6 +2179,55 @@ int _errnoFromFdRightsResult(wasi_vfs.Preview1FdRightsResult result) =>
       wasi_vfs.Preview1FdRightsResult.invalid => _errnoInval,
       wasi_vfs.Preview1FdRightsResult.badf => _errnoBadf,
       wasi_vfs.Preview1FdRightsResult.notCapable => _errnoNotcapable,
+    };
+
+int _raiseNativeProcessSignal(wasi_iface.WASIProcessSignal signal) {
+  final hostSignal = _hostProcessSignalFor(signal);
+  if (hostSignal == null) {
+    return _errnoNosys;
+  }
+  try {
+    return io.Process.killPid(io.pid, hostSignal) ? _errnoSuccess : _errnoInval;
+  } on UnsupportedError {
+    return _errnoNosys;
+  } on ArgumentError {
+    return _errnoInval;
+  }
+}
+
+io.ProcessSignal? _hostProcessSignalFor(wasi_iface.WASIProcessSignal signal) =>
+    switch (signal) {
+      wasi_iface.WASIProcessSignal.none => null,
+      wasi_iface.WASIProcessSignal.hup => io.ProcessSignal.sighup,
+      wasi_iface.WASIProcessSignal.interrupt => io.ProcessSignal.sigint,
+      wasi_iface.WASIProcessSignal.quit => io.ProcessSignal.sigquit,
+      wasi_iface.WASIProcessSignal.ill => io.ProcessSignal.sigill,
+      wasi_iface.WASIProcessSignal.trap => io.ProcessSignal.sigtrap,
+      wasi_iface.WASIProcessSignal.abrt => io.ProcessSignal.sigabrt,
+      wasi_iface.WASIProcessSignal.bus => io.ProcessSignal.sigbus,
+      wasi_iface.WASIProcessSignal.fpe => io.ProcessSignal.sigfpe,
+      wasi_iface.WASIProcessSignal.kill => io.ProcessSignal.sigkill,
+      wasi_iface.WASIProcessSignal.usr1 => io.ProcessSignal.sigusr1,
+      wasi_iface.WASIProcessSignal.segv => io.ProcessSignal.sigsegv,
+      wasi_iface.WASIProcessSignal.usr2 => io.ProcessSignal.sigusr2,
+      wasi_iface.WASIProcessSignal.pipe => io.ProcessSignal.sigpipe,
+      wasi_iface.WASIProcessSignal.alrm => io.ProcessSignal.sigalrm,
+      wasi_iface.WASIProcessSignal.term => io.ProcessSignal.sigterm,
+      wasi_iface.WASIProcessSignal.chld => io.ProcessSignal.sigchld,
+      wasi_iface.WASIProcessSignal.cont => io.ProcessSignal.sigcont,
+      wasi_iface.WASIProcessSignal.stop => io.ProcessSignal.sigstop,
+      wasi_iface.WASIProcessSignal.tstp => io.ProcessSignal.sigtstp,
+      wasi_iface.WASIProcessSignal.ttin => io.ProcessSignal.sigttin,
+      wasi_iface.WASIProcessSignal.ttou => io.ProcessSignal.sigttou,
+      wasi_iface.WASIProcessSignal.urg => io.ProcessSignal.sigurg,
+      wasi_iface.WASIProcessSignal.xcpu => io.ProcessSignal.sigxcpu,
+      wasi_iface.WASIProcessSignal.xfsz => io.ProcessSignal.sigxfsz,
+      wasi_iface.WASIProcessSignal.vtalrm => io.ProcessSignal.sigvtalrm,
+      wasi_iface.WASIProcessSignal.prof => io.ProcessSignal.sigprof,
+      wasi_iface.WASIProcessSignal.winch => io.ProcessSignal.sigwinch,
+      wasi_iface.WASIProcessSignal.poll => io.ProcessSignal.sigpoll,
+      wasi_iface.WASIProcessSignal.pwr => null,
+      wasi_iface.WASIProcessSignal.sys => io.ProcessSignal.sigsys,
     };
 
 int _asInt(Object? value) {

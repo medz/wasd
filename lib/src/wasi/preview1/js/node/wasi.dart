@@ -25,6 +25,7 @@ class WASI implements wasi_iface.WASI {
     int stdout = 1,
     int stderr = 2,
     Map<int, WASIPreview1Socket> sockets = const <int, WASIPreview1Socket>{},
+    wasi_iface.WASIProcRaiseHandler? procRaiseHandler,
     wasi_iface.WASIVersion version = wasi_iface.WASIVersion.preview1,
   }) : _host = _createNodeWasi(
          args: args,

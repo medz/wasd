@@ -12,3 +12,5 @@ bool get isNodeJsRuntime {
   }
   return (versions as JSObject).getProperty<JSAny?>('node'.toJS) != null;
 }
+
+bool get isBrowserJsRuntime => !isNodeJsRuntime;

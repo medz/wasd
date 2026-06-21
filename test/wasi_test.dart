@@ -12,6 +12,9 @@ final _wasiBytes = wasiStartModuleBytes();
 
 Object? _skipOnNode(String reason) => isNodeJsRuntime ? reason : false;
 
+Object? _skipUnlessBrowser(String reason) =>
+    isBrowserJsRuntime ? false : reason;
+
 const int _rightFdRead = 1 << 1;
 const int _rightFdWrite = 1 << 6;
 const int _rightFdFdstatGet = 1 << 21;
@@ -102,6 +105,15 @@ void main() {
     test('constructor creates instance', () {
       final wasi = WASI();
       expect(wasi, isA<WASI>());
+    });
+
+    test('process signal codes follow WASI Preview1 numbering', () {
+      expect(WASIProcessSignal.none.code, 0);
+      expect(WASIProcessSignal.term.code, 15);
+      expect(WASIProcessSignal.sys.code, 30);
+      expect(WASIProcessSignal.fromPreview1Code(15), WASIProcessSignal.term);
+      expect(WASIProcessSignal.fromPreview1Code(30), WASIProcessSignal.sys);
+      expect(WASIProcessSignal.fromPreview1Code(31), isNull);
     });
 
     test('imports contains wasi_snapshot_preview1', () {
@@ -797,17 +809,29 @@ void main() {
       );
 
       test(
-        'unsupported proc_raise returns nosys while basic scheduling syscalls succeed',
+        'proc_raise validates preview1 signals while basic scheduling syscalls succeed',
         () async {
-          final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+          final raisedSignals = <WASIProcessSignal>[];
+          final signalWasi = WASI(
+            procRaiseHandler: raisedSignals.add,
+            args: ['app.wasm'],
+            env: {'FOO': 'bar'},
+            preopens: {'/sandbox': '/tmp'},
+          );
+          final signalResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            signalWasi.imports,
+          );
+          final signalInstance = signalResult.instance;
+          final preview1 = signalWasi.imports['wasi_snapshot_preview1']!;
           final schedYield =
               preview1['sched_yield'] as FunctionImportExportValue;
           final pollOneoff =
               preview1['poll_oneoff'] as FunctionImportExportValue;
           final procRaise = preview1['proc_raise'] as FunctionImportExportValue;
           final memory =
-              (instance.exports['memory'] as MemoryImportExportValue).ref;
-          wasi.finalizeBindings(instance, memory: memory);
+              (signalInstance.exports['memory'] as MemoryImportExportValue).ref;
+          signalWasi.finalizeBindings(signalInstance, memory: memory);
 
           final data = ByteData.view(memory.buffer);
           const inPtr = 2200;
@@ -828,10 +852,38 @@ void main() {
           expect(data.getUint32(outPtr, Endian.little), 0x11223344);
           expect(data.getUint32(outPtr + 4, Endian.little), 0x55667788);
           expect(data.getUint8(outPtr + 10), 0);
-          expect(procRaise.ref([15]), 52);
+          expect(procRaise.ref([15]), 0);
+          expect(raisedSignals, [WASIProcessSignal.term]);
+          expect(procRaise.ref([0]), _errnoInval);
+          expect(procRaise.ref([31]), _errnoInval);
+          expect(raisedSignals, [WASIProcessSignal.term]);
         },
         skip: _skipOnNode(
           'Skipping on Node.js; syscall behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'proc_raise returns nosys in browsers without a handler',
+        () async {
+          final browserWasi = WASI();
+          final browserResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            browserWasi.imports,
+          );
+          final browserInstance = browserResult.instance;
+          final procRaise =
+              browserWasi.imports['wasi_snapshot_preview1']!['proc_raise']
+                  as FunctionImportExportValue;
+          final memory =
+              (browserInstance.exports['memory'] as MemoryImportExportValue)
+                  .ref;
+          browserWasi.finalizeBindings(browserInstance, memory: memory);
+
+          expect(procRaise.ref([15]), 52);
+        },
+        skip: _skipUnlessBrowser(
+          'Skipping outside browser JS runtimes; native proc_raise can signal.',
         ),
       );
 

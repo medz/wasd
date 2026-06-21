@@ -63,9 +63,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   sockets, descriptor flags, descriptor rights, descriptor times, descriptor
   sync/advice validation, clock/file/socket polling readiness, and descriptor
   renumbering. Node still delegates Preview 1 behavior to `node:wasi`.
-- The remaining explicit Preview 1 `ENOSYS` list is `proc_raise`. This list is
-  intentionally in code at `lib/src/wasi/preview1/common/constants.dart`;
-  README support claims must stay aligned with it.
+- Preview 1 `proc_raise` is no longer a blanket `ENOSYS` stub: native hosts
+  deliver mapped process signals by default, native/browser hosts can inject a
+  `procRaiseHandler` for controlled signal handling, and browser hosts still
+  return `ENOSYS` when no handler exists.
 - Preview 1 stdio descriptors, virtual files, configured stream/datagram
   sockets, open directories, and preopens now live in one VFS
   descriptor/capability table with base rights, inheriting rights, descriptor
@@ -102,16 +103,15 @@ This is the implementation state as of 2026-06-21 on `main`.
 
 ## Next Implementation Order
 
-1. Treat `proc_raise` as process-control capability work, not just a return-code
-   stub. Native and JS behavior need separate semantics and tests.
-2. Extend Preview1 socket coverage with conformance-shaped edge cases:
-   multi-iov `RECV_PEEK`, fd renumber/close interactions, shutdown write errors,
-   and larger send/recv benchmarks before adding a native networking adapter.
-3. For P2/P3, add a versioned host boundary first:
+1. Extend Preview1 socket coverage only where the current descriptor-backed
+   model still has real gaps: native adapter boundaries, externally backed
+   readiness, and larger conformance-shaped descriptor distributions before
+   adding raw networking APIs.
+2. For P2/P3, add a versioned host boundary first:
    `preview1`, `preview2`, and `preview3` adapters over shared descriptor,
    resource, clock, random, filesystem, and socket primitives. Do not extend
    `wasi_snapshot_preview1` types into component worlds.
-4. Add WIT ingestion and generated binding support only after the resource table
+3. Add WIT ingestion and generated binding support only after the resource table
    and canonical ABI ownership model are in place.
 
 ## Performance Direction

@@ -87,4 +87,4 @@ const int rightsKnownMask = (1 << 30) - 1;
 const int rightsAll = rightsKnownMask;
 
 /// Preview1 imports that should exist and return `ENOSYS` when unsupported.
-const List<String> preview1NosysImports = <String>['proc_raise'];
+const List<String> preview1NosysImports = <String>[];
