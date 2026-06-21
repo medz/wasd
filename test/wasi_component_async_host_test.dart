@@ -165,6 +165,34 @@ void main() {
       expect(dropped, <String>['message']);
     });
 
+    test(
+      'awaits pending future reads through async program invocation',
+      () async {
+        final component = WasmComponent.decode(_canonicalFutureProgramBytes());
+        expect(component.validate(), isEmpty);
+        final host = WASIComponentAsyncHost();
+        host.defineFutureTypeFromComponent<String>(component, 0, 'message');
+        final program = host.bindCanonicalDefinitions(component);
+        final future =
+            program.invoke(0, const <Object?>[])!
+                as WASIComponentFuture<String>;
+        var completed = false;
+
+        final pending = program.invokeAsync(1, <Object?>[future.readable])
+          ..then((_) {
+            completed = true;
+          });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(completed, isFalse);
+
+        expect(program.invoke(2, <Object?>[future.writable, 'ready']), isNull);
+
+        await expectLater(pending, completion('ready'));
+        expect(completed, isTrue);
+      },
+    );
+
     test('invokes decoded canonical future definitions with handles', () {
       final component = WasmComponent.decode(_canonicalFutureProgramBytes());
       expect(component.validate(), isEmpty);
@@ -200,6 +228,37 @@ void main() {
       expect(host.table.activeCount, 0);
       expect(dropped, <String>['message']);
     });
+
+    test(
+      'awaits pending future reads through async handle invocation',
+      () async {
+        final component = WasmComponent.decode(_canonicalFutureProgramBytes());
+        expect(component.validate(), isEmpty);
+        final host = WASIComponentAsyncHost();
+        host.defineFutureTypeFromComponent<String>(component, 0, 'message');
+        final program = host.bindCanonicalDefinitionsToHandles(component);
+        final handles =
+            program.invoke(0, const <Object?>[])!
+                as WASIComponentAsyncEndpointHandles;
+        var completed = false;
+
+        final pending = program.invokeAsync(1, <Object?>[handles.readable])
+          ..then((_) {
+            completed = true;
+          });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(completed, isFalse);
+
+        expect(program.invoke(2, <Object?>[handles.writable, 'ready']), isNull);
+
+        await expectLater(pending, completion('ready'));
+        expect(completed, isTrue);
+        expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+        expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+        expect(host.table.activeCount, 0);
+      },
+    );
 
     test('rejects non-async definitions and mismatched type bindings', () {
       final component = WasmComponent.decode(_canonicalStreamProgramBytes());

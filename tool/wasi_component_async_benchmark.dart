@@ -10,20 +10,22 @@ const int _defaultIterations = 50000;
 const int _defaultBatchSize = 32;
 const int _warmupIterations = 1000;
 
-void main(List<String> args) {
+Future<void> main(List<String> args) async {
   final options = _Options.parse(args);
   if (options.help) {
     _printUsage();
     return;
   }
 
-  _runWarmup(options);
+  await _runWarmup(options);
 
   final streamRoundTrip = _benchmarkStreamRoundTrip(options);
   final streamCancel = _benchmarkStreamCancel(options);
   final futureCompleteReadDrop = _benchmarkFutureCompleteReadDrop(
     options.iterations,
   );
+  final futurePendingReadCompletion =
+      await _benchmarkFuturePendingReadCompletion(options.iterations);
   final programInvoke = _benchmarkProgramInvoke(options);
   final handleProgramInvoke = _benchmarkHandleProgramInvoke(options);
 
@@ -33,6 +35,7 @@ void main(List<String> args) {
     'stream_round_trip': streamRoundTrip.toJson(),
     'stream_cancel': streamCancel.toJson(),
     'future_complete_read_drop': futureCompleteReadDrop.toJson(),
+    'future_pending_read_completion': futurePendingReadCompletion.toJson(),
     'program_invoke': programInvoke.toJson(),
     'handle_program_invoke': handleProgramInvoke.toJson(),
   };
@@ -44,11 +47,12 @@ void main(List<String> args) {
   }
 }
 
-void _runWarmup(_Options options) {
+Future<void> _runWarmup(_Options options) async {
   final warmup = options.copyWith(iterations: _warmupIterations);
   _benchmarkStreamRoundTrip(warmup);
   _benchmarkStreamCancel(warmup);
   _benchmarkFutureCompleteReadDrop(_warmupIterations);
+  await _benchmarkFuturePendingReadCompletion(_warmupIterations);
   _benchmarkProgramInvoke(warmup);
   _benchmarkHandleProgramInvoke(warmup);
 }
@@ -118,6 +122,27 @@ _Metric _benchmarkFutureCompleteReadDrop(int iterations) {
 
   return _Metric(
     operations: iterations * 4,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+Future<_Metric> _benchmarkFuturePendingReadCompletion(int iterations) async {
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final future = WASIComponentFuture<int>('benchmark-future-pending');
+    final pending = future.readable.readWhenReady();
+    future.writable.complete(i);
+    checksum += await pending;
+    future.readable.drop();
+    future.writable.drop();
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 5,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
@@ -249,6 +274,7 @@ void _printText(Map<String, Object?> payload) {
     'stream_round_trip',
     'stream_cancel',
     'future_complete_read_drop',
+    'future_pending_read_completion',
     'program_invoke',
     'handle_program_invoke',
   ]) {

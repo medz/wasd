@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 
 /// In-memory runtime state for a Component Model `stream<T>` value.
@@ -165,6 +166,15 @@ final class WASIComponentReadableFuture<T extends Object> {
     return _state.value as T;
   }
 
+  /// Returns a Dart future that completes when this component future is ready.
+  ///
+  /// This is the internal completion primitive used by future WASI 0.3 async
+  /// scheduling. The synchronous [read] API remains useful for already-ready
+  /// host-side canonical operations.
+  Future<T> readWhenReady() {
+    return _state.readWhenReady();
+  }
+
   /// Cancels the future while it is still pending.
   void cancel() {
     _state.cancel();
@@ -307,6 +317,7 @@ final class _WASIComponentFutureState<T extends Object> {
 
   _WASIComponentFutureStatus status = _WASIComponentFutureStatus.pending;
   T? value;
+  List<Completer<T>>? readWaiters;
   bool readDropped = false;
   bool writeDropped = false;
   bool _dropCalled = false;
@@ -326,6 +337,17 @@ final class _WASIComponentFutureState<T extends Object> {
     }
   }
 
+  Future<T> readWhenReady() {
+    requireReadable();
+    if (isReady) {
+      return Future<T>.value(value as T);
+    }
+
+    final completer = Completer<T>();
+    (readWaiters ??= <Completer<T>>[]).add(completer);
+    return completer.future;
+  }
+
   void complete(T completedValue) {
     if (writeDropped) {
       throw StateError('WASI component future $name writable was dropped.');
@@ -338,6 +360,9 @@ final class _WASIComponentFutureState<T extends Object> {
     }
     value = completedValue;
     status = _WASIComponentFutureStatus.ready;
+    if (readWaiters != null) {
+      _completeReadWaiters(completedValue);
+    }
   }
 
   void cancel() {
@@ -345,6 +370,7 @@ final class _WASIComponentFutureState<T extends Object> {
       throw StateError('WASI component future $name is not pending.');
     }
     status = _WASIComponentFutureStatus.cancelled;
+    _failReadWaiters(StateError('WASI component future $name was cancelled.'));
   }
 
   void dropReadable() {
@@ -352,6 +378,11 @@ final class _WASIComponentFutureState<T extends Object> {
       return;
     }
     readDropped = true;
+    if (readWaiters != null) {
+      _failReadWaiters(
+        StateError('WASI component future $name readable was dropped.'),
+      );
+    }
     _maybeDrop();
   }
 
@@ -360,7 +391,39 @@ final class _WASIComponentFutureState<T extends Object> {
       return;
     }
     writeDropped = true;
+    if (status == _WASIComponentFutureStatus.pending) {
+      status = _WASIComponentFutureStatus.cancelled;
+      _failReadWaiters(
+        StateError('WASI component future $name writable was dropped.'),
+      );
+    }
     _maybeDrop();
+  }
+
+  void _completeReadWaiters(T completedValue) {
+    final waiters = readWaiters;
+    if (waiters == null || waiters.isEmpty) {
+      return;
+    }
+    readWaiters = null;
+    for (final waiter in waiters) {
+      if (!waiter.isCompleted) {
+        waiter.complete(completedValue);
+      }
+    }
+  }
+
+  void _failReadWaiters(Object error) {
+    final waiters = readWaiters;
+    if (waiters == null || waiters.isEmpty) {
+      return;
+    }
+    readWaiters = null;
+    for (final waiter in waiters) {
+      if (!waiter.isCompleted) {
+        waiter.completeError(error);
+      }
+    }
   }
 
   void _maybeDrop() {

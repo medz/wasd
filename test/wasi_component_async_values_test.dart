@@ -70,6 +70,25 @@ void main() {
       expect(dropped, <String>['answer']);
     });
 
+    test('completes pending readable future waits', () async {
+      final future = WASIComponentFuture<int>('answer');
+      var completed = false;
+
+      final pending = future.readable.readWhenReady()
+        ..then((_) {
+          completed = true;
+        });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(completed, isFalse);
+
+      future.writable.complete(42);
+
+      await expectLater(pending, completion(42));
+      expect(completed, isTrue);
+      expect(future.readable.read(), 42);
+    });
+
     test('cancels pending futures', () {
       final future = WASIComponentFuture<String>('message');
 
@@ -79,6 +98,23 @@ void main() {
       expect(future.readable.isCancelled, isTrue);
       expect(() => future.writable.complete('late'), throwsStateError);
       expect(() => future.readable.read(), throwsStateError);
+    });
+
+    test('fails pending readable future waits on cancel or drop', () async {
+      final cancelled = WASIComponentFuture<String>('cancelled');
+      final cancelledRead = cancelled.readable.readWhenReady();
+
+      cancelled.readable.cancel();
+
+      await expectLater(cancelledRead, throwsStateError);
+
+      final dropped = WASIComponentFuture<String>('dropped');
+      final droppedRead = dropped.readable.readWhenReady();
+
+      dropped.writable.drop();
+
+      expect(dropped.isCancelled, isTrue);
+      await expectLater(droppedRead, throwsStateError);
     });
   });
 }

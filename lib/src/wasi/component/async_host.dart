@@ -245,6 +245,24 @@ final class WASIComponentCanonicalAsyncProgram {
         );
     }
   }
+
+  /// Invokes a canonical async operation and waits for pending future reads.
+  Future<Object?> invokeAsync(int canonicalIndex, List<Object?> args) async {
+    if (canonicalIndex < 0 || canonicalIndex >= operations.length) {
+      throw StateError(
+        'Unknown WASI component canonical async index: $canonicalIndex.',
+      );
+    }
+
+    final operation = operations[canonicalIndex];
+    switch (operation.kind) {
+      case WasmComponentCanonicalKind.futureRead:
+        _expectArity(canonicalIndex, args, 1);
+        return operation.futureReadWhenReady(args.single);
+      default:
+        return invoke(canonicalIndex, args);
+    }
+  }
 }
 
 /// Pair of canonical readable and writable endpoint handles.
@@ -362,6 +380,27 @@ final class WASIComponentCanonicalAsyncHandleProgram {
         throw UnsupportedError(
           'Wasm component canonical ${operation.kind.name} is not executable by the async handle program.',
         );
+    }
+  }
+
+  /// Invokes a handle-backed canonical async operation and waits for pending
+  /// future reads.
+  Future<Object?> invokeAsync(int canonicalIndex, List<Object?> args) async {
+    if (canonicalIndex < 0 || canonicalIndex >= operations.length) {
+      throw StateError(
+        'Unknown WASI component canonical async index: $canonicalIndex.',
+      );
+    }
+
+    final operation = operations[canonicalIndex];
+    switch (operation.kind) {
+      case WasmComponentCanonicalKind.futureRead:
+        _expectArity(canonicalIndex, args, 1);
+        return operation.futureReadHandleWhenReady(
+          _expectHandle(canonicalIndex, args.single, 'readable'),
+        );
+      default:
+        return invoke(canonicalIndex, args);
     }
   }
 }
@@ -484,10 +523,23 @@ final class WASIComponentCanonicalAsyncOperation {
     return _valueType.futureRead(readable);
   }
 
+  /// Executes `future.read` and waits if the future is still pending.
+  Future<Object> futureReadWhenReady(Object? readable) {
+    _requireKind(WasmComponentCanonicalKind.futureRead);
+    return _valueType.futureReadWhenReady(readable);
+  }
+
   /// Executes `future.read` with a readable endpoint handle.
   Object futureReadHandle(int readable) {
     _requireKind(WasmComponentCanonicalKind.futureRead);
     return _valueType.futureReadHandle(readable);
+  }
+
+  /// Executes `future.read` with a readable endpoint handle and waits if
+  /// pending.
+  Future<Object> futureReadHandleWhenReady(int readable) {
+    _requireKind(WasmComponentCanonicalKind.futureRead);
+    return _valueType.futureReadHandleWhenReady(readable);
   }
 
   /// Executes `future.write`.
@@ -769,11 +821,24 @@ final class _RegisteredAsyncValueType<T extends Object> {
     return _expectReadableFuture(readable).read();
   }
 
+  Future<Object> futureReadWhenReady(Object? readable) {
+    _requireKind(_WASIComponentAsyncValueKind.future);
+    return _expectReadableFuture(readable).readWhenReady();
+  }
+
   Object futureReadHandle(int readable) {
     return table.borrow<WASIComponentReadableFuture<T>, Object>(
       readableFutureType!,
       readable,
       (future) => future.read(),
+    );
+  }
+
+  Future<Object> futureReadHandleWhenReady(int readable) {
+    return table.borrow<WASIComponentReadableFuture<T>, Future<Object>>(
+      readableFutureType!,
+      readable,
+      (future) => future.readWhenReady(),
     );
   }
 
