@@ -1,14 +1,17 @@
+import 'dart:typed_data';
+
 import '../../wasm/backend/native/interpreter/component.dart';
+import '../../wasm/memory.dart' as wasm;
 import 'async_values.dart';
 import 'backpressure.dart';
 import 'resource_table.dart';
 
 /// Binds decoded canonical stream/future definitions to executable primitives.
 ///
-/// This is an internal host layer for Component Model async work. It does not
-/// implement the full canonical ABI memory lowering/lifting path yet; it binds
+/// This is an internal host layer for Component Model async work. It binds
 /// validated `stream.*` and `future.*` definitions to typed Dart endpoint
-/// primitives so later P3 host adapters can reuse one execution model.
+/// primitives, including fixed-width primitive stream memory copies, so later
+/// P3 host adapters can reuse one execution model.
 final class WASIComponentAsyncHost {
   /// Creates an async host backed by [table] or a new resource table.
   WASIComponentAsyncHost({
@@ -327,6 +330,50 @@ final class WASIComponentAsyncEndpointHandles {
   final int writable;
 }
 
+/// Status returned by canonical async stream memory copy operations.
+enum WASIComponentAsyncCopyStatus {
+  /// The copy completed synchronously.
+  completed(0),
+
+  /// The stream endpoint was dropped.
+  dropped(1),
+
+  /// The stream endpoint was cancelled.
+  cancelled(2);
+
+  const WASIComponentAsyncCopyStatus(this.code);
+
+  /// Low-bit status code used by the Component Model copy result.
+  final int code;
+}
+
+/// Result of a canonical async stream memory copy operation.
+final class WASIComponentAsyncCopyResult {
+  /// Creates a copy result.
+  const WASIComponentAsyncCopyResult._({
+    required this.status,
+    required this.copiedElements,
+  });
+
+  /// Completed copy result for [copiedElements].
+  factory WASIComponentAsyncCopyResult.completed(int copiedElements) {
+    _checkCopyElementCount(copiedElements);
+    return WASIComponentAsyncCopyResult._(
+      status: WASIComponentAsyncCopyStatus.completed,
+      copiedElements: copiedElements,
+    );
+  }
+
+  /// Copy status.
+  final WASIComponentAsyncCopyStatus status;
+
+  /// Number of elements copied before [status] was observed.
+  final int copiedElements;
+
+  /// Canonical packed result: status in low bits, element count above bit 4.
+  int get packedResult => (copiedElements << 4) | status.code;
+}
+
 /// Handle-backed stream/future-only canonical program for a decoded component.
 final class WASIComponentCanonicalAsyncHandleProgram {
   /// Creates a canonical async handle program from ordered [operations].
@@ -558,6 +605,22 @@ final class WASIComponentCanonicalAsyncOperation {
     return _requireValueType().streamWriteWhenAvailable(writable, values);
   }
 
+  /// Executes `stream.write` by reading fixed-width elements from [memory].
+  WASIComponentAsyncCopyResult streamWriteFromMemory(
+    Object? writable,
+    wasm.Memory memory,
+    int pointer,
+    int elementCount,
+  ) {
+    _requireKind(WasmComponentCanonicalKind.streamWrite);
+    return _requireValueType().streamWriteFromMemory(
+      writable,
+      memory,
+      pointer,
+      elementCount,
+    );
+  }
+
   /// Executes `stream.write` with a writable endpoint handle.
   int streamWriteHandle(int writable, Object? values) {
     _requireKind(WasmComponentCanonicalKind.streamWrite);
@@ -569,6 +632,54 @@ final class WASIComponentCanonicalAsyncOperation {
   Future<int> streamWriteHandleWhenAvailable(int writable, Object? values) {
     _requireKind(WasmComponentCanonicalKind.streamWrite);
     return _requireValueType().streamWriteHandleWhenAvailable(writable, values);
+  }
+
+  /// Executes handle-backed `stream.write` from fixed-width memory elements.
+  WASIComponentAsyncCopyResult streamWriteHandleFromMemory(
+    int writable,
+    wasm.Memory memory,
+    int pointer,
+    int elementCount,
+  ) {
+    _requireKind(WasmComponentCanonicalKind.streamWrite);
+    return _requireValueType().streamWriteHandleFromMemory(
+      writable,
+      memory,
+      pointer,
+      elementCount,
+    );
+  }
+
+  /// Executes `stream.read` and writes fixed-width elements to [memory].
+  WASIComponentAsyncCopyResult streamReadToMemory(
+    Object? readable,
+    wasm.Memory memory,
+    int pointer,
+    int maxElements,
+  ) {
+    _requireKind(WasmComponentCanonicalKind.streamRead);
+    return _requireValueType().streamReadToMemory(
+      readable,
+      memory,
+      pointer,
+      maxElements,
+    );
+  }
+
+  /// Executes handle-backed `stream.read` into fixed-width memory elements.
+  WASIComponentAsyncCopyResult streamReadHandleToMemory(
+    int readable,
+    wasm.Memory memory,
+    int pointer,
+    int maxElements,
+  ) {
+    _requireKind(WasmComponentCanonicalKind.streamRead);
+    return _requireValueType().streamReadHandleToMemory(
+      readable,
+      memory,
+      pointer,
+      maxElements,
+    );
   }
 
   /// Executes `stream.cancel-read`.
@@ -949,6 +1060,25 @@ final class _RegisteredAsyncValueType<T> {
     return stream.writeWhenAvailable(typedValues);
   }
 
+  WASIComponentAsyncCopyResult streamWriteFromMemory(
+    Object? writable,
+    wasm.Memory memory,
+    int pointer,
+    int elementCount,
+  ) {
+    _requireKind(_WASIComponentAsyncValueKind.stream);
+    final stream = _expectWritableStream(writable);
+    final values = _readFixedWidthValuesFromMemory<T>(
+      valueValidator,
+      name,
+      memory,
+      pointer,
+      elementCount,
+    );
+    stream.writeAll(values);
+    return WASIComponentAsyncCopyResult.completed(values.length);
+  }
+
   int streamWriteHandle(int writable, Object? values) {
     return table.borrow<WASIComponentWritableStream<T>, int>(
       writableStreamType!,
@@ -961,6 +1091,30 @@ final class _RegisteredAsyncValueType<T> {
     );
   }
 
+  WASIComponentAsyncCopyResult streamWriteHandleFromMemory(
+    int writable,
+    wasm.Memory memory,
+    int pointer,
+    int elementCount,
+  ) {
+    return table
+        .borrow<WASIComponentWritableStream<T>, WASIComponentAsyncCopyResult>(
+          writableStreamType!,
+          writable,
+          (stream) {
+            final values = _readFixedWidthValuesFromMemory<T>(
+              valueValidator,
+              name,
+              memory,
+              pointer,
+              elementCount,
+            );
+            stream.writeAll(values);
+            return WASIComponentAsyncCopyResult.completed(values.length);
+          },
+        );
+  }
+
   Future<int> streamWriteHandleWhenAvailable(int writable, Object? values) {
     final typedValues = _expectIterableValues(values);
     return table.borrowAsync<WASIComponentWritableStream<T>, int>(
@@ -968,6 +1122,48 @@ final class _RegisteredAsyncValueType<T> {
       writable,
       (stream) => stream.writeWhenAvailable(typedValues),
     );
+  }
+
+  WASIComponentAsyncCopyResult streamReadToMemory(
+    Object? readable,
+    wasm.Memory memory,
+    int pointer,
+    int maxElements,
+  ) {
+    _requireKind(_WASIComponentAsyncValueKind.stream);
+    final values = _expectReadableStream(readable).read(maxElements);
+    _writeFixedWidthValuesToMemory(
+      valueValidator,
+      name,
+      memory,
+      pointer,
+      values,
+    );
+    return WASIComponentAsyncCopyResult.completed(values.length);
+  }
+
+  WASIComponentAsyncCopyResult streamReadHandleToMemory(
+    int readable,
+    wasm.Memory memory,
+    int pointer,
+    int maxElements,
+  ) {
+    return table
+        .borrow<WASIComponentReadableStream<T>, WASIComponentAsyncCopyResult>(
+          readableStreamType!,
+          readable,
+          (stream) {
+            final values = stream.read(maxElements);
+            _writeFixedWidthValuesToMemory(
+              valueValidator,
+              name,
+              memory,
+              pointer,
+              values,
+            );
+            return WASIComponentAsyncCopyResult.completed(values.length);
+          },
+        );
   }
 
   void streamCancelRead(Object? readable) {
@@ -1337,6 +1533,261 @@ bool _primitiveValueMatches(
     WasmComponentPrimitiveValueType.string => value is String,
     WasmComponentPrimitiveValueType.errorContext => false,
   };
+}
+
+List<T> _readFixedWidthValuesFromMemory<T>(
+  _WASIComponentAsyncValueValidator validator,
+  String name,
+  wasm.Memory memory,
+  int pointer,
+  int elementCount,
+) {
+  _checkCopyElementCount(elementCount);
+  if (validator.kind == _WASIComponentAsyncValueShape.unit) {
+    if (null is! T) {
+      throw StateError('WASI component async type $name expected $T value.');
+    }
+    return List<T>.filled(elementCount, null as T);
+  }
+  final primitive = validator.primitive;
+  if (validator.kind != _WASIComponentAsyncValueShape.primitive ||
+      primitive == null) {
+    throw UnsupportedError(
+      'WASI component async type $name does not have a fixed-width memory element type.',
+    );
+  }
+  final layout = _fixedWidthLayout(name, primitive);
+  final bytes = Uint8List.view(memory.buffer);
+  _checkMemoryElementRange(bytes, pointer, elementCount, layout);
+  final data = ByteData.view(memory.buffer);
+  final values = <T>[];
+  for (var i = 0; i < elementCount; i++) {
+    final value = _readFixedWidthValue(
+      data,
+      pointer + i * layout.byteLength,
+      primitive,
+    );
+    validator.validate(name, value);
+    if (value is! T) {
+      throw StateError('WASI component async type $name expected $T value.');
+    }
+    values.add(value as T);
+  }
+  return values;
+}
+
+void _writeFixedWidthValuesToMemory(
+  _WASIComponentAsyncValueValidator validator,
+  String name,
+  wasm.Memory memory,
+  int pointer,
+  List<Object?> values,
+) {
+  _checkCopyElementCount(values.length);
+  validator.validateAll(name, values);
+  if (validator.kind == _WASIComponentAsyncValueShape.unit) {
+    return;
+  }
+  final primitive = validator.primitive;
+  if (validator.kind != _WASIComponentAsyncValueShape.primitive ||
+      primitive == null) {
+    throw UnsupportedError(
+      'WASI component async type $name does not have a fixed-width memory element type.',
+    );
+  }
+  final layout = _fixedWidthLayout(name, primitive);
+  final bytes = Uint8List.view(memory.buffer);
+  _checkMemoryElementRange(bytes, pointer, values.length, layout);
+  final data = ByteData.view(memory.buffer);
+  for (var i = 0; i < values.length; i++) {
+    _writeFixedWidthValue(
+      data,
+      pointer + i * layout.byteLength,
+      primitive,
+      values[i],
+    );
+  }
+}
+
+_FixedWidthLayout _fixedWidthLayout(
+  String name,
+  WasmComponentPrimitiveValueType primitive,
+) {
+  return switch (primitive) {
+    WasmComponentPrimitiveValueType.boolean ||
+    WasmComponentPrimitiveValueType.s8 ||
+    WasmComponentPrimitiveValueType.u8 => const _FixedWidthLayout(
+      byteLength: 1,
+      alignment: 1,
+    ),
+    WasmComponentPrimitiveValueType.s16 ||
+    WasmComponentPrimitiveValueType.u16 => const _FixedWidthLayout(
+      byteLength: 2,
+      alignment: 2,
+    ),
+    WasmComponentPrimitiveValueType.s32 ||
+    WasmComponentPrimitiveValueType.u32 ||
+    WasmComponentPrimitiveValueType.f32 ||
+    WasmComponentPrimitiveValueType.char => const _FixedWidthLayout(
+      byteLength: 4,
+      alignment: 4,
+    ),
+    WasmComponentPrimitiveValueType.s64 ||
+    WasmComponentPrimitiveValueType.u64 ||
+    WasmComponentPrimitiveValueType.f64 => const _FixedWidthLayout(
+      byteLength: 8,
+      alignment: 8,
+    ),
+    WasmComponentPrimitiveValueType.string ||
+    WasmComponentPrimitiveValueType.errorContext => throw UnsupportedError(
+      'WASI component async type $name does not support fixed-width ${primitive.name} memory copies.',
+    ),
+  };
+}
+
+Object _readFixedWidthValue(
+  ByteData data,
+  int offset,
+  WasmComponentPrimitiveValueType primitive,
+) {
+  return switch (primitive) {
+    WasmComponentPrimitiveValueType.boolean => _readCanonicalBool(data, offset),
+    WasmComponentPrimitiveValueType.s8 => data.getInt8(offset),
+    WasmComponentPrimitiveValueType.u8 => data.getUint8(offset),
+    WasmComponentPrimitiveValueType.s16 => data.getInt16(offset, Endian.little),
+    WasmComponentPrimitiveValueType.u16 => data.getUint16(
+      offset,
+      Endian.little,
+    ),
+    WasmComponentPrimitiveValueType.s32 => data.getInt32(offset, Endian.little),
+    WasmComponentPrimitiveValueType.u32 => data.getUint32(
+      offset,
+      Endian.little,
+    ),
+    WasmComponentPrimitiveValueType.s64 => data.getInt64(offset, Endian.little),
+    WasmComponentPrimitiveValueType.u64 => data.getUint64(
+      offset,
+      Endian.little,
+    ),
+    WasmComponentPrimitiveValueType.f32 => data.getFloat32(
+      offset,
+      Endian.little,
+    ),
+    WasmComponentPrimitiveValueType.f64 => data.getFloat64(
+      offset,
+      Endian.little,
+    ),
+    WasmComponentPrimitiveValueType.char => _readCanonicalChar(data, offset),
+    WasmComponentPrimitiveValueType.string ||
+    WasmComponentPrimitiveValueType.errorContext => throw StateError(
+      'Unsupported fixed-width primitive read: ${primitive.name}.',
+    ),
+  };
+}
+
+void _writeFixedWidthValue(
+  ByteData data,
+  int offset,
+  WasmComponentPrimitiveValueType primitive,
+  Object? value,
+) {
+  switch (primitive) {
+    case WasmComponentPrimitiveValueType.boolean:
+      data.setUint8(offset, (value as bool) ? 1 : 0);
+    case WasmComponentPrimitiveValueType.s8:
+      data.setInt8(offset, value as int);
+    case WasmComponentPrimitiveValueType.u8:
+      data.setUint8(offset, value as int);
+    case WasmComponentPrimitiveValueType.s16:
+      data.setInt16(offset, value as int, Endian.little);
+    case WasmComponentPrimitiveValueType.u16:
+      data.setUint16(offset, value as int, Endian.little);
+    case WasmComponentPrimitiveValueType.s32:
+      data.setInt32(offset, value as int, Endian.little);
+    case WasmComponentPrimitiveValueType.u32:
+      data.setUint32(offset, value as int, Endian.little);
+    case WasmComponentPrimitiveValueType.s64:
+      data.setInt64(offset, value as int, Endian.little);
+    case WasmComponentPrimitiveValueType.u64:
+      data.setUint64(offset, value as int, Endian.little);
+    case WasmComponentPrimitiveValueType.f32:
+      data.setFloat32(offset, (value as num).toDouble(), Endian.little);
+    case WasmComponentPrimitiveValueType.f64:
+      data.setFloat64(offset, (value as num).toDouble(), Endian.little);
+    case WasmComponentPrimitiveValueType.char:
+      data.setUint32(offset, (value as String).runes.single, Endian.little);
+    case WasmComponentPrimitiveValueType.string:
+    case WasmComponentPrimitiveValueType.errorContext:
+      throw StateError(
+        'Unsupported fixed-width primitive write: ${primitive.name}.',
+      );
+  }
+}
+
+bool _readCanonicalBool(ByteData data, int offset) {
+  final value = data.getUint8(offset);
+  if (value == 0) {
+    return false;
+  }
+  if (value == 1) {
+    return true;
+  }
+  throw StateError('Canonical bool memory value must be 0 or 1.');
+}
+
+String _readCanonicalChar(ByteData data, int offset) {
+  final value = data.getUint32(offset, Endian.little);
+  if (_isUnicodeScalar(value)) {
+    return String.fromCharCode(value);
+  }
+  throw StateError('Canonical char memory value is not a Unicode scalar.');
+}
+
+bool _isUnicodeScalar(int value) {
+  return value >= 0 && value <= 0x10ffff && (value < 0xd800 || value > 0xdfff);
+}
+
+void _checkMemoryElementRange(
+  Uint8List bytes,
+  int pointer,
+  int elementCount,
+  _FixedWidthLayout layout,
+) {
+  RangeError.checkNotNegative(pointer, 'pointer');
+  _checkCopyElementCount(elementCount);
+  if (layout.alignment > 1 && pointer % layout.alignment != 0) {
+    throw StateError('pointer must be ${layout.alignment}-byte aligned.');
+  }
+  final byteLength = elementCount * layout.byteLength;
+  if (pointer > bytes.length || byteLength > bytes.length - pointer) {
+    throw RangeError.range(
+      pointer + byteLength,
+      0,
+      bytes.length,
+      'pointer + byteLength',
+    );
+  }
+}
+
+const int _maxPackedCopyElements = 0x0fffffff;
+
+void _checkCopyElementCount(int elementCount) {
+  RangeError.checkNotNegative(elementCount, 'elementCount');
+  if (elementCount > _maxPackedCopyElements) {
+    throw RangeError.range(
+      elementCount,
+      0,
+      _maxPackedCopyElements,
+      'elementCount',
+    );
+  }
+}
+
+final class _FixedWidthLayout {
+  const _FixedWidthLayout({required this.byteLength, required this.alignment});
+
+  final int byteLength;
+  final int alignment;
 }
 
 void _expectArity(int canonicalIndex, List<Object?> args, int expected) {

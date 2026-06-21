@@ -4,6 +4,7 @@ import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
+import 'package:wasd/src/wasm/memory.dart';
 
 void main() {
   group('WASIComponentAsyncHost', () {
@@ -562,6 +563,251 @@ void main() {
       );
     });
 
+    test('copies decoded primitive stream values through canonical memory', () {
+      final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 1, Endian.little);
+      data.setUint32(36, 0xffffffff, Endian.little);
+      data.setUint32(40, 13, Endian.little);
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<int>(component, 0, 'u32-stream');
+      final newOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamNew,
+          typeIndex: 0,
+        ),
+      );
+      final readOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamRead,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+      final writeOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamWrite,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+      final stream = newOperation.streamNew() as WASIComponentStream<int>;
+
+      final writeResult = writeOperation.streamWriteFromMemory(
+        stream.writable,
+        memory,
+        32,
+        3,
+      );
+      final readResult = readOperation.streamReadToMemory(
+        stream.readable,
+        memory,
+        96,
+        2,
+      );
+
+      expect(writeResult.status, WASIComponentAsyncCopyStatus.completed);
+      expect(writeResult.copiedElements, 3);
+      expect(writeResult.packedResult, 3 << 4);
+      expect(readResult.status, WASIComponentAsyncCopyStatus.completed);
+      expect(readResult.copiedElements, 2);
+      expect(data.getUint32(96, Endian.little), 1);
+      expect(data.getUint32(100, Endian.little), 0xffffffff);
+      expect(readOperation.streamRead(stream.readable, 2), <int>[13]);
+    });
+
+    test('copies handle-backed primitive stream values through memory', () {
+      final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 21, Endian.little);
+      data.setUint32(36, 34, Endian.little);
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<int>(component, 0, 'u32-stream');
+      final newOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamNew,
+          typeIndex: 0,
+        ),
+      );
+      final readOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamRead,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+      final writeOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamWrite,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+      final dropReadableOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamDropReadable,
+          typeIndex: 0,
+        ),
+      );
+      final dropWritableOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamDropWritable,
+          typeIndex: 0,
+        ),
+      );
+      final handles = newOperation.streamNewHandles();
+
+      final writeResult = writeOperation.streamWriteHandleFromMemory(
+        handles.writable,
+        memory,
+        32,
+        2,
+      );
+      final readResult = readOperation.streamReadHandleToMemory(
+        handles.readable,
+        memory,
+        96,
+        2,
+      );
+
+      expect(writeResult.packedResult, 2 << 4);
+      expect(readResult.packedResult, 2 << 4);
+      expect(data.getUint32(96, Endian.little), 21);
+      expect(data.getUint32(100, Endian.little), 34);
+      expect(host.table.activeCount, 2);
+      dropReadableOperation.streamDropReadableHandle(handles.readable);
+      dropWritableOperation.streamDropWritableHandle(handles.writable);
+      expect(host.table.activeCount, 0);
+    });
+
+    test('rejects unsupported and unaligned stream memory copies', () {
+      final stringComponent = WasmComponent.decode(
+        _streamStringTypeComponentBytes(),
+      );
+      expect(stringComponent.validate(), isEmpty);
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<Object>(stringComponent, 0, 'strings');
+      final stringWrite = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamWrite,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+      final stringStream = WASIComponentStream<Object>('strings');
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+
+      expect(
+        () => stringWrite.streamWriteFromMemory(
+          stringStream.writable,
+          memory,
+          32,
+          1,
+        ),
+        throwsUnsupportedError,
+      );
+
+      final u32Component = WasmComponent.decode(_streamU32TypeComponentBytes());
+      expect(u32Component.validate(), isEmpty);
+      final numberHost = WASIComponentAsyncHost();
+      numberHost.defineStreamTypeFromComponent<int>(
+        u32Component,
+        0,
+        'u32-stream',
+      );
+      final u32Write = numberHost.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamWrite,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+      final numberStream = WASIComponentStream<int>('u32-stream');
+
+      expect(
+        () => u32Write.streamWriteFromMemory(
+          numberStream.writable,
+          memory,
+          33,
+          1,
+        ),
+        throwsStateError,
+      );
+    });
+
+    test('rejects malformed canonical bool stream memory values', () {
+      final component = WasmComponent.decode(_streamBoolTypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final bytes = Uint8List.view(memory.buffer);
+      bytes[32] = 2;
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<bool>(component, 0, 'bool-stream');
+      final newOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamNew,
+          typeIndex: 0,
+        ),
+      );
+      final writeOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamWrite,
+          typeIndex: 0,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      );
+      final stream = newOperation.streamNew() as WASIComponentStream<bool>;
+
+      expect(
+        () => writeOperation.streamWriteFromMemory(
+          stream.writable,
+          memory,
+          32,
+          1,
+        ),
+        throwsStateError,
+      );
+    });
+
     test('validates decoded future element integer bounds', () {
       final component = WasmComponent.decode(_futureU32TypeComponentBytes());
       expect(component.validate(), isEmpty);
@@ -767,6 +1013,40 @@ Uint8List _futureU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x04,
   0x01,
   0x65,
+  0x01,
+  0x79,
+]);
+
+Uint8List _streamBoolTypeComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x04,
+  0x01,
+  0x66,
+  0x01,
+  0x7f,
+]);
+
+Uint8List _streamU32TypeComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x04,
+  0x01,
+  0x66,
   0x01,
   0x79,
 ]);

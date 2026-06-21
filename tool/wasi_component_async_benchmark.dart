@@ -6,6 +6,7 @@ import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
 import 'package:wasd/src/wasi/component/backpressure.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
+import 'package:wasd/src/wasm/memory.dart';
 
 const int _defaultIterations = 50000;
 const int _defaultBatchSize = 32;
@@ -35,6 +36,7 @@ Future<void> main(List<String> args) async {
   final programInvoke = _benchmarkProgramInvoke(options);
   final unitProgramInvoke = _benchmarkUnitProgramInvoke(options);
   final handleProgramInvoke = _benchmarkHandleProgramInvoke(options);
+  final streamMemoryCopy = _benchmarkStreamMemoryCopy(options);
 
   final payload = <String, Object?>{
     'iterations': options.iterations,
@@ -49,6 +51,7 @@ Future<void> main(List<String> args) async {
     'program_invoke': programInvoke.toJson(),
     'unit_program_invoke': unitProgramInvoke.toJson(),
     'handle_program_invoke': handleProgramInvoke.toJson(),
+    'stream_memory_copy': streamMemoryCopy.toJson(),
   };
 
   if (options.json) {
@@ -70,6 +73,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkProgramInvoke(warmup);
   _benchmarkUnitProgramInvoke(warmup);
   _benchmarkHandleProgramInvoke(warmup);
+  _benchmarkStreamMemoryCopy(warmup);
 }
 
 _Metric _benchmarkStreamRoundTrip(_Options options) {
@@ -414,6 +418,79 @@ _Metric _benchmarkHandleProgramInvoke(_Options options) {
   );
 }
 
+_Metric _benchmarkStreamMemoryCopy(_Options options) {
+  final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+  final host = WASIComponentAsyncHost()
+    ..defineStreamTypeFromComponent<int>(component, 0, 'benchmark-u32-stream');
+  final newOperation = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.streamNew,
+      typeIndex: 0,
+    ),
+  );
+  final readOperation = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.streamRead,
+      typeIndex: 0,
+      options: [
+        WasmComponentCanonicalOption(
+          kind: WasmComponentCanonicalOptionKind.memory,
+          index: 0,
+        ),
+      ],
+    ),
+  );
+  final writeOperation = host.bindCanonicalDefinition(
+    const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.streamWrite,
+      typeIndex: 0,
+      options: [
+        WasmComponentCanonicalOption(
+          kind: WasmComponentCanonicalOptionKind.memory,
+          index: 0,
+        ),
+      ],
+    ),
+  );
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  final inputPointer = 1024;
+  final outputPointer = 4096;
+  for (var i = 0; i < options.batchSize; i++) {
+    data.setUint32(inputPointer + i * 4, i, Endian.little);
+  }
+  final stream = newOperation.streamNew() as WASIComponentStream<int>;
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final writeResult = writeOperation.streamWriteFromMemory(
+      stream.writable,
+      memory,
+      inputPointer,
+      options.batchSize,
+    );
+    final readResult = readOperation.streamReadToMemory(
+      stream.readable,
+      memory,
+      outputPointer,
+      options.batchSize,
+    );
+    checksum += writeResult.packedResult;
+    checksum += readResult.packedResult;
+    checksum += data.getUint32(outputPointer, Endian.little);
+  }
+  watch.stop();
+
+  stream.readable.drop();
+  stream.writable.drop();
+  return _Metric(
+    operations: options.iterations * options.batchSize * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _printText(Map<String, Object?> payload) {
   stdout
     ..writeln('WASI component async benchmark')
@@ -430,6 +507,7 @@ void _printText(Map<String, Object?> payload) {
     'program_invoke',
     'unit_program_invoke',
     'handle_program_invoke',
+    'stream_memory_copy',
   ]) {
     final metric = payload[name]! as Map<String, Object?>;
     stdout
@@ -519,6 +597,23 @@ Uint8List _asyncHandleProgramBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x1b,
   0x01,
+]);
+
+Uint8List _streamU32TypeComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x04,
+  0x01,
+  0x66,
+  0x01,
+  0x79,
 ]);
 
 void _printUsage() {
