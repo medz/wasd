@@ -952,6 +952,47 @@ void main() {
       },
     );
 
+    test('publishes dropped handle-backed stream read memory events', () async {
+      final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      final host = WASIComponentAsyncHost();
+      final waitableHost = WASIComponentWaitableHost(
+        table: host.table,
+        waitableResolvers: [host.waitableForHandle],
+      );
+      host.defineStreamTypeFromComponent<int>(component, 0, 'u32-stream');
+      final program = _streamU32MemoryHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final waitableSet = waitableHost.waitableSetNew();
+      waitableHost.waitableJoin(handles.readable, waitableSet);
+
+      expect(
+        program.invokeWithMemoryEvent(2, memory, <Object?>[
+          handles.readable,
+          96,
+          1,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(2),
+      );
+      expect(data.getUint32(128, Endian.little), handles.readable);
+      expect(
+        data.getUint32(132, Endian.little),
+        WASIComponentAsyncCopyStatus.dropped.code,
+      );
+      waitableHost.waitableJoin(handles.readable, 0);
+      waitableHost.waitableSetDrop(waitableSet);
+      expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test('cancels bounded handle-backed stream write memory events', () async {
       final component = WasmComponent.decode(_streamU32TypeComponentBytes());
       expect(component.validate(), isEmpty);
@@ -1007,6 +1048,65 @@ void main() {
       expect(program.invoke(6, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
+
+    test(
+      'publishes dropped bounded handle-backed stream write memory events',
+      () async {
+        final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+        expect(component.validate(), isEmpty);
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final data = ByteData.view(memory.buffer);
+        data.setUint32(32, 3, Endian.little);
+        data.setUint32(36, 5, Endian.little);
+        final host = WASIComponentAsyncHost();
+        final waitableHost = WASIComponentWaitableHost(
+          table: host.table,
+          waitableResolvers: [host.waitableForHandle],
+        );
+        host.defineStreamTypeFromComponent<int>(
+          component,
+          0,
+          'u32-stream',
+          maxBufferedElements: 1,
+        );
+        final program = _streamU32MemoryHandleProgram(host);
+        final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+        final waitableSet = waitableHost.waitableSetNew();
+        waitableHost.waitableJoin(handles.writable, waitableSet);
+
+        expect(
+          program.invokeWithMemory(1, memory, <Object?>[
+            handles.writable,
+            32,
+            1,
+          ]),
+          1 << 4,
+        );
+        expect(
+          program.invokeWithMemoryEvent(1, memory, <Object?>[
+            handles.writable,
+            36,
+            1,
+          ]),
+          wasiComponentAsyncBlocked,
+        );
+        expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+
+        await expectLater(
+          waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+          completion(3),
+        );
+        expect(data.getUint32(128, Endian.little), handles.writable);
+        expect(
+          data.getUint32(132, Endian.little),
+          WASIComponentAsyncCopyStatus.dropped.code,
+        );
+        waitableHost.waitableJoin(handles.writable, 0);
+        waitableHost.waitableSetDrop(waitableSet);
+        expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+        expect(host.table.activeCount, 0);
+      },
+    );
 
     test(
       'publishes bounded handle-backed stream write memory events',

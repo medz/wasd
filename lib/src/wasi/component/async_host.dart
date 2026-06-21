@@ -402,6 +402,15 @@ final class WASIComponentAsyncCopyResult {
     );
   }
 
+  /// Dropped copy result for [copiedElements].
+  factory WASIComponentAsyncCopyResult.dropped([int copiedElements = 0]) {
+    _checkCopyElementCount(copiedElements);
+    return WASIComponentAsyncCopyResult._(
+      status: WASIComponentAsyncCopyStatus.dropped,
+      copiedElements: copiedElements,
+    );
+  }
+
   /// Cancelled copy result for [copiedElements].
   factory WASIComponentAsyncCopyResult.cancelled([int copiedElements = 0]) {
     _checkCopyElementCount(copiedElements);
@@ -2139,11 +2148,22 @@ final class _RegisteredAsyncValueType<T> {
           );
         },
         onError: (Object error, StackTrace stackTrace) {
+          final copyResult = switch (error) {
+            WASIComponentAsyncEndpointStateError(
+              failure: WASIComponentAsyncEndpointFailure.dropped,
+            ) =>
+              WASIComponentAsyncCopyResult.dropped(),
+            WASIComponentAsyncEndpointStateError(
+              failure: WASIComponentAsyncEndpointFailure.cancelled,
+            ) =>
+              WASIComponentAsyncCopyResult.cancelled(),
+            _ => WASIComponentAsyncCopyResult.cancelled(),
+          };
           waitable.setPendingEvent(
             () => WASIComponentWaitableEvent(
               code: code,
               payload1: handle,
-              payload2: WASIComponentAsyncCopyResult.cancelled().packedResult,
+              payload2: copyResult.packedResult,
             ),
           );
         },

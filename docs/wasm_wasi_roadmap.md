@@ -168,6 +168,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   ready, repeated cancellation traps while the copy is being cancelled, and the
   usual waitable event returns either the cancelled payload or a completed
   payload when a future read already resolved before cancellation was observed.
+  Stream copy events also distinguish dropped peers from cancellation: pending
+  stream reads report `DROPPED` when the writable end is dropped, and pending
+  bounded stream writes report `DROPPED` when the readable end is dropped,
+  while explicit same-end copy cancellation still reports `CANCELLED`.
   Subtask/thread event production is still future integration work, but
   stream/future copy event delivery is no longer a placeholder.
   Internal

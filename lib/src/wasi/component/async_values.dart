@@ -1,6 +1,25 @@
 import 'dart:async';
 import 'dart:collection';
 
+/// Async endpoint failure category used by canonical copy event mapping.
+enum WASIComponentAsyncEndpointFailure {
+  /// A dropped endpoint ended the copy, so no more progress is possible.
+  dropped,
+
+  /// The active copy was cancelled by the same endpoint.
+  cancelled,
+}
+
+/// State error carrying the canonical async endpoint failure kind.
+final class WASIComponentAsyncEndpointStateError extends StateError {
+  /// Creates an endpoint state error with a canonical [failure].
+  WASIComponentAsyncEndpointStateError(this.failure, String message)
+    : super(message);
+
+  /// Canonical async endpoint failure kind.
+  final WASIComponentAsyncEndpointFailure failure;
+}
+
 /// In-memory runtime state for a Component Model `stream<T>` value.
 ///
 /// This is a host-side primitive for future WASI 0.3 canonical stream
@@ -481,17 +500,26 @@ final class _WASIComponentStreamState<T> {
     queue.clear();
     if (readWaiters != null) {
       _failReadWaiters(
-        StateError('WASI component stream $name reads were cancelled.'),
+        WASIComponentAsyncEndpointStateError(
+          WASIComponentAsyncEndpointFailure.cancelled,
+          'WASI component stream $name reads were cancelled.',
+        ),
       );
     }
     if (writeWaiters != null) {
       _failWriteWaiters(
-        StateError('WASI component stream $name readable is closed.'),
+        WASIComponentAsyncEndpointStateError(
+          WASIComponentAsyncEndpointFailure.dropped,
+          'WASI component stream $name readable is closed.',
+        ),
       );
     }
     if (writeCapacityWaiters != null) {
       _failWriteCapacityWaiters(
-        StateError('WASI component stream $name readable is closed.'),
+        WASIComponentAsyncEndpointStateError(
+          WASIComponentAsyncEndpointFailure.dropped,
+          'WASI component stream $name readable is closed.',
+        ),
       );
     }
   }
@@ -504,12 +532,18 @@ final class _WASIComponentStreamState<T> {
     writeClosed = true;
     if (writeWaiters != null) {
       _failWriteWaiters(
-        StateError('WASI component stream $name writes were cancelled.'),
+        WASIComponentAsyncEndpointStateError(
+          WASIComponentAsyncEndpointFailure.cancelled,
+          'WASI component stream $name writes were cancelled.',
+        ),
       );
     }
     if (writeCapacityWaiters != null) {
       _failWriteCapacityWaiters(
-        StateError('WASI component stream $name writes were cancelled.'),
+        WASIComponentAsyncEndpointStateError(
+          WASIComponentAsyncEndpointFailure.cancelled,
+          'WASI component stream $name writes were cancelled.',
+        ),
       );
     }
     if (readWaiters != null) {
@@ -525,17 +559,26 @@ final class _WASIComponentStreamState<T> {
     queue.clear();
     if (readWaiters != null) {
       _failReadWaiters(
-        StateError('WASI component stream $name readable was dropped.'),
+        WASIComponentAsyncEndpointStateError(
+          WASIComponentAsyncEndpointFailure.dropped,
+          'WASI component stream $name readable was dropped.',
+        ),
       );
     }
     if (writeWaiters != null) {
       _failWriteWaiters(
-        StateError('WASI component stream $name readable is closed.'),
+        WASIComponentAsyncEndpointStateError(
+          WASIComponentAsyncEndpointFailure.dropped,
+          'WASI component stream $name readable is closed.',
+        ),
       );
     }
     if (writeCapacityWaiters != null) {
       _failWriteCapacityWaiters(
-        StateError('WASI component stream $name readable is closed.'),
+        WASIComponentAsyncEndpointStateError(
+          WASIComponentAsyncEndpointFailure.dropped,
+          'WASI component stream $name readable is closed.',
+        ),
       );
     }
     _maybeDrop();
@@ -549,12 +592,18 @@ final class _WASIComponentStreamState<T> {
     writeClosed = true;
     if (writeWaiters != null) {
       _failWriteWaiters(
-        StateError('WASI component stream $name writable was dropped.'),
+        WASIComponentAsyncEndpointStateError(
+          WASIComponentAsyncEndpointFailure.dropped,
+          'WASI component stream $name writable was dropped.',
+        ),
       );
     }
     if (writeCapacityWaiters != null) {
       _failWriteCapacityWaiters(
-        StateError('WASI component stream $name writable was dropped.'),
+        WASIComponentAsyncEndpointStateError(
+          WASIComponentAsyncEndpointFailure.dropped,
+          'WASI component stream $name writable was dropped.',
+        ),
       );
     }
     if (readWaiters != null) {
@@ -693,6 +742,15 @@ final class _WASIComponentStreamState<T> {
       if (queue.isNotEmpty) {
         waiters.removeFirst();
         waiter.complete(_removeQueued(waiter.maxElements));
+        progressed = true;
+      } else if (writeDropped) {
+        waiters.removeFirst();
+        waiter.fail(
+          WASIComponentAsyncEndpointStateError(
+            WASIComponentAsyncEndpointFailure.dropped,
+            'WASI component stream $name writable was dropped.',
+          ),
+        );
         progressed = true;
       } else if (writeClosed) {
         waiters.removeFirst();
