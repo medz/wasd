@@ -112,12 +112,15 @@ This is the implementation state as of 2026-06-21 on `main`.
   function/value type metadata, so parent components can validate aliased start
   signatures and argument value types. The resource host can bind those imported
   or aliased abstract resources with an unconstrained host representation.
-  Resource host bindings also read decoded resource representation types and
-  validate `resource.new` representation values, and resource-only canonical
-  programs can be invoked by canonical index. Resource table handles are
-  monotonically allocated within the canonical u32 range while slots are reused
-  behind an O(1) handle-to-slot map, so hot create/drop paths do not overflow
-  resource handles after a small number of generations.
+  It can also derive a component resource binding list from the materialized
+  component type index space and define those resource types in one pass, so
+  future P2/P3 adapters do not need to rescan imports, exports, or aliases by
+  hand. Resource host bindings also read decoded resource representation types
+  and validate `resource.new` representation values, and resource-only
+  canonical programs can be invoked by canonical index. Resource table handles
+  are monotonically allocated within the canonical u32 range while slots are
+  reused behind an O(1) handle-to-slot map, so hot create/drop paths do not
+  overflow resource handles after a small number of generations.
   `lib/src/wasi/component/` also contains internal `stream<T>` and `future<T>`
   runtime primitives with separate readable/writable endpoints, cancellation,
   drop callbacks, and benchmark coverage, plus an internal async host that binds
@@ -355,10 +358,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   invocations do not pay for event lifecycle enforcement.
 - Component resource table canonical `resource.new`/`resource.rep`/
   `resource.drop`, decoded resource-only canonical program invocation,
-  mixed canonical-host program invocation over shared component state,
-  error-context canonical lifecycle invocation, error-context canonical string
-  memory adapter invocation with result records, nominal typed lookup,
-  synchronous/asynchronous borrow, and drop behavior are measured by
+  component resource binding extraction from decoded type index spaces, mixed
+  canonical-host program invocation over shared component state, error-context
+  canonical lifecycle invocation, error-context canonical string memory adapter
+  invocation with result records, nominal typed lookup, synchronous/asynchronous
+  borrow, and drop behavior are measured by
   `dart run tool/wasi_resource_table_benchmark.dart --json`.
 
 ## Near-Term Slices

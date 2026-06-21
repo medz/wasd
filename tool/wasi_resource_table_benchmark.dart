@@ -27,6 +27,9 @@ Future<void> main(List<String> args) async {
   final borrowAsync = await _benchmarkBorrowAsync(options);
   final dropCallbacks = _benchmarkDropCallbacks(options.iterations);
   final programInvoke = _benchmarkProgramInvoke(options.iterations);
+  final componentResourceBindings = _benchmarkComponentResourceBindings(
+    options.iterations,
+  );
   final canonicalHostProgram = _benchmarkCanonicalHostProgram(
     options.iterations,
   );
@@ -41,6 +44,7 @@ Future<void> main(List<String> args) async {
     'borrow_async': borrowAsync.toJson(),
     'drop_callbacks': dropCallbacks.toJson(),
     'program_invoke': programInvoke.toJson(),
+    'component_resource_bindings': componentResourceBindings.toJson(),
     'canonical_host_program': canonicalHostProgram.toJson(),
     'error_context_program': errorContextProgram.toJson(),
     'error_context_memory': errorContextMemory.toJson(),
@@ -59,6 +63,7 @@ Future<void> _runWarmup(_Options options) async {
   await _benchmarkBorrowAsync(options.copyWith(iterations: _warmupIterations));
   _benchmarkDropCallbacks(_warmupIterations);
   _benchmarkProgramInvoke(_warmupIterations);
+  _benchmarkComponentResourceBindings(_warmupIterations);
   _benchmarkCanonicalHostProgram(_warmupIterations);
   _benchmarkErrorContextProgram(_warmupIterations);
   _benchmarkErrorContextMemory(_warmupIterations);
@@ -210,6 +215,29 @@ _Metric _benchmarkProgramInvoke(int iterations) {
   }
   return _Metric(
     operations: iterations * 3,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentResourceBindings(int iterations) {
+  final component = WasmComponent.decode(_resourceProgramBytes());
+  final host = WASIComponentResourceHost();
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final bindings = host.componentResourceBindings(component);
+    final binding = bindings.single;
+    checksum += binding.componentTypeIndex;
+    checksum += binding.name.length;
+    checksum += binding.representation.index;
+    checksum += binding.isAbstract ? 1 : 0;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
@@ -448,6 +476,7 @@ void _printText(Map<String, Object?> payload) {
     'borrow_async',
     'drop_callbacks',
     'program_invoke',
+    'component_resource_bindings',
     'canonical_host_program',
     'error_context_program',
     'error_context_memory',

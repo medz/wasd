@@ -78,13 +78,61 @@ final class WASIComponentResourceHost {
     return _defineResourceType<T>(
       componentTypeIndex,
       name,
-      representation: resource.isAbstract
-          ? WASIComponentResourceRepresentation.unconstrained
-          : WASIComponentResourceRepresentation.fromCoreValueTypeCode(
-              resource.representationTypeCode,
-            ),
+      representation: _resourceRepresentation(resource),
       onDrop: onDrop,
     );
+  }
+
+  /// Returns the component resource type bindings in component type-index order.
+  List<WASIComponentResourceBinding> componentResourceBindings(
+    WasmComponent component,
+  ) {
+    final bindings = <WASIComponentResourceBinding>[];
+    final definitions = component.componentTypeIndexDefinitions;
+    for (
+      var componentTypeIndex = 0;
+      componentTypeIndex < definitions.length;
+      componentTypeIndex++
+    ) {
+      final definition = definitions[componentTypeIndex];
+      final resource = definition.resource;
+      if (definition.kind != WasmComponentTypeKind.resource ||
+          resource == null) {
+        continue;
+      }
+      bindings.add(
+        WASIComponentResourceBinding(
+          componentTypeIndex: componentTypeIndex,
+          name: 'resource[$componentTypeIndex]',
+          representation: _resourceRepresentation(resource),
+          isAbstract: resource.isAbstract,
+        ),
+      );
+    }
+    return List<WASIComponentResourceBinding>.unmodifiable(bindings);
+  }
+
+  /// Defines all decoded component resource types from one component scan.
+  List<WASIComponentResourceType<T>>
+  defineComponentResourceTypes<T extends Object>(
+    WasmComponent component, {
+    String Function(WASIComponentResourceBinding binding)? nameForBinding,
+    void Function(WASIComponentResourceBinding binding, T resource)? onDrop,
+  }) {
+    final types = <WASIComponentResourceType<T>>[];
+    for (final binding in componentResourceBindings(component)) {
+      types.add(
+        _defineResourceType<T>(
+          binding.componentTypeIndex,
+          nameForBinding?.call(binding) ?? binding.name,
+          representation: binding.representation,
+          onDrop: onDrop == null
+              ? null
+              : (resource) => onDrop(binding, resource),
+        ),
+      );
+    }
+    return List<WASIComponentResourceType<T>>.unmodifiable(types);
   }
 
   WASIComponentResourceType<T> _defineResourceType<T extends Object>(
@@ -141,6 +189,30 @@ final class WASIComponentResourceHost {
       ]),
     );
   }
+}
+
+/// A decoded component resource type that can be bound to a host type.
+final class WASIComponentResourceBinding {
+  /// Creates a resource binding descriptor.
+  const WASIComponentResourceBinding({
+    required this.componentTypeIndex,
+    required this.name,
+    required this.representation,
+    required this.isAbstract,
+  });
+
+  /// Component type index of the resource.
+  final int componentTypeIndex;
+
+  /// Stable debug name for this component resource.
+  final String name;
+
+  /// Core representation constraint decoded for this resource.
+  final WASIComponentResourceRepresentation representation;
+
+  /// Whether this resource was introduced without a concrete core
+  /// representation.
+  final bool isAbstract;
 }
 
 /// Executable resource-only canonical program for a decoded component.
@@ -282,6 +354,16 @@ WasmComponentResourceType _decodedResourceType(
     );
   }
   return resource;
+}
+
+WASIComponentResourceRepresentation _resourceRepresentation(
+  WasmComponentResourceType resource,
+) {
+  return resource.isAbstract
+      ? WASIComponentResourceRepresentation.unconstrained
+      : WASIComponentResourceRepresentation.fromCoreValueTypeCode(
+          resource.representationTypeCode,
+        );
 }
 
 void _validateRepresentation(

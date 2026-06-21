@@ -80,12 +80,27 @@ void main() {
       expect(component.validate(), isEmpty);
       final host = WASIComponentResourceHost();
       final dropped = <int>[];
-      host.defineResourceTypeFromComponent<int>(
-        component,
-        0,
-        'imported-resource',
-        onDrop: dropped.add,
+      final bindings = host.componentResourceBindings(component);
+
+      expect(bindings, hasLength(1));
+      expect(bindings.single.componentTypeIndex, 0);
+      expect(bindings.single.name, 'resource[0]');
+      expect(bindings.single.isAbstract, isTrue);
+      expect(
+        bindings.single.representation,
+        WASIComponentResourceRepresentation.unconstrained,
       );
+
+      final types = host.defineComponentResourceTypes<int>(
+        component,
+        nameForBinding: (binding) => 'imported-${binding.name}',
+        onDrop: (binding, resource) {
+          expect(binding.componentTypeIndex, 0);
+          dropped.add(resource);
+        },
+      );
+
+      expect(types.single.name, 'imported-resource[0]');
 
       final program = host.bindCanonicalDefinitions(component);
       final handle = program.invoke(0, <Object?>[55]);
@@ -93,6 +108,54 @@ void main() {
       expect(program.invoke(1, <Object?>[handle]), 55);
       expect(program.invoke(2, <Object?>[handle]), isNull);
       expect(dropped, [55]);
+    });
+
+    test('plans and binds all decoded component resource types', () {
+      final component = WasmComponent.decode(_canonicalResourceProgramBytes());
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentResourceHost();
+      final bindings = host.componentResourceBindings(component);
+
+      expect(bindings, hasLength(1));
+      expect(bindings.single.componentTypeIndex, 0);
+      expect(bindings.single.name, 'resource[0]');
+      expect(bindings.single.isAbstract, isFalse);
+      expect(
+        bindings.single.representation,
+        WASIComponentResourceRepresentation.i32,
+      );
+      expect(
+        () => bindings.add(
+          const WASIComponentResourceBinding(
+            componentTypeIndex: 1,
+            name: 'resource[1]',
+            representation: WASIComponentResourceRepresentation.unconstrained,
+            isAbstract: true,
+          ),
+        ),
+        throwsUnsupportedError,
+      );
+
+      final dropped = <int>[];
+      final types = host.defineComponentResourceTypes<int>(
+        component,
+        onDrop: (binding, resource) {
+          expect(
+            binding.representation,
+            WASIComponentResourceRepresentation.i32,
+          );
+          dropped.add(resource);
+        },
+      );
+
+      expect(types.single.name, 'resource[0]');
+
+      final program = host.bindCanonicalDefinitions(component);
+      final handle = program.invoke(0, <Object?>[123]);
+
+      expect(program.invoke(1, <Object?>[handle]), 123);
+      expect(program.invoke(2, <Object?>[handle]), isNull);
+      expect(dropped, [123]);
     });
 
     test(
