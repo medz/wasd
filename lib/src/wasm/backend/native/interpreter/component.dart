@@ -3322,6 +3322,7 @@ final class _WasmComponentValidationContext {
     final functionTypes = <WasmComponentFunctionType?>[];
     final valueEntries = <_WasmComponentValueIndexEntry>[];
     final instanceExportMaps = <_WasmComponentInstanceExportMap?>[];
+    Map<String, String>? importNames;
     List<WasmComponentTypeDefinition>? materializedTypeDefinitions;
     var decodedTypeDefinitionCount = 0;
     List<WasmComponentTypeDefinition> visibleTypeDefinitionsForRead() {
@@ -3348,7 +3349,13 @@ final class _WasmComponentValidationContext {
     for (final event in events) {
       switch (event.kind) {
         case _WasmComponentDefinitionEventKind.import:
-          final descriptor = imports[event.index].descriptor;
+          final import = imports[event.index];
+          validateImportName(
+            import,
+            'import[${event.index}].name',
+            importNames ??= <String, String>{},
+          );
+          final descriptor = import.descriptor;
           final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
           validateExternDescriptor(
             descriptor,
@@ -3624,6 +3631,30 @@ final class _WasmComponentValidationContext {
     if (errors.isEmpty) {
       validateConsumedValues(valueEntries);
     }
+  }
+
+  void validateImportName(
+    WasmComponentImport import,
+    String path,
+    Map<String, String> seenImports,
+  ) {
+    final name = componentExternName(import.name, import.versionSuffix);
+    final previousName = seenImports[name];
+    if (previousName != null) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component import name $name conflicts with previous import name $previousName.',
+        ),
+      );
+      return;
+    }
+    seenImports[name] = name;
+  }
+
+  String componentExternName(String name, String? versionSuffix) {
+    return versionSuffix == null ? name : '$name@$versionSuffix';
   }
 
   void validateExportDefinition(

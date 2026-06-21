@@ -48,6 +48,18 @@ void main() {
       expect(import.descriptor.typeIndex, 0);
     });
 
+    test('reports duplicate component import names', () {
+      final errors = WasmComponent.decode(
+        _duplicateImportNamesComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('import name a conflicts with previous import name a'),
+      );
+    });
+
     test('decodes value imports with direct value types', () {
       final component = WasmComponent.decode(_valueImportComponentBytes());
 
@@ -1585,6 +1597,38 @@ Uint8List _versionedImportComponentBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x00,
 ]);
+
+Uint8List _duplicateImportNamesComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x0b,
+      0x02,
+      0x00,
+      0x01,
+      0x61,
+      0x01,
+      0x00,
+      0x00,
+      0x01,
+      0x61,
+      0x01,
+      0x00,
+    ]);
 
 Uint8List _valueImportComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
