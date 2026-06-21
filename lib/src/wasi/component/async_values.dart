@@ -10,8 +10,15 @@ import 'dart:collection';
 /// the queue implementation.
 final class WASIComponentStream<T extends Object> {
   /// Creates a stream with a debug [name].
-  WASIComponentStream(String name, {void Function()? onDrop})
-    : _state = _WASIComponentStreamState<T>(name, onDrop) {
+  WASIComponentStream(
+    String name, {
+    int? maxBufferedElements,
+    void Function()? onDrop,
+  }) : _state = _WASIComponentStreamState<T>(
+         name,
+         onDrop,
+         maxBufferedElements: maxBufferedElements,
+       ) {
     readable = WASIComponentReadableStream<T>._(_state);
     writable = WASIComponentWritableStream<T>._(_state);
   }
@@ -29,6 +36,9 @@ final class WASIComponentStream<T extends Object> {
 
   /// Number of queued values waiting to be read.
   int get queuedLength => _state.queue.length;
+
+  /// Maximum queued values before writes apply backpressure.
+  int? get maxBufferedElements => _state.maxBufferedElements;
 
   /// Whether both endpoints have been dropped.
   bool get isDropped => _state.isDropped;
@@ -96,6 +106,15 @@ final class WASIComponentWritableStream<T extends Object> {
   /// Writes all [values] to the stream.
   void writeAll(Iterable<T> values) {
     _state.writeAll(values);
+  }
+
+  /// Writes values once the stream has capacity.
+  ///
+  /// For bounded streams this may wait until reads free capacity and then
+  /// complete with the number of values written. For unbounded streams it
+  /// completes after writing every value.
+  Future<int> writeWhenAvailable(Iterable<T> values) {
+    return _state.writeWhenAvailable(values);
   }
 
   /// Closes the writable endpoint without dropping it.
@@ -217,12 +236,15 @@ final class WASIComponentWritableFuture<T extends Object> {
 }
 
 final class _WASIComponentStreamState<T extends Object> {
-  _WASIComponentStreamState(this.name, this.onDrop);
+  _WASIComponentStreamState(this.name, this.onDrop, {int? maxBufferedElements})
+    : maxBufferedElements = _validateMaxBufferedElements(maxBufferedElements);
 
   final String name;
   final void Function()? onDrop;
+  final int? maxBufferedElements;
   final Queue<T> queue = ListQueue<T>();
   Queue<_WASIComponentStreamReadWaiter<T>>? readWaiters;
+  Queue<_WASIComponentStreamWriteWaiter<T>>? writeWaiters;
 
   bool readCancelled = false;
   bool writeCancelled = false;
@@ -230,6 +252,7 @@ final class _WASIComponentStreamState<T extends Object> {
   bool writeDropped = false;
   bool writeClosed = false;
   bool _dropCalled = false;
+  bool _pumpingWaiters = false;
 
   bool get isDropped => readDropped && writeDropped;
 
@@ -240,7 +263,11 @@ final class _WASIComponentStreamState<T extends Object> {
       return <T>[];
     }
 
-    return _removeQueued(maxElements);
+    final values = _removeQueued(maxElements);
+    if (writeWaiters != null) {
+      _pumpWaiters();
+    }
+    return values;
   }
 
   Future<List<T>> readWhenAvailable(int maxElements) {
@@ -250,7 +277,11 @@ final class _WASIComponentStreamState<T extends Object> {
       return Future<List<T>>.value(<T>[]);
     }
     if (queue.isNotEmpty) {
-      return Future<List<T>>.value(_removeQueued(maxElements));
+      final values = _removeQueued(maxElements);
+      if (writeWaiters != null) {
+        _pumpWaiters();
+      }
+      return Future<List<T>>.value(values);
     }
     if (writeClosed) {
       return Future<List<T>>.value(<T>[]);
@@ -265,18 +296,58 @@ final class _WASIComponentStreamState<T extends Object> {
 
   void write(T value) {
     requireWritable();
-    queue.addLast(value);
-    if (readWaiters != null) {
-      _completeReadWaiters();
+    if (maxBufferedElements == null &&
+        readWaiters == null &&
+        writeWaiters == null) {
+      queue.addLast(value);
+      return;
     }
+    writeAll(<T>[value]);
   }
 
   void writeAll(Iterable<T> values) {
     requireWritable();
-    queue.addAll(values);
-    if (readWaiters != null && queue.isNotEmpty) {
-      _completeReadWaiters();
+    if (maxBufferedElements == null &&
+        readWaiters == null &&
+        writeWaiters == null) {
+      queue.addAll(values);
+      return;
     }
+
+    final bufferedValues = _materialize(values);
+    if (bufferedValues.isEmpty) {
+      return;
+    }
+    final available = _availableWriteCapacity;
+    if (available != null && bufferedValues.length > available) {
+      throw StateError(
+        'WASI component stream $name writable has insufficient capacity.',
+      );
+    }
+
+    _appendValues(bufferedValues, bufferedValues.length);
+    if (readWaiters != null || writeWaiters != null) {
+      _pumpWaiters();
+    }
+  }
+
+  Future<int> writeWhenAvailable(Iterable<T> values) {
+    requireWritable();
+    final bufferedValues = _materialize(values);
+    if (bufferedValues.isEmpty) {
+      return Future<int>.value(0);
+    }
+
+    final written = _writeAvailable(bufferedValues);
+    if (written != 0 || maxBufferedElements == null) {
+      return Future<int>.value(written);
+    }
+
+    final completer = Completer<int>();
+    (writeWaiters ??= ListQueue<_WASIComponentStreamWriteWaiter<T>>()).addLast(
+      _WASIComponentStreamWriteWaiter<T>(bufferedValues, completer),
+    );
+    return completer.future;
   }
 
   void requireReadable() {
@@ -308,8 +379,13 @@ final class _WASIComponentStreamState<T extends Object> {
       throw StateError('WASI component stream $name writable was dropped.');
     }
     writeClosed = true;
+    if (writeWaiters != null) {
+      _failWriteWaiters(
+        StateError('WASI component stream $name writable is closed.'),
+      );
+    }
     if (readWaiters != null) {
-      _completeReadWaiters();
+      _pumpWaiters();
     }
   }
 
@@ -325,6 +401,11 @@ final class _WASIComponentStreamState<T extends Object> {
         StateError('WASI component stream $name reads were cancelled.'),
       );
     }
+    if (writeWaiters != null) {
+      _failWriteWaiters(
+        StateError('WASI component stream $name readable is closed.'),
+      );
+    }
   }
 
   void cancelWrite() {
@@ -333,8 +414,13 @@ final class _WASIComponentStreamState<T extends Object> {
     }
     writeCancelled = true;
     writeClosed = true;
+    if (writeWaiters != null) {
+      _failWriteWaiters(
+        StateError('WASI component stream $name writes were cancelled.'),
+      );
+    }
     if (readWaiters != null) {
-      _completeReadWaiters();
+      _pumpWaiters();
     }
   }
 
@@ -349,6 +435,11 @@ final class _WASIComponentStreamState<T extends Object> {
         StateError('WASI component stream $name readable was dropped.'),
       );
     }
+    if (writeWaiters != null) {
+      _failWriteWaiters(
+        StateError('WASI component stream $name readable is closed.'),
+      );
+    }
     _maybeDrop();
   }
 
@@ -358,8 +449,13 @@ final class _WASIComponentStreamState<T extends Object> {
     }
     writeDropped = true;
     writeClosed = true;
+    if (writeWaiters != null) {
+      _failWriteWaiters(
+        StateError('WASI component stream $name writable was dropped.'),
+      );
+    }
     if (readWaiters != null) {
-      _completeReadWaiters();
+      _pumpWaiters();
     }
     _maybeDrop();
   }
@@ -370,20 +466,79 @@ final class _WASIComponentStreamState<T extends Object> {
     return List<T>.generate(count, (_) => queue.removeFirst());
   }
 
-  void _completeReadWaiters() {
-    final waiters = readWaiters;
-    if (waiters == null || waiters.isEmpty) {
-      return;
+  List<T> _materialize(Iterable<T> values) {
+    return values is List<T> ? values : List<T>.of(values);
+  }
+
+  int? get _availableWriteCapacity {
+    final maxBufferedElements = this.maxBufferedElements;
+    if (maxBufferedElements == null) {
+      return null;
+    }
+    final available = maxBufferedElements - queue.length;
+    return available < 0 ? 0 : available;
+  }
+
+  int _writeAvailable(List<T> values) {
+    if (values.isEmpty) {
+      return 0;
+    }
+    final available = _availableWriteCapacity;
+    final count = available == null
+        ? values.length
+        : values.length < available
+        ? values.length
+        : available;
+    if (count == 0) {
+      return 0;
     }
 
+    _appendValues(values, count);
+    if (readWaiters != null || writeWaiters != null) {
+      _pumpWaiters();
+    }
+    return count;
+  }
+
+  void _appendValues(List<T> values, int count) {
+    for (var i = 0; i < count; i++) {
+      queue.addLast(values[i]);
+    }
+  }
+
+  void _pumpWaiters() {
+    if (_pumpingWaiters) {
+      return;
+    }
+    _pumpingWaiters = true;
+    try {
+      var progressed = true;
+      while (progressed) {
+        progressed = _completeReadyReadWaiters();
+        progressed = _completeReadyWriteWaiters() || progressed;
+      }
+    } finally {
+      _pumpingWaiters = false;
+    }
+  }
+
+  bool _completeReadyReadWaiters() {
+    final waiters = readWaiters;
+    if (waiters == null || waiters.isEmpty) {
+      return false;
+    }
+
+    var progressed = false;
     while (waiters.isNotEmpty) {
       final waiter = waiters.first;
       if (queue.isNotEmpty) {
         waiters.removeFirst();
         waiter.complete(_removeQueued(waiter.maxElements));
+        progressed = true;
       } else if (writeClosed) {
         waiters.removeFirst();
         waiter.complete(<T>[]);
+        progressed = true;
       } else {
         break;
       }
@@ -392,6 +547,31 @@ final class _WASIComponentStreamState<T extends Object> {
     if (waiters.isEmpty) {
       readWaiters = null;
     }
+    return progressed;
+  }
+
+  bool _completeReadyWriteWaiters() {
+    final waiters = writeWaiters;
+    if (waiters == null || waiters.isEmpty || writeClosed) {
+      return false;
+    }
+
+    var progressed = false;
+    while (waiters.isNotEmpty) {
+      final available = _availableWriteCapacity;
+      if (available != null && available == 0) {
+        break;
+      }
+      final waiter = waiters.removeFirst();
+      final written = _writeAvailable(waiter.values);
+      waiter.complete(written);
+      progressed = true;
+    }
+
+    if (waiters.isEmpty) {
+      writeWaiters = null;
+    }
+    return progressed;
   }
 
   void _failReadWaiters(Object error) {
@@ -405,12 +585,30 @@ final class _WASIComponentStreamState<T extends Object> {
     }
   }
 
+  void _failWriteWaiters(Object error) {
+    final waiters = writeWaiters;
+    if (waiters == null || waiters.isEmpty) {
+      return;
+    }
+    writeWaiters = null;
+    for (final waiter in waiters) {
+      waiter.fail(error);
+    }
+  }
+
   void _maybeDrop() {
     if (!_dropCalled && isDropped) {
       _dropCalled = true;
       onDrop?.call();
     }
   }
+}
+
+int? _validateMaxBufferedElements(int? maxBufferedElements) {
+  if (maxBufferedElements == null || maxBufferedElements > 0) {
+    return maxBufferedElements;
+  }
+  throw RangeError.range(maxBufferedElements, 1, null, 'maxBufferedElements');
 }
 
 final class _WASIComponentStreamReadWaiter<T extends Object> {
@@ -422,6 +620,25 @@ final class _WASIComponentStreamReadWaiter<T extends Object> {
   void complete(List<T> values) {
     if (!completer.isCompleted) {
       completer.complete(values);
+    }
+  }
+
+  void fail(Object error) {
+    if (!completer.isCompleted) {
+      completer.completeError(error);
+    }
+  }
+}
+
+final class _WASIComponentStreamWriteWaiter<T extends Object> {
+  const _WASIComponentStreamWriteWaiter(this.values, this.completer);
+
+  final List<T> values;
+  final Completer<int> completer;
+
+  void complete(int count) {
+    if (!completer.isCompleted) {
+      completer.complete(count);
     }
   }
 

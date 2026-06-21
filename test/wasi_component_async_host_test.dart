@@ -203,6 +203,92 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test(
+      'awaits bounded stream write capacity through async program invocation',
+      () async {
+        final component = WasmComponent.decode(_canonicalStreamProgramBytes());
+        expect(component.validate(), isEmpty);
+        final host = WASIComponentAsyncHost();
+        host.defineStreamTypeFromComponent<int>(
+          component,
+          0,
+          'numbers',
+          maxBufferedElements: 2,
+        );
+        final program = host.bindCanonicalDefinitions(component);
+        final stream =
+            program.invoke(0, const <Object?>[])! as WASIComponentStream<int>;
+
+        expect(
+          program.invoke(2, <Object?>[
+            stream.writable,
+            <int>[1, 2],
+          ]),
+          2,
+        );
+
+        var completed = false;
+        final pending =
+            program.invokeAsync(2, <Object?>[
+              stream.writable,
+              <int>[3, 4],
+            ])..then((_) {
+              completed = true;
+            });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(completed, isFalse);
+        expect(program.invoke(1, <Object?>[stream.readable, 1]), <int>[1]);
+
+        await expectLater(pending, completion(1));
+        expect(completed, isTrue);
+        expect(program.invoke(1, <Object?>[stream.readable, 4]), <int>[2, 3]);
+      },
+    );
+
+    test(
+      'borrows bounded stream write handles until async write completes',
+      () async {
+        final component = WasmComponent.decode(_canonicalStreamProgramBytes());
+        expect(component.validate(), isEmpty);
+        final host = WASIComponentAsyncHost();
+        host.defineStreamTypeFromComponent<int>(
+          component,
+          0,
+          'numbers',
+          maxBufferedElements: 2,
+        );
+
+        final program = host.bindCanonicalDefinitionsToHandles(component);
+        final handles =
+            program.invoke(0, const <Object?>[])!
+                as WASIComponentAsyncEndpointHandles;
+
+        expect(
+          program.invoke(2, <Object?>[
+            handles.writable,
+            <int>[1, 2],
+          ]),
+          2,
+        );
+
+        final pending = program.invokeAsync(2, <Object?>[
+          handles.writable,
+          <int>[3],
+        ]);
+        await Future<void>.delayed(Duration.zero);
+
+        expect(
+          () => program.invoke(6, <Object?>[handles.writable]),
+          throwsStateError,
+        );
+        expect(program.invoke(1, <Object?>[handles.readable, 1]), <int>[1]);
+
+        await expectLater(pending, completion(1));
+        expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+      },
+    );
+
     test('binds decoded canonical future definitions as a program', () {
       final component = WasmComponent.decode(_canonicalFutureProgramBytes());
       expect(component.validate(), isEmpty);

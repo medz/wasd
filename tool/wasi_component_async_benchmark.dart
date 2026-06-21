@@ -23,6 +23,8 @@ Future<void> main(List<String> args) async {
   final streamCancel = _benchmarkStreamCancel(options);
   final streamPendingReadCompletion =
       await _benchmarkStreamPendingReadCompletion(options);
+  final streamPendingWriteCompletion =
+      await _benchmarkStreamPendingWriteCompletion(options);
   final futureCompleteReadDrop = _benchmarkFutureCompleteReadDrop(
     options.iterations,
   );
@@ -37,6 +39,7 @@ Future<void> main(List<String> args) async {
     'stream_round_trip': streamRoundTrip.toJson(),
     'stream_cancel': streamCancel.toJson(),
     'stream_pending_read_completion': streamPendingReadCompletion.toJson(),
+    'stream_pending_write_completion': streamPendingWriteCompletion.toJson(),
     'future_complete_read_drop': futureCompleteReadDrop.toJson(),
     'future_pending_read_completion': futurePendingReadCompletion.toJson(),
     'program_invoke': programInvoke.toJson(),
@@ -55,6 +58,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkStreamRoundTrip(warmup);
   _benchmarkStreamCancel(warmup);
   await _benchmarkStreamPendingReadCompletion(warmup);
+  await _benchmarkStreamPendingWriteCompletion(warmup);
   _benchmarkFutureCompleteReadDrop(_warmupIterations);
   await _benchmarkFuturePendingReadCompletion(_warmupIterations);
   _benchmarkProgramInvoke(warmup);
@@ -131,6 +135,35 @@ Future<_Metric> _benchmarkStreamPendingReadCompletion(_Options options) async {
 
   return _Metric(
     operations: options.iterations * (options.batchSize * 2 + 4),
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+Future<_Metric> _benchmarkStreamPendingWriteCompletion(_Options options) async {
+  final batch = List<int>.generate(options.batchSize, (index) => index);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final stream = WASIComponentStream<int>(
+      'benchmark-stream-write-pending',
+      maxBufferedElements: options.batchSize,
+    );
+    stream.writable.writeAll(batch);
+    final pending = stream.writable.writeWhenAvailable(batch);
+    final values = stream.readable.read(1);
+    for (final value in values) {
+      checksum += value;
+    }
+    checksum += await pending;
+    stream.readable.drop();
+    stream.writable.drop();
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: options.iterations * (options.batchSize + 6),
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
@@ -303,6 +336,7 @@ void _printText(Map<String, Object?> payload) {
     'stream_round_trip',
     'stream_cancel',
     'stream_pending_read_completion',
+    'stream_pending_write_completion',
     'future_complete_read_drop',
     'future_pending_read_completion',
     'program_invoke',

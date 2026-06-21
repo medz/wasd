@@ -23,6 +23,7 @@ final class WASIComponentAsyncHost {
   void defineStreamType<T extends Object>(
     int componentTypeIndex,
     String name, {
+    int? maxBufferedElements,
     void Function()? onDrop,
   }) {
     _defineType<T>(
@@ -30,6 +31,7 @@ final class WASIComponentAsyncHost {
       name,
       kind: _WASIComponentAsyncValueKind.stream,
       valueValidator: _WASIComponentAsyncValueValidator.unconstrained,
+      maxBufferedElements: maxBufferedElements,
       onDrop: onDrop,
     );
   }
@@ -39,6 +41,7 @@ final class WASIComponentAsyncHost {
     WasmComponent component,
     int componentTypeIndex,
     String name, {
+    int? maxBufferedElements,
     void Function()? onDrop,
   }) {
     final valueValidator = _expectDecodedAsyncType(
@@ -51,6 +54,7 @@ final class WASIComponentAsyncHost {
       name,
       kind: _WASIComponentAsyncValueKind.stream,
       valueValidator: valueValidator,
+      maxBufferedElements: maxBufferedElements,
       onDrop: onDrop,
     );
   }
@@ -66,6 +70,7 @@ final class WASIComponentAsyncHost {
       name,
       kind: _WASIComponentAsyncValueKind.future,
       valueValidator: _WASIComponentAsyncValueValidator.unconstrained,
+      maxBufferedElements: null,
       onDrop: onDrop,
     );
   }
@@ -87,6 +92,7 @@ final class WASIComponentAsyncHost {
       name,
       kind: _WASIComponentAsyncValueKind.future,
       valueValidator: valueValidator,
+      maxBufferedElements: null,
       onDrop: onDrop,
     );
   }
@@ -96,6 +102,7 @@ final class WASIComponentAsyncHost {
     String name, {
     required _WASIComponentAsyncValueKind kind,
     required _WASIComponentAsyncValueValidator valueValidator,
+    int? maxBufferedElements,
     void Function()? onDrop,
   }) {
     if (_valueTypes.containsKey(componentTypeIndex)) {
@@ -108,6 +115,7 @@ final class WASIComponentAsyncHost {
       name: name,
       kind: kind,
       valueValidator: valueValidator,
+      maxBufferedElements: maxBufferedElements,
       onDrop: onDrop,
     );
   }
@@ -265,6 +273,9 @@ final class WASIComponentCanonicalAsyncProgram {
       case WasmComponentCanonicalKind.futureRead:
         _expectArity(canonicalIndex, args, 1);
         return operation.futureReadWhenReady(args.single);
+      case WasmComponentCanonicalKind.streamWrite:
+        _expectArity(canonicalIndex, args, 2);
+        return operation.streamWriteWhenAvailable(args[0], args[1]);
       default:
         return invoke(canonicalIndex, args);
     }
@@ -411,6 +422,12 @@ final class WASIComponentCanonicalAsyncHandleProgram {
         return operation.futureReadHandleWhenReady(
           _expectHandle(canonicalIndex, args.single, 'readable'),
         );
+      case WasmComponentCanonicalKind.streamWrite:
+        _expectArity(canonicalIndex, args, 2);
+        return operation.streamWriteHandleWhenAvailable(
+          _expectHandle(canonicalIndex, args[0], 'writable'),
+          args[1],
+        );
       default:
         return invoke(canonicalIndex, args);
     }
@@ -482,10 +499,23 @@ final class WASIComponentCanonicalAsyncOperation {
     return _valueType.streamWrite(writable, values);
   }
 
+  /// Executes `stream.write` and waits if the stream has no write capacity.
+  Future<int> streamWriteWhenAvailable(Object? writable, Object? values) {
+    _requireKind(WasmComponentCanonicalKind.streamWrite);
+    return _valueType.streamWriteWhenAvailable(writable, values);
+  }
+
   /// Executes `stream.write` with a writable endpoint handle.
   int streamWriteHandle(int writable, Object? values) {
     _requireKind(WasmComponentCanonicalKind.streamWrite);
     return _valueType.streamWriteHandle(writable, values);
+  }
+
+  /// Executes `stream.write` with a writable endpoint handle and waits if the
+  /// stream has no write capacity.
+  Future<int> streamWriteHandleWhenAvailable(int writable, Object? values) {
+    _requireKind(WasmComponentCanonicalKind.streamWrite);
+    return _valueType.streamWriteHandleWhenAvailable(writable, values);
   }
 
   /// Executes `stream.cancel-read`.
@@ -679,6 +709,7 @@ final class _RegisteredAsyncValueType<T extends Object> {
     required this.name,
     required this.kind,
     required this.valueValidator,
+    this.maxBufferedElements,
     this.onDrop,
   }) : readableStreamType = kind == _WASIComponentAsyncValueKind.stream
            ? table.defineType<WASIComponentReadableStream<T>>(
@@ -717,6 +748,7 @@ final class _RegisteredAsyncValueType<T extends Object> {
   final String name;
   final _WASIComponentAsyncValueKind kind;
   final _WASIComponentAsyncValueValidator valueValidator;
+  final int? maxBufferedElements;
   final void Function()? onDrop;
   final WASIComponentResourceType<WASIComponentReadableStream<T>>?
   readableStreamType;
@@ -729,7 +761,11 @@ final class _RegisteredAsyncValueType<T extends Object> {
 
   Object streamNew() {
     _requireKind(_WASIComponentAsyncValueKind.stream);
-    return WASIComponentStream<T>(name, onDrop: onDrop);
+    return WASIComponentStream<T>(
+      name,
+      maxBufferedElements: maxBufferedElements,
+      onDrop: onDrop,
+    );
   }
 
   WASIComponentAsyncEndpointHandles streamNewHandles() {
@@ -791,6 +827,13 @@ final class _RegisteredAsyncValueType<T extends Object> {
     return typedValues.length;
   }
 
+  Future<int> streamWriteWhenAvailable(Object? writable, Object? values) {
+    _requireKind(_WASIComponentAsyncValueKind.stream);
+    final stream = _expectWritableStream(writable);
+    final typedValues = _expectIterableValues(values);
+    return stream.writeWhenAvailable(typedValues);
+  }
+
   int streamWriteHandle(int writable, Object? values) {
     return table.borrow<WASIComponentWritableStream<T>, int>(
       writableStreamType!,
@@ -800,6 +843,15 @@ final class _RegisteredAsyncValueType<T extends Object> {
         stream.writeAll(typedValues);
         return typedValues.length;
       },
+    );
+  }
+
+  Future<int> streamWriteHandleWhenAvailable(int writable, Object? values) {
+    final typedValues = _expectIterableValues(values);
+    return table.borrowAsync<WASIComponentWritableStream<T>, int>(
+      writableStreamType!,
+      writable,
+      (stream) => stream.writeWhenAvailable(typedValues),
     );
   }
 

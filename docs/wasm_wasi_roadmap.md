@@ -111,10 +111,12 @@ This is the implementation state as of 2026-06-21 on `main`.
   executing read/write/cancel paths, so reentrant drops cannot invalidate an
   endpoint during host-side canonical execution; pending handle-backed reads
   hold asynchronous resource-table borrows until completion. Internal streams
-  and futures now expose pending read completion primitives, and canonical async
-  programs can await pending `stream.read` and `future.read` operations through
-  `invokeAsync`. P2/P3 host instantiation, WIT ingestion, full canonical ABI
-  lowering/lifting, and full async stream/future execution are not
+  and futures now expose pending read completion primitives. Streams also
+  support optional bounded buffering for backpressure, and canonical async
+  programs can await pending `stream.read`, `stream.write`, and `future.read`
+  operations through `invokeAsync`. P2/P3 host instantiation, WIT ingestion,
+  full canonical ABI lowering/lifting, and full async stream/future execution
+  are not
   production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
@@ -181,8 +183,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   async forwarding case from WASI 0.3 must be a first-class benchmark, not only
   a functional test.
 - Internal component stream/future endpoint round-trip, cancellation,
-  completion/drop, pending stream/future-read completion, decoded canonical
-  async program invocation, and resource-table-backed borrowed handle
+  completion/drop, pending stream/future-read completion, bounded stream-write
+  backpressure completion, decoded canonical async program invocation, and
+  resource-table-backed borrowed handle
   invocation costs are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`.
 - Component resource table canonical `resource.new`/`resource.rep`/

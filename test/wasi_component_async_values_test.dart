@@ -91,6 +91,75 @@ void main() {
 
       await expectLater(droppedRead, throwsStateError);
     });
+
+    test(
+      'completes pending bounded stream writes when capacity opens',
+      () async {
+        final stream = WASIComponentStream<int>(
+          'numbers',
+          maxBufferedElements: 2,
+        );
+        stream.writable.writeAll(<int>[1, 2]);
+        var completed = false;
+
+        final pending = stream.writable.writeWhenAvailable(<int>[3, 4])
+          ..then((_) {
+            completed = true;
+          });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(completed, isFalse);
+        expect(stream.queuedLength, 2);
+        expect(stream.readable.read(1), <int>[1]);
+
+        await expectLater(pending, completion(1));
+        expect(completed, isTrue);
+        expect(stream.readable.read(4), <int>[2, 3]);
+      },
+    );
+
+    test('fails pending bounded stream writes on cancel or drop', () async {
+      final cancelled = WASIComponentStream<String>(
+        'cancelled',
+        maxBufferedElements: 1,
+      );
+      cancelled.writable.write('open');
+      final cancelledWrite = cancelled.writable.writeWhenAvailable(<String>[
+        'late',
+      ]);
+
+      cancelled.writable.cancel();
+
+      await expectLater(cancelledWrite, throwsStateError);
+
+      final dropped = WASIComponentStream<String>(
+        'dropped',
+        maxBufferedElements: 1,
+      );
+      dropped.writable.write('open');
+      final droppedWrite = dropped.writable.writeWhenAvailable(<String>[
+        'late',
+      ]);
+
+      dropped.writable.drop();
+
+      await expectLater(droppedWrite, throwsStateError);
+    });
+
+    test('rejects synchronous bounded writes without partial enqueue', () {
+      final stream = WASIComponentStream<int>(
+        'numbers',
+        maxBufferedElements: 2,
+      );
+
+      expect(() => stream.writable.writeAll(<int>[1, 2, 3]), throwsStateError);
+      expect(stream.queuedLength, 0);
+
+      stream.writable.writeAll(<int>[1, 2]);
+
+      expect(() => stream.writable.write(3), throwsStateError);
+      expect(stream.readable.read(4), <int>[1, 2]);
+    });
   });
 
   group('WASIComponentFuture', () {
