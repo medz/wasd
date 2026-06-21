@@ -1978,10 +1978,12 @@ Future<void> _runVmMode(List<String> args) async {
   }
 
   final startedAt = DateTime.now().toUtc();
-  final files = _collectSuiteFiles(testsuite.path, suite);
-  final selectedFiles = maxFiles == null
-      ? files
-      : files.take(maxFiles).toList();
+  final selectedFiles = _selectedSuiteFiles(
+    args: args,
+    testsuiteDir: testsuite.path,
+    suite: suite,
+    maxFiles: maxFiles,
+  );
 
   final results = <_FileResult>[];
   final reasonCounts = <String, int>{};
@@ -2092,10 +2094,12 @@ Future<void> _runPrepareManifestMode(
     return;
   }
 
-  final files = _collectSuiteFiles(testsuite.path, suite);
-  final selectedFiles = maxFiles == null
-      ? files
-      : files.take(maxFiles).toList();
+  final selectedFiles = _selectedSuiteFiles(
+    args: args,
+    testsuiteDir: testsuite.path,
+    suite: suite,
+    maxFiles: maxFiles,
+  );
 
   final rootDir = Directory(prepareRoot);
   if (rootDir.existsSync()) {
@@ -2814,6 +2818,50 @@ List<String> _collectSuiteFiles(String testsuiteDir, _SpecSuite suite) {
   return files;
 }
 
+List<String> _selectedSuiteFiles({
+  required List<String> args,
+  required String testsuiteDir,
+  required _SpecSuite suite,
+  required int? maxFiles,
+}) {
+  final requestedFiles = _argValues(args, '--file');
+  if (requestedFiles.isNotEmpty) {
+    final selected = <String>[];
+    for (final requested in requestedFiles) {
+      final resolved = _resolveRequestedSuiteFile(
+        requested,
+        testsuiteDir: testsuiteDir,
+      );
+      if (!File(resolved).existsSync()) {
+        throw ArgumentError('Requested spec file does not exist: $requested');
+      }
+      selected.add(resolved);
+    }
+    selected.sort();
+    return maxFiles == null ? selected : selected.take(maxFiles).toList();
+  }
+
+  final files = _collectSuiteFiles(testsuiteDir, suite);
+  return maxFiles == null ? files : files.take(maxFiles).toList();
+}
+
+String _resolveRequestedSuiteFile(
+  String requested, {
+  required String testsuiteDir,
+}) {
+  final trimmed = requested.trim();
+  if (trimmed.isEmpty) {
+    throw ArgumentError('Requested spec file path must not be empty.');
+  }
+  if (File(trimmed).isAbsolute) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('third_party/') || trimmed.startsWith('./')) {
+    return File(trimmed).absolute.path;
+  }
+  return File('$testsuiteDir/$trimmed').absolute.path;
+}
+
 String _groupForFile(String file, String testsuiteDir) {
   final normalizedFile = file.replaceAll('\\', '/');
   final normalizedRoot = testsuiteDir.replaceAll('\\', '/');
@@ -2977,6 +3025,22 @@ String? _argValue(List<String> args, String key) {
     }
   }
   return null;
+}
+
+List<String> _argValues(List<String> args, String key) {
+  final values = <String>[];
+  for (var i = 0; i < args.length; i++) {
+    final current = args[i];
+    if (current == key && i + 1 < args.length) {
+      values.add(args[i + 1]);
+      i++;
+      continue;
+    }
+    if (current.startsWith('$key=')) {
+      values.add(current.substring(key.length + 1));
+    }
+  }
+  return values;
 }
 
 Future<_WastConverter> _resolveWastConverter({
@@ -3233,6 +3297,7 @@ void _printUsage() {
     '[--output-json=<path>] '
     '[--output-md=<path>] '
     '[--max-files=<n>] '
+    '[--file=<path>] '
     '[--conversion-cache-dir=<path>] '
     '[--no-conversion-cache] '
     '[--json-from-wast=<path>] '

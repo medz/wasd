@@ -114,15 +114,12 @@ final class WasmTable {
     if (length == 0) {
       return;
     }
-    if (identical(this, source) && destinationOffset > sourceOffset) {
-      for (var i = length - 1; i >= 0; i--) {
-        _entries[destinationOffset + i] = _entries[sourceOffset + i];
-      }
-      return;
-    }
-    for (var i = 0; i < length; i++) {
-      _entries[destinationOffset + i] = source._entries[sourceOffset + i];
-    }
+    _entries.setRange(
+      destinationOffset,
+      destinationOffset + length,
+      source._entries,
+      sourceOffset,
+    );
   }
 
   void fillRange(int offset, int length, int? value) {

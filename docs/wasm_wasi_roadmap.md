@@ -200,7 +200,12 @@ This is the implementation state as of 2026-06-21 on `main`.
   conversion outputs by converter/input hash under `.dart_tool/spec_runner`,
   then copies cached outputs into fresh execution directories so repeated
   conformance runs avoid redundant external converter work without reusing
-  mutable execution state.
+  mutable execution state. Targeted spec execution can now run individual
+  `.wast` files with `tool/spec_testsuite_runner.dart --file=<path>`, which is
+  the preferred loop for hot files such as `memory_copy.wast`,
+  `table_copy.wast`, and SIMD stress cases. Native table copying now delegates
+  to Dart range-copy semantics instead of a manual element loop while preserving
+  same-table overlapping copy behavior.
   P2/P3 host instantiation, WIT ingestion, full canonical ABI
   lowering/lifting, memory-backed typed stream/future copy, and full async
   stream/future execution are not production-supported yet.
@@ -260,7 +265,9 @@ This is the implementation state as of 2026-06-21 on `main`.
 - Any new conformance runner should cache toolchain discovery, generated
   bundles, and fixture conversion results by input hash. The current
   spec-testsuite runner caches converter outputs but still executes each file
-  from a fresh work directory to preserve isolation.
+  from a fresh work directory to preserve isolation. Use `--file=<path>` for
+  targeted hot-file verification before running broader conformance smoke
+  checks.
 - Preview 1 VFS path resolution, directory-entry rebuilding, descriptor rights,
   and socket descriptor paths are measured by
   `dart run tool/wasi_vfs_benchmark.dart --json`, covering `path_open`,
