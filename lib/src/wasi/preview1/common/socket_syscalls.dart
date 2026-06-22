@@ -54,6 +54,9 @@ int preview1SockRecv({
   required Uint8List? bytes,
   required ByteData? data,
 }) {
+  if ((flags & ~riflagKnownMask) != 0) {
+    return errnoInval;
+  }
   final socket = vfs.socketForFd(fd);
   if (socket == null) {
     return _errnoForMissingSocket(vfs, fd);
@@ -61,9 +64,6 @@ int preview1SockRecv({
   final right = _checkDescriptorRight(vfs, fd, rightFdRead);
   if (right != errnoSuccess) {
     return right;
-  }
-  if ((flags & ~riflagKnownMask) != 0) {
-    return errnoInval;
   }
   if (bytes == null || data == null) {
     return errnoInval;
@@ -90,6 +90,9 @@ int preview1SockSend({
   required Uint8List? bytes,
   required ByteData? data,
 }) {
+  if (flags != 0) {
+    return errnoInval;
+  }
   final socket = vfs.socketForFd(fd);
   if (socket == null) {
     return _errnoForMissingSocket(vfs, fd);
@@ -97,9 +100,6 @@ int preview1SockSend({
   final right = _checkDescriptorRight(vfs, fd, rightFdWrite);
   if (right != errnoSuccess) {
     return right;
-  }
-  if (flags != 0) {
-    return errnoInval;
   }
   if (bytes == null || data == null) {
     return errnoInval;

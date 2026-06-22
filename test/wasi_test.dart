@@ -3289,6 +3289,78 @@ void main() {
       );
 
       test(
+        'sock_recv and sock_send validate flags before descriptor rights',
+        () async {
+          final receiveSocket = WASIPreview1Socket(
+            receiveData: utf8.encode('input'),
+          );
+          final sendSocket = WASIPreview1Socket();
+          final socketWasi = WASI(sockets: {46: receiveSocket, 47: sendSocket});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final sockSend = preview1['sock_send'] as FunctionImportExportValue;
+          final fdFdstatSetRights =
+              preview1['fd_fdstat_set_rights'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const recvIovPtr = 4816;
+          const recvBufferPtr = 4848;
+          const recvCountPtr = 4880;
+          const recvFlagsPtr = 4896;
+          const sendIovPtr = 4912;
+          const sendBufferPtr = 4944;
+          const sendCountPtr = 4976;
+          const recvUnknownFlag = 1 << 2;
+          const sendUnknownFlag = 1;
+
+          data.setUint32(recvIovPtr, recvBufferPtr, Endian.little);
+          data.setUint32(recvIovPtr + 4, 3, Endian.little);
+          bytes.setAll(sendBufferPtr, utf8.encode('out'));
+          data.setUint32(sendIovPtr, sendBufferPtr, Endian.little);
+          data.setUint32(sendIovPtr + 4, 3, Endian.little);
+          expect(fdFdstatSetRights.ref([46, 0, 0]), 0);
+          expect(fdFdstatSetRights.ref([47, 0, 0]), 0);
+
+          data.setUint32(recvCountPtr, 0xfeedface, Endian.little);
+          data.setUint16(recvFlagsPtr, 0xbeef, Endian.little);
+          expect(
+            sockRecv.ref([
+              46,
+              recvIovPtr,
+              1,
+              recvUnknownFlag,
+              recvCountPtr,
+              recvFlagsPtr,
+            ]),
+            _errnoInval,
+          );
+          expect(data.getUint32(recvCountPtr, Endian.little), 0xfeedface);
+          expect(data.getUint16(recvFlagsPtr, Endian.little), 0xbeef);
+          expect(utf8.decode(receiveSocket.remainingReceiveData), 'input');
+
+          data.setUint32(sendCountPtr, 0xdeadbeef, Endian.little);
+          expect(
+            sockSend.ref([47, sendIovPtr, 1, sendUnknownFlag, sendCountPtr]),
+            _errnoInval,
+          );
+          expect(data.getUint32(sendCountPtr, Endian.little), 0xdeadbeef);
+          expect(sendSocket.sentData, isEmpty);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'sock_recv snapshots iovs before writing receive buffers',
         () async {
           final stream = WASIPreview1Socket(

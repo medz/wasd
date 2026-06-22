@@ -228,6 +228,46 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-FLAG-PREFLIGHT` - `sock_recv` and `sock_send` validate ABI
+  flags before descriptor/socket/right state.
+  - Scope: native/browser shared Preview1 stream and datagram `sock_recv` and
+    `sock_send` flag validation ordering.
+  - Edit targets: `lib/src/wasi/preview1/common/socket_syscalls.dart`,
+    `test/wasi_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`
+    failed before the fix with `Expected: <28>` and `Actual: <76>`, proving
+    invalid flags were hidden behind `NOTCAPABLE` descriptor-right checks.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`;
+    `dart test test/wasi_test.dart --name "sock_recv|sock_send"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_recv|sock_send"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_recv_peek.operations=8000`,
+    `socket_recv_peek.per_operation_us=0.146`,
+    `socket_recv_waitall.operations=24000`,
+    `socket_recv_waitall.per_operation_us=0.48625`,
+    `socket_send_recv.operations=56000`,
+    `socket_send_recv.per_operation_us=0.20760714285714285`,
+    `socket_send_error_preflight.operations=48000`,
+    `socket_send_error_preflight.per_operation_us=0.009395833333333334`,
+    `socket_fd_read_write.operations=32000`, and
+    `socket_fd_read_write.per_operation_us=0.2274375` for the socket-heavy
+    distribution. The implementation only moves constant-time flag checks ahead
+    of descriptor lookup and right checks; success hot paths add no allocation
+    or loops.
+  - Done when: invalid `sock_recv`/`sock_send` flags return `EINVAL` without
+    mutating output pointers, consuming receive data, or recording sent bytes,
+    even when descriptor rights are absent.
+  - Evidence update: this checked row, the detailed backlog child row, the
+    verification matrix, and the current baseline.
+  - Claim impact: closes one Preview1 socket ABI-validation ordering gap for
+    native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-RECV-IOV-SNAPSHOT` - `sock_recv` snapshots overlapping iovec
   tables before writing receive buffers.
   - Scope: native/browser shared Preview1 stream and datagram `sock_recv` iovec
@@ -1081,6 +1121,7 @@ copying their internals directly.
 | [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `path_open` create/exclusive/truncate is covered; full Preview1 conformance still needs broader syscall/spec-suite gates and remaining socket edges. |
 | [x] | Preview1 native/browser fd count-pointer ABI | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test -p chrome test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Result count pointers at guest memory address `0` now write correctly for stdio and virtual-file fd read/write syscalls; full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser clock and poll-clock validation | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "clock_time_get"`; `dart test -p chrome test/wasi_test.dart --name "clock_time_get"`; `dart test test/wasi_test.dart --name "poll_oneoff"`; `dart test -p chrome test/wasi_test.dart --name "poll_oneoff"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Unsupported `clock_time_get` ids now preserve output memory and return `EINVAL`; invalid `poll_oneoff` clock subscriptions now report event `EINVAL`; full Preview1 still needs broader syscall/spec-suite gates. |
+| [x] | Preview1 native/browser socket flag preflight | `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`; `dart test test/wasi_test.dart --name "sock_recv|sock_send"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv|sock_send"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Invalid `sock_recv`/`sock_send` flags now return `EINVAL` before descriptor-right failures and without socket/output side effects; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket recv iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv snapshots iovs before writing receive buffers"`; `dart test test/wasi_test.dart --name "sock_recv"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream and datagram `sock_recv` now snapshot overlapping iovec tables before receive-buffer writes; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
@@ -1104,8 +1145,10 @@ This is the implementation state as of 2026-06-23 on `main`.
   sync/advice validation, clock/file/socket polling readiness including
   host-supplied socket readiness hints, `clock_time_get` unsupported-id
   validation, `poll_oneoff` clock subscription validation, fd read/write count
-  outputs at guest memory address zero, `sock_recv` iovec aliasing protection,
-  host-backed stream/datagram receive/send handlers, and descriptor renumbering.
+  outputs at guest memory address zero, `sock_recv`/`sock_send` invalid flag
+  preflight before descriptor-right checks, `sock_recv` iovec aliasing
+  protection, host-backed stream/datagram receive/send handlers, and descriptor
+  renumbering.
   Node still delegates Preview 1 behavior to `node:wasi`.
 - Preview 1 `proc_raise` is no longer a blanket `ENOSYS` stub: native hosts
   deliver mapped process signals by default, native/browser hosts can inject a
@@ -1588,6 +1631,42 @@ performance visible while the support surface expands.
 
 ## Near-Term Execution Backlog
 
+- [x] `P1-SOCKET-FLAG-PREFLIGHT` - `sock_recv` and `sock_send` validate ABI
+  flags before descriptor/socket/right state.
+  - Scope: native/browser shared Preview1 stream and datagram socket syscall
+    validation in `lib/src/wasi/preview1/common/socket_syscalls.dart`.
+  - Edit targets: `lib/src/wasi/preview1/common/socket_syscalls.dart`,
+    `test/wasi_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`
+    failed before the fix with `Actual: <76>` instead of `Expected: <28>`
+    after descriptor rights were stripped.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`;
+    `dart test test/wasi_test.dart --name "sock_recv|sock_send"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_recv|sock_send"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_recv_peek.operations=8000`,
+    `socket_recv_peek.per_operation_us=0.146`,
+    `socket_recv_waitall.operations=24000`,
+    `socket_recv_waitall.per_operation_us=0.48625`,
+    `socket_send_recv.operations=56000`,
+    `socket_send_recv.per_operation_us=0.20760714285714285`,
+    `socket_send_error_preflight.operations=48000`,
+    `socket_send_error_preflight.per_operation_us=0.009395833333333334`,
+    `socket_fd_read_write.operations=32000`, and
+    `socket_fd_read_write.per_operation_us=0.2274375` for the socket-heavy
+    distribution.
+  - Done when: invalid flags return `EINVAL` before descriptor/right errors and
+    before any socket data or output pointer side effects.
+  - Evidence update: this checked row plus `Current Execution Board`,
+    `Verification Matrix`, and `Current wasd Baseline`.
+  - Claim impact: contributes to `P1-SOCKET-CONFORMANCE` and `SUPPORT-P1`; does
+    not complete Preview1 full support or any P2/P3 support gate.
 - [x] `P1-SOCKET-RECV-IOV-SNAPSHOT` - `sock_recv` snapshots overlapping iovec
   tables before writing receive buffers.
   - Scope: native/browser shared Preview1 stream and datagram `sock_recv` iovec
