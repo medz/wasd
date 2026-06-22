@@ -72,6 +72,8 @@ test or done condition is too broad to verify in one commit.
 | --- | --- | --- | --- | --- |
 | [ ] | `P1-SOCKET-CONFORMANCE` | Add the next missing Preview1 socket/native adapter regression in `test/wasi_test.dart`. | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Moves `SUPPORT-P1` only after remaining P1 socket rows are complete. |
 | [x] | `PERF-HEAVY-RUNNERS` | DOOM runtime matrix reports per-runtime elapsed time and peak RSS; spec testsuite reports conversion cache hits/misses and Top Slow Files. | `dart run tool/spec_testsuite_runner.dart --suite=core --file=imports0.wast --output-json=.dart_tool/spec_runner/perf_heavy_runners_imports0.json --output-md=.dart_tool/spec_runner/perf_heavy_runners_imports0.md --prepare-root=.dart_tool/spec_runner/perf_heavy_runners_bundle --conversion-cache-dir=.dart_tool/spec_runner/conversion_cache`; `dart test test/doom_smoke_test.dart --name "doom cli runtime matrix"` | Gives performance evidence for `SUPPORT-WASM` and `PERFORMANCE-GATES`; does not complete either support claim. |
+| [x] | `PERF-DOOM-INSTANTIATE-PHASES` | DOOM instantiate now has a phase-level RSS/duration profiler, and decoder byte reads avoid avoidable section/body double copies. | `dart run tool/doom_instantiate_profile.dart --json`; `dart test test/wasm_test.dart`; `dart test test/component_test.dart`; `dart test test/doom_smoke_test.dart --name "doom cli runtime matrix"`; `dart analyze` | Identifies the remaining `compile_module` validation/predecode allocation as the next `SUPPORT-WASM` performance blocker. |
+| [ ] | `PERF-WASM-COMPILE-PREDECODE` | Reduce `compile_module` temporary RSS from validation/predecode on DOOM-sized modules. | `dart run tool/doom_instantiate_profile.dart --json`; `dart test test/wasm_test.dart`; `dart analyze` | Required before treating DOOM/spec heat as solved rather than only measured. |
 | [ ] | `CM-VALIDATION-GAPS` | Add a deterministic component validation failure before adding host behavior. | `dart test test/component_test.dart`; `dart test test/wasi_component_async_host_test.dart` | Reduces late runtime traps in P2/P3 adapter work. |
 | [x] | `WIT-DOCUMENT-BOUNDARIES` | Internal WIT package/interface/world parsing with diagnostics is implemented under `lib/src/wasi/component/`. | `dart test test/wasi_component_wit_test.dart`; `dart analyze` | Provides structured input for later P2/P3 adapters, but no public support claim. |
 | [ ] | `P2-P3-ADAPTERS` | Bind one real Preview2/Preview3 adapter path over shared component primitives. | `dart test test/wasi_component_versioned_host_test.dart` plus adapter-specific tests | Starts concrete `SUPPORT-P2` / `SUPPORT-P3` evidence. |
@@ -588,6 +590,13 @@ performance visible while the support surface expands.
   measured-process helper for elapsed time and sampled child-process peak RSS;
   future heavy runners should reuse the same helper instead of open-coding
   process timing.
+- DOOM instantiate profiling must stay phase-level, not only whole-process.
+  `tool/doom_instantiate_profile.dart --json` reports fixture sizes, total
+  duration, baseline/peak RSS, and per-phase RSS deltas. A local run after
+  eliminating avoidable byte-reader double copies still measured the
+  `compile_module` phase as the dominant spike
+  (`rss_delta_bytes=442023936`), so the next optimization target is
+  validation/predecode allocation rather than runner scheduling.
 - Heavy external-process tests should be grouped behind explicit runner modes so
   default validation remains useful without hiding performance regressions.
 - Any new conformance runner should cache toolchain discovery, generated
@@ -807,6 +816,45 @@ performance visible while the support surface expands.
     Dart VM child at `peak_rss_bytes=859389952`, which makes VM instantiate
     memory the next performance root-cause candidate rather than a test runner
     scheduling artifact.
+- [x] `PERF-DOOM-INSTANTIATE-PHASES` - DOOM instantiate phase profiler.
+  - Change: add a reusable DOOM instantiate profiler and remove avoidable
+    decoder/example byte copies without weakening compiled-module byte
+    isolation.
+  - Evidence: `tool/doom_instantiate_profile.dart`,
+    `lib/src/wasm/backend/native/interpreter/byte_reader.dart`,
+    `lib/src/wasm/backend/native/interpreter/module.dart`,
+    `lib/src/wasm/backend/native/interpreter/component.dart`, and
+    `example/doom_cli.dart`.
+  - Gate:
+    - `dart run tool/doom_instantiate_profile.dart --json`
+    - `dart test test/wasm_test.dart`
+    - `dart test test/component_test.dart`
+    - `dart test test/doom_smoke_test.dart --name "doom cli runtime matrix"`
+    - `dart analyze`
+  - Done when: the DOOM instantiate path reports per-phase duration/RSS, the
+    module/component byte readers avoid `sublist` plus `fromList` double
+    copies, section/body subreaders use bounded views while retained bytes are
+    still copied, and the example no longer copies file-loaded wasm/IWAD bytes
+    before handing them to APIs that already own their isolation boundary.
+  - Result: a local JSON run reported `peak_rss_bytes=788201472` and
+    `compile_module.rss_delta_bytes=442023936`. The minor byte-copy cleanup did
+    not solve the peak, which confirms the next root-cause row is
+    validation/predecode allocation.
+- [ ] `PERF-WASM-COMPILE-PREDECODE` - Compile-time validation/predecode memory.
+  - Change: reduce temporary instruction/predecode allocation during
+    `WebAssembly.compile` without skipping validation or hiding malformed
+    modules.
+  - Evidence: `tool/doom_instantiate_profile.dart`,
+    `lib/src/wasm/backend/native/interpreter/validator.dart`,
+    `lib/src/wasm/backend/native/interpreter/predecode.dart`, and
+    `lib/src/wasm/backend/native/interpreter/instance.dart`.
+  - Gate:
+    - `dart run tool/doom_instantiate_profile.dart --json`
+    - `dart test test/wasm_test.dart`
+    - `dart analyze`
+  - Done when: the profile shows a lower `compile_module.rss_delta_bytes` on
+    DOOM-sized modules while validation errors and instantiate behavior remain
+    covered by the core Wasm tests.
 - [ ] `CM-VALIDATION-GAPS` - Component validation gaps that are deterministic
   and local.
   - Change: add validation tests before runtime wiring for remaining borrow,

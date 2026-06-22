@@ -29,11 +29,23 @@ final class ByteReader {
 
     final start = offset;
     offset += length;
-    return Uint8List.fromList(_bytes.sublist(start, offset));
+    return _bytes.sublist(start, offset);
+  }
+
+  Uint8List readBytesView(int length) {
+    if (length < 0 || remaining < length) {
+      throw FormatException(
+        'Unexpected EOF while reading $length bytes. Remaining: $remaining.',
+      );
+    }
+
+    final start = offset;
+    offset += length;
+    return Uint8List.sublistView(_bytes, start, offset);
   }
 
   ByteReader readSubReader(int length) {
-    return ByteReader(readBytes(length));
+    return ByteReader(readBytesView(length));
   }
 
   Uint8List readRemainingBytes() {

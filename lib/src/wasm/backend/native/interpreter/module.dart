@@ -1600,7 +1600,7 @@ final class WasmModule {
       final opcode = reader.readByte();
       switch (opcode) {
         case Opcodes.end:
-          return Uint8List.fromList(reader.bytes.sublist(start, reader.offset));
+          return reader.bytes.sublist(start, reader.offset);
         case Opcodes.i32Const:
           reader.readVarInt32();
         case Opcodes.i64Const:

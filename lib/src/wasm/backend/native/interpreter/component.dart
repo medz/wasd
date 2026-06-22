@@ -5699,7 +5699,7 @@ WasmComponentValueData _readListComponentValue(
 }
 
 Uint8List _componentValueRawBytes(ByteReader reader, int start) {
-  return Uint8List.fromList(reader.bytes.sublist(start, reader.offset));
+  return reader.bytes.sublist(start, reader.offset);
 }
 
 int _readComponentCoreU32Value(ByteReader reader) {

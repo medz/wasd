@@ -83,7 +83,7 @@ Future<int> _run(List<String> args) async {
   final wasi = WASI(
     args: wasiArgs,
     preopens: <String, String>{guestRoot: guestRoot},
-    files: <String, Uint8List>{guestIwadPath: Uint8List.fromList(iwadBytes)},
+    files: <String, Uint8List>{guestIwadPath: iwadBytes},
     env: <String, String>{
       'HOME': guestRoot,
       'TERM': 'xterm',
@@ -97,7 +97,7 @@ Future<int> _run(List<String> args) async {
   };
 
   final result = await WebAssembly.instantiate(
-    Uint8List.fromList(wasmBytes).buffer,
+    _exactBuffer(wasmBytes),
     imports,
   );
   final memoryValue = result.instance.exports['memory'];
@@ -191,6 +191,14 @@ int _parsePositiveInt(String? raw, int fallback) {
 int _parseNonNegativeInt(String? raw, int fallback) {
   final parsed = raw == null ? fallback : int.tryParse(raw) ?? fallback;
   return parsed < 0 ? fallback : parsed;
+}
+
+ByteBuffer _exactBuffer(Uint8List bytes) {
+  if (bytes.offsetInBytes == 0 &&
+      bytes.lengthInBytes == bytes.buffer.lengthInBytes) {
+    return bytes.buffer;
+  }
+  return Uint8List.fromList(bytes).buffer;
 }
 
 int? _asIntOrNull(Object? value) {
