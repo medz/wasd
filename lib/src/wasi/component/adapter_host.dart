@@ -338,14 +338,30 @@ final class WASIComponentCanonicalAdapterOperation {
 ) {
   final primitive = layout.primitive;
   if (primitive == null) {
-    return _loadFlatComposite(
-      layout,
-      path,
-      flatArgs,
-      offset,
-      memory,
-      stringEncoding,
-    );
+    return switch (layout.kind) {
+      WASIComponentCanonicalAdapterFlatValueKind.record ||
+      WASIComponentCanonicalAdapterFlatValueKind.tuple ||
+      WASIComponentCanonicalAdapterFlatValueKind.fixedList =>
+        _loadFlatComposite(
+          layout,
+          path,
+          flatArgs,
+          offset,
+          memory,
+          stringEncoding,
+        ),
+      WASIComponentCanonicalAdapterFlatValueKind.flags => _loadFlatFlags(
+        layout,
+        path,
+        flatArgs,
+        offset,
+      ),
+      WASIComponentCanonicalAdapterFlatValueKind.enumeration =>
+        _loadFlatEnumeration(layout, path, flatArgs, offset),
+      WASIComponentCanonicalAdapterFlatValueKind.primitive => throw StateError(
+        'Primitive flat layout without a primitive type.',
+      ),
+    };
   }
   if (primitive == WasmComponentPrimitiveValueType.string) {
     if (offset + 2 > flatArgs.length) {
@@ -377,6 +393,53 @@ final class WASIComponentCanonicalAdapterOperation {
     flatArgs[offset],
   );
   return (value: value, nextOffset: offset + 1);
+}
+
+({Object? value, int nextOffset}) _loadFlatFlags(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  List<Object?> flatArgs,
+  int offset,
+) {
+  if (offset >= flatArgs.length) {
+    throw StateError(
+      'WASI component canonical adapter value $path expected a flat flags argument.',
+    );
+  }
+  final bits = _expectFlatInt(path, flatArgs[offset]);
+  _checkFlatFlagsBits(path, layout.labels, bits);
+  return (
+    value: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.flags,
+      rawBytes: Uint8List(0),
+      labels: _activeFlatFlagLabels(layout, bits),
+    ),
+    nextOffset: offset + 1,
+  );
+}
+
+({Object? value, int nextOffset}) _loadFlatEnumeration(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  List<Object?> flatArgs,
+  int offset,
+) {
+  if (offset >= flatArgs.length) {
+    throw StateError(
+      'WASI component canonical adapter value $path expected a flat enum argument.',
+    );
+  }
+  final index = _expectFlatInt(path, flatArgs[offset]);
+  _checkFlatEnumIndex(path, layout.labels, index);
+  return (
+    value: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.enumeration,
+      rawBytes: Uint8List(0),
+      index: index,
+      label: layout.labels[index],
+    ),
+    nextOffset: offset + 1,
+  );
 }
 
 ({Object? value, int nextOffset}) _loadFlatComposite(
@@ -448,14 +511,28 @@ List<Object?> _storeFlatLayout(
 ) {
   final primitive = layout.primitive;
   if (primitive == null) {
-    return _storeFlatComposite(
-      layout,
-      path,
-      value,
-      memory,
-      realloc,
-      stringEncoding,
-    );
+    return switch (layout.kind) {
+      WASIComponentCanonicalAdapterFlatValueKind.record ||
+      WASIComponentCanonicalAdapterFlatValueKind.tuple ||
+      WASIComponentCanonicalAdapterFlatValueKind.fixedList =>
+        _storeFlatComposite(
+          layout,
+          path,
+          value,
+          memory,
+          realloc,
+          stringEncoding,
+        ),
+      WASIComponentCanonicalAdapterFlatValueKind.flags => <Object?>[
+        _flatFlagsToBits(layout, path, value),
+      ],
+      WASIComponentCanonicalAdapterFlatValueKind.enumeration => <Object?>[
+        _flatEnumerationToIndex(layout, path, value),
+      ],
+      WASIComponentCanonicalAdapterFlatValueKind.primitive => throw StateError(
+        'Primitive flat layout without a primitive type.',
+      ),
+    };
   }
   if (primitive == WasmComponentPrimitiveValueType.string) {
     final memoryRef = _requireMemory(memory, path);
@@ -509,15 +586,23 @@ WasmComponentValueData _componentValueDataFromFlatValue(
 ) {
   final primitive = layout.primitive;
   if (primitive == null) {
-    if (value is WasmComponentValueData &&
-        value.kind == _flatCompositeValueDataKind(layout.kind)) {
-      return value;
-    }
-    throw StateError(
-      'WASI component canonical adapter value $path expected ${layout.kind.name} data.',
-    );
+    return _nonPrimitiveDataFromComponentValue(layout, path, value);
   }
   return _primitiveDataFromComponentValue(primitive, path, value);
+}
+
+WasmComponentValueData _nonPrimitiveDataFromComponentValue(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  Object? value,
+) {
+  if (value is WasmComponentValueData &&
+      value.kind == _flatValueDataKind(layout.kind)) {
+    return value;
+  }
+  throw StateError(
+    'WASI component canonical adapter value $path expected ${layout.kind.name} data.',
+  );
 }
 
 WasmComponentValueData _primitiveDataFromComponentValue(
@@ -585,10 +670,119 @@ WasmComponentValueDataKind _flatCompositeValueDataKind(
       WasmComponentValueDataKind.tuple,
     WASIComponentCanonicalAdapterFlatValueKind.fixedList =>
       WasmComponentValueDataKind.fixedList,
-    WASIComponentCanonicalAdapterFlatValueKind.primitive => throw StateError(
-      'Primitive flat layouts are not composite.',
+    WASIComponentCanonicalAdapterFlatValueKind.primitive ||
+    WASIComponentCanonicalAdapterFlatValueKind.flags ||
+    WASIComponentCanonicalAdapterFlatValueKind.enumeration => throw StateError(
+      'Flat layout is not composite.',
     ),
   };
+}
+
+WasmComponentValueDataKind _flatValueDataKind(
+  WASIComponentCanonicalAdapterFlatValueKind kind,
+) {
+  return switch (kind) {
+    WASIComponentCanonicalAdapterFlatValueKind.record =>
+      WasmComponentValueDataKind.record,
+    WASIComponentCanonicalAdapterFlatValueKind.tuple =>
+      WasmComponentValueDataKind.tuple,
+    WASIComponentCanonicalAdapterFlatValueKind.fixedList =>
+      WasmComponentValueDataKind.fixedList,
+    WASIComponentCanonicalAdapterFlatValueKind.flags =>
+      WasmComponentValueDataKind.flags,
+    WASIComponentCanonicalAdapterFlatValueKind.enumeration =>
+      WasmComponentValueDataKind.enumeration,
+    WASIComponentCanonicalAdapterFlatValueKind.primitive => throw StateError(
+      'Primitive flat layouts use primitive value data.',
+    ),
+  };
+}
+
+int _flatFlagsToBits(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  Object? value,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != WasmComponentValueDataKind.flags) {
+    throw StateError(
+      'WASI component canonical adapter value $path expected flags data.',
+    );
+  }
+  var bits = 0;
+  for (final label in value.labels) {
+    final index = layout.labels.indexOf(label);
+    if (index < 0) {
+      throw StateError(
+        'WASI component canonical adapter value $path has unknown flag $label.',
+      );
+    }
+    bits |= 1 << index;
+  }
+  return bits;
+}
+
+int _flatEnumerationToIndex(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  Object? value,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != WasmComponentValueDataKind.enumeration) {
+    throw StateError(
+      'WASI component canonical adapter value $path expected enum data.',
+    );
+  }
+  final index = value.index;
+  if (index != null) {
+    _checkFlatEnumIndex(path, layout.labels, index);
+    return index;
+  }
+  final label = value.label;
+  if (label != null) {
+    final index = layout.labels.indexOf(label);
+    if (index >= 0) {
+      return index;
+    }
+  }
+  throw StateError(
+    'WASI component canonical adapter value $path expected a known enum case.',
+  );
+}
+
+List<String> _activeFlatFlagLabels(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  int bits,
+) {
+  final active = <String>[];
+  for (var i = 0; i < layout.labels.length; i++) {
+    if ((bits & (1 << i)) != 0) {
+      active.add(layout.labels[i]);
+    }
+  }
+  return List<String>.unmodifiable(active);
+}
+
+void _checkFlatFlagsBits(String path, List<String> labels, int bits) {
+  if (bits < 0) {
+    throw StateError(
+      'WASI component canonical adapter value $path expected unsigned flags.',
+    );
+  }
+  final mask = (1 << labels.length) - 1;
+  if ((bits & ~mask) != 0) {
+    throw StateError(
+      'WASI component canonical adapter value $path has unknown flag bits.',
+    );
+  }
+}
+
+void _checkFlatEnumIndex(String path, List<String> labels, int index) {
+  if (index < 0 || index >= labels.length) {
+    throw StateError(
+      'WASI component canonical adapter value $path has invalid enum index $index.',
+    );
+  }
 }
 
 Object? _flatPrimitiveToComponentValue(

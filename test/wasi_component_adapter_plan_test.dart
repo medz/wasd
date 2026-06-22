@@ -111,6 +111,42 @@ void main() {
       }
     });
 
+    test('plan flags and enum flat value layouts', () {
+      final component = WasmComponent.decode(
+        canonicalFlagsEnumLiftLowerComponentBytes(),
+      );
+
+      expect(component.validate(), isEmpty);
+
+      final plans = componentCanonicalAdapterPlans(component);
+
+      expect(plans, hasLength(4));
+      for (final plan in plans.take(2)) {
+        expect(plan.params.single.flatLength, 1);
+        expect(
+          plan.params.single.flatLayout!.kind,
+          WASIComponentCanonicalAdapterFlatValueKind.flags,
+        );
+        expect(plan.result!.flatLength, 1);
+        expect(
+          plan.result!.flatLayout!.kind,
+          WASIComponentCanonicalAdapterFlatValueKind.flags,
+        );
+      }
+      for (final plan in plans.skip(2)) {
+        expect(plan.params.single.flatLength, 1);
+        expect(
+          plan.params.single.flatLayout!.kind,
+          WASIComponentCanonicalAdapterFlatValueKind.enumeration,
+        );
+        expect(plan.result!.flatLength, 1);
+        expect(
+          plan.result!.flatLayout!.kind,
+          WASIComponentCanonicalAdapterFlatValueKind.enumeration,
+        );
+      }
+    });
+
     test('executes primitive lift and lower plans with direct callbacks', () {
       final component = WasmComponent.decode(
         canonicalPrimitiveLiftLowerComponentBytes(),
@@ -312,6 +348,74 @@ void main() {
         () => program.invokeFlat(0, const <Object?>[11]),
         throwsStateError,
       );
+    });
+
+    test('invokes flags and enum adapter programs through flat scalars', () {
+      final component = WasmComponent.decode(
+        canonicalFlagsEnumLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+
+      final program = host.bindAdapterPlans(
+        plans,
+        coreFunctions: {
+          0: (args) {
+            final flags = args.single! as WasmComponentValueData;
+            expect(flags.kind, WasmComponentValueDataKind.flags);
+            expect(flags.labels, ['read', 'exec']);
+            return WasmComponentValueData(
+              kind: WasmComponentValueDataKind.flags,
+              rawBytes: Uint8List(0),
+              labels: ['read', 'write'],
+            );
+          },
+          1: (args) {
+            final color = args.single! as WasmComponentValueData;
+            expect(color.kind, WasmComponentValueDataKind.enumeration);
+            expect(color.index, 1);
+            expect(color.label, 'green');
+            return WasmComponentValueData(
+              kind: WasmComponentValueDataKind.enumeration,
+              rawBytes: Uint8List(0),
+              label: 'blue',
+            );
+          },
+        },
+        componentFunctions: {
+          0: (args) {
+            final flags = args.single! as WasmComponentValueData;
+            expect(flags.kind, WasmComponentValueDataKind.flags);
+            expect(flags.labels, ['write']);
+            return WasmComponentValueData(
+              kind: WasmComponentValueDataKind.flags,
+              rawBytes: Uint8List(0),
+              labels: ['exec'],
+            );
+          },
+          1: (args) {
+            final color = args.single! as WasmComponentValueData;
+            expect(color.kind, WasmComponentValueDataKind.enumeration);
+            expect(color.index, 0);
+            expect(color.label, 'red');
+            return WasmComponentValueData(
+              kind: WasmComponentValueDataKind.enumeration,
+              rawBytes: Uint8List(0),
+              index: 1,
+            );
+          },
+        },
+      );
+
+      expect(program.invokeFlat(0, const <Object?>[0x5]), [0x3]);
+      expect(program.invokeFlat(1, const <Object?>[0x2]), [0x4]);
+      expect(program.invokeFlat(2, const <Object?>[1]), [2]);
+      expect(program.invokeFlat(3, const <Object?>[0]), [1]);
+      expect(
+        () => program.invokeFlat(0, const <Object?>[0x8]),
+        throwsStateError,
+      );
+      expect(() => program.invokeFlat(2, const <Object?>[3]), throwsStateError);
     });
 
     test('invokes adapter programs through flat primitive values', () {

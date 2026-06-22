@@ -61,6 +61,8 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentAdapterStringFlatInvoke(options.iterations);
   final componentAdapterRecordFlatInvoke =
       _benchmarkComponentAdapterRecordFlatInvoke(options.iterations);
+  final componentAdapterFlagsEnumFlatInvoke =
+      _benchmarkComponentAdapterFlagsEnumFlatInvoke(options.iterations);
   final componentAdapterStringMemoryInvoke =
       _benchmarkComponentAdapterStringMemoryInvoke(options.iterations);
   final componentHostStreamMemoryBinding =
@@ -106,6 +108,8 @@ Future<void> main(List<String> args) async {
         .toJson(),
     'component_adapter_record_flat_invoke': componentAdapterRecordFlatInvoke
         .toJson(),
+    'component_adapter_flags_enum_flat_invoke':
+        componentAdapterFlagsEnumFlatInvoke.toJson(),
     'component_adapter_string_memory_invoke': componentAdapterStringMemoryInvoke
         .toJson(),
     'component_host_stream_memory_binding': componentHostStreamMemoryBinding
@@ -150,6 +154,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentAdapterStringProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterRecordFlatInvoke(_warmupIterations);
+  _benchmarkComponentAdapterFlagsEnumFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringMemoryInvoke(_warmupIterations);
   _benchmarkComponentHostStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostRecordStreamMemoryBinding(_warmupIterations);
@@ -666,6 +671,41 @@ _Metric _benchmarkComponentAdapterRecordFlatInvoke(int iterations) {
   );
 }
 
+_Metric _benchmarkComponentAdapterFlagsEnumFlatInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalFlagsEnumLiftLowerComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {
+      0: (_) => _flagsValue(const ['read', 'write']),
+      1: (_) => _enumValue(label: 'blue'),
+    },
+    componentFunctions: {
+      0: (_) => _flagsValue(const ['exec']),
+      1: (_) => _enumValue(index: 1),
+    },
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    checksum += program.invokeFlat(0, const <Object?>[0x5]).single! as int;
+    checksum += program.invokeFlat(1, const <Object?>[0x2]).single! as int;
+    checksum += program.invokeFlat(2, const <Object?>[1]).single! as int;
+    checksum += program.invokeFlat(3, const <Object?>[0]).single! as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 4,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 WasmComponentValueData _recordValue(int left, int right) {
   return WasmComponentValueData(
     kind: WasmComponentValueDataKind.record,
@@ -682,6 +722,23 @@ WasmComponentValueData _recordValue(int left, int right) {
         integer: right,
       ),
     ],
+  );
+}
+
+WasmComponentValueData _flagsValue(List<String> labels) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.flags,
+    rawBytes: Uint8List(0),
+    labels: List<String>.unmodifiable(labels),
+  );
+}
+
+WasmComponentValueData _enumValue({int? index, String? label}) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.enumeration,
+    rawBytes: Uint8List(0),
+    index: index,
+    label: label,
   );
 }
 

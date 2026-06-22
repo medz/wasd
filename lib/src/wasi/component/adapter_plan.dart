@@ -125,19 +125,37 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
   /// Primitive scalar flat layout.
   const WASIComponentCanonicalAdapterFlatValuePlan.primitive(this.primitive)
     : kind = WASIComponentCanonicalAdapterFlatValueKind.primitive,
+      labels = const <String>[],
       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
+
+  /// Flags bitset flat layout.
+  const WASIComponentCanonicalAdapterFlatValuePlan.flags({required this.labels})
+    : kind = WASIComponentCanonicalAdapterFlatValueKind.flags,
+      primitive = null,
+      fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
+
+  /// Enum discriminant flat layout.
+  const WASIComponentCanonicalAdapterFlatValuePlan.enumeration({
+    required this.labels,
+  }) : kind = WASIComponentCanonicalAdapterFlatValueKind.enumeration,
+       primitive = null,
+       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Composite scalar flat layout.
   const WASIComponentCanonicalAdapterFlatValuePlan.composite({
     required this.kind,
     required this.fields,
-  }) : primitive = null;
+  }) : primitive = null,
+       labels = const <String>[];
 
   /// Flat layout kind.
   final WASIComponentCanonicalAdapterFlatValueKind kind;
 
   /// Primitive represented by this layout.
   final WasmComponentPrimitiveValueType? primitive;
+
+  /// Labels used by flags or enum layouts.
+  final List<String> labels;
 
   /// Nested flat fields for composite layouts.
   final List<WASIComponentCanonicalAdapterFlatFieldPlan> fields;
@@ -147,6 +165,10 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
     final primitive = this.primitive;
     if (primitive != null) {
       return primitive == WasmComponentPrimitiveValueType.string ? 2 : 1;
+    }
+    if (kind == WASIComponentCanonicalAdapterFlatValueKind.flags ||
+        kind == WASIComponentCanonicalAdapterFlatValueKind.enumeration) {
+      return 1;
     }
     return fields.fold<int>(
       0,
@@ -168,6 +190,12 @@ enum WASIComponentCanonicalAdapterFlatValueKind {
 
   /// Fixed-list flattened element-by-element.
   fixedList,
+
+  /// Flags represented by one bitset scalar.
+  flags,
+
+  /// Enum represented by one discriminant scalar.
+  enumeration,
 }
 
 /// Nested field in a flat Canonical ABI scalar layout.
@@ -424,10 +452,16 @@ final class _FlatLayoutResolver {
                   ),
               ]),
         );
-      case WasmComponentDefinedValueTypeKind.list:
       case WasmComponentDefinedValueTypeKind.flags:
-      case WasmComponentDefinedValueTypeKind.variant:
+        return WASIComponentCanonicalAdapterFlatValuePlan.flags(
+          labels: List<String>.unmodifiable(type.labels),
+        );
       case WasmComponentDefinedValueTypeKind.enumeration:
+        return WASIComponentCanonicalAdapterFlatValuePlan.enumeration(
+          labels: List<String>.unmodifiable(type.labels),
+        );
+      case WasmComponentDefinedValueTypeKind.list:
+      case WasmComponentDefinedValueTypeKind.variant:
       case WasmComponentDefinedValueTypeKind.option:
       case WasmComponentDefinedValueTypeKind.result:
       case WasmComponentDefinedValueTypeKind.own:
