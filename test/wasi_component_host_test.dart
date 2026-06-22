@@ -730,7 +730,7 @@ void main() {
       },
     );
 
-    test('reports unsupported nested async stream bindings before binding', () {
+    test('validates nested async stream bindings before binding', () {
       final component = WasmComponent.decode(
         _streamIndexedNestedAsyncCanonicalBytes(),
       );
@@ -738,25 +738,22 @@ void main() {
 
       final plan = host.prepareComponent(component);
 
-      expect(component.validate(), isEmpty);
+      final errors = component.validate();
+      expect(errors, hasLength(1));
+      expect(errors.single.message, contains('nested async'));
+      expect(errors.single.message, contains('stream element type'));
       expect(plan.canBind, isFalse);
-      expect(
-        plan.asyncValueBindings.map((binding) => binding.componentTypeIndex),
-        [0],
-      );
-      expect(plan.bindingErrors, hasLength(1));
-      expect(plan.bindingErrors.single.canonicalIndex, 0);
-      expect(
-        plan.bindingErrors.single.kind,
-        WasmComponentCanonicalKind.streamNew,
-      );
+      expect(plan.validationErrors, hasLength(1));
+      expect(plan.validationErrors.single.message, contains('nested async'));
+      expect(plan.asyncValueBindings, isEmpty);
+      expect(plan.bindingErrors, isEmpty);
       expect(
         () => plan.bind(),
         throwsA(
-          isA<WASIComponentHostBindingException>().having(
+          isA<WASIComponentCanonicalHostValidationException>().having(
             (error) => error.toString(),
             'message',
-            contains('supported stream/future async value binding'),
+            allOf(contains('invalid component'), contains('nested async')),
           ),
         ),
       );

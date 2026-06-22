@@ -33,6 +33,10 @@ Status date: 2026-06-22.
 - Do not add prose-only roadmap TODOs to active sections. A roadmap item is
   executable only when another maintainer can start from its fields without
   re-inferring the test, files, or done condition.
+- Treat the `Current Execution Board` as the canonical next-action queue. When a
+  touched ID also appears in the detailed backlog, verification matrix, or
+  completion checklist, update those entries in the same commit so the roadmap
+  stays mechanically auditable.
 
 ## Checklist Row Format
 
@@ -51,6 +55,28 @@ to this shape as they are touched.
   - Evidence update: roadmap, README, API docs, or support matrix updates that
     must happen in the same commit.
   - Claim impact: support gate changed by this row, or `None`.
+
+Checked rows keep the same shape, but the `Red test` and `Implementation gate`
+must include the exact command evidence that was actually run. If a checked row
+cannot name its command evidence, demote it back to unchecked or split it into a
+new executable child row.
+
+## Roadmap Audit Checklist
+
+Use this checklist before committing roadmap changes. These checkboxes are a
+process guard, not support progress.
+
+- [ ] Every touched executable row has `Scope`, `Edit targets`, `Red test`,
+  `Implementation gate`, `Performance gate`, `Done when`, `Evidence update`,
+  and `Claim impact`.
+- [ ] Every touched checked row names the focused command that failed or exposed
+  the gap before the fix, plus the exact commands that passed after the fix.
+- [ ] Every touched support gate names required rows, implementation commands,
+  performance commands, the done condition, and the evidence update location.
+- [ ] The current execution board, detailed backlog, verification matrix, and
+  completion checklist agree for every touched ID.
+- [ ] No public P1/P2/P3 support claim is inferred from an internal helper test;
+  the version-specific gate remains unchecked until its row says otherwise.
 
 ## Execution Loop
 
@@ -199,7 +225,8 @@ too broad to verify in one commit.
     `future<stream<string>>` validated cleanly, then passed after the fix;
     `dart test test/component_test.dart`;
     `dart test test/wasi_component_async_host_test.dart --name "validates indexed nested async stream element types before binding"`;
-    `dart test test/wasi_component_async_host_test.dart`.
+    `dart test test/wasi_component_async_host_test.dart`;
+    `dart test test/wasi_component_host_test.dart --name "validates nested async stream bindings before binding"`.
   - Claim impact: moves one unsupported P3 async payload shape from host-time
     failure to deterministic component validation; does not complete
     `CM-VALIDATION-GAPS`, `SUPPORT-P2`, or `SUPPORT-P3`.
@@ -338,28 +365,80 @@ unchecked.
 - [ ] `SUPPORT-WASM` - Full core Wasm support.
   - Current: core module parsing and execution exist, with conformance work
     still in progress.
-  - Required gate: spec-suite coverage is wired into a repeatable runner,
-    current failures are triaged, and hot files have targeted performance
-    evidence.
+  - Required rows: checked spec-runner coverage rows for every remaining
+    standardized core feature failure, plus `PERFORMANCE-GATES` for hot compile
+    and instantiate paths.
+  - Implementation gate:
+    `tool/ensure_toolchains.sh --check`;
+    `dart run tool/spec_testsuite_runner.dart --suite=core --output-json=.dart_tool/spec_runner/core.json --output-md=.dart_tool/spec_runner/core.md --prepare-root=.dart_tool/spec_runner/core_bundle --conversion-cache-dir=.dart_tool/spec_runner/conversion_cache`;
+    `dart test test/wasm_test.dart test/wasm_predecode_test.dart`.
+  - Performance gate:
+    `dart run tool/doom_instantiate_profile.dart --compile-breakdown --json`;
+    `dart run tool/doom_instantiate_profile.dart --instantiate-breakdown --json`.
+  - Done when: the core spec runner has no untriaged standardized-feature
+    failures, every skipped or failing feature has a linked unchecked row, and
+    the compile/instantiate profiles show no unresolved memory or duration
+    blocker.
+  - Evidence update: verification matrix, detailed backlog, and README support
+    wording if public claims change.
 - [ ] `SUPPORT-P1` - Full WASI Preview1 support.
   - Current: `WASI(...)` supports Preview1, but socket and host-backed edge
     cases are still incomplete.
-  - Required gate: native, browser, and Node-relevant Preview1 paths have
-    focused regression coverage, descriptor/socket benchmarks, and
-    conformance-shaped evidence.
+  - Required rows: every Preview1 descriptor, filesystem, stdio, clock, random,
+    poll, and socket row checked, including `P1-SOCKET-CONFORMANCE` child rows.
+  - Implementation gate:
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`;
+    `dart test -p node test/wasi_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: native, browser, and Node-relevant Preview1 gates pass with
+    conformance-shaped coverage, error paths preserve guest memory/output
+    pointers, and benchmarks cover descriptor and socket hot paths.
+  - Evidence update: verification matrix, detailed backlog, README support
+    matrix, and README command/snippet tests when docs or API examples change.
 - [ ] `SUPPORT-P2` - Full WASI 0.2 / Preview2 support.
   - Current: the public factory rejects Preview2; internal versioned component
     gates exist.
-  - Required gate: real Preview2 components bind through versioned adapters,
-    WIT/interface ingestion exists, and public docs/API expose only verified
-    behavior.
+  - Required rows: `P2-P3-ADAPTERS`, `WIT-INGESTION`, `CM-VALUE-VALIDATION`,
+    resource lifetime rows, and adapter-specific Preview2 interface rows.
+  - Implementation gate:
+    `dart test test/wasi_component_versioned_host_test.dart`;
+    `dart test test/wasi_component_wit_test.dart`;
+    every adapter-specific Preview2 test command recorded by the required rows.
+    `SUPPORT-P2` cannot be checked until those row-level commands exist and pass.
+  - Performance gate:
+    `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`;
+    add adapter benchmarks for any repeated host-call or value-copy path exposed
+    by the required rows.
+  - Done when: real Preview2 components bind and execute through versioned
+    adapters, WIT/interface ingestion feeds those adapters, public docs/API
+    expose only verified behavior, and no Preview1 import path is used as P2
+    proof.
+  - Evidence update: verification matrix, completion checklist, README support
+    matrix, and README snippet/command tests when public API claims change.
 - [ ] `SUPPORT-P3` - Full WASI 0.3 / Preview3 support.
   - Current: the public factory rejects Preview3; internal P3 resources, async
     primitives, waitables, tasks, context, thread identity, and copy paths are
     partially executable.
-  - Required gate: real Preview3 components execute through a versioned host
-    with resources, streams, futures, waitables, tasks, async behavior,
-    cancellation, and benchmark evidence.
+  - Required rows: `P3-VERSIONED-RUN`, `P3-RESOURCE-LIFETIME`,
+    `P3-STREAM-FUTURE-SHAPES`, `P3-TASK-CONTEXT-THREAD`,
+    `PUBLIC-API-DOCS`, `VERSION-GATES`, `PERFORMANCE-GATES`, and
+    `FULL-VERIFY`.
+  - Implementation gate:
+    `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_host_test.dart test/wasi_component_async_host_test.dart test/wasi_component_waitable_set_test.dart test/wasi_component_task_test.dart test/wasi_component_thread_test.dart test/wasi_component_value_memory_test.dart`;
+    every adapter-specific Preview3 component execution command recorded by the
+    required rows. `SUPPORT-P3` cannot be checked until those row-level commands
+    exist and pass.
+  - Performance gate:
+    `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`;
+    `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`;
+    `dart run tool/component_benchmark.dart --json`.
+  - Done when: real Preview3 components execute through a versioned host with
+    resources, streams, futures, waitables, tasks, async behavior, cancellation,
+    and benchmark evidence; helper-only tests are not counted as support proof.
+  - Evidence update: verification matrix, completion checklist, README support
+    matrix, and README snippet/command tests when public API claims change.
 
 ## External Reference Points
 
@@ -432,7 +511,7 @@ copying their internals directly.
 | [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
 | [x] | Versioned Preview2/Preview3 capability gates | `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/preview2/component_host.dart`, `lib/src/wasi/preview3/component_host.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_versioned_host_test.dart` | Concrete P2/P3 interface adapter modules instead of generic facade binding. |
 | [x] | Internal P3 async endpoints, waitables, tasks, context, thread identity | `lib/src/wasi/component/async_host.dart`, `lib/src/wasi/component/waitable_set.dart`, `lib/src/wasi/component/task.dart`, `lib/src/wasi/component/thread.dart`, `test/wasi_component_async_host_test.dart` | `dart test test/wasi_component_async_host_test.dart test/wasi_component_waitable_set_test.dart test/wasi_component_task_test.dart test/wasi_component_thread_test.dart` | Full async lowering, task spawning, scheduler-owned thread switch/suspend/resume. |
-| [x] | Owned-resource stream/future copy buffers, pending copy events, and cancel-copy events through async, component, and versioned Preview3 hosts | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_async_host_test.dart`, `test/wasi_component_host_test.dart`, `test/wasi_component_versioned_host_test.dart`, `test/support/component_fixtures.dart` | `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart test/wasi_component_async_host_test.dart test/wasi_component_value_memory_test.dart`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Borrowed payload lifetimes, nested async payloads, and public P3 API claims remain unsupported. |
+| [x] | Owned-resource stream/future copy buffers, pending copy events, and cancel-copy events through async, component, and versioned Preview3 hosts | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_async_host_test.dart`, `test/wasi_component_host_test.dart`, `test/wasi_component_versioned_host_test.dart`, `test/support/component_fixtures.dart` | `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart test/wasi_component_async_host_test.dart test/wasi_component_value_memory_test.dart`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Borrowed payload lifetimes, broader composite async payload execution, and public P3 API claims remain unsupported. |
 | [x] | Canonical lift/lower adapter planning and internal callback invocation | `lib/src/wasi/component/adapter_plan.dart`, `lib/src/wasi/component/adapter_host.dart`, `test/wasi_component_adapter_plan_test.dart` | `dart test test/wasi_component_adapter_plan_test.dart`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Automatic binding of decoded lift/lower definitions to instantiated core/component functions. |
 | [ ] | Preview1 full socket conformance | Add focused regressions under `test/wasi_test.dart` and VFS/socket benchmarks | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --json` | Native adapter boundaries and broader socket conformance remain incomplete. |
 | [x] | WIT package/interface/world boundary parser | `lib/src/wasi/component/wit_document.dart`, `test/wasi_component_wit_test.dart` | `dart test test/wasi_component_wit_test.dart`; `dart analyze` | Parser evidence alone does not unlock P2/P3 support; it only feeds adapter binding. |
@@ -1380,18 +1459,24 @@ performance visible while the support surface expands.
   - Scope: component value type validation for global and scoped type
     definitions used by future Preview2/Preview3 async hosts.
   - Edit targets: `lib/src/wasm/backend/native/interpreter/component.dart`,
-    `test/component_test.dart`, and `test/wasi_component_async_host_test.dart`.
+    `test/component_test.dart`, `test/wasi_component_async_host_test.dart`, and
+    `test/wasi_component_host_test.dart`.
   - Red test:
     `dart test test/component_test.dart --name "reports nested stream and future element types"`
     failed before the fix because nested async value types validated cleanly and
-    were rejected only later by async host binding.
+    were rejected only later by async host binding; the host-focused
+    `dart test test/wasi_component_host_test.dart --name "validates nested async stream bindings before binding"`
+    gate now proves component-host planning reports validation errors before
+    async value bindings or host binding errors are produced.
   - Implementation gate: `dart test test/component_test.dart`;
-    `dart test test/wasi_component_async_host_test.dart`.
+    `dart test test/wasi_component_async_host_test.dart`;
+    `dart test test/wasi_component_host_test.dart`.
   - Performance gate: N/A for this validation-only shape guard; it reuses
     memoized type-shape traversal and does not add runtime host work.
   - Done when: `stream<stream<T>>`, `future<stream<T>>`, and scoped indexed
     nested async payloads fail validation with a diagnostic naming nested async
-    element types before host state can be mutated.
+    element types before host state can be mutated, and component-host planning
+    preserves that validation failure without creating async host bindings.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry.
   - Claim impact: reduces P3 async validation risk; no direct support gate.
