@@ -1186,7 +1186,6 @@ int readSocketIntoIov({
     return errnoInval;
   }
 
-  var totalRead = 0;
   final peek = (flags & riflagRecvPeek) != 0;
   if (socket.isDatagram) {
     return _readDatagramSocketIntoIov(
@@ -1200,6 +1199,8 @@ int readSocketIntoIov({
       roFlagsPtr: roFlagsPtr,
     );
   }
+  var totalRead = 0;
+  var requestedBytes = 0;
   final waitAll = (flags & riflagRecvWaitall) != 0;
   if (waitAll) {
     final capacity = _socketIovCapacity(
@@ -1230,6 +1231,7 @@ int readSocketIntoIov({
       return errnoInval;
     }
 
+    requestedBytes += len;
     if (len > 0) {
       final read = socket.readInto(
         bytes,
@@ -1245,6 +1247,9 @@ int readSocketIntoIov({
     }
   }
 
+  if (totalRead == 0 && requestedBytes > 0 && !socket.receiveShutdown) {
+    return errnoAgain;
+  }
   data.setUint32(nreadPtr, totalRead, Endian.little);
   data.setUint16(roFlagsPtr, 0, Endian.little);
   return errnoSuccess;
@@ -1269,7 +1274,15 @@ int _readDatagramSocketIntoIov({
   if (capacity < 0) {
     return errnoInval;
   }
-  if (socket.receiveShutdown || !socket.hasReceiveMessage) {
+  if (!socket.receiveShutdown && !socket.hasReceiveMessage) {
+    if (capacity > 0) {
+      return errnoAgain;
+    }
+    data.setUint32(nreadPtr, 0, Endian.little);
+    data.setUint16(roFlagsPtr, 0, Endian.little);
+    return errnoSuccess;
+  }
+  if (socket.receiveShutdown) {
     data.setUint32(nreadPtr, 0, Endian.little);
     data.setUint16(roFlagsPtr, 0, Endian.little);
     return errnoSuccess;

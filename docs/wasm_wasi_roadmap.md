@@ -223,9 +223,9 @@ This is the implementation state as of 2026-06-22 on `main`.
   baseline, directory-heavy, descriptor-heavy, and socket-heavy distributions.
   It also covers socket multi-iov peek/waitall, datagram truncation, socket
   send/recv including host-backed stream/datagram handlers and write-side
-  would-block behavior, socket polling readiness including zero-length datagram
-  readiness, queued accepts, and externally backed read/write readiness hints,
-  and socket renumber/close descriptor paths.
+  and read-side would-block behavior, socket polling readiness including
+  zero-length datagram readiness, queued accepts, and externally backed
+  read/write readiness hints, and socket renumber/close descriptor paths.
   Stream socket sends are recorded as owned byte chunks, and long receive
   streams compact consumed prefixes in larger batches so socket-heavy reads do
   not repeatedly shift the backing buffer. Default datagram socket sends now
@@ -599,10 +599,10 @@ performance visible while the support surface expands.
   baseline, directory-heavy, descriptor-heavy, and socket-heavy distributions,
   plus `path_open`, `fd_readdir`, link/symlink mutation, rights checks, socket
   multi-iov `RECV_PEEK`/`RECV_WAITALL`, datagram truncation, default and
-  host-backed datagram send, socket send/recv, and socket poll readiness, plus
-  file, directory, and socket descriptor renumber/close over large directory and
-  descriptor sets. Keep optimizing against benchmark data instead of test suite
-  heat alone.
+  host-backed datagram send, socket send/recv including read/write
+  would-block paths, and socket poll readiness, plus file, directory, and
+  socket descriptor renumber/close over large directory and descriptor sets.
+  Keep optimizing against benchmark data instead of test suite heat alone.
 - Component async host paths are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`, including
   canonical async stream/future copies, context get/set TLS operations,
@@ -723,6 +723,23 @@ performance visible while the support surface expands.
     `dart test -p chrome test/wasi_test.dart --name "invalid write counts"`.
   - Done when: stream and datagram host send handlers returning out-of-range
     counts leave `nwritten` unchanged and report `EINVAL`.
+- [x] `P1-SOCKET-RECV-WOULD-BLOCK` - Preview1 socket receive would-block state.
+  - Scope: native/browser shared Preview1 `sock_recv` behavior for empty
+    stream and datagram descriptors.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, and `tool/wasi_vfs_benchmark.dart`.
+  - Red test:
+    `dart test test/wasi_test.dart --name "sock_recv returns again"` failed
+    before the fix.
+  - Implementation gate: `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_recv"`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: empty, non-shutdown stream/datagram sockets return `EAGAIN`
+    without modifying `nread`/`roflags`, receive-shutdown sockets still report
+    success with zero bytes, and the socket benchmark covers both read-side
+    would-block paths.
 - [x] `P1-SOCKET-DATAGRAM-SEND-OWNED` - Preview1 datagram send copy reduction.
   - Scope: native/browser shared Preview1 VFS datagram send hot path.
   - Edit targets: `lib/src/wasi/preview1/socket.dart`,

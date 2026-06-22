@@ -1881,6 +1881,63 @@ void main() {
       );
 
       test(
+        'sock_recv returns again for sockets with no queued receive data',
+        () async {
+          final stream = WASIPreview1Socket();
+          final datagram = WASIPreview1Socket.datagram();
+          final socketWasi = WASI(sockets: {18: stream, 19: datagram});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final data = ByteData.view(memory.buffer);
+          const iovPtr = 4320;
+          const bufferPtr = 4352;
+          const countPtr = 4384;
+          const flagsPtr = 4400;
+
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 4, Endian.little);
+          data.setUint32(countPtr, 0xfeedface, Endian.little);
+          data.setUint16(flagsPtr, 0xbeef, Endian.little);
+          expect(
+            sockRecv.ref([18, iovPtr, 1, 0, countPtr, flagsPtr]),
+            _errnoAgain,
+          );
+          expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+          expect(data.getUint16(flagsPtr, Endian.little), 0xbeef);
+
+          expect(
+            sockRecv.ref([19, iovPtr, 1, 0, countPtr, flagsPtr]),
+            _errnoAgain,
+          );
+          expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+          expect(data.getUint16(flagsPtr, Endian.little), 0xbeef);
+
+          stream.shutdown(receive: true, send: false);
+          datagram.shutdown(receive: true, send: false);
+          expect(sockRecv.ref([18, iovPtr, 1, 0, countPtr, flagsPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 0);
+          expect(data.getUint16(flagsPtr, Endian.little), 0);
+          data.setUint32(countPtr, 0xfeedface, Endian.little);
+          data.setUint16(flagsPtr, 0xbeef, Endian.little);
+          expect(sockRecv.ref([19, iovPtr, 1, 0, countPtr, flagsPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 0);
+          expect(data.getUint16(flagsPtr, Endian.little), 0);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'sock_recv handles multi-iov peek without consuming socket data',
         () async {
           final socket = WASIPreview1Socket(receiveData: utf8.encode('abcdef'));

@@ -544,6 +544,8 @@ _Metric _benchmarkSocketSendRecv(_Options options) {
     ),
   );
   final blockedSocket = WASIPreview1Socket(writeReady: false);
+  final emptyStreamSocket = WASIPreview1Socket();
+  final emptyDatagramSocket = WASIPreview1Socket.datagram();
   var hostReceiveByte = 0;
   var hostSentBytes = 0;
   final hostSocket = WASIPreview1Socket(
@@ -561,14 +563,24 @@ _Metric _benchmarkSocketSendRecv(_Options options) {
     },
   );
   final vfs = Preview1VirtualFileSystem(
-    sockets: {64: socket, 65: blockedSocket, 66: hostSocket},
+    sockets: {
+      64: socket,
+      65: blockedSocket,
+      66: hostSocket,
+      67: emptyStreamSocket,
+      68: emptyDatagramSocket,
+    },
   );
   final descriptor = vfs.socketForFd(64);
   final blockedDescriptor = vfs.socketForFd(65);
   final hostDescriptor = vfs.socketForFd(66);
+  final emptyStreamDescriptor = vfs.socketForFd(67);
+  final emptyDatagramDescriptor = vfs.socketForFd(68);
   if (descriptor == null ||
       blockedDescriptor == null ||
-      hostDescriptor == null) {
+      hostDescriptor == null ||
+      emptyStreamDescriptor == null ||
+      emptyDatagramDescriptor == null) {
     throw StateError('socket descriptor missing for send/recv benchmark');
   }
   final bytes = Uint8List(384);
@@ -652,6 +664,48 @@ _Metric _benchmarkSocketSendRecv(_Options options) {
     }
     checksum += blockedErrno;
 
+    data.setUint32(countPtr, 0x7fffffff, Endian.little);
+    data.setUint16(flagsPtr, 0x7fff, Endian.little);
+    final emptyStreamErrno = readSocketIntoIov(
+      socket: emptyStreamDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: recvIovPtr,
+      iovsLen: 2,
+      flags: 0,
+      nreadPtr: countPtr,
+      roFlagsPtr: flagsPtr,
+    );
+    if (emptyStreamErrno != errnoAgain ||
+        data.getUint32(countPtr, Endian.little) != 0x7fffffff ||
+        data.getUint16(flagsPtr, Endian.little) != 0x7fff) {
+      throw StateError(
+        'empty stream recv did not block at iteration $i: '
+        '$emptyStreamErrno',
+      );
+    }
+    checksum += emptyStreamErrno;
+
+    final emptyDatagramErrno = readSocketIntoIov(
+      socket: emptyDatagramDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: recvIovPtr,
+      iovsLen: 2,
+      flags: 0,
+      nreadPtr: countPtr,
+      roFlagsPtr: flagsPtr,
+    );
+    if (emptyDatagramErrno != errnoAgain ||
+        data.getUint32(countPtr, Endian.little) != 0x7fffffff ||
+        data.getUint16(flagsPtr, Endian.little) != 0x7fff) {
+      throw StateError(
+        'empty datagram recv did not block at iteration $i: '
+        '$emptyDatagramErrno',
+      );
+    }
+    checksum += emptyDatagramErrno;
+
     final hostRecvErrno = readSocketIntoIov(
       socket: hostDescriptor,
       bytes: bytes,
@@ -686,7 +740,7 @@ _Metric _benchmarkSocketSendRecv(_Options options) {
   }
   watch.stop();
   return _Metric(
-    operations: options.iterations * 5,
+    operations: options.iterations * 7,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum + hostReceiveByte + hostSentBytes,
   );
