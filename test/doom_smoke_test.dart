@@ -33,6 +33,28 @@ void main() {
         contains('RUNTIME MATRIX PASS'),
         reason: result.diagnostics('doom runtime matrix did not pass'),
       );
+      expect(
+        result.stdout,
+        matches(
+          RegExp(
+            r'== dart-vm ==[\s\S]*elapsed_ms=\d+[\s\S]*peak_rss_bytes=(unknown|\d+)',
+          ),
+        ),
+        reason: result.diagnostics(
+          'doom runtime matrix did not report dart-vm process metrics',
+        ),
+      );
+      expect(
+        result.stdout,
+        matches(
+          RegExp(
+            r'== node-js ==[\s\S]*elapsed_ms=\d+[\s\S]*peak_rss_bytes=(unknown|\d+)',
+          ),
+        ),
+        reason: result.diagnostics(
+          'doom runtime matrix did not report node-js process metrics',
+        ),
+      );
     },
     tags: const <String>['doom', 'slow'],
     timeout: const Timeout(Duration(minutes: 3)),

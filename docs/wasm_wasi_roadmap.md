@@ -71,7 +71,7 @@ test or done condition is too broad to verify in one commit.
 | Status | ID | Next executable action | Required gate | Support claim unlocked |
 | --- | --- | --- | --- | --- |
 | [ ] | `P1-SOCKET-CONFORMANCE` | Add the next missing Preview1 socket/native adapter regression in `test/wasi_test.dart`. | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Moves `SUPPORT-P1` only after remaining P1 socket rows are complete. |
-| [ ] | `PERF-HEAVY-RUNNERS` | Add timing/cache evidence for heavy spec and DOOM paths before changing runtime algorithms for heat. | targeted spec runner command; `dart test test/doom_smoke_test.dart` | Gives performance evidence for `SUPPORT-WASM` and `PERFORMANCE-GATES`. |
+| [x] | `PERF-HEAVY-RUNNERS` | DOOM runtime matrix reports per-runtime elapsed time and peak RSS; spec testsuite reports conversion cache hits/misses and Top Slow Files. | `dart run tool/spec_testsuite_runner.dart --suite=core --file=imports0.wast --output-json=.dart_tool/spec_runner/perf_heavy_runners_imports0.json --output-md=.dart_tool/spec_runner/perf_heavy_runners_imports0.md --prepare-root=.dart_tool/spec_runner/perf_heavy_runners_bundle --conversion-cache-dir=.dart_tool/spec_runner/conversion_cache`; `dart test test/doom_smoke_test.dart --name "doom cli runtime matrix"` | Gives performance evidence for `SUPPORT-WASM` and `PERFORMANCE-GATES`; does not complete either support claim. |
 | [ ] | `CM-VALIDATION-GAPS` | Add a deterministic component validation failure before adding host behavior. | `dart test test/component_test.dart`; `dart test test/wasi_component_async_host_test.dart` | Reduces late runtime traps in P2/P3 adapter work. |
 | [x] | `WIT-DOCUMENT-BOUNDARIES` | Internal WIT package/interface/world parsing with diagnostics is implemented under `lib/src/wasi/component/`. | `dart test test/wasi_component_wit_test.dart`; `dart analyze` | Provides structured input for later P2/P3 adapters, but no public support claim. |
 | [ ] | `P2-P3-ADAPTERS` | Bind one real Preview2/Preview3 adapter path over shared component primitives. | `dart test test/wasi_component_versioned_host_test.dart` plus adapter-specific tests | Starts concrete `SUPPORT-P2` / `SUPPORT-P3` evidence. |
@@ -584,9 +584,10 @@ performance visible while the support surface expands.
   exercises repeated `stream<T>` definitions over a shared borrow-containing
   type graph, which is the current stress case for component validation.
 - Test runners must report elapsed time and peak memory for heavy paths. The
-  spec runner and DOOM smoke tests use the shared measured-process helper for
-  elapsed time and sampled child-process peak RSS; future heavy runners should
-  reuse the same helper instead of open-coding process timing.
+  spec runner, DOOM runtime matrix, and DOOM smoke tests use the shared
+  measured-process helper for elapsed time and sampled child-process peak RSS;
+  future heavy runners should reuse the same helper instead of open-coding
+  process timing.
 - Heavy external-process tests should be grouped behind explicit runner modes so
   default validation remains useful without hiding performance regressions.
 - Any new conformance runner should cache toolchain discovery, generated
@@ -785,15 +786,27 @@ performance visible while the support surface expands.
   - Done when: benchmark JSON reports baseline, directory-heavy,
     descriptor-heavy, and socket-heavy runs with the dimensions and metrics for
     each distribution.
-- [ ] `PERF-HEAVY-RUNNERS` - Heavy runner process and fixture-conversion audit.
-  - Change: add timing/cache evidence for spec runner and DOOM fixture
-    conversion hot spots before changing runtime code for test heat.
-  - Evidence: `tool/spec_runner.dart`, DOOM smoke tests, measured process
-    output.
-  - Gate: targeted spec runner command plus
-    `dart test test/doom_smoke_test.dart`.
+- [x] `PERF-HEAVY-RUNNERS` - Heavy runner process and fixture-conversion audit.
+  - Change: add timing/cache evidence for spec runner and DOOM runtime hot
+    paths before changing runtime code for test heat.
+  - Evidence: `tool/spec_testsuite_runner.dart`,
+    `tool/doom_runtime_matrix.dart`, DOOM smoke tests, measured process output,
+    `.dart_tool/spec_runner/perf_heavy_runners_imports0.json`, and
+    `.dart_tool/spec_runner/perf_heavy_runners_imports0.md`.
+  - Gate:
+    - `dart run tool/spec_testsuite_runner.dart --suite=core --file=imports0.wast --output-json=.dart_tool/spec_runner/perf_heavy_runners_imports0.json --output-md=.dart_tool/spec_runner/perf_heavy_runners_imports0.md --prepare-root=.dart_tool/spec_runner/perf_heavy_runners_bundle --conversion-cache-dir=.dart_tool/spec_runner/conversion_cache`
+    - `dart test test/doom_smoke_test.dart --name "doom cli runtime matrix"`
+    - `dart test test/measured_process_test.dart`
+    - `dart analyze`
   - Done when: reports include elapsed time, peak RSS, cache hits/misses, and
     the slowest conversion/execution steps.
+  - Result: targeted spec report recorded one conversion cache hit, zero
+    misses, and a Top Slow Files row for `imports0.wast`; the DOOM runtime
+    matrix now reports `elapsed_ms` and `peak_rss_bytes` for both `dart-vm` and
+    `node-js` on successful runs. A local instantiate-mode run measured the
+    Dart VM child at `peak_rss_bytes=859389952`, which makes VM instantiate
+    memory the next performance root-cause candidate rather than a test runner
+    scheduling artifact.
 - [ ] `CM-VALIDATION-GAPS` - Component validation gaps that are deterministic
   and local.
   - Change: add validation tests before runtime wiring for remaining borrow,

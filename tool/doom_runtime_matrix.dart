@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'src/measured_process.dart';
+
 const String _defaultWasmPath = 'test/fixtures/doom/doom.wasm';
 const String _defaultIwadPath = 'test/fixtures/doom/doom1.wad';
 const String _defaultGuestRoot = '/doom';
@@ -144,6 +146,10 @@ void _printCommandResult(_CommandResult result) {
   stdout.writeln('== ${result.name} ==');
   stdout.writeln('\$ ${result.command}');
   stdout.writeln('exit=${result.exitCode}');
+  stdout.writeln('elapsed_ms=${result.durationMs}');
+  stdout.writeln(
+    'peak_rss_bytes=${result.peakRssBytes == null ? 'unknown' : result.peakRssBytes}',
+  );
   if (result.stdout.trim().isNotEmpty) {
     stdout.writeln('[stdout]');
     stdout.write(result.stdout);
@@ -166,13 +172,15 @@ Future<_CommandResult> _runCommand({
   required List<String> arguments,
 }) async {
   try {
-    final result = await Process.run(executable, arguments);
+    final result = await runMeasuredProcess(<String>[executable, ...arguments]);
     return _CommandResult(
       name: name,
       command: _commandToString(executable, arguments),
       exitCode: result.exitCode,
       stdout: '${result.stdout}',
       stderr: '${result.stderr}',
+      durationMs: result.durationMs,
+      peakRssBytes: result.peakRssBytes,
     );
   } on ProcessException catch (error) {
     return _CommandResult(
@@ -181,6 +189,8 @@ Future<_CommandResult> _runCommand({
       exitCode: 127,
       stdout: '',
       stderr: '${error.message}\n$error',
+      durationMs: 0,
+      peakRssBytes: null,
     );
   }
 }
@@ -249,6 +259,8 @@ final class _CommandResult {
     required this.exitCode,
     required this.stdout,
     required this.stderr,
+    required this.durationMs,
+    required this.peakRssBytes,
   });
 
   final String name;
@@ -256,6 +268,8 @@ final class _CommandResult {
   final int exitCode;
   final String stdout;
   final String stderr;
+  final int durationMs;
+  final int? peakRssBytes;
 
   bool get success => exitCode == 0;
 }
