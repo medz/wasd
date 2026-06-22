@@ -1,6 +1,8 @@
 import 'dart:collection';
 import 'dart:typed_data';
 
+const int _receiveCompactionThreshold = 64 * 1024;
+
 /// Host-side socket state for WASI Preview1 descriptors.
 ///
 /// The in-repo native and browser Preview1 shims use this object for inherited
@@ -30,7 +32,7 @@ final class WASIPreview1Socket {
 
   final _WASIPreview1SocketKind _kind;
   final List<int> _receiveBytes;
-  final List<int> _sentBytes = <int>[];
+  final BytesBuilder _sentBytes = BytesBuilder(copy: true);
   final ListQueue<Uint8List> _receiveMessages;
   final List<Uint8List> _sentMessages = <Uint8List>[];
   final ListQueue<WASIPreview1Socket> _pendingAccepted;
@@ -43,7 +45,7 @@ final class WASIPreview1Socket {
   bool sendShutdown = false;
 
   /// Returns a copy of the bytes sent through `sock_send`.
-  Uint8List get sentData => Uint8List.fromList(_sentBytes);
+  Uint8List get sentData => _sentBytes.toBytes();
 
   /// Returns copies of datagram messages sent through `sock_send`.
   List<Uint8List> get sentMessages => <Uint8List>[
@@ -180,9 +182,7 @@ final class WASIPreview1Socket {
       return 0;
     }
     final end = sourceStart + length;
-    for (var index = sourceStart; index < end; index++) {
-      _sentBytes.add(source[index]);
-    }
+    _sentBytes.add(Uint8List.sublistView(source, sourceStart, end));
     return length;
   }
 
@@ -218,7 +218,8 @@ final class WASIPreview1Socket {
       _receiveOffset = 0;
       return;
     }
-    if (_receiveOffset < 4096 && _receiveOffset * 2 < _receiveBytes.length) {
+    if (_receiveOffset < _receiveCompactionThreshold &&
+        _receiveOffset * 2 < _receiveBytes.length) {
       return;
     }
     _receiveBytes.removeRange(0, _receiveOffset);

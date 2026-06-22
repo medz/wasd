@@ -148,6 +148,20 @@ void main() {
       );
     });
 
+    test('stream sockets record sent bytes as an owned copy', () {
+      final socket = WASIPreview1Socket();
+      final source = Uint8List.fromList([1, 2, 3, 4]);
+
+      expect(socket.writeFrom(source, 1, 2), 2);
+      source[1] = 9;
+      expect(socket.sentData, [2, 3]);
+
+      expect(socket.writeFrom(Uint8List.fromList([4]), 0, 1), 1);
+      expect(socket.sentData, [2, 3, 4]);
+      socket.clearSentData();
+      expect(socket.sentData, isEmpty);
+    });
+
     test('imports has fd_write function', () {
       final wasi = WASI();
       final preview1 = wasi.imports['wasi_snapshot_preview1']!;

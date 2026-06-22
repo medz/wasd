@@ -183,6 +183,9 @@ This is the implementation state as of 2026-06-22 on `main`.
   It also covers socket multi-iov peek/waitall, datagram truncation, socket
   send/recv, socket polling readiness including zero-length datagram readiness
   and queued accepts, and socket renumber/close descriptor paths.
+  Stream socket sends are recorded as owned byte chunks, and long receive
+  streams compact consumed prefixes in larger batches so socket-heavy reads do
+  not repeatedly shift the backing buffer.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/` now provides an internal typed resource table plus
