@@ -81,6 +81,46 @@ void main() {
       expect(() => invalidResult.invoke(const <Object?>[]), throwsStateError);
     });
 
+    test('binds primitive adapter programs by decoded function indexes', () {
+      final component = WasmComponent.decode(
+        canonicalPrimitiveLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+      var coreInvocations = 0;
+      var componentInvocations = 0;
+
+      final program = host.bindAdapterPlans(
+        plans,
+        coreFunctions: {
+          0: (args) {
+            expect(args, isEmpty);
+            coreInvocations++;
+            return 11;
+          },
+        },
+        componentFunctions: {
+          0: (args) {
+            expect(args, isEmpty);
+            componentInvocations++;
+            return 12;
+          },
+        },
+      );
+
+      expect(program.operations, hasLength(2));
+      expect(() => program.operations.clear(), throwsUnsupportedError);
+      expect(program.invoke(0, const <Object?>[]), 11);
+      expect(program.invoke(1, const <Object?>[]), 12);
+      expect(coreInvocations, 1);
+      expect(componentInvocations, 1);
+      expect(() => program.invoke(2, const <Object?>[]), throwsStateError);
+      expect(
+        () => host.bindAdapterPlans(plans, coreFunctions: {0: (_) => 1}),
+        throwsStateError,
+      );
+    });
+
     test('exposes resource adapter plans through Preview3 preparation', () {
       final component = WasmComponent.decode(
         canonicalResourceLiftComponentBytes(),

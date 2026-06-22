@@ -40,6 +40,92 @@ final class WASIComponentCanonicalAdapterHost {
       callback: componentFunction,
     );
   }
+
+  /// Binds adapter [plans] against decoded core/component function indexes.
+  WASIComponentCanonicalAdapterProgram bindAdapterPlans(
+    Iterable<WASIComponentCanonicalAdapterPlan> plans, {
+    Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
+    Map<int, WASIComponentCanonicalAdapterCallback> componentFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
+  }) {
+    final operations = <WASIComponentCanonicalAdapterOperation>[];
+    for (final plan in plans) {
+      switch (plan.kind) {
+        case WasmComponentCanonicalKind.lift:
+          final index = plan.definition.coreFunctionIndex;
+          final callback = index == null ? null : coreFunctions[index];
+          if (callback == null) {
+            throw StateError(
+              'Missing core function callback for canonical adapter index '
+              '${plan.canonicalIndex}: $index.',
+            );
+          }
+          operations.add(bindLiftCoreFunction(plan, callback));
+        case WasmComponentCanonicalKind.lower:
+          final index = plan.definition.functionIndex;
+          final callback = index == null ? null : componentFunctions[index];
+          if (callback == null) {
+            throw StateError(
+              'Missing component function callback for canonical adapter index '
+              '${plan.canonicalIndex}: $index.',
+            );
+          }
+          operations.add(bindLowerComponentFunction(plan, callback));
+        default:
+          throw UnsupportedError(
+            'WASI component canonical ${plan.kind.name} is not an adapter.',
+          );
+      }
+    }
+    return WASIComponentCanonicalAdapterProgram(
+      operations: List<WASIComponentCanonicalAdapterOperation>.unmodifiable(
+        operations,
+      ),
+    );
+  }
+}
+
+/// Canonical-indexed executable direct primitive adapter program.
+final class WASIComponentCanonicalAdapterProgram {
+  /// Creates a canonical adapter program from ordered [operations].
+  WASIComponentCanonicalAdapterProgram({required this.operations})
+    : _operationsByCanonicalIndex = _indexOperations(operations);
+
+  /// Adapter operations in prepared plan order.
+  final List<WASIComponentCanonicalAdapterOperation> operations;
+
+  final Map<int, WASIComponentCanonicalAdapterOperation>
+  _operationsByCanonicalIndex;
+
+  /// Invokes the adapter operation at [canonicalIndex].
+  Object? invoke(int canonicalIndex, List<Object?> args) {
+    final operation = _operationsByCanonicalIndex[canonicalIndex];
+    if (operation == null) {
+      throw StateError(
+        'Unknown WASI component canonical adapter index: $canonicalIndex.',
+      );
+    }
+    return operation.invoke(args);
+  }
+}
+
+Map<int, WASIComponentCanonicalAdapterOperation> _indexOperations(
+  List<WASIComponentCanonicalAdapterOperation> operations,
+) {
+  final byCanonicalIndex = <int, WASIComponentCanonicalAdapterOperation>{};
+  for (final operation in operations) {
+    final canonicalIndex = operation.canonicalIndex;
+    if (byCanonicalIndex.containsKey(canonicalIndex)) {
+      throw StateError(
+        'Duplicate WASI component canonical adapter index: $canonicalIndex.',
+      );
+    }
+    byCanonicalIndex[canonicalIndex] = operation;
+  }
+  return Map<int, WASIComponentCanonicalAdapterOperation>.unmodifiable(
+    byCanonicalIndex,
+  );
 }
 
 /// Executable direct primitive canonical adapter operation.

@@ -49,6 +49,9 @@ Future<void> main(List<String> args) async {
   final componentAdapterDirectInvoke = _benchmarkComponentAdapterDirectInvoke(
     options.iterations,
   );
+  final componentAdapterProgramInvoke = _benchmarkComponentAdapterProgramInvoke(
+    options.iterations,
+  );
   final componentHostStreamMemoryBinding =
       _benchmarkComponentHostStreamMemoryBinding(options.iterations);
   final componentHostRecordStreamMemoryBinding =
@@ -85,6 +88,7 @@ Future<void> main(List<String> args) async {
     'component_versioned_preview3_stream_binding':
         componentVersionedPreview3StreamBinding.toJson(),
     'component_adapter_direct_invoke': componentAdapterDirectInvoke.toJson(),
+    'component_adapter_program_invoke': componentAdapterProgramInvoke.toJson(),
     'component_host_stream_memory_binding': componentHostStreamMemoryBinding
         .toJson(),
     'component_host_record_stream_memory_binding':
@@ -123,6 +127,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentHostStreamBinding(_warmupIterations);
   _benchmarkComponentVersionedPreview3StreamBinding(_warmupIterations);
   _benchmarkComponentAdapterDirectInvoke(_warmupIterations);
+  _benchmarkComponentAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentHostStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostRecordStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostListStreamMemoryBinding(_warmupIterations);
@@ -473,6 +478,31 @@ _Metric _benchmarkComponentAdapterDirectInvoke(int iterations) {
   for (var i = 0; i < iterations; i++) {
     checksum += lift.invoke(const <Object?>[]) as int;
     checksum += lower.invoke(const <Object?>[]) as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentAdapterProgramInvoke(int iterations) {
+  final component = WasmComponent.decode(_primitiveAdapterProgramBytes());
+  final plans = componentCanonicalAdapterPlans(component);
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {0: (_) => 41},
+    componentFunctions: {0: (_) => 42},
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    checksum += program.invoke(0, const <Object?>[]) as int;
+    checksum += program.invoke(1, const <Object?>[]) as int;
   }
   watch.stop();
 
