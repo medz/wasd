@@ -141,7 +141,8 @@ too broad to verify in one commit.
     option placement for `stream.read`, `stream.write`, `future.read`, and
     `future.write` copy definitions;
     `CM-RESOURCE-REPRESENTATION-VALIDATION` covers resource representation
-    type byte validation for supported single-byte core value type reps.
+    validation for the currently valid `i32` representation and structured
+    rejection of non-`i32` resource reps, including typed reference encodings.
   - Done when: the invalid component fails before host state is mutated and the
     diagnostic names the rejected shape or interface boundary.
   - Evidence update: record the failing shape and the exact command evidence.
@@ -230,16 +231,20 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
-- [x] `CM-RESOURCE-REPRESENTATION-VALIDATION` - Reject unsupported component
-  resource representation type bytes.
+- [x] `CM-RESOURCE-REPRESENTATION-VALIDATION` - Enforce `i32` component
+  resource representations and reject other core value type encodings.
   - Scope: component-model resource type validation before P2/P3 resource host
     binding and canonical resource operations.
   - Edit targets: `lib/src/wasm/backend/native/interpreter/component.dart`,
     `test/component_test.dart`, and this roadmap.
   - Red test:
     `dart test test/component_test.dart --name "reports invalid component resource type indexes"`
-    failed before the fix because a resource type with representation byte
-    `0x00` validated with no diagnostic.
+    first failed because a resource type with representation byte `0x00`
+    validated with no diagnostic; this correction then failed because
+    single-byte `externref` validated cleanly and a validly encoded `(ref eq)`
+    representation threw `FormatException: Unsupported Wasm component optional
+    index tag: 0x6d` before validation could report the unsupported
+    representation.
   - Implementation gate:
     `dart test test/component_test.dart --name "reports invalid component resource type indexes"`;
     `dart test test/component_test.dart`;
@@ -249,9 +254,11 @@ too broad to verify in one commit.
   - Performance gate: N/A; this is a constant-time validation check over a
     decoded resource type and does not touch adapter execution, async copy, or
     resource-table hot paths.
-  - Done when: unsupported resource representation bytes fail validation with a
-    structured diagnostic before resource host binding, while supported
-    single-byte core value type reps such as `externref` still validate.
+  - Done when: `i32` resource representations validate; non-`i32`
+    representations such as `externref`, `(ref eq)`, and malformed `0x00`
+    encodings produce structured validation diagnostics before resource host
+    binding; and typed-reference representation payload bytes are consumed by
+    the decoder instead of being misread as destructor/callback option tags.
   - Evidence update: this checked row, the detailed backlog child row, and the
     current execution board checked-child list.
   - Claim impact: reduces P2/P3 resource validation risk; does not complete
@@ -2938,16 +2945,20 @@ performance visible while the support surface expands.
     - `dart test test/wasi_component_async_host_test.dart`
   - Done when: unsupported shapes fail during validation with structured
     diagnostics before host mutation.
-- [x] `CM-RESOURCE-REPRESENTATION-VALIDATION` - Reject unsupported component
-  resource representation type bytes.
+- [x] `CM-RESOURCE-REPRESENTATION-VALIDATION` - Enforce `i32` component
+  resource representations and reject other core value type encodings.
   - Scope: component-model resource type validation before P2/P3 resource host
     binding and canonical resource operations.
   - Edit targets: `lib/src/wasm/backend/native/interpreter/component.dart`,
     `test/component_test.dart`, and this roadmap.
   - Red test:
     `dart test test/component_test.dart --name "reports invalid component resource type indexes"`
-    failed before the fix because a resource type with representation byte
-    `0x00` validated with no diagnostic.
+    first failed because a resource type with representation byte `0x00`
+    validated with no diagnostic; this correction then failed because
+    single-byte `externref` validated cleanly and a validly encoded `(ref eq)`
+    representation threw `FormatException: Unsupported Wasm component optional
+    index tag: 0x6d` before validation could report the unsupported
+    representation.
   - Implementation gate:
     `dart test test/component_test.dart --name "reports invalid component resource type indexes"`;
     `dart test test/component_test.dart`;
@@ -2957,9 +2968,11 @@ performance visible while the support surface expands.
   - Performance gate: N/A; this is a constant-time validation check over a
     decoded resource type and does not touch adapter execution, async copy, or
     resource-table hot paths.
-  - Done when: unsupported resource representation bytes fail validation with a
-    structured diagnostic before resource host binding, while supported
-    single-byte core value type reps such as `externref` still validate.
+  - Done when: `i32` resource representations validate; non-`i32`
+    representations such as `externref`, `(ref eq)`, and malformed `0x00`
+    encodings produce structured validation diagnostics before resource host
+    binding; and typed-reference representation payload bytes are consumed by
+    the decoder instead of being misread as destructor/callback option tags.
   - Evidence update: this checked row plus the `Current Execution Board`
     checked-child list and `Recently Checked` entry.
   - Claim impact: reduces P2/P3 resource validation risk; no direct support

@@ -6471,7 +6471,7 @@ WasmComponentValueType? _readOptionalComponentValueType(ByteReader reader) {
 }
 
 WasmComponentResourceType _readResourceType(ByteReader reader, int lead) {
-  final rep = reader.readByte();
+  final rep = _readResourceRepresentationTypeCode(reader);
   if (lead == 0x3f) {
     return WasmComponentResourceType(
       representationTypeCode: rep,
@@ -6484,6 +6484,14 @@ WasmComponentResourceType _readResourceType(ByteReader reader, int lead) {
     destructorFunctionIndex: reader.readVarUint32(),
     callbackFunctionIndex: _readOptionalComponentIndex(reader),
   );
+}
+
+int _readResourceRepresentationTypeCode(ByteReader reader) {
+  final lead = reader.readByte();
+  if (lead == 0x63 || lead == 0x64 || lead == 0x62 || lead == 0x61) {
+    _readCoreHeapType(reader);
+  }
+  return lead;
 }
 
 int? _readOptionalComponentIndex(ByteReader reader) {
@@ -6981,11 +6989,7 @@ bool _isCoreLegacyHeapType(int code) {
 }
 
 bool _isSupportedResourceRepresentationTypeCode(int? code) {
-  return switch (code) {
-    0x7f || 0x7e || 0x7d || 0x7c || 0x7b => true,
-    final int value when _isCoreLegacyHeapType(value) => true,
-    _ => false,
-  };
+  return code == 0x7f;
 }
 
 String _formatNullableByte(int? value) =>

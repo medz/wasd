@@ -1003,11 +1003,31 @@ void main() {
         ).validate(),
         isEmpty,
       );
+      final externrefRepresentation = WasmComponent.decode(
+        _resourceExternrefRepresentationTypeComponentBytes(),
+      ).validate();
+      expect(externrefRepresentation, hasLength(1));
       expect(
-        WasmComponent.decode(
-          _resourceExternrefRepresentationTypeComponentBytes(),
-        ).validate(),
-        isEmpty,
+        externrefRepresentation.single.message,
+        contains('resource representation type'),
+      );
+
+      final refEqRepresentation = WasmComponent.decode(
+        _resourceRefEqRepresentationTypeComponentBytes(),
+      );
+      final refEqErrors = refEqRepresentation.validate();
+      expect(refEqErrors, hasLength(1));
+      expect(
+        refEqErrors.single.message,
+        contains('resource representation type'),
+      );
+      expect(
+        refEqRepresentation
+            .typeDefinitions
+            .single
+            .resource!
+            .representationTypeCode,
+        0x64,
       );
 
       final invalidRepresentation = WasmComponent.decode(
@@ -7443,6 +7463,14 @@ Uint8List _resourceDestructorFunctionComponentBytes() =>
 
 Uint8List _resourceExternrefRepresentationTypeComponentBytes() =>
     _componentWithSingleTypeDefinitionBytes(const <int>[0x3f, 0x6f, 0x00]);
+
+Uint8List _resourceRefEqRepresentationTypeComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[
+      0x3f,
+      0x64,
+      0x6d,
+      0x00,
+    ]);
 
 Uint8List _resourceInvalidRepresentationTypeComponentBytes() =>
     _componentWithSingleTypeDefinitionBytes(const <int>[0x3f, 0x00, 0x00]);
