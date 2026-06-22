@@ -1045,6 +1045,15 @@ void main() {
         duplicateName.single.message,
         contains('Duplicate Wasm component instantiation argument name'),
       );
+
+      final duplicateInlineExportName = WasmComponent.decode(
+        _inlineInstanceDuplicateExportNameComponentBytes(),
+      ).validate();
+      expect(duplicateInlineExportName, hasLength(1));
+      expect(
+        duplicateInlineExportName.single.message,
+        contains('Duplicate Wasm component inline export name'),
+      );
     });
 
     test('validates core instance indexes in definition order', () {
@@ -1099,6 +1108,15 @@ void main() {
       expect(
         duplicateArgumentName.single.message,
         contains('Duplicate Wasm component core instantiation argument name'),
+      );
+
+      final duplicateInlineExportName = WasmComponent.decode(
+        _coreInstanceDuplicateInlineExportNameComponentBytes(),
+      ).validate();
+      expect(duplicateInlineExportName, hasLength(1));
+      expect(
+        duplicateInlineExportName.single.message,
+        contains('Duplicate Wasm component core inline export name'),
       );
     });
 
@@ -2936,6 +2954,41 @@ Uint8List _coreInstanceDuplicateArgumentNameComponentBytes() =>
       0x00,
     ]);
 
+Uint8List _coreInstanceDuplicateInlineExportNameComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x01,
+      0x08,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x02,
+      0x0b,
+      0x01,
+      0x01,
+      0x02,
+      0x01,
+      0x6d,
+      0x11,
+      0x00,
+      0x01,
+      0x6d,
+      0x11,
+      0x00,
+    ]);
+
 Uint8List _coreModuleExportAliasInstantiateComponentBytes() =>
     Uint8List.fromList(const <int>[
       0x00,
@@ -3171,6 +3224,48 @@ Uint8List _inlineInstanceComponentBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x00,
 ]);
+
+Uint8List _inlineInstanceDuplicateExportNameComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x05,
+      0x0d,
+      0x01,
+      0x01,
+      0x02,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x00,
+    ]);
 
 Uint8List _instantiateInstanceComponentBytes() =>
     Uint8List.fromList(const <int>[

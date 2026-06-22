@@ -4416,6 +4416,14 @@ final class _WasmComponentValidationContext {
           );
         }
       case WasmComponentInstanceKind.inlineExports:
+        _validateUniqueNames(
+          instance.exports.map(
+            (export) => componentExternName(export.name, export.versionSuffix),
+          ),
+          '$path.exports',
+          'inline export',
+          errors,
+        );
         for (var i = 0; i < instance.exports.length; i++) {
           validateComponentSortIndex(
             instance.exports[i].sort,
@@ -4529,6 +4537,12 @@ final class _WasmComponentValidationContext {
           );
         }
       case WasmComponentCoreInstanceKind.inlineExports:
+        _validateUniqueNames(
+          instance.exports.map((export) => export.name),
+          '$path.exports',
+          'core inline export',
+          errors,
+        );
         for (var i = 0; i < instance.exports.length; i++) {
           final sort = instance.exports[i].sort;
           validateCoreSortIndex(

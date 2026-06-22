@@ -217,6 +217,17 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `CM-INLINE-INSTANCE-DUPLICATE-EXPORTS` - Component and core inline
+  instance export names reject duplicates during validation.
+  - Evidence:
+    `dart test test/component_test.dart -n "validates component instantiation indexes and value arguments|validates core instance indexes in definition order"`
+    failed before the fix because duplicate component/core inline export names
+    validated cleanly, then passed after the fix;
+    `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`; `dart analyze`.
+  - Claim impact: removes one component-model ambiguity before P2/P3 adapter
+    binding or host mutation; does not complete `CM-VALIDATION-GAPS`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-POLL-ACCEPT-RIGHTS` - `poll_oneoff(fd_read)` uses
   `SOCK_ACCEPT` rights for queued accept readiness.
   - Evidence:
@@ -1755,6 +1766,30 @@ performance visible while the support surface expands.
     - `dart test test/wasi_component_async_host_test.dart`
   - Done when: unsupported shapes fail during validation with structured
     diagnostics before host mutation.
+- [x] `CM-INLINE-INSTANCE-DUPLICATE-EXPORTS` - Reject duplicate component and
+  core inline instance export names.
+  - Scope: component-model validation for `WasmComponentInstance.inlineExports`
+    and `WasmComponentCoreInstance.inlineExports`.
+  - Edit targets:
+    `lib/src/wasm/backend/native/interpreter/component.dart`,
+    `test/component_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/component_test.dart -n "validates component instantiation indexes and value arguments|validates core instance indexes in definition order"`
+    failed before the fix because duplicate component/core inline export names
+    validated cleanly.
+  - Implementation gate:
+    `dart test test/component_test.dart -n "validates component instantiation indexes and value arguments|validates core instance indexes in definition order"`;
+    `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`; `dart analyze`.
+  - Performance gate: N/A; this adds validation-time linear name scans and no
+    runtime host path.
+  - Done when: duplicate inline export names in both component and core
+    instances are rejected before alias resolution, adapter binding, or host
+    state can observe the ambiguous shape.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: reduces P2/P3 component validation ambiguity; no direct
+    support gate.
 - [x] `CM-INSTANTIATION-DUPLICATE-ARGS` - Reject duplicate component and core
   instantiation argument names.
   - Scope: component-model validation for `WasmComponentInstance` and
