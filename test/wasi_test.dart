@@ -17,9 +17,13 @@ Object? _skipUnlessBrowser(String reason) =>
     isBrowserJsRuntime ? false : reason;
 
 const int _rightFdRead = 1 << 1;
+const int _rightFdDatasync = 1;
 const int _rightFdFdstatSetFlags = 1 << 3;
+const int _rightFdSync = 1 << 4;
 const int _rightFdWrite = 1 << 6;
+const int _rightFdAdvise = 1 << 7;
 const int _rightFdFdstatGet = 1 << 21;
+const int _rightFdFilestatSetTimes = 1 << 23;
 const int _rightPollFdReadwrite = 1 << 27;
 const int _rightSockShutdown = 1 << 28;
 const int _rightSockAccept = 1 << 29;
@@ -2421,6 +2425,64 @@ void main() {
             0xfeedface,
           );
           expect(blockedStream.sentData, isEmpty);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'default socket rights expose socket-specific operations only',
+        () async {
+          final socket = WASIPreview1Socket();
+          final socketWasi = WASI(sockets: {39: socket});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final fdFdstatGet =
+              preview1['fd_fdstat_get'] as FunctionImportExportValue;
+          final fdAdvise = preview1['fd_advise'] as FunctionImportExportValue;
+          final fdDatasync =
+              preview1['fd_datasync'] as FunctionImportExportValue;
+          final fdSync = preview1['fd_sync'] as FunctionImportExportValue;
+          final fdFilestatSetTimes =
+              preview1['fd_filestat_set_times'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const fdstatPtr = 4720;
+          const socketRights =
+              _rightFdRead |
+              _rightFdFdstatSetFlags |
+              _rightFdWrite |
+              _rightFdFdstatGet |
+              _rightPollFdReadwrite |
+              _rightSockShutdown |
+              _rightSockAccept;
+          const fileOnlyRights =
+              _rightFdDatasync |
+              _rightFdSync |
+              _rightFdAdvise |
+              _rightFdFilestatSetTimes;
+
+          expect(fdFdstatGet.ref([39, fdstatPtr]), 0);
+          expect(bytes[fdstatPtr], _filetypeSocketStream);
+          final rightsBase = _getUint64Le(data, fdstatPtr + 8);
+          final rightsInheriting = _getUint64Le(data, fdstatPtr + 16);
+          expect(rightsBase, socketRights);
+          expect(rightsInheriting, socketRights);
+          expect(rightsBase & fileOnlyRights, 0);
+
+          expect(fdAdvise.ref([39, 0, 0, 0]), _errnoNotcapable);
+          expect(fdDatasync.ref([39]), _errnoNotcapable);
+          expect(fdSync.ref([39]), _errnoNotcapable);
+          expect(fdFilestatSetTimes.ref([39, 0, 0, 0]), _errnoNotcapable);
         },
         skip: _skipOnNode(
           'Skipping on Node.js; socket behavior is delegated to node:wasi.',

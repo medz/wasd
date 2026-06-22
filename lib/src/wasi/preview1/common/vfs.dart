@@ -1183,7 +1183,7 @@ final class Preview1DescriptorRights {
     : this(base: base ?? rightsAll, inheriting: inheriting ?? rightsAll);
 
   Preview1DescriptorRights.socket({int? base, int? inheriting})
-    : this(base: base ?? rightsAll, inheriting: inheriting ?? rightsAll);
+    : this(base: base ?? rightsSocket, inheriting: inheriting ?? rightsSocket);
 
   int base;
   int inheriting;

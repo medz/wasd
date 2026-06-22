@@ -306,6 +306,24 @@ too broad to verify in one commit.
   - Claim impact: closes one Preview1 socket descriptor compatibility gap for
     native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
     `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
+- [x] `P1-SOCKET-RIGHTS-NARROW` - Default Preview1 socket descriptors expose only
+  socket-specific rights.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "default socket rights expose socket-specific operations only"`
+    failed before the fix because default socket fdstat rights were `rightsAll`;
+    then passed after the fix;
+    `dart test -p chrome test/wasi_test.dart --name "default socket rights expose socket-specific operations only|fd_read and fd_write operate on preview1 socket descriptors|sock_recv and sock_send use configured preview1 stream sockets|sock_accept returns queued preview1 stream sockets with inherited rights|sock_shutdown and descriptor rights are enforced for preview1 sockets"`;
+    `dart test test/wasi_test.dart --name "socket"`;
+    `dart test test/wasi_test.dart`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `rights_checks.operations=4096000` and
+    `socket_fd_read_write.operations=32000` for the socket-heavy distribution;
+    `dart analyze`.
+  - Spec reference: WASI Preview1 rights separate socket IO/shutdown/accept/poll
+    rights from file-only sync, advice, allocation, seek, and timestamp rights.
+  - Claim impact: closes one Preview1 socket capability-boundary gap for
+    native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-POLL-ZERO-HINT` - Stream socket `readReadyBytes: 0` does not
   produce a false `poll_oneoff(fd_read)` readiness event.
   - Evidence:
@@ -1327,6 +1345,35 @@ performance visible while the support surface expands.
     IO, would-block reads/writes leave output counters unchanged, browser and
     native shims share the same VFS socket helpers, and README support wording
     names socket `fd_read`/`fd_write`.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
+    support or any P2/P3 support gate.
+- [x] `P1-SOCKET-RIGHTS-NARROW` - Default injected socket descriptors do not grant
+  file-only rights.
+  - Scope: shared Preview1 VFS default rights for configured stream/datagram
+    socket descriptors and native/browser fdstat-visible capability behavior.
+  - Edit targets: `lib/src/wasi/preview1/common/constants.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "default socket rights expose socket-specific operations only"`
+    failed before the fix because `fd_fdstat_get` exposed `rightsAll` for an
+    injected socket descriptor.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "default socket rights expose socket-specific operations only"`;
+    `dart test -p chrome test/wasi_test.dart --name "default socket rights expose socket-specific operations only|fd_read and fd_write operate on preview1 socket descriptors|sock_recv and sock_send use configured preview1 stream sockets|sock_accept returns queued preview1 stream sockets with inherited rights|sock_shutdown and descriptor rights are enforced for preview1 sockets"`;
+    `dart test test/wasi_test.dart --name "socket"`;
+    `dart test test/wasi_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; the
+    socket-heavy distribution reported `rights_checks.operations=4096000` and
+    `socket_fd_read_write.operations=32000`.
+  - Done when: default socket fdstat rights contain fd read/write, fdstat set
+    flags/get, poll, shutdown, and accept rights; file-only sync/advice/timestamp
+    rights are absent; `fd_advise`, `fd_datasync`, `fd_sync`, and
+    `fd_filestat_set_times` return `ENOTCAPABLE` on default sockets; native and
+    browser socket IO/shutdown/accept regressions still pass.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
