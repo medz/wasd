@@ -11,6 +11,7 @@ import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/resource_table.dart';
 import 'package:wasd/src/wasi/component/string_memory.dart';
+import 'package:wasd/src/wasi/component/value_memory.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
@@ -81,6 +82,8 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentAdapterResourceFlatInvoke(options.iterations);
   final componentAdapterResourceMemoryInvoke =
       _benchmarkComponentAdapterResourceMemoryInvoke(options.iterations);
+  final componentAdapterResourceRecordMemoryInvoke =
+      _benchmarkComponentAdapterResourceRecordMemoryInvoke(options.iterations);
   final componentAdapterErrorContextDirectInvoke =
       _benchmarkComponentAdapterErrorContextDirectInvoke(options.iterations);
   final componentAdapterErrorContextFlatInvoke =
@@ -152,6 +155,8 @@ Future<void> main(List<String> args) async {
         .toJson(),
     'component_adapter_resource_memory_invoke':
         componentAdapterResourceMemoryInvoke.toJson(),
+    'component_adapter_resource_record_memory_invoke':
+        componentAdapterResourceRecordMemoryInvoke.toJson(),
     'component_adapter_error_context_direct_invoke':
         componentAdapterErrorContextDirectInvoke.toJson(),
     'component_adapter_error_context_flat_invoke':
@@ -212,6 +217,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentAdapterResourceDirectInvoke(_warmupIterations);
   _benchmarkComponentAdapterResourceFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterResourceMemoryInvoke(_warmupIterations);
+  _benchmarkComponentAdapterResourceRecordMemoryInvoke(_warmupIterations);
   _benchmarkComponentAdapterErrorContextDirectInvoke(_warmupIterations);
   _benchmarkComponentAdapterErrorContextFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterErrorContextMemoryInvoke(_warmupIterations);
@@ -1074,6 +1080,131 @@ _Metric _benchmarkComponentAdapterResourceMemoryInvoke(int iterations) {
     operations: iterations,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentAdapterResourceRecordMemoryInvoke(int iterations) {
+  final plan = _resourceRecordAdapterPlan();
+  final program = const WASIComponentCanonicalAdapterHost().bindAdapterPlans(
+    [plan],
+    coreFunctions: {
+      0: (_) => _u32CompositeValue(WasmComponentValueDataKind.record, const [
+        303,
+        404,
+        9,
+      ]),
+    },
+  );
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    data.setUint32(32, 101, Endian.little);
+    data.setUint32(36, 202, Endian.little);
+    data.setUint16(40, 7, Endian.little);
+    final result =
+        program.invokeWithMemory(0, memory, const <int>[32], resultPointer: 64)!
+            as WasmComponentValueData;
+    checksum += result.items[0].integer! as int;
+    checksum += data.getUint32(64, Endian.little);
+    checksum += data.getUint32(68, Endian.little);
+    checksum += data.getUint16(72, Endian.little);
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+WASIComponentCanonicalAdapterPlan _resourceRecordAdapterPlan() {
+  final memoryCodec =
+      WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
+        component_fixtures.canonicalResourceRecordValueType,
+        component_fixtures.canonicalResourceRecordDefinitions,
+      )!;
+  final resourceUses = <WASIComponentResourceUse>[
+    const WASIComponentResourceUse(
+      canonicalIndex: 0,
+      canonicalKind: WasmComponentCanonicalKind.lift,
+      path: 'canonical[0].param[0].input.owned',
+      handleKind: WASIComponentResourceHandleKind.own,
+      resourceTypeIndex: 0,
+      binding: null,
+    ),
+    const WASIComponentResourceUse(
+      canonicalIndex: 0,
+      canonicalKind: WasmComponentCanonicalKind.lift,
+      path: 'canonical[0].param[0].input.borrowed',
+      handleKind: WASIComponentResourceHandleKind.borrow,
+      resourceTypeIndex: 0,
+      binding: null,
+    ),
+    const WASIComponentResourceUse(
+      canonicalIndex: 0,
+      canonicalKind: WasmComponentCanonicalKind.lift,
+      path: 'canonical[0].result.owned',
+      handleKind: WASIComponentResourceHandleKind.own,
+      resourceTypeIndex: 0,
+      binding: null,
+    ),
+    const WASIComponentResourceUse(
+      canonicalIndex: 0,
+      canonicalKind: WasmComponentCanonicalKind.lift,
+      path: 'canonical[0].result.borrowed',
+      handleKind: WASIComponentResourceHandleKind.borrow,
+      resourceTypeIndex: 0,
+      binding: null,
+    ),
+  ];
+  return WASIComponentCanonicalAdapterPlan(
+    canonicalIndex: 0,
+    definition: const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.lift,
+      coreFunctionIndex: 0,
+    ),
+    functionType: const WasmComponentFunctionType(
+      params: [
+        WasmComponentLabeledValueType(
+          label: 'input',
+          type: component_fixtures.canonicalResourceRecordValueType,
+        ),
+      ],
+      result: component_fixtures.canonicalResourceRecordValueType,
+    ),
+    params: [
+      WASIComponentCanonicalAdapterValuePlan(
+        path: 'canonical[0].param[0].input',
+        label: 'input',
+        type: component_fixtures.canonicalResourceRecordValueType,
+        memoryCodec: memoryCodec,
+        flatLayout: null,
+        resourceUses: resourceUses
+            .where((use) => use.path.startsWith('canonical[0].param[0].input.'))
+            .toList(growable: false),
+      ),
+    ],
+    result: WASIComponentCanonicalAdapterValuePlan(
+      path: 'canonical[0].result',
+      label: null,
+      type: component_fixtures.canonicalResourceRecordValueType,
+      memoryCodec: memoryCodec,
+      flatLayout: null,
+      resourceUses: resourceUses
+          .where((use) => use.path.startsWith('canonical[0].result.'))
+          .toList(growable: false),
+    ),
+    resourceUses: resourceUses,
+    stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+    memoryIndex: 0,
+    reallocIndex: null,
+    postReturnIndex: null,
+    callbackIndex: null,
+    isAsync: false,
   );
 }
 

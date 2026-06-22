@@ -6,6 +6,8 @@ import 'package:wasd/src/wasi/component/value_memory.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
 
+import 'support/component_fixtures.dart' as component_fixtures;
+
 void main() {
   group('WASIComponentCanonicalValueMemoryCodec', () {
     test('loads and stores record fields with canonical padding', () {
@@ -122,6 +124,66 @@ void main() {
             kind: WasmComponentValueDataKind.integer,
             rawBytes: Uint8List(0),
             integer: 0x100000000,
+          ),
+        ),
+        throwsStateError,
+      );
+    });
+
+    test('loads and stores handle-aware adapter records as canonical u32', () {
+      expect(
+        WASIComponentCanonicalValueMemoryCodec.fromValueType(
+          component_fixtures.canonicalResourceRecordValueType,
+          component_fixtures.canonicalResourceRecordDefinitions,
+        ),
+        isNull,
+      );
+      final codec = WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
+        component_fixtures.canonicalResourceRecordValueType,
+        component_fixtures.canonicalResourceRecordDefinitions,
+      )!;
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 101, Endian.little);
+      data.setUint32(36, 202, Endian.little);
+      data.setUint16(40, 7, Endian.little);
+
+      final loaded = codec.load(memory, 32) as WasmComponentValueData;
+
+      expect(codec.byteLength, 12);
+      expect(codec.alignment, 4);
+      expect(loaded.kind, WasmComponentValueDataKind.record);
+      expect(loaded.items.map((item) => item.integer), [101, 202, 7]);
+
+      codec.store(memory, 64, loaded);
+      expect(data.getUint32(64, Endian.little), 101);
+      expect(data.getUint32(68, Endian.little), 202);
+      expect(data.getUint16(72, Endian.little), 7);
+
+      expect(
+        () => codec.store(
+          memory,
+          80,
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.record,
+            rawBytes: Uint8List(0),
+            items: [
+              WasmComponentValueData(
+                kind: WasmComponentValueDataKind.integer,
+                rawBytes: Uint8List(0),
+                integer: 0x100000000,
+              ),
+              WasmComponentValueData(
+                kind: WasmComponentValueDataKind.integer,
+                rawBytes: Uint8List(0),
+                integer: 202,
+              ),
+              WasmComponentValueData(
+                kind: WasmComponentValueDataKind.integer,
+                rawBytes: Uint8List(0),
+                integer: 7,
+              ),
+            ],
           ),
         ),
         throwsStateError,

@@ -7,6 +7,7 @@ import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/string_memory.dart';
+import 'package:wasd/src/wasi/component/value_memory.dart';
 import 'package:wasd/src/wasi/component/versioned_host.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasi/version.dart';
@@ -578,6 +579,137 @@ void main() {
         throwsStateError,
       );
     });
+
+    test(
+      'invokes handle-aware record adapter programs through canonical value memory',
+      () {
+        final memoryCodec =
+            WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
+              canonicalResourceRecordValueType,
+              canonicalResourceRecordDefinitions,
+            )!;
+        final resourceUses = [
+          const WASIComponentResourceUse(
+            canonicalIndex: 0,
+            canonicalKind: WasmComponentCanonicalKind.lift,
+            path: 'canonical[0].param[0].input.owned',
+            handleKind: WASIComponentResourceHandleKind.own,
+            resourceTypeIndex: 0,
+            binding: null,
+          ),
+          const WASIComponentResourceUse(
+            canonicalIndex: 0,
+            canonicalKind: WasmComponentCanonicalKind.lift,
+            path: 'canonical[0].param[0].input.borrowed',
+            handleKind: WASIComponentResourceHandleKind.borrow,
+            resourceTypeIndex: 0,
+            binding: null,
+          ),
+          const WASIComponentResourceUse(
+            canonicalIndex: 0,
+            canonicalKind: WasmComponentCanonicalKind.lift,
+            path: 'canonical[0].result.owned',
+            handleKind: WASIComponentResourceHandleKind.own,
+            resourceTypeIndex: 0,
+            binding: null,
+          ),
+          const WASIComponentResourceUse(
+            canonicalIndex: 0,
+            canonicalKind: WasmComponentCanonicalKind.lift,
+            path: 'canonical[0].result.borrowed',
+            handleKind: WASIComponentResourceHandleKind.borrow,
+            resourceTypeIndex: 0,
+            binding: null,
+          ),
+        ];
+        final plan = WASIComponentCanonicalAdapterPlan(
+          canonicalIndex: 0,
+          definition: const WasmComponentCanonicalDefinition(
+            kind: WasmComponentCanonicalKind.lift,
+            coreFunctionIndex: 0,
+          ),
+          functionType: const WasmComponentFunctionType(
+            params: [
+              WasmComponentLabeledValueType(
+                label: 'input',
+                type: canonicalResourceRecordValueType,
+              ),
+            ],
+            result: canonicalResourceRecordValueType,
+          ),
+          params: [
+            WASIComponentCanonicalAdapterValuePlan(
+              path: 'canonical[0].param[0].input',
+              label: 'input',
+              type: canonicalResourceRecordValueType,
+              memoryCodec: memoryCodec,
+              flatLayout: null,
+              resourceUses: resourceUses
+                  .where(
+                    (use) =>
+                        use.path.startsWith('canonical[0].param[0].input.'),
+                  )
+                  .toList(growable: false),
+            ),
+          ],
+          result: WASIComponentCanonicalAdapterValuePlan(
+            path: 'canonical[0].result',
+            label: null,
+            type: canonicalResourceRecordValueType,
+            memoryCodec: memoryCodec,
+            flatLayout: null,
+            resourceUses: resourceUses
+                .where((use) => use.path.startsWith('canonical[0].result.'))
+                .toList(growable: false),
+          ),
+          resourceUses: resourceUses,
+          stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+          memoryIndex: 0,
+          reallocIndex: null,
+          postReturnIndex: null,
+          callbackIndex: null,
+          isAsync: false,
+        );
+        final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
+        final data = ByteData.view(memory.buffer);
+        data.setUint32(32, 101, Endian.little);
+        data.setUint32(36, 202, Endian.little);
+        data.setUint16(40, 7, Endian.little);
+
+        final program = const WASIComponentCanonicalAdapterHost()
+            .bindAdapterPlans(
+              [plan],
+              coreFunctions: {
+                0: (args) {
+                  final record = args.single! as WasmComponentValueData;
+                  expect(record.kind, WasmComponentValueDataKind.record);
+                  expect(record.items.map((item) => item.integer), [
+                    101,
+                    202,
+                    7,
+                  ]);
+                  return _u32CompositeValue(
+                    WasmComponentValueDataKind.record,
+                    const [303, 404, 9],
+                  );
+                },
+              },
+            );
+
+        final result = program.invokeWithMemory(0, memory, const <int>[
+          32,
+        ], resultPointer: 64);
+
+        expect(result, isA<WasmComponentValueData>());
+        expect(data.getUint32(64, Endian.little), 303);
+        expect(data.getUint32(68, Endian.little), 404);
+        expect(data.getUint16(72, Endian.little), 9);
+        expect(
+          () => program.invoke(0, const <Object?>[]),
+          throwsUnsupportedError,
+        );
+      },
+    );
 
     test(
       'invokes tuple and fixed-list adapter programs through flat scalars',

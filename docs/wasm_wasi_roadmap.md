@@ -258,14 +258,15 @@ This is the implementation state as of 2026-06-22 on `main`.
   values validated by the shared Canonical ABI value-memory codec, including
   primitive values and dynamic string/list payloads passed as Dart-side
   component values, plus canonical `u32` handles for direct or memory-backed
-  resource and `error-context` adapter calls. It resolves callbacks by decoded
-  `coreFunctionIndex` / `functionIndex`, then exposes those operations through a
-  canonical-indexed adapter program. Memory-backed adapter invocation still
-  rejects nested async values, async adapters, and value shapes without a
-  supported codec instead of approximating them. Resource handle ownership,
-  drop, and borrow lifetime semantics remain a higher-level resource table
-  concern instead of being approximated in the value-memory codec. This keeps
-  future
+  resource and `error-context` adapter calls, including resource handles nested
+  inside supported composite adapter value-memory shapes. It resolves callbacks
+  by decoded `coreFunctionIndex` / `functionIndex`, then exposes those
+  operations through a canonical-indexed adapter program. Memory-backed adapter
+  invocation still rejects nested async values, async adapters, and value shapes
+  without a supported codec instead of approximating them. Resource handle
+  ownership, drop, and borrow lifetime semantics remain a higher-level resource
+  table concern instead of being approximated in the value-memory codec. This
+  keeps future
   adapter generation inputs explicit while automatic binding of decoded
   `lift`/`lower` definitions to instantiated core/component functions is still
   reported as a host capability gap instead of being overclaimed. The same
@@ -467,11 +468,12 @@ This is the implementation state as of 2026-06-22 on `main`.
   decoded direct result adapter flat tag/payload invocation,
   decoded direct resource adapter handle invocation, decoded direct resource
   adapter flat handle invocation, decoded direct resource adapter memory
-  invocation, decoded direct error-context adapter handle invocation, decoded
-  direct error-context adapter flat handle invocation, decoded direct
-  error-context adapter memory invocation, decoded direct string adapter memory
-  invocation, decoded core-memory primitive future-copy, and decoded
-  core-memory list plus string-list future-copy round trips, mixed
+  invocation, decoded direct resource-record adapter memory invocation, decoded
+  direct error-context adapter handle invocation, decoded direct error-context
+  adapter flat handle invocation, decoded direct error-context adapter memory
+  invocation, decoded direct string adapter memory invocation, decoded
+  core-memory primitive future-copy, and decoded core-memory list plus
+  string-list future-copy round trips, mixed
   canonical-host
   program invocation over shared component state, error-context canonical
   lifecycle invocation, error-context canonical string memory adapter invocation

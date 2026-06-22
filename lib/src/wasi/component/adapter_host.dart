@@ -310,9 +310,14 @@ final class WASIComponentCanonicalAdapterOperation {
       ),
       growable: false,
     );
-    final result = invoke(args);
+    final result = _callback(List<Object?>.unmodifiable(args));
     final resultPlan = plan.result;
     if (resultPlan == null) {
+      if (result != null) {
+        throw StateError(
+          'WASI component canonical adapter index $canonicalIndex expected no result.',
+        );
+      }
       if (resultPointer != null) {
         throw StateError(
           'WASI component canonical adapter index $canonicalIndex expected no result pointer.',

@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
+
 /// Returns a component with one primitive canonical lift and one canonical
 /// lower over an `() -> u32` component function type.
 Uint8List canonicalPrimitiveLiftLowerComponentBytes() =>
@@ -58,6 +60,53 @@ Uint8List canonicalU32ResultLiftLowerComponentBytes() =>
 /// `borrow` resource handles backed by an `i32` resource representation.
 Uint8List canonicalResourceLiftComponentBytes() =>
     Uint8List.fromList(_canonicalResourceLiftComponentBytes);
+
+/// Value type for a record containing owned and borrowed resource handles.
+const canonicalResourceRecordValueType = WasmComponentValueType.typeIndex(3);
+
+/// Type definitions for a record with `own`, `borrow`, and primitive fields.
+const canonicalResourceRecordDefinitions = <WasmComponentTypeDefinition>[
+  WasmComponentTypeDefinition(
+    kind: WasmComponentTypeKind.resource,
+    resource: WasmComponentResourceType.abstract(),
+  ),
+  WasmComponentTypeDefinition(
+    kind: WasmComponentTypeKind.definedValue,
+    definedValue: WasmComponentDefinedValueType(
+      kind: WasmComponentDefinedValueTypeKind.own,
+      typeIndex: 0,
+    ),
+  ),
+  WasmComponentTypeDefinition(
+    kind: WasmComponentTypeKind.definedValue,
+    definedValue: WasmComponentDefinedValueType(
+      kind: WasmComponentDefinedValueTypeKind.borrow,
+      typeIndex: 0,
+    ),
+  ),
+  WasmComponentTypeDefinition(
+    kind: WasmComponentTypeKind.definedValue,
+    definedValue: WasmComponentDefinedValueType(
+      kind: WasmComponentDefinedValueTypeKind.record,
+      fields: [
+        WasmComponentLabeledValueType(
+          label: 'owned',
+          type: WasmComponentValueType.typeIndex(1),
+        ),
+        WasmComponentLabeledValueType(
+          label: 'borrowed',
+          type: WasmComponentValueType.typeIndex(2),
+        ),
+        WasmComponentLabeledValueType(
+          label: 'code',
+          type: WasmComponentValueType.primitive(
+            WasmComponentPrimitiveValueType.u16,
+          ),
+        ),
+      ],
+    ),
+  ),
+];
 
 const List<int> _canonicalPrimitiveLiftLowerComponentBytes = <int>[
   0x00,

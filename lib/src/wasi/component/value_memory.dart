@@ -20,7 +20,7 @@ final class WASIComponentCanonicalValueMemoryCodec {
 
   /// Canonical memory codec for handle values represented as `u32`.
   static const canonicalU32Handle = WASIComponentCanonicalValueMemoryCodec._(
-    _PrimitiveLayout(WasmComponentPrimitiveValueType.u32, 4, 4),
+    _canonicalU32HandleLayout,
   );
 
   /// Builds a Canonical ABI memory codec for [type].
@@ -32,6 +32,25 @@ final class WASIComponentCanonicalValueMemoryCodec {
     List<WasmComponentTypeDefinition> definitions,
   ) {
     final layout = _LayoutResolver(definitions).resolveValueType(type);
+    return layout == null
+        ? null
+        : WASIComponentCanonicalValueMemoryCodec._(layout);
+  }
+
+  /// Builds a Canonical ABI memory codec for adapter value boundaries.
+  ///
+  /// Unlike [fromValueType], this treats `own` and `borrow` resource handles as
+  /// canonical `u32` memory values. It does not validate resource ownership,
+  /// drop, or borrow lifetime semantics; adapter hosts must keep those tied to
+  /// the component resource table.
+  static WASIComponentCanonicalValueMemoryCodec? fromAdapterValueType(
+    WasmComponentValueType type,
+    List<WasmComponentTypeDefinition> definitions,
+  ) {
+    final layout = _LayoutResolver(
+      definitions,
+      allowHandles: true,
+    ).resolveValueType(type);
     return layout == null
         ? null
         : WASIComponentCanonicalValueMemoryCodec._(layout);
@@ -273,9 +292,10 @@ final class WASIComponentCanonicalValueMemoryCodec {
 }
 
 final class _LayoutResolver {
-  _LayoutResolver(this.definitions);
+  _LayoutResolver(this.definitions, {this.allowHandles = false});
 
   final List<WasmComponentTypeDefinition> definitions;
+  final bool allowHandles;
   final Map<int, _CanonicalValueLayout?> _cache =
       <int, _CanonicalValueLayout?>{};
   final Set<int> _visiting = <int>{};
@@ -379,6 +399,15 @@ final class _LayoutResolver {
         return _variantLayout(cases, WasmComponentValueDataKind.result);
       case WasmComponentDefinedValueTypeKind.own:
       case WasmComponentDefinedValueTypeKind.borrow:
+        final typeIndex = type.typeIndex;
+        if (!allowHandles ||
+            typeIndex == null ||
+            typeIndex < 0 ||
+            typeIndex >= definitions.length ||
+            definitions[typeIndex].kind != WasmComponentTypeKind.resource) {
+          return null;
+        }
+        return _canonicalU32HandleLayout;
       case WasmComponentDefinedValueTypeKind.stream:
       case WasmComponentDefinedValueTypeKind.future:
         return null;
@@ -401,6 +430,12 @@ final class _LayoutResolver {
     return _VariantLayout(kind, caseLayouts);
   }
 }
+
+const _canonicalU32HandleLayout = _PrimitiveLayout(
+  WasmComponentPrimitiveValueType.u32,
+  4,
+  4,
+);
 
 abstract final class _CanonicalValueLayout {
   const _CanonicalValueLayout();
