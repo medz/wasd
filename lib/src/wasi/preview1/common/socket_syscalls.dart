@@ -18,12 +18,12 @@ int preview1SockAccept({
   if (socket == null) {
     return _errnoForMissingSocket(vfs, fd);
   }
+  if ((flags & ~socketFdflagKnownMask) != 0) {
+    return errnoNotsup;
+  }
   final right = _checkDescriptorRight(vfs, fd, rightSockAccept);
   if (right != errnoSuccess) {
     return right;
-  }
-  if ((flags & ~socketFdflagKnownMask) != 0) {
-    return errnoNotsup;
   }
   if (!socket.isStream) {
     return errnoNotsup;

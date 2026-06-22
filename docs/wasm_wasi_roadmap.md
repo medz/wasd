@@ -228,6 +228,42 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-ACCEPT-FLAG-PREFLIGHT` - `sock_accept` validates
+  socket-unsupported fdflags before accept rights.
+  - Scope: native/browser shared Preview1 stream `sock_accept` descriptor flag
+    validation ordering after fd/socket classification and before rights or
+    queue mutation.
+  - Edit targets: `lib/src/wasi/preview1/common/socket_syscalls.dart`,
+    `test/wasi_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`
+    failed before the fix with `Expected: <58>` and `Actual: <76>`, proving a
+    socket-unsupported `APPEND` flag was hidden behind missing `SOCK_ACCEPT`
+    rights.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`;
+    `dart test -p chrome test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`;
+    `dart test test/wasi_test.dart --name "sock_accept|socket descriptor flags|socket syscalls return notsock|datagram sockets do not expose accept rights"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_accept|socket descriptor flags|socket syscalls return notsock|datagram sockets do not expose accept rights"`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_accept_inheritance.operations=16000`,
+    `socket_accept_inheritance.per_operation_us=0.0898125`,
+    `socket_accept_receive_shutdown.operations=16000`,
+    `socket_accept_receive_shutdown.per_operation_us=0.0215625`,
+    `socket_poll_readiness.operations=80000`, and
+    `socket_poll_readiness.per_operation_us=0.074125` for the socket-heavy
+    distribution. The implementation only moves an existing constant-time
+    fdflag mask check earlier after socket classification; successful accept
+    hot paths add no allocation or loops.
+  - Done when: `sock_accept(APPEND)` on a socket returns `NOTSUP` before rights
+    failures, preserves the output fd pointer, and leaves the queued accepted
+    socket available.
+  - Evidence update: this checked row, the detailed backlog child row, the
+    verification matrix, and the current baseline.
+  - Claim impact: closes one Preview1 socket accept flag-ordering conformance
+    gap for native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-FLAG-PREFLIGHT` - `sock_recv` and `sock_send` validate ABI
   flags before descriptor/socket/right state.
   - Scope: native/browser shared Preview1 stream and datagram `sock_recv` and
@@ -1122,6 +1158,7 @@ copying their internals directly.
 | [x] | Preview1 native/browser fd count-pointer ABI | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test -p chrome test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Result count pointers at guest memory address `0` now write correctly for stdio and virtual-file fd read/write syscalls; full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser clock and poll-clock validation | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "clock_time_get"`; `dart test -p chrome test/wasi_test.dart --name "clock_time_get"`; `dart test test/wasi_test.dart --name "poll_oneoff"`; `dart test -p chrome test/wasi_test.dart --name "poll_oneoff"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Unsupported `clock_time_get` ids now preserve output memory and return `EINVAL`; invalid `poll_oneoff` clock subscriptions now report event `EINVAL`; full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket flag preflight | `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`; `dart test test/wasi_test.dart --name "sock_recv|sock_send"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv|sock_send"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Invalid `sock_recv`/`sock_send` flags now return `EINVAL` before descriptor-right failures and without socket/output side effects; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
+| [x] | Preview1 native/browser socket accept flag preflight | `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`; `dart test -p chrome test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`; `dart test test/wasi_test.dart --name "sock_accept|socket descriptor flags|socket syscalls return notsock|datagram sockets do not expose accept rights"`; `dart test -p chrome test/wasi_test.dart --name "sock_accept|socket descriptor flags|socket syscalls return notsock|datagram sockets do not expose accept rights"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Socket-unsupported `sock_accept` fdflags now return `NOTSUP` before accept-right failures while preserving non-socket/bad-fd errno order and queued accepted sockets; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket recv iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv snapshots iovs before writing receive buffers"`; `dart test test/wasi_test.dart --name "sock_recv"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream and datagram `sock_recv` now snapshot overlapping iovec tables before receive-buffer writes; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
@@ -1145,10 +1182,10 @@ This is the implementation state as of 2026-06-23 on `main`.
   sync/advice validation, clock/file/socket polling readiness including
   host-supplied socket readiness hints, `clock_time_get` unsupported-id
   validation, `poll_oneoff` clock subscription validation, fd read/write count
-  outputs at guest memory address zero, `sock_recv`/`sock_send` invalid flag
+  outputs at guest memory address zero, socket syscall invalid/unsupported flag
   preflight before descriptor-right checks, `sock_recv` iovec aliasing
-  protection, host-backed stream/datagram receive/send handlers, and descriptor
-  renumbering.
+  protection, host-backed stream/datagram receive/send handlers, accept queue
+  preservation on unsupported descriptor flags, and descriptor renumbering.
   Node still delegates Preview 1 behavior to `node:wasi`.
 - Preview 1 `proc_raise` is no longer a blanket `ENOSYS` stub: native hosts
   deliver mapped process signals by default, native/browser hosts can inject a
@@ -1631,6 +1668,37 @@ performance visible while the support surface expands.
 
 ## Near-Term Execution Backlog
 
+- [x] `P1-SOCKET-ACCEPT-FLAG-PREFLIGHT` - `sock_accept` validates
+  socket-unsupported fdflags before accept rights.
+  - Scope: native/browser shared Preview1 stream socket accept validation in
+    `lib/src/wasi/preview1/common/socket_syscalls.dart`.
+  - Edit targets: `lib/src/wasi/preview1/common/socket_syscalls.dart`,
+    `test/wasi_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`
+    failed before the fix with `Actual: <76>` instead of `Expected: <58>` after
+    accept rights were stripped.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`;
+    `dart test -p chrome test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`;
+    `dart test test/wasi_test.dart --name "sock_accept|socket descriptor flags|socket syscalls return notsock|datagram sockets do not expose accept rights"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_accept|socket descriptor flags|socket syscalls return notsock|datagram sockets do not expose accept rights"`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_accept_inheritance.operations=16000`,
+    `socket_accept_inheritance.per_operation_us=0.0898125`,
+    `socket_accept_receive_shutdown.operations=16000`,
+    `socket_accept_receive_shutdown.per_operation_us=0.0215625`,
+    `socket_poll_readiness.operations=80000`, and
+    `socket_poll_readiness.per_operation_us=0.074125` for the socket-heavy
+    distribution.
+  - Done when: unsupported accept fdflags return `NOTSUP` before
+    descriptor-right errors while preserving output pointer and queued accepted
+    socket state.
+  - Evidence update: this checked row plus `Current Execution Board`,
+    `Verification Matrix`, and `Current wasd Baseline`.
+  - Claim impact: contributes to `P1-SOCKET-CONFORMANCE` and `SUPPORT-P1`; does
+    not complete Preview1 full support or any P2/P3 support gate.
 - [x] `P1-SOCKET-FLAG-PREFLIGHT` - `sock_recv` and `sock_send` validate ABI
   flags before descriptor/socket/right state.
   - Scope: native/browser shared Preview1 stream and datagram socket syscall

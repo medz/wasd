@@ -3000,8 +3000,16 @@ void main() {
             receiveData: utf8.encode('client'),
           );
           final listener = WASIPreview1Socket(pendingAccepted: [accepted]);
+          final blockedAccepted = WASIPreview1Socket(
+            receiveData: utf8.encode('blocked'),
+          );
+          final blockedListener = WASIPreview1Socket(
+            pendingAccepted: [blockedAccepted],
+          );
           final socket = WASIPreview1Socket();
-          final socketWasi = WASI(sockets: {20: listener, 21: socket});
+          final socketWasi = WASI(
+            sockets: {20: listener, 21: socket, 22: blockedListener},
+          );
           final socketResult = await WebAssembly.instantiate(
             _wasiBytes.buffer,
             socketWasi.imports,
@@ -3040,6 +3048,7 @@ void main() {
             ]),
             0,
           );
+          expect(fdFdstatSetRights.ref([22, 0, 0]), 0);
 
           data.setUint32(acceptedFdPtr, 0xdeadbeef, Endian.little);
           expect(
@@ -3064,6 +3073,12 @@ void main() {
             _errnoNotsup,
           );
           expect(data.getUint32(acceptedFdPtr, Endian.little), 0xdeadbeef);
+          expect(
+            sockAccept.ref([22, _fdflagAppend, acceptedFdPtr]),
+            _errnoNotsup,
+          );
+          expect(data.getUint32(acceptedFdPtr, Endian.little), 0xdeadbeef);
+          expect(blockedListener.hasPendingAccept, isTrue);
 
           expect(fdFdstatSetFlags.ref([21, _fdflagUnknown]), _errnoInval);
           expect(fdFdstatSetFlags.ref([21, _fdflagAppend]), _errnoNotsup);
