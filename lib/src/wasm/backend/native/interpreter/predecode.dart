@@ -153,7 +153,11 @@ final class _ControlFrame {
 }
 
 abstract final class WasmPredecoder {
+  static const int _maxSharedSmallImmediate = 0xff;
+
   static final Map<int, Instruction> _sharedPureInstructions =
+      <int, Instruction>{};
+  static final Map<int, Instruction> _sharedSmallImmediateInstructions =
       <int, Instruction>{};
 
   static PredecodedFunction decode(
@@ -525,22 +529,26 @@ abstract final class WasmPredecoder {
         case Opcodes.brIf:
         case Opcodes.brOnNull:
         case Opcodes.brOnNonNull:
-        case Opcodes.call:
-        case Opcodes.callRef:
-        case Opcodes.returnCall:
-        case Opcodes.returnCallRef:
         case Opcodes.localGet:
         case Opcodes.localSet:
         case Opcodes.localTee:
         case Opcodes.globalGet:
         case Opcodes.globalSet:
+        case Opcodes.memorySize:
+        case Opcodes.memoryGrow:
+        case Opcodes.refFunc:
+          instructions.add(
+            _smallImmediateInstruction(opcode, reader.readVarUint32()),
+          );
+
+        case Opcodes.call:
+        case Opcodes.callRef:
+        case Opcodes.returnCall:
+        case Opcodes.returnCallRef:
         case Opcodes.tableGet:
         case Opcodes.tableSet:
         case Opcodes.throwTag:
         case Opcodes.rethrowTag:
-        case Opcodes.memorySize:
-        case Opcodes.memoryGrow:
-        case Opcodes.refFunc:
           instructions.add(
             Instruction(opcode: opcode, immediate: reader.readVarUint32()),
           );
@@ -1834,6 +1842,18 @@ abstract final class WasmPredecoder {
 
   static Instruction _pureInstruction(int opcode) =>
       _sharedPureInstructions[opcode] ??= Instruction(opcode: opcode);
+
+  // Only share opcodes whose validation and VM paths never mutate Instruction.
+  static Instruction _smallImmediateInstruction(int opcode, int immediate) {
+    if (immediate < 0 || immediate > _maxSharedSmallImmediate) {
+      return Instruction(opcode: opcode, immediate: immediate);
+    }
+    final key = (opcode << 8) | immediate;
+    return _sharedSmallImmediateInstructions[key] ??= Instruction(
+      opcode: opcode,
+      immediate: immediate,
+    );
+  }
 
   static bool _isExceptionHandlingOpcode(int opcode) {
     return switch (opcode) {

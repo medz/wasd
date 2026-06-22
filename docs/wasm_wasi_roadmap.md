@@ -875,12 +875,25 @@ performance visible while the support surface expands.
       compile-breakdown run reported `validate_module.rss_delta_bytes=289144832`
       and `validate_module.duration_ms=472`; a full instantiate run still
       reported `compile_module.rss_delta_bytes=360955904`.
+    - `WasmPredecoder` now reuses whitelisted small-immediate instruction
+      objects for branch, local, global, `memory.size`, `memory.grow`, and
+      `ref.func` opcodes that do not mutate `Instruction` runtime caches. The
+      regression keeps `call` instructions unshared because the VM caches call
+      targets on the instruction object. In the same local run, the
+      compile-breakdown profile moved from
+      `validate_module.rss_delta_bytes=312852480` and
+      `validate_module.duration_ms=482` before this change to
+      `validate_module.rss_delta_bytes=309346304` and
+      `validate_module.duration_ms=479` after it. A full instantiate run
+      reported `compile_module.rss_delta_bytes=326025216`, but the end-to-end
+      peak is still noisy because `instantiate_module` reported
+      `rss_delta_bytes=163037184` in that run.
   - Next: continue replacing validator hot-path string/list stack simulation
     with a compact representation for core primitive modules, then split out
     retained instantiate RSS if `instantiate_module` remains the end-to-end peak.
   - Done when: the profile shows a lower `compile_module.rss_delta_bytes` on
-    DOOM-sized modules; the latest local full instantiate profile still reports
-    `compile_module.rss_delta_bytes=356057088`, so this row remains open.
+    DOOM-sized modules with stable repeated runs and no shifted peak into
+    `instantiate_module`, so this row remains open.
 - [ ] `CM-VALIDATION-GAPS` - Component validation gaps that are deterministic
   and local.
   - Change: add validation tests before runtime wiring for remaining borrow,

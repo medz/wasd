@@ -33,6 +33,40 @@ void main() {
       expect(decoded.instructions[3].immediate, 1);
     });
 
+    test('reuses safe small-immediate instruction objects only', () {
+      final decoded = WasmPredecoder.decode(
+        WasmCodeBody(
+          locals: const <WasmLocalDecl>[],
+          instructions: Uint8List.fromList(const <int>[
+            Opcodes.localGet,
+            0,
+            Opcodes.localGet,
+            0,
+            Opcodes.localGet,
+            1,
+            Opcodes.call,
+            0,
+            Opcodes.call,
+            0,
+            Opcodes.end,
+          ]),
+        ),
+        const <WasmFunctionType>[],
+      );
+
+      expect(identical(decoded.instructions[0], decoded.instructions[1]), true);
+      expect(
+        identical(decoded.instructions[0], decoded.instructions[2]),
+        false,
+      );
+      expect(
+        identical(decoded.instructions[3], decoded.instructions[4]),
+        false,
+      );
+      expect(decoded.instructions[3].immediate, 0);
+      expect(decoded.instructions[4].immediate, 0);
+    });
+
     test('reuses type-indexed block signature lists', () {
       final functionType = WasmFunctionType(
         params: const <WasmValueType>[WasmValueType.i32],
