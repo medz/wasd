@@ -228,7 +228,10 @@ This is the implementation state as of 2026-06-22 on `main`.
   and socket renumber/close descriptor paths.
   Stream socket sends are recorded as owned byte chunks, and long receive
   streams compact consumed prefixes in larger batches so socket-heavy reads do
-  not repeatedly shift the backing buffer.
+  not repeatedly shift the backing buffer. Default datagram socket sends now
+  transfer the VFS-owned message buffer into the socket record path instead of
+  copying it a second time, while caller-owned `writeMessage` lists still keep
+  defensive copy semantics.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/` now provides an internal typed resource table plus
@@ -594,10 +597,11 @@ performance visible while the support surface expands.
   `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`, covering
   baseline, directory-heavy, descriptor-heavy, and socket-heavy distributions,
   plus `path_open`, `fd_readdir`, link/symlink mutation, rights checks, socket
-  multi-iov `RECV_PEEK`/`RECV_WAITALL`, datagram truncation, socket send/recv,
-  and socket poll readiness, plus file, directory, and socket descriptor
-  renumber/close over large directory and descriptor sets. Keep optimizing
-  against benchmark data instead of test suite heat alone.
+  multi-iov `RECV_PEEK`/`RECV_WAITALL`, datagram truncation, default and
+  host-backed datagram send, socket send/recv, and socket poll readiness, plus
+  file, directory, and socket descriptor renumber/close over large directory and
+  descriptor sets. Keep optimizing against benchmark data instead of test suite
+  heat alone.
 - Component async host paths are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`, including
   canonical async stream/future copies, context get/set TLS operations,
@@ -718,6 +722,20 @@ performance visible while the support surface expands.
     `dart test -p chrome test/wasi_test.dart --name "invalid write counts"`.
   - Done when: stream and datagram host send handlers returning out-of-range
     counts leave `nwritten` unchanged and report `EINVAL`.
+- [x] `P1-SOCKET-DATAGRAM-SEND-OWNED` - Preview1 datagram send copy reduction.
+  - Scope: native/browser shared Preview1 VFS datagram send hot path.
+  - Edit targets: `lib/src/wasi/preview1/socket.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, and
+    `tool/wasi_vfs_benchmark.dart`.
+  - Red test: N/A for the narrow performance-only copy reduction; the focused
+    regression keeps caller-owned `writeMessage` copy semantics separate from
+    the VFS-owned hot path.
+  - Implementation gate: `dart test test/wasi_test.dart`; `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=socket-heavy --iterations=1000 --json`.
+  - Done when: VFS-created datagram messages are recorded without a second
+    defensive copy, caller-owned `writeMessage` input is still copied, and the
+    socket-heavy benchmark covers default and host-backed datagram send paths.
 - [x] `PERF-VFS-DISTRIBUTIONS` - VFS/descriptor benchmark distributions.
   - Change: extend benchmark data to larger conformance-shaped path, directory,
     socket, and descriptor sets before optimizing more VFS code.

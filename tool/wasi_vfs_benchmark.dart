@@ -755,6 +755,24 @@ _Metric _benchmarkSocketDatagramTruncation(_Options options) {
     }
     checksum += data.getUint32(countPtr, Endian.little) + roflags;
 
+    final defaultSendErrno = writeSocketFromIov(
+      socket: descriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 1,
+      nwrittenPtr: countPtr,
+    );
+    if (defaultSendErrno != errnoSuccess) {
+      throw StateError(
+        'default datagram send failed at iteration $i: $defaultSendErrno',
+      );
+    }
+    if (data.getUint32(countPtr, Endian.little) != _socketIovSize) {
+      throw StateError('default datagram send mismatch at iteration $i');
+    }
+    checksum += data.getUint32(countPtr, Endian.little);
+
     final hostRecvErrno = readSocketIntoIov(
       socket: hostDescriptor,
       bytes: bytes,
@@ -795,8 +813,11 @@ _Metric _benchmarkSocketDatagramTruncation(_Options options) {
     checksum += data.getUint32(countPtr, Endian.little);
   }
   watch.stop();
+  if (socket.sentMessages.length != options.iterations) {
+    throw StateError('default datagram send record count mismatch');
+  }
   return _Metric(
-    operations: options.iterations * 3,
+    operations: options.iterations * 4,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum + hostReceiveByte + hostSentBytes,
   );

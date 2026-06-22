@@ -340,6 +340,27 @@ final class WASIPreview1Socket {
     return data.length;
   }
 
+  /// Records an owned datagram message sent through `sock_send`.
+  ///
+  /// The caller transfers [message] to this socket and must not mutate it after
+  /// the call. This avoids an extra copy on the VFS datagram-send hot path while
+  /// keeping [writeMessage] defensive for caller-owned lists.
+  int writeOwnedMessage(Uint8List message) {
+    if (sendShutdown) {
+      return 0;
+    }
+    final sendMessageHandler = _sendMessageHandler;
+    if (sendMessageHandler != null) {
+      final written = sendMessageHandler(message);
+      if (written < 0 || written > message.length) {
+        throw RangeError.range(written, 0, message.length, 'written');
+      }
+      return written;
+    }
+    _sentMessages.add(message);
+    return message.length;
+  }
+
   /// Returns the next queued accepted socket, if one is available.
   WASIPreview1Socket? accept() {
     if (!isStream || _pendingAccepted.isEmpty) {

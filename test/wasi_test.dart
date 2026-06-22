@@ -148,6 +148,22 @@ void main() {
       );
     });
 
+    test('datagram sockets keep defensive and owned write paths separate', () {
+      final socket = WASIPreview1Socket.datagram();
+      final callerOwned = Uint8List.fromList([1, 2, 3]);
+
+      expect(socket.writeMessage(callerOwned), 3);
+      callerOwned[0] = 9;
+      expect(socket.sentMessages.single, [1, 2, 3]);
+
+      final vfsOwned = Uint8List.fromList([4, 5]);
+      expect(socket.writeOwnedMessage(vfsOwned), 2);
+      expect(socket.sentMessages.map((message) => message.toList()), [
+        [1, 2, 3],
+        [4, 5],
+      ]);
+    });
+
     test('stream sockets record sent bytes as an owned copy', () {
       final socket = WASIPreview1Socket();
       final source = Uint8List.fromList([1, 2, 3, 4]);

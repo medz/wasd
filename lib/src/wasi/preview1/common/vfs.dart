@@ -1417,7 +1417,7 @@ int _writeDatagramSocketFromIov({
   }
   int written;
   try {
-    written = socket.writeMessage(message);
+    written = socket.writeOwnedMessage(message);
   } on RangeError {
     return errnoInval;
   }
@@ -1577,6 +1577,8 @@ final class Preview1VirtualSocket {
       socket.writeFrom(source, start, length);
 
   int writeMessage(List<int> data) => socket.writeMessage(data);
+
+  int writeOwnedMessage(Uint8List data) => socket.writeOwnedMessage(data);
 
   int readMessageInto(
     Uint8List target,
