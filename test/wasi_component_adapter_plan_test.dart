@@ -147,6 +147,40 @@ void main() {
       }
     });
 
+    test('plan list flat value layouts', () {
+      final component = WasmComponent.decode(
+        canonicalU32ListLiftLowerComponentBytes(),
+      );
+
+      expect(component.validate(), isEmpty);
+
+      final plans = componentCanonicalAdapterPlans(component);
+
+      expect(plans, hasLength(2));
+      for (final plan in plans) {
+        expect(plan.params, hasLength(1));
+        expect(plan.params.single.label, 'input');
+        expect(plan.params.single.byteLength, 8);
+        expect(plan.params.single.alignment, 4);
+        expect(plan.params.single.flatLength, 2);
+        expect(
+          plan.params.single.flatLayout!.kind,
+          WASIComponentCanonicalAdapterFlatValueKind.list,
+        );
+        expect(plan.result, isNotNull);
+        expect(plan.result!.byteLength, 8);
+        expect(plan.result!.alignment, 4);
+        expect(plan.result!.flatLength, 2);
+        expect(
+          plan.result!.flatLayout!.kind,
+          WASIComponentCanonicalAdapterFlatValueKind.list,
+        );
+        expect(plan.hasDynamicPayload, isTrue);
+        expect(plan.memoryIndex, 0);
+        expect(plan.reallocIndex, 0);
+      }
+    });
+
     test('executes primitive lift and lower plans with direct callbacks', () {
       final component = WasmComponent.decode(
         canonicalPrimitiveLiftLowerComponentBytes(),
@@ -416,6 +450,71 @@ void main() {
         throwsStateError,
       );
       expect(() => program.invokeFlat(2, const <Object?>[3]), throwsStateError);
+    });
+
+    test('invokes list adapter programs through flat pointer length pairs', () {
+      final component = WasmComponent.decode(
+        canonicalU32ListLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+      final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
+      final realloc = _bumpRealloc(memory, start: 512);
+      _writeU32List(memory, 64, const [3, 5]);
+      _writeU32List(memory, 96, const [11]);
+
+      final program = host.bindAdapterPlans(
+        plans,
+        coreFunctions: {
+          1: (args) {
+            final list = args.single! as WasmComponentValueData;
+            expect(list.kind, WasmComponentValueDataKind.list);
+            expect(list.items.map((item) => item.integer), [3, 5]);
+            return _u32ListValue(const [7, 13, 17]);
+          },
+        },
+        componentFunctions: {
+          0: (args) {
+            final list = args.single! as WasmComponentValueData;
+            expect(list.kind, WasmComponentValueDataKind.list);
+            expect(list.items.map((item) => item.integer), [11]);
+            return _u32ListValue(const [19, 23]);
+          },
+        },
+      );
+
+      final lifted = program.invokeFlat(
+        0,
+        const <Object?>[64, 2],
+        memory: memory,
+        realloc: realloc,
+      );
+      expect(lifted[1], 3);
+      expect(_readU32List(memory, lifted[0]! as int, lifted[1]! as int), [
+        7,
+        13,
+        17,
+      ]);
+
+      final lowered = program.invokeFlat(
+        1,
+        const <Object?>[96, 1],
+        memory: memory,
+        realloc: realloc,
+      );
+      expect(lowered[1], 2);
+      expect(_readU32List(memory, lowered[0]! as int, lowered[1]! as int), [
+        19,
+        23,
+      ]);
+      expect(
+        () => program.invokeFlat(0, const <Object?>[64, 2]),
+        throwsStateError,
+      );
+      expect(
+        () => program.invokeFlat(0, const <Object?>[64, 2], memory: memory),
+        throwsUnsupportedError,
+      );
     });
 
     test('invokes adapter programs through flat primitive values', () {
@@ -734,4 +833,35 @@ WASIComponentCanonicalRealloc _bumpRealloc(
     }
     return pointer;
   };
+}
+
+WasmComponentValueData _u32ListValue(List<int> values) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.list,
+    rawBytes: Uint8List(0),
+    items: [
+      for (final value in values)
+        WasmComponentValueData(
+          kind: WasmComponentValueDataKind.integer,
+          rawBytes: Uint8List(0),
+          integer: value,
+        ),
+    ],
+  );
+}
+
+void _writeU32List(wasm.Memory memory, int pointer, List<int> values) {
+  final data = ByteData.view(memory.buffer);
+  for (var i = 0; i < values.length; i++) {
+    data.setUint32(pointer + i * 4, values[i], Endian.little);
+  }
+}
+
+List<int> _readU32List(wasm.Memory memory, int pointer, int length) {
+  final data = ByteData.view(memory.buffer);
+  return List<int>.generate(
+    length,
+    (index) => data.getUint32(pointer + index * 4, Endian.little),
+    growable: false,
+  );
 }

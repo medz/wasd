@@ -63,6 +63,8 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentAdapterRecordFlatInvoke(options.iterations);
   final componentAdapterFlagsEnumFlatInvoke =
       _benchmarkComponentAdapterFlagsEnumFlatInvoke(options.iterations);
+  final componentAdapterListFlatInvoke =
+      _benchmarkComponentAdapterListFlatInvoke(options.iterations);
   final componentAdapterStringMemoryInvoke =
       _benchmarkComponentAdapterStringMemoryInvoke(options.iterations);
   final componentHostStreamMemoryBinding =
@@ -110,6 +112,8 @@ Future<void> main(List<String> args) async {
         .toJson(),
     'component_adapter_flags_enum_flat_invoke':
         componentAdapterFlagsEnumFlatInvoke.toJson(),
+    'component_adapter_list_flat_invoke': componentAdapterListFlatInvoke
+        .toJson(),
     'component_adapter_string_memory_invoke': componentAdapterStringMemoryInvoke
         .toJson(),
     'component_host_stream_memory_binding': componentHostStreamMemoryBinding
@@ -155,6 +159,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentAdapterStringFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterRecordFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterFlagsEnumFlatInvoke(_warmupIterations);
+  _benchmarkComponentAdapterListFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringMemoryInvoke(_warmupIterations);
   _benchmarkComponentHostStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostRecordStreamMemoryBinding(_warmupIterations);
@@ -706,6 +711,53 @@ _Metric _benchmarkComponentAdapterFlagsEnumFlatInvoke(int iterations) {
   );
 }
 
+_Metric _benchmarkComponentAdapterListFlatInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalU32ListLiftLowerComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final host = const WASIComponentCanonicalAdapterHost();
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final realloc = (_, _, _, _) => 512;
+  _writeU32List(memory, 64, const [3, 5]);
+  _writeU32List(memory, 96, const [11]);
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {
+      1: (_) => _u32ListValue(const [7, 13, 17]),
+    },
+    componentFunctions: {
+      0: (_) => _u32ListValue(const [19, 23]),
+    },
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final lifted = program.invokeFlat(
+      0,
+      const <Object?>[64, 2],
+      memory: memory,
+      realloc: realloc,
+    );
+    checksum += lifted[1]! as int;
+    final lowered = program.invokeFlat(
+      1,
+      const <Object?>[96, 1],
+      memory: memory,
+      realloc: realloc,
+    );
+    checksum += lowered[1]! as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 WasmComponentValueData _recordValue(int left, int right) {
   return WasmComponentValueData(
     kind: WasmComponentValueDataKind.record,
@@ -723,6 +775,28 @@ WasmComponentValueData _recordValue(int left, int right) {
       ),
     ],
   );
+}
+
+WasmComponentValueData _u32ListValue(List<int> values) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.list,
+    rawBytes: Uint8List(0),
+    items: [
+      for (final value in values)
+        WasmComponentValueData(
+          kind: WasmComponentValueDataKind.integer,
+          rawBytes: Uint8List(0),
+          integer: value,
+        ),
+    ],
+  );
+}
+
+void _writeU32List(Memory memory, int pointer, List<int> values) {
+  final data = ByteData.view(memory.buffer);
+  for (var i = 0; i < values.length; i++) {
+    data.setUint32(pointer + i * 4, values[i], Endian.little);
+  }
 }
 
 WasmComponentValueData _flagsValue(List<String> labels) {

@@ -125,13 +125,17 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
   /// Primitive scalar flat layout.
   const WASIComponentCanonicalAdapterFlatValuePlan.primitive(this.primitive)
     : kind = WASIComponentCanonicalAdapterFlatValueKind.primitive,
+      memoryCodec = null,
       labels = const <String>[],
+      element = null,
       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Flags bitset flat layout.
   const WASIComponentCanonicalAdapterFlatValuePlan.flags({required this.labels})
     : kind = WASIComponentCanonicalAdapterFlatValueKind.flags,
       primitive = null,
+      memoryCodec = null,
+      element = null,
       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Enum discriminant flat layout.
@@ -139,6 +143,17 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
     required this.labels,
   }) : kind = WASIComponentCanonicalAdapterFlatValueKind.enumeration,
        primitive = null,
+       memoryCodec = null,
+       element = null,
+       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
+
+  /// Dynamic list `(ptr, len)` flat layout.
+  const WASIComponentCanonicalAdapterFlatValuePlan.list({
+    required this.element,
+    required this.memoryCodec,
+  }) : kind = WASIComponentCanonicalAdapterFlatValueKind.list,
+       primitive = null,
+       labels = const <String>[],
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Composite scalar flat layout.
@@ -146,7 +161,9 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
     required this.kind,
     required this.fields,
   }) : primitive = null,
-       labels = const <String>[];
+       memoryCodec = null,
+       labels = const <String>[],
+       element = null;
 
   /// Flat layout kind.
   final WASIComponentCanonicalAdapterFlatValueKind kind;
@@ -154,8 +171,14 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
   /// Primitive represented by this layout.
   final WasmComponentPrimitiveValueType? primitive;
 
+  /// Canonical memory codec needed by dynamic flat layouts.
+  final WASIComponentCanonicalValueMemoryCodec? memoryCodec;
+
   /// Labels used by flags or enum layouts.
   final List<String> labels;
+
+  /// Element layout used by dynamic list layouts.
+  final WASIComponentCanonicalAdapterFlatValuePlan? element;
 
   /// Nested flat fields for composite layouts.
   final List<WASIComponentCanonicalAdapterFlatFieldPlan> fields;
@@ -169,6 +192,9 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
     if (kind == WASIComponentCanonicalAdapterFlatValueKind.flags ||
         kind == WASIComponentCanonicalAdapterFlatValueKind.enumeration) {
       return 1;
+    }
+    if (kind == WASIComponentCanonicalAdapterFlatValueKind.list) {
+      return 2;
     }
     return fields.fold<int>(
       0,
@@ -196,6 +222,9 @@ enum WASIComponentCanonicalAdapterFlatValueKind {
 
   /// Enum represented by one discriminant scalar.
   enumeration,
+
+  /// Dynamic list represented by a `(ptr, len)` scalar pair.
+  list,
 }
 
 /// Nested field in a flat Canonical ABI scalar layout.
@@ -370,10 +399,15 @@ final class _FlatLayoutResolver {
         _cache[typeIndex] = null;
         final definition = definitions[typeIndex];
         final definedValue = definition.definedValue;
+        final memoryCodec =
+            WASIComponentCanonicalValueMemoryCodec.fromValueType(
+              type,
+              definitions,
+            );
         final layout =
             definition.kind == WasmComponentTypeKind.definedValue &&
                 definedValue != null
-            ? _resolveDefinedValue(definedValue)
+            ? _resolveDefinedValue(definedValue, memoryCodec)
             : null;
         _visiting.remove(typeIndex);
         _cache[typeIndex] = layout;
@@ -383,6 +417,7 @@ final class _FlatLayoutResolver {
 
   WASIComponentCanonicalAdapterFlatValuePlan? _resolveDefinedValue(
     WasmComponentDefinedValueType type,
+    WASIComponentCanonicalValueMemoryCodec? memoryCodec,
   ) {
     switch (type.kind) {
       case WasmComponentDefinedValueTypeKind.primitive:
@@ -461,6 +496,17 @@ final class _FlatLayoutResolver {
           labels: List<String>.unmodifiable(type.labels),
         );
       case WasmComponentDefinedValueTypeKind.list:
+        final elementType = type.elementType;
+        if (elementType == null || memoryCodec == null) {
+          return null;
+        }
+        final elementLayout = resolveValueType(elementType);
+        return elementLayout == null
+            ? null
+            : WASIComponentCanonicalAdapterFlatValuePlan.list(
+                element: elementLayout,
+                memoryCodec: memoryCodec,
+              );
       case WasmComponentDefinedValueTypeKind.variant:
       case WasmComponentDefinedValueTypeKind.option:
       case WasmComponentDefinedValueTypeKind.result:

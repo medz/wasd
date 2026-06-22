@@ -4,6 +4,7 @@ import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
 import 'adapter_plan.dart';
 import 'string_memory.dart';
+import 'value_memory.dart';
 
 /// Function callback used by direct canonical adapter operations.
 typedef WASIComponentCanonicalAdapterCallback =
@@ -358,6 +359,14 @@ final class WASIComponentCanonicalAdapterOperation {
       ),
       WASIComponentCanonicalAdapterFlatValueKind.enumeration =>
         _loadFlatEnumeration(layout, path, flatArgs, offset),
+      WASIComponentCanonicalAdapterFlatValueKind.list => _loadFlatList(
+        layout,
+        path,
+        flatArgs,
+        offset,
+        memory,
+        stringEncoding,
+      ),
       WASIComponentCanonicalAdapterFlatValueKind.primitive => throw StateError(
         'Primitive flat layout without a primitive type.',
       ),
@@ -439,6 +448,31 @@ final class WASIComponentCanonicalAdapterOperation {
       label: layout.labels[index],
     ),
     nextOffset: offset + 1,
+  );
+}
+
+({Object? value, int nextOffset}) _loadFlatList(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  List<Object?> flatArgs,
+  int offset,
+  wasm.Memory? memory,
+  WASIComponentCanonicalStringEncoding stringEncoding,
+) {
+  if (offset + 2 > flatArgs.length) {
+    throw StateError(
+      'WASI component canonical adapter value $path expected 2 flat list arguments.',
+    );
+  }
+  final memoryRef = _requireMemory(memory, path);
+  final pointer = _expectFlatInt(path, flatArgs[offset]);
+  final length = _expectFlatInt(path, flatArgs[offset + 1]);
+  return (
+    value: _requireListMemoryCodec(
+      layout,
+      path,
+    ).loadFlatList(memoryRef, pointer, length, stringEncoding: stringEncoding),
+    nextOffset: offset + 2,
   );
 }
 
@@ -529,6 +563,14 @@ List<Object?> _storeFlatLayout(
       WASIComponentCanonicalAdapterFlatValueKind.enumeration => <Object?>[
         _flatEnumerationToIndex(layout, path, value),
       ],
+      WASIComponentCanonicalAdapterFlatValueKind.list => _storeFlatList(
+        layout,
+        path,
+        value,
+        memory,
+        realloc,
+        stringEncoding,
+      ),
       WASIComponentCanonicalAdapterFlatValueKind.primitive => throw StateError(
         'Primitive flat layout without a primitive type.',
       ),
@@ -672,7 +714,8 @@ WasmComponentValueDataKind _flatCompositeValueDataKind(
       WasmComponentValueDataKind.fixedList,
     WASIComponentCanonicalAdapterFlatValueKind.primitive ||
     WASIComponentCanonicalAdapterFlatValueKind.flags ||
-    WASIComponentCanonicalAdapterFlatValueKind.enumeration => throw StateError(
+    WASIComponentCanonicalAdapterFlatValueKind.enumeration ||
+    WASIComponentCanonicalAdapterFlatValueKind.list => throw StateError(
       'Flat layout is not composite.',
     ),
   };
@@ -692,6 +735,8 @@ WasmComponentValueDataKind _flatValueDataKind(
       WasmComponentValueDataKind.flags,
     WASIComponentCanonicalAdapterFlatValueKind.enumeration =>
       WasmComponentValueDataKind.enumeration,
+    WASIComponentCanonicalAdapterFlatValueKind.list =>
+      WasmComponentValueDataKind.list,
     WASIComponentCanonicalAdapterFlatValueKind.primitive => throw StateError(
       'Primitive flat layouts use primitive value data.',
     ),
@@ -783,6 +828,37 @@ void _checkFlatEnumIndex(String path, List<String> labels, int index) {
       'WASI component canonical adapter value $path has invalid enum index $index.',
     );
   }
+}
+
+List<Object?> _storeFlatList(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  Object? value,
+  wasm.Memory? memory,
+  WASIComponentCanonicalRealloc? realloc,
+  WASIComponentCanonicalStringEncoding stringEncoding,
+) {
+  final memoryRef = _requireMemory(memory, path);
+  final flat = _requireListMemoryCodec(layout, path).storeFlatList(
+    memoryRef,
+    value,
+    realloc: realloc,
+    stringEncoding: stringEncoding,
+  );
+  return <Object?>[flat.pointer, flat.length];
+}
+
+WASIComponentCanonicalValueMemoryCodec _requireListMemoryCodec(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+) {
+  final codec = layout.memoryCodec;
+  if (codec != null) {
+    return codec;
+  }
+  throw StateError(
+    'WASI component canonical adapter value $path expected list memory codec.',
+  );
 }
 
 Object? _flatPrimitiveToComponentValue(

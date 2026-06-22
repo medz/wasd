@@ -194,6 +194,55 @@ final class WASIComponentCanonicalValueMemoryCodec {
     }
   }
 
+  /// Loads a dynamic list value from a flat Canonical ABI `(ptr, len)` pair.
+  WasmComponentValueData loadFlatList(
+    wasm.Memory memory,
+    int pointer,
+    int length, {
+    WASIComponentCanonicalStringEncoding stringEncoding =
+        WASIComponentCanonicalStringEncoding.utf8,
+  }) {
+    final layout = _layout;
+    if (layout is! _ListLayout) {
+      throw StateError('WASI component canonical value expected list layout.');
+    }
+    final bytes = Uint8List.view(memory.buffer);
+    return layout.loadFlat(
+      memory,
+      ByteData.view(memory.buffer),
+      bytes,
+      pointer,
+      length,
+      stringEncoding,
+    );
+  }
+
+  /// Stores a dynamic list value and returns its flat `(ptr, len)` pair.
+  ({int pointer, int length}) storeFlatList(
+    wasm.Memory memory,
+    Object? value, {
+    WASIComponentCanonicalRealloc? realloc,
+    WASIComponentCanonicalStringEncoding stringEncoding =
+        WASIComponentCanonicalStringEncoding.utf8,
+  }) {
+    final layout = _layout;
+    if (layout is! _ListLayout) {
+      throw StateError('WASI component canonical value expected list layout.');
+    }
+    if (value is! WasmComponentValueData ||
+        value.kind != WasmComponentValueDataKind.list) {
+      throw StateError('WASI component canonical value expected list data.');
+    }
+    validate('list', value);
+    return layout.storeFlat(
+      memory,
+      ByteData.view(memory.buffer),
+      value,
+      realloc,
+      stringEncoding,
+    );
+  }
+
   /// Validates [value] against this canonical value shape.
   void validate(String name, Object? value) {
     _layout.validate(name, value);
@@ -855,6 +904,27 @@ final class _ListLayout extends _CanonicalValueLayout {
   ) {
     final payloadPointer = data.getUint32(pointer, Endian.little);
     final length = data.getUint32(pointer + 4, Endian.little);
+    return loadFlat(
+      memory,
+      data,
+      bytes,
+      payloadPointer,
+      length,
+      stringEncoding,
+      rawBytes: _copyRawBytes(bytes, pointer, byteLength),
+    );
+  }
+
+  WasmComponentValueData loadFlat(
+    wasm.Memory memory,
+    ByteData data,
+    Uint8List bytes,
+    int payloadPointer,
+    int length,
+    WASIComponentCanonicalStringEncoding stringEncoding, {
+    Uint8List? rawBytes,
+  }) {
+    _checkU32(length, 'list length');
     final payloadByteLength = _listPayloadByteLength(elementLayout, length);
     if (length > 0) {
       _checkMemoryRange(
@@ -877,7 +947,7 @@ final class _ListLayout extends _CanonicalValueLayout {
     );
     return WasmComponentValueData(
       kind: WasmComponentValueDataKind.list,
-      rawBytes: _copyRawBytes(bytes, pointer, byteLength),
+      rawBytes: rawBytes ?? Uint8List(0),
       items: List<WasmComponentValueData>.unmodifiable(items),
     );
   }
@@ -919,6 +989,22 @@ final class _ListLayout extends _CanonicalValueLayout {
     );
     data.setUint32(pointer, payloadPointer, Endian.little);
     data.setUint32(pointer + 4, value.items.length, Endian.little);
+  }
+
+  ({int pointer, int length}) storeFlat(
+    wasm.Memory memory,
+    ByteData data,
+    WasmComponentValueData value,
+    WASIComponentCanonicalRealloc? realloc,
+    WASIComponentCanonicalStringEncoding stringEncoding,
+  ) {
+    if (value.kind != WasmComponentValueDataKind.list) {
+      throw StateError('WASI component canonical value expected list data.');
+    }
+    return (
+      pointer: _storeListPayload(memory, data, value, realloc, stringEncoding),
+      length: value.items.length,
+    );
   }
 
   @override
