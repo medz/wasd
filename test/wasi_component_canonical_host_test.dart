@@ -221,6 +221,64 @@ void main() {
       );
     });
 
+    test('reports canonical kind capabilities by runtime area', () {
+      final host = WASIComponentCanonicalHost();
+
+      final capabilities = host.canonicalKindCapabilities;
+
+      expect(
+        capabilities.map((capability) => capability.kind),
+        WasmComponentCanonicalKind.values,
+      );
+
+      final streamRead = host.canonicalKindCapability(
+        WasmComponentCanonicalKind.streamRead,
+      );
+      expect(streamRead.isSupported, isTrue);
+      expect(streamRead.area, WASIComponentCanonicalCapabilityArea.asyncValue);
+      expect(streamRead.unsupportedReason, isNull);
+
+      final lower = host.canonicalKindCapability(
+        WasmComponentCanonicalKind.lower,
+      );
+      expect(lower.isSupported, isFalse);
+      expect(
+        lower.area,
+        WASIComponentCanonicalCapabilityArea.adapterGeneration,
+      );
+      expect(lower.unsupportedReason, contains('typed core function'));
+      expect(
+        host.supportsCanonicalKind(WasmComponentCanonicalKind.lower),
+        isFalse,
+      );
+
+      final threadSuspend = host.canonicalKindCapability(
+        WasmComponentCanonicalKind.threadSuspend,
+      );
+      expect(threadSuspend.isSupported, isFalse);
+      expect(
+        threadSuspend.area,
+        WASIComponentCanonicalCapabilityArea.threadScheduling,
+      );
+      expect(threadSuspend.unsupportedReason, contains('task scheduling'));
+
+      expect(
+        host
+            .canonicalKindCapability(WasmComponentCanonicalKind.errorContextNew)
+            .area,
+        WASIComponentCanonicalCapabilityArea.errorContext,
+      );
+      expect(
+        () => capabilities.add(
+          const WASIComponentCanonicalKindCapability(
+            kind: WasmComponentCanonicalKind.resourceNew,
+            area: WASIComponentCanonicalCapabilityArea.resource,
+          ),
+        ),
+        throwsUnsupportedError,
+      );
+    });
+
     test('prepares a reusable component binding plan', () {
       final component = WasmComponent.decode(_canonicalContextGetBytes());
       final host = WASIComponentCanonicalHost();

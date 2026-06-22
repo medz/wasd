@@ -229,9 +229,13 @@ This is the implementation state as of 2026-06-22 on `main`.
   diagnostics instead of runtime-only host errors. It also reports all
   unsupported canonical definitions before building any operation table, so
   versioned adapters can surface real capability gaps without partially bound
-  programs. The same facade can also prepare a reusable binding plan that
-  captures component validation errors, unsupported canonical definitions, and
-  the canonical definition snapshot once before any operation table is built.
+  programs. It now also exposes a structured canonical capability report for
+  every decoded canonical kind, including the runtime area and any unsupported
+  reason, so future Preview 2 / Preview 3 adapters can preflight host coverage
+  without copying private dispatch switches or parsing exception strings. The
+  same facade can also prepare a reusable binding plan that captures component
+  validation errors, unsupported canonical definitions, and the canonical
+  definition snapshot once before any operation table is built.
   An internal component host adapter now combines that canonical plan with the
   decoded component resource and async value binding lists, defines component
   resources plus supported unit, primitive, fixed-size composite, string, and
@@ -434,8 +438,9 @@ This is the implementation state as of 2026-06-22 on `main`.
    runtime host state.
 5. Wire canonical `stream.*` and `future.*` memory lowering/lifting and async
    scheduling around the internal async host before adding public P3 API claims.
-6. Introduce explicit WASI version modules for future P2/P3 work instead of
-   extending Preview 1 host types in place.
+6. Introduce explicit WASI version modules for future P2/P3 work on top of the
+   canonical capability report instead of extending Preview 1 host types in
+   place.
 7. Extend async host value validation beyond primitive element aliases only
    when composite value lowering/lifting support is implemented.
 8. Add WIT/interface ingestion only after the versioned host boundary and

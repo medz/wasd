@@ -137,6 +137,29 @@ final class WASIComponentCanonicalHost {
     return _unsupportedCanonicalKindReason(kind) == null;
   }
 
+  /// Describes this host's support for every decoded canonical kind.
+  ///
+  /// Versioned P2/P3 adapters can use this table to preflight components
+  /// without duplicating the canonical dispatch matrix.
+  List<WASIComponentCanonicalKindCapability> get canonicalKindCapabilities {
+    return List<WASIComponentCanonicalKindCapability>.unmodifiable([
+      for (final kind in WasmComponentCanonicalKind.values)
+        canonicalKindCapability(kind),
+    ]);
+  }
+
+  /// Describes this host's support for one decoded canonical [kind].
+  WASIComponentCanonicalKindCapability canonicalKindCapability(
+    WasmComponentCanonicalKind kind,
+  ) {
+    final unsupportedReason = _unsupportedCanonicalKindReason(kind);
+    return WASIComponentCanonicalKindCapability(
+      kind: kind,
+      area: _canonicalCapabilityArea(kind),
+      unsupportedReason: unsupportedReason,
+    );
+  }
+
   /// Reports unsupported definitions without partially binding a program.
   List<WASIComponentCanonicalHostUnsupportedDefinition>
   unsupportedCanonicalDefinitions(
@@ -474,6 +497,61 @@ final class WASIComponentCanonicalHostValidationException implements Exception {
   }
 }
 
+/// Functional area covered by a Component Model canonical operation.
+enum WASIComponentCanonicalCapabilityArea {
+  /// Typed core function adapter generation for canonical lift/lower.
+  adapterGeneration,
+
+  /// Canonical component resource operations.
+  resource,
+
+  /// P3 async stream/future/backpressure operations.
+  asyncValue,
+
+  /// P3 waitable set operations.
+  waitable,
+
+  /// Caller-side subtask operations.
+  subtask,
+
+  /// Callee-side task operations.
+  task,
+
+  /// Component context get/set operations.
+  context,
+
+  /// Thread identity and availability operations.
+  threadIdentity,
+
+  /// Scheduler-dependent thread operations.
+  threadScheduling,
+
+  /// Error-context lifecycle and debug-message operations.
+  errorContext,
+}
+
+/// Host support report for one Component Model canonical kind.
+final class WASIComponentCanonicalKindCapability {
+  /// Creates a canonical kind support report.
+  const WASIComponentCanonicalKindCapability({
+    required this.kind,
+    required this.area,
+    this.unsupportedReason,
+  });
+
+  /// Canonical operation kind.
+  final WasmComponentCanonicalKind kind;
+
+  /// Runtime area required by [kind].
+  final WASIComponentCanonicalCapabilityArea area;
+
+  /// Why [kind] cannot currently be bound, or `null` when supported.
+  final String? unsupportedReason;
+
+  /// Whether this host can bind [kind].
+  bool get isSupported => unsupportedReason == null;
+}
+
 String? _unsupportedCanonicalKindReason(WasmComponentCanonicalKind kind) {
   switch (kind) {
     case WasmComponentCanonicalKind.resourceNew:
@@ -525,6 +603,69 @@ String? _unsupportedCanonicalKindReason(WasmComponentCanonicalKind kind) {
     case WasmComponentCanonicalKind.threadSpawnRef:
     case WasmComponentCanonicalKind.threadSpawnIndirect:
       return 'scheduler-dependent canonical thread operations require component task scheduling';
+  }
+}
+
+WASIComponentCanonicalCapabilityArea _canonicalCapabilityArea(
+  WasmComponentCanonicalKind kind,
+) {
+  switch (kind) {
+    case WasmComponentCanonicalKind.lift:
+    case WasmComponentCanonicalKind.lower:
+      return WASIComponentCanonicalCapabilityArea.adapterGeneration;
+    case WasmComponentCanonicalKind.resourceNew:
+    case WasmComponentCanonicalKind.resourceDrop:
+    case WasmComponentCanonicalKind.resourceRep:
+      return WASIComponentCanonicalCapabilityArea.resource;
+    case WasmComponentCanonicalKind.backpressureSet:
+    case WasmComponentCanonicalKind.backpressureInc:
+    case WasmComponentCanonicalKind.backpressureDec:
+    case WasmComponentCanonicalKind.streamNew:
+    case WasmComponentCanonicalKind.streamRead:
+    case WasmComponentCanonicalKind.streamWrite:
+    case WasmComponentCanonicalKind.streamCancelRead:
+    case WasmComponentCanonicalKind.streamCancelWrite:
+    case WasmComponentCanonicalKind.streamDropReadable:
+    case WasmComponentCanonicalKind.streamDropWritable:
+    case WasmComponentCanonicalKind.futureNew:
+    case WasmComponentCanonicalKind.futureRead:
+    case WasmComponentCanonicalKind.futureWrite:
+    case WasmComponentCanonicalKind.futureCancelRead:
+    case WasmComponentCanonicalKind.futureCancelWrite:
+    case WasmComponentCanonicalKind.futureDropReadable:
+    case WasmComponentCanonicalKind.futureDropWritable:
+      return WASIComponentCanonicalCapabilityArea.asyncValue;
+    case WasmComponentCanonicalKind.waitableSetNew:
+    case WasmComponentCanonicalKind.waitableSetWait:
+    case WasmComponentCanonicalKind.waitableSetPoll:
+    case WasmComponentCanonicalKind.waitableSetDrop:
+    case WasmComponentCanonicalKind.waitableJoin:
+      return WASIComponentCanonicalCapabilityArea.waitable;
+    case WasmComponentCanonicalKind.subtaskCancel:
+    case WasmComponentCanonicalKind.subtaskDrop:
+      return WASIComponentCanonicalCapabilityArea.subtask;
+    case WasmComponentCanonicalKind.taskReturn:
+    case WasmComponentCanonicalKind.taskCancel:
+      return WASIComponentCanonicalCapabilityArea.task;
+    case WasmComponentCanonicalKind.contextGet:
+    case WasmComponentCanonicalKind.contextSet:
+      return WASIComponentCanonicalCapabilityArea.context;
+    case WasmComponentCanonicalKind.threadIndex:
+    case WasmComponentCanonicalKind.threadAvailableParallelism:
+      return WASIComponentCanonicalCapabilityArea.threadIdentity;
+    case WasmComponentCanonicalKind.threadYield:
+    case WasmComponentCanonicalKind.threadNewIndirect:
+    case WasmComponentCanonicalKind.threadSwitchTo:
+    case WasmComponentCanonicalKind.threadSuspend:
+    case WasmComponentCanonicalKind.threadResumeLater:
+    case WasmComponentCanonicalKind.threadYieldTo:
+    case WasmComponentCanonicalKind.threadSpawnRef:
+    case WasmComponentCanonicalKind.threadSpawnIndirect:
+      return WASIComponentCanonicalCapabilityArea.threadScheduling;
+    case WasmComponentCanonicalKind.errorContextNew:
+    case WasmComponentCanonicalKind.errorContextDebugMessage:
+    case WasmComponentCanonicalKind.errorContextDrop:
+      return WASIComponentCanonicalCapabilityArea.errorContext;
   }
 }
 
