@@ -142,7 +142,9 @@ too broad to verify in one commit.
     `future.write` copy definitions;
     `CM-RESOURCE-REPRESENTATION-VALIDATION` covers resource representation
     validation for the currently valid `i32` representation and structured
-    rejection of non-`i32` resource reps, including typed reference encodings.
+    rejection of non-`i32` resource reps, including typed reference encodings;
+    `CM-INSTANTIATION-IMPORT-MATCHING` covers known local child-component
+    instantiation import name, missing argument, and sort matching checks.
   - Done when: the invalid component fails before host state is mutated and the
     diagnostic names the rejected shape or interface boundary.
   - Evidence update: record the failing shape and the exact command evidence.
@@ -242,6 +244,35 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `CM-INSTANTIATION-IMPORT-MATCHING` - Component instantiation arguments
+  are matched against known local child component imports before runtime
+  planning.
+  - Scope: component-model validation for `instantiate` expressions that target
+    a locally decoded child component.
+  - Edit targets: `lib/src/wasm/backend/native/interpreter/component.dart`,
+    `test/component_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments" --reporter=compact`
+    failed before the fix because a child component importing `"need"`
+    accepted an instantiation argument named `"other"` with no missing-import
+    diagnostic.
+  - Implementation gate:
+    `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments" --reporter=compact`;
+    `dart test test/component_test.dart --reporter=compact`;
+    `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart --reporter=compact`;
+    `dart test --reporter=compact --concurrency=1`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/component_benchmark.dart --json` reported
+    `decode.per_iteration_us=59.835` and `validate.per_iteration_us=122.87`.
+  - Done when: known local child component instantiation rejects unknown
+    argument names, missing required imports, and wrong argument sort before
+    component host planning or adapter binding can observe the invalid shape.
+  - Evidence update: this checked row plus the detailed backlog row,
+    verification matrix, and current baseline.
+  - Claim impact: reduces `CM-VALIDATION-GAPS` and Preview2/Preview3 adapter
+    interface risk; does not complete `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [x] `P3-OPTION-STREAM-SELECTOR-VALIDATION` - Canonical
   variant/option/result selectors are internally consistent before value-memory
   writes or P3 async stream enqueues.
@@ -1687,6 +1718,7 @@ copying their internals directly.
 | [x] | Preview1 native/browser stream socket send iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs"`; `dart test -p chrome test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs"`; `dart test test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs|virtual socket send handlers stop after partial writes|virtual socket host send handlers reject invalid write counts|sock_recv|sock_send"`; `dart test -p chrome test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs|virtual socket send handlers stop after partial writes|virtual socket host send handlers reject invalid write counts|sock_recv|sock_send"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream `sock_send` now snapshots overlapping iovec tables before host callbacks can mutate guest memory; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket recv iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv snapshots iovs before writing receive buffers"`; `dart test test/wasi_test.dart --name "sock_recv"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream and datagram `sock_recv` now snapshot overlapping iovec tables before receive-buffer writes; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
+| [x] | Component instantiation import matching for known local child components | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments" --reporter=compact`; `dart test test/component_test.dart --reporter=compact`; `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart --reporter=compact`; `dart run tool/component_benchmark.dart --json`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | Known local child component instantiation now rejects unknown argument names, missing required imports, and wrong argument sorts before adapter binding; imported/aliased component targets, cross-component type equivalence, generated worlds, and official suite coverage remain open. |
 | [x] | Component task-return borrow validation | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "reports task.return result types containing borrow|reports missing canonical option requirements|reports invalid canonical result value type indexes" --reporter=compact`; `dart run tool/component_benchmark.dart --json` | Borrowed canonical `task.return` results are now rejected during validation; broader borrow, stream, future, nested-shape, generated-world, and component-suite coverage remains. |
 | [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
 | [x] | Versioned Preview2/Preview3 capability gates | `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/preview2/component_host.dart`, `lib/src/wasi/preview3/component_host.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_versioned_host_test.dart` | Concrete P2/P3 interface adapter modules instead of generic facade binding. |
@@ -1794,8 +1826,13 @@ This is the implementation state as of 2026-06-23 on `main`.
   resource aliases used by canonical resource definitions. Function and value
   aliases of instantiated component exports now preserve the child export's
   function/value type metadata, so parent components can validate aliased start
-  signatures and argument value types. The resource host can bind those imported
-  or aliased abstract resources with an unconstrained host representation.
+  signatures and argument value types. Component validation also tracks the
+  component index space with nullable local component entries, so instantiating
+  a known local child component now rejects unknown import argument names,
+  missing required imports, and argument sort mismatches without misidentifying
+  imported or aliased component indexes as local definitions. The resource host
+  can bind those imported or aliased abstract resources with an unconstrained
+  host representation.
   It can also derive a component resource binding list from the materialized
   component type index space and define those resource types in one pass, so
   future P2/P3 adapters do not need to rescan imports, exports, or aliases by
@@ -3745,6 +3782,39 @@ performance visible while the support surface expands.
     `Recently Checked` entry.
   - Claim impact: reduces P2/P3 component validation risk; no direct support
     gate.
+- [x] `CM-INSTANTIATION-IMPORT-MATCHING` - Component instance arguments match
+  known local child component imports.
+  - Scope: component-model validation for `WasmComponentInstance.instantiate`
+    when the target component index resolves to a locally decoded child
+    component.
+  - Edit targets:
+    `lib/src/wasm/backend/native/interpreter/component.dart`,
+    `test/component_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments" --reporter=compact`
+    failed before the fix because a child component importing `"need"`
+    validated successfully when instantiated with only `"other"`, so the
+    validator reported neither unknown arguments nor missing imports.
+  - Implementation gate:
+    `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments" --reporter=compact`;
+    `dart test test/component_test.dart --reporter=compact`;
+    `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart --reporter=compact`;
+    `dart test --reporter=compact --concurrency=1`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/component_benchmark.dart --json` reported
+    `decode.per_iteration_us=59.835` and `validate.per_iteration_us=122.87`.
+  - Done when: instantiating a known local child component rejects argument
+    names that are not imports, rejects omitted required imports, rejects
+    argument sort mismatches, and preserves component index-space alignment for
+    imported or otherwise unknown component entries without pretending to
+    validate their import sets.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    checked-child list, `Recently Checked`, the verification matrix, and the
+    current baseline.
+  - Claim impact: reduces P2/P3 component validation ambiguity before adapter
+    binding; imported-component type equivalence and generated-world validation
+    remain open, so no support gate changes directly.
 - [x] `CM-NESTED-ASYNC-VALUE-VALIDATION` - Reject nested stream/future value
   payloads during component validation.
   - Scope: component value type validation for global and scoped type
