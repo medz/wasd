@@ -254,14 +254,17 @@ This is the implementation state as of 2026-06-22 on `main`.
   decoded function signatures, string encoding and core option indexes,
   Canonical ABI value-memory codecs for supported parameter/result shapes, and
   structured `own`/`borrow` resource handle uses. An internal direct adapter
-  host can execute synchronous primitive `lift`/`lower` plans against callbacks
-  resolved by decoded `coreFunctionIndex` / `functionIndex`, then expose those
-  operations through a canonical-indexed adapter program. It rejects resource
-  handles, dynamic memory payloads, async adapters, and non-primitive value
-  shapes instead of approximating them. This keeps future adapter generation
-  inputs explicit while automatic binding of decoded `lift`/`lower` definitions
-  to instantiated core/component functions is still reported as a host
-  capability gap instead of being overclaimed. Async value
+  host can execute synchronous `lift`/`lower` plans over direct component
+  values validated by the shared Canonical ABI value-memory codec, including
+  primitive values and dynamic string/list payloads passed as Dart-side
+  component values. It resolves callbacks by decoded `coreFunctionIndex` /
+  `functionIndex`, then exposes those operations through a canonical-indexed
+  adapter program. It still rejects resource handles, nested async values,
+  async adapters, and value shapes without a supported codec instead of
+  approximating them. This keeps future adapter generation inputs explicit
+  while automatic binding of decoded `lift`/`lower` definitions to instantiated
+  core/component functions and full memory-backed core ABI flattening are still
+  reported as host capability gaps instead of being overclaimed. Async value
   bindings now also expose Canonical ABI memory-copy layout through an
   internal Canonical ABI value-memory codec covering primitive values,
   records/tuples, fixed lists, flags, variants, options, results, enums, and
@@ -439,8 +442,9 @@ This is the implementation state as of 2026-06-22 on `main`.
   component-host binding startup with resource, Preview2 version-profile
   resource binding, stream, Preview3 version-profile stream binding, decoded
   core-memory primitive stream-copy, decoded core-memory fixed-size record,
-  list, and string-list stream-copy, decoded core-memory primitive future-copy,
-  and decoded core-memory list plus string-list future-copy round trips, mixed
+  list, and string-list stream-copy, decoded direct string adapter program
+  invocation, decoded core-memory primitive future-copy, and decoded
+  core-memory list plus string-list future-copy round trips, mixed
   canonical-host
   program invocation over shared component state, error-context canonical
   lifecycle invocation, error-context canonical string memory adapter invocation

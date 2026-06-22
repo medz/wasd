@@ -54,6 +54,36 @@ void main() {
       expect(lower.reallocIndex, isNull);
     });
 
+    test('plan string lift and lower value memory layouts', () {
+      final component = WasmComponent.decode(
+        canonicalStringLiftLowerComponentBytes(),
+      );
+
+      expect(component.validate(), isEmpty);
+
+      final plans = componentCanonicalAdapterPlans(component);
+
+      expect(plans, hasLength(2));
+      for (final plan in plans) {
+        expect(plan.params, hasLength(1));
+        expect(plan.params.single.label, 'input');
+        expect(plan.params.single.byteLength, 8);
+        expect(plan.params.single.alignment, 4);
+        expect(plan.params.single.hasDynamicPayload, isTrue);
+        expect(plan.result, isNotNull);
+        expect(plan.result!.byteLength, 8);
+        expect(plan.result!.alignment, 4);
+        expect(plan.result!.hasDynamicPayload, isTrue);
+        expect(plan.hasDynamicPayload, isTrue);
+        expect(plan.stringEncoding, WASIComponentCanonicalStringEncoding.utf8);
+        expect(plan.memoryIndex, 0);
+      }
+      expect(plans[0].kind, WasmComponentCanonicalKind.lift);
+      expect(plans[0].reallocIndex, 1);
+      expect(plans[1].kind, WasmComponentCanonicalKind.lower);
+      expect(plans[1].reallocIndex, 1);
+    });
+
     test('executes primitive lift and lower plans with direct callbacks', () {
       final component = WasmComponent.decode(
         canonicalPrimitiveLiftLowerComponentBytes(),
@@ -83,6 +113,35 @@ void main() {
         (_) => 'not-a-number',
       );
       expect(() => invalidResult.invoke(const <Object?>[]), throwsStateError);
+    });
+
+    test('executes string lift and lower plans with direct callbacks', () {
+      final component = WasmComponent.decode(
+        canonicalStringLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+
+      final lift = host.bindLiftCoreFunction(plans[0], (args) {
+        expect(args, ['guest']);
+        return 'host:${args.single}';
+      });
+      final lower = host.bindLowerComponentFunction(plans[1], (args) {
+        expect(args, ['component']);
+        return 'core:${args.single}';
+      });
+
+      expect(lift.invoke(const <Object?>['guest']), 'host:guest');
+      expect(lower.invoke(const <Object?>['component']), 'core:component');
+
+      final invalidParam = host.bindLiftCoreFunction(plans[0], (_) => 'ok');
+      expect(() => invalidParam.invoke(const <Object?>[1]), throwsStateError);
+
+      final invalidResult = host.bindLowerComponentFunction(plans[1], (_) => 1);
+      expect(
+        () => invalidResult.invoke(const <Object?>['component']),
+        throwsStateError,
+      );
     });
 
     test('binds primitive adapter programs by decoded function indexes', () {
@@ -123,6 +182,43 @@ void main() {
         () => host.bindAdapterPlans(plans, coreFunctions: {0: (_) => 1}),
         throwsStateError,
       );
+    });
+
+    test('binds string adapter programs by decoded function indexes', () {
+      final component = WasmComponent.decode(
+        canonicalStringLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+      var coreInvocations = 0;
+      var componentInvocations = 0;
+
+      final program = host.bindAdapterPlans(
+        plans,
+        coreFunctions: {
+          0: (args) {
+            expect(args, ['core']);
+            coreInvocations++;
+            return 'lift:${args.single}';
+          },
+        },
+        componentFunctions: {
+          0: (args) {
+            expect(args, ['component']);
+            componentInvocations++;
+            return 'lower:${args.single}';
+          },
+        },
+      );
+
+      expect(program.invoke(0, const <Object?>['core']), 'lift:core');
+      expect(
+        program.invoke(1, const <Object?>['component']),
+        'lower:component',
+      );
+      expect(coreInvocations, 1);
+      expect(componentInvocations, 1);
+      expect(() => program.invoke(0, const <Object?>[1]), throwsStateError);
     });
 
     test('binds primitive adapter programs from component host plans', () {

@@ -8,9 +8,11 @@ typedef WASIComponentCanonicalAdapterCallback =
 /// Host for executable canonical `lift`/`lower` adapter operations.
 ///
 /// This is the first executable adapter boundary. It intentionally supports
-/// only direct synchronous primitive signatures: resource handles, dynamic
-/// memory payloads, nested component values, and async adapters are rejected
-/// instead of being approximated.
+/// only direct synchronous value signatures backed by the shared Canonical ABI
+/// value codec. Resource handles, nested async values, and async adapters are
+/// rejected instead of being approximated. Dynamic strings/lists are accepted
+/// as direct Dart-side component values here; this is still separate from the
+/// memory-backed core ABI flattening path.
 final class WASIComponentCanonicalAdapterHost {
   /// Creates a canonical adapter host.
   const WASIComponentCanonicalAdapterHost();
@@ -21,7 +23,7 @@ final class WASIComponentCanonicalAdapterHost {
     WASIComponentCanonicalAdapterCallback coreFunction,
   ) {
     _requireAdapterKind(plan, WasmComponentCanonicalKind.lift);
-    _checkDirectPrimitivePlan(plan);
+    _checkDirectValuePlan(plan);
     return WASIComponentCanonicalAdapterOperation._(
       plan: plan,
       callback: coreFunction,
@@ -34,7 +36,7 @@ final class WASIComponentCanonicalAdapterHost {
     WASIComponentCanonicalAdapterCallback componentFunction,
   ) {
     _requireAdapterKind(plan, WasmComponentCanonicalKind.lower);
-    _checkDirectPrimitivePlan(plan);
+    _checkDirectValuePlan(plan);
     return WASIComponentCanonicalAdapterOperation._(
       plan: plan,
       callback: componentFunction,
@@ -86,7 +88,7 @@ final class WASIComponentCanonicalAdapterHost {
   }
 }
 
-/// Canonical-indexed executable direct primitive adapter program.
+/// Canonical-indexed executable direct value adapter program.
 final class WASIComponentCanonicalAdapterProgram {
   /// Creates a canonical adapter program from ordered [operations].
   WASIComponentCanonicalAdapterProgram({required this.operations})
@@ -128,7 +130,7 @@ Map<int, WASIComponentCanonicalAdapterOperation> _indexOperations(
   );
 }
 
-/// Executable direct primitive canonical adapter operation.
+/// Executable direct value canonical adapter operation.
 final class WASIComponentCanonicalAdapterOperation {
   const WASIComponentCanonicalAdapterOperation._({
     required this.plan,
@@ -146,7 +148,7 @@ final class WASIComponentCanonicalAdapterOperation {
   /// Canonical definition index.
   int get canonicalIndex => plan.canonicalIndex;
 
-  /// Invokes the adapter with direct primitive values.
+  /// Invokes the adapter with direct component values.
   Object? invoke(List<Object?> args) {
     if (args.length != plan.params.length) {
       throw StateError(
@@ -185,7 +187,7 @@ void _requireAdapterKind(
   }
 }
 
-void _checkDirectPrimitivePlan(WASIComponentCanonicalAdapterPlan plan) {
+void _checkDirectValuePlan(WASIComponentCanonicalAdapterPlan plan) {
   if (plan.isAsync) {
     throw UnsupportedError(
       'WASI component canonical adapter index ${plan.canonicalIndex} uses async.',
@@ -196,28 +198,23 @@ void _checkDirectPrimitivePlan(WASIComponentCanonicalAdapterPlan plan) {
       'WASI component canonical adapter index ${plan.canonicalIndex} uses resource handles.',
     );
   }
-  if (plan.hasDynamicPayload) {
-    throw UnsupportedError(
-      'WASI component canonical adapter index ${plan.canonicalIndex} uses dynamic memory payloads.',
-    );
-  }
   for (final param in plan.params) {
-    _checkDirectPrimitiveValue(plan, param);
+    _checkDirectValue(plan, param);
   }
   final result = plan.result;
   if (result != null) {
-    _checkDirectPrimitiveValue(plan, result);
+    _checkDirectValue(plan, result);
   }
 }
 
-void _checkDirectPrimitiveValue(
+void _checkDirectValue(
   WASIComponentCanonicalAdapterPlan plan,
   WASIComponentCanonicalAdapterValuePlan value,
 ) {
-  if (value.memoryCodec?.primitive == null) {
+  if (value.memoryCodec == null) {
     throw UnsupportedError(
       'WASI component canonical adapter index ${plan.canonicalIndex} '
-      'value ${value.path} is not a direct primitive value.',
+      'value ${value.path} does not have a supported direct value codec.',
     );
   }
   if (value.resourceUses.isNotEmpty) {

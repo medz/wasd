@@ -15,6 +15,8 @@ import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
 
+import '../test/support/component_fixtures.dart' as component_fixtures;
+
 const int _defaultIterations = 100000;
 const int _defaultResources = 1024;
 const int _warmupIterations = 1000;
@@ -52,6 +54,8 @@ Future<void> main(List<String> args) async {
   final componentAdapterProgramInvoke = _benchmarkComponentAdapterProgramInvoke(
     options.iterations,
   );
+  final componentAdapterStringProgramInvoke =
+      _benchmarkComponentAdapterStringProgramInvoke(options.iterations);
   final componentHostStreamMemoryBinding =
       _benchmarkComponentHostStreamMemoryBinding(options.iterations);
   final componentHostRecordStreamMemoryBinding =
@@ -89,6 +93,8 @@ Future<void> main(List<String> args) async {
         componentVersionedPreview3StreamBinding.toJson(),
     'component_adapter_direct_invoke': componentAdapterDirectInvoke.toJson(),
     'component_adapter_program_invoke': componentAdapterProgramInvoke.toJson(),
+    'component_adapter_string_program_invoke':
+        componentAdapterStringProgramInvoke.toJson(),
     'component_host_stream_memory_binding': componentHostStreamMemoryBinding
         .toJson(),
     'component_host_record_stream_memory_binding':
@@ -128,6 +134,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentVersionedPreview3StreamBinding(_warmupIterations);
   _benchmarkComponentAdapterDirectInvoke(_warmupIterations);
   _benchmarkComponentAdapterProgramInvoke(_warmupIterations);
+  _benchmarkComponentAdapterStringProgramInvoke(_warmupIterations);
   _benchmarkComponentHostStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostRecordStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostListStreamMemoryBinding(_warmupIterations);
@@ -503,6 +510,49 @@ _Metric _benchmarkComponentAdapterProgramInvoke(int iterations) {
   for (var i = 0; i < iterations; i++) {
     checksum += program.invoke(0, const <Object?>[]) as int;
     checksum += program.invoke(1, const <Object?>[]) as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentAdapterStringProgramInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalStringLiftLowerComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {
+      0: (args) {
+        if (args.single != 'core') {
+          throw StateError('unexpected lift adapter argument: ${args.single}');
+        }
+        return 'lifted';
+      },
+    },
+    componentFunctions: {
+      0: (args) {
+        if (args.single != 'component') {
+          throw StateError('unexpected lower adapter argument: ${args.single}');
+        }
+        return 'lowered';
+      },
+    },
+  );
+  const coreArgs = <Object?>['core'];
+  const componentArgs = <Object?>['component'];
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    checksum += (program.invoke(0, coreArgs) as String).length;
+    checksum += (program.invoke(1, componentArgs) as String).length;
   }
   watch.stop();
 
