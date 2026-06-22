@@ -900,6 +900,15 @@ performance visible while the support surface expands.
       reported `compile_module.rss_delta_bytes=325812224` and
       `instantiate_module.rss_delta_bytes=164364288`, so retained instantiate
       RSS still needs separate work.
+    - Function validation now passes module-level table, tag, and global index
+      views into simple stack validation instead of rebuilding them per
+      function, and simple stack validation now builds parameter/local
+      signatures directly without an intermediate local-signature list. The
+      compile-breakdown RSS remains noisy across local runs
+      (`validate_module.rss_delta_bytes=312213504`, then `293535744`, then
+      `309870592`), but the same final full instantiate run reported
+      `compile_module.rss_delta_bytes=285687808` and
+      `instantiate_module.rss_delta_bytes=88293376`.
   - Next: continue replacing validator hot-path string/list stack simulation
     with a compact representation for core primitive modules, then split out
     retained instantiate RSS if `instantiate_module` remains the end-to-end peak.

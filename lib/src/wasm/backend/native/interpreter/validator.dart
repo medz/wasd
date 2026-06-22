@@ -724,6 +724,12 @@ abstract final class WasmValidator {
           .map((i) => module.types[i.tagType!.typeIndex]),
       ...module.tags.map((tag) => module.types[tag.typeIndex]),
     ];
+    final availableGlobals = <WasmGlobalType>[
+      ...module.imports
+          .where((i) => i.kind == WasmImportKind.global)
+          .map((i) => i.globalType!),
+      ...module.globals.map((global) => global.type),
+    ];
     final declaredFunctionRefs = _declaredFunctionReferences(module);
     var requiresDataCount = false;
 
@@ -776,6 +782,9 @@ abstract final class WasmValidator {
           instructions: predecoded.instructions,
           memory64ByIndex: memory64ByIndex,
           table64ByIndex: table64ByIndex,
+          tableTypes: tableTypes,
+          tagTypes: tagTypes,
+          availableGlobals: availableGlobals,
         );
       } on FormatException catch (error) {
         throw FormatException(
@@ -1718,6 +1727,9 @@ abstract final class WasmValidator {
     required List<Instruction> instructions,
     required List<bool> memory64ByIndex,
     required List<bool> table64ByIndex,
+    required List<WasmTableType> tableTypes,
+    required List<WasmFunctionType> tagTypes,
+    required List<WasmGlobalType> availableGlobals,
   }) {
     Never mismatch([String? reason]) {
       assert(reason == null || reason.isNotEmpty);
@@ -1727,18 +1739,6 @@ abstract final class WasmValidator {
       throw FormatException('Validation failed: type mismatch ($reason).');
     }
 
-    final tableTypes = <WasmTableType>[
-      ...module.imports
-          .where((import) => import.kind == WasmImportKind.table)
-          .map((import) => import.tableType!),
-      ...module.tables,
-    ];
-    final tagTypes = <WasmFunctionType>[
-      ...module.imports
-          .where((import) => import.kind == WasmImportKind.tag)
-          .map((import) => module.types[import.tagType!.typeIndex]),
-      ...module.tags.map((tag) => module.types[tag.typeIndex]),
-    ];
     final nullableExnRef = _encodeRefSignature(
       nullable: true,
       exact: false,
@@ -1789,13 +1789,6 @@ abstract final class WasmValidator {
       return _functionParamSignatures(tagTypes[tagIndex]);
     }
 
-    final availableGlobals = <WasmGlobalType>[
-      ...module.imports
-          .where((i) => i.kind == WasmImportKind.global)
-          .map((i) => i.globalType!),
-      ...module.globals.map((global) => global.type),
-    ];
-
     WasmGlobalType globalTypeForIndex(int globalIndex, String label) {
       if (globalIndex < 0 || globalIndex >= availableGlobals.length) {
         mismatch('$label index out of range: $globalIndex');
@@ -1834,10 +1827,7 @@ abstract final class WasmValidator {
       return types.map(_signatureForValueType).toList(growable: false);
     }
 
-    final locals = <String>[
-      ..._functionParamSignatures(functionType),
-      ..._localSignatures(body),
-    ];
+    final locals = _functionAndLocalSignatures(functionType, body);
     final functionResultSignatures = _functionResultSignatures(functionType);
     final stack = <String>[];
     final controlStack = <_SimpleControlFrame>[
@@ -4532,6 +4522,23 @@ abstract final class WasmValidator {
 
   static List<String> _localSignatures(WasmCodeBody body) {
     final signatures = <String>[];
+    for (final local in body.locals) {
+      final signature =
+          local.typeSignature != null && local.typeSignature!.isNotEmpty
+          ? local.typeSignature!
+          : _signatureForValueType(local.type);
+      for (var i = 0; i < local.count; i++) {
+        signatures.add(signature);
+      }
+    }
+    return signatures;
+  }
+
+  static List<String> _functionAndLocalSignatures(
+    WasmFunctionType functionType,
+    WasmCodeBody body,
+  ) {
+    final signatures = <String>[..._functionParamSignatures(functionType)];
     for (final local in body.locals) {
       final signature =
           local.typeSignature != null && local.typeSignature!.isNotEmpty
