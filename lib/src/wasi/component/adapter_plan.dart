@@ -131,6 +131,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
       ok = null,
       error = null,
       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
+      handleKind = null,
+      resourceTypeIndex = null,
       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Flags bitset flat layout.
@@ -142,6 +144,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
       ok = null,
       error = null,
       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
+      handleKind = null,
+      resourceTypeIndex = null,
       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Enum discriminant flat layout.
@@ -154,6 +158,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        ok = null,
        error = null,
        cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
+       handleKind = null,
+       resourceTypeIndex = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Dynamic list `(ptr, len)` flat layout.
@@ -166,6 +172,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        ok = null,
        error = null,
        cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
+       handleKind = null,
+       resourceTypeIndex = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Option tag plus payload flat layout.
@@ -178,6 +186,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        ok = null,
        error = null,
        cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
+       handleKind = null,
+       resourceTypeIndex = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Result tag plus the maximum ok/error payload flat layout.
@@ -190,6 +200,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        labels = const <String>[],
        element = null,
        cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
+       handleKind = null,
+       resourceTypeIndex = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Variant tag plus the maximum case payload flat layout.
@@ -202,6 +214,22 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        element = null,
        ok = null,
        error = null,
+       handleKind = null,
+       resourceTypeIndex = null,
+       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
+
+  /// Resource handle represented by a canonical `u32` scalar.
+  const WASIComponentCanonicalAdapterFlatValuePlan.resource({
+    required this.handleKind,
+    required this.resourceTypeIndex,
+  }) : kind = WASIComponentCanonicalAdapterFlatValueKind.resource,
+       primitive = null,
+       memoryCodec = null,
+       labels = const <String>[],
+       element = null,
+       ok = null,
+       error = null,
+       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Composite scalar flat layout.
@@ -214,7 +242,9 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        element = null,
        ok = null,
        error = null,
-       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[];
+       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
+       handleKind = null,
+       resourceTypeIndex = null;
 
   /// Flat layout kind.
   final WASIComponentCanonicalAdapterFlatValueKind kind;
@@ -240,6 +270,12 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
   /// Case layouts used by variant layouts.
   final List<WASIComponentCanonicalAdapterFlatCasePlan> cases;
 
+  /// Resource ownership flavor used by resource handle layouts.
+  final WASIComponentResourceHandleKind? handleKind;
+
+  /// Component resource type index used by resource handle layouts.
+  final int? resourceTypeIndex;
+
   /// Nested flat fields for composite layouts.
   final List<WASIComponentCanonicalAdapterFlatFieldPlan> fields;
 
@@ -255,6 +291,9 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
     }
     if (kind == WASIComponentCanonicalAdapterFlatValueKind.list) {
       return 2;
+    }
+    if (kind == WASIComponentCanonicalAdapterFlatValueKind.resource) {
+      return 1;
     }
     if (kind == WASIComponentCanonicalAdapterFlatValueKind.option) {
       return 1 + element!.flatLength;
@@ -312,6 +351,9 @@ enum WASIComponentCanonicalAdapterFlatValueKind {
 
   /// Variant represented by a tag plus maximum case payload scalar sequence.
   variant,
+
+  /// Resource handle represented by a canonical `u32` scalar.
+  resource,
 }
 
 /// Case in a flat Canonical ABI variant layout.
@@ -657,6 +699,16 @@ final class _FlatLayoutResolver {
         );
       case WasmComponentDefinedValueTypeKind.own:
       case WasmComponentDefinedValueTypeKind.borrow:
+        final resourceTypeIndex = type.typeIndex;
+        if (resourceTypeIndex == null || resourceTypeIndex < 0) {
+          return null;
+        }
+        return WASIComponentCanonicalAdapterFlatValuePlan.resource(
+          handleKind: type.kind == WasmComponentDefinedValueTypeKind.own
+              ? WASIComponentResourceHandleKind.own
+              : WASIComponentResourceHandleKind.borrow,
+          resourceTypeIndex: resourceTypeIndex,
+        );
       case WasmComponentDefinedValueTypeKind.stream:
       case WasmComponentDefinedValueTypeKind.future:
         return null;

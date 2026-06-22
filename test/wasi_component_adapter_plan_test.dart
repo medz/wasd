@@ -1023,6 +1023,19 @@ void main() {
         adapter.params[0].resourceUses.single.handleKind,
         WASIComponentResourceHandleKind.own,
       );
+      expect(adapter.params[0].flatLength, 1);
+      expect(
+        adapter.params[0].flatLayout!.kind,
+        WASIComponentCanonicalAdapterFlatValueKind.resource,
+      );
+      expect(
+        adapter.params[0].flatLayout!.handleKind,
+        WASIComponentResourceHandleKind.own,
+      );
+      expect(
+        adapter.params[0].flatLayout!.resourceTypeIndex,
+        adapter.params[0].resourceUses.single.resourceTypeIndex,
+      );
 
       expect(adapter.params[1].path, 'canonical[0].param[1].borrowed');
       expect(adapter.params[1].label, 'borrowed');
@@ -1030,6 +1043,19 @@ void main() {
       expect(
         adapter.params[1].resourceUses.single.handleKind,
         WASIComponentResourceHandleKind.borrow,
+      );
+      expect(adapter.params[1].flatLength, 1);
+      expect(
+        adapter.params[1].flatLayout!.kind,
+        WASIComponentCanonicalAdapterFlatValueKind.resource,
+      );
+      expect(
+        adapter.params[1].flatLayout!.handleKind,
+        WASIComponentResourceHandleKind.borrow,
+      );
+      expect(
+        adapter.params[1].flatLayout!.resourceTypeIndex,
+        adapter.params[1].resourceUses.single.resourceTypeIndex,
       );
 
       expect(adapter.result, isNotNull);
@@ -1039,12 +1065,50 @@ void main() {
         adapter.result!.resourceUses.single.handleKind,
         WASIComponentResourceHandleKind.own,
       );
+      expect(adapter.result!.flatLength, 1);
+      expect(
+        adapter.result!.flatLayout!.kind,
+        WASIComponentCanonicalAdapterFlatValueKind.resource,
+      );
+      expect(
+        adapter.result!.flatLayout!.handleKind,
+        WASIComponentResourceHandleKind.own,
+      );
+      expect(
+        adapter.result!.flatLayout!.resourceTypeIndex,
+        adapter.result!.resourceUses.single.resourceTypeIndex,
+      );
 
       expect(
         () => host.componentHost.canonicalHost.adapterHost.bindLiftCoreFunction(
           adapter,
           (_) => 1,
         ),
+        throwsUnsupportedError,
+      );
+
+      final program = host.componentHost.canonicalHost.adapterHost
+          .bindAdapterPlans(
+            plan.adapterPlans,
+            coreFunctions: {
+              adapter.definition.coreFunctionIndex!: (args) {
+                expect(args, [101, 202]);
+                return 303;
+              },
+            },
+          );
+
+      expect(program.invokeFlat(0, const <Object?>[101, 202]), [303]);
+      expect(
+        () => program.invokeFlat(0, const <Object?>[-1, 202]),
+        throwsStateError,
+      );
+      expect(
+        () => program.invokeFlat(0, const <Object?>[0x100000000, 202]),
+        throwsStateError,
+      );
+      expect(
+        () => program.invoke(0, const <Object?>[101, 202]),
         throwsUnsupportedError,
       );
     });

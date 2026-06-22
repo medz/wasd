@@ -259,28 +259,30 @@ This is the implementation state as of 2026-06-22 on `main`.
   primitive values and dynamic string/list payloads passed as Dart-side
   component values. It resolves callbacks by decoded `coreFunctionIndex` /
   `functionIndex`, then exposes those operations through a canonical-indexed
-  adapter program. It still rejects resource handles, nested async values,
-  async adapters, and value shapes without a supported codec instead of
-  approximating them. This keeps future adapter generation inputs explicit
-  while automatic binding of decoded `lift`/`lower` definitions to instantiated
-  core/component functions and general canonical ABI flattening are still
-  reported as host capability gaps instead of being overclaimed. The same
+  adapter program. Direct and memory-backed adapter invocation still rejects
+  resource handles, nested async values, async adapters, and value shapes
+  without a supported codec instead of approximating them. This keeps future
+  adapter generation inputs explicit while automatic binding of decoded
+  `lift`/`lower` definitions to instantiated core/component functions is still
+  reported as a host capability gap instead of being overclaimed. The same
   adapter program can also load direct adapter parameters from canonical value
   memory, store direct adapter results back through the shared value-memory
   codec plus explicit `realloc`, and invoke the supported primitive/string
-  plus record/tuple/fixed-list/flags/enum/list/variant/option/result subset
-  through flat scalar values such as canonical string and dynamic list
+  plus record/tuple/fixed-list/flags/enum/list/variant/option/result/resource
+  subset through flat scalar values such as canonical string and dynamic list
   `(ptr, len)` pairs, field-by-field record scalars, flags bitsets, enum
   discriminants, generic variant tag/payload pairs, option tag/payload pairs,
-  and result tag/payload pairs. These are value-codec
+  result tag/payload pairs, and `own`/`borrow` canonical `u32` handles. These
+  are value-codec
   adapter boundaries, not a complete flattened core function ABI. Async value
   bindings now also expose Canonical ABI memory-copy layout through an
   internal Canonical ABI value-memory codec covering primitive values,
   records/tuples, fixed lists, flags, variants, options, results, enums, and
   dynamic strings/lists, including `list<string>`. Dynamic string/list storage
-  uses canonical `(ptr, len)` records plus explicit `realloc`, while
-  handle-table, borrow, and nested async payload semantics remain unsupported
-  instead of being approximated. Future P3 adapters can route stream/future
+  uses canonical `(ptr, len)` records plus explicit `realloc`, while resource
+  handle-table ownership/drop, borrow lifetime enforcement, and nested async
+  payload semantics remain unsupported instead of being approximated. Future
+  P3 adapters can route stream/future
   memory lowering through this shared codec without re-deriving byte widths,
   alignments, padding, or dynamic payload allocation separately from the
   executable copy path.
@@ -458,6 +460,7 @@ This is the implementation state as of 2026-06-22 on `main`.
   invocation, decoded direct variant adapter flat tag/payload invocation,
   decoded direct option adapter flat tag/payload invocation,
   decoded direct result adapter flat tag/payload invocation,
+  decoded direct resource adapter flat handle invocation,
   decoded direct string adapter memory invocation, decoded core-memory
   primitive future-copy, and decoded
   core-memory list plus string-list future-copy round trips, mixed
