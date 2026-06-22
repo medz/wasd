@@ -3523,6 +3523,14 @@ final class _WasmComponentValidationContext {
       '$path.result',
       scopedTypeDefinitions: visibleTypeDefinitions,
     );
+    if (definition.kind == WasmComponentCanonicalKind.taskReturn) {
+      validateValueTypeDoesNotContainBorrow(
+        definition.result?.valueType,
+        '$path.result',
+        'task.return result type',
+        scopedTypeDefinitions: visibleTypeDefinitions,
+      );
+    }
   }
 
   void validateCanonicalOptions(

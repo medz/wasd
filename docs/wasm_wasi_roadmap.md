@@ -236,6 +236,30 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `CM-TASK-RETURN-BORROW-VALIDATION` - canonical `task.return` result
+  types reject borrowed values during component validation.
+  - Scope: Component Model validation for Preview3 task-return boundaries before
+    task host binding, async lowering, or value-memory mutation can observe an
+    invalid borrowed result.
+  - Edit targets: `lib/src/wasm/backend/native/interpreter/component.dart`,
+    `test/component_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/component_test.dart --name "reports task.return result types containing borrow" --reporter=compact`
+    failed before the fix because `task.return` accepted a result type that
+    resolved to `borrow<resource>` with no validation diagnostic.
+  - Implementation gate:
+    `dart test test/component_test.dart --name "reports task.return result types containing borrow|reports missing canonical option requirements|reports invalid canonical result value type indexes" --reporter=compact`.
+  - Performance gate:
+    `dart run tool/component_benchmark.dart --json` reported
+    `decode.per_iteration_us=60.435` and `validate.per_iteration_us=118.19`.
+  - Done when: a decoded canonical `task.return` whose result type directly or
+    indirectly contains `borrow` reports a structured validation error before
+    any Preview3 task result can be bound to host execution.
+  - Evidence update: this checked row plus the detailed backlog row and
+    verification matrix.
+  - Claim impact: contributes to `CM-VALIDATION-GAPS`, `SUPPORT-P2`, and
+    `SUPPORT-P3`; it does not complete `SUPPORT-P1`/`SUPPORT-P2`/`SUPPORT-P3`
+    or the broader component validation backlog.
 - [x] `P1-SOCKET-FILESTAT-RIGHTS-PREFLIGHT` - `fd_filestat_get` descriptor and
   capability errors preflight guest-memory validation.
   - Scope: native/browser shared Preview1 `fd_filestat_get` errno ordering and
@@ -1598,6 +1622,7 @@ copying their internals directly.
 | [x] | Preview1 native/browser stream socket send iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs"`; `dart test -p chrome test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs"`; `dart test test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs|virtual socket send handlers stop after partial writes|virtual socket host send handlers reject invalid write counts|sock_recv|sock_send"`; `dart test -p chrome test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs|virtual socket send handlers stop after partial writes|virtual socket host send handlers reject invalid write counts|sock_recv|sock_send"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream `sock_send` now snapshots overlapping iovec tables before host callbacks can mutate guest memory; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket recv iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv snapshots iovs before writing receive buffers"`; `dart test test/wasi_test.dart --name "sock_recv"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream and datagram `sock_recv` now snapshot overlapping iovec tables before receive-buffer writes; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
+| [x] | Component task-return borrow validation | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "reports task.return result types containing borrow|reports missing canonical option requirements|reports invalid canonical result value type indexes" --reporter=compact`; `dart run tool/component_benchmark.dart --json` | Borrowed canonical `task.return` results are now rejected during validation; broader borrow, stream, future, nested-shape, generated-world, and component-suite coverage remains. |
 | [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
 | [x] | Versioned Preview2/Preview3 capability gates | `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/preview2/component_host.dart`, `lib/src/wasi/preview3/component_host.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_versioned_host_test.dart` | Concrete P2/P3 interface adapter modules instead of generic facade binding. |
 | [x] | Internal P3 async endpoints, waitables, tasks, context, thread identity | `lib/src/wasi/component/async_host.dart`, `lib/src/wasi/component/waitable_set.dart`, `lib/src/wasi/component/task.dart`, `lib/src/wasi/component/thread.dart`, `test/wasi_component_async_host_test.dart` | `dart test test/wasi_component_async_host_test.dart test/wasi_component_waitable_set_test.dart test/wasi_component_task_test.dart test/wasi_component_thread_test.dart` | Full async lowering, task spawning, scheduler-owned thread switch/suspend/resume. |
@@ -3471,6 +3496,25 @@ performance visible while the support surface expands.
     - `dart test test/wasi_component_async_host_test.dart`
   - Done when: unsupported shapes fail during validation with structured
     diagnostics before host mutation.
+- [x] `CM-TASK-RETURN-BORROW-VALIDATION` - Reject borrowed canonical
+  `task.return` results before Preview3 task host binding.
+  - Scope: local component validation for canonical definitions, using the same
+    borrow traversal applied to function result types.
+  - Evidence: `lib/src/wasm/backend/native/interpreter/component.dart`,
+    `test/component_test.dart`.
+  - Red test:
+    `dart test test/component_test.dart --name "reports task.return result types containing borrow" --reporter=compact`
+    initially failed because the validator accepted a `task.return` result type
+    resolving to `borrow<resource>`.
+  - Gate:
+    - `dart test test/component_test.dart --name "reports task.return result types containing borrow|reports missing canonical option requirements|reports invalid canonical result value type indexes" --reporter=compact`
+    - `dart run tool/component_benchmark.dart --json`
+  - Done when: invalid borrowed task-return result shapes fail validation with a
+    `task.return result type` diagnostic and no host execution path observes the
+    invalid result.
+  - Claim impact: closes one deterministic component validation gap; broader
+    borrow, stream, future, nested-shape, generated-world, and conformance-suite
+    work remains.
 - [x] `CM-RESOURCE-REPRESENTATION-VALIDATION` - Enforce `i32` component
   resource representations and reject other core value type encodings.
   - Scope: component-model resource type validation before P2/P3 resource host

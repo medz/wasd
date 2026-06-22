@@ -1625,6 +1625,16 @@ void main() {
       );
     });
 
+    test('reports task.return result types containing borrow', () {
+      final errors = WasmComponent.decode(
+        _canonicalTaskReturnBorrowResultComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(errors.single.message, contains('task.return result type'));
+      expect(errors.single.message, contains('borrow'));
+    });
+
     test('reports invalid canonical option core indexes', () {
       final errors = WasmComponent.decode(
         _canonicalMemoryOptionOutOfRangeComponentBytes(),
@@ -5074,6 +5084,34 @@ Uint8List _canonicalTaskReturnStringWithoutMemoryComponentBytes() =>
       0x09,
       0x00,
       0x73,
+      0x00,
+    ]);
+
+Uint8List _canonicalTaskReturnBorrowResultComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x06,
+      0x02,
+      0x3f,
+      0x7f,
+      0x00,
+      0x68,
+      0x00,
+      0x08,
+      0x06,
+      0x01,
+      0x09,
+      0x00,
+      0x01,
+      0x01,
       0x00,
     ]);
 
