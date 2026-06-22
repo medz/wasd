@@ -6,6 +6,7 @@ import 'async_values.dart';
 import 'backpressure.dart';
 import 'resource_table.dart';
 import 'string_memory.dart';
+import 'unicode_scalar.dart';
 import 'value_memory.dart';
 import 'waitable_set.dart';
 
@@ -2960,7 +2961,7 @@ bool _primitiveValueMatches(
     WasmComponentPrimitiveValueType.f32 ||
     WasmComponentPrimitiveValueType.f64 => value is num,
     WasmComponentPrimitiveValueType.char =>
-      value is String && value.runes.length == 1,
+      singleWASIComponentUnicodeScalar(value) != null,
     WasmComponentPrimitiveValueType.string => value is String,
     WasmComponentPrimitiveValueType.errorContext =>
       value is int && value >= 0 && value <= 0xffffffff,

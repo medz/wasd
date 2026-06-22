@@ -75,6 +75,28 @@ void main() {
       );
     });
 
+    test('rejects non-scalar char stores', () {
+      final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+        const WasmComponentValueType.primitive(
+          WasmComponentPrimitiveValueType.char,
+        ),
+        const <WasmComponentTypeDefinition>[],
+      )!;
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+
+      codec.store(memory, 32, 'A');
+      expect(data.getUint32(32, Endian.little), 0x41);
+      expect(
+        () => codec.store(memory, 32, String.fromCharCode(0xd800)),
+        throwsStateError,
+      );
+      expect(data.getUint32(32, Endian.little), 0x41);
+
+      codec.store(memory, 32, String.fromCharCode(0x1f600));
+      expect(data.getUint32(32, Endian.little), 0x1f600);
+    });
+
     test('loads and stores error-context handles as canonical u32', () {
       final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
         const WasmComponentValueType.primitive(

@@ -2578,6 +2578,35 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('rejects non-scalar char future values before memory copies', () {
+      final component = WasmComponent.decode(_futureCharTypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentAsyncHost();
+      host.defineFutureTypeFromComponent<String>(component, 0, 'char-future');
+      final program = _futureU32MemoryHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+
+      expect(
+        () => program.invoke(1, <Object?>[
+          handles.writable,
+          String.fromCharCode(0xd800),
+        ]),
+        throwsStateError,
+      );
+
+      expect(program.invoke(1, <Object?>[handles.writable, 'A']), isNull);
+      expect(
+        program.invokeWithMemory(2, memory, <Object?>[handles.readable, 64]),
+        0,
+      );
+      expect(data.getUint32(64, Endian.little), 0x41);
+      expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test('copies decoded list future values through canonical memory', () {
       final component = WasmComponent.decode(
         _futureListU32TypeComponentBytes(),
@@ -2975,6 +3004,23 @@ Uint8List _futureStringTypeComponentBytes() => Uint8List.fromList(const <int>[
   0x65,
   0x01,
   0x73,
+]);
+
+Uint8List _futureCharTypeComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x04,
+  0x01,
+  0x65,
+  0x01,
+  0x74,
 ]);
 
 Uint8List _futureListU32TypeComponentBytes() => Uint8List.fromList(const <int>[

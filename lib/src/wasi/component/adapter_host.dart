@@ -4,6 +4,7 @@ import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
 import 'adapter_plan.dart';
 import 'string_memory.dart';
+import 'unicode_scalar.dart';
 import 'value_memory.dart';
 
 /// Function callback used by direct canonical adapter operations.
@@ -1652,7 +1653,7 @@ num _expectFlatNum(String path, Object? value) {
 }
 
 String _flatCharToString(String path, int value) {
-  if (_isUnicodeScalar(value)) {
+  if (isWASIComponentUnicodeScalar(value)) {
     return String.fromCharCode(value);
   }
   throw StateError(
@@ -1661,16 +1662,13 @@ String _flatCharToString(String path, int value) {
 }
 
 int _stringToFlatChar(String path, Object? value) {
-  if (value is String && value.runes.length == 1) {
-    return value.runes.single;
+  final scalar = singleWASIComponentUnicodeScalar(value);
+  if (scalar != null) {
+    return scalar;
   }
   throw StateError(
-    'WASI component canonical adapter value $path expected a character.',
+    'WASI component canonical adapter value $path expected a Unicode scalar character.',
   );
-}
-
-bool _isUnicodeScalar(int value) {
-  return value >= 0 && value <= 0x10ffff && (value < 0xd800 || value > 0xdfff);
 }
 
 wasm.Memory _requireMemory(wasm.Memory? memory, String path) {

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
 import 'string_memory.dart';
+import 'unicode_scalar.dart';
 
 /// Canonical ABI memory codec for one component value type.
 ///
@@ -1598,7 +1599,13 @@ void _writePrimitive(
     case WasmComponentPrimitiveValueType.f64:
       data.setFloat64(offset, (value as num).toDouble(), Endian.little);
     case WasmComponentPrimitiveValueType.char:
-      data.setUint32(offset, (value as String).runes.single, Endian.little);
+      final scalar = singleWASIComponentUnicodeScalar(value);
+      if (scalar == null) {
+        throw StateError(
+          'WASI component canonical value expected Unicode scalar char.',
+        );
+      }
+      data.setUint32(offset, scalar, Endian.little);
     case WasmComponentPrimitiveValueType.string:
       throw StateError(
         'Unsupported canonical primitive write: ${primitive.name}.',
@@ -1736,7 +1743,7 @@ bool _primitiveValueMatches(
     WasmComponentPrimitiveValueType.f32 ||
     WasmComponentPrimitiveValueType.f64 => value is num,
     WasmComponentPrimitiveValueType.char =>
-      value is String && value.runes.length == 1,
+      singleWASIComponentUnicodeScalar(value) != null,
     WasmComponentPrimitiveValueType.string => value is String,
     WasmComponentPrimitiveValueType.errorContext =>
       value is int && value >= 0 && value <= 0xffffffff,
@@ -1753,14 +1760,10 @@ bool _readCanonicalBool(ByteData data, int offset) {
 
 String _readCanonicalChar(ByteData data, int offset) {
   final value = data.getUint32(offset, Endian.little);
-  if (_isUnicodeScalar(value)) {
+  if (isWASIComponentUnicodeScalar(value)) {
     return String.fromCharCode(value);
   }
   throw StateError('Canonical char memory value is not a Unicode scalar.');
-}
-
-bool _isUnicodeScalar(int value) {
-  return value >= 0 && value <= 0x10ffff && (value < 0xd800 || value > 0xdfff);
 }
 
 int _readUnsigned(ByteData data, int pointer, int byteLength) {
