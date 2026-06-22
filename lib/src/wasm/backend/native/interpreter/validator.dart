@@ -1991,6 +1991,18 @@ abstract final class WasmValidator {
       return popped;
     }
 
+    void popSignaturePrefix(List<String> signatures, int count, String label) {
+      for (var i = count - 1; i >= 0; i--) {
+        popExpected(signatures[i], '$label[$i]');
+      }
+    }
+
+    void pushSignaturePrefix(List<String> signatures, int count) {
+      for (var i = 0; i < count; i++) {
+        stack.add(signatures[i]);
+      }
+    }
+
     bool validateFrameEnd(_SimpleControlFrame frame, String label) {
       final resultLength = frame.resultSignatures.length;
       final hasConcreteStack = stack.length > frame.stackHeight;
@@ -2328,7 +2340,8 @@ abstract final class WasmValidator {
           if (depths.isEmpty) {
             mismatch('br_table requires at least default depth');
           }
-          List<String>? commonSignatures;
+          List<String>? commonSignatureRef;
+          List<String>? commonSignatureOverride;
           final enforceTargetTypes = !controlStack.last.polymorphic;
           for (final depth in depths) {
             final labelFrame = frameForDepth(depth, 'br_table');
@@ -2336,10 +2349,12 @@ abstract final class WasmValidator {
               labelFrame.hasEndReachability = true;
             }
             final labelSignatures = labelFrame.labelSignatures;
-            if (commonSignatures == null) {
-              commonSignatures = List<String>.from(labelSignatures);
+            if (commonSignatureRef == null) {
+              commonSignatureRef = labelSignatures;
               continue;
             }
+            final commonSignatures =
+                commonSignatureOverride ?? commonSignatureRef;
             if (labelSignatures.length != commonSignatures.length) {
               mismatch('br_table target arity mismatch');
             }
@@ -2364,7 +2379,8 @@ abstract final class WasmValidator {
                 continue;
               }
               if (_isValueSignatureSubtype(module, expected, actual)) {
-                commonSignatures[i] = actual;
+                commonSignatureOverride ??= List<String>.from(commonSignatures);
+                commonSignatureOverride[i] = actual;
                 continue;
               }
               if (enforceTargetTypes) {
@@ -2375,7 +2391,10 @@ abstract final class WasmValidator {
               }
             }
           }
-          popLabelValues(commonSignatures!, 'br_table operand');
+          popLabelValues(
+            commonSignatureOverride ?? commonSignatureRef!,
+            'br_table operand',
+          );
           markPolymorphic();
 
         case Opcodes.brOnNull:
@@ -2417,9 +2436,13 @@ abstract final class WasmValidator {
               'operand=$nonNullOperand label=${labelSignatures.last}',
             );
           }
-          final prefix = labelSignatures.sublist(0, labelSignatures.length - 1);
-          popLabelValues(prefix, 'br_on_non_null operand');
-          stack.addAll(prefix);
+          final prefixLength = labelSignatures.length - 1;
+          popSignaturePrefix(
+            labelSignatures,
+            prefixLength,
+            'br_on_non_null operand',
+          );
+          pushSignaturePrefix(labelSignatures, prefixLength);
 
         case Opcodes.return_:
           for (var i = functionResultSignatures.length - 1; i >= 0; i--) {
@@ -4082,9 +4105,9 @@ abstract final class WasmValidator {
             }
             if (labelPrefixLength > 0) {
               stack.length -= labelPrefixLength;
-              stack.addAll(
-                labelFrame.resultSignatures.sublist(0, labelPrefixLength),
-              );
+              for (var i = 0; i < labelPrefixLength; i++) {
+                stack.add(labelFrame.resultSignatures[i]);
+              }
             }
             stack.add(fallthroughSignature);
           }
@@ -4183,9 +4206,9 @@ abstract final class WasmValidator {
             }
             if (labelPrefixLength > 0) {
               stack.length -= labelPrefixLength;
-              stack.addAll(
-                labelFrame.resultSignatures.sublist(0, labelPrefixLength),
-              );
+              for (var i = 0; i < labelPrefixLength; i++) {
+                stack.add(labelFrame.resultSignatures[i]);
+              }
             }
           }
           stack.add(fallthroughSignature);

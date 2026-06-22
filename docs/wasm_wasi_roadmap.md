@@ -870,6 +870,11 @@ performance visible while the support surface expands.
       `validate_module.rss_delta_bytes=296042496` and
       `validate_module.duration_ms=486`, while a full instantiate run still
       reported `compile_module.rss_delta_bytes=356057088`.
+    - Simple stack and reference branch validation now avoid transient
+      `br_table`, `br_on_non_null`, and branch-cast prefix lists. A local
+      compile-breakdown run reported `validate_module.rss_delta_bytes=289144832`
+      and `validate_module.duration_ms=472`; a full instantiate run still
+      reported `compile_module.rss_delta_bytes=360955904`.
   - Next: continue replacing validator hot-path string/list stack simulation
     with a compact representation for core primitive modules, then split out
     retained instantiate RSS if `instantiate_module` remains the end-to-end peak.
