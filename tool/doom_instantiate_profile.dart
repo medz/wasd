@@ -4,6 +4,10 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:wasd/wasd.dart';
+import 'package:wasd/src/wasm/backend/native/interpreter/module.dart'
+    as native_ir;
+import 'package:wasd/src/wasm/backend/native/interpreter/validator.dart'
+    as native_validator;
 
 const String _defaultWasmPath = 'test/fixtures/doom/doom.wasm';
 const String _defaultIwadPath = 'test/fixtures/doom/doom1.wad';
@@ -29,6 +33,7 @@ Future<int> _run(List<String> args) async {
   final guestRoot = options['guest-root'] ?? _defaultGuestRoot;
   final timedemo = options['timedemo'] ?? _defaultTimedemo;
   final jsonOutput = options.containsKey('json');
+  final compileBreakdown = options.containsKey('compile-breakdown');
 
   final wasmFile = File(wasmPath);
   final iwadFile = File(iwadPath);
@@ -39,6 +44,15 @@ Future<int> _run(List<String> args) async {
   if (!iwadFile.existsSync()) {
     stderr.writeln('Missing IWAD fixture: $iwadPath');
     return 2;
+  }
+
+  if (compileBreakdown) {
+    return _runCompileBreakdown(
+      wasmFile: wasmFile,
+      wasmPath: wasmPath,
+      iwadPath: iwadPath,
+      jsonOutput: jsonOutput,
+    );
   }
 
   final profile = _PhaseProfiler()..sample('start');
@@ -111,6 +125,75 @@ Future<int> _run(List<String> args) async {
   return 0;
 }
 
+Future<int> _runCompileBreakdown({
+  required File wasmFile,
+  required String wasmPath,
+  required String iwadPath,
+  required bool jsonOutput,
+}) async {
+  final profile = _PhaseProfiler()..sample('start');
+  final wasmBytes = await profile.measure(
+    'read_wasm',
+    () => wasmFile.readAsBytes(),
+  );
+  final module = await profile.measure(
+    'decode_module',
+    () => native_ir.WasmModule.decode(wasmBytes),
+  );
+  await profile.measure(
+    'validate_module',
+    () => native_validator.WasmValidator.validateModule(module),
+  );
+
+  final report = <String, Object?>{
+    'mode': 'compile_breakdown',
+    'wasm': wasmPath,
+    'iwad': iwadPath,
+    'wasm_size_bytes': wasmFile.lengthSync(),
+    'module_stats': _moduleStats(module),
+    'total_duration_ms': profile.totalDurationMs,
+    'baseline_rss_bytes': profile.baselineRssBytes,
+    'peak_rss_bytes': profile.peakRssBytes,
+    'phases': profile.phases.map((phase) => phase.toJson()).toList(),
+  };
+
+  if (jsonOutput) {
+    stdout.writeln(jsonEncode(report));
+  } else {
+    _printTextReport(report);
+  }
+  return 0;
+}
+
+Map<String, Object?> _moduleStats(native_ir.WasmModule module) {
+  var instructionBytes = 0;
+  var localGroups = 0;
+  var expandedLocals = 0;
+  var dataBytes = 0;
+  for (final code in module.codes) {
+    instructionBytes += code.instructions.length;
+    localGroups += code.locals.length;
+    for (final local in code.locals) {
+      expandedLocals += local.count;
+    }
+  }
+  for (final segment in module.dataSegments) {
+    dataBytes += segment.bytes.length;
+  }
+
+  return <String, Object?>{
+    'types': module.types.length,
+    'imports': module.imports.length,
+    'functions': module.functionTypeIndices.length,
+    'codes': module.codes.length,
+    'instruction_bytes': instructionBytes,
+    'local_groups': localGroups,
+    'expanded_locals': expandedLocals,
+    'data_segments': module.dataSegments.length,
+    'data_bytes': dataBytes,
+  };
+}
+
 ModuleImports _doomEnvImports() {
   Object? ok(List<Object?> _) => 0;
 
@@ -180,6 +263,9 @@ void _printUsage() {
   stdout.writeln('  --iwad=<path>        Default: $_defaultIwadPath');
   stdout.writeln('  --guest-root=<path>  Default: $_defaultGuestRoot');
   stdout.writeln('  --timedemo=<name>    Default: $_defaultTimedemo');
+  stdout.writeln(
+    '  --compile-breakdown  Profile internal decode/validate only.',
+  );
   stdout.writeln('  --json               Print machine-readable JSON.');
 }
 

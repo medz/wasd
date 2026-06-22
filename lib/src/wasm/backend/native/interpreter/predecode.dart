@@ -153,6 +153,9 @@ final class _ControlFrame {
 }
 
 abstract final class WasmPredecoder {
+  static final Map<int, Instruction> _sharedPureInstructions =
+      <int, Instruction>{};
+
   static PredecodedFunction decode(
     WasmCodeBody body,
     List<WasmFunctionType> moduleTypes, {
@@ -316,7 +319,7 @@ abstract final class WasmPredecoder {
         case Opcodes.i64Extend8S:
         case Opcodes.i64Extend16S:
         case Opcodes.i64Extend32S:
-          instructions.add(Instruction(opcode: opcode));
+          instructions.add(_pureInstruction(opcode));
 
         case Opcodes.block:
           final blockType = _readBlockTypeInfo(reader, moduleTypes);
@@ -722,7 +725,7 @@ abstract final class WasmPredecoder {
       case Opcodes.i64Sub128:
       case Opcodes.i64MulWideS:
       case Opcodes.i64MulWideU:
-        instructions.add(Instruction(opcode: pseudoOpcode));
+        instructions.add(_pureInstruction(pseudoOpcode));
 
       case Opcodes.dataDrop:
       case Opcodes.elemDrop:
@@ -968,7 +971,7 @@ abstract final class WasmPredecoder {
             'Invalid atomic.fence immediate: expected 0.',
           );
         }
-        instructions.add(Instruction(opcode: pseudoOpcode));
+        instructions.add(_pureInstruction(pseudoOpcode));
 
       default:
         throw UnsupportedError(
@@ -1820,6 +1823,9 @@ abstract final class WasmPredecoder {
   static double _decodeF64(Uint8List bytes) {
     return ByteData.sublistView(bytes).getFloat64(0, Endian.little);
   }
+
+  static Instruction _pureInstruction(int opcode) =>
+      _sharedPureInstructions[opcode] ??= Instruction(opcode: opcode);
 
   static bool _isExceptionHandlingOpcode(int opcode) {
     return switch (opcode) {
