@@ -217,6 +217,21 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `CM-EXPORT-DUPLICATE-NAMES` - Top-level component exports reject duplicate
+  names during validation.
+  - Evidence:
+    `dart test test/component_test.dart --name "validates component export sort indexes in definition order"`
+    failed before the fix because duplicate top-level component export names
+    validated cleanly, then passed after the fix;
+    `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`;
+    `dart test test/wasi_component_versioned_host_test.dart`; `dart analyze`.
+  - Spec reference: Component Model import and export definitions require all
+    export names to be strongly unique; this row closes the exact duplicate-name
+    subset before adapter binding.
+  - Claim impact: removes one component-model export-map ambiguity before
+    Preview2/Preview3 adapter execution; does not complete
+    `CM-VALIDATION-GAPS`, `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-POLL-ZERO-HINT` - Stream socket `readReadyBytes: 0` does not
   produce a false `poll_oneoff(fd_read)` readiness event.
   - Evidence:

@@ -3961,6 +3961,7 @@ final class _WasmComponentValidationContext {
     final valueEntries = <_WasmComponentValueIndexEntry>[];
     final instanceExportMaps = <_WasmComponentInstanceExportMap?>[];
     Map<String, String>? importNames;
+    Map<String, String>? exportNames;
     List<WasmComponentTypeDefinition>? materializedTypeDefinitions;
     var decodedTypeDefinitionCount = 0;
     List<WasmComponentTypeDefinition> visibleTypeDefinitionsForRead() {
@@ -4046,6 +4047,11 @@ final class _WasmComponentValidationContext {
           }
         case _WasmComponentDefinitionEventKind.export:
           final export = exports[event.index];
+          validateExportName(
+            export,
+            'export[${event.index}].name',
+            exportNames ??= <String, String>{},
+          );
           final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
           validateExternDescriptor(
             export.descriptor,
@@ -4302,6 +4308,26 @@ final class _WasmComponentValidationContext {
       return;
     }
     seenImports[name] = name;
+  }
+
+  void validateExportName(
+    WasmComponentExport export,
+    String path,
+    Map<String, String> seenExports,
+  ) {
+    final name = componentExternName(export.name, export.versionSuffix);
+    final previousName = seenExports[name];
+    if (previousName != null) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component export name $name conflicts with previous export name $previousName.',
+        ),
+      );
+      return;
+    }
+    seenExports[name] = name;
   }
 
   String componentExternName(String name, String? versionSuffix) {

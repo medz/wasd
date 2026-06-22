@@ -972,6 +972,15 @@ void main() {
         valueBeforeDefinition.single.message,
         contains('Unknown Wasm component value index'),
       );
+
+      final duplicateName = WasmComponent.decode(
+        _duplicateExportNamesComponentBytes(),
+      ).validate();
+      expect(duplicateName, hasLength(1));
+      expect(
+        duplicateName.single.message,
+        contains('export name host-func conflicts with previous export name'),
+      );
     });
 
     test('reports value import equality indexes before definition', () {
@@ -2242,6 +2251,72 @@ Uint8List _exportComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x00,
 ]);
+
+Uint8List _duplicateExportNamesComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x05,
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      0x0a,
+      0x0e,
+      0x01,
+      0x00,
+      0x09,
+      0x68,
+      0x6f,
+      0x73,
+      0x74,
+      0x2d,
+      0x66,
+      0x75,
+      0x6e,
+      0x63,
+      0x01,
+      0x00,
+      0x0b,
+      0x1d,
+      0x02,
+      0x00,
+      0x09,
+      0x68,
+      0x6f,
+      0x73,
+      0x74,
+      0x2d,
+      0x66,
+      0x75,
+      0x6e,
+      0x63,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x09,
+      0x68,
+      0x6f,
+      0x73,
+      0x74,
+      0x2d,
+      0x66,
+      0x75,
+      0x6e,
+      0x63,
+      0x01,
+      0x00,
+      0x00,
+    ]);
 
 Uint8List _exportFunctionAliasComponentBytes() =>
     Uint8List.fromList(const <int>[
