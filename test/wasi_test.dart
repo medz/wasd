@@ -148,6 +148,17 @@ void main() {
       );
     });
 
+    test('accepted socket queues require stream sockets', () {
+      final listener = WASIPreview1Socket();
+      final datagram = WASIPreview1Socket.datagram();
+
+      expect(() => listener.queueAccepted(datagram), throwsStateError);
+      expect(
+        () => WASIPreview1Socket(pendingAccepted: [datagram]),
+        throwsStateError,
+      );
+    });
+
     test('datagram sockets keep defensive and owned write paths separate', () {
       final socket = WASIPreview1Socket.datagram();
       final callerOwned = Uint8List.fromList([1, 2, 3]);

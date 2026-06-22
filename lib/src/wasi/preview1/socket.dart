@@ -54,6 +54,9 @@ final class WASIPreview1Socket {
        _sendMessageHandler = null,
        _pendingAccepted = ListQueue<WASIPreview1Socket>.of(pendingAccepted) {
     this.readReadyBytes = readReadyBytes;
+    for (final socket in _pendingAccepted) {
+      _validateAcceptedSocket(socket);
+    }
   }
 
   /// Creates a datagram socket with optional queued receive messages.
@@ -235,7 +238,14 @@ final class WASIPreview1Socket {
     if (!isStream) {
       throw StateError('Datagram sockets cannot accept connections.');
     }
+    _validateAcceptedSocket(socket);
     _pendingAccepted.add(socket);
+  }
+
+  static void _validateAcceptedSocket(WASIPreview1Socket socket) {
+    if (!socket.isStream) {
+      throw StateError('Accepted sockets must be stream sockets.');
+    }
   }
 
   /// Removes all bytes recorded from prior `sock_send` calls.

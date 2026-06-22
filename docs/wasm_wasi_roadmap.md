@@ -191,6 +191,17 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-ACCEPT-STREAM-QUEUE` - Accepted socket queues reject datagram
+  descriptors before `sock_accept` can expose them.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "accepted socket queues require stream sockets"`
+    failed before the fix, then passed after the fix;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "accepted socket queues require stream sockets"`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
+    `dart analyze`.
+  - Claim impact: closes one Preview1 host-injected socket conformance edge for
+    `SUPPORT-P1`; does not complete the parent `P1-SOCKET-CONFORMANCE` row.
 - [x] `PERF-WASM-COMPILE-PREDECODE` - Validator signature classification avoids
   byte-list churn, native Modules retain validated predecode results, and
   instantiate reuses them instead of decoding functions again.
@@ -843,6 +854,28 @@ performance visible while the support surface expands.
     this row with the exact commands run.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete it until the
     Preview1 socket and runtime gates are all checked.
+- [x] `P1-SOCKET-ACCEPT-STREAM-QUEUE` - Accepted socket queues require stream
+  sockets.
+  - Scope: host-injected Preview1 stream listener state before VFS fd allocation
+    and `sock_accept` exposure.
+  - Edit targets: `lib/src/wasi/preview1/socket.dart` and `test/wasi_test.dart`.
+  - Red test:
+    `dart test test/wasi_test.dart --name "accepted socket queues require stream sockets"`
+    failed before the fix because a stream listener accepted a datagram socket.
+  - Implementation gate: `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "accepted socket queues require stream sockets"`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+    The validation runs only on host queue construction/mutation; the benchmark
+    records that existing socket recv/send/poll/renumber paths remain covered.
+  - Done when: both constructor-supplied `pendingAccepted` sockets and later
+    `queueAccepted` calls reject datagram sockets before any invalid accepted fd
+    can be exposed.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
+    socket conformance row.
 - [x] `P1-SOCKET-READINESS-HINTS` - Preview1 host-backed socket readiness.
   - Change: let injected `WASIPreview1Socket` descriptors expose read byte-count
     readiness and write readiness without buffering fake data.
