@@ -274,6 +274,32 @@ void main() {
       expect(loaded.labels, ['a', 'i']);
     });
 
+    test('rejects duplicate flag labels before writing memory', () {
+      final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+        const WasmComponentValueType.typeIndex(0),
+        [
+          const WasmComponentTypeDefinition(
+            kind: WasmComponentTypeKind.definedValue,
+            definedValue: WasmComponentDefinedValueType(
+              kind: WasmComponentDefinedValueTypeKind.flags,
+              labels: ['a', 'b', 'c'],
+            ),
+          ),
+        ],
+      )!;
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint8(32, 0xff);
+      final duplicate = WasmComponentValueData(
+        kind: WasmComponentValueDataKind.flags,
+        rawBytes: Uint8List(0),
+        labels: ['a', 'a'],
+      );
+
+      expect(() => codec.store(memory, 32, duplicate), throwsStateError);
+      expect(data.getUint8(32), 0xff);
+    });
+
     test('loads and stores variants with aligned payloads', () {
       final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
         const WasmComponentValueType.typeIndex(0),

@@ -1224,16 +1224,10 @@ final class _FlagsLayout extends _CanonicalValueLayout {
     WASIComponentCanonicalRealloc? realloc,
     WASIComponentCanonicalStringEncoding stringEncoding,
   ) {
-    if (value.kind != WasmComponentValueDataKind.flags) {
-      throw StateError('WASI component canonical value expected flags data.');
-    }
+    validate('flags', value);
     var bits = 0;
     for (final label in value.labels) {
-      final index = labels.indexOf(label);
-      if (index < 0) {
-        throw StateError('Unknown WASI component flag label: $label.');
-      }
-      bits |= 1 << index;
+      bits |= 1 << labels.indexOf(label);
     }
     _writeUnsigned(data, pointer, byteLength, bits);
   }
@@ -1242,10 +1236,16 @@ final class _FlagsLayout extends _CanonicalValueLayout {
   void validate(String name, Object? value) {
     if (value is WasmComponentValueData &&
         value.kind == WasmComponentValueDataKind.flags) {
+      final seen = <String>{};
       for (final label in value.labels) {
         if (!labels.contains(label)) {
           throw StateError(
             'WASI component canonical value $name has unknown flag $label.',
+          );
+        }
+        if (!seen.add(label)) {
+          throw StateError(
+            'WASI component canonical value $name has duplicate flag $label.',
           );
         }
       }

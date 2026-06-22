@@ -236,6 +236,34 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P3-FLAGS-STREAM-COPY-VALIDATION` - decoded `stream<flags>` values copy
+  through canonical memory and duplicate host-side flag labels fail before
+  enqueue or memory writes.
+  - Scope: Preview3 async stream copy over shared value-memory flags layout,
+    including host-side value validation before stream mutation.
+  - Edit targets: `lib/src/wasi/component/value_memory.dart`,
+    `test/wasi_component_value_memory_test.dart`,
+    `test/wasi_component_async_host_test.dart`,
+    `tool/wasi_component_async_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_component_value_memory_test.dart test/wasi_component_async_host_test.dart --name "rejects duplicate flag labels before writing memory|copies decoded flags stream values through canonical memory" --reporter=compact`
+    failed before the fix because duplicate labels were silently folded into a
+    single flag bit and the async stream write returned success.
+  - Implementation gate:
+    `dart test test/wasi_component_value_memory_test.dart --reporter=compact`;
+    `dart test test/wasi_component_async_host_test.dart --reporter=compact`.
+  - Performance gate:
+    `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`
+    now reports `stream_flags_memory_copy.operations=64000` and
+    `stream_flags_memory_copy.per_operation_us=0.103828125`.
+  - Done when: canonical memory copy round-trips decoded `stream<flags>`
+    values, duplicate host-side flag labels throw before writes/enqueues, and
+    the async benchmark includes a flags copy metric.
+  - Evidence update: this checked row plus the detailed backlog row,
+    verification matrix, and benchmark metric.
+  - Claim impact: contributes to `P3-ASYNC-COPY-GAPS`,
+    `CM-VALUE-VALIDATION`, and `SUPPORT-P3`; it does not complete
+    `SUPPORT-P1`/`SUPPORT-P2`/`SUPPORT-P3` or broader P3 async copy coverage.
 - [x] `CM-TASK-RETURN-BORROW-VALIDATION` - canonical `task.return` result
   types reject borrowed values during component validation.
   - Scope: Component Model validation for Preview3 task-return boundaries before
@@ -1627,6 +1655,7 @@ copying their internals directly.
 | [x] | Versioned Preview2/Preview3 capability gates | `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/preview2/component_host.dart`, `lib/src/wasi/preview3/component_host.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_versioned_host_test.dart` | Concrete P2/P3 interface adapter modules instead of generic facade binding. |
 | [x] | Internal P3 async endpoints, waitables, tasks, context, thread identity | `lib/src/wasi/component/async_host.dart`, `lib/src/wasi/component/waitable_set.dart`, `lib/src/wasi/component/task.dart`, `lib/src/wasi/component/thread.dart`, `test/wasi_component_async_host_test.dart` | `dart test test/wasi_component_async_host_test.dart test/wasi_component_waitable_set_test.dart test/wasi_component_task_test.dart test/wasi_component_thread_test.dart` | Full async lowering, task spawning, scheduler-owned thread switch/suspend/resume. |
 | [x] | Owned-resource stream/future copy buffers, pending copy events, and cancel-copy events through async, component, and versioned Preview3 hosts | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_async_host_test.dart`, `test/wasi_component_host_test.dart`, `test/wasi_component_versioned_host_test.dart`, `test/support/component_fixtures.dart` | `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart test/wasi_component_async_host_test.dart test/wasi_component_value_memory_test.dart`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Borrowed payload lifetimes, broader composite async payload execution, and public P3 API claims remain unsupported. |
+| [x] | P3 flags stream canonical memory copy and host value validation | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_value_memory_test.dart`, `test/wasi_component_async_host_test.dart`, `tool/wasi_component_async_benchmark.dart` | `dart test test/wasi_component_value_memory_test.dart test/wasi_component_async_host_test.dart --name "rejects duplicate flag labels before writing memory|copies decoded flags stream values through canonical memory" --reporter=compact`; `dart test test/wasi_component_value_memory_test.dart --reporter=compact`; `dart test test/wasi_component_async_host_test.dart --reporter=compact`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json` | Decoded `stream<flags>` now round-trips through canonical memory and duplicate host-side flag labels fail before memory writes/enqueues; broader composite stream/future shapes, waitable coverage for this shape, generated-world binding, and public P3 support remain incomplete. |
 | [x] | P3 future char Unicode-scalar validation before canonical memory copy | `lib/src/wasi/component/unicode_scalar.dart`, `lib/src/wasi/component/async_host.dart`, `lib/src/wasi/component/value_memory.dart`, `lib/src/wasi/component/adapter_host.dart`, `test/wasi_component_async_host_test.dart`, `test/wasi_component_value_memory_test.dart` | `dart test test/wasi_component_async_host_test.dart --name "rejects non-scalar char future values before memory copies"`; `dart test test/wasi_component_value_memory_test.dart --name "rejects non-scalar char stores"`; `dart test test/wasi_component_async_host_test.dart`; `dart test test/wasi_component_value_memory_test.dart`; `dart test test/wasi_component_adapter_plan_test.dart`; `dart test test/wasi_component_host_test.dart`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`; `dart analyze` | Full Preview3 still needs generated world/interface ingestion, official component-suite style runs, and broader async shape coverage. |
 | [x] | Canonical variant/option/result payload validation before value-memory writes | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_value_memory_test.dart`, `tool/wasi_resource_table_benchmark.dart` | `dart test test/wasi_component_value_memory_test.dart --name "rejects invalid variant payloads before writing memory" --reporter=compact`; `dart test test/wasi_component_value_memory_test.dart --reporter=compact`; `dart test test/wasi_component_async_host_test.dart --reporter=compact`; `dart test test/wasi_component_host_test.dart --reporter=compact`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`; `dart analyze` | Invalid payloadless or missing-payload variant stores now fail before discriminant writes, and valid variant stores are measured by `canonical_variant_store`; full P2/P3 support still needs WIT ingestion, generated world binding, and broader component-suite runs. |
 | [x] | Canonical lift/lower adapter planning and internal callback invocation | `lib/src/wasi/component/adapter_plan.dart`, `lib/src/wasi/component/adapter_host.dart`, `test/wasi_component_adapter_plan_test.dart` | `dart test test/wasi_component_adapter_plan_test.dart`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Automatic binding of decoded lift/lower definitions to instantiated core/component functions. |
@@ -3767,6 +3796,29 @@ performance visible while the support surface expands.
   - Claim impact: contributes to Preview3 async Canonical ABI boundary
     correctness; does not complete `P3-ASYNC-COPY-GAPS`, `CM-VALUE-VALIDATION`,
     `SUPPORT-P2`, or `SUPPORT-P3`.
+- [x] `P3-FLAGS-STREAM-COPY-VALIDATION` - Copy decoded `stream<flags>` values
+  through canonical memory and reject duplicate host-side flag labels.
+  - Scope: shared Canonical ABI value-memory flags layout plus Preview3 async
+    stream write/read memory-copy operations.
+  - Evidence: `lib/src/wasi/component/value_memory.dart`,
+    `test/wasi_component_value_memory_test.dart`,
+    `test/wasi_component_async_host_test.dart`,
+    `tool/wasi_component_async_benchmark.dart`.
+  - Red test:
+    `dart test test/wasi_component_value_memory_test.dart test/wasi_component_async_host_test.dart --name "rejects duplicate flag labels before writing memory|copies decoded flags stream values through canonical memory" --reporter=compact`
+    failed because duplicate labels were accepted by value-memory store and by
+    async stream host writes.
+  - Gate:
+    - `dart test test/wasi_component_value_memory_test.dart --reporter=compact`
+    - `dart test test/wasi_component_async_host_test.dart --reporter=compact`
+    - `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`
+  - Done when: a decoded `stream<flags {a,b,c}>` round-trips through canonical
+    memory, duplicate labels fail before guest-memory writes or async endpoint
+    enqueue, and the async benchmark reports `stream_flags_memory_copy`.
+  - Claim impact: closes one composite Preview3 async value-memory path and one
+    host-side value validation gap; broader stream/future shapes, generated
+    worlds, waitable coverage for this shape, and public P3 support remain
+    incomplete.
 - [ ] `P3-ASYNC-COPY-GAPS` - Canonical `stream.*` / `future.*` lowering beyond
   the current copy-buffer subset.
   - Change: wire validated shapes into the internal async host and component

@@ -1683,6 +1683,48 @@ void main() {
       },
     );
 
+    test('copies decoded flags stream values through canonical memory', () {
+      final component = WasmComponent.decode(_streamFlagsTypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<WasmComponentValueData>(
+        component,
+        1,
+        'flags',
+      );
+      final program = _streamFlagsMemoryHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint8(32, 0x05);
+
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32, 1]),
+        1 << 4,
+      );
+      expect(
+        program.invokeWithMemory(2, memory, <Object?>[handles.readable, 64, 1]),
+        1 << 4,
+      );
+      expect(data.getUint8(64), 0x05);
+
+      final duplicate = WasmComponentValueData(
+        kind: WasmComponentValueDataKind.flags,
+        rawBytes: Uint8List(0),
+        labels: ['a', 'a'],
+      );
+      expect(
+        () => program.invoke(1, <Object?>[
+          handles.writable,
+          [duplicate],
+        ]),
+        throwsStateError,
+      );
+      expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test('does not require realloc for empty string stream reads', () {
       final component = WasmComponent.decode(_streamStringTypeComponentBytes());
       expect(component.validate(), isEmpty);
@@ -2954,6 +2996,31 @@ Uint8List _streamListStringTypeComponentBytes() =>
       0x00,
     ]);
 
+Uint8List _streamFlagsTypeComponentBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  0x0c,
+  0x02,
+  0x6e,
+  0x03,
+  0x01,
+  0x61,
+  0x01,
+  0x62,
+  0x01,
+  0x63,
+  0x66,
+  0x01,
+  0x00,
+]);
+
 Uint8List _futureU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x61,
@@ -3396,6 +3463,57 @@ WASIComponentCanonicalAsyncHandleProgram _streamListStringMemoryHandleProgram(
             ),
             WasmComponentCanonicalOption(
               kind: WasmComponentCanonicalOptionKind.realloc,
+              index: 0,
+            ),
+          ],
+        ),
+      ),
+      host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamDropReadable,
+          typeIndex: 1,
+        ),
+      ),
+      host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamDropWritable,
+          typeIndex: 1,
+        ),
+      ),
+    ],
+  );
+}
+
+WASIComponentCanonicalAsyncHandleProgram _streamFlagsMemoryHandleProgram(
+  WASIComponentAsyncHost host,
+) {
+  return WASIComponentCanonicalAsyncHandleProgram(
+    operations: [
+      host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamNew,
+          typeIndex: 1,
+        ),
+      ),
+      host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamWrite,
+          typeIndex: 1,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      ),
+      host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamRead,
+          typeIndex: 1,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
               index: 0,
             ),
           ],
