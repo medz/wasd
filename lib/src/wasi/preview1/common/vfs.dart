@@ -1199,19 +1199,18 @@ int readSocketIntoIov({
       roFlagsPtr: roFlagsPtr,
     );
   }
+  final capacity = _socketIovCapacity(
+    bytes: bytes,
+    data: data,
+    iovs: iovs,
+    iovsLen: iovsLen,
+  );
+  if (capacity < 0) {
+    return errnoInval;
+  }
   var totalRead = 0;
-  var requestedBytes = 0;
   final waitAll = (flags & riflagRecvWaitall) != 0;
   if (waitAll) {
-    final capacity = _socketIovCapacity(
-      bytes: bytes,
-      data: data,
-      iovs: iovs,
-      iovsLen: iovsLen,
-    );
-    if (capacity < 0) {
-      return errnoInval;
-    }
     if (!socket.receiveShutdown && socket.remainingReceiveLength < capacity) {
       socket.ensureReceiveData(capacity);
     }
@@ -1227,11 +1226,7 @@ int readSocketIntoIov({
 
     final buf = data.getUint32(entry, Endian.little);
     final len = data.getUint32(entry + 4, Endian.little);
-    if (len > 0 && buf + len > bytes.length) {
-      return errnoInval;
-    }
 
-    requestedBytes += len;
     if (len > 0) {
       final read = socket.readInto(
         bytes,
@@ -1247,7 +1242,7 @@ int readSocketIntoIov({
     }
   }
 
-  if (totalRead == 0 && requestedBytes > 0 && !socket.receiveShutdown) {
+  if (totalRead == 0 && capacity > 0 && !socket.receiveShutdown) {
     return errnoAgain;
   }
   data.setUint32(nreadPtr, totalRead, Endian.little);
@@ -1369,6 +1364,15 @@ int writeSocketFromIov({
       nwrittenPtr: nwrittenPtr,
     );
   }
+  if (_socketIovCapacity(
+        bytes: bytes,
+        data: data,
+        iovs: iovs,
+        iovsLen: iovsLen,
+      ) <
+      0) {
+    return errnoInval;
+  }
 
   var totalWritten = 0;
   try {
@@ -1380,9 +1384,6 @@ int writeSocketFromIov({
 
       final buf = data.getUint32(entry, Endian.little);
       final len = data.getUint32(entry + 4, Endian.little);
-      if (len > 0 && buf + len > bytes.length) {
-        return errnoInval;
-      }
 
       if (len > 0) {
         final written = socket.writeFrom(bytes, buf, len);

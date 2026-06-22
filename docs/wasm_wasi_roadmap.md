@@ -211,7 +211,10 @@ This is the implementation state as of 2026-06-22 on `main`.
   flags, renumbering, and close state. Preview1 does not define socket creation
   syscalls, so native/browser socket support is host-provided descriptor
   injection through
-  `WASIPreview1Socket`, not raw networking.
+  `WASIPreview1Socket`, not raw networking. Stream socket `sock_recv` and
+  `sock_send` preflight the complete iovec array before mutating guest memory,
+  consuming receive data, or recording sent bytes, matching the datagram path's
+  all-or-error validation boundary.
 - Preview 1 directory entries are indexed through per-directory child maps so
   common path/link/symlink mutation paths rebuild only affected directories.
   File lookup fallback indexes are also maintained as ordered path buckets, so
@@ -600,9 +603,10 @@ performance visible while the support surface expands.
   plus `path_open`, `fd_readdir`, link/symlink mutation, rights checks, socket
   multi-iov `RECV_PEEK`/`RECV_WAITALL`, datagram truncation, default and
   host-backed datagram send, socket send/recv including read/write
-  would-block paths, and socket poll readiness, plus file, directory, and
-  socket descriptor renumber/close over large directory and descriptor sets.
-  Keep optimizing against benchmark data instead of test suite heat alone.
+  would-block paths and stream iovec preflight costs, and socket poll
+  readiness, plus file, directory, and socket descriptor renumber/close over
+  large directory and descriptor sets. Keep optimizing against benchmark data
+  instead of test suite heat alone.
 - Component async host paths are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`, including
   canonical async stream/future copies, context get/set TLS operations,
@@ -740,6 +744,23 @@ performance visible while the support surface expands.
     without modifying `nread`/`roflags`, receive-shutdown sockets still report
     success with zero bytes, and the socket benchmark covers both read-side
     would-block paths.
+- [x] `P1-SOCKET-IOV-PREFLIGHT` - Preview1 stream socket iovec preflight.
+  - Scope: native/browser shared Preview1 stream `sock_recv` and `sock_send`
+    validation before socket or guest-memory side effects.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "validate stream iovs"` failed
+    before the fix.
+  - Implementation gate: `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_"`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: invalid later stream iovs return `EINVAL` without modifying
+    output pointers, guest buffers, receive queues, or sent-byte state, and
+    the all-distribution VFS benchmark covers the stream recv/send hot path
+    with preflight enabled.
 - [x] `P1-SOCKET-DATAGRAM-SEND-OWNED` - Preview1 datagram send copy reduction.
   - Scope: native/browser shared Preview1 VFS datagram send hot path.
   - Edit targets: `lib/src/wasi/preview1/socket.dart`,
