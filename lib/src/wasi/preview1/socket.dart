@@ -176,7 +176,6 @@ final class WASIPreview1Socket {
   void addReceiveData(List<int> data) {
     if (isDatagram) {
       _receiveMessages.add(Uint8List.fromList(data));
-      receiveShutdown = false;
       return;
     }
     _appendReceiveBytes(data);
@@ -223,7 +222,6 @@ final class WASIPreview1Socket {
       return false;
     }
     _receiveMessages.add(Uint8List.fromList(message));
-    receiveShutdown = false;
     final readyBytes = _readReadyBytes;
     if (readyBytes != null) {
       _readReadyBytes = message.length >= readyBytes
@@ -370,7 +368,6 @@ final class WASIPreview1Socket {
     }
     _compactReceiveBuffer();
     _receiveBytes.addAll(data);
-    receiveShutdown = false;
   }
 
   void _compactReceiveBuffer() {

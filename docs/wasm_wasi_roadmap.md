@@ -191,6 +191,19 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-RECEIVE-SHUTDOWN-TERMINAL` - Receive-side shutdown remains
+  terminal across host-injected data and poll readiness.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "virtual socket receive shutdown remains terminal"`
+    failed before the fix, then passed after the fix;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "virtual socket receive shutdown remains terminal"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_shutdown and descriptor rights are enforced for preview1 sockets"`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
+    `dart analyze`.
+  - Claim impact: aligns shared Preview1 stream/datagram receive and poll state
+    with shutdown semantics for `SUPPORT-P1`; does not complete the parent
+    `P1-SOCKET-CONFORMANCE` row.
 - [x] `P1-SOCKET-SEND-SHUTDOWN-VFS` - Shared VFS socket send rejects
   write-side shutdown with `EPIPE`.
   - Evidence:
@@ -907,6 +920,30 @@ performance visible while the support surface expands.
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
   - Done when: stream and datagram VFS sends return `EPIPE` after write-side
     shutdown, leave `nwritten` unchanged, and record no sent bytes/messages.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
+    socket conformance row.
+- [x] `P1-SOCKET-RECEIVE-SHUTDOWN-TERMINAL` - Receive-side shutdown remains
+  terminal.
+  - Scope: native/browser shared Preview1 socket state for stream/datagram
+    receive, host-injected receive data, and `poll_oneoff` read readiness after
+    `sock_shutdown(..., RD)`.
+  - Edit targets: `lib/src/wasi/preview1/socket.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`, and `test/wasi_test.dart`.
+  - Red test:
+    `dart test test/wasi_test.dart --name "virtual socket receive shutdown remains terminal"`
+    failed before the fix because host-injected data reopened the receive side
+    and poll reported queued bytes instead of hangup.
+  - Implementation gate: `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "virtual socket receive shutdown remains terminal"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_shutdown and descriptor rights are enforced for preview1 sockets"`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: stream and datagram receive-side shutdown remains monotonic,
+    host-injected receive data cannot reopen it, poll reports hangup before
+    queued data/readiness hints, and VFS receive returns zero bytes.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent

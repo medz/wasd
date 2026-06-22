@@ -208,6 +208,11 @@ final class Preview1VirtualFileSystem {
 
     final socket = socketForFd(fd);
     if (socket != null) {
+      if (socket.receiveShutdown) {
+        return const Preview1FdPollReadiness.ready(
+          flags: eventrwflagFdReadwriteHangup,
+        );
+      }
       if (socket.isDatagram) {
         if (socket.hasReceiveMessage) {
           return Preview1FdPollReadiness.ready(
@@ -223,11 +228,6 @@ final class Preview1VirtualFileSystem {
             nbytes: socket.remainingReceiveLength,
           );
         }
-      }
-      if (socket.receiveShutdown) {
-        return const Preview1FdPollReadiness.ready(
-          flags: eventrwflagFdReadwriteHangup,
-        );
       }
       final readReadyBytes = socket.readReadyBytes;
       if (readReadyBytes != null) {

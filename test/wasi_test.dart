@@ -436,6 +436,58 @@ void main() {
       expect(datagram.sentMessages, isEmpty);
     });
 
+    test('virtual socket receive shutdown remains terminal', () {
+      final stream = WASIPreview1Socket(receiveData: [1, 2]);
+      final datagram = WASIPreview1Socket.datagram(
+        receiveMessages: [
+          [3, 4],
+        ],
+      );
+      stream.shutdown(receive: true, send: false);
+      datagram.shutdown(receive: true, send: false);
+      stream.addReceiveData([5, 6]);
+      datagram.addReceiveData([7, 8]);
+      final vfs = Preview1VirtualFileSystem(
+        sockets: {77: stream, 78: datagram},
+      );
+      final bytes = Uint8List(64);
+      final data = ByteData.view(bytes.buffer);
+      const iovPtr = 0;
+      const bufferPtr = 24;
+      const countPtr = 48;
+      const flagsPtr = 56;
+      data.setUint32(iovPtr, bufferPtr, Endian.little);
+      data.setUint32(iovPtr + 4, 4, Endian.little);
+
+      for (final fd in [77, 78]) {
+        final readiness = vfs.pollFdReadWrite(
+          fd: fd,
+          eventType: _eventTypeFdRead,
+        );
+        expect(readiness.ready, isTrue);
+        expect(readiness.nbytes, 0);
+        expect(readiness.flags, _eventrwflagFdReadwriteHangup);
+
+        data.setUint32(countPtr, 0xdeadbeef, Endian.little);
+        data.setUint16(flagsPtr, 0xbeef, Endian.little);
+        expect(
+          readSocketIntoIov(
+            socket: vfs.socketForFd(fd)!,
+            bytes: bytes,
+            data: data,
+            iovs: iovPtr,
+            iovsLen: 1,
+            flags: 0,
+            nreadPtr: countPtr,
+            roFlagsPtr: flagsPtr,
+          ),
+          0,
+        );
+        expect(data.getUint32(countPtr, Endian.little), 0);
+        expect(data.getUint16(flagsPtr, Endian.little), 0);
+      }
+    });
+
     test('imports has fd_write function', () {
       final wasi = WASI();
       final preview1 = wasi.imports['wasi_snapshot_preview1']!;
