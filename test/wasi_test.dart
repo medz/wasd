@@ -445,8 +445,14 @@ void main() {
       );
       stream.shutdown(receive: true, send: false);
       datagram.shutdown(receive: true, send: false);
+      expect(stream.remainingReceiveData, isEmpty);
+      expect(datagram.remainingReceiveMessages, isEmpty);
+
       stream.addReceiveData([5, 6]);
       datagram.addReceiveData([7, 8]);
+      expect(stream.remainingReceiveData, isEmpty);
+      expect(datagram.remainingReceiveMessages, isEmpty);
+
       final vfs = Preview1VirtualFileSystem(
         sockets: {77: stream, 78: datagram},
       );

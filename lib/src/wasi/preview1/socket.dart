@@ -174,6 +174,9 @@ final class WASIPreview1Socket {
   ///
   /// For datagram sockets, [data] is queued as one receive message.
   void addReceiveData(List<int> data) {
+    if (receiveShutdown) {
+      return;
+    }
     if (isDatagram) {
       _receiveMessages.add(Uint8List.fromList(data));
       return;
@@ -358,12 +361,18 @@ final class WASIPreview1Socket {
 
   /// Shuts down future receive and/or send operations.
   void shutdown({required bool receive, required bool send}) {
+    if (receive) {
+      _receiveBytes.clear();
+      _receiveOffset = 0;
+      _receiveMessages.clear();
+      _readReadyBytes = null;
+    }
     receiveShutdown = receiveShutdown || receive;
     sendShutdown = sendShutdown || send;
   }
 
   void _appendReceiveBytes(List<int> data) {
-    if (data.isEmpty) {
+    if (data.isEmpty || receiveShutdown) {
       return;
     }
     _compactReceiveBuffer();
