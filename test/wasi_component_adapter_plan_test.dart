@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/adapter_host.dart';
 import 'package:wasd/src/wasi/component/adapter_plan.dart';
@@ -83,6 +85,30 @@ void main() {
       expect(plans[0].reallocIndex, 1);
       expect(plans[1].kind, WasmComponentCanonicalKind.lower);
       expect(plans[1].reallocIndex, 1);
+    });
+
+    test('plan record lift and lower flat value layouts', () {
+      final component = WasmComponent.decode(
+        canonicalRecordLiftLowerComponentBytes(),
+      );
+
+      expect(component.validate(), isEmpty);
+
+      final plans = componentCanonicalAdapterPlans(component);
+
+      expect(plans, hasLength(2));
+      for (final plan in plans) {
+        expect(plan.params, hasLength(1));
+        expect(plan.params.single.label, 'input');
+        expect(plan.params.single.byteLength, 8);
+        expect(plan.params.single.alignment, 4);
+        expect(plan.params.single.flatLength, 2);
+        expect(plan.result, isNotNull);
+        expect(plan.result!.byteLength, 8);
+        expect(plan.result!.alignment, 4);
+        expect(plan.result!.flatLength, 2);
+        expect(plan.hasDynamicPayload, isFalse);
+      }
     });
 
     test('executes primitive lift and lower plans with direct callbacks', () {
@@ -220,6 +246,72 @@ void main() {
       expect(coreInvocations, 1);
       expect(componentInvocations, 1);
       expect(() => program.invoke(0, const <Object?>[1]), throwsStateError);
+    });
+
+    test('invokes record adapter programs through flat scalar values', () {
+      final component = WasmComponent.decode(
+        canonicalRecordLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+
+      final program = host.bindAdapterPlans(
+        plans,
+        coreFunctions: {
+          0: (args) {
+            expect(args.single, isA<WasmComponentValueData>());
+            final record = args.single! as WasmComponentValueData;
+            expect(record.kind, WasmComponentValueDataKind.record);
+            expect(record.items.map((item) => item.integer), [11, 12]);
+            return WasmComponentValueData(
+              kind: WasmComponentValueDataKind.record,
+              rawBytes: Uint8List(0),
+              items: [
+                WasmComponentValueData(
+                  kind: WasmComponentValueDataKind.integer,
+                  rawBytes: Uint8List(0),
+                  integer: 21,
+                ),
+                WasmComponentValueData(
+                  kind: WasmComponentValueDataKind.integer,
+                  rawBytes: Uint8List(0),
+                  integer: 22,
+                ),
+              ],
+            );
+          },
+        },
+        componentFunctions: {
+          0: (args) {
+            final record = args.single! as WasmComponentValueData;
+            expect(record.kind, WasmComponentValueDataKind.record);
+            expect(record.items.map((item) => item.integer), [31, 32]);
+            return WasmComponentValueData(
+              kind: WasmComponentValueDataKind.record,
+              rawBytes: Uint8List(0),
+              items: [
+                WasmComponentValueData(
+                  kind: WasmComponentValueDataKind.integer,
+                  rawBytes: Uint8List(0),
+                  integer: 41,
+                ),
+                WasmComponentValueData(
+                  kind: WasmComponentValueDataKind.integer,
+                  rawBytes: Uint8List(0),
+                  integer: 42,
+                ),
+              ],
+            );
+          },
+        },
+      );
+
+      expect(program.invokeFlat(0, const <Object?>[11, 12]), [21, 22]);
+      expect(program.invokeFlat(1, const <Object?>[31, 32]), [41, 42]);
+      expect(
+        () => program.invokeFlat(0, const <Object?>[11]),
+        throwsStateError,
+      );
     });
 
     test('invokes adapter programs through flat primitive values', () {

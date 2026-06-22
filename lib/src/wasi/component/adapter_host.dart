@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
 import 'adapter_plan.dart';
@@ -310,21 +312,50 @@ final class WASIComponentCanonicalAdapterOperation {
   wasm.Memory? memory,
   WASIComponentCanonicalStringEncoding stringEncoding,
 ) {
-  final primitive = valuePlan.memoryCodec!.primitive;
-  if (primitive == null) {
+  final layout = valuePlan.flatLayout;
+  if (layout == null) {
     throw UnsupportedError(
       'WASI component canonical adapter value ${valuePlan.path} does not support flat values.',
+    );
+  }
+  return _loadFlatLayout(
+    layout,
+    valuePlan.path,
+    flatArgs,
+    offset,
+    memory,
+    stringEncoding,
+  );
+}
+
+({Object? value, int nextOffset}) _loadFlatLayout(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  List<Object?> flatArgs,
+  int offset,
+  wasm.Memory? memory,
+  WASIComponentCanonicalStringEncoding stringEncoding,
+) {
+  final primitive = layout.primitive;
+  if (primitive == null) {
+    return _loadFlatComposite(
+      layout,
+      path,
+      flatArgs,
+      offset,
+      memory,
+      stringEncoding,
     );
   }
   if (primitive == WasmComponentPrimitiveValueType.string) {
     if (offset + 2 > flatArgs.length) {
       throw StateError(
-        'WASI component canonical adapter value ${valuePlan.path} expected 2 flat string arguments.',
+        'WASI component canonical adapter value $path expected 2 flat string arguments.',
       );
     }
-    final memoryRef = _requireMemory(memory, valuePlan.path);
-    final pointer = _expectFlatInt(valuePlan.path, flatArgs[offset]);
-    final length = _expectFlatInt(valuePlan.path, flatArgs[offset + 1]);
+    final memoryRef = _requireMemory(memory, path);
+    final pointer = _expectFlatInt(path, flatArgs[offset]);
+    final length = _expectFlatInt(path, flatArgs[offset + 1]);
     return (
       value: readWASIComponentCanonicalString(
         memoryRef,
@@ -337,16 +368,50 @@ final class WASIComponentCanonicalAdapterOperation {
   }
   if (offset >= flatArgs.length) {
     throw StateError(
-      'WASI component canonical adapter value ${valuePlan.path} expected a flat argument.',
+      'WASI component canonical adapter value $path expected a flat argument.',
     );
   }
   final value = _flatPrimitiveToComponentValue(
     primitive,
-    valuePlan.path,
+    path,
     flatArgs[offset],
   );
-  valuePlan.memoryCodec!.validate(valuePlan.path, value);
   return (value: value, nextOffset: offset + 1);
+}
+
+({Object? value, int nextOffset}) _loadFlatComposite(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  List<Object?> flatArgs,
+  int offset,
+  wasm.Memory? memory,
+  WASIComponentCanonicalStringEncoding stringEncoding,
+) {
+  final items = <WasmComponentValueData>[];
+  var nextOffset = offset;
+  for (final field in layout.fields) {
+    final fieldPath = '$path.${field.label}';
+    final loaded = _loadFlatLayout(
+      field.value,
+      fieldPath,
+      flatArgs,
+      nextOffset,
+      memory,
+      stringEncoding,
+    );
+    items.add(
+      _componentValueDataFromFlatValue(field.value, fieldPath, loaded.value),
+    );
+    nextOffset = loaded.nextOffset;
+  }
+  return (
+    value: WasmComponentValueData(
+      kind: _flatCompositeValueDataKind(layout.kind),
+      rawBytes: Uint8List(0),
+      items: List<WasmComponentValueData>.unmodifiable(items),
+    ),
+    nextOffset: nextOffset,
+  );
 }
 
 List<Object?> _storeFlatValue(
@@ -357,25 +422,173 @@ List<Object?> _storeFlatValue(
   WASIComponentCanonicalStringEncoding stringEncoding,
 ) {
   valuePlan.memoryCodec!.validate(valuePlan.path, value);
-  final primitive = valuePlan.memoryCodec!.primitive;
-  if (primitive == null) {
+  final layout = valuePlan.flatLayout;
+  if (layout == null) {
     throw UnsupportedError(
       'WASI component canonical adapter value ${valuePlan.path} does not support flat values.',
     );
   }
+  return _storeFlatLayout(
+    layout,
+    valuePlan.path,
+    value,
+    memory,
+    realloc,
+    stringEncoding,
+  );
+}
+
+List<Object?> _storeFlatLayout(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  Object? value,
+  wasm.Memory? memory,
+  WASIComponentCanonicalRealloc? realloc,
+  WASIComponentCanonicalStringEncoding stringEncoding,
+) {
+  final primitive = layout.primitive;
+  if (primitive == null) {
+    return _storeFlatComposite(
+      layout,
+      path,
+      value,
+      memory,
+      realloc,
+      stringEncoding,
+    );
+  }
   if (primitive == WasmComponentPrimitiveValueType.string) {
-    final memoryRef = _requireMemory(memory, valuePlan.path);
+    final memoryRef = _requireMemory(memory, path);
     final memoryString = writeWASIComponentCanonicalString(
       memoryRef,
-      _requireRealloc(realloc, valuePlan.path),
+      _requireRealloc(realloc, path),
       value as String,
       stringEncoding,
     );
     return <Object?>[memoryString.pointer, memoryString.canonicalLength];
   }
-  return <Object?>[
-    _componentPrimitiveToFlatValue(primitive, valuePlan.path, value),
-  ];
+  return <Object?>[_componentPrimitiveToFlatValue(primitive, path, value)];
+}
+
+List<Object?> _storeFlatComposite(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  Object? value,
+  wasm.Memory? memory,
+  WASIComponentCanonicalRealloc? realloc,
+  WASIComponentCanonicalStringEncoding stringEncoding,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != _flatCompositeValueDataKind(layout.kind) ||
+      value.items.length != layout.fields.length) {
+    throw StateError(
+      'WASI component canonical adapter value $path expected ${layout.kind.name} data.',
+    );
+  }
+  final flat = <Object?>[];
+  for (var i = 0; i < layout.fields.length; i++) {
+    final field = layout.fields[i];
+    flat.addAll(
+      _storeFlatLayout(
+        field.value,
+        '$path.${field.label}',
+        value.items[i],
+        memory,
+        realloc,
+        stringEncoding,
+      ),
+    );
+  }
+  return flat;
+}
+
+WasmComponentValueData _componentValueDataFromFlatValue(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  Object? value,
+) {
+  final primitive = layout.primitive;
+  if (primitive == null) {
+    if (value is WasmComponentValueData &&
+        value.kind == _flatCompositeValueDataKind(layout.kind)) {
+      return value;
+    }
+    throw StateError(
+      'WASI component canonical adapter value $path expected ${layout.kind.name} data.',
+    );
+  }
+  return _primitiveDataFromComponentValue(primitive, path, value);
+}
+
+WasmComponentValueData _primitiveDataFromComponentValue(
+  WasmComponentPrimitiveValueType primitive,
+  String path,
+  Object? value,
+) {
+  switch (primitive) {
+    case WasmComponentPrimitiveValueType.boolean:
+      if (value is bool) {
+        return WasmComponentValueData(
+          kind: WasmComponentValueDataKind.boolean,
+          rawBytes: Uint8List(0),
+          boolean: value,
+        );
+      }
+    case WasmComponentPrimitiveValueType.s8:
+    case WasmComponentPrimitiveValueType.u8:
+    case WasmComponentPrimitiveValueType.s16:
+    case WasmComponentPrimitiveValueType.u16:
+    case WasmComponentPrimitiveValueType.s32:
+    case WasmComponentPrimitiveValueType.u32:
+    case WasmComponentPrimitiveValueType.s64:
+    case WasmComponentPrimitiveValueType.u64:
+      if (value is int) {
+        return WasmComponentValueData(
+          kind: WasmComponentValueDataKind.integer,
+          rawBytes: Uint8List(0),
+          integer: value,
+        );
+      }
+    case WasmComponentPrimitiveValueType.f32:
+    case WasmComponentPrimitiveValueType.f64:
+      if (value is num) {
+        return WasmComponentValueData(
+          kind: WasmComponentValueDataKind.floatingPoint,
+          rawBytes: Uint8List(0),
+          floatingPoint: value.toDouble(),
+        );
+      }
+    case WasmComponentPrimitiveValueType.char:
+    case WasmComponentPrimitiveValueType.string:
+      if (value is String) {
+        return WasmComponentValueData(
+          kind: WasmComponentValueDataKind.string,
+          rawBytes: Uint8List(0),
+          string: value,
+        );
+      }
+    case WasmComponentPrimitiveValueType.errorContext:
+      break;
+  }
+  throw StateError(
+    'WASI component canonical adapter value $path does not match ${primitive.name}.',
+  );
+}
+
+WasmComponentValueDataKind _flatCompositeValueDataKind(
+  WASIComponentCanonicalAdapterFlatValueKind kind,
+) {
+  return switch (kind) {
+    WASIComponentCanonicalAdapterFlatValueKind.record =>
+      WasmComponentValueDataKind.record,
+    WASIComponentCanonicalAdapterFlatValueKind.tuple =>
+      WasmComponentValueDataKind.tuple,
+    WASIComponentCanonicalAdapterFlatValueKind.fixedList =>
+      WasmComponentValueDataKind.fixedList,
+    WASIComponentCanonicalAdapterFlatValueKind.primitive => throw StateError(
+      'Primitive flat layouts are not composite.',
+    ),
+  };
 }
 
 Object? _flatPrimitiveToComponentValue(
@@ -413,8 +626,11 @@ Object? _componentPrimitiveToFlatValue(
   String path,
   Object? value,
 ) {
+  final direct = value is WasmComponentValueData
+      ? _primitiveValueFromData(primitive, path, value)
+      : value;
   return switch (primitive) {
-    WasmComponentPrimitiveValueType.boolean => (value as bool) ? 1 : 0,
+    WasmComponentPrimitiveValueType.boolean => (direct as bool) ? 1 : 0,
     WasmComponentPrimitiveValueType.s8 ||
     WasmComponentPrimitiveValueType.u8 ||
     WasmComponentPrimitiveValueType.s16 ||
@@ -422,10 +638,10 @@ Object? _componentPrimitiveToFlatValue(
     WasmComponentPrimitiveValueType.s32 ||
     WasmComponentPrimitiveValueType.u32 ||
     WasmComponentPrimitiveValueType.s64 ||
-    WasmComponentPrimitiveValueType.u64 => value as int,
+    WasmComponentPrimitiveValueType.u64 => direct as int,
     WasmComponentPrimitiveValueType.f32 ||
-    WasmComponentPrimitiveValueType.f64 => value as num,
-    WasmComponentPrimitiveValueType.char => _stringToFlatChar(path, value),
+    WasmComponentPrimitiveValueType.f64 => direct as num,
+    WasmComponentPrimitiveValueType.char => _stringToFlatChar(path, direct),
     WasmComponentPrimitiveValueType.string => throw StateError(
       'String flat values are handled separately.',
     ),
@@ -433,6 +649,49 @@ Object? _componentPrimitiveToFlatValue(
       'WASI component canonical adapter value $path uses error-context handles.',
     ),
   };
+}
+
+Object? _primitiveValueFromData(
+  WasmComponentPrimitiveValueType primitive,
+  String path,
+  WasmComponentValueData value,
+) {
+  switch (primitive) {
+    case WasmComponentPrimitiveValueType.boolean:
+      if (value.kind == WasmComponentValueDataKind.boolean &&
+          value.boolean != null) {
+        return value.boolean;
+      }
+    case WasmComponentPrimitiveValueType.s8:
+    case WasmComponentPrimitiveValueType.u8:
+    case WasmComponentPrimitiveValueType.s16:
+    case WasmComponentPrimitiveValueType.u16:
+    case WasmComponentPrimitiveValueType.s32:
+    case WasmComponentPrimitiveValueType.u32:
+    case WasmComponentPrimitiveValueType.s64:
+    case WasmComponentPrimitiveValueType.u64:
+      if (value.kind == WasmComponentValueDataKind.integer &&
+          value.integer is int) {
+        return value.integer;
+      }
+    case WasmComponentPrimitiveValueType.f32:
+    case WasmComponentPrimitiveValueType.f64:
+      if (value.kind == WasmComponentValueDataKind.floatingPoint &&
+          value.floatingPoint != null) {
+        return value.floatingPoint;
+      }
+    case WasmComponentPrimitiveValueType.char:
+    case WasmComponentPrimitiveValueType.string:
+      if (value.kind == WasmComponentValueDataKind.string &&
+          value.string != null) {
+        return value.string;
+      }
+    case WasmComponentPrimitiveValueType.errorContext:
+      break;
+  }
+  throw StateError(
+    'WASI component canonical adapter value $path does not match ${primitive.name}.',
+  );
 }
 
 int _expectFlatInt(String path, Object? value) {

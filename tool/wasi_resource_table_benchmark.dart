@@ -59,6 +59,8 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentAdapterStringProgramInvoke(options.iterations);
   final componentAdapterStringFlatInvoke =
       _benchmarkComponentAdapterStringFlatInvoke(options.iterations);
+  final componentAdapterRecordFlatInvoke =
+      _benchmarkComponentAdapterRecordFlatInvoke(options.iterations);
   final componentAdapterStringMemoryInvoke =
       _benchmarkComponentAdapterStringMemoryInvoke(options.iterations);
   final componentHostStreamMemoryBinding =
@@ -101,6 +103,8 @@ Future<void> main(List<String> args) async {
     'component_adapter_string_program_invoke':
         componentAdapterStringProgramInvoke.toJson(),
     'component_adapter_string_flat_invoke': componentAdapterStringFlatInvoke
+        .toJson(),
+    'component_adapter_record_flat_invoke': componentAdapterRecordFlatInvoke
         .toJson(),
     'component_adapter_string_memory_invoke': componentAdapterStringMemoryInvoke
         .toJson(),
@@ -145,6 +149,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringFlatInvoke(_warmupIterations);
+  _benchmarkComponentAdapterRecordFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringMemoryInvoke(_warmupIterations);
   _benchmarkComponentHostStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostRecordStreamMemoryBinding(_warmupIterations);
@@ -627,6 +632,56 @@ _Metric _benchmarkComponentAdapterStringFlatInvoke(int iterations) {
     operations: iterations * 2,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentAdapterRecordFlatInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalRecordLiftLowerComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {0: (_) => _recordValue(21, 22)},
+    componentFunctions: {0: (_) => _recordValue(41, 42)},
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final lifted = program.invokeFlat(0, const <Object?>[11, 12]);
+    checksum += lifted[0]! as int;
+    checksum += lifted[1]! as int;
+    final lowered = program.invokeFlat(1, const <Object?>[31, 32]);
+    checksum += lowered[0]! as int;
+    checksum += lowered[1]! as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+WasmComponentValueData _recordValue(int left, int right) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.record,
+    rawBytes: Uint8List(0),
+    items: [
+      WasmComponentValueData(
+        kind: WasmComponentValueDataKind.integer,
+        rawBytes: Uint8List(0),
+        integer: left,
+      ),
+      WasmComponentValueData(
+        kind: WasmComponentValueDataKind.integer,
+        rawBytes: Uint8List(0),
+        integer: right,
+      ),
+    ],
   );
 }
 
