@@ -8,6 +8,7 @@ import '../../../wasm/memory.dart' as wasm;
 import '../../../wasm/module.dart' as wasm;
 import '../../wasi.dart' as wasi_iface;
 import '../common/constants.dart' as wasi_common;
+import '../common/socket_syscalls.dart' as wasi_socket;
 import '../common/vfs.dart' as wasi_vfs;
 import '../socket.dart';
 
@@ -370,41 +371,15 @@ class WASI implements wasi_iface.WASI {
         if (args.length < 3) {
           return _errnoInval;
         }
-        final fd = _asInt(args[0]);
-        final flags = _asInt(args[1]);
-        final acceptedFdPtr = _asInt(args[2]);
-        if ((flags & ~_fdflagKnownMask) != 0) {
-          return _errnoInval;
-        }
-        final socket = _vfs.socketForFd(fd);
-        if (socket == null) {
-          return _errnoForMissingSocket(fd);
-        }
-        final right = _checkDescriptorRight(fd, _rightSockAccept);
-        if (right != _errnoSuccess) {
-          return right;
-        }
-        if ((flags & ~_socketFdflagKnownMask) != 0) {
-          return _errnoNotsup;
-        }
-        if (!socket.isStream) {
-          return _errnoNotsup;
-        }
-
         final view = _memoryView();
-        if (view == null) {
-          return _errnoInval;
-        }
-        if (acceptedFdPtr < 0 || acceptedFdPtr + 4 > view.bytes.length) {
-          return _errnoInval;
-        }
-
-        final acceptedFd = _vfs.acceptSocket(fd: fd, descriptorFlags: flags);
-        if (acceptedFd < 0) {
-          return _errnoAgain;
-        }
-        view.data.setUint32(acceptedFdPtr, acceptedFd, Endian.little);
-        return _errnoSuccess;
+        return wasi_socket.preview1SockAccept(
+          vfs: _vfs,
+          fd: _asInt(args[0]),
+          flags: _asInt(args[1]),
+          acceptedFdPtr: _asInt(args[2]),
+          bytes: view?.bytes,
+          data: view?.data,
+        );
       });
 
   wasm.FunctionImportExportValue get _sockRecvImport =>
@@ -412,32 +387,17 @@ class WASI implements wasi_iface.WASI {
         if (args.length < 6) {
           return _errnoInval;
         }
-        final fd = _asInt(args[0]);
-        final socket = _vfs.socketForFd(fd);
-        if (socket == null) {
-          return _errnoForMissingSocket(fd);
-        }
-        final right = _checkDescriptorRight(fd, _rightFdRead);
-        if (right != _errnoSuccess) {
-          return right;
-        }
-        final flags = _asInt(args[3]);
-        if ((flags & ~_riflagKnownMask) != 0) {
-          return _errnoInval;
-        }
         final view = _memoryView();
-        if (view == null) {
-          return _errnoInval;
-        }
-        return wasi_vfs.readSocketIntoIov(
-          socket: socket,
-          bytes: view.bytes,
-          data: view.data,
+        return wasi_socket.preview1SockRecv(
+          vfs: _vfs,
+          fd: _asInt(args[0]),
           iovs: _asInt(args[1]),
           iovsLen: _asInt(args[2]),
-          flags: flags,
+          flags: _asInt(args[3]),
           nreadPtr: _asInt(args[4]),
           roFlagsPtr: _asInt(args[5]),
+          bytes: view?.bytes,
+          data: view?.data,
         );
       });
 
@@ -446,32 +406,16 @@ class WASI implements wasi_iface.WASI {
         if (args.length < 5) {
           return _errnoInval;
         }
-        final fd = _asInt(args[0]);
-        final socket = _vfs.socketForFd(fd);
-        if (socket == null) {
-          return _errnoForMissingSocket(fd);
-        }
-        final right = _checkDescriptorRight(fd, _rightFdWrite);
-        if (right != _errnoSuccess) {
-          return right;
-        }
-        if (_asInt(args[3]) != 0) {
-          return _errnoInval;
-        }
-        if (socket.sendShutdown) {
-          return _errnoPipe;
-        }
         final view = _memoryView();
-        if (view == null) {
-          return _errnoInval;
-        }
-        return wasi_vfs.writeSocketFromIov(
-          socket: socket,
-          bytes: view.bytes,
-          data: view.data,
+        return wasi_socket.preview1SockSend(
+          vfs: _vfs,
+          fd: _asInt(args[0]),
           iovs: _asInt(args[1]),
           iovsLen: _asInt(args[2]),
+          flags: _asInt(args[3]),
           nwrittenPtr: _asInt(args[4]),
+          bytes: view?.bytes,
+          data: view?.data,
         );
       });
 
@@ -480,24 +424,11 @@ class WASI implements wasi_iface.WASI {
         if (args.length < 2) {
           return _errnoInval;
         }
-        final fd = _asInt(args[0]);
-        final socket = _vfs.socketForFd(fd);
-        if (socket == null) {
-          return _errnoForMissingSocket(fd);
-        }
-        final how = _asInt(args[1]);
-        if (how == 0 || (how & ~_sdflagKnownMask) != 0) {
-          return _errnoInval;
-        }
-        final right = _checkDescriptorRight(fd, _rightSockShutdown);
-        if (right != _errnoSuccess) {
-          return right;
-        }
-        socket.shutdown(
-          receive: (how & _sdflagRd) != 0,
-          send: (how & _sdflagWr) != 0,
+        return wasi_socket.preview1SockShutdown(
+          vfs: _vfs,
+          fd: _asInt(args[0]),
+          how: _asInt(args[1]),
         );
-        return _errnoSuccess;
       });
 
   wasm.FunctionImportExportValue get _fdReadImport =>
@@ -1632,9 +1563,6 @@ class WASI implements wasi_iface.WASI {
 
   bool _isOpenDescriptor(int fd) => _vfs.descriptorKindForFd(fd) != null;
 
-  int _errnoForMissingSocket(int fd) =>
-      _isOpenDescriptor(fd) ? _errnoNotsock : _errnoBadf;
-
   int _checkDescriptorRight(int fd, int right) {
     if (!_isOpenDescriptor(fd)) {
       return _errnoBadf;
@@ -2104,7 +2032,6 @@ const int _subscriptionClockTimeoutOffset = 24;
 const int _subscriptionClockFlagsOffset = 40;
 const int _subscriptionClockAbstime = 1;
 const int _errnoSuccess = wasi_common.errnoSuccess;
-const int _errnoAgain = wasi_common.errnoAgain;
 const int _errnoInval = wasi_common.errnoInval;
 const int _errnoBadf = wasi_common.errnoBadf;
 const int _errnoExist = wasi_common.errnoExist;
@@ -2113,10 +2040,8 @@ const int _errnoNoent = wasi_common.errnoNoent;
 const int _errnoNosys = wasi_common.errnoNosys;
 const int _errnoNotdir = wasi_common.errnoNotdir;
 const int _errnoNotempty = wasi_common.errnoNotempty;
-const int _errnoNotsock = wasi_common.errnoNotsock;
 const int _errnoNotsup = wasi_common.errnoNotsup;
 const int _errnoNotcapable = wasi_common.errnoNotcapable;
-const int _errnoPipe = wasi_common.errnoPipe;
 const int _prestatSize = wasi_common.prestatSize;
 const int _preopenTypeDir = wasi_common.preopenTypeDir;
 const int _fdstatSize = wasi_common.fdstatSize;
@@ -2125,10 +2050,6 @@ const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
 const int _fdflagKnownMask = wasi_common.fdflagKnownMask;
 const int _socketFdflagKnownMask = wasi_common.socketFdflagKnownMask;
-const int _riflagKnownMask = wasi_common.riflagKnownMask;
-const int _sdflagRd = wasi_common.sdflagRd;
-const int _sdflagWr = wasi_common.sdflagWr;
-const int _sdflagKnownMask = wasi_common.sdflagKnownMask;
 const int _lookupflagSymlinkFollow = wasi_common.lookupflagSymlinkFollow;
 const int _lookupflagKnownMask = _lookupflagSymlinkFollow;
 const int _filestatSize = 64;
@@ -2168,8 +2089,6 @@ const int _rightFdFilestatSetTimes = wasi_common.rightFdFilestatSetTimes;
 const int _rightPathSymlink = wasi_common.rightPathSymlink;
 const int _rightPathRemoveDirectory = wasi_common.rightPathRemoveDirectory;
 const int _rightPathUnlinkFile = wasi_common.rightPathUnlinkFile;
-const int _rightSockShutdown = wasi_common.rightSockShutdown;
-const int _rightSockAccept = wasi_common.rightSockAccept;
 const int _rightsKnownMask = wasi_common.rightsKnownMask;
 const List<String> _preview1NosysImports = wasi_common.preview1NosysImports;
 

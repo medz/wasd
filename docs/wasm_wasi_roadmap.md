@@ -217,6 +217,17 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-ADAPTER-BOUNDARY` - Native and browser socket imports share one
+  Preview1 adapter boundary.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "socket syscalls return notsock for non-socket descriptors"`;
+    `dart test test/wasi_test.dart --name "sock_shutdown and descriptor rights are enforced for preview1 sockets"`;
+    `dart test -p chrome test/wasi_test.dart --name "socket syscalls return notsock for non-socket descriptors"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_shutdown and descriptor rights are enforced for preview1 sockets"`;
+    `dart test test/wasi_test.dart`; `dart analyze`.
+  - Claim impact: reduces native/browser Preview1 socket drift risk; does not
+    complete `P1-SOCKET-CONFORMANCE`, `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [x] `CM-INSTANTIATION-DUPLICATE-ARGS` - Component and core instantiation
   argument names reject duplicates during validation.
   - Evidence:
@@ -1092,6 +1103,31 @@ performance visible while the support surface expands.
     this row with the exact commands run.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete it until the
     Preview1 socket and runtime gates are all checked.
+- [x] `P1-SOCKET-ADAPTER-BOUNDARY` - Native and browser socket imports share one
+  Preview1 adapter boundary.
+  - Scope: native/browser `sock_accept`, `sock_recv`, `sock_send`, and
+    `sock_shutdown` import adapters over shared Preview1 socket/VFS semantics.
+  - Edit targets:
+    `lib/src/wasi/preview1/common/socket_syscalls.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, and this roadmap.
+  - Red test: N/A for this behavior-preserving adapter extraction; existing
+    native and Chrome socket regressions guard the preserved error ordering and
+    output-pointer behavior.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "socket syscalls return notsock for non-socket descriptors"`;
+    `dart test test/wasi_test.dart --name "sock_shutdown and descriptor rights are enforced for preview1 sockets"`;
+    `dart test -p chrome test/wasi_test.dart --name "socket syscalls return notsock for non-socket descriptors"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_shutdown and descriptor rights are enforced for preview1 sockets"`;
+    `dart test test/wasi_test.dart`; `dart analyze`.
+  - Performance gate: N/A; this moves existing branch logic into one shared
+    adapter helper and does not add loops, allocation, or socket hot-path work.
+  - Done when: native and browser socket imports both delegate to the shared
+    helper, existing native/browser socket regressions pass, and no public API
+    or support claim changes.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: reduces Preview1 adapter drift risk; no direct support gate.
 - [x] `P1-SOCKET-DATAGRAM-PARTIAL-SEND-INVALID` - Host-backed datagram sends
   reject partial message acceptance.
   - Scope: shared Preview1 `WASIPreview1Socket.datagram` send handler results
