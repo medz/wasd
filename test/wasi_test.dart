@@ -162,6 +162,48 @@ void main() {
       expect(socket.sentData, isEmpty);
     });
 
+    test('virtual socket poll honors host readiness hints', () {
+      final socket = WASIPreview1Socket(readReadyBytes: 128, writeReady: false);
+      final vfs = Preview1VirtualFileSystem(sockets: {70: socket});
+
+      final readable = vfs.pollFdReadWrite(fd: 70, eventType: _eventTypeFdRead);
+      expect(readable.ready, isTrue);
+      expect(readable.errno, 0);
+      expect(readable.nbytes, 128);
+      expect(readable.flags, 0);
+
+      final writeWaiting = vfs.pollFdReadWrite(
+        fd: 70,
+        eventType: _eventTypeFdWrite,
+      );
+      expect(writeWaiting.ready, isFalse);
+      expect(writeWaiting.errno, 0);
+
+      socket.readReadyBytes = null;
+      final readWaiting = vfs.pollFdReadWrite(
+        fd: 70,
+        eventType: _eventTypeFdRead,
+      );
+      expect(readWaiting.ready, isFalse);
+
+      socket.addReceiveData([1, 2, 3]);
+      final bufferedRead = vfs.pollFdReadWrite(
+        fd: 70,
+        eventType: _eventTypeFdRead,
+      );
+      expect(bufferedRead.ready, isTrue);
+      expect(bufferedRead.nbytes, 3);
+
+      socket.writeReady = true;
+      final writable = vfs.pollFdReadWrite(
+        fd: 70,
+        eventType: _eventTypeFdWrite,
+      );
+      expect(writable.ready, isTrue);
+
+      expect(() => socket.readReadyBytes = -1, throwsArgumentError);
+    });
+
     test('imports has fd_write function', () {
       final wasi = WASI();
       final preview1 = wasi.imports['wasi_snapshot_preview1']!;
@@ -1139,6 +1181,108 @@ void main() {
             data.getUint16(outPtr + _eventErrorOffset, Endian.little),
             _errnoNotcapable,
           );
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeFdWrite);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'poll_oneoff reports host socket readiness hints',
+        () async {
+          final external = WASIPreview1Socket(
+            readReadyBytes: 77,
+            writeReady: false,
+          );
+          final socketWasi = WASI(sockets: {29: external});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final pollOneoff =
+              preview1['poll_oneoff'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const inPtr = 3544;
+          const outPtr = 3664;
+          const neventsPtr = 3792;
+
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0x9909,
+            tag: _eventTypeFdRead,
+            fd: 29,
+          );
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]),
+            ),
+            0,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0x9909);
+          expect(data.getUint16(outPtr + _eventErrorOffset, Endian.little), 0);
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeFdRead);
+          expect(
+            _getUint64Le(data, outPtr + _eventFdReadwriteNbytesOffset),
+            77,
+          );
+          expect(
+            data.getUint16(
+              outPtr + _eventFdReadwriteFlagsOffset,
+              Endian.little,
+            ),
+            0,
+          );
+
+          bytes.fillRange(outPtr, outPtr + _eventSize * 2, 0xff);
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0xaa0a,
+            tag: _eventTypeFdWrite,
+            fd: 29,
+          );
+          _writePollSubscription(
+            data,
+            inPtr + _subscriptionSize,
+            userdata: 0xbb0b,
+            tag: _eventTypeClock,
+          );
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 2, neventsPtr]),
+            ),
+            0,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0xbb0b);
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeClock);
+
+          external.writeReady = true;
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0xcc0c,
+            tag: _eventTypeFdWrite,
+            fd: 29,
+          );
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]),
+            ),
+            0,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0xcc0c);
           expect(bytes[outPtr + _eventTypeOffset], _eventTypeFdWrite);
         },
         skip: _skipOnNode(

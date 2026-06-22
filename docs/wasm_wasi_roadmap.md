@@ -139,7 +139,7 @@ copying their internals directly.
 
 | Status | Capability boundary | Evidence to inspect | Verification gate | Remaining gap |
 | --- | --- | --- | --- | --- |
-| [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Conformance-shaped socket edge cases and externally backed readiness. |
+| [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Conformance-shaped socket edge cases and native adapter boundaries. |
 | [x] | Component decoder and canonical validation base | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion and broader official component suite coverage. |
 | [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
 | [x] | Versioned Preview2/Preview3 capability gates | `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/preview2/component_host.dart`, `lib/src/wasi/preview3/component_host.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_versioned_host_test.dart` | Concrete P2/P3 interface adapter modules instead of generic facade binding. |
@@ -158,8 +158,9 @@ This is the implementation state as of 2026-06-22 on `main`.
   `lib/src/wasi/preview1/common/vfs.dart` for virtual files, directories,
   readdir state, hard links, symlinks/readlink, configured stream/datagram
   sockets, descriptor flags, descriptor rights, descriptor times, descriptor
-  sync/advice validation, clock/file/socket polling readiness, and descriptor
-  renumbering. Node still delegates Preview 1 behavior to `node:wasi`.
+  sync/advice validation, clock/file/socket polling readiness including
+  host-supplied socket readiness hints, and descriptor renumbering. Node still
+  delegates Preview 1 behavior to `node:wasi`.
 - Preview 1 `proc_raise` is no longer a blanket `ENOSYS` stub: native hosts
   deliver mapped process signals by default, native/browser hosts can inject a
   `procRaiseHandler` for controlled signal handling, and browser hosts still
@@ -181,8 +182,9 @@ This is the implementation state as of 2026-06-22 on `main`.
   `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; it reports
   baseline, directory-heavy, descriptor-heavy, and socket-heavy distributions.
   It also covers socket multi-iov peek/waitall, datagram truncation, socket
-  send/recv, socket polling readiness including zero-length datagram readiness
-  and queued accepts, and socket renumber/close descriptor paths.
+  send/recv, socket polling readiness including zero-length datagram readiness,
+  queued accepts, and externally backed read/write readiness hints, and socket
+  renumber/close descriptor paths.
   Stream socket sends are recorded as owned byte chunks, and long receive
   streams compact consumed prefixes in larger batches so socket-heavy reads do
   not repeatedly shift the backing buffer.
@@ -606,12 +608,22 @@ performance visible while the support surface expands.
 
 - [ ] `P1-SOCKET-CONFORMANCE` - Preview1 socket conformance edge cases.
   - Change: add focused native/browser regressions for native adapter
-    boundaries and externally backed readiness.
+    boundaries and remaining socket edge cases.
   - Evidence: `test/wasi_test.dart`, `lib/src/wasi/preview1/common/vfs.dart`.
   - Gate: `dart test test/wasi_test.dart`;
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
   - Done when: regressions cover the failing edge cases and benchmark output
     includes the affected socket paths.
+- [x] `P1-SOCKET-READINESS-HINTS` - Preview1 host-backed socket readiness.
+  - Change: let injected `WASIPreview1Socket` descriptors expose read byte-count
+    readiness and write readiness without buffering fake data.
+  - Evidence: `lib/src/wasi/preview1/socket.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`,
+    `tool/wasi_vfs_benchmark.dart`.
+  - Gate: `dart test test/wasi_test.dart`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: `poll_oneoff`/VFS reports host-supplied read readiness,
+    host-blocked write readiness, and benchmark output includes both paths.
 - [x] `PERF-VFS-DISTRIBUTIONS` - VFS/descriptor benchmark distributions.
   - Change: extend benchmark data to larger conformance-shaped path, directory,
     socket, and descriptor sets before optimizing more VFS code.

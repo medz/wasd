@@ -679,8 +679,18 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
   final closed = WASIPreview1Socket();
   closed.shutdown(receive: true, send: false);
   final listener = WASIPreview1Socket(pendingAccepted: [WASIPreview1Socket()]);
+  final external = WASIPreview1Socket(
+    readReadyBytes: _socketChunkSize ~/ 2,
+    writeReady: false,
+  );
   final vfs = Preview1VirtualFileSystem(
-    sockets: {64: readable, 65: waiting, 66: closed, 67: listener},
+    sockets: {
+      64: readable,
+      65: waiting,
+      66: closed,
+      67: listener,
+      68: external,
+    },
   );
 
   var checksum = 0;
@@ -728,10 +738,33 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
       throw StateError('queued accept socket poll failed at iteration $i');
     }
     checksum++;
+
+    final externalReadEvent = vfs.pollFdReadWrite(
+      fd: 68,
+      eventType: eventTypeFdRead,
+    );
+    if (!externalReadEvent.ready ||
+        externalReadEvent.nbytes != _socketChunkSize ~/ 2 ||
+        externalReadEvent.flags != 0 ||
+        externalReadEvent.errno != errnoSuccess) {
+      throw StateError('external readable socket poll failed at iteration $i');
+    }
+    checksum += externalReadEvent.nbytes;
+
+    final externalWriteEvent = vfs.pollFdReadWrite(
+      fd: 68,
+      eventType: eventTypeFdWrite,
+    );
+    if (externalWriteEvent.ready || externalWriteEvent.errno != errnoSuccess) {
+      throw StateError(
+        'external write-wait socket poll failed at iteration $i',
+      );
+    }
+    checksum += externalWriteEvent.errno;
   }
   watch.stop();
   return _Metric(
-    operations: options.iterations * 5,
+    operations: options.iterations * 7,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );

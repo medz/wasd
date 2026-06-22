@@ -15,20 +15,28 @@ final class WASIPreview1Socket {
   WASIPreview1Socket({
     List<int> receiveData = const <int>[],
     Iterable<WASIPreview1Socket> pendingAccepted = const <WASIPreview1Socket>[],
+    int? readReadyBytes,
+    this.writeReady,
   }) : _kind = _WASIPreview1SocketKind.stream,
        _receiveBytes = List<int>.of(receiveData, growable: true),
        _receiveMessages = ListQueue<Uint8List>(),
-       _pendingAccepted = ListQueue<WASIPreview1Socket>.of(pendingAccepted);
+       _pendingAccepted = ListQueue<WASIPreview1Socket>.of(pendingAccepted) {
+    this.readReadyBytes = readReadyBytes;
+  }
 
   /// Creates a datagram socket with optional queued receive messages.
   WASIPreview1Socket.datagram({
     Iterable<List<int>> receiveMessages = const <List<int>>[],
+    int? readReadyBytes,
+    this.writeReady,
   }) : _kind = _WASIPreview1SocketKind.datagram,
        _receiveBytes = <int>[],
        _receiveMessages = ListQueue<Uint8List>.of(
          receiveMessages.map(Uint8List.fromList),
        ),
-       _pendingAccepted = ListQueue<WASIPreview1Socket>();
+       _pendingAccepted = ListQueue<WASIPreview1Socket>() {
+    this.readReadyBytes = readReadyBytes;
+  }
 
   final _WASIPreview1SocketKind _kind;
   final List<int> _receiveBytes;
@@ -36,6 +44,7 @@ final class WASIPreview1Socket {
   final ListQueue<Uint8List> _receiveMessages;
   final List<Uint8List> _sentMessages = <Uint8List>[];
   final ListQueue<WASIPreview1Socket> _pendingAccepted;
+  int? _readReadyBytes;
   int _receiveOffset = 0;
 
   /// Whether further receive operations have been shut down.
@@ -43,6 +52,29 @@ final class WASIPreview1Socket {
 
   /// Whether further send operations have been shut down.
   bool sendShutdown = false;
+
+  /// Host-supplied read readiness when no receive data is buffered.
+  ///
+  /// Leave this as `null` to derive readiness from queued bytes, queued
+  /// datagrams, queued accepts, and receive shutdown state.
+  int? get readReadyBytes => _readReadyBytes;
+
+  set readReadyBytes(int? value) {
+    if (value != null && value < 0) {
+      throw ArgumentError.value(
+        value,
+        'readReadyBytes',
+        'must not be negative',
+      );
+    }
+    _readReadyBytes = value;
+  }
+
+  /// Host-supplied write readiness.
+  ///
+  /// Leave this as `null` to use the default Preview1 descriptor behavior:
+  /// writable unless the send side has been shut down.
+  bool? writeReady;
 
   /// Returns a copy of the bytes sent through `sock_send`.
   Uint8List get sentData => _sentBytes.toBytes();
