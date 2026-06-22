@@ -321,6 +321,65 @@ void main() {
       expect(loaded.associatedValue!.integer, 0x0102030405060708);
     });
 
+    test('rejects invalid variant payloads before writing memory', () {
+      final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+        const WasmComponentValueType.typeIndex(0),
+        [
+          const WasmComponentTypeDefinition(
+            kind: WasmComponentTypeKind.definedValue,
+            definedValue: WasmComponentDefinedValueType(
+              kind: WasmComponentDefinedValueTypeKind.variant,
+              cases: [
+                WasmComponentVariantCase(label: 'empty'),
+                WasmComponentVariantCase(
+                  label: 'number',
+                  type: WasmComponentValueType.primitive(
+                    WasmComponentPrimitiveValueType.u32,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      )!;
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final bytes = Uint8List.view(memory.buffer);
+      bytes.fillRange(32, 40, 0xaa);
+
+      expect(
+        () => codec.store(
+          memory,
+          32,
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.variant,
+            rawBytes: Uint8List(0),
+            label: 'empty',
+            associatedValue: WasmComponentValueData(
+              kind: WasmComponentValueDataKind.integer,
+              rawBytes: Uint8List(0),
+              integer: 7,
+            ),
+          ),
+        ),
+        throwsStateError,
+      );
+      expect(bytes.sublist(32, 40), everyElement(0xaa));
+
+      expect(
+        () => codec.store(
+          memory,
+          32,
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.variant,
+            rawBytes: Uint8List(0),
+            label: 'number',
+          ),
+        ),
+        throwsStateError,
+      );
+      expect(bytes.sublist(32, 40), everyElement(0xaa));
+    });
+
     test('loads and stores lists of fixed-size elements through realloc', () {
       final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
         const WasmComponentValueType.typeIndex(0),

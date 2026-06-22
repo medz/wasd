@@ -121,6 +121,9 @@ Future<void> main(List<String> args) async {
   );
   final errorContextProgram = _benchmarkErrorContextProgram(options.iterations);
   final errorContextMemory = _benchmarkErrorContextMemory(options.iterations);
+  final canonicalVariantStore = _benchmarkCanonicalVariantStore(
+    options.iterations,
+  );
 
   final payload = <String, Object?>{
     'iterations': options.iterations,
@@ -198,6 +201,7 @@ Future<void> main(List<String> args) async {
     'canonical_host_program': canonicalHostProgram.toJson(),
     'error_context_program': errorContextProgram.toJson(),
     'error_context_memory': errorContextMemory.toJson(),
+    'canonical_variant_store': canonicalVariantStore.toJson(),
   };
 
   if (options.json) {
@@ -251,6 +255,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkCanonicalHostProgram(_warmupIterations);
   _benchmarkErrorContextProgram(_warmupIterations);
   _benchmarkErrorContextMemory(_warmupIterations);
+  _benchmarkCanonicalVariantStore(_warmupIterations);
 }
 
 _Metric _benchmarkInsertGetDrop(int iterations) {
@@ -2365,6 +2370,50 @@ _Metric _benchmarkErrorContextMemory(int iterations) {
   );
 }
 
+_Metric _benchmarkCanonicalVariantStore(int iterations) {
+  final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+    const WasmComponentValueType.typeIndex(0),
+    [
+      const WasmComponentTypeDefinition(
+        kind: WasmComponentTypeKind.definedValue,
+        definedValue: WasmComponentDefinedValueType(
+          kind: WasmComponentDefinedValueTypeKind.variant,
+          cases: [
+            WasmComponentVariantCase(label: 'empty'),
+            WasmComponentVariantCase(
+              label: 'number',
+              type: WasmComponentValueType.primitive(
+                WasmComponentPrimitiveValueType.u32,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ],
+  )!;
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  final empty = _u32VariantValue(index: 0);
+  final number = _u32VariantValue(label: 'number', value: 41);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    codec.store(memory, 32, empty);
+    codec.store(memory, 40, number);
+    checksum += data.getUint8(32);
+    checksum += data.getUint8(40);
+    checksum += data.getUint32(44, Endian.little);
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _printText(Map<String, Object?> payload) {
   stdout
     ..writeln('WASI component resource table benchmark')
@@ -2394,6 +2443,7 @@ void _printText(Map<String, Object?> payload) {
     'canonical_host_program',
     'error_context_program',
     'error_context_memory',
+    'canonical_variant_store',
   ]) {
     final metric = payload[name]! as Map<String, Object?>;
     stdout

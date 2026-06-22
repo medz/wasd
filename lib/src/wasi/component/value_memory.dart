@@ -1367,28 +1367,39 @@ final class _VariantLayout extends _CanonicalValueLayout {
       );
     }
     final index = _caseIndex(value);
-    _writeUnsigned(data, pointer, _discriminantByteLength, index);
     final layout = cases[index].layout;
-    if (layout != null) {
-      final associated = value.associatedValue;
-      if (associated == null) {
+    final associated = value.associatedValue;
+    if (layout == null) {
+      if (associated != null) {
         throw StateError(
-          'WASI component canonical value ${cases[index].label} needs payload.',
+          'WASI component canonical value ${cases[index].label} must not have '
+          'payload.',
         );
       }
-      final payloadOffset = _alignTo(
-        pointer + _discriminantByteLength,
-        _maxCaseAlignment,
-      );
-      layout.storeData(
-        memory,
-        data,
-        payloadOffset,
-        associated,
-        realloc,
-        stringEncoding,
+      _writeUnsigned(data, pointer, _discriminantByteLength, index);
+      return;
+    }
+
+    final payload = associated;
+    if (payload == null) {
+      throw StateError(
+        'WASI component canonical value ${cases[index].label} needs payload.',
       );
     }
+    layout.validate('${kind.name}.${cases[index].label}', payload);
+    _writeUnsigned(data, pointer, _discriminantByteLength, index);
+    final payloadOffset = _alignTo(
+      pointer + _discriminantByteLength,
+      _maxCaseAlignment,
+    );
+    layout.storeData(
+      memory,
+      data,
+      payloadOffset,
+      payload,
+      realloc,
+      stringEncoding,
+    );
   }
 
   @override

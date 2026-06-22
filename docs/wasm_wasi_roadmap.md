@@ -208,6 +208,9 @@ too broad to verify in one commit.
     tests for the selected shape.
   - Performance gate: relevant component or async benchmark when the shape adds a
     repeated copy or allocation path.
+  - Checked child rows: `CM-VARIANT-PAYLOAD-STORE-VALIDATION` covers
+    payload-bearing and payloadless variant store validation before canonical
+    memory writes, with adapter variant/option/result benchmarks still passing.
   - Done when: validation and execution accept/reject the same shape under the
     same ownership and memory rules.
   - Evidence update: record the selected shape and command evidence.
@@ -233,6 +236,36 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `CM-VARIANT-PAYLOAD-STORE-VALIDATION` - Canonical variant store validates
+  payload shape before writing guest memory.
+  - Scope: Canonical ABI value-memory store behavior for variant, option, and
+    result-style payload cases used by Preview2/Preview3 adapters.
+  - Edit targets: `lib/src/wasi/component/value_memory.dart`,
+    `test/wasi_component_value_memory_test.dart`,
+    `tool/wasi_resource_table_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_component_value_memory_test.dart --name "rejects invalid variant payloads before writing memory" --reporter=compact`
+    failed before the fix because a payloadless variant case carrying an
+    associated payload returned successfully instead of throwing, and the same
+    path could write the discriminant before detecting invalid payload shape.
+  - Implementation gate:
+    `dart test test/wasi_component_value_memory_test.dart --name "rejects invalid variant payloads before writing memory" --reporter=compact`;
+    `dart test test/wasi_component_value_memory_test.dart --reporter=compact`;
+    `dart test test/wasi_component_async_host_test.dart --reporter=compact`;
+    `dart test test/wasi_component_host_test.dart --reporter=compact`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`
+    reported `canonical_variant_store.operations=4000` and
+    `canonical_variant_store.per_operation_us=0.26275`.
+  - Done when: payloadless cases reject associated values before memory writes,
+    payload-bearing cases reject missing or invalid payloads before writing the
+    discriminant, valid variant stores still write aligned payloads, and
+    component host async/value-memory suites keep passing.
+  - Evidence update: this checked row, the `CM-VALUE-VALIDATION` checked-child
+    list, the verification matrix, and the resource benchmark payload.
+  - Claim impact: reduces P2/P3 Canonical ABI value validation risk; does not
+    complete `CM-VALUE-VALIDATION`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-FDFLAGS-RIGHTS-PREFLIGHT` - Socket-unsupported
   `fd_fdstat_set_flags` flags are rejected before descriptor rights.
   - Scope: native/browser shared Preview1 `fd_fdstat_set_flags` errno ordering
@@ -1429,6 +1462,7 @@ copying their internals directly.
 | [x] | Internal P3 async endpoints, waitables, tasks, context, thread identity | `lib/src/wasi/component/async_host.dart`, `lib/src/wasi/component/waitable_set.dart`, `lib/src/wasi/component/task.dart`, `lib/src/wasi/component/thread.dart`, `test/wasi_component_async_host_test.dart` | `dart test test/wasi_component_async_host_test.dart test/wasi_component_waitable_set_test.dart test/wasi_component_task_test.dart test/wasi_component_thread_test.dart` | Full async lowering, task spawning, scheduler-owned thread switch/suspend/resume. |
 | [x] | Owned-resource stream/future copy buffers, pending copy events, and cancel-copy events through async, component, and versioned Preview3 hosts | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_async_host_test.dart`, `test/wasi_component_host_test.dart`, `test/wasi_component_versioned_host_test.dart`, `test/support/component_fixtures.dart` | `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart test/wasi_component_async_host_test.dart test/wasi_component_value_memory_test.dart`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Borrowed payload lifetimes, broader composite async payload execution, and public P3 API claims remain unsupported. |
 | [x] | P3 future char Unicode-scalar validation before canonical memory copy | `lib/src/wasi/component/unicode_scalar.dart`, `lib/src/wasi/component/async_host.dart`, `lib/src/wasi/component/value_memory.dart`, `lib/src/wasi/component/adapter_host.dart`, `test/wasi_component_async_host_test.dart`, `test/wasi_component_value_memory_test.dart` | `dart test test/wasi_component_async_host_test.dart --name "rejects non-scalar char future values before memory copies"`; `dart test test/wasi_component_value_memory_test.dart --name "rejects non-scalar char stores"`; `dart test test/wasi_component_async_host_test.dart`; `dart test test/wasi_component_value_memory_test.dart`; `dart test test/wasi_component_adapter_plan_test.dart`; `dart test test/wasi_component_host_test.dart`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`; `dart analyze` | Full Preview3 still needs generated world/interface ingestion, official component-suite style runs, and broader async shape coverage. |
+| [x] | Canonical variant/option/result payload validation before value-memory writes | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_value_memory_test.dart`, `tool/wasi_resource_table_benchmark.dart` | `dart test test/wasi_component_value_memory_test.dart --name "rejects invalid variant payloads before writing memory" --reporter=compact`; `dart test test/wasi_component_value_memory_test.dart --reporter=compact`; `dart test test/wasi_component_async_host_test.dart --reporter=compact`; `dart test test/wasi_component_host_test.dart --reporter=compact`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`; `dart analyze` | Invalid payloadless or missing-payload variant stores now fail before discriminant writes, and valid variant stores are measured by `canonical_variant_store`; full P2/P3 support still needs WIT ingestion, generated world binding, and broader component-suite runs. |
 | [x] | Canonical lift/lower adapter planning and internal callback invocation | `lib/src/wasi/component/adapter_plan.dart`, `lib/src/wasi/component/adapter_host.dart`, `test/wasi_component_adapter_plan_test.dart` | `dart test test/wasi_component_adapter_plan_test.dart`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Automatic binding of decoded lift/lower definitions to instantiated core/component functions. |
 | [ ] | Preview1 full socket conformance | Add focused regressions under `test/wasi_test.dart` and VFS/socket benchmarks | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --json` | Native adapter boundaries and broader socket conformance remain incomplete. |
 | [x] | WIT package/interface/world boundary parser | `lib/src/wasi/component/wit_document.dart`, `test/wasi_component_wit_test.dart` | `dart test test/wasi_component_wit_test.dart`; `dart analyze` | Parser evidence alone does not unlock P2/P3 support; it only feeds adapter binding. |
@@ -3423,6 +3457,37 @@ performance visible while the support surface expands.
     references fail with line/column diagnostics that name the boundary.
   - Evidence update: the verification matrix gains the WIT parser evidence, but
     `WIT-INGESTION`, `SUPPORT-P2`, and `SUPPORT-P3` stay unchecked.
+- [x] `CM-VARIANT-PAYLOAD-STORE-VALIDATION` - Canonical variant store rejects
+  invalid payload shape before memory writes.
+  - Scope: Canonical ABI value-memory store behavior for variant, option, and
+    result-style payload cases used by Preview2/Preview3 adapters.
+  - Edit targets: `lib/src/wasi/component/value_memory.dart`,
+    `test/wasi_component_value_memory_test.dart`,
+    `tool/wasi_resource_table_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_component_value_memory_test.dart --name "rejects invalid variant payloads before writing memory" --reporter=compact`
+    failed before the fix because a payloadless variant case with an associated
+    payload returned successfully, and invalid payload paths could mutate the
+    discriminant byte before reporting the bad value.
+  - Implementation gate:
+    `dart test test/wasi_component_value_memory_test.dart --name "rejects invalid variant payloads before writing memory" --reporter=compact`;
+    `dart test test/wasi_component_value_memory_test.dart --reporter=compact`;
+    `dart test test/wasi_component_async_host_test.dart --reporter=compact`;
+    `dart test test/wasi_component_host_test.dart --reporter=compact`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`
+    reported `canonical_variant_store.operations=4000` and
+    `canonical_variant_store.per_operation_us=0.26275`.
+  - Done when: payloadless cases reject associated values before writing memory,
+    payload cases reject missing or invalid payloads before writing the
+    discriminant, valid variant payload stores still succeed, and the component
+    host/value-memory suites keep passing.
+  - Evidence update: this checked row, the `Current Execution Board`
+    `CM-VALUE-VALIDATION` checked-child list, the verification matrix, and the
+    resource benchmark payload.
+  - Claim impact: reduces P2/P3 Canonical ABI value validation risk; does not
+    complete `CM-VALUE-VALIDATION`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [ ] `CM-VALUE-VALIDATION` - Async host value validation beyond primitive
   aliases.
   - Change: extend only when matching lowering/lifting support exists for the
