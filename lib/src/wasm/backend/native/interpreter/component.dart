@@ -4285,10 +4285,16 @@ final class _WasmComponentValidationContext {
             ),
           );
         case _WasmComponentDefinitionEventKind.value:
+          final valueDefinition = valueDefinitions[event.index];
+          validateComponentValueType(
+            valueDefinition.type,
+            'value[${event.index}].type',
+            scopedTypeDefinitions: visibleTypeDefinitionsForRead(),
+          );
           valueEntries.add(
             _WasmComponentValueIndexEntry(
               originPath: 'value[${event.index}]',
-              type: valueDefinitions[event.index].type,
+              type: valueDefinition.type,
             ),
           );
       }
@@ -5654,8 +5660,113 @@ WasmComponentValueDefinition _readValueDefinition(
     type: type,
     payloadSize: payloadSize,
     rawBytes: rawBytes,
-    value: _decodeComponentValueData(type, rawBytes, typeDefinitions),
+    value: _decodeComponentValueDataOrRawForInvalidTypeReference(
+      type,
+      rawBytes,
+      typeDefinitions,
+    ),
   );
+}
+
+WasmComponentValueData _decodeComponentValueDataOrRawForInvalidTypeReference(
+  WasmComponentValueType type,
+  Uint8List rawBytes,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+) {
+  try {
+    return _decodeComponentValueData(type, rawBytes, typeDefinitions);
+  } on FormatException {
+    if (!_componentValueTypeHasInvalidTypeReference(type, typeDefinitions)) {
+      rethrow;
+    }
+    return WasmComponentValueData(
+      kind: WasmComponentValueDataKind.raw,
+      rawBytes: rawBytes,
+    );
+  }
+}
+
+bool _componentValueTypeHasInvalidTypeReference(
+  WasmComponentValueType? type,
+  List<WasmComponentTypeDefinition> typeDefinitions, [
+  Set<int>? visiting,
+]) {
+  if (type == null || type.kind == WasmComponentValueTypeKind.primitive) {
+    return false;
+  }
+
+  final typeIndex = type.typeIndex;
+  if (typeIndex == null ||
+      typeIndex < 0 ||
+      typeIndex >= typeDefinitions.length) {
+    return true;
+  }
+
+  final active = visiting ?? <int>{};
+  if (!active.add(typeIndex)) {
+    return false;
+  }
+
+  final definition = typeDefinitions[typeIndex];
+  final definedValue = definition.definedValue;
+  if (definition.kind != WasmComponentTypeKind.definedValue ||
+      definedValue == null) {
+    active.remove(typeIndex);
+    return true;
+  }
+
+  final hasInvalidReference = switch (definedValue.kind) {
+    WasmComponentDefinedValueTypeKind.record => definedValue.fields.any(
+      (field) => _componentValueTypeHasInvalidTypeReference(
+        field.type,
+        typeDefinitions,
+        active,
+      ),
+    ),
+    WasmComponentDefinedValueTypeKind.variant => definedValue.cases.any(
+      (case_) => _componentValueTypeHasInvalidTypeReference(
+        case_.type,
+        typeDefinitions,
+        active,
+      ),
+    ),
+    WasmComponentDefinedValueTypeKind.list ||
+    WasmComponentDefinedValueTypeKind.fixedList ||
+    WasmComponentDefinedValueTypeKind.option ||
+    WasmComponentDefinedValueTypeKind.stream ||
+    WasmComponentDefinedValueTypeKind.future =>
+      _componentValueTypeHasInvalidTypeReference(
+        definedValue.elementType,
+        typeDefinitions,
+        active,
+      ),
+    WasmComponentDefinedValueTypeKind.tuple => definedValue.types.any(
+      (item) => _componentValueTypeHasInvalidTypeReference(
+        item,
+        typeDefinitions,
+        active,
+      ),
+    ),
+    WasmComponentDefinedValueTypeKind.result =>
+      _componentValueTypeHasInvalidTypeReference(
+            definedValue.okType,
+            typeDefinitions,
+            active,
+          ) ||
+          _componentValueTypeHasInvalidTypeReference(
+            definedValue.errorType,
+            typeDefinitions,
+            active,
+          ),
+    WasmComponentDefinedValueTypeKind.primitive ||
+    WasmComponentDefinedValueTypeKind.flags ||
+    WasmComponentDefinedValueTypeKind.enumeration ||
+    WasmComponentDefinedValueTypeKind.own ||
+    WasmComponentDefinedValueTypeKind.borrow => false,
+  };
+
+  active.remove(typeIndex);
+  return hasInvalidReference;
 }
 
 WasmComponentValueData _decodeComponentValueData(

@@ -972,6 +972,26 @@ void main() {
       );
     });
 
+    test('reports invalid component value definition type indexes', () {
+      final wrongSort = WasmComponent.decode(
+        _valueDefinitionWrongSortTypeIndexComponentBytes(),
+      ).validate();
+      expect(wrongSort, hasLength(1));
+      expect(
+        wrongSort.single.message,
+        contains('does not refer to a value type'),
+      );
+
+      final outOfRange = WasmComponent.decode(
+        _valueDefinitionOutOfRangeTypeIndexComponentBytes(),
+      ).validate();
+      expect(outOfRange, hasLength(1));
+      expect(
+        outOfRange.single.message,
+        contains('Unknown Wasm component value type index'),
+      );
+    });
+
     test('reports invalid component resource type indexes', () {
       expect(
         WasmComponent.decode(_ownedResourceTypeComponentBytes()).validate(),
@@ -6997,6 +7017,17 @@ Uint8List _valueDefinitionsComponentBytes() => Uint8List.fromList(const <int>[
   0x68,
   0x69,
 ]);
+
+Uint8List _valueDefinitionWrongSortTypeIndexComponentBytes() =>
+    _componentBytes([
+      _componentFunctionTypeSection(),
+      _componentSection(0x0c, const <int>[0x01, 0x00, 0x00]),
+    ]);
+
+Uint8List _valueDefinitionOutOfRangeTypeIndexComponentBytes() =>
+    _componentBytes([
+      _componentSection(0x0c, const <int>[0x01, 0x00, 0x00]),
+    ]);
 
 Uint8List _typedValueDefinitionsComponentBytes() =>
     Uint8List.fromList(const <int>[

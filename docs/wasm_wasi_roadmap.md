@@ -7,7 +7,7 @@ ledger for that transition. A support claim is not done until the checklist row
 names the runtime path, the proof files, the verification command, and the exact
 condition for marking it complete.
 
-Status date: 2026-06-22.
+Status date: 2026-06-23.
 
 ## Roadmap Contract
 
@@ -223,6 +223,19 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `CM-VALUE-DEFINITION-TYPE-VALIDATION` - Value definitions validate their
+  component value type indexes before becoming value entries.
+  - Evidence:
+    `dart test test/component_test.dart --name "reports invalid component value definition type indexes"`
+    failed before the fix because a value definition whose type index referenced
+    a function type threw a decode-time `FormatException` before validator
+    diagnostics, then passed after the fix;
+    `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`; `dart analyze`;
+    `dart test`.
+  - Claim impact: moves one P2/P3 component-model value definition index-space
+    error from decode-time exception to deterministic validation; does not
+    complete `CM-VALIDATION-GAPS`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-POLL-WRITE-HANGUP` - `poll_oneoff(fd_write)` reports hangup
   after send-side socket shutdown.
   - Evidence:
@@ -2284,6 +2297,34 @@ performance visible while the support surface expands.
     - `dart test test/wasi_component_async_host_test.dart`
   - Done when: unsupported shapes fail during validation with structured
     diagnostics before host mutation.
+- [x] `CM-VALUE-DEFINITION-TYPE-VALIDATION` - Validate value definition type
+  indexes in definition order.
+  - Scope: component-model value section decoding and validation before value
+    index entries become visible to exports, equality imports, or instantiation
+    arguments.
+  - Edit targets: `lib/src/wasm/backend/native/interpreter/component.dart`,
+    `test/component_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/component_test.dart --name "reports invalid component value definition type indexes"`
+    failed before the fix because a value definition using a function type index
+    threw a decode-time `FormatException`, and an out-of-range value definition
+    type index could not be reported as a structured validation error.
+  - Implementation gate:
+    `dart test test/component_test.dart --name "reports invalid component value definition type indexes"`;
+    `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`; `dart analyze`;
+    `dart test`.
+  - Performance gate: N/A; this is validation-only, the recursive invalid-type
+    guard only runs after a value-definition decode error, and no runtime host
+    path is touched.
+  - Done when: wrong-sort and out-of-range value definition type indexes produce
+    `value[i].type` validation diagnostics before value entries can be consumed
+    or host binding can observe them, while malformed payloads for valid types
+    still remain decode errors.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: reduces P2/P3 component validation risk; no direct support
+    gate.
 - [x] `CM-INLINE-INSTANCE-DUPLICATE-EXPORTS` - Reject duplicate component and
   core inline instance export names.
   - Scope: component-model validation for `WasmComponentInstance.inlineExports`
