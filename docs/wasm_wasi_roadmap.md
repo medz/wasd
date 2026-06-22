@@ -73,7 +73,7 @@ test or done condition is too broad to verify in one commit.
 | [ ] | `P1-SOCKET-CONFORMANCE` | Add the next missing Preview1 socket/native adapter regression in `test/wasi_test.dart`. | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Moves `SUPPORT-P1` only after remaining P1 socket rows are complete. |
 | [ ] | `PERF-HEAVY-RUNNERS` | Add timing/cache evidence for heavy spec and DOOM paths before changing runtime algorithms for heat. | targeted spec runner command; `dart test test/doom_smoke_test.dart` | Gives performance evidence for `SUPPORT-WASM` and `PERFORMANCE-GATES`. |
 | [ ] | `CM-VALIDATION-GAPS` | Add a deterministic component validation failure before adding host behavior. | `dart test test/component_test.dart`; `dart test test/wasi_component_async_host_test.dart` | Reduces late runtime traps in P2/P3 adapter work. |
-| [ ] | `WIT-DOCUMENT-BOUNDARIES` | Add internal WIT package/interface/world parsing with diagnostics, no public support claim. | `dart test test/wasi_component_wit_test.dart`; `dart analyze` | Provides structured input for later P2/P3 adapters. |
+| [x] | `WIT-DOCUMENT-BOUNDARIES` | Internal WIT package/interface/world parsing with diagnostics is implemented under `lib/src/wasi/component/`. | `dart test test/wasi_component_wit_test.dart`; `dart analyze` | Provides structured input for later P2/P3 adapters, but no public support claim. |
 | [ ] | `P2-P3-ADAPTERS` | Bind one real Preview2/Preview3 adapter path over shared component primitives. | `dart test test/wasi_component_versioned_host_test.dart` plus adapter-specific tests | Starts concrete `SUPPORT-P2` / `SUPPORT-P3` evidence. |
 | [ ] | `P3-ASYNC-COPY-GAPS` | Expand one validated async value shape through copy, waitable, cancel/drop, and benchmark paths. | `dart test test/wasi_component_host_test.dart`; async/resource benchmark commands | Moves P3 stream/future support toward production coverage. |
 | [ ] | `CM-VALUE-VALIDATION` | Add one composite value shape only when the same shape can be executed. | value-memory, async-host, and component-host test gates | Keeps adapter value semantics consistent. |
@@ -185,7 +185,7 @@ copying their internals directly.
 | [x] | Owned-resource stream/future copy buffers, pending copy events, and cancel-copy events through async, component, and versioned Preview3 hosts | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_async_host_test.dart`, `test/wasi_component_host_test.dart`, `test/wasi_component_versioned_host_test.dart`, `test/support/component_fixtures.dart` | `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart test/wasi_component_async_host_test.dart test/wasi_component_value_memory_test.dart`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Borrowed payload lifetimes, nested async payloads, and public P3 API claims remain unsupported. |
 | [x] | Canonical lift/lower adapter planning and internal callback invocation | `lib/src/wasi/component/adapter_plan.dart`, `lib/src/wasi/component/adapter_host.dart`, `test/wasi_component_adapter_plan_test.dart` | `dart test test/wasi_component_adapter_plan_test.dart`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Automatic binding of decoded lift/lower definitions to instantiated core/component functions. |
 | [ ] | Preview1 full socket conformance | Add focused regressions under `test/wasi_test.dart` and VFS/socket benchmarks | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --json` | Native adapter boundaries and broader socket conformance remain incomplete. |
-| [ ] | WIT package/interface/world boundary parser | Add internal WIT document model, parser, and diagnostics under `lib/src/wasi/component/` | `dart test test/wasi_component_wit_test.dart`; `dart analyze` | Parser evidence alone does not unlock P2/P3 support; it only feeds adapter binding. |
+| [x] | WIT package/interface/world boundary parser | `lib/src/wasi/component/wit_document.dart`, `test/wasi_component_wit_test.dart` | `dart test test/wasi_component_wit_test.dart`; `dart analyze` | Parser evidence alone does not unlock P2/P3 support; it only feeds adapter binding. |
 | [ ] | P2/P3 world/interface ingestion | Bind parsed/generated WIT worlds through versioned Preview2/Preview3 adapters | Future gate: dedicated WIT ingestion tests plus component host binding tests | No public claim until generated/imported worlds bind through versioned hosts. |
 | [ ] | Full WASI 0.3 support | Real P3 components through versioned host with resources, streams, futures, waitables, tasks, and async behavior | Future gate: wasi-testsuite-style component runs plus performance gates | Current work is internal capability coverage, not full P3 support. |
 
@@ -429,6 +429,11 @@ This is the implementation state as of 2026-06-22 on `main`.
   memory lowering through this shared codec without re-deriving byte widths,
   alignments, padding, or dynamic payload allocation separately from the
   executable copy path.
+  An internal WIT document boundary parser now normalizes package, interface,
+  world, import, and export declarations into structured objects with
+  line/column diagnostics for duplicate names and unresolved local world
+  references. This is a parser/input boundary for future Preview2/Preview3
+  adapter binding, not WIT-generated execution or a public P2/P3 support claim.
   Component-host tests now also exercise decoded core-memory primitive
   `stream<T>`/`future<T>` copy paths through synchronous Canonical ABI calls,
   pending fixed-size and primitive string completion through waitable events,
@@ -763,13 +768,13 @@ performance visible while the support surface expands.
     adapter-specific tests.
   - Done when: a real versioned adapter can bind and execute the covered
     component path without constructing a mixed-version generic host manually.
-- [ ] `WIT-DOCUMENT-BOUNDARIES` - WIT package/interface/world boundary parser.
+- [x] `WIT-DOCUMENT-BOUNDARIES` - WIT package/interface/world boundary parser.
   - Scope: internal component-model input normalization only; no generated
     bindings and no public Preview2/Preview3 support claim.
-  - Edit targets: `lib/src/wasi/component/`, new
+  - Edit targets: `lib/src/wasi/component/wit_document.dart`,
     `test/wasi_component_wit_test.dart`, and this roadmap.
-  - Red test: `dart test test/wasi_component_wit_test.dart` should fail before
-    the parser/model exists.
+  - Red test: `dart test test/wasi_component_wit_test.dart` failed before the
+    parser/model existed.
   - Implementation gate: `dart test test/wasi_component_wit_test.dart`;
     `dart analyze`.
   - Performance gate: N/A for the first parser boundary; add a benchmark before
