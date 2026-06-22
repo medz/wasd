@@ -20,6 +20,7 @@ const int _rightFdRead = 1 << 1;
 const int _rightFdFdstatSetFlags = 1 << 3;
 const int _rightFdWrite = 1 << 6;
 const int _rightFdFdstatGet = 1 << 21;
+const int _rightPollFdReadwrite = 1 << 27;
 const int _rightSockShutdown = 1 << 28;
 const int _rightSockAccept = 1 << 29;
 const int _rightPathOpen = 1 << 13;
@@ -1875,6 +1876,99 @@ void main() {
           expect(acceptedFd, greaterThanOrEqualTo(64));
           expect(fdFdstatGet.ref([acceptedFd, fdstatPtr]), 0);
           expect(bytes[fdstatPtr], _filetypeSocketStream);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'poll_oneoff gates queued socket accepts on sock_accept rights',
+        () async {
+          final allowedListener = WASIPreview1Socket(
+            pendingAccepted: [WASIPreview1Socket()],
+          );
+          final deniedListener = WASIPreview1Socket(
+            pendingAccepted: [WASIPreview1Socket()],
+          );
+          final socketWasi = WASI(
+            sockets: {29: allowedListener, 30: deniedListener},
+          );
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final pollOneoff =
+              preview1['poll_oneoff'] as FunctionImportExportValue;
+          final fdFdstatSetRights =
+              preview1['fd_fdstat_set_rights'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const inPtr = 3552;
+          const outPtr = 3616;
+          const neventsPtr = 3680;
+
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0x9909,
+            tag: _eventTypeFdRead,
+            fd: 29,
+          );
+
+          expect(
+            fdFdstatSetRights.ref([
+              29,
+              _rightPollFdReadwrite | _rightSockAccept,
+              0,
+            ]),
+            0,
+          );
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]),
+            ),
+            0,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0x9909);
+          expect(data.getUint16(outPtr + _eventErrorOffset, Endian.little), 0);
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeFdRead);
+
+          expect(
+            fdFdstatSetRights.ref([
+              30,
+              _rightPollFdReadwrite | _rightFdRead,
+              0,
+            ]),
+            0,
+          );
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0x9910,
+            tag: _eventTypeFdRead,
+            fd: 30,
+          );
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]),
+            ),
+            0,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0x9910);
+          expect(
+            data.getUint16(outPtr + _eventErrorOffset, Endian.little),
+            _errnoNotcapable,
+          );
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeFdRead);
         },
         skip: _skipOnNode(
           'Skipping on Node.js; socket behavior is delegated to node:wasi.',

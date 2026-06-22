@@ -217,6 +217,22 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-POLL-ACCEPT-RIGHTS` - `poll_oneoff(fd_read)` uses
+  `SOCK_ACCEPT` rights for queued accept readiness.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "poll_oneoff gates queued socket accepts on sock_accept rights"`
+    failed before the fix because a listener with `POLL_FD_READWRITE |
+    SOCK_ACCEPT` but no `FD_READ` reported `ENOTCAPABLE(76)`, then passed after
+    the fix;
+    `dart test test/wasi_test.dart --name "poll_oneoff"`;
+    `dart test -p chrome test/wasi_test.dart --name "poll_oneoff"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
+    `dart analyze`.
+  - Claim impact: closes one Preview1 socket poll-rights conformance gap for
+    native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-PATH-OPEN-OFLAGS` - `path_open` implements Preview1 create,
   exclusive-create, and truncate semantics over the shared native/browser VFS.
   - Evidence:
@@ -1181,6 +1197,33 @@ performance visible while the support surface expands.
     matrix.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
     support or any P2/P3 support gate.
+- [x] `P1-SOCKET-POLL-ACCEPT-RIGHTS` - Socket accept readiness is gated by
+  `SOCK_ACCEPT`, not generic `FD_READ`.
+  - Scope: native/browser shared Preview1 `poll_oneoff(fd_read)` readiness for
+    stream sockets with queued accepts.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "poll_oneoff gates queued socket accepts on sock_accept rights"`
+    failed before the fix because a listener descriptor with
+    `POLL_FD_READWRITE | SOCK_ACCEPT` but no `FD_READ` reported
+    `ENOTCAPABLE(76)`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "poll_oneoff"`;
+    `dart test -p chrome test/wasi_test.dart --name "poll_oneoff"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: queued accept readiness reports ready when the descriptor has
+    `POLL_FD_READWRITE | SOCK_ACCEPT`, reports `ENOTCAPABLE` when the descriptor
+    only has `POLL_FD_READWRITE | FD_READ`, and ordinary stream/datagram read
+    readiness continues to use `FD_READ`.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
+    socket conformance row.
 - [x] `P1-SOCKET-DATAGRAM-PARTIAL-SEND-INVALID` - Host-backed datagram sends
   reject partial message acceptance.
   - Scope: shared Preview1 `WASIPreview1Socket.datagram` send handler results
