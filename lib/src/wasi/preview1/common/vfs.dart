@@ -240,11 +240,12 @@ final class Preview1VirtualFileSystem {
       } else {
         final remainingReceiveLength = socket.remainingReceiveLength;
         final readReadyBytes = socket.readReadyBytes;
+        final hasReadReadyHint = readReadyBytes != null && readReadyBytes > 0;
         if (socket.hasPendingAccept) {
           if (descriptorHasRight(fd, rightSockAccept)) {
             return const Preview1FdPollReadiness.ready();
           }
-          if (remainingReceiveLength == 0 && readReadyBytes == null) {
+          if (remainingReceiveLength == 0 && !hasReadReadyHint) {
             return const Preview1FdPollReadiness.error(errnoNotcapable);
           }
         }
@@ -254,7 +255,7 @@ final class Preview1VirtualFileSystem {
           }
           return Preview1FdPollReadiness.ready(nbytes: remainingReceiveLength);
         }
-        if (readReadyBytes != null) {
+        if (hasReadReadyHint) {
           if (!hasFdRead) {
             return const Preview1FdPollReadiness.error(errnoNotcapable);
           }

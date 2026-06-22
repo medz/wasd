@@ -248,6 +248,13 @@ void main() {
       );
       expect(readWaiting.ready, isFalse);
 
+      socket.readReadyBytes = 0;
+      final zeroReadyRead = vfs.pollFdReadWrite(
+        fd: 70,
+        eventType: _eventTypeFdRead,
+      );
+      expect(zeroReadyRead.ready, isFalse);
+
       socket.addReceiveData([1, 2, 3]);
       final bufferedRead = vfs.pollFdReadWrite(
         fd: 70,
@@ -1739,6 +1746,73 @@ void main() {
           expect(sockSend.ref([29, sendIovPtr, 1, 0, sendCountPtr]), 0);
           expect(data.getUint32(sendCountPtr, Endian.little), 4);
           expect(utf8.decode(external.sentData), 'send');
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'poll_oneoff ignores zero-byte stream readiness hints',
+        () async {
+          final socket = WASIPreview1Socket(readReadyBytes: 0);
+          final socketWasi = WASI(sockets: {37: socket});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final pollOneoff =
+              preview1['poll_oneoff'] as FunctionImportExportValue;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const inPtr = 5024;
+          const outPtr = 5136;
+          const neventsPtr = 5248;
+          const iovPtr = 5264;
+          const bufferPtr = 5296;
+          const countPtr = 5328;
+          const flagsPtr = 5344;
+
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0x1010,
+            tag: _eventTypeFdRead,
+            fd: 37,
+          );
+          _writePollSubscription(
+            data,
+            inPtr + _subscriptionSize,
+            userdata: 0x2020,
+            tag: _eventTypeClock,
+          );
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 2, neventsPtr]),
+            ),
+            0,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0x2020);
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeClock);
+
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 4, Endian.little);
+          data.setUint32(countPtr, 0xfeedface, Endian.little);
+          data.setUint16(flagsPtr, 0xbeef, Endian.little);
+          expect(
+            sockRecv.ref([37, iovPtr, 1, 0, countPtr, flagsPtr]),
+            _errnoAgain,
+          );
+          expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+          expect(data.getUint16(flagsPtr, Endian.little), 0xbeef);
         },
         skip: _skipOnNode(
           'Skipping on Node.js; socket behavior is delegated to node:wasi.',

@@ -217,6 +217,24 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-POLL-ZERO-HINT` - Stream socket `readReadyBytes: 0` does not
+  produce a false `poll_oneoff(fd_read)` readiness event.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "virtual socket poll honors host readiness hints"`
+    failed before the fix because shared VFS treated a zero-byte hint as ready;
+    `dart test test/wasi_test.dart --name "poll_oneoff ignores zero-byte stream readiness hints"`
+    failed before the fix because runtime `poll_oneoff` wrote both the false
+    fd-read event and the fallback clock event, then both focused tests passed
+    after the fix;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "poll_oneoff ignores zero-byte stream readiness hints"`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`
+    reported `socket_poll_readiness.operations=72000` for the socket-heavy
+    distribution with the zero-hint non-ready branch covered;
+    `dart analyze`.
+  - Claim impact: closes one Preview1 socket busy-poll conformance and
+    performance gap for native/browser hosts; does not complete
+    `P1-SOCKET-CONFORMANCE`, `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-POLL-PROVIDER-READINESS` - `poll_oneoff(fd_read)` observes
   host-backed stream providers when no explicit readiness hint is set.
   - Evidence:

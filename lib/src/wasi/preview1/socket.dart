@@ -104,6 +104,11 @@ final class WASIPreview1Socket {
   ///
   /// Leave this as `null` to derive readiness from queued bytes, queued
   /// datagrams, queued accepts, and receive shutdown state.
+  ///
+  /// Set a positive value to make `poll_oneoff(fd_read)` report that many
+  /// readable bytes. A value of `0` is treated as no stream-read readiness;
+  /// queue a zero-length datagram or shut down the receive side when the host
+  /// needs to report a real zero-byte readable event.
   int? get readReadyBytes => _readReadyBytes;
 
   set readReadyBytes(int? value) {

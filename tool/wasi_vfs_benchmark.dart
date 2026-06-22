@@ -921,6 +921,7 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
     readReadyBytes: _socketChunkSize ~/ 2,
     writeReady: false,
   );
+  final zeroHint = WASIPreview1Socket(readReadyBytes: 0);
   var providerCalls = 0;
   final providerBacked = WASIPreview1Socket(
     receiveDataProvider: (maxBytes) {
@@ -939,6 +940,7 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
       67: listener,
       68: external,
       69: providerBacked,
+      70: zeroHint,
     },
   );
   final providerDrainBuffer = Uint8List(1);
@@ -1012,6 +1014,15 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
     }
     checksum += externalWriteEvent.errno;
 
+    final zeroHintReadEvent = vfs.pollFdReadWrite(
+      fd: 70,
+      eventType: eventTypeFdRead,
+    );
+    if (zeroHintReadEvent.ready || zeroHintReadEvent.errno != errnoSuccess) {
+      throw StateError('zero-hint stream socket poll failed at iteration $i');
+    }
+    checksum += zeroHintReadEvent.errno;
+
     final providerReadEvent = vfs.pollFdReadWrite(
       fd: 69,
       eventType: eventTypeFdRead,
@@ -1037,7 +1048,7 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
     throw StateError('provider-backed stream socket poll count mismatch');
   }
   return _Metric(
-    operations: options.iterations * 8,
+    operations: options.iterations * 9,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
