@@ -442,6 +442,8 @@ final class WASIComponentCanonicalAdapterOperation {
         flatArgs,
         offset,
       ),
+      WASIComponentCanonicalAdapterFlatValueKind.errorContext =>
+        _loadFlatErrorContext(path, flatArgs, offset),
       WASIComponentCanonicalAdapterFlatValueKind.primitive => throw StateError(
         'Primitive flat layout without a primitive type.',
       ),
@@ -702,6 +704,22 @@ final class WASIComponentCanonicalAdapterOperation {
   );
 }
 
+({Object? value, int nextOffset}) _loadFlatErrorContext(
+  String path,
+  List<Object?> flatArgs,
+  int offset,
+) {
+  if (offset >= flatArgs.length) {
+    throw StateError(
+      'WASI component canonical adapter value $path expected a flat error-context handle.',
+    );
+  }
+  return (
+    value: _expectFlatErrorContextHandle(path, flatArgs[offset]),
+    nextOffset: offset + 1,
+  );
+}
+
 ({Object? value, int nextOffset}) _loadFlatList(
   WASIComponentCanonicalAdapterFlatValuePlan layout,
   String path,
@@ -849,6 +867,9 @@ List<Object?> _storeFlatLayout(
       WASIComponentCanonicalAdapterFlatValueKind.resource => <Object?>[
         _flatResourceHandleToInt(layout, path, value),
       ],
+      WASIComponentCanonicalAdapterFlatValueKind.errorContext => <Object?>[
+        _flatErrorContextHandleToInt(path, value),
+      ],
       WASIComponentCanonicalAdapterFlatValueKind.primitive => throw StateError(
         'Primitive flat layout without a primitive type.',
       ),
@@ -907,6 +928,9 @@ WasmComponentValueData _componentValueDataFromFlatValue(
   final primitive = layout.primitive;
   if (layout.kind == WASIComponentCanonicalAdapterFlatValueKind.resource) {
     return _resourceHandleDataFromFlatValue(path, value);
+  }
+  if (layout.kind == WASIComponentCanonicalAdapterFlatValueKind.errorContext) {
+    return _errorContextHandleDataFromFlatValue(path, value);
   }
   if (primitive == null) {
     return _nonPrimitiveDataFromComponentValue(layout, path, value);
@@ -1000,7 +1024,8 @@ WasmComponentValueDataKind _flatCompositeValueDataKind(
     WASIComponentCanonicalAdapterFlatValueKind.option ||
     WASIComponentCanonicalAdapterFlatValueKind.result ||
     WASIComponentCanonicalAdapterFlatValueKind.variant ||
-    WASIComponentCanonicalAdapterFlatValueKind.resource => throw StateError(
+    WASIComponentCanonicalAdapterFlatValueKind.resource ||
+    WASIComponentCanonicalAdapterFlatValueKind.errorContext => throw StateError(
       'Flat layout is not composite.',
     ),
   };
@@ -1029,6 +1054,8 @@ WasmComponentValueDataKind _flatValueDataKind(
     WASIComponentCanonicalAdapterFlatValueKind.variant =>
       WasmComponentValueDataKind.variant,
     WASIComponentCanonicalAdapterFlatValueKind.resource =>
+      WasmComponentValueDataKind.integer,
+    WASIComponentCanonicalAdapterFlatValueKind.errorContext =>
       WasmComponentValueDataKind.integer,
     WASIComponentCanonicalAdapterFlatValueKind.primitive => throw StateError(
       'Primitive flat layouts use primitive value data.',
@@ -1069,6 +1096,34 @@ Object? _resourceHandleFromData(
   }
   throw StateError(
     'WASI component canonical adapter value $path expected ${layout.handleKind!.name} resource handle data.',
+  );
+}
+
+int _flatErrorContextHandleToInt(String path, Object? value) {
+  final direct = value is WasmComponentValueData
+      ? _errorContextHandleFromData(path, value)
+      : value;
+  return _expectFlatErrorContextHandle(path, direct);
+}
+
+WasmComponentValueData _errorContextHandleDataFromFlatValue(
+  String path,
+  Object? value,
+) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.integer,
+    rawBytes: Uint8List(0),
+    integer: _expectFlatErrorContextHandle(path, value),
+  );
+}
+
+Object? _errorContextHandleFromData(String path, WasmComponentValueData value) {
+  if (value.kind == WasmComponentValueDataKind.integer &&
+      value.integer is int) {
+    return value.integer;
+  }
+  throw StateError(
+    'WASI component canonical adapter value $path expected error-context handle data.',
   );
 }
 
@@ -1527,13 +1582,19 @@ int _expectFlatInt(String path, Object? value) {
   );
 }
 
-int _expectFlatResourceHandle(String path, Object? value) {
+int _expectFlatResourceHandle(String path, Object? value) =>
+    _expectFlatU32Handle(path, value, 'resource');
+
+int _expectFlatErrorContextHandle(String path, Object? value) =>
+    _expectFlatU32Handle(path, value, 'error-context');
+
+int _expectFlatU32Handle(String path, Object? value, String name) {
   final handle = _expectFlatInt(path, value);
   if (handle >= 0 && handle <= 0xffffffff) {
     return handle;
   }
   throw StateError(
-    'WASI component canonical adapter value $path expected a canonical u32 resource handle.',
+    'WASI component canonical adapter value $path expected a canonical u32 $name handle.',
   );
 }
 

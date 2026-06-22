@@ -73,6 +73,8 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentAdapterResultFlatInvoke(options.iterations);
   final componentAdapterResourceFlatInvoke =
       _benchmarkComponentAdapterResourceFlatInvoke(options.iterations);
+  final componentAdapterErrorContextFlatInvoke =
+      _benchmarkComponentAdapterErrorContextFlatInvoke(options.iterations);
   final componentAdapterStringMemoryInvoke =
       _benchmarkComponentAdapterStringMemoryInvoke(options.iterations);
   final componentHostStreamMemoryBinding =
@@ -130,6 +132,8 @@ Future<void> main(List<String> args) async {
         .toJson(),
     'component_adapter_resource_flat_invoke': componentAdapterResourceFlatInvoke
         .toJson(),
+    'component_adapter_error_context_flat_invoke':
+        componentAdapterErrorContextFlatInvoke.toJson(),
     'component_adapter_string_memory_invoke': componentAdapterStringMemoryInvoke
         .toJson(),
     'component_host_stream_memory_binding': componentHostStreamMemoryBinding
@@ -176,7 +180,11 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentAdapterRecordFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterFlagsEnumFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterListFlatInvoke(_warmupIterations);
+  _benchmarkComponentAdapterVariantFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterOptionFlatInvoke(_warmupIterations);
+  _benchmarkComponentAdapterResultFlatInvoke(_warmupIterations);
+  _benchmarkComponentAdapterResourceFlatInvoke(_warmupIterations);
+  _benchmarkComponentAdapterErrorContextFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringMemoryInvoke(_warmupIterations);
   _benchmarkComponentHostStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostRecordStreamMemoryBinding(_warmupIterations);
@@ -890,6 +898,35 @@ _Metric _benchmarkComponentAdapterResourceFlatInvoke(int iterations) {
 
   return _Metric(
     operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentAdapterErrorContextFlatInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalErrorContextLiftLowerComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {1: (_) => 19},
+    componentFunctions: {0: (_) => 29},
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final lifted = program.invokeFlat(0, const <Object?>[17]);
+    checksum += lifted.single! as int;
+    final lowered = program.invokeFlat(1, const <Object?>[23]);
+    checksum += lowered.single! as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );

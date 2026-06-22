@@ -87,6 +87,39 @@ void main() {
       expect(plans[1].reallocIndex, 1);
     });
 
+    test('plan error-context flat handle layouts', () {
+      final component = WasmComponent.decode(
+        canonicalErrorContextLiftLowerComponentBytes(),
+      );
+
+      expect(component.validate(), isEmpty);
+
+      final plans = componentCanonicalAdapterPlans(component);
+
+      expect(plans, hasLength(2));
+      for (final plan in plans) {
+        expect(plan.params, hasLength(1));
+        expect(plan.params.single.label, 'input');
+        expect(plan.params.single.hasMemoryCodec, isFalse);
+        expect(plan.params.single.flatLength, 1);
+        expect(
+          plan.params.single.flatLayout!.kind,
+          WASIComponentCanonicalAdapterFlatValueKind.errorContext,
+        );
+        expect(plan.result, isNotNull);
+        expect(plan.result!.hasMemoryCodec, isFalse);
+        expect(plan.result!.flatLength, 1);
+        expect(
+          plan.result!.flatLayout!.kind,
+          WASIComponentCanonicalAdapterFlatValueKind.errorContext,
+        );
+        expect(plan.hasDynamicPayload, isFalse);
+        expect(plan.hasResourceHandles, isFalse);
+        expect(plan.memoryIndex, 0);
+        expect(plan.reallocIndex, 0);
+      }
+    });
+
     test('plan record lift and lower flat value layouts', () {
       final component = WasmComponent.decode(
         canonicalRecordLiftLowerComponentBytes(),
@@ -768,6 +801,49 @@ void main() {
       expect(program.invokeFlat(0, const <Object?>[]), [51]);
       expect(program.invokeFlat(1, const <Object?>[]), [52]);
       expect(() => program.invokeFlat(0, const <Object?>[1]), throwsStateError);
+    });
+
+    test('invokes error-context adapter programs through flat handles', () {
+      final component = WasmComponent.decode(
+        canonicalErrorContextLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+
+      final program = host.bindAdapterPlans(
+        plans,
+        coreFunctions: {
+          1: (args) {
+            expect(args, [17]);
+            return 19;
+          },
+        },
+        componentFunctions: {
+          0: (args) {
+            expect(args, [23]);
+            return 29;
+          },
+        },
+      );
+
+      expect(program.invokeFlat(0, const <Object?>[17]), [19]);
+      expect(program.invokeFlat(1, const <Object?>[23]), [29]);
+      expect(
+        () => program.invokeFlat(0, const <Object?>[-1]),
+        throwsStateError,
+      );
+      expect(
+        () => program.invokeFlat(0, const <Object?>[0x100000000]),
+        throwsStateError,
+      );
+      expect(
+        () => program.invoke(0, const <Object?>[17]),
+        throwsUnsupportedError,
+      );
+      expect(
+        () => host.bindLiftCoreFunction(plans[0], (_) => 19),
+        throwsUnsupportedError,
+      );
     });
 
     test('invokes string adapter programs through flat scalar values', () {

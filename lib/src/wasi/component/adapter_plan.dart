@@ -232,6 +232,20 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
+  /// Error-context handle represented by a canonical `u32` scalar.
+  const WASIComponentCanonicalAdapterFlatValuePlan.errorContext()
+    : kind = WASIComponentCanonicalAdapterFlatValueKind.errorContext,
+      primitive = null,
+      memoryCodec = null,
+      labels = const <String>[],
+      element = null,
+      ok = null,
+      error = null,
+      cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
+      handleKind = null,
+      resourceTypeIndex = null,
+      fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
+
   /// Composite scalar flat layout.
   const WASIComponentCanonicalAdapterFlatValuePlan.composite({
     required this.kind,
@@ -292,7 +306,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
     if (kind == WASIComponentCanonicalAdapterFlatValueKind.list) {
       return 2;
     }
-    if (kind == WASIComponentCanonicalAdapterFlatValueKind.resource) {
+    if (kind == WASIComponentCanonicalAdapterFlatValueKind.resource ||
+        kind == WASIComponentCanonicalAdapterFlatValueKind.errorContext) {
       return 1;
     }
     if (kind == WASIComponentCanonicalAdapterFlatValueKind.option) {
@@ -354,6 +369,9 @@ enum WASIComponentCanonicalAdapterFlatValueKind {
 
   /// Resource handle represented by a canonical `u32` scalar.
   resource,
+
+  /// Error-context handle represented by a canonical `u32` scalar.
+  errorContext,
 }
 
 /// Case in a flat Canonical ABI variant layout.
@@ -523,9 +541,11 @@ final class _FlatLayoutResolver {
     switch (type.kind) {
       case WasmComponentValueTypeKind.primitive:
         final primitive = type.primitive;
-        return primitive == null ||
-                primitive == WasmComponentPrimitiveValueType.errorContext
-            ? null
+        if (primitive == null) {
+          return null;
+        }
+        return primitive == WasmComponentPrimitiveValueType.errorContext
+            ? const WASIComponentCanonicalAdapterFlatValuePlan.errorContext()
             : WASIComponentCanonicalAdapterFlatValuePlan.primitive(primitive);
       case WasmComponentValueTypeKind.typeIndex:
         final typeIndex = type.typeIndex;
@@ -566,9 +586,11 @@ final class _FlatLayoutResolver {
     switch (type.kind) {
       case WasmComponentDefinedValueTypeKind.primitive:
         final primitive = type.primitive;
-        return primitive == null ||
-                primitive == WasmComponentPrimitiveValueType.errorContext
-            ? null
+        if (primitive == null) {
+          return null;
+        }
+        return primitive == WasmComponentPrimitiveValueType.errorContext
+            ? const WASIComponentCanonicalAdapterFlatValuePlan.errorContext()
             : WASIComponentCanonicalAdapterFlatValuePlan.primitive(primitive);
       case WasmComponentDefinedValueTypeKind.record:
         final fields = <WASIComponentCanonicalAdapterFlatFieldPlan>[];
