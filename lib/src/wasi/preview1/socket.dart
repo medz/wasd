@@ -18,6 +18,17 @@ typedef WASIPreview1SocketReceiveDataProvider =
 typedef WASIPreview1SocketSendHandler =
     int Function(Uint8List source, int sourceStart, int length);
 
+/// Supplies one datagram message for a host-backed Preview1 socket.
+///
+/// Return `null` when no message is available. Return an empty list for a
+/// queued zero-length datagram.
+typedef WASIPreview1SocketReceiveMessageProvider = List<int>? Function();
+
+/// Handles one datagram message written through a host-backed Preview1 socket.
+///
+/// Return the number of bytes accepted by the host.
+typedef WASIPreview1SocketSendMessageHandler = int Function(Uint8List message);
+
 /// Host-side socket state for WASI Preview1 descriptors.
 ///
 /// The in-repo native and browser Preview1 shims use this object for inherited
@@ -39,6 +50,8 @@ final class WASIPreview1Socket {
        _receiveMessages = ListQueue<Uint8List>(),
        _receiveDataProvider = receiveDataProvider,
        _sendHandler = sendHandler,
+       _receiveMessageProvider = null,
+       _sendMessageHandler = null,
        _pendingAccepted = ListQueue<WASIPreview1Socket>.of(pendingAccepted) {
     this.readReadyBytes = readReadyBytes;
   }
@@ -46,6 +59,8 @@ final class WASIPreview1Socket {
   /// Creates a datagram socket with optional queued receive messages.
   WASIPreview1Socket.datagram({
     Iterable<List<int>> receiveMessages = const <List<int>>[],
+    WASIPreview1SocketReceiveMessageProvider? receiveMessageProvider,
+    WASIPreview1SocketSendMessageHandler? sendMessageHandler,
     int? readReadyBytes,
     this.writeReady,
   }) : _kind = _WASIPreview1SocketKind.datagram,
@@ -55,6 +70,8 @@ final class WASIPreview1Socket {
        ),
        _receiveDataProvider = null,
        _sendHandler = null,
+       _receiveMessageProvider = receiveMessageProvider,
+       _sendMessageHandler = sendMessageHandler,
        _pendingAccepted = ListQueue<WASIPreview1Socket>() {
     this.readReadyBytes = readReadyBytes;
   }
@@ -66,6 +83,8 @@ final class WASIPreview1Socket {
   final List<Uint8List> _sentMessages = <Uint8List>[];
   final WASIPreview1SocketReceiveDataProvider? _receiveDataProvider;
   final WASIPreview1SocketSendHandler? _sendHandler;
+  final WASIPreview1SocketReceiveMessageProvider? _receiveMessageProvider;
+  final WASIPreview1SocketSendMessageHandler? _sendMessageHandler;
   final ListQueue<WASIPreview1Socket> _pendingAccepted;
   int? _readReadyBytes;
   int _receiveOffset = 0;
@@ -134,14 +153,19 @@ final class WASIPreview1Socket {
   bool get isStream => _kind == _WASIPreview1SocketKind.stream;
 
   /// Whether a datagram message is queued for receive.
-  bool get hasReceiveMessage => _receiveMessages.isNotEmpty;
+  bool get hasReceiveMessage {
+    ensureReceiveMessage();
+    return _receiveMessages.isNotEmpty;
+  }
 
   /// Whether a future `sock_accept` call can return an accepted stream.
   bool get hasPendingAccept => _pendingAccepted.isNotEmpty;
 
   /// Length of the next queued datagram receive message.
-  int get nextReceiveMessageLength =>
-      _receiveMessages.isEmpty ? 0 : _receiveMessages.first.length;
+  int get nextReceiveMessageLength {
+    ensureReceiveMessage();
+    return _receiveMessages.isEmpty ? 0 : _receiveMessages.first.length;
+  }
 
   /// Appends bytes that future `sock_recv` calls can consume.
   ///
@@ -180,6 +204,30 @@ final class WASIPreview1Socket {
           : readyBytes - data.length;
     }
     return data.length;
+  }
+
+  /// Pulls one host-backed datagram message when no message is queued.
+  bool ensureReceiveMessage() {
+    final provider = _receiveMessageProvider;
+    if (!isDatagram ||
+        receiveShutdown ||
+        provider == null ||
+        _receiveMessages.isNotEmpty) {
+      return false;
+    }
+    final message = provider();
+    if (message == null) {
+      return false;
+    }
+    _receiveMessages.add(Uint8List.fromList(message));
+    receiveShutdown = false;
+    final readyBytes = _readReadyBytes;
+    if (readyBytes != null) {
+      _readReadyBytes = message.length >= readyBytes
+          ? null
+          : readyBytes - message.length;
+    }
+    return true;
   }
 
   /// Queues an accepted stream returned by a future `sock_accept` call.
@@ -279,7 +327,16 @@ final class WASIPreview1Socket {
     if (sendShutdown) {
       return 0;
     }
-    _sentMessages.add(Uint8List.fromList(data));
+    final message = data is Uint8List ? data : Uint8List.fromList(data);
+    final sendMessageHandler = _sendMessageHandler;
+    if (sendMessageHandler != null) {
+      final written = sendMessageHandler(message);
+      if (written < 0 || written > message.length) {
+        throw RangeError.range(written, 0, message.length, 'written');
+      }
+      return written;
+    }
+    _sentMessages.add(Uint8List.fromList(message));
     return data.length;
   }
 

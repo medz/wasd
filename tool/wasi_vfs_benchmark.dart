@@ -702,9 +702,26 @@ _Metric _benchmarkSocketDatagramTruncation(_Options options) {
       ),
     ),
   );
-  final vfs = Preview1VirtualFileSystem(sockets: {64: socket});
+  var hostReceiveByte = 0;
+  var hostSentBytes = 0;
+  final hostSocket = WASIPreview1Socket.datagram(
+    receiveMessageProvider: () {
+      final message = Uint8List(_socketIovSize);
+      for (var i = 0; i < message.length; i++) {
+        message[i] = (hostReceiveByte + i) & 0xff;
+      }
+      hostReceiveByte += message.length;
+      return message;
+    },
+    sendMessageHandler: (message) {
+      hostSentBytes += message.length;
+      return message.length;
+    },
+  );
+  final vfs = Preview1VirtualFileSystem(sockets: {64: socket, 65: hostSocket});
   final descriptor = vfs.socketForFd(64);
-  if (descriptor == null) {
+  final hostDescriptor = vfs.socketForFd(65);
+  if (descriptor == null || hostDescriptor == null) {
     throw StateError('socket descriptor missing for datagram benchmark');
   }
   final bytes = Uint8List(128);
@@ -737,12 +754,51 @@ _Metric _benchmarkSocketDatagramTruncation(_Options options) {
       throw StateError('socket datagram truncation missing at iteration $i');
     }
     checksum += data.getUint32(countPtr, Endian.little) + roflags;
+
+    final hostRecvErrno = readSocketIntoIov(
+      socket: hostDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 1,
+      flags: 0,
+      nreadPtr: countPtr,
+      roFlagsPtr: flagsPtr,
+    );
+    if (hostRecvErrno != errnoSuccess) {
+      throw StateError(
+        'host datagram recv failed at iteration $i: $hostRecvErrno',
+      );
+    }
+    if (data.getUint32(countPtr, Endian.little) != _socketIovSize ||
+        data.getUint16(flagsPtr, Endian.little) != 0) {
+      throw StateError('host datagram recv mismatch at iteration $i');
+    }
+    checksum += data.getUint32(countPtr, Endian.little);
+
+    final hostSendErrno = writeSocketFromIov(
+      socket: hostDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 1,
+      nwrittenPtr: countPtr,
+    );
+    if (hostSendErrno != errnoSuccess) {
+      throw StateError(
+        'host datagram send failed at iteration $i: $hostSendErrno',
+      );
+    }
+    if (data.getUint32(countPtr, Endian.little) != _socketIovSize) {
+      throw StateError('host datagram send mismatch at iteration $i');
+    }
+    checksum += data.getUint32(countPtr, Endian.little);
   }
   watch.stop();
   return _Metric(
-    operations: options.iterations,
+    operations: options.iterations * 3,
     totalMicros: watch.elapsedMicroseconds,
-    checksum: checksum,
+    checksum: checksum + hostReceiveByte + hostSentBytes,
   );
 }
 

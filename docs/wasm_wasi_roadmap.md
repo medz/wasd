@@ -159,9 +159,9 @@ This is the implementation state as of 2026-06-22 on `main`.
   readdir state, hard links, symlinks/readlink, configured stream/datagram
   sockets, descriptor flags, descriptor rights, descriptor times, descriptor
   sync/advice validation, clock/file/socket polling readiness including
-  host-supplied socket readiness hints, host-backed stream receive/send
-  handlers, and descriptor renumbering. Node still delegates Preview 1 behavior
-  to `node:wasi`.
+  host-supplied socket readiness hints, host-backed stream/datagram
+  receive/send handlers, and descriptor renumbering. Node still delegates
+  Preview 1 behavior to `node:wasi`.
 - Preview 1 `proc_raise` is no longer a blanket `ENOSYS` stub: native hosts
   deliver mapped process signals by default, native/browser hosts can inject a
   `procRaiseHandler` for controlled signal handling, and browser hosts still
@@ -183,10 +183,10 @@ This is the implementation state as of 2026-06-22 on `main`.
   `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; it reports
   baseline, directory-heavy, descriptor-heavy, and socket-heavy distributions.
   It also covers socket multi-iov peek/waitall, datagram truncation, socket
-  send/recv including host-backed stream handlers and write-side would-block
-  behavior, socket polling readiness including zero-length datagram readiness,
-  queued accepts, and externally backed read/write readiness hints, and socket
-  renumber/close descriptor paths.
+  send/recv including host-backed stream/datagram handlers and write-side
+  would-block behavior, socket polling readiness including zero-length datagram
+  readiness, queued accepts, and externally backed read/write readiness hints,
+  and socket renumber/close descriptor paths.
   Stream socket sends are recorded as owned byte chunks, and long receive
   streams compact consumed prefixes in larger batches so socket-heavy reads do
   not repeatedly shift the backing buffer.
@@ -647,6 +647,19 @@ performance visible while the support surface expands.
   - Done when: `sock_recv` can satisfy `RECV_WAITALL` from the host provider,
     `sock_send` reaches the host handler, partial host writes stop the multi-iov
     send, and benchmark output includes the host-backed stream path.
+- [x] `P1-SOCKET-HOST-DATAGRAM-IO` - Preview1 host-backed datagram socket IO.
+  - Change: let injected datagram sockets pull whole messages from a host
+    provider and delegate sent datagrams to a host handler.
+  - Evidence: `lib/src/wasi/preview1/socket.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`,
+    `tool/wasi_vfs_benchmark.dart`, `README.md`.
+  - Gate: `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "host-backed datagram handlers"`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: host-provided zero-length datagrams remain readable,
+    `sock_recv`/`RECV_PEEK` preserve host-provided messages, `sock_send`
+    reaches the datagram handler, and benchmark output includes host-backed
+    datagram receive/send paths.
 - [x] `PERF-VFS-DISTRIBUTIONS` - VFS/descriptor benchmark distributions.
   - Change: extend benchmark data to larger conformance-shaped path, directory,
     socket, and descriptor sets before optimizing more VFS code.
