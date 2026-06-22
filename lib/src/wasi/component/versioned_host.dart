@@ -10,7 +10,8 @@ import 'resource_host.dart';
 /// This is intentionally internal. It separates version profile checks from
 /// host capability checks so P2/P3 adapters can report whether a canonical
 /// definition is outside the selected WASI version surface or inside the
-/// version surface but not implemented by the current host yet.
+/// version surface but not implemented by the current host yet. It is not a
+/// public runtime support claim.
 final class WASIComponentVersionedHost {
   /// Creates a versioned host facade for [version].
   WASIComponentVersionedHost({
@@ -105,7 +106,7 @@ final class WASIComponentVersionProfile {
     },
   );
 
-  /// Preview3 profile with Component Model async canonical areas enabled.
+  /// Preview3 profile including Component Model async canonical areas.
   static const preview3 = WASIComponentVersionProfile._(
     version: WASIVersion.preview3,
     label: 'WASI 0.3 / Preview3',

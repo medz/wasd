@@ -241,7 +241,9 @@ This is the implementation state as of 2026-06-22 on `main`.
   as `canon lower` as host gaps. The same facade can also prepare a reusable
   binding plan that captures component validation errors, unsupported canonical
   definitions, and the canonical definition snapshot once before any operation
-  table is built.
+  table is built. Internal Preview2 and Preview3 component-host modules now pin
+  that facade to their respective profiles, giving future version adapters a
+  concrete entrypoint instead of constructing mixed-version component hosts.
   An internal component host adapter now combines that canonical plan with the
   decoded component resource and async value binding lists, defines component
   resources plus supported unit, primitive, fixed-size composite, string, and
@@ -323,8 +325,9 @@ This is the implementation state as of 2026-06-22 on `main`.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
   for component-model WASI versions. Internal component-host version profiles
-  now exist for P2/P3 preflight, but this is still an intentional public version
-  boundary, not a support claim.
+  and fixed Preview2/Preview3 component-host modules now exist for P2/P3
+  preflight, but this is still an intentional public version boundary, not a
+  support claim.
 
 ## Architecture Direction
 
@@ -447,8 +450,8 @@ This is the implementation state as of 2026-06-22 on `main`.
    runtime host state.
 5. Wire canonical `stream.*` and `future.*` memory lowering/lifting and async
    scheduling around the internal async host before adding public P3 API claims.
-6. Expand the internal P2/P3 versioned host facade into concrete version
-   modules instead of extending Preview 1 host types in place.
+6. Grow the internal Preview2/Preview3 component-host modules into concrete
+   adapter modules instead of extending Preview 1 host types in place.
 7. Extend async host value validation beyond primitive element aliases only
    when composite value lowering/lifting support is implemented.
 8. Add WIT/interface ingestion only after the versioned host boundary and

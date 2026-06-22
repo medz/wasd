@@ -5,6 +5,8 @@ import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/versioned_host.dart';
+import 'package:wasd/src/wasi/preview2/component_host.dart';
+import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasi/version.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 
@@ -45,6 +47,40 @@ void main() {
   });
 
   group('WASIComponentVersionedHost', () {
+    test('rejects component canonical definitions for Preview1', () {
+      final component = WasmComponent.decode(_canonicalResourceProgramBytes());
+      final host = WASIComponentVersionedHost(version: WASIVersion.preview1);
+
+      final plan = host.prepareComponent(component);
+
+      expect(plan.canBind, isFalse);
+      expect(plan.validationErrors, isEmpty);
+      expect(plan.unsupportedDefinitions, isEmpty);
+      expect(plan.bindingErrors, isEmpty);
+      expect(plan.versionErrors, hasLength(3));
+      expect(
+        plan.versionErrors.map((error) => error.kind),
+        <WasmComponentCanonicalKind>[
+          WasmComponentCanonicalKind.resourceNew,
+          WasmComponentCanonicalKind.resourceRep,
+          WasmComponentCanonicalKind.resourceDrop,
+        ],
+      );
+      expect(
+        () => plan.bind(),
+        throwsA(
+          isA<WASIComponentVersionUnsupportedException>()
+              .having((error) => error.errors, 'errors', hasLength(3))
+              .having(
+                (error) => error.toString(),
+                'message',
+                contains('WASI Preview1'),
+              ),
+        ),
+      );
+      expect(host.componentHost.table.activeCount, 0);
+    });
+
     test('binds Preview2 resource components through the shared host', () {
       final component = WasmComponent.decode(_canonicalResourceProgramBytes());
       final host = WASIComponentVersionedHost(version: WASIVersion.preview2);
@@ -153,6 +189,48 @@ void main() {
         () => plan.bind(),
         throwsA(isA<WASIComponentCanonicalHostUnsupportedException>()),
       );
+      expect(host.componentHost.table.activeCount, 0);
+    });
+  });
+
+  group('fixed WASI component host versions', () {
+    test('Preview2 wrapper enforces the Preview2 profile', () {
+      final resourceComponent = WasmComponent.decode(
+        _canonicalResourceProgramBytes(),
+      );
+      final streamComponent = WasmComponent.decode(
+        _canonicalStreamProgramBytes(),
+      );
+      final sharedHost = WASIComponentHost();
+      final host = WASIPreview2ComponentHost(componentHost: sharedHost);
+
+      expect(host.profile, same(WASIComponentVersionProfile.preview2));
+      expect(host.componentHost, same(sharedHost));
+
+      final resourcePlan = host.prepareComponent(resourceComponent);
+      final streamPlan = host.prepareComponent(streamComponent);
+
+      expect(resourcePlan.canBind, isTrue);
+      expect(streamPlan.canBind, isFalse);
+      expect(streamPlan.versionErrors, hasLength(7));
+      expect(sharedHost.table.activeCount, 0);
+    });
+
+    test('Preview3 wrapper accepts async stream profile bindings', () {
+      final component = WasmComponent.decode(_canonicalStreamProgramBytes());
+      final host = WASIPreview3ComponentHost();
+
+      expect(host.profile, same(WASIComponentVersionProfile.preview3));
+
+      final binding = host.bindComponent(component);
+      final handles = WASIComponentAsyncEndpointHandles.unpack(
+        binding.program.invoke(0, const <Object?>[])! as int,
+      );
+
+      expect(binding.asyncValueBindings, hasLength(1));
+      expect(host.componentHost.table.activeCount, 2);
+      expect(binding.program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(binding.program.invoke(6, <Object?>[handles.writable]), isNull);
       expect(host.componentHost.table.activeCount, 0);
     });
   });

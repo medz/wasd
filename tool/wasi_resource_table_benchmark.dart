@@ -8,8 +8,8 @@ import 'package:wasd/src/wasi/component/error_context.dart';
 import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/resource_table.dart';
-import 'package:wasd/src/wasi/component/versioned_host.dart';
-import 'package:wasd/src/wasi/version.dart';
+import 'package:wasd/src/wasi/preview2/component_host.dart';
+import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
 
@@ -341,7 +341,7 @@ _Metric _benchmarkComponentVersionedPreview2Binding(int iterations) {
 
   final watch = Stopwatch()..start();
   for (var i = 0; i < iterations; i++) {
-    final host = WASIComponentVersionedHost(version: WASIVersion.preview2);
+    final host = WASIPreview2ComponentHost();
     final binding = host.bindComponent(component);
     final handle = binding.program.invoke(0, <Object?>[i]);
     if (handle is! int) {
@@ -418,7 +418,7 @@ _Metric _benchmarkComponentVersionedPreview3StreamBinding(int iterations) {
 
   final watch = Stopwatch()..start();
   for (var i = 0; i < iterations; i++) {
-    final host = WASIComponentVersionedHost(version: WASIVersion.preview3);
+    final host = WASIPreview3ComponentHost();
     final binding = host.bindComponent(component);
     final packed = binding.program.invoke(0, const <Object?>[]);
     if (packed is! int) {
