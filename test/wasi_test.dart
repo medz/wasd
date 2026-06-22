@@ -17,6 +17,7 @@ Object? _skipUnlessBrowser(String reason) =>
     isBrowserJsRuntime ? false : reason;
 
 const int _rightFdRead = 1 << 1;
+const int _rightFdSeek = 1 << 2;
 const int _rightFdDatasync = 1;
 const int _rightFdFdstatSetFlags = 1 << 3;
 const int _rightFdSync = 1 << 4;
@@ -2719,6 +2720,31 @@ void main() {
       );
 
       test(
+        'positioned fd descriptor errors do not require bound memory',
+        () {
+          final socketWasi = WASI(sockets: {39: WASIPreview1Socket()});
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final fdPwrite = preview1['fd_pwrite'] as FunctionImportExportValue;
+          final fdSeek = preview1['fd_seek'] as FunctionImportExportValue;
+          final fdTell = preview1['fd_tell'] as FunctionImportExportValue;
+
+          expect(fdPread.ref([99, 0, 0, 0, 0]), _errnoBadf);
+          expect(fdPwrite.ref([99, 0, 0, 0, 0]), _errnoBadf);
+          expect(fdSeek.ref([99, 0, 0, 0]), _errnoBadf);
+          expect(fdTell.ref([99, 0]), _errnoBadf);
+
+          expect(fdPread.ref([39, 0, 0, 0, 0]), _errnoNotcapable);
+          expect(fdPwrite.ref([39, 0, 0, 0, 0]), _errnoNotcapable);
+          expect(fdSeek.ref([39, 0, 0, 0]), _errnoNotcapable);
+          expect(fdTell.ref([39, 0]), _errnoNotcapable);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'default socket rights expose socket-specific operations only',
         () async {
           final socket = WASIPreview1Socket();
@@ -2741,6 +2767,10 @@ void main() {
               preview1['fd_filestat_set_size'] as FunctionImportExportValue;
           final fdFilestatSetTimes =
               preview1['fd_filestat_set_times'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final fdPwrite = preview1['fd_pwrite'] as FunctionImportExportValue;
+          final fdSeek = preview1['fd_seek'] as FunctionImportExportValue;
+          final fdTell = preview1['fd_tell'] as FunctionImportExportValue;
           final memory =
               (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
           socketWasi.finalizeBindings(socketInstance, memory: memory);
@@ -2748,6 +2778,10 @@ void main() {
           final bytes = Uint8List.view(memory.buffer);
           final data = ByteData.view(memory.buffer);
           const fdstatPtr = 4720;
+          const iovPtr = 4752;
+          const bufferPtr = 4776;
+          const countPtr = 4800;
+          const offsetPtr = 4808;
           const socketRights =
               _rightFdRead |
               _rightFdFdstatSetFlags |
@@ -2778,6 +2812,24 @@ void main() {
           expect(fdAllocate.ref([39, 0, 1]), _errnoNotcapable);
           expect(fdFilestatSetSize.ref([39, 1]), _errnoNotcapable);
           expect(fdFilestatSetTimes.ref([39, 0, 0, 0]), _errnoNotcapable);
+
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 4, Endian.little);
+          data.setUint32(countPtr, 0xfeedface, Endian.little);
+          expect(fdPread.ref([39, iovPtr, 1, 0, countPtr]), _errnoNotcapable);
+          expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+
+          data.setUint32(countPtr, 0xdeadbeef, Endian.little);
+          expect(fdPwrite.ref([39, iovPtr, 1, 0, countPtr]), _errnoNotcapable);
+          expect(data.getUint32(countPtr, Endian.little), 0xdeadbeef);
+
+          _setUint64Le(data, offsetPtr, 0x11223344);
+          expect(fdSeek.ref([39, 0, 0, offsetPtr]), _errnoNotcapable);
+          expect(_getUint64Le(data, offsetPtr), 0x11223344);
+
+          _setUint64Le(data, offsetPtr, 0x55667788);
+          expect(fdTell.ref([39, offsetPtr]), _errnoNotcapable);
+          expect(_getUint64Le(data, offsetPtr), 0x55667788);
         },
         skip: _skipOnNode(
           'Skipping on Node.js; socket behavior is delegated to node:wasi.',
@@ -4735,7 +4787,7 @@ void main() {
               pathPtr,
               createdPath.length,
               _oflagCreat,
-              _rightFdRead | _rightFdWrite,
+              _rightFdRead | _rightFdWrite | _rightFdSeek,
               0,
               0,
               openedFdPtr,
@@ -4787,7 +4839,7 @@ void main() {
               existingPathPtr,
               existingPath.length,
               _oflagTrunc,
-              _rightFdRead | _rightFdWrite,
+              _rightFdRead | _rightFdWrite | _rightFdSeek,
               0,
               0,
               openedFdPtr,
@@ -4885,7 +4937,7 @@ void main() {
               existingPathPtr,
               existingPath.length,
               0,
-              _rightFdRead,
+              _rightFdRead | _rightFdSeek,
               0,
               0,
               openedFdPtr,
@@ -5100,13 +5152,17 @@ void main() {
 
           expect(fdFdstatGet.ref([fd, fdstatPtr]), 0);
           expect(
-            fdFdstatSetRights.ref([fd, _rightFdRead | _rightFdFdstatGet, 0]),
+            fdFdstatSetRights.ref([
+              fd,
+              _rightFdRead | _rightFdSeek | _rightFdFdstatGet,
+              0,
+            ]),
             0,
           );
           expect(fdFdstatGet.ref([fd, fdstatPtr]), 0);
           expect(
             _getUint64Le(data, fdstatPtr + 8),
-            _rightFdRead | _rightFdFdstatGet,
+            _rightFdRead | _rightFdSeek | _rightFdFdstatGet,
           );
           expect(_getUint64Le(data, fdstatPtr + 16), 0);
 

@@ -539,21 +539,17 @@ class WASI implements wasi.WASI {
         final iovsLen = _asInt(args[2]);
         final offset = _asInt64(args[3]);
         final nreadPtr = _asInt(args[4]);
-        final opened = _vfs.openFileForFd(fd);
-        if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
-          return _errnoBadf;
-        }
-        final right = _checkDescriptorRight(fd, _rightFdRead);
-        if (right != _errnoSuccess) {
-          return right;
-        }
+        final view = _memoryView();
 
-        return _readOpenFileIntoIov(
-          opened: opened,
+        return wasi_fd.preview1FdPread(
+          vfs: _vfs,
+          fd: fd,
+          bytes: view?.bytes,
+          data: view?.data,
           iovs: iovs,
           iovsLen: iovsLen,
+          offset: offset,
           nreadPtr: nreadPtr,
-          fileOffset: offset,
         );
       });
 
@@ -567,21 +563,17 @@ class WASI implements wasi.WASI {
         final iovsLen = _asInt(args[2]);
         final offset = _asInt64(args[3]);
         final nwrittenPtr = _asInt(args[4]);
-        final opened = _vfs.openFileForFd(fd);
-        if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
-          return _errnoBadf;
-        }
-        final right = _checkDescriptorRight(fd, _rightFdWrite);
-        if (right != _errnoSuccess) {
-          return right;
-        }
+        final view = _memoryView();
 
-        return _writeOpenFileFromIov(
-          opened: opened,
+        return wasi_fd.preview1FdPwrite(
+          vfs: _vfs,
+          fd: fd,
+          bytes: view?.bytes,
+          data: view?.data,
           iovs: iovs,
           iovsLen: iovsLen,
+          offset: offset,
           nwrittenPtr: nwrittenPtr,
-          fileOffset: offset,
         );
       });
 
@@ -867,41 +859,17 @@ class WASI implements wasi.WASI {
         final offset = _asInt64(args[1]);
         final whence = _asInt(args[2]);
         final newOffsetPtr = _asInt(args[3]);
-        final opened = _vfs.openFileForFd(fd);
-        if (opened == null) {
-          return _errnoBadf;
-        }
-        final right = _checkDescriptorRight(fd, _rightFdSeek);
-        if (right != _errnoSuccess) {
-          return right;
-        }
 
         final view = _memoryView();
-        if (view == null) {
-          return _errnoInval;
-        }
-        final bytes = view.bytes;
-        final data = view.data;
-        if (newOffsetPtr < 0 || newOffsetPtr + 8 > bytes.length) {
-          return _errnoInval;
-        }
-
-        final base = switch (whence) {
-          0 => 0,
-          1 => opened.offset,
-          2 => opened.bytes.length,
-          _ => -1,
-        };
-        if (base < 0) {
-          return _errnoInval;
-        }
-        final next = base + offset;
-        if (next < 0) {
-          return _errnoInval;
-        }
-        opened.offset = next;
-        _setUint64(data, newOffsetPtr, next);
-        return _errnoSuccess;
+        return wasi_fd.preview1FdSeek(
+          vfs: _vfs,
+          fd: fd,
+          offset: offset,
+          whence: whence,
+          bytes: view?.bytes,
+          data: view?.data,
+          newOffsetPtr: newOffsetPtr,
+        );
       });
 
   wasm.FunctionImportExportValue get _fdTellImport =>
@@ -911,25 +879,15 @@ class WASI implements wasi.WASI {
         }
         final fd = _asInt(args[0]);
         final offsetPtr = _asInt(args[1]);
-        final opened = _vfs.openFileForFd(fd);
-        if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
-          return _errnoBadf;
-        }
-        final right = _checkDescriptorRight(fd, _rightFdTell);
-        if (right != _errnoSuccess) {
-          return right;
-        }
 
         final view = _memoryView();
-        if (view == null) {
-          return _errnoInval;
-        }
-        if (offsetPtr < 0 || offsetPtr + 8 > view.bytes.length) {
-          return _errnoInval;
-        }
-
-        _setUint64(view.data, offsetPtr, opened.offset);
-        return _errnoSuccess;
+        return wasi_fd.preview1FdTell(
+          vfs: _vfs,
+          fd: fd,
+          bytes: view?.bytes,
+          data: view?.data,
+          offsetPtr: offsetPtr,
+        );
       });
 
   wasm.FunctionImportExportValue get _clockTimeGetImport =>
@@ -2049,9 +2007,7 @@ const int _filestatTimeKnownFlags =
     _filestatSetModificationTimeNow;
 const int _rightFdDatasync = wasi_common.rightFdDatasync;
 const int _rightFdRead = wasi_common.rightFdRead;
-const int _rightFdSeek = wasi_common.rightFdSeek;
 const int _rightFdSync = wasi_common.rightFdSync;
-const int _rightFdTell = wasi_common.rightFdTell;
 const int _rightFdWrite = wasi_common.rightFdWrite;
 const int _rightFdAdvise = wasi_common.rightFdAdvise;
 const int _rightPathCreateDirectory = wasi_common.rightPathCreateDirectory;

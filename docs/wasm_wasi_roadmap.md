@@ -236,6 +236,35 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-POSITIONED-RIGHTS-PREFLIGHT` - Positioned fd operations on
+  socket descriptors fail as capability errors before file lookup.
+  - Scope: native/browser shared Preview1 `fd_pread`, `fd_pwrite`, `fd_seek`,
+    and `fd_tell` errno ordering for valid socket descriptors without
+    positioned-file rights.
+  - Edit targets: `lib/src/wasi/preview1/common/fd_syscalls.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`,
+    `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "default socket rights expose socket-specific operations only" --reporter=compact`
+    failed before the fix because `fd_pread` on a valid socket returned
+    `BADF(8)` instead of `ENOTCAPABLE(76)`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "positioned fd descriptor errors do not require bound memory|default socket rights expose socket-specific operations only|fd_fdstat_set_rights persists and enforces descriptor rights|path_open creates, exclusively opens, and truncates virtual files|path_open create and truncate require directory rights|fd_pread, fd_pwrite, and fd_write update virtual files|fd_tell, fd_filestat_set_size, and fd_allocate update file size" --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --name "positioned fd descriptor errors do not require bound memory|default socket rights expose socket-specific operations only|fd_fdstat_set_rights persists and enforces descriptor rights|path_open creates, exclusively opens, and truncates virtual files|path_open create and truncate require directory rights|fd_pread, fd_pwrite, and fd_write update virtual files|fd_tell, fd_filestat_set_size, and fd_allocate update file size" --reporter=compact`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` now
+    includes `socket_positioned_rights_preflight`, with baseline
+    `operations=8000`, `per_operation_us=0.5745`, and socket-heavy
+    `operations=32000`, `per_operation_us=0.07315625`.
+  - Done when: default sockets report `ENOTCAPABLE` for `fd_pread`,
+    `fd_pwrite`, `fd_seek`, and `fd_tell`, output pointers remain unchanged on
+    those errors, unknown descriptors still report `BADF`, positioned file IO
+    requires `FD_SEEK` alongside read/write capability, and native/browser
+    imports share the same helper.
+  - Claim impact: contributes to `P1-SOCKET-CONFORMANCE` and `SUPPORT-P1`; does
+    not complete the parent row or any `SUPPORT-P1`/`SUPPORT-P2`/`SUPPORT-P3`
+    gate.
 - [x] `P1-SOCKET-STREAM-ZERO-SEND` - Zero-byte stream socket writes are
   no-ops even when the stream is not write-ready.
   - Scope: native/browser shared Preview1 byte-stream `sock_send` and
@@ -1531,6 +1560,7 @@ copying their internals directly.
 | [x] | Preview1 native/browser socket accept flag preflight | `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`; `dart test -p chrome test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`; `dart test test/wasi_test.dart --name "sock_accept|socket descriptor flags|socket syscalls return notsock|datagram sockets do not expose accept rights"`; `dart test -p chrome test/wasi_test.dart --name "sock_accept|socket descriptor flags|socket syscalls return notsock|datagram sockets do not expose accept rights"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Socket-unsupported `sock_accept` fdflags now return `NOTSUP` before accept-right failures while preserving non-socket/bad-fd errno order and queued accepted sockets; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket fdstat flag preflight | `lib/src/wasi/preview1/common/fd_syscalls.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "socket descriptor flags reject file-only flags" --reporter=compact`; `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags|sock_accept|datagram sockets do not expose accept rights|default socket rights expose socket-specific operations only" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "socket descriptor flags reject file-only flags|sock_accept|datagram sockets do not expose accept rights|default socket rights expose socket-specific operations only" --reporter=compact`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Socket-unsupported `fd_fdstat_set_flags(APPEND)` now returns `NOTSUP` before descriptor-right failures while unknown bits still return `EINVAL` and supported `NONBLOCK` still respects rights; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket file-right preflight | `lib/src/wasi/preview1/common/fd_syscalls.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "default socket rights expose socket-specific operations only" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "default socket rights expose socket-specific operations only" --reporter=compact`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `fd_allocate` and `fd_filestat_set_size` on default sockets now return `ENOTCAPABLE` through the shared native/browser fd helper before any file lookup; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
+| [x] | Preview1 native/browser socket positioned-right preflight | `lib/src/wasi/preview1/common/fd_syscalls.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "positioned fd descriptor errors do not require bound memory|default socket rights expose socket-specific operations only|fd_fdstat_set_rights persists and enforces descriptor rights|path_open creates, exclusively opens, and truncates virtual files|path_open create and truncate require directory rights|fd_pread, fd_pwrite, and fd_write update virtual files|fd_tell, fd_filestat_set_size, and fd_allocate update file size" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "positioned fd descriptor errors do not require bound memory|default socket rights expose socket-specific operations only|fd_fdstat_set_rights persists and enforces descriptor rights|path_open creates, exclusively opens, and truncates virtual files|path_open create and truncate require directory rights|fd_pread, fd_pwrite, and fd_write update virtual files|fd_tell, fd_filestat_set_size, and fd_allocate update file size" --reporter=compact`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `fd_pread`, `fd_pwrite`, `fd_seek`, and `fd_tell` on default sockets now return `ENOTCAPABLE` before file lookup and preserve output pointers; positioned file IO now requires `FD_SEEK` with read/write rights; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser stream socket zero-byte send | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_send and fd_write treat zero-byte stream writes as no-ops" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "sock_send and fd_write treat zero-byte stream writes as no-ops" --reporter=compact`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Byte-stream zero-capacity `sock_send` and socket-backed `fd_write` now write `nwritten=0` without being blocked by `writeReady=false`; datagram zero-length messages still take the datagram path, and full Preview1 socket conformance still needs broader gates. |
 | [x] | Preview1 native/browser connected stream accept capability | `lib/src/wasi/preview1/socket.dart`, `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "connected stream sockets can opt out of accept capability"`; `dart test -p chrome test/wasi_test.dart --name "connected stream sockets can opt out of accept capability|accepted sockets do not inherit listener accept rights by default|sock_accept returns queued preview1 stream sockets with inherited rights|default socket rights expose socket-specific operations only|socket descriptor flags reject file-only flags|datagram sockets do not expose accept rights"`; `dart test test/wasi_test.dart`; `dart test --reporter=compact --concurrency=1`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; `dart analyze` | `WASIPreview1Socket(canAccept: false)` now models connected stream endpoints without `SOCK_ACCEPT`, preserves accept output state on rejected `sock_accept`, and is covered by `socket_connected_rights`; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser stream socket send iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs"`; `dart test -p chrome test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs"`; `dart test test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs|virtual socket send handlers stop after partial writes|virtual socket host send handlers reject invalid write counts|sock_recv|sock_send"`; `dart test -p chrome test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs|virtual socket send handlers stop after partial writes|virtual socket host send handlers reject invalid write counts|sock_recv|sock_send"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream `sock_send` now snapshots overlapping iovec tables before host callbacks can mutate guest memory; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
@@ -1560,11 +1590,13 @@ This is the implementation state as of 2026-06-23 on `main`.
   host-supplied socket readiness hints, `clock_time_get` unsupported-id
   validation, `poll_oneoff` clock subscription validation, fd read/write count
   outputs at guest memory address zero, virtual-file fd read/write iovec
-  preflight and aliasing protection, socket syscall invalid/unsupported flag
-  and shutdown `how` preflight before descriptor/right checks, `sock_recv` and
-  stream `sock_send` iovec aliasing protection, host-backed stream/datagram
-  receive/send handlers, accept queue preservation on unsupported descriptor
-  flags, and descriptor renumbering.
+  preflight and aliasing protection, positioned file IO requiring `FD_SEEK`
+  with read/write capability, socket descriptor file-only and positioned-fd
+  capability preflight before file lookup, socket syscall invalid/unsupported
+  flag and shutdown `how` preflight before descriptor/right checks, `sock_recv`
+  and stream `sock_send` iovec aliasing protection, host-backed
+  stream/datagram receive/send handlers, accept queue preservation on
+  unsupported descriptor flags, and descriptor renumbering.
   Node still delegates Preview 1 behavior to `node:wasi`.
 - Preview 1 `proc_raise` is no longer a blanket `ENOSYS` stub: native hosts
   deliver mapped process signals by default, native/browser hosts can inject a
@@ -1587,7 +1619,11 @@ This is the implementation state as of 2026-06-23 on `main`.
   `sock_recv` and virtual-file fd reads snapshot iovec descriptors only when
   output buffers overlap the iovec table, preserving syscall-start iov semantics
   without adding allocation to ordinary non-overlapping reads. This matches the
-  datagram path's all-or-error validation boundary.
+  datagram path's all-or-error validation boundary. `fd_pread`, `fd_pwrite`,
+  `fd_seek`, and `fd_tell` now run through a shared native/browser positioned-fd
+  helper, so valid socket descriptors without positioned-file rights report
+  `ENOTCAPABLE` and preserve output pointers instead of being misclassified as
+  bad file descriptors.
 - Preview 1 `path_open` now honors `O_CREAT`, `O_CREAT|O_EXCL`, and `O_TRUNC`
   over shared native/browser VFS state. File creation updates the same path
   indexes and directory child maps as rename/link/unlink, exclusive create
@@ -1605,9 +1641,10 @@ This is the implementation state as of 2026-06-23 on `main`.
   It also covers virtual-file fd read/write iovec loops, socket multi-iov
   peek/waitall, datagram truncation, socket send/recv including host-backed
   stream/datagram handlers and write-side and read-side would-block behavior,
-  socket shutdown preflight, socket polling readiness including zero-length
-  datagram readiness, queued accepts, and externally backed read/write
-  readiness hints, and socket renumber/close descriptor paths.
+  socket shutdown preflight, socket positioned-right preflight, socket polling
+  readiness including zero-length datagram readiness, queued accepts, and
+  externally backed read/write readiness hints, and socket renumber/close
+  descriptor paths.
   Stream socket sends are recorded as owned byte chunks, and long receive
   streams compact consumed prefixes in larger batches so socket-heavy reads do
   not repeatedly shift the backing buffer. Default datagram socket sends now
@@ -2393,6 +2430,38 @@ performance visible while the support surface expands.
     `writeReady=false`, write `nwritten=0`, and leave sent byte buffers empty.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry and the verification matrix.
+  - Claim impact: contributes to `P1-SOCKET-CONFORMANCE` and `SUPPORT-P1`; does
+    not complete the parent `P1-SOCKET-CONFORMANCE` row.
+- [x] `P1-SOCKET-POSITIONED-RIGHTS-PREFLIGHT` - Positioned fd operations on
+  socket descriptors fail as capability errors before file lookup.
+  - Scope: shared Preview1 native/browser `fd_pread`, `fd_pwrite`, `fd_seek`,
+    and `fd_tell` descriptor/right/file preflight.
+  - Edit targets: `lib/src/wasi/preview1/common/fd_syscalls.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`,
+    `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "default socket rights expose socket-specific operations only" --reporter=compact`
+    failed before the fix because `fd_pread` on a valid socket returned
+    `BADF(8)` instead of `ENOTCAPABLE(76)`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "positioned fd descriptor errors do not require bound memory|default socket rights expose socket-specific operations only|fd_fdstat_set_rights persists and enforces descriptor rights|path_open creates, exclusively opens, and truncates virtual files|path_open create and truncate require directory rights|fd_pread, fd_pwrite, and fd_write update virtual files|fd_tell, fd_filestat_set_size, and fd_allocate update file size" --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --name "positioned fd descriptor errors do not require bound memory|default socket rights expose socket-specific operations only|fd_fdstat_set_rights persists and enforces descriptor rights|path_open creates, exclusively opens, and truncates virtual files|path_open create and truncate require directory rights|fd_pread, fd_pwrite, and fd_write update virtual files|fd_tell, fd_filestat_set_size, and fd_allocate update file size" --reporter=compact`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_positioned_rights_preflight.operations=8000` and
+    `socket_positioned_rights_preflight.per_operation_us=0.5745` on the
+    baseline distribution, plus
+    `socket_positioned_rights_preflight.operations=32000` and
+    `socket_positioned_rights_preflight.per_operation_us=0.07315625` on the
+    socket-heavy distribution.
+  - Done when: valid sockets report `ENOTCAPABLE` for positioned fd operations,
+    output pointers stay untouched on those errors, unknown descriptors still
+    report `BADF`, real file positioned IO requires `FD_SEEK` alongside
+    read/write capability, and native/browser imports share the same helper.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry, the verification matrix, and the benchmark
+    metric.
   - Claim impact: contributes to `P1-SOCKET-CONFORMANCE` and `SUPPORT-P1`; does
     not complete the parent `P1-SOCKET-CONFORMANCE` row.
 - [ ] `P1-SOCKET-CONFORMANCE` - Preview1 socket conformance edge cases.

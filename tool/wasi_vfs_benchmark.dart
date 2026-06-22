@@ -111,6 +111,8 @@ Map<String, Object?> _runBenchmark(_Options options) {
   final socketFileRightsPreflight = _benchmarkSocketFileRightsPreflight(
     options,
   );
+  final socketPositionedRightsPreflight =
+      _benchmarkSocketPositionedRightsPreflight(options);
   final socketPollReadiness = _benchmarkSocketPollReadiness(options);
   final socketRenumberClose = _benchmarkSocketRenumberClose(options);
   final socketAcceptInheritance = _benchmarkSocketAcceptInheritance(options);
@@ -145,6 +147,8 @@ Map<String, Object?> _runBenchmark(_Options options) {
     'socket_connected_rights': socketConnectedRights.toJson(),
     'socket_fdflag_preflight': socketFdflagPreflight.toJson(),
     'socket_file_rights_preflight': socketFileRightsPreflight.toJson(),
+    'socket_positioned_rights_preflight': socketPositionedRightsPreflight
+        .toJson(),
     'socket_poll_readiness': socketPollReadiness.toJson(),
     'socket_renumber_close': socketRenumberClose.toJson(),
     'socket_accept_inheritance': socketAcceptInheritance.toJson(),
@@ -199,6 +203,7 @@ void _runWarmup(Map<String, Uint8List> files, _Options options) {
   _benchmarkSocketConnectedRights(warmupOptions);
   _benchmarkSocketFdflagPreflight(warmupOptions);
   _benchmarkSocketFileRightsPreflight(warmupOptions);
+  _benchmarkSocketPositionedRightsPreflight(warmupOptions);
   _benchmarkSocketPollReadiness(warmupOptions);
   _benchmarkSocketRenumberClose(warmupOptions);
 }
@@ -1951,6 +1956,116 @@ _Metric _benchmarkSocketFileRightsPreflight(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketPositionedRightsPreflight(_Options options) {
+  const fdBase = 53248;
+  final sockets = <int, WASIPreview1Socket>{
+    for (var i = 0; i < options.iterations; i++)
+      fdBase + i: WASIPreview1Socket(),
+  };
+  final vfs = Preview1VirtualFileSystem(
+    firstVirtualFd: fdBase + options.iterations,
+    sockets: sockets,
+  );
+  final bytes = Uint8List(128);
+  final data = ByteData.view(bytes.buffer);
+  const iovPtr = 0;
+  const bufferPtr = 32;
+  const countPtr = 64;
+  const offsetPtr = 72;
+  const countSentinel = 0x7fffffff;
+  const offsetLowSentinel = 0x11223344;
+  const offsetHighSentinel = 0x55667788;
+  data.setUint32(iovPtr, bufferPtr, Endian.little);
+  data.setUint32(iovPtr + 4, 4, Endian.little);
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final fd = fdBase + i;
+    data.setUint32(countPtr, countSentinel, Endian.little);
+    final preadErrno = preview1FdPread(
+      vfs: vfs,
+      fd: fd,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 1,
+      offset: 0,
+      nreadPtr: countPtr,
+    );
+    if (preadErrno != errnoNotcapable ||
+        data.getUint32(countPtr, Endian.little) != countSentinel) {
+      throw StateError(
+        'socket fd_pread errno failed at iteration $i: $preadErrno',
+      );
+    }
+    checksum += preadErrno;
+
+    data.setUint32(countPtr, countSentinel, Endian.little);
+    final pwriteErrno = preview1FdPwrite(
+      vfs: vfs,
+      fd: fd,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 1,
+      offset: 0,
+      nwrittenPtr: countPtr,
+    );
+    if (pwriteErrno != errnoNotcapable ||
+        data.getUint32(countPtr, Endian.little) != countSentinel) {
+      throw StateError(
+        'socket fd_pwrite errno failed at iteration $i: $pwriteErrno',
+      );
+    }
+    checksum += pwriteErrno;
+
+    data.setUint32(offsetPtr, offsetLowSentinel, Endian.little);
+    data.setUint32(offsetPtr + 4, offsetHighSentinel, Endian.little);
+    final seekErrno = preview1FdSeek(
+      vfs: vfs,
+      fd: fd,
+      offset: 0,
+      whence: 0,
+      bytes: bytes,
+      data: data,
+      newOffsetPtr: offsetPtr,
+    );
+    if (seekErrno != errnoNotcapable ||
+        data.getUint32(offsetPtr, Endian.little) != offsetLowSentinel ||
+        data.getUint32(offsetPtr + 4, Endian.little) != offsetHighSentinel) {
+      throw StateError(
+        'socket fd_seek errno failed at iteration $i: $seekErrno',
+      );
+    }
+    checksum += seekErrno;
+
+    data.setUint32(offsetPtr, offsetLowSentinel, Endian.little);
+    data.setUint32(offsetPtr + 4, offsetHighSentinel, Endian.little);
+    final tellErrno = preview1FdTell(
+      vfs: vfs,
+      fd: fd,
+      bytes: bytes,
+      data: data,
+      offsetPtr: offsetPtr,
+    );
+    if (tellErrno != errnoNotcapable ||
+        data.getUint32(offsetPtr, Endian.little) != offsetLowSentinel ||
+        data.getUint32(offsetPtr + 4, Endian.little) != offsetHighSentinel) {
+      throw StateError(
+        'socket fd_tell errno failed at iteration $i: $tellErrno',
+      );
+    }
+    checksum += tellErrno;
+  }
+  watch.stop();
+  return _Metric(
+    operations: options.iterations * 4,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _writeTwoIovs({
   required ByteData data,
   required int iovPtr,
@@ -2056,6 +2171,10 @@ void _printSingleText(
   _printMetric(
     'socket file rights preflight',
     payload['socket_file_rights_preflight'],
+  );
+  _printMetric(
+    'socket positioned rights preflight',
+    payload['socket_positioned_rights_preflight'],
   );
   _printMetric('socket poll readiness', payload['socket_poll_readiness']);
   _printMetric('socket renumber/close', payload['socket_renumber_close']);

@@ -1,5 +1,34 @@
+import 'dart:typed_data';
+
 import 'constants.dart';
 import 'vfs.dart';
+
+typedef _OpenFilePreflight = ({int errno, Preview1VirtualOpenFile? opened});
+
+_OpenFilePreflight _openFileForDescriptor({
+  required Preview1VirtualFileSystem vfs,
+  required int fd,
+  required int rights,
+}) {
+  final descriptorKind = vfs.descriptorKindForFd(fd);
+  if (descriptorKind == null) {
+    return (errno: errnoBadf, opened: null);
+  }
+  if (!vfs.descriptorHasRight(fd, rights)) {
+    return (errno: errnoNotcapable, opened: null);
+  }
+  final opened = vfs.openFileForFd(fd);
+  if (opened == null || vfs.isOpenDirectoryFd(fd)) {
+    return (errno: errnoBadf, opened: null);
+  }
+  return (errno: errnoSuccess, opened: opened);
+}
+
+void _setUint64(ByteData data, int offset, int value) {
+  final normalized = value < 0 ? value + (1 << 64) : value;
+  data.setUint32(offset, normalized & 0xffffffff, Endian.little);
+  data.setUint32(offset + 4, normalized >>> 32, Endian.little);
+}
 
 int preview1FdAllocate({
   required Preview1VirtualFileSystem vfs,
@@ -68,5 +97,142 @@ int preview1FdFilestatSetSize({
   }
 
   opened.setLength(size);
+  return errnoSuccess;
+}
+
+int preview1FdPread({
+  required Preview1VirtualFileSystem vfs,
+  required int fd,
+  required Uint8List? bytes,
+  required ByteData? data,
+  required int iovs,
+  required int iovsLen,
+  required int offset,
+  required int nreadPtr,
+}) {
+  final preflight = _openFileForDescriptor(
+    vfs: vfs,
+    fd: fd,
+    rights: rightFdRead | rightFdSeek,
+  );
+  if (preflight.errno != errnoSuccess) {
+    return preflight.errno;
+  }
+  if (bytes == null || data == null) {
+    return errnoInval;
+  }
+
+  return readOpenFileIntoIov(
+    opened: preflight.opened!,
+    bytes: bytes,
+    data: data,
+    iovs: iovs,
+    iovsLen: iovsLen,
+    nreadPtr: nreadPtr,
+    fileOffset: offset,
+  );
+}
+
+int preview1FdPwrite({
+  required Preview1VirtualFileSystem vfs,
+  required int fd,
+  required Uint8List? bytes,
+  required ByteData? data,
+  required int iovs,
+  required int iovsLen,
+  required int offset,
+  required int nwrittenPtr,
+}) {
+  final preflight = _openFileForDescriptor(
+    vfs: vfs,
+    fd: fd,
+    rights: rightFdWrite | rightFdSeek,
+  );
+  if (preflight.errno != errnoSuccess) {
+    return preflight.errno;
+  }
+  if (bytes == null || data == null) {
+    return errnoInval;
+  }
+
+  return writeOpenFileFromIov(
+    opened: preflight.opened!,
+    bytes: bytes,
+    data: data,
+    iovs: iovs,
+    iovsLen: iovsLen,
+    nwrittenPtr: nwrittenPtr,
+    fileOffset: offset,
+  );
+}
+
+int preview1FdSeek({
+  required Preview1VirtualFileSystem vfs,
+  required int fd,
+  required int offset,
+  required int whence,
+  required Uint8List? bytes,
+  required ByteData? data,
+  required int newOffsetPtr,
+}) {
+  final preflight = _openFileForDescriptor(
+    vfs: vfs,
+    fd: fd,
+    rights: rightFdSeek,
+  );
+  if (preflight.errno != errnoSuccess) {
+    return preflight.errno;
+  }
+  if (bytes == null || data == null) {
+    return errnoInval;
+  }
+
+  if (newOffsetPtr < 0 || newOffsetPtr + 8 > bytes.length) {
+    return errnoInval;
+  }
+
+  final opened = preflight.opened!;
+  final base = switch (whence) {
+    0 => 0,
+    1 => opened.offset,
+    2 => opened.bytes.length,
+    _ => -1,
+  };
+  if (base < 0) {
+    return errnoInval;
+  }
+  final next = base + offset;
+  if (next < 0) {
+    return errnoInval;
+  }
+  opened.offset = next;
+  _setUint64(data, newOffsetPtr, next);
+  return errnoSuccess;
+}
+
+int preview1FdTell({
+  required Preview1VirtualFileSystem vfs,
+  required int fd,
+  required Uint8List? bytes,
+  required ByteData? data,
+  required int offsetPtr,
+}) {
+  final preflight = _openFileForDescriptor(
+    vfs: vfs,
+    fd: fd,
+    rights: rightFdTell,
+  );
+  if (preflight.errno != errnoSuccess) {
+    return preflight.errno;
+  }
+  if (bytes == null || data == null) {
+    return errnoInval;
+  }
+
+  if (offsetPtr < 0 || offsetPtr + 8 > bytes.length) {
+    return errnoInval;
+  }
+
+  _setUint64(data, offsetPtr, preflight.opened!.offset);
   return errnoSuccess;
 }
