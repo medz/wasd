@@ -217,6 +217,16 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-FDFLAGS-SUPPORTED` - Socket descriptors reject file-only
+  descriptor flags while preserving `NONBLOCK`.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`
+    failed before the fix because `sock_accept` accepted `APPEND`, then passed
+    after the fix;
+    `dart test -p chrome test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`.
+  - Claim impact: tightens native/browser Preview1 socket fdflag semantics and
+    preserves accept queue/output state on unsupported flag errors; does not
+    complete the parent `P1-SOCKET-CONFORMANCE` row.
 - [x] `CM-INSTANCE-CORE-SORT-VALIDATION` - Component instance arguments reject
   missing core sort indexes during validation.
   - Evidence:
@@ -1057,6 +1067,34 @@ performance visible while the support surface expands.
     this row with the exact commands run.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete it until the
     Preview1 socket and runtime gates are all checked.
+- [x] `P1-SOCKET-FDFLAGS-SUPPORTED` - Socket descriptors reject file-only
+  descriptor flags.
+  - Scope: native/browser Preview1 socket fdflag validation for `sock_accept`
+    and `fd_fdstat_set_flags`.
+  - Edit targets: `lib/src/wasi/preview1/common/constants.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`
+    failed before the fix because a stream listener accepted `APPEND`, consumed
+    its queued accepted socket, and exposed a file-only flag on the accepted
+    socket descriptor.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`;
+    `dart test -p chrome test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`;
+    `dart test test/wasi_test.dart`; `dart analyze`.
+  - Performance gate: N/A; this only adds constant-time descriptor flag
+    validation before existing socket accept/fdstat mutation paths.
+  - Done when: unknown fdflag bits still return `EINVAL`, known file-only
+    fdflags keep `NOTSOCK`/`BADF` descriptor errors for non-socket descriptors,
+    return `NOTSUP` for socket descriptors, `NONBLOCK` remains accepted, failed
+    `sock_accept` leaves the accepted-fd output pointer unchanged, and the
+    pending accepted socket is still available afterward.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
+    socket conformance row.
 - [x] `P1-SOCKET-DATAGRAM-ACCEPT-NOTSUP` - `sock_accept` reports `NOTSUP` for
   datagram sockets.
   - Scope: native/browser Preview1 `sock_accept` errno classification for a

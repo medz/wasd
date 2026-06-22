@@ -17,6 +17,7 @@ Object? _skipUnlessBrowser(String reason) =>
     isBrowserJsRuntime ? false : reason;
 
 const int _rightFdRead = 1 << 1;
+const int _rightFdFdstatSetFlags = 1 << 3;
 const int _rightFdWrite = 1 << 6;
 const int _rightFdFdstatGet = 1 << 21;
 const int _rightSockShutdown = 1 << 28;
@@ -31,6 +32,9 @@ const int _errnoNotsock = 57;
 const int _errnoNotsup = 58;
 const int _errnoNotcapable = 76;
 const int _errnoPipe = 64;
+const int _fdflagAppend = 1;
+const int _fdflagNonblock = 4;
+const int _fdflagUnknown = 1 << 5;
 const int _riflagRecvWaitall = 2;
 const int _roflagRecvDataTruncated = 1;
 const int _subscriptionSize = 48;
@@ -2125,6 +2129,93 @@ void main() {
             'client',
           );
           expect(sockAccept.ref([20, 0, acceptedFdPtr]), 6);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'socket descriptor flags reject file-only flags',
+        () async {
+          final accepted = WASIPreview1Socket(
+            receiveData: utf8.encode('client'),
+          );
+          final listener = WASIPreview1Socket(pendingAccepted: [accepted]);
+          final socket = WASIPreview1Socket();
+          final socketWasi = WASI(sockets: {20: listener, 21: socket});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockAccept =
+              preview1['sock_accept'] as FunctionImportExportValue;
+          final fdFdstatGet =
+              preview1['fd_fdstat_get'] as FunctionImportExportValue;
+          final fdFdstatSetFlags =
+              preview1['fd_fdstat_set_flags'] as FunctionImportExportValue;
+          final fdFdstatSetRights =
+              preview1['fd_fdstat_set_rights'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final data = ByteData.view(memory.buffer);
+          const acceptedFdPtr = 3312;
+          const fdstatPtr = 3328;
+
+          expect(
+            fdFdstatSetRights.ref([
+              20,
+              _rightSockAccept,
+              _rightFdRead | _rightFdFdstatGet,
+            ]),
+            0,
+          );
+          expect(
+            fdFdstatSetRights.ref([
+              21,
+              _rightFdFdstatGet | _rightFdFdstatSetFlags,
+              0,
+            ]),
+            0,
+          );
+
+          data.setUint32(acceptedFdPtr, 0xdeadbeef, Endian.little);
+          expect(
+            sockAccept.ref([1, _fdflagAppend, acceptedFdPtr]),
+            _errnoNotsock,
+          );
+          expect(data.getUint32(acceptedFdPtr, Endian.little), 0xdeadbeef);
+          expect(
+            sockAccept.ref([99, _fdflagAppend, acceptedFdPtr]),
+            _errnoBadf,
+          );
+          expect(data.getUint32(acceptedFdPtr, Endian.little), 0xdeadbeef);
+
+          expect(
+            sockAccept.ref([20, _fdflagUnknown, acceptedFdPtr]),
+            _errnoInval,
+          );
+          expect(data.getUint32(acceptedFdPtr, Endian.little), 0xdeadbeef);
+
+          expect(
+            sockAccept.ref([20, _fdflagAppend, acceptedFdPtr]),
+            _errnoNotsup,
+          );
+          expect(data.getUint32(acceptedFdPtr, Endian.little), 0xdeadbeef);
+
+          expect(fdFdstatSetFlags.ref([21, _fdflagUnknown]), _errnoInval);
+          expect(fdFdstatSetFlags.ref([21, _fdflagAppend]), _errnoNotsup);
+          expect(fdFdstatGet.ref([21, fdstatPtr]), 0);
+          expect(data.getUint16(fdstatPtr + 2, Endian.little), 0);
+
+          expect(sockAccept.ref([20, _fdflagNonblock, acceptedFdPtr]), 0);
+          final acceptedFd = data.getUint32(acceptedFdPtr, Endian.little);
+          expect(fdFdstatGet.ref([acceptedFd, fdstatPtr]), 0);
+          expect(data.getUint16(fdstatPtr + 2, Endian.little), _fdflagNonblock);
         },
         skip: _skipOnNode(
           'Skipping on Node.js; socket behavior is delegated to node:wasi.',

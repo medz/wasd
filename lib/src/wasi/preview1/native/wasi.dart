@@ -384,6 +384,9 @@ class WASI implements wasi_iface.WASI {
         if (right != _errnoSuccess) {
           return right;
         }
+        if ((flags & ~_socketFdflagKnownMask) != 0) {
+          return _errnoNotsup;
+        }
         if (!socket.isStream) {
           return _errnoNotsup;
         }
@@ -769,6 +772,10 @@ class WASI implements wasi_iface.WASI {
         final right = _checkDescriptorRight(fd, _rightFdFdstatSetFlags);
         if (right != _errnoSuccess) {
           return right;
+        }
+        final socket = _vfs.socketForFd(fd);
+        if (socket != null && (flags & ~_socketFdflagKnownMask) != 0) {
+          return _errnoNotsup;
         }
         return _vfs.setDescriptorFlags(fd, flags) ? _errnoSuccess : _errnoBadf;
       });
@@ -2117,6 +2124,7 @@ const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
 const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
 const int _fdflagKnownMask = wasi_common.fdflagKnownMask;
+const int _socketFdflagKnownMask = wasi_common.socketFdflagKnownMask;
 const int _riflagKnownMask = wasi_common.riflagKnownMask;
 const int _sdflagRd = wasi_common.sdflagRd;
 const int _sdflagWr = wasi_common.sdflagWr;

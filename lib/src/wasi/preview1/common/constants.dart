@@ -48,6 +48,7 @@ const int fdflagRsync = 8;
 const int fdflagSync = 16;
 const int fdflagKnownMask =
     fdflagAppend | fdflagDsync | fdflagNonblock | fdflagRsync | fdflagSync;
+const int socketFdflagKnownMask = fdflagNonblock;
 const int riflagRecvPeek = 1;
 const int riflagRecvWaitall = 2;
 const int riflagKnownMask = riflagRecvPeek | riflagRecvWaitall;
