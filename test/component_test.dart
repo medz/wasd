@@ -1003,6 +1003,21 @@ void main() {
         ).validate(),
         isEmpty,
       );
+      expect(
+        WasmComponent.decode(
+          _resourceExternrefRepresentationTypeComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
+
+      final invalidRepresentation = WasmComponent.decode(
+        _resourceInvalidRepresentationTypeComponentBytes(),
+      ).validate();
+      expect(invalidRepresentation, hasLength(1));
+      expect(
+        invalidRepresentation.single.message,
+        contains('resource representation type'),
+      );
 
       final wrongSort = WasmComponent.decode(
         _ownedWrongSortTypeIndexComponentBytes(),
@@ -7425,6 +7440,12 @@ Uint8List _resourceDestructorFunctionComponentBytes() =>
       0x01,
       0x00,
     ]);
+
+Uint8List _resourceExternrefRepresentationTypeComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[0x3f, 0x6f, 0x00]);
+
+Uint8List _resourceInvalidRepresentationTypeComponentBytes() =>
+    _componentWithSingleTypeDefinitionBytes(const <int>[0x3f, 0x00, 0x00]);
 
 Uint8List _resourceDestructorOutOfRangeFunctionComponentBytes() =>
     _componentWithSingleTypeDefinitionBytes(const <int>[

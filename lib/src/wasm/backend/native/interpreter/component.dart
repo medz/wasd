@@ -1598,6 +1598,11 @@ final class _WasmComponentValidationContext {
       );
     }
 
+    final resource = type.resource;
+    if (type.kind == WasmComponentTypeKind.resource && resource != null) {
+      validateResourceType(resource, '$path.resource');
+    }
+
     final component = type.component;
     if (type.kind == WasmComponentTypeKind.component && component != null) {
       validateComponentTypeDeclarations(
@@ -3121,6 +3126,23 @@ final class _WasmComponentValidationContext {
         ),
       );
     }
+  }
+
+  void validateResourceType(WasmComponentResourceType type, String path) {
+    final representationTypeCode = type.representationTypeCode;
+    if (type.isAbstract ||
+        _isSupportedResourceRepresentationTypeCode(representationTypeCode)) {
+      return;
+    }
+
+    errors.add(
+      WasmComponentValidationError(
+        path: '$path.representation',
+        message:
+            'Unsupported Wasm component resource representation type: '
+            '${_formatNullableByte(representationTypeCode)}.',
+      ),
+    );
   }
 
   void validateExternDescriptor(
@@ -6957,6 +6979,17 @@ bool _isCoreLegacyHeapType(int code) {
     _ => false,
   };
 }
+
+bool _isSupportedResourceRepresentationTypeCode(int? code) {
+  return switch (code) {
+    0x7f || 0x7e || 0x7d || 0x7c || 0x7b => true,
+    final int value when _isCoreLegacyHeapType(value) => true,
+    _ => false,
+  };
+}
+
+String _formatNullableByte(int? value) =>
+    value == null ? 'null' : '0x${value.toRadixString(16)}';
 
 void _readSignedLebContinuation(ByteReader reader, int firstByte) {
   var byte = firstByte;

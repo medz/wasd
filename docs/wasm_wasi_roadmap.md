@@ -139,7 +139,9 @@ too broad to verify in one commit.
     path; in that case add the relevant component benchmark command here.
   - Checked child rows: `CM-CANONICAL-COPY-OPTION-PLACEMENT` covers invalid
     option placement for `stream.read`, `stream.write`, `future.read`, and
-    `future.write` copy definitions.
+    `future.write` copy definitions;
+    `CM-RESOURCE-REPRESENTATION-VALIDATION` covers resource representation
+    type byte validation for supported single-byte core value type reps.
   - Done when: the invalid component fails before host state is mutated and the
     diagnostic names the rejected shape or interface boundary.
   - Evidence update: record the failing shape and the exact command evidence.
@@ -228,6 +230,32 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `CM-RESOURCE-REPRESENTATION-VALIDATION` - Reject unsupported component
+  resource representation type bytes.
+  - Scope: component-model resource type validation before P2/P3 resource host
+    binding and canonical resource operations.
+  - Edit targets: `lib/src/wasm/backend/native/interpreter/component.dart`,
+    `test/component_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/component_test.dart --name "reports invalid component resource type indexes"`
+    failed before the fix because a resource type with representation byte
+    `0x00` validated with no diagnostic.
+  - Implementation gate:
+    `dart test test/component_test.dart --name "reports invalid component resource type indexes"`;
+    `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`;
+    `dart analyze`;
+    `dart test`.
+  - Performance gate: N/A; this is a constant-time validation check over a
+    decoded resource type and does not touch adapter execution, async copy, or
+    resource-table hot paths.
+  - Done when: unsupported resource representation bytes fail validation with a
+    structured diagnostic before resource host binding, while supported
+    single-byte core value type reps such as `externref` still validate.
+  - Evidence update: this checked row, the detailed backlog child row, and the
+    current execution board checked-child list.
+  - Claim impact: reduces P2/P3 resource validation risk; does not complete
+    `CM-VALIDATION-GAPS`, `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-SHUTDOWN-HOW-PREFLIGHT` - `sock_shutdown` validates `how`
   before descriptor/socket/right state.
   - Scope: native/browser shared Preview1 `sock_shutdown` ABI validation
@@ -2910,6 +2938,32 @@ performance visible while the support surface expands.
     - `dart test test/wasi_component_async_host_test.dart`
   - Done when: unsupported shapes fail during validation with structured
     diagnostics before host mutation.
+- [x] `CM-RESOURCE-REPRESENTATION-VALIDATION` - Reject unsupported component
+  resource representation type bytes.
+  - Scope: component-model resource type validation before P2/P3 resource host
+    binding and canonical resource operations.
+  - Edit targets: `lib/src/wasm/backend/native/interpreter/component.dart`,
+    `test/component_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/component_test.dart --name "reports invalid component resource type indexes"`
+    failed before the fix because a resource type with representation byte
+    `0x00` validated with no diagnostic.
+  - Implementation gate:
+    `dart test test/component_test.dart --name "reports invalid component resource type indexes"`;
+    `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`;
+    `dart analyze`;
+    `dart test`.
+  - Performance gate: N/A; this is a constant-time validation check over a
+    decoded resource type and does not touch adapter execution, async copy, or
+    resource-table hot paths.
+  - Done when: unsupported resource representation bytes fail validation with a
+    structured diagnostic before resource host binding, while supported
+    single-byte core value type reps such as `externref` still validate.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    checked-child list and `Recently Checked` entry.
+  - Claim impact: reduces P2/P3 resource validation risk; no direct support
+    gate.
 - [x] `CM-CANONICAL-COPY-OPTION-PLACEMENT` - Reject non-copy options on
   stream/future canonical copy definitions.
   - Scope: component-model canonical validation for decoded `stream.read`,
