@@ -191,6 +191,20 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-HOST-RECV-PROVIDER-CAP` - Host-backed stream receive providers
+  are capped to the requested byte count before buffering.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "virtual socket receive providers are capped to requested bytes"`
+    failed before the fix because oversized provider chunks were buffered past
+    the guest request, then passed after the fix;
+    `dart test test/wasi_test.dart --name "sock_recv waitall drains chunked host stream providers"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "virtual socket receive providers are capped to requested bytes"`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
+    `dart analyze`.
+  - Claim impact: tightens the host-backed Preview1 stream provider API and
+    prevents oversized provider returns from expanding buffered socket memory;
+    does not complete the parent `P1-SOCKET-CONFORMANCE` row.
 - [x] `P1-SOCKET-HOST-STREAM-WAITALL-CHUNKS` - Host-backed stream
   `RECV_WAITALL` drains chunked providers until the request is satisfied or the
   provider reports no data.
@@ -943,6 +957,31 @@ performance visible while the support surface expands.
     available or the provider returns empty, ordinary receive keeps the one-pull
     default, shutdown mutation cannot cause an unbounded loop, and
     `socket_recv_waitall` benchmark output includes the host chunked path.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
+    socket conformance row.
+- [x] `P1-SOCKET-HOST-RECV-PROVIDER-CAP` - Host-backed stream receive providers
+  are capped to the requested byte count.
+  - Scope: native/browser shared Preview1 stream sockets backed by
+    `WASIPreview1SocketReceiveDataProvider`.
+  - Edit targets: `lib/src/wasi/preview1/socket.dart` and
+    `test/wasi_test.dart`.
+  - Red test:
+    `dart test test/wasi_test.dart --name "virtual socket receive providers are capped to requested bytes"`
+    failed before the fix because a provider returning more than `maxBytes`
+    left the extra bytes buffered and made a later read succeed unexpectedly.
+  - Implementation gate: `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "virtual socket receive providers are capped to requested bytes"`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+    This keeps the normal host receive and `RECV_WAITALL` paths covered; the cap
+    branch is a defensive contract path for invalid host callbacks.
+  - Done when: provider returns larger than `maxBytes` are clipped before
+    buffering, ordinary and waitall host receive semantics still pass, output
+    pointers remain unchanged on the follow-up `EAGAIN`, and benchmark output
+    still covers host receive paths.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent

@@ -7,7 +7,8 @@ const int _receiveCompactionThreshold = 64 * 1024;
 ///
 /// The provider should return at most [maxBytes] bytes that can be consumed by
 /// a future `sock_recv` call. Returning an empty list means no host bytes were
-/// available at the time of the call.
+/// available at the time of the call. If a provider returns more than
+/// [maxBytes], the socket accepts only the requested prefix.
 typedef WASIPreview1SocketReceiveDataProvider =
     List<int> Function(int maxBytes);
 
@@ -204,11 +205,14 @@ final class WASIPreview1Socket {
     var totalPulled = 0;
     while (!receiveShutdown && remainingReceiveLength < minUnreadBytes) {
       final beforeLength = remainingReceiveLength;
-      final data = provider(minUnreadBytes - beforeLength);
+      final requestedBytes = minUnreadBytes - beforeLength;
+      final data = provider(requestedBytes);
       if (data.isEmpty) {
         break;
       }
-      _appendReceiveBytes(data);
+      _appendReceiveBytes(
+        data.length > requestedBytes ? data.sublist(0, requestedBytes) : data,
+      );
       final pulled = remainingReceiveLength - beforeLength;
       if (pulled <= 0) {
         break;

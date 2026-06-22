@@ -294,6 +294,64 @@ void main() {
       expect(acceptedBytes, [1]);
     });
 
+    test('virtual socket receive providers are capped to requested bytes', () {
+      var providerCalls = 0;
+      final socket = WASIPreview1Socket(
+        receiveDataProvider: (maxBytes) {
+          providerCalls++;
+          expect(maxBytes, 2);
+          return providerCalls == 1 ? utf8.encode('hello') : const <int>[];
+        },
+      );
+      final vfs = Preview1VirtualFileSystem(sockets: {72: socket});
+      final descriptor = vfs.socketForFd(72)!;
+      final bytes = Uint8List(64);
+      final data = ByteData.view(bytes.buffer);
+      const iovPtr = 0;
+      const bufferPtr = 16;
+      const countPtr = 32;
+      const flagsPtr = 40;
+
+      data.setUint32(iovPtr, bufferPtr, Endian.little);
+      data.setUint32(iovPtr + 4, 2, Endian.little);
+      expect(
+        readSocketIntoIov(
+          socket: descriptor,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          flags: 0,
+          nreadPtr: countPtr,
+          roFlagsPtr: flagsPtr,
+        ),
+        0,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 2);
+      expect(data.getUint16(flagsPtr, Endian.little), 0);
+      expect(utf8.decode(bytes.sublist(bufferPtr, bufferPtr + 2)), 'he');
+      expect(socket.remainingReceiveData, isEmpty);
+
+      data.setUint32(countPtr, 0xfeedface, Endian.little);
+      data.setUint16(flagsPtr, 0xbeef, Endian.little);
+      expect(
+        readSocketIntoIov(
+          socket: descriptor,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          flags: 0,
+          nreadPtr: countPtr,
+          roFlagsPtr: flagsPtr,
+        ),
+        _errnoAgain,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+      expect(data.getUint16(flagsPtr, Endian.little), 0xbeef);
+      expect(providerCalls, 2);
+    });
+
     test('virtual datagram providers preserve zero-length messages', () {
       final messages = [<int>[]];
       final socket = WASIPreview1Socket.datagram(
