@@ -14,6 +14,46 @@ const int _defaultMutations = 200;
 const int _warmupIterations = 50;
 const int _socketChunkSize = 64;
 const int _socketIovSize = 32;
+const String _allDistributions = 'all';
+const String _baselineDistribution = 'baseline';
+const List<String> _benchmarkDistributions = <String>[
+  _baselineDistribution,
+  'directory-heavy',
+  'descriptor-heavy',
+  'socket-heavy',
+];
+
+const Map<String, _DistributionDefaults> _distributionDefaults =
+    <String, _DistributionDefaults>{
+      _baselineDistribution: _DistributionDefaults(
+        directories: _defaultDirectories,
+        filesPerDirectory: _defaultFilesPerDirectory,
+        iterations: _defaultIterations,
+        openFds: _defaultOpenFds,
+        mutations: _defaultMutations,
+      ),
+      'directory-heavy': _DistributionDefaults(
+        directories: 128,
+        filesPerDirectory: 64,
+        iterations: _defaultIterations,
+        openFds: _defaultOpenFds,
+        mutations: _defaultMutations,
+      ),
+      'descriptor-heavy': _DistributionDefaults(
+        directories: _defaultDirectories,
+        filesPerDirectory: _defaultFilesPerDirectory,
+        iterations: 1000,
+        openFds: 2048,
+        mutations: _defaultMutations,
+      ),
+      'socket-heavy': _DistributionDefaults(
+        directories: _defaultDirectories,
+        filesPerDirectory: _defaultFilesPerDirectory,
+        iterations: 8000,
+        openFds: _defaultOpenFds,
+        mutations: _defaultMutations,
+      ),
+    };
 
 void main(List<String> args) {
   final options = _Options.parse(args);
@@ -22,6 +62,26 @@ void main(List<String> args) {
     return;
   }
 
+  final payload = options.distribution == _allDistributions
+      ? <String, Object?>{
+          'distribution': _allDistributions,
+          'runs': {
+            for (final distribution in _benchmarkDistributions)
+              distribution: _runBenchmark(
+                options.withDistribution(distribution),
+              ),
+          },
+        }
+      : _runBenchmark(options);
+
+  if (options.json) {
+    stdout.writeln(const JsonEncoder.withIndent('  ').convert(payload));
+  } else {
+    _printText(payload);
+  }
+}
+
+Map<String, Object?> _runBenchmark(_Options options) {
   final baselineFiles = _buildFiles(
     directories: options.directories,
     filesPerDirectory: options.filesPerDirectory,
@@ -42,6 +102,7 @@ void main(List<String> args) {
   final socketRenumberClose = _benchmarkSocketRenumberClose(options);
 
   final payload = <String, Object?>{
+    'distribution': options.distribution,
     'directories': options.directories,
     'files_per_directory': options.filesPerDirectory,
     'files': baselineFiles.length,
@@ -61,12 +122,7 @@ void main(List<String> args) {
     'socket_poll_readiness': socketPollReadiness.toJson(),
     'socket_renumber_close': socketRenumberClose.toJson(),
   };
-
-  if (options.json) {
-    stdout.writeln(const JsonEncoder.withIndent('  ').convert(payload));
-  } else {
-    _printText(payload);
-  }
+  return payload;
 }
 
 Map<String, Uint8List> _buildFiles({
@@ -753,8 +809,37 @@ int _openBenchmarkPath(
 }
 
 void _printText(Map<String, Object?> payload) {
+  final runs = payload['runs'];
+  if (runs is Map<String, Object?>) {
+    stdout
+      ..writeln('wasi vfs benchmark')
+      ..writeln('  distribution: ${payload['distribution']}');
+    for (final entry in runs.entries) {
+      stdout.writeln('');
+      stdout.writeln('distribution: ${entry.key}');
+      _printSingleText(
+        entry.value! as Map<String, Object?>,
+        includeTitle: false,
+        includeDistribution: false,
+      );
+    }
+    return;
+  }
+  _printSingleText(payload);
+}
+
+void _printSingleText(
+  Map<String, Object?> payload, {
+  bool includeTitle = true,
+  bool includeDistribution = true,
+}) {
+  if (includeTitle) {
+    stdout.writeln('wasi vfs benchmark');
+  }
+  if (includeDistribution) {
+    stdout.writeln('  distribution: ${payload['distribution']}');
+  }
   stdout
-    ..writeln('wasi vfs benchmark')
     ..writeln('  directories: ${payload['directories']}')
     ..writeln('  files per directory: ${payload['files_per_directory']}')
     ..writeln('  files: ${payload['files']}')
@@ -791,6 +876,9 @@ void _printUsage() {
 Usage: dart run tool/wasi_vfs_benchmark.dart [options]
 
 Options:
+  --distribution=<name>      Benchmark distribution: baseline, directory-heavy,
+                             descriptor-heavy, socket-heavy, or all. Default:
+                             $_baselineDistribution.
   --directories=<n>          Number of virtual directories. Default: $_defaultDirectories.
   --files-per-directory=<n>  Number of files under each directory. Default: $_defaultFilesPerDirectory.
   --iterations=<n>           Repetitions for open/readdir/right checks. Default: $_defaultIterations.
@@ -799,6 +887,22 @@ Options:
   --json                     Print machine-readable JSON.
   --help                     Show this help.
 ''');
+}
+
+final class _DistributionDefaults {
+  const _DistributionDefaults({
+    required this.directories,
+    required this.filesPerDirectory,
+    required this.iterations,
+    required this.openFds,
+    required this.mutations,
+  });
+
+  final int directories;
+  final int filesPerDirectory;
+  final int iterations;
+  final int openFds;
+  final int mutations;
 }
 
 final class _Metric {
@@ -824,41 +928,75 @@ final class _Metric {
 
 final class _Options {
   const _Options({
-    required this.directories,
-    required this.filesPerDirectory,
-    required this.iterations,
-    required this.openFds,
-    required this.mutations,
+    required this.distribution,
+    required this.directoriesOverride,
+    required this.filesPerDirectoryOverride,
+    required this.iterationsOverride,
+    required this.openFdsOverride,
+    required this.mutationsOverride,
     required this.json,
     required this.help,
   });
 
-  final int directories;
-  final int filesPerDirectory;
-  final int iterations;
-  final int openFds;
-  final int mutations;
+  final String distribution;
+  final int? directoriesOverride;
+  final int? filesPerDirectoryOverride;
+  final int? iterationsOverride;
+  final int? openFdsOverride;
+  final int? mutationsOverride;
   final bool json;
   final bool help;
 
+  _DistributionDefaults get _defaults {
+    return _distributionDefaults[distribution] ??
+        _distributionDefaults[_baselineDistribution]!;
+  }
+
+  int get directories => directoriesOverride ?? _defaults.directories;
+
+  int get filesPerDirectory {
+    return filesPerDirectoryOverride ?? _defaults.filesPerDirectory;
+  }
+
+  int get iterations => iterationsOverride ?? _defaults.iterations;
+
+  int get openFds => openFdsOverride ?? _defaults.openFds;
+
+  int get mutations => mutationsOverride ?? _defaults.mutations;
+
+  _Options withDistribution(String distribution) {
+    return _Options(
+      distribution: distribution,
+      directoriesOverride: directoriesOverride,
+      filesPerDirectoryOverride: filesPerDirectoryOverride,
+      iterationsOverride: iterationsOverride,
+      openFdsOverride: openFdsOverride,
+      mutationsOverride: mutationsOverride,
+      json: json,
+      help: help,
+    );
+  }
+
   _Options copyWith({int? iterations, int? openFds, int? mutations}) {
     return _Options(
-      directories: directories,
-      filesPerDirectory: filesPerDirectory,
-      iterations: iterations ?? this.iterations,
-      openFds: openFds ?? this.openFds,
-      mutations: mutations ?? this.mutations,
+      distribution: distribution,
+      directoriesOverride: directories,
+      filesPerDirectoryOverride: filesPerDirectory,
+      iterationsOverride: iterations ?? this.iterations,
+      openFdsOverride: openFds ?? this.openFds,
+      mutationsOverride: mutations ?? this.mutations,
       json: json,
       help: help,
     );
   }
 
   factory _Options.parse(List<String> args) {
-    var directories = _defaultDirectories;
-    var filesPerDirectory = _defaultFilesPerDirectory;
-    var iterations = _defaultIterations;
-    var openFds = _defaultOpenFds;
-    var mutations = _defaultMutations;
+    var distribution = _baselineDistribution;
+    int? directories;
+    int? filesPerDirectory;
+    int? iterations;
+    int? openFds;
+    int? mutations;
     var json = false;
     var help = false;
 
@@ -867,6 +1005,12 @@ final class _Options {
         json = true;
       } else if (arg == '--help' || arg == '-h') {
         help = true;
+      } else if (arg.startsWith('--distribution=')) {
+        distribution = arg.substring('--distribution='.length);
+        if (distribution != _allDistributions &&
+            !_distributionDefaults.containsKey(distribution)) {
+          throw ArgumentError('Unsupported distribution: $distribution');
+        }
       } else if (arg.startsWith('--directories=')) {
         directories = _positiveInt(arg, '--directories');
       } else if (arg.startsWith('--files-per-directory=')) {
@@ -883,11 +1027,12 @@ final class _Options {
     }
 
     return _Options(
-      directories: directories,
-      filesPerDirectory: filesPerDirectory,
-      iterations: iterations,
-      openFds: openFds,
-      mutations: mutations,
+      distribution: distribution,
+      directoriesOverride: directories,
+      filesPerDirectoryOverride: filesPerDirectory,
+      iterationsOverride: iterations,
+      openFdsOverride: openFds,
+      mutationsOverride: mutations,
       json: json,
       help: help,
     );

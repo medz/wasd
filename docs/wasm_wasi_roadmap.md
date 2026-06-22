@@ -139,7 +139,7 @@ copying their internals directly.
 
 | Status | Capability boundary | Evidence to inspect | Verification gate | Remaining gap |
 | --- | --- | --- | --- | --- |
-| [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --json` | Conformance-shaped socket edge cases and externally backed readiness. |
+| [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Conformance-shaped socket edge cases and externally backed readiness. |
 | [x] | Component decoder and canonical validation base | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion and broader official component suite coverage. |
 | [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
 | [x] | Versioned Preview2/Preview3 capability gates | `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/preview2/component_host.dart`, `lib/src/wasi/preview3/component_host.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_versioned_host_test.dart` | Concrete P2/P3 interface adapter modules instead of generic facade binding. |
@@ -173,10 +173,12 @@ This is the implementation state as of 2026-06-22 on `main`.
   `WASIPreview1Socket`, not raw networking.
 - Preview 1 directory entries are indexed through per-directory child maps so
   common path/link/symlink mutation paths rebuild only affected directories.
-  The benchmark entrypoint is `dart run tool/wasi_vfs_benchmark.dart --json`;
-  it also covers socket multi-iov peek/waitall, datagram truncation, socket
-  send/recv, socket polling readiness including zero-length datagram
-  readiness and queued accepts, and socket renumber/close descriptor paths.
+  The benchmark entrypoint is
+  `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; it reports
+  baseline, directory-heavy, descriptor-heavy, and socket-heavy distributions.
+  It also covers socket multi-iov peek/waitall, datagram truncation, socket
+  send/recv, socket polling readiness including zero-length datagram readiness
+  and queued accepts, and socket renumber/close descriptor paths.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/` now provides an internal typed resource table plus
@@ -529,12 +531,13 @@ performance visible while the support surface expands.
   verification before running broader conformance smoke checks.
 - Preview 1 VFS path resolution, directory-entry rebuilding, descriptor rights,
   and socket descriptor paths are measured by
-  `dart run tool/wasi_vfs_benchmark.dart --json`, covering `path_open`,
-  `fd_readdir`, link/symlink mutation, rights checks, socket multi-iov
-  `RECV_PEEK`/`RECV_WAITALL`, datagram truncation, socket send/recv, and socket
-  poll readiness, plus file, directory, and socket descriptor renumber/close
-  over large directory and descriptor sets. Keep optimizing against benchmark
-  data instead of test suite heat alone.
+  `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`, covering
+  baseline, directory-heavy, descriptor-heavy, and socket-heavy distributions,
+  plus `path_open`, `fd_readdir`, link/symlink mutation, rights checks, socket
+  multi-iov `RECV_PEEK`/`RECV_WAITALL`, datagram truncation, socket send/recv,
+  and socket poll readiness, plus file, directory, and socket descriptor
+  renumber/close over large directory and descriptor sets. Keep optimizing
+  against benchmark data instead of test suite heat alone.
 - Component async host paths are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`, including
   canonical async stream/future copies, context get/set TLS operations,
@@ -599,16 +602,17 @@ performance visible while the support surface expands.
     boundaries and externally backed readiness.
   - Evidence: `test/wasi_test.dart`, `lib/src/wasi/preview1/common/vfs.dart`.
   - Gate: `dart test test/wasi_test.dart`;
-    `dart run tool/wasi_vfs_benchmark.dart --json`.
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
   - Done when: regressions cover the failing edge cases and benchmark output
     includes the affected socket paths.
-- [ ] `PERF-VFS-DISTRIBUTIONS` - VFS/descriptor benchmark distributions.
+- [x] `PERF-VFS-DISTRIBUTIONS` - VFS/descriptor benchmark distributions.
   - Change: extend benchmark data to larger conformance-shaped path, directory,
     socket, and descriptor sets before optimizing more VFS code.
   - Evidence: `tool/wasi_vfs_benchmark.dart`.
-  - Gate: `dart run tool/wasi_vfs_benchmark.dart --json`.
-  - Done when: benchmark JSON reports the new distributions and gives stable
-    numbers for descriptor-heavy cases.
+  - Gate: `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: benchmark JSON reports baseline, directory-heavy,
+    descriptor-heavy, and socket-heavy runs with the dimensions and metrics for
+    each distribution.
 - [ ] `PERF-HEAVY-RUNNERS` - Heavy runner process and fixture-conversion audit.
   - Change: add timing/cache evidence for spec runner and DOOM fixture
     conversion hot spots before changing runtime code for test heat.
