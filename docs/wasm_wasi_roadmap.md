@@ -228,6 +228,29 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-CLOCK-TIME-INVALID-ID` - `clock_time_get` rejects unsupported
+  Preview1 clock ids without mutating guest output.
+  - Scope: native/browser Preview1 `clock_time_get` syscall validation.
+  - Edit targets: `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "clock_time_get returns inval for unsupported clock ids"`
+    failed before the fix because `clock_time_get(99, ...)` returned success and
+    wrote a timestamp.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "clock_time_get returns inval for unsupported clock ids"`;
+    `dart test test/wasi_test.dart --name "clock_time_get"`;
+    `dart test -p chrome test/wasi_test.dart --name "clock_time_get"`.
+  - Performance gate: N/A; this adds one constant-time supported-clock check to an
+    existing syscall boundary and does not add a loop, allocation, or runtime hot
+    path.
+  - Done when: unsupported clock ids return `EINVAL`, preserve the output memory,
+    and supported clock ids still write timestamps on native and browser hosts.
+  - Evidence update: this checked row plus the verification matrix row.
+  - Claim impact: closes one Preview1 clock syscall validation gap for
+    native/browser hosts; does not complete `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [x] `CM-CANONICAL-COPY-OPTION-PLACEMENT` - Stream/future canonical copy
   definitions reject non-copy options during validation.
   - Scope: component-model canonical validation for decoded `stream.read`,
@@ -961,6 +984,7 @@ copying their internals directly.
 | Status | Capability boundary | Evidence to inspect | Verification gate | Remaining gap |
 | --- | --- | --- | --- | --- |
 | [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `path_open` create/exclusive/truncate is covered; full Preview1 conformance still needs broader syscall/spec-suite gates and remaining socket edges. |
+| [x] | Preview1 native/browser clock syscall validation | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "clock_time_get"`; `dart test -p chrome test/wasi_test.dart --name "clock_time_get"` | Unsupported `clock_time_get` ids now preserve output memory and return `EINVAL`; full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
 | [x] | Versioned Preview2/Preview3 capability gates | `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/preview2/component_host.dart`, `lib/src/wasi/preview3/component_host.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_versioned_host_test.dart` | Concrete P2/P3 interface adapter modules instead of generic facade binding. |
@@ -974,16 +998,16 @@ copying their internals directly.
 
 ## Current wasd Baseline
 
-This is the implementation state as of 2026-06-22 on `main`.
+This is the implementation state as of 2026-06-23 on `main`.
 
 - Preview 1 is real but still incomplete. Native and browser hosts share
   `lib/src/wasi/preview1/common/vfs.dart` for virtual files, directories,
   readdir state, hard links, symlinks/readlink, configured stream/datagram
   sockets, descriptor flags, descriptor rights, descriptor times, descriptor
   sync/advice validation, clock/file/socket polling readiness including
-  host-supplied socket readiness hints, host-backed stream/datagram
-  receive/send handlers, and descriptor renumbering. Node still delegates
-  Preview 1 behavior to `node:wasi`.
+  host-supplied socket readiness hints, `clock_time_get` unsupported-id
+  validation, host-backed stream/datagram receive/send handlers, and descriptor
+  renumbering. Node still delegates Preview 1 behavior to `node:wasi`.
 - Preview 1 `proc_raise` is no longer a blanket `ENOSYS` stub: native hosts
   deliver mapped process signals by default, native/browser hosts can inject a
   `procRaiseHandler` for controlled signal handling, and browser hosts still

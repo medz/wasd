@@ -972,6 +972,9 @@ class WASI implements wasi.WASI {
         }
         final clockId = _asInt(args[0]);
         final timePtr = _asInt(args[2]);
+        if (_clockResolutionNanos(clockId) == null) {
+          return _errnoInval;
+        }
 
         final view = _memoryView();
         if (view == null) {

@@ -1249,6 +1249,29 @@ void main() {
       );
 
       test(
+        'clock_time_get returns inval for unsupported clock ids',
+        () {
+          final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+          final clockTimeGet =
+              preview1['clock_time_get'] as FunctionImportExportValue;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
+          wasi.finalizeBindings(instance, memory: memory);
+
+          final data = ByteData.view(memory.buffer);
+          const timePtr = 1610;
+          _setUint64Le(data, timePtr, 123);
+
+          final result = clockTimeGet.ref([99, 0, timePtr]);
+          expect(result, 28);
+          expect(_getUint64Le(data, timePtr), 123);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; clock_time_get behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'clock_res_get writes a non-zero resolution for supported clocks',
         () {
           final preview1 = wasi.imports['wasi_snapshot_preview1']!;
