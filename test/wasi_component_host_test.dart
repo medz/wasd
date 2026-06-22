@@ -9,6 +9,8 @@ import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
 
+import 'support/component_fixtures.dart' as component_fixtures;
+
 void main() {
   group('WASIComponentHost', () {
     test('binds component resources and canonical builtins together', () {
@@ -200,6 +202,60 @@ void main() {
       expect(binding.program.invoke(4, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
+
+    test(
+      'copies owned resource streams through decoded core memory options',
+      () {
+        final component = WasmComponent.decode(
+          component_fixtures.ownedResourceAsyncMemoryProgramFromU32(
+            _canonicalStreamMemoryProgramBytes(),
+            isStream: true,
+          ),
+        );
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final data = ByteData.view(memory.buffer);
+        data.setUint32(32, 0x7fffffff, Endian.little);
+        data.setUint32(36, 0x80000000, Endian.little);
+        final host = WASIComponentHost();
+
+        final plan = host.prepareComponent(component);
+
+        expect(component.validate(), isEmpty);
+        expect(plan.canBind, isTrue);
+        expect(plan.resourceBindings, hasLength(1));
+        expect(plan.resourceBindings.single.componentTypeIndex, 0);
+        expect(plan.asyncValueBindings, hasLength(1));
+        expect(plan.asyncValueBindings.single.componentTypeIndex, 2);
+        expect(plan.asyncValueBindings.single.memoryLayout!.byteLength, 4);
+
+        final binding = plan.bind();
+        final handles = WASIComponentAsyncEndpointHandles.unpack(
+          binding.program.invoke(0, const <Object?>[])! as int,
+        );
+
+        expect(
+          binding.program.invokeWithMemory(2, memory, <Object?>[
+            handles.writable,
+            32,
+            2,
+          ]),
+          2 << 4,
+        );
+        expect(
+          binding.program.invokeWithMemory(1, memory, <Object?>[
+            handles.readable,
+            96,
+            2,
+          ]),
+          2 << 4,
+        );
+        expect(data.getUint32(96, Endian.little), 0x7fffffff);
+        expect(data.getUint32(100, Endian.little), 0x80000000);
+        expect(binding.program.invoke(3, <Object?>[handles.readable]), isNull);
+        expect(binding.program.invoke(4, <Object?>[handles.writable]), isNull);
+        expect(host.table.activeCount, 0);
+      },
+    );
 
     test('copies record streams through decoded core memory options', () {
       final component = WasmComponent.decode(
@@ -526,6 +582,60 @@ void main() {
       expect(binding.program.invoke(4, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
+
+    test(
+      'copies owned resource futures through decoded core memory options',
+      () {
+        final component = WasmComponent.decode(
+          component_fixtures.ownedResourceAsyncMemoryProgramFromU32(
+            _canonicalFutureMemoryProgramBytes(),
+            isStream: false,
+          ),
+        );
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final data = ByteData.view(memory.buffer);
+        data.setUint32(32, 0xffffffff, Endian.little);
+        final host = WASIComponentHost();
+
+        final plan = host.prepareComponent(component);
+
+        expect(component.validate(), isEmpty);
+        expect(plan.canBind, isTrue);
+        expect(plan.resourceBindings, hasLength(1));
+        expect(plan.resourceBindings.single.componentTypeIndex, 0);
+        expect(plan.asyncValueBindings, hasLength(1));
+        expect(
+          plan.asyncValueBindings.single.kind,
+          WASIComponentAsyncValueBindingKind.future,
+        );
+        expect(plan.asyncValueBindings.single.componentTypeIndex, 2);
+        expect(plan.asyncValueBindings.single.memoryLayout!.byteLength, 4);
+
+        final binding = plan.bind();
+        final handles = WASIComponentAsyncEndpointHandles.unpack(
+          binding.program.invoke(0, const <Object?>[])! as int,
+        );
+
+        expect(
+          binding.program.invokeWithMemory(2, memory, <Object?>[
+            handles.writable,
+            32,
+          ]),
+          0,
+        );
+        expect(
+          binding.program.invokeWithMemory(1, memory, <Object?>[
+            handles.readable,
+            96,
+          ]),
+          0,
+        );
+        expect(data.getUint32(96, Endian.little), 0xffffffff);
+        expect(binding.program.invoke(3, <Object?>[handles.readable]), isNull);
+        expect(binding.program.invoke(4, <Object?>[handles.writable]), isNull);
+        expect(host.table.activeCount, 0);
+      },
+    );
 
     test('copies record futures through decoded core memory options', () {
       final component = WasmComponent.decode(

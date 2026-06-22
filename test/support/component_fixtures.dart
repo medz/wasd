@@ -61,6 +61,96 @@ Uint8List canonicalU32ResultLiftLowerComponentBytes() =>
 Uint8List canonicalResourceLiftComponentBytes() =>
     Uint8List.fromList(_canonicalResourceLiftComponentBytes);
 
+/// Returns a component whose type section defines `stream<own resource>`.
+Uint8List streamOwnResourceTypeComponentBytes() =>
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x3f,
+      0x7f,
+      0x00,
+      0x69,
+      0x00,
+      0x66,
+      0x01,
+      0x01,
+    ], count: 3);
+
+/// Returns a component whose type section defines `future<own resource>`.
+Uint8List futureOwnResourceTypeComponentBytes() =>
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x3f,
+      0x7f,
+      0x00,
+      0x69,
+      0x00,
+      0x65,
+      0x01,
+      0x01,
+    ], count: 3);
+
+/// Rewrites a decoded `stream<u32>` or `future<u32>` memory-copy program to
+/// use `own resource` element handles at component type index 2.
+Uint8List ownedResourceAsyncMemoryProgramFromU32(
+  Uint8List source, {
+  required bool isStream,
+}) {
+  final bytes = source.toList();
+  final oldTypeSection = isStream
+      ? const <int>[0x07, 0x04, 0x01, 0x66, 0x01, 0x79]
+      : const <int>[0x07, 0x04, 0x01, 0x65, 0x01, 0x79];
+  final newTypeSection = isStream
+      ? const <int>[
+          0x07,
+          0x09,
+          0x03,
+          0x3f,
+          0x7f,
+          0x00,
+          0x69,
+          0x00,
+          0x66,
+          0x01,
+          0x01,
+        ]
+      : const <int>[
+          0x07,
+          0x09,
+          0x03,
+          0x3f,
+          0x7f,
+          0x00,
+          0x69,
+          0x00,
+          0x65,
+          0x01,
+          0x01,
+        ];
+  final typeOffset = _indexOfSublist(bytes, oldTypeSection);
+  if (typeOffset < 0) {
+    throw StateError('Unable to find async u32 type section in fixture.');
+  }
+  bytes.replaceRange(
+    typeOffset,
+    typeOffset + oldTypeSection.length,
+    newTypeSection,
+  );
+
+  final canonicalKinds = isStream
+      ? const <int>[0x0e, 0x0f, 0x10, 0x13, 0x14]
+      : const <int>[0x15, 0x16, 0x17, 0x1a, 0x1b];
+  final canonicalSearchStart = typeOffset + newTypeSection.length;
+  for (final kind in canonicalKinds) {
+    final offset = _indexOfSublist(bytes, <int>[
+      kind,
+      0x00,
+    ], start: canonicalSearchStart);
+    if (offset < 0) {
+      throw StateError('Unable to find canonical ${kind.toRadixString(16)}.');
+    }
+    bytes[offset + 1] = 0x02;
+  }
+  return Uint8List.fromList(bytes);
+}
+
 /// Value type for a record containing owned and borrowed resource handles.
 const canonicalResourceRecordValueType = WasmComponentValueType.typeIndex(3);
 
@@ -107,6 +197,48 @@ const canonicalResourceRecordDefinitions = <WasmComponentTypeDefinition>[
     ),
   ),
 ];
+
+Uint8List _componentWithTypeDefinitionsBytes(
+  List<int> typeBytes, {
+  required int count,
+}) => Uint8List.fromList(<int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  typeBytes.length + 1,
+  count,
+  ...typeBytes,
+]);
+
+int _indexOfSublist(List<int> source, List<int> pattern, {int start = 0}) {
+  if (pattern.isEmpty || pattern.length > source.length) {
+    return -1;
+  }
+  final startOffset = start.clamp(0, source.length).toInt();
+  for (
+    var offset = startOffset;
+    offset <= source.length - pattern.length;
+    offset++
+  ) {
+    var matches = true;
+    for (var index = 0; index < pattern.length; index++) {
+      if (source[offset + index] != pattern[index]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return offset;
+    }
+  }
+  return -1;
+}
 
 const List<int> _canonicalPrimitiveLiftLowerComponentBytes = <int>[
   0x00,

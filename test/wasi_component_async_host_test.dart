@@ -7,6 +7,8 @@ import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
 
+import 'support/component_fixtures.dart' as component_fixtures;
+
 void main() {
   group('WASIComponentAsyncHost', () {
     test('binds decoded canonical backpressure definitions', () {
@@ -728,7 +730,7 @@ void main() {
 
     test('copies owned resource stream handles through canonical memory', () {
       final component = WasmComponent.decode(
-        _streamOwnResourceTypeComponentBytes(),
+        component_fixtures.streamOwnResourceTypeComponentBytes(),
       );
       expect(component.validate(), isEmpty);
       final memory = Memory(const MemoryDescriptor(initial: 1));
@@ -1988,7 +1990,7 @@ void main() {
 
     test('copies owned resource future handles through canonical memory', () {
       final component = WasmComponent.decode(
-        _futureOwnResourceTypeComponentBytes(),
+        component_fixtures.futureOwnResourceTypeComponentBytes(),
       );
       expect(component.validate(), isEmpty);
       final memory = Memory(const MemoryDescriptor(initial: 1));
@@ -2960,30 +2962,6 @@ Uint8List _streamU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x79,
 ]);
 
-Uint8List _streamOwnResourceTypeComponentBytes() =>
-    _componentWithTypeDefinitionsBytes(const <int>[
-      0x3f,
-      0x7f,
-      0x00,
-      0x69,
-      0x00,
-      0x66,
-      0x01,
-      0x01,
-    ], count: 3);
-
-Uint8List _futureOwnResourceTypeComponentBytes() =>
-    _componentWithTypeDefinitionsBytes(const <int>[
-      0x3f,
-      0x7f,
-      0x00,
-      0x69,
-      0x00,
-      0x65,
-      0x01,
-      0x01,
-    ], count: 3);
-
 Uint8List _streamIndexedPrimitiveElementTypeComponentBytes() =>
     Uint8List.fromList(const <int>[
       0x00,
@@ -3023,24 +3001,6 @@ Uint8List _streamIndexedNestedAsyncElementTypeComponentBytes() =>
       0x01,
       0x00,
     ]);
-
-Uint8List _componentWithTypeDefinitionsBytes(
-  List<int> typeBytes, {
-  required int count,
-}) => Uint8List.fromList(<int>[
-  0x00,
-  0x61,
-  0x73,
-  0x6d,
-  0x0d,
-  0x00,
-  0x01,
-  0x00,
-  0x07,
-  typeBytes.length + 1,
-  count,
-  ...typeBytes,
-]);
 
 final class _DropDuringIteration extends Iterable<int> {
   _DropDuringIteration({required this.onFirstValue});

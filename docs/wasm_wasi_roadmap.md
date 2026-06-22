@@ -2,9 +2,24 @@
 
 This repository is moving from limited Wasm plus WASI Preview 1 support toward
 real, verified Wasm and WASI support across Preview 1, WASI 0.2, and WASI 0.3.
-This document is the working architecture guide for that transition.
+This document is the working architecture guide and execution checklist for
+that transition. A support claim is not done until the checklist row names the
+runtime path, the proof files, and the command that can be run to verify it.
 
 Status date: 2026-06-22.
+
+## How To Use This Roadmap
+
+- Treat `[x]` as "implemented and covered by the listed evidence", not as a
+  marketing support claim.
+- Treat `[ ]` as executable backlog. Each item names the next artifact to
+  change and the gate that should pass before checking it off.
+- Keep claims narrow. If only an internal host path is verified, do not mark a
+  public API, cross-runtime, or full-version support row complete.
+- Add a test or benchmark name with every completed row. If the evidence cannot
+  be named, the row is not complete.
+- For performance-sensitive work, include a benchmark command before updating
+  the row. Test heat is a symptom; measured hot paths are the evidence.
 
 ## External Reference Points
 
@@ -67,6 +82,21 @@ copying their internals directly.
   must not expose the latter as supported until a real scheduler owns their
   lifecycle semantics.
   Reference: https://github.com/WebAssembly/component-model/blob/main/design/mvp/CanonicalABI.md
+
+## Verification Matrix
+
+| Status | Capability boundary | Evidence to inspect | Verification gate | Remaining gap |
+| --- | --- | --- | --- | --- |
+| [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --json` | Conformance-shaped socket edge cases and externally backed readiness. |
+| [x] | Component decoder and canonical validation base | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion and broader official component suite coverage. |
+| [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
+| [x] | Versioned Preview2/Preview3 capability gates | `lib/src/wasi/component/versioned_host.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_versioned_host_test.dart` | Concrete P2/P3 interface adapter modules instead of generic facade binding. |
+| [x] | Internal P3 async endpoints, waitables, tasks, context, thread identity | `lib/src/wasi/component/async_host.dart`, `lib/src/wasi/component/waitable_set.dart`, `lib/src/wasi/component/task.dart`, `lib/src/wasi/component/thread.dart`, `test/wasi_component_async_host_test.dart` | `dart test test/wasi_component_async_host_test.dart test/wasi_component_waitable_set_test.dart test/wasi_component_task_test.dart test/wasi_component_thread_test.dart` | Full async lowering, task spawning, scheduler-owned thread switch/suspend/resume. |
+| [x] | Owned-resource stream/future copy buffers through async and component hosts | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_async_host_test.dart`, `test/wasi_component_host_test.dart`, `test/support/component_fixtures.dart` | `dart test test/wasi_component_host_test.dart test/wasi_component_async_host_test.dart test/wasi_component_value_memory_test.dart`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Borrowed payload lifetimes, nested async payloads, and public P3 API claims remain unsupported. |
+| [x] | Canonical lift/lower adapter planning and internal callback invocation | `lib/src/wasi/component/adapter_plan.dart`, `lib/src/wasi/component/adapter_host.dart`, `test/wasi_component_adapter_plan_test.dart` | `dart test test/wasi_component_adapter_plan_test.dart`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Automatic binding of decoded lift/lower definitions to instantiated core/component functions. |
+| [ ] | Preview1 full socket conformance | Add focused regressions under `test/wasi_test.dart` and VFS/socket benchmarks | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --json` | Native adapter boundaries and externally backed readiness are not complete. |
+| [ ] | P2/P3 world/interface ingestion | Add WIT/interface ingestion module and decoded-world fixtures | Future gate: dedicated WIT ingestion tests plus component host binding tests | No public claim until generated/imported worlds bind through versioned hosts. |
+| [ ] | Full WASI 0.3 support | Real P3 components through versioned host with resources, streams, futures, waitables, tasks, and async behavior | Future gate: wasi-testsuite-style component runs plus performance gates | Current work is internal capability coverage, not full P3 support. |
 
 ## Current wasd Baseline
 
@@ -248,11 +278,12 @@ This is the implementation state as of 2026-06-22 on `main`.
   concrete entrypoint instead of constructing mixed-version component hosts.
   An internal component host adapter now combines that canonical plan with the
   decoded component resource and async value binding lists, defines component
-  resources plus supported unit, primitive, fixed-size composite, string, and
-  fixed-width-element list `stream<T>`/`future<T>` values on the
-  shared table only after validation and capability checks pass, and returns
-  the canonical-indexed program from the same shared host state. The same
-  component-host plan also captures canonical `lift`/`lower` adapter metadata:
+  resources plus supported unit, primitive, owned-resource, fixed-size
+  composite, string, and fixed-width-element list `stream<T>`/`future<T>`
+  values on the shared table only after validation and capability checks pass,
+  and returns the canonical-indexed program from the same shared host state.
+  The same component-host plan also captures canonical `lift`/`lower` adapter
+  metadata:
   decoded function signatures, string encoding and core option indexes,
   Canonical ABI value-memory codecs for supported parameter/result shapes, and
   structured `own`/`borrow` resource handle uses. An internal direct adapter
@@ -460,9 +491,9 @@ This is the implementation state as of 2026-06-22 on `main`.
   component resource binding extraction from decoded type index spaces,
   component-host binding startup with resource, Preview2 version-profile
   resource binding, stream, Preview3 version-profile stream binding, decoded
-  core-memory primitive stream-copy, decoded core-memory fixed-size record,
-  list, and string-list stream-copy, decoded direct string adapter program
-  invocation, decoded direct string adapter flat-scalar invocation, decoded
+  core-memory primitive and owned-resource stream-copy, decoded core-memory
+  fixed-size record, list, and string-list stream-copy, decoded direct string
+  adapter program invocation, decoded direct string adapter flat-scalar invocation, decoded
   direct record, tuple, and fixed-list adapter flat-scalar invocation, decoded
   direct flags/enum adapter flat-scalar invocation, decoded direct list adapter
   flat pointer/length invocation, decoded direct variant adapter flat tag/payload
@@ -475,8 +506,8 @@ This is the implementation state as of 2026-06-22 on `main`.
   direct error-context adapter handle invocation, decoded direct error-context
   adapter flat handle invocation, decoded direct error-context adapter memory
   invocation, decoded direct string adapter memory invocation, decoded
-  core-memory primitive future-copy, and decoded core-memory list plus
-  string-list future-copy round trips, mixed
+  core-memory primitive and owned-resource future-copy, and decoded core-memory
+  list plus string-list future-copy round trips, mixed
   canonical-host
   program invocation over shared component state, error-context canonical
   lifecycle invocation, error-context canonical string memory adapter invocation
@@ -484,29 +515,69 @@ This is the implementation state as of 2026-06-22 on `main`.
   and drop behavior are measured by
   `dart run tool/wasi_resource_table_benchmark.dart --json`.
 
-## Near-Term Slices
+## Near-Term Execution Backlog
 
-1. Extend Preview 1 socket coverage toward conformance edge cases that are not
-   covered yet: native adapter boundaries and externally backed readiness.
-2. Extend the VFS/descriptor benchmark with larger conformance-shaped path
-   distributions, then use it as the gate for further VFS optimizations.
-3. Audit `tool/spec_runner.dart` and DOOM tests for process-spawn and fixture
-   conversion hot spots, then add timing and caching where it changes actual
-   runtime cost.
-4. Keep closing component-model validation gaps that are local and
-   deterministic, then wire validated borrow, stream, and future shapes into
-   runtime host state.
-5. Wire canonical `stream.*` and `future.*` memory lowering/lifting and async
-   scheduling around the internal async host before adding public P3 API claims.
-6. Grow the internal Preview2/Preview3 component-host modules into concrete
-   adapter modules instead of extending Preview 1 host types in place.
-7. Extend async host value validation beyond primitive element aliases only
-   when composite value lowering/lifting support is implemented.
-8. Add WIT/interface ingestion only after the versioned host boundary and
-   resource table are wired into canonical ABI ownership behavior.
+- [ ] Preview1 socket conformance edge cases.
+  - Change: add focused native/browser regressions for native adapter
+    boundaries and externally backed readiness.
+  - Evidence: `test/wasi_test.dart`, `lib/src/wasi/preview1/common/vfs.dart`.
+  - Gate: `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --json`.
+- [ ] VFS/descriptor benchmark distributions.
+  - Change: extend benchmark data to larger conformance-shaped path and
+    descriptor sets before optimizing more VFS code.
+  - Evidence: `tool/wasi_vfs_benchmark.dart`.
+  - Gate: `dart run tool/wasi_vfs_benchmark.dart --json`.
+- [ ] Heavy runner process and fixture-conversion audit.
+  - Change: add timing/cache evidence for `tool/spec_runner.dart` and DOOM
+    fixture conversion hot spots before changing runtime code for test heat.
+  - Evidence: `tool/spec_runner.dart`, DOOM smoke tests, measured process
+    output.
+  - Gate: targeted spec runner command plus `dart test test/doom_smoke_test.dart`.
+- [ ] Component validation gaps that are deterministic and local.
+  - Change: add validation tests before runtime wiring for remaining borrow,
+    stream, future, and nested-shape rules.
+  - Evidence: `test/component_test.dart`, `test/wasi_component_async_host_test.dart`.
+  - Gate: `dart test test/component_test.dart test/wasi_component_async_host_test.dart`.
+- [ ] Canonical `stream.*` / `future.*` lowering beyond current copy-buffer
+  subset.
+  - Change: wire validated shapes into the internal async host and component
+    host before adding public P3 API claims.
+  - Evidence: `lib/src/wasi/component/async_host.dart`, `test/wasi_component_host_test.dart`.
+  - Gate: `dart test test/wasi_component_host_test.dart`; async/resource
+    benchmark commands from the verification matrix.
+- [ ] Concrete Preview2/Preview3 adapter modules.
+  - Change: grow `lib/src/wasi/preview2/` and `lib/src/wasi/preview3/` adapters
+    over shared component primitives instead of extending Preview1 host types.
+  - Evidence: preview-specific host modules and versioned-host tests.
+  - Gate: `dart test test/wasi_component_versioned_host_test.dart` plus new
+    adapter-specific tests.
+- [ ] Async host value validation beyond primitive aliases.
+  - Change: extend only when matching lowering/lifting support exists for the
+    same composite shape.
+  - Evidence: value-memory tests, async-host tests, component-host tests.
+  - Gate: `dart test test/wasi_component_value_memory_test.dart test/wasi_component_async_host_test.dart test/wasi_component_host_test.dart`.
+- [ ] WIT/interface ingestion.
+  - Change: add ingestion only after versioned host boundaries and resource
+    ownership behavior are strong enough to bind generated worlds.
+  - Evidence: future WIT fixtures and versioned host tests.
+  - Gate: future WIT ingestion test suite plus component-host binding tests.
 
-## Completion Bar
+## Completion Checklist
 
-The project should not claim full WASI 0.3 support until it can run real P3
-components through a versioned host layer with resource, stream, future, and
-async behavior covered by tests and measured performance gates.
+Full WASI 0.3 support must remain unclaimed until every row below is checked.
+
+- [ ] Real P3 components run through a versioned Preview3 host layer.
+- [ ] Resource ownership, `own`, `borrow`, drop, stale-handle, and active-borrow
+  behavior are covered by tests and benchmarks.
+- [ ] `stream<T>` and `future<T>` cover primitive, composite, owned-resource,
+  dynamic string/list, cancellation, waitable, and backpressure behavior.
+- [ ] Async task/subtask/context/thread behavior is covered by executable tests,
+  not only direct helper calls.
+- [ ] Public API and README wording match the implemented support matrix.
+- [ ] P1, P2, and P3 gates each have their own test command and do not rely on
+  a narrower internal helper as proof.
+- [ ] Performance gates cover stream/future forwarding, memory copy, resource
+  table borrow/drop, VFS descriptors, and heavy process runners.
+- [ ] A full verification run has current evidence: `dart format .`,
+  `dart analyze`, `dart test`, targeted browser/node checks when touched, and
+  the relevant benchmark JSON outputs.

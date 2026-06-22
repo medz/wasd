@@ -94,6 +94,10 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentAdapterStringMemoryInvoke(options.iterations);
   final componentHostStreamMemoryBinding =
       _benchmarkComponentHostStreamMemoryBinding(options.iterations);
+  final componentHostOwnedResourceStreamMemoryBinding =
+      _benchmarkComponentHostOwnedResourceStreamMemoryBinding(
+        options.iterations,
+      );
   final componentHostRecordStreamMemoryBinding =
       _benchmarkComponentHostRecordStreamMemoryBinding(options.iterations);
   final componentHostListStreamMemoryBinding =
@@ -106,6 +110,10 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentHostStringListFutureMemoryBinding(options.iterations);
   final componentHostFutureMemoryBinding =
       _benchmarkComponentHostFutureMemoryBinding(options.iterations);
+  final componentHostOwnedResourceFutureMemoryBinding =
+      _benchmarkComponentHostOwnedResourceFutureMemoryBinding(
+        options.iterations,
+      );
   final canonicalHostProgram = _benchmarkCanonicalHostProgram(
     options.iterations,
   );
@@ -167,6 +175,8 @@ Future<void> main(List<String> args) async {
         .toJson(),
     'component_host_stream_memory_binding': componentHostStreamMemoryBinding
         .toJson(),
+    'component_host_owned_resource_stream_memory_binding':
+        componentHostOwnedResourceStreamMemoryBinding.toJson(),
     'component_host_record_stream_memory_binding':
         componentHostRecordStreamMemoryBinding.toJson(),
     'component_host_list_stream_memory_binding':
@@ -179,6 +189,8 @@ Future<void> main(List<String> args) async {
         componentHostStringListFutureMemoryBinding.toJson(),
     'component_host_future_memory_binding': componentHostFutureMemoryBinding
         .toJson(),
+    'component_host_owned_resource_future_memory_binding':
+        componentHostOwnedResourceFutureMemoryBinding.toJson(),
     'canonical_host_program': canonicalHostProgram.toJson(),
     'error_context_program': errorContextProgram.toJson(),
     'error_context_memory': errorContextMemory.toJson(),
@@ -223,12 +235,14 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentAdapterErrorContextMemoryInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringMemoryInvoke(_warmupIterations);
   _benchmarkComponentHostStreamMemoryBinding(_warmupIterations);
+  _benchmarkComponentHostOwnedResourceStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostRecordStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostListStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostStringListStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostListFutureMemoryBinding(_warmupIterations);
   _benchmarkComponentHostStringListFutureMemoryBinding(_warmupIterations);
   _benchmarkComponentHostFutureMemoryBinding(_warmupIterations);
+  _benchmarkComponentHostOwnedResourceFutureMemoryBinding(_warmupIterations);
   _benchmarkCanonicalHostProgram(_warmupIterations);
   _benchmarkErrorContextProgram(_warmupIterations);
   _benchmarkErrorContextMemory(_warmupIterations);
@@ -1557,6 +1571,65 @@ _Metric _benchmarkComponentHostStreamMemoryBinding(int iterations) {
   );
 }
 
+_Metric _benchmarkComponentHostOwnedResourceStreamMemoryBinding(
+  int iterations,
+) {
+  final component = WasmComponent.decode(
+    component_fixtures.ownedResourceAsyncMemoryProgramFromU32(
+      _streamMemoryProgramBytes(),
+      isStream: true,
+    ),
+  );
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    data.setUint32(32, i & 0xffffffff, Endian.little);
+    data.setUint32(36, (i + 1) & 0xffffffff, Endian.little);
+    final host = WASIComponentHost();
+    final binding = host.bindComponent(component);
+    final packed = binding.program.invoke(0, const <Object?>[]);
+    if (packed is! int) {
+      throw StateError(
+        'component host owned-resource stream.new returned non-i64',
+      );
+    }
+    final handles = WASIComponentAsyncEndpointHandles.unpack(packed);
+    checksum +=
+        binding.program.invokeWithMemory(2, memory, <Object?>[
+              handles.writable,
+              32,
+              2,
+            ])
+            as int;
+    checksum +=
+        binding.program.invokeWithMemory(1, memory, <Object?>[
+              handles.readable,
+              96,
+              2,
+            ])
+            as int;
+    checksum += data.getUint32(96, Endian.little);
+    checksum += data.getUint32(100, Endian.little);
+    binding.program.invoke(3, <Object?>[handles.readable]);
+    binding.program.invoke(4, <Object?>[handles.writable]);
+    if (host.table.activeCount != 0) {
+      throw StateError(
+        'component host owned-resource stream memory table leaked ${host.table.activeCount} resources',
+      );
+    }
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkComponentHostRecordStreamMemoryBinding(int iterations) {
   final component = WasmComponent.decode(_recordStreamMemoryProgramBytes());
   final memory = Memory(const MemoryDescriptor(initial: 1));
@@ -1948,6 +2021,61 @@ _Metric _benchmarkComponentHostFutureMemoryBinding(int iterations) {
   );
 }
 
+_Metric _benchmarkComponentHostOwnedResourceFutureMemoryBinding(
+  int iterations,
+) {
+  final component = WasmComponent.decode(
+    component_fixtures.ownedResourceAsyncMemoryProgramFromU32(
+      _futureMemoryProgramBytes(),
+      isStream: false,
+    ),
+  );
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    data.setUint32(32, i & 0xffffffff, Endian.little);
+    final host = WASIComponentHost();
+    final binding = host.bindComponent(component);
+    final packed = binding.program.invoke(0, const <Object?>[]);
+    if (packed is! int) {
+      throw StateError(
+        'component host owned-resource future.new returned non-i64',
+      );
+    }
+    final handles = WASIComponentAsyncEndpointHandles.unpack(packed);
+    checksum +=
+        binding.program.invokeWithMemory(2, memory, <Object?>[
+              handles.writable,
+              32,
+            ])
+            as int;
+    checksum +=
+        binding.program.invokeWithMemory(1, memory, <Object?>[
+              handles.readable,
+              96,
+            ])
+            as int;
+    checksum += data.getUint32(96, Endian.little);
+    binding.program.invoke(3, <Object?>[handles.readable]);
+    binding.program.invoke(4, <Object?>[handles.writable]);
+    if (host.table.activeCount != 0) {
+      throw StateError(
+        'component host owned-resource future memory table leaked ${host.table.activeCount} resources',
+      );
+    }
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _writeStringListInput(Uint8List bytes, ByteData data, int iteration) {
   final first = 0x61 + (iteration % 26);
   final second = 0x41 + (iteration % 26);
@@ -2215,12 +2343,14 @@ void _printText(Map<String, Object?> payload) {
     'component_host_stream_binding',
     'component_versioned_preview3_stream_binding',
     'component_host_stream_memory_binding',
+    'component_host_owned_resource_stream_memory_binding',
     'component_host_record_stream_memory_binding',
     'component_host_list_stream_memory_binding',
     'component_host_string_list_stream_memory_binding',
     'component_host_list_future_memory_binding',
     'component_host_string_list_future_memory_binding',
     'component_host_future_memory_binding',
+    'component_host_owned_resource_future_memory_binding',
     'canonical_host_program',
     'error_context_program',
     'error_context_memory',

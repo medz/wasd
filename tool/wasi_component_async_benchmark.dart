@@ -13,6 +13,8 @@ import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
 
+import '../test/support/component_fixtures.dart' as component_fixtures;
+
 const int _defaultIterations = 50000;
 const int _defaultBatchSize = 32;
 const int _warmupIterations = 1000;
@@ -1723,7 +1725,7 @@ _Metric _benchmarkFutureMemoryCopy(int iterations) {
 _Metric _benchmarkStreamOwnedResourceMemoryCopy(_Options options) {
   return _benchmarkStreamMemoryCopyForType(
     options,
-    componentBytes: _streamOwnResourceTypeComponentBytes(),
+    componentBytes: component_fixtures.streamOwnResourceTypeComponentBytes(),
     componentTypeIndex: 2,
     name: 'benchmark-owned-resource-stream',
     inputValueForIndex: (index) => 0x1000 + index,
@@ -1733,7 +1735,7 @@ _Metric _benchmarkStreamOwnedResourceMemoryCopy(_Options options) {
 _Metric _benchmarkFutureOwnedResourceMemoryCopy(int iterations) {
   return _benchmarkFutureMemoryCopyForType(
     iterations,
-    componentBytes: _futureOwnResourceTypeComponentBytes(),
+    componentBytes: component_fixtures.futureOwnResourceTypeComponentBytes(),
     componentTypeIndex: 2,
     name: 'benchmark-owned-resource-future',
     inputValue: 0x55aa55aa,
@@ -2049,48 +2051,6 @@ Uint8List _futureU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x65,
   0x01,
   0x79,
-]);
-
-Uint8List _streamOwnResourceTypeComponentBytes() =>
-    _componentWithTypeDefinitionsBytes(const <int>[
-      0x3f,
-      0x7f,
-      0x00,
-      0x69,
-      0x00,
-      0x66,
-      0x01,
-      0x01,
-    ], count: 3);
-
-Uint8List _futureOwnResourceTypeComponentBytes() =>
-    _componentWithTypeDefinitionsBytes(const <int>[
-      0x3f,
-      0x7f,
-      0x00,
-      0x69,
-      0x00,
-      0x65,
-      0x01,
-      0x01,
-    ], count: 3);
-
-Uint8List _componentWithTypeDefinitionsBytes(
-  List<int> typeBytes, {
-  required int count,
-}) => Uint8List.fromList(<int>[
-  0x00,
-  0x61,
-  0x73,
-  0x6d,
-  0x0d,
-  0x00,
-  0x01,
-  0x00,
-  0x07,
-  typeBytes.length + 1,
-  count,
-  ...typeBytes,
 ]);
 
 void _printUsage() {
