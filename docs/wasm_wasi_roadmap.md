@@ -257,11 +257,13 @@ This is the implementation state as of 2026-06-22 on `main`.
   host can execute synchronous `lift`/`lower` plans over direct component
   values validated by the shared Canonical ABI value-memory codec, including
   primitive values and dynamic string/list payloads passed as Dart-side
-  component values. It resolves callbacks by decoded `coreFunctionIndex` /
-  `functionIndex`, then exposes those operations through a canonical-indexed
-  adapter program. Direct and memory-backed adapter invocation still rejects
-  resource handles, nested async values, async adapters, and value shapes
-  without a supported codec instead of approximating them. This keeps future
+  component values, plus canonical `u32` handles for direct resource and
+  `error-context` adapter calls. It resolves callbacks by decoded
+  `coreFunctionIndex` / `functionIndex`, then exposes those operations through a
+  canonical-indexed adapter program. Memory-backed adapter invocation still
+  rejects resource handles, `error-context` handles, nested async values, async
+  adapters, and value shapes without a supported codec instead of approximating
+  them. This keeps future
   adapter generation inputs explicit while automatic binding of decoded
   `lift`/`lower` definitions to instantiated core/component functions is still
   reported as a host capability gap instead of being overclaimed. The same
@@ -461,8 +463,9 @@ This is the implementation state as of 2026-06-22 on `main`.
   invocation,
   decoded direct option adapter flat tag/payload invocation,
   decoded direct result adapter flat tag/payload invocation,
-  decoded direct resource adapter flat handle invocation, decoded direct
-  error-context adapter flat handle invocation,
+  decoded direct resource adapter handle invocation, decoded direct resource
+  adapter flat handle invocation, decoded direct error-context adapter handle
+  invocation, decoded direct error-context adapter flat handle invocation,
   decoded direct string adapter memory invocation, decoded core-memory
   primitive future-copy, and decoded
   core-memory list plus string-list future-copy round trips, mixed

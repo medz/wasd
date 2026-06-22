@@ -14,11 +14,13 @@ typedef WASIComponentCanonicalAdapterCallback =
 ///
 /// This is the first executable adapter boundary. It intentionally supports
 /// only synchronous value signatures backed by the shared Canonical ABI value
-/// codec or flat scalar layouts. Direct and memory-backed invocations still
-/// reject resource handles, nested async values, and async adapters instead of
-/// approximating ownership or scheduling semantics. Flat invocations can pass
-/// `own`/`borrow` resource handles as canonical `u32` scalars; resource table
-/// ownership, borrow, and drop behavior remains a higher-level host concern.
+/// codec or canonical `u32` handle layouts. Direct invocations can pass
+/// `own`/`borrow` resource handles and `error-context` handles as canonical
+/// `u32` scalars; memory-backed invocations still reject those handles, nested
+/// async values, and async adapters instead of approximating ownership or
+/// scheduling semantics. Flat invocations use the same canonical handle
+/// representation. Resource table ownership, borrow, and drop behavior remains
+/// a higher-level host concern.
 final class WASIComponentCanonicalAdapterHost {
   /// Creates a canonical adapter host.
   const WASIComponentCanonicalAdapterHost();
@@ -34,6 +36,7 @@ final class WASIComponentCanonicalAdapterHost {
       plan: plan,
       callback: coreFunction,
       directValueSupported: true,
+      memoryValueSupported: _supportsMemoryValuePlan(plan),
     );
   }
 
@@ -48,6 +51,7 @@ final class WASIComponentCanonicalAdapterHost {
       plan: plan,
       callback: componentFunction,
       directValueSupported: true,
+      memoryValueSupported: _supportsMemoryValuePlan(plan),
     );
   }
 
@@ -77,6 +81,7 @@ final class WASIComponentCanonicalAdapterHost {
               plan: plan,
               callback: callback,
               directValueSupported: _supportsDirectValuePlan(plan),
+              memoryValueSupported: _supportsMemoryValuePlan(plan),
             ),
           );
         case WasmComponentCanonicalKind.lower:
@@ -94,6 +99,7 @@ final class WASIComponentCanonicalAdapterHost {
               plan: plan,
               callback: callback,
               directValueSupported: _supportsDirectValuePlan(plan),
+              memoryValueSupported: _supportsMemoryValuePlan(plan),
             ),
           );
         default:
@@ -196,14 +202,17 @@ final class WASIComponentCanonicalAdapterOperation {
     required this.plan,
     required WASIComponentCanonicalAdapterCallback callback,
     required bool directValueSupported,
+    required bool memoryValueSupported,
   }) : _callback = callback,
-       _directValueSupported = directValueSupported;
+       _directValueSupported = directValueSupported,
+       _memoryValueSupported = memoryValueSupported;
 
   /// Adapter generation plan this operation executes.
   final WASIComponentCanonicalAdapterPlan plan;
 
   final WASIComponentCanonicalAdapterCallback _callback;
   final bool _directValueSupported;
+  final bool _memoryValueSupported;
 
   /// Canonical adapter kind.
   WasmComponentCanonicalKind get kind => plan.kind;
@@ -220,11 +229,12 @@ final class WASIComponentCanonicalAdapterOperation {
         '${plan.params.length} arguments, got ${args.length}.',
       );
     }
+    final directArgs = <Object?>[];
     for (var i = 0; i < plan.params.length; i++) {
-      plan.params[i].memoryCodec!.validate(plan.params[i].path, args[i]);
+      directArgs.add(_validateDirectValue(plan.params[i], args[i]));
     }
 
-    final result = _callback(List<Object?>.unmodifiable(args));
+    final result = _callback(List<Object?>.unmodifiable(directArgs));
     final resultPlan = plan.result;
     if (resultPlan == null) {
       if (result != null) {
@@ -234,8 +244,7 @@ final class WASIComponentCanonicalAdapterOperation {
       }
       return null;
     }
-    resultPlan.memoryCodec!.validate(resultPlan.path, result);
-    return result;
+    return _validateDirectValue(resultPlan, result);
   }
 
   /// Invokes the adapter through flat Canonical ABI scalar values.
@@ -285,7 +294,7 @@ final class WASIComponentCanonicalAdapterOperation {
     int? resultPointer,
     WASIComponentCanonicalRealloc? realloc,
   }) {
-    _checkDirectInvokeSupported();
+    _checkMemoryInvokeSupported();
     if (paramPointers.length != plan.params.length) {
       throw StateError(
         'WASI component canonical adapter index $canonicalIndex expected '
@@ -336,6 +345,15 @@ final class WASIComponentCanonicalAdapterOperation {
     );
   }
 
+  void _checkMemoryInvokeSupported() {
+    if (_memoryValueSupported) {
+      return;
+    }
+    throw UnsupportedError(
+      'WASI component canonical adapter index $canonicalIndex does not support memory-backed invocation.',
+    );
+  }
+
   Object? _invokeFlatCallback(List<Object?> args) {
     final result = _callback(List<Object?>.unmodifiable(args));
     final resultPlan = plan.result;
@@ -349,6 +367,28 @@ final class WASIComponentCanonicalAdapterOperation {
     }
     return result;
   }
+}
+
+Object? _validateDirectValue(
+  WASIComponentCanonicalAdapterValuePlan valuePlan,
+  Object? value,
+) {
+  final memoryCodec = valuePlan.memoryCodec;
+  if (memoryCodec != null) {
+    memoryCodec.validate(valuePlan.path, value);
+    return value;
+  }
+  final flatLayout = valuePlan.flatLayout;
+  if (flatLayout?.kind == WASIComponentCanonicalAdapterFlatValueKind.resource) {
+    return _flatResourceHandleToInt(flatLayout!, valuePlan.path, value);
+  }
+  if (flatLayout?.kind ==
+      WASIComponentCanonicalAdapterFlatValueKind.errorContext) {
+    return _flatErrorContextHandleToInt(valuePlan.path, value);
+  }
+  throw UnsupportedError(
+    'WASI component canonical adapter value ${valuePlan.path} does not support direct values.',
+  );
 }
 
 ({Object? value, int nextOffset}) _loadFlatValue(
@@ -1668,11 +1708,6 @@ void _checkDirectValuePlan(WASIComponentCanonicalAdapterPlan plan) {
       'WASI component canonical adapter index ${plan.canonicalIndex} uses async.',
     );
   }
-  if (plan.hasResourceHandles) {
-    throw UnsupportedError(
-      'WASI component canonical adapter index ${plan.canonicalIndex} uses resource handles.',
-    );
-  }
   for (final param in plan.params) {
     _checkDirectValue(plan, param);
   }
@@ -1683,7 +1718,7 @@ void _checkDirectValuePlan(WASIComponentCanonicalAdapterPlan plan) {
 }
 
 bool _supportsDirectValuePlan(WASIComponentCanonicalAdapterPlan plan) {
-  if (plan.isAsync || plan.hasResourceHandles) {
+  if (plan.isAsync) {
     return false;
   }
   for (final param in plan.params) {
@@ -1696,7 +1731,31 @@ bool _supportsDirectValuePlan(WASIComponentCanonicalAdapterPlan plan) {
 }
 
 bool _supportsDirectValue(WASIComponentCanonicalAdapterValuePlan value) {
+  return (value.memoryCodec != null && value.resourceUses.isEmpty) ||
+      _supportsDirectHandleValue(value);
+}
+
+bool _supportsMemoryValuePlan(WASIComponentCanonicalAdapterPlan plan) {
+  if (plan.isAsync) {
+    return false;
+  }
+  for (final param in plan.params) {
+    if (!_supportsMemoryValue(param)) {
+      return false;
+    }
+  }
+  final result = plan.result;
+  return result == null || _supportsMemoryValue(result);
+}
+
+bool _supportsMemoryValue(WASIComponentCanonicalAdapterValuePlan value) {
   return value.memoryCodec != null && value.resourceUses.isEmpty;
+}
+
+bool _supportsDirectHandleValue(WASIComponentCanonicalAdapterValuePlan value) {
+  final kind = value.flatLayout?.kind;
+  return kind == WASIComponentCanonicalAdapterFlatValueKind.resource ||
+      kind == WASIComponentCanonicalAdapterFlatValueKind.errorContext;
 }
 
 void _checkAdapterProgramPlan(WASIComponentCanonicalAdapterPlan plan) {
@@ -1711,16 +1770,10 @@ void _checkDirectValue(
   WASIComponentCanonicalAdapterPlan plan,
   WASIComponentCanonicalAdapterValuePlan value,
 ) {
-  if (value.memoryCodec == null) {
+  if (!_supportsDirectValue(value)) {
     throw UnsupportedError(
       'WASI component canonical adapter index ${plan.canonicalIndex} '
       'value ${value.path} does not have a supported direct value codec.',
-    );
-  }
-  if (value.resourceUses.isNotEmpty) {
-    throw UnsupportedError(
-      'WASI component canonical adapter index ${plan.canonicalIndex} '
-      'value ${value.path} uses resource handles.',
     );
   }
 }

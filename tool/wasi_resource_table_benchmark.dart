@@ -75,8 +75,12 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentAdapterOptionFlatInvoke(options.iterations);
   final componentAdapterResultFlatInvoke =
       _benchmarkComponentAdapterResultFlatInvoke(options.iterations);
+  final componentAdapterResourceDirectInvoke =
+      _benchmarkComponentAdapterResourceDirectInvoke(options.iterations);
   final componentAdapterResourceFlatInvoke =
       _benchmarkComponentAdapterResourceFlatInvoke(options.iterations);
+  final componentAdapterErrorContextDirectInvoke =
+      _benchmarkComponentAdapterErrorContextDirectInvoke(options.iterations);
   final componentAdapterErrorContextFlatInvoke =
       _benchmarkComponentAdapterErrorContextFlatInvoke(options.iterations);
   final componentAdapterStringMemoryInvoke =
@@ -138,8 +142,12 @@ Future<void> main(List<String> args) async {
         .toJson(),
     'component_adapter_result_flat_invoke': componentAdapterResultFlatInvoke
         .toJson(),
+    'component_adapter_resource_direct_invoke':
+        componentAdapterResourceDirectInvoke.toJson(),
     'component_adapter_resource_flat_invoke': componentAdapterResourceFlatInvoke
         .toJson(),
+    'component_adapter_error_context_direct_invoke':
+        componentAdapterErrorContextDirectInvoke.toJson(),
     'component_adapter_error_context_flat_invoke':
         componentAdapterErrorContextFlatInvoke.toJson(),
     'component_adapter_string_memory_invoke': componentAdapterStringMemoryInvoke
@@ -193,7 +201,9 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentAdapterVariantFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterOptionFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterResultFlatInvoke(_warmupIterations);
+  _benchmarkComponentAdapterResourceDirectInvoke(_warmupIterations);
   _benchmarkComponentAdapterResourceFlatInvoke(_warmupIterations);
+  _benchmarkComponentAdapterErrorContextDirectInvoke(_warmupIterations);
   _benchmarkComponentAdapterErrorContextFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringMemoryInvoke(_warmupIterations);
   _benchmarkComponentHostStreamMemoryBinding(_warmupIterations);
@@ -968,6 +978,32 @@ _Metric _benchmarkComponentAdapterResultFlatInvoke(int iterations) {
   );
 }
 
+_Metric _benchmarkComponentAdapterResourceDirectInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalResourceLiftComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final plan = plans.single;
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {plan.definition.coreFunctionIndex!: (_) => 51},
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    checksum += program.invoke(0, const <Object?>[31, 41])! as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkComponentAdapterResourceFlatInvoke(int iterations) {
   final component = WasmComponent.decode(
     component_fixtures.canonicalResourceLiftComponentBytes(),
@@ -990,6 +1026,33 @@ _Metric _benchmarkComponentAdapterResourceFlatInvoke(int iterations) {
 
   return _Metric(
     operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentAdapterErrorContextDirectInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalErrorContextLiftLowerComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {1: (_) => 19},
+    componentFunctions: {0: (_) => 29},
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    checksum += program.invoke(0, const <Object?>[17])! as int;
+    checksum += program.invoke(1, const <Object?>[23])! as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );

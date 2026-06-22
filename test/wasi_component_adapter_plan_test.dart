@@ -972,12 +972,30 @@ void main() {
         () => program.invokeFlat(0, const <Object?>[0x100000000]),
         throwsStateError,
       );
+      expect(program.invoke(0, const <Object?>[17]), 19);
+      expect(program.invoke(1, const <Object?>[23]), 29);
+      expect(() => program.invoke(0, const <Object?>[-1]), throwsStateError);
       expect(
-        () => program.invoke(0, const <Object?>[17]),
-        throwsUnsupportedError,
+        () => program.invoke(0, const <Object?>[0x100000000]),
+        throwsStateError,
       );
       expect(
-        () => host.bindLiftCoreFunction(plans[0], (_) => 19),
+        () => program.invokeWithMemory(
+          0,
+          wasm.Memory(const wasm.MemoryDescriptor(initial: 1)),
+          const <int>[0],
+          resultPointer: 4,
+        ),
+        throwsUnsupportedError,
+      );
+      final operation = host.bindLiftCoreFunction(plans[0], (_) => 19);
+      expect(operation.invoke(const <Object?>[17]), 19);
+      expect(
+        () => operation.invokeWithMemory(
+          wasm.Memory(const wasm.MemoryDescriptor(initial: 1)),
+          const <int>[0],
+          resultPointer: 4,
+        ),
         throwsUnsupportedError,
       );
     });
@@ -1291,10 +1309,26 @@ void main() {
         adapter.result!.resourceUses.single.resourceTypeIndex,
       );
 
+      final operation = host.componentHost.canonicalHost.adapterHost
+          .bindLiftCoreFunction(adapter, (args) {
+            expect(args, [101, 202]);
+            return 303;
+          });
+
+      expect(operation.invoke(const <Object?>[101, 202]), 303);
       expect(
-        () => host.componentHost.canonicalHost.adapterHost.bindLiftCoreFunction(
-          adapter,
-          (_) => 1,
+        () => operation.invoke(const <Object?>[-1, 202]),
+        throwsStateError,
+      );
+      expect(
+        () => operation.invoke(const <Object?>[0x100000000, 202]),
+        throwsStateError,
+      );
+      expect(
+        () => operation.invokeWithMemory(
+          wasm.Memory(const wasm.MemoryDescriptor(initial: 1)),
+          const <int>[0, 4],
+          resultPointer: 8,
         ),
         throwsUnsupportedError,
       );
@@ -1311,6 +1345,7 @@ void main() {
           );
 
       expect(program.invokeFlat(0, const <Object?>[101, 202]), [303]);
+      expect(program.invoke(0, const <Object?>[101, 202]), 303);
       expect(
         () => program.invokeFlat(0, const <Object?>[-1, 202]),
         throwsStateError,
@@ -1320,7 +1355,12 @@ void main() {
         throwsStateError,
       );
       expect(
-        () => program.invoke(0, const <Object?>[101, 202]),
+        () => program.invokeWithMemory(
+          0,
+          wasm.Memory(const wasm.MemoryDescriptor(initial: 1)),
+          const <int>[0, 4],
+          resultPointer: 8,
+        ),
         throwsUnsupportedError,
       );
     });
