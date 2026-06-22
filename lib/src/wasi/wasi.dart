@@ -9,7 +9,7 @@ import 'preview1/native/wasi.dart'
     if (dart.library.js_interop) 'preview1/js/wasi.dart'
     as backend;
 
-export 'preview1/socket.dart';
+export 'preview1/socket.dart' hide writeWASIPreview1SocketOwnedMessage;
 export 'version.dart';
 
 /// Handles a WASI Preview1 `proc_raise` signal.

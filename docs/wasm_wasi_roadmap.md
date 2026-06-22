@@ -231,7 +231,8 @@ This is the implementation state as of 2026-06-22 on `main`.
   not repeatedly shift the backing buffer. Default datagram socket sends now
   transfer the VFS-owned message buffer into the socket record path instead of
   copying it a second time, while caller-owned `writeMessage` lists still keep
-  defensive copy semantics.
+  defensive copy semantics. The owned-buffer hook is hidden from the public
+  `package:wasd/wasi.dart` export so the user-facing socket API stays small.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/` now provides an internal typed resource table plus
@@ -734,8 +735,10 @@ performance visible while the support surface expands.
   - Performance gate:
     `dart run tool/wasi_vfs_benchmark.dart --distribution=socket-heavy --iterations=1000 --json`.
   - Done when: VFS-created datagram messages are recorded without a second
-    defensive copy, caller-owned `writeMessage` input is still copied, and the
-    socket-heavy benchmark covers default and host-backed datagram send paths.
+    defensive copy, the owned-buffer hook is not exported through
+    `package:wasd/wasi.dart`, caller-owned `writeMessage` input is still
+    copied, and the socket-heavy benchmark covers default and host-backed
+    datagram send paths.
 - [x] `PERF-VFS-DISTRIBUTIONS` - VFS/descriptor benchmark distributions.
   - Change: extend benchmark data to larger conformance-shaped path, directory,
     socket, and descriptor sets before optimizing more VFS code.

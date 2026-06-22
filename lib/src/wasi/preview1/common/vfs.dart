@@ -1578,7 +1578,9 @@ final class Preview1VirtualSocket {
 
   int writeMessage(List<int> data) => socket.writeMessage(data);
 
-  int writeOwnedMessage(Uint8List data) => socket.writeOwnedMessage(data);
+  /// Records a VFS-owned datagram message without another defensive copy.
+  int writeOwnedMessage(Uint8List data) =>
+      writeWASIPreview1SocketOwnedMessage(socket, data);
 
   int readMessageInto(
     Uint8List target,

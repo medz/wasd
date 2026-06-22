@@ -156,8 +156,29 @@ void main() {
       callerOwned[0] = 9;
       expect(socket.sentMessages.single, [1, 2, 3]);
 
-      final vfsOwned = Uint8List.fromList([4, 5]);
-      expect(socket.writeOwnedMessage(vfsOwned), 2);
+      final vfs = Preview1VirtualFileSystem(sockets: {75: socket});
+      final descriptor = vfs.socketForFd(75)!;
+      final bytes = Uint8List(32);
+      final data = ByteData.view(bytes.buffer);
+      const iovPtr = 0;
+      const bufferPtr = 16;
+      const countPtr = 24;
+      bytes.setAll(bufferPtr, [4, 5]);
+      data.setUint32(iovPtr, bufferPtr, Endian.little);
+      data.setUint32(iovPtr + 4, 2, Endian.little);
+
+      expect(
+        writeSocketFromIov(
+          socket: descriptor,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nwrittenPtr: countPtr,
+        ),
+        0,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 2);
       expect(socket.sentMessages.map((message) => message.toList()), [
         [1, 2, 3],
         [4, 5],
