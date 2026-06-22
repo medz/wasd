@@ -28,6 +28,7 @@ const int _errnoAgain = 6;
 const int _errnoInval = 28;
 const int _errnoNotcapable = 76;
 const int _errnoPipe = 64;
+const int _riflagRecvWaitall = 2;
 const int _roflagRecvDataTruncated = 1;
 const int _subscriptionSize = 48;
 const int _subscriptionTagOffset = 8;
@@ -1917,6 +1918,79 @@ void main() {
           expect(data.getUint32(sendCountPtr, Endian.little), 4);
           expect(utf8.decode(sent.toBytes()), 'host');
           expect(socket.sentData, isEmpty);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'sock_recv waitall drains chunked host stream providers',
+        () async {
+          final receiveSource = utf8.encode('hello');
+          var receiveOffset = 0;
+          var providerCalls = 0;
+          final socket = WASIPreview1Socket(
+            receiveDataProvider: (maxBytes) {
+              providerCalls++;
+              if (maxBytes <= 0 || receiveOffset >= receiveSource.length) {
+                return const <int>[];
+              }
+              final byte = receiveSource[receiveOffset];
+              receiveOffset++;
+              return <int>[byte];
+            },
+          );
+          final socketWasi = WASI(sockets: {34: socket});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const iovPtr = 4560;
+          const firstBufferPtr = 4592;
+          const secondBufferPtr = 4624;
+          const countPtr = 4656;
+          const flagsPtr = 4672;
+
+          data.setUint32(iovPtr, firstBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 2, Endian.little);
+          data.setUint32(iovPtr + 8, secondBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 12, 3, Endian.little);
+          data.setUint32(countPtr, 0xfeedface, Endian.little);
+          data.setUint16(flagsPtr, 0xbeef, Endian.little);
+
+          expect(
+            sockRecv.ref([
+              34,
+              iovPtr,
+              2,
+              _riflagRecvWaitall,
+              countPtr,
+              flagsPtr,
+            ]),
+            0,
+          );
+          expect(data.getUint32(countPtr, Endian.little), 5);
+          expect(data.getUint16(flagsPtr, Endian.little), 0);
+          expect(
+            utf8.decode(bytes.sublist(firstBufferPtr, firstBufferPtr + 2)),
+            'he',
+          );
+          expect(
+            utf8.decode(bytes.sublist(secondBufferPtr, secondBufferPtr + 3)),
+            'llo',
+          );
+          expect(providerCalls, 5);
+          expect(socket.remainingReceiveData, isEmpty);
         },
         skip: _skipOnNode(
           'Skipping on Node.js; socket behavior is delegated to node:wasi.',

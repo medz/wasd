@@ -189,7 +189,10 @@ final class WASIPreview1Socket {
   /// Most callers should use `sock_recv` rather than calling this directly.
   /// The shared Preview1 host uses it to make `RECV_WAITALL` observe the same
   /// host-backed stream data as normal reads.
-  int ensureReceiveData(int minUnreadBytes) {
+  int ensureReceiveData(
+    int minUnreadBytes, {
+    bool drainUntilSatisfied = false,
+  }) {
     final provider = _receiveDataProvider;
     if (!isStream ||
         receiveShutdown ||
@@ -197,18 +200,29 @@ final class WASIPreview1Socket {
         minUnreadBytes <= remainingReceiveLength) {
       return 0;
     }
-    final data = provider(minUnreadBytes - remainingReceiveLength);
-    if (data.isEmpty) {
-      return 0;
+
+    var totalPulled = 0;
+    while (!receiveShutdown && remainingReceiveLength < minUnreadBytes) {
+      final beforeLength = remainingReceiveLength;
+      final data = provider(minUnreadBytes - beforeLength);
+      if (data.isEmpty) {
+        break;
+      }
+      _appendReceiveBytes(data);
+      final pulled = remainingReceiveLength - beforeLength;
+      if (pulled <= 0) {
+        break;
+      }
+      totalPulled += pulled;
+      final readyBytes = _readReadyBytes;
+      if (readyBytes != null) {
+        _readReadyBytes = pulled >= readyBytes ? null : readyBytes - pulled;
+      }
+      if (!drainUntilSatisfied) {
+        break;
+      }
     }
-    _appendReceiveBytes(data);
-    final readyBytes = _readReadyBytes;
-    if (readyBytes != null) {
-      _readReadyBytes = data.length >= readyBytes
-          ? null
-          : readyBytes - data.length;
-    }
-    return data.length;
+    return totalPulled;
   }
 
   /// Pulls one host-backed datagram message when no message is queued.

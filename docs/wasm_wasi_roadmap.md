@@ -191,6 +191,19 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-HOST-STREAM-WAITALL-CHUNKS` - Host-backed stream
+  `RECV_WAITALL` drains chunked providers until the request is satisfied or the
+  provider reports no data.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "sock_recv waitall drains chunked host stream providers"`
+    failed before the fix with `_errnoAgain`, then passed after the fix;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_recv waitall drains chunked host stream providers"`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
+    `dart analyze`.
+  - Claim impact: improves host-backed Preview1 stream socket behavior and keeps
+    the waitall path visible in `socket_recv_waitall`; does not complete the
+    parent `P1-SOCKET-CONFORMANCE` row.
 - [x] `P1-SOCKET-DESCRIPTOR-NAMESPACE` - Initial descriptors reject fd namespace
   collisions and invalid virtual allocator starts.
   - Evidence:
@@ -909,6 +922,31 @@ performance visible while the support surface expands.
     this row with the exact commands run.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete it until the
     Preview1 socket and runtime gates are all checked.
+- [x] `P1-SOCKET-HOST-STREAM-WAITALL-CHUNKS` - Host-backed stream
+  `RECV_WAITALL` drains chunked providers.
+  - Scope: native/browser shared Preview1 stream sockets backed by
+    `WASIPreview1SocketReceiveDataProvider`.
+  - Edit targets: `lib/src/wasi/preview1/socket.dart`,
+    `test/wasi_test.dart`, and `tool/wasi_vfs_benchmark.dart`.
+  - Red test:
+    `dart test test/wasi_test.dart --name "sock_recv waitall drains chunked host stream providers"`
+    failed before the fix because `ensureReceiveData` pulled the provider only
+    once and returned `_errnoAgain` even though later provider calls could
+    satisfy the full `RECV_WAITALL` request.
+  - Implementation gate: `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_recv waitall drains chunked host stream providers"`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: `RECV_WAITALL` explicitly asks `ensureReceiveData` to keep
+    pulling non-empty provider chunks until the requested unread byte count is
+    available or the provider returns empty, ordinary receive keeps the one-pull
+    default, shutdown mutation cannot cause an unbounded loop, and
+    `socket_recv_waitall` benchmark output includes the host chunked path.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
+    socket conformance row.
 - [x] `P1-SOCKET-ACCEPT-STREAM-QUEUE` - Accepted socket queues require stream
   sockets.
   - Scope: host-injected Preview1 stream listener state before VFS fd allocation

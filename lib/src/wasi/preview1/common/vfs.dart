@@ -1220,7 +1220,7 @@ int readSocketIntoIov({
   final waitAll = (flags & riflagRecvWaitall) != 0;
   if (waitAll) {
     if (!socket.receiveShutdown && socket.remainingReceiveLength < capacity) {
-      socket.ensureReceiveData(capacity);
+      socket.ensureReceiveData(capacity, drainUntilSatisfied: true);
     }
     if (!socket.receiveShutdown && socket.remainingReceiveLength < capacity) {
       return errnoAgain;
@@ -1633,8 +1633,13 @@ final class Preview1VirtualSocket {
 
   int get remainingReceiveLength => socket.remainingReceiveLength;
 
-  int ensureReceiveData(int minUnreadBytes) =>
-      socket.ensureReceiveData(minUnreadBytes);
+  int ensureReceiveData(
+    int minUnreadBytes, {
+    bool drainUntilSatisfied = false,
+  }) => socket.ensureReceiveData(
+    minUnreadBytes,
+    drainUntilSatisfied: drainUntilSatisfied,
+  );
 
   int? get readReadyBytes => socket.readReadyBytes;
 

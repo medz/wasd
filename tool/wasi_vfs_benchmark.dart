@@ -467,12 +467,27 @@ _Metric _benchmarkSocketRecvWaitall(_Options options) {
   final againSocket = WASIPreview1Socket(
     receiveData: List<int>.generate(_socketChunkSize - 1, (index) => index),
   );
+  var hostReceiveByte = 0;
+  final hostChunkedSocket = WASIPreview1Socket(
+    receiveDataProvider: (maxBytes) {
+      if (maxBytes <= 0) {
+        return const <int>[];
+      }
+      final chunkLength = maxBytes < 8 ? maxBytes : 8;
+      final start = hostReceiveByte;
+      hostReceiveByte += chunkLength;
+      return List<int>.generate(chunkLength, (index) => (start + index) & 0xff);
+    },
+  );
   final vfs = Preview1VirtualFileSystem(
-    sockets: {64: satisfiedSocket, 65: againSocket},
+    sockets: {64: satisfiedSocket, 65: againSocket, 66: hostChunkedSocket},
   );
   final satisfiedDescriptor = vfs.socketForFd(64);
   final againDescriptor = vfs.socketForFd(65);
-  if (satisfiedDescriptor == null || againDescriptor == null) {
+  final hostChunkedDescriptor = vfs.socketForFd(66);
+  if (satisfiedDescriptor == null ||
+      againDescriptor == null ||
+      hostChunkedDescriptor == null) {
     throw StateError('socket descriptor missing for waitall benchmark');
   }
   final bytes = Uint8List(256);
@@ -527,10 +542,27 @@ _Metric _benchmarkSocketRecvWaitall(_Options options) {
       );
     }
     checksum += againErrno;
+    final hostChunkedErrno = readSocketIntoIov(
+      socket: hostChunkedDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 2,
+      flags: riflagRecvWaitall,
+      nreadPtr: countPtr,
+      roFlagsPtr: flagsPtr,
+    );
+    if (hostChunkedErrno != errnoSuccess) {
+      throw StateError(
+        'socket waitall host chunked recv failed at iteration $i: '
+        '$hostChunkedErrno',
+      );
+    }
+    checksum += data.getUint32(countPtr, Endian.little);
   }
   watch.stop();
   return _Metric(
-    operations: options.iterations * 2,
+    operations: options.iterations * 3,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
