@@ -1261,14 +1261,14 @@ int readSocketIntoIov({
   required int iovsLen,
   required int flags,
   required int nreadPtr,
-  required int roFlagsPtr,
+  required int? roFlagsPtr,
 }) {
   if (iovs < 0 ||
       iovsLen < 0 ||
       nreadPtr < 0 ||
-      roFlagsPtr < 0 ||
       nreadPtr + 4 > bytes.length ||
-      roFlagsPtr + 2 > bytes.length) {
+      (roFlagsPtr != null &&
+          (roFlagsPtr < 0 || roFlagsPtr + 2 > bytes.length))) {
     return errnoInval;
   }
 
@@ -1331,9 +1331,21 @@ int readSocketIntoIov({
   if (totalRead == 0 && capacity > 0 && !socket.receiveShutdown) {
     return errnoAgain;
   }
-  data.setUint32(nreadPtr, totalRead, Endian.little);
-  data.setUint16(roFlagsPtr, 0, Endian.little);
+  _writeSocketReadResult(data, nreadPtr, roFlagsPtr, totalRead, 0);
   return errnoSuccess;
+}
+
+void _writeSocketReadResult(
+  ByteData data,
+  int nreadPtr,
+  int? roFlagsPtr,
+  int nread,
+  int roFlags,
+) {
+  data.setUint32(nreadPtr, nread, Endian.little);
+  if (roFlagsPtr != null) {
+    data.setUint16(roFlagsPtr, roFlags, Endian.little);
+  }
 }
 
 int _readDatagramSocketIntoIov({
@@ -1344,7 +1356,7 @@ int _readDatagramSocketIntoIov({
   required int iovsLen,
   required bool peek,
   required int nreadPtr,
-  required int roFlagsPtr,
+  required int? roFlagsPtr,
 }) {
   final capacity = _socketIovCapacity(
     bytes: bytes,
@@ -1359,13 +1371,11 @@ int _readDatagramSocketIntoIov({
     if (capacity > 0) {
       return errnoAgain;
     }
-    data.setUint32(nreadPtr, 0, Endian.little);
-    data.setUint16(roFlagsPtr, 0, Endian.little);
+    _writeSocketReadResult(data, nreadPtr, roFlagsPtr, 0, 0);
     return errnoSuccess;
   }
   if (socket.receiveShutdown) {
-    data.setUint32(nreadPtr, 0, Endian.little);
-    data.setUint16(roFlagsPtr, 0, Endian.little);
+    _writeSocketReadResult(data, nreadPtr, roFlagsPtr, 0, 0);
     return errnoSuccess;
   }
 
@@ -1392,11 +1402,12 @@ int _readDatagramSocketIntoIov({
   if (!peek) {
     socket.consumeReceiveMessage();
   }
-  data.setUint32(nreadPtr, totalRead, Endian.little);
-  data.setUint16(
+  _writeSocketReadResult(
+    data,
+    nreadPtr,
     roFlagsPtr,
+    totalRead,
     truncated ? roflagRecvDataTruncated : 0,
-    Endian.little,
   );
   return errnoSuccess;
 }

@@ -2276,6 +2276,158 @@ void main() {
       );
 
       test(
+        'fd_read and fd_write operate on preview1 socket descriptors',
+        () async {
+          final stream = WASIPreview1Socket(receiveData: utf8.encode('stream'));
+          final emptyStream = WASIPreview1Socket();
+          final blockedStream = WASIPreview1Socket(writeReady: false);
+          final datagram = WASIPreview1Socket.datagram(
+            receiveMessages: [utf8.encode('packet')],
+          );
+          final socketWasi = WASI(
+            sockets: {
+              35: stream,
+              36: datagram,
+              37: emptyStream,
+              38: blockedStream,
+            },
+          );
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final fdRead = preview1['fd_read'] as FunctionImportExportValue;
+          final fdWrite = preview1['fd_write'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const streamReadIovPtr = 4240;
+          const streamReadBufferPtr = 4272;
+          const streamReadCountPtr = 4304;
+          const streamWriteIovPtr = 4320;
+          const streamWriteBufferPtr = 4352;
+          const streamWriteCountPtr = 4384;
+          const datagramReadIovPtr = 4400;
+          const datagramReadBufferPtr = 4432;
+          const datagramReadCountPtr = 4464;
+          const datagramWriteIovPtr = 4480;
+          const datagramWriteFirstPtr = 4512;
+          const datagramWriteSecondPtr = 4528;
+          const datagramWriteCountPtr = 4544;
+          const emptyReadIovPtr = 4560;
+          const emptyReadBufferPtr = 4592;
+          const emptyReadCountPtr = 4624;
+          const blockedWriteIovPtr = 4640;
+          const blockedWriteBufferPtr = 4672;
+          const blockedWriteCountPtr = 4704;
+
+          data.setUint32(streamReadIovPtr, streamReadBufferPtr, Endian.little);
+          data.setUint32(streamReadIovPtr + 4, 6, Endian.little);
+          data.setUint32(streamReadCountPtr, 0xdeadbeef, Endian.little);
+          expect(fdRead.ref([35, streamReadIovPtr, 1, streamReadCountPtr]), 0);
+          expect(data.getUint32(streamReadCountPtr, Endian.little), 6);
+          expect(
+            utf8.decode(
+              bytes.sublist(streamReadBufferPtr, streamReadBufferPtr + 6),
+            ),
+            'stream',
+          );
+
+          bytes.setAll(streamWriteBufferPtr, utf8.encode('reply'));
+          data.setUint32(
+            streamWriteIovPtr,
+            streamWriteBufferPtr,
+            Endian.little,
+          );
+          data.setUint32(streamWriteIovPtr + 4, 5, Endian.little);
+          data.setUint32(streamWriteCountPtr, 0xfeedface, Endian.little);
+          expect(
+            fdWrite.ref([35, streamWriteIovPtr, 1, streamWriteCountPtr]),
+            0,
+          );
+          expect(data.getUint32(streamWriteCountPtr, Endian.little), 5);
+          expect(utf8.decode(stream.sentData), 'reply');
+
+          data.setUint32(
+            datagramReadIovPtr,
+            datagramReadBufferPtr,
+            Endian.little,
+          );
+          data.setUint32(datagramReadIovPtr + 4, 4, Endian.little);
+          data.setUint32(datagramReadCountPtr, 0xdeadbeef, Endian.little);
+          expect(
+            fdRead.ref([36, datagramReadIovPtr, 1, datagramReadCountPtr]),
+            0,
+          );
+          expect(data.getUint32(datagramReadCountPtr, Endian.little), 4);
+          expect(
+            utf8.decode(
+              bytes.sublist(datagramReadBufferPtr, datagramReadBufferPtr + 4),
+            ),
+            'pack',
+          );
+          expect(datagram.remainingReceiveMessages, isEmpty);
+
+          bytes.setAll(datagramWriteFirstPtr, utf8.encode('da'));
+          bytes.setAll(datagramWriteSecondPtr, utf8.encode('ta'));
+          data.setUint32(
+            datagramWriteIovPtr,
+            datagramWriteFirstPtr,
+            Endian.little,
+          );
+          data.setUint32(datagramWriteIovPtr + 4, 2, Endian.little);
+          data.setUint32(
+            datagramWriteIovPtr + 8,
+            datagramWriteSecondPtr,
+            Endian.little,
+          );
+          data.setUint32(datagramWriteIovPtr + 12, 2, Endian.little);
+          data.setUint32(datagramWriteCountPtr, 0xfeedface, Endian.little);
+          expect(
+            fdWrite.ref([36, datagramWriteIovPtr, 2, datagramWriteCountPtr]),
+            0,
+          );
+          expect(data.getUint32(datagramWriteCountPtr, Endian.little), 4);
+          expect(datagram.sentMessages.map(utf8.decode).toList(), ['data']);
+
+          data.setUint32(emptyReadIovPtr, emptyReadBufferPtr, Endian.little);
+          data.setUint32(emptyReadIovPtr + 4, 4, Endian.little);
+          data.setUint32(emptyReadCountPtr, 0xdeadbeef, Endian.little);
+          expect(
+            fdRead.ref([37, emptyReadIovPtr, 1, emptyReadCountPtr]),
+            _errnoAgain,
+          );
+          expect(data.getUint32(emptyReadCountPtr, Endian.little), 0xdeadbeef);
+
+          bytes.setAll(blockedWriteBufferPtr, utf8.encode('stop'));
+          data.setUint32(
+            blockedWriteIovPtr,
+            blockedWriteBufferPtr,
+            Endian.little,
+          );
+          data.setUint32(blockedWriteIovPtr + 4, 4, Endian.little);
+          data.setUint32(blockedWriteCountPtr, 0xfeedface, Endian.little);
+          expect(
+            fdWrite.ref([38, blockedWriteIovPtr, 1, blockedWriteCountPtr]),
+            _errnoAgain,
+          );
+          expect(
+            data.getUint32(blockedWriteCountPtr, Endian.little),
+            0xfeedface,
+          );
+          expect(blockedStream.sentData, isEmpty);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'sock_recv and sock_send use host-backed stream handlers',
         () async {
           final receiveSource = utf8.encode('hello');

@@ -154,20 +154,35 @@ class WASI implements wasi.WASI {
         final nwrittenPtr = _asInt(args[3]);
 
         final opened = _vfs.openFileForFd(fd);
+        final socket = _vfs.socketForFd(fd);
         final stdioKind = _vfs.stdioKindForFd(fd);
         final isOutput =
             stdioKind == wasi_vfs.Preview1StdioDescriptorKind.stdout ||
             stdioKind == wasi_vfs.Preview1StdioDescriptorKind.stderr;
         if (!isOutput) {
-          if (opened == null) {
+          if (opened == null && socket == null) {
             return _errnoBadf;
           }
           final right = _checkDescriptorRight(fd, _rightFdWrite);
           if (right != _errnoSuccess) {
             return right;
           }
+          if (socket != null) {
+            final view = _memoryView();
+            if (view == null) {
+              return _errnoInval;
+            }
+            return wasi_vfs.writeSocketFromIov(
+              socket: socket,
+              bytes: view.bytes,
+              data: view.data,
+              iovs: iovs,
+              iovsLen: iovsLen,
+              nwrittenPtr: nwrittenPtr,
+            );
+          }
           return _writeOpenFileFromIov(
-            opened: opened,
+            opened: opened!,
             iovs: iovs,
             iovsLen: iovsLen,
             nwrittenPtr: nwrittenPtr,
@@ -448,13 +463,14 @@ class WASI implements wasi.WASI {
         final iovsLen = _asInt(args[2]);
         final nreadPtr = _asInt(args[3]);
         final opened = _vfs.openFileForFd(fd);
+        final socket = _vfs.socketForFd(fd);
         final input =
             _vfs.stdioKindForFd(fd) ==
                 wasi_vfs.Preview1StdioDescriptorKind.stdin
             ? _stdinInput
             : opened;
         final isDirectory = _vfs.isOpenDirectoryFd(fd);
-        if (input == null) {
+        if (input == null && socket == null) {
           return _errnoBadf;
         }
         if (isDirectory) {
@@ -464,9 +480,25 @@ class WASI implements wasi.WASI {
         if (right != _errnoSuccess) {
           return right;
         }
+        if (socket != null) {
+          final view = _memoryView();
+          if (view == null) {
+            return _errnoInval;
+          }
+          return wasi_vfs.readSocketIntoIov(
+            socket: socket,
+            bytes: view.bytes,
+            data: view.data,
+            iovs: iovs,
+            iovsLen: iovsLen,
+            flags: 0,
+            nreadPtr: nreadPtr,
+            roFlagsPtr: null,
+          );
+        }
 
         return _readOpenFileIntoIov(
-          opened: input,
+          opened: input!,
           iovs: iovs,
           iovsLen: iovsLen,
           nreadPtr: nreadPtr,

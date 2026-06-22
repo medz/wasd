@@ -289,6 +289,23 @@ too broad to verify in one commit.
   - Claim impact: closes one Preview1 syscall ABI and guest-memory side-effect
     gap for native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
     `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
+- [x] `P1-SOCKET-FD-READ-WRITE` - Configured Preview1 socket descriptors work
+  through generic `fd_read` and `fd_write`.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "fd_read and fd_write operate on preview1 socket descriptors"`
+    failed before the fix because `fd_read` returned `BADF(8)` for a socket fd,
+    then passed after the fix;
+    `dart test -p chrome test/wasi_test.dart --name "fd_read and fd_write operate on preview1 socket descriptors"`;
+    `dart test test/wasi_test.dart`;
+    `dart test test/readme_snippets_test.dart test/readme_commands_test.dart`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_fd_read_write.operations=32000` for the socket-heavy distribution;
+    `dart analyze`.
+  - Spec reference: WASI Preview1 `rights::fd_read` grants `fd_read` and
+    `sock_recv`; `rights::fd_write` grants `fd_write` and `sock_send`.
+  - Claim impact: closes one Preview1 socket descriptor compatibility gap for
+    native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-POLL-ZERO-HINT` - Stream socket `readReadyBytes: 0` does not
   produce a false `poll_oneoff(fd_read)` readiness event.
   - Evidence:
@@ -1284,6 +1301,36 @@ performance visible while the support surface expands.
     this row with the exact commands run.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete it until the
     Preview1 socket and runtime gates are all checked.
+- [x] `P1-SOCKET-FD-READ-WRITE` - Generic fd IO works on injected Preview1
+  socket descriptors.
+  - Scope: native/browser `fd_read` and `fd_write` dispatch for configured
+    stream/datagram `WASIPreview1Socket` descriptors, including would-block output
+    pointer side effects and the fd-style socket read path with no `roflags`
+    result pointer.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`,
+    `tool/wasi_vfs_benchmark.dart`, `README.md`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "fd_read and fd_write operate on preview1 socket descriptors"`
+    failed before the fix because `fd_read` returned `BADF(8)` for a configured
+    socket descriptor.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "fd_read and fd_write operate on preview1 socket descriptors"`;
+    `dart test -p chrome test/wasi_test.dart --name "fd_read and fd_write operate on preview1 socket descriptors"`;
+    `dart test test/wasi_test.dart`;
+    `dart test test/readme_snippets_test.dart test/readme_commands_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; the
+    socket-heavy distribution reported `socket_fd_read_write.operations=32000`.
+  - Done when: stream and datagram sockets can be read/written through generic fd
+    IO, would-block reads/writes leave output counters unchanged, browser and
+    native shims share the same VFS socket helpers, and README support wording
+    names socket `fd_read`/`fd_write`.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
+    support or any P2/P3 support gate.
 - [x] `P1-SOCKET-ADAPTER-BOUNDARY` - Native and browser socket imports share one
   Preview1 adapter boundary.
   - Scope: native/browser `sock_accept`, `sock_recv`, `sock_send`, and

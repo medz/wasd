@@ -97,6 +97,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
   final socketRecvPeek = _benchmarkSocketRecvPeek(options);
   final socketRecvWaitall = _benchmarkSocketRecvWaitall(options);
   final socketSendRecv = _benchmarkSocketSendRecv(options);
+  final socketFdReadWrite = _benchmarkSocketFdReadWrite(options);
   final socketDgramTruncation = _benchmarkSocketDatagramTruncation(options);
   final socketPollReadiness = _benchmarkSocketPollReadiness(options);
   final socketRenumberClose = _benchmarkSocketRenumberClose(options);
@@ -118,6 +119,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
     'socket_recv_peek': socketRecvPeek.toJson(),
     'socket_recv_waitall': socketRecvWaitall.toJson(),
     'socket_send_recv': socketSendRecv.toJson(),
+    'socket_fd_read_write': socketFdReadWrite.toJson(),
     'socket_dgram_truncation': socketDgramTruncation.toJson(),
     'socket_poll_readiness': socketPollReadiness.toJson(),
     'socket_renumber_close': socketRenumberClose.toJson(),
@@ -778,6 +780,135 @@ _Metric _benchmarkSocketSendRecv(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketFdReadWrite(_Options options) {
+  final socket = WASIPreview1Socket(
+    receiveData: List<int>.generate(
+      options.iterations * _socketChunkSize,
+      (index) => index & 0xff,
+    ),
+  );
+  final emptySocket = WASIPreview1Socket();
+  final blockedSocket = WASIPreview1Socket(writeReady: false);
+  final vfs = Preview1VirtualFileSystem(
+    sockets: {64: socket, 65: emptySocket, 66: blockedSocket},
+  );
+  final descriptor = vfs.socketForFd(64);
+  final emptyDescriptor = vfs.socketForFd(65);
+  final blockedDescriptor = vfs.socketForFd(66);
+  if (descriptor == null ||
+      emptyDescriptor == null ||
+      blockedDescriptor == null) {
+    throw StateError('socket descriptor missing for fd read/write benchmark');
+  }
+
+  final bytes = Uint8List(384);
+  final data = ByteData.view(bytes.buffer);
+  const readIovPtr = 0;
+  const readFirstBufferPtr = 32;
+  const readSecondBufferPtr = 96;
+  const writeIovPtr = 160;
+  const writeFirstBufferPtr = 192;
+  const writeSecondBufferPtr = 256;
+  const countPtr = 320;
+  _writeTwoIovs(
+    data: data,
+    iovPtr: readIovPtr,
+    firstBufferPtr: readFirstBufferPtr,
+    firstLength: _socketIovSize,
+    secondBufferPtr: readSecondBufferPtr,
+    secondLength: _socketIovSize,
+  );
+  _writeTwoIovs(
+    data: data,
+    iovPtr: writeIovPtr,
+    firstBufferPtr: writeFirstBufferPtr,
+    firstLength: _socketIovSize,
+    secondBufferPtr: writeSecondBufferPtr,
+    secondLength: _socketIovSize,
+  );
+  for (var i = 0; i < _socketIovSize; i++) {
+    bytes[writeFirstBufferPtr + i] = i & 0xff;
+    bytes[writeSecondBufferPtr + i] = (i + _socketIovSize) & 0xff;
+  }
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final readErrno = readSocketIntoIov(
+      socket: descriptor,
+      bytes: bytes,
+      data: data,
+      iovs: readIovPtr,
+      iovsLen: 2,
+      flags: 0,
+      nreadPtr: countPtr,
+      roFlagsPtr: null,
+    );
+    if (readErrno != errnoSuccess) {
+      throw StateError('socket fd_read failed at iteration $i: $readErrno');
+    }
+    checksum += data.getUint32(countPtr, Endian.little);
+
+    final writeErrno = writeSocketFromIov(
+      socket: descriptor,
+      bytes: bytes,
+      data: data,
+      iovs: writeIovPtr,
+      iovsLen: 2,
+      nwrittenPtr: countPtr,
+    );
+    if (writeErrno != errnoSuccess) {
+      throw StateError('socket fd_write failed at iteration $i: $writeErrno');
+    }
+    checksum += data.getUint32(countPtr, Endian.little);
+
+    data.setUint32(countPtr, 0x7fffffff, Endian.little);
+    final emptyReadErrno = readSocketIntoIov(
+      socket: emptyDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: readIovPtr,
+      iovsLen: 2,
+      flags: 0,
+      nreadPtr: countPtr,
+      roFlagsPtr: null,
+    );
+    if (emptyReadErrno != errnoAgain ||
+        data.getUint32(countPtr, Endian.little) != 0x7fffffff) {
+      throw StateError(
+        'socket fd_read empty stream wrote output at iteration $i: '
+        '$emptyReadErrno',
+      );
+    }
+    checksum += emptyReadErrno;
+
+    data.setUint32(countPtr, 0x7fffffff, Endian.little);
+    final blockedWriteErrno = writeSocketFromIov(
+      socket: blockedDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: writeIovPtr,
+      iovsLen: 2,
+      nwrittenPtr: countPtr,
+    );
+    if (blockedWriteErrno != errnoAgain ||
+        data.getUint32(countPtr, Endian.little) != 0x7fffffff ||
+        blockedSocket.sentData.isNotEmpty) {
+      throw StateError(
+        'socket fd_write blocked stream wrote output at iteration $i: '
+        '$blockedWriteErrno',
+      );
+    }
+    checksum += blockedWriteErrno;
+  }
+  watch.stop();
+  return _Metric(
+    operations: options.iterations * 4,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkSocketDatagramTruncation(_Options options) {
   final socket = WASIPreview1Socket.datagram(
     receiveMessages: List<List<int>>.generate(
@@ -1172,6 +1303,7 @@ void _printSingleText(
   _printMetric('socket recv peek', payload['socket_recv_peek']);
   _printMetric('socket recv waitall', payload['socket_recv_waitall']);
   _printMetric('socket send/recv', payload['socket_send_recv']);
+  _printMetric('socket fd read/write', payload['socket_fd_read_write']);
   _printMetric(
     'socket datagram truncation',
     payload['socket_dgram_truncation'],
