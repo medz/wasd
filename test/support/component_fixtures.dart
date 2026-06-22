@@ -151,6 +151,50 @@ Uint8List ownedResourceAsyncMemoryProgramFromU32(
   return Uint8List.fromList(bytes);
 }
 
+/// Returns a component whose canonical section creates and drops a
+/// `stream<own resource>`.
+Uint8List ownedResourceStreamNewDropComponentBytes() =>
+    _componentWithSectionsBytes(
+      typeBytes: const <int>[0x3f, 0x7f, 0x00, 0x69, 0x00, 0x66, 0x01, 0x01],
+      typeCount: 3,
+      canonicalBytes: const <int>[0x0e, 0x02, 0x13, 0x02, 0x14, 0x02],
+      canonicalCount: 3,
+    );
+
+/// Returns a component whose canonical section creates and drops a
+/// `future<own resource>`.
+Uint8List ownedResourceFutureNewDropComponentBytes() =>
+    _componentWithSectionsBytes(
+      typeBytes: const <int>[0x3f, 0x7f, 0x00, 0x69, 0x00, 0x65, 0x01, 0x01],
+      typeCount: 3,
+      canonicalBytes: const <int>[0x15, 0x02, 0x1a, 0x02, 0x1b, 0x02],
+      canonicalCount: 3,
+    );
+
+Uint8List _componentWithSectionsBytes({
+  required List<int> typeBytes,
+  required int typeCount,
+  required List<int> canonicalBytes,
+  required int canonicalCount,
+}) => Uint8List.fromList(<int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  typeBytes.length + 1,
+  typeCount,
+  ...typeBytes,
+  0x08,
+  canonicalBytes.length + 1,
+  canonicalCount,
+  ...canonicalBytes,
+]);
+
 /// Value type for a record containing owned and borrowed resource handles.
 const canonicalResourceRecordValueType = WasmComponentValueType.typeIndex(3);
 

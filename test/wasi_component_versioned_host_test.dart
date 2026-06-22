@@ -219,6 +219,98 @@ void main() {
       expect(sharedHost.table.activeCount, 0);
     });
 
+    test(
+      'Preview2 wrapper rejects owned-resource async values at version gate',
+      () {
+        final streamComponent = WasmComponent.decode(
+          ownedResourceStreamNewDropComponentBytes(),
+        );
+        final futureComponent = WasmComponent.decode(
+          ownedResourceFutureNewDropComponentBytes(),
+        );
+        final host = WASIPreview2ComponentHost();
+
+        final streamPlan = host.prepareComponent(streamComponent);
+        final futurePlan = host.prepareComponent(futureComponent);
+
+        expect(streamComponent.validate(), isEmpty);
+        expect(futureComponent.validate(), isEmpty);
+        expect(streamPlan.canBind, isFalse);
+        expect(futurePlan.canBind, isFalse);
+        expect(streamPlan.versionErrors, hasLength(3));
+        expect(futurePlan.versionErrors, hasLength(3));
+        expect(streamPlan.versionErrors.map((error) => error.kind), [
+          WasmComponentCanonicalKind.streamNew,
+          WasmComponentCanonicalKind.streamDropReadable,
+          WasmComponentCanonicalKind.streamDropWritable,
+        ]);
+        expect(futurePlan.versionErrors.map((error) => error.kind), [
+          WasmComponentCanonicalKind.futureNew,
+          WasmComponentCanonicalKind.futureDropReadable,
+          WasmComponentCanonicalKind.futureDropWritable,
+        ]);
+        expect(streamPlan.unsupportedDefinitions, isEmpty);
+        expect(futurePlan.unsupportedDefinitions, isEmpty);
+        expect(streamPlan.bindingErrors, isEmpty);
+        expect(futurePlan.bindingErrors, isEmpty);
+        expect(streamPlan.componentPlan.resourceBindings, hasLength(1));
+        expect(futurePlan.componentPlan.resourceBindings, hasLength(1));
+        expect(
+          streamPlan.componentPlan.resourceBindings.single.componentTypeIndex,
+          0,
+        );
+        expect(
+          futurePlan.componentPlan.resourceBindings.single.componentTypeIndex,
+          0,
+        );
+        expect(streamPlan.componentPlan.asyncValueBindings, hasLength(1));
+        expect(futurePlan.componentPlan.asyncValueBindings, hasLength(1));
+        expect(
+          streamPlan.componentPlan.asyncValueBindings.single.kind,
+          WASIComponentAsyncValueBindingKind.stream,
+        );
+        expect(
+          futurePlan.componentPlan.asyncValueBindings.single.kind,
+          WASIComponentAsyncValueBindingKind.future,
+        );
+        expect(
+          streamPlan.componentPlan.asyncValueBindings.single.componentTypeIndex,
+          2,
+        );
+        expect(
+          futurePlan.componentPlan.asyncValueBindings.single.componentTypeIndex,
+          2,
+        );
+        expect(
+          streamPlan
+              .componentPlan
+              .asyncValueBindings
+              .single
+              .memoryLayout!
+              .byteLength,
+          4,
+        );
+        expect(
+          futurePlan
+              .componentPlan
+              .asyncValueBindings
+              .single
+              .memoryLayout!
+              .byteLength,
+          4,
+        );
+        expect(
+          () => streamPlan.bind(),
+          throwsA(isA<WASIComponentVersionUnsupportedException>()),
+        );
+        expect(
+          () => futurePlan.bind(),
+          throwsA(isA<WASIComponentVersionUnsupportedException>()),
+        );
+        expect(host.componentHost.table.activeCount, 0);
+      },
+    );
+
     test('Preview3 wrapper accepts async stream profile bindings', () {
       final component = WasmComponent.decode(_canonicalStreamProgramBytes());
       final host = WASIPreview3ComponentHost();
@@ -235,6 +327,107 @@ void main() {
       expect(binding.program.invoke(5, <Object?>[handles.readable]), isNull);
       expect(binding.program.invoke(6, <Object?>[handles.writable]), isNull);
       expect(host.componentHost.table.activeCount, 0);
+    });
+
+    test('Preview3 wrapper executes owned-resource async lifecycles', () {
+      final streamComponent = WasmComponent.decode(
+        ownedResourceStreamNewDropComponentBytes(),
+      );
+      final futureComponent = WasmComponent.decode(
+        ownedResourceFutureNewDropComponentBytes(),
+      );
+      final streamHost = WASIPreview3ComponentHost();
+      final futureHost = WASIPreview3ComponentHost();
+
+      final streamPlan = streamHost.prepareComponent(streamComponent);
+      final futurePlan = futureHost.prepareComponent(futureComponent);
+
+      expect(streamComponent.validate(), isEmpty);
+      expect(futureComponent.validate(), isEmpty);
+      expect(streamPlan.canBind, isTrue);
+      expect(futurePlan.canBind, isTrue);
+      expect(streamPlan.versionErrors, isEmpty);
+      expect(futurePlan.versionErrors, isEmpty);
+      expect(streamPlan.unsupportedDefinitions, isEmpty);
+      expect(futurePlan.unsupportedDefinitions, isEmpty);
+      expect(streamPlan.bindingErrors, isEmpty);
+      expect(futurePlan.bindingErrors, isEmpty);
+      expect(streamPlan.componentPlan.resourceBindings, hasLength(1));
+      expect(futurePlan.componentPlan.resourceBindings, hasLength(1));
+      expect(
+        streamPlan.componentPlan.resourceBindings.single.componentTypeIndex,
+        0,
+      );
+      expect(
+        futurePlan.componentPlan.resourceBindings.single.componentTypeIndex,
+        0,
+      );
+      expect(streamPlan.componentPlan.asyncValueBindings, hasLength(1));
+      expect(futurePlan.componentPlan.asyncValueBindings, hasLength(1));
+      expect(
+        streamPlan.componentPlan.asyncValueBindings.single.kind,
+        WASIComponentAsyncValueBindingKind.stream,
+      );
+      expect(
+        futurePlan.componentPlan.asyncValueBindings.single.kind,
+        WASIComponentAsyncValueBindingKind.future,
+      );
+      expect(
+        streamPlan.componentPlan.asyncValueBindings.single.componentTypeIndex,
+        2,
+      );
+      expect(
+        futurePlan.componentPlan.asyncValueBindings.single.componentTypeIndex,
+        2,
+      );
+      expect(
+        streamPlan
+            .componentPlan
+            .asyncValueBindings
+            .single
+            .memoryLayout!
+            .byteLength,
+        4,
+      );
+      expect(
+        futurePlan
+            .componentPlan
+            .asyncValueBindings
+            .single
+            .memoryLayout!
+            .byteLength,
+        4,
+      );
+
+      final streamBinding = streamPlan.bind();
+      final streamHandles = WASIComponentAsyncEndpointHandles.unpack(
+        streamBinding.program.invoke(0, const <Object?>[])! as int,
+      );
+      expect(streamHost.componentHost.table.activeCount, 2);
+      expect(
+        streamBinding.program.invoke(1, <Object?>[streamHandles.readable]),
+        isNull,
+      );
+      expect(
+        streamBinding.program.invoke(2, <Object?>[streamHandles.writable]),
+        isNull,
+      );
+      expect(streamHost.componentHost.table.activeCount, 0);
+
+      final futureBinding = futurePlan.bind();
+      final futureHandles = WASIComponentAsyncEndpointHandles.unpack(
+        futureBinding.program.invoke(0, const <Object?>[])! as int,
+      );
+      expect(futureHost.componentHost.table.activeCount, 2);
+      expect(
+        futureBinding.program.invoke(1, <Object?>[futureHandles.readable]),
+        isNull,
+      );
+      expect(
+        futureBinding.program.invoke(2, <Object?>[futureHandles.writable]),
+        isNull,
+      );
+      expect(futureHost.componentHost.table.activeCount, 0);
     });
 
     test('Preview3 wrapper reports adapter resource handle uses', () {

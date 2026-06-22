@@ -697,6 +697,9 @@ final class WasmComponentValidationError {
 
   final String path;
   final String message;
+
+  @override
+  String toString() => '$path: $message';
 }
 
 enum _WasmComponentDefinitionEventKind {
