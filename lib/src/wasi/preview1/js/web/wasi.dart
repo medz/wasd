@@ -1077,8 +1077,10 @@ class WASI implements wasi.WASI {
     final lookupFlags = _asInt(args[1]);
     final pathPtr = _asInt(args[2]);
     final pathLen = _asInt(args[3]);
+    final oflags = _asInt(args[4]);
     final openedFdPtr = _asInt(args[8]);
-    if ((lookupFlags & ~_lookupflagKnownMask) != 0) {
+    if ((lookupFlags & ~_lookupflagKnownMask) != 0 ||
+        (oflags & ~_oflagKnownMask) != 0) {
       return _errnoInval;
     }
     final baseDirectory = _vfs.directoryPathForFd(dirFd);
@@ -1145,6 +1147,21 @@ class WASI implements wasi.WASI {
     if (parentRights == null) {
       return _errnoBadf;
     }
+    if ((oflags & _oflagCreat) != 0) {
+      final createRight = _checkDescriptorRight(dirFd, _rightPathCreateFile);
+      if (createRight != _errnoSuccess) {
+        return createRight;
+      }
+    }
+    if ((oflags & _oflagTrunc) != 0) {
+      final truncateRight = _checkDescriptorRight(
+        dirFd,
+        _rightPathFilestatSetSize,
+      );
+      if (truncateRight != _errnoSuccess) {
+        return truncateRight;
+      }
+    }
     if (requestedRightsBase != 0 &&
             (requestedRightsBase | parentRights.inheriting) !=
                 parentRights.inheriting ||
@@ -1158,6 +1175,7 @@ class WASI implements wasi.WASI {
       rightsBase: requestedRightsBase,
       rightsInheriting: requestedRightsInheriting,
       descriptorFlags: descriptorFlags,
+      oflags: oflags,
     );
     switch (opened.kind) {
       case wasi_vfs.Preview1VirtualOpenKind.file:
@@ -1166,6 +1184,12 @@ class WASI implements wasi.WASI {
         return _errnoSuccess;
       case wasi_vfs.Preview1VirtualOpenKind.missing:
         return _errnoNoent;
+      case wasi_vfs.Preview1VirtualOpenKind.exists:
+        return _errnoExist;
+      case wasi_vfs.Preview1VirtualOpenKind.isDirectory:
+        return _errnoIsdir;
+      case wasi_vfs.Preview1VirtualOpenKind.notDirectory:
+        return _errnoNotdir;
     }
   });
 
@@ -2046,6 +2070,9 @@ const int _fdstatSize = wasi_common.fdstatSize;
 const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
 const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
+const int _oflagCreat = wasi_common.oflagCreat;
+const int _oflagTrunc = wasi_common.oflagTrunc;
+const int _oflagKnownMask = wasi_common.oflagKnownMask;
 const int _fdflagKnownMask = wasi_common.fdflagKnownMask;
 const int _socketFdflagKnownMask = wasi_common.socketFdflagKnownMask;
 const int _lookupflagSymlinkFollow = wasi_common.lookupflagSymlinkFollow;
@@ -2072,6 +2099,7 @@ const int _rightFdWrite = wasi_common.rightFdWrite;
 const int _rightFdAdvise = wasi_common.rightFdAdvise;
 const int _rightFdAllocate = wasi_common.rightFdAllocate;
 const int _rightPathCreateDirectory = wasi_common.rightPathCreateDirectory;
+const int _rightPathCreateFile = wasi_common.rightPathCreateFile;
 const int _rightPathLinkSource = wasi_common.rightPathLinkSource;
 const int _rightPathLinkTarget = wasi_common.rightPathLinkTarget;
 const int _rightPathOpen = wasi_common.rightPathOpen;
@@ -2080,6 +2108,7 @@ const int _rightPathReadlink = wasi_common.rightPathReadlink;
 const int _rightPathRenameSource = wasi_common.rightPathRenameSource;
 const int _rightPathRenameTarget = wasi_common.rightPathRenameTarget;
 const int _rightPathFilestatGet = wasi_common.rightPathFilestatGet;
+const int _rightPathFilestatSetSize = wasi_common.rightPathFilestatSetSize;
 const int _rightPathFilestatSetTimes = wasi_common.rightPathFilestatSetTimes;
 const int _rightFdFilestatGet = wasi_common.rightFdFilestatGet;
 const int _rightFdFilestatSetSize = wasi_common.rightFdFilestatSetSize;

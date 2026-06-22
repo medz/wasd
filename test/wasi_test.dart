@@ -22,16 +22,21 @@ const int _rightFdWrite = 1 << 6;
 const int _rightFdFdstatGet = 1 << 21;
 const int _rightSockShutdown = 1 << 28;
 const int _rightSockAccept = 1 << 29;
+const int _rightPathOpen = 1 << 13;
 const int _rightsAll = (1 << 30) - 1;
 const int _filetypeSocketDgram = 5;
 const int _filetypeSocketStream = 6;
 const int _errnoAgain = 6;
 const int _errnoBadf = 8;
+const int _errnoExist = 20;
 const int _errnoInval = 28;
 const int _errnoNotsock = 57;
 const int _errnoNotsup = 58;
 const int _errnoNotcapable = 76;
 const int _errnoPipe = 64;
+const int _oflagCreat = 1;
+const int _oflagExcl = 4;
+const int _oflagTrunc = 8;
 const int _fdflagAppend = 1;
 const int _fdflagNonblock = 4;
 const int _fdflagUnknown = 1 << 5;
@@ -3103,6 +3108,223 @@ void main() {
         },
         skip: _skipOnNode(
           'Skipping on Node.js; file IO behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'path_open creates, exclusively opens, and truncates virtual files',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/existing.txt': Uint8List.fromList(
+                utf8.encode('abcdef'),
+              ),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final fdPwrite = preview1['fd_pwrite'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final createdPath = utf8.encode('created.txt');
+          final existingPath = utf8.encode('existing.txt');
+          const pathPtr = 4512;
+          const existingPathPtr = 4544;
+          const openedFdPtr = 4576;
+          const iovPtr = 4592;
+          const bufferPtr = 4624;
+          const countPtr = 4656;
+          const readBufferPtr = 4672;
+          const exclusiveFdSentinel = 0xdecafbad;
+
+          bytes.setAll(pathPtr, createdPath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              createdPath.length,
+              _oflagCreat,
+              _rightFdRead | _rightFdWrite,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final createdFd = data.getUint32(openedFdPtr, Endian.little);
+
+          bytes.setAll(bufferPtr, utf8.encode('new'));
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 3, Endian.little);
+          expect(fdPwrite.ref([createdFd, iovPtr, 1, 0, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 3);
+
+          data.setUint32(iovPtr, readBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 3, Endian.little);
+          expect(fdPread.ref([createdFd, iovPtr, 1, 0, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 3);
+          expect(
+            utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + 3)),
+            'new',
+          );
+
+          data.setUint32(openedFdPtr, exclusiveFdSentinel, Endian.little);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              createdPath.length,
+              _oflagCreat | _oflagExcl,
+              _rightFdRead,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            _errnoExist,
+          );
+          expect(
+            data.getUint32(openedFdPtr, Endian.little),
+            exclusiveFdSentinel,
+          );
+
+          bytes.setAll(existingPathPtr, existingPath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              existingPathPtr,
+              existingPath.length,
+              _oflagTrunc,
+              _rightFdRead | _rightFdWrite,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final truncatedFd = data.getUint32(openedFdPtr, Endian.little);
+          data.setUint32(iovPtr, readBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 6, Endian.little);
+          expect(fdPread.ref([truncatedFd, iovPtr, 1, 0, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 0);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; file IO behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'path_open create and truncate require directory rights',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/existing.txt': Uint8List.fromList(
+                utf8.encode('abcdef'),
+              ),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdFdstatSetRights =
+              preview1['fd_fdstat_set_rights'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final missingPath = utf8.encode('created.txt');
+          final existingPath = utf8.encode('existing.txt');
+          const missingPathPtr = 4720;
+          const existingPathPtr = 4752;
+          const openedFdPtr = 4784;
+          const iovPtr = 4800;
+          const readBufferPtr = 4832;
+          const countPtr = 4864;
+          const failedFdSentinel = 0xfeedface;
+
+          expect(fdFdstatSetRights.ref([3, _rightPathOpen, _rightsAll]), 0);
+
+          bytes.setAll(missingPathPtr, missingPath);
+          data.setUint32(openedFdPtr, failedFdSentinel, Endian.little);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              missingPathPtr,
+              missingPath.length,
+              _oflagCreat,
+              _rightFdRead | _rightFdWrite,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            _errnoNotcapable,
+          );
+          expect(data.getUint32(openedFdPtr, Endian.little), failedFdSentinel);
+
+          bytes.setAll(existingPathPtr, existingPath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              existingPathPtr,
+              existingPath.length,
+              _oflagTrunc,
+              _rightFdRead | _rightFdWrite,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            _errnoNotcapable,
+          );
+
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              existingPathPtr,
+              existingPath.length,
+              0,
+              _rightFdRead,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final fd = data.getUint32(openedFdPtr, Endian.little);
+          data.setUint32(iovPtr, readBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 6, Endian.little);
+          expect(fdPread.ref([fd, iovPtr, 1, 0, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 6);
+          expect(
+            utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + 6)),
+            'abcdef',
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; path_open behavior is delegated to node:wasi.',
         ),
       );
 

@@ -793,10 +793,24 @@ final class Preview1VirtualFileSystem {
     int? rightsBase,
     int? rightsInheriting,
     int descriptorFlags = 0,
+    int oflags = 0,
   }) {
     final normalized = normalizeGuestPath(guestPath);
+    final create = (oflags & oflagCreat) != 0;
+    final directory = (oflags & oflagDirectory) != 0;
+    final exclusive = (oflags & oflagExcl) != 0;
+    final truncate = (oflags & oflagTrunc) != 0;
     final file = lookupFile(normalized);
     if (file != null) {
+      if (directory) {
+        return const Preview1VirtualOpenResult.notDirectory();
+      }
+      if (create && exclusive) {
+        return const Preview1VirtualOpenResult.exists();
+      }
+      if (truncate) {
+        file.setLength(0);
+      }
       final fd = _allocateVirtualFd();
       _openFilesByFd[fd] = Preview1VirtualOpenFile(
         file,
@@ -810,6 +824,12 @@ final class Preview1VirtualFileSystem {
     }
 
     if (isDirectoryPath(normalized)) {
+      if (create && exclusive) {
+        return const Preview1VirtualOpenResult.exists();
+      }
+      if (truncate) {
+        return const Preview1VirtualOpenResult.isDirectory();
+      }
       final fd = _allocateVirtualFd();
       _openDirectoriesByFd[fd] = normalized;
       _openDirectoryFlagsByFd[fd] = descriptorFlags;
@@ -820,7 +840,34 @@ final class Preview1VirtualFileSystem {
       return Preview1VirtualOpenResult.directory(fd);
     }
 
-    return const Preview1VirtualOpenResult.missing();
+    if (directory || !create) {
+      return const Preview1VirtualOpenResult.missing();
+    }
+
+    final parent = dirnameOfGuestPath(normalized);
+    if (_filesByGuestPath.containsKey(parent) ||
+        _symlinksByGuestPath.containsKey(parent)) {
+      return const Preview1VirtualOpenResult.notDirectory();
+    }
+    if (!_virtualDirectoryPaths.contains(parent)) {
+      return const Preview1VirtualOpenResult.missing();
+    }
+
+    final created = Preview1VirtualFile(Uint8List(0));
+    _filesByGuestPath[normalized] = created;
+    _indexFilePath(normalized);
+    _setDirectoryChild(normalized, filetypeRegularFile);
+    _rebuildDirectoryEntriesForPaths({parent});
+    final fd = _allocateVirtualFd();
+    _openFilesByFd[fd] = Preview1VirtualOpenFile(
+      created,
+      rights: Preview1DescriptorRights.file(
+        base: rightsBase,
+        inheriting: rightsInheriting,
+      ),
+      descriptorFlags: descriptorFlags,
+    );
+    return Preview1VirtualOpenResult.file(fd);
   }
 
   int acceptSocket({required int fd, required int descriptorFlags}) {
@@ -1659,7 +1706,14 @@ final class Preview1VirtualSocket {
       socket.isDatagram ? filetypeSocketDgram : filetypeSocketStream;
 }
 
-enum Preview1VirtualOpenKind { file, directory, missing }
+enum Preview1VirtualOpenKind {
+  file,
+  directory,
+  missing,
+  exists,
+  isDirectory,
+  notDirectory,
+}
 
 enum Preview1PathMutationResult {
   success,
@@ -1709,6 +1763,15 @@ final class Preview1VirtualOpenResult {
 
   const Preview1VirtualOpenResult.missing()
     : this._(Preview1VirtualOpenKind.missing, null);
+
+  const Preview1VirtualOpenResult.exists()
+    : this._(Preview1VirtualOpenKind.exists, null);
+
+  const Preview1VirtualOpenResult.isDirectory()
+    : this._(Preview1VirtualOpenKind.isDirectory, null);
+
+  const Preview1VirtualOpenResult.notDirectory()
+    : this._(Preview1VirtualOpenKind.notDirectory, null);
 
   final Preview1VirtualOpenKind kind;
   final int? fd;

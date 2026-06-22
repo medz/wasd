@@ -217,6 +217,20 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-PATH-OPEN-OFLAGS` - `path_open` implements Preview1 create,
+  exclusive-create, and truncate semantics over the shared native/browser VFS.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "path_open creates, exclusively opens, and truncates virtual files"`
+    failed before the fix because `O_CREAT` on a missing file returned
+    `ENOENT(44)`, then passed after the fix;
+    `dart test test/wasi_test.dart --name "path_open"`;
+    `dart test -p chrome test/wasi_test.dart --name "path_open"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Claim impact: closes one Preview1 file-system conformance gap for
+    native/browser hosts; does not complete `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [x] `P1-SOCKET-ADAPTER-BOUNDARY` - Native and browser socket imports share one
   Preview1 adapter boundary.
   - Evidence:
@@ -458,10 +472,12 @@ unchecked.
   - Evidence update: verification matrix, detailed backlog, and README support
     wording if public claims change.
 - [ ] `SUPPORT-P1` - Full WASI Preview1 support.
-  - Current: `WASI(...)` supports Preview1, but socket and host-backed edge
-    cases are still incomplete.
+  - Current: `WASI(...)` provides a real Preview1 host surface, but full
+    Preview1 support remains incomplete.
   - Required rows: every Preview1 descriptor, filesystem, stdio, clock, random,
-    poll, and socket row checked, including `P1-SOCKET-CONFORMANCE` child rows.
+    poll, and socket row checked, including `P1-PATH-OPEN-OFLAGS`,
+    `P1-SOCKET-CONFORMANCE` child rows, and future conformance-suite rows for
+    gaps not yet represented by a narrower ID.
   - Implementation gate:
     `dart test test/wasi_test.dart`;
     `dart test -p chrome test/wasi_test.dart`;
@@ -582,7 +598,7 @@ copying their internals directly.
 
 | Status | Capability boundary | Evidence to inspect | Verification gate | Remaining gap |
 | --- | --- | --- | --- | --- |
-| [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Conformance-shaped socket edge cases and native adapter boundaries. |
+| [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `path_open` create/exclusive/truncate is covered; full Preview1 conformance still needs broader syscall/spec-suite gates and remaining socket edges. |
 | [x] | Component decoder and canonical validation base | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion and broader official component suite coverage. |
 | [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
 | [x] | Versioned Preview2/Preview3 capability gates | `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/preview2/component_host.dart`, `lib/src/wasi/preview3/component_host.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_versioned_host_test.dart` | Concrete P2/P3 interface adapter modules instead of generic facade binding. |
@@ -620,6 +636,11 @@ This is the implementation state as of 2026-06-22 on `main`.
   `sock_send` preflight the complete iovec array before mutating guest memory,
   consuming receive data, or recording sent bytes, matching the datagram path's
   all-or-error validation boundary.
+- Preview 1 `path_open` now honors `O_CREAT`, `O_CREAT|O_EXCL`, and `O_TRUNC`
+  over shared native/browser VFS state. File creation updates the same path
+  indexes and directory child maps as rename/link/unlink, exclusive create
+  leaves the output-fd pointer untouched on `EEXIST`, and create/truncate check
+  the directory descriptor's path rights before mutating VFS state.
 - Preview 1 directory entries are indexed through per-directory child maps so
   common path/link/symlink mutation paths rebuild only affected directories.
   File lookup fallback indexes are also maintained as ordered path buckets, so
@@ -1128,6 +1149,38 @@ performance visible while the support surface expands.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry.
   - Claim impact: reduces Preview1 adapter drift risk; no direct support gate.
+- [x] `P1-PATH-OPEN-OFLAGS` - `path_open` implements Preview1 file creation,
+  exclusive create, and truncation over shared native/browser VFS state.
+  - Scope: native/browser Preview1 `path_open` handling for `O_CREAT`,
+    `O_EXCL`, and `O_TRUNC`, including output-fd side effects and directory
+    rights.
+  - Edit targets: `lib/src/wasi/preview1/common/constants.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`,
+    `README.md`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "path_open creates, exclusively opens, and truncates virtual files"`
+    failed before the fix because `O_CREAT` returned `ENOENT(44)` for a
+    missing file.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "path_open"`;
+    `dart test -p chrome test/wasi_test.dart --name "path_open"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
+    creation/truncation updates the existing VFS maps and per-directory child
+    indexes without adding broad scans.
+  - Done when: `O_CREAT` creates an in-memory file, `O_CREAT|O_EXCL` rejects an
+    existing file without changing the output fd pointer, `O_TRUNC` clears an
+    existing file, and create/truncate fail with `ENOTCAPABLE` when the
+    directory descriptor lacks the required path rights.
+  - Evidence update: this checked row, the `Current Execution Board`
+    `Recently Checked` entry, README support wording, and the verification
+    matrix.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
+    support or any P2/P3 support gate.
 - [x] `P1-SOCKET-DATAGRAM-PARTIAL-SEND-INVALID` - Host-backed datagram sends
   reject partial message acceptance.
   - Scope: shared Preview1 `WASIPreview1Socket.datagram` send handler results
@@ -1797,10 +1850,25 @@ performance visible while the support surface expands.
 
 ## Completion Checklist
 
-Full WASI 0.3 support must remain unclaimed until every row below is checked.
-Checking a row requires the current command evidence to be added to that row or
-to a linked checked child row in the same commit.
+Full Wasm and WASI Preview1/Preview2/Preview3 support must remain unclaimed
+until every row below is checked. Checking a row requires current command
+evidence to be added to that row or to a linked checked child row in the same
+commit.
 
+- [ ] `P1-RUNTIME-COMPLETE`
+  - Condition: every Preview1 syscall implemented by the native/browser host has
+    syscall-level regression coverage, official/conformance-style workload
+    coverage, error side-effect checks, and Node/browser/native runtime
+    alignment where the runtime owns behavior.
+  - Gate: full `test/wasi_test.dart`, targeted Chrome/Node Preview1 gates,
+    wasi-testsuite-style Preview1 command/reactor fixtures, and VFS/socket
+    benchmark evidence.
+- [ ] `P2-WORLD-COMPLETE`
+  - Condition: WASI 0.2 worlds/interfaces bind through real component-model
+    adapters with resources, canonical ABI lowering/lifting, WIT ingestion, and
+    executable host calls.
+  - Gate: versioned Preview2 adapter tests, WIT world ingestion tests,
+    component execution tests, and relevant resource/adapter benchmarks.
 - [ ] `P3-VERSIONED-RUN`
   - Condition: real P3 components run through a versioned Preview3 host layer.
   - Gate: versioned Preview3 adapter tests plus component-host execution tests.

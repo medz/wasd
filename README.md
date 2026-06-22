@@ -166,7 +166,7 @@ dart test test/wasi_test.dart test/wasm_test.dart
 
 | WASI Version | Status |
 | --- | --- |
-| Preview 1 | Supported |
+| Preview 1 | Partial, actively expanding |
 | Preview 2 | Not implemented |
 | Preview 3 | Not implemented |
 
