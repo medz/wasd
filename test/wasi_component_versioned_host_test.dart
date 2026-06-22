@@ -6,6 +6,7 @@ import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/versioned_host.dart';
+import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasi/version.dart';
@@ -606,6 +607,157 @@ void main() {
       );
       expect(futureHost.componentHost.table.activeCount, 0);
     });
+
+    test(
+      'Preview3 wrapper publishes owned-resource async copy events',
+      () async {
+        final streamComponent = WasmComponent.decode(
+          ownedResourceAsyncMemoryProgramFromU32(
+            canonicalU32StreamMemoryComponentBytes(),
+            isStream: true,
+          ),
+        );
+        final futureComponent = WasmComponent.decode(
+          ownedResourceAsyncMemoryProgramFromU32(
+            canonicalU32FutureMemoryComponentBytes(),
+            isStream: false,
+          ),
+        );
+        final streamHost = WASIPreview3ComponentHost();
+        final futureHost = WASIPreview3ComponentHost();
+        final streamMemory = Memory(const MemoryDescriptor(initial: 1));
+        final futureMemory = Memory(const MemoryDescriptor(initial: 1));
+        final streamData = ByteData.view(streamMemory.buffer);
+        final futureData = ByteData.view(futureMemory.buffer);
+        streamData.setUint32(32, 0x01020304, Endian.little);
+        streamData.setUint32(36, 0x05060708, Endian.little);
+        futureData.setUint32(32, 0x0a0b0c0d, Endian.little);
+
+        final streamBinding = streamHost.bindComponent(streamComponent);
+        final streamHandles = WASIComponentAsyncEndpointHandles.unpack(
+          streamBinding.program.invoke(0, const <Object?>[])! as int,
+        );
+        final streamWaitableHost =
+            streamHost.componentHost.canonicalHost.waitableHost;
+        final streamWaitableSet = streamWaitableHost.waitableSetNew();
+        streamWaitableHost.waitableJoin(
+          streamHandles.readable,
+          streamWaitableSet,
+        );
+        var streamCompleted = false;
+
+        expect(
+          streamBinding.program.invokeWithMemoryEvent(
+            1,
+            streamMemory,
+            <Object?>[streamHandles.readable, 96, 2],
+          ),
+          wasiComponentAsyncBlocked,
+        );
+        final streamPending =
+            streamWaitableHost.waitableSetWaitToMemory(
+              streamWaitableSet,
+              streamMemory,
+              128,
+            )..then((_) {
+              streamCompleted = true;
+            });
+        await Future<void>.delayed(Duration.zero);
+        expect(streamCompleted, isFalse);
+        expect(
+          () => streamBinding.program.invoke(3, <Object?>[
+            streamHandles.readable,
+          ]),
+          throwsStateError,
+        );
+        expect(
+          streamBinding.program.invokeWithMemory(2, streamMemory, <Object?>[
+            streamHandles.writable,
+            32,
+            2,
+          ]),
+          2 << 4,
+        );
+
+        await expectLater(
+          streamPending,
+          completion(WASIComponentWaitableEventCode.streamRead.value),
+        );
+        expect(streamCompleted, isTrue);
+        expect(streamData.getUint32(96, Endian.little), 0x01020304);
+        expect(streamData.getUint32(100, Endian.little), 0x05060708);
+        expect(
+          streamData.getUint32(128, Endian.little),
+          streamHandles.readable,
+        );
+        expect(streamData.getUint32(132, Endian.little), 2 << 4);
+        streamWaitableHost.waitableJoin(streamHandles.readable, 0);
+        streamWaitableHost.waitableSetDrop(streamWaitableSet);
+        expect(
+          streamBinding.program.invoke(3, <Object?>[streamHandles.readable]),
+          isNull,
+        );
+        expect(
+          streamBinding.program.invoke(4, <Object?>[streamHandles.writable]),
+          isNull,
+        );
+        expect(streamHost.componentHost.table.activeCount, 0);
+
+        final futureBinding = futureHost.bindComponent(futureComponent);
+        final futureHandles = WASIComponentAsyncEndpointHandles.unpack(
+          futureBinding.program.invoke(0, const <Object?>[])! as int,
+        );
+        final futureWaitableHost =
+            futureHost.componentHost.canonicalHost.waitableHost;
+        final futureWaitableSet = futureWaitableHost.waitableSetNew();
+        futureWaitableHost.waitableJoin(
+          futureHandles.readable,
+          futureWaitableSet,
+        );
+
+        expect(
+          futureBinding.program.invokeWithMemoryEvent(
+            1,
+            futureMemory,
+            <Object?>[futureHandles.readable, 96],
+          ),
+          wasiComponentAsyncBlocked,
+        );
+        expect(
+          futureBinding.program.invokeWithMemory(2, futureMemory, <Object?>[
+            futureHandles.writable,
+            32,
+          ]),
+          0,
+        );
+
+        await expectLater(
+          futureWaitableHost.waitableSetWaitToMemory(
+            futureWaitableSet,
+            futureMemory,
+            128,
+          ),
+          completion(WASIComponentWaitableEventCode.futureRead.value),
+        );
+        expect(futureData.getUint32(96, Endian.little), 0x0a0b0c0d);
+        expect(
+          futureData.getUint32(128, Endian.little),
+          futureHandles.readable,
+        );
+        expect(futureData.getUint32(132, Endian.little), 0);
+        futureWaitableHost.waitableJoin(futureHandles.readable, 0);
+        futureWaitableHost.waitableSetDrop(futureWaitableSet);
+        expect(
+          futureBinding.program.invoke(3, <Object?>[futureHandles.readable]),
+          isNull,
+        );
+        expect(
+          futureBinding.program.invoke(4, <Object?>[futureHandles.writable]),
+          isNull,
+        );
+        expect(futureHost.componentHost.table.activeCount, 0);
+      },
+    );
 
     test('Preview3 wrapper reports adapter resource handle uses', () {
       final component = WasmComponent.decode(
