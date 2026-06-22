@@ -102,6 +102,9 @@ Map<String, Object?> _runBenchmark(_Options options) {
   final socketPollReadiness = _benchmarkSocketPollReadiness(options);
   final socketRenumberClose = _benchmarkSocketRenumberClose(options);
   final socketAcceptInheritance = _benchmarkSocketAcceptInheritance(options);
+  final socketAcceptReceiveShutdown = _benchmarkSocketAcceptReceiveShutdown(
+    options,
+  );
 
   final payload = <String, Object?>{
     'distribution': options.distribution,
@@ -125,6 +128,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
     'socket_poll_readiness': socketPollReadiness.toJson(),
     'socket_renumber_close': socketRenumberClose.toJson(),
     'socket_accept_inheritance': socketAcceptInheritance.toJson(),
+    'socket_accept_receive_shutdown': socketAcceptReceiveShutdown.toJson(),
   };
   return payload;
 }
@@ -1264,6 +1268,42 @@ _Metric _benchmarkSocketAcceptInheritance(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketAcceptReceiveShutdown(_Options options) {
+  const fdBase = 8192;
+  final sockets = <int, WASIPreview1Socket>{
+    for (var i = 0; i < options.iterations; i++)
+      fdBase + i: WASIPreview1Socket(pendingAccepted: [WASIPreview1Socket()]),
+  };
+  final vfs = Preview1VirtualFileSystem(
+    firstVirtualFd: fdBase + options.iterations,
+    sockets: sockets,
+  );
+
+  var successfulOperations = 0;
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final fd = fdBase + i;
+    final listener = vfs.socketForFd(fd)!.socket;
+    listener.shutdown(receive: true, send: false);
+    successfulOperations++;
+    if (vfs.acceptSocket(fd: fd, descriptorFlags: 0) >= 0) {
+      throw StateError('receive-shutdown listener accepted at iteration $i');
+    }
+    if (listener.hasPendingAccept) {
+      throw StateError('receive-shutdown listener kept accept queue at $i');
+    }
+    checksum += fd;
+    successfulOperations++;
+  }
+  watch.stop();
+  return _Metric(
+    operations: successfulOperations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _writeTwoIovs({
   required ByteData data,
   required int iovPtr,
@@ -1358,6 +1398,10 @@ void _printSingleText(
   _printMetric(
     'socket accept inheritance',
     payload['socket_accept_inheritance'],
+  );
+  _printMetric(
+    'socket accept receive shutdown',
+    payload['socket_accept_receive_shutdown'],
   );
 }
 

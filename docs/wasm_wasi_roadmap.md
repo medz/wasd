@@ -223,6 +223,25 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-ACCEPT-RECEIVE-SHUTDOWN` - Listener receive shutdown terminates
+  pending accepts without fd side effects.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "sock_accept stops after listener receive shutdown without fd side effects"`
+    failed before the fix because `sock_accept` returned `SUCCESS` after
+    `sock_shutdown(SD_RD)`, then passed after the fix;
+    `dart test test/wasi_test.dart --name "sock_accept stops after listener receive shutdown without fd side effects|poll_oneoff reports queued socket accepts as readable|sock_accept returns queued preview1 stream sockets with inherited rights|sock_shutdown and descriptor rights are enforced for preview1 sockets|poll_oneoff reports preview1 socket read readiness and hangup"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_accept stops after listener receive shutdown without fd side effects|poll_oneoff reports queued socket accepts as readable|sock_accept returns queued preview1 stream sockets with inherited rights|sock_shutdown and descriptor rights are enforced for preview1 sockets|poll_oneoff reports preview1 socket read readiness and hangup"`;
+    `dart test test/wasi_test.dart`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_accept_receive_shutdown.operations=16000` and
+    `socket_accept_receive_shutdown.per_operation_us=0.043625` for the
+    socket-heavy distribution.
+  - Spec reference: Preview1 `sock_shutdown(SD_RD)` terminates receive-side
+    operations; queued accepts are modeled as socket read readiness and must not
+    remain separately consumable after receive shutdown reports hangup.
+  - Claim impact: closes one Preview1 socket shutdown/accept consistency gap;
+    does not complete `P1-SOCKET-CONFORMANCE`, `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [x] `P2-P3-ADAPTERS` - Preview2 and Preview3 fixed-version wrappers execute
   canonical primitive lift/lower adapters through the shared versioned host.
   - Evidence:
@@ -1360,6 +1379,33 @@ performance visible while the support surface expands.
     this row with the exact commands run.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete it until the
     Preview1 socket and runtime gates are all checked.
+- [x] `P1-SOCKET-ACCEPT-RECEIVE-SHUTDOWN` - Listener receive shutdown terminates
+  pending accepts without fd side effects.
+  - Scope: shared Preview1 stream listener shutdown state, `sock_accept`,
+    `poll_oneoff(fd_read)`, and VFS accept queue behavior.
+  - Edit targets: `lib/src/wasi/preview1/socket.dart`, `test/wasi_test.dart`,
+    `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "sock_accept stops after listener receive shutdown without fd side effects"`
+    failed before the fix because `sock_accept` returned `SUCCESS` after
+    `sock_shutdown(SD_RD)` and allocated an accepted fd.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "sock_accept stops after listener receive shutdown without fd side effects"`;
+    `dart test test/wasi_test.dart --name "sock_accept stops after listener receive shutdown without fd side effects|poll_oneoff reports queued socket accepts as readable|sock_accept returns queued preview1 stream sockets with inherited rights|sock_shutdown and descriptor rights are enforced for preview1 sockets|poll_oneoff reports preview1 socket read readiness and hangup"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_accept stops after listener receive shutdown without fd side effects|poll_oneoff reports queued socket accepts as readable|sock_accept returns queued preview1 stream sockets with inherited rights|sock_shutdown and descriptor rights are enforced for preview1 sockets|poll_oneoff reports preview1 socket read readiness and hangup"`;
+    `dart test test/wasi_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; the
+    socket-heavy distribution reported
+    `socket_accept_receive_shutdown.operations=16000` and
+    `socket_accept_receive_shutdown.per_operation_us=0.043625`.
+  - Done when: receive shutdown clears queued accepts, `poll_oneoff(fd_read)`
+    reports hangup, `sock_accept` returns `EAGAIN` without changing the output
+    fd pointer, and no accepted fd is allocated.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
+    support or any P2/P3 support gate.
 - [x] `P1-SOCKET-FD-READ-WRITE` - Generic fd IO works on injected Preview1
   socket descriptors.
   - Scope: native/browser `fd_read` and `fd_write` dispatch for configured

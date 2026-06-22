@@ -382,7 +382,7 @@ final class WASIPreview1Socket {
 
   /// Returns the next queued accepted socket, if one is available.
   WASIPreview1Socket? accept() {
-    if (!isStream || _pendingAccepted.isEmpty) {
+    if (!isStream || receiveShutdown || _pendingAccepted.isEmpty) {
       return null;
     }
     return _pendingAccepted.removeFirst();
@@ -394,6 +394,7 @@ final class WASIPreview1Socket {
       _receiveBytes.clear();
       _receiveOffset = 0;
       _receiveMessages.clear();
+      _pendingAccepted.clear();
       _readReadyBytes = null;
     }
     receiveShutdown = receiveShutdown || receive;
