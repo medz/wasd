@@ -107,6 +107,9 @@ Map<String, Object?> _runBenchmark(_Options options) {
   final socketDatagramRights = _benchmarkSocketDatagramRights(options);
   final socketConnectedRights = _benchmarkSocketConnectedRights(options);
   final socketFdflagPreflight = _benchmarkSocketFdflagPreflight(options);
+  final socketFileRightsPreflight = _benchmarkSocketFileRightsPreflight(
+    options,
+  );
   final socketPollReadiness = _benchmarkSocketPollReadiness(options);
   final socketRenumberClose = _benchmarkSocketRenumberClose(options);
   final socketAcceptInheritance = _benchmarkSocketAcceptInheritance(options);
@@ -139,6 +142,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
     'socket_datagram_rights': socketDatagramRights.toJson(),
     'socket_connected_rights': socketConnectedRights.toJson(),
     'socket_fdflag_preflight': socketFdflagPreflight.toJson(),
+    'socket_file_rights_preflight': socketFileRightsPreflight.toJson(),
     'socket_poll_readiness': socketPollReadiness.toJson(),
     'socket_renumber_close': socketRenumberClose.toJson(),
     'socket_accept_inheritance': socketAcceptInheritance.toJson(),
@@ -191,6 +195,7 @@ void _runWarmup(Map<String, Uint8List> files, _Options options) {
   _benchmarkSocketDatagramTruncation(warmupOptions);
   _benchmarkSocketConnectedRights(warmupOptions);
   _benchmarkSocketFdflagPreflight(warmupOptions);
+  _benchmarkSocketFileRightsPreflight(warmupOptions);
   _benchmarkSocketPollReadiness(warmupOptions);
   _benchmarkSocketRenumberClose(warmupOptions);
 }
@@ -1855,6 +1860,51 @@ _Metric _benchmarkSocketFdflagPreflight(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketFileRightsPreflight(_Options options) {
+  const fdBase = 49152;
+  final sockets = <int, WASIPreview1Socket>{
+    for (var i = 0; i < options.iterations; i++)
+      fdBase + i: WASIPreview1Socket(),
+  };
+  final vfs = Preview1VirtualFileSystem(
+    firstVirtualFd: fdBase + options.iterations,
+    sockets: sockets,
+  );
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final fd = fdBase + i;
+    final allocateErrno = preview1FdAllocate(
+      vfs: vfs,
+      fd: fd,
+      offset: 0,
+      length: 1,
+    );
+    if (allocateErrno != errnoNotcapable) {
+      throw StateError(
+        'socket fd_allocate errno failed at iteration $i: $allocateErrno',
+      );
+    }
+    checksum += allocateErrno;
+
+    final setSizeErrno = preview1FdFilestatSetSize(vfs: vfs, fd: fd, size: 1);
+    if (setSizeErrno != errnoNotcapable) {
+      throw StateError(
+        'socket fd_filestat_set_size errno failed at iteration $i: '
+        '$setSizeErrno',
+      );
+    }
+    checksum += setSizeErrno;
+  }
+  watch.stop();
+  return _Metric(
+    operations: options.iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _writeTwoIovs({
   required ByteData data,
   required int iovPtr,
@@ -1956,6 +2006,10 @@ void _printSingleText(
   _printMetric('socket datagram rights', payload['socket_datagram_rights']);
   _printMetric('socket connected rights', payload['socket_connected_rights']);
   _printMetric('socket fdflag preflight', payload['socket_fdflag_preflight']);
+  _printMetric(
+    'socket file rights preflight',
+    payload['socket_file_rights_preflight'],
+  );
   _printMetric('socket poll readiness', payload['socket_poll_readiness']);
   _printMetric('socket renumber/close', payload['socket_renumber_close']);
   _printMetric(

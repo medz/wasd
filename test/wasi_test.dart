@@ -2735,6 +2735,10 @@ void main() {
           final fdDatasync =
               preview1['fd_datasync'] as FunctionImportExportValue;
           final fdSync = preview1['fd_sync'] as FunctionImportExportValue;
+          final fdAllocate =
+              preview1['fd_allocate'] as FunctionImportExportValue;
+          final fdFilestatSetSize =
+              preview1['fd_filestat_set_size'] as FunctionImportExportValue;
           final fdFilestatSetTimes =
               preview1['fd_filestat_set_times'] as FunctionImportExportValue;
           final memory =
@@ -2771,6 +2775,8 @@ void main() {
           expect(fdAdvise.ref([39, 0, 0, 0]), _errnoNotcapable);
           expect(fdDatasync.ref([39]), _errnoNotcapable);
           expect(fdSync.ref([39]), _errnoNotcapable);
+          expect(fdAllocate.ref([39, 0, 1]), _errnoNotcapable);
+          expect(fdFilestatSetSize.ref([39, 1]), _errnoNotcapable);
           expect(fdFilestatSetTimes.ref([39, 0, 0, 0]), _errnoNotcapable);
         },
         skip: _skipOnNode(

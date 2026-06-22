@@ -642,20 +642,12 @@ class WASI implements wasi_iface.WASI {
         final fd = _asInt(args[0]);
         final offset = _asInt64(args[1]);
         final len = _asInt64(args[2]);
-        final opened = _vfs.openFileForFd(fd);
-        if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
-          return _errnoBadf;
-        }
-        final right = _checkDescriptorRight(fd, _rightFdAllocate);
-        if (right != _errnoSuccess) {
-          return right;
-        }
-        if (offset < 0 || len < 0 || offset + len < offset) {
-          return _errnoInval;
-        }
-
-        opened.allocate(offset, len);
-        return _errnoSuccess;
+        return wasi_fd.preview1FdAllocate(
+          vfs: _vfs,
+          fd: fd,
+          offset: offset,
+          length: len,
+        );
       });
 
   wasm.FunctionImportExportValue
@@ -805,20 +797,7 @@ class WASI implements wasi_iface.WASI {
         }
         final fd = _asInt(args[0]);
         final size = _asInt64(args[1]);
-        final opened = _vfs.openFileForFd(fd);
-        if (opened == null || _vfs.isOpenDirectoryFd(fd)) {
-          return _errnoBadf;
-        }
-        final right = _checkDescriptorRight(fd, _rightFdFilestatSetSize);
-        if (right != _errnoSuccess) {
-          return right;
-        }
-        if (size < 0) {
-          return _errnoInval;
-        }
-
-        opened.setLength(size);
-        return _errnoSuccess;
+        return wasi_fd.preview1FdFilestatSetSize(vfs: _vfs, fd: fd, size: size);
       });
 
   wasm.FunctionImportExportValue get _fdFilestatSetTimesImport =>
@@ -2077,7 +2056,6 @@ const int _rightFdSync = wasi_common.rightFdSync;
 const int _rightFdTell = wasi_common.rightFdTell;
 const int _rightFdWrite = wasi_common.rightFdWrite;
 const int _rightFdAdvise = wasi_common.rightFdAdvise;
-const int _rightFdAllocate = wasi_common.rightFdAllocate;
 const int _rightPathCreateDirectory = wasi_common.rightPathCreateDirectory;
 const int _rightPathCreateFile = wasi_common.rightPathCreateFile;
 const int _rightPathLinkSource = wasi_common.rightPathLinkSource;
@@ -2091,7 +2069,6 @@ const int _rightPathFilestatGet = wasi_common.rightPathFilestatGet;
 const int _rightPathFilestatSetSize = wasi_common.rightPathFilestatSetSize;
 const int _rightPathFilestatSetTimes = wasi_common.rightPathFilestatSetTimes;
 const int _rightFdFilestatGet = wasi_common.rightFdFilestatGet;
-const int _rightFdFilestatSetSize = wasi_common.rightFdFilestatSetSize;
 const int _rightFdFilestatSetTimes = wasi_common.rightFdFilestatSetTimes;
 const int _rightPathSymlink = wasi_common.rightPathSymlink;
 const int _rightPathRemoveDirectory = wasi_common.rightPathRemoveDirectory;
