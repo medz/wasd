@@ -191,19 +191,21 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
-- [x] `P1-SOCKET-DESCRIPTOR-NAMESPACE` - Initial socket descriptors reject fd
-  namespace collisions with stdio/preopens.
+- [x] `P1-SOCKET-DESCRIPTOR-NAMESPACE` - Initial descriptors reject fd namespace
+  collisions and invalid virtual allocator starts.
   - Evidence:
     `dart test test/wasi_test.dart --name "virtual socket descriptors reject initial fd collisions"`
-    failed before the fix, then passed after the fix;
+    failed on the negative `firstVirtualFd` case before this fix, then passed
+    after the fix;
     `dart test test/wasi_test.dart`;
     `dart test -p chrome test/wasi_test.dart --name "virtual socket descriptors reject initial fd collisions"`;
     `dart test -p chrome test/wasi_test.dart --name "sock_recv and sock_send use configured preview1 stream sockets"`;
     `dart test -p chrome test/wasi_test.dart --name "fd_prestat_get and fd_prestat_dir_name expose configured preopen"`;
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
     `dart analyze`.
-  - Claim impact: prevents inconsistent Preview1 descriptor kind/rights state for
-    injected sockets in `SUPPORT-P1`; does not complete the parent
+  - Claim impact: prevents inconsistent Preview1 descriptor kind/rights state
+    and negative virtual descriptor allocation in `SUPPORT-P1`; does not
+    complete the parent
     `P1-SOCKET-CONFORMANCE` row.
 - [x] `P1-SOCKET-RECEIVE-SHUTDOWN-DROPS-BUFFERS` - Receive-side shutdown drops
   unread receive buffers and later host-injected data.
@@ -998,17 +1000,18 @@ performance visible while the support surface expands.
     `Recently Checked` entry.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
     socket conformance row.
-- [x] `P1-SOCKET-DESCRIPTOR-NAMESPACE` - Initial socket descriptors reject fd
-  namespace collisions.
+- [x] `P1-SOCKET-DESCRIPTOR-NAMESPACE` - Initial descriptors reject fd namespace
+  collisions and invalid virtual allocator starts.
   - Scope: native/browser shared Preview1 VFS construction for configured stdio,
-    preopen, and injected socket descriptor numbers.
+    preopen, injected socket descriptor numbers, and the first virtual
+    descriptor allocation number.
   - Edit targets: `lib/src/wasi/preview1/common/vfs.dart` and
     `test/wasi_test.dart`.
   - Red test:
     `dart test test/wasi_test.dart --name "virtual socket descriptors reject initial fd collisions"`
-    failed before the fix because negative socket fds, stdio/socket collisions,
-    preopen/socket collisions, stdio/preopen collisions, and duplicate stdio fds
-    were silently accepted.
+    failed across the namespace fixes while a negative `firstVirtualFd`,
+    negative socket fds, stdio/socket collisions, preopen/socket collisions,
+    stdio/preopen collisions, and duplicate stdio fds were silently accepted.
   - Implementation gate: `dart test test/wasi_test.dart`;
     `dart test -p chrome test/wasi_test.dart --name "virtual socket descriptors reject initial fd collisions"`;
     `dart test -p chrome test/wasi_test.dart --name "sock_recv and sock_send use configured preview1 stream sockets"`;
@@ -1016,10 +1019,11 @@ performance visible while the support surface expands.
     `dart analyze`.
   - Performance gate:
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
-  - Done when: initial stdio fds are nonnegative and unique, preopen fds cannot
-    share fd numbers with stdio descriptors, socket fds are nonnegative, sockets
-    cannot share fd numbers with stdio/preopen descriptors, and normal
-    high-numbered socket injection plus preopen discovery still work.
+  - Done when: the first virtual fd allocation number is nonnegative, initial
+    stdio fds are nonnegative and unique, preopen fds cannot share fd numbers
+    with stdio descriptors, socket fds are nonnegative, sockets cannot share fd
+    numbers with stdio/preopen descriptors, and normal high-numbered socket
+    injection plus preopen discovery still work.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent

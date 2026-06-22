@@ -49,6 +49,7 @@ final class Preview1VirtualFileSystem {
        },
        _symlinksByGuestPath = <String, Preview1VirtualSymlink>{} {
     _validateInitialDescriptorNamespace(
+      firstVirtualFd: firstVirtualFd,
       stdinFd: stdinFd,
       stdoutFd: stdoutFd,
       stderrFd: stderrFd,
@@ -1830,12 +1831,21 @@ Map<int, Preview1StdioDescriptorKind> _buildStdioDescriptors({
 }
 
 void _validateInitialDescriptorNamespace({
+  required int firstVirtualFd,
   required int stdinFd,
   required int stdoutFd,
   required int stderrFd,
   required Iterable<int> preopenFds,
   required Iterable<int> socketFds,
 }) {
+  if (firstVirtualFd < 0) {
+    throw ArgumentError.value(
+      firstVirtualFd,
+      'firstVirtualFd',
+      'must not be negative',
+    );
+  }
+
   final stdioFds = <int>[stdinFd, stdoutFd, stderrFd];
   final seenStdio = <int>{};
   for (final fd in stdioFds) {

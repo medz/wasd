@@ -496,6 +496,10 @@ void main() {
 
     test('virtual socket descriptors reject initial fd collisions', () {
       expect(
+        () => Preview1VirtualFileSystem(firstVirtualFd: -1),
+        throwsArgumentError,
+      );
+      expect(
         () => Preview1VirtualFileSystem(sockets: {-1: WASIPreview1Socket()}),
         throwsArgumentError,
       );
