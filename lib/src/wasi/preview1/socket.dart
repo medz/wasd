@@ -3,6 +3,21 @@ import 'dart:typed_data';
 
 const int _receiveCompactionThreshold = 64 * 1024;
 
+/// Supplies stream bytes for a host-backed Preview1 socket.
+///
+/// The provider should return at most [maxBytes] bytes that can be consumed by
+/// a future `sock_recv` call. Returning an empty list means no host bytes were
+/// available at the time of the call.
+typedef WASIPreview1SocketReceiveDataProvider =
+    List<int> Function(int maxBytes);
+
+/// Handles stream bytes written through a host-backed Preview1 socket.
+///
+/// Return the number of bytes accepted by the host. Returning fewer than
+/// [length] bytes makes the current `sock_send` stop at that partial write.
+typedef WASIPreview1SocketSendHandler =
+    int Function(Uint8List source, int sourceStart, int length);
+
 /// Host-side socket state for WASI Preview1 descriptors.
 ///
 /// The in-repo native and browser Preview1 shims use this object for inherited
@@ -16,10 +31,14 @@ final class WASIPreview1Socket {
     List<int> receiveData = const <int>[],
     Iterable<WASIPreview1Socket> pendingAccepted = const <WASIPreview1Socket>[],
     int? readReadyBytes,
+    WASIPreview1SocketReceiveDataProvider? receiveDataProvider,
+    WASIPreview1SocketSendHandler? sendHandler,
     this.writeReady,
   }) : _kind = _WASIPreview1SocketKind.stream,
        _receiveBytes = List<int>.of(receiveData, growable: true),
        _receiveMessages = ListQueue<Uint8List>(),
+       _receiveDataProvider = receiveDataProvider,
+       _sendHandler = sendHandler,
        _pendingAccepted = ListQueue<WASIPreview1Socket>.of(pendingAccepted) {
     this.readReadyBytes = readReadyBytes;
   }
@@ -34,6 +53,8 @@ final class WASIPreview1Socket {
        _receiveMessages = ListQueue<Uint8List>.of(
          receiveMessages.map(Uint8List.fromList),
        ),
+       _receiveDataProvider = null,
+       _sendHandler = null,
        _pendingAccepted = ListQueue<WASIPreview1Socket>() {
     this.readReadyBytes = readReadyBytes;
   }
@@ -43,6 +64,8 @@ final class WASIPreview1Socket {
   final BytesBuilder _sentBytes = BytesBuilder(copy: true);
   final ListQueue<Uint8List> _receiveMessages;
   final List<Uint8List> _sentMessages = <Uint8List>[];
+  final WASIPreview1SocketReceiveDataProvider? _receiveDataProvider;
+  final WASIPreview1SocketSendHandler? _sendHandler;
   final ListQueue<WASIPreview1Socket> _pendingAccepted;
   int? _readReadyBytes;
   int _receiveOffset = 0;
@@ -129,12 +152,34 @@ final class WASIPreview1Socket {
       receiveShutdown = false;
       return;
     }
-    if (data.isEmpty) {
-      return;
+    _appendReceiveBytes(data);
+  }
+
+  /// Pulls host-backed stream bytes until at least [minUnreadBytes] are queued.
+  ///
+  /// Most callers should use `sock_recv` rather than calling this directly.
+  /// The shared Preview1 host uses it to make `RECV_WAITALL` observe the same
+  /// host-backed stream data as normal reads.
+  int ensureReceiveData(int minUnreadBytes) {
+    final provider = _receiveDataProvider;
+    if (!isStream ||
+        receiveShutdown ||
+        provider == null ||
+        minUnreadBytes <= remainingReceiveLength) {
+      return 0;
     }
-    _compactReceiveBuffer();
-    _receiveBytes.addAll(data);
-    receiveShutdown = false;
+    final data = provider(minUnreadBytes - remainingReceiveLength);
+    if (data.isEmpty) {
+      return 0;
+    }
+    _appendReceiveBytes(data);
+    final readyBytes = _readReadyBytes;
+    if (readyBytes != null) {
+      _readReadyBytes = data.length >= readyBytes
+          ? null
+          : readyBytes - data.length;
+    }
+    return data.length;
   }
 
   /// Queues an accepted stream returned by a future `sock_accept` call.
@@ -164,6 +209,7 @@ final class WASIPreview1Socket {
     if (length <= 0 || receiveShutdown) {
       return 0;
     }
+    ensureReceiveData(socketOffset + length);
     final readOffset = _receiveOffset + socketOffset;
     final available = _receiveBytes.length - readOffset;
     if (available <= 0) {
@@ -215,6 +261,14 @@ final class WASIPreview1Socket {
     if (length <= 0 || sendShutdown) {
       return 0;
     }
+    final sendHandler = _sendHandler;
+    if (sendHandler != null) {
+      final written = sendHandler(source, sourceStart, length);
+      if (written < 0 || written > length) {
+        throw RangeError.range(written, 0, length, 'written');
+      }
+      return written;
+    }
     final end = sourceStart + length;
     _sentBytes.add(Uint8List.sublistView(source, sourceStart, end));
     return length;
@@ -241,6 +295,15 @@ final class WASIPreview1Socket {
   void shutdown({required bool receive, required bool send}) {
     receiveShutdown = receiveShutdown || receive;
     sendShutdown = sendShutdown || send;
+  }
+
+  void _appendReceiveBytes(List<int> data) {
+    if (data.isEmpty) {
+      return;
+    }
+    _compactReceiveBuffer();
+    _receiveBytes.addAll(data);
+    receiveShutdown = false;
   }
 
   void _compactReceiveBuffer() {

@@ -146,7 +146,7 @@ copying their internals directly.
 | [x] | Internal P3 async endpoints, waitables, tasks, context, thread identity | `lib/src/wasi/component/async_host.dart`, `lib/src/wasi/component/waitable_set.dart`, `lib/src/wasi/component/task.dart`, `lib/src/wasi/component/thread.dart`, `test/wasi_component_async_host_test.dart` | `dart test test/wasi_component_async_host_test.dart test/wasi_component_waitable_set_test.dart test/wasi_component_task_test.dart test/wasi_component_thread_test.dart` | Full async lowering, task spawning, scheduler-owned thread switch/suspend/resume. |
 | [x] | Owned-resource stream/future copy buffers, pending copy events, and cancel-copy events through async, component, and versioned Preview3 hosts | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_async_host_test.dart`, `test/wasi_component_host_test.dart`, `test/wasi_component_versioned_host_test.dart`, `test/support/component_fixtures.dart` | `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart test/wasi_component_async_host_test.dart test/wasi_component_value_memory_test.dart`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Borrowed payload lifetimes, nested async payloads, and public P3 API claims remain unsupported. |
 | [x] | Canonical lift/lower adapter planning and internal callback invocation | `lib/src/wasi/component/adapter_plan.dart`, `lib/src/wasi/component/adapter_host.dart`, `test/wasi_component_adapter_plan_test.dart` | `dart test test/wasi_component_adapter_plan_test.dart`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Automatic binding of decoded lift/lower definitions to instantiated core/component functions. |
-| [ ] | Preview1 full socket conformance | Add focused regressions under `test/wasi_test.dart` and VFS/socket benchmarks | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --json` | Native adapter boundaries and externally backed readiness are not complete. |
+| [ ] | Preview1 full socket conformance | Add focused regressions under `test/wasi_test.dart` and VFS/socket benchmarks | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --json` | Native adapter boundaries and broader socket conformance remain incomplete. |
 | [ ] | P2/P3 world/interface ingestion | Add WIT/interface ingestion module and decoded-world fixtures | Future gate: dedicated WIT ingestion tests plus component host binding tests | No public claim until generated/imported worlds bind through versioned hosts. |
 | [ ] | Full WASI 0.3 support | Real P3 components through versioned host with resources, streams, futures, waitables, tasks, and async behavior | Future gate: wasi-testsuite-style component runs plus performance gates | Current work is internal capability coverage, not full P3 support. |
 
@@ -159,8 +159,9 @@ This is the implementation state as of 2026-06-22 on `main`.
   readdir state, hard links, symlinks/readlink, configured stream/datagram
   sockets, descriptor flags, descriptor rights, descriptor times, descriptor
   sync/advice validation, clock/file/socket polling readiness including
-  host-supplied socket readiness hints, and descriptor renumbering. Node still
-  delegates Preview 1 behavior to `node:wasi`.
+  host-supplied socket readiness hints, host-backed stream receive/send
+  handlers, and descriptor renumbering. Node still delegates Preview 1 behavior
+  to `node:wasi`.
 - Preview 1 `proc_raise` is no longer a blanket `ENOSYS` stub: native hosts
   deliver mapped process signals by default, native/browser hosts can inject a
   `procRaiseHandler` for controlled signal handling, and browser hosts still
@@ -182,10 +183,10 @@ This is the implementation state as of 2026-06-22 on `main`.
   `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; it reports
   baseline, directory-heavy, descriptor-heavy, and socket-heavy distributions.
   It also covers socket multi-iov peek/waitall, datagram truncation, socket
-  send/recv including write-side would-block behavior, socket polling
-  readiness including zero-length datagram readiness, queued accepts, and
-  externally backed read/write readiness hints, and socket renumber/close
-  descriptor paths.
+  send/recv including host-backed stream handlers and write-side would-block
+  behavior, socket polling readiness including zero-length datagram readiness,
+  queued accepts, and externally backed read/write readiness hints, and socket
+  renumber/close descriptor paths.
   Stream socket sends are recorded as owned byte chunks, and long receive
   streams compact consumed prefixes in larger batches so socket-heavy reads do
   not repeatedly shift the backing buffer.
@@ -634,6 +635,18 @@ performance visible while the support surface expands.
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
   - Done when: poll and send agree on host-blocked writable state and the
     benchmark includes the blocked-send path.
+- [x] `P1-SOCKET-HOST-STREAM-IO` - Preview1 host-backed stream socket IO.
+  - Change: let injected stream sockets pull receive bytes from a host provider
+    and delegate sent bytes to a host handler.
+  - Evidence: `lib/src/wasi/preview1/socket.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`,
+    `tool/wasi_vfs_benchmark.dart`, `README.md`.
+  - Gate: `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "host-backed stream handlers"`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: `sock_recv` can satisfy `RECV_WAITALL` from the host provider,
+    `sock_send` reaches the host handler, partial host writes stop the multi-iov
+    send, and benchmark output includes the host-backed stream path.
 - [x] `PERF-VFS-DISTRIBUTIONS` - VFS/descriptor benchmark distributions.
   - Change: extend benchmark data to larger conformance-shaped path, directory,
     socket, and descriptor sets before optimizing more VFS code.

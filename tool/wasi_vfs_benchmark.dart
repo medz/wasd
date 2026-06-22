@@ -544,12 +544,31 @@ _Metric _benchmarkSocketSendRecv(_Options options) {
     ),
   );
   final blockedSocket = WASIPreview1Socket(writeReady: false);
+  var hostReceiveByte = 0;
+  var hostSentBytes = 0;
+  final hostSocket = WASIPreview1Socket(
+    receiveDataProvider: (maxBytes) {
+      final chunk = Uint8List(maxBytes);
+      for (var i = 0; i < maxBytes; i++) {
+        chunk[i] = (hostReceiveByte + i) & 0xff;
+      }
+      hostReceiveByte += maxBytes;
+      return chunk;
+    },
+    sendHandler: (source, start, length) {
+      hostSentBytes += length;
+      return length;
+    },
+  );
   final vfs = Preview1VirtualFileSystem(
-    sockets: {64: socket, 65: blockedSocket},
+    sockets: {64: socket, 65: blockedSocket, 66: hostSocket},
   );
   final descriptor = vfs.socketForFd(64);
   final blockedDescriptor = vfs.socketForFd(65);
-  if (descriptor == null || blockedDescriptor == null) {
+  final hostDescriptor = vfs.socketForFd(66);
+  if (descriptor == null ||
+      blockedDescriptor == null ||
+      hostDescriptor == null) {
     throw StateError('socket descriptor missing for send/recv benchmark');
   }
   final bytes = Uint8List(384);
@@ -632,12 +651,44 @@ _Metric _benchmarkSocketSendRecv(_Options options) {
       throw StateError('socket blocked send wrote data at iteration $i');
     }
     checksum += blockedErrno;
+
+    final hostRecvErrno = readSocketIntoIov(
+      socket: hostDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: recvIovPtr,
+      iovsLen: 2,
+      flags: riflagRecvWaitall,
+      nreadPtr: countPtr,
+      roFlagsPtr: flagsPtr,
+    );
+    if (hostRecvErrno != errnoSuccess) {
+      throw StateError(
+        'host socket recv failed at iteration $i: $hostRecvErrno',
+      );
+    }
+    checksum += data.getUint32(countPtr, Endian.little);
+
+    final hostSendErrno = writeSocketFromIov(
+      socket: hostDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: sendIovPtr,
+      iovsLen: 2,
+      nwrittenPtr: countPtr,
+    );
+    if (hostSendErrno != errnoSuccess) {
+      throw StateError(
+        'host socket send failed at iteration $i: $hostSendErrno',
+      );
+    }
+    checksum += data.getUint32(countPtr, Endian.little);
   }
   watch.stop();
   return _Metric(
-    operations: options.iterations * 3,
+    operations: options.iterations * 5,
     totalMicros: watch.elapsedMicroseconds,
-    checksum: checksum,
+    checksum: checksum + hostReceiveByte + hostSentBytes,
   );
 }
 

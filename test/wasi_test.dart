@@ -204,6 +204,47 @@ void main() {
       expect(() => socket.readReadyBytes = -1, throwsArgumentError);
     });
 
+    test('virtual socket send handlers stop after partial writes', () {
+      final acceptedBytes = <int>[];
+      final socket = WASIPreview1Socket(
+        sendHandler: (source, start, length) {
+          acceptedBytes.add(source[start]);
+          return 1;
+        },
+      );
+      final vfs = Preview1VirtualFileSystem(sockets: {71: socket});
+      final descriptor = vfs.socketForFd(71)!;
+      final bytes = Uint8List(64);
+      final data = ByteData.view(bytes.buffer);
+      const iovPtr = 0;
+      const firstBufferPtr = 24;
+      const secondBufferPtr = 32;
+      const countPtr = 48;
+
+      bytes[firstBufferPtr] = 1;
+      bytes[firstBufferPtr + 1] = 2;
+      bytes[secondBufferPtr] = 3;
+      bytes[secondBufferPtr + 1] = 4;
+      data.setUint32(iovPtr, firstBufferPtr, Endian.little);
+      data.setUint32(iovPtr + 4, 2, Endian.little);
+      data.setUint32(iovPtr + 8, secondBufferPtr, Endian.little);
+      data.setUint32(iovPtr + 12, 2, Endian.little);
+
+      expect(
+        writeSocketFromIov(
+          socket: descriptor,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 2,
+          nwrittenPtr: countPtr,
+        ),
+        0,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 1);
+      expect(acceptedBytes, [1]);
+    });
+
     test('imports has fd_write function', () {
       final wasi = WASI();
       final preview1 = wasi.imports['wasi_snapshot_preview1']!;
@@ -1514,6 +1555,86 @@ void main() {
 
           expect(fdFdstatGet.ref([10, fdstatPtr]), 0);
           expect(bytes[fdstatPtr], _filetypeSocketStream);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'sock_recv and sock_send use host-backed stream handlers',
+        () async {
+          final receiveSource = utf8.encode('hello');
+          var receiveOffset = 0;
+          final sent = BytesBuilder(copy: true);
+          final socket = WASIPreview1Socket(
+            readReadyBytes: receiveSource.length,
+            receiveDataProvider: (maxBytes) {
+              final remaining = receiveSource.length - receiveOffset;
+              if (remaining <= 0 || maxBytes <= 0) {
+                return const <int>[];
+              }
+              final count = maxBytes < remaining ? maxBytes : remaining;
+              final chunk = receiveSource.sublist(
+                receiveOffset,
+                receiveOffset + count,
+              );
+              receiveOffset += count;
+              return chunk;
+            },
+            sendHandler: (source, start, length) {
+              sent.add(Uint8List.sublistView(source, start, start + length));
+              return length;
+            },
+          );
+          final socketWasi = WASI(sockets: {11: socket});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final sockSend = preview1['sock_send'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const recvIovPtr = 3096;
+          const recvBufferPtr = 3136;
+          const recvCountPtr = 3184;
+          const recvFlagsPtr = 3200;
+          const sendIovPtr = 3216;
+          const sendFirstBufferPtr = 3264;
+          const sendSecondBufferPtr = 3296;
+          const sendCountPtr = 3344;
+
+          data.setUint32(recvIovPtr, recvBufferPtr, Endian.little);
+          data.setUint32(recvIovPtr + 4, 5, Endian.little);
+          expect(
+            sockRecv.ref([11, recvIovPtr, 1, 2, recvCountPtr, recvFlagsPtr]),
+            0,
+          );
+          expect(data.getUint32(recvCountPtr, Endian.little), 5);
+          expect(data.getUint16(recvFlagsPtr, Endian.little), 0);
+          expect(
+            utf8.decode(bytes.sublist(recvBufferPtr, recvBufferPtr + 5)),
+            'hello',
+          );
+          expect(receiveOffset, receiveSource.length);
+
+          bytes.setAll(sendFirstBufferPtr, utf8.encode('ho'));
+          bytes.setAll(sendSecondBufferPtr, utf8.encode('st'));
+          data.setUint32(sendIovPtr, sendFirstBufferPtr, Endian.little);
+          data.setUint32(sendIovPtr + 4, 2, Endian.little);
+          data.setUint32(sendIovPtr + 8, sendSecondBufferPtr, Endian.little);
+          data.setUint32(sendIovPtr + 12, 2, Endian.little);
+          expect(sockSend.ref([11, sendIovPtr, 2, 0, sendCountPtr]), 0);
+          expect(data.getUint32(sendCountPtr, Endian.little), 4);
+          expect(utf8.decode(sent.toBytes()), 'host');
+          expect(socket.sentData, isEmpty);
         },
         skip: _skipOnNode(
           'Skipping on Node.js; socket behavior is delegated to node:wasi.',

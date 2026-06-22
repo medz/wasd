@@ -1212,6 +1212,9 @@ int readSocketIntoIov({
       return errnoInval;
     }
     if (!socket.receiveShutdown && socket.remainingReceiveLength < capacity) {
+      socket.ensureReceiveData(capacity);
+    }
+    if (!socket.receiveShutdown && socket.remainingReceiveLength < capacity) {
       return errnoAgain;
     }
   }
@@ -1368,7 +1371,11 @@ int writeSocketFromIov({
     }
 
     if (len > 0) {
-      totalWritten += socket.writeFrom(bytes, buf, len);
+      final written = socket.writeFrom(bytes, buf, len);
+      totalWritten += written;
+      if (written < len) {
+        break;
+      }
     }
   }
 
@@ -1586,6 +1593,9 @@ final class Preview1VirtualSocket {
   bool get receiveShutdown => socket.receiveShutdown;
 
   int get remainingReceiveLength => socket.remainingReceiveLength;
+
+  int ensureReceiveData(int minUnreadBytes) =>
+      socket.ensureReceiveData(minUnreadBytes);
 
   int? get readReadyBytes => socket.readReadyBytes;
 
