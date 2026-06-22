@@ -260,6 +260,13 @@ final class Preview1VirtualFileSystem {
           }
           return Preview1FdPollReadiness.ready(nbytes: readReadyBytes);
         }
+        if (hasFdRead) {
+          socket.ensureReceiveData(1);
+          final pulledReceiveLength = socket.remainingReceiveLength;
+          if (pulledReceiveLength > 0) {
+            return Preview1FdPollReadiness.ready(nbytes: pulledReceiveLength);
+          }
+        }
       }
       if (!hasFdRead) {
         return const Preview1FdPollReadiness.error(errnoNotcapable);

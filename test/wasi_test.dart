@@ -1746,6 +1746,117 @@ void main() {
       );
 
       test(
+        'poll_oneoff pulls host-backed stream provider readiness',
+        () async {
+          final receiveSource = utf8.encode('io');
+          var receiveOffset = 0;
+          var providerCalls = 0;
+          final socket = WASIPreview1Socket(
+            receiveDataProvider: (maxBytes) {
+              providerCalls++;
+              final remaining = receiveSource.length - receiveOffset;
+              if (remaining <= 0 || maxBytes <= 0) {
+                return const <int>[];
+              }
+              final count = maxBytes < remaining ? maxBytes : remaining;
+              final chunk = receiveSource.sublist(
+                receiveOffset,
+                receiveOffset + count,
+              );
+              receiveOffset += count;
+              return chunk;
+            },
+          );
+          var deniedProviderCalls = 0;
+          final deniedSocket = WASIPreview1Socket(
+            receiveDataProvider: (_) {
+              deniedProviderCalls++;
+              return const <int>[0xff];
+            },
+          );
+          final socketWasi = WASI(sockets: {35: socket, 36: deniedSocket});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final pollOneoff =
+              preview1['poll_oneoff'] as FunctionImportExportValue;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final fdFdstatSetRights =
+              preview1['fd_fdstat_set_rights'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const inPtr = 4688;
+          const outPtr = 4800;
+          const neventsPtr = 4912;
+          const iovPtr = 4928;
+          const bufferPtr = 4960;
+          const countPtr = 4992;
+          const flagsPtr = 5008;
+
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0xdd0d,
+            tag: _eventTypeFdRead,
+            fd: 35,
+          );
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]),
+            ),
+            0,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0xdd0d);
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeFdRead);
+          expect(_getUint64Le(data, outPtr + _eventFdReadwriteNbytesOffset), 1);
+          expect(providerCalls, 1);
+
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 2, Endian.little);
+          expect(sockRecv.ref([35, iovPtr, 1, 0, countPtr, flagsPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 2);
+          expect(data.getUint16(flagsPtr, Endian.little), 0);
+          expect(utf8.decode(bytes.sublist(bufferPtr, bufferPtr + 2)), 'io');
+          expect(providerCalls, 2);
+          expect(socket.remainingReceiveData, isEmpty);
+
+          expect(fdFdstatSetRights.ref([36, 0, 0]), 0);
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0xee0e,
+            tag: _eventTypeFdRead,
+            fd: 36,
+          );
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]),
+            ),
+            0,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0xee0e);
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeFdRead);
+          expect(
+            data.getUint16(outPtr + _eventErrorOffset, Endian.little),
+            _errnoNotcapable,
+          );
+          expect(deniedProviderCalls, 0);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'poll_oneoff treats queued zero-length datagrams as readable',
         () async {
           final datagram = WASIPreview1Socket.datagram(

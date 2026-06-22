@@ -921,6 +921,16 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
     readReadyBytes: _socketChunkSize ~/ 2,
     writeReady: false,
   );
+  var providerCalls = 0;
+  final providerBacked = WASIPreview1Socket(
+    receiveDataProvider: (maxBytes) {
+      if (maxBytes <= 0) {
+        return const <int>[];
+      }
+      providerCalls++;
+      return <int>[providerCalls & 0xff];
+    },
+  );
   final vfs = Preview1VirtualFileSystem(
     sockets: {
       64: readable,
@@ -928,8 +938,10 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
       66: closed,
       67: listener,
       68: external,
+      69: providerBacked,
     },
   );
+  final providerDrainBuffer = Uint8List(1);
 
   var checksum = 0;
   final watch = Stopwatch()..start();
@@ -999,10 +1011,33 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
       );
     }
     checksum += externalWriteEvent.errno;
+
+    final providerReadEvent = vfs.pollFdReadWrite(
+      fd: 69,
+      eventType: eventTypeFdRead,
+    );
+    if (!providerReadEvent.ready ||
+        providerReadEvent.nbytes != 1 ||
+        providerReadEvent.flags != 0 ||
+        providerReadEvent.errno != errnoSuccess) {
+      throw StateError(
+        'provider-backed stream socket poll failed at iteration $i',
+      );
+    }
+    final drained = providerBacked.readInto(providerDrainBuffer, 0, 1);
+    if (drained != 1) {
+      throw StateError(
+        'provider-backed stream socket drain failed at iteration $i',
+      );
+    }
+    checksum += providerReadEvent.nbytes + providerDrainBuffer.single;
   }
   watch.stop();
+  if (providerCalls != options.iterations) {
+    throw StateError('provider-backed stream socket poll count mismatch');
+  }
   return _Metric(
-    operations: options.iterations * 7,
+    operations: options.iterations * 8,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );

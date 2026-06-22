@@ -217,6 +217,21 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-POLL-PROVIDER-READINESS` - `poll_oneoff(fd_read)` observes
+  host-backed stream providers when no explicit readiness hint is set.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "poll_oneoff pulls host-backed stream provider readiness"`
+    failed before the fix because the provider-backed stream returned
+    `nevents=0`, then passed after the fix;
+    `dart test -p chrome test/wasi_test.dart --name "poll_oneoff pulls host-backed stream provider readiness"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`
+    reported `socket_poll_readiness` with provider-backed stream polling in each
+    distribution; `dart analyze`.
+  - Claim impact: closes one Preview1 host-backed stream poll conformance gap
+    for native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `CM-INLINE-INSTANCE-DUPLICATE-EXPORTS` - Component and core inline
   instance export names reject duplicates during validation.
   - Evidence:
@@ -1235,6 +1250,37 @@ performance visible while the support surface expands.
     `Recently Checked` entry.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
     socket conformance row.
+- [x] `P1-SOCKET-POLL-PROVIDER-READINESS` - Host-backed stream providers feed
+  `poll_oneoff(fd_read)` readiness without a separate readiness hint.
+  - Scope: native/browser shared Preview1 `poll_oneoff(fd_read)` readiness for
+    stream sockets that can synchronously pull data from a
+    `WASIPreview1SocketReceiveDataProvider`.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "poll_oneoff pulls host-backed stream provider readiness"`
+    failed before the fix because a provider-backed stream with no
+    `readReadyBytes` hint produced zero poll events even though `sock_recv`
+    could synchronously pull bytes.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "poll_oneoff pulls host-backed stream provider readiness"`;
+    `dart test -p chrome test/wasi_test.dart --name "poll_oneoff pulls host-backed stream provider readiness"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
+    `socket_poll_readiness` now drains one provider-backed stream byte per
+    iteration and reported `per_operation_us=0.075890625` for the socket-heavy
+    distribution in the recorded run.
+  - Done when: a provider-backed stream with no buffered data and no
+    `readReadyBytes` hint reports one readable poll event, preserves the pulled
+    byte for the next `sock_recv`, does not call the provider without `FD_READ`,
+    and the benchmark covers the provider-poll path.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
+    socket conformance or any P2/P3 support gate.
 - [x] `P1-SOCKET-DATAGRAM-PARTIAL-SEND-INVALID` - Host-backed datagram sends
   reject partial message acceptance.
   - Scope: shared Preview1 `WASIPreview1Socket.datagram` send handler results
