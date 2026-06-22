@@ -161,11 +161,10 @@ abstract final class WasmValidator {
     WasmModule module,
     String signature,
   ) {
-    final bytes = _signatureToBytes(signature);
-    if (bytes.isEmpty) {
+    final lead = _signatureLeadByte(signature);
+    if (lead == null) {
       return;
     }
-    final lead = bytes.first;
     if (lead == 0x7f || // i32
         lead == 0x7e || // i64
         lead == 0x7d || // f32
@@ -1838,46 +1837,12 @@ abstract final class WasmValidator {
         resultSignatures: functionResultSignatures,
       ),
     ];
-    bool isReferenceLikeSignature(String signature) {
-      final bytes = _signatureToBytes(signature);
-      if (bytes.isEmpty) {
-        return false;
-      }
-      final lead = bytes.first;
-      if (lead == 0x63 || lead == 0x64) {
-        return true;
-      }
-      return switch (lead) {
-        0x70 || // funcref
-        0x6f || // externref
-        0x74 || // exnref (new)
-        0x75 || // noexn (new)
-        0x71 || // nullref
-        0x72 || // nullexternref
-        0x73 || // nullfuncref
-        0x6e || // anyref
-        0x6d || // eqref
-        0x6c || // i31ref
-        0x6b || // structref
-        0x6a || // arrayref
-        0x69 || // i31ref (legacy)
-        0x68 || // exnref
-        0x67 ||
-        0x66 ||
-        0x65 ||
-        0x62 ||
-        0x61 ||
-        0x60 => true,
-        _ => false,
-      };
-    }
-
     bool isSubtypeForLightweightPass(String actual, String expected) {
       if (actual == _stackBottomSignature ||
           expected == _stackBottomSignature) {
         return true;
       }
-      if (expected == '7f' && isReferenceLikeSignature(actual)) {
+      if (expected == '7f' && _isReferenceLikeSignature(actual)) {
         // Local declarations collapse reference locals to i32 in the compact
         // model used by this pass.
         return true;
@@ -1885,8 +1850,8 @@ abstract final class WasmValidator {
       if (_isValueSignatureSubtype(module, actual, expected)) {
         return true;
       }
-      if (!isReferenceLikeSignature(actual) ||
-          !isReferenceLikeSignature(expected)) {
+      if (!_isReferenceLikeSignature(actual) ||
+          !_isReferenceLikeSignature(expected)) {
         return false;
       }
       final actualRef = _parseRefSignature(actual);
@@ -1941,7 +1906,7 @@ abstract final class WasmValidator {
       if (value == _stackBottomSignature) {
         return _stackBottomSignature;
       }
-      if (!isReferenceLikeSignature(value)) {
+      if (!_isReferenceLikeSignature(value)) {
         mismatch('$label requires reference operand');
       }
       final parsed = _parseRefSignature(value);
@@ -5297,19 +5262,12 @@ abstract final class WasmValidator {
   }
 
   static bool _isPackedStorageSignature(String signature) {
-    final bytes = _signatureToBytes(signature);
-    if (bytes.isEmpty) {
-      return false;
-    }
-    return bytes.first == 0x78 || bytes.first == 0x77;
+    final lead = _signatureLeadByte(signature);
+    return lead == 0x78 || lead == 0x77;
   }
 
   static bool _isNumericOrVectorValueSignature(String signature) {
-    final bytes = _signatureToBytes(signature);
-    if (bytes.isEmpty) {
-      return false;
-    }
-    return switch (bytes.first) {
+    return switch (_signatureLeadByte(signature)) {
       0x78 || // i8
       0x77 || // i16
       0x7f || // i32
@@ -5317,6 +5275,34 @@ abstract final class WasmValidator {
       0x7d || // f32
       0x7c || // f64
       0x7b => true, // v128
+      _ => false,
+    };
+  }
+
+  static bool _isReferenceLikeSignature(String signature) {
+    return switch (_signatureLeadByte(signature)) {
+      0x70 || // funcref
+      0x6f || // externref
+      0x74 || // exnref (new)
+      0x75 || // noexn (new)
+      0x71 || // nullref
+      0x72 || // nullexternref
+      0x73 || // nullfuncref
+      0x6e || // anyref
+      0x6d || // eqref
+      0x6c || // i31ref
+      0x6b || // structref
+      0x6a || // arrayref
+      0x69 || // i31ref (legacy)
+      0x68 || // exnref
+      0x67 ||
+      0x66 ||
+      0x65 ||
+      0x64 ||
+      0x63 ||
+      0x62 ||
+      0x61 ||
+      0x60 => true,
       _ => false,
     };
   }
@@ -5422,9 +5408,7 @@ abstract final class WasmValidator {
         // Segment heap detail is not retained in the compact element model yet.
         return true;
       default:
-        final targetBytes = _signatureToBytes(targetValueSignature);
-        return targetBytes.isNotEmpty &&
-            targetBytes.first == segmentRefTypeCode;
+        return _signatureLeadByte(targetValueSignature) == segmentRefTypeCode;
     }
   }
 
@@ -5451,9 +5435,38 @@ abstract final class WasmValidator {
     }
     final bytes = <int>[];
     for (var i = 0; i < signature.length; i += 2) {
-      bytes.add(int.parse(signature.substring(i, i + 2), radix: 16));
+      bytes.add(_hexByteAt(signature, i));
     }
     return bytes;
+  }
+
+  static int? _signatureLeadByte(String signature) {
+    if (signature.isEmpty || signature.length.isOdd) {
+      return null;
+    }
+    return _hexByteAt(signature, 0);
+  }
+
+  static int _hexByteAt(String value, int offset) {
+    final high = _hexNibble(value.codeUnitAt(offset));
+    final low = _hexNibble(value.codeUnitAt(offset + 1));
+    if (high < 0 || low < 0) {
+      throw const FormatException('Invalid hexadecimal signature byte.');
+    }
+    return (high << 4) | low;
+  }
+
+  static int _hexNibble(int codeUnit) {
+    if (codeUnit >= 0x30 && codeUnit <= 0x39) {
+      return codeUnit - 0x30;
+    }
+    if (codeUnit >= 0x61 && codeUnit <= 0x66) {
+      return codeUnit - 0x61 + 10;
+    }
+    if (codeUnit >= 0x41 && codeUnit <= 0x46) {
+      return codeUnit - 0x41 + 10;
+    }
+    return -1;
   }
 
   static String _bytesToSignature(List<int> bytes) {

@@ -909,9 +909,18 @@ performance visible while the support surface expands.
       `309870592`), but the same final full instantiate run reported
       `compile_module.rss_delta_bytes=285687808` and
       `instantiate_module.rss_delta_bytes=88293376`.
-  - Next: continue replacing validator hot-path string/list stack simulation
-    with a compact representation for core primitive modules, then split out
-    retained instantiate RSS if `instantiate_module` remains the end-to-end peak.
+    - Validator signature classification now reads leading hex bytes without
+      allocating `List<int>` or substring objects for reference/numeric/packed
+      checks, while preserving full byte parsing for Canonical/GC ref
+      signatures that need it. Repeated compile-breakdown runs reported
+      `validate_module.rss_delta_bytes=132513792` and then `133611520`, with
+      `validate_module.duration_ms=386` and then `396`. The matching full
+      instantiate run reported `compile_module.rss_delta_bytes=132972544`, but
+      `instantiate_module.rss_delta_bytes=212844544`, so the next peak has moved
+      past compile validation.
+  - Next: split retained instantiate RSS after the compile-time validator stack
+    reductions, then decide whether the remaining validator work needs a full
+    non-string operand stack or only targeted ref-signature caching.
   - Done when: the profile shows a lower `compile_module.rss_delta_bytes` on
     DOOM-sized modules with stable repeated runs and no shifted peak into
     `instantiate_module`, so this row remains open.
