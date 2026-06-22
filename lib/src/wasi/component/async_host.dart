@@ -13,8 +13,9 @@ import 'waitable_set.dart';
 ///
 /// This is an internal host layer for Component Model async work. It binds
 /// validated `stream.*` and `future.*` definitions to typed Dart endpoint
-/// primitives, including fixed-size and primitive string stream/future memory
-/// copies, so later P3 host adapters can reuse one execution model.
+/// primitives, including primitive, composite, and dynamic string/list
+/// stream/future memory copies, so later P3 host adapters can reuse one
+/// execution model.
 final class WASIComponentAsyncHost {
   /// Creates an async host backed by [table] or a new resource table.
   WASIComponentAsyncHost({
@@ -360,8 +361,8 @@ final class WASIComponentAsyncValueBinding {
 
   /// Canonical ABI memory-copy layout for this payload.
   ///
-  /// Returns `null` for unit payloads and values such as `string` that have a
-  /// specialized realloc-backed stream/future memory representation.
+  /// Returns `null` for unit payloads and unsupported shapes such as resources,
+  /// borrows, nested streams/futures, and error contexts.
   final WASIComponentAsyncValueMemoryLayout? memoryLayout;
 }
 
@@ -762,8 +763,8 @@ final class WASIComponentCanonicalAsyncHandleProgram {
   ///
   /// This uses the core Canonical ABI argument shape for stream/future copies:
   /// `stream.{read,write}` receive `(handle, ptr, n)`, and
-  /// `future.{read,write}` receive `(handle, ptr)`. Dynamic string read paths
-  /// use [realloc] to lower host strings into guest memory. Completed copy
+  /// `future.{read,write}` receive `(handle, ptr)`. Dynamic string/list read
+  /// paths use [realloc] to lower host values into guest memory. Completed copy
   /// results are returned in their canonical packed integer representation.
   Object? invokeWithMemory(
     int canonicalIndex,
@@ -2997,6 +2998,7 @@ List<T> _readValuesFromMemory<T>(
     memory,
     pointer,
     elementCount,
+    stringEncoding,
   );
 }
 
@@ -3010,7 +3012,13 @@ T _readValueFromMemory<T>(
   if (validator.primitive == WasmComponentPrimitiveValueType.string) {
     return _readStringValueFromMemory<T>(name, memory, pointer, stringEncoding);
   }
-  return _readCanonicalValueFromMemory<T>(validator, name, memory, pointer);
+  return _readCanonicalValueFromMemory<T>(
+    validator,
+    name,
+    memory,
+    pointer,
+    stringEncoding,
+  );
 }
 
 T _readStringValueFromMemory<T>(
@@ -3072,6 +3080,7 @@ void _writeValuesToMemory(
     memory,
     pointer,
     values,
+    stringEncoding,
     realloc,
   );
 }
@@ -3104,6 +3113,7 @@ void _writeValueToMemory(
     memory,
     pointer,
     value,
+    stringEncoding,
     realloc,
   );
 }
@@ -3142,6 +3152,7 @@ List<T> _readCanonicalValuesFromMemory<T>(
   wasm.Memory memory,
   int pointer,
   int elementCount,
+  WASIComponentCanonicalStringEncoding stringEncoding,
 ) {
   _checkCopyElementCount(elementCount);
   if (validator.kind == _WASIComponentAsyncValueShape.unit) {
@@ -3156,7 +3167,13 @@ List<T> _readCanonicalValuesFromMemory<T>(
       'WASI component async type $name does not have a canonical memory element type.',
     );
   }
-  return codec.loadManyAs<T>(memory, pointer, elementCount, name);
+  return codec.loadManyAs<T>(
+    memory,
+    pointer,
+    elementCount,
+    name,
+    stringEncoding: stringEncoding,
+  );
 }
 
 T _readCanonicalValueFromMemory<T>(
@@ -3164,6 +3181,7 @@ T _readCanonicalValueFromMemory<T>(
   String name,
   wasm.Memory memory,
   int pointer,
+  WASIComponentCanonicalStringEncoding stringEncoding,
 ) {
   if (validator.kind == _WASIComponentAsyncValueShape.unit) {
     if (null is! T) {
@@ -3177,7 +3195,7 @@ T _readCanonicalValueFromMemory<T>(
       'WASI component async type $name does not have a canonical memory element type.',
     );
   }
-  return codec.loadAs<T>(memory, pointer, name);
+  return codec.loadAs<T>(memory, pointer, name, stringEncoding: stringEncoding);
 }
 
 void _writeCanonicalValuesToMemory(
@@ -3186,6 +3204,7 @@ void _writeCanonicalValuesToMemory(
   wasm.Memory memory,
   int pointer,
   List<Object?> values,
+  WASIComponentCanonicalStringEncoding stringEncoding,
   WASIComponentCanonicalRealloc? realloc,
 ) {
   _checkCopyElementCount(values.length);
@@ -3199,7 +3218,13 @@ void _writeCanonicalValuesToMemory(
       'WASI component async type $name does not have a canonical memory element type.',
     );
   }
-  codec.storeMany(memory, pointer, values, realloc: realloc);
+  codec.storeMany(
+    memory,
+    pointer,
+    values,
+    realloc: realloc,
+    stringEncoding: stringEncoding,
+  );
 }
 
 void _writeCanonicalValueToMemory(
@@ -3208,6 +3233,7 @@ void _writeCanonicalValueToMemory(
   wasm.Memory memory,
   int pointer,
   Object? value,
+  WASIComponentCanonicalStringEncoding stringEncoding,
   WASIComponentCanonicalRealloc? realloc,
 ) {
   validator.validate(name, value);
@@ -3220,7 +3246,13 @@ void _writeCanonicalValueToMemory(
       'WASI component async type $name does not have a canonical memory element type.',
     );
   }
-  codec.store(memory, pointer, value, realloc: realloc);
+  codec.store(
+    memory,
+    pointer,
+    value,
+    realloc: realloc,
+    stringEncoding: stringEncoding,
+  );
 }
 
 WASIComponentAsyncValueMemoryLayout? _memoryLayoutFor(

@@ -4,7 +4,7 @@ This repository is moving from limited Wasm plus WASI Preview 1 support toward
 real, verified Wasm and WASI support across Preview 1, WASI 0.2, and WASI 0.3.
 This document is the working architecture guide for that transition.
 
-Status date: 2026-06-21.
+Status date: 2026-06-22.
 
 ## External Reference Points
 
@@ -70,7 +70,7 @@ copying their internals directly.
 
 ## Current wasd Baseline
 
-This is the implementation state as of 2026-06-21 on `main`.
+This is the implementation state as of 2026-06-22 on `main`.
 
 - Preview 1 is real but still incomplete. Native and browser hosts share
   `lib/src/wasi/preview1/common/vfs.dart` for virtual files, directories,
@@ -140,9 +140,10 @@ This is the implementation state as of 2026-06-21 on `main`.
   streams/futures. Streams also support optional bounded buffering for
   backpressure, and canonical async programs can await pending `stream.read`,
   `stream.write`, and `future.read` operations through `invokeAsync`. The async
-  host can also copy fixed-size and primitive string `stream<T>`/`future<T>`
-  values between guest memory and async endpoints for canonical
-  `stream.read`/`stream.write` and `future.read`/`future.write` adapters.
+  host can also copy primitive, fixed-composite, string, and string/list
+  `stream<T>`/`future<T>` values between guest memory and async endpoints for
+  canonical `stream.read`/`stream.write` and `future.read`/`future.write`
+  adapters.
   Handle-backed canonical programs expose an ABI-shaped memory invocation path:
   `stream.{read,write}` use `(handle, ptr, n)` and `future.{read,write}` use
   `(handle, ptr)`, string read paths accept a canonical `realloc` callback for
@@ -233,30 +234,31 @@ This is the implementation state as of 2026-06-21 on `main`.
   the canonical definition snapshot once before any operation table is built.
   An internal component host adapter now combines that canonical plan with the
   decoded component resource and async value binding lists, defines component
-  resources plus supported unit, primitive, fixed-size composite, primitive
-  string, and fixed-width-element list `stream<T>`/`future<T>` values on the
+  resources plus supported unit, primitive, fixed-size composite, string, and
+  fixed-width-element list `stream<T>`/`future<T>` values on the
   shared table only after validation and capability checks pass, and returns
   the canonical-indexed program from the same shared host state. Async value
   bindings now also expose Canonical ABI memory-copy layout through an
   internal Canonical ABI value-memory codec covering primitive values,
   records/tuples, fixed lists, flags, variants, options, results, enums, and
-  fixed-width-element lists. Dynamic list storage uses canonical `(ptr, len)`
-  records plus explicit `realloc`, while handle-table, borrow, nested async,
-  and string-list payload semantics remain unsupported instead of being
-  approximated. Future P3 adapters can route stream/future memory lowering
-  through this shared codec without re-deriving byte widths, alignments,
-  padding, or dynamic payload allocation separately from the executable copy
-  path.
+  dynamic strings/lists, including `list<string>`. Dynamic string/list storage
+  uses canonical `(ptr, len)` records plus explicit `realloc`, while
+  handle-table, borrow, and nested async payload semantics remain unsupported
+  instead of being approximated. Future P3 adapters can route stream/future
+  memory lowering through this shared codec without re-deriving byte widths,
+  alignments, padding, or dynamic payload allocation separately from the
+  executable copy path.
   Component-host tests now also exercise decoded core-memory primitive
   `stream<T>`/`future<T>` copy paths through synchronous Canonical ABI calls,
   pending fixed-size and primitive string completion through waitable events,
-  and fixed-size record, fixed-width-element list, plus primitive string
-  `stream<T>`/`future<T>` round trips through decoded core-memory copy
-  definitions. Component validation now follows the Canonical ABI stream/future
-  copy option split: `stream.read`/`future.read` require `realloc` for dynamic
-  list/string elements, `stream.write`/`future.write` do not, `memory` is still
-  required when an element type is present, and `realloc` itself requires
-  `memory`. Primitive `string` `stream.write`/`future.write` now read
+  and fixed-size record, fixed-width-element list, primitive string, plus
+  `list<string>` `stream<T>`/`future<T>` round trips through decoded
+  core-memory copy definitions. Component validation now follows the Canonical
+  ABI stream/future copy option split: `stream.read`/`future.read` require
+  `realloc` for dynamic list/string elements, `stream.write`/`future.write` do
+  not, `memory` is still required when an element type is present, and
+  `realloc` itself requires `memory`. Primitive `string`
+  `stream.write`/`future.write` now read
   canonical `(ptr, len)` string records from guest memory through the same
   UTF-8, UTF-16, and Latin1+UTF-16 adapter used by error-context memory paths,
   and direct/handle-backed primitive `string` `stream.read`/`future.read`
@@ -268,10 +270,11 @@ This is the implementation state as of 2026-06-21 on `main`.
   decoded component-host primitive string `stream.read`/`stream.write` and
   `future.read`/`future.write` round trips can execute through their respective
   `(handle, ptr, n)` and `(handle, ptr)` core-memory call shapes.
-  Fixed-width-element list values now use the same callback to allocate payload
-  storage before writing the canonical `(ptr, len)` record. The adapter still
-  does not automatically invoke decoded core realloc exports; callers must
-  provide the realloc callback at invocation time. Lists containing strings,
+  Dynamic list values now use the same callback to allocate payload storage
+  before writing the canonical `(ptr, len)` record, and list elements containing
+  strings recursively allocate their own canonical string payloads. The adapter
+  still does not automatically invoke decoded core realloc exports; callers
+  must provide the realloc callback at invocation time. Lists containing
   resources, borrows, or nested async values remain unsupported for executable
   memory copy. This is an adapter boundary for future P2/P3 version modules,
   not a public support claim.
@@ -305,8 +308,8 @@ This is the implementation state as of 2026-06-21 on `main`.
   copy while preserving the required previous-page-count result.
   P2/P3 host instantiation, WIT ingestion, full canonical ABI
   lowering/lifting, general memory-backed typed stream/future copy beyond the
-  verified primitive/string/fixed-composite/list subset, and full async
-  stream/future execution are not production-supported yet.
+  verified primitive/string/fixed-composite/list/string-list subset, and full
+  async stream/future execution are not production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
   for component-model WASI versions. This is an intentional version boundary,
@@ -407,9 +410,9 @@ This is the implementation state as of 2026-06-21 on `main`.
   `resource.drop`, decoded resource-only canonical program invocation,
   component resource binding extraction from decoded type index spaces,
   component-host binding startup with resource, stream, decoded core-memory
-  primitive stream-copy, decoded core-memory fixed-size record and list
-  stream-copy, decoded core-memory primitive future-copy, and decoded
-  core-memory list future-copy round trips, mixed
+  primitive stream-copy, decoded core-memory fixed-size record, list, and
+  string-list stream-copy, decoded core-memory primitive future-copy, and
+  decoded core-memory list plus string-list future-copy round trips, mixed
   canonical-host
   program invocation over shared component state, error-context canonical
   lifecycle invocation, error-context canonical string memory adapter invocation
