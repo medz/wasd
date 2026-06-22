@@ -1256,7 +1256,9 @@ void main() {
 
       expect(adapter.params[0].path, 'canonical[0].param[0].owned');
       expect(adapter.params[0].label, 'owned');
-      expect(adapter.params[0].hasMemoryCodec, isFalse);
+      expect(adapter.params[0].hasMemoryCodec, isTrue);
+      expect(adapter.params[0].byteLength, 4);
+      expect(adapter.params[0].alignment, 4);
       expect(
         adapter.params[0].resourceUses.single.handleKind,
         WASIComponentResourceHandleKind.own,
@@ -1277,7 +1279,9 @@ void main() {
 
       expect(adapter.params[1].path, 'canonical[0].param[1].borrowed');
       expect(adapter.params[1].label, 'borrowed');
-      expect(adapter.params[1].hasMemoryCodec, isFalse);
+      expect(adapter.params[1].hasMemoryCodec, isTrue);
+      expect(adapter.params[1].byteLength, 4);
+      expect(adapter.params[1].alignment, 4);
       expect(
         adapter.params[1].resourceUses.single.handleKind,
         WASIComponentResourceHandleKind.borrow,
@@ -1298,7 +1302,9 @@ void main() {
 
       expect(adapter.result, isNotNull);
       expect(adapter.result!.path, 'canonical[0].result');
-      expect(adapter.result!.hasMemoryCodec, isFalse);
+      expect(adapter.result!.hasMemoryCodec, isTrue);
+      expect(adapter.result!.byteLength, 4);
+      expect(adapter.result!.alignment, 4);
       expect(
         adapter.result!.resourceUses.single.handleKind,
         WASIComponentResourceHandleKind.own,
@@ -1324,6 +1330,18 @@ void main() {
           });
 
       expect(operation.invoke(const <Object?>[101, 202]), 303);
+      final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 101, Endian.little);
+      data.setUint32(36, 202, Endian.little);
+      expect(
+        operation.invokeWithMemory(memory, const <int>[
+          32,
+          36,
+        ], resultPointer: 40),
+        303,
+      );
+      expect(data.getUint32(40, Endian.little), 303);
       expect(
         () => operation.invoke(const <Object?>[-1, 202]),
         throwsStateError,
@@ -1331,14 +1349,6 @@ void main() {
       expect(
         () => operation.invoke(const <Object?>[0x100000000, 202]),
         throwsStateError,
-      );
-      expect(
-        () => operation.invokeWithMemory(
-          wasm.Memory(const wasm.MemoryDescriptor(initial: 1)),
-          const <int>[0, 4],
-          resultPointer: 8,
-        ),
-        throwsUnsupportedError,
       );
 
       final program = host.componentHost.canonicalHost.adapterHost
@@ -1355,6 +1365,14 @@ void main() {
       expect(program.invokeFlat(0, const <Object?>[101, 202]), [303]);
       expect(program.invoke(0, const <Object?>[101, 202]), 303);
       expect(
+        program.invokeWithMemory(0, memory, const <int>[
+          32,
+          36,
+        ], resultPointer: 44),
+        303,
+      );
+      expect(data.getUint32(44, Endian.little), 303);
+      expect(
         () => program.invokeFlat(0, const <Object?>[-1, 202]),
         throwsStateError,
       );
@@ -1363,13 +1381,16 @@ void main() {
         throwsStateError,
       );
       expect(
-        () => program.invokeWithMemory(
-          0,
-          wasm.Memory(const wasm.MemoryDescriptor(initial: 1)),
-          const <int>[0, 4],
-          resultPointer: 8,
-        ),
-        throwsUnsupportedError,
+        () => host.componentHost.canonicalHost.adapterHost
+            .bindLiftCoreFunction(adapter, (_) => -1)
+            .invokeWithMemory(memory, const <int>[32, 36], resultPointer: 48),
+        throwsStateError,
+      );
+      expect(
+        () => host.componentHost.canonicalHost.adapterHost
+            .bindLiftCoreFunction(adapter, (_) => 0x100000000)
+            .invokeWithMemory(memory, const <int>[32, 36], resultPointer: 48),
+        throwsStateError,
       );
     });
   });

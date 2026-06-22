@@ -512,19 +512,34 @@ WASIComponentCanonicalAdapterValuePlan _valuePlan({
   required _FlatLayoutResolver flatLayouts,
   required List<WASIComponentResourceUse> resourceUses,
 }) {
+  final flatLayout = flatLayouts.resolveValueType(type);
   return WASIComponentCanonicalAdapterValuePlan(
     path: path,
     label: label,
     type: type,
-    memoryCodec: WASIComponentCanonicalValueMemoryCodec.fromValueType(
-      type,
-      definitions,
-    ),
-    flatLayout: flatLayouts.resolveValueType(type),
+    memoryCodec: _memoryCodecForAdapterValue(type, definitions, flatLayout),
+    flatLayout: flatLayout,
     resourceUses: List<WASIComponentResourceUse>.unmodifiable(
       resourceUses.where((use) => _resourceUseBelongsToPath(use.path, path)),
     ),
   );
+}
+
+WASIComponentCanonicalValueMemoryCodec? _memoryCodecForAdapterValue(
+  WasmComponentValueType type,
+  List<WasmComponentTypeDefinition> definitions,
+  WASIComponentCanonicalAdapterFlatValuePlan? flatLayout,
+) {
+  final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+    type,
+    definitions,
+  );
+  if (codec != null) {
+    return codec;
+  }
+  return flatLayout?.kind == WASIComponentCanonicalAdapterFlatValueKind.resource
+      ? WASIComponentCanonicalValueMemoryCodec.canonicalU32Handle
+      : null;
 }
 
 final class _FlatLayoutResolver {

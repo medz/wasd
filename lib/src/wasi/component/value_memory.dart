@@ -12,10 +12,16 @@ import 'string_memory.dart';
 /// `(ptr, len)` record and use [WASIComponentCanonicalRealloc] when storing
 /// payloads.
 /// Resource handle-table semantics and borrow tracking are reported as
-/// unsupported instead of being approximated. Error-context handles are plain
-/// canonical `u32` values in memory.
+/// unsupported instead of being approximated. Resource and error-context
+/// handles can be represented as plain canonical `u32` values when the caller
+/// supplies a handle-aware adapter plan.
 final class WASIComponentCanonicalValueMemoryCodec {
   const WASIComponentCanonicalValueMemoryCodec._(this._layout);
+
+  /// Canonical memory codec for handle values represented as `u32`.
+  static const canonicalU32Handle = WASIComponentCanonicalValueMemoryCodec._(
+    _PrimitiveLayout(WasmComponentPrimitiveValueType.u32, 4, 4),
+  );
 
   /// Builds a Canonical ABI memory codec for [type].
   ///

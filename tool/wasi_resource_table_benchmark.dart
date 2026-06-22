@@ -79,6 +79,8 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentAdapterResourceDirectInvoke(options.iterations);
   final componentAdapterResourceFlatInvoke =
       _benchmarkComponentAdapterResourceFlatInvoke(options.iterations);
+  final componentAdapterResourceMemoryInvoke =
+      _benchmarkComponentAdapterResourceMemoryInvoke(options.iterations);
   final componentAdapterErrorContextDirectInvoke =
       _benchmarkComponentAdapterErrorContextDirectInvoke(options.iterations);
   final componentAdapterErrorContextFlatInvoke =
@@ -148,6 +150,8 @@ Future<void> main(List<String> args) async {
         componentAdapterResourceDirectInvoke.toJson(),
     'component_adapter_resource_flat_invoke': componentAdapterResourceFlatInvoke
         .toJson(),
+    'component_adapter_resource_memory_invoke':
+        componentAdapterResourceMemoryInvoke.toJson(),
     'component_adapter_error_context_direct_invoke':
         componentAdapterErrorContextDirectInvoke.toJson(),
     'component_adapter_error_context_flat_invoke':
@@ -207,6 +211,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentAdapterResultFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterResourceDirectInvoke(_warmupIterations);
   _benchmarkComponentAdapterResourceFlatInvoke(_warmupIterations);
+  _benchmarkComponentAdapterResourceMemoryInvoke(_warmupIterations);
   _benchmarkComponentAdapterErrorContextDirectInvoke(_warmupIterations);
   _benchmarkComponentAdapterErrorContextFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterErrorContextMemoryInvoke(_warmupIterations);
@@ -1026,6 +1031,42 @@ _Metric _benchmarkComponentAdapterResourceFlatInvoke(int iterations) {
   for (var i = 0; i < iterations; i++) {
     final lifted = program.invokeFlat(0, const <Object?>[31, 41]);
     checksum += lifted.single! as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentAdapterResourceMemoryInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalResourceLiftComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final plan = plans.single;
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {plan.definition.coreFunctionIndex!: (_) => 51},
+  );
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    data.setUint32(32, 31, Endian.little);
+    data.setUint32(36, 41, Endian.little);
+    checksum +=
+        program.invokeWithMemory(0, memory, const <int>[
+              32,
+              36,
+            ], resultPointer: 40)!
+            as int;
+    checksum += data.getUint32(40, Endian.little);
   }
   watch.stop();
 

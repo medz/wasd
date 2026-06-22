@@ -16,11 +16,10 @@ typedef WASIComponentCanonicalAdapterCallback =
 /// only synchronous value signatures backed by the shared Canonical ABI value
 /// codec or canonical `u32` handle layouts. Direct invocations can pass
 /// `own`/`borrow` resource handles and `error-context` handles as canonical
-/// `u32` scalars; memory-backed invocations still reject those handles, nested
-/// async values, and async adapters instead of approximating ownership or
-/// scheduling semantics. Flat invocations use the same canonical handle
-/// representation. Resource table ownership, borrow, and drop behavior remains
-/// a higher-level host concern.
+/// `u32` scalars; memory-backed invocations use the same canonical `u32`
+/// handle representation while still rejecting nested async values and async
+/// adapters instead of approximating scheduling semantics. Resource table
+/// ownership, borrow, and drop behavior remains a higher-level host concern.
 final class WASIComponentCanonicalAdapterHost {
   /// Creates a canonical adapter host.
   const WASIComponentCanonicalAdapterHost();
@@ -1749,7 +1748,7 @@ bool _supportsMemoryValuePlan(WASIComponentCanonicalAdapterPlan plan) {
 }
 
 bool _supportsMemoryValue(WASIComponentCanonicalAdapterValuePlan value) {
-  return value.memoryCodec != null && value.resourceUses.isEmpty;
+  return value.memoryCodec != null;
 }
 
 bool _supportsDirectHandleValue(WASIComponentCanonicalAdapterValuePlan value) {
