@@ -144,6 +144,53 @@ void main() {
       }
     });
 
+    test('plan tuple and fixed-list lift and lower flat value layouts', () {
+      final tupleComponent = WasmComponent.decode(
+        canonicalTupleLiftLowerComponentBytes(),
+      );
+      final fixedListComponent = WasmComponent.decode(
+        canonicalFixedListLiftLowerComponentBytes(),
+      );
+
+      expect(tupleComponent.validate(), isEmpty);
+      expect(fixedListComponent.validate(), isEmpty);
+
+      final cases = [
+        (
+          plans: componentCanonicalAdapterPlans(tupleComponent),
+          kind: WASIComponentCanonicalAdapterFlatValueKind.tuple,
+          flatLength: 2,
+          byteLength: 8,
+          alignment: 4,
+        ),
+        (
+          plans: componentCanonicalAdapterPlans(fixedListComponent),
+          kind: WASIComponentCanonicalAdapterFlatValueKind.fixedList,
+          flatLength: 3,
+          byteLength: 12,
+          alignment: 4,
+        ),
+      ];
+
+      for (final case_ in cases) {
+        expect(case_.plans, hasLength(2));
+        for (final plan in case_.plans) {
+          expect(plan.params, hasLength(1));
+          expect(plan.params.single.label, 'input');
+          expect(plan.params.single.byteLength, case_.byteLength);
+          expect(plan.params.single.alignment, case_.alignment);
+          expect(plan.params.single.flatLength, case_.flatLength);
+          expect(plan.params.single.flatLayout!.kind, case_.kind);
+          expect(plan.result, isNotNull);
+          expect(plan.result!.byteLength, case_.byteLength);
+          expect(plan.result!.alignment, case_.alignment);
+          expect(plan.result!.flatLength, case_.flatLength);
+          expect(plan.result!.flatLayout!.kind, case_.kind);
+          expect(plan.hasDynamicPayload, isFalse);
+        }
+      }
+    });
+
     test('plan flags and enum flat value layouts', () {
       final component = WasmComponent.decode(
         canonicalFlagsEnumLiftLowerComponentBytes(),
@@ -527,6 +574,95 @@ void main() {
         throwsStateError,
       );
     });
+
+    test(
+      'invokes tuple and fixed-list adapter programs through flat scalars',
+      () {
+        final tupleComponent = WasmComponent.decode(
+          canonicalTupleLiftLowerComponentBytes(),
+        );
+        final fixedListComponent = WasmComponent.decode(
+          canonicalFixedListLiftLowerComponentBytes(),
+        );
+        final tuplePlans = componentCanonicalAdapterPlans(tupleComponent);
+        final fixedListPlans = componentCanonicalAdapterPlans(
+          fixedListComponent,
+        );
+        final host = const WASIComponentCanonicalAdapterHost();
+
+        final tupleProgram = host.bindAdapterPlans(
+          tuplePlans,
+          coreFunctions: {
+            0: (args) {
+              final tuple = args.single! as WasmComponentValueData;
+              expect(tuple.kind, WasmComponentValueDataKind.tuple);
+              expect(tuple.items.map((item) => item.integer), [11, 12]);
+              return _u32CompositeValue(
+                WasmComponentValueDataKind.tuple,
+                const [21, 22],
+              );
+            },
+          },
+          componentFunctions: {
+            0: (args) {
+              final tuple = args.single! as WasmComponentValueData;
+              expect(tuple.kind, WasmComponentValueDataKind.tuple);
+              expect(tuple.items.map((item) => item.integer), [31, 32]);
+              return _u32CompositeValue(
+                WasmComponentValueDataKind.tuple,
+                const [41, 42],
+              );
+            },
+          },
+        );
+        final fixedListProgram = host.bindAdapterPlans(
+          fixedListPlans,
+          coreFunctions: {
+            0: (args) {
+              final fixedList = args.single! as WasmComponentValueData;
+              expect(fixedList.kind, WasmComponentValueDataKind.fixedList);
+              expect(fixedList.items.map((item) => item.integer), [1, 2, 3]);
+              return _u32CompositeValue(
+                WasmComponentValueDataKind.fixedList,
+                const [4, 5, 6],
+              );
+            },
+          },
+          componentFunctions: {
+            0: (args) {
+              final fixedList = args.single! as WasmComponentValueData;
+              expect(fixedList.kind, WasmComponentValueDataKind.fixedList);
+              expect(fixedList.items.map((item) => item.integer), [7, 8, 9]);
+              return _u32CompositeValue(
+                WasmComponentValueDataKind.fixedList,
+                const [10, 11, 12],
+              );
+            },
+          },
+        );
+
+        expect(tupleProgram.invokeFlat(0, const <Object?>[11, 12]), [21, 22]);
+        expect(tupleProgram.invokeFlat(1, const <Object?>[31, 32]), [41, 42]);
+        expect(fixedListProgram.invokeFlat(0, const <Object?>[1, 2, 3]), [
+          4,
+          5,
+          6,
+        ]);
+        expect(fixedListProgram.invokeFlat(1, const <Object?>[7, 8, 9]), [
+          10,
+          11,
+          12,
+        ]);
+        expect(
+          () => tupleProgram.invokeFlat(0, const <Object?>[11]),
+          throwsStateError,
+        );
+        expect(
+          () => fixedListProgram.invokeFlat(0, const <Object?>[1, 2]),
+          throwsStateError,
+        );
+      },
+    );
 
     test('invokes flags and enum adapter programs through flat scalars', () {
       final component = WasmComponent.decode(
@@ -1213,6 +1349,24 @@ WASIComponentCanonicalRealloc _bumpRealloc(
 WasmComponentValueData _u32ListValue(List<int> values) {
   return WasmComponentValueData(
     kind: WasmComponentValueDataKind.list,
+    rawBytes: Uint8List(0),
+    items: [
+      for (final value in values)
+        WasmComponentValueData(
+          kind: WasmComponentValueDataKind.integer,
+          rawBytes: Uint8List(0),
+          integer: value,
+        ),
+    ],
+  );
+}
+
+WasmComponentValueData _u32CompositeValue(
+  WasmComponentValueDataKind kind,
+  List<int> values,
+) {
+  return WasmComponentValueData(
+    kind: kind,
     rawBytes: Uint8List(0),
     items: [
       for (final value in values)

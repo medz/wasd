@@ -61,6 +61,10 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentAdapterStringFlatInvoke(options.iterations);
   final componentAdapterRecordFlatInvoke =
       _benchmarkComponentAdapterRecordFlatInvoke(options.iterations);
+  final componentAdapterTupleFlatInvoke =
+      _benchmarkComponentAdapterTupleFlatInvoke(options.iterations);
+  final componentAdapterFixedListFlatInvoke =
+      _benchmarkComponentAdapterFixedListFlatInvoke(options.iterations);
   final componentAdapterFlagsEnumFlatInvoke =
       _benchmarkComponentAdapterFlagsEnumFlatInvoke(options.iterations);
   final componentAdapterListFlatInvoke =
@@ -120,6 +124,10 @@ Future<void> main(List<String> args) async {
         .toJson(),
     'component_adapter_record_flat_invoke': componentAdapterRecordFlatInvoke
         .toJson(),
+    'component_adapter_tuple_flat_invoke': componentAdapterTupleFlatInvoke
+        .toJson(),
+    'component_adapter_fixed_list_flat_invoke':
+        componentAdapterFixedListFlatInvoke.toJson(),
     'component_adapter_flags_enum_flat_invoke':
         componentAdapterFlagsEnumFlatInvoke.toJson(),
     'component_adapter_list_flat_invoke': componentAdapterListFlatInvoke
@@ -178,6 +186,8 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentAdapterStringProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterRecordFlatInvoke(_warmupIterations);
+  _benchmarkComponentAdapterTupleFlatInvoke(_warmupIterations);
+  _benchmarkComponentAdapterFixedListFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterFlagsEnumFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterListFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterVariantFlatInvoke(_warmupIterations);
@@ -701,6 +711,88 @@ _Metric _benchmarkComponentAdapterRecordFlatInvoke(int iterations) {
   );
 }
 
+_Metric _benchmarkComponentAdapterTupleFlatInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalTupleLiftLowerComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {
+      0: (_) =>
+          _u32CompositeValue(WasmComponentValueDataKind.tuple, const [21, 22]),
+    },
+    componentFunctions: {
+      0: (_) =>
+          _u32CompositeValue(WasmComponentValueDataKind.tuple, const [41, 42]),
+    },
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final lifted = program.invokeFlat(0, const <Object?>[11, 12]);
+    checksum += lifted[0]! as int;
+    checksum += lifted[1]! as int;
+    final lowered = program.invokeFlat(1, const <Object?>[31, 32]);
+    checksum += lowered[0]! as int;
+    checksum += lowered[1]! as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentAdapterFixedListFlatInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalFixedListLiftLowerComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {
+      0: (_) => _u32CompositeValue(WasmComponentValueDataKind.fixedList, const [
+        4,
+        5,
+        6,
+      ]),
+    },
+    componentFunctions: {
+      0: (_) => _u32CompositeValue(WasmComponentValueDataKind.fixedList, const [
+        10,
+        11,
+        12,
+      ]),
+    },
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final lifted = program.invokeFlat(0, const <Object?>[1, 2, 3]);
+    checksum += lifted[0]! as int;
+    checksum += lifted[1]! as int;
+    checksum += lifted[2]! as int;
+    final lowered = program.invokeFlat(1, const <Object?>[7, 8, 9]);
+    checksum += lowered[0]! as int;
+    checksum += lowered[1]! as int;
+    checksum += lowered[2]! as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkComponentAdapterFlagsEnumFlatInvoke(int iterations) {
   final component = WasmComponent.decode(
     component_fixtures.canonicalFlagsEnumLiftLowerComponentBytes(),
@@ -947,6 +1039,24 @@ WasmComponentValueData _recordValue(int left, int right) {
         rawBytes: Uint8List(0),
         integer: right,
       ),
+    ],
+  );
+}
+
+WasmComponentValueData _u32CompositeValue(
+  WasmComponentValueDataKind kind,
+  List<int> values,
+) {
+  return WasmComponentValueData(
+    kind: kind,
+    rawBytes: Uint8List(0),
+    items: [
+      for (final value in values)
+        WasmComponentValueData(
+          kind: WasmComponentValueDataKind.integer,
+          rawBytes: Uint8List(0),
+          integer: value,
+        ),
     ],
   );
 }

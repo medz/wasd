@@ -455,9 +455,10 @@ This is the implementation state as of 2026-06-22 on `main`.
   core-memory primitive stream-copy, decoded core-memory fixed-size record,
   list, and string-list stream-copy, decoded direct string adapter program
   invocation, decoded direct string adapter flat-scalar invocation, decoded
-  direct record adapter flat-scalar invocation, decoded direct flags/enum
-  adapter flat-scalar invocation, decoded direct list adapter flat pointer/length
-  invocation, decoded direct variant adapter flat tag/payload invocation,
+  direct record, tuple, and fixed-list adapter flat-scalar invocation, decoded
+  direct flags/enum adapter flat-scalar invocation, decoded direct list adapter
+  flat pointer/length invocation, decoded direct variant adapter flat tag/payload
+  invocation,
   decoded direct option adapter flat tag/payload invocation,
   decoded direct result adapter flat tag/payload invocation,
   decoded direct resource adapter flat handle invocation, decoded direct
