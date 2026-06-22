@@ -236,6 +236,30 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-STREAM-ZERO-SEND` - Zero-byte stream socket writes are
+  no-ops even when the stream is not write-ready.
+  - Scope: native/browser shared Preview1 byte-stream `sock_send` and
+    socket-backed `fd_write` zero-capacity writes.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "sock_send and fd_write treat zero-byte stream writes as no-ops" --reporter=compact`
+    failed before the fix because `sock_send` on a blocked stream returned
+    `EAGAIN(6)` instead of writing `nwritten=0`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "sock_send and fd_write treat zero-byte stream writes as no-ops" --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_send and fd_write treat zero-byte stream writes as no-ops" --reporter=compact`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` now
+    includes `socket_stream_zero_send`, with baseline `operations=2000`,
+    `per_operation_us=0.0665`, and socket-heavy `operations=8000`,
+    `per_operation_us=0.023375`.
+  - Done when: stream zero-capacity writes still validate iovs and output
+    pointers, preserve send-side shutdown errors, bypass `writeReady=false`,
+    write `nwritten=0`, and do not record sent bytes.
+  - Claim impact: contributes to `P1-SOCKET-CONFORMANCE` and `SUPPORT-P1`; does
+    not complete the parent row or any `SUPPORT-P1`/`SUPPORT-P2`/`SUPPORT-P3`
+    gate.
 - [x] `P1-SOCKET-FILE-RIGHTS-PREFLIGHT` - File-only fd mutations on socket
   descriptors fail as capability errors before file lookup.
   - Scope: native/browser shared Preview1 `fd_allocate` and
@@ -1507,6 +1531,7 @@ copying their internals directly.
 | [x] | Preview1 native/browser socket accept flag preflight | `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`; `dart test -p chrome test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`; `dart test test/wasi_test.dart --name "sock_accept|socket descriptor flags|socket syscalls return notsock|datagram sockets do not expose accept rights"`; `dart test -p chrome test/wasi_test.dart --name "sock_accept|socket descriptor flags|socket syscalls return notsock|datagram sockets do not expose accept rights"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Socket-unsupported `sock_accept` fdflags now return `NOTSUP` before accept-right failures while preserving non-socket/bad-fd errno order and queued accepted sockets; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket fdstat flag preflight | `lib/src/wasi/preview1/common/fd_syscalls.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "socket descriptor flags reject file-only flags" --reporter=compact`; `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags|sock_accept|datagram sockets do not expose accept rights|default socket rights expose socket-specific operations only" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "socket descriptor flags reject file-only flags|sock_accept|datagram sockets do not expose accept rights|default socket rights expose socket-specific operations only" --reporter=compact`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Socket-unsupported `fd_fdstat_set_flags(APPEND)` now returns `NOTSUP` before descriptor-right failures while unknown bits still return `EINVAL` and supported `NONBLOCK` still respects rights; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket file-right preflight | `lib/src/wasi/preview1/common/fd_syscalls.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "default socket rights expose socket-specific operations only" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "default socket rights expose socket-specific operations only" --reporter=compact`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `fd_allocate` and `fd_filestat_set_size` on default sockets now return `ENOTCAPABLE` through the shared native/browser fd helper before any file lookup; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
+| [x] | Preview1 native/browser stream socket zero-byte send | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_send and fd_write treat zero-byte stream writes as no-ops" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "sock_send and fd_write treat zero-byte stream writes as no-ops" --reporter=compact`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Byte-stream zero-capacity `sock_send` and socket-backed `fd_write` now write `nwritten=0` without being blocked by `writeReady=false`; datagram zero-length messages still take the datagram path, and full Preview1 socket conformance still needs broader gates. |
 | [x] | Preview1 native/browser connected stream accept capability | `lib/src/wasi/preview1/socket.dart`, `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "connected stream sockets can opt out of accept capability"`; `dart test -p chrome test/wasi_test.dart --name "connected stream sockets can opt out of accept capability|accepted sockets do not inherit listener accept rights by default|sock_accept returns queued preview1 stream sockets with inherited rights|default socket rights expose socket-specific operations only|socket descriptor flags reject file-only flags|datagram sockets do not expose accept rights"`; `dart test test/wasi_test.dart`; `dart test --reporter=compact --concurrency=1`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; `dart analyze` | `WASIPreview1Socket(canAccept: false)` now models connected stream endpoints without `SOCK_ACCEPT`, preserves accept output state on rejected `sock_accept`, and is covered by `socket_connected_rights`; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser stream socket send iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs"`; `dart test -p chrome test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs"`; `dart test test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs|virtual socket send handlers stop after partial writes|virtual socket host send handlers reject invalid write counts|sock_recv|sock_send"`; `dart test -p chrome test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs|virtual socket send handlers stop after partial writes|virtual socket host send handlers reject invalid write counts|sock_recv|sock_send"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream `sock_send` now snapshots overlapping iovec tables before host callbacks can mutate guest memory; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket recv iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv snapshots iovs before writing receive buffers"`; `dart test test/wasi_test.dart --name "sock_recv"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream and datagram `sock_recv` now snapshot overlapping iovec tables before receive-buffer writes; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
@@ -2339,6 +2364,33 @@ performance visible while the support surface expands.
     `fd_filestat_set_size`, the same helper still returns `BADF` for unknown
     descriptors, real files still allocate/truncate through the same shared
     helper, and VM/Chrome focused gates agree.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry and the verification matrix.
+  - Claim impact: contributes to `P1-SOCKET-CONFORMANCE` and `SUPPORT-P1`; does
+    not complete the parent `P1-SOCKET-CONFORMANCE` row.
+- [x] `P1-SOCKET-STREAM-ZERO-SEND` - Zero-byte stream socket writes bypass
+  write-readiness state as no-ops.
+  - Scope: shared Preview1 native/browser byte-stream `sock_send` and
+    socket-backed `fd_write` zero-capacity writes.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "sock_send and fd_write treat zero-byte stream writes as no-ops" --reporter=compact`
+    failed before the fix because a valid zero-length iovec on a blocked stream
+    returned `EAGAIN(6)` instead of `SUCCESS` with `nwritten=0`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "sock_send and fd_write treat zero-byte stream writes as no-ops" --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_send and fd_write treat zero-byte stream writes as no-ops" --reporter=compact`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_stream_zero_send.operations=2000` and
+    `socket_stream_zero_send.per_operation_us=0.0665` on the baseline
+    distribution, plus `socket_stream_zero_send.operations=8000` and
+    `socket_stream_zero_send.per_operation_us=0.023375` on the socket-heavy
+    distribution.
+  - Done when: zero-capacity byte-stream writes still validate the iovec table
+    and output pointer, preserve send-side shutdown errors, bypass
+    `writeReady=false`, write `nwritten=0`, and leave sent byte buffers empty.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry and the verification matrix.
   - Claim impact: contributes to `P1-SOCKET-CONFORMANCE` and `SUPPORT-P1`; does

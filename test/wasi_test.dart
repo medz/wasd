@@ -4206,6 +4206,63 @@ void main() {
       );
 
       test(
+        'sock_send and fd_write treat zero-byte stream writes as no-ops',
+        () async {
+          final sockSendSocket = WASIPreview1Socket(writeReady: false);
+          final fdWriteSocket = WASIPreview1Socket(writeReady: false);
+          final shutdownSocket = WASIPreview1Socket();
+          shutdownSocket.shutdown(receive: false, send: true);
+          final socketWasi = WASI(
+            sockets: {
+              34: sockSendSocket,
+              39: fdWriteSocket,
+              40: shutdownSocket,
+            },
+          );
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockSend = preview1['sock_send'] as FunctionImportExportValue;
+          final fdWrite = preview1['fd_write'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final data = ByteData.view(memory.buffer);
+          const iovPtr = 3712;
+          const bufferPtr = 3744;
+          const sockSendCountPtr = 3776;
+          const fdWriteCountPtr = 3792;
+
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 0, Endian.little);
+          data.setUint32(sockSendCountPtr, 0xfeedface, Endian.little);
+          expect(sockSend.ref([34, iovPtr, 1, 0, sockSendCountPtr]), 0);
+          expect(data.getUint32(sockSendCountPtr, Endian.little), 0);
+          expect(sockSendSocket.sentData, isEmpty);
+
+          data.setUint32(fdWriteCountPtr, 0xdeadbeef, Endian.little);
+          expect(fdWrite.ref([39, iovPtr, 1, fdWriteCountPtr]), 0);
+          expect(data.getUint32(fdWriteCountPtr, Endian.little), 0);
+          expect(fdWriteSocket.sentData, isEmpty);
+
+          data.setUint32(sockSendCountPtr, 0xfeedface, Endian.little);
+          expect(
+            sockSend.ref([40, iovPtr, 1, 0, sockSendCountPtr]),
+            _errnoPipe,
+          );
+          expect(data.getUint32(sockSendCountPtr, Endian.little), 0xfeedface);
+          expect(shutdownSocket.sentData, isEmpty);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'sock_send reports pipe after write-side shutdown',
         () async {
           final socket = WASIPreview1Socket();

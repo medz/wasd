@@ -1621,6 +1621,10 @@ int writeSocketFromIov({
   if (socket.sendShutdown) {
     return errnoPipe;
   }
+  if (socket.isStream && capacity == 0) {
+    data.setUint32(nwrittenPtr, 0, Endian.little);
+    return errnoSuccess;
+  }
   if (socket.writeReady == false) {
     return errnoAgain;
   }

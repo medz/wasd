@@ -101,6 +101,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
   final socketRecvWaitall = _benchmarkSocketRecvWaitall(options);
   final socketSendRecv = _benchmarkSocketSendRecv(options);
   final socketSendErrorPreflight = _benchmarkSocketSendErrorPreflight(options);
+  final socketStreamZeroSend = _benchmarkSocketStreamZeroSend(options);
   final socketShutdownPreflight = _benchmarkSocketShutdownPreflight(options);
   final socketFdReadWrite = _benchmarkSocketFdReadWrite(options);
   final socketDgramTruncation = _benchmarkSocketDatagramTruncation(options);
@@ -136,6 +137,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
     'socket_recv_waitall': socketRecvWaitall.toJson(),
     'socket_send_recv': socketSendRecv.toJson(),
     'socket_send_error_preflight': socketSendErrorPreflight.toJson(),
+    'socket_stream_zero_send': socketStreamZeroSend.toJson(),
     'socket_shutdown_preflight': socketShutdownPreflight.toJson(),
     'socket_fd_read_write': socketFdReadWrite.toJson(),
     'socket_dgram_truncation': socketDgramTruncation.toJson(),
@@ -191,6 +193,7 @@ void _runWarmup(Map<String, Uint8List> files, _Options options) {
   _benchmarkSocketRecvPeek(warmupOptions);
   _benchmarkSocketRecvWaitall(warmupOptions);
   _benchmarkSocketSendRecv(warmupOptions);
+  _benchmarkSocketStreamZeroSend(warmupOptions);
   _benchmarkSocketShutdownPreflight(warmupOptions);
   _benchmarkSocketDatagramTruncation(warmupOptions);
   _benchmarkSocketConnectedRights(warmupOptions);
@@ -1179,6 +1182,49 @@ _Metric _benchmarkSocketSendErrorPreflight(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketStreamZeroSend(_Options options) {
+  final blockedStream = WASIPreview1Socket(writeReady: false);
+  final vfs = Preview1VirtualFileSystem(sockets: {64: blockedStream});
+  final descriptor = vfs.socketForFd(64);
+  if (descriptor == null) {
+    throw StateError('socket descriptor missing for zero-send benchmark');
+  }
+
+  final bytes = Uint8List(64);
+  final data = ByteData.view(bytes.buffer);
+  const iovPtr = 0;
+  const bufferPtr = 32;
+  const countPtr = 48;
+  data.setUint32(iovPtr, bufferPtr, Endian.little);
+  data.setUint32(iovPtr + 4, 0, Endian.little);
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    data.setUint32(countPtr, 0x7fffffff, Endian.little);
+    final errno = writeSocketFromIov(
+      socket: descriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 1,
+      nwrittenPtr: countPtr,
+    );
+    if (errno != errnoSuccess ||
+        data.getUint32(countPtr, Endian.little) != 0 ||
+        blockedStream.sentData.isNotEmpty) {
+      throw StateError('stream zero-send failed at iteration $i: errno=$errno');
+    }
+    checksum++;
+  }
+  watch.stop();
+  return _Metric(
+    operations: options.iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkSocketShutdownPreflight(_Options options) {
   final shutdownSocket = WASIPreview1Socket();
   final rightlessSocket = WASIPreview1Socket();
@@ -1994,6 +2040,7 @@ void _printSingleText(
     'socket send error preflight',
     payload['socket_send_error_preflight'],
   );
+  _printMetric('socket stream zero send', payload['socket_stream_zero_send']);
   _printMetric(
     'socket shutdown preflight',
     payload['socket_shutdown_preflight'],
