@@ -228,6 +228,37 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-FD-COUNT-PTR-ZERO` - Preview1 fd count outputs may target memory
+  address zero.
+  - Scope: native/browser Preview1 stdio and virtual-file `fd_read`,
+    `fd_write`, `fd_pread`, and `fd_pwrite` result count pointers.
+  - Edit targets: `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "fd read and write counts can target memory zero"`
+    failed before the fix because `fd_write` returned success but left the
+    count pointer at address `0` unchanged.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "fd read and write counts can target memory zero"`;
+    `dart test -p chrome test/wasi_test.dart --name "fd read and write counts can target memory zero"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_fd_read_write.operations=32000`,
+    `socket_fd_read_write.per_operation_us=0.237125`,
+    `socket_poll_readiness.operations=80000`, and
+    `socket_poll_readiness.per_operation_us=0.0749` for the socket-heavy
+    distribution. The implementation adds one constant-time result-pointer
+    preflight before the iovec loop and does not add per-iovec allocation.
+  - Done when: native and browser hosts treat guest memory address `0` as a valid
+    result count pointer for stdio and virtual-file read/write syscalls, and
+    invalid result pointers are rejected before host IO side effects.
+  - Evidence update: this checked row, the detailed backlog child row, the
+    verification matrix, and the current baseline.
+  - Claim impact: closes one Preview1 fd ABI gap for native/browser hosts; does
+    not complete `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-POLL-CLOCK-VALIDATION` - `poll_oneoff` reports invalid clock
   subscriptions as event errors.
   - Scope: native/browser Preview1 `poll_oneoff` clock subscription validation.
@@ -1010,6 +1041,7 @@ copying their internals directly.
 | Status | Capability boundary | Evidence to inspect | Verification gate | Remaining gap |
 | --- | --- | --- | --- | --- |
 | [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `path_open` create/exclusive/truncate is covered; full Preview1 conformance still needs broader syscall/spec-suite gates and remaining socket edges. |
+| [x] | Preview1 native/browser fd count-pointer ABI | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test -p chrome test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Result count pointers at guest memory address `0` now write correctly for stdio and virtual-file fd read/write syscalls; full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser clock and poll-clock validation | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "clock_time_get"`; `dart test -p chrome test/wasi_test.dart --name "clock_time_get"`; `dart test test/wasi_test.dart --name "poll_oneoff"`; `dart test -p chrome test/wasi_test.dart --name "poll_oneoff"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Unsupported `clock_time_get` ids now preserve output memory and return `EINVAL`; invalid `poll_oneoff` clock subscriptions now report event `EINVAL`; full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
@@ -1032,9 +1064,10 @@ This is the implementation state as of 2026-06-23 on `main`.
   sockets, descriptor flags, descriptor rights, descriptor times, descriptor
   sync/advice validation, clock/file/socket polling readiness including
   host-supplied socket readiness hints, `clock_time_get` unsupported-id
-  validation, `poll_oneoff` clock subscription validation, host-backed
-  stream/datagram receive/send handlers, and descriptor renumbering. Node still
-  delegates Preview 1 behavior to `node:wasi`.
+  validation, `poll_oneoff` clock subscription validation, fd read/write count
+  outputs at guest memory address zero, host-backed stream/datagram receive/send
+  handlers, and descriptor renumbering. Node still delegates Preview 1 behavior
+  to `node:wasi`.
 - Preview 1 `proc_raise` is no longer a blanket `ENOSYS` stub: native hosts
   deliver mapped process signals by default, native/browser hosts can inject a
   `procRaiseHandler` for controlled signal handling, and browser hosts still
@@ -1514,6 +1547,37 @@ performance visible while the support surface expands.
 
 ## Near-Term Execution Backlog
 
+- [x] `P1-FD-COUNT-PTR-ZERO` - Preview1 fd count outputs may target memory
+  address zero.
+  - Scope: native/browser Preview1 stdio and virtual-file `fd_read`,
+    `fd_write`, `fd_pread`, and `fd_pwrite` result count pointers.
+  - Edit targets: `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "fd read and write counts can target memory zero"`
+    failed before the fix because a successful stdio `fd_write` skipped writing
+    the count when `nwritten` was address `0`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "fd read and write counts can target memory zero"`;
+    `dart test -p chrome test/wasi_test.dart --name "fd read and write counts can target memory zero"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_fd_read_write.operations=32000`,
+    `socket_fd_read_write.per_operation_us=0.237125`,
+    `socket_poll_readiness.operations=80000`, and
+    `socket_poll_readiness.per_operation_us=0.0749` for the socket-heavy
+    distribution. The change removes the false optional-pointer branch and keeps
+    the result pointer check constant-time before the iovec loop.
+  - Done when: address `0` is a valid count-output pointer for stdio and
+    virtual-file fd read/write syscalls on native and browser hosts, and invalid
+    count pointers fail before host IO side effects.
+  - Evidence update: this checked row plus `Current Execution Board`,
+    `Verification Matrix`, and `Current wasd Baseline`.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
+    support or any P2/P3 support gate.
 - [x] `P1-POLL-ZERO-SUBSCRIPTIONS` - `poll_oneoff` reports `EINVAL` for an empty
   subscription set.
   - Scope: native/browser Preview1 `poll_oneoff` ABI validation and guest-memory

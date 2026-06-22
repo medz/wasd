@@ -3993,6 +3993,96 @@ void main() {
       );
 
       test(
+        'fd read and write counts can target memory zero',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/data.txt': Uint8List.fromList(utf8.encode('abcdef')),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdRead = preview1['fd_read'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final fdPwrite = preview1['fd_pwrite'] as FunctionImportExportValue;
+          final fdWrite = preview1['fd_write'] as FunctionImportExportValue;
+          final fdSeek = preview1['fd_seek'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final relativePath = utf8.encode('data.txt');
+          const countPtr = 0;
+          const countSentinel = 0xdeadbeef;
+          const pathPtr = 2240;
+          const openedFdPtr = 2260;
+          const writeIovPtr = 2272;
+          const writeBufferPtr = 2304;
+          const readIovPtr = 2352;
+          const readBufferPtr = 2384;
+          const offsetPtr = 2432;
+
+          data.setUint32(writeIovPtr, writeBufferPtr, Endian.little);
+          data.setUint32(writeIovPtr + 4, 0, Endian.little);
+          data.setUint32(countPtr, countSentinel, Endian.little);
+          expect(fdWrite.ref([1, writeIovPtr, 1, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 0);
+
+          bytes.setAll(pathPtr, relativePath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              relativePath.length,
+              0,
+              _rightsAll,
+              _rightsAll,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final fd = data.getUint32(openedFdPtr, Endian.little);
+
+          bytes.setAll(writeBufferPtr, utf8.encode('XY'));
+          data.setUint32(writeIovPtr, writeBufferPtr, Endian.little);
+          data.setUint32(writeIovPtr + 4, 2, Endian.little);
+          data.setUint32(countPtr, countSentinel, Endian.little);
+          expect(fdPwrite.ref([fd, writeIovPtr, 1, 2, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 2);
+
+          data.setUint32(readIovPtr, readBufferPtr, Endian.little);
+          data.setUint32(readIovPtr + 4, 6, Endian.little);
+          data.setUint32(countPtr, countSentinel, Endian.little);
+          expect(fdPread.ref([fd, readIovPtr, 1, 0, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 6);
+
+          expect(fdSeek.ref([fd, 0, 0, offsetPtr]), 0);
+          data.setUint32(readIovPtr + 4, 3, Endian.little);
+          data.setUint32(countPtr, countSentinel, Endian.little);
+          expect(fdRead.ref([fd, readIovPtr, 1, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 3);
+
+          bytes.setAll(writeBufferPtr, utf8.encode('zz'));
+          data.setUint32(countPtr, countSentinel, Endian.little);
+          expect(fdWrite.ref([fd, writeIovPtr, 1, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 2);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; file IO behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'path_open creates, exclusively opens, and truncates virtual files',
         () async {
           final fileWasi = WASI(

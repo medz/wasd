@@ -196,12 +196,13 @@ class WASI implements wasi_iface.WASI {
         }
 
         final buffer = memory.buffer;
-        if (iovs < 0 || iovsLen < 0 || nwrittenPtr < 0) {
-          return _errnoInval;
-        }
-
         final bytes = Uint8List.view(buffer);
         final data = ByteData.view(buffer);
+        if (iovs < 0 ||
+            iovsLen < 0 ||
+            !_isU32InBounds(nwrittenPtr, bytes.length)) {
+          return _errnoInval;
+        }
         int totalBytes = 0;
         final output = <int>[];
 
@@ -232,12 +233,7 @@ class WASI implements wasi_iface.WASI {
           }
         }
 
-        if (nwrittenPtr != 0) {
-          if (nwrittenPtr + 4 > bytes.length) {
-            return _errnoInval;
-          }
-          data.setUint32(nwrittenPtr, totalBytes, Endian.little);
-        }
+        data.setUint32(nwrittenPtr, totalBytes, Endian.little);
         return _errnoSuccess;
       });
 
@@ -1897,7 +1893,7 @@ class WASI implements wasi_iface.WASI {
     final data = view.data;
     if (iovs < 0 ||
         iovsLen < 0 ||
-        nreadPtr < 0 ||
+        !_isU32InBounds(nreadPtr, bytes.length) ||
         (fileOffset != null && fileOffset < 0)) {
       return _errnoInval;
     }
@@ -1922,12 +1918,7 @@ class WASI implements wasi_iface.WASI {
       }
     }
 
-    if (nreadPtr != 0) {
-      if (nreadPtr + 4 > bytes.length) {
-        return _errnoInval;
-      }
-      data.setUint32(nreadPtr, totalRead, Endian.little);
-    }
+    data.setUint32(nreadPtr, totalRead, Endian.little);
     return _errnoSuccess;
   }
 
@@ -1946,7 +1937,7 @@ class WASI implements wasi_iface.WASI {
     final data = view.data;
     if (iovs < 0 ||
         iovsLen < 0 ||
-        nwrittenPtr < 0 ||
+        !_isU32InBounds(nwrittenPtr, bytes.length) ||
         (fileOffset != null && fileOffset < 0)) {
       return _errnoInval;
     }
@@ -1971,12 +1962,7 @@ class WASI implements wasi_iface.WASI {
       }
     }
 
-    if (nwrittenPtr != 0) {
-      if (nwrittenPtr + 4 > bytes.length) {
-        return _errnoInval;
-      }
-      data.setUint32(nwrittenPtr, totalWritten, Endian.little);
-    }
+    data.setUint32(nwrittenPtr, totalWritten, Endian.little);
     return _errnoSuccess;
   }
 
