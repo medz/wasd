@@ -69,6 +69,28 @@ void main() {
           'import name foo-BAR conflicts with previous import name foo-bar',
         ),
       );
+
+      final versionedDuplicate = WasmComponent.decode(
+        _versionedDuplicateImportNamesComponentBytes(),
+      ).validate();
+      expect(versionedDuplicate, hasLength(1));
+      expect(
+        versionedDuplicate.single.message,
+        contains(
+          'import name foo@2.0.0 conflicts with previous import name foo@1.0.0',
+        ),
+      );
+
+      final structuredDuplicate = WasmComponent.decode(
+        _structuredDuplicateImportNamesComponentBytes(),
+      ).validate();
+      expect(structuredDuplicate, hasLength(1));
+      expect(
+        structuredDuplicate.single.message,
+        contains(
+          'import name [method]foo.foo conflicts with previous import name foo',
+        ),
+      );
     });
 
     test('decodes value imports with direct value types', () {
@@ -483,6 +505,28 @@ void main() {
           'import name foo-BAR conflicts with previous import name foo-bar',
         ),
       );
+
+      final versionedDuplicate = WasmComponent.decode(
+        _versionedDuplicateTypeDeclarationImportNamesComponentBytes(),
+      ).validate();
+      expect(versionedDuplicate, hasLength(1));
+      expect(
+        versionedDuplicate.single.message,
+        contains(
+          'import name foo@2.0.0 conflicts with previous import name foo@1.0.0',
+        ),
+      );
+
+      final structuredDuplicate = WasmComponent.decode(
+        _structuredDuplicateTypeDeclarationImportNamesComponentBytes(),
+      ).validate();
+      expect(structuredDuplicate, hasLength(1));
+      expect(
+        structuredDuplicate.single.message,
+        contains(
+          'import name [method]foo.foo conflicts with previous import name foo',
+        ),
+      );
     });
 
     test('reports invalid component type declaration indexes', () {
@@ -627,6 +671,28 @@ void main() {
         foldedDuplicate.single.message,
         contains(
           'export name foo-BAR conflicts with previous export name foo-bar',
+        ),
+      );
+
+      final versionedDuplicate = WasmComponent.decode(
+        _versionedDuplicateTypeDeclarationExportNamesComponentBytes(),
+      ).validate();
+      expect(versionedDuplicate, hasLength(1));
+      expect(
+        versionedDuplicate.single.message,
+        contains(
+          'export name foo@2.0.0 conflicts with previous export name foo@1.0.0',
+        ),
+      );
+
+      final structuredDuplicate = WasmComponent.decode(
+        _structuredDuplicateTypeDeclarationExportNamesComponentBytes(),
+      ).validate();
+      expect(structuredDuplicate, hasLength(1));
+      expect(
+        structuredDuplicate.single.message,
+        contains(
+          'export name [method]foo.foo conflicts with previous export name foo',
         ),
       );
     });
@@ -1025,6 +1091,28 @@ void main() {
           'export name foo-BAR conflicts with previous export name foo-bar',
         ),
       );
+
+      final versionedDuplicateName = WasmComponent.decode(
+        _versionedDuplicateExportNamesComponentBytes(),
+      ).validate();
+      expect(versionedDuplicateName, hasLength(1));
+      expect(
+        versionedDuplicateName.single.message,
+        contains(
+          'export name foo@2.0.0 conflicts with previous export name foo@1.0.0',
+        ),
+      );
+
+      final structuredDuplicateName = WasmComponent.decode(
+        _structuredDuplicateExportNamesComponentBytes(),
+      ).validate();
+      expect(structuredDuplicateName, hasLength(1));
+      expect(
+        structuredDuplicateName.single.message,
+        contains(
+          'export name [method]foo.foo conflicts with previous export name foo',
+        ),
+      );
     });
 
     test('reports value import equality indexes before definition', () {
@@ -1106,6 +1194,24 @@ void main() {
       expect(
         duplicateInlineExportName.single.message,
         contains('Duplicate Wasm component inline export name'),
+      );
+
+      final versionedDuplicateInlineExportName = WasmComponent.decode(
+        _inlineInstanceVersionedDuplicateExportNameComponentBytes(),
+      ).validate();
+      expect(versionedDuplicateInlineExportName, hasLength(1));
+      expect(
+        versionedDuplicateInlineExportName.single.message,
+        contains('inline export name "foo@2.0.0" conflicts with "foo@1.0.0"'),
+      );
+
+      final structuredDuplicateInlineExportName = WasmComponent.decode(
+        _inlineInstanceStructuredDuplicateExportNameComponentBytes(),
+      ).validate();
+      expect(structuredDuplicateInlineExportName, hasLength(1));
+      expect(
+        structuredDuplicateInlineExportName.single.message,
+        contains('inline export name "[method]foo.foo" conflicts with "foo"'),
       );
     });
 
@@ -1747,6 +1853,156 @@ Uint8List _emptyComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
 ]);
 
+Uint8List _minimalFunctionComponentWithImports(List<List<int>> imports) {
+  return _componentBytes([
+    _componentFunctionTypeSection(),
+    _componentSection(0x0a, [
+      ..._varUint32(imports.length),
+      for (final import in imports) ...import,
+    ]),
+  ]);
+}
+
+Uint8List _minimalFunctionComponentWithExports(List<List<int>> exports) {
+  return _componentBytes([
+    _componentFunctionTypeSection(),
+    _componentSingleFunctionImportSection('host-func'),
+    _componentSection(0x0b, [
+      ..._varUint32(exports.length),
+      for (final export in exports) ...export,
+    ]),
+  ]);
+}
+
+Uint8List _minimalFunctionComponentWithInlineExports(List<List<int>> exports) {
+  return _componentBytes([
+    _componentFunctionTypeSection(),
+    _componentSingleFunctionImportSection('f'),
+    _componentSection(0x05, [
+      0x01,
+      0x01,
+      ..._varUint32(exports.length),
+      for (final export in exports) ...export,
+    ]),
+  ]);
+}
+
+Uint8List _componentTypeWithDeclarations(List<List<int>> declarations) {
+  return _componentBytes([
+    _componentSection(0x07, [
+      0x01,
+      0x41,
+      ..._varUint32(declarations.length),
+      for (final declaration in declarations) ...declaration,
+    ]),
+  ]);
+}
+
+Uint8List _componentInstanceTypeWithFunctionExportDeclarations(
+  List<List<int>> exports,
+) {
+  return _componentBytes([
+    _componentSection(0x07, [
+      0x01,
+      0x42,
+      ..._varUint32(exports.length + 1),
+      0x01,
+      0x40,
+      0x00,
+      0x01,
+      0x00,
+      for (final export in exports) ...export,
+    ]),
+  ]);
+}
+
+Uint8List _componentBytes(List<List<int>> sections) {
+  return Uint8List.fromList([
+    0x00,
+    0x61,
+    0x73,
+    0x6d,
+    0x0d,
+    0x00,
+    0x01,
+    0x00,
+    for (final section in sections) ...section,
+  ]);
+}
+
+List<int> _componentFunctionTypeSection() {
+  return _componentSection(0x07, [0x01, 0x40, 0x00, 0x01, 0x00]);
+}
+
+List<int> _componentSingleFunctionImportSection(String name) {
+  return _componentSection(0x0a, [0x01, ..._componentFunctionImport(name)]);
+}
+
+List<int> _componentFunctionImport(String name, {String? versionSuffix}) {
+  return [..._componentExternNameBytes(name, versionSuffix), 0x01, 0x00];
+}
+
+List<int> _componentFunctionExport(String name, {String? versionSuffix}) {
+  return [..._componentExternNameBytes(name, versionSuffix), 0x01, 0x00, 0x00];
+}
+
+List<int> _componentInlineFunctionExport(String name, {String? versionSuffix}) {
+  return [..._componentExternNameBytes(name, versionSuffix), 0x01, 0x00];
+}
+
+List<int> _componentTypeValueImportDeclaration(
+  String name, {
+  String? versionSuffix,
+}) {
+  return [0x03, ..._componentExternNameBytes(name, versionSuffix), 0x02, 0x73];
+}
+
+List<int> _componentTypeFunctionExportDeclaration(
+  String name,
+  int functionTypeIndex, {
+  String? versionSuffix,
+}) {
+  return [
+    0x04,
+    ..._componentExternNameBytes(name, versionSuffix),
+    0x01,
+    ..._varUint32(functionTypeIndex),
+  ];
+}
+
+List<int> _componentSection(int id, List<int> payload) {
+  return [id, ..._varUint32(payload.length), ...payload];
+}
+
+List<int> _componentExternNameBytes(String name, String? versionSuffix) {
+  if (versionSuffix == null) {
+    return [0x00, ..._componentNameBytes(name)];
+  }
+  return [
+    0x01,
+    ..._componentNameBytes(name),
+    ..._componentNameBytes(versionSuffix),
+  ];
+}
+
+List<int> _componentNameBytes(String name) {
+  return [..._varUint32(name.length), ...name.codeUnits];
+}
+
+List<int> _varUint32(int value) {
+  final bytes = <int>[];
+  var remaining = value;
+  do {
+    var byte = remaining & 0x7f;
+    remaining >>= 7;
+    if (remaining != 0) {
+      byte |= 0x80;
+    }
+    bytes.add(byte);
+  } while (remaining != 0);
+  return bytes;
+}
+
 Uint8List _customSectionComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x61,
@@ -1910,6 +2166,18 @@ Uint8List _caseFoldedDuplicateImportNamesComponentBytes() =>
       0x52,
       0x01,
       0x00,
+    ]);
+
+Uint8List _versionedDuplicateImportNamesComponentBytes() =>
+    _minimalFunctionComponentWithImports([
+      _componentFunctionImport('foo', versionSuffix: '1.0.0'),
+      _componentFunctionImport('foo', versionSuffix: '2.0.0'),
+    ]);
+
+Uint8List _structuredDuplicateImportNamesComponentBytes() =>
+    _minimalFunctionComponentWithImports([
+      _componentFunctionImport('foo'),
+      _componentFunctionImport('[method]foo.foo'),
     ]);
 
 Uint8List _valueImportComponentBytes() => Uint8List.fromList(const <int>[
@@ -2466,6 +2734,18 @@ Uint8List _caseFoldedDuplicateExportNamesComponentBytes() =>
       0x01,
       0x00,
       0x00,
+    ]);
+
+Uint8List _versionedDuplicateExportNamesComponentBytes() =>
+    _minimalFunctionComponentWithExports([
+      _componentFunctionExport('foo', versionSuffix: '1.0.0'),
+      _componentFunctionExport('foo', versionSuffix: '2.0.0'),
+    ]);
+
+Uint8List _structuredDuplicateExportNamesComponentBytes() =>
+    _minimalFunctionComponentWithExports([
+      _componentFunctionExport('foo'),
+      _componentFunctionExport('[method]foo.foo'),
     ]);
 
 Uint8List _exportFunctionAliasComponentBytes() =>
@@ -3490,6 +3770,18 @@ Uint8List _inlineInstanceDuplicateExportNameComponentBytes() =>
       0x66,
       0x01,
       0x00,
+    ]);
+
+Uint8List _inlineInstanceVersionedDuplicateExportNameComponentBytes() =>
+    _minimalFunctionComponentWithInlineExports([
+      _componentInlineFunctionExport('foo', versionSuffix: '1.0.0'),
+      _componentInlineFunctionExport('foo', versionSuffix: '2.0.0'),
+    ]);
+
+Uint8List _inlineInstanceStructuredDuplicateExportNameComponentBytes() =>
+    _minimalFunctionComponentWithInlineExports([
+      _componentInlineFunctionExport('foo'),
+      _componentInlineFunctionExport('[method]foo.foo'),
     ]);
 
 Uint8List _instantiateInstanceComponentBytes() =>
@@ -5521,6 +5813,18 @@ Uint8List _caseFoldedDuplicateTypeDeclarationImportNamesComponentBytes() =>
       0x73,
     ]);
 
+Uint8List _versionedDuplicateTypeDeclarationImportNamesComponentBytes() =>
+    _componentTypeWithDeclarations([
+      _componentTypeValueImportDeclaration('foo', versionSuffix: '1.0.0'),
+      _componentTypeValueImportDeclaration('foo', versionSuffix: '2.0.0'),
+    ]);
+
+Uint8List _structuredDuplicateTypeDeclarationImportNamesComponentBytes() =>
+    _componentTypeWithDeclarations([
+      _componentTypeValueImportDeclaration('foo'),
+      _componentTypeValueImportDeclaration('[method]foo.foo'),
+    ]);
+
 Uint8List _typeDeclarationExportBeforeTypeComponentBytes() =>
     Uint8List.fromList(const <int>[
       0x00,
@@ -5881,6 +6185,18 @@ Uint8List _caseFoldedDuplicateTypeDeclarationExportNamesComponentBytes() =>
       0x52,
       0x01,
       0x01,
+    ]);
+
+Uint8List _versionedDuplicateTypeDeclarationExportNamesComponentBytes() =>
+    _componentInstanceTypeWithFunctionExportDeclarations([
+      _componentTypeFunctionExportDeclaration('foo', 0, versionSuffix: '1.0.0'),
+      _componentTypeFunctionExportDeclaration('foo', 1, versionSuffix: '2.0.0'),
+    ]);
+
+Uint8List _structuredDuplicateTypeDeclarationExportNamesComponentBytes() =>
+    _componentInstanceTypeWithFunctionExportDeclarations([
+      _componentTypeFunctionExportDeclaration('foo', 0),
+      _componentTypeFunctionExportDeclaration('[method]foo.foo', 1),
     ]);
 
 Uint8List _typeDeclarationExportIntroducesComponentTypeComponentBytes() =>

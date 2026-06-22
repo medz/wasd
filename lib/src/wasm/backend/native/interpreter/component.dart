@@ -2035,8 +2035,8 @@ final class _WasmComponentValidationContext {
   }) {
     final localTypeDefinitions = <WasmComponentTypeDefinition>[];
     final localCoreTypeKinds = <WasmComponentCoreTypeKind>[];
-    Map<String, String>? importNames;
-    Map<String, String>? exportNames;
+    _WasmComponentExternNameSet? importNames;
+    _WasmComponentExternNameSet? exportNames;
     final typeScopes = <_WasmComponentTypeAliasScope>[
       _WasmComponentTypeAliasScope(
         definitions: localTypeDefinitions,
@@ -2075,7 +2075,7 @@ final class _WasmComponentValidationContext {
             validateImportName(
               import,
               '$path.declarations[$i].import.name',
-              importNames ??= <String, String>{},
+              importNames ??= _WasmComponentExternNameSet(),
             );
           }
           validateTypeDeclarationExternDescriptor(
@@ -2094,7 +2094,7 @@ final class _WasmComponentValidationContext {
             validateTypeExportName(
               export,
               '$path.declarations[$i].export.name',
-              exportNames ??= <String, String>{},
+              exportNames ??= _WasmComponentExternNameSet(),
             );
           }
           final descriptor = export?.descriptor;
@@ -3969,8 +3969,8 @@ final class _WasmComponentValidationContext {
     final functionTypes = <WasmComponentFunctionType?>[];
     final valueEntries = <_WasmComponentValueIndexEntry>[];
     final instanceExportMaps = <_WasmComponentInstanceExportMap?>[];
-    Map<String, String>? importNames;
-    Map<String, String>? exportNames;
+    _WasmComponentExternNameSet? importNames;
+    _WasmComponentExternNameSet? exportNames;
     List<WasmComponentTypeDefinition>? materializedTypeDefinitions;
     var decodedTypeDefinitionCount = 0;
     List<WasmComponentTypeDefinition> visibleTypeDefinitionsForRead() {
@@ -4001,7 +4001,7 @@ final class _WasmComponentValidationContext {
           validateImportName(
             import,
             'import[${event.index}].name',
-            importNames ??= <String, String>{},
+            importNames ??= _WasmComponentExternNameSet(),
           );
           final descriptor = import.descriptor;
           final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
@@ -4059,7 +4059,7 @@ final class _WasmComponentValidationContext {
           validateExportName(
             export,
             'export[${event.index}].name',
-            exportNames ??= <String, String>{},
+            exportNames ??= _WasmComponentExternNameSet(),
           );
           final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
           validateExternDescriptor(
@@ -4302,72 +4302,67 @@ final class _WasmComponentValidationContext {
   void validateImportName(
     WasmComponentImport import,
     String path,
-    Map<String, String> seenImports,
+    _WasmComponentExternNameSet seenImports,
   ) {
-    final name = componentExternName(import.name, import.versionSuffix);
-    final key = componentExternNameLookupKey(import.name, import.versionSuffix);
-    final previousName = seenImports[key];
+    final name = _WasmComponentExternNameSignature(
+      import.name,
+      import.versionSuffix,
+    );
+    final previousName = seenImports.add(name);
     if (previousName != null) {
       errors.add(
         WasmComponentValidationError(
           path: path,
           message:
-              'Wasm component import name $name conflicts with previous import name $previousName.',
+              'Wasm component import name ${name.displayName} conflicts with previous import name ${previousName.displayName}.',
         ),
       );
       return;
     }
-    seenImports[key] = name;
   }
 
   void validateExportName(
     WasmComponentExport export,
     String path,
-    Map<String, String> seenExports,
+    _WasmComponentExternNameSet seenExports,
   ) {
-    final name = componentExternName(export.name, export.versionSuffix);
-    final key = componentExternNameLookupKey(export.name, export.versionSuffix);
-    final previousName = seenExports[key];
+    final name = _WasmComponentExternNameSignature(
+      export.name,
+      export.versionSuffix,
+    );
+    final previousName = seenExports.add(name);
     if (previousName != null) {
       errors.add(
         WasmComponentValidationError(
           path: path,
           message:
-              'Wasm component export name $name conflicts with previous export name $previousName.',
+              'Wasm component export name ${name.displayName} conflicts with previous export name ${previousName.displayName}.',
         ),
       );
       return;
     }
-    seenExports[key] = name;
   }
 
   void validateTypeExportName(
     WasmComponentTypeExport export,
     String path,
-    Map<String, String> seenExports,
+    _WasmComponentExternNameSet seenExports,
   ) {
-    final name = componentExternName(export.name, export.versionSuffix);
-    final key = componentExternNameLookupKey(export.name, export.versionSuffix);
-    final previousName = seenExports[key];
+    final name = _WasmComponentExternNameSignature(
+      export.name,
+      export.versionSuffix,
+    );
+    final previousName = seenExports.add(name);
     if (previousName != null) {
       errors.add(
         WasmComponentValidationError(
           path: path,
           message:
-              'Wasm component export name $name conflicts with previous export name $previousName.',
+              'Wasm component export name ${name.displayName} conflicts with previous export name ${previousName.displayName}.',
         ),
       );
       return;
     }
-    seenExports[key] = name;
-  }
-
-  String componentExternName(String name, String? versionSuffix) {
-    return versionSuffix == null ? name : '$name@$versionSuffix';
-  }
-
-  String componentExternNameLookupKey(String name, String? versionSuffix) {
-    return componentExternName(name, versionSuffix).toLowerCase();
   }
 
   void validateExportDefinition(
@@ -4478,9 +4473,12 @@ final class _WasmComponentValidationContext {
           );
         }
       case WasmComponentInstanceKind.inlineExports:
-        _validateUniqueNames(
+        _validateUniqueComponentExternNames(
           instance.exports.map(
-            (export) => componentExternName(export.name, export.versionSuffix),
+            (export) => _WasmComponentExternNameSignature(
+              export.name,
+              export.versionSuffix,
+            ),
           ),
           '$path.exports',
           'inline export',
@@ -5329,6 +5327,149 @@ void _validateUniqueNames(
       );
     }
   }
+}
+
+void _validateUniqueComponentExternNames(
+  Iterable<_WasmComponentExternNameSignature> names,
+  String path,
+  String kind,
+  List<WasmComponentValidationError> errors,
+) {
+  final seen = _WasmComponentExternNameSet();
+  for (final name in names) {
+    final previousName = seen.add(name);
+    if (previousName != null) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Duplicate Wasm component $kind name "${name.displayName}" conflicts with "${previousName.displayName}".',
+        ),
+      );
+    }
+  }
+}
+
+String _componentExternName(String name, String? versionSuffix) {
+  return versionSuffix == null ? name : '$name@$versionSuffix';
+}
+
+final class _WasmComponentExternNameSet {
+  final _byFoldedStrippedName =
+      <String, List<_WasmComponentExternNameSignature>>{};
+  final _plainLabels = <String, _WasmComponentExternNameSignature>{};
+  final _dottedRepeatedLabels = <String, _WasmComponentExternNameSignature>{};
+
+  _WasmComponentExternNameSignature? add(
+    _WasmComponentExternNameSignature name,
+  ) {
+    final sameFolded = _byFoldedStrippedName[name.foldedStrippedName];
+    if (sameFolded != null) {
+      for (final previous in sameFolded) {
+        if (!_isConstructorPair(previous, name)) {
+          return previous;
+        }
+      }
+    }
+
+    final dottedRepeatedLabel = name.dottedRepeatedLabelKey;
+    if (dottedRepeatedLabel != null) {
+      final previousPlain = _plainLabels[dottedRepeatedLabel];
+      if (previousPlain != null) {
+        return previousPlain;
+      }
+    }
+
+    final plainLabel = name.plainLabelKey;
+    if (plainLabel != null) {
+      final previousDotted = _dottedRepeatedLabels[plainLabel];
+      if (previousDotted != null) {
+        return previousDotted;
+      }
+    }
+
+    _byFoldedStrippedName
+        .putIfAbsent(name.foldedStrippedName, () {
+          return <_WasmComponentExternNameSignature>[];
+        })
+        .add(name);
+    if (plainLabel != null) {
+      _plainLabels.putIfAbsent(plainLabel, () => name);
+    }
+    if (dottedRepeatedLabel != null) {
+      _dottedRepeatedLabels.putIfAbsent(dottedRepeatedLabel, () => name);
+    }
+    return null;
+  }
+
+  bool _isConstructorPair(
+    _WasmComponentExternNameSignature a,
+    _WasmComponentExternNameSignature b,
+  ) {
+    return _isPlainAndConstructorPair(a, b) || _isPlainAndConstructorPair(b, a);
+  }
+
+  bool _isPlainAndConstructorPair(
+    _WasmComponentExternNameSignature plain,
+    _WasmComponentExternNameSignature constructor,
+  ) {
+    return plain.annotation == null &&
+        constructor.annotation == 'constructor' &&
+        plain.rawName == constructor.strippedName;
+  }
+}
+
+final class _WasmComponentExternNameSignature {
+  _WasmComponentExternNameSignature(this.rawName, this.versionSuffix)
+    : displayName = _componentExternName(rawName, versionSuffix) {
+    final bracketEnd = rawName.startsWith('[') ? rawName.indexOf(']') : -1;
+    if (bracketEnd > 0) {
+      annotation = rawName.substring(1, bracketEnd);
+      strippedName = rawName.substring(bracketEnd + 1);
+    } else {
+      annotation = null;
+      strippedName = rawName;
+    }
+    foldedStrippedName = _foldComponentExternName(strippedName);
+  }
+
+  final String rawName;
+  final String? versionSuffix;
+  final String displayName;
+  late final String? annotation;
+  late final String strippedName;
+  late final String foldedStrippedName;
+
+  String? get plainLabelKey {
+    if (annotation != null || rawName.isEmpty || rawName.contains('.')) {
+      return null;
+    }
+    return _foldComponentExternName(rawName);
+  }
+
+  String? get dottedRepeatedLabelKey {
+    if (annotation == null) {
+      return null;
+    }
+    final separator = strippedName.indexOf('.');
+    if (separator <= 0 || separator != strippedName.lastIndexOf('.')) {
+      return null;
+    }
+    final first = strippedName.substring(0, separator);
+    final second = strippedName.substring(separator + 1);
+    if (first.isEmpty || second.isEmpty) {
+      return null;
+    }
+    final foldedFirst = _foldComponentExternName(first);
+    if (foldedFirst != _foldComponentExternName(second)) {
+      return null;
+    }
+    return foldedFirst;
+  }
+}
+
+String _foldComponentExternName(String name) {
+  return name.toLowerCase();
 }
 
 List<WasmComponentImport> _decodeImports(Uint8List payload) {

@@ -231,11 +231,32 @@ too broad to verify in one commit.
     `dart test test/wasi_component_versioned_host_test.dart`; `dart analyze`.
   - Spec reference: Component Model strongly-unique import/export names compare
     lowercased acronym letters. This row closes the case-folding subset; the
-    structured `[constructor]` / `[method]` / `[static]` rules remain for a
-    future validation row.
+    version-suffix and structured-name subset is covered by
+    `CM-EXTERN-NAME-STRUCTURED-UNIQUE`.
   - Claim impact: reduces Preview2/Preview3 adapter interface ambiguity before
     binding; does not complete `CM-VALIDATION-GAPS`, `SUPPORT-P1`,
     `SUPPORT-P2`, or `SUPPORT-P3`.
+- [x] `CM-EXTERN-NAME-STRUCTURED-UNIQUE` - Component extern name validation
+  applies the structured strong-unique rules.
+  - Evidence:
+    `dart test test/component_test.dart --name "reports duplicate component import names|reports duplicate component type import names|validates function type indexes introduced by exports|validates component export sort indexes in definition order"`
+    failed before the fix because top-level and type-declaration imports/exports
+    accepted duplicate raw names with different version suffixes and accepted
+    `foo` with `[method]foo.foo`, then passed after the fix;
+    `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments"`
+    failed before the fix because inline component instance exports accepted the
+    same version-suffix and structured-name collisions, then passed after the
+    fix; `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`;
+    `dart test test/wasi_component_versioned_host_test.dart`.
+  - Spec reference: Component Model import/export names use strong uniqueness:
+    version suffixes do not distinguish validation names, bracketed annotations
+    are stripped for folded-name comparison, `l` and `[constructor]l` are the
+    special allowed pair, and `l` conflicts with `[*]l.l`.
+  - Claim impact: closes the structured extern-name subset of
+    `CM-VALIDATION-GAPS` and reduces Preview2/Preview3 adapter interface
+    ambiguity before binding; does not complete `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [x] `CM-EXPORT-DUPLICATE-NAMES` - Top-level component exports reject duplicate
   names during validation.
   - Evidence:
@@ -693,7 +714,7 @@ copying their internals directly.
 | Status | Capability boundary | Evidence to inspect | Verification gate | Remaining gap |
 | --- | --- | --- | --- | --- |
 | [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `path_open` create/exclusive/truncate is covered; full Preview1 conformance still needs broader syscall/spec-suite gates and remaining socket edges. |
-| [x] | Component decoder and canonical validation base | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion and broader official component suite coverage. |
+| [x] | Component decoder, canonical validation base, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
 | [x] | Versioned Preview2/Preview3 capability gates | `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/preview2/component_host.dart`, `lib/src/wasi/preview3/component_host.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_versioned_host_test.dart` | Concrete P2/P3 interface adapter modules instead of generic facade binding. |
 | [x] | Internal P3 async endpoints, waitables, tasks, context, thread identity | `lib/src/wasi/component/async_host.dart`, `lib/src/wasi/component/waitable_set.dart`, `lib/src/wasi/component/task.dart`, `lib/src/wasi/component/thread.dart`, `test/wasi_component_async_host_test.dart` | `dart test test/wasi_component_async_host_test.dart test/wasi_component_waitable_set_test.dart test/wasi_component_task_test.dart test/wasi_component_thread_test.dart` | Full async lowering, task spawning, scheduler-owned thread switch/suspend/resume. |
