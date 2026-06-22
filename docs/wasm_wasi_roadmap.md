@@ -228,6 +228,46 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-FD-IOV-SNAPSHOT-PREFLIGHT` - Virtual-file `fd_read`/`fd_pread`
+  snapshots overlapping iovec tables and `fd_write`/`fd_pwrite` validates all
+  iovecs before mutating files.
+  - Scope: native/browser Preview1 virtual-file `fd_read`, `fd_pread`,
+    `fd_write`, and `fd_pwrite` iovec aliasing and all-or-error validation
+    semantics.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`,
+    `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes"`
+    failed before the fix with `Expected: 'ok!'` and `Actual: '___'`, proving
+    the first file read buffer could overwrite the next iovec descriptor before
+    the host used it.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes"`;
+    `dart test -p chrome test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes"`;
+    `dart test test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes|fd_pwrite validates all iovs before mutating virtual files"`;
+    `dart test -p chrome test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes|fd_pwrite validates all iovs before mutating virtual files"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `file_fd_read_write.operations=4000` and
+    `file_fd_read_write.per_operation_us=0.3525` for the baseline distribution,
+    plus `file_fd_read_write.operations=16000` and
+    `file_fd_read_write.per_operation_us=0.0370625` for the socket-heavy
+    distribution. The read path snapshots only when output buffers overlap the
+    iovec table, and the write path preflights all descriptors without snapshot
+    allocation before mutating file bytes.
+  - Done when: native and browser virtual-file reads use the syscall-start iovec
+    descriptors even when read buffers alias the descriptor table, and virtual
+    file writes reject any invalid iovec before changing file contents or the
+    result count pointer.
+  - Evidence update: this checked row, the detailed backlog child row, the
+    verification matrix, and the current baseline.
+  - Claim impact: closes one Preview1 virtual-file fd iovec conformance gap for
+    native/browser hosts; does not complete `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [x] `P1-SOCKET-SEND-IOV-SNAPSHOT` - Stream `sock_send` snapshots overlapping
   iovec tables before host send callbacks can mutate guest memory.
   - Scope: native/browser shared Preview1 stream `sock_send` iovec aliasing
@@ -1191,6 +1231,7 @@ copying their internals directly.
 | --- | --- | --- | --- | --- |
 | [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `path_open` create/exclusive/truncate is covered; full Preview1 conformance still needs broader syscall/spec-suite gates and remaining socket edges. |
 | [x] | Preview1 native/browser fd count-pointer ABI | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test -p chrome test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Result count pointers at guest memory address `0` now write correctly for stdio and virtual-file fd read/write syscalls; full Preview1 still needs broader syscall/spec-suite gates. |
+| [x] | Preview1 native/browser virtual-file fd iovec aliasing and preflight | `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes|fd_pwrite validates all iovs before mutating virtual files"`; `dart test -p chrome test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes|fd_pwrite validates all iovs before mutating virtual files"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Virtual-file fd reads now snapshot overlapping iovec tables before guest-memory writes, and virtual-file fd writes preflight every iovec before mutating file bytes; Node still delegates Preview1 to `node:wasi`, and full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser clock and poll-clock validation | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "clock_time_get"`; `dart test -p chrome test/wasi_test.dart --name "clock_time_get"`; `dart test test/wasi_test.dart --name "poll_oneoff"`; `dart test -p chrome test/wasi_test.dart --name "poll_oneoff"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Unsupported `clock_time_get` ids now preserve output memory and return `EINVAL`; invalid `poll_oneoff` clock subscriptions now report event `EINVAL`; full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket flag preflight | `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`; `dart test test/wasi_test.dart --name "sock_recv|sock_send"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv|sock_send"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Invalid `sock_recv`/`sock_send` flags now return `EINVAL` before descriptor-right failures and without socket/output side effects; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket accept flag preflight | `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`; `dart test -p chrome test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`; `dart test test/wasi_test.dart --name "sock_accept|socket descriptor flags|socket syscalls return notsock|datagram sockets do not expose accept rights"`; `dart test -p chrome test/wasi_test.dart --name "sock_accept|socket descriptor flags|socket syscalls return notsock|datagram sockets do not expose accept rights"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Socket-unsupported `sock_accept` fdflags now return `NOTSUP` before accept-right failures while preserving non-socket/bad-fd errno order and queued accepted sockets; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
@@ -1218,7 +1259,8 @@ This is the implementation state as of 2026-06-23 on `main`.
   sync/advice validation, clock/file/socket polling readiness including
   host-supplied socket readiness hints, `clock_time_get` unsupported-id
   validation, `poll_oneoff` clock subscription validation, fd read/write count
-  outputs at guest memory address zero, socket syscall invalid/unsupported flag
+  outputs at guest memory address zero, virtual-file fd read/write iovec
+  preflight and aliasing protection, socket syscall invalid/unsupported flag
   preflight before descriptor-right checks, `sock_recv` and stream `sock_send`
   iovec aliasing protection, host-backed stream/datagram receive/send handlers,
   accept queue preservation on unsupported descriptor flags, and descriptor
@@ -1237,10 +1279,13 @@ This is the implementation state as of 2026-06-23 on `main`.
   `WASIPreview1Socket`, not raw networking. Stream socket `sock_recv` and
   socket send paths preflight the complete iovec array before mutating guest
   memory, consuming receive data, recording sent bytes, or reporting
-  shutdown/write-ready socket state; `sock_recv` snapshots iovec descriptors only
-  when receive buffers overlap the iovec table, preserving syscall-start iov
-  semantics without adding allocation to ordinary non-overlapping receives. This
-  matches the datagram path's all-or-error validation boundary.
+  shutdown/write-ready socket state. Virtual-file fd reads now share the same
+  iovec validation/snapshot discipline, and virtual-file fd writes preflight all
+  iovecs before mutating file bytes. `sock_recv` and virtual-file fd reads
+  snapshot iovec descriptors only when output buffers overlap the iovec table,
+  preserving syscall-start iov semantics without adding allocation to ordinary
+  non-overlapping reads. This matches the datagram path's all-or-error
+  validation boundary.
 - Preview 1 `path_open` now honors `O_CREAT`, `O_CREAT|O_EXCL`, and `O_TRUNC`
   over shared native/browser VFS state. File creation updates the same path
   indexes and directory child maps as rename/link/unlink, exclusive create
@@ -1255,11 +1300,12 @@ This is the implementation state as of 2026-06-23 on `main`.
   The benchmark entrypoint is
   `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; it reports
   baseline, directory-heavy, descriptor-heavy, and socket-heavy distributions.
-  It also covers socket multi-iov peek/waitall, datagram truncation, socket
-  send/recv including host-backed stream/datagram handlers and write-side
-  and read-side would-block behavior, socket polling readiness including
-  zero-length datagram readiness, queued accepts, and externally backed
-  read/write readiness hints, and socket renumber/close descriptor paths.
+  It also covers virtual-file fd read/write iovec loops, socket multi-iov
+  peek/waitall, datagram truncation, socket send/recv including host-backed
+  stream/datagram handlers and write-side and read-side would-block behavior,
+  socket polling readiness including zero-length datagram readiness, queued
+  accepts, and externally backed read/write readiness hints, and socket
+  renumber/close descriptor paths.
   Stream socket sends are recorded as owned byte chunks, and long receive
   streams compact consumed prefixes in larger batches so socket-heavy reads do
   not repeatedly shift the backing buffer. Default datagram socket sends now
@@ -1867,6 +1913,40 @@ performance visible while the support surface expands.
   - Done when: address `0` is a valid count-output pointer for stdio and
     virtual-file fd read/write syscalls on native and browser hosts, and invalid
     count pointers fail before host IO side effects.
+  - Evidence update: this checked row plus `Current Execution Board`,
+    `Verification Matrix`, and `Current wasd Baseline`.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
+    support or any P2/P3 support gate.
+- [x] `P1-FD-IOV-SNAPSHOT-PREFLIGHT` - Virtual-file fd read/write iovec
+  descriptors are validated before side effects and snapshotted when read
+  buffers overlap the iovec table.
+  - Scope: native/browser Preview1 virtual-file `fd_read`, `fd_pread`,
+    `fd_write`, and `fd_pwrite` iovec validation and memory-aliasing semantics.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`,
+    `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes"`
+    failed before the fix with `Expected: 'ok!'` and `Actual: '___'`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes"`;
+    `dart test -p chrome test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes"`;
+    `dart test test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes|fd_pwrite validates all iovs before mutating virtual files"`;
+    `dart test -p chrome test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes|fd_pwrite validates all iovs before mutating virtual files"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `file_fd_read_write.operations=4000` and
+    `file_fd_read_write.per_operation_us=0.3525` for baseline, and
+    `file_fd_read_write.operations=16000` and
+    `file_fd_read_write.per_operation_us=0.0370625` for socket-heavy. The fix
+    allocates an iovec snapshot only on read aliasing and keeps writes on a
+    validation-only path before file mutation.
+  - Done when: overlapping read buffers cannot redirect later virtual-file read
+    segments, and invalid later write iovecs cannot leave partially mutated
+    virtual-file contents or result counts.
   - Evidence update: this checked row plus `Current Execution Board`,
     `Verification Matrix`, and `Current wasd Baseline`.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full

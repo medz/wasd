@@ -1847,35 +1847,15 @@ class WASI implements wasi.WASI {
     }
     final bytes = view.bytes;
     final data = view.data;
-    if (iovs < 0 ||
-        iovsLen < 0 ||
-        !_isU32InBounds(nreadPtr, bytes.length) ||
-        (fileOffset != null && fileOffset < 0)) {
-      return _errnoInval;
-    }
-
-    var totalRead = 0;
-    for (var index = 0; index < iovsLen; index++) {
-      final entry = iovs + index * _iovecEntrySize;
-      if (entry + _iovecEntrySize > bytes.length) {
-        return _errnoInval;
-      }
-
-      final buf = data.getUint32(entry, Endian.little);
-      final len = data.getUint32(entry + 4, Endian.little);
-      if (len > 0 && buf + len > bytes.length) {
-        return _errnoInval;
-      }
-
-      if (len > 0) {
-        totalRead += fileOffset == null
-            ? opened.readInto(bytes, buf, len)
-            : opened.readAtInto(bytes, buf, len, fileOffset + totalRead);
-      }
-    }
-
-    data.setUint32(nreadPtr, totalRead, Endian.little);
-    return _errnoSuccess;
+    return wasi_vfs.readOpenFileIntoIov(
+      opened: opened,
+      bytes: bytes,
+      data: data,
+      iovs: iovs,
+      iovsLen: iovsLen,
+      nreadPtr: nreadPtr,
+      fileOffset: fileOffset,
+    );
   }
 
   int _writeOpenFileFromIov({
@@ -1891,35 +1871,15 @@ class WASI implements wasi.WASI {
     }
     final bytes = view.bytes;
     final data = view.data;
-    if (iovs < 0 ||
-        iovsLen < 0 ||
-        !_isU32InBounds(nwrittenPtr, bytes.length) ||
-        (fileOffset != null && fileOffset < 0)) {
-      return _errnoInval;
-    }
-
-    var totalWritten = 0;
-    for (var index = 0; index < iovsLen; index++) {
-      final entry = iovs + index * _iovecEntrySize;
-      if (entry + _iovecEntrySize > bytes.length) {
-        return _errnoInval;
-      }
-
-      final buf = data.getUint32(entry, Endian.little);
-      final len = data.getUint32(entry + 4, Endian.little);
-      if (len > 0 && buf + len > bytes.length) {
-        return _errnoInval;
-      }
-
-      if (len > 0) {
-        totalWritten += fileOffset == null
-            ? opened.writeFrom(bytes, buf, len)
-            : opened.writeAtFrom(bytes, buf, len, fileOffset + totalWritten);
-      }
-    }
-
-    data.setUint32(nwrittenPtr, totalWritten, Endian.little);
-    return _errnoSuccess;
+    return wasi_vfs.writeOpenFileFromIov(
+      opened: opened,
+      bytes: bytes,
+      data: data,
+      iovs: iovs,
+      iovsLen: iovsLen,
+      nwrittenPtr: nwrittenPtr,
+      fileOffset: fileOffset,
+    );
   }
 
   _ResolvedPath _resolvePath({

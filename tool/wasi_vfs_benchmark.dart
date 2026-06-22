@@ -93,6 +93,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
   final rights = _benchmarkRightsChecks(baselineFiles, options);
   final mutations = _benchmarkMutations(baselineFiles, options);
   final fileRenumberClose = _benchmarkFileRenumberClose(baselineFiles, options);
+  final fileFdReadWrite = _benchmarkFileFdReadWrite(options);
   final directoryRenumberClose = _benchmarkDirectoryRenumberClose(options);
   final socketRecvPeek = _benchmarkSocketRecvPeek(options);
   final socketRecvWaitall = _benchmarkSocketRecvWaitall(options);
@@ -121,6 +122,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
     'rights_checks': rights.toJson(),
     'mutations_benchmark': mutations.toJson(),
     'file_renumber_close': fileRenumberClose.toJson(),
+    'file_fd_read_write': fileFdReadWrite.toJson(),
     'directory_renumber_close': directoryRenumberClose.toJson(),
     'socket_recv_peek': socketRecvPeek.toJson(),
     'socket_recv_waitall': socketRecvWaitall.toJson(),
@@ -172,6 +174,7 @@ void _runWarmup(Map<String, Uint8List> files, _Options options) {
   _benchmarkRightsChecks(files, warmupOptions);
   _benchmarkMutations(files, warmupOptions);
   _benchmarkFileRenumberClose(files, warmupOptions);
+  _benchmarkFileFdReadWrite(warmupOptions);
   _benchmarkDirectoryRenumberClose(warmupOptions);
   _benchmarkSocketRecvPeek(warmupOptions);
   _benchmarkSocketRecvWaitall(warmupOptions);
@@ -363,6 +366,91 @@ _Metric _benchmarkFileRenumberClose(
   watch.stop();
   return _Metric(
     operations: successfulOperations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkFileFdReadWrite(_Options options) {
+  final vfs = _newVfs({
+    '/sandbox/data.bin': Uint8List.fromList(
+      List<int>.generate(_socketChunkSize, (index) => index & 0xff),
+    ),
+  });
+  final fd = _openBenchmarkPath(
+    vfs,
+    '/sandbox/data.bin',
+    label: 'file fd read/write',
+  );
+  final opened = vfs.openFileForFd(fd);
+  if (opened == null) {
+    throw StateError('file descriptor missing for fd read/write benchmark');
+  }
+
+  final bytes = Uint8List(384);
+  final data = ByteData.view(bytes.buffer);
+  const readIovPtr = 0;
+  const readFirstBufferPtr = 32;
+  const readSecondBufferPtr = 96;
+  const writeIovPtr = 160;
+  const writeFirstBufferPtr = 192;
+  const writeSecondBufferPtr = 256;
+  const countPtr = 320;
+  _writeTwoIovs(
+    data: data,
+    iovPtr: readIovPtr,
+    firstBufferPtr: readFirstBufferPtr,
+    firstLength: _socketIovSize,
+    secondBufferPtr: readSecondBufferPtr,
+    secondLength: _socketIovSize,
+  );
+  _writeTwoIovs(
+    data: data,
+    iovPtr: writeIovPtr,
+    firstBufferPtr: writeFirstBufferPtr,
+    firstLength: _socketIovSize,
+    secondBufferPtr: writeSecondBufferPtr,
+    secondLength: _socketIovSize,
+  );
+  for (var i = 0; i < _socketIovSize; i++) {
+    bytes[writeFirstBufferPtr + i] = (i + 1) & 0xff;
+    bytes[writeSecondBufferPtr + i] = (i + 1 + _socketIovSize) & 0xff;
+  }
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final readErrno = readOpenFileIntoIov(
+      opened: opened,
+      bytes: bytes,
+      data: data,
+      iovs: readIovPtr,
+      iovsLen: 2,
+      nreadPtr: countPtr,
+      fileOffset: 0,
+    );
+    if (readErrno != errnoSuccess) {
+      throw StateError('file fd_read failed at iteration $i: $readErrno');
+    }
+    checksum += data.getUint32(countPtr, Endian.little);
+
+    final writeErrno = writeOpenFileFromIov(
+      opened: opened,
+      bytes: bytes,
+      data: data,
+      iovs: writeIovPtr,
+      iovsLen: 2,
+      nwrittenPtr: countPtr,
+      fileOffset: 0,
+    );
+    if (writeErrno != errnoSuccess) {
+      throw StateError('file fd_write failed at iteration $i: $writeErrno');
+    }
+    checksum += data.getUint32(countPtr, Endian.little);
+  }
+  watch.stop();
+  return _Metric(
+    operations: options.iterations * 2,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
@@ -1604,6 +1692,7 @@ void _printSingleText(
   _printMetric('rights checks', payload['rights_checks']);
   _printMetric('mutations', payload['mutations_benchmark']);
   _printMetric('file renumber/close', payload['file_renumber_close']);
+  _printMetric('file fd read/write', payload['file_fd_read_write']);
   _printMetric('directory renumber/close', payload['directory_renumber_close']);
   _printMetric('socket recv peek', payload['socket_recv_peek']);
   _printMetric('socket recv waitall', payload['socket_recv_waitall']);

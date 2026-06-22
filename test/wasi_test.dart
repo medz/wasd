@@ -4247,6 +4247,162 @@ void main() {
       );
 
       test(
+        'fd_pread snapshots overlapping iovs before writing file bytes',
+        () async {
+          const iovPtr = 5248;
+          const secondIovPtr = iovPtr + 8;
+          const originalTargetPtr = 0x1641;
+          const mutatedTargetPtr = 0x1650;
+          const countPtr = 5824;
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/alias.txt': Uint8List.fromList([
+                mutatedTargetPtr & 0xff,
+                ...'ok!'.codeUnits,
+              ]),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final relativePath = utf8.encode('alias.txt');
+          const pathPtr = 5200;
+          const openedFdPtr = 5232;
+
+          bytes.setAll(pathPtr, relativePath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              relativePath.length,
+              0,
+              _rightsAll,
+              _rightsAll,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final fd = data.getUint32(openedFdPtr, Endian.little);
+
+          bytes.setAll(originalTargetPtr, '___'.codeUnits);
+          bytes.setAll(mutatedTargetPtr, 'bad'.codeUnits);
+          data.setUint32(iovPtr, secondIovPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 1, Endian.little);
+          data.setUint32(iovPtr + 8, originalTargetPtr, Endian.little);
+          data.setUint32(iovPtr + 12, 3, Endian.little);
+
+          expect(fdPread.ref([fd, iovPtr, 2, 0, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 4);
+          expect(
+            utf8.decode(
+              bytes.sublist(originalTargetPtr, originalTargetPtr + 3),
+            ),
+            'ok!',
+          );
+          expect(
+            utf8.decode(bytes.sublist(mutatedTargetPtr, mutatedTargetPtr + 3)),
+            'bad',
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; file IO behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'fd_pwrite validates all iovs before mutating virtual files',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/preflight.txt': Uint8List.fromList(
+                utf8.encode('abcdef'),
+              ),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final fdPwrite = preview1['fd_pwrite'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final relativePath = utf8.encode('preflight.txt');
+          const pathPtr = 5840;
+          const openedFdPtr = 5872;
+          const writeIovPtr = 5888;
+          const writeBufferPtr = 5920;
+          const writeCountPtr = 5952;
+          const readIovPtr = 5968;
+          const readBufferPtr = 6000;
+          const readCountPtr = 6032;
+
+          bytes.setAll(pathPtr, relativePath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              relativePath.length,
+              0,
+              _rightsAll,
+              _rightsAll,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final fd = data.getUint32(openedFdPtr, Endian.little);
+
+          bytes.setAll(writeBufferPtr, utf8.encode('XY'));
+          data.setUint32(writeIovPtr, writeBufferPtr, Endian.little);
+          data.setUint32(writeIovPtr + 4, 2, Endian.little);
+          data.setUint32(writeIovPtr + 8, bytes.length - 2, Endian.little);
+          data.setUint32(writeIovPtr + 12, 8, Endian.little);
+          data.setUint32(writeCountPtr, 0xfeedface, Endian.little);
+          expect(
+            fdPwrite.ref([fd, writeIovPtr, 2, 0, writeCountPtr]),
+            _errnoInval,
+          );
+          expect(data.getUint32(writeCountPtr, Endian.little), 0xfeedface);
+
+          data.setUint32(readIovPtr, readBufferPtr, Endian.little);
+          data.setUint32(readIovPtr + 4, 6, Endian.little);
+          expect(fdPread.ref([fd, readIovPtr, 1, 0, readCountPtr]), 0);
+          expect(data.getUint32(readCountPtr, Endian.little), 6);
+          expect(
+            utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + 6)),
+            'abcdef',
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; file IO behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'fd read and write counts can target memory zero',
         () async {
           final fileWasi = WASI(
