@@ -1182,11 +1182,14 @@ final class Preview1DescriptorRights {
   Preview1DescriptorRights.directory({int? base, int? inheriting})
     : this(base: base ?? rightsAll, inheriting: inheriting ?? rightsAll);
 
-  Preview1DescriptorRights.socket({int? base, int? inheriting})
-    : this(
-        base: base ?? rightsSocket,
-        inheriting: inheriting ?? rightsSocketInheriting,
-      );
+  Preview1DescriptorRights.socket({
+    int? base,
+    int? inheriting,
+    bool canAccept = true,
+  }) : this(
+         base: base ?? (canAccept ? rightsSocket : rightsSocketInheriting),
+         inheriting: inheriting ?? (canAccept ? rightsSocketInheriting : 0),
+       );
 
   int base;
   int inheriting;
@@ -1669,7 +1672,9 @@ final class Preview1VirtualSocket {
     this.socket, {
     Preview1DescriptorRights? rights,
     this.descriptorFlags = 0,
-  }) : rights = rights ?? Preview1DescriptorRights.socket();
+  }) : rights =
+           rights ??
+           Preview1DescriptorRights.socket(canAccept: socket.isStream);
 
   final WASIPreview1Socket socket;
   final Preview1DescriptorRights rights;

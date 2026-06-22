@@ -3000,7 +3000,7 @@ void main() {
       );
 
       test(
-        'sock_accept rejects datagram sockets',
+        'datagram sockets do not expose accept rights',
         () async {
           final datagram = WASIPreview1Socket.datagram();
           final socketWasi = WASI(sockets: {21: datagram});
@@ -3012,6 +3012,8 @@ void main() {
           final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
           final sockAccept =
               preview1['sock_accept'] as FunctionImportExportValue;
+          final fdFdstatGet =
+              preview1['fd_fdstat_get'] as FunctionImportExportValue;
           final fdFdstatSetRights =
               preview1['fd_fdstat_set_rights'] as FunctionImportExportValue;
           final memory =
@@ -3020,13 +3022,19 @@ void main() {
 
           final data = ByteData.view(memory.buffer);
           const acceptedFdPtr = 3264;
+          const fdstatPtr = 3280;
+
+          expect(fdFdstatGet.ref([21, fdstatPtr]), 0);
+          expect(data.getUint8(fdstatPtr), _filetypeSocketDgram);
+          expect(_getUint64Le(data, fdstatPtr + 8) & _rightSockAccept, 0);
+          expect(_getUint64Le(data, fdstatPtr + 16), 0);
 
           expect(
             fdFdstatSetRights.ref([21, _rightSockAccept, _rightFdRead]),
-            0,
+            _errnoNotcapable,
           );
           data.setUint32(acceptedFdPtr, 0xdeadbeef, Endian.little);
-          expect(sockAccept.ref([21, 0, acceptedFdPtr]), _errnoNotsup);
+          expect(sockAccept.ref([21, 0, acceptedFdPtr]), _errnoNotcapable);
           expect(data.getUint32(acceptedFdPtr, Endian.little), 0xdeadbeef);
         },
         skip: _skipOnNode(

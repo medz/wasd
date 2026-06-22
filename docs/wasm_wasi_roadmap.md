@@ -223,6 +223,24 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-DATAGRAM-RIGHTS-NARROW` - Datagram sockets do not expose
+  listener-only `SOCK_ACCEPT` capability.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "datagram sockets do not expose accept rights"`
+    failed before the fix because datagram `fd_fdstat_get` exposed
+    `SOCK_ACCEPT`, then passed after the fix;
+    `dart test test/wasi_test.dart --name "datagram sockets do not expose accept rights|sock_accept returns queued preview1 stream sockets with inherited rights|default socket rights expose socket-specific operations only|sock_recv reports truncation for datagram sockets|sock_recv peek preserves datagram messages and sock_send records datagrams|fd_read and fd_write operate on preview1 socket descriptors"`;
+    `dart test -p chrome test/wasi_test.dart --name "datagram sockets do not expose accept rights|sock_accept returns queued preview1 stream sockets with inherited rights|default socket rights expose socket-specific operations only|sock_recv reports truncation for datagram sockets|sock_recv peek preserves datagram messages and sock_send records datagrams|fd_read and fd_write operate on preview1 socket descriptors"`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_datagram_rights.operations=16000` and
+    `socket_datagram_rights.per_operation_us=0.019875` for the socket-heavy
+    distribution.
+  - Spec reference: Preview1 `SOCK_ACCEPT` is a listener operation; datagram
+    descriptors can still read, write, poll, and shut down but must not expose
+    accept as a grantable default right.
+  - Claim impact: closes one Preview1 socket capability-surface gap for
+    native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-ACCEPT-RECEIVE-SHUTDOWN` - Listener receive shutdown terminates
   pending accepts without fd side effects.
   - Evidence:
@@ -521,8 +539,11 @@ too broad to verify in one commit.
     passed after the fix;
     `dart test -p chrome test/wasi_test.dart --name "sock_accept rejects datagram sockets"`.
   - Claim impact: tightens native/browser Preview1 socket errno classification
-    for operations unsupported by a valid socket type; does not complete the
-    parent `P1-SOCKET-CONFORMANCE` row.
+    for operations unsupported by a valid socket type. This historical row is
+    narrowed further by `P1-SOCKET-DATAGRAM-RIGHTS-NARROW`, where default
+    datagram descriptors no longer expose `SOCK_ACCEPT` and now fail the
+    capability check first; it does not complete the parent
+    `P1-SOCKET-CONFORMANCE` row.
 - [x] `P1-SOCKET-NONSOCKET-ERRNO` - Socket syscalls report `NOTSOCK` for
   descriptors that exist but are not sockets.
   - Evidence:
@@ -1406,6 +1427,32 @@ performance visible while the support surface expands.
     `Recently Checked` entry.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
     support or any P2/P3 support gate.
+- [x] `P1-SOCKET-DATAGRAM-RIGHTS-NARROW` - Datagram sockets do not expose
+  listener-only `SOCK_ACCEPT` capability.
+  - Scope: shared Preview1 VFS default socket rights for injected datagram
+    descriptors and native/browser fdstat-visible capability behavior.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "datagram sockets do not expose accept rights"`
+    failed before the fix because datagram fdstat base rights included
+    `SOCK_ACCEPT`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "datagram sockets do not expose accept rights"`;
+    `dart test test/wasi_test.dart --name "datagram sockets do not expose accept rights|sock_accept returns queued preview1 stream sockets with inherited rights|default socket rights expose socket-specific operations only|sock_recv reports truncation for datagram sockets|sock_recv peek preserves datagram messages and sock_send records datagrams|fd_read and fd_write operate on preview1 socket descriptors"`;
+    `dart test -p chrome test/wasi_test.dart --name "datagram sockets do not expose accept rights|sock_accept returns queued preview1 stream sockets with inherited rights|default socket rights expose socket-specific operations only|sock_recv reports truncation for datagram sockets|sock_recv peek preserves datagram messages and sock_send records datagrams|fd_read and fd_write operate on preview1 socket descriptors"`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; the
+    socket-heavy distribution reported `socket_datagram_rights.operations=16000`
+    and `socket_datagram_rights.per_operation_us=0.019875`.
+  - Done when: default datagram socket base rights equal connection rights
+    without `SOCK_ACCEPT`, inheriting rights are zero, attempts to grant
+    `SOCK_ACCEPT` fail with `ENOTCAPABLE`, and stream listener accept rights
+    still work.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
+    support or any P2/P3 support gate.
 - [x] `P1-SOCKET-FD-READ-WRITE` - Generic fd IO works on injected Preview1
   socket descriptors.
   - Scope: native/browser `fd_read` and `fd_write` dispatch for configured
@@ -1679,8 +1726,11 @@ performance visible while the support surface expands.
     `dart analyze`.
   - Performance gate: N/A; this only changes the existing rejected datagram
     socket branch and does not alter successful socket hot paths.
-  - Done when: datagram sockets with `sock_accept` rights return `NOTSUP`,
-    preserve the accepted-fd output pointer, and native/browser behavior agrees.
+  - Done when: datagram sockets with explicit `sock_accept` rights return
+    `NOTSUP`, preserve the accepted-fd output pointer, and native/browser
+    behavior agrees. Default datagram descriptors are narrowed further by
+    `P1-SOCKET-DATAGRAM-RIGHTS-NARROW`, so ordinary injected datagrams now fail
+    `sock_accept` with `ENOTCAPABLE` before this unsupported-operation branch.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent

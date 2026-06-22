@@ -99,6 +99,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
   final socketSendRecv = _benchmarkSocketSendRecv(options);
   final socketFdReadWrite = _benchmarkSocketFdReadWrite(options);
   final socketDgramTruncation = _benchmarkSocketDatagramTruncation(options);
+  final socketDatagramRights = _benchmarkSocketDatagramRights(options);
   final socketPollReadiness = _benchmarkSocketPollReadiness(options);
   final socketRenumberClose = _benchmarkSocketRenumberClose(options);
   final socketAcceptInheritance = _benchmarkSocketAcceptInheritance(options);
@@ -125,6 +126,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
     'socket_send_recv': socketSendRecv.toJson(),
     'socket_fd_read_write': socketFdReadWrite.toJson(),
     'socket_dgram_truncation': socketDgramTruncation.toJson(),
+    'socket_datagram_rights': socketDatagramRights.toJson(),
     'socket_poll_readiness': socketPollReadiness.toJson(),
     'socket_renumber_close': socketRenumberClose.toJson(),
     'socket_accept_inheritance': socketAcceptInheritance.toJson(),
@@ -1304,6 +1306,49 @@ _Metric _benchmarkSocketAcceptReceiveShutdown(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketDatagramRights(_Options options) {
+  const fdBase = 24576;
+  final sockets = <int, WASIPreview1Socket>{
+    for (var i = 0; i < options.iterations; i++)
+      fdBase + i: WASIPreview1Socket.datagram(),
+  };
+  final vfs = Preview1VirtualFileSystem(
+    firstVirtualFd: fdBase + options.iterations,
+    sockets: sockets,
+  );
+
+  var successfulOperations = 0;
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final fd = fdBase + i;
+    final rights = vfs.descriptorRightsForFd(fd);
+    if (rights == null ||
+        rights.base != rightsSocketInheriting ||
+        rights.inheriting != 0) {
+      throw StateError('datagram socket rights mismatch at iteration $i');
+    }
+    checksum += fd + rights.base + rights.inheriting;
+    successfulOperations++;
+
+    final result = vfs.setDescriptorRights(
+      fd: fd,
+      rightsBase: rightSockAccept,
+      rightsInheriting: 0,
+    );
+    if (result != Preview1FdRightsResult.notCapable) {
+      throw StateError('datagram accepted sock_accept rights at iteration $i');
+    }
+    successfulOperations++;
+  }
+  watch.stop();
+  return _Metric(
+    operations: successfulOperations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _writeTwoIovs({
   required ByteData data,
   required int iovPtr,
@@ -1393,6 +1438,7 @@ void _printSingleText(
     'socket datagram truncation',
     payload['socket_dgram_truncation'],
   );
+  _printMetric('socket datagram rights', payload['socket_datagram_rights']);
   _printMetric('socket poll readiness', payload['socket_poll_readiness']);
   _printMetric('socket renumber/close', payload['socket_renumber_close']);
   _printMetric(
