@@ -30,6 +30,9 @@ Status date: 2026-06-22.
 - Never mark a version support gate complete from internal helper tests alone.
   P1/P2/P3 gates require the version-specific runtime path named in the row.
 - If a row cannot name a failing or missing behavior, split it until it can.
+- Do not add prose-only roadmap TODOs to active sections. A roadmap item is
+  executable only when another maintainer can start from its fields without
+  re-inferring the test, files, or done condition.
 
 ## Checklist Row Format
 
@@ -47,6 +50,7 @@ to this shape as they are touched.
   - Done when: objective condition for changing `[ ]` to `[x]`.
   - Evidence update: roadmap, README, API docs, or support matrix updates that
     must happen in the same commit.
+  - Claim impact: support gate changed by this row, or `None`.
 
 ## Execution Loop
 
@@ -64,22 +68,161 @@ Use this loop for every behavior or performance increment.
 
 ## Current Execution Board
 
-This is the active, ordered board. Choose the first unchecked row that matches
-the current implementation direction. Split a row before starting if the red
-test or done condition is too broad to verify in one commit.
+This is the active, ordered board. Treat the first unchecked row as the default
+next commit. Split a row before starting if the red test or done condition is
+too broad to verify in one commit.
 
-| Status | ID | Next executable action | Required gate | Support claim unlocked |
-| --- | --- | --- | --- | --- |
-| [ ] | `P1-SOCKET-CONFORMANCE` | Add the next missing Preview1 socket/native adapter regression in `test/wasi_test.dart`. | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Moves `SUPPORT-P1` only after remaining P1 socket rows are complete. |
-| [x] | `PERF-HEAVY-RUNNERS` | DOOM runtime matrix reports per-runtime elapsed time and peak RSS; spec testsuite reports conversion cache hits/misses and Top Slow Files. | `dart run tool/spec_testsuite_runner.dart --suite=core --file=imports0.wast --output-json=.dart_tool/spec_runner/perf_heavy_runners_imports0.json --output-md=.dart_tool/spec_runner/perf_heavy_runners_imports0.md --prepare-root=.dart_tool/spec_runner/perf_heavy_runners_bundle --conversion-cache-dir=.dart_tool/spec_runner/conversion_cache`; `dart test test/doom_smoke_test.dart --name "doom cli runtime matrix"` | Gives performance evidence for `SUPPORT-WASM` and `PERFORMANCE-GATES`; does not complete either support claim. |
-| [x] | `PERF-DOOM-INSTANTIATE-PHASES` | DOOM instantiate now has a phase-level RSS/duration profiler, and decoder byte reads avoid avoidable section/body double copies. | `dart run tool/doom_instantiate_profile.dart --json`; `dart test test/wasm_test.dart`; `dart test test/component_test.dart`; `dart test test/doom_smoke_test.dart --name "doom cli runtime matrix"`; `dart analyze` | Identifies the remaining `compile_module` validation/predecode allocation as the next `SUPPORT-WASM` performance blocker. |
-| [x] | `PERF-WASM-COMPILE-PREDECODE` | Validator signature classification avoids byte-list churn, native Modules retain validated predecode results, and instantiate reuses them instead of decoding functions again. | `dart run tool/doom_instantiate_profile.dart --compile-breakdown --json`; `dart run tool/doom_instantiate_profile.dart --instantiate-breakdown --json`; `dart run tool/doom_instantiate_profile.dart --json`; `dart test test/wasm_predecode_test.dart test/wasm_test.dart test/wasi_test.dart`; `dart analyze` | Removes the DOOM compile/instantiate predecode heat blocker; does not complete `SUPPORT-WASM`. |
-| [ ] | `CM-VALIDATION-GAPS` | Add a deterministic component validation failure before adding host behavior. | `dart test test/component_test.dart`; `dart test test/wasi_component_async_host_test.dart` | Reduces late runtime traps in P2/P3 adapter work. |
-| [x] | `WIT-DOCUMENT-BOUNDARIES` | Internal WIT package/interface/world parsing with diagnostics is implemented under `lib/src/wasi/component/`. | `dart test test/wasi_component_wit_test.dart`; `dart analyze` | Provides structured input for later P2/P3 adapters, but no public support claim. |
-| [ ] | `P2-P3-ADAPTERS` | Bind one real Preview2/Preview3 adapter path over shared component primitives. | `dart test test/wasi_component_versioned_host_test.dart` plus adapter-specific tests | Starts concrete `SUPPORT-P2` / `SUPPORT-P3` evidence. |
-| [ ] | `P3-ASYNC-COPY-GAPS` | Expand one validated async value shape through copy, waitable, cancel/drop, and benchmark paths. | `dart test test/wasi_component_host_test.dart`; async/resource benchmark commands | Moves P3 stream/future support toward production coverage. |
-| [ ] | `CM-VALUE-VALIDATION` | Add one composite value shape only when the same shape can be executed. | value-memory, async-host, and component-host test gates | Keeps adapter value semantics consistent. |
-| [ ] | `WIT-INGESTION` | Bind imported/generated WIT worlds through versioned adapters. | WIT ingestion tests plus component-host binding tests | Required before any full P2/P3 public claim. |
+### Now
+
+- [ ] `P1-SOCKET-CONFORMANCE` - Close the next concrete Preview1 socket
+  conformance gap.
+  - Scope: native/browser shared Preview1 socket and descriptor semantics.
+  - Edit targets: `test/wasi_test.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/socket.dart`, and
+    `tool/wasi_vfs_benchmark.dart` when the touched path is performance-relevant.
+  - Red test: add the smallest missing socket regression under
+    `test/wasi_test.dart`, then confirm it fails or is absent for the expected
+    reason before the fix.
+  - Implementation gate: `dart test test/wasi_test.dart`;
+    add `dart test -p chrome test/wasi_test.dart --name "<focused socket name>"`
+    when the shared browser path is touched.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: the selected socket edge has regression coverage, native/browser
+    behavior agrees for the supported subset, output pointers are not mutated on
+    error paths, and the affected socket path is visible in benchmark output.
+  - Evidence update: update this roadmap row or split it into a checked child row
+    with the exact command evidence.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete it until every
+    remaining Preview1 socket row and runtime gate is checked.
+
+### Queued Next
+
+- [ ] `CM-VALIDATION-GAPS` - Add one deterministic component validation failure
+  before adding host behavior.
+  - Scope: component decoder/validator behavior before runtime host mutation.
+  - Edit targets: `lib/src/wasm/backend/native/interpreter/component.dart`,
+    `lib/src/wasi/component/`, `test/component_test.dart`, and
+    `test/wasi_component_async_host_test.dart` as needed by the selected gap.
+  - Red test: add the missing validation case and confirm the current runtime
+    accepts it, traps too late, or reports the wrong diagnostic.
+  - Implementation gate: `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`.
+  - Performance gate: N/A unless validation introduces a new decoded-shape hot
+    path; in that case add the relevant component benchmark command here.
+  - Done when: the invalid component fails before host state is mutated and the
+    diagnostic names the rejected shape or interface boundary.
+  - Evidence update: record the failing shape and the exact command evidence.
+  - Claim impact: reduces `SUPPORT-P2` and `SUPPORT-P3` validation risk; no
+    support gate changes directly.
+- [ ] `P2-P3-ADAPTERS` - Bind one real Preview2/Preview3 adapter path over shared
+  component primitives.
+  - Scope: versioned component host adapters, not Preview1 imports.
+  - Edit targets: `lib/src/wasi/preview2/`,
+    `lib/src/wasi/preview3/`, `lib/src/wasi/component/`,
+    `test/wasi_component_versioned_host_test.dart`, and adapter-specific tests.
+  - Red test: add a real versioned adapter execution case that fails because the
+    interface is not yet bound through the versioned host.
+  - Implementation gate: `dart test test/wasi_component_versioned_host_test.dart`
+    plus the adapter-specific focused test.
+  - Performance gate: run the component/resource benchmark that covers any new
+    resource, stream, future, or callback path added by the adapter.
+  - Done when: one real P2/P3 component path executes through the versioned host
+    without leaking Preview1 imports or bypassing shared component ownership.
+  - Evidence update: record adapter files, tests, and benchmark output in this
+    document.
+  - Claim impact: starts concrete `SUPPORT-P2` / `SUPPORT-P3` evidence; does not
+    complete either gate.
+- [ ] `P3-ASYNC-COPY-GAPS` - Expand one validated async value shape through copy,
+  waitable, cancel/drop, and benchmark paths.
+  - Scope: WASI 0.3 stream/future async host and value-memory behavior.
+  - Edit targets: `lib/src/wasi/component/async_host.dart`,
+    `lib/src/wasi/component/value_memory.dart`,
+    `lib/src/wasi/component/waitable_set.dart`,
+    `test/wasi_component_host_test.dart`,
+    `test/wasi_component_async_host_test.dart`, and async benchmark tools.
+  - Red test: add one missing `stream<T>` or `future<T>` shape that currently
+    cannot be copied, waited, canceled, or dropped through the same host path.
+  - Implementation gate: `dart test test/wasi_component_host_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`;
+    `dart test test/wasi_component_value_memory_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`;
+    `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`.
+  - Done when: the selected shape is validated, copied, completed or canceled,
+    dropped, and benchmarked through the same P3 host path.
+  - Evidence update: record shape, tests, and benchmark output in this document.
+  - Claim impact: moves `SUPPORT-P3` toward execution coverage; no public claim.
+- [ ] `CM-VALUE-VALIDATION` - Add one composite value shape only when the same
+  shape can be executed.
+  - Scope: Canonical ABI value validation matched to executable lift/lower paths.
+  - Edit targets: `lib/src/wasi/component/value_memory.dart`,
+    `lib/src/wasi/component/adapter_host.dart`,
+    `test/wasi_component_value_memory_test.dart`, and component-host tests.
+  - Red test: add a composite shape that currently validates incorrectly or lacks
+    a matching executable lowering/lifting path.
+  - Implementation gate: value-memory, async-host, and component-host focused
+    tests for the selected shape.
+  - Performance gate: relevant component or async benchmark when the shape adds a
+    repeated copy or allocation path.
+  - Done when: validation and execution accept/reject the same shape under the
+    same ownership and memory rules.
+  - Evidence update: record the selected shape and command evidence.
+  - Claim impact: reduces P2/P3 adapter inconsistency; no direct support gate.
+- [ ] `WIT-INGESTION` - Bind imported/generated WIT worlds through versioned
+  adapters.
+  - Scope: WIT package/interface/world ingestion into Preview2/Preview3 adapter
+    binding.
+  - Edit targets: `lib/src/wasi/component/wit_document.dart`,
+    versioned adapter modules, WIT ingestion tests, and component-host binding
+    tests.
+  - Red test: add an imported/generated world that parses but cannot bind through
+    the versioned host.
+  - Implementation gate: WIT ingestion tests plus the matching component-host
+    binding tests.
+  - Performance gate: N/A for parsing-only increments; add adapter benchmark
+    evidence when the row binds executable host calls.
+  - Done when: imported/generated worlds bind through Preview2/Preview3 adapters
+    and failures name the interface/world boundary.
+  - Evidence update: record WIT files, versioned adapter tests, and command
+    evidence.
+  - Claim impact: required before `SUPPORT-P2` or `SUPPORT-P3` can be checked.
+
+### Recently Checked
+
+- [x] `PERF-WASM-COMPILE-PREDECODE` - Validator signature classification avoids
+  byte-list churn, native Modules retain validated predecode results, and
+  instantiate reuses them instead of decoding functions again.
+  - Evidence: `dart run tool/doom_instantiate_profile.dart --compile-breakdown --json`;
+    `dart run tool/doom_instantiate_profile.dart --instantiate-breakdown --json`;
+    `dart run tool/doom_instantiate_profile.dart --json`;
+    `dart test test/wasm_predecode_test.dart test/wasm_test.dart test/wasi_test.dart`;
+    `dart analyze`.
+  - Claim impact: removes the DOOM compile/instantiate predecode heat blocker;
+    does not complete `SUPPORT-WASM`.
+- [x] `PERF-DOOM-INSTANTIATE-PHASES` - DOOM instantiate has phase-level RSS and
+  duration evidence, and decoder byte reads avoid avoidable section/body double
+  copies.
+  - Evidence: `dart run tool/doom_instantiate_profile.dart --json`;
+    `dart test test/wasm_test.dart`; `dart test test/component_test.dart`;
+    `dart test test/doom_smoke_test.dart --name "doom cli runtime matrix"`;
+    `dart analyze`.
+  - Claim impact: identifies remaining compile/validation allocation blockers;
+    does not complete `SUPPORT-WASM`.
+- [x] `PERF-HEAVY-RUNNERS` - DOOM runtime matrix reports per-runtime elapsed time
+  and peak RSS; spec testsuite reports conversion cache hits/misses and Top Slow
+  Files.
+  - Evidence:
+    `dart run tool/spec_testsuite_runner.dart --suite=core --file=imports0.wast --output-json=.dart_tool/spec_runner/perf_heavy_runners_imports0.json --output-md=.dart_tool/spec_runner/perf_heavy_runners_imports0.md --prepare-root=.dart_tool/spec_runner/perf_heavy_runners_bundle --conversion-cache-dir=.dart_tool/spec_runner/conversion_cache`;
+    `dart test test/doom_smoke_test.dart --name "doom cli runtime matrix"`.
+  - Claim impact: gives performance evidence for `SUPPORT-WASM` and
+    `PERFORMANCE-GATES`; does not complete either support claim.
+- [x] `WIT-DOCUMENT-BOUNDARIES` - Internal WIT package/interface/world parsing
+  with diagnostics is implemented under `lib/src/wasi/component/`.
+  - Evidence: `dart test test/wasi_component_wit_test.dart`; `dart analyze`.
+  - Claim impact: provides structured input for later P2/P3 adapters, but no
+    public support claim.
 
 ## Support Claim Gates
 
@@ -677,13 +820,29 @@ performance visible while the support surface expands.
 ## Near-Term Execution Backlog
 
 - [ ] `P1-SOCKET-CONFORMANCE` - Preview1 socket conformance edge cases.
-  - Change: add focused native/browser regressions for native adapter
-    boundaries and remaining socket edge cases.
-  - Evidence: `test/wasi_test.dart`, `lib/src/wasi/preview1/common/vfs.dart`.
-  - Gate: `dart test test/wasi_test.dart`;
+  - Scope: native/browser shared Preview1 socket and descriptor behavior,
+    including host-backed adapters, queued accepts, shutdown/readiness state, and
+    guest-memory side effects on errors.
+  - Edit targets: `test/wasi_test.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/socket.dart`, and
+    `tool/wasi_vfs_benchmark.dart` when the selected edge affects measured
+    socket paths.
+  - Red test: add the smallest missing regression under `test/wasi_test.dart`;
+    for shared behavior, also plan a focused browser gate with
+    `dart test -p chrome test/wasi_test.dart --name "<focused socket name>"`.
+  - Implementation gate: `dart test test/wasi_test.dart`; add the focused Chrome
+    command when shared browser code changes.
+  - Performance gate:
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
-  - Done when: regressions cover the failing edge cases and benchmark output
-    includes the affected socket paths.
+  - Done when: every newly selected socket edge has regression coverage, error
+    paths preserve output pointers and queued data, native/browser behavior agrees
+    for the supported subset, and benchmark output names the affected socket
+    paths.
+  - Evidence update: split each completed edge into a checked child row or update
+    this row with the exact commands run.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete it until the
+    Preview1 socket and runtime gates are all checked.
 - [x] `P1-SOCKET-READINESS-HINTS` - Preview1 host-backed socket readiness.
   - Change: let injected `WASIPreview1Socket` descriptors expose read byte-count
     readiness and write readiness without buffering fake data.
@@ -1003,6 +1162,8 @@ performance visible while the support surface expands.
 ## Completion Checklist
 
 Full WASI 0.3 support must remain unclaimed until every row below is checked.
+Checking a row requires the current command evidence to be added to that row or
+to a linked checked child row in the same commit.
 
 - [ ] `P3-VERSIONED-RUN`
   - Condition: real P3 components run through a versioned Preview3 host layer.
