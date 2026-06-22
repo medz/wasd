@@ -385,7 +385,7 @@ class WASI implements wasi_iface.WASI {
           return right;
         }
         if (!socket.isStream) {
-          return _errnoInval;
+          return _errnoNotsup;
         }
 
         final view = _memoryView();
@@ -2107,6 +2107,7 @@ const int _errnoNosys = wasi_common.errnoNosys;
 const int _errnoNotdir = wasi_common.errnoNotdir;
 const int _errnoNotempty = wasi_common.errnoNotempty;
 const int _errnoNotsock = wasi_common.errnoNotsock;
+const int _errnoNotsup = wasi_common.errnoNotsup;
 const int _errnoNotcapable = wasi_common.errnoNotcapable;
 const int _errnoPipe = wasi_common.errnoPipe;
 const int _prestatSize = wasi_common.prestatSize;

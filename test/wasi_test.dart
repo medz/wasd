@@ -28,6 +28,7 @@ const int _errnoAgain = 6;
 const int _errnoBadf = 8;
 const int _errnoInval = 28;
 const int _errnoNotsock = 57;
+const int _errnoNotsup = 58;
 const int _errnoNotcapable = 76;
 const int _errnoPipe = 64;
 const int _riflagRecvWaitall = 2;
@@ -2209,7 +2210,7 @@ void main() {
             0,
           );
           data.setUint32(acceptedFdPtr, 0xdeadbeef, Endian.little);
-          expect(sockAccept.ref([21, 0, acceptedFdPtr]), _errnoInval);
+          expect(sockAccept.ref([21, 0, acceptedFdPtr]), _errnoNotsup);
           expect(data.getUint32(acceptedFdPtr, Endian.little), 0xdeadbeef);
         },
         skip: _skipOnNode(

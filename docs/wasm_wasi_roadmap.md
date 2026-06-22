@@ -217,6 +217,16 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-DATAGRAM-ACCEPT-NOTSUP` - `sock_accept` reports `NOTSUP` for
+  datagram sockets instead of treating the descriptor as an invalid argument.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "sock_accept rejects datagram sockets"`
+    failed before the fix because datagram sockets returned `EINVAL`, then
+    passed after the fix;
+    `dart test -p chrome test/wasi_test.dart --name "sock_accept rejects datagram sockets"`.
+  - Claim impact: tightens native/browser Preview1 socket errno classification
+    for operations unsupported by a valid socket type; does not complete the
+    parent `P1-SOCKET-CONFORMANCE` row.
 - [x] `P1-SOCKET-NONSOCKET-ERRNO` - Socket syscalls report `NOTSOCK` for
   descriptors that exist but are not sockets.
   - Evidence:
@@ -1038,6 +1048,30 @@ performance visible while the support surface expands.
     this row with the exact commands run.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete it until the
     Preview1 socket and runtime gates are all checked.
+- [x] `P1-SOCKET-DATAGRAM-ACCEPT-NOTSUP` - `sock_accept` reports `NOTSUP` for
+  datagram sockets.
+  - Scope: native/browser Preview1 `sock_accept` errno classification for a
+    valid socket descriptor whose type cannot support accept.
+  - Edit targets: `lib/src/wasi/preview1/common/constants.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "sock_accept rejects datagram sockets"`
+    failed before the fix because the datagram socket path returned `EINVAL`
+    instead of `NOTSUP`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "sock_accept rejects datagram sockets"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_accept rejects datagram sockets"`;
+    `dart analyze`.
+  - Performance gate: N/A; this only changes the existing rejected datagram
+    socket branch and does not alter successful socket hot paths.
+  - Done when: datagram sockets with `sock_accept` rights return `NOTSUP`,
+    preserve the accepted-fd output pointer, and native/browser behavior agrees.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
+    socket conformance row.
 - [x] `P1-SOCKET-NONSOCKET-ERRNO` - Socket syscalls report `NOTSOCK` for
   non-socket descriptors.
   - Scope: native/browser Preview1 `sock_accept`, `sock_recv`, `sock_send`, and
