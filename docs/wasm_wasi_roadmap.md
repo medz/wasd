@@ -182,6 +182,8 @@ too broad to verify in one commit.
   - Performance gate:
     `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`;
     `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`.
+  - Checked child rows: `P3-ASYNC-ERROR-CONTEXT-COPY` covers the canonical memory
+    copy path for `stream<error-context>` and `future<error-context>`.
   - Done when: the selected shape is validated, copied, completed or canceled,
     dropped, and benchmarked through the same P3 host path.
   - Evidence update: record shape, tests, and benchmark output in this document.
@@ -223,6 +225,40 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P3-ASYNC-ERROR-CONTEXT-COPY` - `stream<error-context>` and
+  `future<error-context>` payloads copy through canonical memory.
+  - Scope: internal Preview3 async value copy path over real error-context host
+    handles in a shared component resource table.
+  - Edit targets: `lib/src/wasi/component/async_host.dart`,
+    `test/wasi_component_async_host_test.dart`, and
+    `tool/wasi_component_async_benchmark.dart`.
+  - Red test:
+    `dart test test/wasi_component_async_host_test.dart --name "copies error-context"`
+    failed before the fix because `_asyncValueValidatorForElementType` rejected
+    error-context stream/future element values with an `UnsupportedError`.
+  - Implementation gate:
+    `dart test test/wasi_component_async_host_test.dart --name "copies error-context"`;
+    `dart test test/wasi_component_async_host_test.dart`;
+    `dart test test/wasi_component_value_memory_test.dart`;
+    `dart test test/wasi_component_host_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`
+    reported `stream_error_context_memory_copy.operations=64000`,
+    `stream_error_context_memory_copy.per_operation_us=0.044671875`,
+    `future_error_context_memory_copy.operations=8000`, and
+    `future_error_context_memory_copy.per_operation_us=0.1365`;
+    `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`
+    reported `component_adapter_error_context_memory_invoke.operations=4000`,
+    `component_adapter_error_context_memory_invoke.per_operation_us=0.18925`,
+    `error_context_memory.operations=14000`, and
+    `error_context_memory.per_operation_us=0.06535714285714286`.
+  - Done when: decoded error-context stream and future element types accept real
+    error-context handles, copy them through guest memory, preserve the debug
+    message resource, drop async endpoints without dropping the payload handle,
+    and include dedicated benchmark metrics.
+  - Evidence update: this checked row plus the detailed backlog child row.
+  - Claim impact: closes one Preview3 async error-context copy gap; does not
+    complete `P3-ASYNC-COPY-GAPS`, `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `CM-VALUE-DEFINITION-TYPE-VALIDATION` - Value definitions validate their
   component value type indexes before becoming value entries.
   - Evidence:
@@ -814,9 +850,9 @@ unchecked.
     primitives, waitables, tasks, context, thread identity, and copy paths are
     partially executable.
   - Required rows: `P3-VERSIONED-RUN`, `P3-RESOURCE-LIFETIME`,
-    `P3-STREAM-FUTURE-SHAPES`, `P3-TASK-CONTEXT-THREAD`,
-    `PUBLIC-API-DOCS`, `VERSION-GATES`, `PERFORMANCE-GATES`, and
-    `FULL-VERIFY`.
+    `P3-STREAM-FUTURE-SHAPES`, `P3-ASYNC-COPY-GAPS`,
+    `P3-TASK-CONTEXT-THREAD`, `PUBLIC-API-DOCS`, `VERSION-GATES`,
+    `PERFORMANCE-GATES`, and `FULL-VERIFY`.
   - Implementation gate:
     `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_host_test.dart test/wasi_component_async_host_test.dart test/wasi_component_waitable_set_test.dart test/wasi_component_task_test.dart test/wasi_component_thread_test.dart test/wasi_component_value_memory_test.dart`;
     every adapter-specific Preview3 component execution command recorded by the
@@ -2427,6 +2463,35 @@ performance visible while the support surface expands.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry.
   - Claim impact: reduces P3 async validation risk; no direct support gate.
+- [x] `P3-ASYNC-ERROR-CONTEXT-COPY` - Canonical memory copy for
+  `stream<error-context>` and `future<error-context>`.
+  - Scope: internal Preview3 async host value-copy behavior over real
+    error-context resource handles.
+  - Edit targets: `lib/src/wasi/component/async_host.dart`,
+    `test/wasi_component_async_host_test.dart`, and
+    `tool/wasi_component_async_benchmark.dart`.
+  - Red test:
+    `dart test test/wasi_component_async_host_test.dart --name "copies error-context"`
+    failed before the fix because the async value validator rejected
+    error-context stream/future payloads before canonical memory copy could run.
+  - Implementation gate:
+    `dart test test/wasi_component_async_host_test.dart --name "copies error-context"`;
+    `dart test test/wasi_component_async_host_test.dart`;
+    `dart test test/wasi_component_value_memory_test.dart`;
+    `dart test test/wasi_component_host_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`
+    reported dedicated `stream_error_context_memory_copy` and
+    `future_error_context_memory_copy` metrics;
+    `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`
+    reported the existing error-context adapter and resource-table metrics.
+  - Done when: error-context stream/future element types validate, copy through
+    guest memory as 32-bit handles, keep ownership with the error-context host,
+    drop async endpoints cleanly, and have dedicated benchmark output.
+  - Evidence update: the `Current Execution Board` `Recently Checked` entry.
+  - Claim impact: contributes to Preview3 async value execution coverage; does
+    not complete `P3-ASYNC-COPY-GAPS`, `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [ ] `P3-ASYNC-COPY-GAPS` - Canonical `stream.*` / `future.*` lowering beyond
   the current copy-buffer subset.
   - Change: wire validated shapes into the internal async host and component

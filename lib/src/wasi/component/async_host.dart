@@ -2873,11 +2873,6 @@ _WASIComponentAsyncValueValidator _asyncValueValidatorForElementType(
     return _WASIComponentAsyncValueValidator.unit;
   }
   final primitive = _primitiveElementType(elementType, definitions);
-  if (primitive == WasmComponentPrimitiveValueType.errorContext) {
-    throw UnsupportedError(
-      'WASI component async host does not support error-context stream/future element values yet.',
-    );
-  }
   if (primitive != null) {
     return _WASIComponentAsyncValueValidator._(
       kind: _WASIComponentAsyncValueShape.primitive,
@@ -2967,7 +2962,8 @@ bool _primitiveValueMatches(
     WasmComponentPrimitiveValueType.char =>
       value is String && value.runes.length == 1,
     WasmComponentPrimitiveValueType.string => value is String,
-    WasmComponentPrimitiveValueType.errorContext => false,
+    WasmComponentPrimitiveValueType.errorContext =>
+      value is int && value >= 0 && value <= 0xffffffff,
   };
 }
 

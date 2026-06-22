@@ -6,6 +6,7 @@ import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
 import 'package:wasd/src/wasi/component/backpressure.dart';
 import 'package:wasd/src/wasi/component/context.dart';
+import 'package:wasd/src/wasi/component/error_context.dart';
 import 'package:wasd/src/wasi/component/subtask.dart';
 import 'package:wasd/src/wasi/component/task.dart';
 import 'package:wasd/src/wasi/component/thread.dart';
@@ -71,6 +72,12 @@ Future<void> main(List<String> args) async {
       await _benchmarkHandleMemoryProgramSyncCancel(options);
   final streamMemoryCopy = _benchmarkStreamMemoryCopy(options);
   final futureMemoryCopy = _benchmarkFutureMemoryCopy(options.iterations);
+  final streamErrorContextMemoryCopy = _benchmarkStreamErrorContextMemoryCopy(
+    options,
+  );
+  final futureErrorContextMemoryCopy = _benchmarkFutureErrorContextMemoryCopy(
+    options.iterations,
+  );
   final streamOwnedResourceMemoryCopy = _benchmarkStreamOwnedResourceMemoryCopy(
     options,
   );
@@ -107,6 +114,8 @@ Future<void> main(List<String> args) async {
     'handle_memory_program_sync_cancel': handleMemoryProgramSyncCancel.toJson(),
     'stream_memory_copy': streamMemoryCopy.toJson(),
     'future_memory_copy': futureMemoryCopy.toJson(),
+    'stream_error_context_memory_copy': streamErrorContextMemoryCopy.toJson(),
+    'future_error_context_memory_copy': futureErrorContextMemoryCopy.toJson(),
     'stream_owned_resource_memory_copy': streamOwnedResourceMemoryCopy.toJson(),
     'future_owned_resource_memory_copy': futureOwnedResourceMemoryCopy.toJson(),
   };
@@ -144,6 +153,8 @@ Future<void> _runWarmup(_Options options) async {
   await _benchmarkHandleMemoryProgramSyncCancel(warmup);
   _benchmarkStreamMemoryCopy(warmup);
   _benchmarkFutureMemoryCopy(_warmupIterations);
+  _benchmarkStreamErrorContextMemoryCopy(warmup);
+  _benchmarkFutureErrorContextMemoryCopy(_warmupIterations);
   _benchmarkStreamOwnedResourceMemoryCopy(warmup);
   _benchmarkFutureOwnedResourceMemoryCopy(_warmupIterations);
 }
@@ -1722,6 +1733,55 @@ _Metric _benchmarkFutureMemoryCopy(int iterations) {
   );
 }
 
+_Metric _benchmarkStreamErrorContextMemoryCopy(_Options options) {
+  final errorHost = WASIComponentErrorContextHost();
+  final errorHandles = List<int>.generate(
+    options.batchSize,
+    (index) => errorHost.create('benchmark stream error-context $index'),
+  );
+  return _benchmarkStreamMemoryCopyForType(
+    options,
+    componentBytes: _streamErrorContextTypeComponentBytes(),
+    componentTypeIndex: 0,
+    name: 'benchmark-error-context-stream',
+    host: WASIComponentAsyncHost(table: errorHost.table),
+    inputValueForIndex: (index) => errorHandles[index],
+    afterDrop: () {
+      for (final handle in errorHandles) {
+        errorHost.drop(handle);
+      }
+      if (errorHost.table.activeCount != 0) {
+        throw StateError(
+          'stream error-context benchmark leaked '
+          '${errorHost.table.activeCount} handles',
+        );
+      }
+    },
+  );
+}
+
+_Metric _benchmarkFutureErrorContextMemoryCopy(int iterations) {
+  final errorHost = WASIComponentErrorContextHost();
+  final errorHandle = errorHost.create('benchmark future error-context');
+  return _benchmarkFutureMemoryCopyForType(
+    iterations,
+    componentBytes: _futureErrorContextTypeComponentBytes(),
+    componentTypeIndex: 0,
+    name: 'benchmark-error-context-future',
+    host: WASIComponentAsyncHost(table: errorHost.table),
+    inputValue: errorHandle,
+    afterDrop: () {
+      errorHost.drop(errorHandle);
+      if (errorHost.table.activeCount != 0) {
+        throw StateError(
+          'future error-context benchmark leaked '
+          '${errorHost.table.activeCount} handles',
+        );
+      }
+    },
+  );
+}
+
 _Metric _benchmarkStreamOwnedResourceMemoryCopy(_Options options) {
   return _benchmarkStreamMemoryCopyForType(
     options,
@@ -1748,17 +1808,20 @@ _Metric _benchmarkStreamMemoryCopyForType(
   required int componentTypeIndex,
   required String name,
   required int Function(int index) inputValueForIndex,
+  WASIComponentAsyncHost? host,
+  void Function()? afterDrop,
 }) {
   final component = WasmComponent.decode(componentBytes);
-  final host = WASIComponentAsyncHost()
+  final asyncHost = host ?? WASIComponentAsyncHost();
+  asyncHost
     ..defineStreamTypeFromComponent<int>(component, componentTypeIndex, name);
-  final newOperation = host.bindCanonicalDefinition(
+  final newOperation = asyncHost.bindCanonicalDefinition(
     WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.streamNew,
       typeIndex: componentTypeIndex,
     ),
   );
-  final readOperation = host.bindCanonicalDefinition(
+  final readOperation = asyncHost.bindCanonicalDefinition(
     WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.streamRead,
       typeIndex: componentTypeIndex,
@@ -1770,7 +1833,7 @@ _Metric _benchmarkStreamMemoryCopyForType(
       ],
     ),
   );
-  final writeOperation = host.bindCanonicalDefinition(
+  final writeOperation = asyncHost.bindCanonicalDefinition(
     WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.streamWrite,
       typeIndex: componentTypeIndex,
@@ -1814,6 +1877,7 @@ _Metric _benchmarkStreamMemoryCopyForType(
 
   stream.readable.drop();
   stream.writable.drop();
+  afterDrop?.call();
   return _Metric(
     operations: options.iterations * options.batchSize * 2,
     totalMicros: watch.elapsedMicroseconds,
@@ -1827,17 +1891,20 @@ _Metric _benchmarkFutureMemoryCopyForType(
   required int componentTypeIndex,
   required String name,
   required int inputValue,
+  WASIComponentAsyncHost? host,
+  void Function()? afterDrop,
 }) {
   final component = WasmComponent.decode(componentBytes);
-  final host = WASIComponentAsyncHost()
+  final asyncHost = host ?? WASIComponentAsyncHost();
+  asyncHost
     ..defineFutureTypeFromComponent<int>(component, componentTypeIndex, name);
-  final newOperation = host.bindCanonicalDefinition(
+  final newOperation = asyncHost.bindCanonicalDefinition(
     WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.futureNew,
       typeIndex: componentTypeIndex,
     ),
   );
-  final readOperation = host.bindCanonicalDefinition(
+  final readOperation = asyncHost.bindCanonicalDefinition(
     WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.futureRead,
       typeIndex: componentTypeIndex,
@@ -1849,7 +1916,7 @@ _Metric _benchmarkFutureMemoryCopyForType(
       ],
     ),
   );
-  final writeOperation = host.bindCanonicalDefinition(
+  final writeOperation = asyncHost.bindCanonicalDefinition(
     WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.futureWrite,
       typeIndex: componentTypeIndex,
@@ -1889,6 +1956,7 @@ _Metric _benchmarkFutureMemoryCopyForType(
   }
   watch.stop();
 
+  afterDrop?.call();
   return _Metric(
     operations: iterations * 4,
     totalMicros: watch.elapsedMicroseconds,
@@ -1926,6 +1994,8 @@ void _printText(Map<String, Object?> payload) {
     'handle_memory_program_sync_cancel',
     'stream_memory_copy',
     'future_memory_copy',
+    'stream_error_context_memory_copy',
+    'future_error_context_memory_copy',
     'stream_owned_resource_memory_copy',
     'future_owned_resource_memory_copy',
   ]) {
@@ -2036,6 +2106,24 @@ Uint8List _streamU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x79,
 ]);
 
+Uint8List _streamErrorContextTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x66,
+      0x01,
+      0x64,
+    ]);
+
 Uint8List _futureU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x61,
@@ -2052,6 +2140,24 @@ Uint8List _futureU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x79,
 ]);
+
+Uint8List _futureErrorContextTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x65,
+      0x01,
+      0x64,
+    ]);
 
 void _printUsage() {
   stdout.writeln('''

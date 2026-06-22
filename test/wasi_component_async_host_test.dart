@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
+import 'package:wasd/src/wasi/component/error_context.dart';
 import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
@@ -726,6 +727,42 @@ void main() {
       dropReadableOperation.streamDropReadableHandle(handles.readable);
       dropWritableOperation.streamDropWritableHandle(handles.writable);
       expect(host.table.activeCount, 0);
+    });
+
+    test('copies error-context stream handles through memory', () {
+      final component = WasmComponent.decode(
+        _streamErrorContextTypeComponentBytes(),
+      );
+      expect(component.validate(), isEmpty);
+      final errorHost = WASIComponentErrorContextHost();
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      final errorHandle = errorHost.create('stream failed');
+      data.setUint32(32, errorHandle, Endian.little);
+      final host = WASIComponentAsyncHost(table: errorHost.table);
+      host.defineStreamTypeFromComponent<int>(
+        component,
+        0,
+        'error-context-stream',
+      );
+      final program = _streamErrorContextMemoryHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32, 1]),
+        1 << 4,
+      );
+      expect(
+        program.invokeWithMemory(2, memory, <Object?>[handles.readable, 96, 1]),
+        1 << 4,
+      );
+      expect(data.getUint32(96, Endian.little), errorHandle);
+      expect(errorHost.debugMessage(errorHandle), 'stream failed');
+      expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+      expect(errorHost.table.activeCount, 1);
+      errorHost.drop(errorHandle);
+      expect(errorHost.table.activeCount, 0);
     });
 
     test('copies owned resource stream handles through canonical memory', () {
@@ -1956,6 +1993,42 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('copies error-context future handles through memory', () {
+      final component = WasmComponent.decode(
+        _futureErrorContextTypeComponentBytes(),
+      );
+      expect(component.validate(), isEmpty);
+      final errorHost = WASIComponentErrorContextHost();
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      final errorHandle = errorHost.create('future failed');
+      data.setUint32(32, errorHandle, Endian.little);
+      final host = WASIComponentAsyncHost(table: errorHost.table);
+      host.defineFutureTypeFromComponent<int>(
+        component,
+        0,
+        'error-context-future',
+      );
+      final program = _futureErrorContextMemoryHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32]),
+        0,
+      );
+      expect(
+        program.invokeWithMemory(2, memory, <Object?>[handles.readable, 96]),
+        0,
+      );
+      expect(data.getUint32(96, Endian.little), errorHandle);
+      expect(errorHost.debugMessage(errorHandle), 'future failed');
+      expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+      expect(errorHost.table.activeCount, 1);
+      errorHost.drop(errorHandle);
+      expect(errorHost.table.activeCount, 0);
+    });
+
     test('invokes handle-backed future memory copies with core ABI args', () {
       final component = WasmComponent.decode(_futureU32TypeComponentBytes());
       expect(component.validate(), isEmpty);
@@ -2869,6 +2942,24 @@ Uint8List _futureU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x79,
 ]);
 
+Uint8List _futureErrorContextTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x65,
+      0x01,
+      0x64,
+    ]);
+
 Uint8List _futureStringTypeComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x61,
@@ -2958,6 +3049,24 @@ Uint8List _streamU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x79,
 ]);
+
+Uint8List _streamErrorContextTypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x66,
+      0x01,
+      0x64,
+    ]);
 
 Uint8List _streamIndexedPrimitiveElementTypeComponentBytes() =>
     Uint8List.fromList(const <int>[
@@ -3095,6 +3204,10 @@ WASIComponentCanonicalAsyncHandleProgram _streamU32MemoryHandleProgram(
     ],
   );
 }
+
+WASIComponentCanonicalAsyncHandleProgram _streamErrorContextMemoryHandleProgram(
+  WASIComponentAsyncHost host,
+) => _streamU32MemoryHandleProgram(host);
 
 WASIComponentCanonicalAsyncHandleProgram _streamStringMemoryHandleProgram(
   WASIComponentAsyncHost host,
@@ -3335,6 +3448,10 @@ WASIComponentCanonicalAsyncHandleProgram _futureU32MemoryHandleProgram(
     ],
   );
 }
+
+WASIComponentCanonicalAsyncHandleProgram _futureErrorContextMemoryHandleProgram(
+  WASIComponentAsyncHost host,
+) => _futureU32MemoryHandleProgram(host);
 
 WASIComponentCanonicalAsyncHandleProgram _futureStringMemoryHandleProgram(
   WASIComponentAsyncHost host,
