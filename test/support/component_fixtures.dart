@@ -345,6 +345,63 @@ Uint8List ownedResourceAsyncMemoryProgramFromU32(
   return Uint8List.fromList(bytes);
 }
 
+/// Rewrites a decoded stream/future memory-copy program to include canonical
+/// cancel-read and cancel-write definitions before endpoint drops.
+Uint8List asyncMemoryProgramWithCancelDefinitions(
+  Uint8List source, {
+  required bool isStream,
+  required int componentTypeIndex,
+  bool cancelIsAsync = true,
+}) {
+  final bytes = source.toList();
+  final writeKind = isStream ? 0x10 : 0x17;
+  final cancelReadKind = isStream ? 0x11 : 0x18;
+  final cancelWriteKind = isStream ? 0x12 : 0x19;
+  final dropReadableKind = isStream ? 0x13 : 0x1a;
+  final dropWritableKind = isStream ? 0x14 : 0x1b;
+  final oldSection = <int>[
+    0x08,
+    0x0a,
+    0x03,
+    writeKind,
+    componentTypeIndex,
+    0x01,
+    0x03,
+    0x01,
+    dropReadableKind,
+    componentTypeIndex,
+    dropWritableKind,
+    componentTypeIndex,
+  ];
+  final flag = cancelIsAsync ? 0x01 : 0x00;
+  final newSection = <int>[
+    0x08,
+    0x10,
+    0x05,
+    writeKind,
+    componentTypeIndex,
+    0x01,
+    0x03,
+    0x01,
+    cancelReadKind,
+    componentTypeIndex,
+    flag,
+    cancelWriteKind,
+    componentTypeIndex,
+    flag,
+    dropReadableKind,
+    componentTypeIndex,
+    dropWritableKind,
+    componentTypeIndex,
+  ];
+  final offset = _indexOfSublist(bytes, oldSection);
+  if (offset < 0) {
+    throw StateError('Unable to find async memory write/drop section.');
+  }
+  bytes.replaceRange(offset, offset + oldSection.length, newSection);
+  return Uint8List.fromList(bytes);
+}
+
 /// Returns a component whose canonical section creates and drops a
 /// `stream<own resource>`.
 Uint8List ownedResourceStreamNewDropComponentBytes() =>

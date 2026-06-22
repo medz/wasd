@@ -759,6 +759,141 @@ void main() {
       },
     );
 
+    test('Preview3 wrapper cancels owned-resource async copy events', () async {
+      final streamComponent = WasmComponent.decode(
+        asyncMemoryProgramWithCancelDefinitions(
+          ownedResourceAsyncMemoryProgramFromU32(
+            canonicalU32StreamMemoryComponentBytes(),
+            isStream: true,
+          ),
+          isStream: true,
+          componentTypeIndex: 2,
+        ),
+      );
+      final futureComponent = WasmComponent.decode(
+        asyncMemoryProgramWithCancelDefinitions(
+          ownedResourceAsyncMemoryProgramFromU32(
+            canonicalU32FutureMemoryComponentBytes(),
+            isStream: false,
+          ),
+          isStream: false,
+          componentTypeIndex: 2,
+        ),
+      );
+      final streamHost = WASIPreview3ComponentHost();
+      final futureHost = WASIPreview3ComponentHost();
+      final streamMemory = Memory(const MemoryDescriptor(initial: 1));
+      final futureMemory = Memory(const MemoryDescriptor(initial: 1));
+      final streamData = ByteData.view(streamMemory.buffer);
+      final futureData = ByteData.view(futureMemory.buffer);
+
+      final streamBinding = streamHost.bindComponent(streamComponent);
+      final streamHandles = WASIComponentAsyncEndpointHandles.unpack(
+        streamBinding.program.invoke(0, const <Object?>[])! as int,
+      );
+      final streamWaitableHost =
+          streamHost.componentHost.canonicalHost.waitableHost;
+      final streamWaitableSet = streamWaitableHost.waitableSetNew();
+      streamWaitableHost.waitableJoin(
+        streamHandles.readable,
+        streamWaitableSet,
+      );
+
+      expect(streamComponent.validate(), isEmpty);
+      expect(
+        streamBinding.program.invokeWithMemoryEvent(1, streamMemory, <Object?>[
+          streamHandles.readable,
+          96,
+          2,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        streamBinding.program.invoke(3, <Object?>[streamHandles.readable]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        () =>
+            streamBinding.program.invoke(3, <Object?>[streamHandles.readable]),
+        throwsStateError,
+      );
+
+      await expectLater(
+        streamWaitableHost.waitableSetWaitToMemory(
+          streamWaitableSet,
+          streamMemory,
+          128,
+        ),
+        completion(WASIComponentWaitableEventCode.streamRead.value),
+      );
+      expect(streamData.getUint32(128, Endian.little), streamHandles.readable);
+      expect(
+        streamData.getUint32(132, Endian.little),
+        WASIComponentAsyncCopyResult.cancelled().packedResult,
+      );
+      streamWaitableHost.waitableJoin(streamHandles.readable, 0);
+      streamWaitableHost.waitableSetDrop(streamWaitableSet);
+      expect(
+        streamBinding.program.invoke(5, <Object?>[streamHandles.readable]),
+        isNull,
+      );
+      expect(
+        streamBinding.program.invoke(6, <Object?>[streamHandles.writable]),
+        isNull,
+      );
+      expect(streamHost.componentHost.table.activeCount, 0);
+
+      final futureBinding = futureHost.bindComponent(futureComponent);
+      final futureHandles = WASIComponentAsyncEndpointHandles.unpack(
+        futureBinding.program.invoke(0, const <Object?>[])! as int,
+      );
+      final futureWaitableHost =
+          futureHost.componentHost.canonicalHost.waitableHost;
+      final futureWaitableSet = futureWaitableHost.waitableSetNew();
+      futureWaitableHost.waitableJoin(
+        futureHandles.readable,
+        futureWaitableSet,
+      );
+
+      expect(futureComponent.validate(), isEmpty);
+      expect(
+        futureBinding.program.invokeWithMemoryEvent(1, futureMemory, <Object?>[
+          futureHandles.readable,
+          96,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        futureBinding.program.invoke(3, <Object?>[futureHandles.readable]),
+        wasiComponentAsyncBlocked,
+      );
+
+      await expectLater(
+        futureWaitableHost.waitableSetWaitToMemory(
+          futureWaitableSet,
+          futureMemory,
+          128,
+        ),
+        completion(WASIComponentWaitableEventCode.futureRead.value),
+      );
+      expect(futureData.getUint32(128, Endian.little), futureHandles.readable);
+      expect(
+        futureData.getUint32(132, Endian.little),
+        WASIComponentAsyncCopyResult.cancelled().packedResult,
+      );
+      futureWaitableHost.waitableJoin(futureHandles.readable, 0);
+      futureWaitableHost.waitableSetDrop(futureWaitableSet);
+      expect(
+        futureBinding.program.invoke(5, <Object?>[futureHandles.readable]),
+        isNull,
+      );
+      expect(
+        futureBinding.program.invoke(6, <Object?>[futureHandles.writable]),
+        isNull,
+      );
+      expect(futureHost.componentHost.table.activeCount, 0);
+    });
+
     test('Preview3 wrapper reports adapter resource handle uses', () {
       final component = WasmComponent.decode(
         canonicalResourceLiftComponentBytes(),
