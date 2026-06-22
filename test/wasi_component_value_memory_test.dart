@@ -73,6 +73,61 @@ void main() {
       );
     });
 
+    test('loads and stores error-context handles as canonical u32', () {
+      final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+        const WasmComponentValueType.primitive(
+          WasmComponentPrimitiveValueType.errorContext,
+        ),
+        const <WasmComponentTypeDefinition>[],
+      )!;
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 17, Endian.little);
+
+      expect(codec.byteLength, 4);
+      expect(codec.alignment, 4);
+      expect(codec.load(memory, 32), 17);
+
+      codec.store(memory, 36, 23);
+      expect(data.getUint32(36, Endian.little), 23);
+      codec.store(
+        memory,
+        40,
+        WasmComponentValueData(
+          kind: WasmComponentValueDataKind.integer,
+          rawBytes: Uint8List(0),
+          integer: 29,
+        ),
+      );
+      expect(data.getUint32(40, Endian.little), 29);
+      expect(() => codec.store(memory, 44, -1), throwsStateError);
+      expect(() => codec.store(memory, 44, 0x100000000), throwsStateError);
+      expect(
+        () => codec.store(
+          memory,
+          44,
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.integer,
+            rawBytes: Uint8List(0),
+            integer: -1,
+          ),
+        ),
+        throwsStateError,
+      );
+      expect(
+        () => codec.store(
+          memory,
+          44,
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.integer,
+            rawBytes: Uint8List(0),
+            integer: 0x100000000,
+          ),
+        ),
+        throwsStateError,
+      );
+    });
+
     test('packs flags through the smallest canonical integer width', () {
       final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
         const WasmComponentValueType.typeIndex(0),

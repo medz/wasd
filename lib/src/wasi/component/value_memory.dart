@@ -11,15 +11,16 @@ import 'string_memory.dart';
 /// buffers. Dynamic string/list values are represented by their canonical
 /// `(ptr, len)` record and use [WASIComponentCanonicalRealloc] when storing
 /// payloads.
-/// Handle-table semantics and borrow tracking are reported as unsupported
-/// instead of being approximated.
+/// Resource handle-table semantics and borrow tracking are reported as
+/// unsupported instead of being approximated. Error-context handles are plain
+/// canonical `u32` values in memory.
 final class WASIComponentCanonicalValueMemoryCodec {
   const WASIComponentCanonicalValueMemoryCodec._(this._layout);
 
   /// Builds a Canonical ABI memory codec for [type].
   ///
-  /// Returns `null` when [type] contains component handles, borrows, nested
-  /// stream/future values, error contexts, or an invalid type index.
+  /// Returns `null` when [type] contains component resource handles, borrows,
+  /// nested stream/future values, or an invalid type index.
   static WASIComponentCanonicalValueMemoryCodec? fromValueType(
     WasmComponentValueType type,
     List<WasmComponentTypeDefinition> definitions,
@@ -484,8 +485,12 @@ final class _PrimitiveLayout extends _CanonicalValueLayout {
     WASIComponentCanonicalRealloc? realloc,
     WASIComponentCanonicalStringEncoding stringEncoding,
   ) {
-    validate(primitive.name, value);
-    _writePrimitive(data, pointer, primitive, value);
+    _writePrimitive(
+      data,
+      pointer,
+      primitive,
+      _primitiveValue(primitive, value),
+    );
   }
 
   @override
@@ -1367,6 +1372,7 @@ _CanonicalValueLayout? _primitiveLayout(
     case WasmComponentPrimitiveValueType.u32:
     case WasmComponentPrimitiveValueType.f32:
     case WasmComponentPrimitiveValueType.char:
+    case WasmComponentPrimitiveValueType.errorContext:
       return _PrimitiveLayout(primitive, 4, 4);
     case WasmComponentPrimitiveValueType.s64:
     case WasmComponentPrimitiveValueType.u64:
@@ -1374,8 +1380,6 @@ _CanonicalValueLayout? _primitiveLayout(
       return _PrimitiveLayout(primitive, 8, 8);
     case WasmComponentPrimitiveValueType.string:
       return const _StringLayout();
-    case WasmComponentPrimitiveValueType.errorContext:
-      return null;
   }
 }
 
@@ -1461,6 +1465,10 @@ Object _readPrimitive(
       offset,
       Endian.little,
     ),
+    WasmComponentPrimitiveValueType.errorContext => data.getUint32(
+      offset,
+      Endian.little,
+    ),
     WasmComponentPrimitiveValueType.s64 => data.getInt64(offset, Endian.little),
     WasmComponentPrimitiveValueType.u64 => data.getUint64(
       offset,
@@ -1475,8 +1483,7 @@ Object _readPrimitive(
       Endian.little,
     ),
     WasmComponentPrimitiveValueType.char => _readCanonicalChar(data, offset),
-    WasmComponentPrimitiveValueType.string ||
-    WasmComponentPrimitiveValueType.errorContext => throw StateError(
+    WasmComponentPrimitiveValueType.string => throw StateError(
       'Unsupported canonical primitive read: ${primitive.name}.',
     ),
   };
@@ -1503,6 +1510,8 @@ void _writePrimitive(
       data.setInt32(offset, value as int, Endian.little);
     case WasmComponentPrimitiveValueType.u32:
       data.setUint32(offset, value as int, Endian.little);
+    case WasmComponentPrimitiveValueType.errorContext:
+      data.setUint32(offset, value as int, Endian.little);
     case WasmComponentPrimitiveValueType.s64:
       data.setInt64(offset, value as int, Endian.little);
     case WasmComponentPrimitiveValueType.u64:
@@ -1514,7 +1523,6 @@ void _writePrimitive(
     case WasmComponentPrimitiveValueType.char:
       data.setUint32(offset, (value as String).runes.single, Endian.little);
     case WasmComponentPrimitiveValueType.string:
-    case WasmComponentPrimitiveValueType.errorContext:
       throw StateError(
         'Unsupported canonical primitive write: ${primitive.name}.',
       );
@@ -1541,6 +1549,7 @@ WasmComponentValueData _primitiveData(
     case WasmComponentPrimitiveValueType.u32:
     case WasmComponentPrimitiveValueType.s64:
     case WasmComponentPrimitiveValueType.u64:
+    case WasmComponentPrimitiveValueType.errorContext:
       return WasmComponentValueData(
         kind: WasmComponentValueDataKind.integer,
         rawBytes: rawBytes,
@@ -1560,7 +1569,6 @@ WasmComponentValueData _primitiveData(
         string: value as String,
       );
     case WasmComponentPrimitiveValueType.string:
-    case WasmComponentPrimitiveValueType.errorContext:
       throw StateError(
         'Unsupported canonical primitive data: ${primitive.name}.',
       );
@@ -1585,6 +1593,7 @@ Object? _primitiveValueFromData(
     case WasmComponentPrimitiveValueType.u32:
     case WasmComponentPrimitiveValueType.s64:
     case WasmComponentPrimitiveValueType.u64:
+    case WasmComponentPrimitiveValueType.errorContext:
       if (value.kind == WasmComponentValueDataKind.integer &&
           value.integer is int) {
         return value.integer;
@@ -1601,11 +1610,25 @@ Object? _primitiveValueFromData(
         return value.string;
       }
     case WasmComponentPrimitiveValueType.string:
-    case WasmComponentPrimitiveValueType.errorContext:
       break;
   }
   throw StateError(
     'WASI component canonical value data does not match ${primitive.name}.',
+  );
+}
+
+Object? _primitiveValue(
+  WasmComponentPrimitiveValueType primitive,
+  Object? value,
+) {
+  final candidate = value is WasmComponentValueData
+      ? _primitiveValueFromData(primitive, value)
+      : value;
+  if (_primitiveValueMatches(primitive, candidate)) {
+    return candidate;
+  }
+  throw StateError(
+    'WASI component canonical value expected ${primitive.name}.',
   );
 }
 
@@ -1638,7 +1661,8 @@ bool _primitiveValueMatches(
     WasmComponentPrimitiveValueType.char =>
       value is String && value.runes.length == 1,
     WasmComponentPrimitiveValueType.string => value is String,
-    WasmComponentPrimitiveValueType.errorContext => false,
+    WasmComponentPrimitiveValueType.errorContext =>
+      value is int && value >= 0 && value <= 0xffffffff,
   };
 }
 

@@ -100,14 +100,18 @@ void main() {
       for (final plan in plans) {
         expect(plan.params, hasLength(1));
         expect(plan.params.single.label, 'input');
-        expect(plan.params.single.hasMemoryCodec, isFalse);
+        expect(plan.params.single.hasMemoryCodec, isTrue);
+        expect(plan.params.single.byteLength, 4);
+        expect(plan.params.single.alignment, 4);
         expect(plan.params.single.flatLength, 1);
         expect(
           plan.params.single.flatLayout!.kind,
           WASIComponentCanonicalAdapterFlatValueKind.errorContext,
         );
         expect(plan.result, isNotNull);
-        expect(plan.result!.hasMemoryCodec, isFalse);
+        expect(plan.result!.hasMemoryCodec, isTrue);
+        expect(plan.result!.byteLength, 4);
+        expect(plan.result!.alignment, 4);
         expect(plan.result!.flatLength, 1);
         expect(
           plan.result!.flatLayout!.kind,
@@ -979,25 +983,29 @@ void main() {
         () => program.invoke(0, const <Object?>[0x100000000]),
         throwsStateError,
       );
+      final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 17, Endian.little);
+      data.setUint32(40, 23, Endian.little);
+
       expect(
-        () => program.invokeWithMemory(
-          0,
-          wasm.Memory(const wasm.MemoryDescriptor(initial: 1)),
-          const <int>[0],
-          resultPointer: 4,
-        ),
-        throwsUnsupportedError,
+        program.invokeWithMemory(0, memory, const <int>[32], resultPointer: 36),
+        19,
       );
+      expect(data.getUint32(36, Endian.little), 19);
+      expect(
+        program.invokeWithMemory(1, memory, const <int>[40], resultPointer: 44),
+        29,
+      );
+      expect(data.getUint32(44, Endian.little), 29);
+
       final operation = host.bindLiftCoreFunction(plans[0], (_) => 19);
       expect(operation.invoke(const <Object?>[17]), 19);
       expect(
-        () => operation.invokeWithMemory(
-          wasm.Memory(const wasm.MemoryDescriptor(initial: 1)),
-          const <int>[0],
-          resultPointer: 4,
-        ),
-        throwsUnsupportedError,
+        operation.invokeWithMemory(memory, const <int>[32], resultPointer: 48),
+        19,
       );
+      expect(data.getUint32(48, Endian.little), 19);
     });
 
     test('invokes string adapter programs through flat scalar values', () {

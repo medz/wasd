@@ -83,6 +83,8 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentAdapterErrorContextDirectInvoke(options.iterations);
   final componentAdapterErrorContextFlatInvoke =
       _benchmarkComponentAdapterErrorContextFlatInvoke(options.iterations);
+  final componentAdapterErrorContextMemoryInvoke =
+      _benchmarkComponentAdapterErrorContextMemoryInvoke(options.iterations);
   final componentAdapterStringMemoryInvoke =
       _benchmarkComponentAdapterStringMemoryInvoke(options.iterations);
   final componentHostStreamMemoryBinding =
@@ -150,6 +152,8 @@ Future<void> main(List<String> args) async {
         componentAdapterErrorContextDirectInvoke.toJson(),
     'component_adapter_error_context_flat_invoke':
         componentAdapterErrorContextFlatInvoke.toJson(),
+    'component_adapter_error_context_memory_invoke':
+        componentAdapterErrorContextMemoryInvoke.toJson(),
     'component_adapter_string_memory_invoke': componentAdapterStringMemoryInvoke
         .toJson(),
     'component_host_stream_memory_binding': componentHostStreamMemoryBinding
@@ -205,6 +209,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentAdapterResourceFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterErrorContextDirectInvoke(_warmupIterations);
   _benchmarkComponentAdapterErrorContextFlatInvoke(_warmupIterations);
+  _benchmarkComponentAdapterErrorContextMemoryInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringMemoryInvoke(_warmupIterations);
   _benchmarkComponentHostStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostRecordStreamMemoryBinding(_warmupIterations);
@@ -1077,6 +1082,43 @@ _Metric _benchmarkComponentAdapterErrorContextFlatInvoke(int iterations) {
     checksum += lifted.single! as int;
     final lowered = program.invokeFlat(1, const <Object?>[23]);
     checksum += lowered.single! as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentAdapterErrorContextMemoryInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalErrorContextLiftLowerComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {1: (_) => 19},
+    componentFunctions: {0: (_) => 29},
+  );
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final data = ByteData.view(memory.buffer);
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    data.setUint32(32, 17, Endian.little);
+    checksum +=
+        program.invokeWithMemory(0, memory, const <int>[32], resultPointer: 36)!
+            as int;
+    checksum += data.getUint32(36, Endian.little);
+    data.setUint32(40, 23, Endian.little);
+    checksum +=
+        program.invokeWithMemory(1, memory, const <int>[40], resultPointer: 44)!
+            as int;
+    checksum += data.getUint32(44, Endian.little);
   }
   watch.stop();
 
