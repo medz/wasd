@@ -9,6 +9,7 @@ import 'package:wasd/src/wasi/component/versioned_host.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasi/version.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
+import 'package:wasd/src/wasm/memory.dart' as wasm;
 
 import 'support/component_fixtures.dart';
 
@@ -221,6 +222,89 @@ void main() {
       expect(() => program.invoke(0, const <Object?>[1]), throwsStateError);
     });
 
+    test('invokes string adapter programs through canonical value memory', () {
+      final component = WasmComponent.decode(
+        canonicalStringLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+      final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
+      final realloc = _bumpRealloc(memory);
+      final input = writeWASIComponentCanonicalString(
+        memory,
+        realloc,
+        'guest',
+        WASIComponentCanonicalStringEncoding.utf8,
+      );
+      writeWASIComponentMemoryStringRecord(memory, 32, input);
+
+      final program = host.bindAdapterPlans(
+        plans,
+        coreFunctions: {
+          0: (args) {
+            expect(args, ['guest']);
+            return 'lifted:${args.single}';
+          },
+        },
+        componentFunctions: {
+          0: (args) {
+            expect(args, ['guest']);
+            return 'lowered:${args.single}';
+          },
+        },
+      );
+
+      expect(
+        program.invokeWithMemory(
+          0,
+          memory,
+          const <int>[32],
+          resultPointer: 64,
+          realloc: realloc,
+        ),
+        'lifted:guest',
+      );
+      expect(
+        readWASIComponentCanonicalStringRecord(
+          memory,
+          64,
+          WASIComponentCanonicalStringEncoding.utf8,
+        ),
+        'lifted:guest',
+      );
+
+      expect(
+        program.invokeWithMemory(
+          1,
+          memory,
+          const <int>[32],
+          resultPointer: 96,
+          realloc: realloc,
+        ),
+        'lowered:guest',
+      );
+      expect(
+        readWASIComponentCanonicalStringRecord(
+          memory,
+          96,
+          WASIComponentCanonicalStringEncoding.utf8,
+        ),
+        'lowered:guest',
+      );
+      expect(
+        () => program.invokeWithMemory(0, memory, const <int>[
+          32,
+        ], realloc: realloc),
+        throwsStateError,
+      );
+      expect(
+        () => program.invokeWithMemory(0, memory, const <int>[
+          32,
+        ], resultPointer: 128),
+        throwsUnsupportedError,
+      );
+    });
+
     test('binds primitive adapter programs from component host plans', () {
       final component = WasmComponent.decode(
         canonicalPrimitiveLiftLowerComponentBytes(),
@@ -337,4 +421,23 @@ void main() {
       );
     });
   });
+}
+
+WASIComponentCanonicalRealloc _bumpRealloc(
+  wasm.Memory memory, {
+  int start = 256,
+}) {
+  var heap = start;
+  return (_, _, alignment, newSize) {
+    final remainder = heap % alignment;
+    if (remainder != 0) {
+      heap += alignment - remainder;
+    }
+    final pointer = heap;
+    heap += newSize;
+    if (heap > memory.buffer.lengthInBytes) {
+      throw StateError('test realloc exceeded memory');
+    }
+    return pointer;
+  };
 }

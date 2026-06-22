@@ -1,5 +1,7 @@
 import '../../wasm/backend/native/interpreter/component.dart';
+import '../../wasm/memory.dart' as wasm;
 import 'adapter_plan.dart';
+import 'string_memory.dart';
 
 /// Function callback used by direct canonical adapter operations.
 typedef WASIComponentCanonicalAdapterCallback =
@@ -110,6 +112,28 @@ final class WASIComponentCanonicalAdapterProgram {
     }
     return operation.invoke(args);
   }
+
+  /// Invokes an adapter operation by loading parameters from canonical memory.
+  Object? invokeWithMemory(
+    int canonicalIndex,
+    wasm.Memory memory,
+    List<int> paramPointers, {
+    int? resultPointer,
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    final operation = _operationsByCanonicalIndex[canonicalIndex];
+    if (operation == null) {
+      throw StateError(
+        'Unknown WASI component canonical adapter index: $canonicalIndex.',
+      );
+    }
+    return operation.invokeWithMemory(
+      memory,
+      paramPointers,
+      resultPointer: resultPointer,
+      realloc: realloc,
+    );
+  }
 }
 
 Map<int, WASIComponentCanonicalAdapterOperation> _indexOperations(
@@ -171,6 +195,54 @@ final class WASIComponentCanonicalAdapterOperation {
       return null;
     }
     resultPlan.memoryCodec!.validate(resultPlan.path, result);
+    return result;
+  }
+
+  /// Invokes the adapter with parameter/result values stored in memory.
+  Object? invokeWithMemory(
+    wasm.Memory memory,
+    List<int> paramPointers, {
+    int? resultPointer,
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    if (paramPointers.length != plan.params.length) {
+      throw StateError(
+        'WASI component canonical adapter index $canonicalIndex expected '
+        '${plan.params.length} memory parameter pointers, got '
+        '${paramPointers.length}.',
+      );
+    }
+    final args = List<Object?>.generate(
+      plan.params.length,
+      (index) => plan.params[index].memoryCodec!.load(
+        memory,
+        paramPointers[index],
+        stringEncoding: plan.stringEncoding,
+      ),
+      growable: false,
+    );
+    final result = invoke(args);
+    final resultPlan = plan.result;
+    if (resultPlan == null) {
+      if (resultPointer != null) {
+        throw StateError(
+          'WASI component canonical adapter index $canonicalIndex expected no result pointer.',
+        );
+      }
+      return null;
+    }
+    if (resultPointer == null) {
+      throw StateError(
+        'WASI component canonical adapter index $canonicalIndex requires a result pointer.',
+      );
+    }
+    resultPlan.memoryCodec!.store(
+      memory,
+      resultPointer,
+      result,
+      realloc: realloc,
+      stringEncoding: plan.stringEncoding,
+    );
     return result;
   }
 }
