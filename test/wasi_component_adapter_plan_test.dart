@@ -1,4 +1,5 @@
 import 'package:test/test.dart';
+import 'package:wasd/src/wasi/component/adapter_host.dart';
 import 'package:wasd/src/wasi/component/adapter_plan.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/string_memory.dart';
@@ -49,6 +50,37 @@ void main() {
       expect(lower.reallocIndex, isNull);
     });
 
+    test('executes primitive lift and lower plans with direct callbacks', () {
+      final component = WasmComponent.decode(
+        canonicalPrimitiveLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+
+      final lift = host.bindLiftCoreFunction(plans[0], (args) {
+        expect(args, isEmpty);
+        return 41;
+      });
+      final lower = host.bindLowerComponentFunction(plans[1], (args) {
+        expect(args, isEmpty);
+        return 42;
+      });
+
+      expect(lift.kind, WasmComponentCanonicalKind.lift);
+      expect(lift.canonicalIndex, 0);
+      expect(lift.invoke(const <Object?>[]), 41);
+      expect(lower.kind, WasmComponentCanonicalKind.lower);
+      expect(lower.canonicalIndex, 1);
+      expect(lower.invoke(const <Object?>[]), 42);
+      expect(() => lift.invoke(const <Object?>[1]), throwsStateError);
+
+      final invalidResult = host.bindLiftCoreFunction(
+        plans[0],
+        (_) => 'not-a-number',
+      );
+      expect(() => invalidResult.invoke(const <Object?>[]), throwsStateError);
+    });
+
     test('exposes resource adapter plans through Preview3 preparation', () {
       final component = WasmComponent.decode(
         canonicalResourceLiftComponentBytes(),
@@ -91,6 +123,14 @@ void main() {
       expect(
         adapter.result!.resourceUses.single.handleKind,
         WASIComponentResourceHandleKind.own,
+      );
+
+      expect(
+        () => host.componentHost.canonicalHost.adapterHost.bindLiftCoreFunction(
+          adapter,
+          (_) => 1,
+        ),
+        throwsUnsupportedError,
       );
     });
   });

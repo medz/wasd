@@ -1,5 +1,6 @@
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
+import 'adapter_host.dart';
 import 'string_memory.dart';
 import 'async_host.dart';
 import 'backpressure.dart';
@@ -25,6 +26,7 @@ final class WASIComponentCanonicalHost {
     WASIComponentContext? context,
     int availableParallelism = 1,
   }) : table = table ?? WASIComponentResourceTable() {
+    adapterHost = const WASIComponentCanonicalAdapterHost();
     resourceHost = WASIComponentResourceHost(table: this.table);
     asyncHost = WASIComponentAsyncHost(
       table: this.table,
@@ -49,6 +51,9 @@ final class WASIComponentCanonicalHost {
 
   /// Shared component resource table.
   final WASIComponentResourceTable table;
+
+  /// Adapter host used for executable canonical `lift`/`lower` operations.
+  late final WASIComponentCanonicalAdapterHost adapterHost;
 
   /// Resource host used for canonical `resource.*` operations.
   late final WASIComponentResourceHost resourceHost;

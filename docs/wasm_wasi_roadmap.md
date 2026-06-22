@@ -253,9 +253,14 @@ This is the implementation state as of 2026-06-22 on `main`.
   component-host plan also captures canonical `lift`/`lower` adapter metadata:
   decoded function signatures, string encoding and core option indexes,
   Canonical ABI value-memory codecs for supported parameter/result shapes, and
-  structured `own`/`borrow` resource handle uses. This keeps future adapter
-  generation inputs explicit while `lift`/`lower` execution is still reported
-  as a host capability gap instead of being overclaimed. Async value
+  structured `own`/`borrow` resource handle uses. An internal direct adapter
+  host can execute synchronous primitive `lift`/`lower` plans against injected
+  Dart callbacks, rejecting resource handles, dynamic memory payloads, async
+  adapters, and non-primitive value shapes instead of approximating them. This
+  keeps future adapter generation inputs explicit while automatic binding of
+  decoded `lift`/`lower` definitions to real core/component function indexes is
+  still reported as a host capability gap instead of being overclaimed. Async
+  value
   bindings now also expose Canonical ABI memory-copy layout through an
   internal Canonical ABI value-memory codec covering primitive values,
   records/tuples, fixed lists, flags, variants, options, results, enums, and
