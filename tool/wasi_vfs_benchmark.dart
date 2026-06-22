@@ -1213,6 +1213,8 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
   final waiting = WASIPreview1Socket();
   final closed = WASIPreview1Socket();
   closed.shutdown(receive: true, send: false);
+  final writeClosed = WASIPreview1Socket();
+  writeClosed.shutdown(receive: false, send: true);
   final listener = WASIPreview1Socket(pendingAccepted: [WASIPreview1Socket()]);
   final external = WASIPreview1Socket(
     readReadyBytes: _socketChunkSize ~/ 2,
@@ -1238,6 +1240,7 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
       68: external,
       69: providerBacked,
       70: zeroHint,
+      71: writeClosed,
     },
   );
   final providerDrainBuffer = Uint8List(1);
@@ -1278,6 +1281,20 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
       throw StateError('closed socket hangup poll failed at iteration $i');
     }
     checksum += closedEvent.flags;
+
+    final writeClosedEvent = vfs.pollFdReadWrite(
+      fd: 71,
+      eventType: eventTypeFdWrite,
+    );
+    if (!writeClosedEvent.ready ||
+        writeClosedEvent.nbytes != 0 ||
+        writeClosedEvent.flags != eventrwflagFdReadwriteHangup ||
+        writeClosedEvent.errno != errnoSuccess) {
+      throw StateError(
+        'write-closed socket hangup poll failed at iteration $i',
+      );
+    }
+    checksum += writeClosedEvent.flags;
 
     final acceptEvent = vfs.pollFdReadWrite(fd: 67, eventType: eventTypeFdRead);
     if (!acceptEvent.ready ||
@@ -1345,7 +1362,7 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
     throw StateError('provider-backed stream socket poll count mismatch');
   }
   return _Metric(
-    operations: options.iterations * 9,
+    operations: options.iterations * 10,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );

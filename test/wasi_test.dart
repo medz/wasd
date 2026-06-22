@@ -1610,7 +1610,11 @@ void main() {
         () async {
           final socket = WASIPreview1Socket();
           final restricted = WASIPreview1Socket();
-          final socketWasi = WASI(sockets: {25: socket, 26: restricted});
+          final closedWrite = WASIPreview1Socket();
+          closedWrite.shutdown(receive: false, send: true);
+          final socketWasi = WASI(
+            sockets: {25: socket, 26: restricted, 27: closedWrite},
+          );
           final socketResult = await WebAssembly.instantiate(
             _wasiBytes.buffer,
             socketWasi.imports,
@@ -1670,6 +1674,34 @@ void main() {
             _errnoNotcapable,
           );
           expect(bytes[outPtr + _eventTypeOffset], _eventTypeFdWrite);
+
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0x7707,
+            tag: _eventTypeFdWrite,
+            fd: 27,
+          );
+          data.setUint32(neventsPtr, 0xfeedface, Endian.little);
+          bytes.fillRange(outPtr, outPtr + _eventSize, 0xff);
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]),
+            ),
+            0,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0x7707);
+          expect(data.getUint16(outPtr + _eventErrorOffset, Endian.little), 0);
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeFdWrite);
+          expect(_getUint64Le(data, outPtr + _eventFdReadwriteNbytesOffset), 0);
+          expect(
+            data.getUint16(
+              outPtr + _eventFdReadwriteFlagsOffset,
+              Endian.little,
+            ),
+            _eventrwflagFdReadwriteHangup,
+          );
         },
         skip: _skipOnNode(
           'Skipping on Node.js; socket behavior is delegated to node:wasi.',

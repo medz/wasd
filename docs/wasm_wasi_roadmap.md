@@ -223,6 +223,25 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-POLL-WRITE-HANGUP` - `poll_oneoff(fd_write)` reports hangup
+  after send-side socket shutdown.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "poll_oneoff reports socket write readiness and rights errors"`
+    failed before the fix because the fd_write subscription produced
+    `nevents=0` after `sock_shutdown(SD_WR)`, then passed after the fix;
+    `dart test test/wasi_test.dart --name "poll_oneoff reports socket write readiness and rights errors|poll_oneoff reports host socket readiness hints|sock_send reports pipe after write-side shutdown"`;
+    `dart test -p chrome test/wasi_test.dart --name "poll_oneoff reports socket write readiness and rights errors|poll_oneoff reports host socket readiness hints|sock_send reports pipe after write-side shutdown"`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_poll_readiness.operations=80000` and
+    `socket_poll_readiness.per_operation_us=0.073925` for the socket-heavy
+    distribution.
+  - Spec reference: Preview1 fd-readwrite poll events carry the same
+    `FD_READWRITE_HANGUP` flag for `fd_read` and `fd_write` subscriptions;
+    send-side shutdown must be observable instead of silently looking
+    not-ready.
+  - Claim impact: closes one Preview1 socket poll/shutdown consistency gap for
+    native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-SEND-ERROR-PREFLIGHT` - Socket send iovec validation wins over
   shutdown and write-ready error states.
   - Evidence:
@@ -1421,6 +1440,32 @@ performance visible while the support surface expands.
     this row with the exact commands run.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete it until the
     Preview1 socket and runtime gates are all checked.
+- [x] `P1-SOCKET-POLL-WRITE-HANGUP` - `poll_oneoff(fd_write)` reports hangup
+  after send-side socket shutdown.
+  - Scope: shared Preview1 native/browser socket write readiness, send-side
+    shutdown state, and poll fd-write event flags.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "poll_oneoff reports socket write readiness and rights errors"`
+    failed before the fix because the send-shutdown fd_write subscription wrote
+    `nevents=0` instead of an fd_write event with `FD_READWRITE_HANGUP`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "poll_oneoff reports socket write readiness and rights errors"`;
+    `dart test test/wasi_test.dart --name "poll_oneoff reports socket write readiness and rights errors|poll_oneoff reports host socket readiness hints|sock_send reports pipe after write-side shutdown"`;
+    `dart test -p chrome test/wasi_test.dart --name "poll_oneoff reports socket write readiness and rights errors|poll_oneoff reports host socket readiness hints|sock_send reports pipe after write-side shutdown"`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; the
+    socket-heavy distribution reported `socket_poll_readiness.operations=80000`
+    and `socket_poll_readiness.per_operation_us=0.073925`.
+  - Done when: `sock_shutdown(SD_WR)` makes `poll_oneoff(fd_write)` produce a
+    ready fd_write event with zero bytes and `FD_READWRITE_HANGUP`,
+    `writeReady=false` remains a would-block not-ready state, and the shared
+    socket poll benchmark names the affected readiness path.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
+    support or any P2/P3 support gate.
 - [x] `P1-SOCKET-SEND-ERROR-PREFLIGHT` - Socket send iovec validation wins over
   shutdown and write-ready error states.
   - Scope: shared Preview1 native/browser `sock_send` and VFS socket write error

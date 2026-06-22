@@ -293,7 +293,12 @@ final class Preview1VirtualFileSystem {
 
     final socket = socketForFd(fd);
     if (socket != null) {
-      if (socket.sendShutdown || socket.writeReady == false) {
+      if (socket.sendShutdown) {
+        return const Preview1FdPollReadiness.ready(
+          flags: eventrwflagFdReadwriteHangup,
+        );
+      }
+      if (socket.writeReady == false) {
         return const Preview1FdPollReadiness.notReady();
       }
       return const Preview1FdPollReadiness.ready();
