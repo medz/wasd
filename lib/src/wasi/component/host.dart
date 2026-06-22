@@ -32,6 +32,12 @@ final class WASIComponentHost {
     final resourceBindings = canonicalPlan.validationErrors.isEmpty
         ? canonicalHost.resourceHost.componentResourceBindings(component)
         : const <WASIComponentResourceBinding>[];
+    final resourceUses = canonicalPlan.validationErrors.isEmpty
+        ? canonicalHost.resourceHost.componentCanonicalResourceUses(
+            component,
+            resourceBindings: resourceBindings,
+          )
+        : const <WASIComponentResourceUse>[];
     final asyncValueBindings = canonicalPlan.validationErrors.isEmpty
         ? canonicalHost.asyncHost.componentAsyncValueBindings(component)
         : const <WASIComponentAsyncValueBinding>[];
@@ -45,6 +51,7 @@ final class WASIComponentHost {
       host: this,
       canonicalPlan: canonicalPlan,
       resourceBindings: resourceBindings,
+      resourceUses: resourceUses,
       asyncValueBindings: asyncValueBindings,
       bindingErrors: bindingErrors,
     );
@@ -78,6 +85,7 @@ final class WASIComponentHostBindingPlan {
     required WASIComponentHost host,
     required this.canonicalPlan,
     required this.resourceBindings,
+    required this.resourceUses,
     required this.asyncValueBindings,
     required this.bindingErrors,
   }) : _host = host;
@@ -89,6 +97,9 @@ final class WASIComponentHostBindingPlan {
 
   /// Component resource bindings captured before host binding.
   final List<WASIComponentResourceBinding> resourceBindings;
+
+  /// Canonical adapter resource-handle uses captured before host binding.
+  final List<WASIComponentResourceUse> resourceUses;
 
   /// Component async stream/future bindings captured before host binding.
   final List<WASIComponentAsyncValueBinding> asyncValueBindings;

@@ -168,6 +168,9 @@ final class WASIComponentVersionedBindingPlan {
   List<WASIComponentHostBindingError> get bindingErrors =>
       componentPlan.bindingErrors;
 
+  /// Canonical adapter resource-handle uses captured before host binding.
+  List<WASIComponentResourceUse> get resourceUses => componentPlan.resourceUses;
+
   /// Whether [bind] can build a component host binding without throwing.
   bool get canBind => versionErrors.isEmpty && componentPlan.canBind;
 

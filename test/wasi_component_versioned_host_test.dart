@@ -4,11 +4,14 @@ import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/async_host.dart';
 import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/host.dart';
+import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/versioned_host.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasi/version.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
+
+import 'support/component_fixtures.dart';
 
 void main() {
   group('WASIComponentVersionProfile', () {
@@ -232,6 +235,44 @@ void main() {
       expect(binding.program.invoke(5, <Object?>[handles.readable]), isNull);
       expect(binding.program.invoke(6, <Object?>[handles.writable]), isNull);
       expect(host.componentHost.table.activeCount, 0);
+    });
+
+    test('Preview3 wrapper reports adapter resource handle uses', () {
+      final component = WasmComponent.decode(
+        canonicalResourceLiftComponentBytes(),
+      );
+      final host = WASIPreview3ComponentHost();
+
+      final plan = host.prepareComponent(component);
+
+      expect(component.validate(), isEmpty);
+      expect(plan.canBind, isFalse);
+      expect(plan.versionErrors, isEmpty);
+      expect(plan.unsupportedDefinitions, hasLength(1));
+      expect(
+        plan.unsupportedDefinitions.single.kind,
+        WasmComponentCanonicalKind.lift,
+      );
+      expect(plan.resourceUses, hasLength(3));
+      expect(plan.resourceUses.map((use) => use.path), [
+        'canonical[0].param[0].owned',
+        'canonical[0].param[1].borrowed',
+        'canonical[0].result',
+      ]);
+      expect(plan.resourceUses.map((use) => use.handleKind), [
+        WASIComponentResourceHandleKind.own,
+        WASIComponentResourceHandleKind.borrow,
+        WASIComponentResourceHandleKind.own,
+      ]);
+      expect(plan.resourceUses.map((use) => use.binding?.representation), [
+        WASIComponentResourceRepresentation.i32,
+        WASIComponentResourceRepresentation.i32,
+        WASIComponentResourceRepresentation.i32,
+      ]);
+      expect(
+        () => plan.bind(),
+        throwsA(isA<WASIComponentCanonicalHostUnsupportedException>()),
+      );
     });
   });
 }

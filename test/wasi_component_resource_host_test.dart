@@ -4,6 +4,8 @@ import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 
+import 'support/component_fixtures.dart';
+
 void main() {
   group('WASIComponentResourceHost', () {
     test(
@@ -156,6 +158,50 @@ void main() {
       expect(program.invoke(1, <Object?>[handle]), 123);
       expect(program.invoke(2, <Object?>[handle]), isNull);
       expect(dropped, [123]);
+    });
+
+    test('reports canonical lift resource handle uses', () {
+      final component = WasmComponent.decode(
+        canonicalResourceLiftComponentBytes(),
+      );
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentResourceHost();
+
+      final uses = host.componentCanonicalResourceUses(component);
+
+      expect(uses, hasLength(3));
+      expect(() => uses.clear(), throwsUnsupportedError);
+      expect(uses.map((use) => use.canonicalIndex), [0, 0, 0]);
+      expect(uses.map((use) => use.canonicalKind), [
+        WasmComponentCanonicalKind.lift,
+        WasmComponentCanonicalKind.lift,
+        WasmComponentCanonicalKind.lift,
+      ]);
+      expect(uses.map((use) => use.path), [
+        'canonical[0].param[0].owned',
+        'canonical[0].param[1].borrowed',
+        'canonical[0].result',
+      ]);
+      expect(uses.map((use) => use.handleKind), [
+        WASIComponentResourceHandleKind.own,
+        WASIComponentResourceHandleKind.borrow,
+        WASIComponentResourceHandleKind.own,
+      ]);
+      expect(uses.map((use) => use.resourceTypeIndex), [0, 0, 0]);
+      expect(uses.map((use) => use.binding?.componentTypeIndex), [0, 0, 0]);
+      expect(uses.map((use) => use.binding?.representation), [
+        WASIComponentResourceRepresentation.i32,
+        WASIComponentResourceRepresentation.i32,
+        WASIComponentResourceRepresentation.i32,
+      ]);
+      expect(uses.every((use) => use.binding?.isAbstract == false), isTrue);
+    });
+
+    test('does not report resource operations as adapter handle uses', () {
+      final component = WasmComponent.decode(_canonicalResourceProgramBytes());
+      final host = WASIComponentResourceHost();
+
+      expect(host.componentCanonicalResourceUses(component), isEmpty);
     });
 
     test(
