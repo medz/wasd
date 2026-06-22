@@ -1587,8 +1587,12 @@ abstract final class WasmPredecoder {
       return (
         paramTypes: const <WasmValueType>[],
         paramSignatures: const <String>[],
-        resultTypes: <WasmValueType>[inlineType.type],
-        resultSignatures: <String>[inlineType.signature],
+        resultTypes: List<WasmValueType>.unmodifiable(<WasmValueType>[
+          inlineType.type,
+        ]),
+        resultSignatures: List<String>.unmodifiable(<String>[
+          inlineType.signature,
+        ]),
       );
     }
 
@@ -1603,21 +1607,25 @@ abstract final class WasmPredecoder {
     }
 
     final functionType = moduleTypes[typeIndex];
-    final resultSignatures = functionType.resultTypeSignatures.isNotEmpty
-        ? List<String>.from(functionType.resultTypeSignatures)
+    final resultSignatures =
+        functionType.resultTypeSignatures.isNotEmpty ||
+            functionType.results.isEmpty
+        ? functionType.resultTypeSignatures
         : functionType.results
               .map(_signatureForValueType)
               .toList(growable: false);
-    final paramSignatures = functionType.paramTypeSignatures.isNotEmpty
-        ? List<String>.from(functionType.paramTypeSignatures)
+    final paramSignatures =
+        functionType.paramTypeSignatures.isNotEmpty ||
+            functionType.params.isEmpty
+        ? functionType.paramTypeSignatures
         : functionType.params
               .map(_signatureForValueType)
               .toList(growable: false);
 
     return (
-      paramTypes: List<WasmValueType>.from(functionType.params),
+      paramTypes: functionType.params,
       paramSignatures: paramSignatures,
-      resultTypes: List<WasmValueType>.from(functionType.results),
+      resultTypes: functionType.results,
       resultSignatures: resultSignatures,
     );
   }

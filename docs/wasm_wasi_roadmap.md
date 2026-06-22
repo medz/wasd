@@ -859,16 +859,23 @@ performance visible while the support surface expands.
       reports module size stats. A local run on the DOOM fixture reported
       `module_stats.instruction_bytes=335836` and
       `validate_module.rss_delta_bytes=438878208`, confirming validation stack
-      analysis is the dominant compile-time RSS source.
+      analysis was the dominant compile-time RSS source before signature-list
+      reuse.
     - `WasmPredecoder` now reuses shared instruction objects for pure
       no-immediate opcodes, guarded by `test/wasm_predecode_test.dart`. This is
       a small allocation reduction, not the completion of this row.
-  - Next: replace validator hot-path string/list stack simulation with a more
-    compact representation for core primitive modules, while keeping the
-    existing typed/reference validation behavior for advanced proposals.
+    - Validator and predecoder block/function signature paths now reuse
+      immutable predecoded signature lists instead of repeatedly copying short
+      lists. A later local compile-breakdown run reported
+      `validate_module.rss_delta_bytes=296042496` and
+      `validate_module.duration_ms=486`, while a full instantiate run still
+      reported `compile_module.rss_delta_bytes=356057088`.
+  - Next: continue replacing validator hot-path string/list stack simulation
+    with a compact representation for core primitive modules, then split out
+    retained instantiate RSS if `instantiate_module` remains the end-to-end peak.
   - Done when: the profile shows a lower `compile_module.rss_delta_bytes` on
     DOOM-sized modules; the latest local full instantiate profile still reports
-    `compile_module.rss_delta_bytes=440582144`, so this row remains open.
+    `compile_module.rss_delta_bytes=356057088`, so this row remains open.
 - [ ] `CM-VALIDATION-GAPS` - Component validation gaps that are deterministic
   and local.
   - Change: add validation tests before runtime wiring for remaining borrow,

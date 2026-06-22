@@ -32,5 +32,43 @@ void main() {
       expect(decoded.instructions[2].immediate, 1);
       expect(decoded.instructions[3].immediate, 1);
     });
+
+    test('reuses type-indexed block signature lists', () {
+      final functionType = WasmFunctionType(
+        params: const <WasmValueType>[WasmValueType.i32],
+        results: const <WasmValueType>[WasmValueType.i64],
+        paramTypeSignatures: const <String>['7f'],
+        resultTypeSignatures: const <String>['7e'],
+        kind: WasmCompositeTypeKind.function,
+      );
+
+      final decoded = WasmPredecoder.decode(
+        WasmCodeBody(
+          locals: const <WasmLocalDecl>[],
+          instructions: Uint8List.fromList(const <int>[
+            Opcodes.block,
+            0x00,
+            Opcodes.end,
+            Opcodes.end,
+          ]),
+        ),
+        <WasmFunctionType>[functionType],
+      );
+
+      expect(
+        identical(
+          decoded.instructions[0].blockParameterTypeSignatures,
+          functionType.paramTypeSignatures,
+        ),
+        true,
+      );
+      expect(
+        identical(
+          decoded.instructions[0].blockResultTypeSignatures,
+          functionType.resultTypeSignatures,
+        ),
+        true,
+      );
+    });
   });
 }

@@ -1792,7 +1792,7 @@ abstract final class WasmValidator {
     List<String> blockParamSignatures(Instruction instruction) {
       final signatures = instruction.blockParameterTypeSignatures;
       if (signatures != null) {
-        return List<String>.from(signatures);
+        return signatures;
       }
       final types = instruction.blockParameterTypes;
       if (types == null) {
@@ -1804,7 +1804,7 @@ abstract final class WasmValidator {
     List<String> blockResultSignatures(Instruction instruction) {
       final signatures = instruction.blockResultTypeSignatures;
       if (signatures != null) {
-        return List<String>.from(signatures);
+        return signatures;
       }
       final types = instruction.blockResultTypes;
       if (types == null) {
@@ -1823,8 +1823,8 @@ abstract final class WasmValidator {
       _SimpleControlFrame(
         stackHeight: 0,
         parameterSignatures: const <String>[],
-        labelSignatures: List<String>.from(functionResultSignatures),
-        resultSignatures: List<String>.from(functionResultSignatures),
+        labelSignatures: functionResultSignatures,
+        resultSignatures: functionResultSignatures,
       ),
     ];
     bool isReferenceLikeSignature(String signature) {
@@ -3995,7 +3995,7 @@ abstract final class WasmValidator {
           controlStack.add(
             _ReferenceControlFrame(
               stackHeight: stack.length,
-              resultSignatures: List<String>.from(signatures),
+              resultSignatures: signatures,
               polymorphic: inPolymorphicContext,
             ),
           );
@@ -4528,7 +4528,7 @@ abstract final class WasmValidator {
 
   static List<String> _functionParamSignatures(WasmFunctionType functionType) {
     if (functionType.paramTypeSignatures.length == functionType.params.length) {
-      return List<String>.from(functionType.paramTypeSignatures);
+      return functionType.paramTypeSignatures;
     }
     return functionType.params
         .map(_signatureForValueType)
@@ -4538,7 +4538,7 @@ abstract final class WasmValidator {
   static List<String> _functionResultSignatures(WasmFunctionType functionType) {
     if (functionType.resultTypeSignatures.length ==
         functionType.results.length) {
-      return List<String>.from(functionType.resultTypeSignatures);
+      return functionType.resultTypeSignatures;
     }
     return functionType.results
         .map(_signatureForValueType)
