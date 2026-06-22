@@ -236,6 +236,32 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-DGRAM-READINESS-HINT` - Datagram sockets honor host read
+  readiness hints in `poll_oneoff(fd_read)`.
+  - Scope: native/browser shared Preview1 socket poll readiness for host-backed
+    datagram descriptors.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "poll_oneoff reports host socket readiness hints" --reporter=compact`
+    failed before the fix because a datagram socket with `readReadyBytes=5`
+    produced `nevents=0` instead of a fd_read event.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "poll_oneoff reports host socket readiness hints" --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --name "poll_oneoff reports host socket readiness hints" --reporter=compact`;
+    `dart test test/wasi_test.dart --reporter=compact`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` now
+    includes datagram host hints in `socket_poll_readiness`, with baseline
+    `operations=22000`, `per_operation_us=0.4178636363636364`, and
+    socket-heavy `operations=88000`, `per_operation_us=0.07564772727272727`.
+  - Done when: queued datagram messages still provide their exact message
+    length, positive host readiness hints produce a fd_read event when no
+    message has materialized, zero hints remain not-ready, and native/browser
+    focused gates agree.
+  - Claim impact: contributes to `P1-SOCKET-CONFORMANCE` and `SUPPORT-P1`; does
+    not complete the parent row or any `SUPPORT-P1`/`SUPPORT-P2`/`SUPPORT-P3`
+    gate.
 - [x] `CM-VARIANT-PAYLOAD-STORE-VALIDATION` - Canonical variant store validates
   payload shape before writing guest memory.
   - Scope: Canonical ABI value-memory store behavior for variant, option, and
@@ -2231,6 +2257,34 @@ performance visible while the support surface expands.
     `Recently Checked` entry.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
     support or any P2/P3 support gate.
+- [x] `P1-SOCKET-DGRAM-READINESS-HINT` - Datagram sockets honor host read
+  readiness hints in `poll_oneoff(fd_read)`.
+  - Scope: shared Preview1 native/browser socket poll readiness and the
+    host-facing `WASIPreview1Socket.datagram(readReadyBytes: ...)` API.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "poll_oneoff reports host socket readiness hints" --reporter=compact`
+    failed before the fix because a datagram socket with `readReadyBytes=5`
+    left `nevents=0`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "poll_oneoff reports host socket readiness hints" --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --name "poll_oneoff reports host socket readiness hints" --reporter=compact`;
+    `dart test test/wasi_test.dart --reporter=compact`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_poll_readiness.operations=22000`,
+    `socket_poll_readiness.per_operation_us=0.4178636363636364` on the
+    baseline distribution and `socket_poll_readiness.operations=88000`,
+    `socket_poll_readiness.per_operation_us=0.07564772727272727` on the
+    socket-heavy distribution.
+  - Done when: queued datagram messages still win over readiness hints, positive
+    host hints produce fd_read readiness when no message is materialized, zero
+    hints remain not-ready, and focused VM/Chrome tests agree.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `P1-SOCKET-CONFORMANCE` and `SUPPORT-P1`; does
+    not complete the parent `P1-SOCKET-CONFORMANCE` row.
 - [ ] `P1-SOCKET-CONFORMANCE` - Preview1 socket conformance edge cases.
   - Scope: native/browser shared Preview1 socket and descriptor behavior,
     including host-backed adapters, queued accepts, shutdown/readiness state, and

@@ -1871,7 +1871,8 @@ void main() {
             readReadyBytes: 77,
             writeReady: false,
           );
-          final socketWasi = WASI(sockets: {29: external});
+          final datagram = WASIPreview1Socket.datagram(readReadyBytes: 5);
+          final socketWasi = WASI(sockets: {29: external, 31: datagram});
           final socketResult = await WebAssembly.instantiate(
             _wasiBytes.buffer,
             socketWasi.imports,
@@ -1915,6 +1916,33 @@ void main() {
             _getUint64Le(data, outPtr + _eventFdReadwriteNbytesOffset),
             77,
           );
+          expect(
+            data.getUint16(
+              outPtr + _eventFdReadwriteFlagsOffset,
+              Endian.little,
+            ),
+            0,
+          );
+
+          bytes.fillRange(outPtr, outPtr + _eventSize, 0xff);
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0x9911,
+            tag: _eventTypeFdRead,
+            fd: 31,
+          );
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]),
+            ),
+            0,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0x9911);
+          expect(data.getUint16(outPtr + _eventErrorOffset, Endian.little), 0);
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeFdRead);
+          expect(_getUint64Le(data, outPtr + _eventFdReadwriteNbytesOffset), 5);
           expect(
             data.getUint16(
               outPtr + _eventFdReadwriteFlagsOffset,

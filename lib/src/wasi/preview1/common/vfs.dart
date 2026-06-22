@@ -237,15 +237,18 @@ final class Preview1VirtualFileSystem {
             nbytes: socket.nextReceiveMessageLength,
           );
         }
+        final readReadyBytes = _positiveReadReadyBytes(socket);
+        if (readReadyBytes > 0) {
+          return Preview1FdPollReadiness.ready(nbytes: readReadyBytes);
+        }
       } else {
         final remainingReceiveLength = socket.remainingReceiveLength;
-        final readReadyBytes = socket.readReadyBytes;
-        final hasReadReadyHint = readReadyBytes != null && readReadyBytes > 0;
+        final readReadyBytes = _positiveReadReadyBytes(socket);
         if (socket.hasPendingAccept) {
           if (descriptorHasRight(fd, rightSockAccept)) {
             return const Preview1FdPollReadiness.ready();
           }
-          if (remainingReceiveLength == 0 && !hasReadReadyHint) {
+          if (remainingReceiveLength == 0 && readReadyBytes == 0) {
             return const Preview1FdPollReadiness.error(errnoNotcapable);
           }
         }
@@ -255,7 +258,7 @@ final class Preview1VirtualFileSystem {
           }
           return Preview1FdPollReadiness.ready(nbytes: remainingReceiveLength);
         }
-        if (hasReadReadyHint) {
+        if (readReadyBytes > 0) {
           if (!hasFdRead) {
             return const Preview1FdPollReadiness.error(errnoNotcapable);
           }
@@ -276,6 +279,11 @@ final class Preview1VirtualFileSystem {
     }
 
     return const Preview1FdPollReadiness.error(errnoBadf);
+  }
+
+  int _positiveReadReadyBytes(Preview1VirtualSocket socket) {
+    final readReadyBytes = socket.readReadyBytes;
+    return readReadyBytes != null && readReadyBytes > 0 ? readReadyBytes : 0;
   }
 
   Preview1FdPollReadiness _pollFdWrite(

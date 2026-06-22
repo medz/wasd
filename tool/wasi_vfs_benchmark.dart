@@ -1398,6 +1398,9 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
     readReadyBytes: _socketChunkSize ~/ 2,
     writeReady: false,
   );
+  final externalDatagram = WASIPreview1Socket.datagram(
+    readReadyBytes: _socketChunkSize ~/ 4,
+  );
   final zeroHint = WASIPreview1Socket(readReadyBytes: 0);
   var providerCalls = 0;
   final providerBacked = WASIPreview1Socket(
@@ -1419,6 +1422,7 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
       69: providerBacked,
       70: zeroHint,
       71: writeClosed,
+      72: externalDatagram,
     },
   );
   final providerDrainBuffer = Uint8List(1);
@@ -1495,6 +1499,20 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
     }
     checksum += externalReadEvent.nbytes;
 
+    final externalDatagramEvent = vfs.pollFdReadWrite(
+      fd: 72,
+      eventType: eventTypeFdRead,
+    );
+    if (!externalDatagramEvent.ready ||
+        externalDatagramEvent.nbytes != _socketChunkSize ~/ 4 ||
+        externalDatagramEvent.flags != 0 ||
+        externalDatagramEvent.errno != errnoSuccess) {
+      throw StateError(
+        'external datagram readable socket poll failed at iteration $i',
+      );
+    }
+    checksum += externalDatagramEvent.nbytes;
+
     final externalWriteEvent = vfs.pollFdReadWrite(
       fd: 68,
       eventType: eventTypeFdWrite,
@@ -1540,7 +1558,7 @@ _Metric _benchmarkSocketPollReadiness(_Options options) {
     throw StateError('provider-backed stream socket poll count mismatch');
   }
   return _Metric(
-    operations: options.iterations * 10,
+    operations: options.iterations * 11,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
