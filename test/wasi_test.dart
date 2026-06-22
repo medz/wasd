@@ -1204,6 +1204,7 @@ void main() {
           final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
           final pollOneoff =
               preview1['poll_oneoff'] as FunctionImportExportValue;
+          final sockSend = preview1['sock_send'] as FunctionImportExportValue;
           final memory =
               (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
           socketWasi.finalizeBindings(socketInstance, memory: memory);
@@ -1213,6 +1214,9 @@ void main() {
           const inPtr = 3544;
           const outPtr = 3664;
           const neventsPtr = 3792;
+          const sendIovPtr = 3808;
+          const sendBufferPtr = 3840;
+          const sendCountPtr = 3872;
 
           _writePollSubscription(
             data,
@@ -1267,6 +1271,17 @@ void main() {
           expect(_getUint64Le(data, outPtr), 0xbb0b);
           expect(bytes[outPtr + _eventTypeOffset], _eventTypeClock);
 
+          bytes.setAll(sendBufferPtr, utf8.encode('send'));
+          data.setUint32(sendIovPtr, sendBufferPtr, Endian.little);
+          data.setUint32(sendIovPtr + 4, 4, Endian.little);
+          data.setUint32(sendCountPtr, 0xdeadbeef, Endian.little);
+          expect(
+            sockSend.ref([29, sendIovPtr, 1, 0, sendCountPtr]),
+            _errnoAgain,
+          );
+          expect(data.getUint32(sendCountPtr, Endian.little), 0xdeadbeef);
+          expect(external.sentData, isEmpty);
+
           external.writeReady = true;
           _writePollSubscription(
             data,
@@ -1284,6 +1299,10 @@ void main() {
           expect(data.getUint32(neventsPtr, Endian.little), 1);
           expect(_getUint64Le(data, outPtr), 0xcc0c);
           expect(bytes[outPtr + _eventTypeOffset], _eventTypeFdWrite);
+
+          expect(sockSend.ref([29, sendIovPtr, 1, 0, sendCountPtr]), 0);
+          expect(data.getUint32(sendCountPtr, Endian.little), 4);
+          expect(utf8.decode(external.sentData), 'send');
         },
         skip: _skipOnNode(
           'Skipping on Node.js; socket behavior is delegated to node:wasi.',

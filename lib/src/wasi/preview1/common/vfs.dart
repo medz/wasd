@@ -1340,6 +1340,9 @@ int writeSocketFromIov({
       nwrittenPtr + 4 > bytes.length) {
     return errnoInval;
   }
+  if (socket.writeReady == false) {
+    return errnoAgain;
+  }
   if (socket.isDatagram) {
     return _writeDatagramSocketFromIov(
       socket: socket,

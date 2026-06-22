@@ -543,9 +543,13 @@ _Metric _benchmarkSocketSendRecv(_Options options) {
       (index) => index & 0xff,
     ),
   );
-  final vfs = Preview1VirtualFileSystem(sockets: {64: socket});
+  final blockedSocket = WASIPreview1Socket(writeReady: false);
+  final vfs = Preview1VirtualFileSystem(
+    sockets: {64: socket, 65: blockedSocket},
+  );
   final descriptor = vfs.socketForFd(64);
-  if (descriptor == null) {
+  final blockedDescriptor = vfs.socketForFd(65);
+  if (descriptor == null || blockedDescriptor == null) {
     throw StateError('socket descriptor missing for send/recv benchmark');
   }
   final bytes = Uint8List(384);
@@ -608,10 +612,30 @@ _Metric _benchmarkSocketSendRecv(_Options options) {
       throw StateError('socket send failed at iteration $i: $sendErrno');
     }
     checksum += data.getUint32(countPtr, Endian.little);
+
+    data.setUint32(countPtr, 0x7fffffff, Endian.little);
+    final blockedErrno = writeSocketFromIov(
+      socket: blockedDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: sendIovPtr,
+      iovsLen: 2,
+      nwrittenPtr: countPtr,
+    );
+    if (blockedErrno != errnoAgain) {
+      throw StateError(
+        'socket blocked send failed at iteration $i: $blockedErrno',
+      );
+    }
+    if (data.getUint32(countPtr, Endian.little) != 0x7fffffff ||
+        blockedSocket.sentData.isNotEmpty) {
+      throw StateError('socket blocked send wrote data at iteration $i');
+    }
+    checksum += blockedErrno;
   }
   watch.stop();
   return _Metric(
-    operations: options.iterations * 2,
+    operations: options.iterations * 3,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );

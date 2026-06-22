@@ -73,7 +73,9 @@ final class WASIPreview1Socket {
   /// Host-supplied write readiness.
   ///
   /// Leave this as `null` to use the default Preview1 descriptor behavior:
-  /// writable unless the send side has been shut down.
+  /// writable unless the send side has been shut down. Set this to `false` to
+  /// make polling report the descriptor as not writable and `sock_send` return
+  /// `EAGAIN` without recording sent bytes.
   bool? writeReady;
 
   /// Returns a copy of the bytes sent through `sock_send`.

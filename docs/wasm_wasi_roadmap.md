@@ -182,9 +182,10 @@ This is the implementation state as of 2026-06-22 on `main`.
   `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; it reports
   baseline, directory-heavy, descriptor-heavy, and socket-heavy distributions.
   It also covers socket multi-iov peek/waitall, datagram truncation, socket
-  send/recv, socket polling readiness including zero-length datagram readiness,
-  queued accepts, and externally backed read/write readiness hints, and socket
-  renumber/close descriptor paths.
+  send/recv including write-side would-block behavior, socket polling
+  readiness including zero-length datagram readiness, queued accepts, and
+  externally backed read/write readiness hints, and socket renumber/close
+  descriptor paths.
   Stream socket sends are recorded as owned byte chunks, and long receive
   streams compact consumed prefixes in larger batches so socket-heavy reads do
   not repeatedly shift the backing buffer.
@@ -624,6 +625,15 @@ performance visible while the support surface expands.
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
   - Done when: `poll_oneoff`/VFS reports host-supplied read readiness,
     host-blocked write readiness, and benchmark output includes both paths.
+- [x] `P1-SOCKET-SEND-BACKPRESSURE` - Preview1 socket send would-block state.
+  - Change: make `writeReady=false` block `sock_send` with `EAGAIN` without
+    writing `nwritten` or recording sent bytes.
+  - Evidence: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart`.
+  - Gate: `dart test test/wasi_test.dart`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: poll and send agree on host-blocked writable state and the
+    benchmark includes the blocked-send path.
 - [x] `PERF-VFS-DISTRIBUTIONS` - VFS/descriptor benchmark distributions.
   - Change: extend benchmark data to larger conformance-shaped path, directory,
     socket, and descriptor sets before optimizing more VFS code.
