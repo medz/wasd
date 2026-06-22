@@ -1789,6 +1789,27 @@ abstract final class WasmValidator {
       return _functionParamSignatures(tagTypes[tagIndex]);
     }
 
+    final availableGlobals = <WasmGlobalType>[
+      ...module.imports
+          .where((i) => i.kind == WasmImportKind.global)
+          .map((i) => i.globalType!),
+      ...module.globals.map((global) => global.type),
+    ];
+
+    WasmGlobalType globalTypeForIndex(int globalIndex, String label) {
+      if (globalIndex < 0 || globalIndex >= availableGlobals.length) {
+        mismatch('$label index out of range: $globalIndex');
+      }
+      return availableGlobals[globalIndex];
+    }
+
+    String globalValueSignature(WasmGlobalType type) {
+      final signature = type.valueTypeSignature;
+      return signature != null && signature.isNotEmpty
+          ? signature
+          : _signatureForValueType(type.valueType);
+    }
+
     List<String> blockParamSignatures(Instruction instruction) {
       final signatures = instruction.blockParameterTypeSignatures;
       if (signatures != null) {
@@ -2542,75 +2563,16 @@ abstract final class WasmValidator {
 
         case Opcodes.globalGet:
           final globalIndex = instruction.immediate!;
-          final importedGlobals = module.imports
-              .where((i) => i.kind == WasmImportKind.global)
-              .toList(growable: false);
-          final totalGlobals = importedGlobals.length + module.globals.length;
-          if (globalIndex < 0 || globalIndex >= totalGlobals) {
-            mismatch('global.get index out of range: $globalIndex');
-          }
-          if (globalIndex < importedGlobals.length) {
-            final type = importedGlobals[globalIndex].globalType;
-            if (type == null) {
-              mismatch('global.get malformed import');
-            }
-            stack.add(
-              type.valueTypeSignature != null &&
-                      type.valueTypeSignature!.isNotEmpty
-                  ? type.valueTypeSignature!
-                  : _signatureForValueType(type.valueType),
-            );
-          } else {
-            final localGlobal =
-                module.globals[globalIndex - importedGlobals.length];
-            final type = localGlobal.type;
-            stack.add(
-              type.valueTypeSignature != null &&
-                      type.valueTypeSignature!.isNotEmpty
-                  ? type.valueTypeSignature!
-                  : _signatureForValueType(type.valueType),
-            );
-          }
+          final type = globalTypeForIndex(globalIndex, 'global.get');
+          stack.add(globalValueSignature(type));
 
         case Opcodes.globalSet:
           final globalIndex = instruction.immediate!;
-          final importedGlobals = module.imports
-              .where((i) => i.kind == WasmImportKind.global)
-              .toList(growable: false);
-          final totalGlobals = importedGlobals.length + module.globals.length;
-          if (globalIndex < 0 || globalIndex >= totalGlobals) {
-            mismatch('global.set index out of range: $globalIndex');
+          final type = globalTypeForIndex(globalIndex, 'global.set');
+          if (!type.mutable) {
+            mismatch('global.set requires mutable global');
           }
-          if (globalIndex < importedGlobals.length) {
-            final type = importedGlobals[globalIndex].globalType;
-            if (type == null) {
-              mismatch('global.set malformed import');
-            }
-            if (!type.mutable) {
-              mismatch('global.set requires mutable global');
-            }
-            popExpected(
-              type.valueTypeSignature != null &&
-                      type.valueTypeSignature!.isNotEmpty
-                  ? type.valueTypeSignature!
-                  : _signatureForValueType(type.valueType),
-              'global.set value',
-            );
-          } else {
-            final localGlobal =
-                module.globals[globalIndex - importedGlobals.length];
-            final type = localGlobal.type;
-            if (!type.mutable) {
-              mismatch('global.set requires mutable global');
-            }
-            popExpected(
-              type.valueTypeSignature != null &&
-                      type.valueTypeSignature!.isNotEmpty
-                  ? type.valueTypeSignature!
-                  : _signatureForValueType(type.valueType),
-              'global.set value',
-            );
-          }
+          popExpected(globalValueSignature(type), 'global.set value');
 
         case Opcodes.structGet:
         case Opcodes.structGetS:

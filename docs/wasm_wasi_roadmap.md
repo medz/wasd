@@ -888,6 +888,18 @@ performance visible while the support surface expands.
       reported `compile_module.rss_delta_bytes=326025216`, but the end-to-end
       peak is still noisy because `instantiate_module` reported
       `rss_delta_bytes=163037184` in that run.
+    - Simple stack validation now precomputes the function's global index space
+      once instead of rebuilding imported-global lists for every
+      `global.get/set`. The public compile regression covers a module that
+      indexes both an imported global and a local global. In the same local run,
+      the compile-breakdown profile moved from
+      `validate_module.rss_delta_bytes=306495488` and
+      `validate_module.duration_ms=480` before this change to
+      `validate_module.rss_delta_bytes=287162368` and
+      `validate_module.duration_ms=482` after it. A full instantiate run
+      reported `compile_module.rss_delta_bytes=325812224` and
+      `instantiate_module.rss_delta_bytes=164364288`, so retained instantiate
+      RSS still needs separate work.
   - Next: continue replacing validator hot-path string/list stack simulation
     with a compact representation for core primitive modules, then split out
     retained instantiate RSS if `instantiate_module` remains the end-to-end peak.

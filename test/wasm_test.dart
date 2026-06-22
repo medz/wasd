@@ -8,6 +8,7 @@ final _wasmBytes = simpleAddModuleBytes();
 final _localSetTeeBytes = localSetTeeModuleBytes();
 final _directCallBytes = directCallModuleBytes();
 final _loopBranchBytes = loopBranchModuleBytes();
+final _importedAndLocalGlobalBytes = importedAndLocalGlobalModuleBytes();
 final _loopBackWithoutFunctionResultBytes =
     loopBackWithoutFunctionResultModuleBytes();
 
@@ -42,6 +43,16 @@ void main() {
         WebAssembly.compile(_loopBackWithoutFunctionResultBytes.buffer),
         throwsA(isA<CompileError>()),
       );
+    });
+
+    test('validates imported and local global index spaces', () async {
+      final module = await WebAssembly.compile(
+        _importedAndLocalGlobalBytes.buffer,
+      );
+
+      expect(Module.imports(module), hasLength(1));
+      expect(Module.imports(module).single.kind, ImportExportKind.global);
+      expect(Module.exports(module).single.name, 'sum_globals');
     });
   });
 
