@@ -13,9 +13,9 @@ import 'waitable_set.dart';
 ///
 /// This is an internal host layer for Component Model async work. It binds
 /// validated `stream.*` and `future.*` definitions to typed Dart endpoint
-/// primitives, including primitive, composite, and dynamic string/list
-/// stream/future memory copies, so later P3 host adapters can reuse one
-/// execution model.
+/// primitives, including primitive, owned-resource-handle, composite, and
+/// dynamic string/list stream/future memory copies, so later P3 host adapters
+/// can reuse one execution model.
 final class WASIComponentAsyncHost {
   /// Creates an async host backed by [table] or a new resource table.
   WASIComponentAsyncHost({
@@ -361,8 +361,8 @@ final class WASIComponentAsyncValueBinding {
 
   /// Canonical ABI memory-copy layout for this payload.
   ///
-  /// Returns `null` for unit payloads and unsupported shapes such as resources,
-  /// borrows, nested streams/futures, and error contexts.
+  /// Returns `null` for unit payloads and unsupported shapes such as borrows,
+  /// nested streams/futures, and error contexts.
   final WASIComponentAsyncValueMemoryLayout? memoryLayout;
 }
 
@@ -2888,10 +2888,11 @@ _WASIComponentAsyncValueValidator _asyncValueValidatorForElementType(
       ),
     );
   }
-  final memoryCodec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
-    elementType,
-    definitions,
-  );
+  final memoryCodec =
+      WASIComponentCanonicalValueMemoryCodec.fromAsyncElementType(
+        elementType,
+        definitions,
+      );
   if (memoryCodec == null) {
     throw UnsupportedError(
       'WASI component async host currently supports only stream/future element '

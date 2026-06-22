@@ -173,8 +173,10 @@ This is the implementation state as of 2026-06-22 on `main`.
   adding waitable allocation cost to ordinary handle paths. Handle-backed
   fixed-size `stream.read`, bounded `stream.write`, `future.read`, and
   `future.write` memory copies, plus primitive string `stream.read`,
-  `future.read`, and `future.write` memory copies, also have a canonical
-  event-start path: immediate copies return the packed copy payload, pending
+  `future.read`, and `future.write` memory copies, and decoded owned-resource
+  stream/future element copy buffers represented as canonical `u32` handles,
+  also have a canonical event-start path: immediate copies return the packed
+  copy payload, pending
   copies return `0xffffffff` (`BLOCKED`) and later publish the corresponding
   waitable event with the endpoint handle and packed copy result.
   Pending event-start copies
@@ -284,10 +286,11 @@ This is the implementation state as of 2026-06-22 on `main`.
   internal Canonical ABI value-memory codec covering primitive values,
   records/tuples, fixed lists, flags, variants, options, results, enums, and
   dynamic strings/lists, including `list<string>`. Dynamic string/list storage
-  uses canonical `(ptr, len)` records plus explicit `realloc`, while resource
-  handle-table ownership/drop, borrow lifetime enforcement, and nested async
-  payload semantics remain unsupported instead of being approximated. Future
-  P3 adapters can route stream/future
+  uses canonical `(ptr, len)` records plus explicit `realloc`; owned resource
+  handles use canonical `u32` copy-buffer values for decoded stream/future
+  elements, while resource handle-table ownership/drop, borrow lifetime
+  enforcement, and nested async payload semantics remain unsupported instead of
+  being approximated. Future P3 adapters can route stream/future
   memory lowering through this shared codec without re-deriving byte widths,
   alignments, padding, or dynamic payload allocation separately from the
   executable copy path.
@@ -318,9 +321,9 @@ This is the implementation state as of 2026-06-22 on `main`.
   strings recursively allocate their own canonical string payloads. The adapter
   still does not automatically invoke decoded core realloc exports; callers
   must provide the realloc callback at invocation time. Lists containing
-  resources, borrows, or nested async values remain unsupported for executable
-  memory copy. This is an adapter boundary for future P2/P3 version modules,
-  not a public support claim.
+  borrows or nested async values remain unsupported for executable memory copy.
+  This is an adapter boundary for future P2/P3 version modules, not a public
+  support claim.
   Internal
   error-context support now models
   `error-context.new`, `error-context.debug-message`, and `error-context.drop`
@@ -447,8 +450,8 @@ This is the implementation state as of 2026-06-22 on `main`.
   switching, synchronous, awaited, and waitable-event handle-program
   fixed-size memory-copy invocation costs, synchronous handle-program
   cancel-copy wait costs, subtask cancellation delivery, task return/cancel
-  delivery, plus fixed-size primitive stream/future memory-copy costs, are
-  measured by
+  delivery, plus fixed-size primitive and owned-resource stream/future
+  memory-copy costs, are measured by
   `dart run tool/wasi_component_async_benchmark.dart --json`. Keep active-copy
   state checks on the waitable-event path so ordinary handle and memory
   invocations do not pay for event lifecycle enforcement.

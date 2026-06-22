@@ -14,7 +14,9 @@ import 'string_memory.dart';
 /// Resource handle-table semantics and borrow tracking are reported as
 /// unsupported instead of being approximated. Resource and error-context
 /// handles can be represented as plain canonical `u32` values when the caller
-/// supplies a handle-aware adapter plan.
+/// supplies a handle-aware adapter plan. Owned resource handles can also use
+/// that same canonical `u32` memory representation for stream/future element
+/// copy buffers.
 final class WASIComponentCanonicalValueMemoryCodec {
   const WASIComponentCanonicalValueMemoryCodec._(this._layout);
 
@@ -49,7 +51,25 @@ final class WASIComponentCanonicalValueMemoryCodec {
   ) {
     final layout = _LayoutResolver(
       definitions,
-      allowHandles: true,
+      handleMode: _ResourceHandleMemoryMode.ownAndBorrow,
+    ).resolveValueType(type);
+    return layout == null
+        ? null
+        : WASIComponentCanonicalValueMemoryCodec._(layout);
+  }
+
+  /// Builds a Canonical ABI memory codec for stream/future element buffers.
+  ///
+  /// This treats owned resource handles as canonical `u32` values. Borrowed
+  /// handles remain unsupported here because stream/future payload storage
+  /// cannot extend a borrow lifetime through the byte codec.
+  static WASIComponentCanonicalValueMemoryCodec? fromAsyncElementType(
+    WasmComponentValueType type,
+    List<WasmComponentTypeDefinition> definitions,
+  ) {
+    final layout = _LayoutResolver(
+      definitions,
+      handleMode: _ResourceHandleMemoryMode.ownOnly,
     ).resolveValueType(type);
     return layout == null
         ? null
@@ -292,10 +312,13 @@ final class WASIComponentCanonicalValueMemoryCodec {
 }
 
 final class _LayoutResolver {
-  _LayoutResolver(this.definitions, {this.allowHandles = false});
+  _LayoutResolver(
+    this.definitions, {
+    this.handleMode = _ResourceHandleMemoryMode.none,
+  });
 
   final List<WasmComponentTypeDefinition> definitions;
-  final bool allowHandles;
+  final _ResourceHandleMemoryMode handleMode;
   final Map<int, _CanonicalValueLayout?> _cache =
       <int, _CanonicalValueLayout?>{};
   final Set<int> _visiting = <int>{};
@@ -400,7 +423,7 @@ final class _LayoutResolver {
       case WasmComponentDefinedValueTypeKind.own:
       case WasmComponentDefinedValueTypeKind.borrow:
         final typeIndex = type.typeIndex;
-        if (!allowHandles ||
+        if (!_allowsResourceHandle(type.kind) ||
             typeIndex == null ||
             typeIndex < 0 ||
             typeIndex >= definitions.length ||
@@ -412,6 +435,17 @@ final class _LayoutResolver {
       case WasmComponentDefinedValueTypeKind.future:
         return null;
     }
+  }
+
+  bool _allowsResourceHandle(WasmComponentDefinedValueTypeKind kind) {
+    return switch (handleMode) {
+      _ResourceHandleMemoryMode.none => false,
+      _ResourceHandleMemoryMode.ownOnly =>
+        kind == WasmComponentDefinedValueTypeKind.own,
+      _ResourceHandleMemoryMode.ownAndBorrow =>
+        kind == WasmComponentDefinedValueTypeKind.own ||
+            kind == WasmComponentDefinedValueTypeKind.borrow,
+    };
   }
 
   _CanonicalValueLayout? _variantLayout(
@@ -430,6 +464,8 @@ final class _LayoutResolver {
     return _VariantLayout(kind, caseLayouts);
   }
 }
+
+enum _ResourceHandleMemoryMode { none, ownOnly, ownAndBorrow }
 
 const _canonicalU32HandleLayout = _PrimitiveLayout(
   WasmComponentPrimitiveValueType.u32,

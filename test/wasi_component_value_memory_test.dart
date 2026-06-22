@@ -190,6 +190,38 @@ void main() {
       );
     });
 
+    test('loads and stores owned resource async elements as canonical u32', () {
+      expect(
+        WASIComponentCanonicalValueMemoryCodec.fromValueType(
+          const WasmComponentValueType.typeIndex(1),
+          component_fixtures.canonicalResourceRecordDefinitions,
+        ),
+        isNull,
+      );
+      expect(
+        WASIComponentCanonicalValueMemoryCodec.fromAsyncElementType(
+          const WasmComponentValueType.typeIndex(2),
+          component_fixtures.canonicalResourceRecordDefinitions,
+        ),
+        isNull,
+      );
+      final codec = WASIComponentCanonicalValueMemoryCodec.fromAsyncElementType(
+        const WasmComponentValueType.typeIndex(1),
+        component_fixtures.canonicalResourceRecordDefinitions,
+      )!;
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 0xffffffff, Endian.little);
+
+      expect(codec.byteLength, 4);
+      expect(codec.alignment, 4);
+      expect(codec.load(memory, 32), 0xffffffff);
+
+      codec.store(memory, 36, 0x80000000);
+      expect(data.getUint32(36, Endian.little), 0x80000000);
+      expect(() => codec.store(memory, 40, -1), throwsStateError);
+    });
+
     test('packs flags through the smallest canonical integer width', () {
       final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
         const WasmComponentValueType.typeIndex(0),

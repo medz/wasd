@@ -726,6 +726,82 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('copies owned resource stream handles through canonical memory', () {
+      final component = WasmComponent.decode(
+        _streamOwnResourceTypeComponentBytes(),
+      );
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 0x7fffffff, Endian.little);
+      data.setUint32(36, 0x80000000, Endian.little);
+      final host = WASIComponentAsyncHost();
+      final bindings = host.componentAsyncValueBindings(component);
+
+      expect(bindings.single.componentTypeIndex, 2);
+      expect(bindings.single.memoryLayout!.byteLength, 4);
+      expect(bindings.single.memoryLayout!.alignment, 4);
+
+      host.defineStreamTypeFromComponent<int>(
+        component,
+        2,
+        'owned-resource-stream',
+      );
+      final newOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamNew,
+          typeIndex: 2,
+        ),
+      );
+      final readOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamRead,
+          typeIndex: 2,
+        ),
+      );
+      final writeOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamWrite,
+          typeIndex: 2,
+        ),
+      );
+      final dropReadableOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamDropReadable,
+          typeIndex: 2,
+        ),
+      );
+      final dropWritableOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamDropWritable,
+          typeIndex: 2,
+        ),
+      );
+      final handles = newOperation.streamNewHandles();
+
+      final writeResult = writeOperation.streamWriteHandleFromMemory(
+        handles.writable,
+        memory,
+        32,
+        2,
+      );
+      final readResult = readOperation.streamReadHandleToMemory(
+        handles.readable,
+        memory,
+        96,
+        2,
+      );
+
+      expect(writeResult.packedResult, 2 << 4);
+      expect(readResult.packedResult, 2 << 4);
+      expect(data.getUint32(96, Endian.little), 0x7fffffff);
+      expect(data.getUint32(100, Endian.little), 0x80000000);
+      expect(host.table.activeCount, 2);
+      dropReadableOperation.streamDropReadableHandle(handles.readable);
+      dropWritableOperation.streamDropWritableHandle(handles.writable);
+      expect(host.table.activeCount, 0);
+    });
+
     test('invokes handle-backed stream memory copies with core ABI args', () {
       final component = WasmComponent.decode(_streamU32TypeComponentBytes());
       expect(component.validate(), isEmpty);
@@ -1910,6 +1986,77 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('copies owned resource future handles through canonical memory', () {
+      final component = WasmComponent.decode(
+        _futureOwnResourceTypeComponentBytes(),
+      );
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 0xffffffff, Endian.little);
+      final host = WASIComponentAsyncHost();
+      final bindings = host.componentAsyncValueBindings(component);
+
+      expect(bindings.single.componentTypeIndex, 2);
+      expect(bindings.single.memoryLayout!.byteLength, 4);
+      expect(bindings.single.memoryLayout!.alignment, 4);
+
+      host.defineFutureTypeFromComponent<int>(
+        component,
+        2,
+        'owned-resource-future',
+      );
+      final newOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureNew,
+          typeIndex: 2,
+        ),
+      );
+      final readOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureRead,
+          typeIndex: 2,
+        ),
+      );
+      final writeOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureWrite,
+          typeIndex: 2,
+        ),
+      );
+      final dropReadableOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureDropReadable,
+          typeIndex: 2,
+        ),
+      );
+      final dropWritableOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.futureDropWritable,
+          typeIndex: 2,
+        ),
+      );
+      final handles = newOperation.futureNewHandles();
+
+      expect(
+        writeOperation
+            .futureWriteHandleFromMemory(handles.writable, memory, 32)
+            .packedResult,
+        0,
+      );
+      expect(
+        readOperation
+            .futureReadHandleToMemory(handles.readable, memory, 96)
+            .packedResult,
+        0,
+      );
+      expect(data.getUint32(96, Endian.little), 0xffffffff);
+      expect(host.table.activeCount, 2);
+      dropReadableOperation.futureDropReadableHandle(handles.readable);
+      dropWritableOperation.futureDropWritableHandle(handles.writable);
+      expect(host.table.activeCount, 0);
+    });
+
     test('awaits pending handle-backed future reads into memory', () async {
       final component = WasmComponent.decode(_futureU32TypeComponentBytes());
       expect(component.validate(), isEmpty);
@@ -2813,6 +2960,30 @@ Uint8List _streamU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x79,
 ]);
 
+Uint8List _streamOwnResourceTypeComponentBytes() =>
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x3f,
+      0x7f,
+      0x00,
+      0x69,
+      0x00,
+      0x66,
+      0x01,
+      0x01,
+    ], count: 3);
+
+Uint8List _futureOwnResourceTypeComponentBytes() =>
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x3f,
+      0x7f,
+      0x00,
+      0x69,
+      0x00,
+      0x65,
+      0x01,
+      0x01,
+    ], count: 3);
+
 Uint8List _streamIndexedPrimitiveElementTypeComponentBytes() =>
     Uint8List.fromList(const <int>[
       0x00,
@@ -2852,6 +3023,24 @@ Uint8List _streamIndexedNestedAsyncElementTypeComponentBytes() =>
       0x01,
       0x00,
     ]);
+
+Uint8List _componentWithTypeDefinitionsBytes(
+  List<int> typeBytes, {
+  required int count,
+}) => Uint8List.fromList(<int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  typeBytes.length + 1,
+  count,
+  ...typeBytes,
+]);
 
 final class _DropDuringIteration extends Iterable<int> {
   _DropDuringIteration({required this.onFirstValue});

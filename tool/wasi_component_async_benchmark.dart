@@ -69,6 +69,12 @@ Future<void> main(List<String> args) async {
       await _benchmarkHandleMemoryProgramSyncCancel(options);
   final streamMemoryCopy = _benchmarkStreamMemoryCopy(options);
   final futureMemoryCopy = _benchmarkFutureMemoryCopy(options.iterations);
+  final streamOwnedResourceMemoryCopy = _benchmarkStreamOwnedResourceMemoryCopy(
+    options,
+  );
+  final futureOwnedResourceMemoryCopy = _benchmarkFutureOwnedResourceMemoryCopy(
+    options.iterations,
+  );
 
   final payload = <String, Object?>{
     'iterations': options.iterations,
@@ -99,6 +105,8 @@ Future<void> main(List<String> args) async {
     'handle_memory_program_sync_cancel': handleMemoryProgramSyncCancel.toJson(),
     'stream_memory_copy': streamMemoryCopy.toJson(),
     'future_memory_copy': futureMemoryCopy.toJson(),
+    'stream_owned_resource_memory_copy': streamOwnedResourceMemoryCopy.toJson(),
+    'future_owned_resource_memory_copy': futureOwnedResourceMemoryCopy.toJson(),
   };
 
   if (options.json) {
@@ -134,6 +142,8 @@ Future<void> _runWarmup(_Options options) async {
   await _benchmarkHandleMemoryProgramSyncCancel(warmup);
   _benchmarkStreamMemoryCopy(warmup);
   _benchmarkFutureMemoryCopy(_warmupIterations);
+  _benchmarkStreamOwnedResourceMemoryCopy(warmup);
+  _benchmarkFutureOwnedResourceMemoryCopy(_warmupIterations);
 }
 
 _Metric _benchmarkStreamRoundTrip(_Options options) {
@@ -1691,20 +1701,66 @@ final class _HandleMemoryPrograms {
 }
 
 _Metric _benchmarkStreamMemoryCopy(_Options options) {
-  final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+  return _benchmarkStreamMemoryCopyForType(
+    options,
+    componentBytes: _streamU32TypeComponentBytes(),
+    componentTypeIndex: 0,
+    name: 'benchmark-u32-stream',
+    inputValueForIndex: (index) => index,
+  );
+}
+
+_Metric _benchmarkFutureMemoryCopy(int iterations) {
+  return _benchmarkFutureMemoryCopyForType(
+    iterations,
+    componentBytes: _futureU32TypeComponentBytes(),
+    componentTypeIndex: 0,
+    name: 'benchmark-u32-future',
+    inputValue: 0x55aa55aa,
+  );
+}
+
+_Metric _benchmarkStreamOwnedResourceMemoryCopy(_Options options) {
+  return _benchmarkStreamMemoryCopyForType(
+    options,
+    componentBytes: _streamOwnResourceTypeComponentBytes(),
+    componentTypeIndex: 2,
+    name: 'benchmark-owned-resource-stream',
+    inputValueForIndex: (index) => 0x1000 + index,
+  );
+}
+
+_Metric _benchmarkFutureOwnedResourceMemoryCopy(int iterations) {
+  return _benchmarkFutureMemoryCopyForType(
+    iterations,
+    componentBytes: _futureOwnResourceTypeComponentBytes(),
+    componentTypeIndex: 2,
+    name: 'benchmark-owned-resource-future',
+    inputValue: 0x55aa55aa,
+  );
+}
+
+_Metric _benchmarkStreamMemoryCopyForType(
+  _Options options, {
+  required Uint8List componentBytes,
+  required int componentTypeIndex,
+  required String name,
+  required int Function(int index) inputValueForIndex,
+}) {
+  final component = WasmComponent.decode(componentBytes);
   final host = WASIComponentAsyncHost()
-    ..defineStreamTypeFromComponent<int>(component, 0, 'benchmark-u32-stream');
+    ..defineStreamTypeFromComponent<int>(component, componentTypeIndex, name);
   final newOperation = host.bindCanonicalDefinition(
-    const WasmComponentCanonicalDefinition(
+    WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.streamNew,
-      typeIndex: 0,
+      typeIndex: componentTypeIndex,
     ),
   );
   final readOperation = host.bindCanonicalDefinition(
-    const WasmComponentCanonicalDefinition(
+    WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.streamRead,
-      typeIndex: 0,
-      options: [
+      typeIndex: componentTypeIndex,
+      options: const [
         WasmComponentCanonicalOption(
           kind: WasmComponentCanonicalOptionKind.memory,
           index: 0,
@@ -1713,10 +1769,10 @@ _Metric _benchmarkStreamMemoryCopy(_Options options) {
     ),
   );
   final writeOperation = host.bindCanonicalDefinition(
-    const WasmComponentCanonicalDefinition(
+    WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.streamWrite,
-      typeIndex: 0,
-      options: [
+      typeIndex: componentTypeIndex,
+      options: const [
         WasmComponentCanonicalOption(
           kind: WasmComponentCanonicalOptionKind.memory,
           index: 0,
@@ -1726,10 +1782,10 @@ _Metric _benchmarkStreamMemoryCopy(_Options options) {
   );
   final memory = Memory(const MemoryDescriptor(initial: 1));
   final data = ByteData.view(memory.buffer);
-  final inputPointer = 1024;
-  final outputPointer = 4096;
+  const inputPointer = 1024;
+  const outputPointer = 4096;
   for (var i = 0; i < options.batchSize; i++) {
-    data.setUint32(inputPointer + i * 4, i, Endian.little);
+    data.setUint32(inputPointer + i * 4, inputValueForIndex(i), Endian.little);
   }
   final stream = newOperation.streamNew() as WASIComponentStream<int>;
   var checksum = 0;
@@ -1763,21 +1819,27 @@ _Metric _benchmarkStreamMemoryCopy(_Options options) {
   );
 }
 
-_Metric _benchmarkFutureMemoryCopy(int iterations) {
-  final component = WasmComponent.decode(_futureU32TypeComponentBytes());
+_Metric _benchmarkFutureMemoryCopyForType(
+  int iterations, {
+  required Uint8List componentBytes,
+  required int componentTypeIndex,
+  required String name,
+  required int inputValue,
+}) {
+  final component = WasmComponent.decode(componentBytes);
   final host = WASIComponentAsyncHost()
-    ..defineFutureTypeFromComponent<int>(component, 0, 'benchmark-u32-future');
+    ..defineFutureTypeFromComponent<int>(component, componentTypeIndex, name);
   final newOperation = host.bindCanonicalDefinition(
-    const WasmComponentCanonicalDefinition(
+    WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.futureNew,
-      typeIndex: 0,
+      typeIndex: componentTypeIndex,
     ),
   );
   final readOperation = host.bindCanonicalDefinition(
-    const WasmComponentCanonicalDefinition(
+    WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.futureRead,
-      typeIndex: 0,
-      options: [
+      typeIndex: componentTypeIndex,
+      options: const [
         WasmComponentCanonicalOption(
           kind: WasmComponentCanonicalOptionKind.memory,
           index: 0,
@@ -1786,10 +1848,10 @@ _Metric _benchmarkFutureMemoryCopy(int iterations) {
     ),
   );
   final writeOperation = host.bindCanonicalDefinition(
-    const WasmComponentCanonicalDefinition(
+    WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.futureWrite,
-      typeIndex: 0,
-      options: [
+      typeIndex: componentTypeIndex,
+      options: const [
         WasmComponentCanonicalOption(
           kind: WasmComponentCanonicalOptionKind.memory,
           index: 0,
@@ -1801,7 +1863,7 @@ _Metric _benchmarkFutureMemoryCopy(int iterations) {
   final data = ByteData.view(memory.buffer);
   const inputPointer = 1024;
   const outputPointer = 4096;
-  data.setUint32(inputPointer, 0x55aa55aa, Endian.little);
+  data.setUint32(inputPointer, inputValue, Endian.little);
   var checksum = 0;
 
   final watch = Stopwatch()..start();
@@ -1862,6 +1924,8 @@ void _printText(Map<String, Object?> payload) {
     'handle_memory_program_sync_cancel',
     'stream_memory_copy',
     'future_memory_copy',
+    'stream_owned_resource_memory_copy',
+    'future_owned_resource_memory_copy',
   ]) {
     final metric = payload[name]! as Map<String, Object?>;
     stdout
@@ -1985,6 +2049,48 @@ Uint8List _futureU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x65,
   0x01,
   0x79,
+]);
+
+Uint8List _streamOwnResourceTypeComponentBytes() =>
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x3f,
+      0x7f,
+      0x00,
+      0x69,
+      0x00,
+      0x66,
+      0x01,
+      0x01,
+    ], count: 3);
+
+Uint8List _futureOwnResourceTypeComponentBytes() =>
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x3f,
+      0x7f,
+      0x00,
+      0x69,
+      0x00,
+      0x65,
+      0x01,
+      0x01,
+    ], count: 3);
+
+Uint8List _componentWithTypeDefinitionsBytes(
+  List<int> typeBytes, {
+  required int count,
+}) => Uint8List.fromList(<int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x07,
+  typeBytes.length + 1,
+  count,
+  ...typeBytes,
 ]);
 
 void _printUsage() {
