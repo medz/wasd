@@ -494,6 +494,28 @@ void main() {
       }
     });
 
+    test('virtual socket descriptors reject initial fd collisions', () {
+      expect(
+        () => Preview1VirtualFileSystem(sockets: {-1: WASIPreview1Socket()}),
+        throwsArgumentError,
+      );
+      expect(
+        () => Preview1VirtualFileSystem(sockets: {0: WASIPreview1Socket()}),
+        throwsArgumentError,
+      );
+      expect(
+        () => Preview1VirtualFileSystem(
+          preopens: {'/sandbox': '/tmp'},
+          sockets: {3: WASIPreview1Socket()},
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => Preview1VirtualFileSystem(stdinFd: 10, stdoutFd: 10),
+        throwsArgumentError,
+      );
+    });
+
     test('imports has fd_write function', () {
       final wasi = WASI();
       final preview1 = wasi.imports['wasi_snapshot_preview1']!;

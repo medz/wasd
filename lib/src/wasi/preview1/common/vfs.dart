@@ -48,6 +48,13 @@ final class Preview1VirtualFileSystem {
            entry.key: Preview1VirtualSocket(entry.value),
        },
        _symlinksByGuestPath = <String, Preview1VirtualSymlink>{} {
+    _validateInitialDescriptorNamespace(
+      stdinFd: stdinFd,
+      stdoutFd: stdoutFd,
+      stderrFd: stderrFd,
+      preopenFds: _preopenGuestPathsByFd.keys,
+      socketFds: sockets.keys,
+    );
     _stdioRightsByFd = {
       for (final fd in _stdioDescriptorsByFd.keys)
         fd: Preview1DescriptorRights.file(),
@@ -1820,6 +1827,39 @@ Map<int, Preview1StdioDescriptorKind> _buildStdioDescriptors({
     stdoutFd: Preview1StdioDescriptorKind.stdout,
     stderrFd: Preview1StdioDescriptorKind.stderr,
   };
+}
+
+void _validateInitialDescriptorNamespace({
+  required int stdinFd,
+  required int stdoutFd,
+  required int stderrFd,
+  required Iterable<int> preopenFds,
+  required Iterable<int> socketFds,
+}) {
+  final stdioFds = <int>[stdinFd, stdoutFd, stderrFd];
+  final seenStdio = <int>{};
+  for (final fd in stdioFds) {
+    if (fd < 0) {
+      throw ArgumentError.value(fd, 'stdio fd', 'must not be negative');
+    }
+    if (!seenStdio.add(fd)) {
+      throw ArgumentError.value(fd, 'stdio fd', 'must be unique');
+    }
+  }
+
+  final reservedFds = <int>{...seenStdio, ...preopenFds};
+  for (final fd in socketFds) {
+    if (fd < 0) {
+      throw ArgumentError.value(fd, 'socket fd', 'must not be negative');
+    }
+    if (reservedFds.contains(fd)) {
+      throw ArgumentError.value(
+        fd,
+        'socket fd',
+        'must not collide with stdio or preopen descriptors',
+      );
+    }
+  }
 }
 
 Set<String> _buildVirtualDirectorySet({

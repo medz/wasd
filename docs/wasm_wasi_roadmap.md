@@ -191,6 +191,19 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-DESCRIPTOR-NAMESPACE` - Initial socket descriptors reject fd
+  namespace collisions with stdio/preopens.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "virtual socket descriptors reject initial fd collisions"`
+    failed before the fix, then passed after the fix;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "virtual socket descriptors reject initial fd collisions"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_recv and sock_send use configured preview1 stream sockets"`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
+    `dart analyze`.
+  - Claim impact: prevents inconsistent Preview1 descriptor kind/rights state for
+    injected sockets in `SUPPORT-P1`; does not complete the parent
+    `P1-SOCKET-CONFORMANCE` row.
 - [x] `P1-SOCKET-RECEIVE-SHUTDOWN-DROPS-BUFFERS` - Receive-side shutdown drops
   unread receive buffers and later host-injected data.
   - Evidence:
@@ -980,6 +993,29 @@ performance visible while the support surface expands.
   - Done when: receive-side shutdown clears unread stream bytes, clears queued
     datagrams, clears read-readiness hints, and later `addReceiveData` calls do
     not allocate or queue unreachable receive data.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
+    socket conformance row.
+- [x] `P1-SOCKET-DESCRIPTOR-NAMESPACE` - Initial socket descriptors reject fd
+  namespace collisions.
+  - Scope: native/browser shared Preview1 VFS construction for configured stdio,
+    preopen, and injected socket descriptor numbers.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart` and
+    `test/wasi_test.dart`.
+  - Red test:
+    `dart test test/wasi_test.dart --name "virtual socket descriptors reject initial fd collisions"`
+    failed before the fix because negative socket fds, stdio/socket collisions,
+    preopen/socket collisions, and duplicate stdio fds were silently accepted.
+  - Implementation gate: `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "virtual socket descriptors reject initial fd collisions"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_recv and sock_send use configured preview1 stream sockets"`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: initial stdio fds are nonnegative and unique, socket fds are
+    nonnegative, sockets cannot share fd numbers with stdio/preopen descriptors,
+    and normal high-numbered socket injection still works.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
