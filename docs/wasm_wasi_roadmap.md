@@ -228,6 +228,32 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-POLL-CLOCK-VALIDATION` - `poll_oneoff` reports invalid clock
+  subscriptions as event errors.
+  - Scope: native/browser Preview1 `poll_oneoff` clock subscription validation.
+  - Edit targets: `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "poll_oneoff reports invalid clock subscriptions as event errors"`
+    failed before the fix because unsupported clock ids produced a success event
+    with event errno `0`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "poll_oneoff reports invalid clock subscriptions as event errors"`;
+    `dart test test/wasi_test.dart --name "poll_oneoff"`;
+    `dart test -p chrome test/wasi_test.dart --name "poll_oneoff"`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_poll_readiness.operations=80000` and
+    `socket_poll_readiness.per_operation_us=0.07295` for the socket-heavy
+    distribution.
+  - Done when: unsupported clock ids and unknown clock flags write a clock event
+    with `EINVAL`, while valid pending clock subscriptions still defer to the
+    existing wait-time calculation.
+  - Evidence update: this checked row plus the verification matrix row.
+  - Claim impact: closes one Preview1 poll/clock validation gap for
+    native/browser hosts; does not complete `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [x] `P1-CLOCK-TIME-INVALID-ID` - `clock_time_get` rejects unsupported
   Preview1 clock ids without mutating guest output.
   - Scope: native/browser Preview1 `clock_time_get` syscall validation.
@@ -984,7 +1010,7 @@ copying their internals directly.
 | Status | Capability boundary | Evidence to inspect | Verification gate | Remaining gap |
 | --- | --- | --- | --- | --- |
 | [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `path_open` create/exclusive/truncate is covered; full Preview1 conformance still needs broader syscall/spec-suite gates and remaining socket edges. |
-| [x] | Preview1 native/browser clock syscall validation | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "clock_time_get"`; `dart test -p chrome test/wasi_test.dart --name "clock_time_get"` | Unsupported `clock_time_get` ids now preserve output memory and return `EINVAL`; full Preview1 still needs broader syscall/spec-suite gates. |
+| [x] | Preview1 native/browser clock and poll-clock validation | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "clock_time_get"`; `dart test -p chrome test/wasi_test.dart --name "clock_time_get"`; `dart test test/wasi_test.dart --name "poll_oneoff"`; `dart test -p chrome test/wasi_test.dart --name "poll_oneoff"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Unsupported `clock_time_get` ids now preserve output memory and return `EINVAL`; invalid `poll_oneoff` clock subscriptions now report event `EINVAL`; full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
 | [x] | Versioned Preview2/Preview3 capability gates | `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/preview2/component_host.dart`, `lib/src/wasi/preview3/component_host.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_versioned_host_test.dart` | Concrete P2/P3 interface adapter modules instead of generic facade binding. |
@@ -1006,8 +1032,9 @@ This is the implementation state as of 2026-06-23 on `main`.
   sockets, descriptor flags, descriptor rights, descriptor times, descriptor
   sync/advice validation, clock/file/socket polling readiness including
   host-supplied socket readiness hints, `clock_time_get` unsupported-id
-  validation, host-backed stream/datagram receive/send handlers, and descriptor
-  renumbering. Node still delegates Preview 1 behavior to `node:wasi`.
+  validation, `poll_oneoff` clock subscription validation, host-backed
+  stream/datagram receive/send handlers, and descriptor renumbering. Node still
+  delegates Preview 1 behavior to `node:wasi`.
 - Preview 1 `proc_raise` is no longer a blanket `ENOSYS` stub: native hosts
   deliver mapped process signals by default, native/browser hosts can inject a
   `procRaiseHandler` for controlled signal handling, and browser hosts still

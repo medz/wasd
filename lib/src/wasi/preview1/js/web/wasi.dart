@@ -1697,15 +1697,21 @@ class WASI implements wasi.WASI {
       var nbytes = 0;
       var flags = 0;
       var isReady = true;
-      final remainingNanos = switch (tag) {
-        _eventTypeClock => _clockSubscriptionWaitNanos(
+      var remainingNanos = 0;
+      if (tag == _eventTypeClock) {
+        final clockWaitNanos = _clockSubscriptionWaitNanos(
           data: data,
           subscriptionPtr: subscriptionPtr,
           nowMonotonic: nowMonotonic,
-        ),
-        _eventTypeFdRead || _eventTypeFdWrite => 0,
-        _ => 0,
-      };
+        );
+        if (clockWaitNanos == _clockSubscriptionInvalid) {
+          errno = _errnoInval;
+        } else {
+          remainingNanos = clockWaitNanos;
+        }
+      } else if (tag != _eventTypeFdRead && tag != _eventTypeFdWrite) {
+        errno = _errnoInval;
+      }
       if (remainingNanos > 0) {
         if (earliestWaitNanos == 0 || remainingNanos < earliestWaitNanos) {
           earliestWaitNanos = remainingNanos;
@@ -1725,8 +1731,6 @@ class WASI implements wasi.WASI {
         errno = readiness.errno;
         nbytes = readiness.nbytes;
         flags = readiness.flags;
-      } else if (tag != _eventTypeClock) {
-        errno = _errnoInval;
       }
       if (!isReady) {
         continue;
@@ -1778,6 +1782,10 @@ class WASI implements wasi.WASI {
       subscriptionPtr + _subscriptionClockFlagsOffset,
       Endian.little,
     );
+    if (_clockResolutionNanos(clockId) == null ||
+        (flags & ~_subscriptionClockAbstime) != 0) {
+      return _clockSubscriptionInvalid;
+    }
     final now = _clockNowNanos(clockId);
     final deadline = (flags & _subscriptionClockAbstime) != 0
         ? timeout
@@ -2087,6 +2095,7 @@ const int _subscriptionClockIdOffset = 16;
 const int _subscriptionClockTimeoutOffset = 24;
 const int _subscriptionClockFlagsOffset = 40;
 const int _subscriptionClockAbstime = 1;
+const int _clockSubscriptionInvalid = -1;
 const int _errnoSuccess = wasi_common.errnoSuccess;
 const int _errnoInval = wasi_common.errnoInval;
 const int _errnoBadf = wasi_common.errnoBadf;

@@ -50,6 +50,8 @@ const int _roflagRecvDataTruncated = 1;
 const int _subscriptionSize = 48;
 const int _subscriptionTagOffset = 8;
 const int _subscriptionFdReadwriteFdOffset = 16;
+const int _subscriptionClockIdOffset = 16;
+const int _subscriptionClockFlagsOffset = 40;
 const int _eventSize = 32;
 const int _eventErrorOffset = 8;
 const int _eventTypeOffset = 10;
@@ -1493,6 +1495,82 @@ void main() {
         },
         skip: _skipOnNode(
           'Skipping on Node.js; syscall behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'poll_oneoff reports invalid clock subscriptions as event errors',
+        () async {
+          final pollWasi = WASI();
+          final pollResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            pollWasi.imports,
+          );
+          final pollInstance = pollResult.instance;
+          final pollOneoff =
+              pollWasi.imports['wasi_snapshot_preview1']!['poll_oneoff']
+                  as FunctionImportExportValue;
+          final memory =
+              (pollInstance.exports['memory'] as MemoryImportExportValue).ref;
+          pollWasi.finalizeBindings(pollInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const inPtr = 2448;
+          const outPtr = 2544;
+          const neventsPtr = 2640;
+
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0x9901,
+            tag: _eventTypeClock,
+          );
+          data.setUint32(inPtr + _subscriptionClockIdOffset, 99, Endian.little);
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]),
+            ),
+            0,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0x9901);
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeClock);
+          expect(
+            data.getUint16(outPtr + _eventErrorOffset, Endian.little),
+            _errnoInval,
+          );
+
+          bytes.fillRange(outPtr, outPtr + _eventSize, 0xff);
+          data.setUint32(neventsPtr, 0xfeedface, Endian.little);
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0x9902,
+            tag: _eventTypeClock,
+          );
+          data.setUint32(inPtr + _subscriptionClockIdOffset, 0, Endian.little);
+          data.setUint16(
+            inPtr + _subscriptionClockFlagsOffset,
+            2,
+            Endian.little,
+          );
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]),
+            ),
+            0,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0x9902);
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeClock);
+          expect(
+            data.getUint16(outPtr + _eventErrorOffset, Endian.little),
+            _errnoInval,
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; poll_oneoff behavior is delegated to node:wasi.',
         ),
       );
 
