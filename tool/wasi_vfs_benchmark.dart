@@ -104,6 +104,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
   final socketFdReadWrite = _benchmarkSocketFdReadWrite(options);
   final socketDgramTruncation = _benchmarkSocketDatagramTruncation(options);
   final socketDatagramRights = _benchmarkSocketDatagramRights(options);
+  final socketConnectedRights = _benchmarkSocketConnectedRights(options);
   final socketPollReadiness = _benchmarkSocketPollReadiness(options);
   final socketRenumberClose = _benchmarkSocketRenumberClose(options);
   final socketAcceptInheritance = _benchmarkSocketAcceptInheritance(options);
@@ -134,6 +135,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
     'socket_fd_read_write': socketFdReadWrite.toJson(),
     'socket_dgram_truncation': socketDgramTruncation.toJson(),
     'socket_datagram_rights': socketDatagramRights.toJson(),
+    'socket_connected_rights': socketConnectedRights.toJson(),
     'socket_poll_readiness': socketPollReadiness.toJson(),
     'socket_renumber_close': socketRenumberClose.toJson(),
     'socket_accept_inheritance': socketAcceptInheritance.toJson(),
@@ -184,6 +186,7 @@ void _runWarmup(Map<String, Uint8List> files, _Options options) {
   _benchmarkSocketSendRecv(warmupOptions);
   _benchmarkSocketShutdownPreflight(warmupOptions);
   _benchmarkSocketDatagramTruncation(warmupOptions);
+  _benchmarkSocketConnectedRights(warmupOptions);
   _benchmarkSocketPollReadiness(warmupOptions);
   _benchmarkSocketRenumberClose(warmupOptions);
 }
@@ -1695,6 +1698,54 @@ _Metric _benchmarkSocketDatagramRights(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketConnectedRights(_Options options) {
+  const fdBase = 32768;
+  final sockets = <int, WASIPreview1Socket>{
+    for (var i = 0; i < options.iterations; i++)
+      fdBase + i: WASIPreview1Socket(canAccept: false),
+  };
+  final vfs = Preview1VirtualFileSystem(
+    firstVirtualFd: fdBase + options.iterations,
+    sockets: sockets,
+  );
+
+  var successfulOperations = 0;
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final fd = fdBase + i;
+    final rights = vfs.descriptorRightsForFd(fd);
+    if (rights == null ||
+        rights.base != rightsSocketInheriting ||
+        rights.inheriting != 0) {
+      throw StateError('connected socket rights mismatch at iteration $i');
+    }
+    checksum += fd + rights.base + rights.inheriting;
+    successfulOperations++;
+
+    final result = vfs.setDescriptorRights(
+      fd: fd,
+      rightsBase: rightSockAccept,
+      rightsInheriting: 0,
+    );
+    if (result != Preview1FdRightsResult.notCapable) {
+      throw StateError('connected socket accepted sock_accept rights at $i');
+    }
+    successfulOperations++;
+
+    if (vfs.acceptSocket(fd: fd, descriptorFlags: 0) >= 0) {
+      throw StateError('connected socket accepted a queued stream at $i');
+    }
+    successfulOperations++;
+  }
+  watch.stop();
+  return _Metric(
+    operations: successfulOperations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _writeTwoIovs({
   required ByteData data,
   required int iovPtr,
@@ -1794,6 +1845,7 @@ void _printSingleText(
     payload['socket_dgram_truncation'],
   );
   _printMetric('socket datagram rights', payload['socket_datagram_rights']);
+  _printMetric('socket connected rights', payload['socket_connected_rights']);
   _printMetric('socket poll readiness', payload['socket_poll_readiness']);
   _printMetric('socket renumber/close', payload['socket_renumber_close']);
   _printMetric(

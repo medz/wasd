@@ -908,7 +908,7 @@ final class Preview1VirtualFileSystem {
 
   int acceptSocket({required int fd, required int descriptorFlags}) {
     final listener = socketForFd(fd);
-    if (listener == null || !listener.isStream) {
+    if (listener == null || !listener.isStream || !listener.canAccept) {
       return -1;
     }
     final accepted = listener.socket.accept();
@@ -919,7 +919,7 @@ final class Preview1VirtualFileSystem {
     _socketsByFd[acceptedFd] = Preview1VirtualSocket(
       accepted,
       rights: Preview1DescriptorRights.socket(
-        base: listener.rights.inheriting,
+        base: listener.rights.inheriting & ~rightSockAccept,
         inheriting: 0,
       ),
       descriptorFlags: descriptorFlags,
@@ -1822,7 +1822,7 @@ final class Preview1VirtualSocket {
     this.descriptorFlags = 0,
   }) : rights =
            rights ??
-           Preview1DescriptorRights.socket(canAccept: socket.isStream);
+           Preview1DescriptorRights.socket(canAccept: socket.canAccept);
 
   final WASIPreview1Socket socket;
   final Preview1DescriptorRights rights;
@@ -1893,6 +1893,8 @@ final class Preview1VirtualSocket {
   bool get isDatagram => socket.isDatagram;
 
   bool get isStream => socket.isStream;
+
+  bool get canAccept => socket.canAccept;
 
   bool get hasReceiveMessage => socket.hasReceiveMessage;
 

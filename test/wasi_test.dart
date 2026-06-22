@@ -2976,6 +2976,56 @@ void main() {
       );
 
       test(
+        'connected stream sockets can opt out of accept capability',
+        () async {
+          final socket = WASIPreview1Socket(canAccept: false);
+          final socketWasi = WASI(sockets: {43: socket});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockAccept =
+              preview1['sock_accept'] as FunctionImportExportValue;
+          final fdFdstatGet =
+              preview1['fd_fdstat_get'] as FunctionImportExportValue;
+          final fdFdstatSetRights =
+              preview1['fd_fdstat_set_rights'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const fdstatPtr = 4880;
+          const acceptedFdPtr = 4912;
+
+          expect(fdFdstatGet.ref([43, fdstatPtr]), 0);
+          expect(bytes[fdstatPtr], _filetypeSocketStream);
+          final rightsBase = _getUint64Le(data, fdstatPtr + 8);
+          final rightsInheriting = _getUint64Le(data, fdstatPtr + 16);
+          expect(rightsBase & _rightSockAccept, 0);
+          expect(rightsInheriting & _rightSockAccept, 0);
+
+          expect(
+            fdFdstatSetRights.ref([43, _rightSockAccept, 0]),
+            _errnoNotcapable,
+          );
+          data.setUint32(acceptedFdPtr, 0xdeadbeef, Endian.little);
+          expect(sockAccept.ref([43, 0, acceptedFdPtr]), _errnoNotcapable);
+          expect(data.getUint32(acceptedFdPtr, Endian.little), 0xdeadbeef);
+          expect(
+            () => socket.queueAccepted(WASIPreview1Socket()),
+            throwsStateError,
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'sock_accept returns queued preview1 stream sockets with inherited rights',
         () async {
           final accepted = WASIPreview1Socket(

@@ -233,6 +233,43 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-CONNECTED-ACCEPT-CAPABILITY` - Stream sockets can opt out of
+  listener accept capability.
+  - Scope: native/browser shared Preview1 socket descriptor rights and
+    `sock_accept` classification for host-injected connected streams.
+  - Edit targets: `lib/src/wasi/preview1/socket.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/common/socket_syscalls.dart`,
+    `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "connected stream sockets can opt out of accept capability" --reporter=compact`
+    failed before the fix because `WASIPreview1Socket` had no `canAccept`
+    named parameter, so every injected stream descriptor was modeled as
+    listener-capable.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "connected stream sockets can opt out of accept capability" --reporter=compact`;
+    `dart test test/wasi_test.dart --name "connected stream sockets can opt out of accept capability|accepted sockets do not inherit listener accept rights by default|sock_accept returns queued preview1 stream sockets with inherited rights|default socket rights expose socket-specific operations only|socket descriptor flags reject file-only flags|datagram sockets do not expose accept rights" --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --name "connected stream sockets can opt out of accept capability|accepted sockets do not inherit listener accept rights by default|sock_accept returns queued preview1 stream sockets with inherited rights|default socket rights expose socket-specific operations only|socket descriptor flags reject file-only flags|datagram sockets do not expose accept rights" --reporter=compact`;
+    `dart test test/wasi_test.dart --reporter=compact`;
+    `dart test --reporter=compact --concurrency=1`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_connected_rights.operations=6000` and
+    `socket_connected_rights.per_operation_us=0.06766666666666667` for the
+    baseline distribution, plus `socket_connected_rights.operations=24000` and
+    `socket_connected_rights.per_operation_us=0.015833333333333335` for the
+    socket-heavy distribution.
+  - Done when: host code can create `WASIPreview1Socket(canAccept: false)`,
+    the descriptor exposes stream send/recv/shutdown rights without
+    `SOCK_ACCEPT`, `sock_accept` preserves the output fd pointer and reports
+    `ENOTCAPABLE`, listener streams keep existing `sock_accept` behavior, and
+    accepted sockets still do not inherit listener accept rights.
+  - Evidence update: this checked row, the detailed backlog child row, the
+    verification matrix, and the socket benchmark payload.
+  - Claim impact: closes one Preview1 socket capability-model gap for
+    native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P3-ASYNC-CHAR-SCALAR` - Reject non-scalar `future<char>` values before
   canonical memory copies.
   - Scope: internal Preview3 async future value validation plus shared
@@ -1341,6 +1378,7 @@ copying their internals directly.
 | [x] | Preview1 native/browser socket flag preflight | `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`; `dart test test/wasi_test.dart --name "sock_recv|sock_send"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv|sock_send"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Invalid `sock_recv`/`sock_send` flags now return `EINVAL` before descriptor-right failures and without socket/output side effects; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket shutdown `how` preflight | `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_shutdown validates how before descriptor state"`; `dart test -p chrome test/wasi_test.dart --name "sock_shutdown validates how before descriptor state"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Invalid `sock_shutdown` `how` values now return `EINVAL` before bad-fd, non-socket, or rights errors without mutating socket state; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket accept flag preflight | `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`; `dart test -p chrome test/wasi_test.dart --name "socket descriptor flags reject file-only flags"`; `dart test test/wasi_test.dart --name "sock_accept|socket descriptor flags|socket syscalls return notsock|datagram sockets do not expose accept rights"`; `dart test -p chrome test/wasi_test.dart --name "sock_accept|socket descriptor flags|socket syscalls return notsock|datagram sockets do not expose accept rights"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Socket-unsupported `sock_accept` fdflags now return `NOTSUP` before accept-right failures while preserving non-socket/bad-fd errno order and queued accepted sockets; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
+| [x] | Preview1 native/browser connected stream accept capability | `lib/src/wasi/preview1/socket.dart`, `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "connected stream sockets can opt out of accept capability"`; `dart test -p chrome test/wasi_test.dart --name "connected stream sockets can opt out of accept capability|accepted sockets do not inherit listener accept rights by default|sock_accept returns queued preview1 stream sockets with inherited rights|default socket rights expose socket-specific operations only|socket descriptor flags reject file-only flags|datagram sockets do not expose accept rights"`; `dart test test/wasi_test.dart`; `dart test --reporter=compact --concurrency=1`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; `dart analyze` | `WASIPreview1Socket(canAccept: false)` now models connected stream endpoints without `SOCK_ACCEPT`, preserves accept output state on rejected `sock_accept`, and is covered by `socket_connected_rights`; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser stream socket send iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs"`; `dart test -p chrome test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs"`; `dart test test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs|virtual socket send handlers stop after partial writes|virtual socket host send handlers reject invalid write counts|sock_recv|sock_send"`; `dart test -p chrome test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs|virtual socket send handlers stop after partial writes|virtual socket host send handlers reject invalid write counts|sock_recv|sock_send"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream `sock_send` now snapshots overlapping iovec tables before host callbacks can mutate guest memory; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket recv iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv snapshots iovs before writing receive buffers"`; `dart test test/wasi_test.dart --name "sock_recv"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream and datagram `sock_recv` now snapshot overlapping iovec tables before receive-buffer writes; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
@@ -2141,6 +2179,32 @@ performance visible while the support surface expands.
     this row with the exact commands run.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete it until the
     Preview1 socket and runtime gates are all checked.
+- [x] `P1-SOCKET-CONNECTED-ACCEPT-CAPABILITY` - Connected stream sockets do not
+  expose listener accept capability.
+  - Scope: native/browser shared Preview1 `WASIPreview1Socket` host API,
+    descriptor rights, and `sock_accept` behavior for stream descriptors that
+    are connected endpoints rather than listeners.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "connected stream sockets can opt out of accept capability" --reporter=compact`
+    failed before the fix because the stream socket constructor had no
+    `canAccept` capability switch; after the fix, focused VM and Chrome
+    accept/right tests passed, `dart test test/wasi_test.dart --reporter=compact`
+    and `dart test --reporter=compact --concurrency=1` passed, and
+    `dart analyze` reported no issues.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` now
+    includes `socket_connected_rights`, with baseline
+    `operations=6000`, `per_operation_us=0.06766666666666667`, and socket-heavy
+    `operations=24000`, `per_operation_us=0.015833333333333335`.
+  - Done when: `WASIPreview1Socket(canAccept: false)` creates a stream
+    descriptor without `SOCK_ACCEPT`, cannot gain `SOCK_ACCEPT` through
+    `fd_fdstat_set_rights`, rejects queued accepts on the host object, preserves
+    the accepted-fd output pointer on `sock_accept`, and listener streams retain
+    their existing accept/inheritance behavior.
+  - Claim impact: tightens the Preview1 socket capability model for connected
+    stream descriptors; it does not complete the parent
+    `P1-SOCKET-CONFORMANCE` row or any `SUPPORT-P1`/`SUPPORT-P2`/`SUPPORT-P3`
+    gate.
 - [x] `P1-SOCKET-POLL-WRITE-HANGUP` - `poll_oneoff(fd_write)` reports hangup
   after send-side socket shutdown.
   - Scope: shared Preview1 native/browser socket write readiness, send-side

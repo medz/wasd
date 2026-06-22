@@ -40,14 +40,19 @@ typedef WASIPreview1SocketSendMessageHandler = int Function(Uint8List message);
 /// connections itself.
 final class WASIPreview1Socket {
   /// Creates a byte-stream socket with optional receive data and queued accepts.
+  ///
+  /// Set [canAccept] to `false` for connected stream endpoints that should not
+  /// expose `SOCK_ACCEPT` descriptor rights.
   WASIPreview1Socket({
     List<int> receiveData = const <int>[],
     Iterable<WASIPreview1Socket> pendingAccepted = const <WASIPreview1Socket>[],
+    bool canAccept = true,
     int? readReadyBytes,
     WASIPreview1SocketReceiveDataProvider? receiveDataProvider,
     WASIPreview1SocketSendHandler? sendHandler,
     this.writeReady,
   }) : _kind = _WASIPreview1SocketKind.stream,
+       _canAccept = canAccept,
        _receiveBytes = List<int>.of(receiveData, growable: true),
        _receiveMessages = ListQueue<Uint8List>(),
        _receiveDataProvider = receiveDataProvider,
@@ -56,6 +61,13 @@ final class WASIPreview1Socket {
        _sendMessageHandler = null,
        _pendingAccepted = ListQueue<WASIPreview1Socket>.of(pendingAccepted) {
     this.readReadyBytes = readReadyBytes;
+    if (!_canAccept && _pendingAccepted.isNotEmpty) {
+      throw ArgumentError.value(
+        canAccept,
+        'canAccept',
+        'must be true when pendingAccepted is not empty',
+      );
+    }
     for (final socket in _pendingAccepted) {
       _validateAcceptedSocket(socket);
     }
@@ -69,6 +81,7 @@ final class WASIPreview1Socket {
     int? readReadyBytes,
     this.writeReady,
   }) : _kind = _WASIPreview1SocketKind.datagram,
+       _canAccept = false,
        _receiveBytes = <int>[],
        _receiveMessages = ListQueue<Uint8List>.of(
          receiveMessages.map(Uint8List.fromList),
@@ -82,6 +95,7 @@ final class WASIPreview1Socket {
   }
 
   final _WASIPreview1SocketKind _kind;
+  final bool _canAccept;
   final List<int> _receiveBytes;
   final BytesBuilder _sentBytes = BytesBuilder(copy: true);
   final ListQueue<Uint8List> _receiveMessages;
@@ -161,6 +175,9 @@ final class WASIPreview1Socket {
 
   /// Whether this descriptor is a byte-stream socket.
   bool get isStream => _kind == _WASIPreview1SocketKind.stream;
+
+  /// Whether this stream is a listener that can accept queued stream sockets.
+  bool get canAccept => isStream && _canAccept;
 
   /// Whether a datagram message is queued for receive.
   bool get hasReceiveMessage {
@@ -260,8 +277,8 @@ final class WASIPreview1Socket {
 
   /// Queues an accepted stream returned by a future `sock_accept` call.
   void queueAccepted(WASIPreview1Socket socket) {
-    if (!isStream) {
-      throw StateError('Datagram sockets cannot accept connections.');
+    if (!canAccept) {
+      throw StateError('Only listener stream sockets can accept connections.');
     }
     _validateAcceptedSocket(socket);
     _pendingAccepted.add(socket);
@@ -382,7 +399,7 @@ final class WASIPreview1Socket {
 
   /// Returns the next queued accepted socket, if one is available.
   WASIPreview1Socket? accept() {
-    if (!isStream || receiveShutdown || _pendingAccepted.isEmpty) {
+    if (!canAccept || receiveShutdown || _pendingAccepted.isEmpty) {
       return null;
     }
     return _pendingAccepted.removeFirst();

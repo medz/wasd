@@ -28,6 +28,9 @@ int preview1SockAccept({
   if (!socket.isStream) {
     return errnoNotsup;
   }
+  if (!socket.canAccept) {
+    return errnoNotsup;
+  }
   if (bytes == null || data == null) {
     return errnoInval;
   }
