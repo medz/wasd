@@ -1,14 +1,15 @@
-# Wasm and WASI Roadmap
+# Wasm and WASI Executable Roadmap
 
 This repository is moving from limited Wasm plus WASI Preview 1 support toward
 real, verified Wasm and WASI support across Preview 1, WASI 0.2, and WASI 0.3.
-This document is the working architecture guide and execution checklist for
-that transition. A support claim is not done until the checklist row names the
-runtime path, the proof files, and the command that can be run to verify it.
+This document is the working architecture guide, execution queue, and evidence
+ledger for that transition. A support claim is not done until the checklist row
+names the runtime path, the proof files, the verification command, and the exact
+condition for marking it complete.
 
 Status date: 2026-06-22.
 
-## How To Use This Roadmap
+## Roadmap Contract
 
 - Treat every row with an ID as work that can be executed, reviewed, and checked
   off independently.
@@ -26,6 +27,26 @@ Status date: 2026-06-22.
   the row. Test heat is a symptom; measured hot paths are the evidence.
 - When a commit completes a row, update that row in the same commit with the
   exact verification command that was run.
+- Never mark a version support gate complete from internal helper tests alone.
+  P1/P2/P3 gates require the version-specific runtime path named in the row.
+- If a row cannot name a failing or missing behavior, split it until it can.
+
+## Checklist Row Format
+
+Every new backlog item must use these fields. Existing rows should be normalized
+to this shape as they are touched.
+
+- [ ] `ID` - One independently reviewable behavior, architecture, performance,
+  or documentation boundary.
+  - Scope: the narrow runtime/API/version boundary affected by this row.
+  - Edit targets: files or directories expected to change.
+  - Red test: the focused test or benchmark that should fail, be missing, or
+    expose the gap before the implementation.
+  - Implementation gate: the command that proves the behavior after the fix.
+  - Performance gate: benchmark command, or `N/A` with the reason.
+  - Done when: objective condition for changing `[ ]` to `[x]`.
+  - Evidence update: roadmap, README, API docs, or support matrix updates that
+    must happen in the same commit.
 
 ## Execution Loop
 
@@ -40,6 +61,23 @@ Use this loop for every behavior or performance increment.
 - [ ] Run the row's gate command and any benchmark named by the row.
 - [ ] Update the verification matrix or backlog row with the exact evidence.
 - [ ] Commit the code, test, and roadmap evidence together.
+
+## Current Execution Board
+
+This is the active, ordered board. Choose the first unchecked row that matches
+the current implementation direction. Split a row before starting if the red
+test or done condition is too broad to verify in one commit.
+
+| Status | ID | Next executable action | Required gate | Support claim unlocked |
+| --- | --- | --- | --- | --- |
+| [ ] | `P1-SOCKET-CONFORMANCE` | Add the next missing Preview1 socket/native adapter regression in `test/wasi_test.dart`. | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Moves `SUPPORT-P1` only after remaining P1 socket rows are complete. |
+| [ ] | `PERF-HEAVY-RUNNERS` | Add timing/cache evidence for heavy spec and DOOM paths before changing runtime algorithms for heat. | targeted spec runner command; `dart test test/doom_smoke_test.dart` | Gives performance evidence for `SUPPORT-WASM` and `PERFORMANCE-GATES`. |
+| [ ] | `CM-VALIDATION-GAPS` | Add a deterministic component validation failure before adding host behavior. | `dart test test/component_test.dart`; `dart test test/wasi_component_async_host_test.dart` | Reduces late runtime traps in P2/P3 adapter work. |
+| [ ] | `WIT-DOCUMENT-BOUNDARIES` | Add internal WIT package/interface/world parsing with diagnostics, no public support claim. | `dart test test/wasi_component_wit_test.dart`; `dart analyze` | Provides structured input for later P2/P3 adapters. |
+| [ ] | `P2-P3-ADAPTERS` | Bind one real Preview2/Preview3 adapter path over shared component primitives. | `dart test test/wasi_component_versioned_host_test.dart` plus adapter-specific tests | Starts concrete `SUPPORT-P2` / `SUPPORT-P3` evidence. |
+| [ ] | `P3-ASYNC-COPY-GAPS` | Expand one validated async value shape through copy, waitable, cancel/drop, and benchmark paths. | `dart test test/wasi_component_host_test.dart`; async/resource benchmark commands | Moves P3 stream/future support toward production coverage. |
+| [ ] | `CM-VALUE-VALIDATION` | Add one composite value shape only when the same shape can be executed. | value-memory, async-host, and component-host test gates | Keeps adapter value semantics consistent. |
+| [ ] | `WIT-INGESTION` | Bind imported/generated WIT worlds through versioned adapters. | WIT ingestion tests plus component-host binding tests | Required before any full P2/P3 public claim. |
 
 ## Support Claim Gates
 
@@ -147,7 +185,8 @@ copying their internals directly.
 | [x] | Owned-resource stream/future copy buffers, pending copy events, and cancel-copy events through async, component, and versioned Preview3 hosts | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_async_host_test.dart`, `test/wasi_component_host_test.dart`, `test/wasi_component_versioned_host_test.dart`, `test/support/component_fixtures.dart` | `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart test/wasi_component_async_host_test.dart test/wasi_component_value_memory_test.dart`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Borrowed payload lifetimes, nested async payloads, and public P3 API claims remain unsupported. |
 | [x] | Canonical lift/lower adapter planning and internal callback invocation | `lib/src/wasi/component/adapter_plan.dart`, `lib/src/wasi/component/adapter_host.dart`, `test/wasi_component_adapter_plan_test.dart` | `dart test test/wasi_component_adapter_plan_test.dart`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Automatic binding of decoded lift/lower definitions to instantiated core/component functions. |
 | [ ] | Preview1 full socket conformance | Add focused regressions under `test/wasi_test.dart` and VFS/socket benchmarks | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --json` | Native adapter boundaries and broader socket conformance remain incomplete. |
-| [ ] | P2/P3 world/interface ingestion | Add WIT/interface ingestion module and decoded-world fixtures | Future gate: dedicated WIT ingestion tests plus component host binding tests | No public claim until generated/imported worlds bind through versioned hosts. |
+| [ ] | WIT package/interface/world boundary parser | Add internal WIT document model, parser, and diagnostics under `lib/src/wasi/component/` | `dart test test/wasi_component_wit_test.dart`; `dart analyze` | Parser evidence alone does not unlock P2/P3 support; it only feeds adapter binding. |
+| [ ] | P2/P3 world/interface ingestion | Bind parsed/generated WIT worlds through versioned Preview2/Preview3 adapters | Future gate: dedicated WIT ingestion tests plus component host binding tests | No public claim until generated/imported worlds bind through versioned hosts. |
 | [ ] | Full WASI 0.3 support | Real P3 components through versioned host with resources, streams, futures, waitables, tasks, and async behavior | Future gate: wasi-testsuite-style component runs plus performance gates | Current work is internal capability coverage, not full P3 support. |
 
 ## Current wasd Baseline
@@ -502,15 +541,20 @@ performance visible while the support surface expands.
      memory codec.
    - Do not: add public P3 claims for shapes not covered by copy, cancellation,
      waitable, and benchmark gates.
-6. `P2-P3-ADAPTERS`
+6. `WIT-DOCUMENT-BOUNDARIES`
+   - Why: WIT parsing needs a real diagnostic model before generated worlds can
+     be safely bound to Preview2/Preview3 adapters.
+   - Do not: expose this as public P2/P3 support or generate bindings before
+     adapter ownership semantics are ready.
+7. `P2-P3-ADAPTERS`
    - Why: versioned adapters are the boundary that turns internal primitives
      into real WASI versions.
    - Do not: leak Preview1 imports or types into component worlds.
-7. `CM-VALUE-VALIDATION`
+8. `CM-VALUE-VALIDATION`
    - Why: composite value validation should expand only with matching
      lowering/lifting support.
    - Do not: validate shapes that cannot be executed through the same host path.
-8. `WIT-INGESTION`
+9. `WIT-INGESTION`
    - Why: WIT/world ingestion should bind into stable versioned hosts, not
      around them.
    - Do not: claim P2/P3 support from decoded canonical snippets alone.
@@ -719,6 +763,22 @@ performance visible while the support surface expands.
     adapter-specific tests.
   - Done when: a real versioned adapter can bind and execute the covered
     component path without constructing a mixed-version generic host manually.
+- [ ] `WIT-DOCUMENT-BOUNDARIES` - WIT package/interface/world boundary parser.
+  - Scope: internal component-model input normalization only; no generated
+    bindings and no public Preview2/Preview3 support claim.
+  - Edit targets: `lib/src/wasi/component/`, new
+    `test/wasi_component_wit_test.dart`, and this roadmap.
+  - Red test: `dart test test/wasi_component_wit_test.dart` should fail before
+    the parser/model exists.
+  - Implementation gate: `dart test test/wasi_component_wit_test.dart`;
+    `dart analyze`.
+  - Performance gate: N/A for the first parser boundary; add a benchmark before
+    parsing generated or large WIT packages.
+  - Done when: package, interface, world, import, and export boundaries are
+    parsed into structured objects; duplicate names and unresolved local world
+    references fail with line/column diagnostics that name the boundary.
+  - Evidence update: the verification matrix gains the WIT parser evidence, but
+    `WIT-INGESTION`, `SUPPORT-P2`, and `SUPPORT-P3` stay unchecked.
 - [ ] `CM-VALUE-VALIDATION` - Async host value validation beyond primitive
   aliases.
   - Change: extend only when matching lowering/lifting support exists for the
