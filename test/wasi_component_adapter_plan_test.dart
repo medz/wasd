@@ -215,6 +215,40 @@ void main() {
       }
     });
 
+    test('plan result flat value layouts', () {
+      final component = WasmComponent.decode(
+        canonicalU32ResultLiftLowerComponentBytes(),
+      );
+
+      expect(component.validate(), isEmpty);
+
+      final plans = componentCanonicalAdapterPlans(component);
+
+      expect(plans, hasLength(2));
+      for (final plan in plans) {
+        expect(plan.params, hasLength(1));
+        expect(plan.params.single.label, 'input');
+        expect(plan.params.single.byteLength, 8);
+        expect(plan.params.single.alignment, 4);
+        expect(plan.params.single.flatLength, 2);
+        expect(
+          plan.params.single.flatLayout!.kind,
+          WASIComponentCanonicalAdapterFlatValueKind.result,
+        );
+        expect(plan.result, isNotNull);
+        expect(plan.result!.byteLength, 8);
+        expect(plan.result!.alignment, 4);
+        expect(plan.result!.flatLength, 2);
+        expect(
+          plan.result!.flatLayout!.kind,
+          WASIComponentCanonicalAdapterFlatValueKind.result,
+        );
+        expect(plan.hasDynamicPayload, isFalse);
+        expect(plan.memoryIndex, 0);
+        expect(plan.reallocIndex, 0);
+      }
+    });
+
     test('executes primitive lift and lower plans with direct callbacks', () {
       final component = WasmComponent.decode(
         canonicalPrimitiveLiftLowerComponentBytes(),
@@ -593,6 +627,48 @@ void main() {
       expect(() => program.invokeFlat(0, const <Object?>[1]), throwsStateError);
     });
 
+    test('invokes result adapter programs through flat tag payload pairs', () {
+      final component = WasmComponent.decode(
+        canonicalU32ResultLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+
+      final program = host.bindAdapterPlans(
+        plans,
+        coreFunctions: {
+          1: (args) {
+            final result = args.single! as WasmComponentValueData;
+            expect(result.kind, WasmComponentValueDataKind.result);
+            expect(result.index, 0);
+            expect(result.label, 'ok');
+            expect(result.isOk, isTrue);
+            expect(result.associatedValue!.integer, 31);
+            return _u32OkValue(41);
+          },
+        },
+        componentFunctions: {
+          0: (args) {
+            final result = args.single! as WasmComponentValueData;
+            expect(result.kind, WasmComponentValueDataKind.result);
+            expect(result.index, 1);
+            expect(result.label, 'error');
+            expect(result.isOk, isFalse);
+            expect(result.associatedValue!.integer, 7);
+            return _u32ErrorValue(11);
+          },
+        },
+      );
+
+      expect(program.invokeFlat(0, const <Object?>[0, 31]), [0, 41]);
+      expect(program.invokeFlat(1, const <Object?>[1, 7]), [1, 11]);
+      expect(
+        () => program.invokeFlat(0, const <Object?>[2, 0]),
+        throwsStateError,
+      );
+      expect(() => program.invokeFlat(0, const <Object?>[0]), throwsStateError);
+    });
+
     test('invokes adapter programs through flat primitive values', () {
       final component = WasmComponent.decode(
         canonicalPrimitiveLiftLowerComponentBytes(),
@@ -944,6 +1020,32 @@ WasmComponentValueData _u32NoneValue() {
     kind: WasmComponentValueDataKind.option,
     rawBytes: Uint8List(0),
     isSome: false,
+  );
+}
+
+WasmComponentValueData _u32OkValue(int value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.result,
+    rawBytes: Uint8List(0),
+    isOk: true,
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.integer,
+      rawBytes: Uint8List(0),
+      integer: value,
+    ),
+  );
+}
+
+WasmComponentValueData _u32ErrorValue(int value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.result,
+    rawBytes: Uint8List(0),
+    isOk: false,
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.integer,
+      rawBytes: Uint8List(0),
+      integer: value,
+    ),
   );
 }
 

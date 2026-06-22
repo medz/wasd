@@ -128,6 +128,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
       memoryCodec = null,
       labels = const <String>[],
       element = null,
+      ok = null,
+      error = null,
       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Flags bitset flat layout.
@@ -136,6 +138,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
       primitive = null,
       memoryCodec = null,
       element = null,
+      ok = null,
+      error = null,
       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Enum discriminant flat layout.
@@ -145,6 +149,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        primitive = null,
        memoryCodec = null,
        element = null,
+       ok = null,
+       error = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Dynamic list `(ptr, len)` flat layout.
@@ -154,6 +160,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
   }) : kind = WASIComponentCanonicalAdapterFlatValueKind.list,
        primitive = null,
        labels = const <String>[],
+       ok = null,
+       error = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Option tag plus payload flat layout.
@@ -163,6 +171,19 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        primitive = null,
        memoryCodec = null,
        labels = const <String>[],
+       ok = null,
+       error = null,
+       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
+
+  /// Result tag plus the maximum ok/error payload flat layout.
+  const WASIComponentCanonicalAdapterFlatValuePlan.result({
+    required this.ok,
+    required this.error,
+  }) : kind = WASIComponentCanonicalAdapterFlatValueKind.result,
+       primitive = null,
+       memoryCodec = null,
+       labels = const <String>[],
+       element = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Composite scalar flat layout.
@@ -172,7 +193,9 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
   }) : primitive = null,
        memoryCodec = null,
        labels = const <String>[],
-       element = null;
+       element = null,
+       ok = null,
+       error = null;
 
   /// Flat layout kind.
   final WASIComponentCanonicalAdapterFlatValueKind kind;
@@ -188,6 +211,12 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
 
   /// Element layout used by dynamic list layouts.
   final WASIComponentCanonicalAdapterFlatValuePlan? element;
+
+  /// Success payload layout used by result layouts.
+  final WASIComponentCanonicalAdapterFlatValuePlan? ok;
+
+  /// Error payload layout used by result layouts.
+  final WASIComponentCanonicalAdapterFlatValuePlan? error;
 
   /// Nested flat fields for composite layouts.
   final List<WASIComponentCanonicalAdapterFlatFieldPlan> fields;
@@ -207,6 +236,11 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
     }
     if (kind == WASIComponentCanonicalAdapterFlatValueKind.option) {
       return 1 + element!.flatLength;
+    }
+    if (kind == WASIComponentCanonicalAdapterFlatValueKind.result) {
+      final okLength = ok?.flatLength ?? 0;
+      final errorLength = error?.flatLength ?? 0;
+      return 1 + (okLength > errorLength ? okLength : errorLength);
     }
     return fields.fold<int>(
       0,
@@ -240,6 +274,9 @@ enum WASIComponentCanonicalAdapterFlatValueKind {
 
   /// Option represented by a tag plus payload scalar sequence.
   option,
+
+  /// Result represented by a tag plus maximum payload scalar sequence.
+  result,
 }
 
 /// Nested field in a flat Canonical ABI scalar layout.
@@ -533,8 +570,22 @@ final class _FlatLayoutResolver {
             : WASIComponentCanonicalAdapterFlatValuePlan.option(
                 element: elementLayout,
               );
-      case WasmComponentDefinedValueTypeKind.variant:
       case WasmComponentDefinedValueTypeKind.result:
+        final okType = type.okType;
+        final errorType = type.errorType;
+        final okLayout = okType == null ? null : resolveValueType(okType);
+        final errorLayout = errorType == null
+            ? null
+            : resolveValueType(errorType);
+        if ((okType != null && okLayout == null) ||
+            (errorType != null && errorLayout == null)) {
+          return null;
+        }
+        return WASIComponentCanonicalAdapterFlatValuePlan.result(
+          ok: okLayout,
+          error: errorLayout,
+        );
+      case WasmComponentDefinedValueTypeKind.variant:
       case WasmComponentDefinedValueTypeKind.own:
       case WasmComponentDefinedValueTypeKind.borrow:
       case WasmComponentDefinedValueTypeKind.stream:

@@ -67,6 +67,8 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentAdapterListFlatInvoke(options.iterations);
   final componentAdapterOptionFlatInvoke =
       _benchmarkComponentAdapterOptionFlatInvoke(options.iterations);
+  final componentAdapterResultFlatInvoke =
+      _benchmarkComponentAdapterResultFlatInvoke(options.iterations);
   final componentAdapterStringMemoryInvoke =
       _benchmarkComponentAdapterStringMemoryInvoke(options.iterations);
   final componentHostStreamMemoryBinding =
@@ -117,6 +119,8 @@ Future<void> main(List<String> args) async {
     'component_adapter_list_flat_invoke': componentAdapterListFlatInvoke
         .toJson(),
     'component_adapter_option_flat_invoke': componentAdapterOptionFlatInvoke
+        .toJson(),
+    'component_adapter_result_flat_invoke': componentAdapterResultFlatInvoke
         .toJson(),
     'component_adapter_string_memory_invoke': componentAdapterStringMemoryInvoke
         .toJson(),
@@ -794,6 +798,37 @@ _Metric _benchmarkComponentAdapterOptionFlatInvoke(int iterations) {
   );
 }
 
+_Metric _benchmarkComponentAdapterResultFlatInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalU32ResultLiftLowerComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {1: (_) => _u32OkValue(41)},
+    componentFunctions: {0: (_) => _u32ErrorValue(11)},
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final lifted = program.invokeFlat(0, const <Object?>[0, 31]);
+    checksum += lifted[0]! as int;
+    checksum += lifted[1]! as int;
+    final lowered = program.invokeFlat(1, const <Object?>[1, 7]);
+    checksum += lowered[0]! as int;
+    checksum += lowered[1]! as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 WasmComponentValueData _recordValue(int left, int right) {
   return WasmComponentValueData(
     kind: WasmComponentValueDataKind.record,
@@ -853,6 +888,32 @@ WasmComponentValueData _u32NoneValue() {
     kind: WasmComponentValueDataKind.option,
     rawBytes: Uint8List(0),
     isSome: false,
+  );
+}
+
+WasmComponentValueData _u32OkValue(int value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.result,
+    rawBytes: Uint8List(0),
+    isOk: true,
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.integer,
+      rawBytes: Uint8List(0),
+      integer: value,
+    ),
+  );
+}
+
+WasmComponentValueData _u32ErrorValue(int value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.result,
+    rawBytes: Uint8List(0),
+    isOk: false,
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.integer,
+      rawBytes: Uint8List(0),
+      integer: value,
+    ),
   );
 }
 

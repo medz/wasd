@@ -268,11 +268,11 @@ This is the implementation state as of 2026-06-22 on `main`.
   adapter program can also load direct adapter parameters from canonical value
   memory, store direct adapter results back through the shared value-memory
   codec plus explicit `realloc`, and invoke the supported primitive/string
-  plus record/tuple/fixed-list/flags/enum/list/option subset through flat
+  plus record/tuple/fixed-list/flags/enum/list/option/result subset through flat
   scalar values such as canonical string and dynamic list `(ptr, len)` pairs,
-  field-by-field record scalars, flags bitsets, enum discriminants, and option
-  tag/payload pairs. These are value-codec adapter boundaries, not a complete
-  flattened core function ABI. Async value
+  field-by-field record scalars, flags bitsets, enum discriminants, option
+  tag/payload pairs, and result tag/payload pairs. These are value-codec
+  adapter boundaries, not a complete flattened core function ABI. Async value
   bindings now also expose Canonical ABI memory-copy layout through an
   internal Canonical ABI value-memory codec covering primitive values,
   records/tuples, fixed lists, flags, variants, options, results, enums, and
@@ -455,6 +455,7 @@ This is the implementation state as of 2026-06-22 on `main`.
   direct record adapter flat-scalar invocation, decoded direct flags/enum
   adapter flat-scalar invocation, decoded direct list adapter flat pointer/length
   invocation, decoded direct option adapter flat tag/payload invocation,
+  decoded direct result adapter flat tag/payload invocation,
   decoded direct string adapter memory invocation, decoded core-memory
   primitive future-copy, and decoded
   core-memory list plus string-list future-copy round trips, mixed
