@@ -233,9 +233,15 @@ This is the implementation state as of 2026-06-22 on `main`.
   every decoded canonical kind, including the runtime area and any unsupported
   reason, so future Preview 2 / Preview 3 adapters can preflight host coverage
   without copying private dispatch switches or parsing exception strings. The
-  same facade can also prepare a reusable binding plan that captures component
-  validation errors, unsupported canonical definitions, and the canonical
-  definition snapshot once before any operation table is built.
+  internal versioned component-host facade consumes that report to separate
+  version-profile errors from host capability gaps: Preview2 resource canonical
+  components can bind through the shared component host, Preview2 rejects P3
+  stream/future canonical definitions before host mutation, and Preview3 admits
+  the async profile while still reporting unimplemented host capabilities such
+  as `canon lower` as host gaps. The same facade can also prepare a reusable
+  binding plan that captures component validation errors, unsupported canonical
+  definitions, and the canonical definition snapshot once before any operation
+  table is built.
   An internal component host adapter now combines that canonical plan with the
   decoded component resource and async value binding lists, defines component
   resources plus supported unit, primitive, fixed-size composite, string, and
@@ -316,8 +322,9 @@ This is the implementation state as of 2026-06-22 on `main`.
   async stream/future execution are not production-supported yet.
 - The public `WASIVersion` enum names Preview1, Preview2, and Preview3, but the
   `WASI(...)` factory now accepts only Preview1 and throws `UnsupportedError`
-  for component-model WASI versions. This is an intentional version boundary,
-  not a support claim.
+  for component-model WASI versions. Internal component-host version profiles
+  now exist for P2/P3 preflight, but this is still an intentional public version
+  boundary, not a support claim.
 
 ## Architecture Direction
 
@@ -341,10 +348,11 @@ This is the implementation state as of 2026-06-22 on `main`.
    model still has real gaps: native adapter boundaries, externally backed
    readiness, and larger conformance-shaped descriptor distributions before
    adding raw networking APIs.
-2. For P2/P3, replace the current explicit constructor rejection with real
-   versioned adapters over shared descriptor, resource, clock, random,
-   filesystem, and socket primitives. Do not extend `wasi_snapshot_preview1`
-   types into component worlds.
+2. For P2/P3, build real versioned adapters on top of the internal component
+   version profiles and shared descriptor, resource, clock, random, filesystem,
+   and socket primitives before replacing the current explicit constructor
+   rejection. Do not extend `wasi_snapshot_preview1` types into component
+   worlds.
 3. Expand the resource host into a component host adapter for imports, exports,
    representation-aware canonical lift/lower ownership, and async lifecycle
    state before adding WIT ingestion and generated binding support.
@@ -413,10 +421,11 @@ This is the implementation state as of 2026-06-22 on `main`.
 - Component resource table canonical `resource.new`/`resource.rep`/
   `resource.drop`, decoded resource-only canonical program invocation,
   component resource binding extraction from decoded type index spaces,
-  component-host binding startup with resource, stream, decoded core-memory
-  primitive stream-copy, decoded core-memory fixed-size record, list, and
-  string-list stream-copy, decoded core-memory primitive future-copy, and
-  decoded core-memory list plus string-list future-copy round trips, mixed
+  component-host binding startup with resource, Preview2 version-profile
+  resource binding, stream, Preview3 version-profile stream binding, decoded
+  core-memory primitive stream-copy, decoded core-memory fixed-size record,
+  list, and string-list stream-copy, decoded core-memory primitive future-copy,
+  and decoded core-memory list plus string-list future-copy round trips, mixed
   canonical-host
   program invocation over shared component state, error-context canonical
   lifecycle invocation, error-context canonical string memory adapter invocation
@@ -438,9 +447,8 @@ This is the implementation state as of 2026-06-22 on `main`.
    runtime host state.
 5. Wire canonical `stream.*` and `future.*` memory lowering/lifting and async
    scheduling around the internal async host before adding public P3 API claims.
-6. Introduce explicit WASI version modules for future P2/P3 work on top of the
-   canonical capability report instead of extending Preview 1 host types in
-   place.
+6. Expand the internal P2/P3 versioned host facade into concrete version
+   modules instead of extending Preview 1 host types in place.
 7. Extend async host value validation beyond primitive element aliases only
    when composite value lowering/lifting support is implemented.
 8. Add WIT/interface ingestion only after the versioned host boundary and

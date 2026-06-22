@@ -8,6 +8,8 @@ import 'package:wasd/src/wasi/component/error_context.dart';
 import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/resource_table.dart';
+import 'package:wasd/src/wasi/component/versioned_host.dart';
+import 'package:wasd/src/wasi/version.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
 
@@ -35,9 +37,13 @@ Future<void> main(List<String> args) async {
   final componentHostBinding = _benchmarkComponentHostBinding(
     options.iterations,
   );
+  final componentVersionedPreview2Binding =
+      _benchmarkComponentVersionedPreview2Binding(options.iterations);
   final componentHostStreamBinding = _benchmarkComponentHostStreamBinding(
     options.iterations,
   );
+  final componentVersionedPreview3StreamBinding =
+      _benchmarkComponentVersionedPreview3StreamBinding(options.iterations);
   final componentHostStreamMemoryBinding =
       _benchmarkComponentHostStreamMemoryBinding(options.iterations);
   final componentHostRecordStreamMemoryBinding =
@@ -68,7 +74,11 @@ Future<void> main(List<String> args) async {
     'program_invoke': programInvoke.toJson(),
     'component_resource_bindings': componentResourceBindings.toJson(),
     'component_host_binding': componentHostBinding.toJson(),
+    'component_versioned_preview2_binding': componentVersionedPreview2Binding
+        .toJson(),
     'component_host_stream_binding': componentHostStreamBinding.toJson(),
+    'component_versioned_preview3_stream_binding':
+        componentVersionedPreview3StreamBinding.toJson(),
     'component_host_stream_memory_binding': componentHostStreamMemoryBinding
         .toJson(),
     'component_host_record_stream_memory_binding':
@@ -103,7 +113,9 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkProgramInvoke(_warmupIterations);
   _benchmarkComponentResourceBindings(_warmupIterations);
   _benchmarkComponentHostBinding(_warmupIterations);
+  _benchmarkComponentVersionedPreview2Binding(_warmupIterations);
   _benchmarkComponentHostStreamBinding(_warmupIterations);
+  _benchmarkComponentVersionedPreview3StreamBinding(_warmupIterations);
   _benchmarkComponentHostStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostRecordStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostListStreamMemoryBinding(_warmupIterations);
@@ -323,6 +335,43 @@ _Metric _benchmarkComponentHostBinding(int iterations) {
   );
 }
 
+_Metric _benchmarkComponentVersionedPreview2Binding(int iterations) {
+  final component = WasmComponent.decode(_resourceProgramBytes());
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final host = WASIComponentVersionedHost(version: WASIVersion.preview2);
+    final binding = host.bindComponent(component);
+    final handle = binding.program.invoke(0, <Object?>[i]);
+    if (handle is! int) {
+      throw StateError(
+        'component versioned Preview2 resource.new returned non-handle',
+      );
+    }
+    final representation = binding.program.invoke(1, <Object?>[handle]);
+    if (representation is! int) {
+      throw StateError(
+        'component versioned Preview2 resource.rep returned non-int',
+      );
+    }
+    checksum += representation;
+    binding.program.invoke(2, <Object?>[handle]);
+    if (host.componentHost.table.activeCount != 0) {
+      throw StateError(
+        'component versioned Preview2 table leaked ${host.componentHost.table.activeCount} resources',
+      );
+    }
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkComponentHostStreamBinding(int iterations) {
   final component = WasmComponent.decode(_streamProgramBytes());
   var checksum = 0;
@@ -351,6 +400,48 @@ _Metric _benchmarkComponentHostStreamBinding(int iterations) {
     if (host.table.activeCount != 0) {
       throw StateError(
         'component host stream table leaked ${host.table.activeCount} resources',
+      );
+    }
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentVersionedPreview3StreamBinding(int iterations) {
+  final component = WasmComponent.decode(_streamProgramBytes());
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final host = WASIComponentVersionedHost(version: WASIVersion.preview3);
+    final binding = host.bindComponent(component);
+    final packed = binding.program.invoke(0, const <Object?>[]);
+    if (packed is! int) {
+      throw StateError(
+        'component versioned Preview3 stream.new returned non-i64',
+      );
+    }
+    final handles = WASIComponentAsyncEndpointHandles.unpack(packed);
+    checksum +=
+        binding.program.invoke(2, <Object?>[
+              handles.writable,
+              <Object?>[null],
+            ])
+            as int;
+    final values =
+        binding.program.invoke(1, <Object?>[handles.readable, 1])
+            as List<Object?>;
+    checksum += values.length;
+    binding.program.invoke(5, <Object?>[handles.readable]);
+    binding.program.invoke(6, <Object?>[handles.writable]);
+    if (host.componentHost.table.activeCount != 0) {
+      throw StateError(
+        'component versioned Preview3 stream table leaked ${host.componentHost.table.activeCount} resources',
       );
     }
   }
@@ -1067,7 +1158,9 @@ void _printText(Map<String, Object?> payload) {
     'program_invoke',
     'component_resource_bindings',
     'component_host_binding',
+    'component_versioned_preview2_binding',
     'component_host_stream_binding',
+    'component_versioned_preview3_stream_binding',
     'component_host_stream_memory_binding',
     'component_host_record_stream_memory_binding',
     'component_host_list_stream_memory_binding',
