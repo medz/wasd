@@ -660,6 +660,15 @@ performance visible while the support surface expands.
     `sock_recv`/`RECV_PEEK` preserve host-provided messages, `sock_send`
     reaches the datagram handler, and benchmark output includes host-backed
     datagram receive/send paths.
+- [x] `P1-SOCKET-HOST-HANDLER-VALIDATION` - Preview1 socket host callback
+  result validation.
+  - Change: reject invalid host send counts with `EINVAL` instead of leaking a
+    Dart exception or writing an untrusted `nwritten` value.
+  - Evidence: `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`.
+  - Gate: `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "invalid write counts"`.
+  - Done when: stream and datagram host send handlers returning out-of-range
+    counts leave `nwritten` unchanged and report `EINVAL`.
 - [x] `PERF-VFS-DISTRIBUTIONS` - VFS/descriptor benchmark distributions.
   - Change: extend benchmark data to larger conformance-shaped path, directory,
     socket, and descriptor sets before optimizing more VFS code.

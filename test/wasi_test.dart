@@ -289,6 +289,56 @@ void main() {
       expect(socket.remainingReceiveMessages, isEmpty);
     });
 
+    test('virtual socket host send handlers reject invalid write counts', () {
+      final stream = WASIPreview1Socket(
+        sendHandler: (source, start, length) => length + 1,
+      );
+      final datagram = WASIPreview1Socket.datagram(
+        sendMessageHandler: (message) => -1,
+      );
+      final vfs = Preview1VirtualFileSystem(
+        sockets: {73: stream, 74: datagram},
+      );
+      final bytes = Uint8List(64);
+      final data = ByteData.view(bytes.buffer);
+      const iovPtr = 0;
+      const bufferPtr = 24;
+      const countPtr = 48;
+
+      bytes.setAll(bufferPtr, [1, 2, 3, 4]);
+      data.setUint32(iovPtr, bufferPtr, Endian.little);
+      data.setUint32(iovPtr + 4, 4, Endian.little);
+
+      data.setUint32(countPtr, 0xdeadbeef, Endian.little);
+      expect(
+        writeSocketFromIov(
+          socket: vfs.socketForFd(73)!,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nwrittenPtr: countPtr,
+        ),
+        _errnoInval,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 0xdeadbeef);
+
+      data.setUint32(countPtr, 0xfeedface, Endian.little);
+      expect(
+        writeSocketFromIov(
+          socket: vfs.socketForFd(74)!,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nwrittenPtr: countPtr,
+        ),
+        _errnoInval,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+      expect(datagram.sentMessages, isEmpty);
+    });
+
     test('imports has fd_write function', () {
       final wasi = WASI();
       final preview1 = wasi.imports['wasi_snapshot_preview1']!;

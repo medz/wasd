@@ -1358,25 +1358,29 @@ int writeSocketFromIov({
   }
 
   var totalWritten = 0;
-  for (var index = 0; index < iovsLen; index++) {
-    final entry = iovs + index * iovecEntrySize;
-    if (entry + iovecEntrySize > bytes.length) {
-      return errnoInval;
-    }
+  try {
+    for (var index = 0; index < iovsLen; index++) {
+      final entry = iovs + index * iovecEntrySize;
+      if (entry + iovecEntrySize > bytes.length) {
+        return errnoInval;
+      }
 
-    final buf = data.getUint32(entry, Endian.little);
-    final len = data.getUint32(entry + 4, Endian.little);
-    if (len > 0 && buf + len > bytes.length) {
-      return errnoInval;
-    }
+      final buf = data.getUint32(entry, Endian.little);
+      final len = data.getUint32(entry + 4, Endian.little);
+      if (len > 0 && buf + len > bytes.length) {
+        return errnoInval;
+      }
 
-    if (len > 0) {
-      final written = socket.writeFrom(bytes, buf, len);
-      totalWritten += written;
-      if (written < len) {
-        break;
+      if (len > 0) {
+        final written = socket.writeFrom(bytes, buf, len);
+        totalWritten += written;
+        if (written < len) {
+          break;
+        }
       }
     }
+  } on RangeError {
+    return errnoInval;
   }
 
   data.setUint32(nwrittenPtr, totalWritten, Endian.little);
@@ -1411,7 +1415,13 @@ int _writeDatagramSocketFromIov({
       offset += len;
     }
   }
-  data.setUint32(nwrittenPtr, socket.writeMessage(message), Endian.little);
+  int written;
+  try {
+    written = socket.writeMessage(message);
+  } on RangeError {
+    return errnoInval;
+  }
+  data.setUint32(nwrittenPtr, written, Endian.little);
   return errnoSuccess;
 }
 
