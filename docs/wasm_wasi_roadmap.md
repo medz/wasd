@@ -217,6 +217,15 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `CM-INSTANCE-CORE-SORT-VALIDATION` - Component instance arguments reject
+  missing core sort indexes during validation.
+  - Evidence:
+    `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments"`
+    failed before the fix because an instance argument referencing an undefined
+    core memory validated cleanly, then passed after the fix.
+  - Claim impact: moves one component-model index-space error from accepted
+    input to deterministic validation before any host binding; does not complete
+    `CM-VALIDATION-GAPS`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-DATAGRAM-ACCEPT-NOTSUP` - `sock_accept` reports `NOTSUP` for
   datagram sockets instead of treating the descriptor as an invalid argument.
   - Evidence:
@@ -1525,6 +1534,30 @@ performance visible while the support surface expands.
     - `dart test test/wasi_component_async_host_test.dart`
   - Done when: unsupported shapes fail during validation with structured
     diagnostics before host mutation.
+- [x] `CM-INSTANCE-CORE-SORT-VALIDATION` - Component instance arguments reject
+  missing core sort indexes.
+  - Scope: component-model validation for `WasmComponentInstance` argument and
+    inline-export sort indexes that refer to the core index spaces.
+  - Edit targets:
+    `lib/src/wasm/backend/native/interpreter/component.dart`,
+    `test/component_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments"`
+    failed before the fix because an instance argument with sort
+    `core memory 0` validated even though no core memory had been defined.
+  - Implementation gate:
+    `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments"`;
+    `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`; `dart analyze`.
+  - Performance gate: N/A; this reuses the existing component validation core
+    index counter and adds no runtime host work.
+  - Done when: component instance arguments and inline exports that use core
+    sorts are checked against the visible core index spaces before host state or
+    component instantiation planning can observe the invalid shape.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: reduces P2/P3 component validation risk; no direct support
+    gate.
 - [x] `CM-NESTED-ASYNC-VALUE-VALIDATION` - Reject nested stream/future value
   payloads during component validation.
   - Scope: component value type validation for global and scoped type

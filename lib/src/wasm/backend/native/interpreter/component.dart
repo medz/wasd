@@ -4124,6 +4124,7 @@ final class _WasmComponentValidationContext {
             functionTypes: functionTypes,
             valueEntries: valueEntries,
             visibleTypeDefinitions: visibleTypeDefinitions,
+            coreCounts: coreCounts,
             componentCount: componentCount,
             instanceCount: instanceCount,
           );
@@ -4385,6 +4386,7 @@ final class _WasmComponentValidationContext {
     required List<WasmComponentFunctionType?> functionTypes,
     required List<_WasmComponentValueIndexEntry> valueEntries,
     required List<WasmComponentTypeDefinition> visibleTypeDefinitions,
+    required _WasmComponentCoreIndexCounts coreCounts,
     required int componentCount,
     required int instanceCount,
   }) {
@@ -4402,6 +4404,7 @@ final class _WasmComponentValidationContext {
             functionTypes: functionTypes,
             valueEntries: valueEntries,
             visibleTypeDefinitions: visibleTypeDefinitions,
+            coreCounts: coreCounts,
             componentCount: componentCount,
             instanceCount: instanceCount,
           );
@@ -4414,6 +4417,7 @@ final class _WasmComponentValidationContext {
             functionTypes: functionTypes,
             valueEntries: valueEntries,
             visibleTypeDefinitions: visibleTypeDefinitions,
+            coreCounts: coreCounts,
             componentCount: componentCount,
             instanceCount: instanceCount,
           );
@@ -4464,6 +4468,7 @@ final class _WasmComponentValidationContext {
     required List<WasmComponentFunctionType?> functionTypes,
     required List<_WasmComponentValueIndexEntry> valueEntries,
     required List<WasmComponentTypeDefinition> visibleTypeDefinitions,
+    required _WasmComponentCoreIndexCounts coreCounts,
     required int componentCount,
     required int instanceCount,
   }) {
@@ -4483,7 +4488,10 @@ final class _WasmComponentValidationContext {
           visibleTypeDefinitions,
         );
       case WasmComponentSortKind.core:
-        break;
+        final coreKind = sort.coreKind;
+        if (coreKind != null) {
+          validateCoreSortIndex(sort.index, path, coreKind, coreCounts);
+        }
     }
   }
 

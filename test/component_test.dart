@@ -1022,6 +1022,15 @@ void main() {
         contains('Unknown Wasm component component index'),
       );
 
+      final missingCoreArgument = WasmComponent.decode(
+        _instantiateMissingCoreArgumentComponentBytes(),
+      ).validate();
+      expect(missingCoreArgument, hasLength(1));
+      expect(
+        missingCoreArgument.single.message,
+        contains('Unknown Wasm component core memory index'),
+      );
+
       final duplicate = WasmComponent.decode(
         _instantiateDuplicateValueArgumentComponentBytes(),
       ).validate();
@@ -2986,6 +2995,41 @@ Uint8List _coreInlineInstanceUndefinedMemoryComponentBytes() =>
       0x6d,
       0x65,
       0x6d,
+      0x02,
+      0x00,
+    ]);
+
+Uint8List _instantiateMissingCoreArgumentComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x04,
+      0x08,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x05,
+      0x0b,
+      0x01,
+      0x00,
+      0x00,
+      0x01,
+      0x03,
+      0x64,
+      0x65,
+      0x70,
+      0x00,
       0x02,
       0x00,
     ]);
