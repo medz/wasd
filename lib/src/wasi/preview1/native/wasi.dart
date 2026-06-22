@@ -8,6 +8,7 @@ import '../../../wasm/memory.dart' as wasm;
 import '../../../wasm/module.dart' as wasm;
 import '../../wasi.dart' as wasi_iface;
 import '../common/constants.dart' as wasi_common;
+import '../common/fd_syscalls.dart' as wasi_fd;
 import '../common/socket_syscalls.dart' as wasi_socket;
 import '../common/vfs.dart' as wasi_vfs;
 import '../socket.dart';
@@ -723,20 +724,11 @@ class WASI implements wasi_iface.WASI {
         if (args.length < 2) {
           return _errnoInval;
         }
-        final fd = _asInt(args[0]);
-        final flags = _asInt(args[1]);
-        if ((flags & ~_fdflagKnownMask) != 0) {
-          return _errnoInval;
-        }
-        final right = _checkDescriptorRight(fd, _rightFdFdstatSetFlags);
-        if (right != _errnoSuccess) {
-          return right;
-        }
-        final socket = _vfs.socketForFd(fd);
-        if (socket != null && (flags & ~_socketFdflagKnownMask) != 0) {
-          return _errnoNotsup;
-        }
-        return _vfs.setDescriptorFlags(fd, flags) ? _errnoSuccess : _errnoBadf;
+        return wasi_fd.preview1FdFdstatSetFlags(
+          vfs: _vfs,
+          fd: _asInt(args[0]),
+          flags: _asInt(args[1]),
+        );
       });
 
   wasm.FunctionImportExportValue get _fdFdstatSetRightsImport =>
@@ -2053,7 +2045,6 @@ const int _errnoNoent = wasi_common.errnoNoent;
 const int _errnoNosys = wasi_common.errnoNosys;
 const int _errnoNotdir = wasi_common.errnoNotdir;
 const int _errnoNotempty = wasi_common.errnoNotempty;
-const int _errnoNotsup = wasi_common.errnoNotsup;
 const int _errnoNotcapable = wasi_common.errnoNotcapable;
 const int _prestatSize = wasi_common.prestatSize;
 const int _preopenTypeDir = wasi_common.preopenTypeDir;
@@ -2065,7 +2056,6 @@ const int _oflagCreat = wasi_common.oflagCreat;
 const int _oflagTrunc = wasi_common.oflagTrunc;
 const int _oflagKnownMask = wasi_common.oflagKnownMask;
 const int _fdflagKnownMask = wasi_common.fdflagKnownMask;
-const int _socketFdflagKnownMask = wasi_common.socketFdflagKnownMask;
 const int _lookupflagSymlinkFollow = wasi_common.lookupflagSymlinkFollow;
 const int _lookupflagKnownMask = _lookupflagSymlinkFollow;
 const int _filestatSize = 64;
@@ -2083,7 +2073,6 @@ const int _filestatTimeKnownFlags =
 const int _rightFdDatasync = wasi_common.rightFdDatasync;
 const int _rightFdRead = wasi_common.rightFdRead;
 const int _rightFdSeek = wasi_common.rightFdSeek;
-const int _rightFdFdstatSetFlags = wasi_common.rightFdFdstatSetFlags;
 const int _rightFdSync = wasi_common.rightFdSync;
 const int _rightFdTell = wasi_common.rightFdTell;
 const int _rightFdWrite = wasi_common.rightFdWrite;

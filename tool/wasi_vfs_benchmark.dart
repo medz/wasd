@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:wasd/src/wasi/preview1/common/constants.dart';
+import 'package:wasd/src/wasi/preview1/common/fd_syscalls.dart';
 import 'package:wasd/src/wasi/preview1/common/socket_syscalls.dart';
 import 'package:wasd/src/wasi/preview1/common/vfs.dart';
 import 'package:wasd/src/wasi/preview1/socket.dart';
@@ -105,6 +106,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
   final socketDgramTruncation = _benchmarkSocketDatagramTruncation(options);
   final socketDatagramRights = _benchmarkSocketDatagramRights(options);
   final socketConnectedRights = _benchmarkSocketConnectedRights(options);
+  final socketFdflagPreflight = _benchmarkSocketFdflagPreflight(options);
   final socketPollReadiness = _benchmarkSocketPollReadiness(options);
   final socketRenumberClose = _benchmarkSocketRenumberClose(options);
   final socketAcceptInheritance = _benchmarkSocketAcceptInheritance(options);
@@ -136,6 +138,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
     'socket_dgram_truncation': socketDgramTruncation.toJson(),
     'socket_datagram_rights': socketDatagramRights.toJson(),
     'socket_connected_rights': socketConnectedRights.toJson(),
+    'socket_fdflag_preflight': socketFdflagPreflight.toJson(),
     'socket_poll_readiness': socketPollReadiness.toJson(),
     'socket_renumber_close': socketRenumberClose.toJson(),
     'socket_accept_inheritance': socketAcceptInheritance.toJson(),
@@ -187,6 +190,7 @@ void _runWarmup(Map<String, Uint8List> files, _Options options) {
   _benchmarkSocketShutdownPreflight(warmupOptions);
   _benchmarkSocketDatagramTruncation(warmupOptions);
   _benchmarkSocketConnectedRights(warmupOptions);
+  _benchmarkSocketFdflagPreflight(warmupOptions);
   _benchmarkSocketPollReadiness(warmupOptions);
   _benchmarkSocketRenumberClose(warmupOptions);
 }
@@ -1746,6 +1750,93 @@ _Metric _benchmarkSocketConnectedRights(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketFdflagPreflight(_Options options) {
+  const fdBase = 40960;
+  final sockets = <int, WASIPreview1Socket>{
+    for (var i = 0; i < options.iterations; i++) ...{
+      fdBase + i * 2: WASIPreview1Socket(),
+      fdBase + i * 2 + 1: WASIPreview1Socket(),
+    },
+  };
+  final vfs = Preview1VirtualFileSystem(
+    firstVirtualFd: fdBase + options.iterations * 2,
+    sockets: sockets,
+  );
+  for (var i = 0; i < options.iterations; i++) {
+    final rightlessFd = fdBase + i * 2 + 1;
+    final result = vfs.setDescriptorRights(
+      fd: rightlessFd,
+      rightsBase: 0,
+      rightsInheriting: 0,
+    );
+    if (result != Preview1FdRightsResult.success) {
+      throw StateError('socket fdflag setup failed at iteration $i: $result');
+    }
+  }
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final writableFd = fdBase + i * 2;
+    final rightlessFd = writableFd + 1;
+
+    final unsupportedErrno = preview1FdFdstatSetFlags(
+      vfs: vfs,
+      fd: rightlessFd,
+      flags: fdflagAppend,
+    );
+    if (unsupportedErrno != errnoNotsup) {
+      throw StateError(
+        'socket fdflag unsupported errno failed at iteration $i: '
+        '$unsupportedErrno',
+      );
+    }
+    checksum += unsupportedErrno;
+
+    final rightlessErrno = preview1FdFdstatSetFlags(
+      vfs: vfs,
+      fd: rightlessFd,
+      flags: fdflagNonblock,
+    );
+    if (rightlessErrno != errnoNotcapable) {
+      throw StateError(
+        'socket fdflag rightless errno failed at iteration $i: '
+        '$rightlessErrno',
+      );
+    }
+    checksum += rightlessErrno;
+
+    final successErrno = preview1FdFdstatSetFlags(
+      vfs: vfs,
+      fd: writableFd,
+      flags: fdflagNonblock,
+    );
+    if (successErrno != errnoSuccess ||
+        vfs.descriptorFlagsForFd(writableFd) != fdflagNonblock) {
+      throw StateError('socket fdflag success failed at iteration $i');
+    }
+    checksum += successErrno + vfs.descriptorFlagsForFd(writableFd)!;
+
+    final invalidErrno = preview1FdFdstatSetFlags(
+      vfs: vfs,
+      fd: writableFd,
+      flags: fdflagKnownMask << 1,
+    );
+    if (invalidErrno != errnoInval) {
+      throw StateError(
+        'socket fdflag invalid errno failed at iteration $i: $invalidErrno',
+      );
+    }
+    checksum += invalidErrno;
+  }
+  watch.stop();
+  return _Metric(
+    operations: options.iterations * 4,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _writeTwoIovs({
   required ByteData data,
   required int iovPtr,
@@ -1846,6 +1937,7 @@ void _printSingleText(
   );
   _printMetric('socket datagram rights', payload['socket_datagram_rights']);
   _printMetric('socket connected rights', payload['socket_connected_rights']);
+  _printMetric('socket fdflag preflight', payload['socket_fdflag_preflight']);
   _printMetric('socket poll readiness', payload['socket_poll_readiness']);
   _printMetric('socket renumber/close', payload['socket_renumber_close']);
   _printMetric(

@@ -3189,6 +3189,9 @@ void main() {
           expect(fdFdstatSetFlags.ref([21, _fdflagAppend]), _errnoNotsup);
           expect(fdFdstatGet.ref([21, fdstatPtr]), 0);
           expect(data.getUint16(fdstatPtr + 2, Endian.little), 0);
+          expect(fdFdstatSetFlags.ref([22, _fdflagAppend]), _errnoNotsup);
+          expect(fdFdstatGet.ref([22, fdstatPtr]), 0);
+          expect(data.getUint16(fdstatPtr + 2, Endian.little), 0);
 
           expect(sockAccept.ref([20, _fdflagNonblock, acceptedFdPtr]), 0);
           final acceptedFd = data.getUint32(acceptedFdPtr, Endian.little);
