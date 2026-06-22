@@ -10,6 +10,7 @@ import 'package:wasd/src/wasi/preview2/component_host.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasi/version.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
+import 'package:wasd/src/wasm/memory.dart';
 
 import 'support/component_fixtures.dart';
 
@@ -425,6 +426,182 @@ void main() {
       );
       expect(
         futureBinding.program.invoke(2, <Object?>[futureHandles.writable]),
+        isNull,
+      );
+      expect(futureHost.componentHost.table.activeCount, 0);
+    });
+
+    test('Preview2 wrapper rejects owned-resource async memory copies', () {
+      final streamComponent = WasmComponent.decode(
+        ownedResourceAsyncMemoryProgramFromU32(
+          canonicalU32StreamMemoryComponentBytes(),
+          isStream: true,
+        ),
+      );
+      final futureComponent = WasmComponent.decode(
+        ownedResourceAsyncMemoryProgramFromU32(
+          canonicalU32FutureMemoryComponentBytes(),
+          isStream: false,
+        ),
+      );
+      final host = WASIPreview2ComponentHost();
+
+      final streamPlan = host.prepareComponent(streamComponent);
+      final futurePlan = host.prepareComponent(futureComponent);
+
+      expect(streamComponent.validate(), isEmpty);
+      expect(futureComponent.validate(), isEmpty);
+      expect(streamPlan.canBind, isFalse);
+      expect(futurePlan.canBind, isFalse);
+      expect(streamPlan.versionErrors, hasLength(5));
+      expect(futurePlan.versionErrors, hasLength(5));
+      expect(streamPlan.versionErrors.map((error) => error.kind), [
+        WasmComponentCanonicalKind.streamNew,
+        WasmComponentCanonicalKind.streamRead,
+        WasmComponentCanonicalKind.streamWrite,
+        WasmComponentCanonicalKind.streamDropReadable,
+        WasmComponentCanonicalKind.streamDropWritable,
+      ]);
+      expect(futurePlan.versionErrors.map((error) => error.kind), [
+        WasmComponentCanonicalKind.futureNew,
+        WasmComponentCanonicalKind.futureRead,
+        WasmComponentCanonicalKind.futureWrite,
+        WasmComponentCanonicalKind.futureDropReadable,
+        WasmComponentCanonicalKind.futureDropWritable,
+      ]);
+      expect(streamPlan.unsupportedDefinitions, isEmpty);
+      expect(futurePlan.unsupportedDefinitions, isEmpty);
+      expect(streamPlan.bindingErrors, isEmpty);
+      expect(futurePlan.bindingErrors, isEmpty);
+      expect(streamPlan.componentPlan.resourceBindings, hasLength(1));
+      expect(futurePlan.componentPlan.resourceBindings, hasLength(1));
+      expect(streamPlan.componentPlan.asyncValueBindings, hasLength(1));
+      expect(futurePlan.componentPlan.asyncValueBindings, hasLength(1));
+      expect(
+        streamPlan
+            .componentPlan
+            .asyncValueBindings
+            .single
+            .memoryLayout!
+            .byteLength,
+        4,
+      );
+      expect(
+        futurePlan
+            .componentPlan
+            .asyncValueBindings
+            .single
+            .memoryLayout!
+            .byteLength,
+        4,
+      );
+      expect(
+        () => streamPlan.bind(),
+        throwsA(isA<WASIComponentVersionUnsupportedException>()),
+      );
+      expect(
+        () => futurePlan.bind(),
+        throwsA(isA<WASIComponentVersionUnsupportedException>()),
+      );
+      expect(host.componentHost.table.activeCount, 0);
+    });
+
+    test('Preview3 wrapper executes owned-resource async memory copies', () {
+      final streamComponent = WasmComponent.decode(
+        ownedResourceAsyncMemoryProgramFromU32(
+          canonicalU32StreamMemoryComponentBytes(),
+          isStream: true,
+        ),
+      );
+      final futureComponent = WasmComponent.decode(
+        ownedResourceAsyncMemoryProgramFromU32(
+          canonicalU32FutureMemoryComponentBytes(),
+          isStream: false,
+        ),
+      );
+      final streamHost = WASIPreview3ComponentHost();
+      final futureHost = WASIPreview3ComponentHost();
+      final streamMemory = Memory(const MemoryDescriptor(initial: 1));
+      final futureMemory = Memory(const MemoryDescriptor(initial: 1));
+      final streamData = ByteData.view(streamMemory.buffer);
+      final futureData = ByteData.view(futureMemory.buffer);
+      streamData.setUint32(32, 0x7fffffff, Endian.little);
+      streamData.setUint32(36, 0x80000000, Endian.little);
+      futureData.setUint32(32, 0xffffffff, Endian.little);
+
+      final streamPlan = streamHost.prepareComponent(streamComponent);
+      final futurePlan = futureHost.prepareComponent(futureComponent);
+
+      expect(streamComponent.validate(), isEmpty);
+      expect(futureComponent.validate(), isEmpty);
+      expect(streamPlan.canBind, isTrue);
+      expect(futurePlan.canBind, isTrue);
+      expect(streamPlan.versionErrors, isEmpty);
+      expect(futurePlan.versionErrors, isEmpty);
+      expect(streamPlan.unsupportedDefinitions, isEmpty);
+      expect(futurePlan.unsupportedDefinitions, isEmpty);
+      expect(streamPlan.componentPlan.resourceBindings, hasLength(1));
+      expect(futurePlan.componentPlan.resourceBindings, hasLength(1));
+      expect(streamPlan.componentPlan.asyncValueBindings, hasLength(1));
+      expect(futurePlan.componentPlan.asyncValueBindings, hasLength(1));
+
+      final streamBinding = streamPlan.bind();
+      final streamHandles = WASIComponentAsyncEndpointHandles.unpack(
+        streamBinding.program.invoke(0, const <Object?>[])! as int,
+      );
+      expect(
+        streamBinding.program.invokeWithMemory(2, streamMemory, <Object?>[
+          streamHandles.writable,
+          32,
+          2,
+        ]),
+        2 << 4,
+      );
+      expect(
+        streamBinding.program.invokeWithMemory(1, streamMemory, <Object?>[
+          streamHandles.readable,
+          96,
+          2,
+        ]),
+        2 << 4,
+      );
+      expect(streamData.getUint32(96, Endian.little), 0x7fffffff);
+      expect(streamData.getUint32(100, Endian.little), 0x80000000);
+      expect(
+        streamBinding.program.invoke(3, <Object?>[streamHandles.readable]),
+        isNull,
+      );
+      expect(
+        streamBinding.program.invoke(4, <Object?>[streamHandles.writable]),
+        isNull,
+      );
+      expect(streamHost.componentHost.table.activeCount, 0);
+
+      final futureBinding = futurePlan.bind();
+      final futureHandles = WASIComponentAsyncEndpointHandles.unpack(
+        futureBinding.program.invoke(0, const <Object?>[])! as int,
+      );
+      expect(
+        futureBinding.program.invokeWithMemory(2, futureMemory, <Object?>[
+          futureHandles.writable,
+          32,
+        ]),
+        0,
+      );
+      expect(
+        futureBinding.program.invokeWithMemory(1, futureMemory, <Object?>[
+          futureHandles.readable,
+          96,
+        ]),
+        0,
+      );
+      expect(futureData.getUint32(96, Endian.little), 0xffffffff);
+      expect(
+        futureBinding.program.invoke(3, <Object?>[futureHandles.readable]),
+        isNull,
+      );
+      expect(
+        futureBinding.program.invoke(4, <Object?>[futureHandles.writable]),
         isNull,
       );
       expect(futureHost.componentHost.table.activeCount, 0);

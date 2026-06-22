@@ -160,7 +160,7 @@ void main() {
 
     test('copies primitive streams through decoded core memory options', () {
       final component = WasmComponent.decode(
-        _canonicalStreamMemoryProgramBytes(),
+        component_fixtures.canonicalU32StreamMemoryComponentBytes(),
       );
       final memory = Memory(const MemoryDescriptor(initial: 1));
       final data = ByteData.view(memory.buffer);
@@ -208,7 +208,7 @@ void main() {
       () {
         final component = WasmComponent.decode(
           component_fixtures.ownedResourceAsyncMemoryProgramFromU32(
-            _canonicalStreamMemoryProgramBytes(),
+            component_fixtures.canonicalU32StreamMemoryComponentBytes(),
             isStream: true,
           ),
         );
@@ -446,7 +446,7 @@ void main() {
       'publishes primitive stream read events through decoded core memory options',
       () async {
         final component = WasmComponent.decode(
-          _canonicalStreamMemoryProgramBytes(),
+          component_fixtures.canonicalU32StreamMemoryComponentBytes(),
         );
         final memory = Memory(const MemoryDescriptor(initial: 1));
         final data = ByteData.view(memory.buffer);
@@ -540,7 +540,7 @@ void main() {
 
     test('copies primitive futures through decoded core memory options', () {
       final component = WasmComponent.decode(
-        _canonicalFutureMemoryProgramBytes(),
+        component_fixtures.canonicalU32FutureMemoryComponentBytes(),
       );
       final memory = Memory(const MemoryDescriptor(initial: 1));
       final data = ByteData.view(memory.buffer);
@@ -588,7 +588,7 @@ void main() {
       () {
         final component = WasmComponent.decode(
           component_fixtures.ownedResourceAsyncMemoryProgramFromU32(
-            _canonicalFutureMemoryProgramBytes(),
+            component_fixtures.canonicalU32FutureMemoryComponentBytes(),
             isStream: false,
           ),
         );
@@ -685,7 +685,7 @@ void main() {
       'publishes primitive future read events through decoded core memory options',
       () async {
         final component = WasmComponent.decode(
-          _canonicalFutureMemoryProgramBytes(),
+          component_fixtures.canonicalU32FutureMemoryComponentBytes(),
         );
         final memory = Memory(const MemoryDescriptor(initial: 1));
         final data = ByteData.view(memory.buffer);
@@ -1457,101 +1457,6 @@ Uint8List _canonicalStreamProgramBytes() => Uint8List.fromList(const <int>[
   0x14,
   0x00,
 ]);
-
-Uint8List _canonicalStreamMemoryProgramBytes() =>
-    Uint8List.fromList(const <int>[
-      0x00,
-      0x61,
-      0x73,
-      0x6d,
-      0x0d,
-      0x00,
-      0x01,
-      0x00,
-      0x01,
-      0x16,
-      0x00,
-      0x61,
-      0x73,
-      0x6d,
-      0x01,
-      0x00,
-      0x00,
-      0x00,
-      0x05,
-      0x03,
-      0x01,
-      0x00,
-      0x01,
-      0x07,
-      0x07,
-      0x01,
-      0x03,
-      0x6d,
-      0x65,
-      0x6d,
-      0x02,
-      0x00,
-      0x02,
-      0x04,
-      0x01,
-      0x00,
-      0x00,
-      0x00,
-      0x07,
-      0x04,
-      0x01,
-      0x66,
-      0x01,
-      0x79,
-      0x08,
-      0x03,
-      0x01,
-      0x0e,
-      0x00,
-      0x06,
-      0x09,
-      0x01,
-      0x00,
-      0x02,
-      0x01,
-      0x00,
-      0x03,
-      0x6d,
-      0x65,
-      0x6d,
-      0x08,
-      0x06,
-      0x01,
-      0x0f,
-      0x00,
-      0x01,
-      0x03,
-      0x00,
-      0x06,
-      0x09,
-      0x01,
-      0x00,
-      0x02,
-      0x01,
-      0x00,
-      0x03,
-      0x6d,
-      0x65,
-      0x6d,
-      0x08,
-      0x0a,
-      0x03,
-      0x10,
-      0x00,
-      0x01,
-      0x03,
-      0x01,
-      0x13,
-      0x00,
-      0x14,
-      0x00,
-    ]);
 
 Uint8List _canonicalRecordStreamMemoryProgramBytes() =>
     Uint8List.fromList(const <int>[
@@ -2487,101 +2392,6 @@ Uint8List _canonicalFutureProgramBytes() => Uint8List.fromList(const <int>[
   0x1b,
   0x00,
 ]);
-
-Uint8List _canonicalFutureMemoryProgramBytes() =>
-    Uint8List.fromList(const <int>[
-      0x00,
-      0x61,
-      0x73,
-      0x6d,
-      0x0d,
-      0x00,
-      0x01,
-      0x00,
-      0x01,
-      0x16,
-      0x00,
-      0x61,
-      0x73,
-      0x6d,
-      0x01,
-      0x00,
-      0x00,
-      0x00,
-      0x05,
-      0x03,
-      0x01,
-      0x00,
-      0x01,
-      0x07,
-      0x07,
-      0x01,
-      0x03,
-      0x6d,
-      0x65,
-      0x6d,
-      0x02,
-      0x00,
-      0x02,
-      0x04,
-      0x01,
-      0x00,
-      0x00,
-      0x00,
-      0x07,
-      0x04,
-      0x01,
-      0x65,
-      0x01,
-      0x79,
-      0x08,
-      0x03,
-      0x01,
-      0x15,
-      0x00,
-      0x06,
-      0x09,
-      0x01,
-      0x00,
-      0x02,
-      0x01,
-      0x00,
-      0x03,
-      0x6d,
-      0x65,
-      0x6d,
-      0x08,
-      0x06,
-      0x01,
-      0x16,
-      0x00,
-      0x01,
-      0x03,
-      0x00,
-      0x06,
-      0x09,
-      0x01,
-      0x00,
-      0x02,
-      0x01,
-      0x00,
-      0x03,
-      0x6d,
-      0x65,
-      0x6d,
-      0x08,
-      0x0a,
-      0x03,
-      0x17,
-      0x00,
-      0x01,
-      0x03,
-      0x01,
-      0x1a,
-      0x00,
-      0x1b,
-      0x00,
-    ]);
 
 Uint8List _canonicalRecordFutureMemoryProgramBytes() =>
     Uint8List.fromList(const <int>[
