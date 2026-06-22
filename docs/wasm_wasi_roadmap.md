@@ -217,6 +217,17 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-DATAGRAM-PARTIAL-SEND-INVALID` - Host-backed datagram send
+  handlers must accept a whole message or fail validation.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "sock_send rejects partial host-backed datagram writes"`
+    failed before the fix because partial datagram writes returned success, then
+    passed after the fix;
+    `dart test test/wasi_test.dart --name "virtual socket host send handlers reject invalid write counts"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_send rejects partial host-backed datagram writes"`.
+  - Claim impact: tightens native/browser Preview1 host-backed datagram send
+    semantics and preserves `nwritten` on invalid host callback results; does
+    not complete the parent `P1-SOCKET-CONFORMANCE` row.
 - [x] `P1-SOCKET-FDFLAGS-SUPPORTED` - Socket descriptors reject file-only
   descriptor flags while preserving `NONBLOCK`.
   - Evidence:
@@ -1067,6 +1078,32 @@ performance visible while the support surface expands.
     this row with the exact commands run.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete it until the
     Preview1 socket and runtime gates are all checked.
+- [x] `P1-SOCKET-DATAGRAM-PARTIAL-SEND-INVALID` - Host-backed datagram sends
+  reject partial message acceptance.
+  - Scope: shared Preview1 `WASIPreview1Socket.datagram` send handler results
+    through both direct VFS calls and native/browser `sock_send`.
+  - Edit targets: `lib/src/wasi/preview1/socket.dart`, `test/wasi_test.dart`,
+    and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "sock_send rejects partial host-backed datagram writes"`
+    failed before the fix because a host datagram send handler returning
+    `message.length - 1` produced `SUCCESS` and wrote a short `nwritten` value.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "virtual socket host send handlers reject invalid write counts"`;
+    `dart test test/wasi_test.dart --name "sock_send rejects partial host-backed datagram writes"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_send rejects partial host-backed datagram writes"`;
+    `dart test test/wasi_test.dart`; `dart analyze`.
+  - Performance gate: N/A; this adds one constant-time equality check to an
+    invalid host callback branch and does not allocate or copy on successful
+    datagram sends.
+  - Done when: datagram send handlers returning less or more than the message
+    length are rejected with `EINVAL`, `nwritten` remains unchanged, default
+    datagram sends still record the full message, and stream host handlers keep
+    their existing partial-write behavior.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
+    socket conformance row.
 - [x] `P1-SOCKET-FDFLAGS-SUPPORTED` - Socket descriptors reject file-only
   descriptor flags.
   - Scope: native/browser Preview1 socket fdflag validation for `sock_accept`

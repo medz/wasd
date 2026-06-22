@@ -27,7 +27,8 @@ typedef WASIPreview1SocketReceiveMessageProvider = List<int>? Function();
 
 /// Handles one datagram message written through a host-backed Preview1 socket.
 ///
-/// Return the number of bytes accepted by the host.
+/// Return the number of bytes accepted by the host. Datagram writes are
+/// message-oriented, so the returned count must equal the message length.
 typedef WASIPreview1SocketSendMessageHandler = int Function(Uint8List message);
 
 /// Host-side socket state for WASI Preview1 descriptors.
@@ -360,8 +361,13 @@ final class WASIPreview1Socket {
     final sendMessageHandler = _sendMessageHandler;
     if (sendMessageHandler != null) {
       final written = sendMessageHandler(message);
-      if (written < 0 || written > message.length) {
-        throw RangeError.range(written, 0, message.length, 'written');
+      if (written != message.length) {
+        throw RangeError.range(
+          written,
+          message.length,
+          message.length,
+          'written',
+        );
       }
       return written;
     }
@@ -431,8 +437,13 @@ int writeWASIPreview1SocketOwnedMessage(
   final sendMessageHandler = socket._sendMessageHandler;
   if (sendMessageHandler != null) {
     final written = sendMessageHandler(message);
-    if (written < 0 || written > message.length) {
-      throw RangeError.range(written, 0, message.length, 'written');
+    if (written != message.length) {
+      throw RangeError.range(
+        written,
+        message.length,
+        message.length,
+        'written',
+      );
     }
     return written;
   }

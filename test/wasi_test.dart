@@ -410,8 +410,19 @@ void main() {
       final datagram = WASIPreview1Socket.datagram(
         sendMessageHandler: (message) => -1,
       );
+      final partialDatagram = WASIPreview1Socket.datagram(
+        sendMessageHandler: (message) => message.length - 1,
+      );
+      final overDatagram = WASIPreview1Socket.datagram(
+        sendMessageHandler: (message) => message.length + 1,
+      );
       final vfs = Preview1VirtualFileSystem(
-        sockets: {73: stream, 74: datagram},
+        sockets: {
+          73: stream,
+          74: datagram,
+          75: partialDatagram,
+          76: overDatagram,
+        },
       );
       final bytes = Uint8List(64);
       final data = ByteData.view(bytes.buffer);
@@ -451,6 +462,36 @@ void main() {
       );
       expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
       expect(datagram.sentMessages, isEmpty);
+
+      data.setUint32(countPtr, 0xabad1dea, Endian.little);
+      expect(
+        writeSocketFromIov(
+          socket: vfs.socketForFd(75)!,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nwrittenPtr: countPtr,
+        ),
+        _errnoInval,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 0xabad1dea);
+      expect(partialDatagram.sentMessages, isEmpty);
+
+      data.setUint32(countPtr, 0x12345678, Endian.little);
+      expect(
+        writeSocketFromIov(
+          socket: vfs.socketForFd(76)!,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nwrittenPtr: countPtr,
+        ),
+        _errnoInval,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 0x12345678);
+      expect(overDatagram.sentMessages, isEmpty);
     });
 
     test('virtual socket send rejects write-side shutdown', () {
@@ -2734,6 +2775,44 @@ void main() {
           expect(data.getUint32(countPtr, Endian.little), 4);
           expect(sentMessages, hasLength(1));
           expect(utf8.decode(sentMessages.single), 'data');
+          expect(socket.sentMessages, isEmpty);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'sock_send rejects partial host-backed datagram writes',
+        () async {
+          final socket = WASIPreview1Socket.datagram(
+            sendMessageHandler: (message) => message.length - 1,
+          );
+          final socketWasi = WASI(sockets: {17: socket});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockSend = preview1['sock_send'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const iovPtr = 4312;
+          const bufferPtr = 4344;
+          const countPtr = 4376;
+
+          bytes.setAll(bufferPtr, utf8.encode('data'));
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 4, Endian.little);
+          data.setUint32(countPtr, 0xfeedface, Endian.little);
+
+          expect(sockSend.ref([17, iovPtr, 1, 0, countPtr]), _errnoInval);
+          expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
           expect(socket.sentMessages, isEmpty);
         },
         skip: _skipOnNode(
