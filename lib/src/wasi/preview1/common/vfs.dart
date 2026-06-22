@@ -1351,6 +1351,9 @@ int writeSocketFromIov({
       nwrittenPtr + 4 > bytes.length) {
     return errnoInval;
   }
+  if (socket.sendShutdown) {
+    return errnoPipe;
+  }
   if (socket.writeReady == false) {
     return errnoAgain;
   }

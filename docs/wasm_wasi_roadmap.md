@@ -191,6 +191,19 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-SEND-SHUTDOWN-VFS` - Shared VFS socket send rejects
+  write-side shutdown with `EPIPE`.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "virtual socket send rejects write-side shutdown"`
+    failed before the fix, then passed after the fix;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_send reports pipe after write-side shutdown"`;
+    `dart test -p chrome test/wasi_test.dart --name "virtual socket send rejects write-side shutdown"`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
+    `dart analyze`.
+  - Claim impact: aligns shared Preview1 VFS stream/datagram send behavior with
+    `sock_send` shutdown semantics for `SUPPORT-P1`; does not complete the parent
+    `P1-SOCKET-CONFORMANCE` row.
 - [x] `P1-SOCKET-ACCEPT-STREAM-QUEUE` - Accepted socket queues reject datagram
   descriptors before `sock_accept` can expose them.
   - Evidence:
@@ -872,6 +885,28 @@ performance visible while the support surface expands.
   - Done when: both constructor-supplied `pendingAccepted` sockets and later
     `queueAccepted` calls reject datagram sockets before any invalid accepted fd
     can be exposed.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
+    socket conformance row.
+- [x] `P1-SOCKET-SEND-SHUTDOWN-VFS` - Shared VFS send rejects write-side
+  shutdown.
+  - Scope: native/browser shared Preview1 VFS `writeSocketFromIov` behavior for
+    stream and datagram descriptors after `sock_shutdown(..., WR)`.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart` and
+    `test/wasi_test.dart`.
+  - Red test:
+    `dart test test/wasi_test.dart --name "virtual socket send rejects write-side shutdown"`
+    failed before the fix because the shared helper returned success with zero
+    bytes instead of `EPIPE`.
+  - Implementation gate: `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_send reports pipe after write-side shutdown"`;
+    `dart test -p chrome test/wasi_test.dart --name "virtual socket send rejects write-side shutdown"`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: stream and datagram VFS sends return `EPIPE` after write-side
+    shutdown, leave `nwritten` unchanged, and record no sent bytes/messages.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
