@@ -101,6 +101,7 @@ const int rightsSocket =
     rightPollFdReadwrite |
     rightSockShutdown |
     rightSockAccept;
+const int rightsSocketInheriting = rightsSocket & ~rightSockAccept;
 
 /// Preview1 imports that should exist and return `ENOSYS` when unsupported.
 const List<String> preview1NosysImports = <String>[];

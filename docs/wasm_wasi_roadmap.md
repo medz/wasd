@@ -324,6 +324,24 @@ too broad to verify in one commit.
   - Claim impact: closes one Preview1 socket capability-boundary gap for
     native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
     `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
+- [x] `P1-SOCKET-ACCEPT-INHERITING-RIGHTS` - Accepted sockets do not inherit
+  listener-only accept capability by default.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "accepted sockets do not inherit listener accept rights by default"`
+    failed before the fix because the accepted socket inherited `SOCK_ACCEPT` in
+    its base rights, then passed after the fix;
+    `dart test -p chrome test/wasi_test.dart --name "accepted sockets do not inherit listener accept rights by default|default socket rights expose socket-specific operations only|sock_accept returns queued preview1 stream sockets with inherited rights|poll_oneoff reports queued socket accepts as readable|poll_oneoff gates queued socket accepts on sock_accept rights"`;
+    `dart test test/wasi_test.dart`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_accept_inheritance.operations=16000` for the socket-heavy
+    distribution; `dart analyze`.
+  - Spec reference: WASI Preview1 `fdstat` carries separate base and inheriting
+    rights; accepted descriptors are derived from the listener's inheriting
+    rights, so default listener-only `SOCK_ACCEPT` should not propagate to a
+    connection descriptor.
+  - Claim impact: closes one Preview1 socket capability propagation gap for
+    native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-POLL-ZERO-HINT` - Stream socket `readReadyBytes: 0` does not
   produce a false `poll_oneoff(fd_read)` readiness event.
   - Evidence:
@@ -1374,6 +1392,33 @@ performance visible while the support surface expands.
     rights are absent; `fd_advise`, `fd_datasync`, `fd_sync`, and
     `fd_filestat_set_times` return `ENOTCAPABLE` on default sockets; native and
     browser socket IO/shutdown/accept regressions still pass.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
+    support or any P2/P3 support gate.
+- [x] `P1-SOCKET-ACCEPT-INHERITING-RIGHTS` - Accepted socket descriptors inherit
+  connection rights, not listener rights.
+  - Scope: shared Preview1 VFS default socket inheriting rights and
+    native/browser `sock_accept` capability propagation.
+  - Edit targets: `lib/src/wasi/preview1/common/constants.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`,
+    `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "accepted sockets do not inherit listener accept rights by default"`
+    failed before the fix because the accepted socket fdstat base rights included
+    `SOCK_ACCEPT`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "accepted sockets do not inherit listener accept rights by default"`;
+    `dart test -p chrome test/wasi_test.dart --name "accepted sockets do not inherit listener accept rights by default|default socket rights expose socket-specific operations only|sock_accept returns queued preview1 stream sockets with inherited rights|poll_oneoff reports queued socket accepts as readable|poll_oneoff gates queued socket accepts on sock_accept rights"`;
+    `dart test test/wasi_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; the
+    socket-heavy distribution reported
+    `socket_accept_inheritance.operations=16000`.
+  - Done when: default listener sockets keep `SOCK_ACCEPT` in base rights, remove
+    it from inheriting rights, accepted sockets can still read their queued data,
+    accepted fdstat inheriting rights are zero, and `sock_accept` on an accepted
+    socket fails with `ENOTCAPABLE` without mutating the output pointer.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full

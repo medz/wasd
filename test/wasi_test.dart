@@ -2465,6 +2465,7 @@ void main() {
               _rightPollFdReadwrite |
               _rightSockShutdown |
               _rightSockAccept;
+          const socketInheritingRights = socketRights & ~_rightSockAccept;
           const fileOnlyRights =
               _rightFdDatasync |
               _rightFdSync |
@@ -2476,13 +2477,86 @@ void main() {
           final rightsBase = _getUint64Le(data, fdstatPtr + 8);
           final rightsInheriting = _getUint64Le(data, fdstatPtr + 16);
           expect(rightsBase, socketRights);
-          expect(rightsInheriting, socketRights);
+          expect(rightsInheriting, socketInheritingRights);
           expect(rightsBase & fileOnlyRights, 0);
+          expect(rightsInheriting & _rightSockAccept, 0);
 
           expect(fdAdvise.ref([39, 0, 0, 0]), _errnoNotcapable);
           expect(fdDatasync.ref([39]), _errnoNotcapable);
           expect(fdSync.ref([39]), _errnoNotcapable);
           expect(fdFilestatSetTimes.ref([39, 0, 0, 0]), _errnoNotcapable);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'accepted sockets do not inherit listener accept rights by default',
+        () async {
+          final accepted = WASIPreview1Socket(
+            receiveData: utf8.encode('client'),
+          );
+          final listener = WASIPreview1Socket(pendingAccepted: [accepted]);
+          final socketWasi = WASI(sockets: {42: listener});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockAccept =
+              preview1['sock_accept'] as FunctionImportExportValue;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final fdFdstatGet =
+              preview1['fd_fdstat_get'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const acceptedFdPtr = 4736;
+          const fdstatPtr = 4752;
+          const iovPtr = 4784;
+          const bufferPtr = 4816;
+          const countPtr = 4848;
+          const flagsPtr = 4864;
+          const socketBaseRights =
+              _rightFdRead |
+              _rightFdFdstatSetFlags |
+              _rightFdWrite |
+              _rightFdFdstatGet |
+              _rightPollFdReadwrite |
+              _rightSockShutdown |
+              _rightSockAccept;
+          const socketInheritingRights = socketBaseRights & ~_rightSockAccept;
+
+          expect(sockAccept.ref([42, 0, acceptedFdPtr]), 0);
+          final acceptedFd = data.getUint32(acceptedFdPtr, Endian.little);
+          expect(fdFdstatGet.ref([acceptedFd, fdstatPtr]), 0);
+          expect(bytes[fdstatPtr], _filetypeSocketStream);
+          expect(_getUint64Le(data, fdstatPtr + 8), socketInheritingRights);
+          expect(_getUint64Le(data, fdstatPtr + 16), 0);
+
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 6, Endian.little);
+          expect(
+            sockRecv.ref([acceptedFd, iovPtr, 1, 0, countPtr, flagsPtr]),
+            0,
+          );
+          expect(data.getUint32(countPtr, Endian.little), 6);
+          expect(
+            utf8.decode(bytes.sublist(bufferPtr, bufferPtr + 6)),
+            'client',
+          );
+
+          data.setUint32(acceptedFdPtr, 0xdeadbeef, Endian.little);
+          expect(
+            sockAccept.ref([acceptedFd, 0, acceptedFdPtr]),
+            _errnoNotcapable,
+          );
+          expect(data.getUint32(acceptedFdPtr, Endian.little), 0xdeadbeef);
         },
         skip: _skipOnNode(
           'Skipping on Node.js; socket behavior is delegated to node:wasi.',

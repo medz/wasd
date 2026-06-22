@@ -101,6 +101,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
   final socketDgramTruncation = _benchmarkSocketDatagramTruncation(options);
   final socketPollReadiness = _benchmarkSocketPollReadiness(options);
   final socketRenumberClose = _benchmarkSocketRenumberClose(options);
+  final socketAcceptInheritance = _benchmarkSocketAcceptInheritance(options);
 
   final payload = <String, Object?>{
     'distribution': options.distribution,
@@ -123,6 +124,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
     'socket_dgram_truncation': socketDgramTruncation.toJson(),
     'socket_poll_readiness': socketPollReadiness.toJson(),
     'socket_renumber_close': socketRenumberClose.toJson(),
+    'socket_accept_inheritance': socketAcceptInheritance.toJson(),
   };
   return payload;
 }
@@ -1219,6 +1221,49 @@ _Metric _benchmarkSocketRenumberClose(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketAcceptInheritance(_Options options) {
+  final listener = WASIPreview1Socket(
+    pendingAccepted: List<WASIPreview1Socket>.generate(
+      options.iterations,
+      (_) => WASIPreview1Socket(),
+    ),
+  );
+  final vfs = Preview1VirtualFileSystem(sockets: {64: listener});
+
+  var successfulOperations = 0;
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final acceptedFd = vfs.acceptSocket(
+      fd: 64,
+      descriptorFlags: fdflagNonblock,
+    );
+    if (acceptedFd < 0) {
+      throw StateError('socket accept failed at iteration $i');
+    }
+    successfulOperations++;
+    final rights = vfs.descriptorRightsForFd(acceptedFd);
+    final flags = vfs.descriptorFlagsForFd(acceptedFd);
+    if (rights == null ||
+        rights.base != rightsSocketInheriting ||
+        rights.inheriting != 0 ||
+        flags != fdflagNonblock) {
+      throw StateError('accepted socket rights mismatch at iteration $i');
+    }
+    checksum += acceptedFd + rights.base + flags!;
+    if (!vfs.close(acceptedFd)) {
+      throw StateError('accepted socket close failed at iteration $i');
+    }
+    successfulOperations++;
+  }
+  watch.stop();
+  return _Metric(
+    operations: successfulOperations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 void _writeTwoIovs({
   required ByteData data,
   required int iovPtr,
@@ -1310,6 +1355,10 @@ void _printSingleText(
   );
   _printMetric('socket poll readiness', payload['socket_poll_readiness']);
   _printMetric('socket renumber/close', payload['socket_renumber_close']);
+  _printMetric(
+    'socket accept inheritance',
+    payload['socket_accept_inheritance'],
+  );
 }
 
 void _printMetric(String label, Object? raw) {
