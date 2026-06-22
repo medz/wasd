@@ -85,6 +85,7 @@ Future<void> main(List<String> args) async {
     options.iterations,
   );
   final streamFlagsMemoryCopy = _benchmarkStreamFlagsMemoryCopy(options);
+  final streamOptionMemoryCopy = _benchmarkStreamOptionMemoryCopy(options);
 
   final payload = <String, Object?>{
     'iterations': options.iterations,
@@ -120,6 +121,7 @@ Future<void> main(List<String> args) async {
     'stream_owned_resource_memory_copy': streamOwnedResourceMemoryCopy.toJson(),
     'future_owned_resource_memory_copy': futureOwnedResourceMemoryCopy.toJson(),
     'stream_flags_memory_copy': streamFlagsMemoryCopy.toJson(),
+    'stream_option_memory_copy': streamOptionMemoryCopy.toJson(),
   };
 
   if (options.json) {
@@ -160,6 +162,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkStreamOwnedResourceMemoryCopy(warmup);
   _benchmarkFutureOwnedResourceMemoryCopy(_warmupIterations);
   _benchmarkStreamFlagsMemoryCopy(warmup);
+  _benchmarkStreamOptionMemoryCopy(warmup);
 }
 
 _Metric _benchmarkStreamRoundTrip(_Options options) {
@@ -1796,24 +1799,66 @@ _Metric _benchmarkStreamOwnedResourceMemoryCopy(_Options options) {
 }
 
 _Metric _benchmarkStreamFlagsMemoryCopy(_Options options) {
-  final component = WasmComponent.decode(_streamFlagsTypeComponentBytes());
+  return _benchmarkStreamComponentValueMemoryCopy(
+    options,
+    componentBytes: _streamFlagsTypeComponentBytes(),
+    componentTypeIndex: 1,
+    name: 'benchmark-flags-stream',
+    elementByteLength: 1,
+    writeInputElement: (data, pointer, index) {
+      data.setUint8(pointer, 1 << (index % 3));
+    },
+    checksumOutputElement: (data, pointer, index) => data.getUint8(pointer),
+  );
+}
+
+_Metric _benchmarkStreamOptionMemoryCopy(_Options options) {
+  return _benchmarkStreamComponentValueMemoryCopy(
+    options,
+    componentBytes: _streamOptionU32TypeComponentBytes(),
+    componentTypeIndex: 1,
+    name: 'benchmark-option-stream',
+    elementByteLength: 8,
+    writeInputElement: (data, pointer, index) {
+      data.setUint8(pointer, 1);
+      data.setUint32(pointer + 4, 0x1000 + index, Endian.little);
+    },
+    checksumOutputElement: (data, pointer, index) {
+      return data.getUint8(pointer) +
+          data.getUint32(pointer + 4, Endian.little);
+    },
+  );
+}
+
+_Metric _benchmarkStreamComponentValueMemoryCopy(
+  _Options options, {
+  required Uint8List componentBytes,
+  required int componentTypeIndex,
+  required String name,
+  required int elementByteLength,
+  required void Function(ByteData data, int pointer, int index)
+  writeInputElement,
+  required int Function(ByteData data, int pointer, int index)
+  checksumOutputElement,
+}) {
+  final component = WasmComponent.decode(componentBytes);
   final host = WASIComponentAsyncHost()
     ..defineStreamTypeFromComponent<WasmComponentValueData>(
       component,
-      1,
-      'benchmark-flags-stream',
+      componentTypeIndex,
+      name,
     );
   final newOperation = host.bindCanonicalDefinition(
-    const WasmComponentCanonicalDefinition(
+    WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.streamNew,
-      typeIndex: 1,
+      typeIndex: componentTypeIndex,
     ),
   );
   final readOperation = host.bindCanonicalDefinition(
-    const WasmComponentCanonicalDefinition(
+    WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.streamRead,
-      typeIndex: 1,
-      options: [
+      typeIndex: componentTypeIndex,
+      options: const [
         WasmComponentCanonicalOption(
           kind: WasmComponentCanonicalOptionKind.memory,
           index: 0,
@@ -1822,10 +1867,10 @@ _Metric _benchmarkStreamFlagsMemoryCopy(_Options options) {
     ),
   );
   final writeOperation = host.bindCanonicalDefinition(
-    const WasmComponentCanonicalDefinition(
+    WasmComponentCanonicalDefinition(
       kind: WasmComponentCanonicalKind.streamWrite,
-      typeIndex: 1,
-      options: [
+      typeIndex: componentTypeIndex,
+      options: const [
         WasmComponentCanonicalOption(
           kind: WasmComponentCanonicalOptionKind.memory,
           index: 0,
@@ -1838,7 +1883,7 @@ _Metric _benchmarkStreamFlagsMemoryCopy(_Options options) {
   const inputPointer = 1024;
   const outputPointer = 4096;
   for (var i = 0; i < options.batchSize; i++) {
-    data.setUint8(inputPointer + i, 1 << (i % 3));
+    writeInputElement(data, inputPointer + i * elementByteLength, i);
   }
   final stream =
       newOperation.streamNew() as WASIComponentStream<WasmComponentValueData>;
@@ -1860,7 +1905,12 @@ _Metric _benchmarkStreamFlagsMemoryCopy(_Options options) {
     );
     checksum += writeResult.packedResult;
     checksum += readResult.packedResult;
-    checksum += data.getUint8(outputPointer + (i % options.batchSize));
+    final outputIndex = i % options.batchSize;
+    checksum += checksumOutputElement(
+      data,
+      outputPointer + outputIndex * elementByteLength,
+      outputIndex,
+    );
   }
   watch.stop();
 
@@ -2229,6 +2279,26 @@ Uint8List _streamFlagsTypeComponentBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x00,
 ]);
+
+Uint8List _streamOptionU32TypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x06,
+      0x02,
+      0x6b,
+      0x79,
+      0x66,
+      0x01,
+      0x00,
+    ]);
 
 Uint8List _futureU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x00,

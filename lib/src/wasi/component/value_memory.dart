@@ -1422,25 +1422,43 @@ final class _VariantLayout extends _CanonicalValueLayout {
   }
 
   int _caseIndex(WasmComponentValueData value) {
+    int? selectedIndex;
+
+    void selectIndex(int index) {
+      if (selectedIndex != null && selectedIndex != index) {
+        throw StateError(
+          'Conflicting WASI component ${kind.name} case selectors.',
+        );
+      }
+      selectedIndex = index;
+    }
+
     final index = value.index;
     if (index != null) {
       if (index < 0 || index >= cases.length) {
         throw StateError('Invalid WASI component variant case index: $index.');
       }
-      return index;
+      selectIndex(index);
     }
     final label = value.label;
     if (label != null) {
       final index = cases.indexWhere((case_) => case_.label == label);
-      if (index >= 0) {
-        return index;
+      if (index < 0) {
+        throw StateError(
+          'Unknown WASI component ${kind.name} case label: $label.',
+        );
       }
+      selectIndex(index);
     }
     if (kind == WasmComponentValueDataKind.option && value.isSome != null) {
-      return value.isSome! ? 1 : 0;
+      selectIndex(value.isSome! ? 1 : 0);
     }
     if (kind == WasmComponentValueDataKind.result && value.isOk != null) {
-      return value.isOk! ? 0 : 1;
+      selectIndex(value.isOk! ? 0 : 1);
+    }
+    final resolvedIndex = selectedIndex;
+    if (resolvedIndex != null) {
+      return resolvedIndex;
     }
     throw StateError('WASI component canonical variant value needs a case.');
   }

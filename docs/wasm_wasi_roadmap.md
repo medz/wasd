@@ -191,7 +191,10 @@ too broad to verify in one commit.
   - Checked child rows: `P3-ASYNC-ERROR-CONTEXT-COPY` covers the canonical memory
     copy path for `stream<error-context>` and `future<error-context>`;
     `P3-ASYNC-CHAR-SCALAR` covers Unicode-scalar validation for `future<char>`
-    before host values can enter canonical memory copy.
+    before host values can enter canonical memory copy;
+    `P3-OPTION-STREAM-SELECTOR-VALIDATION` covers decoded
+    `stream<option<u32>>` copy plus conflicting option selector rejection before
+    enqueue.
   - Done when: the selected shape is validated, copied, completed or canceled,
     dropped, and benchmarked through the same P3 host path.
   - Evidence update: record shape, tests, and benchmark output in this document.
@@ -210,7 +213,10 @@ too broad to verify in one commit.
     repeated copy or allocation path.
   - Checked child rows: `CM-VARIANT-PAYLOAD-STORE-VALIDATION` covers
     payload-bearing and payloadless variant store validation before canonical
-    memory writes, with adapter variant/option/result benchmarks still passing.
+    memory writes, with adapter variant/option/result benchmarks still passing;
+    `P3-OPTION-STREAM-SELECTOR-VALIDATION` covers consistent variant, option,
+    and result case selectors in the shared value-memory codec before P3 async
+    host writes can mutate endpoints.
   - Done when: validation and execution accept/reject the same shape under the
     same ownership and memory rules.
   - Evidence update: record the selected shape and command evidence.
@@ -236,6 +242,37 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P3-OPTION-STREAM-SELECTOR-VALIDATION` - Canonical
+  variant/option/result selectors are internally consistent before value-memory
+  writes or P3 async stream enqueues.
+  - Scope: shared Canonical ABI value-memory selector resolution plus decoded
+    `stream<option<u32>>` memory-copy execution through the Preview3 async host.
+  - Edit targets: `lib/src/wasi/component/value_memory.dart`,
+    `test/wasi_component_value_memory_test.dart`,
+    `test/wasi_component_async_host_test.dart`,
+    `tool/wasi_component_async_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_component_value_memory_test.dart test/wasi_component_async_host_test.dart --name "rejects conflicting variant case selectors before writing memory|rejects conflicting option stream value selectors" --reporter=compact`
+    failed before the fix because the variant store returned successfully when
+    `index` and `label` named different cases, and the async `stream.write`
+    accepted an option value whose `index` and `isSome` disagreed.
+  - Implementation gate:
+    `dart test test/wasi_component_value_memory_test.dart test/wasi_component_async_host_test.dart --name "rejects conflicting variant case selectors before writing memory|rejects conflicting option stream value selectors" --reporter=compact`;
+    broader value-memory, async-host, component-host, and versioned-host suites
+    must pass before commit.
+  - Performance gate:
+    `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`
+    now reports `stream_option_memory_copy.operations=64000` and
+    `stream_option_memory_copy.per_operation_us=0.128375`.
+  - Done when: conflicting variant labels/indexes and option/result booleans
+    throw before guest-memory writes or async endpoint mutation, valid decoded
+    `stream<option<u32>>` still round-trips through canonical memory, and the
+    async benchmark includes an option stream copy metric.
+  - Evidence update: this checked row plus the detailed backlog row,
+    verification matrix, and benchmark metric.
+  - Claim impact: contributes to `P3-ASYNC-COPY-GAPS`,
+    `CM-VALUE-VALIDATION`, `SUPPORT-P2`, and `SUPPORT-P3`; it does not complete
+    `SUPPORT-P1`/`SUPPORT-P2`/`SUPPORT-P3` or broader component value coverage.
 - [x] `P3-FLAGS-STREAM-COPY-VALIDATION` - decoded `stream<flags>` values copy
   through canonical memory and duplicate host-side flag labels fail before
   enqueue or memory writes.
@@ -1656,6 +1693,7 @@ copying their internals directly.
 | [x] | Internal P3 async endpoints, waitables, tasks, context, thread identity | `lib/src/wasi/component/async_host.dart`, `lib/src/wasi/component/waitable_set.dart`, `lib/src/wasi/component/task.dart`, `lib/src/wasi/component/thread.dart`, `test/wasi_component_async_host_test.dart` | `dart test test/wasi_component_async_host_test.dart test/wasi_component_waitable_set_test.dart test/wasi_component_task_test.dart test/wasi_component_thread_test.dart` | Full async lowering, task spawning, scheduler-owned thread switch/suspend/resume. |
 | [x] | Owned-resource stream/future copy buffers, pending copy events, and cancel-copy events through async, component, and versioned Preview3 hosts | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_async_host_test.dart`, `test/wasi_component_host_test.dart`, `test/wasi_component_versioned_host_test.dart`, `test/support/component_fixtures.dart` | `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart test/wasi_component_async_host_test.dart test/wasi_component_value_memory_test.dart`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Borrowed payload lifetimes, broader composite async payload execution, and public P3 API claims remain unsupported. |
 | [x] | P3 flags stream canonical memory copy and host value validation | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_value_memory_test.dart`, `test/wasi_component_async_host_test.dart`, `tool/wasi_component_async_benchmark.dart` | `dart test test/wasi_component_value_memory_test.dart test/wasi_component_async_host_test.dart --name "rejects duplicate flag labels before writing memory|copies decoded flags stream values through canonical memory" --reporter=compact`; `dart test test/wasi_component_value_memory_test.dart --reporter=compact`; `dart test test/wasi_component_async_host_test.dart --reporter=compact`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json` | Decoded `stream<flags>` now round-trips through canonical memory and duplicate host-side flag labels fail before memory writes/enqueues; broader composite stream/future shapes, waitable coverage for this shape, generated-world binding, and public P3 support remain incomplete. |
+| [x] | Canonical variant/option/result selector consistency through P3 option stream copy | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_value_memory_test.dart`, `test/wasi_component_async_host_test.dart`, `tool/wasi_component_async_benchmark.dart` | `dart test test/wasi_component_value_memory_test.dart test/wasi_component_async_host_test.dart --name "rejects conflicting variant case selectors before writing memory|rejects conflicting option stream value selectors" --reporter=compact`; `dart test test/wasi_component_value_memory_test.dart --reporter=compact`; `dart test test/wasi_component_async_host_test.dart --reporter=compact`; `dart test test/wasi_component_host_test.dart --reporter=compact`; `dart test test/wasi_component_versioned_host_test.dart --reporter=compact`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json` | Conflicting selector fields now fail before canonical memory writes or stream endpoint mutation, and valid `stream<option<u32>>` values copy through canonical memory with a dedicated benchmark; full P2/P3 support still needs generated world binding, official-style component runs, and broader async/value shapes. |
 | [x] | P3 future char Unicode-scalar validation before canonical memory copy | `lib/src/wasi/component/unicode_scalar.dart`, `lib/src/wasi/component/async_host.dart`, `lib/src/wasi/component/value_memory.dart`, `lib/src/wasi/component/adapter_host.dart`, `test/wasi_component_async_host_test.dart`, `test/wasi_component_value_memory_test.dart` | `dart test test/wasi_component_async_host_test.dart --name "rejects non-scalar char future values before memory copies"`; `dart test test/wasi_component_value_memory_test.dart --name "rejects non-scalar char stores"`; `dart test test/wasi_component_async_host_test.dart`; `dart test test/wasi_component_value_memory_test.dart`; `dart test test/wasi_component_adapter_plan_test.dart`; `dart test test/wasi_component_host_test.dart`; `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`; `dart analyze` | Full Preview3 still needs generated world/interface ingestion, official component-suite style runs, and broader async shape coverage. |
 | [x] | Canonical variant/option/result payload validation before value-memory writes | `lib/src/wasi/component/value_memory.dart`, `test/wasi_component_value_memory_test.dart`, `tool/wasi_resource_table_benchmark.dart` | `dart test test/wasi_component_value_memory_test.dart --name "rejects invalid variant payloads before writing memory" --reporter=compact`; `dart test test/wasi_component_value_memory_test.dart --reporter=compact`; `dart test test/wasi_component_async_host_test.dart --reporter=compact`; `dart test test/wasi_component_host_test.dart --reporter=compact`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`; `dart analyze` | Invalid payloadless or missing-payload variant stores now fail before discriminant writes, and valid variant stores are measured by `canonical_variant_store`; full P2/P3 support still needs WIT ingestion, generated world binding, and broader component-suite runs. |
 | [x] | Canonical lift/lower adapter planning and internal callback invocation | `lib/src/wasi/component/adapter_plan.dart`, `lib/src/wasi/component/adapter_host.dart`, `test/wasi_component_adapter_plan_test.dart` | `dart test test/wasi_component_adapter_plan_test.dart`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Automatic binding of decoded lift/lower definitions to instantiated core/component functions. |
@@ -1937,7 +1975,10 @@ This is the implementation state as of 2026-06-23 on `main`.
   handles use canonical `u32` copy-buffer values for decoded stream/future
   elements, while resource handle-table ownership/drop, borrow lifetime
   enforcement, and nested async payload semantics remain unsupported instead of
-  being approximated. Future P3 adapters can route stream/future
+  being approximated. Host-side decoded variant, option, and result values must
+  use internally consistent selectors before canonical memory writes or async
+  endpoint enqueues; conflicting fields fail instead of being silently
+  prioritized. Future P3 adapters can route stream/future
   memory lowering through this shared codec without re-deriving byte widths,
   alignments, padding, or dynamic payload allocation separately from the
   executable copy path.
@@ -3819,6 +3860,42 @@ performance visible while the support surface expands.
     host-side value validation gap; broader stream/future shapes, generated
     worlds, waitable coverage for this shape, and public P3 support remain
     incomplete.
+- [x] `P3-OPTION-STREAM-SELECTOR-VALIDATION` - Reject conflicting
+  variant/option/result selectors before canonical memory writes or async
+  stream enqueues.
+  - Scope: shared Canonical ABI selector resolution for variants, options, and
+    results, plus Preview3 decoded `stream<option<u32>>` memory-copy execution.
+  - Edit targets: `lib/src/wasi/component/value_memory.dart`,
+    `test/wasi_component_value_memory_test.dart`,
+    `test/wasi_component_async_host_test.dart`,
+    `tool/wasi_component_async_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_component_value_memory_test.dart test/wasi_component_async_host_test.dart --name "rejects conflicting variant case selectors before writing memory|rejects conflicting option stream value selectors" --reporter=compact`
+    failed before the fix because a value with mismatched variant `index` and
+    `label` stored successfully, and a stream option value with mismatched
+    `index` and `isSome` was accepted into the endpoint.
+  - Implementation gate:
+    `dart test test/wasi_component_value_memory_test.dart test/wasi_component_async_host_test.dart --name "rejects conflicting variant case selectors before writing memory|rejects conflicting option stream value selectors" --reporter=compact`;
+    `dart test test/wasi_component_value_memory_test.dart --reporter=compact`;
+    `dart test test/wasi_component_async_host_test.dart --reporter=compact`;
+    `dart test test/wasi_component_host_test.dart --reporter=compact`;
+    `dart test test/wasi_component_versioned_host_test.dart --reporter=compact`.
+  - Performance gate:
+    `dart run tool/wasi_component_async_benchmark.dart --iterations=2000 --batch-size=16 --json`
+    reported `stream_option_memory_copy.operations=64000` and
+    `stream_option_memory_copy.per_operation_us=0.128375`.
+  - Done when: selector fields that describe the same variant/option/result
+    case must agree before memory or endpoint mutation, legal
+    `stream<option<u32>>` values still copy through canonical memory, endpoint
+    drops leave no table leaks, and the async benchmark measures the option
+    stream copy path.
+  - Evidence update: this detailed child row plus the `Current Execution Board`
+    checked-child list, `Recently Checked`, the verification matrix, and the
+    benchmark payload.
+  - Claim impact: contributes to `P3-ASYNC-COPY-GAPS`,
+    `CM-VALUE-VALIDATION`, `SUPPORT-P2`, and `SUPPORT-P3`; it does not complete
+    `P3-ASYNC-COPY-GAPS`, `CM-VALUE-VALIDATION`, `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [ ] `P3-ASYNC-COPY-GAPS` - Canonical `stream.*` / `future.*` lowering beyond
   the current copy-buffer subset.
   - Change: wire validated shapes into the internal async host and component

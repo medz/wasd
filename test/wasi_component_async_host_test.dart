@@ -1725,6 +1725,58 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('rejects conflicting option stream value selectors', () {
+      final component = WasmComponent.decode(
+        _streamOptionU32TypeComponentBytes(),
+      );
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<WasmComponentValueData>(
+        component,
+        1,
+        'options',
+      );
+      final program = _streamOptionU32MemoryHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint8(32, 1);
+      data.setUint32(36, 0x12345678, Endian.little);
+
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32, 1]),
+        1 << 4,
+      );
+      expect(
+        program.invokeWithMemory(2, memory, <Object?>[handles.readable, 64, 1]),
+        1 << 4,
+      );
+      expect(data.getUint8(64), 1);
+      expect(data.getUint32(68, Endian.little), 0x12345678);
+
+      final conflicting = WasmComponentValueData(
+        kind: WasmComponentValueDataKind.option,
+        rawBytes: Uint8List(0),
+        index: 1,
+        isSome: false,
+        associatedValue: WasmComponentValueData(
+          kind: WasmComponentValueDataKind.integer,
+          rawBytes: Uint8List(0),
+          integer: 7,
+        ),
+      );
+      expect(
+        () => program.invoke(1, <Object?>[
+          handles.writable,
+          [conflicting],
+        ]),
+        throwsStateError,
+      );
+      expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test('does not require realloc for empty string stream reads', () {
       final component = WasmComponent.decode(_streamStringTypeComponentBytes());
       expect(component.validate(), isEmpty);
@@ -3021,6 +3073,26 @@ Uint8List _streamFlagsTypeComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
 ]);
 
+Uint8List _streamOptionU32TypeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x06,
+      0x02,
+      0x6b,
+      0x79,
+      0x66,
+      0x01,
+      0x00,
+    ]);
+
 Uint8List _futureU32TypeComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x61,
@@ -3485,6 +3557,57 @@ WASIComponentCanonicalAsyncHandleProgram _streamListStringMemoryHandleProgram(
 }
 
 WASIComponentCanonicalAsyncHandleProgram _streamFlagsMemoryHandleProgram(
+  WASIComponentAsyncHost host,
+) {
+  return WASIComponentCanonicalAsyncHandleProgram(
+    operations: [
+      host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamNew,
+          typeIndex: 1,
+        ),
+      ),
+      host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamWrite,
+          typeIndex: 1,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      ),
+      host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamRead,
+          typeIndex: 1,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      ),
+      host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamDropReadable,
+          typeIndex: 1,
+        ),
+      ),
+      host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.streamDropWritable,
+          typeIndex: 1,
+        ),
+      ),
+    ],
+  );
+}
+
+WASIComponentCanonicalAsyncHandleProgram _streamOptionU32MemoryHandleProgram(
   WASIComponentAsyncHost host,
 ) {
   return WASIComponentCanonicalAsyncHandleProgram(

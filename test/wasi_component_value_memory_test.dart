@@ -406,6 +406,51 @@ void main() {
       expect(bytes.sublist(32, 40), everyElement(0xaa));
     });
 
+    test(
+      'rejects conflicting variant case selectors before writing memory',
+      () {
+        final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+          const WasmComponentValueType.typeIndex(0),
+          [
+            const WasmComponentTypeDefinition(
+              kind: WasmComponentTypeKind.definedValue,
+              definedValue: WasmComponentDefinedValueType(
+                kind: WasmComponentDefinedValueTypeKind.variant,
+                cases: [
+                  WasmComponentVariantCase(label: 'empty'),
+                  WasmComponentVariantCase(
+                    label: 'number',
+                    type: WasmComponentValueType.primitive(
+                      WasmComponentPrimitiveValueType.u64,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        )!;
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final data = ByteData.view(memory.buffer);
+        data.setUint8(32, 0xff);
+        data.setUint64(40, 0xffffffffffffffff, Endian.little);
+        final conflicting = WasmComponentValueData(
+          kind: WasmComponentValueDataKind.variant,
+          rawBytes: Uint8List(0),
+          index: 1,
+          label: 'empty',
+          associatedValue: WasmComponentValueData(
+            kind: WasmComponentValueDataKind.integer,
+            rawBytes: Uint8List(0),
+            integer: 7,
+          ),
+        );
+
+        expect(() => codec.store(memory, 32, conflicting), throwsStateError);
+        expect(data.getUint8(32), 0xff);
+        expect(data.getUint64(40, Endian.little), 0xffffffffffffffff);
+      },
+    );
+
     test('loads and stores lists of fixed-size elements through realloc', () {
       final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
         const WasmComponentValueType.typeIndex(0),
