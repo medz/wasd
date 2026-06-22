@@ -1533,6 +1533,9 @@ int writeSocketFromIov({
     );
   }
 
+  final iovSnapshot = _socketIovNeedsSnapshot(iovState)
+      ? _snapshotSocketIovs(data: data, iovs: iovs, iovsLen: iovsLen)
+      : null;
   var totalWritten = 0;
   try {
     for (var index = 0; index < iovsLen; index++) {
@@ -1541,8 +1544,13 @@ int writeSocketFromIov({
         return errnoInval;
       }
 
-      final buf = data.getUint32(entry, Endian.little);
-      final len = data.getUint32(entry + 4, Endian.little);
+      final snapshotIndex = index * 2;
+      final buf = iovSnapshot == null
+          ? data.getUint32(entry, Endian.little)
+          : iovSnapshot[snapshotIndex];
+      final len = iovSnapshot == null
+          ? data.getUint32(entry + 4, Endian.little)
+          : iovSnapshot[snapshotIndex + 1];
 
       if (len > 0) {
         final written = socket.writeFrom(bytes, buf, len);

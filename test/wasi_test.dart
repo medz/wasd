@@ -320,6 +320,61 @@ void main() {
       expect(acceptedBytes, [1]);
     });
 
+    test('virtual socket stream send snapshots overlapping iovs', () {
+      const iovPtr = 4800;
+      const secondIovPtr = iovPtr + 8;
+      const originalPayloadPtr = 0x1341;
+      const mutatedPayloadPtr = 0x1350;
+      const countPtr = 5008;
+      final acceptedBytes = BytesBuilder(copy: true);
+      var calls = 0;
+      final socket = WASIPreview1Socket(
+        sendHandler: (source, start, length) {
+          calls++;
+          acceptedBytes.add(
+            Uint8List.sublistView(source, start, start + length),
+          );
+          if (calls == 1) {
+            expect(start, secondIovPtr);
+            expect(length, 1);
+            expect(source[start], originalPayloadPtr & 0xff);
+            source[start] = mutatedPayloadPtr & 0xff;
+          }
+          return length;
+        },
+      );
+      final vfs = Preview1VirtualFileSystem(sockets: {71: socket});
+      final descriptor = vfs.socketForFd(71)!;
+      final bytes = Uint8List(8192);
+      final data = ByteData.view(bytes.buffer);
+
+      bytes.setAll(originalPayloadPtr, utf8.encode('ok!'));
+      bytes.setAll(mutatedPayloadPtr, utf8.encode('bad'));
+      data.setUint32(iovPtr, secondIovPtr, Endian.little);
+      data.setUint32(iovPtr + 4, 1, Endian.little);
+      data.setUint32(iovPtr + 8, originalPayloadPtr, Endian.little);
+      data.setUint32(iovPtr + 12, 3, Endian.little);
+
+      expect(
+        writeSocketFromIov(
+          socket: descriptor,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 2,
+          nwrittenPtr: countPtr,
+        ),
+        0,
+      );
+      expect(calls, 2);
+      expect(data.getUint32(countPtr, Endian.little), 4);
+      expect(acceptedBytes.toBytes(), [
+        originalPayloadPtr & 0xff,
+        ...'ok!'.codeUnits,
+      ]);
+      expect(data.getUint32(secondIovPtr, Endian.little), mutatedPayloadPtr);
+    });
+
     test('virtual socket receive providers are capped to requested bytes', () {
       var providerCalls = 0;
       final socket = WASIPreview1Socket(
