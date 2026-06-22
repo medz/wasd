@@ -1418,6 +1418,19 @@ void main() {
         ),
         isTrue,
       );
+
+      final streamRead = WasmComponent.decode(
+        _canonicalStreamReadWithAsyncComponentBytes(),
+      ).validate();
+
+      expect(
+        streamRead.any(
+          (error) => error.message.contains(
+            'stream or future copy cannot use async option',
+          ),
+        ),
+        isTrue,
+      );
     });
 
     test('validates stream and future dynamic copy options by direction', () {
@@ -4833,6 +4846,30 @@ Uint8List _canonicalLowerWithPostReturnComponentBytes() =>
       0x01,
       0x05,
       0x00,
+    ]);
+
+Uint8List _canonicalStreamReadWithAsyncComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x03,
+      0x01,
+      0x66,
+      0x00,
+      0x08,
+      0x05,
+      0x01,
+      0x0f,
+      0x00,
+      0x01,
+      0x06,
     ]);
 
 Uint8List _canonicalMemoryOptionOutOfRangeComponentBytes() =>

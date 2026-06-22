@@ -137,6 +137,9 @@ too broad to verify in one commit.
     `dart test test/wasi_component_async_host_test.dart`.
   - Performance gate: N/A unless validation introduces a new decoded-shape hot
     path; in that case add the relevant component benchmark command here.
+  - Checked child rows: `CM-CANONICAL-COPY-OPTION-PLACEMENT` covers invalid
+    option placement for `stream.read`, `stream.write`, `future.read`, and
+    `future.write` copy definitions.
   - Done when: the invalid component fails before host state is mutated and the
     diagnostic names the rejected shape or interface boundary.
   - Evidence update: record the failing shape and the exact command evidence.
@@ -225,6 +228,29 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `CM-CANONICAL-COPY-OPTION-PLACEMENT` - Stream/future canonical copy
+  definitions reject non-copy options during validation.
+  - Scope: component-model canonical validation for decoded `stream.read`,
+    `stream.write`, `future.read`, and `future.write` definitions before async
+    host binding.
+  - Edit targets: `lib/src/wasm/backend/native/interpreter/component.dart`,
+    `test/component_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/component_test.dart --name "reports invalid canonical option placements"`
+    failed before the fix because `canon stream.read` with an `async` option
+    validated without a diagnostic rejecting that option placement.
+  - Implementation gate:
+    `dart test test/component_test.dart --name "reports invalid canonical option placements"`;
+    `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`.
+  - Performance gate: N/A; this tightens an existing validation-time
+    `O(option count)` scan and does not add a runtime host or copy hot path.
+  - Done when: stream/future copy definitions only accept string encoding,
+    memory, and realloc canonical options, and invalid options fail validation
+    before any async host state can be bound.
+  - Evidence update: this checked row plus the detailed backlog child row.
+  - Claim impact: reduces P2/P3 component validation risk; does not complete
+    `CM-VALIDATION-GAPS`, `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P3-ASYNC-ERROR-CONTEXT-COPY` - `stream<error-context>` and
   `future<error-context>` payloads copy through canonical memory.
   - Scope: internal Preview3 async value copy path over real error-context host
@@ -935,7 +961,7 @@ copying their internals directly.
 | Status | Capability boundary | Evidence to inspect | Verification gate | Remaining gap |
 | --- | --- | --- | --- | --- |
 | [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `path_open` create/exclusive/truncate is covered; full Preview1 conformance still needs broader syscall/spec-suite gates and remaining socket edges. |
-| [x] | Component decoder, canonical validation base, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
+| [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
 | [x] | Versioned Preview2/Preview3 capability gates | `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/preview2/component_host.dart`, `lib/src/wasi/preview3/component_host.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_versioned_host_test.dart` | Concrete P2/P3 interface adapter modules instead of generic facade binding. |
 | [x] | Internal P3 async endpoints, waitables, tasks, context, thread identity | `lib/src/wasi/component/async_host.dart`, `lib/src/wasi/component/waitable_set.dart`, `lib/src/wasi/component/task.dart`, `lib/src/wasi/component/thread.dart`, `test/wasi_component_async_host_test.dart` | `dart test test/wasi_component_async_host_test.dart test/wasi_component_waitable_set_test.dart test/wasi_component_task_test.dart test/wasi_component_thread_test.dart` | Full async lowering, task spawning, scheduler-owned thread switch/suspend/resume. |
@@ -2333,6 +2359,30 @@ performance visible while the support surface expands.
     - `dart test test/wasi_component_async_host_test.dart`
   - Done when: unsupported shapes fail during validation with structured
     diagnostics before host mutation.
+- [x] `CM-CANONICAL-COPY-OPTION-PLACEMENT` - Reject non-copy options on
+  stream/future canonical copy definitions.
+  - Scope: component-model canonical validation for decoded `stream.read`,
+    `stream.write`, `future.read`, and `future.write` definitions before async
+    host binding.
+  - Edit targets: `lib/src/wasm/backend/native/interpreter/component.dart`,
+    `test/component_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/component_test.dart --name "reports invalid canonical option placements"`
+    failed before the fix because `canon stream.read` with an `async` option
+    validated without a diagnostic rejecting that option placement.
+  - Implementation gate:
+    `dart test test/component_test.dart --name "reports invalid canonical option placements"`;
+    `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`.
+  - Performance gate: N/A; this reuses the existing validation-time option scan
+    and adds no runtime host or canonical copy hot path.
+  - Done when: decoded stream/future copy definitions accept only string
+    encoding, memory, and realloc options, and invalid options fail with a
+    structured validation diagnostic before async host state can be bound.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: reduces P2/P3 component validation risk; no direct support
+    gate.
 - [x] `CM-VALUE-DEFINITION-TYPE-VALIDATION` - Validate value definition type
   indexes in definition order.
   - Scope: component-model value section decoding and validation before value

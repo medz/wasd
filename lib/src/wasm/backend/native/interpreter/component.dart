@@ -3570,7 +3570,7 @@ final class _WasmComponentValidationContext {
       }
 
       if (canonicalDefinitionUsesStreamOrFutureCopy(definition.kind) &&
-          canonicalStreamOrFutureCopyDisallowsOption(optionKind)) {
+          !canonicalStreamOrFutureCopyAllowsOption(optionKind)) {
         errors.add(
           WasmComponentValidationError(
             path: '$path.options[$i]',
@@ -3592,11 +3592,12 @@ final class _WasmComponentValidationContext {
         kind == WasmComponentCanonicalOptionKind.callback;
   }
 
-  bool canonicalStreamOrFutureCopyDisallowsOption(
+  bool canonicalStreamOrFutureCopyAllowsOption(
     WasmComponentCanonicalOptionKind kind,
   ) {
-    return kind == WasmComponentCanonicalOptionKind.postReturn ||
-        kind == WasmComponentCanonicalOptionKind.callback;
+    return canonicalOptionIsStringEncoding(kind) ||
+        kind == WasmComponentCanonicalOptionKind.memory ||
+        kind == WasmComponentCanonicalOptionKind.realloc;
   }
 
   bool canonicalLowerParametersRequireMemory(
