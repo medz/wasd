@@ -65,6 +65,8 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentAdapterFlagsEnumFlatInvoke(options.iterations);
   final componentAdapterListFlatInvoke =
       _benchmarkComponentAdapterListFlatInvoke(options.iterations);
+  final componentAdapterVariantFlatInvoke =
+      _benchmarkComponentAdapterVariantFlatInvoke(options.iterations);
   final componentAdapterOptionFlatInvoke =
       _benchmarkComponentAdapterOptionFlatInvoke(options.iterations);
   final componentAdapterResultFlatInvoke =
@@ -117,6 +119,8 @@ Future<void> main(List<String> args) async {
     'component_adapter_flags_enum_flat_invoke':
         componentAdapterFlagsEnumFlatInvoke.toJson(),
     'component_adapter_list_flat_invoke': componentAdapterListFlatInvoke
+        .toJson(),
+    'component_adapter_variant_flat_invoke': componentAdapterVariantFlatInvoke
         .toJson(),
     'component_adapter_option_flat_invoke': componentAdapterOptionFlatInvoke
         .toJson(),
@@ -798,6 +802,37 @@ _Metric _benchmarkComponentAdapterOptionFlatInvoke(int iterations) {
   );
 }
 
+_Metric _benchmarkComponentAdapterVariantFlatInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalU32VariantLiftLowerComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {1: (_) => _u32VariantValue(label: 'right', value: 41)},
+    componentFunctions: {0: (_) => _u32VariantValue(index: 0)},
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final lifted = program.invokeFlat(0, const <Object?>[1, 31]);
+    checksum += lifted[0]! as int;
+    checksum += lifted[1]! as int;
+    final lowered = program.invokeFlat(1, const <Object?>[0, 999]);
+    checksum += lowered[0]! as int;
+    checksum += lowered[1]! as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkComponentAdapterResultFlatInvoke(int iterations) {
   final component = WasmComponent.decode(
     component_fixtures.canonicalU32ResultLiftLowerComponentBytes(),
@@ -888,6 +923,26 @@ WasmComponentValueData _u32NoneValue() {
     kind: WasmComponentValueDataKind.option,
     rawBytes: Uint8List(0),
     isSome: false,
+  );
+}
+
+WasmComponentValueData _u32VariantValue({
+  int? index,
+  String? label,
+  int? value,
+}) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.variant,
+    rawBytes: Uint8List(0),
+    index: index,
+    label: label,
+    associatedValue: value == null
+        ? null
+        : WasmComponentValueData(
+            kind: WasmComponentValueDataKind.integer,
+            rawBytes: Uint8List(0),
+            integer: value,
+          ),
   );
 }
 

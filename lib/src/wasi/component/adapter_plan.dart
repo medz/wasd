@@ -130,6 +130,7 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
       element = null,
       ok = null,
       error = null,
+      cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Flags bitset flat layout.
@@ -140,6 +141,7 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
       element = null,
       ok = null,
       error = null,
+      cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Enum discriminant flat layout.
@@ -151,6 +153,7 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        element = null,
        ok = null,
        error = null,
+       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Dynamic list `(ptr, len)` flat layout.
@@ -162,6 +165,7 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        labels = const <String>[],
        ok = null,
        error = null,
+       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Option tag plus payload flat layout.
@@ -173,6 +177,7 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        labels = const <String>[],
        ok = null,
        error = null,
+       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Result tag plus the maximum ok/error payload flat layout.
@@ -184,6 +189,19 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        memoryCodec = null,
        labels = const <String>[],
        element = null,
+       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
+       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
+
+  /// Variant tag plus the maximum case payload flat layout.
+  const WASIComponentCanonicalAdapterFlatValuePlan.variant({
+    required this.cases,
+  }) : kind = WASIComponentCanonicalAdapterFlatValueKind.variant,
+       primitive = null,
+       memoryCodec = null,
+       labels = const <String>[],
+       element = null,
+       ok = null,
+       error = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Composite scalar flat layout.
@@ -195,7 +213,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        labels = const <String>[],
        element = null,
        ok = null,
-       error = null;
+       error = null,
+       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[];
 
   /// Flat layout kind.
   final WASIComponentCanonicalAdapterFlatValueKind kind;
@@ -217,6 +236,9 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
 
   /// Error payload layout used by result layouts.
   final WASIComponentCanonicalAdapterFlatValuePlan? error;
+
+  /// Case layouts used by variant layouts.
+  final List<WASIComponentCanonicalAdapterFlatCasePlan> cases;
 
   /// Nested flat fields for composite layouts.
   final List<WASIComponentCanonicalAdapterFlatFieldPlan> fields;
@@ -241,6 +263,16 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
       final okLength = ok?.flatLength ?? 0;
       final errorLength = error?.flatLength ?? 0;
       return 1 + (okLength > errorLength ? okLength : errorLength);
+    }
+    if (kind == WASIComponentCanonicalAdapterFlatValueKind.variant) {
+      var maxPayloadLength = 0;
+      for (final case_ in cases) {
+        final payloadLength = case_.value?.flatLength ?? 0;
+        if (payloadLength > maxPayloadLength) {
+          maxPayloadLength = payloadLength;
+        }
+      }
+      return 1 + maxPayloadLength;
     }
     return fields.fold<int>(
       0,
@@ -277,6 +309,24 @@ enum WASIComponentCanonicalAdapterFlatValueKind {
 
   /// Result represented by a tag plus maximum payload scalar sequence.
   result,
+
+  /// Variant represented by a tag plus maximum case payload scalar sequence.
+  variant,
+}
+
+/// Case in a flat Canonical ABI variant layout.
+final class WASIComponentCanonicalAdapterFlatCasePlan {
+  /// Creates a flat variant case layout.
+  const WASIComponentCanonicalAdapterFlatCasePlan({
+    required this.label,
+    required this.value,
+  });
+
+  /// Case label.
+  final String label;
+
+  /// Optional case payload layout.
+  final WASIComponentCanonicalAdapterFlatValuePlan? value;
 }
 
 /// Nested field in a flat Canonical ABI scalar layout.
@@ -586,6 +636,25 @@ final class _FlatLayoutResolver {
           error: errorLayout,
         );
       case WasmComponentDefinedValueTypeKind.variant:
+        final cases = <WASIComponentCanonicalAdapterFlatCasePlan>[];
+        for (final case_ in type.cases) {
+          final caseType = case_.type;
+          final layout = caseType == null ? null : resolveValueType(caseType);
+          if (caseType != null && layout == null) {
+            return null;
+          }
+          cases.add(
+            WASIComponentCanonicalAdapterFlatCasePlan(
+              label: case_.label,
+              value: layout,
+            ),
+          );
+        }
+        return WASIComponentCanonicalAdapterFlatValuePlan.variant(
+          cases: List<WASIComponentCanonicalAdapterFlatCasePlan>.unmodifiable(
+            cases,
+          ),
+        );
       case WasmComponentDefinedValueTypeKind.own:
       case WasmComponentDefinedValueTypeKind.borrow:
       case WasmComponentDefinedValueTypeKind.stream:

@@ -383,6 +383,14 @@ final class WASIComponentCanonicalAdapterOperation {
         memory,
         stringEncoding,
       ),
+      WASIComponentCanonicalAdapterFlatValueKind.variant => _loadFlatVariant(
+        layout,
+        path,
+        flatArgs,
+        offset,
+        memory,
+        stringEncoding,
+      ),
       WASIComponentCanonicalAdapterFlatValueKind.primitive => throw StateError(
         'Primitive flat layout without a primitive type.',
       ),
@@ -576,6 +584,56 @@ final class WASIComponentCanonicalAdapterOperation {
   );
 }
 
+({Object? value, int nextOffset}) _loadFlatVariant(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  List<Object?> flatArgs,
+  int offset,
+  wasm.Memory? memory,
+  WASIComponentCanonicalStringEncoding stringEncoding,
+) {
+  final flatLength = layout.flatLength;
+  if (offset + flatLength > flatArgs.length) {
+    throw StateError(
+      'WASI component canonical adapter value $path expected $flatLength flat variant arguments.',
+    );
+  }
+  final tag = _expectFlatInt(path, flatArgs[offset]);
+  if (tag < 0 || tag >= layout.cases.length) {
+    throw StateError(
+      'WASI component canonical adapter value $path has invalid variant tag $tag.',
+    );
+  }
+  final case_ = layout.cases[tag];
+  final payloadLayout = case_.value;
+  WasmComponentValueData? associated;
+  if (payloadLayout != null) {
+    final loaded = _loadFlatLayout(
+      payloadLayout,
+      '$path.${case_.label}',
+      flatArgs,
+      offset + 1,
+      memory,
+      stringEncoding,
+    );
+    associated = _componentValueDataFromFlatValue(
+      payloadLayout,
+      '$path.${case_.label}',
+      loaded.value,
+    );
+  }
+  return (
+    value: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.variant,
+      rawBytes: Uint8List(0),
+      index: tag,
+      label: case_.label,
+      associatedValue: associated,
+    ),
+    nextOffset: offset + flatLength,
+  );
+}
+
 ({Object? value, int nextOffset}) _loadFlatList(
   WASIComponentCanonicalAdapterFlatValuePlan layout,
   String path,
@@ -705,6 +763,14 @@ List<Object?> _storeFlatLayout(
         stringEncoding,
       ),
       WASIComponentCanonicalAdapterFlatValueKind.result => _storeFlatResult(
+        layout,
+        path,
+        value,
+        memory,
+        realloc,
+        stringEncoding,
+      ),
+      WASIComponentCanonicalAdapterFlatValueKind.variant => _storeFlatVariant(
         layout,
         path,
         value,
@@ -858,7 +924,8 @@ WasmComponentValueDataKind _flatCompositeValueDataKind(
     WASIComponentCanonicalAdapterFlatValueKind.enumeration ||
     WASIComponentCanonicalAdapterFlatValueKind.list ||
     WASIComponentCanonicalAdapterFlatValueKind.option ||
-    WASIComponentCanonicalAdapterFlatValueKind.result => throw StateError(
+    WASIComponentCanonicalAdapterFlatValueKind.result ||
+    WASIComponentCanonicalAdapterFlatValueKind.variant => throw StateError(
       'Flat layout is not composite.',
     ),
   };
@@ -884,6 +951,8 @@ WasmComponentValueDataKind _flatValueDataKind(
       WasmComponentValueDataKind.option,
     WASIComponentCanonicalAdapterFlatValueKind.result =>
       WasmComponentValueDataKind.result,
+    WASIComponentCanonicalAdapterFlatValueKind.variant =>
+      WasmComponentValueDataKind.variant,
     WASIComponentCanonicalAdapterFlatValueKind.primitive => throw StateError(
       'Primitive flat layouts use primitive value data.',
     ),
@@ -1057,9 +1126,85 @@ List<Object?> _storeFlatResult(
   final tag = isOk ? 0 : 1;
   final label = isOk ? 'ok' : 'error';
   final payloadLayout = isOk ? layout.ok : layout.error;
+  return _storeFlatTagPayload(
+    layout,
+    path,
+    tag,
+    label,
+    payloadLayout,
+    value.associatedValue,
+    memory,
+    realloc,
+    stringEncoding,
+  );
+}
+
+bool _flatResultIsOk(WasmComponentValueData value) {
+  final isOk = value.isOk;
+  if (isOk != null) {
+    return isOk;
+  }
+  final index = value.index;
+  if (index != null) {
+    if (index == 0) {
+      return true;
+    }
+    if (index == 1) {
+      return false;
+    }
+  }
+  final label = value.label;
+  if (label == 'ok') {
+    return true;
+  }
+  if (label == 'error') {
+    return false;
+  }
+  throw StateError('WASI component canonical result value needs a case.');
+}
+
+List<Object?> _storeFlatVariant(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  Object? value,
+  wasm.Memory? memory,
+  WASIComponentCanonicalRealloc? realloc,
+  WASIComponentCanonicalStringEncoding stringEncoding,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != WasmComponentValueDataKind.variant) {
+    throw StateError(
+      'WASI component canonical adapter value $path expected variant data.',
+    );
+  }
+  final index = _flatVariantCaseIndex(layout, path, value);
+  final case_ = layout.cases[index];
+  return _storeFlatTagPayload(
+    layout,
+    path,
+    index,
+    case_.label,
+    case_.value,
+    value.associatedValue,
+    memory,
+    realloc,
+    stringEncoding,
+  );
+}
+
+List<Object?> _storeFlatTagPayload(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  int tag,
+  String label,
+  WASIComponentCanonicalAdapterFlatValuePlan? payloadLayout,
+  WasmComponentValueData? associated,
+  wasm.Memory? memory,
+  WASIComponentCanonicalRealloc? realloc,
+  WASIComponentCanonicalStringEncoding stringEncoding,
+) {
   final flatLength = layout.flatLength;
   final flat = <Object?>[tag];
-  final associated = value.associatedValue;
   if (payloadLayout == null) {
     if (associated != null) {
       throw StateError(
@@ -1094,28 +1239,30 @@ List<Object?> _storeFlatResult(
   return flat;
 }
 
-bool _flatResultIsOk(WasmComponentValueData value) {
-  final isOk = value.isOk;
-  if (isOk != null) {
-    return isOk;
-  }
+int _flatVariantCaseIndex(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  WasmComponentValueData value,
+) {
   final index = value.index;
   if (index != null) {
-    if (index == 0) {
-      return true;
+    if (index >= 0 && index < layout.cases.length) {
+      return index;
     }
-    if (index == 1) {
-      return false;
-    }
+    throw StateError(
+      'WASI component canonical adapter value $path has invalid variant case index $index.',
+    );
   }
   final label = value.label;
-  if (label == 'ok') {
-    return true;
+  if (label != null) {
+    final index = layout.cases.indexWhere((case_) => case_.label == label);
+    if (index >= 0) {
+      return index;
+    }
   }
-  if (label == 'error') {
-    return false;
-  }
-  throw StateError('WASI component canonical result value needs a case.');
+  throw StateError(
+    'WASI component canonical adapter value $path expected a known variant case.',
+  );
 }
 
 List<Object?> _zeroFlatValues(

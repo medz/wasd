@@ -181,6 +181,49 @@ void main() {
       }
     });
 
+    test('plan variant flat value layouts', () {
+      final component = WasmComponent.decode(
+        canonicalU32VariantLiftLowerComponentBytes(),
+      );
+
+      expect(component.validate(), isEmpty);
+
+      final plans = componentCanonicalAdapterPlans(component);
+
+      expect(plans, hasLength(2));
+      for (final plan in plans) {
+        expect(plan.params, hasLength(1));
+        expect(plan.params.single.label, 'input');
+        expect(plan.params.single.byteLength, 8);
+        expect(plan.params.single.alignment, 4);
+        expect(plan.params.single.flatLength, 2);
+        final paramLayout = plan.params.single.flatLayout!;
+        expect(
+          paramLayout.kind,
+          WASIComponentCanonicalAdapterFlatValueKind.variant,
+        );
+        expect(paramLayout.cases.map((case_) => case_.label), [
+          'empty',
+          'left',
+          'right',
+        ]);
+        expect(paramLayout.cases[0].value, isNull);
+        expect(paramLayout.cases[1].value!.flatLength, 1);
+        expect(paramLayout.cases[2].value!.flatLength, 1);
+        expect(plan.result, isNotNull);
+        expect(plan.result!.byteLength, 8);
+        expect(plan.result!.alignment, 4);
+        expect(plan.result!.flatLength, 2);
+        expect(
+          plan.result!.flatLayout!.kind,
+          WASIComponentCanonicalAdapterFlatValueKind.variant,
+        );
+        expect(plan.hasDynamicPayload, isFalse);
+        expect(plan.memoryIndex, 0);
+        expect(plan.reallocIndex, 0);
+      }
+    });
+
     test('plan option flat value layouts', () {
       final component = WasmComponent.decode(
         canonicalU32OptionLiftLowerComponentBytes(),
@@ -583,6 +626,46 @@ void main() {
         () => program.invokeFlat(0, const <Object?>[64, 2], memory: memory),
         throwsUnsupportedError,
       );
+    });
+
+    test('invokes variant adapter programs through flat tag payload pairs', () {
+      final component = WasmComponent.decode(
+        canonicalU32VariantLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+
+      final program = host.bindAdapterPlans(
+        plans,
+        coreFunctions: {
+          1: (args) {
+            final variant = args.single! as WasmComponentValueData;
+            expect(variant.kind, WasmComponentValueDataKind.variant);
+            expect(variant.index, 1);
+            expect(variant.label, 'left');
+            expect(variant.associatedValue!.integer, 31);
+            return _u32VariantValue(label: 'right', value: 41);
+          },
+        },
+        componentFunctions: {
+          0: (args) {
+            final variant = args.single! as WasmComponentValueData;
+            expect(variant.kind, WasmComponentValueDataKind.variant);
+            expect(variant.index, 0);
+            expect(variant.label, 'empty');
+            expect(variant.associatedValue, isNull);
+            return _u32VariantValue(index: 0);
+          },
+        },
+      );
+
+      expect(program.invokeFlat(0, const <Object?>[1, 31]), [2, 41]);
+      expect(program.invokeFlat(1, const <Object?>[0, 999]), [0, 0]);
+      expect(
+        () => program.invokeFlat(0, const <Object?>[3, 0]),
+        throwsStateError,
+      );
+      expect(() => program.invokeFlat(0, const <Object?>[1]), throwsStateError);
     });
 
     test('invokes option adapter programs through flat tag payload pairs', () {
@@ -999,6 +1082,26 @@ WasmComponentValueData _u32ListValue(List<int> values) {
           integer: value,
         ),
     ],
+  );
+}
+
+WasmComponentValueData _u32VariantValue({
+  int? index,
+  String? label,
+  int? value,
+}) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.variant,
+    rawBytes: Uint8List(0),
+    index: index,
+    label: label,
+    associatedValue: value == null
+        ? null
+        : WasmComponentValueData(
+            kind: WasmComponentValueDataKind.integer,
+            rawBytes: Uint8List(0),
+            integer: value,
+          ),
   );
 }
 
