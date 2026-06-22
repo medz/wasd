@@ -1,9 +1,13 @@
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/adapter_host.dart';
 import 'package:wasd/src/wasi/component/adapter_plan.dart';
+import 'package:wasd/src/wasi/component/canonical_host.dart';
+import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/string_memory.dart';
+import 'package:wasd/src/wasi/component/versioned_host.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
+import 'package:wasd/src/wasi/version.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 
 import 'support/component_fixtures.dart';
@@ -118,6 +122,69 @@ void main() {
       expect(
         () => host.bindAdapterPlans(plans, coreFunctions: {0: (_) => 1}),
         throwsStateError,
+      );
+    });
+
+    test('binds primitive adapter programs from component host plans', () {
+      final component = WasmComponent.decode(
+        canonicalPrimitiveLiftLowerComponentBytes(),
+      );
+      final host = WASIComponentHost();
+
+      final plan = host.prepareComponent(component);
+
+      expect(plan.canBind, isFalse);
+      expect(plan.validationErrors, isEmpty);
+      expect(plan.bindingErrors, isEmpty);
+      expect(plan.unsupportedDefinitions, hasLength(2));
+      expect(plan.adapterPlans, hasLength(2));
+
+      final program = plan.bindAdapters(
+        coreFunctions: {0: (_) => 21},
+        componentFunctions: {0: (_) => 22},
+      );
+
+      expect(program.operations, hasLength(2));
+      expect(program.invoke(0, const <Object?>[]), 21);
+      expect(program.invoke(1, const <Object?>[]), 22);
+      expect(
+        () => plan.bind(),
+        throwsA(isA<WASIComponentCanonicalHostUnsupportedException>()),
+      );
+    });
+
+    test('binds primitive adapter programs through Preview3 only', () {
+      final component = WasmComponent.decode(
+        canonicalPrimitiveLiftLowerComponentBytes(),
+      );
+
+      final preview3Plan = WASIPreview3ComponentHost().prepareComponent(
+        component,
+      );
+
+      expect(preview3Plan.canBind, isFalse);
+      expect(preview3Plan.versionErrors, isEmpty);
+      expect(preview3Plan.adapterPlans, hasLength(2));
+
+      final program = preview3Plan.bindAdapters(
+        coreFunctions: {0: (_) => 31},
+        componentFunctions: {0: (_) => 32},
+      );
+
+      expect(program.invoke(0, const <Object?>[]), 31);
+      expect(program.invoke(1, const <Object?>[]), 32);
+
+      final preview1Plan = WASIComponentVersionedHost(
+        version: WASIVersion.preview1,
+      ).prepareComponent(component);
+
+      expect(preview1Plan.versionErrors, hasLength(2));
+      expect(
+        () => preview1Plan.bindAdapters(
+          coreFunctions: {0: (_) => 1},
+          componentFunctions: {0: (_) => 2},
+        ),
+        throwsA(isA<WASIComponentVersionUnsupportedException>()),
       );
     });
 

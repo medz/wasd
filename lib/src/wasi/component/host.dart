@@ -1,4 +1,5 @@
 import '../../wasm/backend/native/interpreter/component.dart';
+import 'adapter_host.dart';
 import 'adapter_plan.dart';
 import 'async_host.dart';
 import 'canonical_host.dart';
@@ -126,6 +127,23 @@ final class WASIComponentHostBindingPlan {
 
   /// Whether [bind] can build a component host binding without throwing.
   bool get canBind => canonicalPlan.canBind && bindingErrors.isEmpty;
+
+  /// Binds direct primitive canonical `lift`/`lower` adapter operations.
+  WASIComponentCanonicalAdapterProgram bindAdapters({
+    Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
+    Map<int, WASIComponentCanonicalAdapterCallback> componentFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
+  }) {
+    if (validationErrors.isNotEmpty) {
+      throw WASIComponentCanonicalHostValidationException(validationErrors);
+    }
+    return _host.canonicalHost.adapterHost.bindAdapterPlans(
+      adapterPlans,
+      coreFunctions: coreFunctions,
+      componentFunctions: componentFunctions,
+    );
+  }
 
   /// Defines component resources and binds the canonical builtin program.
   WASIComponentHostBinding bind({
