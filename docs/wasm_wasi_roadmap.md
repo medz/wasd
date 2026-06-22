@@ -272,6 +272,23 @@ too broad to verify in one commit.
   - Claim impact: removes one component-model export-map ambiguity before
     Preview2/Preview3 adapter execution; does not complete
     `CM-VALIDATION-GAPS`, `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
+- [x] `P1-POLL-ZERO-SUBSCRIPTIONS` - `poll_oneoff` rejects zero subscriptions
+  without writing guest memory.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "poll_oneoff rejects zero subscriptions without memory side effects"`
+    failed before the fix because native `poll_oneoff` returned success; then
+    passed after the fix;
+    `dart test -p chrome test/wasi_test.dart --name "poll_oneoff rejects zero subscriptions without memory side effects"`;
+    `dart test test/wasi_test.dart --name "poll_oneoff"`;
+    `dart test -p chrome test/wasi_test.dart --name "poll_oneoff"`;
+    `dart test test/wasi_test.dart`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_poll_readiness.operations=72000` for the socket-heavy distribution.
+  - Spec reference: WASI Preview1 `poll_oneoff` returns `errno::inval` when
+    `nsubscriptions` is `0`.
+  - Claim impact: closes one Preview1 syscall ABI and guest-memory side-effect
+    gap for native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-POLL-ZERO-HINT` - Stream socket `readReadyBytes: 0` does not
   produce a false `poll_oneoff(fd_read)` readiness event.
   - Evidence:
@@ -1215,6 +1232,34 @@ performance visible while the support surface expands.
 
 ## Near-Term Execution Backlog
 
+- [x] `P1-POLL-ZERO-SUBSCRIPTIONS` - `poll_oneoff` reports `EINVAL` for an empty
+  subscription set.
+  - Scope: native/browser Preview1 `poll_oneoff` ABI validation and guest-memory
+    side effects when `nsubscriptions == 0`.
+  - Edit targets: `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "poll_oneoff rejects zero subscriptions without memory side effects"`
+    failed before the fix because `poll_oneoff` returned success and wrote
+    `nevents=0`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "poll_oneoff rejects zero subscriptions without memory side effects"`;
+    `dart test -p chrome test/wasi_test.dart --name "poll_oneoff rejects zero subscriptions without memory side effects"`;
+    `dart test test/wasi_test.dart --name "poll_oneoff"`;
+    `dart test -p chrome test/wasi_test.dart --name "poll_oneoff"`;
+    `dart test test/wasi_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; the
+    branch is an early ABI validation check before the poll event loop and does
+    not add work to non-empty poll or socket readiness paths.
+  - Done when: native and browser shims both return `EINVAL` for zero
+    subscriptions, leave `nevents` and the event buffer unchanged, and still pass
+    the existing poll/socket readiness regressions.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
+    support or any P2/P3 support gate.
 - [ ] `P1-SOCKET-CONFORMANCE` - Preview1 socket conformance edge cases.
   - Scope: native/browser shared Preview1 socket and descriptor behavior,
     including host-backed adapters, queued accepts, shutdown/readiness state, and

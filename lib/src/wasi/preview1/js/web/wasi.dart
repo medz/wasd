@@ -1558,8 +1558,7 @@ class WASI implements wasi.WASI {
           return _errnoInval;
         }
         if (nsubscriptions == 0) {
-          data.setUint32(neventsPtr, 0, Endian.little);
-          return _errnoSuccess;
+          return _errnoInval;
         }
         if (inPtr < 0 ||
             outPtr < 0 ||

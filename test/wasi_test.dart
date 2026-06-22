@@ -1429,6 +1429,47 @@ void main() {
       );
 
       test(
+        'poll_oneoff rejects zero subscriptions without memory side effects',
+        () async {
+          final pollWasi = WASI();
+          final pollResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            pollWasi.imports,
+          );
+          final pollInstance = pollResult.instance;
+          final pollOneoff =
+              pollWasi.imports['wasi_snapshot_preview1']!['poll_oneoff']
+                  as FunctionImportExportValue;
+          final memory =
+              (pollInstance.exports['memory'] as MemoryImportExportValue).ref;
+          pollWasi.finalizeBindings(pollInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const inPtr = 2200;
+          const outPtr = 2300;
+          const neventsPtr = 2400;
+          bytes.fillRange(outPtr, outPtr + _eventSize, 0xaa);
+          data.setUint32(neventsPtr, 0xdeadbeef, Endian.little);
+
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 0, neventsPtr]),
+            ),
+            _errnoInval,
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 0xdeadbeef);
+          expect(
+            bytes.sublist(outPtr, outPtr + _eventSize),
+            everyElement(0xaa),
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; syscall behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'proc_raise returns nosys in browsers without a handler',
         () async {
           final browserWasi = WASI();
