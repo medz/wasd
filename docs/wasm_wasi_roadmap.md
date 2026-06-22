@@ -10,16 +10,68 @@ Status date: 2026-06-22.
 
 ## How To Use This Roadmap
 
+- Treat every row with an ID as work that can be executed, reviewed, and checked
+  off independently.
 - Treat `[x]` as "implemented and covered by the listed evidence", not as a
-  marketing support claim.
-- Treat `[ ]` as executable backlog. Each item names the next artifact to
-  change and the gate that should pass before checking it off.
+  marketing support claim. Full-version support needs the support-gate table
+  below, not just one completed implementation row.
+- Treat `[ ]` as executable backlog. Each item must name the files to touch, the
+  behavior to prove, the command that verifies it, and the condition for marking
+  the row complete.
 - Keep claims narrow. If only an internal host path is verified, do not mark a
   public API, cross-runtime, or full-version support row complete.
 - Add a test or benchmark name with every completed row. If the evidence cannot
   be named, the row is not complete.
 - For performance-sensitive work, include a benchmark command before updating
   the row. Test heat is a symptom; measured hot paths are the evidence.
+- When a commit completes a row, update that row in the same commit with the
+  exact verification command that was run.
+
+## Execution Loop
+
+Use this loop for every behavior or performance increment.
+
+- [ ] Pick exactly one backlog ID unless the rows are mechanically inseparable.
+- [ ] Write or extend the focused regression/spec test first.
+- [ ] Confirm the new test fails for the expected missing behavior when
+  practical.
+- [ ] Implement the smallest runtime or host change that satisfies the row
+  without crossing version boundaries.
+- [ ] Run the row's gate command and any benchmark named by the row.
+- [ ] Update the verification matrix or backlog row with the exact evidence.
+- [ ] Commit the code, test, and roadmap evidence together.
+
+## Support Claim Gates
+
+These are release-claim gates, not implementation tasks. A lower-level row in
+the roadmap can be complete while the version-level support claim remains
+unchecked.
+
+- [ ] `SUPPORT-WASM` - Full core Wasm support.
+  - Current: core module parsing and execution exist, with conformance work
+    still in progress.
+  - Required gate: spec-suite coverage is wired into a repeatable runner,
+    current failures are triaged, and hot files have targeted performance
+    evidence.
+- [ ] `SUPPORT-P1` - Full WASI Preview1 support.
+  - Current: `WASI(...)` supports Preview1, but socket and host-backed edge
+    cases are still incomplete.
+  - Required gate: native, browser, and Node-relevant Preview1 paths have
+    focused regression coverage, descriptor/socket benchmarks, and
+    conformance-shaped evidence.
+- [ ] `SUPPORT-P2` - Full WASI 0.2 / Preview2 support.
+  - Current: the public factory rejects Preview2; internal versioned component
+    gates exist.
+  - Required gate: real Preview2 components bind through versioned adapters,
+    WIT/interface ingestion exists, and public docs/API expose only verified
+    behavior.
+- [ ] `SUPPORT-P3` - Full WASI 0.3 / Preview3 support.
+  - Current: the public factory rejects Preview3; internal P3 resources, async
+    primitives, waitables, tasks, context, thread identity, and copy paths are
+    partially executable.
+  - Required gate: real Preview3 components execute through a versioned host
+    with resources, streams, futures, waitables, tasks, async behavior,
+    cancellation, and benchmark evidence.
 
 ## External Reference Points
 
@@ -410,20 +462,45 @@ This is the implementation state as of 2026-06-22 on `main`.
 5. Prefer generated or spec-derived interface bindings once WIT coverage starts.
    Hand-written host shims should stay narrow and tested.
 
-## Next Implementation Order
+## Ordered Execution Queue
 
-1. Extend Preview1 socket coverage only where the current descriptor-backed
-   model still has real gaps: native adapter boundaries, externally backed
-   readiness, and larger conformance-shaped descriptor distributions before
-   adding raw networking APIs.
-2. For P2/P3, build real versioned adapters on top of the internal component
-   version profiles and shared descriptor, resource, clock, random, filesystem,
-   and socket primitives before replacing the current explicit constructor
-   rejection. Do not extend `wasi_snapshot_preview1` types into component
-   worlds.
-3. Expand the resource host into a component host adapter for imports, exports,
-   representation-aware canonical lift/lower ownership, and async lifecycle
-   state before adding WIT ingestion and generated binding support.
+Work from this queue before opening new lines of implementation. The order is
+chosen to keep public claims honest, keep the architecture layered, and keep
+performance visible while the support surface expands.
+
+1. `P1-SOCKET-CONFORMANCE`
+   - Why: Preview1 is the only public WASI surface today, so remaining P1 gaps
+     should be measured before P2/P3 become public.
+   - Do not: add raw networking APIs that Preview1 does not specify.
+2. `PERF-VFS-DISTRIBUTIONS`
+   - Why: socket and descriptor work needs benchmark distributions that
+     resemble conformance loads, not only small unit tests.
+   - Do not: optimize VFS code from CPU heat alone without benchmark data.
+3. `PERF-HEAVY-RUNNERS`
+   - Why: heavy tests and fixture conversion can hide runtime regressions or
+     create false performance signals.
+   - Do not: treat one hot test run as proof of a runtime algorithm problem.
+4. `CM-VALIDATION-GAPS`
+   - Why: deterministic validation rules should fail early before runtime host
+     state is mutated.
+   - Do not: approximate unsupported Canonical ABI shapes at runtime.
+5. `P3-ASYNC-COPY-GAPS`
+   - Why: P3 stream/future behavior must grow through the shared async host and
+     memory codec.
+   - Do not: add public P3 claims for shapes not covered by copy, cancellation,
+     waitable, and benchmark gates.
+6. `P2-P3-ADAPTERS`
+   - Why: versioned adapters are the boundary that turns internal primitives
+     into real WASI versions.
+   - Do not: leak Preview1 imports or types into component worlds.
+7. `CM-VALUE-VALIDATION`
+   - Why: composite value validation should expand only with matching
+     lowering/lifting support.
+   - Do not: validate shapes that cannot be executed through the same host path.
+8. `WIT-INGESTION`
+   - Why: WIT/world ingestion should bind into stable versioned hosts, not
+     around them.
+   - Do not: claim P2/P3 support from decoded canonical snippets alone.
 
 ## Performance Direction
 
@@ -517,69 +594,122 @@ This is the implementation state as of 2026-06-22 on `main`.
 
 ## Near-Term Execution Backlog
 
-- [ ] Preview1 socket conformance edge cases.
+- [ ] `P1-SOCKET-CONFORMANCE` - Preview1 socket conformance edge cases.
   - Change: add focused native/browser regressions for native adapter
     boundaries and externally backed readiness.
   - Evidence: `test/wasi_test.dart`, `lib/src/wasi/preview1/common/vfs.dart`.
-  - Gate: `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --json`.
-- [ ] VFS/descriptor benchmark distributions.
-  - Change: extend benchmark data to larger conformance-shaped path and
-    descriptor sets before optimizing more VFS code.
+  - Gate: `dart test test/wasi_test.dart`;
+    `dart run tool/wasi_vfs_benchmark.dart --json`.
+  - Done when: regressions cover the failing edge cases and benchmark output
+    includes the affected socket paths.
+- [ ] `PERF-VFS-DISTRIBUTIONS` - VFS/descriptor benchmark distributions.
+  - Change: extend benchmark data to larger conformance-shaped path, directory,
+    socket, and descriptor sets before optimizing more VFS code.
   - Evidence: `tool/wasi_vfs_benchmark.dart`.
   - Gate: `dart run tool/wasi_vfs_benchmark.dart --json`.
-- [ ] Heavy runner process and fixture-conversion audit.
-  - Change: add timing/cache evidence for `tool/spec_runner.dart` and DOOM
-    fixture conversion hot spots before changing runtime code for test heat.
+  - Done when: benchmark JSON reports the new distributions and gives stable
+    numbers for descriptor-heavy cases.
+- [ ] `PERF-HEAVY-RUNNERS` - Heavy runner process and fixture-conversion audit.
+  - Change: add timing/cache evidence for spec runner and DOOM fixture
+    conversion hot spots before changing runtime code for test heat.
   - Evidence: `tool/spec_runner.dart`, DOOM smoke tests, measured process
     output.
-  - Gate: targeted spec runner command plus `dart test test/doom_smoke_test.dart`.
-- [ ] Component validation gaps that are deterministic and local.
+  - Gate: targeted spec runner command plus
+    `dart test test/doom_smoke_test.dart`.
+  - Done when: reports include elapsed time, peak RSS, cache hits/misses, and
+    the slowest conversion/execution steps.
+- [ ] `CM-VALIDATION-GAPS` - Component validation gaps that are deterministic
+  and local.
   - Change: add validation tests before runtime wiring for remaining borrow,
     stream, future, and nested-shape rules.
-  - Evidence: `test/component_test.dart`, `test/wasi_component_async_host_test.dart`.
-  - Gate: `dart test test/component_test.dart test/wasi_component_async_host_test.dart`.
-- [ ] Canonical `stream.*` / `future.*` lowering beyond current copy-buffer
-  subset.
+  - Evidence: `test/component_test.dart`,
+    `test/wasi_component_async_host_test.dart`.
+  - Gate:
+    - `dart test test/component_test.dart`
+    - `dart test test/wasi_component_async_host_test.dart`
+  - Done when: unsupported shapes fail during validation with structured
+    diagnostics before host mutation.
+- [ ] `P3-ASYNC-COPY-GAPS` - Canonical `stream.*` / `future.*` lowering beyond
+  the current copy-buffer subset.
   - Change: wire validated shapes into the internal async host and component
     host before adding public P3 API claims.
-  - Evidence: `lib/src/wasi/component/async_host.dart`, `test/wasi_component_host_test.dart`.
+  - Evidence: `lib/src/wasi/component/async_host.dart`,
+    `test/wasi_component_host_test.dart`.
   - Gate: `dart test test/wasi_component_host_test.dart`; async/resource
     benchmark commands from the verification matrix.
-- [ ] Concrete Preview2/Preview3 adapter modules.
-  - Change: grow `lib/src/wasi/preview2/` and `lib/src/wasi/preview3/` adapters
-    over shared component primitives instead of extending Preview1 host types.
+  - Done when: the same shape has validation, memory copy,
+    cancellation/drop behavior, waitable behavior when applicable, and
+    benchmark coverage.
+- [ ] `P2-P3-ADAPTERS` - Concrete Preview2/Preview3 adapter modules.
+  - Change: grow `lib/src/wasi/preview2/` and `lib/src/wasi/preview3/`
+    adapters over shared component primitives instead of extending Preview1
+    host types.
   - Evidence: preview-specific host modules, owned-resource async lifecycle,
     memory-copy, pending-copy-event, and cancel-copy-event wrapper tests, and
     versioned-host tests.
   - Gate: `dart test test/wasi_component_versioned_host_test.dart` plus new
     adapter-specific tests.
-- [ ] Async host value validation beyond primitive aliases.
+  - Done when: a real versioned adapter can bind and execute the covered
+    component path without constructing a mixed-version generic host manually.
+- [ ] `CM-VALUE-VALIDATION` - Async host value validation beyond primitive
+  aliases.
   - Change: extend only when matching lowering/lifting support exists for the
     same composite shape.
   - Evidence: value-memory tests, async-host tests, component-host tests.
-  - Gate: `dart test test/wasi_component_value_memory_test.dart test/wasi_component_async_host_test.dart test/wasi_component_host_test.dart`.
-- [ ] WIT/interface ingestion.
+  - Gate:
+    - `dart test test/wasi_component_value_memory_test.dart`
+    - `dart test test/wasi_component_async_host_test.dart`
+    - `dart test test/wasi_component_host_test.dart`
+  - Done when: validated composite shapes can be lowered, lifted, copied, and
+    rejected consistently across value-memory, async-host, and component-host
+    tests.
+- [ ] `WIT-INGESTION` - WIT/interface ingestion.
   - Change: add ingestion only after versioned host boundaries and resource
     ownership behavior are strong enough to bind generated worlds.
   - Evidence: future WIT fixtures and versioned host tests.
   - Gate: future WIT ingestion test suite plus component-host binding tests.
+  - Done when: imported/generated worlds bind through Preview2/Preview3
+    adapters and failures name the interface/world boundary.
 
 ## Completion Checklist
 
 Full WASI 0.3 support must remain unclaimed until every row below is checked.
 
-- [ ] Real P3 components run through a versioned Preview3 host layer.
-- [ ] Resource ownership, `own`, `borrow`, drop, stale-handle, and active-borrow
-  behavior are covered by tests and benchmarks.
-- [ ] `stream<T>` and `future<T>` cover primitive, composite, owned-resource,
-  dynamic string/list, cancellation, waitable, and backpressure behavior.
-- [ ] Async task/subtask/context/thread behavior is covered by executable tests,
-  not only direct helper calls.
-- [ ] Public API and README wording match the implemented support matrix.
-- [ ] P1, P2, and P3 gates each have their own test command and do not rely on
-  a narrower internal helper as proof.
-- [ ] Performance gates cover stream/future forwarding, memory copy, resource
-  table borrow/drop, VFS descriptors, and heavy process runners.
-- [ ] A full verification run has current evidence: `dart format .`,
-  `dart analyze`, `dart test`, targeted browser/node checks when touched, and
-  the relevant benchmark JSON outputs.
+- [ ] `P3-VERSIONED-RUN`
+  - Condition: real P3 components run through a versioned Preview3 host layer.
+  - Gate: versioned Preview3 adapter tests plus component-host execution tests.
+- [ ] `P3-RESOURCE-LIFETIME`
+  - Condition: resource ownership, `own`, `borrow`, drop, stale-handle, and
+    active-borrow behavior are covered by tests and benchmarks.
+  - Gate: resource table, resource host, adapter, component-host, and benchmark
+    gates.
+- [ ] `P3-STREAM-FUTURE-SHAPES`
+  - Condition: `stream<T>` and `future<T>` cover primitive, composite,
+    owned-resource, dynamic string/list, cancellation, waitable, and
+    backpressure behavior.
+  - Gate: async-host, value-memory, component-host, waitable, and async
+    benchmark gates.
+- [ ] `P3-TASK-CONTEXT-THREAD`
+  - Condition: async task/subtask/context/thread behavior is covered by
+    executable component/versioned-host tests, not only direct helper calls.
+  - Gate: task, subtask, context, thread, waitable-set, and versioned-host
+    tests.
+- [ ] `PUBLIC-API-DOCS`
+  - Condition: public API and README wording match the implemented support
+    matrix.
+  - Gate: README snippet/command tests when snippets change plus support-gate
+    review.
+- [ ] `VERSION-GATES`
+  - Condition: P1, P2, and P3 gates each have their own test command and do not
+    rely on a narrower internal helper as proof.
+  - Gate: separate Preview1, Preview2, and Preview3 command evidence in this
+    document.
+- [ ] `PERFORMANCE-GATES`
+  - Condition: performance gates cover stream/future forwarding, memory copy,
+    resource table borrow/drop, VFS descriptors, and heavy process runners.
+  - Gate: current JSON outputs from the async, resource table, VFS, component,
+    and heavy-runner benchmarks.
+- [ ] `FULL-VERIFY`
+  - Condition: a full verification run has current evidence.
+  - Gate: `dart format .`, `dart analyze`, `dart test`, targeted browser/node
+    checks when touched, and the relevant benchmark JSON outputs.
