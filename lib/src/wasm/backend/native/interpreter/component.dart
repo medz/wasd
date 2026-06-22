@@ -4397,6 +4397,12 @@ final class _WasmComponentValidationContext {
           '$path.component',
           componentCount,
         );
+        _validateUniqueNames(
+          instance.arguments.map((argument) => argument.name),
+          '$path.arguments',
+          'instantiation argument',
+          errors,
+        );
         for (var i = 0; i < instance.arguments.length; i++) {
           validateComponentSortIndex(
             instance.arguments[i].sort,
@@ -4507,6 +4513,12 @@ final class _WasmComponentValidationContext {
           '$path.module',
           WasmComponentCoreSortKind.module,
           coreCounts,
+        );
+        _validateUniqueNames(
+          instance.arguments.map((argument) => argument.name),
+          '$path.arguments',
+          'core instantiation argument',
+          errors,
         );
         for (var i = 0; i < instance.arguments.length; i++) {
           validateCoreSortIndex(
@@ -5218,6 +5230,25 @@ void _validateUniqueLabels(
         WasmComponentValidationError(
           path: path,
           message: 'Duplicate Wasm component $kind label: "$label".',
+        ),
+      );
+    }
+  }
+}
+
+void _validateUniqueNames(
+  Iterable<String> names,
+  String path,
+  String kind,
+  List<WasmComponentValidationError> errors,
+) {
+  final seen = <String>{};
+  for (final name in names) {
+    if (!seen.add(name)) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message: 'Duplicate Wasm component $kind name: "$name".',
         ),
       );
     }

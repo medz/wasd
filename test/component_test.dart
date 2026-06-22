@@ -1036,6 +1036,15 @@ void main() {
       ).validate();
       expect(duplicate, hasLength(1));
       expect(duplicate.single.message, contains('already consumed'));
+
+      final duplicateName = WasmComponent.decode(
+        _instantiateDuplicateArgumentNameComponentBytes(),
+      ).validate();
+      expect(duplicateName, hasLength(1));
+      expect(
+        duplicateName.single.message,
+        contains('Duplicate Wasm component instantiation argument name'),
+      );
     });
 
     test('validates core instance indexes in definition order', () {
@@ -1081,6 +1090,15 @@ void main() {
       expect(
         undefinedInlineExport.single.message,
         contains('Unknown Wasm component core memory index'),
+      );
+
+      final duplicateArgumentName = WasmComponent.decode(
+        _coreInstanceDuplicateArgumentNameComponentBytes(),
+      ).validate();
+      expect(duplicateArgumentName, hasLength(1));
+      expect(
+        duplicateArgumentName.single.message,
+        contains('Duplicate Wasm component core instantiation argument name'),
       );
     });
 
@@ -2076,6 +2094,48 @@ Uint8List _instantiateDuplicateValueArgumentComponentBytes() =>
       0x00,
     ]);
 
+Uint8List _instantiateDuplicateArgumentNameComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x04,
+      0x08,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x05,
+      0x12,
+      0x02,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x02,
+      0x03,
+      0x64,
+      0x65,
+      0x70,
+      0x05,
+      0x00,
+      0x03,
+      0x64,
+      0x65,
+      0x70,
+      0x05,
+      0x00,
+    ]);
+
 Uint8List _valueImportDuplicateExportComponentBytes() =>
     Uint8List.fromList(const <int>[
       0x00,
@@ -2826,6 +2886,48 @@ Uint8List _coreInstanceArgumentComponentBytes() =>
       0x00,
       0x00,
       0x01,
+      0x03,
+      0x64,
+      0x65,
+      0x70,
+      0x12,
+      0x00,
+    ]);
+
+Uint8List _coreInstanceDuplicateArgumentNameComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x01,
+      0x08,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x02,
+      0x12,
+      0x02,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x02,
+      0x03,
+      0x64,
+      0x65,
+      0x70,
+      0x12,
+      0x00,
       0x03,
       0x64,
       0x65,

@@ -217,6 +217,20 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `CM-INSTANTIATION-DUPLICATE-ARGS` - Component and core instantiation
+  argument names reject duplicates during validation.
+  - Evidence:
+    `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments"`
+    failed before the fix because duplicate component instantiation argument
+    names validated cleanly, then passed after the fix;
+    `dart test test/component_test.dart --name "validates core instance indexes in definition order"`
+    failed before the fix because duplicate core instantiation argument names
+    validated cleanly, then passed after the fix;
+    `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`; `dart analyze`.
+  - Claim impact: reduces P2/P3 component validation ambiguity before adapter
+    binding or host mutation; does not complete `CM-VALIDATION-GAPS`,
+    `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-DATAGRAM-PARTIAL-SEND-INVALID` - Host-backed datagram send
   handlers must accept a whole message or fail validation.
   - Evidence:
@@ -1609,6 +1623,34 @@ performance visible while the support surface expands.
     - `dart test test/wasi_component_async_host_test.dart`
   - Done when: unsupported shapes fail during validation with structured
     diagnostics before host mutation.
+- [x] `CM-INSTANTIATION-DUPLICATE-ARGS` - Reject duplicate component and core
+  instantiation argument names.
+  - Scope: component-model validation for `WasmComponentInstance` and
+    `WasmComponentCoreInstance` named instantiation arguments.
+  - Edit targets:
+    `lib/src/wasm/backend/native/interpreter/component.dart`,
+    `test/component_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments"`
+    failed before the fix because duplicate component instantiation argument
+    names validated cleanly;
+    `dart test test/component_test.dart --name "validates core instance indexes in definition order"`
+    failed before the fix because duplicate core instantiation argument names
+    validated cleanly.
+  - Implementation gate:
+    `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments"`;
+    `dart test test/component_test.dart --name "validates core instance indexes in definition order"`;
+    `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`; `dart analyze`.
+  - Performance gate: N/A; this adds a single validation-time linear scan of
+    instantiation argument names and no runtime host path.
+  - Done when: duplicate argument names in both component and core
+    instantiation definitions are rejected before adapter binding or host state
+    can observe the ambiguous shape.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: reduces P2/P3 component validation ambiguity; no direct
+    support gate.
 - [x] `CM-INSTANCE-CORE-SORT-VALIDATION` - Component instance arguments reject
   missing core sort indexes.
   - Scope: component-model validation for `WasmComponentInstance` argument and
