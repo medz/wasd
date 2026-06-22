@@ -217,6 +217,25 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `CM-EXTERN-NAME-CASE-FOLDING` - Component import/export name validation
+  rejects case/acronym-folded collisions.
+  - Evidence:
+    `dart test test/component_test.dart --name "reports duplicate component import names"`;
+    `dart test test/component_test.dart --name "validates component export sort indexes in definition order"`;
+    `dart test test/component_test.dart --name "reports duplicate component type import names|validates function type indexes introduced by exports"`
+    failed before the fix because `foo-bar` and `foo-BAR` validated cleanly
+    for top-level imports, top-level exports, component/instance type imports,
+    and component/instance type exports, then passed after the fix;
+    `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`;
+    `dart test test/wasi_component_versioned_host_test.dart`; `dart analyze`.
+  - Spec reference: Component Model strongly-unique import/export names compare
+    lowercased acronym letters. This row closes the case-folding subset; the
+    structured `[constructor]` / `[method]` / `[static]` rules remain for a
+    future validation row.
+  - Claim impact: reduces Preview2/Preview3 adapter interface ambiguity before
+    binding; does not complete `CM-VALIDATION-GAPS`, `SUPPORT-P1`,
+    `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `CM-EXPORT-DUPLICATE-NAMES` - Top-level component exports reject duplicate
   names during validation.
   - Evidence:

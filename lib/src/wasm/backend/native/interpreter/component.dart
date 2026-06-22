@@ -2036,6 +2036,7 @@ final class _WasmComponentValidationContext {
     final localTypeDefinitions = <WasmComponentTypeDefinition>[];
     final localCoreTypeKinds = <WasmComponentCoreTypeKind>[];
     Map<String, String>? importNames;
+    Map<String, String>? exportNames;
     final typeScopes = <_WasmComponentTypeAliasScope>[
       _WasmComponentTypeAliasScope(
         definitions: localTypeDefinitions,
@@ -2088,7 +2089,15 @@ final class _WasmComponentValidationContext {
             introduceComponentTypeImport(descriptor, localTypeDefinitions);
           }
         case WasmComponentTypeDeclarationKind.export:
-          final descriptor = declaration.export?.descriptor;
+          final export = declaration.export;
+          if (export != null) {
+            validateTypeExportName(
+              export,
+              '$path.declarations[$i].export.name',
+              exportNames ??= <String, String>{},
+            );
+          }
+          final descriptor = export?.descriptor;
           validateTypeDeclarationExternDescriptor(
             descriptor,
             '$path.declarations[$i].export.descriptor',
@@ -4296,7 +4305,8 @@ final class _WasmComponentValidationContext {
     Map<String, String> seenImports,
   ) {
     final name = componentExternName(import.name, import.versionSuffix);
-    final previousName = seenImports[name];
+    final key = componentExternNameLookupKey(import.name, import.versionSuffix);
+    final previousName = seenImports[key];
     if (previousName != null) {
       errors.add(
         WasmComponentValidationError(
@@ -4307,7 +4317,7 @@ final class _WasmComponentValidationContext {
       );
       return;
     }
-    seenImports[name] = name;
+    seenImports[key] = name;
   }
 
   void validateExportName(
@@ -4316,7 +4326,8 @@ final class _WasmComponentValidationContext {
     Map<String, String> seenExports,
   ) {
     final name = componentExternName(export.name, export.versionSuffix);
-    final previousName = seenExports[name];
+    final key = componentExternNameLookupKey(export.name, export.versionSuffix);
+    final previousName = seenExports[key];
     if (previousName != null) {
       errors.add(
         WasmComponentValidationError(
@@ -4327,11 +4338,36 @@ final class _WasmComponentValidationContext {
       );
       return;
     }
-    seenExports[name] = name;
+    seenExports[key] = name;
+  }
+
+  void validateTypeExportName(
+    WasmComponentTypeExport export,
+    String path,
+    Map<String, String> seenExports,
+  ) {
+    final name = componentExternName(export.name, export.versionSuffix);
+    final key = componentExternNameLookupKey(export.name, export.versionSuffix);
+    final previousName = seenExports[key];
+    if (previousName != null) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component export name $name conflicts with previous export name $previousName.',
+        ),
+      );
+      return;
+    }
+    seenExports[key] = name;
   }
 
   String componentExternName(String name, String? versionSuffix) {
     return versionSuffix == null ? name : '$name@$versionSuffix';
+  }
+
+  String componentExternNameLookupKey(String name, String? versionSuffix) {
+    return componentExternName(name, versionSuffix).toLowerCase();
   }
 
   void validateExportDefinition(
