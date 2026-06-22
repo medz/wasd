@@ -222,6 +222,104 @@ void main() {
       expect(() => program.invoke(0, const <Object?>[1]), throwsStateError);
     });
 
+    test('invokes adapter programs through flat primitive values', () {
+      final component = WasmComponent.decode(
+        canonicalPrimitiveLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+
+      final program = host.bindAdapterPlans(
+        plans,
+        coreFunctions: {0: (_) => 51},
+        componentFunctions: {0: (_) => 52},
+      );
+
+      expect(program.invokeFlat(0, const <Object?>[]), [51]);
+      expect(program.invokeFlat(1, const <Object?>[]), [52]);
+      expect(() => program.invokeFlat(0, const <Object?>[1]), throwsStateError);
+    });
+
+    test('invokes string adapter programs through flat scalar values', () {
+      final component = WasmComponent.decode(
+        canonicalStringLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+      final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
+      final realloc = _bumpRealloc(memory);
+      final input = writeWASIComponentCanonicalString(
+        memory,
+        realloc,
+        'guest',
+        WASIComponentCanonicalStringEncoding.utf8,
+      );
+
+      final program = host.bindAdapterPlans(
+        plans,
+        coreFunctions: {
+          0: (args) {
+            expect(args, ['guest']);
+            return 'lifted:${args.single}';
+          },
+        },
+        componentFunctions: {
+          0: (args) {
+            expect(args, ['guest']);
+            return 'lowered:${args.single}';
+          },
+        },
+      );
+
+      final lifted = program.invokeFlat(
+        0,
+        <Object?>[input.pointer, input.canonicalLength],
+        memory: memory,
+        realloc: realloc,
+      );
+      expect(lifted, hasLength(2));
+      expect(
+        readWASIComponentCanonicalString(
+          memory,
+          lifted[0]! as int,
+          lifted[1]! as int,
+          WASIComponentCanonicalStringEncoding.utf8,
+        ),
+        'lifted:guest',
+      );
+
+      final lowered = program.invokeFlat(
+        1,
+        <Object?>[input.pointer, input.canonicalLength],
+        memory: memory,
+        realloc: realloc,
+      );
+      expect(lowered, hasLength(2));
+      expect(
+        readWASIComponentCanonicalString(
+          memory,
+          lowered[0]! as int,
+          lowered[1]! as int,
+          WASIComponentCanonicalStringEncoding.utf8,
+        ),
+        'lowered:guest',
+      );
+      expect(
+        () => program.invokeFlat(0, <Object?>[
+          input.pointer,
+          input.canonicalLength,
+        ]),
+        throwsStateError,
+      );
+      expect(
+        () => program.invokeFlat(0, <Object?>[
+          input.pointer,
+          input.canonicalLength,
+        ], memory: memory),
+        throwsUnsupportedError,
+      );
+    });
+
     test('invokes string adapter programs through canonical value memory', () {
       final component = WasmComponent.decode(
         canonicalStringLiftLowerComponentBytes(),

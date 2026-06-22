@@ -263,12 +263,14 @@ This is the implementation state as of 2026-06-22 on `main`.
   async adapters, and value shapes without a supported codec instead of
   approximating them. This keeps future adapter generation inputs explicit
   while automatic binding of decoded `lift`/`lower` definitions to instantiated
-  core/component functions and full memory-backed core ABI flattening are still
+  core/component functions and general canonical ABI flattening are still
   reported as host capability gaps instead of being overclaimed. The same
   adapter program can also load direct adapter parameters from canonical value
-  memory and store direct adapter results back through the shared value-memory
-  codec plus explicit `realloc`; this is a value-codec memory invocation
-  boundary, not a complete flattened core function ABI. Async value
+  memory, store direct adapter results back through the shared value-memory
+  codec plus explicit `realloc`, and invoke the supported primitive/string
+  subset through flat scalar values such as canonical string `(ptr, len)` pairs.
+  These are value-codec adapter boundaries, not a complete flattened core
+  function ABI. Async value
   bindings now also expose Canonical ABI memory-copy layout through an
   internal Canonical ABI value-memory codec covering primitive values,
   records/tuples, fixed lists, flags, variants, options, results, enums, and
@@ -447,9 +449,10 @@ This is the implementation state as of 2026-06-22 on `main`.
   resource binding, stream, Preview3 version-profile stream binding, decoded
   core-memory primitive stream-copy, decoded core-memory fixed-size record,
   list, and string-list stream-copy, decoded direct string adapter program
-  invocation, decoded direct string adapter memory invocation, decoded
-  core-memory primitive future-copy, and decoded core-memory list plus
-  string-list future-copy round trips, mixed
+  invocation, decoded direct string adapter flat-scalar invocation, decoded
+  direct string adapter memory invocation, decoded core-memory primitive
+  future-copy, and decoded core-memory list plus string-list future-copy round
+  trips, mixed
   canonical-host
   program invocation over shared component state, error-context canonical
   lifecycle invocation, error-context canonical string memory adapter invocation

@@ -57,6 +57,8 @@ Future<void> main(List<String> args) async {
   );
   final componentAdapterStringProgramInvoke =
       _benchmarkComponentAdapterStringProgramInvoke(options.iterations);
+  final componentAdapterStringFlatInvoke =
+      _benchmarkComponentAdapterStringFlatInvoke(options.iterations);
   final componentAdapterStringMemoryInvoke =
       _benchmarkComponentAdapterStringMemoryInvoke(options.iterations);
   final componentHostStreamMemoryBinding =
@@ -98,6 +100,8 @@ Future<void> main(List<String> args) async {
     'component_adapter_program_invoke': componentAdapterProgramInvoke.toJson(),
     'component_adapter_string_program_invoke':
         componentAdapterStringProgramInvoke.toJson(),
+    'component_adapter_string_flat_invoke': componentAdapterStringFlatInvoke
+        .toJson(),
     'component_adapter_string_memory_invoke': componentAdapterStringMemoryInvoke
         .toJson(),
     'component_host_stream_memory_binding': componentHostStreamMemoryBinding
@@ -140,6 +144,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentAdapterDirectInvoke(_warmupIterations);
   _benchmarkComponentAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringProgramInvoke(_warmupIterations);
+  _benchmarkComponentAdapterStringFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringMemoryInvoke(_warmupIterations);
   _benchmarkComponentHostStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostRecordStreamMemoryBinding(_warmupIterations);
@@ -559,6 +564,62 @@ _Metric _benchmarkComponentAdapterStringProgramInvoke(int iterations) {
   for (var i = 0; i < iterations; i++) {
     checksum += (program.invoke(0, coreArgs) as String).length;
     checksum += (program.invoke(1, componentArgs) as String).length;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentAdapterStringFlatInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalStringLiftLowerComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {0: (_) => 'lifted'},
+    componentFunctions: {0: (_) => 'lowered'},
+  );
+  final memory = Memory(const MemoryDescriptor(initial: 1));
+  final input = writeWASIComponentCanonicalString(
+    memory,
+    (_, _, _, _) => 256,
+    'guest',
+    WASIComponentCanonicalStringEncoding.utf8,
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final lifted = program.invokeFlat(
+      0,
+      <Object?>[input.pointer, input.canonicalLength],
+      memory: memory,
+      realloc: (_, _, _, _) => 512,
+    );
+    checksum += readWASIComponentCanonicalString(
+      memory,
+      lifted[0]! as int,
+      lifted[1]! as int,
+      WASIComponentCanonicalStringEncoding.utf8,
+    ).length;
+    final lowered = program.invokeFlat(
+      1,
+      <Object?>[input.pointer, input.canonicalLength],
+      memory: memory,
+      realloc: (_, _, _, _) => 512,
+    );
+    checksum += readWASIComponentCanonicalString(
+      memory,
+      lowered[0]! as int,
+      lowered[1]! as int,
+      WASIComponentCanonicalStringEncoding.utf8,
+    ).length;
   }
   watch.stop();
 

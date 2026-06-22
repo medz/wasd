@@ -113,6 +113,22 @@ final class WASIComponentCanonicalAdapterProgram {
     return operation.invoke(args);
   }
 
+  /// Invokes an adapter operation through flat Canonical ABI scalar values.
+  List<Object?> invokeFlat(
+    int canonicalIndex,
+    List<Object?> flatArgs, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    final operation = _operationsByCanonicalIndex[canonicalIndex];
+    if (operation == null) {
+      throw StateError(
+        'Unknown WASI component canonical adapter index: $canonicalIndex.',
+      );
+    }
+    return operation.invokeFlat(flatArgs, memory: memory, realloc: realloc);
+  }
+
   /// Invokes an adapter operation by loading parameters from canonical memory.
   Object? invokeWithMemory(
     int canonicalIndex,
@@ -198,6 +214,46 @@ final class WASIComponentCanonicalAdapterOperation {
     return result;
   }
 
+  /// Invokes the adapter through flat Canonical ABI scalar values.
+  List<Object?> invokeFlat(
+    List<Object?> flatArgs, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    var offset = 0;
+    final args = <Object?>[];
+    for (final param in plan.params) {
+      final next = _loadFlatValue(
+        param,
+        flatArgs,
+        offset,
+        memory,
+        plan.stringEncoding,
+      );
+      args.add(next.value);
+      offset = next.nextOffset;
+    }
+    if (offset != flatArgs.length) {
+      throw StateError(
+        'WASI component canonical adapter index $canonicalIndex expected '
+        '$offset flat arguments, got ${flatArgs.length}.',
+      );
+    }
+
+    final result = invoke(args);
+    final resultPlan = plan.result;
+    if (resultPlan == null) {
+      return const <Object?>[];
+    }
+    return _storeFlatValue(
+      resultPlan,
+      result,
+      memory,
+      realloc,
+      plan.stringEncoding,
+    );
+  }
+
   /// Invokes the adapter with parameter/result values stored in memory.
   Object? invokeWithMemory(
     wasm.Memory memory,
@@ -245,6 +301,199 @@ final class WASIComponentCanonicalAdapterOperation {
     );
     return result;
   }
+}
+
+({Object? value, int nextOffset}) _loadFlatValue(
+  WASIComponentCanonicalAdapterValuePlan valuePlan,
+  List<Object?> flatArgs,
+  int offset,
+  wasm.Memory? memory,
+  WASIComponentCanonicalStringEncoding stringEncoding,
+) {
+  final primitive = valuePlan.memoryCodec!.primitive;
+  if (primitive == null) {
+    throw UnsupportedError(
+      'WASI component canonical adapter value ${valuePlan.path} does not support flat values.',
+    );
+  }
+  if (primitive == WasmComponentPrimitiveValueType.string) {
+    if (offset + 2 > flatArgs.length) {
+      throw StateError(
+        'WASI component canonical adapter value ${valuePlan.path} expected 2 flat string arguments.',
+      );
+    }
+    final memoryRef = _requireMemory(memory, valuePlan.path);
+    final pointer = _expectFlatInt(valuePlan.path, flatArgs[offset]);
+    final length = _expectFlatInt(valuePlan.path, flatArgs[offset + 1]);
+    return (
+      value: readWASIComponentCanonicalString(
+        memoryRef,
+        pointer,
+        length,
+        stringEncoding,
+      ),
+      nextOffset: offset + 2,
+    );
+  }
+  if (offset >= flatArgs.length) {
+    throw StateError(
+      'WASI component canonical adapter value ${valuePlan.path} expected a flat argument.',
+    );
+  }
+  final value = _flatPrimitiveToComponentValue(
+    primitive,
+    valuePlan.path,
+    flatArgs[offset],
+  );
+  valuePlan.memoryCodec!.validate(valuePlan.path, value);
+  return (value: value, nextOffset: offset + 1);
+}
+
+List<Object?> _storeFlatValue(
+  WASIComponentCanonicalAdapterValuePlan valuePlan,
+  Object? value,
+  wasm.Memory? memory,
+  WASIComponentCanonicalRealloc? realloc,
+  WASIComponentCanonicalStringEncoding stringEncoding,
+) {
+  valuePlan.memoryCodec!.validate(valuePlan.path, value);
+  final primitive = valuePlan.memoryCodec!.primitive;
+  if (primitive == null) {
+    throw UnsupportedError(
+      'WASI component canonical adapter value ${valuePlan.path} does not support flat values.',
+    );
+  }
+  if (primitive == WasmComponentPrimitiveValueType.string) {
+    final memoryRef = _requireMemory(memory, valuePlan.path);
+    final memoryString = writeWASIComponentCanonicalString(
+      memoryRef,
+      _requireRealloc(realloc, valuePlan.path),
+      value as String,
+      stringEncoding,
+    );
+    return <Object?>[memoryString.pointer, memoryString.canonicalLength];
+  }
+  return <Object?>[
+    _componentPrimitiveToFlatValue(primitive, valuePlan.path, value),
+  ];
+}
+
+Object? _flatPrimitiveToComponentValue(
+  WasmComponentPrimitiveValueType primitive,
+  String path,
+  Object? value,
+) {
+  return switch (primitive) {
+    WasmComponentPrimitiveValueType.boolean => _expectFlatInt(path, value) != 0,
+    WasmComponentPrimitiveValueType.s8 ||
+    WasmComponentPrimitiveValueType.u8 ||
+    WasmComponentPrimitiveValueType.s16 ||
+    WasmComponentPrimitiveValueType.u16 ||
+    WasmComponentPrimitiveValueType.s32 ||
+    WasmComponentPrimitiveValueType.u32 ||
+    WasmComponentPrimitiveValueType.s64 ||
+    WasmComponentPrimitiveValueType.u64 => _expectFlatInt(path, value),
+    WasmComponentPrimitiveValueType.f32 ||
+    WasmComponentPrimitiveValueType.f64 => _expectFlatNum(path, value),
+    WasmComponentPrimitiveValueType.char => _flatCharToString(
+      path,
+      _expectFlatInt(path, value),
+    ),
+    WasmComponentPrimitiveValueType.string => throw StateError(
+      'String flat values are handled separately.',
+    ),
+    WasmComponentPrimitiveValueType.errorContext => throw UnsupportedError(
+      'WASI component canonical adapter value $path uses error-context handles.',
+    ),
+  };
+}
+
+Object? _componentPrimitiveToFlatValue(
+  WasmComponentPrimitiveValueType primitive,
+  String path,
+  Object? value,
+) {
+  return switch (primitive) {
+    WasmComponentPrimitiveValueType.boolean => (value as bool) ? 1 : 0,
+    WasmComponentPrimitiveValueType.s8 ||
+    WasmComponentPrimitiveValueType.u8 ||
+    WasmComponentPrimitiveValueType.s16 ||
+    WasmComponentPrimitiveValueType.u16 ||
+    WasmComponentPrimitiveValueType.s32 ||
+    WasmComponentPrimitiveValueType.u32 ||
+    WasmComponentPrimitiveValueType.s64 ||
+    WasmComponentPrimitiveValueType.u64 => value as int,
+    WasmComponentPrimitiveValueType.f32 ||
+    WasmComponentPrimitiveValueType.f64 => value as num,
+    WasmComponentPrimitiveValueType.char => _stringToFlatChar(path, value),
+    WasmComponentPrimitiveValueType.string => throw StateError(
+      'String flat values are handled separately.',
+    ),
+    WasmComponentPrimitiveValueType.errorContext => throw UnsupportedError(
+      'WASI component canonical adapter value $path uses error-context handles.',
+    ),
+  };
+}
+
+int _expectFlatInt(String path, Object? value) {
+  if (value is int) {
+    return value;
+  }
+  throw StateError(
+    'WASI component canonical adapter value $path expected int.',
+  );
+}
+
+num _expectFlatNum(String path, Object? value) {
+  if (value is num) {
+    return value;
+  }
+  throw StateError(
+    'WASI component canonical adapter value $path expected num.',
+  );
+}
+
+String _flatCharToString(String path, int value) {
+  if (_isUnicodeScalar(value)) {
+    return String.fromCharCode(value);
+  }
+  throw StateError(
+    'WASI component canonical adapter value $path expected a Unicode scalar.',
+  );
+}
+
+int _stringToFlatChar(String path, Object? value) {
+  if (value is String && value.runes.length == 1) {
+    return value.runes.single;
+  }
+  throw StateError(
+    'WASI component canonical adapter value $path expected a character.',
+  );
+}
+
+bool _isUnicodeScalar(int value) {
+  return value >= 0 && value <= 0x10ffff && (value < 0xd800 || value > 0xdfff);
+}
+
+wasm.Memory _requireMemory(wasm.Memory? memory, String path) {
+  if (memory != null) {
+    return memory;
+  }
+  throw StateError(
+    'WASI component canonical adapter value $path requires memory.',
+  );
+}
+
+WASIComponentCanonicalRealloc _requireRealloc(
+  WASIComponentCanonicalRealloc? realloc,
+  String path,
+) {
+  if (realloc != null) {
+    return realloc;
+  }
+  throw UnsupportedError(
+    'WASI component canonical adapter value $path requires a realloc callback.',
+  );
 }
 
 void _requireAdapterKind(
