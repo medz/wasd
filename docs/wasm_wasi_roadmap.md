@@ -142,22 +142,28 @@ too broad to verify in one commit.
   - Evidence update: record the failing shape and the exact command evidence.
   - Claim impact: reduces `SUPPORT-P2` and `SUPPORT-P3` validation risk; no
     support gate changes directly.
-- [ ] `P2-P3-ADAPTERS` - Bind one real Preview2/Preview3 adapter path over shared
+- [x] `P2-P3-ADAPTERS` - Bind one real Preview2/Preview3 adapter path over shared
   component primitives.
   - Scope: versioned component host adapters, not Preview1 imports.
   - Edit targets: `lib/src/wasi/preview2/`,
     `lib/src/wasi/preview3/`, `lib/src/wasi/component/`,
     `test/wasi_component_versioned_host_test.dart`, and adapter-specific tests.
-  - Red test: add a real versioned adapter execution case that fails because the
-    interface is not yet bound through the versioned host.
-  - Implementation gate: `dart test test/wasi_component_versioned_host_test.dart`
-    plus the adapter-specific focused test.
-  - Performance gate: run the component/resource benchmark that covers any new
-    resource, stream, future, or callback path added by the adapter.
+  - Red test:
+    `dart test test/wasi_component_versioned_host_test.dart --name "Preview2 and Preview3 wrappers execute primitive adapters"`
+    failed before the fix because `WASIPreview2ComponentHost` and
+    `WASIPreview3ComponentHost` did not expose `bindAdapters`.
+  - Implementation gate:
+    `dart test test/wasi_component_versioned_host_test.dart --name "Preview2 and Preview3 wrappers execute primitive adapters"`;
+    `dart test test/wasi_component_versioned_host_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`
+    reported `component_versioned_adapter_program_invoke.operations=8000` and
+    `component_versioned_adapter_program_invoke.per_operation_us=0.192`;
+    `dart analyze`.
   - Done when: one real P2/P3 component path executes through the versioned host
     without leaking Preview1 imports or bypassing shared component ownership.
-  - Evidence update: record adapter files, tests, and benchmark output in this
-    document.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
   - Claim impact: starts concrete `SUPPORT-P2` / `SUPPORT-P3` evidence; does not
     complete either gate.
 - [ ] `P3-ASYNC-COPY-GAPS` - Expand one validated async value shape through copy,
@@ -217,6 +223,23 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P2-P3-ADAPTERS` - Preview2 and Preview3 fixed-version wrappers execute
+  canonical primitive lift/lower adapters through the shared versioned host.
+  - Evidence:
+    `dart test test/wasi_component_versioned_host_test.dart --name "Preview2 and Preview3 wrappers execute primitive adapters"`
+    failed before the fix because the fixed-version wrappers did not expose a
+    `bindAdapters` path, then passed after the fix;
+    `dart test test/wasi_component_versioned_host_test.dart`;
+    `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`
+    reported `component_versioned_adapter_program_invoke.operations=8000` and
+    `component_versioned_adapter_program_invoke.per_operation_us=0.192`;
+    `dart analyze`.
+  - Spec reference: Preview2 and Preview3 component hosts use Component Model
+    canonical `lift`/`lower` adapter generation; this row routes that executable
+    adapter path through the version profile instead of through Preview1 imports
+    or direct low-level adapter-host access.
+  - Claim impact: starts concrete Preview2/Preview3 adapter execution evidence;
+    does not complete `SUPPORT-P2` or `SUPPORT-P3`.
 - [x] `CM-EXTERN-NAME-CASE-FOLDING` - Component import/export name validation
   rejects case/acronym-folded collisions.
   - Evidence:

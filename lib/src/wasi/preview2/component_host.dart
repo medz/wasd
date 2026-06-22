@@ -1,3 +1,4 @@
+import '../component/adapter_host.dart';
 import '../component/async_host.dart';
 import '../component/host.dart';
 import '../component/resource_host.dart';
@@ -33,6 +34,23 @@ final class WASIPreview2ComponentHost {
     bool validate = true,
   }) {
     return versionedHost.prepareComponent(component, validate: validate);
+  }
+
+  /// Prepares and binds Preview2 canonical `lift`/`lower` adapter operations.
+  WASIComponentCanonicalAdapterProgram bindAdapters(
+    WasmComponent component, {
+    bool validate = true,
+    Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
+    Map<int, WASIComponentCanonicalAdapterCallback> componentFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
+  }) {
+    return versionedHost.bindAdapters(
+      component,
+      validate: validate,
+      coreFunctions: coreFunctions,
+      componentFunctions: componentFunctions,
+    );
   }
 
   /// Prepares and binds [component] through the Preview2 profile.

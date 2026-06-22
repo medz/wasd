@@ -51,6 +51,21 @@ final class WASIComponentVersionedHost {
     );
   }
 
+  /// Prepares and binds canonical `lift`/`lower` adapter operations.
+  WASIComponentCanonicalAdapterProgram bindAdapters(
+    WasmComponent component, {
+    bool validate = true,
+    Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
+    Map<int, WASIComponentCanonicalAdapterCallback> componentFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
+  }) {
+    return prepareComponent(component, validate: validate).bindAdapters(
+      coreFunctions: coreFunctions,
+      componentFunctions: componentFunctions,
+    );
+  }
+
   /// Prepares and binds [component].
   WASIComponentHostBinding bindComponent(
     WasmComponent component, {

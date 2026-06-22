@@ -56,6 +56,8 @@ Future<void> main(List<String> args) async {
   final componentAdapterProgramInvoke = _benchmarkComponentAdapterProgramInvoke(
     options.iterations,
   );
+  final componentVersionedAdapterProgramInvoke =
+      _benchmarkComponentVersionedAdapterProgramInvoke(options.iterations);
   final componentAdapterStringProgramInvoke =
       _benchmarkComponentAdapterStringProgramInvoke(options.iterations);
   final componentAdapterStringFlatInvoke =
@@ -137,6 +139,8 @@ Future<void> main(List<String> args) async {
         componentVersionedPreview3StreamBinding.toJson(),
     'component_adapter_direct_invoke': componentAdapterDirectInvoke.toJson(),
     'component_adapter_program_invoke': componentAdapterProgramInvoke.toJson(),
+    'component_versioned_adapter_program_invoke':
+        componentVersionedAdapterProgramInvoke.toJson(),
     'component_adapter_string_program_invoke':
         componentAdapterStringProgramInvoke.toJson(),
     'component_adapter_string_flat_invoke': componentAdapterStringFlatInvoke
@@ -216,6 +220,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentVersionedPreview3StreamBinding(_warmupIterations);
   _benchmarkComponentAdapterDirectInvoke(_warmupIterations);
   _benchmarkComponentAdapterProgramInvoke(_warmupIterations);
+  _benchmarkComponentVersionedAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterRecordFlatInvoke(_warmupIterations);
@@ -616,6 +621,36 @@ _Metric _benchmarkComponentAdapterProgramInvoke(int iterations) {
 
   return _Metric(
     operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentVersionedAdapterProgramInvoke(int iterations) {
+  final component = WasmComponent.decode(_primitiveAdapterProgramBytes());
+  final preview2Program = WASIPreview2ComponentHost().bindAdapters(
+    component,
+    coreFunctions: {0: (_) => 51},
+    componentFunctions: {0: (_) => 52},
+  );
+  final preview3Program = WASIPreview3ComponentHost().bindAdapters(
+    component,
+    coreFunctions: {0: (_) => 61},
+    componentFunctions: {0: (_) => 62},
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    checksum += preview2Program.invokeFlat(0, const <Object?>[]).single as int;
+    checksum += preview2Program.invokeFlat(1, const <Object?>[]).single as int;
+    checksum += preview3Program.invokeFlat(0, const <Object?>[]).single as int;
+    checksum += preview3Program.invokeFlat(1, const <Object?>[]).single as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 4,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
@@ -2346,6 +2381,7 @@ void _printText(Map<String, Object?> payload) {
     'component_versioned_preview2_binding',
     'component_host_stream_binding',
     'component_versioned_preview3_stream_binding',
+    'component_versioned_adapter_program_invoke',
     'component_host_stream_memory_binding',
     'component_host_owned_resource_stream_memory_binding',
     'component_host_record_stream_memory_binding',

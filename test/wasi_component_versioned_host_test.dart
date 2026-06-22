@@ -894,6 +894,67 @@ void main() {
       expect(futureHost.componentHost.table.activeCount, 0);
     });
 
+    test('Preview2 and Preview3 wrappers execute primitive adapters', () {
+      final component = WasmComponent.decode(
+        canonicalPrimitiveLiftLowerComponentBytes(),
+      );
+      final preview2 = WASIPreview2ComponentHost();
+      final preview3 = WASIPreview3ComponentHost();
+      var preview2CoreCalls = 0;
+      var preview2ComponentCalls = 0;
+      var preview3CoreCalls = 0;
+      var preview3ComponentCalls = 0;
+
+      final preview2Program = preview2.bindAdapters(
+        component,
+        coreFunctions: {
+          0: (args) {
+            expect(args, isEmpty);
+            preview2CoreCalls++;
+            return 21;
+          },
+        },
+        componentFunctions: {
+          0: (args) {
+            expect(args, isEmpty);
+            preview2ComponentCalls++;
+            return 22;
+          },
+        },
+      );
+      final preview3Program = preview3.bindAdapters(
+        component,
+        coreFunctions: {
+          0: (args) {
+            expect(args, isEmpty);
+            preview3CoreCalls++;
+            return 31;
+          },
+        },
+        componentFunctions: {
+          0: (args) {
+            expect(args, isEmpty);
+            preview3ComponentCalls++;
+            return 32;
+          },
+        },
+      );
+
+      expect(component.validate(), isEmpty);
+      expect(preview2Program.operations, hasLength(2));
+      expect(preview3Program.operations, hasLength(2));
+      expect(preview2Program.invokeFlat(0, const <Object?>[]), [21]);
+      expect(preview2Program.invokeFlat(1, const <Object?>[]), [22]);
+      expect(preview3Program.invokeFlat(0, const <Object?>[]), [31]);
+      expect(preview3Program.invokeFlat(1, const <Object?>[]), [32]);
+      expect(preview2CoreCalls, 1);
+      expect(preview2ComponentCalls, 1);
+      expect(preview3CoreCalls, 1);
+      expect(preview3ComponentCalls, 1);
+      expect(preview2.componentHost.table.activeCount, 0);
+      expect(preview3.componentHost.table.activeCount, 0);
+    });
+
     test('Preview3 wrapper reports adapter resource handle uses', () {
       final component = WasmComponent.decode(
         canonicalResourceLiftComponentBytes(),
