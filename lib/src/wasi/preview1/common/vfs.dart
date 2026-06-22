@@ -1847,7 +1847,22 @@ void _validateInitialDescriptorNamespace({
     }
   }
 
-  final reservedFds = <int>{...seenStdio, ...preopenFds};
+  final seenPreopen = <int>{};
+  for (final fd in preopenFds) {
+    if (fd < 0) {
+      throw ArgumentError.value(fd, 'preopen fd', 'must not be negative');
+    }
+    if (seenStdio.contains(fd)) {
+      throw ArgumentError.value(
+        fd,
+        'preopen fd',
+        'must not collide with stdio descriptors',
+      );
+    }
+    seenPreopen.add(fd);
+  }
+
+  final reservedFds = <int>{...seenStdio, ...seenPreopen};
   for (final fd in socketFds) {
     if (fd < 0) {
       throw ArgumentError.value(fd, 'socket fd', 'must not be negative');

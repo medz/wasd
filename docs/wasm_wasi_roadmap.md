@@ -199,6 +199,7 @@ too broad to verify in one commit.
     `dart test test/wasi_test.dart`;
     `dart test -p chrome test/wasi_test.dart --name "virtual socket descriptors reject initial fd collisions"`;
     `dart test -p chrome test/wasi_test.dart --name "sock_recv and sock_send use configured preview1 stream sockets"`;
+    `dart test -p chrome test/wasi_test.dart --name "fd_prestat_get and fd_prestat_dir_name expose configured preopen"`;
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
     `dart analyze`.
   - Claim impact: prevents inconsistent Preview1 descriptor kind/rights state for
@@ -1006,16 +1007,19 @@ performance visible while the support surface expands.
   - Red test:
     `dart test test/wasi_test.dart --name "virtual socket descriptors reject initial fd collisions"`
     failed before the fix because negative socket fds, stdio/socket collisions,
-    preopen/socket collisions, and duplicate stdio fds were silently accepted.
+    preopen/socket collisions, stdio/preopen collisions, and duplicate stdio fds
+    were silently accepted.
   - Implementation gate: `dart test test/wasi_test.dart`;
     `dart test -p chrome test/wasi_test.dart --name "virtual socket descriptors reject initial fd collisions"`;
     `dart test -p chrome test/wasi_test.dart --name "sock_recv and sock_send use configured preview1 stream sockets"`;
+    `dart test -p chrome test/wasi_test.dart --name "fd_prestat_get and fd_prestat_dir_name expose configured preopen"`;
     `dart analyze`.
   - Performance gate:
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
-  - Done when: initial stdio fds are nonnegative and unique, socket fds are
-    nonnegative, sockets cannot share fd numbers with stdio/preopen descriptors,
-    and normal high-numbered socket injection still works.
+  - Done when: initial stdio fds are nonnegative and unique, preopen fds cannot
+    share fd numbers with stdio descriptors, socket fds are nonnegative, sockets
+    cannot share fd numbers with stdio/preopen descriptors, and normal
+    high-numbered socket injection plus preopen discovery still work.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent

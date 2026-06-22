@@ -511,6 +511,13 @@ void main() {
         throwsArgumentError,
       );
       expect(
+        () => Preview1VirtualFileSystem(
+          stdinFd: 3,
+          preopens: {'/sandbox': '/tmp'},
+        ),
+        throwsArgumentError,
+      );
+      expect(
         () => Preview1VirtualFileSystem(stdinFd: 10, stdoutFd: 10),
         throwsArgumentError,
       );
