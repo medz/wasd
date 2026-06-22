@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:wasd/src/wasi/preview1/common/constants.dart';
+import 'package:wasd/src/wasi/preview1/common/socket_syscalls.dart';
 import 'package:wasd/src/wasi/preview1/common/vfs.dart';
 import 'package:wasd/src/wasi/preview1/socket.dart';
 
@@ -99,6 +100,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
   final socketRecvWaitall = _benchmarkSocketRecvWaitall(options);
   final socketSendRecv = _benchmarkSocketSendRecv(options);
   final socketSendErrorPreflight = _benchmarkSocketSendErrorPreflight(options);
+  final socketShutdownPreflight = _benchmarkSocketShutdownPreflight(options);
   final socketFdReadWrite = _benchmarkSocketFdReadWrite(options);
   final socketDgramTruncation = _benchmarkSocketDatagramTruncation(options);
   final socketDatagramRights = _benchmarkSocketDatagramRights(options);
@@ -128,6 +130,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
     'socket_recv_waitall': socketRecvWaitall.toJson(),
     'socket_send_recv': socketSendRecv.toJson(),
     'socket_send_error_preflight': socketSendErrorPreflight.toJson(),
+    'socket_shutdown_preflight': socketShutdownPreflight.toJson(),
     'socket_fd_read_write': socketFdReadWrite.toJson(),
     'socket_dgram_truncation': socketDgramTruncation.toJson(),
     'socket_datagram_rights': socketDatagramRights.toJson(),
@@ -179,6 +182,7 @@ void _runWarmup(Map<String, Uint8List> files, _Options options) {
   _benchmarkSocketRecvPeek(warmupOptions);
   _benchmarkSocketRecvWaitall(warmupOptions);
   _benchmarkSocketSendRecv(warmupOptions);
+  _benchmarkSocketShutdownPreflight(warmupOptions);
   _benchmarkSocketDatagramTruncation(warmupOptions);
   _benchmarkSocketPollReadiness(warmupOptions);
   _benchmarkSocketRenumberClose(warmupOptions);
@@ -1163,6 +1167,85 @@ _Metric _benchmarkSocketSendErrorPreflight(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketShutdownPreflight(_Options options) {
+  final shutdownSocket = WASIPreview1Socket();
+  final rightlessSocket = WASIPreview1Socket();
+  final vfs = Preview1VirtualFileSystem(
+    sockets: {64: shutdownSocket, 65: rightlessSocket},
+  );
+  final rightsResult = vfs.setDescriptorRights(
+    fd: 65,
+    rightsBase: 0,
+    rightsInheriting: 0,
+  );
+  if (rightsResult != Preview1FdRightsResult.success) {
+    throw StateError('socket shutdown benchmark rights setup failed');
+  }
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final invalidMissingErrno = preview1SockShutdown(vfs: vfs, fd: 999, how: 8);
+    if (invalidMissingErrno != errnoInval) {
+      throw StateError(
+        'shutdown invalid missing-fd preflight failed at iteration $i: '
+        '$invalidMissingErrno',
+      );
+    }
+    checksum += invalidMissingErrno;
+
+    final invalidNonSocketErrno = preview1SockShutdown(vfs: vfs, fd: 1, how: 8);
+    if (invalidNonSocketErrno != errnoInval) {
+      throw StateError(
+        'shutdown invalid non-socket preflight failed at iteration $i: '
+        '$invalidNonSocketErrno',
+      );
+    }
+    checksum += invalidNonSocketErrno;
+
+    final invalidRightlessErrno = preview1SockShutdown(
+      vfs: vfs,
+      fd: 65,
+      how: 8,
+    );
+    if (invalidRightlessErrno != errnoInval) {
+      throw StateError(
+        'shutdown invalid rightless preflight failed at iteration $i: '
+        '$invalidRightlessErrno',
+      );
+    }
+    checksum += invalidRightlessErrno;
+
+    final rightlessErrno = preview1SockShutdown(vfs: vfs, fd: 65, how: 1);
+    if (rightlessErrno != errnoNotcapable) {
+      throw StateError(
+        'shutdown rightless errno failed at iteration $i: $rightlessErrno',
+      );
+    }
+    checksum += rightlessErrno;
+
+    final successErrno = preview1SockShutdown(vfs: vfs, fd: 64, how: 1);
+    if (successErrno != errnoSuccess) {
+      throw StateError(
+        'shutdown success failed at iteration $i: $successErrno',
+      );
+    }
+    checksum += successErrno;
+  }
+  watch.stop();
+  if (!shutdownSocket.receiveShutdown || shutdownSocket.sendShutdown) {
+    throw StateError('socket shutdown benchmark mutated wrong shutdown state');
+  }
+  if (rightlessSocket.receiveShutdown || rightlessSocket.sendShutdown) {
+    throw StateError('socket shutdown rightless path mutated socket state');
+  }
+  return _Metric(
+    operations: options.iterations * 5,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkSocketDatagramTruncation(_Options options) {
   final socket = WASIPreview1Socket.datagram(
     receiveMessages: List<List<int>>.generate(
@@ -1700,6 +1783,10 @@ void _printSingleText(
   _printMetric(
     'socket send error preflight',
     payload['socket_send_error_preflight'],
+  );
+  _printMetric(
+    'socket shutdown preflight',
+    payload['socket_shutdown_preflight'],
   );
   _printMetric('socket fd read/write', payload['socket_fd_read_write']);
   _printMetric(

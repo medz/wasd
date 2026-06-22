@@ -4004,6 +4004,60 @@ void main() {
       );
 
       test(
+        'sock_shutdown validates how before descriptor state',
+        () async {
+          final socket = WASIPreview1Socket(receiveData: utf8.encode('in'));
+          final socketWasi = WASI(sockets: {48: socket});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final sockSend = preview1['sock_send'] as FunctionImportExportValue;
+          final sockShutdown =
+              preview1['sock_shutdown'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const iovPtr = 3344;
+          const recvBufferPtr = 3376;
+          const sendBufferPtr = 3408;
+          const countPtr = 3440;
+          const flagsPtr = 3456;
+
+          bytes.setAll(sendBufferPtr, utf8.encode('out'));
+          data.setUint32(iovPtr, sendBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 3, Endian.little);
+
+          expect(sockShutdown.ref([999, 8]), _errnoInval);
+          expect(sockShutdown.ref([1, 8]), _errnoInval);
+          expect(sockShutdown.ref([48, 0]), _errnoInval);
+          expect(sockShutdown.ref([48, 8]), _errnoInval);
+
+          expect(sockSend.ref([48, iovPtr, 1, 0, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 3);
+          expect(utf8.decode(socket.sentData), 'out');
+
+          data.setUint32(iovPtr, recvBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 2, Endian.little);
+          expect(sockRecv.ref([48, iovPtr, 1, 0, countPtr, flagsPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 2);
+          expect(
+            utf8.decode(bytes.sublist(recvBufferPtr, recvBufferPtr + 2)),
+            'in',
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'sock_send validates iovs before socket send error states',
         () async {
           final stream = WASIPreview1Socket();

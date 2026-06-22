@@ -119,12 +119,12 @@ int preview1SockShutdown({
   required int fd,
   required int how,
 }) {
+  if (how == 0 || (how & ~sdflagKnownMask) != 0) {
+    return errnoInval;
+  }
   final socket = vfs.socketForFd(fd);
   if (socket == null) {
     return _errnoForMissingSocket(vfs, fd);
-  }
-  if (how == 0 || (how & ~sdflagKnownMask) != 0) {
-    return errnoInval;
   }
   final right = _checkDescriptorRight(vfs, fd, rightSockShutdown);
   if (right != errnoSuccess) {
