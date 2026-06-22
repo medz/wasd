@@ -1296,15 +1296,19 @@ int readSocketIntoIov({
       roFlagsPtr: roFlagsPtr,
     );
   }
-  final capacity = _socketIovCapacity(
+  final iovState = _socketIovState(
     bytes: bytes,
     data: data,
     iovs: iovs,
     iovsLen: iovsLen,
   );
-  if (capacity < 0) {
+  if (iovState == _socketIovInvalid) {
     return errnoInval;
   }
+  final capacity = _socketIovCapacityFromState(iovState);
+  final iovSnapshot = _socketIovNeedsSnapshot(iovState)
+      ? _snapshotSocketIovs(data: data, iovs: iovs, iovsLen: iovsLen)
+      : null;
   var totalRead = 0;
   final waitAll = (flags & riflagRecvWaitall) != 0;
   if (waitAll) {
@@ -1317,12 +1321,13 @@ int readSocketIntoIov({
   }
   for (var index = 0; index < iovsLen; index++) {
     final entry = iovs + index * iovecEntrySize;
-    if (entry + iovecEntrySize > bytes.length) {
-      return errnoInval;
-    }
-
-    final buf = data.getUint32(entry, Endian.little);
-    final len = data.getUint32(entry + 4, Endian.little);
+    final snapshotIndex = index * 2;
+    final buf = iovSnapshot == null
+        ? data.getUint32(entry, Endian.little)
+        : iovSnapshot[snapshotIndex];
+    final len = iovSnapshot == null
+        ? data.getUint32(entry + 4, Endian.little)
+        : iovSnapshot[snapshotIndex + 1];
 
     if (len > 0) {
       final read = socket.readInto(
@@ -1369,15 +1374,19 @@ int _readDatagramSocketIntoIov({
   required int nreadPtr,
   required int? roFlagsPtr,
 }) {
-  final capacity = _socketIovCapacity(
+  final iovState = _socketIovState(
     bytes: bytes,
     data: data,
     iovs: iovs,
     iovsLen: iovsLen,
   );
-  if (capacity < 0) {
+  if (iovState == _socketIovInvalid) {
     return errnoInval;
   }
+  final capacity = _socketIovCapacityFromState(iovState);
+  final iovSnapshot = _socketIovNeedsSnapshot(iovState)
+      ? _snapshotSocketIovs(data: data, iovs: iovs, iovsLen: iovsLen)
+      : null;
   if (!socket.receiveShutdown && !socket.hasReceiveMessage) {
     if (capacity > 0) {
       return errnoAgain;
@@ -1393,8 +1402,13 @@ int _readDatagramSocketIntoIov({
   var totalRead = 0;
   for (var index = 0; index < iovsLen; index++) {
     final entry = iovs + index * iovecEntrySize;
-    final buf = data.getUint32(entry, Endian.little);
-    final len = data.getUint32(entry + 4, Endian.little);
+    final snapshotIndex = index * 2;
+    final buf = iovSnapshot == null
+        ? data.getUint32(entry, Endian.little)
+        : iovSnapshot[snapshotIndex];
+    final len = iovSnapshot == null
+        ? data.getUint32(entry + 4, Endian.little)
+        : iovSnapshot[snapshotIndex + 1];
     if (len > 0) {
       final read = socket.readMessageInto(
         bytes,
@@ -1423,27 +1437,59 @@ int _readDatagramSocketIntoIov({
   return errnoSuccess;
 }
 
-int _socketIovCapacity({
+const int _socketIovInvalid = -1;
+
+// Non-negative values are capacities. Values below [_socketIovInvalid] encode a
+// capacity whose receive buffers overlap the iovec table and require a snapshot.
+int _socketIovState({
   required Uint8List bytes,
   required ByteData data,
   required int iovs,
   required int iovsLen,
 }) {
   var capacity = 0;
+  var overlapsIovTable = false;
+  final iovTableEnd = iovs + iovsLen * iovecEntrySize;
   for (var index = 0; index < iovsLen; index++) {
     final entry = iovs + index * iovecEntrySize;
     if (entry + iovecEntrySize > bytes.length) {
-      return -1;
+      return _socketIovInvalid;
     }
     final buf = data.getUint32(entry, Endian.little);
     final len = data.getUint32(entry + 4, Endian.little);
     if (len > 0 && buf + len > bytes.length) {
-      return -1;
+      return _socketIovInvalid;
+    }
+    if (len > 0 && _rangesOverlap(buf, buf + len, iovs, iovTableEnd)) {
+      overlapsIovTable = true;
     }
     capacity += len;
   }
-  return capacity;
+  return overlapsIovTable ? -capacity - 2 : capacity;
 }
+
+bool _socketIovNeedsSnapshot(int state) => state < _socketIovInvalid;
+
+int _socketIovCapacityFromState(int state) =>
+    _socketIovNeedsSnapshot(state) ? -state - 2 : state;
+
+List<int> _snapshotSocketIovs({
+  required ByteData data,
+  required int iovs,
+  required int iovsLen,
+}) {
+  final snapshot = List<int>.filled(iovsLen * 2, 0);
+  for (var index = 0; index < iovsLen; index++) {
+    final entry = iovs + index * iovecEntrySize;
+    final snapshotIndex = index * 2;
+    snapshot[snapshotIndex] = data.getUint32(entry, Endian.little);
+    snapshot[snapshotIndex + 1] = data.getUint32(entry + 4, Endian.little);
+  }
+  return snapshot;
+}
+
+bool _rangesOverlap(int start, int end, int otherStart, int otherEnd) =>
+    start < otherEnd && otherStart < end;
 
 int writeSocketFromIov({
   required Preview1VirtualSocket socket,
@@ -1459,15 +1505,16 @@ int writeSocketFromIov({
       nwrittenPtr + 4 > bytes.length) {
     return errnoInval;
   }
-  final capacity = _socketIovCapacity(
+  final iovState = _socketIovState(
     bytes: bytes,
     data: data,
     iovs: iovs,
     iovsLen: iovsLen,
   );
-  if (capacity < 0) {
+  if (iovState == _socketIovInvalid) {
     return errnoInval;
   }
+  final capacity = _socketIovCapacityFromState(iovState);
   if (socket.sendShutdown) {
     return errnoPipe;
   }

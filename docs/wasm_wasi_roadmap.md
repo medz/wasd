@@ -228,6 +228,44 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-RECV-IOV-SNAPSHOT` - `sock_recv` snapshots overlapping iovec
+  tables before writing receive buffers.
+  - Scope: native/browser shared Preview1 stream and datagram `sock_recv` iovec
+    aliasing semantics in the VFS socket receive helper.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "sock_recv snapshots iovs before writing receive buffers"`
+    failed before the fix with a `RangeError` after the first receive buffer
+    overwrote the second iovec table entry and the host re-read the corrupted
+    pointer.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "sock_recv snapshots iovs before writing receive buffers"`;
+    `dart test test/wasi_test.dart --name "sock_recv"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_recv"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_recv_peek.operations=8000`,
+    `socket_recv_peek.per_operation_us=0.14575`,
+    `socket_recv_waitall.operations=24000`,
+    `socket_recv_waitall.per_operation_us=0.4800833333333333`,
+    `socket_send_recv.operations=56000`,
+    `socket_send_recv.per_operation_us=0.20007142857142857`,
+    `socket_fd_read_write.operations=32000`, and
+    `socket_fd_read_write.per_operation_us=0.22259375` for the socket-heavy
+    distribution. The implementation allocates a flat iov snapshot only when a
+    receive buffer overlaps the iovec table; ordinary non-overlapping recv paths
+    remain no-snapshot.
+  - Done when: stream and datagram `sock_recv` use the iovec descriptors as they
+    existed before any receive buffer writes, while non-overlapping hot paths
+    avoid per-call snapshot allocation.
+  - Evidence update: this checked row, the detailed backlog child row, the
+    verification matrix, and the current baseline.
+  - Claim impact: closes one Preview1 socket memory-aliasing conformance gap for
+    native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-FD-COUNT-PTR-ZERO` - Preview1 fd count outputs may target memory
   address zero.
   - Scope: native/browser Preview1 stdio and virtual-file `fd_read`,
@@ -1043,6 +1081,7 @@ copying their internals directly.
 | [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `path_open` create/exclusive/truncate is covered; full Preview1 conformance still needs broader syscall/spec-suite gates and remaining socket edges. |
 | [x] | Preview1 native/browser fd count-pointer ABI | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test -p chrome test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Result count pointers at guest memory address `0` now write correctly for stdio and virtual-file fd read/write syscalls; full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser clock and poll-clock validation | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "clock_time_get"`; `dart test -p chrome test/wasi_test.dart --name "clock_time_get"`; `dart test test/wasi_test.dart --name "poll_oneoff"`; `dart test -p chrome test/wasi_test.dart --name "poll_oneoff"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Unsupported `clock_time_get` ids now preserve output memory and return `EINVAL`; invalid `poll_oneoff` clock subscriptions now report event `EINVAL`; full Preview1 still needs broader syscall/spec-suite gates. |
+| [x] | Preview1 native/browser socket recv iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv snapshots iovs before writing receive buffers"`; `dart test test/wasi_test.dart --name "sock_recv"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream and datagram `sock_recv` now snapshot overlapping iovec tables before receive-buffer writes; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Resource table plus decoded `resource.*` host binding | `lib/src/wasi/component/resource_table.dart`, `lib/src/wasi/component/resource_host.dart`, `test/wasi_component_resource_table_test.dart`, `test/wasi_component_resource_host_test.dart` | `dart test test/wasi_component_resource_table_test.dart test/wasi_component_resource_host_test.dart` | Full Canonical ABI ownership/drop integration across generated adapters. |
 | [x] | Versioned Preview2/Preview3 capability gates | `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/preview2/component_host.dart`, `lib/src/wasi/preview3/component_host.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_versioned_host_test.dart` | Concrete P2/P3 interface adapter modules instead of generic facade binding. |
@@ -1065,9 +1104,9 @@ This is the implementation state as of 2026-06-23 on `main`.
   sync/advice validation, clock/file/socket polling readiness including
   host-supplied socket readiness hints, `clock_time_get` unsupported-id
   validation, `poll_oneoff` clock subscription validation, fd read/write count
-  outputs at guest memory address zero, host-backed stream/datagram receive/send
-  handlers, and descriptor renumbering. Node still delegates Preview 1 behavior
-  to `node:wasi`.
+  outputs at guest memory address zero, `sock_recv` iovec aliasing protection,
+  host-backed stream/datagram receive/send handlers, and descriptor renumbering.
+  Node still delegates Preview 1 behavior to `node:wasi`.
 - Preview 1 `proc_raise` is no longer a blanket `ENOSYS` stub: native hosts
   deliver mapped process signals by default, native/browser hosts can inject a
   `procRaiseHandler` for controlled signal handling, and browser hosts still
@@ -1081,8 +1120,10 @@ This is the implementation state as of 2026-06-23 on `main`.
   `WASIPreview1Socket`, not raw networking. Stream socket `sock_recv` and
   socket send paths preflight the complete iovec array before mutating guest
   memory, consuming receive data, recording sent bytes, or reporting
-  shutdown/write-ready socket state, matching the datagram path's all-or-error
-  validation boundary.
+  shutdown/write-ready socket state; `sock_recv` snapshots iovec descriptors only
+  when receive buffers overlap the iovec table, preserving syscall-start iov
+  semantics without adding allocation to ordinary non-overlapping receives. This
+  matches the datagram path's all-or-error validation boundary.
 - Preview 1 `path_open` now honors `O_CREAT`, `O_CREAT|O_EXCL`, and `O_TRUNC`
   over shared native/browser VFS state. File creation updates the same path
   indexes and directory child maps as rename/link/unlink, exclusive create
@@ -1547,6 +1588,42 @@ performance visible while the support surface expands.
 
 ## Near-Term Execution Backlog
 
+- [x] `P1-SOCKET-RECV-IOV-SNAPSHOT` - `sock_recv` snapshots overlapping iovec
+  tables before writing receive buffers.
+  - Scope: native/browser shared Preview1 stream and datagram `sock_recv` iovec
+    aliasing semantics in `lib/src/wasi/preview1/common/vfs.dart`.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "sock_recv snapshots iovs before writing receive buffers"`
+    failed before the fix with a `RangeError` when the first receive buffer
+    overlapped and corrupted the second iovec table entry.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "sock_recv snapshots iovs before writing receive buffers"`;
+    `dart test test/wasi_test.dart --name "sock_recv"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_recv"`;
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_recv_peek.operations=8000`,
+    `socket_recv_peek.per_operation_us=0.14575`,
+    `socket_recv_waitall.operations=24000`,
+    `socket_recv_waitall.per_operation_us=0.4800833333333333`,
+    `socket_send_recv.operations=56000`,
+    `socket_send_recv.per_operation_us=0.20007142857142857`,
+    `socket_fd_read_write.operations=32000`, and
+    `socket_fd_read_write.per_operation_us=0.22259375` for the socket-heavy
+    distribution. Snapshot allocation is conditional on receive-buffer/iovec-table
+    overlap, so the common non-overlapping socket recv path remains allocation-free
+    for this guard.
+  - Done when: stream and datagram socket receives both preserve the original
+    iovec descriptors even when receive buffers overlap the iovec table, and the
+    benchmark keeps socket recv hot paths visible.
+  - Evidence update: this checked row plus `Current Execution Board`,
+    `Verification Matrix`, and `Current wasd Baseline`.
+  - Claim impact: contributes to `P1-SOCKET-CONFORMANCE` and `SUPPORT-P1`; does
+    not complete Preview1 full support or any P2/P3 support gate.
 - [x] `P1-FD-COUNT-PTR-ZERO` - Preview1 fd count outputs may target memory
   address zero.
   - Scope: native/browser Preview1 stdio and virtual-file `fd_read`,

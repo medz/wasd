@@ -3289,6 +3289,118 @@ void main() {
       );
 
       test(
+        'sock_recv snapshots iovs before writing receive buffers',
+        () async {
+          final stream = WASIPreview1Socket(
+            receiveData: utf8.encode('abcdefghij'),
+          );
+          final datagram = WASIPreview1Socket.datagram(
+            receiveMessages: [utf8.encode('klmnopqrst')],
+          );
+          final socketWasi = WASI(sockets: {44: stream, 45: datagram});
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const streamIovPtr = 4560;
+          const streamFirstBufferPtr = streamIovPtr + 8;
+          const streamSecondBufferPtr = 4624;
+          const streamCountPtr = 4656;
+          const streamFlagsPtr = 4672;
+          const datagramIovPtr = 4688;
+          const datagramFirstBufferPtr = datagramIovPtr + 8;
+          const datagramSecondBufferPtr = 4752;
+          const datagramCountPtr = 4784;
+          const datagramFlagsPtr = 4800;
+
+          data.setUint32(streamIovPtr, streamFirstBufferPtr, Endian.little);
+          data.setUint32(streamIovPtr + 4, 8, Endian.little);
+          data.setUint32(
+            streamIovPtr + 8,
+            streamSecondBufferPtr,
+            Endian.little,
+          );
+          data.setUint32(streamIovPtr + 12, 2, Endian.little);
+          expect(
+            sockRecv.ref([
+              44,
+              streamIovPtr,
+              2,
+              0,
+              streamCountPtr,
+              streamFlagsPtr,
+            ]),
+            0,
+          );
+          expect(data.getUint32(streamCountPtr, Endian.little), 10);
+          expect(data.getUint16(streamFlagsPtr, Endian.little), 0);
+          expect(
+            utf8.decode(
+              bytes.sublist(streamFirstBufferPtr, streamFirstBufferPtr + 8),
+            ),
+            'abcdefgh',
+          );
+          expect(
+            utf8.decode(
+              bytes.sublist(streamSecondBufferPtr, streamSecondBufferPtr + 2),
+            ),
+            'ij',
+          );
+          expect(stream.remainingReceiveData, isEmpty);
+
+          data.setUint32(datagramIovPtr, datagramFirstBufferPtr, Endian.little);
+          data.setUint32(datagramIovPtr + 4, 8, Endian.little);
+          data.setUint32(
+            datagramIovPtr + 8,
+            datagramSecondBufferPtr,
+            Endian.little,
+          );
+          data.setUint32(datagramIovPtr + 12, 2, Endian.little);
+          expect(
+            sockRecv.ref([
+              45,
+              datagramIovPtr,
+              2,
+              0,
+              datagramCountPtr,
+              datagramFlagsPtr,
+            ]),
+            0,
+          );
+          expect(data.getUint32(datagramCountPtr, Endian.little), 10);
+          expect(data.getUint16(datagramFlagsPtr, Endian.little), 0);
+          expect(
+            utf8.decode(
+              bytes.sublist(datagramFirstBufferPtr, datagramFirstBufferPtr + 8),
+            ),
+            'klmnopqr',
+          );
+          expect(
+            utf8.decode(
+              bytes.sublist(
+                datagramSecondBufferPtr,
+                datagramSecondBufferPtr + 2,
+              ),
+            ),
+            'st',
+          );
+          expect(datagram.remainingReceiveMessages, isEmpty);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'sock_recv handles multi-iov peek without consuming socket data',
         () async {
           final socket = WASIPreview1Socket(receiveData: utf8.encode('abcdef'));
