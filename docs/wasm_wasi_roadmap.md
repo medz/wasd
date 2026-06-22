@@ -173,6 +173,10 @@ This is the implementation state as of 2026-06-22 on `main`.
   `WASIPreview1Socket`, not raw networking.
 - Preview 1 directory entries are indexed through per-directory child maps so
   common path/link/symlink mutation paths rebuild only affected directories.
+  File lookup fallback indexes are also maintained as ordered path buckets, so
+  hard-link, rename, and unlink mutations update only touched lower-path and
+  basename keys instead of rebuilding every file lookup index. Empty-directory
+  removal uses the same child map instead of scanning every virtual path.
   The benchmark entrypoint is
   `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; it reports
   baseline, directory-heavy, descriptor-heavy, and socket-heavy distributions.

@@ -53,12 +53,12 @@ final class Preview1VirtualFileSystem {
         fd: Preview1DescriptorRights.file(),
     };
     _stdioFlagsByFd = {for (final fd in _stdioDescriptorsByFd.keys) fd: 0};
-    _filesByLowerGuestPath = _indexFilesByLowerPath(_filesByGuestPath);
-    _filesByBasenameLower = _indexFilesByBasename(
+    _filePathsByLowerGuestPath = _indexFilePathsByLowerPath(_filesByGuestPath);
+    _filePathsByBasenameLower = _indexFilePathsByBasename(
       _filesByGuestPath,
       compact: false,
     );
-    _filesByBasenameCompact = _indexFilesByBasename(
+    _filePathsByBasenameCompact = _indexFilePathsByBasename(
       _filesByGuestPath,
       compact: true,
     );
@@ -97,9 +97,9 @@ final class Preview1VirtualFileSystem {
   final Map<int, Preview1DescriptorRights> _openDirectoryRightsByFd =
       <int, Preview1DescriptorRights>{};
 
-  late Map<String, Preview1VirtualFile> _filesByLowerGuestPath;
-  late Map<String, Preview1VirtualFile> _filesByBasenameLower;
-  late Map<String, Preview1VirtualFile> _filesByBasenameCompact;
+  late Map<String, List<String>> _filePathsByLowerGuestPath;
+  late Map<String, List<String>> _filePathsByBasenameLower;
+  late Map<String, List<String>> _filePathsByBasenameCompact;
   late final Set<String> _virtualDirectoryPaths;
   late Map<String, Preview1VirtualNodeMetadata> _directoryMetadataByGuestPath;
   late _DirectoryChildrenByPath _directoryChildrenByGuestPath;
@@ -525,7 +525,10 @@ final class Preview1VirtualFileSystem {
       return direct;
     }
 
-    final caseInsensitive = _filesByLowerGuestPath[normalized.toLowerCase()];
+    final caseInsensitive = _lookupIndexedFile(
+      _filePathsByLowerGuestPath,
+      normalized.toLowerCase(),
+    );
     if (caseInsensitive != null) {
       return caseInsensitive;
     }
@@ -535,7 +538,10 @@ final class Preview1VirtualFileSystem {
       return null;
     }
     final basenameLower = basename.toLowerCase();
-    final byBasenameLower = _filesByBasenameLower[basenameLower];
+    final byBasenameLower = _lookupIndexedFile(
+      _filePathsByBasenameLower,
+      basenameLower,
+    );
     if (byBasenameLower != null) {
       return byBasenameLower;
     }
@@ -544,7 +550,7 @@ final class Preview1VirtualFileSystem {
     if (compactBasename.isEmpty) {
       return null;
     }
-    return _filesByBasenameCompact[compactBasename];
+    return _lookupIndexedFile(_filePathsByBasenameCompact, compactBasename);
   }
 
   bool isDirectoryPath(String guestPath) =>
@@ -593,17 +599,7 @@ final class Preview1VirtualFileSystem {
       return Preview1PathMutationResult.notEmpty;
     }
 
-    final childPrefix = '$normalized/';
-    final hasFileChildren = _filesByGuestPath.keys.any(
-      (path) => path.startsWith(childPrefix),
-    );
-    final hasSymlinkChildren = _symlinksByGuestPath.keys.any(
-      (path) => path.startsWith(childPrefix),
-    );
-    final hasDirectoryChildren = _virtualDirectoryPaths.any(
-      (path) => path != normalized && path.startsWith(childPrefix),
-    );
-    if (hasFileChildren || hasSymlinkChildren || hasDirectoryChildren) {
+    if (_directoryChildrenByGuestPath[normalized]?.isNotEmpty ?? false) {
       return Preview1PathMutationResult.notEmpty;
     }
 
@@ -637,7 +633,7 @@ final class Preview1VirtualFileSystem {
       return Preview1PathMutationResult.noEntry;
     }
 
-    _rebuildFileIndexes();
+    _unindexFilePath(normalized);
     _removeDirectoryChild(normalized);
     _rebuildDirectoryEntriesForPaths({dirnameOfGuestPath(normalized)});
     return Preview1PathMutationResult.success;
@@ -667,8 +663,9 @@ final class Preview1VirtualFileSystem {
         return Preview1PathMutationResult.exists;
       }
       _filesByGuestPath.remove(oldNormalized);
+      _unindexFilePath(oldNormalized);
       _filesByGuestPath[newNormalized] = oldFile;
-      _rebuildFileIndexes();
+      _indexFilePath(newNormalized);
       _removeDirectoryChild(oldNormalized);
       _setDirectoryChild(newNormalized, filetypeRegularFile);
       _rebuildDirectoryEntriesForPaths({
@@ -745,7 +742,7 @@ final class Preview1VirtualFileSystem {
     }
 
     _filesByGuestPath[newNormalized] = oldFile;
-    _rebuildFileIndexes();
+    _indexFilePath(newNormalized);
     _setDirectoryChild(newNormalized, filetypeRegularFile);
     _rebuildDirectoryEntriesForPaths({dirnameOfGuestPath(newNormalized)});
     return Preview1PathMutationResult.success;
@@ -889,15 +886,94 @@ final class Preview1VirtualFileSystem {
   }
 
   void _rebuildFileIndexes() {
-    _filesByLowerGuestPath = _indexFilesByLowerPath(_filesByGuestPath);
-    _filesByBasenameLower = _indexFilesByBasename(
+    _filePathsByLowerGuestPath = _indexFilePathsByLowerPath(_filesByGuestPath);
+    _filePathsByBasenameLower = _indexFilePathsByBasename(
       _filesByGuestPath,
       compact: false,
     );
-    _filesByBasenameCompact = _indexFilesByBasename(
+    _filePathsByBasenameCompact = _indexFilePathsByBasename(
       _filesByGuestPath,
       compact: true,
     );
+  }
+
+  Preview1VirtualFile? _lookupIndexedFile(
+    Map<String, List<String>> index,
+    String key,
+  ) {
+    final paths = index[key];
+    if (paths == null || paths.isEmpty) {
+      return null;
+    }
+    return _filesByGuestPath[paths.first];
+  }
+
+  void _indexFilePath(String guestPath) {
+    final normalized = normalizeGuestPath(guestPath);
+    _addFileIndexPath(
+      _filePathsByLowerGuestPath,
+      normalized.toLowerCase(),
+      normalized,
+    );
+    final basenameLower = basenameOfGuestPath(normalized).toLowerCase();
+    if (basenameLower.isEmpty) {
+      return;
+    }
+    _addFileIndexPath(_filePathsByBasenameLower, basenameLower, normalized);
+    final compactBasename = compactPathToken(basenameLower);
+    if (compactBasename.isNotEmpty) {
+      _addFileIndexPath(
+        _filePathsByBasenameCompact,
+        compactBasename,
+        normalized,
+      );
+    }
+  }
+
+  void _unindexFilePath(String guestPath) {
+    final normalized = normalizeGuestPath(guestPath);
+    _removeFileIndexPath(
+      _filePathsByLowerGuestPath,
+      normalized.toLowerCase(),
+      normalized,
+    );
+    final basenameLower = basenameOfGuestPath(normalized).toLowerCase();
+    if (basenameLower.isEmpty) {
+      return;
+    }
+    _removeFileIndexPath(_filePathsByBasenameLower, basenameLower, normalized);
+    final compactBasename = compactPathToken(basenameLower);
+    if (compactBasename.isEmpty) {
+      return;
+    }
+    _removeFileIndexPath(
+      _filePathsByBasenameCompact,
+      compactBasename,
+      normalized,
+    );
+  }
+
+  void _addFileIndexPath(
+    Map<String, List<String>> index,
+    String key,
+    String path,
+  ) {
+    (index[key] ??= <String>[]).add(path);
+  }
+
+  void _removeFileIndexPath(
+    Map<String, List<String>> index,
+    String key,
+    String removedPath,
+  ) {
+    final paths = index[key];
+    if (paths == null) {
+      return;
+    }
+    paths.remove(removedPath);
+    if (paths.isEmpty) {
+      index.remove(key);
+    }
   }
 
   void _rebuildDirectoryEntries() {
@@ -1652,21 +1728,21 @@ Uint8List nulTerminated(String value) =>
 
 Uint8List pathBytes(String value) => Uint8List.fromList(utf8.encode(value));
 
-Map<String, Preview1VirtualFile> _indexFilesByLowerPath(
+Map<String, List<String>> _indexFilePathsByLowerPath(
   Map<String, Preview1VirtualFile> filesByGuestPath,
 ) {
-  final indexed = <String, Preview1VirtualFile>{};
+  final indexed = <String, List<String>>{};
   for (final entry in filesByGuestPath.entries) {
-    indexed.putIfAbsent(entry.key.toLowerCase(), () => entry.value);
+    (indexed[entry.key.toLowerCase()] ??= <String>[]).add(entry.key);
   }
   return indexed;
 }
 
-Map<String, Preview1VirtualFile> _indexFilesByBasename(
+Map<String, List<String>> _indexFilePathsByBasename(
   Map<String, Preview1VirtualFile> filesByGuestPath, {
   required bool compact,
 }) {
-  final indexed = <String, Preview1VirtualFile>{};
+  final indexed = <String, List<String>>{};
   for (final entry in filesByGuestPath.entries) {
     final basenameLower = basenameOfGuestPath(entry.key).toLowerCase();
     if (basenameLower.isEmpty) {
@@ -1676,7 +1752,7 @@ Map<String, Preview1VirtualFile> _indexFilesByBasename(
     if (key.isEmpty) {
       continue;
     }
-    indexed.putIfAbsent(key, () => entry.value);
+    (indexed[key] ??= <String>[]).add(entry.key);
   }
   return indexed;
 }

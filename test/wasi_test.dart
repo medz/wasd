@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:wasd/src/wasi/preview1/common/vfs.dart';
 import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
 import 'support/runtime_environment.dart';
@@ -232,6 +233,60 @@ void main() {
       expect(preview1['sched_yield'], isA<FunctionImportExportValue>());
       expect(preview1['path_open'], isA<FunctionImportExportValue>());
       expect(preview1['fd_seek'], isA<FunctionImportExportValue>());
+    });
+
+    test('virtual file lookup indexes survive file path mutations', () {
+      final vfs = Preview1VirtualFileSystem(
+        preopens: const {'/sandbox': '/sandbox'},
+        files: {
+          '/sandbox/Alpha.TXT': Uint8List.fromList([1]),
+          '/sandbox/alpha.txt': Uint8List.fromList([2]),
+          '/sandbox/dir/Name.wasm': Uint8List.fromList([3]),
+          '/sandbox/other/name.wasm': Uint8List.fromList([4]),
+        },
+      );
+
+      expect(vfs.lookupFile('/sandbox/ALPHA.TXT')!.bytes.single, 1);
+      expect(vfs.lookupFile('/missing/NAME.WASM')!.bytes.single, 3);
+      expect(
+        vfs.linkPath(
+          oldPath: '/sandbox/alpha.txt',
+          newPath: '/sandbox/linked.txt',
+        ),
+        Preview1PathMutationResult.success,
+      );
+      expect(
+        vfs.renamePath(
+          oldPath: '/sandbox/linked.txt',
+          newPath: '/sandbox/Renamed.TXT',
+        ),
+        Preview1PathMutationResult.success,
+      );
+      expect(vfs.lookupFile('/sandbox/renamed.txt')!.bytes.single, 2);
+      expect(
+        vfs.removeDirectory('/sandbox/dir'),
+        Preview1PathMutationResult.notEmpty,
+      );
+
+      expect(
+        vfs.unlinkFile('/sandbox/Alpha.TXT'),
+        Preview1PathMutationResult.success,
+      );
+      expect(vfs.lookupFile('/sandbox/ALPHA.TXT')!.bytes.single, 2);
+      expect(
+        vfs.unlinkFile('/sandbox/dir/Name.wasm'),
+        Preview1PathMutationResult.success,
+      );
+      expect(vfs.lookupFile('/missing/NAME.WASM')!.bytes.single, 4);
+      expect(
+        vfs.removeDirectory('/sandbox/dir'),
+        Preview1PathMutationResult.success,
+      );
+      expect(
+        vfs.unlinkFile('/sandbox/Renamed.TXT'),
+        Preview1PathMutationResult.success,
+      );
+      expect(vfs.lookupFile('/sandbox/renamed.txt'), isNull);
     });
 
     group('with instantiated module', () {
