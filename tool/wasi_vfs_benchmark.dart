@@ -111,6 +111,9 @@ Map<String, Object?> _runBenchmark(_Options options) {
   final socketFileRightsPreflight = _benchmarkSocketFileRightsPreflight(
     options,
   );
+  final socketFilestatRightsPreflight = _benchmarkSocketFilestatRightsPreflight(
+    options,
+  );
   final socketPositionedRightsPreflight =
       _benchmarkSocketPositionedRightsPreflight(options);
   final socketPollReadiness = _benchmarkSocketPollReadiness(options);
@@ -147,6 +150,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
     'socket_connected_rights': socketConnectedRights.toJson(),
     'socket_fdflag_preflight': socketFdflagPreflight.toJson(),
     'socket_file_rights_preflight': socketFileRightsPreflight.toJson(),
+    'socket_filestat_rights_preflight': socketFilestatRightsPreflight.toJson(),
     'socket_positioned_rights_preflight': socketPositionedRightsPreflight
         .toJson(),
     'socket_poll_readiness': socketPollReadiness.toJson(),
@@ -203,6 +207,7 @@ void _runWarmup(Map<String, Uint8List> files, _Options options) {
   _benchmarkSocketConnectedRights(warmupOptions);
   _benchmarkSocketFdflagPreflight(warmupOptions);
   _benchmarkSocketFileRightsPreflight(warmupOptions);
+  _benchmarkSocketFilestatRightsPreflight(warmupOptions);
   _benchmarkSocketPositionedRightsPreflight(warmupOptions);
   _benchmarkSocketPollReadiness(warmupOptions);
   _benchmarkSocketRenumberClose(warmupOptions);
@@ -1956,6 +1961,83 @@ _Metric _benchmarkSocketFileRightsPreflight(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketFilestatRightsPreflight(_Options options) {
+  const fdBase = 57344;
+  final sockets = <int, WASIPreview1Socket>{
+    for (var i = 0; i < options.iterations; i++) ...{
+      fdBase + i: WASIPreview1Socket(),
+      fdBase + options.iterations + i: WASIPreview1Socket(),
+    },
+  };
+  final vfs = Preview1VirtualFileSystem(
+    firstVirtualFd: fdBase + options.iterations * 2,
+    sockets: sockets,
+  );
+  for (var i = 0; i < options.iterations; i++) {
+    final result = vfs.setDescriptorRights(
+      fd: fdBase + i,
+      rightsBase: 0,
+      rightsInheriting: 0,
+    );
+    if (result != Preview1FdRightsResult.success) {
+      throw StateError('socket filestat rights setup failed at iteration $i');
+    }
+  }
+
+  final bytes = Uint8List(128);
+  final data = ByteData.view(bytes.buffer);
+  const filestatPtr = 0;
+  final invalidFilestatPtr = bytes.length - 1;
+  final sentinelPtr = bytes.length - 8;
+  const sentinel = 0x5a17face;
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    final rightlessFd = fdBase + i;
+    final readableFd = fdBase + options.iterations + i;
+
+    final successErrno = preview1FdFilestatGet(
+      vfs: vfs,
+      fd: readableFd,
+      bytes: bytes,
+      data: data,
+      filestatPtr: filestatPtr,
+    );
+    if (successErrno != errnoSuccess ||
+        bytes[filestatPtr + filestatFiletypeOffset] != filetypeSocketStream) {
+      throw StateError(
+        'socket fd_filestat_get success failed at iteration $i: '
+        '$successErrno',
+      );
+    }
+    checksum += successErrno + bytes[filestatPtr + filestatFiletypeOffset];
+
+    data.setUint32(sentinelPtr, sentinel, Endian.little);
+    final rightlessErrno = preview1FdFilestatGet(
+      vfs: vfs,
+      fd: rightlessFd,
+      bytes: bytes,
+      data: data,
+      filestatPtr: invalidFilestatPtr,
+    );
+    if (rightlessErrno != errnoNotcapable ||
+        data.getUint32(sentinelPtr, Endian.little) != sentinel) {
+      throw StateError(
+        'socket fd_filestat_get preflight failed at iteration $i: '
+        '$rightlessErrno',
+      );
+    }
+    checksum += rightlessErrno;
+  }
+  watch.stop();
+  return _Metric(
+    operations: options.iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkSocketPositionedRightsPreflight(_Options options) {
   const fdBase = 53248;
   final sockets = <int, WASIPreview1Socket>{
@@ -2171,6 +2253,10 @@ void _printSingleText(
   _printMetric(
     'socket file rights preflight',
     payload['socket_file_rights_preflight'],
+  );
+  _printMetric(
+    'socket filestat rights preflight',
+    payload['socket_filestat_rights_preflight'],
   );
   _printMetric(
     'socket positioned rights preflight',

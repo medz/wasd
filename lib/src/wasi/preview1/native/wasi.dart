@@ -738,48 +738,13 @@ class WASI implements wasi_iface.WASI {
         final bufPtr = _asInt(args[1]);
 
         final view = _memoryView();
-        if (view == null) {
-          return _errnoInval;
-        }
-        final bytes = view.bytes;
-        final data = view.data;
-        if (bufPtr < 0 || bufPtr + _filestatSize > bytes.length) {
-          return _errnoInval;
-        }
-
-        final opened = _vfs.openFileForFd(fd);
-        final openedDirectory = _vfs.isOpenDirectoryFd(fd);
-        final socket = _vfs.socketForFd(fd);
-        final isStdio = _vfs.stdioKindForFd(fd) != null;
-        final isDir = _vfs.isPreopenDirectoryFd(fd);
-        if (opened == null &&
-            socket == null &&
-            !openedDirectory &&
-            !isStdio &&
-            !isDir) {
-          return _errnoBadf;
-        }
-        final right = _checkDescriptorRight(fd, _rightFdFilestatGet);
-        if (right != _errnoSuccess) {
-          return right;
-        }
-
-        bytes.fillRange(bufPtr, bufPtr + _filestatSize, 0);
-        bytes[bufPtr + 16] = opened != null
-            ? _filetypeRegularFile
-            : socket != null
-            ? socket.fileType
-            : (isDir || openedDirectory)
-            ? _filetypeDirectory
-            : _filetypeCharacterDevice;
-        if (opened != null) {
-          _setUint64(data, bufPtr + 32, opened.bytes.length);
-        }
-        final metadata = _vfs.metadataForFd(fd);
-        if (metadata != null) {
-          _writeFilestatTimes(data, bufPtr, metadata);
-        }
-        return _errnoSuccess;
+        return wasi_fd.preview1FdFilestatGet(
+          vfs: _vfs,
+          fd: fd,
+          bytes: view?.bytes,
+          data: view?.data,
+          filestatPtr: bufPtr,
+        );
       });
 
   wasm.FunctionImportExportValue get _fdFilestatSetSizeImport =>
@@ -2024,7 +1989,6 @@ const int _rightPathRenameTarget = wasi_common.rightPathRenameTarget;
 const int _rightPathFilestatGet = wasi_common.rightPathFilestatGet;
 const int _rightPathFilestatSetSize = wasi_common.rightPathFilestatSetSize;
 const int _rightPathFilestatSetTimes = wasi_common.rightPathFilestatSetTimes;
-const int _rightFdFilestatGet = wasi_common.rightFdFilestatGet;
 const int _rightFdFilestatSetTimes = wasi_common.rightFdFilestatSetTimes;
 const int _rightPathSymlink = wasi_common.rightPathSymlink;
 const int _rightPathRemoveDirectory = wasi_common.rightPathRemoveDirectory;

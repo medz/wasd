@@ -30,6 +30,39 @@ void _setUint64(ByteData data, int offset, int value) {
   data.setUint32(offset + 4, normalized >>> 32, Endian.little);
 }
 
+void _writeFilestatTimes(
+  ByteData data,
+  int filestatPtr,
+  Preview1VirtualNodeMetadata metadata,
+) {
+  _setUint64(
+    data,
+    filestatPtr + filestatAccessTimeOffset,
+    metadata.accessTimeNanos,
+  );
+  _setUint64(
+    data,
+    filestatPtr + filestatModificationTimeOffset,
+    metadata.modificationTimeNanos,
+  );
+}
+
+int _filetypeForDescriptor(
+  Preview1VirtualFileSystem vfs,
+  int fd,
+  Preview1DescriptorKind descriptorKind,
+) {
+  return switch (descriptorKind) {
+    Preview1DescriptorKind.file => filetypeRegularFile,
+    Preview1DescriptorKind.socket => vfs.socketForFd(fd)?.fileType ?? -1,
+    Preview1DescriptorKind.openDirectory ||
+    Preview1DescriptorKind.preopenDirectory => filetypeDirectory,
+    Preview1DescriptorKind.stdin ||
+    Preview1DescriptorKind.stdout ||
+    Preview1DescriptorKind.stderr => filetypeCharacterDevice,
+  };
+}
+
 int preview1FdAllocate({
   required Preview1VirtualFileSystem vfs,
   required int fd,
@@ -74,6 +107,47 @@ int preview1FdFdstatSetFlags({
     return errnoNotcapable;
   }
   return vfs.setDescriptorFlags(fd, flags) ? errnoSuccess : errnoBadf;
+}
+
+int preview1FdFilestatGet({
+  required Preview1VirtualFileSystem vfs,
+  required int fd,
+  required Uint8List? bytes,
+  required ByteData? data,
+  required int filestatPtr,
+}) {
+  final descriptorKind = vfs.descriptorKindForFd(fd);
+  if (descriptorKind == null) {
+    return errnoBadf;
+  }
+  if (!vfs.descriptorHasRight(fd, rightFdFilestatGet)) {
+    return errnoNotcapable;
+  }
+  if (bytes == null || data == null) {
+    return errnoInval;
+  }
+  if (filestatPtr < 0 || filestatPtr + filestatSize > bytes.length) {
+    return errnoInval;
+  }
+
+  final filetype = _filetypeForDescriptor(vfs, fd, descriptorKind);
+  if (filetype < 0) {
+    return errnoBadf;
+  }
+
+  bytes.fillRange(filestatPtr, filestatPtr + filestatSize, 0);
+  bytes[filestatPtr + filestatFiletypeOffset] = filetype;
+  final opened = descriptorKind == Preview1DescriptorKind.file
+      ? vfs.openFileForFd(fd)
+      : null;
+  if (opened != null) {
+    _setUint64(data, filestatPtr + filestatSizeOffset, opened.bytes.length);
+  }
+  final metadata = vfs.metadataForFd(fd);
+  if (metadata != null) {
+    _writeFilestatTimes(data, filestatPtr, metadata);
+  }
+  return errnoSuccess;
 }
 
 int preview1FdFilestatSetSize({

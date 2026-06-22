@@ -2745,6 +2745,54 @@ void main() {
       );
 
       test(
+        'fd_filestat_get descriptor errors do not require bound memory',
+        () async {
+          final unboundWasi = WASI(sockets: {39: WASIPreview1Socket()});
+          final unboundPreview1 =
+              unboundWasi.imports['wasi_snapshot_preview1']!;
+          final unboundFilestatGet =
+              unboundPreview1['fd_filestat_get'] as FunctionImportExportValue;
+          final unboundSetRights =
+              unboundPreview1['fd_fdstat_set_rights']
+                  as FunctionImportExportValue;
+
+          expect(unboundFilestatGet.ref([99, 0]), _errnoBadf);
+          expect(unboundSetRights.ref([39, 0, 0]), 0);
+          expect(unboundFilestatGet.ref([39, 0]), _errnoNotcapable);
+
+          final socketWasi = WASI(sockets: {40: WASIPreview1Socket()});
+          final result = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final instance = result.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final fdFilestatGet =
+              preview1['fd_filestat_get'] as FunctionImportExportValue;
+          final fdFdstatSetRights =
+              preview1['fd_fdstat_set_rights'] as FunctionImportExportValue;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(instance, memory: memory);
+
+          final data = ByteData.view(memory.buffer);
+          final invalidFilestatPtr = memory.buffer.lengthInBytes - 1;
+          data.setUint32(invalidFilestatPtr - 3, 0xfeedface, Endian.little);
+
+          expect(fdFilestatGet.ref([99, invalidFilestatPtr]), _errnoBadf);
+          expect(fdFdstatSetRights.ref([40, 0, 0]), 0);
+          expect(fdFilestatGet.ref([40, invalidFilestatPtr]), _errnoNotcapable);
+          expect(
+            data.getUint32(invalidFilestatPtr - 3, Endian.little),
+            0xfeedface,
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'default socket rights expose socket-specific operations only',
         () async {
           final socket = WASIPreview1Socket();
