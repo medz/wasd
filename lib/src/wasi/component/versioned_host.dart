@@ -1,5 +1,6 @@
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../version.dart';
+import 'adapter_plan.dart';
 import 'async_host.dart';
 import 'canonical_host.dart';
 import 'host.dart';
@@ -170,6 +171,10 @@ final class WASIComponentVersionedBindingPlan {
 
   /// Canonical adapter resource-handle uses captured before host binding.
   List<WASIComponentResourceUse> get resourceUses => componentPlan.resourceUses;
+
+  /// Canonical `lift`/`lower` adapter plans captured before host binding.
+  List<WASIComponentCanonicalAdapterPlan> get adapterPlans =>
+      componentPlan.adapterPlans;
 
   /// Whether [bind] can build a component host binding without throwing.
   bool get canBind => versionErrors.isEmpty && componentPlan.canBind;

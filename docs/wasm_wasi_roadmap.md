@@ -249,7 +249,13 @@ This is the implementation state as of 2026-06-22 on `main`.
   resources plus supported unit, primitive, fixed-size composite, string, and
   fixed-width-element list `stream<T>`/`future<T>` values on the
   shared table only after validation and capability checks pass, and returns
-  the canonical-indexed program from the same shared host state. Async value
+  the canonical-indexed program from the same shared host state. The same
+  component-host plan also captures canonical `lift`/`lower` adapter metadata:
+  decoded function signatures, string encoding and core option indexes,
+  Canonical ABI value-memory codecs for supported parameter/result shapes, and
+  structured `own`/`borrow` resource handle uses. This keeps future adapter
+  generation inputs explicit while `lift`/`lower` execution is still reported
+  as a host capability gap instead of being overclaimed. Async value
   bindings now also expose Canonical ABI memory-copy layout through an
   internal Canonical ABI value-memory codec covering primitive values,
   records/tuples, fixed lists, flags, variants, options, results, enums, and

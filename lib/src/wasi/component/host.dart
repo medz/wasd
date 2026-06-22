@@ -1,4 +1,5 @@
 import '../../wasm/backend/native/interpreter/component.dart';
+import 'adapter_plan.dart';
 import 'async_host.dart';
 import 'canonical_host.dart';
 import 'resource_host.dart';
@@ -38,6 +39,9 @@ final class WASIComponentHost {
             resourceBindings: resourceBindings,
           )
         : const <WASIComponentResourceUse>[];
+    final adapterPlans = canonicalPlan.validationErrors.isEmpty
+        ? componentCanonicalAdapterPlans(component, resourceUses: resourceUses)
+        : const <WASIComponentCanonicalAdapterPlan>[];
     final asyncValueBindings = canonicalPlan.validationErrors.isEmpty
         ? canonicalHost.asyncHost.componentAsyncValueBindings(component)
         : const <WASIComponentAsyncValueBinding>[];
@@ -52,6 +56,7 @@ final class WASIComponentHost {
       canonicalPlan: canonicalPlan,
       resourceBindings: resourceBindings,
       resourceUses: resourceUses,
+      adapterPlans: adapterPlans,
       asyncValueBindings: asyncValueBindings,
       bindingErrors: bindingErrors,
     );
@@ -86,6 +91,7 @@ final class WASIComponentHostBindingPlan {
     required this.canonicalPlan,
     required this.resourceBindings,
     required this.resourceUses,
+    required this.adapterPlans,
     required this.asyncValueBindings,
     required this.bindingErrors,
   }) : _host = host;
@@ -100,6 +106,9 @@ final class WASIComponentHostBindingPlan {
 
   /// Canonical adapter resource-handle uses captured before host binding.
   final List<WASIComponentResourceUse> resourceUses;
+
+  /// Canonical `lift`/`lower` adapter plans captured before host binding.
+  final List<WASIComponentCanonicalAdapterPlan> adapterPlans;
 
   /// Component async stream/future bindings captured before host binding.
   final List<WASIComponentAsyncValueBinding> asyncValueBindings;
