@@ -65,6 +65,8 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentAdapterFlagsEnumFlatInvoke(options.iterations);
   final componentAdapterListFlatInvoke =
       _benchmarkComponentAdapterListFlatInvoke(options.iterations);
+  final componentAdapterOptionFlatInvoke =
+      _benchmarkComponentAdapterOptionFlatInvoke(options.iterations);
   final componentAdapterStringMemoryInvoke =
       _benchmarkComponentAdapterStringMemoryInvoke(options.iterations);
   final componentHostStreamMemoryBinding =
@@ -114,6 +116,8 @@ Future<void> main(List<String> args) async {
         componentAdapterFlagsEnumFlatInvoke.toJson(),
     'component_adapter_list_flat_invoke': componentAdapterListFlatInvoke
         .toJson(),
+    'component_adapter_option_flat_invoke': componentAdapterOptionFlatInvoke
+        .toJson(),
     'component_adapter_string_memory_invoke': componentAdapterStringMemoryInvoke
         .toJson(),
     'component_host_stream_memory_binding': componentHostStreamMemoryBinding
@@ -160,6 +164,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentAdapterRecordFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterFlagsEnumFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterListFlatInvoke(_warmupIterations);
+  _benchmarkComponentAdapterOptionFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringMemoryInvoke(_warmupIterations);
   _benchmarkComponentHostStreamMemoryBinding(_warmupIterations);
   _benchmarkComponentHostRecordStreamMemoryBinding(_warmupIterations);
@@ -758,6 +763,37 @@ _Metric _benchmarkComponentAdapterListFlatInvoke(int iterations) {
   );
 }
 
+_Metric _benchmarkComponentAdapterOptionFlatInvoke(int iterations) {
+  final component = WasmComponent.decode(
+    component_fixtures.canonicalU32OptionLiftLowerComponentBytes(),
+  );
+  final plans = componentCanonicalAdapterPlans(component);
+  final host = const WASIComponentCanonicalAdapterHost();
+  final program = host.bindAdapterPlans(
+    plans,
+    coreFunctions: {1: (_) => _u32SomeValue(41)},
+    componentFunctions: {0: (_) => _u32NoneValue()},
+  );
+  var checksum = 0;
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final lifted = program.invokeFlat(0, const <Object?>[1, 31]);
+    checksum += lifted[0]! as int;
+    checksum += lifted[1]! as int;
+    final lowered = program.invokeFlat(1, const <Object?>[0, 999]);
+    checksum += lowered[0]! as int;
+    checksum += lowered[1]! as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 WasmComponentValueData _recordValue(int left, int right) {
   return WasmComponentValueData(
     kind: WasmComponentValueDataKind.record,
@@ -797,6 +833,27 @@ void _writeU32List(Memory memory, int pointer, List<int> values) {
   for (var i = 0; i < values.length; i++) {
     data.setUint32(pointer + i * 4, values[i], Endian.little);
   }
+}
+
+WasmComponentValueData _u32SomeValue(int value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    isSome: true,
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.integer,
+      rawBytes: Uint8List(0),
+      integer: value,
+    ),
+  );
+}
+
+WasmComponentValueData _u32NoneValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    isSome: false,
+  );
 }
 
 WasmComponentValueData _flagsValue(List<String> labels) {

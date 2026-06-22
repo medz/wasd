@@ -1342,6 +1342,12 @@ final class _VariantLayout extends _CanonicalValueLayout {
         return index;
       }
     }
+    if (kind == WasmComponentValueDataKind.option && value.isSome != null) {
+      return value.isSome! ? 1 : 0;
+    }
+    if (kind == WasmComponentValueDataKind.result && value.isOk != null) {
+      return value.isOk! ? 0 : 1;
+    }
     throw StateError('WASI component canonical variant value needs a case.');
   }
 }

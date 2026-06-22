@@ -156,6 +156,15 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        labels = const <String>[],
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
+  /// Option tag plus payload flat layout.
+  const WASIComponentCanonicalAdapterFlatValuePlan.option({
+    required this.element,
+  }) : kind = WASIComponentCanonicalAdapterFlatValueKind.option,
+       primitive = null,
+       memoryCodec = null,
+       labels = const <String>[],
+       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
+
   /// Composite scalar flat layout.
   const WASIComponentCanonicalAdapterFlatValuePlan.composite({
     required this.kind,
@@ -196,6 +205,9 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
     if (kind == WASIComponentCanonicalAdapterFlatValueKind.list) {
       return 2;
     }
+    if (kind == WASIComponentCanonicalAdapterFlatValueKind.option) {
+      return 1 + element!.flatLength;
+    }
     return fields.fold<int>(
       0,
       (length, field) => length + field.value.flatLength,
@@ -225,6 +237,9 @@ enum WASIComponentCanonicalAdapterFlatValueKind {
 
   /// Dynamic list represented by a `(ptr, len)` scalar pair.
   list,
+
+  /// Option represented by a tag plus payload scalar sequence.
+  option,
 }
 
 /// Nested field in a flat Canonical ABI scalar layout.
@@ -507,8 +522,18 @@ final class _FlatLayoutResolver {
                 element: elementLayout,
                 memoryCodec: memoryCodec,
               );
-      case WasmComponentDefinedValueTypeKind.variant:
       case WasmComponentDefinedValueTypeKind.option:
+        final elementType = type.elementType;
+        if (elementType == null) {
+          return null;
+        }
+        final elementLayout = resolveValueType(elementType);
+        return elementLayout == null
+            ? null
+            : WASIComponentCanonicalAdapterFlatValuePlan.option(
+                element: elementLayout,
+              );
+      case WasmComponentDefinedValueTypeKind.variant:
       case WasmComponentDefinedValueTypeKind.result:
       case WasmComponentDefinedValueTypeKind.own:
       case WasmComponentDefinedValueTypeKind.borrow:

@@ -181,6 +181,40 @@ void main() {
       }
     });
 
+    test('plan option flat value layouts', () {
+      final component = WasmComponent.decode(
+        canonicalU32OptionLiftLowerComponentBytes(),
+      );
+
+      expect(component.validate(), isEmpty);
+
+      final plans = componentCanonicalAdapterPlans(component);
+
+      expect(plans, hasLength(2));
+      for (final plan in plans) {
+        expect(plan.params, hasLength(1));
+        expect(plan.params.single.label, 'input');
+        expect(plan.params.single.byteLength, 8);
+        expect(plan.params.single.alignment, 4);
+        expect(plan.params.single.flatLength, 2);
+        expect(
+          plan.params.single.flatLayout!.kind,
+          WASIComponentCanonicalAdapterFlatValueKind.option,
+        );
+        expect(plan.result, isNotNull);
+        expect(plan.result!.byteLength, 8);
+        expect(plan.result!.alignment, 4);
+        expect(plan.result!.flatLength, 2);
+        expect(
+          plan.result!.flatLayout!.kind,
+          WASIComponentCanonicalAdapterFlatValueKind.option,
+        );
+        expect(plan.hasDynamicPayload, isFalse);
+        expect(plan.memoryIndex, 0);
+        expect(plan.reallocIndex, 0);
+      }
+    });
+
     test('executes primitive lift and lower plans with direct callbacks', () {
       final component = WasmComponent.decode(
         canonicalPrimitiveLiftLowerComponentBytes(),
@@ -517,6 +551,48 @@ void main() {
       );
     });
 
+    test('invokes option adapter programs through flat tag payload pairs', () {
+      final component = WasmComponent.decode(
+        canonicalU32OptionLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+
+      final program = host.bindAdapterPlans(
+        plans,
+        coreFunctions: {
+          1: (args) {
+            final option = args.single! as WasmComponentValueData;
+            expect(option.kind, WasmComponentValueDataKind.option);
+            expect(option.index, 1);
+            expect(option.label, 'some');
+            expect(option.isSome, isTrue);
+            expect(option.associatedValue!.integer, 31);
+            return _u32SomeValue(41);
+          },
+        },
+        componentFunctions: {
+          0: (args) {
+            final option = args.single! as WasmComponentValueData;
+            expect(option.kind, WasmComponentValueDataKind.option);
+            expect(option.index, 0);
+            expect(option.label, 'none');
+            expect(option.isSome, isFalse);
+            expect(option.associatedValue, isNull);
+            return _u32NoneValue();
+          },
+        },
+      );
+
+      expect(program.invokeFlat(0, const <Object?>[1, 31]), [1, 41]);
+      expect(program.invokeFlat(1, const <Object?>[0, 999]), [0, 0]);
+      expect(
+        () => program.invokeFlat(0, const <Object?>[2, 0]),
+        throwsStateError,
+      );
+      expect(() => program.invokeFlat(0, const <Object?>[1]), throwsStateError);
+    });
+
     test('invokes adapter programs through flat primitive values', () {
       final component = WasmComponent.decode(
         canonicalPrimitiveLiftLowerComponentBytes(),
@@ -847,6 +923,27 @@ WasmComponentValueData _u32ListValue(List<int> values) {
           integer: value,
         ),
     ],
+  );
+}
+
+WasmComponentValueData _u32SomeValue(int value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    isSome: true,
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.integer,
+      rawBytes: Uint8List(0),
+      integer: value,
+    ),
+  );
+}
+
+WasmComponentValueData _u32NoneValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    isSome: false,
   );
 }
 
