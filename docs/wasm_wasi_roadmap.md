@@ -217,6 +217,17 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-NONSOCKET-ERRNO` - Socket syscalls report `NOTSOCK` for
+  descriptors that exist but are not sockets.
+  - Evidence:
+    `dart test test/wasi_test.dart --name "socket syscalls return notsock for non-socket descriptors"`
+    failed before the fix because `sock_accept`, `sock_recv`, `sock_send`, and
+    `sock_shutdown` returned `BADF` for the configured preopen fd, then passed
+    after the fix;
+    `dart test -p chrome test/wasi_test.dart --name "socket syscalls return notsock for non-socket descriptors"`.
+  - Claim impact: tightens native/browser Preview1 socket errno classification
+    and preserves output pointer state on non-socket descriptor errors; does not
+    complete the parent `P1-SOCKET-CONFORMANCE` row.
 - [x] `CM-NESTED-ASYNC-VALUE-VALIDATION` - Component validation rejects nested
   stream/future element shapes before async host binding.
   - Evidence:
@@ -1027,6 +1038,32 @@ performance visible while the support surface expands.
     this row with the exact commands run.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete it until the
     Preview1 socket and runtime gates are all checked.
+- [x] `P1-SOCKET-NONSOCKET-ERRNO` - Socket syscalls report `NOTSOCK` for
+  non-socket descriptors.
+  - Scope: native/browser Preview1 `sock_accept`, `sock_recv`, `sock_send`, and
+    `sock_shutdown` errno classification before memory or socket state mutation.
+  - Edit targets: `lib/src/wasi/preview1/common/constants.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "socket syscalls return notsock for non-socket descriptors"`
+    failed before the fix because a valid preopen fd returned `BADF` instead of
+    `NOTSOCK`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "socket syscalls return notsock for non-socket descriptors"`;
+    `dart test -p chrome test/wasi_test.dart --name "socket syscalls return notsock for non-socket descriptors"`;
+    `dart analyze`.
+  - Performance gate: N/A; this only changes the existing error branch after a
+    failed socket descriptor lookup and does not alter successful socket hot
+    paths.
+  - Done when: known non-socket descriptors return `NOTSOCK`, unknown
+    descriptors still return `BADF`, output pointers remain unchanged on the
+    error path, and native/browser behavior agrees.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete the parent
+    socket conformance row.
 - [x] `P1-SOCKET-HOST-STREAM-WAITALL-CHUNKS` - Host-backed stream
   `RECV_WAITALL` drains chunked providers.
   - Scope: native/browser shared Preview1 stream sockets backed by

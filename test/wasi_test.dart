@@ -25,7 +25,9 @@ const int _rightsAll = (1 << 30) - 1;
 const int _filetypeSocketDgram = 5;
 const int _filetypeSocketStream = 6;
 const int _errnoAgain = 6;
+const int _errnoBadf = 8;
 const int _errnoInval = 28;
+const int _errnoNotsock = 57;
 const int _errnoNotcapable = 76;
 const int _errnoPipe = 64;
 const int _riflagRecvWaitall = 2;
@@ -2129,6 +2131,58 @@ void main() {
       );
 
       test(
+        'socket syscalls return notsock for non-socket descriptors',
+        () {
+          final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+          final sockAccept =
+              preview1['sock_accept'] as FunctionImportExportValue;
+          final sockRecv = preview1['sock_recv'] as FunctionImportExportValue;
+          final sockSend = preview1['sock_send'] as FunctionImportExportValue;
+          final sockShutdown =
+              preview1['sock_shutdown'] as FunctionImportExportValue;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
+          wasi.finalizeBindings(instance, memory: memory);
+
+          final data = ByteData.view(memory.buffer);
+          const iovPtr = 3264;
+          const bufferPtr = 3296;
+          const countPtr = 3328;
+          const flagsPtr = 3344;
+          const acceptedFdPtr = 3360;
+
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 0, Endian.little);
+          data.setUint32(countPtr, 0xfeedface, Endian.little);
+          data.setUint16(flagsPtr, 0xbeef, Endian.little);
+          data.setUint32(acceptedFdPtr, 0xdeadbeef, Endian.little);
+
+          expect(sockAccept.ref([3, 0, acceptedFdPtr]), _errnoNotsock);
+          expect(data.getUint32(acceptedFdPtr, Endian.little), 0xdeadbeef);
+          expect(
+            sockRecv.ref([3, iovPtr, 1, 0, countPtr, flagsPtr]),
+            _errnoNotsock,
+          );
+          expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+          expect(data.getUint16(flagsPtr, Endian.little), 0xbeef);
+          expect(sockSend.ref([3, iovPtr, 1, 0, countPtr]), _errnoNotsock);
+          expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+          expect(sockShutdown.ref([3, 3]), _errnoNotsock);
+
+          expect(sockAccept.ref([99, 0, acceptedFdPtr]), _errnoBadf);
+          expect(
+            sockRecv.ref([99, iovPtr, 1, 0, countPtr, flagsPtr]),
+            _errnoBadf,
+          );
+          expect(sockSend.ref([99, iovPtr, 1, 0, countPtr]), _errnoBadf);
+          expect(sockShutdown.ref([99, 3]), _errnoBadf);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'sock_accept rejects datagram sockets',
         () async {
           final datagram = WASIPreview1Socket.datagram();
@@ -2692,7 +2746,7 @@ void main() {
           expect(sockRecv.ref([30, iovPtr, 1, 0, countPtr, flagsPtr]), 0);
           expect(data.getUint32(countPtr, Endian.little), 0);
           expect(sockShutdown.ref([30, 8]), 28);
-          expect(sockShutdown.ref([1, 1]), 8);
+          expect(sockShutdown.ref([1, 1]), _errnoNotsock);
         },
         skip: _skipOnNode(
           'Skipping on Node.js; socket behavior is delegated to node:wasi.',

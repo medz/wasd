@@ -385,7 +385,7 @@ class WASI implements wasi.WASI {
         }
         final socket = _vfs.socketForFd(fd);
         if (socket == null) {
-          return _errnoBadf;
+          return _errnoForMissingSocket(fd);
         }
         final right = _checkDescriptorRight(fd, _rightSockAccept);
         if (right != _errnoSuccess) {
@@ -419,7 +419,7 @@ class WASI implements wasi.WASI {
         final fd = _asInt(args[0]);
         final socket = _vfs.socketForFd(fd);
         if (socket == null) {
-          return _errnoBadf;
+          return _errnoForMissingSocket(fd);
         }
         final right = _checkDescriptorRight(fd, _rightFdRead);
         if (right != _errnoSuccess) {
@@ -453,7 +453,7 @@ class WASI implements wasi.WASI {
         final fd = _asInt(args[0]);
         final socket = _vfs.socketForFd(fd);
         if (socket == null) {
-          return _errnoBadf;
+          return _errnoForMissingSocket(fd);
         }
         final right = _checkDescriptorRight(fd, _rightFdWrite);
         if (right != _errnoSuccess) {
@@ -487,7 +487,7 @@ class WASI implements wasi.WASI {
         final fd = _asInt(args[0]);
         final socket = _vfs.socketForFd(fd);
         if (socket == null) {
-          return _errnoBadf;
+          return _errnoForMissingSocket(fd);
         }
         final how = _asInt(args[1]);
         if (how == 0 || (how & ~_sdflagKnownMask) != 0) {
@@ -1619,6 +1619,9 @@ class WASI implements wasi.WASI {
 
   bool _isOpenDescriptor(int fd) => _vfs.descriptorKindForFd(fd) != null;
 
+  int _errnoForMissingSocket(int fd) =>
+      _isOpenDescriptor(fd) ? _errnoNotsock : _errnoBadf;
+
   int _checkDescriptorRight(int fd, int right) {
     if (!_isOpenDescriptor(fd)) {
       return _errnoBadf;
@@ -2101,6 +2104,7 @@ const int _errnoNoent = wasi_common.errnoNoent;
 const int _errnoNosys = wasi_common.errnoNosys;
 const int _errnoNotdir = wasi_common.errnoNotdir;
 const int _errnoNotempty = wasi_common.errnoNotempty;
+const int _errnoNotsock = wasi_common.errnoNotsock;
 const int _errnoNotcapable = wasi_common.errnoNotcapable;
 const int _errnoPipe = wasi_common.errnoPipe;
 const int _prestatSize = wasi_common.prestatSize;
