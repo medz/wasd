@@ -101,9 +101,6 @@ int preview1SockSend({
   if (flags != 0) {
     return errnoInval;
   }
-  if (socket.sendShutdown) {
-    return errnoPipe;
-  }
   if (bytes == null || data == null) {
     return errnoInval;
   }

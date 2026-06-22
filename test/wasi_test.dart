@@ -3617,6 +3617,67 @@ void main() {
       );
 
       test(
+        'sock_send validates iovs before socket send error states',
+        () async {
+          final stream = WASIPreview1Socket();
+          final datagram = WASIPreview1Socket.datagram();
+          final blocked = WASIPreview1Socket(writeReady: false);
+          stream.shutdown(receive: false, send: true);
+          datagram.shutdown(receive: false, send: true);
+          final socketWasi = WASI(
+            sockets: {31: stream, 32: datagram, 33: blocked},
+          );
+          final socketResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            socketWasi.imports,
+          );
+          final socketInstance = socketResult.instance;
+          final preview1 = socketWasi.imports['wasi_snapshot_preview1']!;
+          final sockSend = preview1['sock_send'] as FunctionImportExportValue;
+          final memory =
+              (socketInstance.exports['memory'] as MemoryImportExportValue).ref;
+          socketWasi.finalizeBindings(socketInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const iovPtr = 3696;
+          const bufferPtr = 3728;
+          const countPtr = 3760;
+          final invalidBufferPtr = bytes.length - 2;
+
+          data.setUint32(iovPtr, invalidBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 4, Endian.little);
+          data.setUint32(countPtr, 0xfeedface, Endian.little);
+          expect(sockSend.ref([31, iovPtr, 1, 0, countPtr]), _errnoInval);
+          expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+          expect(stream.sentData, isEmpty);
+
+          data.setUint32(countPtr, 0xfeedface, Endian.little);
+          expect(sockSend.ref([32, iovPtr, 1, 0, countPtr]), _errnoInval);
+          expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+          expect(datagram.sentMessages, isEmpty);
+
+          data.setUint32(countPtr, 0xfeedface, Endian.little);
+          expect(sockSend.ref([33, iovPtr, 1, 0, countPtr]), _errnoInval);
+          expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+          expect(blocked.sentData, isEmpty);
+
+          bytes.setAll(bufferPtr, utf8.encode('out'));
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 3, Endian.little);
+          expect(sockSend.ref([31, iovPtr, 1, 0, countPtr]), _errnoPipe);
+          expect(sockSend.ref([32, iovPtr, 1, 0, countPtr]), _errnoPipe);
+          expect(sockSend.ref([33, iovPtr, 1, 0, countPtr]), _errnoAgain);
+          expect(stream.sentData, isEmpty);
+          expect(datagram.sentMessages, isEmpty);
+          expect(blocked.sentData, isEmpty);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; socket behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'sock_send reports pipe after write-side shutdown',
         () async {
           final socket = WASIPreview1Socket();

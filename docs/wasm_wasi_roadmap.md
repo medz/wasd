@@ -223,6 +223,26 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-SOCKET-SEND-ERROR-PREFLIGHT` - Socket send iovec validation wins over
+  shutdown and write-ready error states.
+  - Evidence:
+    the focused red test initially named
+    `sock_send validates iovs before send-side shutdown state` failed before the
+    fix because `sock_send` returned `EPIPE` before checking the invalid iov;
+    after adding blocked-stream coverage, the final executable gates passed:
+    `dart test test/wasi_test.dart --name "sock_send validates iovs before socket send error states"`;
+    `dart test test/wasi_test.dart --name "sock_send validates iovs before socket send error states|sock_send reports pipe after write-side shutdown|sock_recv and sock_send validate stream iovs before side effects"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_send validates iovs before socket send error states|sock_send reports pipe after write-side shutdown|sock_recv and sock_send validate stream iovs before side effects"`;
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `socket_send_error_preflight.operations=48000` and
+    `socket_send_error_preflight.per_operation_us=0.011375` for the socket-heavy
+    distribution.
+  - Spec reference: Preview1 socket writes are guest-memory iovec operations;
+    invalid iovs must not be hidden by socket shutdown or would-block state, and
+    error paths must leave `nwritten` and host send queues unchanged.
+  - Claim impact: closes one Preview1 socket error-ordering gap for
+    native/browser hosts; does not complete `P1-SOCKET-CONFORMANCE`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-DATAGRAM-RIGHTS-NARROW` - Datagram sockets do not expose
   listener-only `SOCK_ACCEPT` capability.
   - Evidence:
@@ -881,9 +901,10 @@ This is the implementation state as of 2026-06-22 on `main`.
   syscalls, so native/browser socket support is host-provided descriptor
   injection through
   `WASIPreview1Socket`, not raw networking. Stream socket `sock_recv` and
-  `sock_send` preflight the complete iovec array before mutating guest memory,
-  consuming receive data, or recording sent bytes, matching the datagram path's
-  all-or-error validation boundary.
+  socket send paths preflight the complete iovec array before mutating guest
+  memory, consuming receive data, recording sent bytes, or reporting
+  shutdown/write-ready socket state, matching the datagram path's all-or-error
+  validation boundary.
 - Preview 1 `path_open` now honors `O_CREAT`, `O_CREAT|O_EXCL`, and `O_TRUNC`
   over shared native/browser VFS state. File creation updates the same path
   indexes and directory child maps as rename/link/unlink, exclusive create
@@ -1400,6 +1421,36 @@ performance visible while the support surface expands.
     this row with the exact commands run.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete it until the
     Preview1 socket and runtime gates are all checked.
+- [x] `P1-SOCKET-SEND-ERROR-PREFLIGHT` - Socket send iovec validation wins over
+  shutdown and write-ready error states.
+  - Scope: shared Preview1 native/browser `sock_send` and VFS socket write error
+    ordering for stream and datagram descriptors.
+  - Edit targets: `lib/src/wasi/preview1/common/socket_syscalls.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`,
+    `tool/wasi_vfs_benchmark.dart`, and this roadmap.
+  - Red test:
+    focused test initially named
+    `sock_send validates iovs before send-side shutdown state` failed before the
+    fix because send-side shutdown returned `EPIPE` before the invalid iov was
+    checked; the final checked test is named
+    `sock_send validates iovs before socket send error states`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "sock_send validates iovs before socket send error states"`;
+    `dart test test/wasi_test.dart --name "sock_send validates iovs before socket send error states|sock_send reports pipe after write-side shutdown|sock_recv and sock_send validate stream iovs before side effects"`;
+    `dart test -p chrome test/wasi_test.dart --name "sock_send validates iovs before socket send error states|sock_send reports pipe after write-side shutdown|sock_recv and sock_send validate stream iovs before side effects"`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; the
+    socket-heavy distribution reported
+    `socket_send_error_preflight.operations=48000` and
+    `socket_send_error_preflight.per_operation_us=0.011375`.
+  - Done when: invalid send iovs return `EINVAL` before shutdown or would-block
+    state, valid iovs still report `EPIPE`/`EAGAIN`, `nwritten` remains
+    unchanged, no stream/datagram send queues are mutated, and the benchmark
+    names this error preflight path.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: contributes to `SUPPORT-P1`; does not complete Preview1 full
+    support or any P2/P3 support gate.
 - [x] `P1-SOCKET-ACCEPT-RECEIVE-SHUTDOWN` - Listener receive shutdown terminates
   pending accepts without fd side effects.
   - Scope: shared Preview1 stream listener shutdown state, `sock_accept`,

@@ -97,6 +97,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
   final socketRecvPeek = _benchmarkSocketRecvPeek(options);
   final socketRecvWaitall = _benchmarkSocketRecvWaitall(options);
   final socketSendRecv = _benchmarkSocketSendRecv(options);
+  final socketSendErrorPreflight = _benchmarkSocketSendErrorPreflight(options);
   final socketFdReadWrite = _benchmarkSocketFdReadWrite(options);
   final socketDgramTruncation = _benchmarkSocketDatagramTruncation(options);
   final socketDatagramRights = _benchmarkSocketDatagramRights(options);
@@ -124,6 +125,7 @@ Map<String, Object?> _runBenchmark(_Options options) {
     'socket_recv_peek': socketRecvPeek.toJson(),
     'socket_recv_waitall': socketRecvWaitall.toJson(),
     'socket_send_recv': socketSendRecv.toJson(),
+    'socket_send_error_preflight': socketSendErrorPreflight.toJson(),
     'socket_fd_read_write': socketFdReadWrite.toJson(),
     'socket_dgram_truncation': socketDgramTruncation.toJson(),
     'socket_datagram_rights': socketDatagramRights.toJson(),
@@ -917,6 +919,162 @@ _Metric _benchmarkSocketFdReadWrite(_Options options) {
   );
 }
 
+_Metric _benchmarkSocketSendErrorPreflight(_Options options) {
+  final shutdownStream = WASIPreview1Socket();
+  final shutdownDatagram = WASIPreview1Socket.datagram();
+  final blockedStream = WASIPreview1Socket(writeReady: false);
+  shutdownStream.shutdown(receive: false, send: true);
+  shutdownDatagram.shutdown(receive: false, send: true);
+  final vfs = Preview1VirtualFileSystem(
+    sockets: {64: shutdownStream, 65: shutdownDatagram, 66: blockedStream},
+  );
+  final shutdownStreamDescriptor = vfs.socketForFd(64);
+  final shutdownDatagramDescriptor = vfs.socketForFd(65);
+  final blockedStreamDescriptor = vfs.socketForFd(66);
+  if (shutdownStreamDescriptor == null ||
+      shutdownDatagramDescriptor == null ||
+      blockedStreamDescriptor == null) {
+    throw StateError('socket descriptor missing for send preflight benchmark');
+  }
+
+  final bytes = Uint8List(128);
+  final data = ByteData.view(bytes.buffer);
+  const iovPtr = 0;
+  const bufferPtr = 32;
+  const countPtr = 96;
+  final invalidBufferPtr = bytes.length - 2;
+  bytes.setAll(bufferPtr, [1, 2, 3, 4]);
+
+  var checksum = 0;
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < options.iterations; i++) {
+    data.setUint32(iovPtr, invalidBufferPtr, Endian.little);
+    data.setUint32(iovPtr + 4, 4, Endian.little);
+
+    data.setUint32(countPtr, 0x7fffffff, Endian.little);
+    final invalidShutdownStreamErrno = writeSocketFromIov(
+      socket: shutdownStreamDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 1,
+      nwrittenPtr: countPtr,
+    );
+    if (invalidShutdownStreamErrno != errnoInval ||
+        data.getUint32(countPtr, Endian.little) != 0x7fffffff) {
+      throw StateError(
+        'shutdown stream send preflight failed at iteration $i: '
+        '$invalidShutdownStreamErrno',
+      );
+    }
+    checksum += invalidShutdownStreamErrno;
+
+    data.setUint32(countPtr, 0x7fffffff, Endian.little);
+    final invalidShutdownDatagramErrno = writeSocketFromIov(
+      socket: shutdownDatagramDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 1,
+      nwrittenPtr: countPtr,
+    );
+    if (invalidShutdownDatagramErrno != errnoInval ||
+        data.getUint32(countPtr, Endian.little) != 0x7fffffff) {
+      throw StateError(
+        'shutdown datagram send preflight failed at iteration $i: '
+        '$invalidShutdownDatagramErrno',
+      );
+    }
+    checksum += invalidShutdownDatagramErrno;
+
+    data.setUint32(countPtr, 0x7fffffff, Endian.little);
+    final invalidBlockedStreamErrno = writeSocketFromIov(
+      socket: blockedStreamDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 1,
+      nwrittenPtr: countPtr,
+    );
+    if (invalidBlockedStreamErrno != errnoInval ||
+        data.getUint32(countPtr, Endian.little) != 0x7fffffff) {
+      throw StateError(
+        'blocked stream send preflight failed at iteration $i: '
+        '$invalidBlockedStreamErrno',
+      );
+    }
+    checksum += invalidBlockedStreamErrno;
+
+    data.setUint32(iovPtr, bufferPtr, Endian.little);
+    data.setUint32(iovPtr + 4, 4, Endian.little);
+
+    data.setUint32(countPtr, 0x7fffffff, Endian.little);
+    final shutdownStreamErrno = writeSocketFromIov(
+      socket: shutdownStreamDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 1,
+      nwrittenPtr: countPtr,
+    );
+    if (shutdownStreamErrno != errnoPipe ||
+        data.getUint32(countPtr, Endian.little) != 0x7fffffff) {
+      throw StateError(
+        'shutdown stream send errno failed at iteration $i: '
+        '$shutdownStreamErrno',
+      );
+    }
+    checksum += shutdownStreamErrno;
+
+    data.setUint32(countPtr, 0x7fffffff, Endian.little);
+    final shutdownDatagramErrno = writeSocketFromIov(
+      socket: shutdownDatagramDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 1,
+      nwrittenPtr: countPtr,
+    );
+    if (shutdownDatagramErrno != errnoPipe ||
+        data.getUint32(countPtr, Endian.little) != 0x7fffffff) {
+      throw StateError(
+        'shutdown datagram send errno failed at iteration $i: '
+        '$shutdownDatagramErrno',
+      );
+    }
+    checksum += shutdownDatagramErrno;
+
+    data.setUint32(countPtr, 0x7fffffff, Endian.little);
+    final blockedStreamErrno = writeSocketFromIov(
+      socket: blockedStreamDescriptor,
+      bytes: bytes,
+      data: data,
+      iovs: iovPtr,
+      iovsLen: 1,
+      nwrittenPtr: countPtr,
+    );
+    if (blockedStreamErrno != errnoAgain ||
+        data.getUint32(countPtr, Endian.little) != 0x7fffffff) {
+      throw StateError(
+        'blocked stream send errno failed at iteration $i: '
+        '$blockedStreamErrno',
+      );
+    }
+    checksum += blockedStreamErrno;
+  }
+  watch.stop();
+  if (shutdownStream.sentData.isNotEmpty ||
+      shutdownDatagram.sentMessages.isNotEmpty ||
+      blockedStream.sentData.isNotEmpty) {
+    throw StateError('socket send preflight wrote data');
+  }
+  return _Metric(
+    operations: options.iterations * 6,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
 _Metric _benchmarkSocketDatagramTruncation(_Options options) {
   final socket = WASIPreview1Socket.datagram(
     receiveMessages: List<List<int>>.generate(
@@ -1433,6 +1591,10 @@ void _printSingleText(
   _printMetric('socket recv peek', payload['socket_recv_peek']);
   _printMetric('socket recv waitall', payload['socket_recv_waitall']);
   _printMetric('socket send/recv', payload['socket_send_recv']);
+  _printMetric(
+    'socket send error preflight',
+    payload['socket_send_error_preflight'],
+  );
   _printMetric('socket fd read/write', payload['socket_fd_read_write']);
   _printMetric(
     'socket datagram truncation',

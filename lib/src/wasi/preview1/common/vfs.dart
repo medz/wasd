@@ -1454,6 +1454,15 @@ int writeSocketFromIov({
       nwrittenPtr + 4 > bytes.length) {
     return errnoInval;
   }
+  final capacity = _socketIovCapacity(
+    bytes: bytes,
+    data: data,
+    iovs: iovs,
+    iovsLen: iovsLen,
+  );
+  if (capacity < 0) {
+    return errnoInval;
+  }
   if (socket.sendShutdown) {
     return errnoPipe;
   }
@@ -1467,17 +1476,9 @@ int writeSocketFromIov({
       data: data,
       iovs: iovs,
       iovsLen: iovsLen,
+      capacity: capacity,
       nwrittenPtr: nwrittenPtr,
     );
-  }
-  if (_socketIovCapacity(
-        bytes: bytes,
-        data: data,
-        iovs: iovs,
-        iovsLen: iovsLen,
-      ) <
-      0) {
-    return errnoInval;
   }
 
   var totalWritten = 0;
@@ -1513,17 +1514,9 @@ int _writeDatagramSocketFromIov({
   required ByteData data,
   required int iovs,
   required int iovsLen,
+  required int capacity,
   required int nwrittenPtr,
 }) {
-  final capacity = _socketIovCapacity(
-    bytes: bytes,
-    data: data,
-    iovs: iovs,
-    iovsLen: iovsLen,
-  );
-  if (capacity < 0) {
-    return errnoInval;
-  }
   final message = Uint8List(capacity);
   var offset = 0;
   for (var index = 0; index < iovsLen; index++) {
