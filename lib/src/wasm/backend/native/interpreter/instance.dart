@@ -22,6 +22,9 @@ import 'validator.dart';
 import 'value.dart';
 import 'vm.dart';
 
+typedef WasmInstantiationPhaseMeasure =
+    T Function<T>(String name, T Function() action);
+
 enum _AsyncSubsetControlKind { block, loop, if_, tryLegacy }
 
 final class _AsyncSubsetThrownException implements Exception {
@@ -180,9 +183,26 @@ final class WasmInstance {
     WasmImports imports = const WasmImports(),
     WasmFeatureSet features = const WasmFeatureSet(),
     bool validate = true,
+    WasmInstantiationPhaseMeasure? profile,
+    List<PredecodedFunction>? predecodedFunctions,
   }) {
+    T phase<T>(String name, T Function() action) {
+      final recorder = profile;
+      if (recorder == null) {
+        return action();
+      }
+      return recorder(name, action);
+    }
+
     if (validate) {
-      WasmValidator.validateModule(module, features: features);
+      phase(
+        'validate_module',
+        () => WasmValidator.validateModule(
+          module,
+          features: features,
+          predecodedFunctions: predecodedFunctions,
+        ),
+      );
     }
 
     final functionRefNamespace = WasmVm.allocateFunctionRefNamespace();
@@ -194,395 +214,433 @@ final class WasmInstance {
     final tagTypes = <WasmTagImport>[];
     var hasAsyncOnlyHostImports = false;
 
-    for (final import in module.imports) {
-      switch (import.kind) {
-        case WasmImportKind.function:
-        case WasmImportKind.exactFunction:
-          final typeIndex = import.functionTypeIndex;
-          if (typeIndex == null ||
-              typeIndex >= module.types.length ||
-              !module.types[typeIndex].isFunctionType) {
-            throw FormatException(
-              'Invalid function import type index: $typeIndex',
-            );
-          }
-          final expectedFunctionType = module.types[typeIndex];
-
-          final callback = imports.functions[import.key];
-          final asyncCallback = imports.asyncFunctions[import.key];
-          if (callback == null && asyncCallback == null) {
-            throw StateError('Missing function import `${import.key}`.');
-          }
-          if (callback == null && asyncCallback != null) {
-            hasAsyncOnlyHostImports = true;
-          }
-          final importedFunctionType = imports.functionTypes[import.key];
-          if (importedFunctionType != null) {
-            final mismatch = _typedFunctionImportTypeMismatch(
-              expected: expectedFunctionType,
-              actual: importedFunctionType,
-            );
-            if (mismatch != null) {
-              throw StateError(
-                'Imported function `${import.key}` has incompatible import type: '
-                '$mismatch.',
+    phase('bind_imports', () {
+      for (final import in module.imports) {
+        switch (import.kind) {
+          case WasmImportKind.function:
+          case WasmImportKind.exactFunction:
+            final typeIndex = import.functionTypeIndex;
+            if (typeIndex == null ||
+                typeIndex >= module.types.length ||
+                !module.types[typeIndex].isFunctionType) {
+              throw FormatException(
+                'Invalid function import type index: $typeIndex',
               );
             }
-          }
-          final syncCallback =
-              callback ??
-              (List<Object?> _) => throw UnsupportedError(
-                'Async-only host import `${import.key}` is not available in '
-                'the synchronous VM pipeline. Use invokeAsync on direct '
-                'exported host functions.',
-              );
+            final expectedFunctionType = module.types[typeIndex];
 
-          functions.add(
-            HostRuntimeFunction(
-              type: module.types[typeIndex],
-              declaredTypeIndex: typeIndex,
-              runtimeTypeDepth:
-                  imports.functionTypeDepths[import.key] ??
-                  _functionTypeDepth(module, typeIndex),
-              callback: syncCallback,
-              asyncCallback: asyncCallback,
-              supportsSync: callback != null,
-            ),
-          );
-
-        case WasmImportKind.table:
-          final expected = import.tableType;
-          if (expected == null) {
-            throw FormatException('Malformed table import `${import.key}`.');
-          }
-
-          final importedTable = imports.tables[import.key];
-          if (importedTable == null) {
-            throw StateError('Missing table import `${import.key}`.');
-          }
-
-          final expectedRefSignature = expected.refTypeSignature;
-          final actualRefSignature = importedTable.refTypeSignature;
-          final refTypeMatches =
-              expectedRefSignature != null && actualRefSignature != null
-              ? _referenceTypeSignaturesMatch(
-                  expectedRefSignature,
-                  actualRefSignature,
-                )
-              : importedTable.refType == expected.refType;
-          if (!refTypeMatches) {
-            throw StateError(
-              'Imported table `${import.key}` ref type mismatch: '
-              'expected=${expected.refType} actual=${importedTable.refType}.',
-            );
-          }
-          if (importedTable.isTable64 != expected.isTable64) {
-            throw StateError(
-              'Imported table `${import.key}` index type mismatch: '
-              'expected table64=${expected.isTable64} '
-              'actual=${importedTable.isTable64}.',
-            );
-          }
-
-          if (importedTable.length < expected.min) {
-            throw StateError(
-              'Imported table `${import.key}` has length ${importedTable.length} '
-              'but requires at least ${expected.min}.',
-            );
-          }
-
-          final expectedMax = expected.max;
-          if (expectedMax != null) {
-            final importedMax = importedTable.max;
-            if (importedMax == null || importedMax > expectedMax) {
-              throw StateError(
-                'Imported table `${import.key}` max mismatch: '
-                'expected <= $expectedMax, actual=${importedMax ?? 'unbounded'}.',
-              );
+            final callback = imports.functions[import.key];
+            final asyncCallback = imports.asyncFunctions[import.key];
+            if (callback == null && asyncCallback == null) {
+              throw StateError('Missing function import `${import.key}`.');
             }
-          }
-
-          tables.add(importedTable);
-
-        case WasmImportKind.memory:
-          final importedMemory = imports.memories[import.key];
-          if (importedMemory == null) {
-            throw StateError('Missing memory import `${import.key}`.');
-          }
-
-          final expected = import.memoryType;
-          if (expected == null) {
-            throw FormatException('Malformed memory import `${import.key}`.');
-          }
-          _validateSupportedMemoryType(
-            expected,
-            features: features,
-            context: 'memory import `${import.key}`',
-          );
-          final expectedPageSize = 1 << expected.pageSizeLog2;
-          if (importedMemory.isMemory64 != expected.isMemory64) {
-            throw StateError(
-              'Imported memory `${import.key}` index type mismatch: '
-              'expected memory64=${expected.isMemory64} '
-              'actual=${importedMemory.isMemory64}.',
-            );
-          }
-
-          if (importedMemory.shared != expected.shared) {
-            throw StateError(
-              'Imported memory `${import.key}` shared flag mismatch: '
-              'expected=${expected.shared} actual=${importedMemory.shared}.',
-            );
-          }
-          if (importedMemory.pageSizeBytes != expectedPageSize) {
-            throw StateError(
-              'Imported memory `${import.key}` memory types incompatible: '
-              'expected pageSize=$expectedPageSize '
-              'actual=${importedMemory.pageSizeBytes}.',
-            );
-          }
-
-          final expectedMax = expected.maxPages;
-          if (expectedMax != null) {
-            final importedMax = importedMemory.maxPages;
-            if (importedMax == null || importedMax > expectedMax) {
-              throw StateError(
-                'Imported memory `${import.key}` max pages mismatch: '
-                'expected <= $expectedMax, actual=${importedMax ?? 'unbounded'}.',
-              );
+            if (callback == null && asyncCallback != null) {
+              hasAsyncOnlyHostImports = true;
             }
-          }
+            final importedFunctionType = imports.functionTypes[import.key];
+            if (importedFunctionType != null) {
+              final mismatch = _typedFunctionImportTypeMismatch(
+                expected: expectedFunctionType,
+                actual: importedFunctionType,
+              );
+              if (mismatch != null) {
+                throw StateError(
+                  'Imported function `${import.key}` has incompatible import type: '
+                  '$mismatch.',
+                );
+              }
+            }
+            final syncCallback =
+                callback ??
+                (List<Object?> _) => throw UnsupportedError(
+                  'Async-only host import `${import.key}` is not available in '
+                  'the synchronous VM pipeline. Use invokeAsync on direct '
+                  'exported host functions.',
+                );
 
-          if (importedMemory.pageCount < expected.minPages) {
-            throw StateError(
-              'Imported memory `${import.key}` has ${importedMemory.pageCount} pages '
-              'but requires at least ${expected.minPages}.',
-            );
-          }
-
-          memories.add(importedMemory);
-
-        case WasmImportKind.global:
-          final globalType = import.globalType;
-          if (globalType == null) {
-            throw FormatException('Malformed global import `${import.key}`.');
-          }
-
-          final importedBinding = imports.globalBindings[import.key];
-          final hasImportedValue = imports.globals.containsKey(import.key);
-          final importedValue = imports.globals[import.key];
-          if (importedBinding == null && !hasImportedValue) {
-            throw StateError('Missing global import `${import.key}`.');
-          }
-
-          final importedType =
-              imports.globalTypes[import.key] ??
-              (importedBinding == null
-                  ? null
-                  : WasmGlobalType(
-                      valueType: importedBinding.valueType,
-                      mutable: importedBinding.mutable,
-                      valueTypeSignature: importedBinding.valueTypeSignature,
-                    ));
-          if (importedType != null &&
-              !_isGlobalImportTypeCompatible(
-                expected: globalType,
-                actual: importedType,
-              )) {
-            throw StateError(
-              'Imported global `${import.key}` has incompatible import type.',
-            );
-          }
-
-          if (importedBinding != null) {
-            globals.add(importedBinding);
-          } else {
-            globals.add(
-              RuntimeGlobal(
-                valueType: globalType.valueType,
-                mutable: globalType.mutable,
-                valueTypeSignature: globalType.valueTypeSignature,
-                value: WasmValue.fromExternal(
-                  globalType.valueType,
-                  importedValue,
-                ),
+            functions.add(
+              HostRuntimeFunction(
+                type: module.types[typeIndex],
+                declaredTypeIndex: typeIndex,
+                runtimeTypeDepth:
+                    imports.functionTypeDepths[import.key] ??
+                    _functionTypeDepth(module, typeIndex),
+                callback: syncCallback,
+                asyncCallback: asyncCallback,
+                supportsSync: callback != null,
               ),
             );
-          }
-          globalTypes.add(globalType);
 
-        case WasmImportKind.tag:
-          final tagType = import.tagType;
-          if (tagType == null ||
-              tagType.typeIndex < 0 ||
-              tagType.typeIndex >= module.types.length ||
-              !module.types[tagType.typeIndex].isFunctionType) {
-            throw FormatException('Malformed tag import `${import.key}`.');
-          }
-          final importedTagType = imports.tags[import.key];
-          if (importedTagType == null) {
-            throw StateError('Missing tag import `${import.key}`.');
-          }
-          final expectedTagType = module.types[tagType.typeIndex];
-          if (!_sameFunctionSignature(importedTagType.type, expectedTagType) ||
-              importedTagType.typeKey !=
-                  _tagNominalTypeKey(module, tagType.typeIndex)) {
-            throw StateError(
-              'Imported tag `${import.key}` has incompatible type.',
+          case WasmImportKind.table:
+            final expected = import.tableType;
+            if (expected == null) {
+              throw FormatException('Malformed table import `${import.key}`.');
+            }
+
+            final importedTable = imports.tables[import.key];
+            if (importedTable == null) {
+              throw StateError('Missing table import `${import.key}`.');
+            }
+
+            final expectedRefSignature = expected.refTypeSignature;
+            final actualRefSignature = importedTable.refTypeSignature;
+            final refTypeMatches =
+                expectedRefSignature != null && actualRefSignature != null
+                ? _referenceTypeSignaturesMatch(
+                    expectedRefSignature,
+                    actualRefSignature,
+                  )
+                : importedTable.refType == expected.refType;
+            if (!refTypeMatches) {
+              throw StateError(
+                'Imported table `${import.key}` ref type mismatch: '
+                'expected=${expected.refType} actual=${importedTable.refType}.',
+              );
+            }
+            if (importedTable.isTable64 != expected.isTable64) {
+              throw StateError(
+                'Imported table `${import.key}` index type mismatch: '
+                'expected table64=${expected.isTable64} '
+                'actual=${importedTable.isTable64}.',
+              );
+            }
+
+            if (importedTable.length < expected.min) {
+              throw StateError(
+                'Imported table `${import.key}` has length ${importedTable.length} '
+                'but requires at least ${expected.min}.',
+              );
+            }
+
+            final expectedMax = expected.max;
+            if (expectedMax != null) {
+              final importedMax = importedTable.max;
+              if (importedMax == null || importedMax > expectedMax) {
+                throw StateError(
+                  'Imported table `${import.key}` max mismatch: '
+                  'expected <= $expectedMax, actual=${importedMax ?? 'unbounded'}.',
+                );
+              }
+            }
+
+            tables.add(importedTable);
+
+          case WasmImportKind.memory:
+            final importedMemory = imports.memories[import.key];
+            if (importedMemory == null) {
+              throw StateError('Missing memory import `${import.key}`.');
+            }
+
+            final expected = import.memoryType;
+            if (expected == null) {
+              throw FormatException('Malformed memory import `${import.key}`.');
+            }
+            _validateSupportedMemoryType(
+              expected,
+              features: features,
+              context: 'memory import `${import.key}`',
             );
-          }
-          tagTypes.add(importedTagType);
+            final expectedPageSize = 1 << expected.pageSizeLog2;
+            if (importedMemory.isMemory64 != expected.isMemory64) {
+              throw StateError(
+                'Imported memory `${import.key}` index type mismatch: '
+                'expected memory64=${expected.isMemory64} '
+                'actual=${importedMemory.isMemory64}.',
+              );
+            }
+
+            if (importedMemory.shared != expected.shared) {
+              throw StateError(
+                'Imported memory `${import.key}` shared flag mismatch: '
+                'expected=${expected.shared} actual=${importedMemory.shared}.',
+              );
+            }
+            if (importedMemory.pageSizeBytes != expectedPageSize) {
+              throw StateError(
+                'Imported memory `${import.key}` memory types incompatible: '
+                'expected pageSize=$expectedPageSize '
+                'actual=${importedMemory.pageSizeBytes}.',
+              );
+            }
+
+            final expectedMax = expected.maxPages;
+            if (expectedMax != null) {
+              final importedMax = importedMemory.maxPages;
+              if (importedMax == null || importedMax > expectedMax) {
+                throw StateError(
+                  'Imported memory `${import.key}` max pages mismatch: '
+                  'expected <= $expectedMax, actual=${importedMax ?? 'unbounded'}.',
+                );
+              }
+            }
+
+            if (importedMemory.pageCount < expected.minPages) {
+              throw StateError(
+                'Imported memory `${import.key}` has ${importedMemory.pageCount} pages '
+                'but requires at least ${expected.minPages}.',
+              );
+            }
+
+            memories.add(importedMemory);
+
+          case WasmImportKind.global:
+            final globalType = import.globalType;
+            if (globalType == null) {
+              throw FormatException('Malformed global import `${import.key}`.');
+            }
+
+            final importedBinding = imports.globalBindings[import.key];
+            final hasImportedValue = imports.globals.containsKey(import.key);
+            final importedValue = imports.globals[import.key];
+            if (importedBinding == null && !hasImportedValue) {
+              throw StateError('Missing global import `${import.key}`.');
+            }
+
+            final importedType =
+                imports.globalTypes[import.key] ??
+                (importedBinding == null
+                    ? null
+                    : WasmGlobalType(
+                        valueType: importedBinding.valueType,
+                        mutable: importedBinding.mutable,
+                        valueTypeSignature: importedBinding.valueTypeSignature,
+                      ));
+            if (importedType != null &&
+                !_isGlobalImportTypeCompatible(
+                  expected: globalType,
+                  actual: importedType,
+                )) {
+              throw StateError(
+                'Imported global `${import.key}` has incompatible import type.',
+              );
+            }
+
+            if (importedBinding != null) {
+              globals.add(importedBinding);
+            } else {
+              globals.add(
+                RuntimeGlobal(
+                  valueType: globalType.valueType,
+                  mutable: globalType.mutable,
+                  valueTypeSignature: globalType.valueTypeSignature,
+                  value: WasmValue.fromExternal(
+                    globalType.valueType,
+                    importedValue,
+                  ),
+                ),
+              );
+            }
+            globalTypes.add(globalType);
+
+          case WasmImportKind.tag:
+            final tagType = import.tagType;
+            if (tagType == null ||
+                tagType.typeIndex < 0 ||
+                tagType.typeIndex >= module.types.length ||
+                !module.types[tagType.typeIndex].isFunctionType) {
+              throw FormatException('Malformed tag import `${import.key}`.');
+            }
+            final importedTagType = imports.tags[import.key];
+            if (importedTagType == null) {
+              throw StateError('Missing tag import `${import.key}`.');
+            }
+            final expectedTagType = module.types[tagType.typeIndex];
+            if (!_sameFunctionSignature(
+                  importedTagType.type,
+                  expectedTagType,
+                ) ||
+                importedTagType.typeKey !=
+                    _tagNominalTypeKey(module, tagType.typeIndex)) {
+              throw StateError(
+                'Imported tag `${import.key}` has incompatible type.',
+              );
+            }
+            tagTypes.add(importedTagType);
+        }
       }
-    }
+    });
     final importedGlobals = List<RuntimeGlobal>.unmodifiable(globals);
 
-    for (final memoryType in module.memories) {
-      _validateSupportedMemoryType(
-        memoryType,
-        features: features,
-        context: 'defined memory',
-      );
-      memories.add(
-        WasmMemory(
-          minPages: memoryType.minPages,
-          maxPages: _runtimeMaxPagesForMemoryType(memoryType),
-          shared: memoryType.shared,
-          isMemory64: memoryType.isMemory64,
-          pageSizeBytes: 1 << memoryType.pageSizeLog2,
-        ),
-      );
-    }
-
-    for (final tableType in module.tables) {
-      tables.add(
-        WasmTable(
-          refType: tableType.refType,
-          min: tableType.min,
-          max: tableType.max,
-          isTable64: tableType.isTable64,
-          refTypeSignature: tableType.refTypeSignature,
-        ),
-      );
-    }
-
-    for (final globalDef in module.globals) {
-      final value = _evaluateConstExpr(
-        globalDef.initExpr,
-        globals,
-        module.types,
-        functionRefNamespace: functionRefNamespace,
-      );
-      globals.add(
-        RuntimeGlobal(
-          valueType: globalDef.type.valueType,
-          mutable: globalDef.type.mutable,
-          valueTypeSignature: globalDef.type.valueTypeSignature,
-          value: value,
-        ),
-      );
-      globalTypes.add(globalDef.type);
-    }
-    for (
-      var localTagIndex = 0;
-      localTagIndex < module.tags.length;
-      localTagIndex++
-    ) {
-      final tag = module.tags[localTagIndex];
-      if (tag.typeIndex < 0 ||
-          tag.typeIndex >= module.types.length ||
-          !module.types[tag.typeIndex].isFunctionType) {
-        throw FormatException('Invalid tag type index: ${tag.typeIndex}');
-      }
-      tagTypes.add(
-        WasmTagImport(
-          type: module.types[tag.typeIndex],
-          nominalTypeKey:
-              'inst:$functionRefNamespace:tag:${module.importedTagCount + localTagIndex}',
-          typeKey: _tagNominalTypeKey(module, tag.typeIndex),
-        ),
-      );
-    }
-    for (var i = 0; i < module.tables.length; i++) {
-      final initExpr = module.tables[i].initExpr;
-      if (initExpr == null) {
-        continue;
-      }
-      final tableIndex = module.importedTableCount + i;
-      if (tableIndex < 0 || tableIndex >= tables.length) {
-        throw FormatException(
-          'Invalid table index for table initializer: $tableIndex',
+    phase('create_memories', () {
+      for (final memoryType in module.memories) {
+        _validateSupportedMemoryType(
+          memoryType,
+          features: features,
+          context: 'defined memory',
+        );
+        memories.add(
+          WasmMemory(
+            minPages: memoryType.minPages,
+            maxPages: _runtimeMaxPagesForMemoryType(memoryType),
+            shared: memoryType.shared,
+            isMemory64: memoryType.isMemory64,
+            pageSizeBytes: 1 << memoryType.pageSizeLog2,
+          ),
         );
       }
-      final initValue = _evaluateConstExpr(
-        initExpr,
-        importedGlobals,
-        module.types,
-        functionRefNamespace: functionRefNamespace,
-      ).castTo(WasmValueType.i32).asI32();
-      final refValue = initValue == -1 ? null : initValue;
-      final table = tables[tableIndex];
-      final fill = List<int?>.filled(table.length, refValue, growable: false);
-      table.initialize(0, fill);
-    }
+    });
+
+    phase('create_tables', () {
+      for (final tableType in module.tables) {
+        tables.add(
+          WasmTable(
+            refType: tableType.refType,
+            min: tableType.min,
+            max: tableType.max,
+            isTable64: tableType.isTable64,
+            refTypeSignature: tableType.refTypeSignature,
+          ),
+        );
+      }
+    });
+
+    phase('create_globals', () {
+      for (final globalDef in module.globals) {
+        final value = _evaluateConstExpr(
+          globalDef.initExpr,
+          globals,
+          module.types,
+          functionRefNamespace: functionRefNamespace,
+        );
+        globals.add(
+          RuntimeGlobal(
+            valueType: globalDef.type.valueType,
+            mutable: globalDef.type.mutable,
+            valueTypeSignature: globalDef.type.valueTypeSignature,
+            value: value,
+          ),
+        );
+        globalTypes.add(globalDef.type);
+      }
+    });
+
+    phase('create_tags', () {
+      for (
+        var localTagIndex = 0;
+        localTagIndex < module.tags.length;
+        localTagIndex++
+      ) {
+        final tag = module.tags[localTagIndex];
+        if (tag.typeIndex < 0 ||
+            tag.typeIndex >= module.types.length ||
+            !module.types[tag.typeIndex].isFunctionType) {
+          throw FormatException('Invalid tag type index: ${tag.typeIndex}');
+        }
+        tagTypes.add(
+          WasmTagImport(
+            type: module.types[tag.typeIndex],
+            nominalTypeKey:
+                'inst:$functionRefNamespace:tag:${module.importedTagCount + localTagIndex}',
+            typeKey: _tagNominalTypeKey(module, tag.typeIndex),
+          ),
+        );
+      }
+    });
+
+    phase('initialize_table_inits', () {
+      for (var i = 0; i < module.tables.length; i++) {
+        final initExpr = module.tables[i].initExpr;
+        if (initExpr == null) {
+          continue;
+        }
+        final tableIndex = module.importedTableCount + i;
+        if (tableIndex < 0 || tableIndex >= tables.length) {
+          throw FormatException(
+            'Invalid table index for table initializer: $tableIndex',
+          );
+        }
+        final initValue = _evaluateConstExpr(
+          initExpr,
+          importedGlobals,
+          module.types,
+          functionRefNamespace: functionRefNamespace,
+        ).castTo(WasmValueType.i32).asI32();
+        final refValue = initValue == -1 ? null : initValue;
+        final table = tables[tableIndex];
+        final fill = List<int?>.filled(table.length, refValue, growable: false);
+        table.initialize(0, fill);
+      }
+    });
 
     final memory64ByIndex = _memory64ByIndex(module);
     final table64ByIndex = _table64ByIndex(module);
-    for (var i = 0; i < module.codes.length; i++) {
-      final typeIndex = module.functionTypeIndices[i];
-      if (typeIndex < 0 ||
-          typeIndex >= module.types.length ||
-          !module.types[typeIndex].isFunctionType) {
-        throw FormatException('Function $i has invalid type index $typeIndex.');
+    phase('predecode_functions', () {
+      final cachedPredecoded =
+          predecodedFunctions != null &&
+              predecodedFunctions.length == module.codes.length
+          ? predecodedFunctions
+          : null;
+      for (var i = 0; i < module.codes.length; i++) {
+        final typeIndex = module.functionTypeIndices[i];
+        if (typeIndex < 0 ||
+            typeIndex >= module.types.length ||
+            !module.types[typeIndex].isFunctionType) {
+          throw FormatException(
+            'Function $i has invalid type index $typeIndex.',
+          );
+        }
+
+        final predecoded = cachedPredecoded == null
+            ? WasmPredecoder.decode(
+                module.codes[i],
+                module.types,
+                features: features,
+                memory64ByIndex: memory64ByIndex,
+              )
+            : cachedPredecoded[i];
+        functions.add(
+          DefinedRuntimeFunction(
+            type: module.types[typeIndex],
+            declaredTypeIndex: typeIndex,
+            runtimeTypeDepth: _functionTypeDepth(module, typeIndex),
+            localTypes: predecoded.localTypes,
+            instructions: predecoded.instructions,
+          ),
+        );
       }
+    });
 
-      final predecoded = WasmPredecoder.decode(
-        module.codes[i],
-        module.types,
-        features: features,
-        memory64ByIndex: memory64ByIndex,
-      );
-      functions.add(
-        DefinedRuntimeFunction(
-          type: module.types[typeIndex],
-          declaredTypeIndex: typeIndex,
-          runtimeTypeDepth: _functionTypeDepth(module, typeIndex),
-          localTypes: predecoded.localTypes,
-          instructions: predecoded.instructions,
-        ),
-      );
-    }
-
-    final dataSegments = List<Uint8List?>.generate(
-      module.dataSegments.length,
-      (index) => Uint8List.fromList(module.dataSegments[index].bytes),
-      growable: false,
+    final dataSegments = phase(
+      'retain_data_segments',
+      () => List<Uint8List?>.generate(
+        module.dataSegments.length,
+        (index) => Uint8List.fromList(module.dataSegments[index].bytes),
+        growable: false,
+      ),
     );
-    final elementSegments = List<List<int?>?>.generate(module.elements.length, (
-      index,
-    ) {
-      final segment = module.elements[index];
-      if (!segment.isPassive) {
-        return null;
-      }
-      final carriesFunctionRefs = _elementCarriesFunctionRefs(module, segment);
-      return segment.functionIndices
-          .map(
-            (functionIndex) => functionIndex == null
-                ? null
-                : _resolveElementReference(
-                    functionIndex,
-                    carriesFunctionRefs: carriesFunctionRefs,
-                    globals: globals,
-                    functionCount: functions.length,
-                    functionRefNamespace: functionRefNamespace,
-                  ),
-          )
-          .toList(growable: false);
-    }, growable: false);
-    final elementSegmentRefTypeCodes = List<int>.generate(
-      module.elements.length,
-      (index) => module.elements[index].refTypeCode,
-      growable: false,
+    final elementSegments = phase(
+      'retain_element_segments',
+      () => List<List<int?>?>.generate(module.elements.length, (index) {
+        final segment = module.elements[index];
+        if (!segment.isPassive) {
+          return null;
+        }
+        final carriesFunctionRefs = _elementCarriesFunctionRefs(
+          module,
+          segment,
+        );
+        return segment.functionIndices
+            .map(
+              (functionIndex) => functionIndex == null
+                  ? null
+                  : _resolveElementReference(
+                      functionIndex,
+                      carriesFunctionRefs: carriesFunctionRefs,
+                      globals: globals,
+                      functionCount: functions.length,
+                      functionRefNamespace: functionRefNamespace,
+                    ),
+            )
+            .toList(growable: false);
+      }, growable: false),
+    );
+    final elementSegmentRefTypeCodes = phase(
+      'retain_element_segment_types',
+      () => List<int>.generate(
+        module.elements.length,
+        (index) => module.elements[index].refTypeCode,
+        growable: false,
+      ),
     );
 
     final functionExports = <String, int>{};
@@ -591,80 +649,85 @@ final class WasmInstance {
     final tableExports = <String, WasmTable>{};
     final tagExports = <String, WasmTagImport>{};
 
-    for (final export in module.exports) {
-      switch (export.kind) {
-        case WasmExportKind.function:
-          if (export.index < 0 || export.index >= functions.length) {
-            throw FormatException(
-              'Export `${export.name}` has invalid function index ${export.index}.',
-            );
-          }
-          functionExports[export.name] = export.index;
+    phase('build_exports', () {
+      for (final export in module.exports) {
+        switch (export.kind) {
+          case WasmExportKind.function:
+            if (export.index < 0 || export.index >= functions.length) {
+              throw FormatException(
+                'Export `${export.name}` has invalid function index ${export.index}.',
+              );
+            }
+            functionExports[export.name] = export.index;
 
-        case WasmExportKind.global:
-          if (export.index < 0 || export.index >= globals.length) {
-            throw FormatException(
-              'Export `${export.name}` has invalid global index ${export.index}.',
-            );
-          }
-          globalExports[export.name] = export.index;
+          case WasmExportKind.global:
+            if (export.index < 0 || export.index >= globals.length) {
+              throw FormatException(
+                'Export `${export.name}` has invalid global index ${export.index}.',
+              );
+            }
+            globalExports[export.name] = export.index;
 
-        case WasmExportKind.memory:
-          if (export.index < 0 || export.index >= memories.length) {
-            throw FormatException(
-              'Export `${export.name}` has invalid memory index ${export.index}.',
-            );
-          }
-          memoryExports[export.name] = memories[export.index];
+          case WasmExportKind.memory:
+            if (export.index < 0 || export.index >= memories.length) {
+              throw FormatException(
+                'Export `${export.name}` has invalid memory index ${export.index}.',
+              );
+            }
+            memoryExports[export.name] = memories[export.index];
 
-        case WasmExportKind.table:
-          if (export.index < 0 || export.index >= tables.length) {
-            throw FormatException(
-              'Export `${export.name}` has invalid table index ${export.index}.',
-            );
-          }
-          tableExports[export.name] = tables[export.index];
+          case WasmExportKind.table:
+            if (export.index < 0 || export.index >= tables.length) {
+              throw FormatException(
+                'Export `${export.name}` has invalid table index ${export.index}.',
+              );
+            }
+            tableExports[export.name] = tables[export.index];
 
-        case WasmExportKind.tag:
-          if (export.index < 0 || export.index >= tagTypes.length) {
-            throw FormatException(
-              'Export `${export.name}` has invalid tag index ${export.index}.',
-            );
-          }
-          tagExports[export.name] = tagTypes[export.index];
+          case WasmExportKind.tag:
+            if (export.index < 0 || export.index >= tagTypes.length) {
+              throw FormatException(
+                'Export `${export.name}` has invalid tag index ${export.index}.',
+              );
+            }
+            tagExports[export.name] = tagTypes[export.index];
+        }
       }
-    }
+    });
 
-    final instance = WasmInstance._(
-      module: module,
-      memories: List.unmodifiable(memories),
-      tables: List.unmodifiable(tables),
-      functions: List.unmodifiable(functions),
-      globals: globals,
-      globalTypes: List.unmodifiable(globalTypes),
-      memory64ByIndex: memory64ByIndex,
-      table64ByIndex: table64ByIndex,
-      dataSegments: dataSegments,
-      elementSegments: elementSegments,
-      elementSegmentRefTypeCodes: elementSegmentRefTypeCodes,
-      functionRefNamespace: functionRefNamespace,
-      tagTypes: List<WasmFunctionType>.unmodifiable(
-        tagTypes.map((tag) => tag.type),
+    final instance = phase(
+      'create_instance',
+      () => WasmInstance._(
+        module: module,
+        memories: List.unmodifiable(memories),
+        tables: List.unmodifiable(tables),
+        functions: List.unmodifiable(functions),
+        globals: globals,
+        globalTypes: List.unmodifiable(globalTypes),
+        memory64ByIndex: memory64ByIndex,
+        table64ByIndex: table64ByIndex,
+        dataSegments: dataSegments,
+        elementSegments: elementSegments,
+        elementSegmentRefTypeCodes: elementSegmentRefTypeCodes,
+        functionRefNamespace: functionRefNamespace,
+        tagTypes: List<WasmFunctionType>.unmodifiable(
+          tagTypes.map((tag) => tag.type),
+        ),
+        tagNominalTypeKeys: List<String>.unmodifiable(
+          tagTypes.map((tag) => tag.nominalTypeKey),
+        ),
+        functionExports: Map.unmodifiable(functionExports),
+        globalExports: Map.unmodifiable(globalExports),
+        memoryExports: Map.unmodifiable(memoryExports),
+        tableExports: Map.unmodifiable(tableExports),
+        tagExports: Map.unmodifiable(tagExports),
+        hasAsyncOnlyHostImports: hasAsyncOnlyHostImports,
       ),
-      tagNominalTypeKeys: List<String>.unmodifiable(
-        tagTypes.map((tag) => tag.nominalTypeKey),
-      ),
-      functionExports: Map.unmodifiable(functionExports),
-      globalExports: Map.unmodifiable(globalExports),
-      memoryExports: Map.unmodifiable(memoryExports),
-      tableExports: Map.unmodifiable(tableExports),
-      tagExports: Map.unmodifiable(tagExports),
-      hasAsyncOnlyHostImports: hasAsyncOnlyHostImports,
     );
 
-    instance._initializeActiveElements();
-    instance._initializeActiveDataSegments();
-    instance._runStartFunction();
+    phase('initialize_active_elements', instance._initializeActiveElements);
+    phase('initialize_active_data', instance._initializeActiveDataSegments);
+    phase('run_start_function', instance._runStartFunction);
 
     return instance;
   }

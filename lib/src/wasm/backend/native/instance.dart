@@ -10,13 +10,19 @@ import 'memory.dart' as native_memory;
 import 'module.dart' as native_module;
 
 class Instance implements wasm.Instance {
-  Instance(wasm.Module module, [wasm.Imports imports = const {}])
-    : _module = module {
+  Instance(
+    wasm.Module module, [
+    wasm.Imports imports = const {},
+    ir_instance.WasmInstantiationPhaseMeasure? profile,
+  ]) : _module = module {
     try {
+      final nativeModule = module as native_module.Module;
       _runtime = ir_instance.WasmInstance.fromModule(
-        (module as native_module.Module).decoded,
+        nativeModule.decoded,
         imports: _buildImports(imports),
         validate: false,
+        profile: profile,
+        predecodedFunctions: nativeModule.predecodedFunctions,
       );
     } on WasmError {
       rethrow;

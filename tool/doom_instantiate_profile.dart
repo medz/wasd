@@ -4,6 +4,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:wasd/wasd.dart';
+import 'package:wasd/src/wasm/backend/native/instance.dart' as native_instance;
+import 'package:wasd/src/wasm/backend/native/module.dart' as native_module;
 import 'package:wasd/src/wasm/backend/native/interpreter/module.dart'
     as native_ir;
 import 'package:wasd/src/wasm/backend/native/interpreter/validator.dart'
@@ -34,6 +36,7 @@ Future<int> _run(List<String> args) async {
   final timedemo = options['timedemo'] ?? _defaultTimedemo;
   final jsonOutput = options.containsKey('json');
   final compileBreakdown = options.containsKey('compile-breakdown');
+  final instantiateBreakdown = options.containsKey('instantiate-breakdown');
 
   final wasmFile = File(wasmPath);
   final iwadFile = File(iwadPath);
@@ -90,17 +93,27 @@ Future<int> _run(List<String> args) async {
     'read_wasm',
     () => wasmFile.readAsBytes(),
   );
-  final module = await profile.measure(
-    'compile_module',
-    () => WebAssembly.compile(wasmBytes.buffer),
-  );
-  final instance = await profile.measure(
-    'instantiate_module',
-    () => WebAssembly.instantiateModule(module, <String, ModuleImports>{
-      ...wasi.imports,
-      'env': _doomEnvImports(),
-    }),
-  );
+  final imports = <String, ModuleImports>{
+    ...wasi.imports,
+    'env': _doomEnvImports(),
+  };
+  late final Instance instance;
+  if (instantiateBreakdown) {
+    final module = await profile.measure(
+      'compile_module',
+      () => native_module.Module(wasmBytes.buffer),
+    );
+    instance = native_instance.Instance(module, imports, profile.measureSync);
+  } else {
+    final module = await profile.measure(
+      'compile_module',
+      () => WebAssembly.compile(wasmBytes.buffer),
+    );
+    instance = await profile.measure(
+      'instantiate_module',
+      () => WebAssembly.instantiateModule(module, imports),
+    );
+  }
   await profile.measure(
     'finalize_wasi_bindings',
     () => wasi.finalizeBindings(instance),
@@ -266,6 +279,9 @@ void _printUsage() {
   stdout.writeln(
     '  --compile-breakdown  Profile internal decode/validate only.',
   );
+  stdout.writeln(
+    '  --instantiate-breakdown  Profile internal native instantiate phases.',
+  );
   stdout.writeln('  --json               Print machine-readable JSON.');
 }
 
@@ -306,6 +322,23 @@ final class _PhaseProfiler {
     final before = _currentRssBytes();
     final watch = Stopwatch()..start();
     final result = await Future<T>.sync(action);
+    watch.stop();
+    final after = _currentRssBytes();
+    phases.add(
+      _PhaseSample(
+        name: name,
+        durationMs: watch.elapsedMilliseconds,
+        rssBytes: after,
+        rssDeltaBytes: before == null || after == null ? null : after - before,
+      ),
+    );
+    return result;
+  }
+
+  T measureSync<T>(String name, T Function() action) {
+    final before = _currentRssBytes();
+    final watch = Stopwatch()..start();
+    final result = action();
     watch.stop();
     final after = _currentRssBytes();
     phases.add(

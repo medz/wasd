@@ -50,6 +50,7 @@ abstract final class WasmValidator {
   static void validateModule(
     WasmModule module, {
     WasmFeatureSet features = const WasmFeatureSet(),
+    List<PredecodedFunction>? predecodedFunctions,
   }) {
     _validateTypeReferences(module);
     _validateTableArity(module, features: features);
@@ -61,7 +62,19 @@ abstract final class WasmValidator {
     _validateTableInitializers(module);
     _validateElements(module);
     _validateDataSegments(module);
-    _validateFunctions(module, features: features);
+    final collectedPredecodedFunctions = predecodedFunctions == null
+        ? null
+        : <PredecodedFunction>[];
+    _validateFunctions(
+      module,
+      features: features,
+      predecodedFunctions: collectedPredecodedFunctions,
+    );
+    if (predecodedFunctions != null) {
+      predecodedFunctions
+        ..clear()
+        ..addAll(collectedPredecodedFunctions!);
+    }
   }
 
   static void _validateTypeReferences(WasmModule module) {
@@ -703,6 +716,7 @@ abstract final class WasmValidator {
   static void _validateFunctions(
     WasmModule module, {
     required WasmFeatureSet features,
+    required List<PredecodedFunction>? predecodedFunctions,
   }) {
     final functionCount =
         module.importedFunctionCount + module.functionTypeIndices.length;
@@ -803,6 +817,7 @@ abstract final class WasmValidator {
           instructions: predecoded.instructions,
         );
       }
+      predecodedFunctions?.add(predecoded);
 
       final controlStack = <int>[];
       for (var pc = 0; pc < predecoded.instructions.length; pc++) {

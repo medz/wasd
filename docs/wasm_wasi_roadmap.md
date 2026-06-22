@@ -73,7 +73,7 @@ test or done condition is too broad to verify in one commit.
 | [ ] | `P1-SOCKET-CONFORMANCE` | Add the next missing Preview1 socket/native adapter regression in `test/wasi_test.dart`. | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Moves `SUPPORT-P1` only after remaining P1 socket rows are complete. |
 | [x] | `PERF-HEAVY-RUNNERS` | DOOM runtime matrix reports per-runtime elapsed time and peak RSS; spec testsuite reports conversion cache hits/misses and Top Slow Files. | `dart run tool/spec_testsuite_runner.dart --suite=core --file=imports0.wast --output-json=.dart_tool/spec_runner/perf_heavy_runners_imports0.json --output-md=.dart_tool/spec_runner/perf_heavy_runners_imports0.md --prepare-root=.dart_tool/spec_runner/perf_heavy_runners_bundle --conversion-cache-dir=.dart_tool/spec_runner/conversion_cache`; `dart test test/doom_smoke_test.dart --name "doom cli runtime matrix"` | Gives performance evidence for `SUPPORT-WASM` and `PERFORMANCE-GATES`; does not complete either support claim. |
 | [x] | `PERF-DOOM-INSTANTIATE-PHASES` | DOOM instantiate now has a phase-level RSS/duration profiler, and decoder byte reads avoid avoidable section/body double copies. | `dart run tool/doom_instantiate_profile.dart --json`; `dart test test/wasm_test.dart`; `dart test test/component_test.dart`; `dart test test/doom_smoke_test.dart --name "doom cli runtime matrix"`; `dart analyze` | Identifies the remaining `compile_module` validation/predecode allocation as the next `SUPPORT-WASM` performance blocker. |
-| [ ] | `PERF-WASM-COMPILE-PREDECODE` | Reduce `validate_module` temporary RSS from stack validation/predecode on DOOM-sized modules. | `dart run tool/doom_instantiate_profile.dart --compile-breakdown --json`; `dart run tool/doom_instantiate_profile.dart --json`; `dart test test/wasm_predecode_test.dart test/wasm_test.dart`; `dart analyze` | Required before treating DOOM/spec heat as solved rather than only measured. |
+| [x] | `PERF-WASM-COMPILE-PREDECODE` | Validator signature classification avoids byte-list churn, native Modules retain validated predecode results, and instantiate reuses them instead of decoding functions again. | `dart run tool/doom_instantiate_profile.dart --compile-breakdown --json`; `dart run tool/doom_instantiate_profile.dart --instantiate-breakdown --json`; `dart run tool/doom_instantiate_profile.dart --json`; `dart test test/wasm_predecode_test.dart test/wasm_test.dart test/wasi_test.dart`; `dart analyze` | Removes the DOOM compile/instantiate predecode heat blocker; does not complete `SUPPORT-WASM`. |
 | [ ] | `CM-VALIDATION-GAPS` | Add a deterministic component validation failure before adding host behavior. | `dart test test/component_test.dart`; `dart test test/wasi_component_async_host_test.dart` | Reduces late runtime traps in P2/P3 adapter work. |
 | [x] | `WIT-DOCUMENT-BOUNDARIES` | Internal WIT package/interface/world parsing with diagnostics is implemented under `lib/src/wasi/component/`. | `dart test test/wasi_component_wit_test.dart`; `dart analyze` | Provides structured input for later P2/P3 adapters, but no public support claim. |
 | [ ] | `P2-P3-ADAPTERS` | Bind one real Preview2/Preview3 adapter path over shared component primitives. | `dart test test/wasi_component_versioned_host_test.dart` plus adapter-specific tests | Starts concrete `SUPPORT-P2` / `SUPPORT-P3` evidence. |
@@ -840,7 +840,7 @@ performance visible while the support surface expands.
     `compile_module.rss_delta_bytes=442023936`. The minor byte-copy cleanup did
     not solve the peak, which confirms the next root-cause row is
     validation/predecode allocation.
-- [ ] `PERF-WASM-COMPILE-PREDECODE` - Compile-time validation/predecode memory.
+- [x] `PERF-WASM-COMPILE-PREDECODE` - Compile-time validation/predecode memory.
   - Change: reduce temporary instruction/predecode allocation during
     `WebAssembly.compile` without skipping validation or hiding malformed
     modules.
@@ -918,12 +918,19 @@ performance visible while the support surface expands.
       instantiate run reported `compile_module.rss_delta_bytes=132972544`, but
       `instantiate_module.rss_delta_bytes=212844544`, so the next peak has moved
       past compile validation.
-  - Next: split retained instantiate RSS after the compile-time validator stack
-    reductions, then decide whether the remaining validator work needs a full
-    non-string operand stack or only targeted ref-signature caching.
+    - Native `Module` now stores the `PredecodedFunction` list produced during
+      validation, native instantiation reuses it, and
+      `tool/doom_instantiate_profile.dart --instantiate-breakdown --json` can
+      show internal instantiate phases. The breakdown confirmed
+      `predecode_functions.rss_delta_bytes=180224`; repeated full profiles
+      reported `compile_module.rss_delta_bytes=58081280` then `67747840`, and
+      `instantiate_module.rss_delta_bytes=3981312` then `9879552`.
+    - A final compile-breakdown gate reported
+      `validate_module.rss_delta_bytes=84099072` and
+      `validate_module.duration_ms=388`.
   - Done when: the profile shows a lower `compile_module.rss_delta_bytes` on
     DOOM-sized modules with stable repeated runs and no shifted peak into
-    `instantiate_module`, so this row remains open.
+    `instantiate_module`.
 - [ ] `CM-VALIDATION-GAPS` - Component validation gaps that are deterministic
   and local.
   - Change: add validation tests before runtime wiring for remaining borrow,
