@@ -1581,6 +1581,22 @@ void main() {
       expect(future.single.message, contains('borrow'));
     });
 
+    test('reports nested stream and future element types', () {
+      final stream = WasmComponent.decode(
+        _nestedStreamTypeComponentBytes(),
+      ).validate();
+      expect(stream, hasLength(1));
+      expect(stream.single.message, contains('nested async'));
+      expect(stream.single.message, contains('stream element type'));
+
+      final future = WasmComponent.decode(
+        _futureStreamTypeComponentBytes(),
+      ).validate();
+      expect(future, hasLength(1));
+      expect(future.single.message, contains('nested async'));
+      expect(future.single.message, contains('future element type'));
+    });
+
     test('reports function result types containing borrow', () {
       expect(
         WasmComponent.decode(_functionOwnResultTypeComponentBytes()).validate(),
@@ -6556,6 +6572,26 @@ Uint8List _futureBorrowTypeComponentBytes() =>
       0x01,
       0x01,
     ], count: 3);
+
+Uint8List _nestedStreamTypeComponentBytes() =>
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x66,
+      0x01,
+      0x73,
+      0x66,
+      0x01,
+      0x00,
+    ], count: 2);
+
+Uint8List _futureStreamTypeComponentBytes() =>
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x66,
+      0x01,
+      0x73,
+      0x65,
+      0x01,
+      0x00,
+    ], count: 2);
 
 Uint8List _functionOwnResultTypeComponentBytes() =>
     _componentWithTypeDefinitionsBytes(const <int>[

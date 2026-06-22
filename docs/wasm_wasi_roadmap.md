@@ -191,6 +191,18 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `CM-NESTED-ASYNC-VALUE-VALIDATION` - Component validation rejects nested
+  stream/future element shapes before async host binding.
+  - Evidence:
+    `dart test test/component_test.dart --name "reports nested stream and future element types"`
+    failed before the fix because `stream<stream<string>>` and
+    `future<stream<string>>` validated cleanly, then passed after the fix;
+    `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart --name "validates indexed nested async stream element types before binding"`;
+    `dart test test/wasi_component_async_host_test.dart`.
+  - Claim impact: moves one unsupported P3 async payload shape from host-time
+    failure to deterministic component validation; does not complete
+    `CM-VALIDATION-GAPS`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-HOST-RECV-PROVIDER-CAP` - Host-backed stream receive providers
   are capped to the requested byte count before buffering.
   - Evidence:
@@ -1363,6 +1375,26 @@ performance visible while the support surface expands.
     - `dart test test/wasi_component_async_host_test.dart`
   - Done when: unsupported shapes fail during validation with structured
     diagnostics before host mutation.
+- [x] `CM-NESTED-ASYNC-VALUE-VALIDATION` - Reject nested stream/future value
+  payloads during component validation.
+  - Scope: component value type validation for global and scoped type
+    definitions used by future Preview2/Preview3 async hosts.
+  - Edit targets: `lib/src/wasm/backend/native/interpreter/component.dart`,
+    `test/component_test.dart`, and `test/wasi_component_async_host_test.dart`.
+  - Red test:
+    `dart test test/component_test.dart --name "reports nested stream and future element types"`
+    failed before the fix because nested async value types validated cleanly and
+    were rejected only later by async host binding.
+  - Implementation gate: `dart test test/component_test.dart`;
+    `dart test test/wasi_component_async_host_test.dart`.
+  - Performance gate: N/A for this validation-only shape guard; it reuses
+    memoized type-shape traversal and does not add runtime host work.
+  - Done when: `stream<stream<T>>`, `future<stream<T>>`, and scoped indexed
+    nested async payloads fail validation with a diagnostic naming nested async
+    element types before host state can be mutated.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry.
+  - Claim impact: reduces P3 async validation risk; no direct support gate.
 - [ ] `P3-ASYNC-COPY-GAPS` - Canonical `stream.*` / `future.*` lowering beyond
   the current copy-buffer subset.
   - Change: wire validated shapes into the internal async host and component

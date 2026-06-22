@@ -2689,22 +2689,19 @@ void main() {
       );
     });
 
-    test('rejects indexed nested async stream element types', () {
-      final component = WasmComponent.decode(
-        _streamIndexedNestedAsyncElementTypeComponentBytes(),
-      );
-      expect(component.validate(), isEmpty);
-      final host = WASIComponentAsyncHost();
+    test(
+      'validates indexed nested async stream element types before binding',
+      () {
+        final component = WasmComponent.decode(
+          _streamIndexedNestedAsyncElementTypeComponentBytes(),
+        );
+        final errors = component.validate();
 
-      expect(
-        () => host.defineStreamTypeFromComponent<Object>(
-          component,
-          1,
-          'indexed-stream',
-        ),
-        throwsUnsupportedError,
-      );
-    });
+        expect(errors, hasLength(1));
+        expect(errors.single.message, contains('nested async'));
+        expect(errors.single.message, contains('stream element type'));
+      },
+    );
   });
 }
 

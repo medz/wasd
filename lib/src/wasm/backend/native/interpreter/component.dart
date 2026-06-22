@@ -1554,6 +1554,8 @@ final class _WasmComponentValidationContext {
   final Set<int> _valueTypeContainsBorrowVisiting = <int>{};
   final Map<int, bool> _valueTypeContainsListOrStringMemo = <int, bool>{};
   final Set<int> _valueTypeContainsListOrStringVisiting = <int>{};
+  final Map<int, bool> _valueTypeContainsStreamOrFutureMemo = <int, bool>{};
+  final Set<int> _valueTypeContainsStreamOrFutureVisiting = <int>{};
 
   void validateComponentTypeDefinition(
     WasmComponentTypeDefinition type,
@@ -1964,6 +1966,12 @@ final class _WasmComponentValidationContext {
           'stream element type',
           scopedTypeDefinitions: scopedTypeDefinitions,
         );
+        validateValueTypeDoesNotContainNestedAsync(
+          type.elementType,
+          '$path.stream',
+          'stream element type',
+          scopedTypeDefinitions: scopedTypeDefinitions,
+        );
       case WasmComponentDefinedValueTypeKind.future:
         validateComponentValueType(
           type.elementType,
@@ -1971,6 +1979,12 @@ final class _WasmComponentValidationContext {
           scopedTypeDefinitions: scopedTypeDefinitions,
         );
         validateValueTypeDoesNotContainBorrow(
+          type.elementType,
+          '$path.future',
+          'future element type',
+          scopedTypeDefinitions: scopedTypeDefinitions,
+        );
+        validateValueTypeDoesNotContainNestedAsync(
           type.elementType,
           '$path.future',
           'future element type',
@@ -2660,6 +2674,26 @@ final class _WasmComponentValidationContext {
     }
   }
 
+  void validateValueTypeDoesNotContainNestedAsync(
+    WasmComponentValueType? valueType,
+    String path,
+    String description, {
+    List<WasmComponentTypeDefinition>? scopedTypeDefinitions,
+  }) {
+    if (valueTypeContainsStreamOrFuture(
+      valueType,
+      scopedTypeDefinitions: scopedTypeDefinitions,
+    )) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component $description cannot contain nested async value.',
+        ),
+      );
+    }
+  }
+
   bool valueTypeContainsBorrow(
     WasmComponentValueType? valueType, {
     List<WasmComponentTypeDefinition>? scopedTypeDefinitions,
@@ -2768,6 +2802,121 @@ final class _WasmComponentValidationContext {
       WasmComponentDefinedValueTypeKind.flags ||
       WasmComponentDefinedValueTypeKind.enumeration ||
       WasmComponentDefinedValueTypeKind.own => false,
+    };
+
+    visiting.remove(typeIndex);
+    memo[typeIndex] = contains;
+    return contains;
+  }
+
+  bool valueTypeContainsStreamOrFuture(
+    WasmComponentValueType? valueType, {
+    List<WasmComponentTypeDefinition>? scopedTypeDefinitions,
+  }) {
+    if (scopedTypeDefinitions != null) {
+      return valueTypeContainsStreamOrFutureInDefinitions(
+        valueType,
+        scopedTypeDefinitions,
+        <int, bool>{},
+        <int>{},
+      );
+    }
+
+    return valueTypeContainsStreamOrFutureInDefinitions(
+      valueType,
+      typeDefinitions,
+      _valueTypeContainsStreamOrFutureMemo,
+      _valueTypeContainsStreamOrFutureVisiting,
+    );
+  }
+
+  bool valueTypeContainsStreamOrFutureInDefinitions(
+    WasmComponentValueType? valueType,
+    List<WasmComponentTypeDefinition> definitions,
+    Map<int, bool> memo,
+    Set<int> visiting,
+  ) {
+    if (valueType == null ||
+        valueType.kind == WasmComponentValueTypeKind.primitive) {
+      return false;
+    }
+
+    final typeIndex = valueType.typeIndex;
+    if (typeIndex == null || typeIndex < 0 || typeIndex >= definitions.length) {
+      return false;
+    }
+
+    final cached = memo[typeIndex];
+    if (cached != null) {
+      return cached;
+    }
+    if (!visiting.add(typeIndex)) {
+      return false;
+    }
+
+    final definition = definitions[typeIndex];
+    final definedValue = definition.definedValue;
+    if (definition.kind != WasmComponentTypeKind.definedValue ||
+        definedValue == null) {
+      visiting.remove(typeIndex);
+      memo[typeIndex] = false;
+      return false;
+    }
+
+    final contains = switch (definedValue.kind) {
+      WasmComponentDefinedValueTypeKind.stream ||
+      WasmComponentDefinedValueTypeKind.future => true,
+      WasmComponentDefinedValueTypeKind.record => definedValue.fields.any(
+        (field) => valueTypeContainsStreamOrFutureInDefinitions(
+          field.type,
+          definitions,
+          memo,
+          visiting,
+        ),
+      ),
+      WasmComponentDefinedValueTypeKind.variant => definedValue.cases.any(
+        (case_) => valueTypeContainsStreamOrFutureInDefinitions(
+          case_.type,
+          definitions,
+          memo,
+          visiting,
+        ),
+      ),
+      WasmComponentDefinedValueTypeKind.list ||
+      WasmComponentDefinedValueTypeKind.fixedList ||
+      WasmComponentDefinedValueTypeKind.option =>
+        valueTypeContainsStreamOrFutureInDefinitions(
+          definedValue.elementType,
+          definitions,
+          memo,
+          visiting,
+        ),
+      WasmComponentDefinedValueTypeKind.tuple => definedValue.types.any(
+        (type) => valueTypeContainsStreamOrFutureInDefinitions(
+          type,
+          definitions,
+          memo,
+          visiting,
+        ),
+      ),
+      WasmComponentDefinedValueTypeKind.result =>
+        valueTypeContainsStreamOrFutureInDefinitions(
+              definedValue.okType,
+              definitions,
+              memo,
+              visiting,
+            ) ||
+            valueTypeContainsStreamOrFutureInDefinitions(
+              definedValue.errorType,
+              definitions,
+              memo,
+              visiting,
+            ),
+      WasmComponentDefinedValueTypeKind.primitive ||
+      WasmComponentDefinedValueTypeKind.flags ||
+      WasmComponentDefinedValueTypeKind.enumeration ||
+      WasmComponentDefinedValueTypeKind.own ||
+      WasmComponentDefinedValueTypeKind.borrow => false,
     };
 
     visiting.remove(typeIndex);
