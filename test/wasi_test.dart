@@ -36,6 +36,8 @@ const int _errnoAgain = 6;
 const int _errnoBadf = 8;
 const int _errnoExist = 20;
 const int _errnoInval = 28;
+const int _errnoIsdir = 31;
+const int _errnoNoent = 44;
 const int _errnoNotsock = 57;
 const int _errnoNotdir = 54;
 const int _errnoNotsup = 58;
@@ -6359,6 +6361,140 @@ void main() {
           expect(
             pathFilestatGet.ref([3, 0, pathPtr, dirPath.length, filestatPtr]),
             44,
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; path mutation behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'path mutation preserves trailing slash errors',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/file.txt': Uint8List.fromList([1]),
+              '/sandbox/target.txt': Uint8List.fromList([2]),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathCreateDirectory =
+              preview1['path_create_directory'] as FunctionImportExportValue;
+          final pathRemoveDirectory =
+              preview1['path_remove_directory'] as FunctionImportExportValue;
+          final pathSymlink =
+              preview1['path_symlink'] as FunctionImportExportValue;
+          final pathUnlinkFile =
+              preview1['path_unlink_file'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          const pathPtr = 2688;
+          const targetPtr = 2752;
+          const filestatPtr = 2820;
+
+          final filePath = utf8.encode('file.txt');
+          final fileSlashPath = utf8.encode('file.txt/');
+          bytes.setAll(pathPtr, fileSlashPath);
+          expect(
+            pathUnlinkFile.ref([3, pathPtr, fileSlashPath.length]),
+            _errnoNotdir,
+          );
+          bytes.setAll(pathPtr, filePath);
+          expect(
+            pathFilestatGet.ref([3, 0, pathPtr, filePath.length, filestatPtr]),
+            0,
+          );
+
+          final dirPath = utf8.encode('dir');
+          final dirSlashPath = utf8.encode('dir/');
+          bytes.setAll(pathPtr, dirPath);
+          expect(pathCreateDirectory.ref([3, pathPtr, dirPath.length]), 0);
+          bytes.setAll(pathPtr, dirSlashPath);
+          expect(
+            pathUnlinkFile.ref([3, pathPtr, dirSlashPath.length]),
+            _errnoIsdir,
+          );
+          bytes.setAll(pathPtr, dirPath);
+          expect(pathRemoveDirectory.ref([3, pathPtr, dirPath.length]), 0);
+
+          final source = utf8.encode('source');
+          final danglingSlashPath = utf8.encode('dangling/');
+          bytes.setAll(targetPtr, source);
+          bytes.setAll(pathPtr, danglingSlashPath);
+          expect(
+            pathSymlink.ref([
+              targetPtr,
+              source.length,
+              3,
+              pathPtr,
+              danglingSlashPath.length,
+            ]),
+            _errnoNoent,
+          );
+
+          final targetSlashPath = utf8.encode('target.txt/');
+          bytes.setAll(pathPtr, targetSlashPath);
+          expect(
+            pathSymlink.ref([
+              targetPtr,
+              source.length,
+              3,
+              pathPtr,
+              targetSlashPath.length,
+            ]),
+            _errnoNotdir,
+          );
+
+          final symlinkPath = utf8.encode('link.txt');
+          final symlinkSlashPath = utf8.encode('link.txt/');
+          bytes.setAll(pathPtr, symlinkPath);
+          expect(
+            pathSymlink.ref([
+              targetPtr,
+              source.length,
+              3,
+              pathPtr,
+              symlinkPath.length,
+            ]),
+            0,
+          );
+          bytes.setAll(pathPtr, symlinkSlashPath);
+          expect(
+            pathSymlink.ref([
+              targetPtr,
+              source.length,
+              3,
+              pathPtr,
+              symlinkSlashPath.length,
+            ]),
+            _errnoNotdir,
+          );
+
+          final targetDir = utf8.encode('target-dir');
+          final targetDirSlash = utf8.encode('target-dir/');
+          bytes.setAll(pathPtr, targetDir);
+          expect(pathCreateDirectory.ref([3, pathPtr, targetDir.length]), 0);
+          bytes.setAll(pathPtr, targetDirSlash);
+          expect(
+            pathSymlink.ref([
+              targetPtr,
+              source.length,
+              3,
+              pathPtr,
+              targetDirSlash.length,
+            ]),
+            _errnoExist,
           );
         },
         skip: _skipOnNode(

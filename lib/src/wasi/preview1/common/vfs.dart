@@ -669,8 +669,21 @@ final class Preview1VirtualFileSystem {
     return Preview1PathMutationResult.success;
   }
 
-  Preview1PathMutationResult unlinkFile(String guestPath) {
+  Preview1PathMutationResult unlinkFile(
+    String guestPath, {
+    bool hasTrailingSeparator = false,
+  }) {
     final normalized = normalizeGuestPath(guestPath);
+    if (hasTrailingSeparator) {
+      if (_virtualDirectoryPaths.contains(normalized)) {
+        return Preview1PathMutationResult.isDirectory;
+      }
+      if (_filesByGuestPath.containsKey(normalized) ||
+          _symlinksByGuestPath.containsKey(normalized)) {
+        return Preview1PathMutationResult.notDirectory;
+      }
+      return Preview1PathMutationResult.noEntry;
+    }
     if (_virtualDirectoryPaths.contains(normalized)) {
       return Preview1PathMutationResult.isDirectory;
     }
@@ -804,8 +817,19 @@ final class Preview1VirtualFileSystem {
   Preview1PathMutationResult createSymlink({
     required String target,
     required String linkPath,
+    bool hasTrailingSeparator = false,
   }) {
     final normalized = normalizeGuestPath(linkPath);
+    if (hasTrailingSeparator) {
+      if (_virtualDirectoryPaths.contains(normalized)) {
+        return Preview1PathMutationResult.exists;
+      }
+      if (_filesByGuestPath.containsKey(normalized) ||
+          _symlinksByGuestPath.containsKey(normalized)) {
+        return Preview1PathMutationResult.notDirectory;
+      }
+      return Preview1PathMutationResult.noEntry;
+    }
     if (normalized == '/' ||
         _filesByGuestPath.containsKey(normalized) ||
         _symlinksByGuestPath.containsKey(normalized) ||
@@ -2073,7 +2097,17 @@ final class Preview1VirtualOpenResult {
   final int? fd;
 }
 
-String? resolveGuestPath({
+final class Preview1ResolvedGuestPathInfo {
+  const Preview1ResolvedGuestPathInfo({
+    required this.path,
+    required this.hasTrailingSeparator,
+  });
+
+  final String path;
+  final bool hasTrailingSeparator;
+}
+
+Preview1ResolvedGuestPathInfo? resolveGuestPathInfo({
   required Uint8List bytes,
   required String preopenPath,
   required int pathPtr,
@@ -2088,7 +2122,29 @@ String? resolveGuestPath({
   );
   final nul = decoded.indexOf('\u0000');
   final normalizedPath = nul == -1 ? decoded : decoded.substring(0, nul);
-  return joinGuestPath(preopenPath, normalizedPath);
+  return Preview1ResolvedGuestPathInfo(
+    path: joinGuestPath(preopenPath, normalizedPath),
+    hasTrailingSeparator: hasTrailingGuestPathSeparator(normalizedPath),
+  );
+}
+
+String? resolveGuestPath({
+  required Uint8List bytes,
+  required String preopenPath,
+  required int pathPtr,
+  required int pathLen,
+}) {
+  return resolveGuestPathInfo(
+    bytes: bytes,
+    preopenPath: preopenPath,
+    pathPtr: pathPtr,
+    pathLen: pathLen,
+  )?.path;
+}
+
+bool hasTrailingGuestPathSeparator(String path) {
+  final sanitized = path.replaceAll('\\', '/');
+  return sanitized.endsWith('/') && normalizeGuestPath(sanitized) != '/';
 }
 
 String normalizeGuestPath(String path) {

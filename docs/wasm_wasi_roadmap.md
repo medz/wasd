@@ -109,7 +109,7 @@ too broad to verify in one commit.
     under `lib/src/wasi/preview1/`, and the testsuite runner only when the
     selected failure proves a harness gap rather than a runtime gap.
   - Red test: pick exactly one failing official module from the current
-    `10/72` Preview1 failure list, add the smallest focused regression under
+    `8/72` Preview1 failure list, add the smallest focused regression under
     `test/wasi_test.dart`, and confirm the regression or official single-module
     run fails for the expected reason before the fix.
   - Implementation gate: focused `dart test test/wasi_test.dart --name ...`;
@@ -124,7 +124,8 @@ too broad to verify in one commit.
     that adds a repeated VFS hot path.
   - Checked child rows: `P1-FD-RENUMBER-TARGET-PREFLIGHT`,
     `P1-FD-CLOSE-PREOPEN`, `P1-PATH-OPEN-DIRFD-NOT-DIR`, and
-    `P1-DIRECTORY-NO-SEEK-RIGHT`.
+    `P1-DIRECTORY-NO-SEEK-RIGHT`,
+    `P1-TRAILING-SLASH-PATH-MUTATIONS`.
   - Done when: the official Preview1 command-module run reports zero Preview1
     failures with no unexpected Preview1 skips, and every previously failing
     module has a narrow checked child row with local and official evidence.
@@ -254,6 +255,47 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-TRAILING-SLASH-PATH-MUTATIONS` - path mutation syscalls preserve
+  trailing-slash errno semantics.
+  - Scope: native/browser shared Preview1 VFS path mutation behavior for
+    `path_unlink_file` and `path_symlink` link paths.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "path mutation preserves trailing slash errors" --reporter=expanded`
+    failed before the fix because `path_unlink_file("file.txt/")` returned
+    success and removed the file instead of returning `NOTDIR`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "path mutation preserves trailing slash errors" --reporter=expanded`;
+    `dart test test/wasi_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/unlink_file_trailing_slashes.wasm`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/path_symlink_trailing_slashes.wasm`;
+    `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_trailing_slash.json --disable-colors`
+    reported `8/72` Preview1 failures after the fix, down from `10/72`;
+    `dart test --reporter=compact --concurrency=1`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `mutations_benchmark` at `9.469285714285714us/op` baseline,
+    `13.462857142857143us/op` directory-heavy,
+    `6.211428571428572us/op` descriptor-heavy, and
+    `5.648571428571429us/op` socket-heavy. The implementation carries a single
+    decoded trailing-separator bit from the syscall boundary into mutation
+    helpers instead of reparsing or adding traversal loops.
+  - Done when: `path_unlink_file` leaves regular files intact when the guest
+    path ends in `/`, reports `ISDIR` for directory paths ending in `/`, and
+    `path_symlink` distinguishes trailing-slash missing, file, symlink, and
+    directory link paths with Preview1 errno values that match the official
+    modules.
+  - Evidence update: this checked row plus the detailed backlog row,
+    verification matrix, and current baseline.
+  - Claim impact: closes two official Preview1 testsuite failures
+    (`unlink_file_trailing_slashes` and `path_symlink_trailing_slashes`) for
+    `SUPPORT-P1`; it does not complete `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [x] `P1-NODE-METADATA-TIMESTAMPS` - new virtual files, directories, and
   symlinks start with non-zero filestat timestamps.
   - Scope: native/browser shared Preview1 VFS metadata creation and
@@ -1796,7 +1838,7 @@ unchecked.
 - [ ] `SUPPORT-P1` - Full WASI Preview1 support.
   - Current: `WASI(...)` provides a real Preview1 host surface, but full
     Preview1 support remains incomplete; the current official
-    `WebAssembly/wasi-testsuite` `prod/testsuite-base` run reports `10/72`
+    `WebAssembly/wasi-testsuite` `prod/testsuite-base` run reports `8/72`
     Preview1 failures.
   - Required rows: every Preview1 descriptor, filesystem, stdio, clock, random,
     poll, and socket row checked, including `P1-PATH-OPEN-OFLAGS`,
@@ -1949,6 +1991,7 @@ copying their internals directly.
 | [x] | Preview1 directory fd seek-right masking | `lib/src/wasi/preview1/common/constants.dart`, `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "path_open does not grant fd_seek rights to directories" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "path_open does not grant fd_seek rights to directories" --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/directory_seek.wasm` | Directory descriptors now mask `FD_SEEK` from base rights at descriptor construction while preserving inheriting rights for child opens; the official Preview1 suite dropped from `17/72` failures to `16/72`, so broader filesystem/symlink/directory/inode gaps remain. |
 | [x] | Preview1 virtual file identity and `fd_readdir` paging | `lib/src/wasi/preview1/common/constants.dart`, `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/common/fd_syscalls.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "filestat and readdir report stable virtual node identities" --reporter=expanded`; `dart test test/wasi_test.dart --name "fd_readdir keeps buffer full while directory entries remain" --reporter=expanded`; `dart test test/wasi_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/stat-dev-ino.wasm`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fdopendir-with-access.wasm`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fd_readdir.wasm`; `.dart_tool/wasi-testsuite/.venv/bin/python run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_inode_readdir.json --disable-colors`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | VFS metadata now carries stable `dev`/`ino`/link count, `filestat` and `dirent.d_ino` share that identity, hard links share inode identity, and `fd_readdir` reports a full buffer while more entries remain; the official Preview1 suite dropped from `16/72` failures to `13/72`, so symlink/path edge cases remain. |
 | [x] | Preview1 VFS node filestat timestamps | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "new virtual nodes start with non-zero filestat timestamps" --reporter=expanded`; `dart test test/wasi_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/path_filestat.wasm`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/symlink_filestat.wasm`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fd_filestat_set.wasm`; `.dart_tool/wasi-testsuite/.venv/bin/python run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_filestat_timestamps.json --disable-colors`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | Fresh VFS nodes now report non-zero access and modification timestamps through filestat using a single wall-clock seed plus monotonic virtual increments, preserving explicit timestamp setters and dropping the official Preview1 suite from `13/72` failures to `10/72`. |
+| [x] | Preview1 trailing-slash path mutation errno | `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "path mutation preserves trailing slash errors" --reporter=expanded`; `dart test test/wasi_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/unlink_file_trailing_slashes.wasm`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/path_symlink_trailing_slashes.wasm`; `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_trailing_slash.json --disable-colors`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | `path_unlink_file` and `path_symlink` now preserve the decoded guest trailing-slash bit through native/browser syscall adapters and shared VFS mutation helpers, returning Preview1 `NOTDIR`/`ISDIR`/`NOENT`/`EXIST` without deleting the wrong node; the official Preview1 suite dropped from `10/72` failures to `8/72`. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Component instantiation import matching for known local child components | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments" --reporter=compact`; `dart test test/component_test.dart --reporter=compact`; `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart --reporter=compact`; `dart run tool/component_benchmark.dart --json`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | Known local child component instantiation now rejects unknown argument names, missing required imports, and wrong argument sorts before adapter binding; imported/aliased component targets, cross-component type equivalence, generated worlds, and official suite coverage remain open. |
 | [x] | Component task-return borrow validation | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "reports task.return result types containing borrow|reports missing canonical option requirements|reports invalid canonical result value type indexes" --reporter=compact`; `dart run tool/component_benchmark.dart --json` | Borrowed canonical `task.return` results are now rejected during validation; broader borrow, stream, future, nested-shape, generated-world, and component-suite coverage remains. |
@@ -2054,15 +2097,18 @@ This is the implementation state as of 2026-06-23 on `main`.
   conformance entry point only; full Preview1 support requires running the
   external suite and converting failures into checked implementation rows.
 - The official `WebAssembly/wasi-testsuite` `prod/testsuite-base` run now has
-  `10/72` Preview1 failures with `41` Preview3 tests skipped by the adapter
+  `8/72` Preview1 failures with `41` Preview3 tests skipped by the adapter
   capability filter. `renumber.wasm`, `close_preopen.wasm`,
   `path_open_dirfd_not_dir.wasm`, `directory_seek.wasm`, `fd_readdir.wasm`,
   `stat-dev-ino.wasm`, `fdopendir-with-access.wasm`, `path_filestat.wasm`,
-  `symlink_filestat.wasm`, and `fd_filestat_set.wasm` are now passing;
-  remaining Preview1 failures are concentrated in symlink traversal, path
-  normalization/trailing slash errors, path link/rename edge cases, directory
-  open rights, and absolute/interesting path semantics. The Preview3 skips are
-  a real unsupported-state signal, not a pass result or a support claim.
+  `symlink_filestat.wasm`, `fd_filestat_set.wasm`,
+  `unlink_file_trailing_slashes.wasm`, and
+  `path_symlink_trailing_slashes.wasm` are now passing; remaining Preview1
+  failures are `symlink_create.wasm`, `path_link.wasm`,
+  `nofollow_errors.wasm`, `path_rename.wasm`, `dangling_symlink.wasm`,
+  `symlink_loop.wasm`, `path_open_preopen.wasm`, and
+  `interesting_paths.wasm`. The Preview3 skips are a real unsupported-state
+  signal, not a pass result or a support claim.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/` now provides an internal typed resource table plus
@@ -2369,7 +2415,7 @@ performance visible while the support surface expands.
 
 1. `P1-OFFICIAL-FS-CONFORMANCE`
   - Why: Preview1 is the only public WASI surface today, and the official
-     `wasi-testsuite` run still has `10/72` Preview1 failures that must be
+     `wasi-testsuite` run still has `8/72` Preview1 failures that must be
      closed with real behavior before any full-support claim.
    - Do not: count skipped Preview3 tests as support or replace official
      failures with local-only helper tests.
@@ -2980,6 +3026,44 @@ performance visible while the support surface expands.
   - Claim impact: creates the official Preview1 testsuite gate needed to expose
     real conformance failures; does not complete `P1-SOCKET-CONFORMANCE`,
     `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
+- [x] `P1-TRAILING-SLASH-PATH-MUTATIONS` - Preserve trailing slash errors for
+  Preview1 path mutation syscalls.
+  - Scope: native/browser shared Preview1 guest path decoding and VFS mutation
+    semantics for `path_unlink_file` and `path_symlink`.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "path mutation preserves trailing slash errors" --reporter=expanded`
+    failed before the fix because `path_unlink_file("file.txt/")` returned
+    success and removed the file instead of returning `NOTDIR`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "path mutation preserves trailing slash errors" --reporter=expanded`;
+    `dart test test/wasi_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/unlink_file_trailing_slashes.wasm`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/path_symlink_trailing_slashes.wasm`;
+    `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_trailing_slash.json --disable-colors`
+    reported `8/72` Preview1 failures after the fix, down from `10/72`;
+    `dart test --reporter=compact --concurrency=1`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `mutations_benchmark` at `9.469285714285714us/op` baseline,
+    `13.462857142857143us/op` directory-heavy,
+    `6.211428571428572us/op` descriptor-heavy, and
+    `5.648571428571429us/op` socket-heavy. The trailing separator is decoded
+    once at the syscall boundary and passed as a bit to VFS mutation helpers.
+  - Done when: trailing slash on a file path returns `NOTDIR` without deleting
+    the file, trailing slash on a directory returns the operation-specific
+    directory/exists errno, missing trailing-slash link paths return `NOENT`,
+    and official `unlink_file_trailing_slashes.wasm` plus
+    `path_symlink_trailing_slashes.wasm` pass.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry, verification matrix, and current baseline.
+  - Claim impact: closes two official Preview1 testsuite failures for
+    `SUPPORT-P1`; does not complete Preview1 full support or any P2/P3 gate.
 - [x] `P1-NODE-METADATA-TIMESTAMPS` - Fresh VFS nodes report non-zero access
   and modification times.
   - Scope: VFS metadata creation for snapshotted files, newly created files,

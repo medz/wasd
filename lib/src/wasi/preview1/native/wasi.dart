@@ -1327,7 +1327,11 @@ class WASI implements wasi_iface.WASI {
           return right;
         }
         return _errnoFromPathMutationResult(
-          _vfs.createSymlink(target: target, linkPath: linkPath.path!),
+          _vfs.createSymlink(
+            target: target,
+            linkPath: linkPath.path!,
+            hasTrailingSeparator: linkPath.hasTrailingSeparator,
+          ),
         );
       });
 
@@ -1351,7 +1355,12 @@ class WASI implements wasi_iface.WASI {
         if (right != _errnoSuccess) {
           return right;
         }
-        return _errnoFromPathMutationResult(_vfs.unlinkFile(resolved.path!));
+        return _errnoFromPathMutationResult(
+          _vfs.unlinkFile(
+            resolved.path!,
+            hasTrailingSeparator: resolved.hasTrailingSeparator,
+          ),
+        );
       });
 
   wasm.FunctionImportExportValue
@@ -1592,7 +1601,7 @@ class WASI implements wasi_iface.WASI {
       return const _ResolvedPath.error(_errnoInval);
     }
 
-    final guestPath = wasi_vfs.resolveGuestPath(
+    final guestPath = wasi_vfs.resolveGuestPathInfo(
       bytes: bytes,
       preopenPath: baseDirectory,
       pathPtr: pathPtr,
@@ -1601,7 +1610,10 @@ class WASI implements wasi_iface.WASI {
     if (guestPath == null) {
       return const _ResolvedPath.error(_errnoInval);
     }
-    return _ResolvedPath.path(wasi_vfs.normalizeGuestPath(guestPath));
+    return _ResolvedPath.path(
+      wasi_vfs.normalizeGuestPath(guestPath.path),
+      hasTrailingSeparator: guestPath.hasTrailingSeparator,
+    );
   }
 
   int _writePollEvents({
@@ -2117,12 +2129,16 @@ final class _MemoryView {
 }
 
 final class _ResolvedPath {
-  const _ResolvedPath.path(this.path) : errno = _errnoSuccess;
+  const _ResolvedPath.path(this.path, {this.hasTrailingSeparator = false})
+    : errno = _errnoSuccess;
 
-  const _ResolvedPath.error(this.errno) : path = null;
+  const _ResolvedPath.error(this.errno)
+    : path = null,
+      hasTrailingSeparator = false;
 
   final String? path;
   final int errno;
+  final bool hasTrailingSeparator;
 }
 
 final class _WasiExit extends Error {
