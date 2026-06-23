@@ -1027,7 +1027,7 @@ class WASI implements wasi_iface.WASI {
       return _errnoInval;
     }
 
-    final guestPath = wasi_vfs.resolveGuestPath(
+    final guestPath = wasi_vfs.resolveGuestPathInfo(
       bytes: bytes,
       preopenPath: baseDirectory,
       pathPtr: pathPtr,
@@ -1041,7 +1041,11 @@ class WASI implements wasi_iface.WASI {
     if (guestPath == null) {
       return _errnoInval;
     }
-    final normalizedPath = wasi_vfs.normalizeGuestPath(guestPath);
+    final pathErrno = wasi_vfs.errnoForResolvedGuestPathInfo(guestPath);
+    if (pathErrno != null) {
+      return pathErrno;
+    }
+    final normalizedPath = wasi_vfs.normalizeGuestPath(guestPath.path);
     final openPath = (lookupFlags & _lookupflagSymlinkFollow) == 0
         ? normalizedPath
         : _vfs.resolveSymlinkPath(normalizedPath);
@@ -1097,6 +1101,7 @@ class WASI implements wasi_iface.WASI {
       rightsInheriting: requestedRightsInheriting,
       descriptorFlags: descriptorFlags,
       oflags: oflags,
+      hasTrailingSeparator: guestPath.hasTrailingSeparator,
     );
     switch (opened.kind) {
       case wasi_vfs.Preview1VirtualOpenKind.file:
@@ -1397,7 +1402,7 @@ class WASI implements wasi_iface.WASI {
     if (filestatPtr < 0 || filestatPtr + _filestatSize > bytes.length) {
       return _errnoInval;
     }
-    final guestPath = wasi_vfs.resolveGuestPath(
+    final guestPath = wasi_vfs.resolveGuestPathInfo(
       bytes: bytes,
       preopenPath: baseDirectory,
       pathPtr: pathPtr,
@@ -1411,8 +1416,12 @@ class WASI implements wasi_iface.WASI {
     if (guestPath == null) {
       return _errnoInval;
     }
+    final pathErrno = wasi_vfs.errnoForResolvedGuestPathInfo(guestPath);
+    if (pathErrno != null) {
+      return pathErrno;
+    }
 
-    final normalizedPath = wasi_vfs.normalizeGuestPath(guestPath);
+    final normalizedPath = wasi_vfs.normalizeGuestPath(guestPath.path);
     final entry = _vfs.pathEntry(
       normalizedPath,
       followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
@@ -1609,6 +1618,10 @@ class WASI implements wasi_iface.WASI {
     );
     if (guestPath == null) {
       return const _ResolvedPath.error(_errnoInval);
+    }
+    final pathErrno = wasi_vfs.errnoForResolvedGuestPathInfo(guestPath);
+    if (pathErrno != null) {
+      return _ResolvedPath.error(pathErrno);
     }
     return _ResolvedPath.path(
       wasi_vfs.normalizeGuestPath(guestPath.path),
@@ -2016,6 +2029,7 @@ int _errnoFromPathMutationResult(wasi_vfs.Preview1PathMutationResult result) =>
       wasi_vfs.Preview1PathMutationResult.isDirectory => _errnoIsdir,
       wasi_vfs.Preview1PathMutationResult.notDirectory => _errnoNotdir,
       wasi_vfs.Preview1PathMutationResult.notEmpty => _errnoNotempty,
+      wasi_vfs.Preview1PathMutationResult.notCapable => _errnoNotcapable,
     };
 
 int _errnoFromFdRightsResult(wasi_vfs.Preview1FdRightsResult result) =>

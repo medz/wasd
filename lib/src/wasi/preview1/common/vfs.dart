@@ -819,6 +819,9 @@ final class Preview1VirtualFileSystem {
     required String linkPath,
     bool hasTrailingSeparator = false,
   }) {
+    if (isAbsoluteGuestPath(target)) {
+      return Preview1PathMutationResult.notCapable;
+    }
     final normalized = normalizeGuestPath(linkPath);
     if (hasTrailingSeparator) {
       if (_virtualDirectoryPaths.contains(normalized)) {
@@ -858,6 +861,7 @@ final class Preview1VirtualFileSystem {
     int? rightsInheriting,
     int descriptorFlags = 0,
     int oflags = 0,
+    bool hasTrailingSeparator = false,
   }) {
     final normalized = normalizeGuestPath(guestPath);
     final create = (oflags & oflagCreat) != 0;
@@ -866,6 +870,9 @@ final class Preview1VirtualFileSystem {
     final truncate = (oflags & oflagTrunc) != 0;
     final file = lookupFile(normalized);
     if (file != null) {
+      if (hasTrailingSeparator) {
+        return const Preview1VirtualOpenResult.notDirectory();
+      }
       if (directory) {
         return const Preview1VirtualOpenResult.notDirectory();
       }
@@ -2043,6 +2050,7 @@ enum Preview1PathMutationResult {
   isDirectory,
   notDirectory,
   notEmpty,
+  notCapable,
 }
 
 enum Preview1FdRenumberResult { success, invalid, badf }
@@ -2101,10 +2109,16 @@ final class Preview1ResolvedGuestPathInfo {
   const Preview1ResolvedGuestPathInfo({
     required this.path,
     required this.hasTrailingSeparator,
+    required this.containsNul,
+    required this.isAbsolute,
+    required this.escapesPreopen,
   });
 
   final String path;
   final bool hasTrailingSeparator;
+  final bool containsNul;
+  final bool isAbsolute;
+  final bool escapesPreopen;
 }
 
 Preview1ResolvedGuestPathInfo? resolveGuestPathInfo({
@@ -2125,6 +2139,9 @@ Preview1ResolvedGuestPathInfo? resolveGuestPathInfo({
   return Preview1ResolvedGuestPathInfo(
     path: joinGuestPath(preopenPath, normalizedPath),
     hasTrailingSeparator: hasTrailingGuestPathSeparator(normalizedPath),
+    containsNul: nul != -1,
+    isAbsolute: isAbsoluteGuestPath(normalizedPath),
+    escapesPreopen: guestPathEscapesPreopen(normalizedPath),
   );
 }
 
@@ -2134,17 +2151,57 @@ String? resolveGuestPath({
   required int pathPtr,
   required int pathLen,
 }) {
-  return resolveGuestPathInfo(
+  final info = resolveGuestPathInfo(
     bytes: bytes,
     preopenPath: preopenPath,
     pathPtr: pathPtr,
     pathLen: pathLen,
-  )?.path;
+  );
+  if (info == null || errnoForResolvedGuestPathInfo(info) != null) {
+    return null;
+  }
+  return info.path;
 }
 
 bool hasTrailingGuestPathSeparator(String path) {
   final sanitized = path.replaceAll('\\', '/');
   return sanitized.endsWith('/') && normalizeGuestPath(sanitized) != '/';
+}
+
+bool isAbsoluteGuestPath(String path) {
+  return path.replaceAll('\\', '/').startsWith('/');
+}
+
+bool guestPathEscapesPreopen(String path) {
+  final sanitized = path.replaceAll('\\', '/');
+  if (sanitized.startsWith('/')) {
+    return false;
+  }
+  var depth = 0;
+  for (final segment in sanitized.split('/')) {
+    if (segment.isEmpty || segment == '.') {
+      continue;
+    }
+    if (segment == '..') {
+      if (depth == 0) {
+        return true;
+      }
+      depth--;
+      continue;
+    }
+    depth++;
+  }
+  return false;
+}
+
+int? errnoForResolvedGuestPathInfo(Preview1ResolvedGuestPathInfo info) {
+  if (info.containsNul) {
+    return errnoInval;
+  }
+  if (info.isAbsolute || info.escapesPreopen) {
+    return errnoNotcapable;
+  }
+  return null;
 }
 
 String normalizeGuestPath(String path) {

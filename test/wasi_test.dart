@@ -5883,6 +5883,78 @@ void main() {
       );
 
       test(
+        'path_open rejects absolute, escaping, nul, and file-slash paths',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/dir/nested/file': Uint8List.fromList(
+                utf8.encode('data'),
+              ),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 2528;
+          const openedFdPtr = 2608;
+
+          int openPath(String path) {
+            final pathBytes = utf8.encode(path);
+            bytes.fillRange(pathPtr, pathPtr + 96, 0);
+            bytes.setAll(pathPtr, pathBytes);
+            data.setUint32(openedFdPtr, 0xdeadbeef, Endian.little);
+            return pathOpen.ref([
+                  3,
+                  0,
+                  pathPtr,
+                  pathBytes.length,
+                  0,
+                  _rightsAll,
+                  _rightsAll,
+                  0,
+                  openedFdPtr,
+                ])
+                as int;
+          }
+
+          expect(openPath('/dir/nested/file'), _errnoNotcapable);
+          expect(data.getUint32(openedFdPtr, Endian.little), 0xdeadbeef);
+
+          expect(
+            openPath('dir/nested/../../../dir/nested/file'),
+            _errnoNotcapable,
+          );
+          expect(data.getUint32(openedFdPtr, Endian.little), 0xdeadbeef);
+
+          expect(openPath('dir/nested/file\u0000'), _errnoInval);
+          expect(data.getUint32(openedFdPtr, Endian.little), 0xdeadbeef);
+
+          expect(openPath('dir/nested/file/'), _errnoNotdir);
+          expect(data.getUint32(openedFdPtr, Endian.little), 0xdeadbeef);
+
+          expect(openPath('dir/.//nested/../../dir/nested/../nested/file'), 0);
+          expect(data.getUint32(openedFdPtr, Endian.little), greaterThan(3));
+
+          expect(openPath('dir/nested///'), 0);
+          expect(data.getUint32(openedFdPtr, Endian.little), greaterThan(3));
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; path_open behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'path_open does not grant fd_seek rights to directories',
         () async {
           final fileWasi = WASI(
