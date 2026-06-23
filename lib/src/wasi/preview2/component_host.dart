@@ -3,6 +3,7 @@ import '../component/async_host.dart';
 import '../component/host.dart';
 import '../component/resource_host.dart';
 import '../component/versioned_host.dart';
+import '../component/wit_document.dart';
 import '../version.dart';
 import '../../wasm/backend/native/interpreter/component.dart';
 
@@ -34,6 +35,14 @@ final class WASIPreview2ComponentHost {
     bool validate = true,
   }) {
     return versionedHost.prepareComponent(component, validate: validate);
+  }
+
+  /// Prepares a WIT world for Preview2 adapter binding.
+  WASIComponentVersionedWitWorldPlan prepareWitWorld(
+    WASIComponentWitDocument document, {
+    String? worldName,
+  }) {
+    return versionedHost.prepareWitWorld(document, worldName: worldName);
   }
 
   /// Prepares and binds Preview2 canonical `lift`/`lower` adapter operations.

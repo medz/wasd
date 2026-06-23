@@ -82,13 +82,46 @@ final class WASIComponentWitPackage {
 /// Top-level WIT interface boundary.
 final class WASIComponentWitInterface {
   /// Creates an interface declaration boundary.
-  const WASIComponentWitInterface({required this.name, required this.span});
+  WASIComponentWitInterface({
+    required this.name,
+    required List<WASIComponentWitFunction> functions,
+    required this.span,
+  }) : functions = List<WASIComponentWitFunction>.unmodifiable(functions);
 
   /// Interface name.
   final String name;
 
+  /// Function declarations captured directly in this interface.
+  final List<WASIComponentWitFunction> functions;
+
   /// Source span for the interface name.
   final WASIComponentWitSpan span;
+}
+
+/// Function boundary declared directly in a WIT interface.
+final class WASIComponentWitFunction {
+  /// Creates a WIT function boundary.
+  const WASIComponentWitFunction({
+    required this.name,
+    required this.signature,
+    required this.span,
+  });
+
+  /// Function name before `:`.
+  final String name;
+
+  /// Compact signature text after `:` and before `;`.
+  final String signature;
+
+  /// Source span for the function name.
+  final WASIComponentWitSpan span;
+
+  /// Whether the signature is an `async func`.
+  bool get isAsync => signature.contains('asyncfunc');
+
+  /// Whether this function uses Preview3-native async surface syntax.
+  bool get usesPreview3AsyncFeatures =>
+      isAsync || signature.contains('stream<') || signature.contains('future<');
 }
 
 /// Top-level WIT world boundary.
@@ -118,6 +151,11 @@ final class WASIComponentWitWorld {
   Iterable<WASIComponentWitWorldItem> get exports => items.where(
     (item) => item.direction == WASIComponentWitWorldItemDirection.export,
   );
+
+  /// Include items declared directly in this world.
+  Iterable<WASIComponentWitWorldItem> get includes => items.where(
+    (item) => item.direction == WASIComponentWitWorldItemDirection.include,
+  );
 }
 
 /// Direction of a WIT world boundary item.
@@ -127,6 +165,9 @@ enum WASIComponentWitWorldItemDirection {
 
   /// `export` world item.
   export,
+
+  /// `include` world item.
+  include,
 }
 
 /// Import or export target declared directly in a WIT world.
@@ -258,6 +299,10 @@ final class _WitParser {
     final worlds = <WASIComponentWitWorld>[];
 
     while (!_checkKind(_WitTokenKind.eof)) {
+      if (_checkSymbol('@')) {
+        _skipAnnotation();
+        continue;
+      }
       if (_matchWord('package')) {
         if (package != null) {
           _fail(_current.span, 'duplicate package declaration');
@@ -340,8 +385,55 @@ final class _WitParser {
   WASIComponentWitInterface _parseInterface() {
     final name = _expectWord('interface name');
     _expectSymbol('{');
-    _skipBalancedBlock();
-    return WASIComponentWitInterface(name: name.lexeme, span: name.span);
+    final functions = <WASIComponentWitFunction>[];
+    _parseInterfaceBlock(functions, prefix: '');
+    return WASIComponentWitInterface(
+      name: name.lexeme,
+      functions: functions,
+      span: name.span,
+    );
+  }
+
+  void _parseInterfaceBlock(
+    List<WASIComponentWitFunction> functions, {
+    required String prefix,
+  }) {
+    while (!_checkSymbol('}') && !_checkKind(_WitTokenKind.eof)) {
+      if (_checkSymbol('@')) {
+        _skipAnnotation();
+        continue;
+      }
+      if (_checkKind(_WitTokenKind.word)) {
+        final item = _current;
+        _advance();
+        if (_matchSymbol(':')) {
+          final signature = _parseInterfaceItemSignature(item.span);
+          if (_isFunctionSignature(signature)) {
+            functions.add(
+              WASIComponentWitFunction(
+                name: '$prefix${item.lexeme}',
+                signature: signature,
+                span: item.span,
+              ),
+            );
+          }
+          continue;
+        }
+        if (_checkSymbol('{')) {
+          _advance();
+          _parseInterfaceBlock(functions, prefix: '$prefix${item.lexeme}.');
+          continue;
+        }
+        continue;
+      }
+      if (_checkSymbol('{')) {
+        _advance();
+        _parseInterfaceBlock(functions, prefix: prefix);
+        continue;
+      }
+      _advance();
+    }
+    _expectSymbol('}');
   }
 
   WASIComponentWitWorld _parseWorld() {
@@ -349,12 +441,20 @@ final class _WitParser {
     _expectSymbol('{');
     final items = <WASIComponentWitWorldItem>[];
     while (!_checkSymbol('}') && !_checkKind(_WitTokenKind.eof)) {
+      if (_checkSymbol('@')) {
+        _skipAnnotation();
+        continue;
+      }
       if (_matchWord('import')) {
         items.add(_parseWorldItem(WASIComponentWitWorldItemDirection.import));
         continue;
       }
       if (_matchWord('export')) {
         items.add(_parseWorldItem(WASIComponentWitWorldItemDirection.export));
+        continue;
+      }
+      if (_matchWord('include')) {
+        items.add(_parseWorldItem(WASIComponentWitWorldItemDirection.include));
         continue;
       }
       _skipWorldDeclaration();
@@ -413,15 +513,89 @@ final class _WitParser {
       if (!item.target.isLocal) {
         continue;
       }
-      if (_interfacesByName.containsKey(item.target.text)) {
+      final found = item.direction == WASIComponentWitWorldItemDirection.include
+          ? _worldsByName.containsKey(item.target.text)
+          : _interfacesByName.containsKey(item.target.text);
+      if (found) {
         continue;
       }
       final direction = item.direction.name;
+      final boundary =
+          item.direction == WASIComponentWitWorldItemDirection.include
+          ? 'world'
+          : 'interface';
       _fail(
         item.target.span,
-        "world '${world.name}' $direction references unknown local interface "
+        "world '${world.name}' $direction references unknown local $boundary "
         "'${item.target.text}'",
       );
+    }
+  }
+
+  String _parseInterfaceItemSignature(WASIComponentWitSpan start) {
+    final text = StringBuffer();
+    var parenDepth = 0;
+    var angleDepth = 0;
+    while (!_checkKind(_WitTokenKind.eof)) {
+      if (parenDepth == 0 && angleDepth == 0 && _checkSymbol(';')) {
+        _advance();
+        return text.toString();
+      }
+      if (parenDepth == 0 && angleDepth == 0 && _checkSymbol(',')) {
+        _advance();
+        return text.toString();
+      }
+      if (parenDepth == 0 && angleDepth == 0 && _checkSymbol('}')) {
+        return text.toString();
+      }
+      if (_checkSymbol('}')) {
+        _fail(start, 'unterminated interface item signature');
+      }
+      if (_checkSymbol('{')) {
+        _advance();
+        _skipBalancedBlock();
+        continue;
+      }
+      if (_checkSymbol('(')) {
+        parenDepth++;
+      } else if (_checkSymbol(')') && parenDepth > 0) {
+        parenDepth--;
+      } else if (_checkSymbol('<')) {
+        angleDepth++;
+      } else if (_checkSymbol('>') && angleDepth > 0) {
+        angleDepth--;
+      }
+      text.write(_current.lexeme);
+      _advance();
+    }
+    _fail(start, 'unterminated interface item signature');
+  }
+
+  bool _isFunctionSignature(String signature) {
+    return signature == 'func' ||
+        signature.startsWith('func(') ||
+        signature.contains('func(') ||
+        signature.contains('asyncfunc(');
+  }
+
+  void _skipAnnotation() {
+    _expectSymbol('@');
+    if (_checkKind(_WitTokenKind.word)) {
+      _advance();
+    }
+    if (_matchSymbol('(')) {
+      var depth = 1;
+      while (depth > 0) {
+        if (_checkKind(_WitTokenKind.eof)) {
+          _fail(_current.span, 'unterminated WIT annotation');
+        }
+        if (_checkSymbol('(')) {
+          depth++;
+        } else if (_checkSymbol(')')) {
+          depth--;
+        }
+        _advance();
+      }
     }
   }
 

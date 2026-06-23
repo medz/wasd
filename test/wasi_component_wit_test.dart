@@ -46,6 +46,80 @@ world command {
       expect(world.exports.single.target.isLocal, isTrue);
     });
 
+    test('parses annotated Preview3 async functions and world includes', () {
+      const source = '''
+package wasi:cli@0.3.0;
+
+@since(version = 0.3.0)
+interface run {
+  @since(version = 0.3.0)
+  run: async func() -> result;
+}
+
+interface stdout {
+  write-via-stream: func(data: stream<u8>) -> future<result>;
+}
+
+@since(version = 0.3.0)
+world command {
+  @since(version = 0.3.0)
+  import run;
+  include wasi:filesystem/imports@0.3.0;
+  export stdout;
+}
+''';
+
+      final document = WASIComponentWitDocument.parse(
+        source,
+        sourceName: 'wasi-cli.wit',
+      );
+      final run = document.interfaceNamed('run')!;
+      final stdout = document.interfaceNamed('stdout')!;
+      final world = document.worldNamed('command')!;
+
+      expect(run.functions.single.name, 'run');
+      expect(run.functions.single.isAsync, isTrue);
+      expect(run.functions.single.usesPreview3AsyncFeatures, isTrue);
+      expect(stdout.functions.single.name, 'write-via-stream');
+      expect(stdout.functions.single.isAsync, isFalse);
+      expect(stdout.functions.single.usesPreview3AsyncFeatures, isTrue);
+      expect(world.imports.single.target.text, 'run');
+      expect(
+        world.includes.single.target.text,
+        'wasi:filesystem/imports@0.3.0',
+      );
+      expect(world.exports.single.target.text, 'stdout');
+    });
+
+    test('parses nested resource async function boundaries', () {
+      const source = '''
+package wasi:filesystem@0.3.0;
+
+interface types {
+  resource descriptor {
+    read-via-stream: func(offset: u64) -> tuple<stream<u8>, future<result>>;
+    sync-data: async func() -> result;
+  }
+}
+
+world imports {
+  import types;
+}
+''';
+
+      final document = WASIComponentWitDocument.parse(source);
+      final types = document.interfaceNamed('types')!;
+
+      expect(types.functions.map((function) => function.name), [
+        'descriptor.read-via-stream',
+        'descriptor.sync-data',
+      ]);
+      expect(
+        types.functions.every((function) => function.usesPreview3AsyncFeatures),
+        isTrue,
+      );
+    });
+
     test('skips comments and nested interface declarations', () {
       const source = '''
 package wasi:demo@0.3.0;

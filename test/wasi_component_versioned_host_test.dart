@@ -7,6 +7,7 @@ import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/versioned_host.dart';
 import 'package:wasd/src/wasi/component/waitable_set.dart';
+import 'package:wasd/src/wasi/component/wit_document.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasi/version.dart';
@@ -220,6 +221,60 @@ void main() {
       expect(streamPlan.versionErrors, hasLength(7));
       expect(sharedHost.table.activeCount, 0);
     });
+
+    test(
+      'Preview2 and Preview3 wrappers ingest WIT worlds through profiles',
+      () {
+        const source = '''
+package wasi:cli@0.3.0;
+
+interface run {
+  run: async func() -> result;
+}
+
+interface stdout {
+  write-via-stream: func(data: stream<u8>) -> future<result>;
+}
+
+world command {
+  import run;
+  include wasi:filesystem/imports@0.3.0;
+  export stdout;
+}
+''';
+        final document = WASIComponentWitDocument.parse(source);
+        final preview2 = WASIPreview2ComponentHost();
+        final preview3 = WASIPreview3ComponentHost();
+
+        final preview2Plan = preview2.prepareWitWorld(
+          document,
+          worldName: 'command',
+        );
+        final preview3Plan = preview3.prepareWitWorld(
+          document,
+          worldName: 'command',
+        );
+
+        expect(preview2Plan.canIngest, isFalse);
+        expect(preview2Plan.versionErrors, hasLength(3));
+        expect(
+          preview2Plan.versionErrors.map((error) => error.targetName),
+          containsAll(<String>[
+            'run.run',
+            'stdout.write-via-stream',
+            'wasi:filesystem/imports@0.3.0',
+          ]),
+        );
+        expect(preview3Plan.canIngest, isTrue);
+        expect(preview3Plan.versionErrors, isEmpty);
+        expect(preview3Plan.world.name, 'command');
+        expect(preview3Plan.items.map((item) => item.target.text), [
+          'run',
+          'wasi:filesystem/imports@0.3.0',
+          'stdout',
+        ]);
+      },
+    );
 
     test(
       'Preview2 wrapper rejects owned-resource async values at version gate',

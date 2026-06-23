@@ -6,6 +6,7 @@ import 'async_host.dart';
 import 'canonical_host.dart';
 import 'host.dart';
 import 'resource_host.dart';
+import 'wit_document.dart';
 
 /// Versioned component-host facade for future WASI Preview2/Preview3 adapters.
 ///
@@ -84,6 +85,21 @@ final class WASIComponentVersionedHost {
       asyncValueName: asyncValueName,
       maxBufferedElementsForStream: maxBufferedElementsForStream,
       onAsyncValueDrop: onAsyncValueDrop,
+    );
+  }
+
+  /// Prepares a WIT world against this WASI version profile.
+  WASIComponentVersionedWitWorldPlan prepareWitWorld(
+    WASIComponentWitDocument document, {
+    String? worldName,
+  }) {
+    final world = _selectWitWorld(document, worldName);
+    final errors = _witWorldVersionErrors(profile, document, world);
+    return WASIComponentVersionedWitWorldPlan._(
+      profile: profile,
+      document: document,
+      world: world,
+      versionErrors: errors,
     );
   }
 }
@@ -272,6 +288,66 @@ final class WASIComponentVersionSupportError {
   }
 }
 
+/// Prepared WIT world ingestion report for one WASI version profile.
+final class WASIComponentVersionedWitWorldPlan {
+  WASIComponentVersionedWitWorldPlan._({
+    required this.profile,
+    required this.document,
+    required this.world,
+    required List<WASIComponentVersionedWitWorldError> versionErrors,
+  }) : versionErrors = List<WASIComponentVersionedWitWorldError>.unmodifiable(
+         versionErrors,
+       );
+
+  /// Version profile used for WIT world ingestion.
+  final WASIComponentVersionProfile profile;
+
+  /// Parsed WIT document.
+  final WASIComponentWitDocument document;
+
+  /// Selected world boundary.
+  final WASIComponentWitWorld world;
+
+  /// Version-specific WIT ingestion errors.
+  final List<WASIComponentVersionedWitWorldError> versionErrors;
+
+  /// Direct world items preserved in declaration order.
+  List<WASIComponentWitWorldItem> get items => world.items;
+
+  /// Whether this WIT world can enter adapter binding for [profile].
+  bool get canIngest => versionErrors.isEmpty;
+}
+
+/// WIT world item or function rejected by a WASI version profile.
+final class WASIComponentVersionedWitWorldError {
+  /// Creates a WIT world version-profile error.
+  const WASIComponentVersionedWitWorldError({
+    required this.profile,
+    required this.item,
+    required this.targetName,
+    required this.reason,
+    this.function,
+  });
+
+  /// Version profile that rejected the WIT boundary.
+  final WASIComponentVersionProfile profile;
+
+  /// World item that introduced the rejected boundary.
+  final WASIComponentWitWorldItem item;
+
+  /// Human-readable target path, such as `run.run`.
+  final String targetName;
+
+  /// Optional function boundary when a local interface function was rejected.
+  final WASIComponentWitFunction? function;
+
+  /// Human-readable rejection reason.
+  final String reason;
+
+  @override
+  String toString() => '$targetName: $reason';
+}
+
 /// Thrown when a component uses canonical operations outside a WASI profile.
 final class WASIComponentVersionUnsupportedException implements Exception {
   /// Creates an exception from version support [errors].
@@ -318,4 +394,90 @@ List<WASIComponentVersionSupportError> _versionSupportErrors(
     }
   }
   return List<WASIComponentVersionSupportError>.unmodifiable(errors);
+}
+
+WASIComponentWitWorld _selectWitWorld(
+  WASIComponentWitDocument document,
+  String? worldName,
+) {
+  if (worldName != null) {
+    final world = document.worldNamed(worldName);
+    if (world == null) {
+      throw StateError("WIT document does not declare world '$worldName'.");
+    }
+    return world;
+  }
+  if (document.worlds.length != 1) {
+    throw StateError(
+      'WIT document must declare exactly one world or pass worldName; found '
+      '${document.worlds.length}.',
+    );
+  }
+  return document.worlds.single;
+}
+
+List<WASIComponentVersionedWitWorldError> _witWorldVersionErrors(
+  WASIComponentVersionProfile profile,
+  WASIComponentWitDocument document,
+  WASIComponentWitWorld world,
+) {
+  final errors = <WASIComponentVersionedWitWorldError>[];
+  for (final item in world.items) {
+    final target = item.target;
+    if (target.isQualified) {
+      if (_requiresPreview3WitTarget(target.text) &&
+          !_profileSupportsPreview3Async(profile)) {
+        errors.add(
+          WASIComponentVersionedWitWorldError(
+            profile: profile,
+            item: item,
+            targetName: target.text,
+            reason: '${profile.label} cannot ingest WASI 0.3 WIT target.',
+          ),
+        );
+      }
+      continue;
+    }
+    if (item.direction == WASIComponentWitWorldItemDirection.include) {
+      final included = document.worldNamed(target.text);
+      if (included != null) {
+        errors.addAll(_witWorldVersionErrors(profile, document, included));
+      }
+      continue;
+    }
+    final interface = document.interfaceNamed(target.text);
+    if (interface == null) {
+      continue;
+    }
+    for (final function in interface.functions) {
+      if (!function.usesPreview3AsyncFeatures) {
+        continue;
+      }
+      if (_profileSupportsPreview3Async(profile)) {
+        continue;
+      }
+      errors.add(
+        WASIComponentVersionedWitWorldError(
+          profile: profile,
+          item: item,
+          function: function,
+          targetName: '${interface.name}.${function.name}',
+          reason:
+              '${profile.label} does not include Preview3 async WIT '
+              'functions, streams, or futures.',
+        ),
+      );
+    }
+  }
+  return List<WASIComponentVersionedWitWorldError>.unmodifiable(errors);
+}
+
+bool _profileSupportsPreview3Async(WASIComponentVersionProfile profile) {
+  return profile.canonicalAreas.contains(
+    WASIComponentCanonicalCapabilityArea.asyncValue,
+  );
+}
+
+bool _requiresPreview3WitTarget(String target) {
+  return target.contains('@0.3') || target.contains('@0.3.0');
 }
