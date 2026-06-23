@@ -41,6 +41,7 @@ const int _errnoLoop = 32;
 const int _errnoNoent = 44;
 const int _errnoNotsock = 57;
 const int _errnoNotdir = 54;
+const int _errnoNotempty = 55;
 const int _errnoNotsup = 58;
 const int _errnoPerm = 63;
 const int _errnoNotcapable = 76;
@@ -6436,6 +6437,153 @@ void main() {
           expect(
             pathFilestatGet.ref([3, 0, pathPtr, dirPath.length, filestatPtr]),
             44,
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; path mutation behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'path_rename replaces empty directories and rejects nonempty targets',
+        () async {
+          final fileWasi = WASI(preopens: {'/sandbox': '/tmp'});
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathCreateDirectory =
+              preview1['path_create_directory'] as FunctionImportExportValue;
+          final pathRename =
+              preview1['path_rename'] as FunctionImportExportValue;
+          final pathRemoveDirectory =
+              preview1['path_remove_directory'] as FunctionImportExportValue;
+          final pathUnlinkFile =
+              preview1['path_unlink_file'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const sourcePathPtr = 4368;
+          const targetPathPtr = 4400;
+          const nestedPathPtr = 4432;
+          const filestatPtr = 4472;
+          const openedFdPtr = 4544;
+
+          final sourcePath = utf8.encode('source');
+          final targetPath = utf8.encode('target');
+          final nestedPath = utf8.encode('target/file');
+          bytes.setAll(sourcePathPtr, sourcePath);
+          bytes.setAll(targetPathPtr, targetPath);
+          bytes.setAll(nestedPathPtr, nestedPath);
+
+          expect(
+            pathCreateDirectory.ref([3, sourcePathPtr, sourcePath.length]),
+            0,
+          );
+          expect(
+            pathCreateDirectory.ref([3, targetPathPtr, targetPath.length]),
+            0,
+          );
+          expect(
+            pathRename.ref([
+              3,
+              sourcePathPtr,
+              sourcePath.length,
+              3,
+              targetPathPtr,
+              targetPath.length,
+            ]),
+            0,
+          );
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              sourcePathPtr,
+              sourcePath.length,
+              filestatPtr,
+            ]),
+            _errnoNoent,
+          );
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              targetPathPtr,
+              targetPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(bytes[filestatPtr + 16], 3);
+          expect(
+            pathRemoveDirectory.ref([3, targetPathPtr, targetPath.length]),
+            0,
+          );
+
+          expect(
+            pathCreateDirectory.ref([3, sourcePathPtr, sourcePath.length]),
+            0,
+          );
+          expect(
+            pathCreateDirectory.ref([3, targetPathPtr, targetPath.length]),
+            0,
+          );
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              nestedPathPtr,
+              nestedPath.length,
+              _oflagCreat,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          expect(fdClose.ref([data.getUint32(openedFdPtr, Endian.little)]), 0);
+          expect(
+            pathRename.ref([
+              3,
+              sourcePathPtr,
+              sourcePath.length,
+              3,
+              targetPathPtr,
+              targetPath.length,
+            ]),
+            _errnoNotempty,
+          );
+          expect(
+            pathRename.ref([
+              3,
+              sourcePathPtr,
+              sourcePath.length,
+              3,
+              nestedPathPtr,
+              nestedPath.length,
+            ]),
+            _errnoNotdir,
+          );
+
+          expect(pathUnlinkFile.ref([3, nestedPathPtr, nestedPath.length]), 0);
+          expect(
+            pathRemoveDirectory.ref([3, sourcePathPtr, sourcePath.length]),
+            0,
+          );
+          expect(
+            pathRemoveDirectory.ref([3, targetPathPtr, targetPath.length]),
+            0,
           );
         },
         skip: _skipOnNode(

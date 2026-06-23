@@ -109,7 +109,7 @@ too broad to verify in one commit.
     under `lib/src/wasi/preview1/`, and the testsuite runner only when the
     selected failure proves a harness gap rather than a runtime gap.
   - Red test: pick exactly one failing official module from the current
-    `2/72` Preview1 failure list, add the smallest focused regression under
+    `1/72` Preview1 failure list, add the smallest focused regression under
     `test/wasi_test.dart`, and confirm the regression or official single-module
     run fails for the expected reason before the fix.
   - Implementation gate: focused `dart test test/wasi_test.dart --name ...`;
@@ -125,8 +125,9 @@ too broad to verify in one commit.
   - Checked child rows: `P1-FD-RENUMBER-TARGET-PREFLIGHT`,
     `P1-FD-CLOSE-PREOPEN`, `P1-PATH-OPEN-DIRFD-NOT-DIR`,
     `P1-DIRECTORY-NO-SEEK-RIGHT`, `P1-TRAILING-SLASH-PATH-MUTATIONS`,
-    `P1-GUEST-PATH-CAPABILITY-BOUNDARY`, `P1-PATH-LINK-EDGE-SEMANTICS`, and
-    `P1-SYMLINK-NOFOLLOW-OPEN-LOOP`.
+    `P1-GUEST-PATH-CAPABILITY-BOUNDARY`, `P1-PATH-LINK-EDGE-SEMANTICS`,
+    `P1-SYMLINK-NOFOLLOW-OPEN-LOOP`, and
+    `P1-PATH-RENAME-DIRECTORY-TARGETS`.
   - Done when: the official Preview1 command-module run reports zero Preview1
     failures with no unexpected Preview1 skips, and every previously failing
     module has a narrow checked child row with local and official evidence.
@@ -256,6 +257,37 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-PATH-RENAME-DIRECTORY-TARGETS` - Match Preview1 directory rename
+  target replacement semantics.
+  - Scope: native/browser shared Preview1 VFS `path_rename` behavior when the
+    source is a directory and the target is missing, an existing empty
+    directory, an existing non-empty directory, or a non-directory node.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "path_rename replaces empty directories" --reporter=compact`
+    failed before the fix with `Expected: <0> Actual: <20>` because an
+    existing empty target directory returned `EXIST`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "path_rename replaces empty directories" --reporter=compact`;
+    `dart test test/wasi_test.dart test/wasm_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/path_rename.wasm`;
+    `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_path_rename.json --disable-colors`
+    reported `1/72` Preview1 failures after the fix, down from `2/72`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json > .dart_tool/wasi_vfs_benchmark_after_path_rename.json`
+    reported mutation cost at `8.854us/op` baseline, `12.546us/op`
+    directory-heavy, `5.875us/op` descriptor-heavy, and `5.524us/op`
+    socket-heavy; `path_open_close` stayed at `1.311us/op`, `0.717us/op`,
+    `0.714us/op`, and `0.732us/op` for the same distributions.
+  - Done when: directory rename replaces empty target directories, rejects
+    non-empty target directories with `NOTEMPTY`, rejects non-directory targets
+    with `NOTDIR`, and `path_rename.wasm` passes.
+  - Evidence update: this checked row plus `SUPPORT-P1`, verification matrix,
+    current baseline, and ordered execution queue.
+  - Claim impact: closes one official Preview1 filesystem failure for
+    `SUPPORT-P1`; does not complete Preview1 full support or any P2/P3 gate.
 - [x] `P1-SYMLINK-NOFOLLOW-OPEN-LOOP` - Preview1 `path_open` no-follow
   symlink opens report `LOOP` instead of missing paths.
   - Scope: native/browser shared Preview1 `path_open` and VFS open-result
@@ -1955,7 +1987,7 @@ unchecked.
 - [ ] `SUPPORT-P1` - Full WASI Preview1 support.
   - Current: `WASI(...)` provides a real Preview1 host surface, but full
     Preview1 support remains incomplete; the current official
-    `WebAssembly/wasi-testsuite` `prod/testsuite-base` run reports `2/72`
+    `WebAssembly/wasi-testsuite` `prod/testsuite-base` run reports `1/72`
     Preview1 failures.
   - Required rows: every Preview1 descriptor, filesystem, stdio, clock, random,
     poll, and socket row checked, including `P1-PATH-OPEN-OFLAGS`,
@@ -2112,6 +2144,7 @@ copying their internals directly.
 | [x] | Preview1 guest path capability boundary and `path_open` slash semantics | `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "path_open rejects absolute, escaping, nul, and file-slash paths" --reporter=expanded`; `dart test -p chrome test/wasi_test.dart --name "path_open rejects absolute, escaping, nul, and file-slash paths" --reporter=expanded`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/interesting_paths.wasm`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/symlink_create.wasm`; `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_path_decode.json --disable-colors`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; `dart test test/wasi_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | Guest path decoding now rejects absolute paths and paths that escape the preopen with `NOTCAPABLE`, rejects NUL-containing paths with `INVAL`, keeps file trailing-slash `path_open` failures as `NOTDIR`, allows directory trailing slashes, and rejects absolute symlink targets; the official Preview1 suite dropped from `8/72` failures to `6/72`. |
 | [x] | Preview1 `path_link` hard-link and symlink edge semantics | `lib/src/wasi/preview1/common/constants.dart`, `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "path_link handles directory" --reporter=compact`; `dart test test/wasi_test.dart --name "path_symlink and path_readlink preserve" --reporter=compact`; `dart test test/wasi_test.dart test/wasm_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/path_link.wasm`; `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_path_link.json --disable-colors`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json > .dart_tool/wasi_vfs_benchmark_after_path_link.json` | `path_link` now hard-links regular files and symbolic links without following symlink sources, rejects `LOOKUPFLAGS_SYMLINK_FOLLOW` with `INVAL`, returns `PERM` for directory sources, preserves missing trailing-slash targets as `NOENT`, and drops the official Preview1 suite from `6/72` failures to `5/72`; remaining failures are `nofollow_errors.wasm`, `path_rename.wasm`, `dangling_symlink.wasm`, `symlink_loop.wasm`, and `path_open_preopen.wasm`. |
 | [x] | Preview1 no-follow symlink `path_open` loop errno | `lib/src/wasi/preview1/common/constants.dart`, `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "path_open rejects nofollow symlinks" --reporter=compact`; `dart test test/wasi_test.dart test/wasm_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/nofollow_errors.wasm`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/dangling_symlink.wasm`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/symlink_loop.wasm`; `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_symlink_nofollow.json --disable-colors`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json > .dart_tool/wasi_vfs_benchmark_after_symlink_nofollow.json` | `path_open` now treats an existing symlink as a symlink node when `LOOKUPFLAGS_SYMLINK_FOLLOW` is absent, returning `LOOP` instead of falling through to `NOENT`; the official Preview1 suite dropped from `5/72` failures to `2/72`, leaving only `path_rename.wasm` and `path_open_preopen.wasm`. |
+| [x] | Preview1 `path_rename` directory target semantics | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "path_rename replaces empty directories" --reporter=compact`; `dart test test/wasi_test.dart test/wasm_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/path_rename.wasm`; `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_path_rename.json --disable-colors`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json > .dart_tool/wasi_vfs_benchmark_after_path_rename.json` | Directory `path_rename` now replaces empty target directories, rejects non-empty target directories with `NOTEMPTY`, rejects non-directory targets with `NOTDIR`, and drops the official Preview1 suite from `2/72` failures to `1/72`; the only remaining Preview1 failure is `path_open_preopen.wasm`. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Component instantiation import matching for known local child components | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments" --reporter=compact`; `dart test test/component_test.dart --reporter=compact`; `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart --reporter=compact`; `dart run tool/component_benchmark.dart --json`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | Known local child component instantiation now rejects unknown argument names, missing required imports, and wrong argument sorts before adapter binding; imported/aliased component targets, cross-component type equivalence, generated worlds, and official suite coverage remain open. |
 | [x] | Component task-return borrow validation | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "reports task.return result types containing borrow|reports missing canonical option requirements|reports invalid canonical result value type indexes" --reporter=compact`; `dart run tool/component_benchmark.dart --json` | Borrowed canonical `task.return` results are now rejected during validation; broader borrow, stream, future, nested-shape, generated-world, and component-suite coverage remains. |
@@ -2217,7 +2250,7 @@ This is the implementation state as of 2026-06-23 on `main`.
   conformance entry point only; full Preview1 support requires running the
   external suite and converting failures into checked implementation rows.
 - The official `WebAssembly/wasi-testsuite` `prod/testsuite-base` run now has
-  `2/72` Preview1 failures with `41` Preview3 tests skipped by the adapter
+  `1/72` Preview1 failures with `41` Preview3 tests skipped by the adapter
   capability filter. Passing former failures now include `renumber.wasm`,
   `close_preopen.wasm`, `path_open_dirfd_not_dir.wasm`,
   `directory_seek.wasm`, `fd_readdir.wasm`, `stat-dev-ino.wasm`,
@@ -2226,8 +2259,8 @@ This is the implementation state as of 2026-06-23 on `main`.
   `unlink_file_trailing_slashes.wasm`,
   `path_symlink_trailing_slashes.wasm`, `interesting_paths.wasm`,
   `symlink_create.wasm`, `path_link.wasm`, `nofollow_errors.wasm`,
-  `dangling_symlink.wasm`, and `symlink_loop.wasm`; remaining Preview1
-  failures are `path_rename.wasm` and `path_open_preopen.wasm`. The Preview3
+  `dangling_symlink.wasm`, `symlink_loop.wasm`, and `path_rename.wasm`;
+  the remaining Preview1 failure is `path_open_preopen.wasm`. The Preview3
   skips are a real unsupported-state signal, not a pass result or a support
   claim.
 - Component decoding and validation exist under
@@ -2536,7 +2569,7 @@ performance visible while the support surface expands.
 
 1. `P1-OFFICIAL-FS-CONFORMANCE`
   - Why: Preview1 is the only public WASI surface today, and the official
-     `wasi-testsuite` run still has `2/72` Preview1 failures that must be
+     `wasi-testsuite` run still has `1/72` Preview1 failure that must be
      closed with real behavior before any full-support claim.
    - Do not: count skipped Preview3 tests as support or replace official
      failures with local-only helper tests.
@@ -3220,6 +3253,37 @@ performance visible while the support surface expands.
     `Recently Checked` entry, verification matrix, `SUPPORT-P1`, ordered
     execution queue, and current baseline.
   - Claim impact: closes three official Preview1 testsuite failures for
+    `SUPPORT-P1`; does not complete Preview1 full support or any P2/P3 gate.
+- [x] `P1-PATH-RENAME-DIRECTORY-TARGETS` - Match Preview1 `path_rename`
+  directory target replacement semantics.
+  - Scope: native/browser shared Preview1 VFS `path_rename`, especially
+    directory source replacement of missing, empty-directory, non-empty
+    directory, and non-directory targets.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "path_rename replaces empty directories" --reporter=compact`
+    failed before the fix with `Expected: <0> Actual: <20>` because directory
+    renames treated existing empty directory targets as `EXIST`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "path_rename replaces empty directories" --reporter=compact`;
+    `dart test test/wasi_test.dart test/wasm_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/path_rename.wasm`;
+    `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_path_rename.json --disable-colors`
+    reported `1/72` Preview1 failures after the fix, down from `2/72`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json > .dart_tool/wasi_vfs_benchmark_after_path_rename.json`
+    reported mutation cost at `8.854us/op` baseline, `12.546us/op`
+    directory-heavy, `5.875us/op` descriptor-heavy, and `5.524us/op`
+    socket-heavy.
+  - Done when: empty target directories are replaced, non-empty target
+    directories return `NOTEMPTY`, non-directory targets return `NOTDIR`, and
+    the official `path_rename.wasm` module passes.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry, verification matrix, `SUPPORT-P1`, ordered
+    execution queue, and current baseline.
+  - Claim impact: closes one official Preview1 testsuite failure for
     `SUPPORT-P1`; does not complete Preview1 full support or any P2/P3 gate.
 - [x] `P1-PATH-LINK-EDGE-SEMANTICS` - Match Preview1 `path_link` official
   hard-link and symlink edge semantics.

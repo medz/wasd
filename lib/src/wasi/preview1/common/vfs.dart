@@ -773,7 +773,9 @@ final class Preview1VirtualFileSystem {
       return Preview1PathMutationResult.notDirectory;
     }
     if (_virtualDirectoryPaths.contains(newNormalized)) {
-      return Preview1PathMutationResult.exists;
+      if (_directoryChildrenByGuestPath[newNormalized]?.isNotEmpty ?? false) {
+        return Preview1PathMutationResult.notEmpty;
+      }
     }
 
     _renameDirectory(oldNormalized, newNormalized);
