@@ -1193,15 +1193,36 @@ final class Preview1DirectoryEntry {
 }
 
 final class Preview1VirtualNodeMetadata {
-  Preview1VirtualNodeMetadata({int? inode}) : inode = inode ?? _nextInode++;
+  factory Preview1VirtualNodeMetadata({int? inode, int? timestampNanos}) {
+    return Preview1VirtualNodeMetadata._(
+      inode ?? _nextInode++,
+      timestampNanos ?? _allocateTimestampNanos(),
+    );
+  }
+
+  Preview1VirtualNodeMetadata._(this.inode, int timestampNanos)
+    : accessTimeNanos = timestampNanos,
+      modificationTimeNanos = timestampNanos;
 
   static int _nextInode = 1;
+  static int _nextTimestampNanos = _initialTimestampNanos();
 
   final int device = 1;
   final int inode;
   int linkCount = 1;
-  int accessTimeNanos = 0;
-  int modificationTimeNanos = 0;
+  int accessTimeNanos;
+  int modificationTimeNanos;
+
+  static int _initialTimestampNanos() {
+    final nanos = DateTime.now().microsecondsSinceEpoch * 1000;
+    return nanos <= 0 ? 1 : nanos;
+  }
+
+  static int _allocateTimestampNanos() {
+    final timestamp = _nextTimestampNanos;
+    _nextTimestampNanos = timestamp + 1;
+    return timestamp;
+  }
 
   void retainLink() {
     linkCount++;

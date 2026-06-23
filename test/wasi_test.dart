@@ -5724,6 +5724,82 @@ void main() {
       );
 
       test(
+        'new virtual nodes start with non-zero filestat timestamps',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/existing.txt': Uint8List.fromList([1]),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathCreateDirectory =
+              preview1['path_create_directory'] as FunctionImportExportValue;
+          final pathSymlink =
+              preview1['path_symlink'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 2700;
+          const targetPtr = 2760;
+          const filestatPtr = 2820;
+
+          void expectNonZeroTimes(String path) {
+            final pathBytes = utf8.encode(path);
+            bytes.setAll(pathPtr, pathBytes);
+            expect(
+              pathFilestatGet.ref([
+                3,
+                0,
+                pathPtr,
+                pathBytes.length,
+                filestatPtr,
+              ]),
+              0,
+            );
+            expect(_getUint64Le(data, filestatPtr + 40), isNonZero);
+            expect(_getUint64Le(data, filestatPtr + 48), isNonZero);
+          }
+
+          expectNonZeroTimes('existing.txt');
+
+          final dirPath = utf8.encode('created-dir');
+          bytes.setAll(pathPtr, dirPath);
+          expect(pathCreateDirectory.ref([3, pathPtr, dirPath.length]), 0);
+          expectNonZeroTimes('created-dir');
+
+          final target = utf8.encode('existing.txt');
+          final link = utf8.encode('created-link');
+          bytes.setAll(targetPtr, target);
+          bytes.setAll(pathPtr, link);
+          expect(
+            pathSymlink.ref([
+              targetPtr,
+              target.length,
+              3,
+              pathPtr,
+              link.length,
+            ]),
+            0,
+          );
+          expectNonZeroTimes('created-link');
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; virtual filestat behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'path_open opens virtual directories and resolves nested files',
         () async {
           final fileWasi = WASI(
