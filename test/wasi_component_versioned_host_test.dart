@@ -420,6 +420,97 @@ world command {
     });
 
     test(
+      'Preview2 and Preview3 wrappers execute list and tuple WIT values',
+      () {
+        const source = '''
+package acme:env@0.2.0;
+
+interface environment {
+  expand: func(seed: tuple<string, u32>) -> list<tuple<string, string>>;
+}
+
+world command {
+  import environment;
+}
+''';
+        final document = WASIComponentWitDocument.parse(source);
+        final preview2Plan = WASIPreview2ComponentHost().prepareWitWorld(
+          document,
+          worldName: 'command',
+        );
+        final preview3Plan = WASIPreview3ComponentHost().prepareWitWorld(
+          document,
+          worldName: 'command',
+        );
+        final seenSeeds = <String>[];
+
+        expect(preview2Plan.canBindAdapters, isTrue);
+        expect(preview3Plan.canBindAdapters, isTrue);
+
+        final program = preview2Plan.bindAdapters(
+          imports: {
+            'environment.expand': (args) {
+              final seed = args.single as WasmComponentValueData;
+              expect(seed.kind, WasmComponentValueDataKind.tuple);
+              seenSeeds.add('${seed.items[0].string}:${seed.items[1].integer}');
+              return _stringTupleListValue([
+                ('PATH', '/bin'),
+                ('SEED', seed.items[1].integer.toString()),
+              ]);
+            },
+          },
+        );
+        final preview3Program = preview3Plan.bindAdapters(
+          imports: {
+            'environment.expand': (_) =>
+                _stringTupleListValue([('SHELL', '/bin/sh')]),
+          },
+        );
+
+        final rows =
+            program.invokeImport('environment.expand', [
+                  _seedTupleValue('env', 7),
+                ])
+                as WasmComponentValueData;
+        final preview3Rows =
+            preview3Program.invokeImport('environment.expand', [
+                  _seedTupleValue('ignored', 0),
+                ])
+                as WasmComponentValueData;
+
+        expect(rows.kind, WasmComponentValueDataKind.list);
+        expect(rows.items, hasLength(2));
+        expect(rows.items[0].items.map((item) => item.string), [
+          'PATH',
+          '/bin',
+        ]);
+        expect(rows.items[1].items.map((item) => item.string), ['SEED', '7']);
+        expect(preview3Rows.items.single.items.map((item) => item.string), [
+          'SHELL',
+          '/bin/sh',
+        ]);
+        expect(seenSeeds, ['env:7']);
+        expect(
+          () => program.invokeImport('environment.expand', [
+            _shortSeedTupleValue(),
+          ]),
+          throwsStateError,
+        );
+        expect(seenSeeds, ['env:7']);
+
+        final badResultProgram = preview2Plan.bindAdapters(
+          imports: {'environment.expand': (_) => _badStringTupleListValue()},
+        );
+        expect(
+          () => badResultProgram.invokeImport('environment.expand', [
+            _seedTupleValue('env', 7),
+          ]),
+          throwsStateError,
+        );
+      },
+    );
+
+    test(
       'Preview2 wrapper rejects owned-resource async values at version gate',
       () {
         final streamComponent = WasmComponent.decode(
@@ -1275,6 +1366,90 @@ WasmComponentValueData _u32StringErrorValue(String value) {
       rawBytes: Uint8List(0),
       string: value,
     ),
+  );
+}
+
+WasmComponentValueData _seedTupleValue(String name, int value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.tuple,
+    rawBytes: Uint8List(0),
+    items: [
+      WasmComponentValueData(
+        kind: WasmComponentValueDataKind.string,
+        rawBytes: Uint8List(0),
+        string: name,
+      ),
+      WasmComponentValueData(
+        kind: WasmComponentValueDataKind.integer,
+        rawBytes: Uint8List(0),
+        integer: value,
+      ),
+    ],
+  );
+}
+
+WasmComponentValueData _shortSeedTupleValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.tuple,
+    rawBytes: Uint8List(0),
+    items: [
+      WasmComponentValueData(
+        kind: WasmComponentValueDataKind.string,
+        rawBytes: Uint8List(0),
+        string: 'env',
+      ),
+    ],
+  );
+}
+
+WasmComponentValueData _stringTupleListValue(List<(String, String)> rows) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.list,
+    rawBytes: Uint8List(0),
+    items: [
+      for (final row in rows)
+        WasmComponentValueData(
+          kind: WasmComponentValueDataKind.tuple,
+          rawBytes: Uint8List(0),
+          items: [
+            WasmComponentValueData(
+              kind: WasmComponentValueDataKind.string,
+              rawBytes: Uint8List(0),
+              string: row.$1,
+            ),
+            WasmComponentValueData(
+              kind: WasmComponentValueDataKind.string,
+              rawBytes: Uint8List(0),
+              string: row.$2,
+            ),
+          ],
+        ),
+    ],
+  );
+}
+
+WasmComponentValueData _badStringTupleListValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.list,
+    rawBytes: Uint8List(0),
+    items: [
+      WasmComponentValueData(
+        kind: WasmComponentValueDataKind.tuple,
+        rawBytes: Uint8List(0),
+        items: [
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.string,
+            rawBytes: Uint8List(0),
+            string: 'PATH',
+          ),
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.integer,
+            rawBytes: Uint8List(0),
+            integer: 1,
+          ),
+        ],
+      ),
+    ],
   );
 }
 

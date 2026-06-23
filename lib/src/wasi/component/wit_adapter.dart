@@ -138,23 +138,24 @@ final class WASIComponentWitAdapterParam {
   /// WIT parameter label, when present.
   final String? label;
 
-  /// Primitive WIT value type.
+  /// WIT adapter value type.
   final WASIComponentWitAdapterValueType type;
 }
 
-/// Primitive WIT value type supported by executable WIT adapters.
+/// WIT value type supported by executable WIT adapters.
 final class WASIComponentWitAdapterValueType {
-  const WASIComponentWitAdapterValueType._({
+  WASIComponentWitAdapterValueType._({
     required this.kind,
     required this.text,
     this.primitive,
     this.element,
+    List<WASIComponentWitAdapterValueType> elements = const [],
     this.ok,
     this.error,
-  });
+  }) : elements = List<WASIComponentWitAdapterValueType>.unmodifiable(elements);
 
   /// Creates a primitive WIT adapter value type.
-  const WASIComponentWitAdapterValueType.primitive({
+  WASIComponentWitAdapterValueType.primitive({
     required String text,
     required WasmComponentPrimitiveValueType primitive,
   }) : this._(
@@ -164,7 +165,7 @@ final class WASIComponentWitAdapterValueType {
        );
 
   /// Creates an `option<T>` WIT adapter value type.
-  const WASIComponentWitAdapterValueType.option({
+  WASIComponentWitAdapterValueType.option({
     required String text,
     required WASIComponentWitAdapterValueType element,
   }) : this._(
@@ -173,8 +174,28 @@ final class WASIComponentWitAdapterValueType {
          element: element,
        );
 
+  /// Creates a `list<T>` WIT adapter value type.
+  WASIComponentWitAdapterValueType.list({
+    required String text,
+    required WASIComponentWitAdapterValueType element,
+  }) : this._(
+         kind: WASIComponentWitAdapterValueKind.list,
+         text: text,
+         element: element,
+       );
+
+  /// Creates a `tuple<T...>` WIT adapter value type.
+  WASIComponentWitAdapterValueType.tuple({
+    required String text,
+    required List<WASIComponentWitAdapterValueType> elements,
+  }) : this._(
+         kind: WASIComponentWitAdapterValueKind.tuple,
+         text: text,
+         elements: elements,
+       );
+
   /// Creates a `result<T, E>` WIT adapter value type.
-  const WASIComponentWitAdapterValueType.result({
+  WASIComponentWitAdapterValueType.result({
     required String text,
     required WASIComponentWitAdapterValueType? ok,
     required WASIComponentWitAdapterValueType? error,
@@ -197,6 +218,9 @@ final class WASIComponentWitAdapterValueType {
   /// Option payload type.
   final WASIComponentWitAdapterValueType? element;
 
+  /// Tuple element types.
+  final List<WASIComponentWitAdapterValueType> elements;
+
   /// Result success payload type.
   final WASIComponentWitAdapterValueType? ok;
 
@@ -211,6 +235,12 @@ enum WASIComponentWitAdapterValueKind {
 
   /// `option<T>`.
   option,
+
+  /// `list<T>`.
+  list,
+
+  /// `tuple<T...>`.
+  tuple,
 
   /// `result`, `result<T>`, or `result<T, E>`.
   result,
@@ -529,6 +559,50 @@ _parseWitAdapterValueType(String text, String context) {
       error: null,
     );
   }
+  final listArgs = _genericArgs('list', text);
+  if (listArgs != null) {
+    if (listArgs.length != 1 || listArgs.single.isEmpty) {
+      return (type: null, error: 'unsupported WIT adapter $context type $text');
+    }
+    final element = _parseWitAdapterValueType(
+      listArgs.single,
+      '$context list element',
+    );
+    if (element.error != null) {
+      return (type: null, error: element.error);
+    }
+    return (
+      type: WASIComponentWitAdapterValueType.list(
+        text: text,
+        element: element.type!,
+      ),
+      error: null,
+    );
+  }
+  final tupleArgs = _genericArgs('tuple', text);
+  if (tupleArgs != null) {
+    if (tupleArgs.isEmpty || tupleArgs.any((arg) => arg.isEmpty)) {
+      return (type: null, error: 'unsupported WIT adapter $context type $text');
+    }
+    final elements = <WASIComponentWitAdapterValueType>[];
+    for (var i = 0; i < tupleArgs.length; i++) {
+      final element = _parseWitAdapterValueType(
+        tupleArgs[i],
+        '$context tuple element[$i]',
+      );
+      if (element.error != null) {
+        return (type: null, error: element.error);
+      }
+      elements.add(element.type!);
+    }
+    return (
+      type: WASIComponentWitAdapterValueType.tuple(
+        text: text,
+        elements: elements,
+      ),
+      error: null,
+    );
+  }
   if (text == 'result') {
     return (
       type: WASIComponentWitAdapterValueType.result(
@@ -723,6 +797,10 @@ Object? _validateWitAdapterValue(
       );
     case WASIComponentWitAdapterValueKind.option:
       return _validateWitAdapterOptionValue(type, value, path);
+    case WASIComponentWitAdapterValueKind.list:
+      return _validateWitAdapterListValue(type, value, path);
+    case WASIComponentWitAdapterValueKind.tuple:
+      return _validateWitAdapterTupleValue(type, value, path);
     case WASIComponentWitAdapterValueKind.result:
       return _validateWitAdapterResultValue(type, value, path);
   }
@@ -862,6 +940,45 @@ Object? _validateWitAdapterOptionValue(
     throw StateError('WIT adapter value $path.some needs payload.');
   }
   _validateWitAdapterValue(type.element!, associated, '$path.some');
+  return value;
+}
+
+Object? _validateWitAdapterListValue(
+  WASIComponentWitAdapterValueType type,
+  Object? value,
+  String path,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != WasmComponentValueDataKind.list) {
+    throw StateError('WIT adapter value $path does not match ${type.text}.');
+  }
+  final elementType = type.element!;
+  final items = value.items;
+  for (var i = 0; i < items.length; i++) {
+    _validateWitAdapterValue(elementType, items[i], '$path[$i]');
+  }
+  return value;
+}
+
+Object? _validateWitAdapterTupleValue(
+  WASIComponentWitAdapterValueType type,
+  Object? value,
+  String path,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != WasmComponentValueDataKind.tuple) {
+    throw StateError('WIT adapter value $path does not match ${type.text}.');
+  }
+  final elements = type.elements;
+  if (value.items.length != elements.length) {
+    throw StateError(
+      'WIT adapter value $path expected ${elements.length} tuple fields, '
+      'got ${value.items.length}.',
+    );
+  }
+  for (var i = 0; i < elements.length; i++) {
+    _validateWitAdapterValue(elements[i], value.items[i], '$path.$i');
+  }
   return value;
 }
 

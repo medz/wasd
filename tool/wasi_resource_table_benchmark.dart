@@ -63,6 +63,8 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentWitAdapterProgramInvoke(options.iterations);
   final componentWitCompositeAdapterProgramInvoke =
       _benchmarkComponentWitCompositeAdapterProgramInvoke(options.iterations);
+  final componentWitListTupleAdapterProgramInvoke =
+      _benchmarkComponentWitListTupleAdapterProgramInvoke(options.iterations);
   final componentAdapterStringProgramInvoke =
       _benchmarkComponentAdapterStringProgramInvoke(options.iterations);
   final componentAdapterStringFlatInvoke =
@@ -153,6 +155,8 @@ Future<void> main(List<String> args) async {
         .toJson(),
     'component_wit_composite_adapter_program_invoke':
         componentWitCompositeAdapterProgramInvoke.toJson(),
+    'component_wit_list_tuple_adapter_program_invoke':
+        componentWitListTupleAdapterProgramInvoke.toJson(),
     'component_adapter_string_program_invoke':
         componentAdapterStringProgramInvoke.toJson(),
     'component_adapter_string_flat_invoke': componentAdapterStringFlatInvoke
@@ -236,6 +240,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentVersionedAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentWitAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentWitCompositeAdapterProgramInvoke(_warmupIterations);
+  _benchmarkComponentWitListTupleAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterRecordFlatInvoke(_warmupIterations);
@@ -760,6 +765,59 @@ world command {
 
   return _Metric(
     operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentWitListTupleAdapterProgramInvoke(int iterations) {
+  const source = '''
+package acme:bench@0.2.0;
+
+interface expand {
+  grow: func(seed: tuple<u32, u32>) -> list<tuple<u32, u32>>;
+}
+
+world command {
+  import expand;
+}
+''';
+  final document = WASIComponentWitDocument.parse(source);
+  final program = WASIPreview2ComponentHost()
+      .prepareWitWorld(document, worldName: 'command')
+      .bindAdapters(
+        imports: {
+          'expand.grow': (args) {
+            final seed = args.single as WasmComponentValueData;
+            final left = seed.items[0].integer as int;
+            final right = seed.items[1].integer as int;
+            return _u32TupleListValue([
+              (left + 1, right + 1),
+              (left + 2, right + 2),
+            ]);
+          },
+        },
+      );
+  var checksum = 0;
+  final seed = _u32CompositeValue(WasmComponentValueDataKind.tuple, const [
+    11,
+    13,
+  ]);
+  final seedArgs = <Object?>[seed];
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final list =
+        program.invokeImport('expand.grow', seedArgs) as WasmComponentValueData;
+    for (final tuple in list.items) {
+      checksum += tuple.items[0].integer as int;
+      checksum += tuple.items[1].integer as int;
+    }
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
@@ -1507,6 +1565,17 @@ WasmComponentValueData _u32ListValue(List<int> values) {
           rawBytes: Uint8List(0),
           integer: value,
         ),
+    ],
+  );
+}
+
+WasmComponentValueData _u32TupleListValue(List<(int, int)> rows) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.list,
+    rawBytes: Uint8List(0),
+    items: [
+      for (final row in rows)
+        _u32CompositeValue(WasmComponentValueDataKind.tuple, [row.$1, row.$2]),
     ],
   );
 }
