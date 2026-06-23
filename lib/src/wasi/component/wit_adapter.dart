@@ -144,17 +144,76 @@ final class WASIComponentWitAdapterParam {
 
 /// Primitive WIT value type supported by executable WIT adapters.
 final class WASIComponentWitAdapterValueType {
-  /// Creates a primitive WIT adapter value type.
-  const WASIComponentWitAdapterValueType({
+  const WASIComponentWitAdapterValueType._({
+    required this.kind,
     required this.text,
-    required this.primitive,
+    this.primitive,
+    this.element,
+    this.ok,
+    this.error,
   });
+
+  /// Creates a primitive WIT adapter value type.
+  const WASIComponentWitAdapterValueType.primitive({
+    required String text,
+    required WasmComponentPrimitiveValueType primitive,
+  }) : this._(
+         kind: WASIComponentWitAdapterValueKind.primitive,
+         text: text,
+         primitive: primitive,
+       );
+
+  /// Creates an `option<T>` WIT adapter value type.
+  const WASIComponentWitAdapterValueType.option({
+    required String text,
+    required WASIComponentWitAdapterValueType element,
+  }) : this._(
+         kind: WASIComponentWitAdapterValueKind.option,
+         text: text,
+         element: element,
+       );
+
+  /// Creates a `result<T, E>` WIT adapter value type.
+  const WASIComponentWitAdapterValueType.result({
+    required String text,
+    required WASIComponentWitAdapterValueType? ok,
+    required WASIComponentWitAdapterValueType? error,
+  }) : this._(
+         kind: WASIComponentWitAdapterValueKind.result,
+         text: text,
+         ok: ok,
+         error: error,
+       );
+
+  /// WIT adapter value category.
+  final WASIComponentWitAdapterValueKind kind;
 
   /// WIT spelling.
   final String text;
 
-  /// Component-model primitive represented by [text].
-  final WasmComponentPrimitiveValueType primitive;
+  /// Component-model primitive represented by [text], for primitive values.
+  final WasmComponentPrimitiveValueType? primitive;
+
+  /// Option payload type.
+  final WASIComponentWitAdapterValueType? element;
+
+  /// Result success payload type.
+  final WASIComponentWitAdapterValueType? ok;
+
+  /// Result error payload type.
+  final WASIComponentWitAdapterValueType? error;
+}
+
+/// WIT adapter value category.
+enum WASIComponentWitAdapterValueKind {
+  /// Primitive WIT scalar/string type.
+  primitive,
+
+  /// `option<T>`.
+  option,
+
+  /// `result`, `result<T>`, or `result<T, E>`.
+  result,
 }
 
 /// WIT function signature that cannot bind to an executable adapter.
@@ -294,7 +353,7 @@ final class WASIComponentWitAdapterOperation {
   /// Whether this operation is an import or export.
   WASIComponentWitWorldItemDirection get direction => function.direction;
 
-  /// Invokes this adapter with validated WIT primitive values.
+  /// Invokes this adapter with validated WIT values.
   Object? invoke(List<Object?> args) {
     final signature = function.signature;
     if (!signature.canBind) {
@@ -441,13 +500,113 @@ WASIComponentWitAdapterSignature _unsupportedWitAdapterSignature({
 ({WASIComponentWitAdapterValueType? type, String? error})
 _parseWitAdapterValueType(String text, String context) {
   final primitive = _witPrimitiveValueType(text);
-  if (primitive == null) {
-    return (type: null, error: 'unsupported WIT adapter $context type $text');
+  if (primitive != null) {
+    return (
+      type: WASIComponentWitAdapterValueType.primitive(
+        text: text,
+        primitive: primitive,
+      ),
+      error: null,
+    );
   }
-  return (
-    type: WASIComponentWitAdapterValueType(text: text, primitive: primitive),
-    error: null,
-  );
+  final optionArgs = _genericArgs('option', text);
+  if (optionArgs != null) {
+    if (optionArgs.length != 1 || optionArgs.single.isEmpty) {
+      return (type: null, error: 'unsupported WIT adapter $context type $text');
+    }
+    final element = _parseWitAdapterValueType(
+      optionArgs.single,
+      '$context option payload',
+    );
+    if (element.error != null) {
+      return (type: null, error: element.error);
+    }
+    return (
+      type: WASIComponentWitAdapterValueType.option(
+        text: text,
+        element: element.type!,
+      ),
+      error: null,
+    );
+  }
+  if (text == 'result') {
+    return (
+      type: WASIComponentWitAdapterValueType.result(
+        text: text,
+        ok: null,
+        error: null,
+      ),
+      error: null,
+    );
+  }
+  final resultArgs = _genericArgs('result', text);
+  if (resultArgs != null) {
+    if (resultArgs.isEmpty || resultArgs.length > 2) {
+      return (type: null, error: 'unsupported WIT adapter $context type $text');
+    }
+    final ok = _parseOptionalWitAdapterValueType(
+      resultArgs[0],
+      '$context result ok payload',
+    );
+    if (ok.error != null) {
+      return (type: null, error: ok.error);
+    }
+    final error = resultArgs.length == 1
+        ? (type: null, error: null)
+        : _parseOptionalWitAdapterValueType(
+            resultArgs[1],
+            '$context result error payload',
+          );
+    if (error.error != null) {
+      return (type: null, error: error.error);
+    }
+    return (
+      type: WASIComponentWitAdapterValueType.result(
+        text: text,
+        ok: ok.type,
+        error: error.type,
+      ),
+      error: null,
+    );
+  }
+  return (type: null, error: 'unsupported WIT adapter $context type $text');
+}
+
+({WASIComponentWitAdapterValueType? type, String? error})
+_parseOptionalWitAdapterValueType(String text, String context) {
+  if (text == '_' || text.isEmpty) {
+    return (type: null, error: null);
+  }
+  return _parseWitAdapterValueType(text, context);
+}
+
+List<String>? _genericArgs(String name, String text) {
+  final prefix = '$name<';
+  if (!text.startsWith(prefix) || !text.endsWith('>')) {
+    return null;
+  }
+  final close = _findMatchingAngle(text, name.length);
+  if (close != text.length - 1) {
+    return null;
+  }
+  final body = text.substring(prefix.length, close);
+  return _splitWitTopLevel(body, ',');
+}
+
+int? _findMatchingAngle(String text, int openIndex) {
+  var depth = 0;
+  for (var i = openIndex; i < text.length; i++) {
+    final code = text.codeUnitAt(i);
+    if (code == 60) {
+      depth++;
+    } else if (code == 62) {
+      depth--;
+      if (depth == 0) {
+        return i;
+      }
+    }
+  }
+  return null;
 }
 
 WasmComponentPrimitiveValueType? _witPrimitiveValueType(String text) {
@@ -554,72 +713,274 @@ Object? _validateWitAdapterValue(
   Object? value,
   String path,
 ) {
-  switch (type.primitive) {
+  switch (type.kind) {
+    case WASIComponentWitAdapterValueKind.primitive:
+      return _validateWitAdapterPrimitiveValue(
+        type.primitive!,
+        type.text,
+        value,
+        path,
+      );
+    case WASIComponentWitAdapterValueKind.option:
+      return _validateWitAdapterOptionValue(type, value, path);
+    case WASIComponentWitAdapterValueKind.result:
+      return _validateWitAdapterResultValue(type, value, path);
+  }
+}
+
+Object? _validateWitAdapterPrimitiveValue(
+  WasmComponentPrimitiveValueType primitive,
+  String text,
+  Object? value,
+  String path,
+) {
+  final directValue = _directPrimitiveValue(primitive, value);
+  switch (primitive) {
     case WasmComponentPrimitiveValueType.boolean:
-      if (value is bool) {
-        return value;
+      if (directValue is bool) {
+        return directValue;
       }
       break;
     case WasmComponentPrimitiveValueType.s8:
-      if (_isIntInRange(value, -0x80, 0x7f)) {
-        return value;
+      if (_isIntInRange(directValue, -0x80, 0x7f)) {
+        return directValue;
       }
       break;
     case WasmComponentPrimitiveValueType.u8:
-      if (_isIntInRange(value, 0, 0xff)) {
-        return value;
+      if (_isIntInRange(directValue, 0, 0xff)) {
+        return directValue;
       }
       break;
     case WasmComponentPrimitiveValueType.s16:
-      if (_isIntInRange(value, -0x8000, 0x7fff)) {
-        return value;
+      if (_isIntInRange(directValue, -0x8000, 0x7fff)) {
+        return directValue;
       }
       break;
     case WasmComponentPrimitiveValueType.u16:
-      if (_isIntInRange(value, 0, 0xffff)) {
-        return value;
+      if (_isIntInRange(directValue, 0, 0xffff)) {
+        return directValue;
       }
       break;
     case WasmComponentPrimitiveValueType.s32:
-      if (_isIntInRange(value, -0x80000000, 0x7fffffff)) {
-        return value;
+      if (_isIntInRange(directValue, -0x80000000, 0x7fffffff)) {
+        return directValue;
       }
       break;
     case WasmComponentPrimitiveValueType.u32:
-      if (_isIntInRange(value, 0, 0xffffffff)) {
-        return value;
+      if (_isIntInRange(directValue, 0, 0xffffffff)) {
+        return directValue;
       }
       break;
     case WasmComponentPrimitiveValueType.s64:
-      if (_isBigIntInRange(value, _s64Min, _s64Max)) {
-        return value;
+      if (_isBigIntInRange(directValue, _s64Min, _s64Max)) {
+        return directValue;
       }
       break;
     case WasmComponentPrimitiveValueType.u64:
-      if (_isBigIntInRange(value, BigInt.zero, _u64Max)) {
-        return value;
+      if (_isBigIntInRange(directValue, BigInt.zero, _u64Max)) {
+        return directValue;
       }
       break;
     case WasmComponentPrimitiveValueType.f32:
     case WasmComponentPrimitiveValueType.f64:
-      if (value is num) {
-        return value;
+      if (directValue is num) {
+        return directValue;
       }
       break;
     case WasmComponentPrimitiveValueType.char:
-      if (singleWASIComponentUnicodeScalar(value) != null) {
-        return value;
+      if (singleWASIComponentUnicodeScalar(directValue) != null) {
+        return directValue;
       }
       break;
     case WasmComponentPrimitiveValueType.string:
-      if (value is String) {
-        return value;
+      if (directValue is String) {
+        return directValue;
       }
       break;
     case WasmComponentPrimitiveValueType.errorContext:
       break;
   }
-  throw StateError('WIT adapter value $path does not match ${type.text}.');
+  throw StateError('WIT adapter value $path does not match $text.');
+}
+
+Object? _directPrimitiveValue(
+  WasmComponentPrimitiveValueType primitive,
+  Object? value,
+) {
+  if (value is! WasmComponentValueData) {
+    return value;
+  }
+  switch (primitive) {
+    case WasmComponentPrimitiveValueType.boolean:
+      return value.kind == WasmComponentValueDataKind.boolean
+          ? value.boolean
+          : null;
+    case WasmComponentPrimitiveValueType.s8:
+    case WasmComponentPrimitiveValueType.u8:
+    case WasmComponentPrimitiveValueType.s16:
+    case WasmComponentPrimitiveValueType.u16:
+    case WasmComponentPrimitiveValueType.s32:
+    case WasmComponentPrimitiveValueType.u32:
+    case WasmComponentPrimitiveValueType.s64:
+    case WasmComponentPrimitiveValueType.u64:
+      return value.kind == WasmComponentValueDataKind.integer
+          ? value.integer
+          : null;
+    case WasmComponentPrimitiveValueType.f32:
+    case WasmComponentPrimitiveValueType.f64:
+      return value.kind == WasmComponentValueDataKind.floatingPoint
+          ? value.floatingPoint
+          : null;
+    case WasmComponentPrimitiveValueType.char:
+    case WasmComponentPrimitiveValueType.string:
+      return value.kind == WasmComponentValueDataKind.string
+          ? value.string
+          : null;
+    case WasmComponentPrimitiveValueType.errorContext:
+      return null;
+  }
+}
+
+Object? _validateWitAdapterOptionValue(
+  WASIComponentWitAdapterValueType type,
+  Object? value,
+  String path,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != WasmComponentValueDataKind.option) {
+    throw StateError('WIT adapter value $path does not match ${type.text}.');
+  }
+  final isSome = _witOptionIsSome(value, path);
+  final associated = value.associatedValue;
+  if (!isSome) {
+    if (associated != null) {
+      throw StateError('WIT adapter value $path.none does not take payload.');
+    }
+    return value;
+  }
+  if (associated == null) {
+    throw StateError('WIT adapter value $path.some needs payload.');
+  }
+  _validateWitAdapterValue(type.element!, associated, '$path.some');
+  return value;
+}
+
+Object? _validateWitAdapterResultValue(
+  WASIComponentWitAdapterValueType type,
+  Object? value,
+  String path,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != WasmComponentValueDataKind.result) {
+    throw StateError('WIT adapter value $path does not match ${type.text}.');
+  }
+  final isOk = _witResultIsOk(value, path);
+  final payloadType = isOk ? type.ok : type.error;
+  final label = isOk ? 'ok' : 'error';
+  final associated = value.associatedValue;
+  if (payloadType == null) {
+    if (associated != null) {
+      throw StateError('WIT adapter value $path.$label does not take payload.');
+    }
+    return value;
+  }
+  if (associated == null) {
+    throw StateError('WIT adapter value $path.$label needs payload.');
+  }
+  _validateWitAdapterValue(payloadType, associated, '$path.$label');
+  return value;
+}
+
+bool _witOptionIsSome(WasmComponentValueData value, String path) {
+  bool? selected;
+  void select(bool next, String source) {
+    if (selected != null && selected != next) {
+      throw StateError(
+        'WIT adapter value $path has conflicting option $source.',
+      );
+    }
+    selected = next;
+  }
+
+  final isSome = value.isSome;
+  if (isSome != null) {
+    select(isSome, 'isSome');
+  }
+  final index = value.index;
+  if (index != null) {
+    if (index == 0) {
+      select(false, 'index');
+    } else if (index == 1) {
+      select(true, 'index');
+    } else {
+      throw StateError(
+        'WIT adapter value $path has invalid option index $index.',
+      );
+    }
+  }
+  final label = value.label;
+  if (label != null) {
+    if (label == 'none') {
+      select(false, 'label');
+    } else if (label == 'some') {
+      select(true, 'label');
+    } else {
+      throw StateError(
+        'WIT adapter value $path has invalid option label $label.',
+      );
+    }
+  }
+  final result = selected;
+  if (result == null) {
+    throw StateError('WIT adapter value $path needs an option case.');
+  }
+  return result;
+}
+
+bool _witResultIsOk(WasmComponentValueData value, String path) {
+  bool? selected;
+  void select(bool next, String source) {
+    if (selected != null && selected != next) {
+      throw StateError(
+        'WIT adapter value $path has conflicting result $source.',
+      );
+    }
+    selected = next;
+  }
+
+  final isOk = value.isOk;
+  if (isOk != null) {
+    select(isOk, 'isOk');
+  }
+  final index = value.index;
+  if (index != null) {
+    if (index == 0) {
+      select(true, 'index');
+    } else if (index == 1) {
+      select(false, 'index');
+    } else {
+      throw StateError(
+        'WIT adapter value $path has invalid result index $index.',
+      );
+    }
+  }
+  final label = value.label;
+  if (label != null) {
+    if (label == 'ok') {
+      select(true, 'label');
+    } else if (label == 'error') {
+      select(false, 'label');
+    } else {
+      throw StateError(
+        'WIT adapter value $path has invalid result label $label.',
+      );
+    }
+  }
+  final result = selected;
+  if (result == null) {
+    throw StateError('WIT adapter value $path needs a result case.');
+  }
+  return result;
 }
 
 bool _isIntInRange(Object? value, int min, int max) {

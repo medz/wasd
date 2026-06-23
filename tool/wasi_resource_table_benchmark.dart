@@ -61,6 +61,8 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentVersionedAdapterProgramInvoke(options.iterations);
   final componentWitAdapterProgramInvoke =
       _benchmarkComponentWitAdapterProgramInvoke(options.iterations);
+  final componentWitCompositeAdapterProgramInvoke =
+      _benchmarkComponentWitCompositeAdapterProgramInvoke(options.iterations);
   final componentAdapterStringProgramInvoke =
       _benchmarkComponentAdapterStringProgramInvoke(options.iterations);
   final componentAdapterStringFlatInvoke =
@@ -149,6 +151,8 @@ Future<void> main(List<String> args) async {
         componentVersionedAdapterProgramInvoke.toJson(),
     'component_wit_adapter_program_invoke': componentWitAdapterProgramInvoke
         .toJson(),
+    'component_wit_composite_adapter_program_invoke':
+        componentWitCompositeAdapterProgramInvoke.toJson(),
     'component_adapter_string_program_invoke':
         componentAdapterStringProgramInvoke.toJson(),
     'component_adapter_string_flat_invoke': componentAdapterStringFlatInvoke
@@ -231,6 +235,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentVersionedAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentWitAdapterProgramInvoke(_warmupIterations);
+  _benchmarkComponentWitCompositeAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterRecordFlatInvoke(_warmupIterations);
@@ -699,6 +704,57 @@ world command {
     addArgs[0] = i & 0xffff;
     checksum += program.invokeImport('adder.add', addArgs) as int;
     program.invokeExport('sink.write', const <Object?>['ok']);
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentWitCompositeAdapterProgramInvoke(int iterations) {
+  const source = '''
+package acme:bench@0.2.0;
+
+interface lookup {
+  get: func(key: option<u32>) -> result<u32, u32>;
+}
+
+world command {
+  import lookup;
+}
+''';
+  final document = WASIComponentWitDocument.parse(source);
+  final program = WASIPreview2ComponentHost()
+      .prepareWitWorld(document, worldName: 'command')
+      .bindAdapters(
+        imports: {
+          'lookup.get': (args) {
+            final key = args.single as WasmComponentValueData;
+            if (key.isSome ?? false) {
+              final value = key.associatedValue!.integer as int;
+              return _u32OkValue(value + 7);
+            }
+            return _u32ErrorValue(3);
+          },
+        },
+      );
+  var checksum = 0;
+  final some = _u32SomeValue(11);
+  final none = _u32NoneValue();
+  final someArgs = <Object?>[some];
+  final noneArgs = <Object?>[none];
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final ok =
+        program.invokeImport('lookup.get', someArgs) as WasmComponentValueData;
+    checksum += ok.associatedValue!.integer as int;
+    final error =
+        program.invokeImport('lookup.get', noneArgs) as WasmComponentValueData;
+    checksum += error.associatedValue!.integer as int;
   }
   watch.stop();
 

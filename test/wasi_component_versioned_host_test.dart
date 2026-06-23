@@ -346,6 +346,79 @@ world command {
       );
     });
 
+    test('Preview2 and Preview3 wrappers execute composite WIT values', () {
+      const source = '''
+package acme:math@0.2.0;
+
+interface lookup {
+  get: func(key: option<u32>) -> result<u32, string>;
+}
+
+world command {
+  import lookup;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2Plan = WASIPreview2ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'command',
+      );
+      final preview3Plan = WASIPreview3ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'command',
+      );
+      final seenKeys = <int?>[];
+
+      expect(preview2Plan.canBindAdapters, isTrue);
+      expect(preview3Plan.canBindAdapters, isTrue);
+
+      final program = preview2Plan.bindAdapters(
+        imports: {
+          'lookup.get': (args) {
+            final key = args.single as WasmComponentValueData;
+            expect(key.kind, WasmComponentValueDataKind.option);
+            if (key.isSome ?? false) {
+              seenKeys.add(key.associatedValue!.integer as int);
+              return _u32StringOkValue(42);
+            }
+            seenKeys.add(null);
+            return _u32StringErrorValue('missing');
+          },
+        },
+      );
+      final preview3Program = preview3Plan.bindAdapters(
+        imports: {'lookup.get': (_) => _u32StringOkValue(7)},
+      );
+
+      final ok =
+          program.invokeImport('lookup.get', [_u32SomeValue(1)])
+              as WasmComponentValueData;
+      final error =
+          program.invokeImport('lookup.get', [_u32NoneValue()])
+              as WasmComponentValueData;
+      final preview3Ok =
+          preview3Program.invokeImport('lookup.get', [_u32NoneValue()])
+              as WasmComponentValueData;
+
+      expect(ok.kind, WasmComponentValueDataKind.result);
+      expect(ok.isOk, isTrue);
+      expect(ok.associatedValue!.integer, 42);
+      expect(error.isOk, isFalse);
+      expect(error.associatedValue!.string, 'missing');
+      expect(preview3Ok.isOk, isTrue);
+      expect(preview3Ok.associatedValue!.integer, 7);
+      expect(seenKeys, [1, null]);
+      expect(
+        () => program.invokeImport('lookup.get', [_conflictingU32SomeValue()]),
+        throwsStateError,
+      );
+      expect(
+        () => program.invokeImport('lookup.get', [_wrongKindU32SomeValue()]),
+        throwsStateError,
+      );
+      expect(seenKeys, [1, null]);
+    });
+
     test(
       'Preview2 wrapper rejects owned-resource async values at version gate',
       () {
@@ -1118,6 +1191,91 @@ world command {
       );
     });
   });
+}
+
+WasmComponentValueData _u32SomeValue(int value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    index: 1,
+    label: 'some',
+    isSome: true,
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.integer,
+      rawBytes: Uint8List(0),
+      integer: value,
+    ),
+  );
+}
+
+WasmComponentValueData _u32NoneValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    index: 0,
+    label: 'none',
+    isSome: false,
+  );
+}
+
+WasmComponentValueData _conflictingU32SomeValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    index: 1,
+    label: 'some',
+    isSome: false,
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.integer,
+      rawBytes: Uint8List(0),
+      integer: 1,
+    ),
+  );
+}
+
+WasmComponentValueData _wrongKindU32SomeValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    index: 1,
+    label: 'some',
+    isSome: true,
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.string,
+      rawBytes: Uint8List(0),
+      integer: 1,
+    ),
+  );
+}
+
+WasmComponentValueData _u32StringOkValue(int value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.result,
+    rawBytes: Uint8List(0),
+    index: 0,
+    label: 'ok',
+    isOk: true,
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.integer,
+      rawBytes: Uint8List(0),
+      integer: value,
+    ),
+  );
+}
+
+WasmComponentValueData _u32StringErrorValue(String value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.result,
+    rawBytes: Uint8List(0),
+    index: 1,
+    label: 'error',
+    isOk: false,
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.string,
+      rawBytes: Uint8List(0),
+      string: value,
+    ),
+  );
 }
 
 Uint8List _canonicalResourceProgramBytes() => Uint8List.fromList(const <int>[
