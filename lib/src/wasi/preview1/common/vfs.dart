@@ -393,6 +393,9 @@ final class Preview1VirtualFileSystem {
     if (fromFd == toFd) {
       return Preview1FdRenumberResult.success;
     }
+    if (!_hasDescriptor(toFd)) {
+      return Preview1FdRenumberResult.badf;
+    }
 
     final stdioDescriptor = _stdioDescriptorsByFd.remove(fromFd);
     if (stdioDescriptor != null) {

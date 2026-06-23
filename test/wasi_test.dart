@@ -5008,7 +5008,7 @@ void main() {
       );
 
       test(
-        'fd_renumber moves virtual descriptors and replaces the target',
+        'fd_renumber moves virtual descriptors and requires an open target',
         () async {
           final fileWasi = WASI(
             preopens: {'/sandbox': '/tmp'},
@@ -5115,10 +5115,12 @@ void main() {
           );
           final reopenedFd = data.getUint32(sourceFdPtr, Endian.little);
           expect(fdClose.ref([targetFd]), 0);
-          expect(fdRenumber.ref([reopenedFd, targetFd]), 0);
-          expect(fdTell.ref([reopenedFd, offsetPtr]), 8);
+          expect(fdRenumber.ref([reopenedFd, targetFd]), _errnoBadf);
+          expect(fdTell.ref([targetFd, offsetPtr]), _errnoBadf);
+          expect(fdTell.ref([reopenedFd, offsetPtr]), 0);
+          expect(_getUint64Le(data, offsetPtr), 0);
           bytes.fillRange(readBufferPtr, readBufferPtr + 4, 0);
-          expect(fdPread.ref([targetFd, iovPtr, 1, 0, readCountPtr]), 0);
+          expect(fdPread.ref([reopenedFd, iovPtr, 1, 0, readCountPtr]), 0);
           expect(data.getUint32(readCountPtr, Endian.little), 4);
           expect(
             utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + 4)),

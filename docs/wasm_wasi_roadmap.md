@@ -244,6 +244,33 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-FD-RENUMBER-TARGET-PREFLIGHT` - `fd_renumber` rejects invalid
+  destination descriptors before moving the source descriptor.
+  - Scope: native/browser shared Preview1 descriptor table semantics for
+    `fd_renumber(from, to)`.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "fd_renumber" --reporter=compact`
+    previously encoded the wrong behavior by allowing a virtual file descriptor
+    to renumber into a closed destination fd.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "fd_renumber" --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --name "fd_renumber" --reporter=compact`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/renumber.wasm`;
+    upstream `wasi-testsuite` rerun reported `19/72` Preview1 failures after
+    this change, down from `20/72`.
+  - Performance gate: N/A; this adds one descriptor-table preflight and does not
+    touch fd read/write hot loops.
+  - Done when: invalid negative descriptors still return `EINVAL`, missing
+    source descriptors return `BADF`, `from == to` for an open descriptor remains
+    a no-op success, missing destination descriptors return `BADF`, and the
+    source descriptor remains usable after that failure.
+  - Evidence update: this checked row plus the detailed backlog row,
+    verification matrix, and current baseline.
+  - Claim impact: closes one official Preview1 testsuite failure for
+    `SUPPORT-P1`; it does not complete `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [x] `P1-OFFICIAL-TESTSUITE-ADAPTER` - wasd can be invoked by the official
   `wasi-testsuite` runner for Preview1 command modules.
   - Scope: external conformance execution entrypoint for `wasm32-wasip1`
@@ -1749,6 +1776,7 @@ copying their internals directly.
 | [x] | Preview1 native/browser stream socket send iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs"`; `dart test -p chrome test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs"`; `dart test test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs|virtual socket send handlers stop after partial writes|virtual socket host send handlers reject invalid write counts|sock_recv|sock_send"`; `dart test -p chrome test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs|virtual socket send handlers stop after partial writes|virtual socket host send handlers reject invalid write counts|sock_recv|sock_send"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream `sock_send` now snapshots overlapping iovec tables before host callbacks can mutate guest memory; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket recv iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv snapshots iovs before writing receive buffers"`; `dart test test/wasi_test.dart --name "sock_recv"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream and datagram `sock_recv` now snapshot overlapping iovec tables before receive-buffer writes; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Official WASI testsuite adapter for Preview1 command modules | `tool/wasi_testsuite_preview1_runner.dart`, `tool/wasi_testsuite_wasd_adapter.py`, `test/wasi_testsuite_runner_test.dart`, `test/support/wasm_fixtures.dart` | `dart test test/wasi_testsuite_runner_test.dart --reporter=compact`; `dart run tool/wasi_testsuite_preview1_runner.dart --version`; `python3 -m py_compile tool/wasi_testsuite_wasd_adapter.py` | wasd can now be invoked by the official `wasi-testsuite` runner for `wasm32-wasip1` `wasi:cli/command` tests, with `--dir HOST::GUEST` roots snapshotted into the virtual VFS and observed by a real `path_open`/`fd_read` command module; full Preview1 still requires running the external suite and turning failures into checked implementation rows. |
+| [x] | Preview1 `fd_renumber` target descriptor preflight | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "fd_renumber" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "fd_renumber" --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/renumber.wasm` | `fd_renumber` now returns `BADF` when the destination descriptor is not open and preserves the source descriptor; the official Preview1 suite dropped from `20/72` failures to `19/72`, so broader filesystem/symlink/directory/inode gaps remain. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Component instantiation import matching for known local child components | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments" --reporter=compact`; `dart test test/component_test.dart --reporter=compact`; `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart --reporter=compact`; `dart run tool/component_benchmark.dart --json`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | Known local child component instantiation now rejects unknown argument names, missing required imports, and wrong argument sorts before adapter binding; imported/aliased component targets, cross-component type equivalence, generated worlds, and official suite coverage remain open. |
 | [x] | Component task-return borrow validation | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "reports task.return result types containing borrow|reports missing canonical option requirements|reports invalid canonical result value type indexes" --reporter=compact`; `dart run tool/component_benchmark.dart --json` | Borrowed canonical `task.return` results are now rejected during validation; broader borrow, stream, future, nested-shape, generated-world, and component-suite coverage remains. |
@@ -1853,6 +1881,12 @@ This is the implementation state as of 2026-06-23 on `main`.
   command-module entry point rather than an empty adapter shell. This is still a
   conformance entry point only; full Preview1 support requires running the
   external suite and converting failures into checked implementation rows.
+- The official `WebAssembly/wasi-testsuite` `prod/testsuite-base` run now has
+  `19/72` Preview1 failures with `41` Preview3 tests skipped by the adapter
+  capability filter. `renumber.wasm` is now passing; remaining Preview1 failures
+  are concentrated in symlink traversal, path normalization/trailing slash
+  errors, directory seek/open rights, preopen close semantics, directory entry
+  scaling, and stable device/inode metadata.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/` now provides an internal typed resource table plus
@@ -2768,6 +2802,31 @@ performance visible while the support surface expands.
   - Claim impact: creates the official Preview1 testsuite gate needed to expose
     real conformance failures; does not complete `P1-SOCKET-CONFORMANCE`,
     `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
+- [x] `P1-FD-RENUMBER-TARGET-PREFLIGHT` - `fd_renumber` requires an open
+  destination descriptor.
+  - Scope: native/browser shared Preview1 descriptor table behavior in
+    `Preview1VirtualFileSystem.renumberDescriptor`.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, and this roadmap.
+  - Red test: update the existing `fd_renumber` regression that previously
+    allowed renumbering a virtual file descriptor into a closed destination fd;
+    the official `renumber.wasm` failure reported
+    `fd_renumber should not allow renumbering to invalid destination file descriptors`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "fd_renumber" --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --name "fd_renumber" --reporter=compact`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/renumber.wasm`;
+    upstream `wasi-testsuite` rerun with the wasd adapter reported `19/72`
+    Preview1 failures after the fix, down from `20/72`.
+  - Performance gate: N/A; descriptor existence preflight is constant-time and
+    not on the fd IO hot path.
+  - Done when: invalid destination fds return `BADF` without closing or moving
+    the source descriptor, valid destination fds still get replaced, and
+    `from == to` remains success for an open descriptor.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry, verification matrix, and current baseline.
+  - Claim impact: closes one official Preview1 testsuite failure for
+    `SUPPORT-P1`; does not complete Preview1 full support or any P2/P3 gate.
 - [x] `P1-SOCKET-CONNECTED-ACCEPT-CAPABILITY` - Connected stream sockets do not
   expose listener accept capability.
   - Scope: native/browser shared Preview1 `WASIPreview1Socket` host API,
