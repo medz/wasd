@@ -1,3 +1,6 @@
+@JS()
+library;
+
 import 'dart:convert';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
@@ -2109,12 +2112,55 @@ int? _tryParseJsInt(String? raw) {
 external JSString _jsString(JSAny? value);
 
 JSObject _requireWebCrypto() {
+  if (_isNodeJs()) {
+    final crypto = _requireNodeWebCrypto();
+    if (crypto != null) {
+      return crypto;
+    }
+  }
+
   final crypto = globalContext.getProperty<JSObject?>('crypto'.toJS);
   if (crypto != null) {
     return crypto;
   }
+
+  final nodeCrypto = _requireNodeWebCrypto();
+  if (nodeCrypto != null) {
+    return nodeCrypto;
+  }
+
   throw UnsupportedError('Web Crypto is unavailable in this runtime.');
 }
+
+bool _isNodeJs() {
+  final process = globalContext.getProperty<JSAny?>('process'.toJS);
+  if (process == null) {
+    return false;
+  }
+  final versions = (process as JSObject).getProperty<JSAny?>('versions'.toJS);
+  if (versions == null) {
+    return false;
+  }
+  return (versions as JSObject).getProperty<JSAny?>('node'.toJS) != null;
+}
+
+JSObject? _requireNodeWebCrypto() {
+  final require = globalContext.getProperty<JSAny?>('require'.toJS);
+  if (require == null) {
+    return null;
+  }
+  final cryptoModule = _jsRequire('node:crypto'.toJS);
+  if (cryptoModule case final JSObject module) {
+    final webcrypto = module.getProperty<JSObject?>('webcrypto'.toJS);
+    if (webcrypto != null) {
+      return webcrypto;
+    }
+  }
+  return null;
+}
+
+@JS('require')
+external JSAny _jsRequire(JSString module);
 
 void _setUint64(ByteData data, int offset, int value) {
   final normalized = value.toUnsigned(64);

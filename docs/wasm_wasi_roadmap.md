@@ -100,6 +100,33 @@ too broad to verify in one commit.
 
 ### Now
 
+- [ ] `CORE-OFFICIAL-SPEC-COMPLETE` - Finish core Wasm against the official
+  spec-suite before adding more P2/P3 surface.
+  - Scope: standardized core WebAssembly parsing, validation, instantiation,
+    and execution across the native VM and JS backends. Proposal-only and
+    component-model failures are not counted as core completion.
+  - Edit targets: `lib/src/wasm/`, `test/wasm_test.dart`,
+    `test/wasm_predecode_test.dart`, `tool/spec_runner.dart`,
+    `tool/spec_testsuite_runner.dart`, and focused spec-regression tests.
+  - Red test: run the core suite gate and convert the first untriaged failing
+    `.wast` command into a focused regression or a checked child row.
+  - Implementation gate:
+    `tool/ensure_toolchains.sh --check`;
+    `dart run tool/spec_testsuite_runner.dart --suite=core --output-json=.dart_tool/spec_runner/core.json --output-md=.dart_tool/spec_runner/core.md --prepare-root=.dart_tool/spec_runner/core_bundle --conversion-cache-dir=.dart_tool/spec_runner/conversion_cache`;
+    `dart test test/wasm_test.dart test/wasm_predecode_test.dart`;
+    `dart run tool/spec_runner.dart --target=vm --suite=core`.
+  - Performance gate:
+    `dart run tool/doom_instantiate_profile.dart --compile-breakdown --json`;
+    `dart run tool/doom_instantiate_profile.dart --instantiate-breakdown --json`.
+  - Done when: every official standardized core feature either passes on the
+    selected backend or has a checked, narrow child row explaining the remaining
+    unsupported proposal boundary; no untriaged core failures remain; compile
+    and instantiate profiles show no unresolved memory/duration blocker.
+  - Evidence update: update `SUPPORT-WASM`, the verification matrix, current
+    baseline percentages, and the first P1 row that becomes the next default
+    action after core completion.
+  - Claim impact: required before `SUPPORT-WASM` can be checked and before P2/P3
+    work returns to the default queue.
 - [x] `P1-OFFICIAL-FS-CONFORMANCE` - Drive official Preview1 filesystem
   failures to zero one checked child at a time.
   - Scope: native/browser shared Preview1 VFS and syscall behavior exercised by
@@ -138,7 +165,38 @@ too broad to verify in one commit.
     conformance gate for `SUPPORT-P1`; it does not complete `SUPPORT-P2` or
     `SUPPORT-P3`, and skipped Preview3 modules remain unsupported.
 
-### Queued Next
+### Queued After Core
+
+- [ ] `P1-FULL-RUNTIME-GATE` - Finish package-level Preview1 support across VM,
+  browser, and Node before returning to P2/P3.
+  - Scope: Preview1 host behavior, public API wording, official testsuite
+    deltas, and runtime alignment across native, browser JS, and Node JS.
+  - Edit targets: `lib/src/wasi/preview1/`, `test/wasi_test.dart`,
+    `tool/wasi_testsuite_preview1_runner.dart`,
+    `tool/wasi_testsuite_wasd_adapter.py`, README support tables, and this
+    roadmap.
+  - Red test: pick the next failing official Preview1 command/reactor module or
+    runtime mismatch, add the narrow regression, and confirm the current code
+    fails for that behavior.
+  - Implementation gate:
+    `dart test test/wasi_test.dart`;
+    `dart test -p chrome test/wasi_test.dart`;
+    `dart test -p node test/wasi_test.dart`;
+    `python3 -m py_compile tool/wasi_testsuite_wasd_adapter.py`;
+    the official `WebAssembly/wasi-testsuite` Preview1 run through
+    `tool/wasi_testsuite_wasd_adapter.py`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Done when: local VM/browser/Node Preview1 suites pass with no unexpected
+    skips, the official Preview1 suite has no untriaged failures, README/API
+    claims match the verified host surface, and VFS/socket hot paths have
+    current benchmark evidence.
+  - Evidence update: update `SUPPORT-P1`, the verification matrix, current
+    baseline percentages, README support wording, and completion checklist.
+  - Claim impact: required before `SUPPORT-P1` can be checked; P2/P3 queue stays
+    deferred until this row is complete.
+
+### Deferred Until Core And P1
 
 - [ ] `CM-VALIDATION-GAPS` - Add one deterministic component validation failure
   before adding host behavior.
@@ -278,6 +336,32 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-JS-NODE-SHARED-HOST` - Node.js Preview1 uses wasd's in-repo JS host
+  instead of delegating to `node:wasi`.
+  - Scope: JS Preview1 host selection and Node runtime parity for the same
+    in-memory VFS/syscall surface already used by browser JS.
+  - Edit targets: `lib/src/wasi/preview1/js/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`,
+    `lib/src/wasi/preview1/js/node/wasi.dart`, `test/wasi_test.dart`,
+    README support wording, and this roadmap.
+  - Red test:
+    `dart test -p node test/wasi_test.dart --name "fd_read reads configured stdin bytes and advances offset|fd_pread, fd_pwrite, and fd_write update virtual files" --reporter=compact`
+    did not complete under the old `node:wasi` delegation because configured
+    `stdinData` was not owned by wasd's VFS.
+  - Implementation gate:
+    `dart test -p node test/wasi_test.dart --name "fd_read reads configured stdin bytes and advances offset|fd_pread, fd_pwrite, and fd_write update virtual files" --reporter=compact`;
+    `dart test -p node test/wasi_test.dart --reporter=compact`.
+  - Performance gate: N/A; this removes a host delegation layer and does not add
+    a repeated VFS or socket hot path. Run `wasi_vfs_benchmark` for the next
+    syscall implementation row that changes descriptor or path algorithms.
+  - Done when: `js/wasi.dart` selects wasd's shared JS Preview1 host for Node
+    and browser runtimes, Node WebCrypto resolves through `node:crypto`
+    `webcrypto` when needed, all stale `node:wasi` skips are removed, and the
+    full Node Preview1 regression suite passes with only browser-only skips.
+  - Evidence update: this checked row, `SUPPORT-P1`, verification matrix,
+    README support wording, current baseline, and completion checklist.
+  - Claim impact: removes the Node delegation blocker from `SUPPORT-P1`; full
+    Preview1 still needs the official testsuite and support-gate evidence.
 - [x] `WIT-WORLD-RESOURCE-ADAPTER-BINDING` - Execute local WIT resource handles
   through versioned adapter callbacks.
   - Scope: local WIT interfaces imported by a selected world, limited to
@@ -2286,16 +2370,18 @@ unchecked.
   - Evidence update: verification matrix, detailed backlog, and README support
     wording if public claims change.
 - [ ] `SUPPORT-P1` - Full WASI Preview1 support.
-  - Current: `WASI(...)` provides a real Preview1 host surface, and the current
-    official `WebAssembly/wasi-testsuite` `prod/testsuite-base` run reports
-    `PASS: 72 tests passed (41 skipped)`. Keep this row unchecked until the
-    package-level Preview1 support claim is reconciled across VM, browser,
-    Node delegation, README/API wording, and any non-testsuite Preview1 gaps.
+  - Current: `WASI(...)` provides a real Preview1 host surface. Native and JS
+    runtimes now use in-repo Preview1 hosts; Node no longer delegates to
+    `node:wasi`. The current official `WebAssembly/wasi-testsuite`
+    `prod/testsuite-base` run reports `PASS: 72 tests passed (41 skipped)`.
+    Keep this row unchecked until the package-level Preview1 support claim is
+    reconciled across VM, browser, Node, README/API wording, and any
+    non-testsuite Preview1 gaps.
   - Required rows: every Preview1 descriptor, filesystem, stdio, clock, random,
     poll, and socket row checked, including `P1-PATH-OPEN-OFLAGS`,
     `P1-SOCKET-CONFORMANCE` child rows, `P1-OFFICIAL-TESTSUITE-ADAPTER`,
-    `P1-OFFICIAL-FS-CONFORMANCE` child rows, and future official testsuite gap
-    rows not yet represented by a narrower ID.
+    `P1-OFFICIAL-FS-CONFORMANCE` child rows, `P1-JS-NODE-SHARED-HOST`, and
+    future official testsuite gap rows not yet represented by a narrower ID.
   - Implementation gate:
     `dart test test/wasi_test.dart`;
     `dart test -p chrome test/wasi_test.dart`;
@@ -2426,8 +2512,9 @@ copying their internals directly.
 | Status | Capability boundary | Evidence to inspect | Verification gate | Remaining gap |
 | --- | --- | --- | --- | --- |
 | [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `path_open` create/exclusive/truncate is covered; full Preview1 conformance still needs broader syscall/spec-suite gates and remaining socket edges. |
+| [x] | Preview1 Node.js shared JS host parity | `lib/src/wasi/preview1/js/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test -p node test/wasi_test.dart --name "fd_read reads configured stdin bytes and advances offset|fd_pread, fd_pwrite, and fd_write update virtual files" --reporter=compact`; `dart test -p node test/wasi_test.dart --reporter=compact` | Node.js now uses wasd's in-repo JS Preview1 host, including configured stdin and virtual files, instead of `node:wasi`; full Preview1 still needs official testsuite and support-gate evidence. |
 | [x] | Preview1 native/browser fd count-pointer ABI | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test -p chrome test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Result count pointers at guest memory address `0` now write correctly for stdio and virtual-file fd read/write syscalls; full Preview1 still needs broader syscall/spec-suite gates. |
-| [x] | Preview1 native/browser virtual-file fd iovec aliasing and preflight | `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes|fd_pwrite validates all iovs before mutating virtual files"`; `dart test -p chrome test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes|fd_pwrite validates all iovs before mutating virtual files"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Virtual-file fd reads now snapshot overlapping iovec tables before guest-memory writes, and virtual-file fd writes preflight every iovec before mutating file bytes; Node still delegates Preview1 to `node:wasi`, and full Preview1 still needs broader syscall/spec-suite gates. |
+| [x] | Preview1 native/browser virtual-file fd iovec aliasing and preflight | `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes|fd_pwrite validates all iovs before mutating virtual files"`; `dart test -p chrome test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes|fd_pwrite validates all iovs before mutating virtual files"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Virtual-file fd reads now snapshot overlapping iovec tables before guest-memory writes, and virtual-file fd writes preflight every iovec before mutating file bytes; full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser clock and poll-clock validation | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "clock_time_get"`; `dart test -p chrome test/wasi_test.dart --name "clock_time_get"`; `dart test test/wasi_test.dart --name "poll_oneoff"`; `dart test -p chrome test/wasi_test.dart --name "poll_oneoff"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Unsupported `clock_time_get` ids now preserve output memory and return `EINVAL`; invalid `poll_oneoff` clock subscriptions now report event `EINVAL`; full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket flag preflight | `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv and sock_send validate flags before descriptor rights"`; `dart test test/wasi_test.dart --name "sock_recv|sock_send"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv|sock_send"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Invalid `sock_recv`/`sock_send` flags now return `EINVAL` before descriptor-right failures and without socket/output side effects; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket shutdown `how` preflight | `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_shutdown validates how before descriptor state"`; `dart test -p chrome test/wasi_test.dart --name "sock_shutdown validates how before descriptor state"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Invalid `sock_shutdown` `how` values now return `EINVAL` before bad-fd, non-socket, or rights errors without mutating socket state; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
@@ -2481,7 +2568,9 @@ copying their internals directly.
 
 This is the implementation state as of 2026-06-23 on `main`.
 
-- Preview 1 is real but still incomplete. Native and browser hosts share
+- Preview 1 is real but still incomplete. Native, browser JS, and Node JS hosts
+  now share the in-repo Preview1 VFS/syscall model instead of delegating Node to
+  `node:wasi`. Native and JS hosts share
   `lib/src/wasi/preview1/common/vfs.dart` for virtual files, directories,
   readdir state, hard links, symlinks/readlink, configured stream/datagram
   sockets, descriptor flags, descriptor rights, descriptor times, descriptor
@@ -2496,11 +2585,10 @@ This is the implementation state as of 2026-06-23 on `main`.
   and stream `sock_send` iovec aliasing protection, host-backed
   stream/datagram receive/send handlers, accept queue preservation on
   unsupported descriptor flags, and descriptor renumbering.
-  Node still delegates Preview 1 behavior to `node:wasi`.
 - Preview 1 `proc_raise` is no longer a blanket `ENOSYS` stub: native hosts
-  deliver mapped process signals by default, native/browser hosts can inject a
-  `procRaiseHandler` for controlled signal handling, and browser hosts still
-  return `ENOSYS` when no handler exists.
+  deliver mapped process signals by default, native/JS hosts can inject a
+  `procRaiseHandler` for controlled signal handling, and JS hosts still return
+  `ENOSYS` when no handler exists.
 - Preview 1 stdio descriptors, virtual files, configured stream/datagram
   sockets, open directories, and preopens now live in one VFS
   descriptor/capability table with base rights, inheriting rights, descriptor
@@ -5513,7 +5601,8 @@ evidence to be added to that row or to a linked checked child row in the same
 commit.
 
 - [ ] `P1-RUNTIME-COMPLETE`
-  - Condition: every Preview1 syscall implemented by the native/browser host has
+  - Condition: every Preview1 syscall implemented by the native/browser/Node
+    host surface has
     syscall-level regression coverage, official/conformance-style workload
     coverage, error side-effect checks, and Node/browser/native runtime
     alignment where the runtime owns behavior.

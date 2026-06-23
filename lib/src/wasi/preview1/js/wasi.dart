@@ -1,14 +1,10 @@
 import 'dart:typed_data';
 
-import 'dart:js_interop';
-import 'dart:js_interop_unsafe';
-
 import '../../../wasm/instance.dart' as wasm_instance;
 import '../../../wasm/memory.dart' as wasm_memory;
 import '../../../wasm/module.dart' as wasm_module;
 import '../../wasi.dart' as wasi_iface;
 import '../socket.dart';
-import 'node/wasi.dart' as node;
 import 'web/wasi.dart' as web;
 
 class WASI implements wasi_iface.WASI {
@@ -59,16 +55,6 @@ class WASI implements wasi_iface.WASI {
   }) => _delegate.finalizeBindings(instance, memory: memory);
 }
 
-bool _isNodeJs() {
-  final process = globalContext.getProperty<JSAny?>('process'.toJS);
-  if (process == null) return false;
-  final versions = (process as JSObject).getProperty<JSAny?>('versions'.toJS);
-  if (versions == null) return false;
-  final nodeVersion = (versions as JSObject).getProperty<JSAny?>('node'.toJS);
-  if (nodeVersion == null) return false;
-  return globalContext.getProperty<JSAny?>('require'.toJS) != null;
-}
-
 wasi_iface.WASI _createDelegate({
   required List<String> args,
   required Map<String, String> env,
@@ -83,25 +69,8 @@ wasi_iface.WASI _createDelegate({
   required wasi_iface.WASIProcRaiseHandler? procRaiseHandler,
   required wasi_iface.WASIVersion version,
 }) {
-  final useNode = _isNodeJs();
   if (const bool.fromEnvironment('WASI_TRACE')) {
-    print('WASI JS backend: ${useNode ? 'node' : 'web'}');
-  }
-  if (useNode) {
-    return node.WASI(
-      args: args,
-      env: env,
-      preopens: preopens,
-      files: files,
-      returnOnExit: returnOnExit,
-      stdin: stdin,
-      stdinData: stdinData,
-      stdout: stdout,
-      stderr: stderr,
-      sockets: sockets,
-      procRaiseHandler: procRaiseHandler,
-      version: version,
-    );
+    print('WASI JS backend: wasd');
   }
   return web.WASI(
     args: args,
