@@ -932,6 +932,13 @@ final class Preview1VirtualFileSystem {
       if (truncate) {
         return const Preview1VirtualOpenResult.isDirectory();
       }
+      final requestsOnlyFileReadWriteRights =
+          rightsBase != null &&
+          (rightsBase & rightFdWrite) != 0 &&
+          (rightsBase & ~(rightFdRead | rightFdWrite)) == 0;
+      if (directory && requestsOnlyFileReadWriteRights) {
+        return const Preview1VirtualOpenResult.isDirectory();
+      }
       final fd = _allocateVirtualFd();
       _openDirectoriesByFd[fd] = normalized;
       _openDirectoryFlagsByFd[fd] = descriptorFlags;

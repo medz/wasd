@@ -6020,6 +6020,65 @@ void main() {
       );
 
       test(
+        'path_open rejects directory read-write rights with O_DIRECTORY',
+        () async {
+          final fileWasi = WASI(preopens: {'/sandbox': '/tmp'});
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 2304;
+          const openedFdPtr = 2320;
+          final currentDirectory = utf8.encode('.');
+          bytes.setAll(pathPtr, currentDirectory);
+
+          int openDirectoryWithRights(int rightsBase) {
+            data.setUint32(openedFdPtr, 0xdeadbeef, Endian.little);
+            return pathOpen.ref([
+                  3,
+                  0,
+                  pathPtr,
+                  currentDirectory.length,
+                  _oflagDirectory,
+                  rightsBase,
+                  0,
+                  0,
+                  openedFdPtr,
+                ])
+                as int;
+          }
+
+          expect(openDirectoryWithRights(0), 0);
+          expect(fdClose.ref([data.getUint32(openedFdPtr, Endian.little)]), 0);
+
+          expect(openDirectoryWithRights(_rightFdRead), 0);
+          expect(fdClose.ref([data.getUint32(openedFdPtr, Endian.little)]), 0);
+
+          expect(openDirectoryWithRights(_rightsAll), 0);
+          expect(fdClose.ref([data.getUint32(openedFdPtr, Endian.little)]), 0);
+
+          expect(
+            openDirectoryWithRights(_rightFdRead | _rightFdWrite),
+            _errnoIsdir,
+          );
+          expect(data.getUint32(openedFdPtr, Endian.little), 0xdeadbeef);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; path_open behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'fd_readdir reads virtual directory entries and respects cookies',
         () async {
           final fileWasi = WASI(
