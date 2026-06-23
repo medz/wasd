@@ -46,6 +46,39 @@ world command {
       expect(world.exports.single.target.isLocal, isTrue);
     });
 
+    test('parses local record type declarations', () {
+      const source = '''
+package acme:env@0.2.0;
+
+interface environment {
+  record entry {
+    name: string,
+    value: string,
+  }
+
+  get: func() -> list<entry>;
+}
+
+world command {
+  import environment;
+}
+''';
+
+      final document = WASIComponentWitDocument.parse(source);
+      final environment = document.interfaceNamed('environment')!;
+
+      expect(environment.records.map((record) => record.name), ['entry']);
+      expect(environment.records.single.fields.map((field) => field.name), [
+        'name',
+        'value',
+      ]);
+      expect(environment.records.single.fields.map((field) => field.type), [
+        'string',
+        'string',
+      ]);
+      expect(environment.functions.single.signature, 'func()->list<entry>');
+    });
+
     test('parses annotated Preview3 async functions and world includes', () {
       const source = '''
 package wasi:cli@0.3.0;

@@ -65,6 +65,8 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentWitCompositeAdapterProgramInvoke(options.iterations);
   final componentWitListTupleAdapterProgramInvoke =
       _benchmarkComponentWitListTupleAdapterProgramInvoke(options.iterations);
+  final componentWitRecordAdapterProgramInvoke =
+      _benchmarkComponentWitRecordAdapterProgramInvoke(options.iterations);
   final componentAdapterStringProgramInvoke =
       _benchmarkComponentAdapterStringProgramInvoke(options.iterations);
   final componentAdapterStringFlatInvoke =
@@ -157,6 +159,8 @@ Future<void> main(List<String> args) async {
         componentWitCompositeAdapterProgramInvoke.toJson(),
     'component_wit_list_tuple_adapter_program_invoke':
         componentWitListTupleAdapterProgramInvoke.toJson(),
+    'component_wit_record_adapter_program_invoke':
+        componentWitRecordAdapterProgramInvoke.toJson(),
     'component_adapter_string_program_invoke':
         componentAdapterStringProgramInvoke.toJson(),
     'component_adapter_string_flat_invoke': componentAdapterStringFlatInvoke
@@ -241,6 +245,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentWitAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentWitCompositeAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentWitListTupleAdapterProgramInvoke(_warmupIterations);
+  _benchmarkComponentWitRecordAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterRecordFlatInvoke(_warmupIterations);
@@ -813,6 +818,57 @@ world command {
       checksum += tuple.items[0].integer as int;
       checksum += tuple.items[1].integer as int;
     }
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentWitRecordAdapterProgramInvoke(int iterations) {
+  const source = '''
+package acme:bench@0.2.0;
+
+interface records {
+  record pair {
+    left: u32,
+    right: u32,
+  }
+
+  swap: func(pair: pair) -> pair;
+}
+
+world command {
+  import records;
+}
+''';
+  final document = WASIComponentWitDocument.parse(source);
+  final program = WASIPreview2ComponentHost()
+      .prepareWitWorld(document, worldName: 'command')
+      .bindAdapters(
+        imports: {
+          'records.swap': (args) {
+            final pair = args.single as WasmComponentValueData;
+            final left = pair.items[0].integer as int;
+            final right = pair.items[1].integer as int;
+            return _recordValue(right, left);
+          },
+        },
+      );
+  var checksum = 0;
+  final pair = _recordValue(11, 13);
+  final pairArgs = <Object?>[pair];
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final swapped =
+        program.invokeImport('records.swap', pairArgs)
+            as WasmComponentValueData;
+    checksum += swapped.items[0].integer as int;
+    checksum += swapped.items[1].integer as int;
   }
   watch.stop();
 

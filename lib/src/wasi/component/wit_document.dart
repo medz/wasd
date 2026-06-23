@@ -85,8 +85,10 @@ final class WASIComponentWitInterface {
   WASIComponentWitInterface({
     required this.name,
     required List<WASIComponentWitFunction> functions,
+    required List<WASIComponentWitRecord> records,
     required this.span,
-  }) : functions = List<WASIComponentWitFunction>.unmodifiable(functions);
+  }) : functions = List<WASIComponentWitFunction>.unmodifiable(functions),
+       records = List<WASIComponentWitRecord>.unmodifiable(records);
 
   /// Interface name.
   final String name;
@@ -94,7 +96,58 @@ final class WASIComponentWitInterface {
   /// Function declarations captured directly in this interface.
   final List<WASIComponentWitFunction> functions;
 
+  /// Record declarations captured directly in this interface.
+  final List<WASIComponentWitRecord> records;
+
   /// Source span for the interface name.
+  final WASIComponentWitSpan span;
+
+  /// Returns the record named [name], if this interface declares one.
+  WASIComponentWitRecord? recordNamed(String name) {
+    for (final record in records) {
+      if (record.name == name) {
+        return record;
+      }
+    }
+    return null;
+  }
+}
+
+/// Record type declared directly in a WIT interface.
+final class WASIComponentWitRecord {
+  /// Creates a WIT record declaration boundary.
+  WASIComponentWitRecord({
+    required this.name,
+    required List<WASIComponentWitRecordField> fields,
+    required this.span,
+  }) : fields = List<WASIComponentWitRecordField>.unmodifiable(fields);
+
+  /// Record name.
+  final String name;
+
+  /// Ordered record fields.
+  final List<WASIComponentWitRecordField> fields;
+
+  /// Source span for the record name.
+  final WASIComponentWitSpan span;
+}
+
+/// Field declared directly in a WIT record.
+final class WASIComponentWitRecordField {
+  /// Creates a WIT record field boundary.
+  const WASIComponentWitRecordField({
+    required this.name,
+    required this.type,
+    required this.span,
+  });
+
+  /// Field name.
+  final String name;
+
+  /// Compact field type text.
+  final String type;
+
+  /// Source span for the field name.
   final WASIComponentWitSpan span;
 }
 
@@ -386,21 +439,37 @@ final class _WitParser {
     final name = _expectWord('interface name');
     _expectSymbol('{');
     final functions = <WASIComponentWitFunction>[];
-    _parseInterfaceBlock(functions, prefix: '');
+    final records = <WASIComponentWitRecord>[];
+    _parseInterfaceBlock(functions, records, prefix: '');
     return WASIComponentWitInterface(
       name: name.lexeme,
       functions: functions,
+      records: records,
       span: name.span,
     );
   }
 
   void _parseInterfaceBlock(
-    List<WASIComponentWitFunction> functions, {
+    List<WASIComponentWitFunction> functions,
+    List<WASIComponentWitRecord> records, {
     required String prefix,
   }) {
     while (!_checkSymbol('}') && !_checkKind(_WitTokenKind.eof)) {
       if (_checkSymbol('@')) {
         _skipAnnotation();
+        continue;
+      }
+      if (_matchWord('record')) {
+        final record = _parseRecord();
+        final first = _recordNamed(records, record.name);
+        if (first != null) {
+          _fail(
+            record.span,
+            "duplicate record '${record.name}'; first declared at "
+            '${first.span.location}',
+          );
+        }
+        records.add(record);
         continue;
       }
       if (_checkKind(_WitTokenKind.word)) {
@@ -421,19 +490,66 @@ final class _WitParser {
         }
         if (_checkSymbol('{')) {
           _advance();
-          _parseInterfaceBlock(functions, prefix: '$prefix${item.lexeme}.');
+          _parseInterfaceBlock(
+            functions,
+            records,
+            prefix: '$prefix${item.lexeme}.',
+          );
           continue;
         }
         continue;
       }
       if (_checkSymbol('{')) {
         _advance();
-        _parseInterfaceBlock(functions, prefix: prefix);
+        _parseInterfaceBlock(functions, records, prefix: prefix);
         continue;
       }
       _advance();
     }
     _expectSymbol('}');
+  }
+
+  WASIComponentWitRecord _parseRecord() {
+    final name = _expectWord('record name');
+    _expectSymbol('{');
+    final fields = <WASIComponentWitRecordField>[];
+    while (!_checkSymbol('}') && !_checkKind(_WitTokenKind.eof)) {
+      if (_checkSymbol('@')) {
+        _skipAnnotation();
+        continue;
+      }
+      final field = _expectWord('record field name');
+      _expectSymbol(':');
+      final type = _parseInterfaceItemSignature(field.span);
+      if (type.isEmpty) {
+        _fail(field.span, "record field '${field.lexeme}' has empty type");
+      }
+      fields.add(
+        WASIComponentWitRecordField(
+          name: field.lexeme,
+          type: type,
+          span: field.span,
+        ),
+      );
+    }
+    _expectSymbol('}');
+    return WASIComponentWitRecord(
+      name: name.lexeme,
+      fields: fields,
+      span: name.span,
+    );
+  }
+
+  WASIComponentWitRecord? _recordNamed(
+    List<WASIComponentWitRecord> records,
+    String name,
+  ) {
+    for (final record in records) {
+      if (record.name == name) {
+        return record;
+      }
+    }
+    return null;
   }
 
   WASIComponentWitWorld _parseWorld() {

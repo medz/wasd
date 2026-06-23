@@ -41,7 +41,7 @@ List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
           interfaceName: interface.name,
           function: function,
           direction: item.direction,
-          signature: _parseWitAdapterSignature(function),
+          signature: _parseWitAdapterSignature(function, interface),
         ),
       );
     }
@@ -150,9 +150,11 @@ final class WASIComponentWitAdapterValueType {
     this.primitive,
     this.element,
     List<WASIComponentWitAdapterValueType> elements = const [],
+    List<WASIComponentWitAdapterRecordField> fields = const [],
     this.ok,
     this.error,
-  }) : elements = List<WASIComponentWitAdapterValueType>.unmodifiable(elements);
+  }) : elements = List<WASIComponentWitAdapterValueType>.unmodifiable(elements),
+       fields = List<WASIComponentWitAdapterRecordField>.unmodifiable(fields);
 
   /// Creates a primitive WIT adapter value type.
   WASIComponentWitAdapterValueType.primitive({
@@ -194,6 +196,16 @@ final class WASIComponentWitAdapterValueType {
          elements: elements,
        );
 
+  /// Creates a named WIT `record` adapter value type.
+  WASIComponentWitAdapterValueType.record({
+    required String text,
+    required List<WASIComponentWitAdapterRecordField> fields,
+  }) : this._(
+         kind: WASIComponentWitAdapterValueKind.record,
+         text: text,
+         fields: fields,
+       );
+
   /// Creates a `result<T, E>` WIT adapter value type.
   WASIComponentWitAdapterValueType.result({
     required String text,
@@ -221,11 +233,29 @@ final class WASIComponentWitAdapterValueType {
   /// Tuple element types.
   final List<WASIComponentWitAdapterValueType> elements;
 
+  /// Record field types.
+  final List<WASIComponentWitAdapterRecordField> fields;
+
   /// Result success payload type.
   final WASIComponentWitAdapterValueType? ok;
 
   /// Result error payload type.
   final WASIComponentWitAdapterValueType? error;
+}
+
+/// WIT adapter record field type.
+final class WASIComponentWitAdapterRecordField {
+  /// Creates a WIT adapter record field type.
+  const WASIComponentWitAdapterRecordField({
+    required this.name,
+    required this.type,
+  });
+
+  /// WIT record field name.
+  final String name;
+
+  /// WIT record field value type.
+  final WASIComponentWitAdapterValueType type;
 }
 
 /// WIT adapter value category.
@@ -241,6 +271,9 @@ enum WASIComponentWitAdapterValueKind {
 
   /// `tuple<T...>`.
   tuple,
+
+  /// Named WIT `record`.
+  record,
 
   /// `result`, `result<T>`, or `result<T, E>`.
   result,
@@ -428,6 +461,7 @@ final class WASIComponentWitAdapterOperation {
 
 WASIComponentWitAdapterSignature _parseWitAdapterSignature(
   WASIComponentWitFunction function,
+  WASIComponentWitInterface interface,
 ) {
   final signature = function.signature;
   final isAsync = signature.startsWith('asyncfunc');
@@ -466,6 +500,7 @@ WASIComponentWitAdapterSignature _parseWitAdapterSignature(
     final parsedResult = _parseWitAdapterValueType(
       suffix.substring(2),
       'result',
+      interface,
     );
     if (parsedResult.error != null) {
       return _unsupportedWitAdapterSignature(
@@ -494,7 +529,11 @@ WASIComponentWitAdapterSignature _parseWitAdapterSignature(
           reason: 'empty WIT function parameter label',
         );
       }
-      final parsedType = _parseWitAdapterValueType(typeText, 'parameter');
+      final parsedType = _parseWitAdapterValueType(
+        typeText,
+        'parameter',
+        interface,
+      );
       if (parsedType.error != null) {
         return _unsupportedWitAdapterSignature(
           isAsync: isAsync,
@@ -528,7 +567,12 @@ WASIComponentWitAdapterSignature _unsupportedWitAdapterSignature({
 }
 
 ({WASIComponentWitAdapterValueType? type, String? error})
-_parseWitAdapterValueType(String text, String context) {
+_parseWitAdapterValueType(
+  String text,
+  String context,
+  WASIComponentWitInterface interface, [
+  Set<String>? visitingRecords,
+]) {
   final primitive = _witPrimitiveValueType(text);
   if (primitive != null) {
     return (
@@ -547,6 +591,8 @@ _parseWitAdapterValueType(String text, String context) {
     final element = _parseWitAdapterValueType(
       optionArgs.single,
       '$context option payload',
+      interface,
+      visitingRecords,
     );
     if (element.error != null) {
       return (type: null, error: element.error);
@@ -567,6 +613,8 @@ _parseWitAdapterValueType(String text, String context) {
     final element = _parseWitAdapterValueType(
       listArgs.single,
       '$context list element',
+      interface,
+      visitingRecords,
     );
     if (element.error != null) {
       return (type: null, error: element.error);
@@ -589,6 +637,8 @@ _parseWitAdapterValueType(String text, String context) {
       final element = _parseWitAdapterValueType(
         tupleArgs[i],
         '$context tuple element[$i]',
+        interface,
+        visitingRecords,
       );
       if (element.error != null) {
         return (type: null, error: element.error);
@@ -621,6 +671,8 @@ _parseWitAdapterValueType(String text, String context) {
     final ok = _parseOptionalWitAdapterValueType(
       resultArgs[0],
       '$context result ok payload',
+      interface,
+      visitingRecords,
     );
     if (ok.error != null) {
       return (type: null, error: ok.error);
@@ -630,6 +682,8 @@ _parseWitAdapterValueType(String text, String context) {
         : _parseOptionalWitAdapterValueType(
             resultArgs[1],
             '$context result error payload',
+            interface,
+            visitingRecords,
           );
     if (error.error != null) {
       return (type: null, error: error.error);
@@ -643,15 +697,54 @@ _parseWitAdapterValueType(String text, String context) {
       error: null,
     );
   }
+  final record = interface.recordNamed(text);
+  if (record != null) {
+    final visiting = visitingRecords ?? <String>{};
+    if (!visiting.add(record.name)) {
+      return (
+        type: null,
+        error: 'unsupported recursive WIT adapter $context type $text',
+      );
+    }
+    final fields = <WASIComponentWitAdapterRecordField>[];
+    for (final field in record.fields) {
+      final parsedField = _parseWitAdapterValueType(
+        field.type,
+        '$context record ${record.name}.${field.name}',
+        interface,
+        visiting,
+      );
+      if (parsedField.error != null) {
+        visiting.remove(record.name);
+        return (type: null, error: parsedField.error);
+      }
+      fields.add(
+        WASIComponentWitAdapterRecordField(
+          name: field.name,
+          type: parsedField.type!,
+        ),
+      );
+    }
+    visiting.remove(record.name);
+    return (
+      type: WASIComponentWitAdapterValueType.record(text: text, fields: fields),
+      error: null,
+    );
+  }
   return (type: null, error: 'unsupported WIT adapter $context type $text');
 }
 
 ({WASIComponentWitAdapterValueType? type, String? error})
-_parseOptionalWitAdapterValueType(String text, String context) {
+_parseOptionalWitAdapterValueType(
+  String text,
+  String context,
+  WASIComponentWitInterface interface, [
+  Set<String>? visitingRecords,
+]) {
   if (text == '_' || text.isEmpty) {
     return (type: null, error: null);
   }
-  return _parseWitAdapterValueType(text, context);
+  return _parseWitAdapterValueType(text, context, interface, visitingRecords);
 }
 
 List<String>? _genericArgs(String name, String text) {
@@ -801,6 +894,8 @@ Object? _validateWitAdapterValue(
       return _validateWitAdapterListValue(type, value, path);
     case WASIComponentWitAdapterValueKind.tuple:
       return _validateWitAdapterTupleValue(type, value, path);
+    case WASIComponentWitAdapterValueKind.record:
+      return _validateWitAdapterRecordValue(type, value, path);
     case WASIComponentWitAdapterValueKind.result:
       return _validateWitAdapterResultValue(type, value, path);
   }
@@ -978,6 +1073,29 @@ Object? _validateWitAdapterTupleValue(
   }
   for (var i = 0; i < elements.length; i++) {
     _validateWitAdapterValue(elements[i], value.items[i], '$path.$i');
+  }
+  return value;
+}
+
+Object? _validateWitAdapterRecordValue(
+  WASIComponentWitAdapterValueType type,
+  Object? value,
+  String path,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != WasmComponentValueDataKind.record) {
+    throw StateError('WIT adapter value $path does not match ${type.text}.');
+  }
+  final fields = type.fields;
+  if (value.items.length != fields.length) {
+    throw StateError(
+      'WIT adapter value $path expected ${fields.length} record fields, '
+      'got ${value.items.length}.',
+    );
+  }
+  for (var i = 0; i < fields.length; i++) {
+    final field = fields[i];
+    _validateWitAdapterValue(field.type, value.items[i], '$path.${field.name}');
   }
   return value;
 }

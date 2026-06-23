@@ -510,6 +510,83 @@ world command {
       },
     );
 
+    test('Preview2 and Preview3 wrappers execute named WIT record values', () {
+      const source = '''
+package acme:env@0.2.0;
+
+interface environment {
+  record entry {
+    name: string,
+    value: string,
+  }
+
+  get: func(prefix: string) -> list<entry>;
+}
+
+world command {
+  import environment;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2Plan = WASIPreview2ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'command',
+      );
+      final preview3Plan = WASIPreview3ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'command',
+      );
+      final prefixes = <String>[];
+
+      expect(preview2Plan.canBindAdapters, isTrue);
+      expect(preview3Plan.canBindAdapters, isTrue);
+
+      final program = preview2Plan.bindAdapters(
+        imports: {
+          'environment.get': (args) {
+            prefixes.add(args.single as String);
+            return _envEntryListValue([('PATH', '/bin'), ('SHELL', '/bin/sh')]);
+          },
+        },
+      );
+      final preview3Program = preview3Plan.bindAdapters(
+        imports: {
+          'environment.get': (_) => _envEntryListValue([('HOME', '/tmp')]),
+        },
+      );
+
+      final rows =
+          program.invokeImport('environment.get', ['env'])
+              as WasmComponentValueData;
+      final preview3Rows =
+          preview3Program.invokeImport('environment.get', ['ignored'])
+              as WasmComponentValueData;
+
+      expect(rows.kind, WasmComponentValueDataKind.list);
+      expect(rows.items.map((item) => item.kind), [
+        WasmComponentValueDataKind.record,
+        WasmComponentValueDataKind.record,
+      ]);
+      expect(rows.items[0].items.map((item) => item.string), ['PATH', '/bin']);
+      expect(rows.items[1].items.map((item) => item.string), [
+        'SHELL',
+        '/bin/sh',
+      ]);
+      expect(preview3Rows.items.single.items.map((item) => item.string), [
+        'HOME',
+        '/tmp',
+      ]);
+      expect(prefixes, ['env']);
+
+      final badResultProgram = preview2Plan.bindAdapters(
+        imports: {'environment.get': (_) => _badEnvEntryListValue()},
+      );
+      expect(
+        () => badResultProgram.invokeImport('environment.get', ['env']),
+        throwsStateError,
+      );
+    });
+
     test(
       'Preview2 wrapper rejects owned-resource async values at version gate',
       () {
@@ -1446,6 +1523,53 @@ WasmComponentValueData _badStringTupleListValue() {
             kind: WasmComponentValueDataKind.integer,
             rawBytes: Uint8List(0),
             integer: 1,
+          ),
+        ],
+      ),
+    ],
+  );
+}
+
+WasmComponentValueData _envEntryListValue(List<(String, String)> rows) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.list,
+    rawBytes: Uint8List(0),
+    items: [for (final row in rows) _envEntryValue(row.$1, row.$2)],
+  );
+}
+
+WasmComponentValueData _envEntryValue(String name, String value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.record,
+    rawBytes: Uint8List(0),
+    items: [
+      WasmComponentValueData(
+        kind: WasmComponentValueDataKind.string,
+        rawBytes: Uint8List(0),
+        string: name,
+      ),
+      WasmComponentValueData(
+        kind: WasmComponentValueDataKind.string,
+        rawBytes: Uint8List(0),
+        string: value,
+      ),
+    ],
+  );
+}
+
+WasmComponentValueData _badEnvEntryListValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.list,
+    rawBytes: Uint8List(0),
+    items: [
+      WasmComponentValueData(
+        kind: WasmComponentValueDataKind.record,
+        rawBytes: Uint8List(0),
+        items: [
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.string,
+            rawBytes: Uint8List(0),
+            string: 'PATH',
           ),
         ],
       ),
