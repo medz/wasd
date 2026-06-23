@@ -244,6 +244,33 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-OFFICIAL-TESTSUITE-ADAPTER` - wasd can be invoked by the official
+  `wasi-testsuite` runner for Preview1 command modules.
+  - Scope: external conformance execution entrypoint for `wasm32-wasip1`
+    `wasi:cli/command` tests, not a new public support claim.
+  - Edit targets: `tool/wasi_testsuite_preview1_runner.dart`,
+    `tool/wasi_testsuite_wasd_adapter.py`, `test/wasi_testsuite_runner_test.dart`,
+    `test/support/wasm_fixtures.dart`, and this roadmap.
+  - Red test:
+    before this row, the repository had no `wasi-testsuite` runtime adapter and
+    no subprocess runner that accepted testsuite-style `--env`, `--dir
+    HOST::GUEST`, module path, and argv inputs for wasd.
+  - Implementation gate:
+    `dart test test/wasi_testsuite_runner_test.dart --reporter=compact`;
+    `dart run tool/wasi_testsuite_preview1_runner.dart --version`;
+    `python3 -m py_compile tool/wasi_testsuite_wasd_adapter.py`.
+  - Performance gate: N/A; this adds a conformance subprocess entrypoint and
+    host-root snapshot setup, not a runtime hot path.
+  - Done when: the adapter reports only the actually supported
+    `wasm32-wasip1` / `wasi:cli/command` target, computes argv for the Dart
+    runner, the runner executes a real WASI command module that opens and reads
+    a snapshotted preopen file through `path_open`/`fd_read`, and returns its
+    `proc_exit` code.
+  - Evidence update: this checked row plus the detailed backlog row,
+    verification matrix, and current baseline.
+  - Claim impact: creates an official Preview1 conformance gate for
+    `SUPPORT-P1`; it does not complete `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`, and the adapter intentionally does not claim Preview3.
 - [x] `CM-INSTANTIATION-IMPORT-MATCHING` - Component instantiation arguments
   are matched against known local child component imports before runtime
   planning.
@@ -1580,12 +1607,16 @@ unchecked.
     Preview1 support remains incomplete.
   - Required rows: every Preview1 descriptor, filesystem, stdio, clock, random,
     poll, and socket row checked, including `P1-PATH-OPEN-OFLAGS`,
-    `P1-SOCKET-CONFORMANCE` child rows, and future conformance-suite rows for
-    gaps not yet represented by a narrower ID.
+    `P1-SOCKET-CONFORMANCE` child rows, `P1-OFFICIAL-TESTSUITE-ADAPTER`, and
+    future official testsuite gap rows not yet represented by a narrower ID.
   - Implementation gate:
     `dart test test/wasi_test.dart`;
     `dart test -p chrome test/wasi_test.dart`;
-    `dart test -p node test/wasi_test.dart`.
+    `dart test -p node test/wasi_test.dart`;
+    `python3 -m py_compile tool/wasi_testsuite_wasd_adapter.py`;
+    after cloning `WebAssembly/wasi-testsuite` `prod/testsuite-base`,
+    run its `./run-tests --runtime-adapter <wasd>/tool/wasi_testsuite_wasd_adapter.py`
+    and record pass/fail deltas as executable rows.
   - Performance gate:
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
   - Done when: native, browser, and Node-relevant Preview1 gates pass with
@@ -1717,6 +1748,7 @@ copying their internals directly.
 | [x] | Preview1 native/browser connected stream accept capability | `lib/src/wasi/preview1/socket.dart`, `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/common/socket_syscalls.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "connected stream sockets can opt out of accept capability"`; `dart test -p chrome test/wasi_test.dart --name "connected stream sockets can opt out of accept capability|accepted sockets do not inherit listener accept rights by default|sock_accept returns queued preview1 stream sockets with inherited rights|default socket rights expose socket-specific operations only|socket descriptor flags reject file-only flags|datagram sockets do not expose accept rights"`; `dart test test/wasi_test.dart`; `dart test --reporter=compact --concurrency=1`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; `dart analyze` | `WASIPreview1Socket(canAccept: false)` now models connected stream endpoints without `SOCK_ACCEPT`, preserves accept output state on rejected `sock_accept`, and is covered by `socket_connected_rights`; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser stream socket send iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs"`; `dart test -p chrome test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs"`; `dart test test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs|virtual socket send handlers stop after partial writes|virtual socket host send handlers reject invalid write counts|sock_recv|sock_send"`; `dart test -p chrome test/wasi_test.dart --name "virtual socket stream send snapshots overlapping iovs|virtual socket send handlers stop after partial writes|virtual socket host send handlers reject invalid write counts|sock_recv|sock_send"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream `sock_send` now snapshots overlapping iovec tables before host callbacks can mutate guest memory; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser socket recv iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv snapshots iovs before writing receive buffers"`; `dart test test/wasi_test.dart --name "sock_recv"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream and datagram `sock_recv` now snapshot overlapping iovec tables before receive-buffer writes; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
+| [x] | Official WASI testsuite adapter for Preview1 command modules | `tool/wasi_testsuite_preview1_runner.dart`, `tool/wasi_testsuite_wasd_adapter.py`, `test/wasi_testsuite_runner_test.dart`, `test/support/wasm_fixtures.dart` | `dart test test/wasi_testsuite_runner_test.dart --reporter=compact`; `dart run tool/wasi_testsuite_preview1_runner.dart --version`; `python3 -m py_compile tool/wasi_testsuite_wasd_adapter.py` | wasd can now be invoked by the official `wasi-testsuite` runner for `wasm32-wasip1` `wasi:cli/command` tests, with `--dir HOST::GUEST` roots snapshotted into the virtual VFS and observed by a real `path_open`/`fd_read` command module; full Preview1 still requires running the external suite and turning failures into checked implementation rows. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Component instantiation import matching for known local child components | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments" --reporter=compact`; `dart test test/component_test.dart --reporter=compact`; `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart --reporter=compact`; `dart run tool/component_benchmark.dart --json`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | Known local child component instantiation now rejects unknown argument names, missing required imports, and wrong argument sorts before adapter binding; imported/aliased component targets, cross-component type equivalence, generated worlds, and official suite coverage remain open. |
 | [x] | Component task-return borrow validation | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "reports task.return result types containing borrow|reports missing canonical option requirements|reports invalid canonical result value type indexes" --reporter=compact`; `dart run tool/component_benchmark.dart --json` | Borrowed canonical `task.return` results are now rejected during validation; broader borrow, stream, future, nested-shape, generated-world, and component-suite coverage remains. |
@@ -1811,6 +1843,16 @@ This is the implementation state as of 2026-06-23 on `main`.
   copying it a second time, while caller-owned `writeMessage` lists still keep
   defensive copy semantics. The owned-buffer hook is hidden from the public
   `package:wasd/wasi.dart` export so the user-facing socket API stays small.
+- The repository now includes `tool/wasi_testsuite_wasd_adapter.py` and
+  `tool/wasi_testsuite_preview1_runner.dart`, allowing the upstream
+  `WebAssembly/wasi-testsuite` runner to invoke wasd for `wasm32-wasip1`
+  `wasi:cli/command` modules. The runner maps testsuite env/argv inputs into
+  `WASI`, snapshots `--dir HOST::GUEST` host roots into the in-memory Preview1
+  VFS, and returns the module's `proc_exit` code. Its regression fixture opens
+  and reads a snapshotted file through `path_open`/`fd_read`, so this is a real
+  command-module entry point rather than an empty adapter shell. This is still a
+  conformance entry point only; full Preview1 support requires running the
+  external suite and converting failures into checked implementation rows.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/` now provides an internal typed resource table plus
@@ -2691,6 +2733,41 @@ performance visible while the support surface expands.
     this row with the exact commands run.
   - Claim impact: contributes to `SUPPORT-P1`; does not complete it until the
     Preview1 socket and runtime gates are all checked.
+- [x] `P1-OFFICIAL-TESTSUITE-ADAPTER` - Add a wasd runtime adapter for the
+  official WASI testsuite Preview1 command runner.
+  - Scope: subprocess conformance entrypoint for `wasm32-wasip1`
+    `wasi:cli/command` modules using wasd's native Preview1 host.
+  - Edit targets: `tool/wasi_testsuite_preview1_runner.dart`,
+    `tool/wasi_testsuite_wasd_adapter.py`,
+    `test/wasi_testsuite_runner_test.dart`, `test/support/wasm_fixtures.dart`,
+    and this roadmap.
+  - Red test: before this row there was no testsuite-compatible adapter or
+    runner that accepted testsuite `args/env/root` inputs and invoked
+    `WASI.start` on a command module.
+  - Implementation gate:
+    `dart test test/wasi_testsuite_runner_test.dart --reporter=compact`;
+    `dart run tool/wasi_testsuite_preview1_runner.dart --version`;
+    `python3 -m py_compile tool/wasi_testsuite_wasd_adapter.py`;
+    manual smoke
+    `dart run tool/wasi_testsuite_preview1_runner.dart /tmp/wasd-wasi-exit7.wasm`
+    returned process exit code `7` for a generated `_start -> proc_exit(7)`
+    module; the checked regression now uses a command module that reads
+    `/input.txt` through `path_open`/`fd_read` and exits `0` only after seeing
+    the expected bytes.
+  - Performance gate: N/A; this is a conformance harness entrypoint. The
+    runner snapshots `--dir HOST::GUEST` files once per subprocess before
+    instantiation and does not alter VFS syscall hot paths.
+  - Done when: the Python adapter exposes `get_name`, `get_version`,
+    `get_wasi_versions`, `get_wasi_worlds`, and `compute_argv`; it declares only
+    `wasm32-wasip1` and `wasi:cli/command`; the Dart runner executes a real
+    WASI command module with env, argv, and preopened virtual files; and the
+    repository has a regression test for the runner subprocess.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry, `SUPPORT-P1`, verification matrix, and current
+    baseline.
+  - Claim impact: creates the official Preview1 testsuite gate needed to expose
+    real conformance failures; does not complete `P1-SOCKET-CONFORMANCE`,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `P1-SOCKET-CONNECTED-ACCEPT-CAPABILITY` - Connected stream sockets do not
   expose listener accept capability.
   - Scope: native/browser shared Preview1 `WASIPreview1Socket` host API,
