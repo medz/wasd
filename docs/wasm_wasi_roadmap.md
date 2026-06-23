@@ -267,7 +267,9 @@ too broad to verify in one commit.
     declarations referenced by synchronous adapter signatures;
     `WIT-WORLD-VARIANT-ENUM-FLAGS-ADAPTER-BINDING` covers local WIT
     `variant`, `enum`, and `flags` declarations referenced by synchronous
-    adapter signatures.
+    adapter signatures; `WIT-WORLD-RESOURCE-ADAPTER-BINDING` covers local WIT
+    `resource` declarations referenced by owned and borrowed synchronous
+    adapter handle signatures.
   - Done when: imported/generated worlds bind through Preview2/Preview3 adapters
     and failures name the interface/world boundary.
   - Evidence update: record WIT files, versioned adapter tests, and command
@@ -276,6 +278,47 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `WIT-WORLD-RESOURCE-ADAPTER-BINDING` - Execute local WIT resource handles
+  through versioned adapter callbacks.
+  - Scope: local WIT interfaces imported by a selected world, limited to
+    synchronous signatures that reference `resource` declarations in the same
+    interface as owned handles spelled by the resource name or borrowed
+    `borrow<T>` handles represented by canonical `u32`
+    handles.
+  - Edit targets: `lib/src/wasi/component/wit_document.dart`,
+    `lib/src/wasi/component/wit_adapter.dart`,
+    `test/wasi_component_wit_test.dart`,
+    `test/wasi_component_versioned_host_test.dart`,
+    `tool/wasi_resource_table_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_component_wit_test.dart --name "resource type" --reporter=expanded`
+    failed before the fix because parsed interfaces exposed no resource
+    declarations;
+    `dart test test/wasi_component_versioned_host_test.dart --name "resource handles" --reporter=expanded`
+    failed before the fix because WIT signatures containing `descriptor` and
+    `borrow<descriptor>` were unsupported and `canBindAdapters` stayed false.
+  - Implementation gate:
+    `dart test test/wasi_component_wit_test.dart --name "resource type" --reporter=expanded`;
+    `dart test test/wasi_component_versioned_host_test.dart --name "resource handles" --reporter=expanded`;
+    `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_wit_test.dart --reporter=compact`.
+  - Performance gate:
+    `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`
+    reported `component_wit_resource_adapter_program_invoke.operations=6000`
+    and
+    `component_wit_resource_adapter_program_invoke.per_operation_us=0.23233333333333334`.
+  - Done when: parsed local WIT `resource` declarations are retained on their
+    interface, same-interface resource names resolve during adapter signature
+    parsing, owned and borrowed resource handle values execute through
+    Preview2 and Preview3 world adapter plans, invalid handle values fail
+    before callbacks run, callback results are validated before returning, and
+    resource lifetime/drop semantics remain owned by the component resource
+    host instead of being faked by WIT adapter glue.
+  - Evidence update: this checked row plus `WIT-INGESTION`, the verification
+    matrix, detailed backlog, and resource benchmark metric.
+  - Claim impact: advances `WIT-INGESTION` and concrete `SUPPORT-P2`/`SUPPORT-P3`
+    adapter evidence; does not complete generated multi-package binding,
+    cross-interface named type resolution, resource lifetime/drop integration,
+    async WIT adapters, `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `WIT-WORLD-VARIANT-ENUM-FLAGS-ADAPTER-BINDING` - Execute local WIT
   variant, enum, and flags values through versioned adapter callbacks.
   - Scope: local WIT interfaces imported by a selected world, limited to
@@ -315,7 +358,7 @@ too broad to verify in one commit.
     matrix, detailed backlog, and resource benchmark metric.
   - Claim impact: advances `WIT-INGESTION` and concrete `SUPPORT-P2`/`SUPPORT-P3`
     adapter evidence; does not complete generated multi-package binding,
-    cross-interface named type resolution, resource WIT adapter execution,
+    cross-interface named type resolution, resource lifetime/drop integration,
     async WIT adapters, `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `WIT-WORLD-RECORD-ADAPTER-BINDING` - Execute local named WIT record values
   through versioned adapter callbacks.
@@ -354,7 +397,7 @@ too broad to verify in one commit.
     matrix, detailed backlog, and resource benchmark metric.
   - Claim impact: advances `WIT-INGESTION` and concrete `SUPPORT-P2`/`SUPPORT-P3`
     adapter evidence; does not complete generated multi-package binding,
-    cross-interface named type resolution, resource WIT adapter execution,
+    cross-interface named type resolution, resource lifetime/drop integration,
     async WIT adapters, `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `WIT-WORLD-LIST-TUPLE-ADAPTER-BINDING` - Execute synchronous WIT
   list/tuple values through versioned adapter callbacks.
@@ -386,7 +429,7 @@ too broad to verify in one commit.
     matrix, detailed backlog, and resource benchmark metric.
   - Claim impact: advances `WIT-INGESTION` and concrete `SUPPORT-P2`/`SUPPORT-P3`
     adapter evidence; does not complete generated multi-package binding,
-    cross-interface named type resolution, resource WIT adapter execution,
+    cross-interface named type resolution, resource lifetime/drop integration,
     async WIT adapters, `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `WIT-WORLD-COMPOSITE-ADAPTER-BINDING` - Execute synchronous composite WIT
   values through versioned adapter callbacks.
@@ -2271,7 +2314,8 @@ unchecked.
 - [ ] `SUPPORT-P2` - Full WASI 0.2 / Preview2 support.
   - Current: the public factory rejects Preview2; internal versioned component
     gates and local synchronous primitive plus `option`/`result` and
-    `list`/`tuple` WIT world adapters exist.
+    `list`/`tuple`, named record, variant/enum/flags, and resource-handle WIT
+    world adapters exist.
   - Required rows: `P2-P3-ADAPTERS`, `WIT-INGESTION`, `CM-VALUE-VALIDATION`,
     resource lifetime rows, and adapter-specific Preview2 interface rows.
   - Implementation gate:
@@ -2293,8 +2337,9 @@ unchecked.
   - Current: the public factory rejects Preview3; internal P3 resources, async
     primitives, waitables, tasks, context, thread identity, and copy paths are
     partially executable, and local synchronous primitive plus
-    `option`/`result` and `list`/`tuple` WIT world adapters now execute through
-    the Preview3 versioned host.
+    `option`/`result`, `list`/`tuple`, named record, variant/enum/flags, and
+    resource-handle WIT world adapters now execute through the Preview3
+    versioned host.
   - Required rows: `P3-VERSIONED-RUN`, `P3-RESOURCE-LIFETIME`,
     `P3-STREAM-FUTURE-SHAPES`, `P3-ASYNC-COPY-GAPS`,
     `P3-TASK-CONTEXT-THREAD`, `PUBLIC-API-DOCS`, `VERSION-GATES`,
@@ -2424,10 +2469,11 @@ copying their internals directly.
 | [x] | WIT package/interface/world boundary parser | `lib/src/wasi/component/wit_document.dart`, `test/wasi_component_wit_test.dart` | `dart test test/wasi_component_wit_test.dart`; `dart analyze` | Parser evidence alone does not unlock P2/P3 support; it only feeds adapter binding. |
 | [x] | P2/P3 WIT world version-profile ingestion | `lib/src/wasi/component/wit_document.dart`, `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/preview2/component_host.dart`, `lib/src/wasi/preview3/component_host.dart`, `test/wasi_component_wit_test.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_wit_test.dart test/wasi_component_versioned_host_test.dart --name "parses annotated|ingest WIT worlds" --reporter=expanded`; `dart test test/wasi_component_wit_test.dart test/wasi_component_versioned_host_test.dart test/wasi_component_host_test.dart --reporter=compact`; `dart run tool/component_benchmark.dart --json > .dart_tool/component_benchmark_after_wit_ingestion.json` | Annotated Preview3 WIT function/import/include boundaries, including nested resource methods, now feed a fixed P2/P3 version-profile preflight: Preview2 rejects P3 async functions, streams, futures, and `@0.3.0` includes, while Preview3 accepts the same world for adapter binding preflight. Generated multi-package world binding and executable interface adapters remain open. Component benchmark stayed at `57.325us/iter` decode and `112.59us/iter` validate. |
 | [x] | P2/P3 primitive WIT world adapter binding | `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/component/wit_adapter.dart`, `test/wasi_component_versioned_host_test.dart`, `tool/wasi_resource_table_benchmark.dart` | `dart test test/wasi_component_versioned_host_test.dart --name "WIT world adapters" --reporter=expanded`; `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_wit_test.dart --reporter=compact`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Local synchronous primitive WIT import/export functions now expand once during planning and execute through Preview2/Preview3 adapter callbacks with primitive value validation. Generated multi-package worlds, complex Canonical ABI shapes, and async WIT adapters remain open. |
-| [x] | P2/P3 composite WIT world adapter binding | `lib/src/wasi/component/wit_adapter.dart`, `test/wasi_component_versioned_host_test.dart`, `tool/wasi_resource_table_benchmark.dart` | `dart test test/wasi_component_versioned_host_test.dart --name "composite WIT values" --reporter=expanded`; `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_wit_test.dart --reporter=compact`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Local synchronous `option<T>` and `result<T, E>` WIT values now bind through Preview2/Preview3 adapter callbacks over existing `WasmComponentValueData` trees with selector and payload-kind validation before callbacks run. Generated multi-package worlds, cross-interface named types, resources, and async WIT adapters remain open. |
-| [x] | P2/P3 list/tuple WIT world adapter binding | `lib/src/wasi/component/wit_adapter.dart`, `test/wasi_component_versioned_host_test.dart`, `tool/wasi_resource_table_benchmark.dart` | `dart test test/wasi_component_versioned_host_test.dart --name "list and tuple WIT values" --reporter=expanded`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Local synchronous `list<T>` and `tuple<T...>` WIT values now bind through Preview2/Preview3 adapter callbacks over existing `WasmComponentValueData` trees with recursive element/field validation and tuple arity checks. Generated multi-package worlds, cross-interface named types, resources, and async WIT adapters remain open. |
-| [x] | P2/P3 named record WIT world adapter binding | `lib/src/wasi/component/wit_document.dart`, `lib/src/wasi/component/wit_adapter.dart`, `test/wasi_component_wit_test.dart`, `test/wasi_component_versioned_host_test.dart`, `tool/wasi_resource_table_benchmark.dart` | `dart test test/wasi_component_wit_test.dart --name "local record" --reporter=expanded`; `dart test test/wasi_component_versioned_host_test.dart --name "named WIT record" --reporter=expanded`; `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_wit_test.dart --reporter=compact`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Local same-interface WIT `record` declarations now parse and resolve by name in synchronous Preview2/Preview3 adapter signatures, with recursive field validation over supported payload types and record arity checks. Generated multi-package worlds, cross-interface type resolution, resources, and async WIT adapters remain open. |
-| [x] | P2/P3 variant/enum/flags WIT world adapter binding | `lib/src/wasi/component/wit_document.dart`, `lib/src/wasi/component/wit_adapter.dart`, `test/wasi_component_wit_test.dart`, `test/wasi_component_versioned_host_test.dart`, `tool/wasi_resource_table_benchmark.dart` | `dart test test/wasi_component_wit_test.dart --name "variant enum and flags" --reporter=expanded`; `dart test test/wasi_component_versioned_host_test.dart --name "variants enums and flags" --reporter=expanded`; `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_wit_test.dart --reporter=compact`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Local same-interface WIT `variant`, `enum`, and `flags` declarations now parse and resolve by name in synchronous Preview2/Preview3 adapter signatures, with flag-label validation, enum case validation, variant selector consistency, and variant payload validation. Generated multi-package worlds, cross-interface type resolution, resources, and async WIT adapters remain open. |
+| [x] | P2/P3 composite WIT world adapter binding | `lib/src/wasi/component/wit_adapter.dart`, `test/wasi_component_versioned_host_test.dart`, `tool/wasi_resource_table_benchmark.dart` | `dart test test/wasi_component_versioned_host_test.dart --name "composite WIT values" --reporter=expanded`; `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_wit_test.dart --reporter=compact`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Local synchronous `option<T>` and `result<T, E>` WIT values now bind through Preview2/Preview3 adapter callbacks over existing `WasmComponentValueData` trees with selector and payload-kind validation before callbacks run. Generated multi-package worlds, cross-interface named types, resource lifetime/drop integration, and async WIT adapters remain open. |
+| [x] | P2/P3 list/tuple WIT world adapter binding | `lib/src/wasi/component/wit_adapter.dart`, `test/wasi_component_versioned_host_test.dart`, `tool/wasi_resource_table_benchmark.dart` | `dart test test/wasi_component_versioned_host_test.dart --name "list and tuple WIT values" --reporter=expanded`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Local synchronous `list<T>` and `tuple<T...>` WIT values now bind through Preview2/Preview3 adapter callbacks over existing `WasmComponentValueData` trees with recursive element/field validation and tuple arity checks. Generated multi-package worlds, cross-interface named types, resource lifetime/drop integration, and async WIT adapters remain open. |
+| [x] | P2/P3 named record WIT world adapter binding | `lib/src/wasi/component/wit_document.dart`, `lib/src/wasi/component/wit_adapter.dart`, `test/wasi_component_wit_test.dart`, `test/wasi_component_versioned_host_test.dart`, `tool/wasi_resource_table_benchmark.dart` | `dart test test/wasi_component_wit_test.dart --name "local record" --reporter=expanded`; `dart test test/wasi_component_versioned_host_test.dart --name "named WIT record" --reporter=expanded`; `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_wit_test.dart --reporter=compact`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Local same-interface WIT `record` declarations now parse and resolve by name in synchronous Preview2/Preview3 adapter signatures, with recursive field validation over supported payload types and record arity checks. Generated multi-package worlds, cross-interface type resolution, resource lifetime/drop integration, and async WIT adapters remain open. |
+| [x] | P2/P3 variant/enum/flags WIT world adapter binding | `lib/src/wasi/component/wit_document.dart`, `lib/src/wasi/component/wit_adapter.dart`, `test/wasi_component_wit_test.dart`, `test/wasi_component_versioned_host_test.dart`, `tool/wasi_resource_table_benchmark.dart` | `dart test test/wasi_component_wit_test.dart --name "variant enum and flags" --reporter=expanded`; `dart test test/wasi_component_versioned_host_test.dart --name "variants enums and flags" --reporter=expanded`; `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_wit_test.dart --reporter=compact`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Local same-interface WIT `variant`, `enum`, and `flags` declarations now parse and resolve by name in synchronous Preview2/Preview3 adapter signatures, with flag-label validation, enum case validation, variant selector consistency, and variant payload validation. Generated multi-package worlds, cross-interface type resolution, resource lifetime/drop integration, and async WIT adapters remain open. |
+| [x] | P2/P3 resource WIT world adapter binding | `lib/src/wasi/component/wit_document.dart`, `lib/src/wasi/component/wit_adapter.dart`, `test/wasi_component_wit_test.dart`, `test/wasi_component_versioned_host_test.dart`, `tool/wasi_resource_table_benchmark.dart` | `dart test test/wasi_component_wit_test.dart --name "resource type" --reporter=expanded`; `dart test test/wasi_component_versioned_host_test.dart --name "resource handles" --reporter=expanded`; `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_wit_test.dart --reporter=compact`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Local same-interface WIT `resource` declarations now parse and resolve by name in synchronous Preview2/Preview3 adapter signatures, with owned and borrowed resource handles represented and validated as canonical `u32` values. Generated multi-package worlds, cross-interface type resolution, resource lifetime/drop integration, and async WIT adapters remain open. |
 | [ ] | P2/P3 generated multi-package/async world adapter binding | Bind imported/generated WIT worlds through executable Preview2/Preview3 adapters, including complex value shapes and Preview3 async WIT functions | Future gate: generated WIT fixtures plus component-host binding/execution tests | No public claim until generated/imported worlds bind to executable adapters through versioned hosts, and async worlds execute through the P3 scheduler path. |
 | [ ] | Full WASI 0.3 support | Real P3 components through versioned host with resources, streams, futures, waitables, tasks, and async behavior | Future gate: wasi-testsuite-style component runs plus performance gates | Current work is internal capability coverage, not full P3 support. |
 
@@ -2748,13 +2794,14 @@ This is the implementation state as of 2026-06-23 on `main`.
   adapter binding, not WIT-generated execution or a public P2/P3 support claim.
   Versioned WIT world adapter plans can now execute local synchronous primitive
   functions plus `option<T>`, `result<T, E>`, `list<T>`, `tuple<T...>`, and
-  same-interface named `record`, `variant`, `enum`, and `flags` value trees
-  through Preview2 and Preview3 callbacks over `WasmComponentValueData`;
+  same-interface named `record`, `variant`, `enum`, `flags`, and `resource`
+  handle value trees through Preview2 and Preview3 callbacks over
+  `WasmComponentValueData` and canonical `u32` resource handles;
   selector conflicts, tuple arity mismatches, record arity mismatches, unknown
   flags, invalid enum cases, variant payload mismatches, and nested primitive
   payload-kind mismatches fail at the adapter boundary. Generated
-  multi-package WIT, cross-interface named type resolution, resources, and
-  async WIT execution remain future work.
+  multi-package WIT, cross-interface named type resolution, resource
+  lifetime/drop integration, and async WIT execution remain future work.
   Component-host tests now also exercise decoded core-memory primitive
   `stream<T>`/`future<T>` copy paths through synchronous Canonical ABI calls,
   pending fixed-size and primitive string completion through waitable events,
@@ -5229,10 +5276,49 @@ performance visible while the support surface expands.
     `WIT-WORLD-VARIANT-ENUM-FLAGS-ADAPTER-BINDING` now parses local WIT
     `variant`, `enum`, and `flags` declarations and binds same-interface named
     variant/enum/flags values through the same Preview2/Preview3 adapter path.
+    `WIT-WORLD-RESOURCE-ADAPTER-BINDING` now parses local WIT `resource`
+    declarations and binds same-interface owned and borrowed resource handles
+    through the same Preview2/Preview3 adapter path.
   - Gate: current WIT ingestion tests plus future generated-WIT fixture and
     component-host binding tests.
   - Done when: imported/generated worlds bind through Preview2/Preview3
     adapters and failures name the interface/world boundary.
+
+- [x] `WIT-WORLD-RESOURCE-ADAPTER-BINDING` - Local WIT resource handles bind to
+  executable Preview2/Preview3 adapters.
+  - Scope: internal WIT adapter binding for local import interface functions
+    with synchronous signatures that reference resources declared in the same
+    interface.
+  - Edit targets: `lib/src/wasi/component/wit_document.dart`,
+    `lib/src/wasi/component/wit_adapter.dart`,
+    `test/wasi_component_wit_test.dart`,
+    `test/wasi_component_versioned_host_test.dart`,
+    `tool/wasi_resource_table_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_component_wit_test.dart --name "resource type" --reporter=expanded`
+    failed before the fix because local resource declarations were not
+    captured;
+    `dart test test/wasi_component_versioned_host_test.dart --name "resource handles" --reporter=expanded`
+    failed before the fix because named resource and borrowed resource WIT
+    adapter types were rejected before binding.
+  - Implementation gate:
+    `dart test test/wasi_component_wit_test.dart --name "resource type" --reporter=expanded`;
+    `dart test test/wasi_component_versioned_host_test.dart --name "resource handles" --reporter=expanded`;
+    `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_wit_test.dart --reporter=compact`.
+  - Performance gate:
+    `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`
+    reported `component_wit_resource_adapter_program_invoke.operations=6000`
+    and
+    `component_wit_resource_adapter_program_invoke.per_operation_us=0.23233333333333334`.
+  - Done when: local WIT resource declarations are parsed, same-interface
+    resource names resolve as owned handles and `borrow<T>` handles,
+    valid handle arguments/results execute in Preview2 and Preview3 adapter
+    programs, invalid handle values fail before callbacks run, and callbacks
+    results are validated before returning to the caller.
+  - Claim impact: advances `WIT-INGESTION`; does not complete generated
+    multi-package world binding, cross-interface named type resolution,
+    resource lifetime/drop integration, async WIT adapter execution,
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 
 - [x] `WIT-WORLD-VARIANT-ENUM-FLAGS-ADAPTER-BINDING` - Local WIT variant, enum,
   and flags values bind to executable Preview2/Preview3 adapters.
@@ -5268,7 +5354,7 @@ performance visible while the support surface expands.
     invalid variant payloads fail before returning to the caller.
   - Claim impact: advances `WIT-INGESTION`; does not complete generated
     multi-package world binding, cross-interface named type resolution,
-    resource WIT adapter execution, async WIT adapter execution, `SUPPORT-P1`,
+    resource lifetime/drop integration, async WIT adapter execution, `SUPPORT-P1`,
     `SUPPORT-P2`, or `SUPPORT-P3`.
 
 - [x] `WIT-WORLD-RECORD-ADAPTER-BINDING` - Local named WIT record values bind
@@ -5302,7 +5388,7 @@ performance visible while the support surface expands.
     caller.
   - Claim impact: advances `WIT-INGESTION`; does not complete generated
     multi-package world binding, cross-interface named type resolution,
-    resource WIT adapter execution, async WIT adapter execution, `SUPPORT-P1`,
+    resource lifetime/drop integration, async WIT adapter execution, `SUPPORT-P1`,
     `SUPPORT-P2`, or `SUPPORT-P3`.
 
 - [x] `WIT-WORLD-LIST-TUPLE-ADAPTER-BINDING` - Local list/tuple WIT world values
@@ -5331,7 +5417,7 @@ performance visible while the support surface expands.
     callers.
   - Claim impact: advances `WIT-INGESTION`; does not complete generated
     multi-package world binding, cross-interface named type resolution,
-    resource WIT adapter execution, async WIT adapter execution,
+    resource lifetime/drop integration, async WIT adapter execution,
     `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 
 - [x] `WIT-WORLD-COMPOSITE-ADAPTER-BINDING` - Local composite WIT world values

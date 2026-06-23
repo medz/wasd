@@ -71,6 +71,8 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentWitVariantEnumFlagsAdapterProgramInvoke(
         options.iterations,
       );
+  final componentWitResourceAdapterProgramInvoke =
+      _benchmarkComponentWitResourceAdapterProgramInvoke(options.iterations);
   final componentAdapterStringProgramInvoke =
       _benchmarkComponentAdapterStringProgramInvoke(options.iterations);
   final componentAdapterStringFlatInvoke =
@@ -167,6 +169,8 @@ Future<void> main(List<String> args) async {
         componentWitRecordAdapterProgramInvoke.toJson(),
     'component_wit_variant_enum_flags_adapter_program_invoke':
         componentWitVariantEnumFlagsAdapterProgramInvoke.toJson(),
+    'component_wit_resource_adapter_program_invoke':
+        componentWitResourceAdapterProgramInvoke.toJson(),
     'component_adapter_string_program_invoke':
         componentAdapterStringProgramInvoke.toJson(),
     'component_adapter_string_flat_invoke': componentAdapterStringFlatInvoke
@@ -253,6 +257,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentWitListTupleAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentWitRecordAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentWitVariantEnumFlagsAdapterProgramInvoke(_warmupIterations);
+  _benchmarkComponentWitResourceAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterRecordFlatInvoke(_warmupIterations);
@@ -946,6 +951,54 @@ world command {
 
   return _Metric(
     operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentWitResourceAdapterProgramInvoke(int iterations) {
+  const source = '''
+package acme:bench@0.2.0;
+
+interface files {
+  resource descriptor {
+    read: func() -> u32;
+  }
+
+  open: func(path: string) -> descriptor;
+  stat: func(handle: borrow<descriptor>) -> u32;
+}
+
+world command {
+  import files;
+}
+''';
+  final document = WASIComponentWitDocument.parse(source);
+  final program = WASIPreview2ComponentHost()
+      .prepareWitWorld(document, worldName: 'command')
+      .bindAdapters(
+        imports: {
+          'files.descriptor.read': (_) => 5,
+          'files.open': (_) => 77,
+          'files.stat': (args) => (args.single as int) + 1,
+        },
+      );
+  var checksum = 0;
+  const readArgs = <Object?>[];
+  const openArgs = <Object?>['cfg'];
+  final statArgs = <Object?>[0];
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final handle = program.invokeImport('files.open', openArgs) as int;
+    statArgs[0] = handle;
+    checksum += program.invokeImport('files.stat', statArgs) as int;
+    checksum += program.invokeImport('files.descriptor.read', readArgs) as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 3,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );
@@ -2732,6 +2785,7 @@ void _printText(Map<String, Object?> payload) {
     'component_host_stream_binding',
     'component_versioned_preview3_stream_binding',
     'component_versioned_adapter_program_invoke',
+    'component_wit_resource_adapter_program_invoke',
     'component_host_stream_memory_binding',
     'component_host_owned_resource_stream_memory_binding',
     'component_host_record_stream_memory_binding',

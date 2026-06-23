@@ -140,6 +140,40 @@ world command {
       );
     });
 
+    test('parses local resource type declarations', () {
+      const source = '''
+package acme:files@0.2.0;
+
+interface files {
+  resource descriptor {
+    read: func() -> u32;
+  }
+
+  open: func(path: string) -> descriptor;
+  stat: func(handle: borrow<descriptor>) -> u32;
+}
+
+world command {
+  import files;
+}
+''';
+
+      final document = WASIComponentWitDocument.parse(source);
+      final files = document.interfaceNamed('files')!;
+
+      expect(files.resources.map((resource) => resource.name), ['descriptor']);
+      expect(files.functions.map((function) => function.name), [
+        'descriptor.read',
+        'open',
+        'stat',
+      ]);
+      expect(files.functions.map((function) => function.signature), [
+        'func()->u32',
+        'func(path:string)->descriptor',
+        'func(handle:borrow<descriptor>)->u32',
+      ]);
+    });
+
     test('parses annotated Preview3 async functions and world includes', () {
       const source = '''
 package wasi:cli@0.3.0;

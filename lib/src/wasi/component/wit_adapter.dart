@@ -155,6 +155,8 @@ final class WASIComponentWitAdapterValueType {
     List<WASIComponentWitAdapterVariantCase> cases = const [],
     this.ok,
     this.error,
+    this.resourceName,
+    this.isBorrowedResource = false,
   }) : elements = List<WASIComponentWitAdapterValueType>.unmodifiable(elements),
        fields = List<WASIComponentWitAdapterRecordField>.unmodifiable(fields),
        labels = List<String>.unmodifiable(labels),
@@ -240,6 +242,18 @@ final class WASIComponentWitAdapterValueType {
          cases: cases,
        );
 
+  /// Creates a local WIT `resource` handle adapter value type.
+  WASIComponentWitAdapterValueType.resource({
+    required String text,
+    required String resourceName,
+    required bool isBorrowed,
+  }) : this._(
+         kind: WASIComponentWitAdapterValueKind.resource,
+         text: text,
+         resourceName: resourceName,
+         isBorrowedResource: isBorrowed,
+       );
+
   /// Creates a `result<T, E>` WIT adapter value type.
   WASIComponentWitAdapterValueType.result({
     required String text,
@@ -281,6 +295,12 @@ final class WASIComponentWitAdapterValueType {
 
   /// Result error payload type.
   final WASIComponentWitAdapterValueType? error;
+
+  /// Local WIT resource name for resource-handle values.
+  final String? resourceName;
+
+  /// Whether a resource-handle value is declared as `borrow<T>`.
+  final bool isBorrowedResource;
 }
 
 /// WIT adapter record field type.
@@ -338,6 +358,9 @@ enum WASIComponentWitAdapterValueKind {
 
   /// Named WIT `variant`.
   variant,
+
+  /// Local WIT resource handle represented by a canonical `u32`.
+  resource,
 
   /// `result`, `result<T>`, or `result<T, E>`.
   result,
@@ -761,6 +784,16 @@ _parseWitAdapterValueType(
       error: null,
     );
   }
+  final borrowedResourceArgs = _genericArgs('borrow', text);
+  if (borrowedResourceArgs != null) {
+    return _parseWitAdapterResourceValueType(
+      text,
+      borrowedResourceArgs,
+      context,
+      interface,
+      isBorrowed: true,
+    );
+  }
   final record = interface.recordNamed(text);
   if (record != null) {
     final visiting = visitingTypes ?? <String>{};
@@ -853,7 +886,46 @@ _parseWitAdapterValueType(
       error: null,
     );
   }
+  final resource = interface.resourceNamed(text);
+  if (resource != null) {
+    return (
+      type: WASIComponentWitAdapterValueType.resource(
+        text: text,
+        resourceName: resource.name,
+        isBorrowed: false,
+      ),
+      error: null,
+    );
+  }
   return (type: null, error: 'unsupported WIT adapter $context type $text');
+}
+
+({WASIComponentWitAdapterValueType? type, String? error})
+_parseWitAdapterResourceValueType(
+  String text,
+  List<String> args,
+  String context,
+  WASIComponentWitInterface interface, {
+  required bool isBorrowed,
+}) {
+  if (args.length != 1 || args.single.isEmpty) {
+    return (type: null, error: 'unsupported WIT adapter $context type $text');
+  }
+  final resource = interface.resourceNamed(args.single);
+  if (resource == null) {
+    return (
+      type: null,
+      error: 'unknown WIT adapter $context resource type ${args.single}',
+    );
+  }
+  return (
+    type: WASIComponentWitAdapterValueType.resource(
+      text: text,
+      resourceName: resource.name,
+      isBorrowed: isBorrowed,
+    ),
+    error: null,
+  );
 }
 
 ({WASIComponentWitAdapterValueType? type, String? error})
@@ -1024,6 +1096,8 @@ Object? _validateWitAdapterValue(
       return _validateWitAdapterEnumValue(type, value, path);
     case WASIComponentWitAdapterValueKind.variant:
       return _validateWitAdapterVariantValue(type, value, path);
+    case WASIComponentWitAdapterValueKind.resource:
+      return _validateWitAdapterResourceValue(type, value, path);
     case WASIComponentWitAdapterValueKind.result:
       return _validateWitAdapterResultValue(type, value, path);
   }
@@ -1315,6 +1389,19 @@ Object? _validateWitAdapterResultValue(
   }
   _validateWitAdapterValue(payloadType, associated, '$path.$label');
   return value;
+}
+
+Object? _validateWitAdapterResourceValue(
+  WASIComponentWitAdapterValueType type,
+  Object? value,
+  String path,
+) {
+  return _validateWitAdapterPrimitiveValue(
+    WasmComponentPrimitiveValueType.u32,
+    type.text,
+    value,
+    path,
+  );
 }
 
 int _witCaseIndex(

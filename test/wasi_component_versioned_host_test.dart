@@ -700,6 +700,94 @@ world command {
       },
     );
 
+    test('Preview2 and Preview3 wrappers execute WIT resource handles', () {
+      const source = '''
+package acme:files@0.2.0;
+
+interface files {
+  resource descriptor {
+    read: func() -> u32;
+  }
+
+  open: func(path: string) -> descriptor;
+  stat: func(handle: borrow<descriptor>) -> u32;
+}
+
+world command {
+  import files;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2Plan = WASIPreview2ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'command',
+      );
+      final preview3Plan = WASIPreview3ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'command',
+      );
+      final seen = <Object?>[];
+
+      expect(preview2Plan.canBindAdapters, isTrue);
+      expect(preview3Plan.canBindAdapters, isTrue);
+      expect(preview2Plan.functions.map((function) => function.qualifiedName), [
+        'files.descriptor.read',
+        'files.open',
+        'files.stat',
+      ]);
+
+      final program = preview2Plan.bindAdapters(
+        imports: {
+          'files.descriptor.read': (args) {
+            seen.add(args.length);
+            return 7;
+          },
+          'files.open': (args) {
+            seen.add(args.single);
+            return 41;
+          },
+          'files.stat': (args) {
+            seen.add(args.single);
+            return (args.single as int) + 1;
+          },
+        },
+      );
+      final preview3Program = preview3Plan.bindAdapters(
+        imports: {
+          'files.descriptor.read': (_) => 11,
+          'files.open': (_) => 51,
+          'files.stat': (args) => args.single,
+        },
+      );
+
+      final handle = program.invokeImport('files.open', ['config']);
+      expect(handle, 41);
+      expect(program.invokeImport('files.stat', [handle]), 42);
+      expect(program.invokeImport('files.descriptor.read', const []), 7);
+      expect(preview3Program.invokeImport('files.open', ['config']), 51);
+      expect(preview3Program.invokeImport('files.stat', [51]), 51);
+      expect(
+        preview3Program.invokeImport('files.descriptor.read', const []),
+        11,
+      );
+      expect(seen, ['config', 41, 0]);
+
+      expect(() => program.invokeImport('files.stat', [-1]), throwsStateError);
+      expect(seen, ['config', 41, 0]);
+
+      final badResultProgram = preview2Plan.bindAdapters(
+        imports: {
+          'files.descriptor.read': (_) => 0,
+          'files.open': (_) => -1,
+          'files.stat': (args) => args.single,
+        },
+      );
+      expect(
+        () => badResultProgram.invokeImport('files.open', ['config']),
+        throwsStateError,
+      );
+    });
+
     test(
       'Preview2 wrapper rejects owned-resource async values at version gate',
       () {

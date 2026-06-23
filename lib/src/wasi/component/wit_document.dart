@@ -89,12 +89,14 @@ final class WASIComponentWitInterface {
     required List<WASIComponentWitVariant> variants,
     required List<WASIComponentWitFlags> flags,
     required List<WASIComponentWitEnum> enums,
+    required List<WASIComponentWitResource> resources,
     required this.span,
   }) : functions = List<WASIComponentWitFunction>.unmodifiable(functions),
        records = List<WASIComponentWitRecord>.unmodifiable(records),
        variants = List<WASIComponentWitVariant>.unmodifiable(variants),
        flags = List<WASIComponentWitFlags>.unmodifiable(flags),
-       enums = List<WASIComponentWitEnum>.unmodifiable(enums);
+       enums = List<WASIComponentWitEnum>.unmodifiable(enums),
+       resources = List<WASIComponentWitResource>.unmodifiable(resources);
 
   /// Interface name.
   final String name;
@@ -113,6 +115,9 @@ final class WASIComponentWitInterface {
 
   /// Enum declarations captured directly in this interface.
   final List<WASIComponentWitEnum> enums;
+
+  /// Resource declarations captured directly in this interface.
+  final List<WASIComponentWitResource> resources;
 
   /// Source span for the interface name.
   final WASIComponentWitSpan span;
@@ -152,6 +157,16 @@ final class WASIComponentWitInterface {
     for (final enum_ in enums) {
       if (enum_.name == name) {
         return enum_;
+      }
+    }
+    return null;
+  }
+
+  /// Returns the resource named [name], if this interface declares one.
+  WASIComponentWitResource? resourceNamed(String name) {
+    for (final resource in resources) {
+      if (resource.name == name) {
+        return resource;
       }
     }
     return null;
@@ -281,6 +296,18 @@ final class WASIComponentWitLabel {
   final String name;
 
   /// Source span for the label name.
+  final WASIComponentWitSpan span;
+}
+
+/// Resource type declared directly in a WIT interface.
+final class WASIComponentWitResource {
+  /// Creates a WIT resource declaration boundary.
+  const WASIComponentWitResource({required this.name, required this.span});
+
+  /// Resource name.
+  final String name;
+
+  /// Source span for the resource name.
   final WASIComponentWitSpan span;
 }
 
@@ -576,12 +603,14 @@ final class _WitParser {
     final variants = <WASIComponentWitVariant>[];
     final flags = <WASIComponentWitFlags>[];
     final enums = <WASIComponentWitEnum>[];
+    final resources = <WASIComponentWitResource>[];
     _parseInterfaceBlock(
       functions,
       records,
       variants,
       flags,
       enums,
+      resources,
       prefix: '',
     );
     return WASIComponentWitInterface(
@@ -591,6 +620,7 @@ final class _WitParser {
       variants: variants,
       flags: flags,
       enums: enums,
+      resources: resources,
       span: name.span,
     );
   }
@@ -600,7 +630,8 @@ final class _WitParser {
     List<WASIComponentWitRecord> records,
     List<WASIComponentWitVariant> variantTypes,
     List<WASIComponentWitFlags> flagsTypes,
-    List<WASIComponentWitEnum> enumTypes, {
+    List<WASIComponentWitEnum> enumTypes,
+    List<WASIComponentWitResource> resourceTypes, {
     required String prefix,
   }) {
     while (!_checkSymbol('}') && !_checkKind(_WitTokenKind.eof)) {
@@ -617,6 +648,7 @@ final class _WitParser {
           variantTypes,
           flagsTypes,
           enumTypes,
+          resourceTypes,
         );
         records.add(record);
         continue;
@@ -630,6 +662,7 @@ final class _WitParser {
           variantTypes,
           flagsTypes,
           enumTypes,
+          resourceTypes,
         );
         variantTypes.add(variant);
         continue;
@@ -643,6 +676,7 @@ final class _WitParser {
           variantTypes,
           flagsTypes,
           enumTypes,
+          resourceTypes,
         );
         flagsTypes.add(flags);
         continue;
@@ -656,8 +690,21 @@ final class _WitParser {
           variantTypes,
           flagsTypes,
           enumTypes,
+          resourceTypes,
         );
         enumTypes.add(enum_);
+        continue;
+      }
+      if (_matchWord('resource')) {
+        _parseResource(
+          functions,
+          records,
+          variantTypes,
+          flagsTypes,
+          enumTypes,
+          resourceTypes,
+          prefix: prefix,
+        );
         continue;
       }
       if (_checkKind(_WitTokenKind.word)) {
@@ -684,6 +731,7 @@ final class _WitParser {
             variantTypes,
             flagsTypes,
             enumTypes,
+            resourceTypes,
             prefix: '$prefix${item.lexeme}.',
           );
           continue;
@@ -698,6 +746,7 @@ final class _WitParser {
           variantTypes,
           flagsTypes,
           enumTypes,
+          resourceTypes,
           prefix: prefix,
         );
         continue;
@@ -705,6 +754,43 @@ final class _WitParser {
       _advance();
     }
     _expectSymbol('}');
+  }
+
+  void _parseResource(
+    List<WASIComponentWitFunction> functions,
+    List<WASIComponentWitRecord> records,
+    List<WASIComponentWitVariant> variantTypes,
+    List<WASIComponentWitFlags> flagsTypes,
+    List<WASIComponentWitEnum> enumTypes,
+    List<WASIComponentWitResource> resourceTypes, {
+    required String prefix,
+  }) {
+    final name = _expectWord('resource name');
+    _failDuplicateInterfaceType(
+      name.lexeme,
+      name.span,
+      records,
+      variantTypes,
+      flagsTypes,
+      enumTypes,
+      resourceTypes,
+    );
+    resourceTypes.add(
+      WASIComponentWitResource(name: name.lexeme, span: name.span),
+    );
+    if (_matchSymbol(';')) {
+      return;
+    }
+    _expectSymbol('{');
+    _parseInterfaceBlock(
+      functions,
+      records,
+      variantTypes,
+      flagsTypes,
+      enumTypes,
+      resourceTypes,
+      prefix: '$prefix${name.lexeme}.',
+    );
   }
 
   WASIComponentWitRecord _parseRecord() {
@@ -892,8 +978,16 @@ final class _WitParser {
     List<WASIComponentWitVariant> variants,
     List<WASIComponentWitFlags> flags,
     List<WASIComponentWitEnum> enums,
+    List<WASIComponentWitResource> resources,
   ) {
-    final first = _interfaceTypeNamed(name, records, variants, flags, enums);
+    final first = _interfaceTypeNamed(
+      name,
+      records,
+      variants,
+      flags,
+      enums,
+      resources,
+    );
     if (first == null) {
       return;
     }
@@ -910,6 +1004,7 @@ final class _WitParser {
     List<WASIComponentWitVariant> variants,
     List<WASIComponentWitFlags> flags,
     List<WASIComponentWitEnum> enums,
+    List<WASIComponentWitResource> resources,
   ) {
     final record = _recordNamed(records, name);
     if (record != null) {
@@ -928,6 +1023,11 @@ final class _WitParser {
     for (final enum_ in enums) {
       if (enum_.name == name) {
         return (kind: 'enum', span: enum_.span);
+      }
+    }
+    for (final resource in resources) {
+      if (resource.name == name) {
+        return (kind: 'resource', span: resource.span);
       }
     }
     return null;
