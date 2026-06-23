@@ -41,8 +41,10 @@ const int _errnoNoent = 44;
 const int _errnoNotsock = 57;
 const int _errnoNotdir = 54;
 const int _errnoNotsup = 58;
+const int _errnoPerm = 63;
 const int _errnoNotcapable = 76;
 const int _errnoPipe = 64;
+const int _lookupflagSymlinkFollow = 1;
 const int _oflagCreat = 1;
 const int _oflagDirectory = 2;
 const int _oflagExcl = 4;
@@ -6702,6 +6704,146 @@ void main() {
       );
 
       test(
+        'path_link handles directory, trailing slash, and symlink edges',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/source.txt': Uint8List.fromList(utf8.encode('hello')),
+              '/sandbox/dir/existing.txt': Uint8List.fromList([1]),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathLink = preview1['path_link'] as FunctionImportExportValue;
+          final pathSymlink =
+              preview1['path_symlink'] as FunctionImportExportValue;
+          final pathReadlink =
+              preview1['path_readlink'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const sourcePathPtr = 3840;
+          const dirPathPtr = 3872;
+          const dirLinkPathPtr = 3904;
+          const trailingPathPtr = 3936;
+          const targetPathPtr = 3968;
+          const symlinkPathPtr = 4000;
+          const symlinkHardPathPtr = 4032;
+          const symlinkFollowPathPtr = 4064;
+          const readlinkBufferPtr = 4096;
+          const readlinkUsedPtr = 4144;
+
+          final sourcePath = utf8.encode('source.txt');
+          final dirPath = utf8.encode('dir');
+          final dirLinkPath = utf8.encode('dir-link');
+          final trailingPath = utf8.encode('missing/');
+          final targetPath = utf8.encode('dangling-target');
+          final symlinkPath = utf8.encode('symlink');
+          final symlinkHardPath = utf8.encode('symlink-hard');
+          final symlinkFollowPath = utf8.encode('symlink-follow');
+          bytes.setAll(sourcePathPtr, sourcePath);
+          bytes.setAll(dirPathPtr, dirPath);
+          bytes.setAll(dirLinkPathPtr, dirLinkPath);
+          bytes.setAll(trailingPathPtr, trailingPath);
+          bytes.setAll(targetPathPtr, targetPath);
+          bytes.setAll(symlinkPathPtr, symlinkPath);
+          bytes.setAll(symlinkHardPathPtr, symlinkHardPath);
+          bytes.setAll(symlinkFollowPathPtr, symlinkFollowPath);
+
+          expect(
+            pathLink.ref([
+              3,
+              0,
+              dirPathPtr,
+              dirPath.length,
+              3,
+              dirLinkPathPtr,
+              dirLinkPath.length,
+            ]),
+            _errnoPerm,
+          );
+          expect(
+            pathLink.ref([
+              3,
+              0,
+              sourcePathPtr,
+              sourcePath.length,
+              3,
+              trailingPathPtr,
+              trailingPath.length,
+            ]),
+            _errnoNoent,
+          );
+          expect(
+            pathSymlink.ref([
+              targetPathPtr,
+              targetPath.length,
+              3,
+              symlinkPathPtr,
+              symlinkPath.length,
+            ]),
+            0,
+          );
+          expect(
+            pathLink.ref([
+              3,
+              0,
+              symlinkPathPtr,
+              symlinkPath.length,
+              3,
+              symlinkHardPathPtr,
+              symlinkHardPath.length,
+            ]),
+            0,
+          );
+          expect(
+            pathReadlink.ref([
+              3,
+              symlinkHardPathPtr,
+              symlinkHardPath.length,
+              readlinkBufferPtr,
+              32,
+              readlinkUsedPtr,
+            ]),
+            0,
+          );
+          final readlinkUsed = data.getUint32(readlinkUsedPtr, Endian.little);
+          expect(
+            utf8.decode(
+              bytes.sublist(
+                readlinkBufferPtr,
+                readlinkBufferPtr + readlinkUsed,
+              ),
+            ),
+            'dangling-target',
+          );
+          expect(
+            pathLink.ref([
+              3,
+              _lookupflagSymlinkFollow,
+              symlinkPathPtr,
+              symlinkPath.length,
+              3,
+              symlinkFollowPathPtr,
+              symlinkFollowPath.length,
+            ]),
+            _errnoInval,
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; path_link behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'path_symlink and path_readlink preserve virtual symlink targets',
         () async {
           final fileWasi = WASI(
@@ -6862,7 +7004,19 @@ void main() {
           expect(
             pathLink.ref([
               3,
-              1,
+              _lookupflagSymlinkFollow,
+              linkPathPtr,
+              linkPath.length,
+              3,
+              hardLinkPathPtr,
+              hardLinkPath.length,
+            ]),
+            _errnoInval,
+          );
+          expect(
+            pathLink.ref([
+              3,
+              0,
               linkPathPtr,
               linkPath.length,
               3,
@@ -6899,7 +7053,7 @@ void main() {
           expect(
             pathOpen.ref([
               3,
-              0,
+              _lookupflagSymlinkFollow,
               hardLinkPathPtr,
               hardLinkPath.length,
               0,

@@ -687,7 +687,9 @@ final class Preview1VirtualFileSystem {
     if (_virtualDirectoryPaths.contains(normalized)) {
       return Preview1PathMutationResult.isDirectory;
     }
-    if (_symlinksByGuestPath.remove(normalized) != null) {
+    final removedSymlink = _symlinksByGuestPath.remove(normalized);
+    if (removedSymlink != null) {
+      removedSymlink.metadata.releaseLink();
       _removeDirectoryChild(normalized);
       _rebuildDirectoryEntriesForPaths({dirnameOfGuestPath(normalized)});
       return Preview1PathMutationResult.success;
@@ -781,9 +783,20 @@ final class Preview1VirtualFileSystem {
   Preview1PathMutationResult linkPath({
     required String oldPath,
     required String newPath,
+    bool newPathHasTrailingSeparator = false,
   }) {
     final oldNormalized = normalizeGuestPath(oldPath);
     final newNormalized = normalizeGuestPath(newPath);
+    if (newPathHasTrailingSeparator) {
+      if (_virtualDirectoryPaths.contains(newNormalized)) {
+        return Preview1PathMutationResult.exists;
+      }
+      if (_filesByGuestPath.containsKey(newNormalized) ||
+          _symlinksByGuestPath.containsKey(newNormalized)) {
+        return Preview1PathMutationResult.notDirectory;
+      }
+      return Preview1PathMutationResult.noEntry;
+    }
     final newParent = dirnameOfGuestPath(newNormalized);
     if (_filesByGuestPath.containsKey(newParent) ||
         _symlinksByGuestPath.containsKey(newParent)) {
@@ -799,19 +812,28 @@ final class Preview1VirtualFileSystem {
     }
 
     final oldFile = _filesByGuestPath[oldNormalized];
-    if (oldFile == null) {
-      if (_virtualDirectoryPaths.contains(oldNormalized)) {
-        return Preview1PathMutationResult.isDirectory;
-      }
-      return Preview1PathMutationResult.noEntry;
+    if (oldFile != null) {
+      _filesByGuestPath[newNormalized] = oldFile;
+      oldFile.metadata.retainLink();
+      _indexFilePath(newNormalized);
+      _setDirectoryChild(newNormalized, filetypeRegularFile);
+      _rebuildDirectoryEntriesForPaths({dirnameOfGuestPath(newNormalized)});
+      return Preview1PathMutationResult.success;
     }
 
-    _filesByGuestPath[newNormalized] = oldFile;
-    oldFile.metadata.retainLink();
-    _indexFilePath(newNormalized);
-    _setDirectoryChild(newNormalized, filetypeRegularFile);
-    _rebuildDirectoryEntriesForPaths({dirnameOfGuestPath(newNormalized)});
-    return Preview1PathMutationResult.success;
+    final oldSymlink = _symlinksByGuestPath[oldNormalized];
+    if (oldSymlink != null) {
+      _symlinksByGuestPath[newNormalized] = oldSymlink;
+      oldSymlink.metadata.retainLink();
+      _setDirectoryChild(newNormalized, filetypeSymbolicLink);
+      _rebuildDirectoryEntriesForPaths({dirnameOfGuestPath(newNormalized)});
+      return Preview1PathMutationResult.success;
+    }
+
+    if (_virtualDirectoryPaths.contains(oldNormalized)) {
+      return Preview1PathMutationResult.permissionDenied;
+    }
+    return Preview1PathMutationResult.noEntry;
   }
 
   Preview1PathMutationResult createSymlink({
@@ -2051,6 +2073,7 @@ enum Preview1PathMutationResult {
   notDirectory,
   notEmpty,
   notCapable,
+  permissionDenied,
 }
 
 enum Preview1FdRenumberResult { success, invalid, badf }

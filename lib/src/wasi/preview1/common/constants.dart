@@ -12,6 +12,7 @@ const int errnoNotdir = 54;
 const int errnoNotempty = 55;
 const int errnoNotsock = 57;
 const int errnoNotsup = 58;
+const int errnoPerm = 63;
 const int errnoNotcapable = 76;
 const int errnoPipe = 64;
 const int prestatSize = 8;

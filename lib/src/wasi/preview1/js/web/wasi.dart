@@ -1199,6 +1199,9 @@ class WASI implements wasi.WASI {
         if ((lookupFlags & ~_lookupflagKnownMask) != 0) {
           return _errnoInval;
         }
+        if ((lookupFlags & _lookupflagSymlinkFollow) != 0) {
+          return _errnoInval;
+        }
         final oldPath = _resolvePath(
           dirFd: _asInt(args[0]),
           pathPtr: _asInt(args[2]),
@@ -1229,15 +1232,13 @@ class WASI implements wasi.WASI {
         if (newRight != _errnoSuccess) {
           return newRight;
         }
-        final oldLinkPath = (lookupFlags & _lookupflagSymlinkFollow) == 0
-            ? oldPath.path!
-            : _vfs.resolveSymlinkPath(oldPath.path!);
-        if (oldLinkPath == null) {
-          return _errnoNoent;
-        }
 
         return _errnoFromPathMutationResult(
-          _vfs.linkPath(oldPath: oldLinkPath, newPath: newPath.path!),
+          _vfs.linkPath(
+            oldPath: oldPath.path!,
+            newPath: newPath.path!,
+            newPathHasTrailingSeparator: newPath.hasTrailingSeparator,
+          ),
         );
       });
 
@@ -1970,6 +1971,7 @@ const int _errnoNosys = wasi_common.errnoNosys;
 const int _errnoNotdir = wasi_common.errnoNotdir;
 const int _errnoNotempty = wasi_common.errnoNotempty;
 const int _errnoNotcapable = wasi_common.errnoNotcapable;
+const int _errnoPerm = wasi_common.errnoPerm;
 const int _prestatSize = wasi_common.prestatSize;
 const int _preopenTypeDir = wasi_common.preopenTypeDir;
 const int _fdstatSize = wasi_common.fdstatSize;
@@ -2028,6 +2030,7 @@ int _errnoFromPathMutationResult(wasi_vfs.Preview1PathMutationResult result) =>
       wasi_vfs.Preview1PathMutationResult.notDirectory => _errnoNotdir,
       wasi_vfs.Preview1PathMutationResult.notEmpty => _errnoNotempty,
       wasi_vfs.Preview1PathMutationResult.notCapable => _errnoNotcapable,
+      wasi_vfs.Preview1PathMutationResult.permissionDenied => _errnoPerm,
     };
 
 int _errnoFromFdRightsResult(wasi_vfs.Preview1FdRightsResult result) =>
