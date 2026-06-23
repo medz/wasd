@@ -109,7 +109,7 @@ too broad to verify in one commit.
     under `lib/src/wasi/preview1/`, and the testsuite runner only when the
     selected failure proves a harness gap rather than a runtime gap.
   - Red test: pick exactly one failing official module from the current
-    `16/72` Preview1 failure list, add the smallest focused regression under
+    `13/72` Preview1 failure list, add the smallest focused regression under
     `test/wasi_test.dart`, and confirm the regression or official single-module
     run fails for the expected reason before the fix.
   - Implementation gate: focused `dart test test/wasi_test.dart --name ...`;
@@ -254,6 +254,47 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-FILE-IDENTITY-AND-READDIR-PAGING` - virtual files, directories, hard
+  links, `filestat`, and `fd_readdir` share stable device/inode identity and
+  keep paged directory reads non-EOF while entries remain.
+  - Scope: native/browser shared Preview1 VFS metadata, directory-entry cache,
+    `fd_filestat_get`, `path_filestat_get`, hard-link link counts, and
+    `fd_readdir` buffer pagination.
+  - Edit targets: `lib/src/wasi/preview1/common/constants.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/common/fd_syscalls.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red tests:
+    `dart test test/wasi_test.dart --name "filestat and readdir report stable virtual node identities" --reporter=expanded`
+    failed before the fix because `fd_filestat_get` reported inode `0`;
+    `dart test test/wasi_test.dart --name "fd_readdir keeps buffer full while directory entries remain" --reporter=expanded`
+    failed before the fix with `8` entries instead of `102`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "filestat and readdir report stable virtual node identities" --reporter=expanded`;
+    `dart test test/wasi_test.dart --name "fd_readdir keeps buffer full while directory entries remain" --reporter=expanded`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/stat-dev-ino.wasm`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fdopendir-with-access.wasm`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fd_readdir.wasm`;
+    `.dart_tool/wasi-testsuite/.venv/bin/python run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_inode_readdir.json --disable-colors`
+    reported `13/72` Preview1 failures after the fix, down from `16/72`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `readdir` at `0.4415us/op` baseline, `0.3085us/op` directory-heavy,
+    `0.297us/op` descriptor-heavy, and `0.292375us/op` socket-heavy; inode
+    lookup is cached into directory entries instead of performed per
+    `fd_readdir` write.
+  - Done when: `filestat.dev` is stable and non-zero inside the VFS,
+    distinct files have distinct `filestat.ino`, hard links share `ino` and
+    link count, `fd_readdir.d_ino` matches `filestat.ino`, and partial buffers
+    only signal EOF when no entries remain.
+  - Evidence update: this checked row plus the detailed backlog row,
+    verification matrix, and current baseline.
+  - Claim impact: closes three official Preview1 testsuite failures
+    (`stat-dev-ino`, `fdopendir-with-access`, and `fd_readdir`) for
+    `SUPPORT-P1`; it does not complete `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [x] `P1-DIRECTORY-NO-SEEK-RIGHT` - directory descriptors do not receive
   `FD_SEEK` in base rights.
   - Scope: native/browser shared Preview1 directory descriptor rights exposed by
@@ -1722,7 +1763,7 @@ unchecked.
 - [ ] `SUPPORT-P1` - Full WASI Preview1 support.
   - Current: `WASI(...)` provides a real Preview1 host surface, but full
     Preview1 support remains incomplete; the current official
-    `WebAssembly/wasi-testsuite` `prod/testsuite-base` run reports `16/72`
+    `WebAssembly/wasi-testsuite` `prod/testsuite-base` run reports `13/72`
     Preview1 failures.
   - Required rows: every Preview1 descriptor, filesystem, stdio, clock, random,
     poll, and socket row checked, including `P1-PATH-OPEN-OFLAGS`,
@@ -1873,6 +1914,7 @@ copying their internals directly.
 | [x] | Preview1 `fd_close` preopen descriptor close | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "fd_close closes preopen descriptors without closing opened directories" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "fd_close closes preopen descriptors without closing opened directories" --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/close_preopen.wasm` | `fd_close` now closes preopen descriptors through the shared descriptor table while preserving child directory descriptors opened from that preopen; the official Preview1 suite dropped from `19/72` failures to `18/72`, so broader filesystem/symlink/directory/inode gaps remain. |
 | [x] | Preview1 `path_open` non-directory base fd preflight | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "path_open rejects file descriptors as directory bases" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "path_open rejects file descriptors as directory bases" --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/path_open_dirfd_not_dir.wasm` | `path_open` and shared path resolution now distinguish missing descriptors from live non-directory descriptors, returning `BADF` only for the former and `NOTDIR` for the latter; the official Preview1 suite dropped from `18/72` failures to `17/72`, so broader filesystem/symlink/directory/inode gaps remain. |
 | [x] | Preview1 directory fd seek-right masking | `lib/src/wasi/preview1/common/constants.dart`, `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "path_open does not grant fd_seek rights to directories" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "path_open does not grant fd_seek rights to directories" --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/directory_seek.wasm` | Directory descriptors now mask `FD_SEEK` from base rights at descriptor construction while preserving inheriting rights for child opens; the official Preview1 suite dropped from `17/72` failures to `16/72`, so broader filesystem/symlink/directory/inode gaps remain. |
+| [x] | Preview1 virtual file identity and `fd_readdir` paging | `lib/src/wasi/preview1/common/constants.dart`, `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/common/fd_syscalls.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "filestat and readdir report stable virtual node identities" --reporter=expanded`; `dart test test/wasi_test.dart --name "fd_readdir keeps buffer full while directory entries remain" --reporter=expanded`; `dart test test/wasi_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/stat-dev-ino.wasm`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fdopendir-with-access.wasm`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fd_readdir.wasm`; `.dart_tool/wasi-testsuite/.venv/bin/python run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_inode_readdir.json --disable-colors`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | VFS metadata now carries stable `dev`/`ino`/link count, `filestat` and `dirent.d_ino` share that identity, hard links share inode identity, and `fd_readdir` reports a full buffer while more entries remain; the official Preview1 suite dropped from `16/72` failures to `13/72`, so symlink/path edge cases remain. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Component instantiation import matching for known local child components | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments" --reporter=compact`; `dart test test/component_test.dart --reporter=compact`; `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart --reporter=compact`; `dart run tool/component_benchmark.dart --json`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | Known local child component instantiation now rejects unknown argument names, missing required imports, and wrong argument sorts before adapter binding; imported/aliased component targets, cross-component type equivalence, generated worlds, and official suite coverage remain open. |
 | [x] | Component task-return borrow validation | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "reports task.return result types containing borrow|reports missing canonical option requirements|reports invalid canonical result value type indexes" --reporter=compact`; `dart run tool/component_benchmark.dart --json` | Borrowed canonical `task.return` results are now rejected during validation; broader borrow, stream, future, nested-shape, generated-world, and component-suite coverage remains. |
@@ -1978,13 +2020,14 @@ This is the implementation state as of 2026-06-23 on `main`.
   conformance entry point only; full Preview1 support requires running the
   external suite and converting failures into checked implementation rows.
 - The official `WebAssembly/wasi-testsuite` `prod/testsuite-base` run now has
-  `16/72` Preview1 failures with `41` Preview3 tests skipped by the adapter
-  capability filter. `renumber.wasm`, `close_preopen.wasm`, and
-  `path_open_dirfd_not_dir.wasm`, and `directory_seek.wasm` are now passing;
+  `13/72` Preview1 failures with `41` Preview3 tests skipped by the adapter
+  capability filter. `renumber.wasm`, `close_preopen.wasm`,
+  `path_open_dirfd_not_dir.wasm`, `directory_seek.wasm`, `fd_readdir.wasm`,
+  `stat-dev-ino.wasm`, and `fdopendir-with-access.wasm` are now passing;
   remaining Preview1 failures are concentrated in symlink traversal, path
-  normalization/trailing slash errors, directory open rights, directory entry
-  scaling, and stable device/inode metadata. The Preview3 skips are a real
-  unsupported-state signal, not a pass result or a support claim.
+  normalization/trailing slash errors, path link/rename/filestat edge cases,
+  directory open rights, and filestat set-times behavior. The Preview3 skips
+  are a real unsupported-state signal, not a pass result or a support claim.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/` now provides an internal typed resource table plus
@@ -2290,8 +2333,8 @@ chosen to keep public claims honest, keep the architecture layered, and keep
 performance visible while the support surface expands.
 
 1. `P1-OFFICIAL-FS-CONFORMANCE`
-   - Why: Preview1 is the only public WASI surface today, and the official
-     `wasi-testsuite` run still has `16/72` Preview1 failures that must be
+  - Why: Preview1 is the only public WASI surface today, and the official
+     `wasi-testsuite` run still has `13/72` Preview1 failures that must be
      closed with real behavior before any full-support claim.
    - Do not: count skipped Preview3 tests as support or replace official
      failures with local-only helper tests.
@@ -2902,6 +2945,48 @@ performance visible while the support surface expands.
   - Claim impact: creates the official Preview1 testsuite gate needed to expose
     real conformance failures; does not complete `P1-SOCKET-CONFORMANCE`,
     `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
+- [x] `P1-FILE-IDENTITY-AND-READDIR-PAGING` - Add stable virtual node identity
+  and non-EOF `fd_readdir` paging.
+  - Scope: native/browser shared Preview1 VFS node metadata, hard-link identity,
+    directory-entry inode cache, `fd_filestat_get`, `path_filestat_get`, and
+    `fd_readdir` buffer semantics.
+  - Edit targets: `lib/src/wasi/preview1/common/constants.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/common/fd_syscalls.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red tests:
+    `dart test test/wasi_test.dart --name "filestat and readdir report stable virtual node identities" --reporter=expanded`
+    failed before the fix because directory `fd_filestat_get` reported inode
+    `0`; `dart test test/wasi_test.dart --name "fd_readdir keeps buffer full while directory entries remain" --reporter=expanded`
+    failed before the fix with `8` entries instead of `102`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "filestat and readdir report stable virtual node identities" --reporter=expanded`;
+    `dart test test/wasi_test.dart --name "fd_readdir keeps buffer full while directory entries remain" --reporter=expanded`;
+    `dart test test/wasi_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/stat-dev-ino.wasm`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fdopendir-with-access.wasm`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fd_readdir.wasm`;
+    `.dart_tool/wasi-testsuite/.venv/bin/python run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_inode_readdir.json --disable-colors`
+    reported `13/72` Preview1 failures after the fix, down from `16/72`;
+    `dart test --reporter=compact --concurrency=1`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` reported
+    `readdir` at `0.4415us/op` baseline, `0.3085us/op` directory-heavy,
+    `0.297us/op` descriptor-heavy, and `0.292375us/op` socket-heavy. The
+    implementation assigns identity at node creation/mutation and caches inode
+    on directory entries, avoiding per-`fd_readdir` path lookup.
+  - Done when: `filestat.dev` and `filestat.ino` are stable and non-zero for
+    VFS nodes, separate files have separate inodes, hard links share inode and
+    link count, `dirent.d_ino` matches `filestat.ino`, and `fd_readdir`
+    returns `bufused == bufferLength` while entries remain.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry, verification matrix, and current baseline.
+  - Claim impact: closes three official Preview1 testsuite failures for
+    `SUPPORT-P1`; does not complete Preview1 full support or any P2/P3 gate.
 - [x] `P1-FD-RENUMBER-TARGET-PREFLIGHT` - `fd_renumber` requires an open
   destination descriptor.
   - Scope: native/browser shared Preview1 descriptor table behavior in

@@ -1420,7 +1420,11 @@ class WASI implements wasi.WASI {
     bytes.fillRange(filestatPtr, filestatPtr + _filestatSize, 0);
     bytes[filestatPtr + 16] = entry.fileType;
     _setUint64(data, filestatPtr + 32, entry.size);
-    _writeFilestatTimes(data, filestatPtr, entry.metadata);
+    wasi_vfs.writeFilestatMetadata(
+      data: data,
+      filestatPtr: filestatPtr,
+      metadata: entry.metadata,
+    );
     return _errnoSuccess;
   });
 
@@ -1560,23 +1564,6 @@ class WASI implements wasi.WASI {
       metadata.modificationTimeNanos = now;
     }
     return _errnoSuccess;
-  }
-
-  void _writeFilestatTimes(
-    ByteData data,
-    int filestatPtr,
-    wasi_vfs.Preview1VirtualNodeMetadata metadata,
-  ) {
-    _setUint64(
-      data,
-      filestatPtr + _filestatAccessTimeOffset,
-      metadata.accessTimeNanos,
-    );
-    _setUint64(
-      data,
-      filestatPtr + _filestatModificationTimeOffset,
-      metadata.modificationTimeNanos,
-    );
   }
 
   int _writePollEvents({
@@ -1971,8 +1958,6 @@ const int _fdflagKnownMask = wasi_common.fdflagKnownMask;
 const int _lookupflagSymlinkFollow = wasi_common.lookupflagSymlinkFollow;
 const int _lookupflagKnownMask = _lookupflagSymlinkFollow;
 const int _filestatSize = 64;
-const int _filestatAccessTimeOffset = 40;
-const int _filestatModificationTimeOffset = 48;
 const int _filestatSetAccessTime = 1;
 const int _filestatSetAccessTimeNow = 2;
 const int _filestatSetModificationTime = 4;

@@ -80,11 +80,13 @@ final class Preview1VirtualFileSystem {
     };
     _directoryChildrenByGuestPath = _buildDirectoryChildrenByPath(
       directories: _virtualDirectoryPaths,
+      directoryMetadataByGuestPath: _directoryMetadataByGuestPath,
       filesByGuestPath: _filesByGuestPath,
       symlinksByGuestPath: _symlinksByGuestPath,
     );
     _directoryEntriesByGuestPath = _buildDirectoryEntriesFromChildren(
       _directoryChildrenByGuestPath,
+      directoryMetadataByGuestPath: _directoryMetadataByGuestPath,
     );
   }
 
@@ -677,10 +679,12 @@ final class Preview1VirtualFileSystem {
       _rebuildDirectoryEntriesForPaths({dirnameOfGuestPath(normalized)});
       return Preview1PathMutationResult.success;
     }
-    if (_filesByGuestPath.remove(normalized) == null) {
+    final removedFile = _filesByGuestPath.remove(normalized);
+    if (removedFile == null) {
       return Preview1PathMutationResult.noEntry;
     }
 
+    removedFile.metadata.releaseLink();
     _unindexFilePath(normalized);
     _removeDirectoryChild(normalized);
     _rebuildDirectoryEntriesForPaths({dirnameOfGuestPath(normalized)});
@@ -790,6 +794,7 @@ final class Preview1VirtualFileSystem {
     }
 
     _filesByGuestPath[newNormalized] = oldFile;
+    oldFile.metadata.retainLink();
     _indexFilePath(newNormalized);
     _setDirectoryChild(newNormalized, filetypeRegularFile);
     _rebuildDirectoryEntriesForPaths({dirnameOfGuestPath(newNormalized)});
@@ -1074,11 +1079,13 @@ final class Preview1VirtualFileSystem {
   void _rebuildDirectoryEntries() {
     _directoryChildrenByGuestPath = _buildDirectoryChildrenByPath(
       directories: _virtualDirectoryPaths,
+      directoryMetadataByGuestPath: _directoryMetadataByGuestPath,
       filesByGuestPath: _filesByGuestPath,
       symlinksByGuestPath: _symlinksByGuestPath,
     );
     _directoryEntriesByGuestPath = _buildDirectoryEntriesFromChildren(
       _directoryChildrenByGuestPath,
+      directoryMetadataByGuestPath: _directoryMetadataByGuestPath,
     );
   }
 
@@ -1090,7 +1097,11 @@ final class Preview1VirtualFileSystem {
         _directoryEntriesByGuestPath.remove(normalized);
         continue;
       }
-      _directoryEntriesByGuestPath[normalized] = _directoryEntryList(children);
+      _directoryEntriesByGuestPath[normalized] = _directoryEntryList(
+        directoryPath: normalized,
+        children: children,
+        directoryMetadataByGuestPath: _directoryMetadataByGuestPath,
+      );
     }
   }
 
@@ -1102,7 +1113,24 @@ final class Preview1VirtualFileSystem {
     if (children == null || name.isEmpty) {
       return;
     }
-    children[name] = Preview1DirectoryEntry(name: name, fileType: fileType);
+    children[name] = Preview1DirectoryEntry(
+      name: name,
+      fileType: fileType,
+      inode: _inodeForPath(normalized),
+    );
+  }
+
+  int _inodeForPath(String guestPath) {
+    final normalized = normalizeGuestPath(guestPath);
+    final file = _filesByGuestPath[normalized];
+    if (file != null) {
+      return file.metadata.inode;
+    }
+    final symlink = _symlinksByGuestPath[normalized];
+    if (symlink != null) {
+      return symlink.metadata.inode;
+    }
+    return _directoryMetadataByGuestPath[normalized]?.inode ?? 0;
   }
 
   void _removeDirectoryChild(String guestPath) {
@@ -1152,17 +1180,38 @@ final class Preview1VirtualFileSystem {
 }
 
 final class Preview1DirectoryEntry {
-  Preview1DirectoryEntry({required this.name, required this.fileType})
-    : nameBytes = pathBytes(name);
+  Preview1DirectoryEntry({
+    required this.name,
+    required this.fileType,
+    required this.inode,
+  }) : nameBytes = pathBytes(name);
 
   final String name;
   final Uint8List nameBytes;
   final int fileType;
+  final int inode;
 }
 
 final class Preview1VirtualNodeMetadata {
+  Preview1VirtualNodeMetadata({int? inode}) : inode = inode ?? _nextInode++;
+
+  static int _nextInode = 1;
+
+  final int device = 1;
+  final int inode;
+  int linkCount = 1;
   int accessTimeNanos = 0;
   int modificationTimeNanos = 0;
+
+  void retainLink() {
+    linkCount++;
+  }
+
+  void releaseLink() {
+    if (linkCount > 0) {
+      linkCount--;
+    }
+  }
 }
 
 enum Preview1StdioDescriptorKind { stdin, stdout, stderr }
@@ -1235,14 +1284,14 @@ int writeDirectoryEntries({
   for (var index = startIndex; index < entries.length; index++) {
     final remaining = bufferLength - written;
     if (remaining < direntSize) {
-      break;
+      return bufferLength;
     }
 
     final entry = entries[index];
     final entryPtr = bufferPtr + written;
     bytes.fillRange(entryPtr, entryPtr + direntSize, 0);
     _setUint64(data, entryPtr + direntNextOffset, index + 1);
-    _setUint64(data, entryPtr + direntInodeOffset, 0);
+    _setUint64(data, entryPtr + direntInodeOffset, entry.inode);
     data.setUint32(
       entryPtr + direntNameLengthOffset,
       entry.nameBytes.length,
@@ -1264,6 +1313,26 @@ int writeDirectoryEntries({
     }
   }
   return written;
+}
+
+void writeFilestatMetadata({
+  required ByteData data,
+  required int filestatPtr,
+  required Preview1VirtualNodeMetadata metadata,
+}) {
+  _setUint64(data, filestatPtr + filestatDeviceOffset, metadata.device);
+  _setUint64(data, filestatPtr + filestatInodeOffset, metadata.inode);
+  _setUint64(data, filestatPtr + filestatLinkCountOffset, metadata.linkCount);
+  _setUint64(
+    data,
+    filestatPtr + filestatAccessTimeOffset,
+    metadata.accessTimeNanos,
+  );
+  _setUint64(
+    data,
+    filestatPtr + filestatModificationTimeOffset,
+    metadata.modificationTimeNanos,
+  );
 }
 
 int readSocketIntoIov({
@@ -2209,6 +2278,8 @@ bool _isChildPath(String path, String parent) {
 
 _DirectoryChildrenByPath _buildDirectoryChildrenByPath({
   required Set<String> directories,
+  required Map<String, Preview1VirtualNodeMetadata>
+  directoryMetadataByGuestPath,
   required Map<String, Preview1VirtualFile> filesByGuestPath,
   required Map<String, Preview1VirtualSymlink> symlinksByGuestPath,
 }) {
@@ -2221,6 +2292,7 @@ _DirectoryChildrenByPath _buildDirectoryChildrenByPath({
     required String parent,
     required String name,
     required int fileType,
+    required int inode,
   }) {
     final children = childrenByDirectory[parent];
     if (children == null || name.isEmpty) {
@@ -2228,7 +2300,8 @@ _DirectoryChildrenByPath _buildDirectoryChildrenByPath({
     }
     children.putIfAbsent(
       name,
-      () => Preview1DirectoryEntry(name: name, fileType: fileType),
+      () =>
+          Preview1DirectoryEntry(name: name, fileType: fileType, inode: inode),
     );
   }
 
@@ -2240,20 +2313,23 @@ _DirectoryChildrenByPath _buildDirectoryChildrenByPath({
       parent: dirnameOfGuestPath(directory),
       name: basenameOfGuestPath(directory),
       fileType: filetypeDirectory,
+      inode: directoryMetadataByGuestPath[directory]?.inode ?? 0,
     );
   }
-  for (final filePath in filesByGuestPath.keys) {
+  for (final entry in filesByGuestPath.entries) {
     addChild(
-      parent: dirnameOfGuestPath(filePath),
-      name: basenameOfGuestPath(filePath),
+      parent: dirnameOfGuestPath(entry.key),
+      name: basenameOfGuestPath(entry.key),
       fileType: filetypeRegularFile,
+      inode: entry.value.metadata.inode,
     );
   }
-  for (final symlinkPath in symlinksByGuestPath.keys) {
+  for (final entry in symlinksByGuestPath.entries) {
     addChild(
-      parent: dirnameOfGuestPath(symlinkPath),
-      name: basenameOfGuestPath(symlinkPath),
+      parent: dirnameOfGuestPath(entry.key),
+      name: basenameOfGuestPath(entry.key),
       fileType: filetypeSymbolicLink,
+      inode: entry.value.metadata.inode,
     );
   }
 
@@ -2261,20 +2337,39 @@ _DirectoryChildrenByPath _buildDirectoryChildrenByPath({
 }
 
 Map<String, List<Preview1DirectoryEntry>> _buildDirectoryEntriesFromChildren(
-  _DirectoryChildrenByPath childrenByDirectory,
-) {
+  _DirectoryChildrenByPath childrenByDirectory, {
+  required Map<String, Preview1VirtualNodeMetadata>
+  directoryMetadataByGuestPath,
+}) {
   return {
     for (final entry in childrenByDirectory.entries)
-      entry.key: _directoryEntryList(entry.value),
+      entry.key: _directoryEntryList(
+        directoryPath: entry.key,
+        children: entry.value,
+        directoryMetadataByGuestPath: directoryMetadataByGuestPath,
+      ),
   };
 }
 
-List<Preview1DirectoryEntry> _directoryEntryList(
-  Map<String, Preview1DirectoryEntry> children,
-) {
+List<Preview1DirectoryEntry> _directoryEntryList({
+  required String directoryPath,
+  required Map<String, Preview1DirectoryEntry> children,
+  required Map<String, Preview1VirtualNodeMetadata>
+  directoryMetadataByGuestPath,
+}) {
+  final current = normalizeGuestPath(directoryPath);
+  final parent = dirnameOfGuestPath(current);
   return <Preview1DirectoryEntry>[
-    Preview1DirectoryEntry(name: '.', fileType: filetypeDirectory),
-    Preview1DirectoryEntry(name: '..', fileType: filetypeDirectory),
+    Preview1DirectoryEntry(
+      name: '.',
+      fileType: filetypeDirectory,
+      inode: directoryMetadataByGuestPath[current]?.inode ?? 0,
+    ),
+    Preview1DirectoryEntry(
+      name: '..',
+      fileType: filetypeDirectory,
+      inode: directoryMetadataByGuestPath[parent]?.inode ?? 0,
+    ),
     ...children.values.toList()..sort((a, b) => a.name.compareTo(b.name)),
   ];
 }

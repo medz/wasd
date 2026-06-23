@@ -77,17 +77,18 @@ int _getUint64Le(ByteData data, int offset) {
   return low | (high << 32);
 }
 
-List<({String name, int next, int type})> _readDirents(
+List<({int inode, String name, int next, int type})> _readDirents(
   Uint8List bytes,
   ByteData data,
   int ptr,
   int length,
 ) {
-  final entries = <({String name, int next, int type})>[];
+  final entries = <({int inode, String name, int next, int type})>[];
   var offset = ptr;
   final end = ptr + length;
   while (offset + 24 <= end) {
     final next = _getUint64Le(data, offset);
+    final inode = _getUint64Le(data, offset + 8);
     final nameLen = data.getUint32(offset + 16, Endian.little);
     final type = bytes[offset + 20];
     final namePtr = offset + 24;
@@ -96,6 +97,7 @@ List<({String name, int next, int type})> _readDirents(
       break;
     }
     entries.add((
+      inode: inode,
       name: utf8.decode(bytes.sublist(namePtr, nameEnd)),
       next: next,
       type: type,
@@ -5964,6 +5966,226 @@ void main() {
             updatedBufused,
           );
           expect(updatedEntries.map((entry) => entry.name), contains('newdir'));
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; fd_readdir behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'filestat and readdir report stable virtual node identities',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/assets/a.txt': Uint8List.fromList([1]),
+              '/sandbox/assets/b.txt': Uint8List.fromList([2]),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final pathLink = preview1['path_link'] as FunctionImportExportValue;
+          final fdFilestatGet =
+              preview1['fd_filestat_get'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
+          final fdReaddir = preview1['fd_readdir'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 2700;
+          const secondPathPtr = 2736;
+          const openedFdPtr = 2772;
+          const filestatPtr = 2808;
+          const otherFilestatPtr = 2872;
+          const direntsPtr = 2944;
+          const bufusedPtr = 3200;
+
+          final dirPath = utf8.encode('assets');
+          bytes.setAll(pathPtr, dirPath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              dirPath.length,
+              0,
+              _rightsAll,
+              _rightsAll,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final dirFd = data.getUint32(openedFdPtr, Endian.little);
+          expect(fdFilestatGet.ref([dirFd, filestatPtr]), 0);
+          final dirDevice = _getUint64Le(data, filestatPtr);
+          final dirInode = _getUint64Le(data, filestatPtr + 8);
+          expect(dirDevice, isNonZero);
+          expect(dirInode, isNonZero);
+
+          final fileA = utf8.encode('assets/a.txt');
+          bytes.setAll(pathPtr, fileA);
+          expect(
+            pathFilestatGet.ref([3, 0, pathPtr, fileA.length, filestatPtr]),
+            0,
+          );
+          final fileADevice = _getUint64Le(data, filestatPtr);
+          final fileAInode = _getUint64Le(data, filestatPtr + 8);
+          expect(fileADevice, dirDevice);
+          expect(fileAInode, isNonZero);
+
+          final fileB = utf8.encode('assets/b.txt');
+          bytes.setAll(pathPtr, fileB);
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              pathPtr,
+              fileB.length,
+              otherFilestatPtr,
+            ]),
+            0,
+          );
+          expect(_getUint64Le(data, otherFilestatPtr), dirDevice);
+          final fileBInode = _getUint64Le(data, otherFilestatPtr + 8);
+          expect(fileBInode, isNot(fileAInode));
+
+          final hardLink = utf8.encode('assets/a-hard.txt');
+          bytes.setAll(pathPtr, fileA);
+          bytes.setAll(secondPathPtr, hardLink);
+          expect(
+            pathLink.ref([
+              3,
+              0,
+              pathPtr,
+              fileA.length,
+              3,
+              secondPathPtr,
+              hardLink.length,
+            ]),
+            0,
+          );
+          bytes.setAll(pathPtr, hardLink);
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              pathPtr,
+              hardLink.length,
+              otherFilestatPtr,
+            ]),
+            0,
+          );
+          expect(_getUint64Le(data, otherFilestatPtr), dirDevice);
+          expect(_getUint64Le(data, otherFilestatPtr + 8), fileAInode);
+
+          expect(fdReaddir.ref([dirFd, direntsPtr, 220, 0, bufusedPtr]), 0);
+          final bufused = data.getUint32(bufusedPtr, Endian.little);
+          final entries = _readDirents(bytes, data, direntsPtr, bufused);
+          expect(
+            entries.singleWhere((entry) => entry.name == '.').inode,
+            dirInode,
+          );
+          expect(
+            entries.singleWhere((entry) => entry.name == 'a.txt').inode,
+            fileAInode,
+          );
+          expect(
+            entries.singleWhere((entry) => entry.name == 'a-hard.txt').inode,
+            fileAInode,
+          );
+          expect(
+            entries.singleWhere((entry) => entry.name == 'b.txt').inode,
+            fileBInode,
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; virtual identity behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'fd_readdir keeps buffer full while directory entries remain',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              for (var index = 0; index < 100; index++)
+                '/sandbox/many/file.$index': Uint8List(0),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdReaddir = preview1['fd_readdir'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 2700;
+          const openedFdPtr = 2736;
+          const direntsPtr = 2800;
+          const bufferLength = 256;
+          const bufusedPtr = 3100;
+
+          final dirPath = utf8.encode('many');
+          bytes.setAll(pathPtr, dirPath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              dirPath.length,
+              0,
+              _rightsAll,
+              _rightsAll,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final dirFd = data.getUint32(openedFdPtr, Endian.little);
+
+          var total = 0;
+          var cookie = 0;
+          for (var page = 0; page < 32; page++) {
+            bytes.fillRange(direntsPtr, direntsPtr + bufferLength, 0);
+            expect(
+              fdReaddir.ref([
+                dirFd,
+                direntsPtr,
+                bufferLength,
+                cookie,
+                bufusedPtr,
+              ]),
+              0,
+            );
+            final bufused = data.getUint32(bufusedPtr, Endian.little);
+            final entries = _readDirents(bytes, data, direntsPtr, bufused);
+            total += entries.length;
+            if (bufused < bufferLength) {
+              break;
+            }
+            expect(entries, isNotEmpty);
+            cookie = entries.last.next;
+          }
+
+          expect(total, 102);
         },
         skip: _skipOnNode(
           'Skipping on Node.js; fd_readdir behavior is delegated to node:wasi.',

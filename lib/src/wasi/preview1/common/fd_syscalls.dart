@@ -30,23 +30,6 @@ void _setUint64(ByteData data, int offset, int value) {
   data.setUint32(offset + 4, normalized >>> 32, Endian.little);
 }
 
-void _writeFilestatTimes(
-  ByteData data,
-  int filestatPtr,
-  Preview1VirtualNodeMetadata metadata,
-) {
-  _setUint64(
-    data,
-    filestatPtr + filestatAccessTimeOffset,
-    metadata.accessTimeNanos,
-  );
-  _setUint64(
-    data,
-    filestatPtr + filestatModificationTimeOffset,
-    metadata.modificationTimeNanos,
-  );
-}
-
 int _filetypeForDescriptor(
   Preview1VirtualFileSystem vfs,
   int fd,
@@ -145,7 +128,11 @@ int preview1FdFilestatGet({
   }
   final metadata = vfs.metadataForFd(fd);
   if (metadata != null) {
-    _writeFilestatTimes(data, filestatPtr, metadata);
+    writeFilestatMetadata(
+      data: data,
+      filestatPtr: filestatPtr,
+      metadata: metadata,
+    );
   }
   return errnoSuccess;
 }
