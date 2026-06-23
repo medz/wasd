@@ -1228,6 +1228,67 @@ void main() {
       );
 
       test(
+        'fd_close closes preopen descriptors without closing opened directories',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/assets/doom1.wad': Uint8List.fromList([7, 8, 9]),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+          final fdFdstatGet =
+              preview1['fd_fdstat_get'] as FunctionImportExportValue;
+          final fdPrestatGet =
+              preview1['fd_prestat_get'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 1500;
+          const openedFdPtr = 1532;
+          const fdstatPtr = 1548;
+          final dirPath = utf8.encode('assets');
+          bytes.setAll(pathPtr, dirPath);
+
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              dirPath.length,
+              0,
+              _rightsAll,
+              _rightsAll,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final openedDirFd = data.getUint32(openedFdPtr, Endian.little);
+          expect(openedDirFd, greaterThan(3));
+
+          expect(fdClose.ref([3]), 0);
+          expect(fdFdstatGet.ref([3, fdstatPtr]), _errnoBadf);
+          expect(fdPrestatGet.ref([3, fdstatPtr]), _errnoBadf);
+          expect(fdFdstatGet.ref([openedDirFd, fdstatPtr]), 0);
+          expect(bytes[fdstatPtr], 3);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; fd_close behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
         'fd_fdstat_get writes a character-device descriptor for stdio',
         () {
           final preview1 = wasi.imports['wasi_snapshot_preview1']!;

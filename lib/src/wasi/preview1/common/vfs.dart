@@ -559,23 +559,11 @@ final class Preview1VirtualFileSystem {
   }
 
   bool close(int fd) {
-    if (_stdioDescriptorsByFd.remove(fd) != null) {
-      _stdioRightsByFd.remove(fd);
-      _stdioFlagsByFd.remove(fd);
-      return true;
+    if (!_hasDescriptor(fd)) {
+      return false;
     }
-    if (_openFilesByFd.remove(fd) != null) {
-      return true;
-    }
-    if (_socketsByFd.remove(fd) != null) {
-      return true;
-    }
-    if (_openDirectoriesByFd.remove(fd) != null) {
-      _openDirectoryFlagsByFd.remove(fd);
-      _openDirectoryRightsByFd.remove(fd);
-      return true;
-    }
-    return false;
+    _closeDescriptor(fd);
+    return true;
   }
 
   Preview1VirtualFile? lookupFile(String guestPath) {

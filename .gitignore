@@ -6,6 +6,10 @@ build/
 coverage/
 .toolchains/
 
+# Python tool state
+__pycache__/
+*.pyc
+
 # IDE / OS
 .DS_Store
 .idea/

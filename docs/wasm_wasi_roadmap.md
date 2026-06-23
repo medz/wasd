@@ -100,28 +100,37 @@ too broad to verify in one commit.
 
 ### Now
 
-- [ ] `P1-SOCKET-CONFORMANCE` - Close the next concrete Preview1 socket
-  conformance gap.
-  - Scope: native/browser shared Preview1 socket and descriptor semantics.
+- [ ] `P1-OFFICIAL-FS-CONFORMANCE` - Drive official Preview1 filesystem
+  failures to zero one checked child at a time.
+  - Scope: native/browser shared Preview1 VFS and syscall behavior exercised by
+    upstream `WebAssembly/wasi-testsuite` `wasm32-wasip1` command modules.
   - Edit targets: `test/wasi_test.dart`,
-    `lib/src/wasi/preview1/common/vfs.dart`,
-    `lib/src/wasi/preview1/socket.dart`, and
-    `tool/wasi_vfs_benchmark.dart` when the touched path is performance-relevant.
-  - Red test: add the smallest missing socket regression under
-    `test/wasi_test.dart`, then confirm it fails or is absent for the expected
-    reason before the fix.
-  - Implementation gate: `dart test test/wasi_test.dart`;
-    add `dart test -p chrome test/wasi_test.dart --name "<focused socket name>"`
-    when the shared browser path is touched.
-  - Performance gate:
-    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
-  - Done when: the selected socket edge has regression coverage, native/browser
-    behavior agrees for the supported subset, output pointers are not mutated on
-    error paths, and the affected socket path is visible in benchmark output.
-  - Evidence update: update this roadmap row or split it into a checked child row
-    with the exact command evidence.
-  - Claim impact: contributes to `SUPPORT-P1`; does not complete it until every
-    remaining Preview1 socket row and runtime gate is checked.
+    `lib/src/wasi/preview1/common/vfs.dart`, native/browser syscall adapters
+    under `lib/src/wasi/preview1/`, and the testsuite runner only when the
+    selected failure proves a harness gap rather than a runtime gap.
+  - Red test: pick exactly one failing official module from the current
+    `18/72` Preview1 failure list, add the smallest focused regression under
+    `test/wasi_test.dart`, and confirm the regression or official single-module
+    run fails for the expected reason before the fix.
+  - Implementation gate: focused `dart test test/wasi_test.dart --name ...`;
+    matching `dart test -p chrome test/wasi_test.dart --name ...` when shared
+    browser behavior is touched; the matching
+    `dart tool/wasi_testsuite_preview1_runner.dart .../<case>.wasm`; then the
+    upstream `./run-tests --runtime-adapter <wasd>/tool/wasi_testsuite_wasd_adapter.py`
+    rerun with the new pass/fail delta recorded.
+  - Performance gate: N/A for constant-time descriptor/syscall preflight rows;
+    run `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` for
+    directory traversal, readdir, path lookup, descriptor allocation, or any row
+    that adds a repeated VFS hot path.
+  - Checked child rows: `P1-FD-RENUMBER-TARGET-PREFLIGHT` and
+    `P1-FD-CLOSE-PREOPEN`.
+  - Done when: the official Preview1 command-module run reports zero Preview1
+    failures with no unexpected Preview1 skips, and every previously failing
+    module has a narrow checked child row with local and official evidence.
+  - Evidence update: update this board, the detailed backlog, the verification
+    matrix, and current baseline numbers in the same commit.
+  - Claim impact: contributes to `SUPPORT-P1`; it does not complete
+    `SUPPORT-P1`, `SUPPORT-P2`, or `SUPPORT-P3`.
 
 ### Queued Next
 
@@ -244,6 +253,32 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-FD-CLOSE-PREOPEN` - `fd_close` closes preopen directory
+  descriptors without closing already opened child descriptors.
+  - Scope: native/browser shared Preview1 descriptor table semantics for
+    preopen directory descriptors.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "fd_close closes preopen descriptors without closing opened directories" --reporter=compact`
+    failed before the fix because `fd_close(3)` returned `BADF` for a configured
+    preopen descriptor after a child directory had been opened.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "fd_close closes preopen descriptors without closing opened directories" --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --name "fd_close closes preopen descriptors without closing opened directories" --reporter=compact`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/close_preopen.wasm`;
+    upstream `wasi-testsuite` rerun reported `18/72` Preview1 failures after
+    this change, down from `19/72`.
+  - Performance gate: N/A; this replaces duplicated descriptor cleanup branches
+    with one constant-time `_hasDescriptor`/`_closeDescriptor` path.
+  - Done when: `fd_close` succeeds for a live preopen fd, later preopen metadata
+    queries for that fd return `BADF`, and a directory fd opened from that
+    preopen remains usable as `FILETYPE_DIRECTORY`.
+  - Evidence update: this checked row plus the detailed backlog row,
+    verification matrix, and current baseline.
+  - Claim impact: closes one official Preview1 testsuite failure for
+    `SUPPORT-P1`; it does not complete `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [x] `P1-FD-RENUMBER-TARGET-PREFLIGHT` - `fd_renumber` rejects invalid
   destination descriptors before moving the source descriptor.
   - Scope: native/browser shared Preview1 descriptor table semantics for
@@ -1631,11 +1666,14 @@ unchecked.
     wording if public claims change.
 - [ ] `SUPPORT-P1` - Full WASI Preview1 support.
   - Current: `WASI(...)` provides a real Preview1 host surface, but full
-    Preview1 support remains incomplete.
+    Preview1 support remains incomplete; the current official
+    `WebAssembly/wasi-testsuite` `prod/testsuite-base` run reports `18/72`
+    Preview1 failures.
   - Required rows: every Preview1 descriptor, filesystem, stdio, clock, random,
     poll, and socket row checked, including `P1-PATH-OPEN-OFLAGS`,
-    `P1-SOCKET-CONFORMANCE` child rows, `P1-OFFICIAL-TESTSUITE-ADAPTER`, and
-    future official testsuite gap rows not yet represented by a narrower ID.
+    `P1-SOCKET-CONFORMANCE` child rows, `P1-OFFICIAL-TESTSUITE-ADAPTER`,
+    `P1-OFFICIAL-FS-CONFORMANCE` child rows, and future official testsuite gap
+    rows not yet represented by a narrower ID.
   - Implementation gate:
     `dart test test/wasi_test.dart`;
     `dart test -p chrome test/wasi_test.dart`;
@@ -1777,6 +1815,7 @@ copying their internals directly.
 | [x] | Preview1 native/browser socket recv iovec aliasing | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "sock_recv snapshots iovs before writing receive buffers"`; `dart test test/wasi_test.dart --name "sock_recv"`; `dart test -p chrome test/wasi_test.dart --name "sock_recv"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Stream and datagram `sock_recv` now snapshot overlapping iovec tables before receive-buffer writes; full Preview1 socket conformance still needs broader syscall/spec-suite gates. |
 | [x] | Official WASI testsuite adapter for Preview1 command modules | `tool/wasi_testsuite_preview1_runner.dart`, `tool/wasi_testsuite_wasd_adapter.py`, `test/wasi_testsuite_runner_test.dart`, `test/support/wasm_fixtures.dart` | `dart test test/wasi_testsuite_runner_test.dart --reporter=compact`; `dart run tool/wasi_testsuite_preview1_runner.dart --version`; `python3 -m py_compile tool/wasi_testsuite_wasd_adapter.py` | wasd can now be invoked by the official `wasi-testsuite` runner for `wasm32-wasip1` `wasi:cli/command` tests, with `--dir HOST::GUEST` roots snapshotted into the virtual VFS and observed by a real `path_open`/`fd_read` command module; full Preview1 still requires running the external suite and turning failures into checked implementation rows. |
 | [x] | Preview1 `fd_renumber` target descriptor preflight | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "fd_renumber" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "fd_renumber" --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/renumber.wasm` | `fd_renumber` now returns `BADF` when the destination descriptor is not open and preserves the source descriptor; the official Preview1 suite dropped from `20/72` failures to `19/72`, so broader filesystem/symlink/directory/inode gaps remain. |
+| [x] | Preview1 `fd_close` preopen descriptor close | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "fd_close closes preopen descriptors without closing opened directories" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "fd_close closes preopen descriptors without closing opened directories" --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/close_preopen.wasm` | `fd_close` now closes preopen descriptors through the shared descriptor table while preserving child directory descriptors opened from that preopen; the official Preview1 suite dropped from `19/72` failures to `18/72`, so broader filesystem/symlink/directory/inode gaps remain. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Component instantiation import matching for known local child components | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments" --reporter=compact`; `dart test test/component_test.dart --reporter=compact`; `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart --reporter=compact`; `dart run tool/component_benchmark.dart --json`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | Known local child component instantiation now rejects unknown argument names, missing required imports, and wrong argument sorts before adapter binding; imported/aliased component targets, cross-component type equivalence, generated worlds, and official suite coverage remain open. |
 | [x] | Component task-return borrow validation | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "reports task.return result types containing borrow|reports missing canonical option requirements|reports invalid canonical result value type indexes" --reporter=compact`; `dart run tool/component_benchmark.dart --json` | Borrowed canonical `task.return` results are now rejected during validation; broader borrow, stream, future, nested-shape, generated-world, and component-suite coverage remains. |
@@ -1882,11 +1921,12 @@ This is the implementation state as of 2026-06-23 on `main`.
   conformance entry point only; full Preview1 support requires running the
   external suite and converting failures into checked implementation rows.
 - The official `WebAssembly/wasi-testsuite` `prod/testsuite-base` run now has
-  `19/72` Preview1 failures with `41` Preview3 tests skipped by the adapter
-  capability filter. `renumber.wasm` is now passing; remaining Preview1 failures
-  are concentrated in symlink traversal, path normalization/trailing slash
-  errors, directory seek/open rights, preopen close semantics, directory entry
-  scaling, and stable device/inode metadata.
+  `18/72` Preview1 failures with `41` Preview3 tests skipped by the adapter
+  capability filter. `renumber.wasm` and `close_preopen.wasm` are now passing;
+  remaining Preview1 failures are concentrated in symlink traversal, path
+  normalization/trailing slash errors, directory seek/open rights, directory
+  entry scaling, and stable device/inode metadata. The Preview3 skips are a
+  real unsupported-state signal, not a pass result or a support claim.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/` now provides an internal typed resource table plus
@@ -2191,10 +2231,12 @@ Work from this queue before opening new lines of implementation. The order is
 chosen to keep public claims honest, keep the architecture layered, and keep
 performance visible while the support surface expands.
 
-1. `P1-SOCKET-CONFORMANCE`
-   - Why: Preview1 is the only public WASI surface today, so remaining P1 gaps
-     should be measured before P2/P3 become public.
-   - Do not: add raw networking APIs that Preview1 does not specify.
+1. `P1-OFFICIAL-FS-CONFORMANCE`
+   - Why: Preview1 is the only public WASI surface today, and the official
+     `wasi-testsuite` run still has `18/72` Preview1 failures that must be
+     closed with real behavior before any full-support claim.
+   - Do not: count skipped Preview3 tests as support or replace official
+     failures with local-only helper tests.
 2. `PERF-VFS-DISTRIBUTIONS`
    - Why: socket and descriptor work needs benchmark distributions that
      resemble conformance loads, not only small unit tests.
@@ -2823,6 +2865,32 @@ performance visible while the support surface expands.
   - Done when: invalid destination fds return `BADF` without closing or moving
     the source descriptor, valid destination fds still get replaced, and
     `from == to` remains success for an open descriptor.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry, verification matrix, and current baseline.
+  - Claim impact: closes one official Preview1 testsuite failure for
+    `SUPPORT-P1`; does not complete Preview1 full support or any P2/P3 gate.
+- [x] `P1-FD-CLOSE-PREOPEN` - `fd_close` closes preopen directory descriptors.
+  - Scope: native/browser shared Preview1 descriptor table behavior in
+    `Preview1VirtualFileSystem.close`.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `test/wasi_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "fd_close closes preopen descriptors without closing opened directories" --reporter=compact`
+    failed before the fix because `fd_close(3)` returned `BADF` for the
+    configured preopen descriptor even after a child directory descriptor opened
+    from that preopen remained valid.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "fd_close closes preopen descriptors without closing opened directories" --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --name "fd_close closes preopen descriptors without closing opened directories" --reporter=compact`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/close_preopen.wasm`;
+    upstream `wasi-testsuite` rerun with the wasd adapter reported `18/72`
+    Preview1 failures after the fix, down from `19/72`.
+  - Performance gate: N/A; `close` now uses the existing constant-time
+    descriptor presence and cleanup helpers instead of separate cleanup
+    branches.
+  - Done when: closing a preopen fd succeeds, later `fd_fdstat_get` and
+    `fd_prestat_get` on that fd return `BADF`, and an opened directory fd
+    derived from that preopen still reports `FILETYPE_DIRECTORY`.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry, verification matrix, and current baseline.
   - Claim impact: closes one official Preview1 testsuite failure for
