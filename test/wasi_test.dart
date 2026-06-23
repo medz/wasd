@@ -37,6 +37,7 @@ const int _errnoBadf = 8;
 const int _errnoExist = 20;
 const int _errnoInval = 28;
 const int _errnoIsdir = 31;
+const int _errnoLoop = 32;
 const int _errnoNoent = 44;
 const int _errnoNotsock = 57;
 const int _errnoNotdir = 54;
@@ -6840,6 +6841,156 @@ void main() {
         },
         skip: _skipOnNode(
           'Skipping on Node.js; path_link behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'path_open rejects nofollow symlinks without resolving targets',
+        () async {
+          final fileWasi = WASI(preopens: {'/sandbox': '/tmp'});
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathCreateDirectory =
+              preview1['path_create_directory'] as FunctionImportExportValue;
+          final pathSymlink =
+              preview1['path_symlink'] as FunctionImportExportValue;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          const targetPathPtr = 4176;
+          const symlinkPathPtr = 4208;
+          const danglingTargetPtr = 4240;
+          const danglingPathPtr = 4272;
+          const selfPathPtr = 4304;
+          const openedFdPtr = 4336;
+
+          final targetPath = utf8.encode('target');
+          final symlinkPath = utf8.encode('symlink');
+          final danglingTarget = utf8.encode('missing-target');
+          final danglingPath = utf8.encode('dangling');
+          final selfPath = utf8.encode('self');
+          bytes.setAll(targetPathPtr, targetPath);
+          bytes.setAll(symlinkPathPtr, symlinkPath);
+          bytes.setAll(danglingTargetPtr, danglingTarget);
+          bytes.setAll(danglingPathPtr, danglingPath);
+          bytes.setAll(selfPathPtr, selfPath);
+
+          expect(
+            pathCreateDirectory.ref([3, targetPathPtr, targetPath.length]),
+            0,
+          );
+          expect(
+            pathSymlink.ref([
+              targetPathPtr,
+              targetPath.length,
+              3,
+              symlinkPathPtr,
+              symlinkPath.length,
+            ]),
+            0,
+          );
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              symlinkPathPtr,
+              symlinkPath.length,
+              _oflagDirectory,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            _errnoLoop,
+          );
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              symlinkPathPtr,
+              symlinkPath.length,
+              0,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            _errnoLoop,
+          );
+          expect(
+            pathOpen.ref([
+              3,
+              _lookupflagSymlinkFollow,
+              symlinkPathPtr,
+              symlinkPath.length,
+              _oflagDirectory,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+
+          expect(
+            pathSymlink.ref([
+              danglingTargetPtr,
+              danglingTarget.length,
+              3,
+              danglingPathPtr,
+              danglingPath.length,
+            ]),
+            0,
+          );
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              danglingPathPtr,
+              danglingPath.length,
+              0,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            _errnoLoop,
+          );
+
+          expect(
+            pathSymlink.ref([
+              selfPathPtr,
+              selfPath.length,
+              3,
+              selfPathPtr,
+              selfPath.length,
+            ]),
+            0,
+          );
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              selfPathPtr,
+              selfPath.length,
+              0,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            _errnoLoop,
+          );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; symlink behavior is delegated to node:wasi.',
         ),
       );
 

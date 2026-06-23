@@ -1116,6 +1116,8 @@ class WASI implements wasi_iface.WASI {
         return _errnoIsdir;
       case wasi_vfs.Preview1VirtualOpenKind.notDirectory:
         return _errnoNotdir;
+      case wasi_vfs.Preview1VirtualOpenKind.symlinkLoop:
+        return _errnoLoop;
     }
   });
 
@@ -1973,6 +1975,7 @@ const int _errnoNosys = wasi_common.errnoNosys;
 const int _errnoNotdir = wasi_common.errnoNotdir;
 const int _errnoNotempty = wasi_common.errnoNotempty;
 const int _errnoNotcapable = wasi_common.errnoNotcapable;
+const int _errnoLoop = wasi_common.errnoLoop;
 const int _errnoPerm = wasi_common.errnoPerm;
 const int _prestatSize = wasi_common.prestatSize;
 const int _preopenTypeDir = wasi_common.preopenTypeDir;

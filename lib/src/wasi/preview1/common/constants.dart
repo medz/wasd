@@ -6,6 +6,7 @@ const int errnoBadf = 8;
 const int errnoAgain = 6;
 const int errnoExist = 20;
 const int errnoIsdir = 31;
+const int errnoLoop = 32;
 const int errnoNoent = 44;
 const int errnoNosys = 52;
 const int errnoNotdir = 54;

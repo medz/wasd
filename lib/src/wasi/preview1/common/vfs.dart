@@ -916,6 +916,13 @@ final class Preview1VirtualFileSystem {
       return Preview1VirtualOpenResult.file(fd);
     }
 
+    if (_symlinksByGuestPath.containsKey(normalized)) {
+      if (create && exclusive) {
+        return const Preview1VirtualOpenResult.exists();
+      }
+      return const Preview1VirtualOpenResult.symlinkLoop();
+    }
+
     if (isDirectoryPath(normalized)) {
       if (create && exclusive) {
         return const Preview1VirtualOpenResult.exists();
@@ -2062,6 +2069,7 @@ enum Preview1VirtualOpenKind {
   exists,
   isDirectory,
   notDirectory,
+  symlinkLoop,
 }
 
 enum Preview1PathMutationResult {
@@ -2123,6 +2131,9 @@ final class Preview1VirtualOpenResult {
 
   const Preview1VirtualOpenResult.notDirectory()
     : this._(Preview1VirtualOpenKind.notDirectory, null);
+
+  const Preview1VirtualOpenResult.symlinkLoop()
+    : this._(Preview1VirtualOpenKind.symlinkLoop, null);
 
   final Preview1VirtualOpenKind kind;
   final int? fd;

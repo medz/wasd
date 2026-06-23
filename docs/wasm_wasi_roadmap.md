@@ -109,7 +109,7 @@ too broad to verify in one commit.
     under `lib/src/wasi/preview1/`, and the testsuite runner only when the
     selected failure proves a harness gap rather than a runtime gap.
   - Red test: pick exactly one failing official module from the current
-    `5/72` Preview1 failure list, add the smallest focused regression under
+    `2/72` Preview1 failure list, add the smallest focused regression under
     `test/wasi_test.dart`, and confirm the regression or official single-module
     run fails for the expected reason before the fix.
   - Implementation gate: focused `dart test test/wasi_test.dart --name ...`;
@@ -124,10 +124,9 @@ too broad to verify in one commit.
     that adds a repeated VFS hot path.
   - Checked child rows: `P1-FD-RENUMBER-TARGET-PREFLIGHT`,
     `P1-FD-CLOSE-PREOPEN`, `P1-PATH-OPEN-DIRFD-NOT-DIR`,
-    `P1-DIRECTORY-NO-SEEK-RIGHT`,
-    `P1-TRAILING-SLASH-PATH-MUTATIONS`, and
-    `P1-GUEST-PATH-CAPABILITY-BOUNDARY`, and
-    `P1-PATH-LINK-EDGE-SEMANTICS`.
+    `P1-DIRECTORY-NO-SEEK-RIGHT`, `P1-TRAILING-SLASH-PATH-MUTATIONS`,
+    `P1-GUEST-PATH-CAPABILITY-BOUNDARY`, `P1-PATH-LINK-EDGE-SEMANTICS`, and
+    `P1-SYMLINK-NOFOLLOW-OPEN-LOOP`.
   - Done when: the official Preview1 command-module run reports zero Preview1
     failures with no unexpected Preview1 skips, and every previously failing
     module has a narrow checked child row with local and official evidence.
@@ -256,6 +255,43 @@ too broad to verify in one commit.
   - Claim impact: required before `SUPPORT-P2` or `SUPPORT-P3` can be checked.
 
 ### Recently Checked
+
+- [x] `P1-SYMLINK-NOFOLLOW-OPEN-LOOP` - Preview1 `path_open` no-follow
+  symlink opens report `LOOP` instead of missing paths.
+  - Scope: native/browser shared Preview1 `path_open` and VFS open-result
+    semantics for symlink nodes when `LOOKUPFLAGS_SYMLINK_FOLLOW` is absent.
+  - Edit targets: `lib/src/wasi/preview1/common/constants.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "path_open rejects nofollow symlinks" --reporter=compact`
+    failed before the fix because no-follow opening a symlink returned
+    `NOENT` instead of `LOOP`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "path_open rejects nofollow symlinks" --reporter=compact`;
+    `dart test test/wasi_test.dart test/wasm_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/nofollow_errors.wasm`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/dangling_symlink.wasm`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/symlink_loop.wasm`;
+    `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_symlink_nofollow.json --disable-colors`
+    reported `2/72` Preview1 failures after the fix, down from `5/72`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json > .dart_tool/wasi_vfs_benchmark_after_symlink_nofollow.json`
+    reported `path_open_close` at `1.422us/op` baseline, `0.7265us/op`
+    directory-heavy, `0.708us/op` descriptor-heavy, and `0.76525us/op`
+    socket-heavy. The implementation adds one symlink map lookup to the
+    existing `openPath` decision tree.
+  - Done when: no-follow `path_open` on directory, dangling, and
+    self-referential symlinks returns `LOOP`; symlink-follow opening of a
+    symlinked directory still succeeds; and `nofollow_errors.wasm`,
+    `dangling_symlink.wasm`, and `symlink_loop.wasm` pass.
+  - Evidence update: this checked row plus `SUPPORT-P1`, verification matrix,
+    current baseline, and ordered execution queue.
+  - Claim impact: closes three official Preview1 testsuite failures for
+    `SUPPORT-P1`; it does not complete full P1/P2/P3 support.
 
 - [x] `P1-PATH-LINK-EDGE-SEMANTICS` - Preview1 `path_link` matches
   official hard-link and symlink edge semantics.
@@ -1919,7 +1955,7 @@ unchecked.
 - [ ] `SUPPORT-P1` - Full WASI Preview1 support.
   - Current: `WASI(...)` provides a real Preview1 host surface, but full
     Preview1 support remains incomplete; the current official
-    `WebAssembly/wasi-testsuite` `prod/testsuite-base` run reports `5/72`
+    `WebAssembly/wasi-testsuite` `prod/testsuite-base` run reports `2/72`
     Preview1 failures.
   - Required rows: every Preview1 descriptor, filesystem, stdio, clock, random,
     poll, and socket row checked, including `P1-PATH-OPEN-OFLAGS`,
@@ -2075,6 +2111,7 @@ copying their internals directly.
 | [x] | Preview1 trailing-slash path mutation errno | `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "path mutation preserves trailing slash errors" --reporter=expanded`; `dart test test/wasi_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/unlink_file_trailing_slashes.wasm`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/path_symlink_trailing_slashes.wasm`; `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_trailing_slash.json --disable-colors`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | `path_unlink_file` and `path_symlink` now preserve the decoded guest trailing-slash bit through native/browser syscall adapters and shared VFS mutation helpers, returning Preview1 `NOTDIR`/`ISDIR`/`NOENT`/`EXIST` without deleting the wrong node; the official Preview1 suite dropped from `10/72` failures to `8/72`. |
 | [x] | Preview1 guest path capability boundary and `path_open` slash semantics | `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "path_open rejects absolute, escaping, nul, and file-slash paths" --reporter=expanded`; `dart test -p chrome test/wasi_test.dart --name "path_open rejects absolute, escaping, nul, and file-slash paths" --reporter=expanded`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/interesting_paths.wasm`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/symlink_create.wasm`; `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_path_decode.json --disable-colors`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; `dart test test/wasi_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | Guest path decoding now rejects absolute paths and paths that escape the preopen with `NOTCAPABLE`, rejects NUL-containing paths with `INVAL`, keeps file trailing-slash `path_open` failures as `NOTDIR`, allows directory trailing slashes, and rejects absolute symlink targets; the official Preview1 suite dropped from `8/72` failures to `6/72`. |
 | [x] | Preview1 `path_link` hard-link and symlink edge semantics | `lib/src/wasi/preview1/common/constants.dart`, `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "path_link handles directory" --reporter=compact`; `dart test test/wasi_test.dart --name "path_symlink and path_readlink preserve" --reporter=compact`; `dart test test/wasi_test.dart test/wasm_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/path_link.wasm`; `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_path_link.json --disable-colors`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json > .dart_tool/wasi_vfs_benchmark_after_path_link.json` | `path_link` now hard-links regular files and symbolic links without following symlink sources, rejects `LOOKUPFLAGS_SYMLINK_FOLLOW` with `INVAL`, returns `PERM` for directory sources, preserves missing trailing-slash targets as `NOENT`, and drops the official Preview1 suite from `6/72` failures to `5/72`; remaining failures are `nofollow_errors.wasm`, `path_rename.wasm`, `dangling_symlink.wasm`, `symlink_loop.wasm`, and `path_open_preopen.wasm`. |
+| [x] | Preview1 no-follow symlink `path_open` loop errno | `lib/src/wasi/preview1/common/constants.dart`, `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "path_open rejects nofollow symlinks" --reporter=compact`; `dart test test/wasi_test.dart test/wasm_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/nofollow_errors.wasm`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/dangling_symlink.wasm`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/symlink_loop.wasm`; `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_symlink_nofollow.json --disable-colors`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json > .dart_tool/wasi_vfs_benchmark_after_symlink_nofollow.json` | `path_open` now treats an existing symlink as a symlink node when `LOOKUPFLAGS_SYMLINK_FOLLOW` is absent, returning `LOOP` instead of falling through to `NOENT`; the official Preview1 suite dropped from `5/72` failures to `2/72`, leaving only `path_rename.wasm` and `path_open_preopen.wasm`. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Component instantiation import matching for known local child components | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments" --reporter=compact`; `dart test test/component_test.dart --reporter=compact`; `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart --reporter=compact`; `dart run tool/component_benchmark.dart --json`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | Known local child component instantiation now rejects unknown argument names, missing required imports, and wrong argument sorts before adapter binding; imported/aliased component targets, cross-component type equivalence, generated worlds, and official suite coverage remain open. |
 | [x] | Component task-return borrow validation | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "reports task.return result types containing borrow|reports missing canonical option requirements|reports invalid canonical result value type indexes" --reporter=compact`; `dart run tool/component_benchmark.dart --json` | Borrowed canonical `task.return` results are now rejected during validation; broader borrow, stream, future, nested-shape, generated-world, and component-suite coverage remains. |
@@ -2180,7 +2217,7 @@ This is the implementation state as of 2026-06-23 on `main`.
   conformance entry point only; full Preview1 support requires running the
   external suite and converting failures into checked implementation rows.
 - The official `WebAssembly/wasi-testsuite` `prod/testsuite-base` run now has
-  `5/72` Preview1 failures with `41` Preview3 tests skipped by the adapter
+  `2/72` Preview1 failures with `41` Preview3 tests skipped by the adapter
   capability filter. Passing former failures now include `renumber.wasm`,
   `close_preopen.wasm`, `path_open_dirfd_not_dir.wasm`,
   `directory_seek.wasm`, `fd_readdir.wasm`, `stat-dev-ino.wasm`,
@@ -2188,11 +2225,11 @@ This is the implementation state as of 2026-06-23 on `main`.
   `symlink_filestat.wasm`, `fd_filestat_set.wasm`,
   `unlink_file_trailing_slashes.wasm`,
   `path_symlink_trailing_slashes.wasm`, `interesting_paths.wasm`,
-  `symlink_create.wasm`, and `path_link.wasm`; remaining
-  Preview1 failures are `nofollow_errors.wasm`, `path_rename.wasm`,
-  `dangling_symlink.wasm`, `symlink_loop.wasm`, and `path_open_preopen.wasm`.
-  The Preview3 skips are a real unsupported-state signal, not a pass result or
-  a support claim.
+  `symlink_create.wasm`, `path_link.wasm`, `nofollow_errors.wasm`,
+  `dangling_symlink.wasm`, and `symlink_loop.wasm`; remaining Preview1
+  failures are `path_rename.wasm` and `path_open_preopen.wasm`. The Preview3
+  skips are a real unsupported-state signal, not a pass result or a support
+  claim.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/` now provides an internal typed resource table plus
@@ -2499,7 +2536,7 @@ performance visible while the support surface expands.
 
 1. `P1-OFFICIAL-FS-CONFORMANCE`
   - Why: Preview1 is the only public WASI surface today, and the official
-     `wasi-testsuite` run still has `5/72` Preview1 failures that must be
+     `wasi-testsuite` run still has `2/72` Preview1 failures that must be
      closed with real behavior before any full-support claim.
    - Do not: count skipped Preview3 tests as support or replace official
      failures with local-only helper tests.
@@ -3147,6 +3184,42 @@ performance visible while the support surface expands.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry, verification matrix, and current baseline.
   - Claim impact: closes two official Preview1 testsuite failures for
+    `SUPPORT-P1`; does not complete Preview1 full support or any P2/P3 gate.
+- [x] `P1-SYMLINK-NOFOLLOW-OPEN-LOOP` - Return `LOOP` when `path_open`
+  sees a symlink without follow lookup flags.
+  - Scope: native/browser shared Preview1 `path_open` errno behavior for
+    symlink, dangling symlink, and self-referential symlink nodes when
+    `LOOKUPFLAGS_SYMLINK_FOLLOW` is absent.
+  - Edit targets: `lib/src/wasi/preview1/common/constants.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "path_open rejects nofollow symlinks" --reporter=compact`
+    failed before the fix with `Expected: <32> Actual: <44>` because symlink
+    nodes fell through to the missing-path case.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "path_open rejects nofollow symlinks" --reporter=compact`;
+    `dart test test/wasi_test.dart test/wasm_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/nofollow_errors.wasm`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/dangling_symlink.wasm`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/symlink_loop.wasm`;
+    `.dart_tool/wasi-testsuite/.venv/bin/python .dart_tool/wasi-testsuite/run-tests --runtime-adapter /Users/seven/workspace/wasd/tool/wasi_testsuite_wasd_adapter.py --json-output-location /Users/seven/workspace/wasd/.dart_tool/wasi_testsuite_wasd_p1_after_symlink_nofollow.json --disable-colors`
+    reported `2/72` Preview1 failures after the fix, down from `5/72`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json > .dart_tool/wasi_vfs_benchmark_after_symlink_nofollow.json`
+    reported `path_open_close` at `1.422us/op` baseline, `0.7265us/op`
+    directory-heavy, `0.708us/op` descriptor-heavy, and `0.76525us/op`
+    socket-heavy.
+  - Done when: no-follow `path_open` on directory symlink, dangling symlink,
+    and self-loop symlink returns `LOOP`; symlink-follow directory opens still
+    succeed; and the three official modules pass.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry, verification matrix, `SUPPORT-P1`, ordered
+    execution queue, and current baseline.
+  - Claim impact: closes three official Preview1 testsuite failures for
     `SUPPORT-P1`; does not complete Preview1 full support or any P2/P3 gate.
 - [x] `P1-PATH-LINK-EDGE-SEMANTICS` - Match Preview1 `path_link` official
   hard-link and symlink edge semantics.
