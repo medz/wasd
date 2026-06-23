@@ -6,6 +6,7 @@ import 'async_host.dart';
 import 'canonical_host.dart';
 import 'host.dart';
 import 'resource_host.dart';
+import 'wit_adapter.dart';
 import 'wit_document.dart';
 
 /// Versioned component-host facade for future WASI Preview2/Preview3 adapters.
@@ -95,11 +96,13 @@ final class WASIComponentVersionedHost {
   }) {
     final world = _selectWitWorld(document, worldName);
     final errors = _witWorldVersionErrors(profile, document, world);
+    final functions = wasiComponentWitWorldFunctions(document, world);
     return WASIComponentVersionedWitWorldPlan._(
       profile: profile,
       document: document,
       world: world,
       versionErrors: errors,
+      functions: functions,
     );
   }
 }
@@ -295,9 +298,14 @@ final class WASIComponentVersionedWitWorldPlan {
     required this.document,
     required this.world,
     required List<WASIComponentVersionedWitWorldError> versionErrors,
+    required List<WASIComponentWitFunctionBinding> functions,
   }) : versionErrors = List<WASIComponentVersionedWitWorldError>.unmodifiable(
          versionErrors,
-       );
+       ),
+       functions = List<WASIComponentWitFunctionBinding>.unmodifiable(
+         functions,
+       ),
+       bindingErrors = wasiComponentWitAdapterBindingErrors(functions);
 
   /// Version profile used for WIT world ingestion.
   final WASIComponentVersionProfile profile;
@@ -316,6 +324,36 @@ final class WASIComponentVersionedWitWorldPlan {
 
   /// Whether this WIT world can enter adapter binding for [profile].
   bool get canIngest => versionErrors.isEmpty;
+
+  /// Local WIT functions expanded from imports, exports, and local includes.
+  final List<WASIComponentWitFunctionBinding> functions;
+
+  /// Binding errors for WIT functions inside this version profile.
+  final List<WASIComponentWitAdapterBindingError> bindingErrors;
+
+  /// Whether this WIT world can bind executable synchronous adapters.
+  bool get canBindAdapters => canIngest && bindingErrors.isEmpty;
+
+  /// Binds local WIT interface functions to executable adapter callbacks.
+  WASIComponentWitAdapterProgram bindAdapters({
+    Map<String, WASIComponentWitAdapterCallback> imports =
+        const <String, WASIComponentWitAdapterCallback>{},
+    Map<String, WASIComponentWitAdapterCallback> exports =
+        const <String, WASIComponentWitAdapterCallback>{},
+  }) {
+    if (versionErrors.isNotEmpty) {
+      throw WASIComponentVersionedWitWorldUnsupportedException(versionErrors);
+    }
+    final errors = bindingErrors;
+    if (errors.isNotEmpty) {
+      throw WASIComponentWitAdapterBindingException(errors);
+    }
+    return WASIComponentWitAdapterProgram.bind(
+      functions,
+      imports: imports,
+      exports: exports,
+    );
+  }
 }
 
 /// WIT world item or function rejected by a WASI version profile.
@@ -346,6 +384,31 @@ final class WASIComponentVersionedWitWorldError {
 
   @override
   String toString() => '$targetName: $reason';
+}
+
+/// Thrown when WIT world ingestion fails the selected WASI version profile.
+final class WASIComponentVersionedWitWorldUnsupportedException
+    implements Exception {
+  /// Creates an exception from WIT version [errors].
+  WASIComponentVersionedWitWorldUnsupportedException(
+    Iterable<WASIComponentVersionedWitWorldError> errors,
+  ) : errors = List<WASIComponentVersionedWitWorldError>.unmodifiable(errors);
+
+  /// WIT version errors that blocked adapter binding.
+  final List<WASIComponentVersionedWitWorldError> errors;
+
+  @override
+  String toString() {
+    final buffer = StringBuffer(
+      'WASI component version profile cannot bind WIT world',
+    );
+    for (final error in errors) {
+      buffer
+        ..write('\n')
+        ..write(error);
+    }
+    return buffer.toString();
+  }
 }
 
 /// Thrown when a component uses canonical operations outside a WASI profile.

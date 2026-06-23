@@ -267,6 +267,13 @@ world command {
         );
         expect(preview3Plan.canIngest, isTrue);
         expect(preview3Plan.versionErrors, isEmpty);
+        expect(preview3Plan.canBindAdapters, isFalse);
+        expect(
+          preview3Plan.bindingErrors.map(
+            (error) => error.function.qualifiedName,
+          ),
+          containsAll(<String>['run.run', 'stdout.write-via-stream']),
+        );
         expect(preview3Plan.world.name, 'command');
         expect(preview3Plan.items.map((item) => item.target.text), [
           'run',
@@ -275,6 +282,69 @@ world command {
         ]);
       },
     );
+
+    test('Preview2 and Preview3 wrappers execute WIT world adapters', () {
+      const source = '''
+package acme:math@0.2.0;
+
+interface adder {
+  add: func(left: u32, right: u32) -> u32;
+}
+
+interface printer {
+  print: func(message: string);
+}
+
+world command {
+  import adder;
+  export printer;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2Plan = WASIPreview2ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'command',
+      );
+      final preview3Plan = WASIPreview3ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'command',
+      );
+      final printed = <String>[];
+
+      expect(preview2Plan.canBindAdapters, isTrue);
+      expect(preview3Plan.canBindAdapters, isTrue);
+      expect(preview2Plan.functions.map((function) => function.qualifiedName), [
+        'adder.add',
+        'printer.print',
+      ]);
+      expect(preview2Plan.functions.map((function) => function.direction), [
+        WASIComponentWitWorldItemDirection.import,
+        WASIComponentWitWorldItemDirection.export,
+      ]);
+
+      final preview2Program = preview2Plan.bindAdapters(
+        imports: {'adder.add': (args) => (args[0] as int) + (args[1] as int)},
+        exports: {
+          'printer.print': (args) {
+            printed.add(args.single as String);
+            return null;
+          },
+        },
+      );
+      final preview3Program = preview3Plan.bindAdapters(
+        imports: {'adder.add': (args) => 7},
+        exports: {'printer.print': (_) => null},
+      );
+
+      expect(preview2Program.invokeImport('adder.add', [20, 22]), 42);
+      expect(preview2Program.invokeExport('printer.print', ['ready']), isNull);
+      expect(printed, ['ready']);
+      expect(preview3Program.invokeImport('adder.add', [3, 4]), 7);
+      expect(
+        () => preview2Program.invokeImport('adder.add', [0x100000000, 1]),
+        throwsStateError,
+      );
+    });
 
     test(
       'Preview2 wrapper rejects owned-resource async values at version gate',

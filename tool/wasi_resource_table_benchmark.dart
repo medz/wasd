@@ -12,6 +12,7 @@ import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/resource_table.dart';
 import 'package:wasd/src/wasi/component/string_memory.dart';
 import 'package:wasd/src/wasi/component/value_memory.dart';
+import 'package:wasd/src/wasi/component/wit_document.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
@@ -58,6 +59,8 @@ Future<void> main(List<String> args) async {
   );
   final componentVersionedAdapterProgramInvoke =
       _benchmarkComponentVersionedAdapterProgramInvoke(options.iterations);
+  final componentWitAdapterProgramInvoke =
+      _benchmarkComponentWitAdapterProgramInvoke(options.iterations);
   final componentAdapterStringProgramInvoke =
       _benchmarkComponentAdapterStringProgramInvoke(options.iterations);
   final componentAdapterStringFlatInvoke =
@@ -144,6 +147,8 @@ Future<void> main(List<String> args) async {
     'component_adapter_program_invoke': componentAdapterProgramInvoke.toJson(),
     'component_versioned_adapter_program_invoke':
         componentVersionedAdapterProgramInvoke.toJson(),
+    'component_wit_adapter_program_invoke': componentWitAdapterProgramInvoke
+        .toJson(),
     'component_adapter_string_program_invoke':
         componentAdapterStringProgramInvoke.toJson(),
     'component_adapter_string_flat_invoke': componentAdapterStringFlatInvoke
@@ -225,6 +230,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentAdapterDirectInvoke(_warmupIterations);
   _benchmarkComponentAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentVersionedAdapterProgramInvoke(_warmupIterations);
+  _benchmarkComponentWitAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterRecordFlatInvoke(_warmupIterations);
@@ -656,6 +662,48 @@ _Metric _benchmarkComponentVersionedAdapterProgramInvoke(int iterations) {
 
   return _Metric(
     operations: iterations * 4,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentWitAdapterProgramInvoke(int iterations) {
+  const source = '''
+package acme:bench@0.2.0;
+
+interface adder {
+  add: func(left: u32, right: u32) -> u32;
+}
+
+interface sink {
+  write: func(message: string);
+}
+
+world command {
+  import adder;
+  export sink;
+}
+''';
+  final document = WASIComponentWitDocument.parse(source);
+  final program = WASIPreview2ComponentHost()
+      .prepareWitWorld(document, worldName: 'command')
+      .bindAdapters(
+        imports: {'adder.add': (args) => (args[0] as int) + (args[1] as int)},
+        exports: {'sink.write': (_) => null},
+      );
+  var checksum = 0;
+  final addArgs = <Object?>[0, 7];
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    addArgs[0] = i & 0xffff;
+    checksum += program.invokeImport('adder.add', addArgs) as int;
+    program.invokeExport('sink.write', const <Object?>['ok']);
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations * 2,
     totalMicros: watch.elapsedMicroseconds,
     checksum: checksum,
   );

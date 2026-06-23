@@ -244,16 +244,22 @@ too broad to verify in one commit.
     binding.
   - Edit targets: `lib/src/wasi/component/wit_document.dart`,
     versioned adapter modules, WIT ingestion tests, and component-host binding
-    tests.
+    tests. Executable adapter increments also update
+    `tool/wasi_resource_table_benchmark.dart`.
   - Red test: add an imported/generated world that parses but cannot bind through
     the versioned host.
   - Implementation gate: WIT ingestion tests plus the matching component-host
     binding tests.
-  - Performance gate: N/A for parsing-only increments; add adapter benchmark
-    evidence when the row binds executable host calls.
+  - Performance gate: N/A for parsing-only increments; executable adapter
+    increments must run
+    `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`
+    and record the relevant metric.
   - Checked child rows: `WIT-WORLD-VERSION-PROFILE-INGESTION` covers annotated
     Preview3 WIT function/import/include parsing plus Preview2/Preview3
-    version-profile ingestion before generated adapter binding.
+    version-profile ingestion before generated adapter binding;
+    `WIT-WORLD-PRIMITIVE-ADAPTER-BINDING` covers local synchronous primitive WIT
+    import/export functions bound to executable Preview2/Preview3 adapter
+    callbacks.
   - Done when: imported/generated worlds bind through Preview2/Preview3 adapters
     and failures name the interface/world boundary.
   - Evidence update: record WIT files, versioned adapter tests, and command
@@ -262,6 +268,37 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `WIT-WORLD-PRIMITIVE-ADAPTER-BINDING` - Execute local primitive WIT world
+  functions through versioned adapter callbacks.
+  - Scope: local WIT interfaces imported/exported by a selected world, limited
+    to synchronous primitive parameters/results and fixed Preview2/Preview3
+    version profiles.
+  - Edit targets: `lib/src/wasi/component/versioned_host.dart`,
+    `lib/src/wasi/component/wit_adapter.dart`,
+    `test/wasi_component_versioned_host_test.dart`,
+    `tool/wasi_resource_table_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_component_versioned_host_test.dart --name "WIT world adapters" --reporter=expanded`
+    failed before the fix because `WASIComponentVersionedWitWorldPlan` had no
+    `canBindAdapters`, `functions`, or `bindAdapters` API.
+  - Implementation gate:
+    `dart test test/wasi_component_versioned_host_test.dart --name "WIT world adapters" --reporter=expanded`;
+    `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_wit_test.dart --reporter=compact`.
+  - Performance gate:
+    `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`
+    reported `component_wit_adapter_program_invoke.operations=4000` and
+    `component_wit_adapter_program_invoke.per_operation_us=0.22325`.
+  - Done when: a parsed WIT world expands local import/export interface
+    functions once during planning, Preview2 and Preview3 bind the resulting
+    synchronous primitive adapters to callbacks, import/export invocation
+    validates WIT primitive values before calling callbacks, and Preview3 async
+    WIT worlds remain ingestible but not falsely bindable as synchronous
+    adapters.
+  - Evidence update: this checked row plus `WIT-INGESTION`, the verification
+    matrix, detailed backlog, and resource benchmark metric.
+  - Claim impact: advances `WIT-INGESTION` and concrete `SUPPORT-P2`/`SUPPORT-P3`
+    adapter evidence; does not complete generated multi-package binding,
+    async WIT adapters, `SUPPORT-P2`, or `SUPPORT-P3`.
 - [x] `WIT-WORLD-VERSION-PROFILE-INGESTION` - Feed parsed WIT worlds into
   Preview2/Preview3 version profiles.
   - Scope: WIT document ingestion for package annotations, interface function
@@ -2083,7 +2120,7 @@ unchecked.
     matrix, and README command/snippet tests when docs or API examples change.
 - [ ] `SUPPORT-P2` - Full WASI 0.2 / Preview2 support.
   - Current: the public factory rejects Preview2; internal versioned component
-    gates exist.
+    gates and local synchronous primitive WIT world adapters exist.
   - Required rows: `P2-P3-ADAPTERS`, `WIT-INGESTION`, `CM-VALUE-VALIDATION`,
     resource lifetime rows, and adapter-specific Preview2 interface rows.
   - Implementation gate:
@@ -2104,7 +2141,8 @@ unchecked.
 - [ ] `SUPPORT-P3` - Full WASI 0.3 / Preview3 support.
   - Current: the public factory rejects Preview3; internal P3 resources, async
     primitives, waitables, tasks, context, thread identity, and copy paths are
-    partially executable.
+    partially executable, and local synchronous primitive WIT world adapters now
+    execute through the Preview3 versioned host.
   - Required rows: `P3-VERSIONED-RUN`, `P3-RESOURCE-LIFETIME`,
     `P3-STREAM-FUTURE-SHAPES`, `P3-ASYNC-COPY-GAPS`,
     `P3-TASK-CONTEXT-THREAD`, `PUBLIC-API-DOCS`, `VERSION-GATES`,
@@ -2233,7 +2271,8 @@ copying their internals directly.
 | [ ] | Preview1 full socket conformance | Add focused regressions under `test/wasi_test.dart` and VFS/socket benchmarks | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --json` | Native adapter boundaries and broader socket conformance remain incomplete. |
 | [x] | WIT package/interface/world boundary parser | `lib/src/wasi/component/wit_document.dart`, `test/wasi_component_wit_test.dart` | `dart test test/wasi_component_wit_test.dart`; `dart analyze` | Parser evidence alone does not unlock P2/P3 support; it only feeds adapter binding. |
 | [x] | P2/P3 WIT world version-profile ingestion | `lib/src/wasi/component/wit_document.dart`, `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/preview2/component_host.dart`, `lib/src/wasi/preview3/component_host.dart`, `test/wasi_component_wit_test.dart`, `test/wasi_component_versioned_host_test.dart` | `dart test test/wasi_component_wit_test.dart test/wasi_component_versioned_host_test.dart --name "parses annotated|ingest WIT worlds" --reporter=expanded`; `dart test test/wasi_component_wit_test.dart test/wasi_component_versioned_host_test.dart test/wasi_component_host_test.dart --reporter=compact`; `dart run tool/component_benchmark.dart --json > .dart_tool/component_benchmark_after_wit_ingestion.json` | Annotated Preview3 WIT function/import/include boundaries, including nested resource methods, now feed a fixed P2/P3 version-profile preflight: Preview2 rejects P3 async functions, streams, futures, and `@0.3.0` includes, while Preview3 accepts the same world for adapter binding preflight. Generated multi-package world binding and executable interface adapters remain open. Component benchmark stayed at `57.325us/iter` decode and `112.59us/iter` validate. |
-| [ ] | P2/P3 generated world/interface adapter binding | Bind imported/generated WIT worlds through executable Preview2/Preview3 adapters | Future gate: generated WIT fixtures plus component-host binding/execution tests | No public claim until generated/imported worlds bind to executable adapters through versioned hosts. |
+| [x] | P2/P3 primitive WIT world adapter binding | `lib/src/wasi/component/versioned_host.dart`, `lib/src/wasi/component/wit_adapter.dart`, `test/wasi_component_versioned_host_test.dart`, `tool/wasi_resource_table_benchmark.dart` | `dart test test/wasi_component_versioned_host_test.dart --name "WIT world adapters" --reporter=expanded`; `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_wit_test.dart --reporter=compact`; `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json` | Local synchronous primitive WIT import/export functions now expand once during planning and execute through Preview2/Preview3 adapter callbacks with primitive value validation. Generated multi-package worlds, complex Canonical ABI shapes, and async WIT adapters remain open. |
+| [ ] | P2/P3 generated multi-package/async world adapter binding | Bind imported/generated WIT worlds through executable Preview2/Preview3 adapters, including complex value shapes and Preview3 async WIT functions | Future gate: generated WIT fixtures plus component-host binding/execution tests | No public claim until generated/imported worlds bind to executable adapters through versioned hosts, and async worlds execute through the P3 scheduler path. |
 | [ ] | Full WASI 0.3 support | Real P3 components through versioned host with resources, streams, futures, waitables, tasks, and async behavior | Future gate: wasi-testsuite-style component runs plus performance gates | Current work is internal capability coverage, not full P3 support. |
 
 ## Current wasd Baseline
@@ -5012,11 +5051,41 @@ performance visible while the support surface expands.
   - Evidence: `WIT-WORLD-VERSION-PROFILE-INGESTION` now parses annotated
     Preview3 WIT interface functions and world includes, then routes local and
     qualified world targets through the fixed Preview2/Preview3 versioned
-    hosts.
+    hosts. `WIT-WORLD-PRIMITIVE-ADAPTER-BINDING` now expands local synchronous
+    primitive WIT import/export functions into executable Preview2/Preview3
+    adapter callbacks with primitive value validation.
   - Gate: current WIT ingestion tests plus future generated-WIT fixture and
     component-host binding tests.
   - Done when: imported/generated worlds bind through Preview2/Preview3
     adapters and failures name the interface/world boundary.
+
+- [x] `WIT-WORLD-PRIMITIVE-ADAPTER-BINDING` - Local primitive WIT world
+  functions bind to executable Preview2/Preview3 adapters.
+  - Scope: internal WIT adapter binding for local import/export interface
+    functions with synchronous primitive WIT signatures.
+  - Edit targets: `lib/src/wasi/component/versioned_host.dart`,
+    `lib/src/wasi/component/wit_adapter.dart`,
+    `test/wasi_component_versioned_host_test.dart`,
+    `tool/wasi_resource_table_benchmark.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_component_versioned_host_test.dart --name "WIT world adapters" --reporter=expanded`
+    failed before the fix because the versioned WIT world plan could ingest but
+    not expand or bind executable adapter callbacks.
+  - Implementation gate:
+    `dart test test/wasi_component_versioned_host_test.dart --name "WIT world adapters" --reporter=expanded`;
+    `dart test test/wasi_component_versioned_host_test.dart test/wasi_component_wit_test.dart --reporter=compact`.
+  - Performance gate:
+    `dart run tool/wasi_resource_table_benchmark.dart --iterations=2000 --resources=256 --json`
+    reported `component_wit_adapter_program_invoke.operations=4000` and
+    `component_wit_adapter_program_invoke.per_operation_us=0.22325`.
+  - Done when: the selected WIT world expands local functions once, exposes
+    direction-aware qualified names, binds Preview2/Preview3 import/export
+    callbacks, validates primitive arguments/results at invocation, rejects
+    invalid `u32` inputs before callback execution, and keeps P3 async WIT
+    worlds out of the synchronous adapter binding path.
+  - Claim impact: advances `WIT-INGESTION`; does not complete generated
+    multi-package world binding, async WIT adapter execution, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 
 - [x] `WIT-WORLD-VERSION-PROFILE-INGESTION` - Parsed WIT worlds enter the
   Preview2/Preview3 version-profile preflight.
