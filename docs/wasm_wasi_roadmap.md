@@ -109,7 +109,7 @@ too broad to verify in one commit.
     under `lib/src/wasi/preview1/`, and the testsuite runner only when the
     selected failure proves a harness gap rather than a runtime gap.
   - Red test: pick exactly one failing official module from the current
-    `17/72` Preview1 failure list, add the smallest focused regression under
+    `16/72` Preview1 failure list, add the smallest focused regression under
     `test/wasi_test.dart`, and confirm the regression or official single-module
     run fails for the expected reason before the fix.
   - Implementation gate: focused `dart test test/wasi_test.dart --name ...`;
@@ -123,7 +123,8 @@ too broad to verify in one commit.
     directory traversal, readdir, path lookup, descriptor allocation, or any row
     that adds a repeated VFS hot path.
   - Checked child rows: `P1-FD-RENUMBER-TARGET-PREFLIGHT`,
-    `P1-FD-CLOSE-PREOPEN`, and `P1-PATH-OPEN-DIRFD-NOT-DIR`.
+    `P1-FD-CLOSE-PREOPEN`, `P1-PATH-OPEN-DIRFD-NOT-DIR`, and
+    `P1-DIRECTORY-NO-SEEK-RIGHT`.
   - Done when: the official Preview1 command-module run reports zero Preview1
     failures with no unexpected Preview1 skips, and every previously failing
     module has a narrow checked child row with local and official evidence.
@@ -253,6 +254,33 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-DIRECTORY-NO-SEEK-RIGHT` - directory descriptors do not receive
+  `FD_SEEK` in base rights.
+  - Scope: native/browser shared Preview1 directory descriptor rights exposed by
+    `path_open`, `fd_fdstat_get`, and `fd_seek`.
+  - Edit targets: `lib/src/wasi/preview1/common/constants.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "path_open does not grant fd_seek rights to directories" --reporter=compact`
+    failed before the fix because an opened directory fdstat still included
+    `FD_SEEK` in `fs_rights_base`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "path_open does not grant fd_seek rights to directories" --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --name "path_open does not grant fd_seek rights to directories" --reporter=compact`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/directory_seek.wasm`;
+    upstream `wasi-testsuite` rerun reported `16/72` Preview1 failures after
+    this change, down from `17/72`.
+  - Performance gate: N/A; this masks a constant directory base-right bit at
+    descriptor construction time and does not affect path lookup or fd IO loops.
+  - Done when: directory fdstat no longer exposes `FD_SEEK`, `fd_seek` on that
+    descriptor returns `ENOTCAPABLE` without writing the output offset, and
+    directory inheriting rights still flow to child opens.
+  - Evidence update: this checked row plus the detailed backlog row,
+    verification matrix, and current baseline.
+  - Claim impact: closes one official Preview1 testsuite failure for
+    `SUPPORT-P1`; it does not complete `SUPPORT-P1`, `SUPPORT-P2`, or
+    `SUPPORT-P3`.
 - [x] `P1-PATH-OPEN-DIRFD-NOT-DIR` - `path_open` rejects non-directory base
   descriptors as `NOTDIR`.
   - Scope: native/browser shared Preview1 path syscall descriptor preflight for
@@ -1694,7 +1722,7 @@ unchecked.
 - [ ] `SUPPORT-P1` - Full WASI Preview1 support.
   - Current: `WASI(...)` provides a real Preview1 host surface, but full
     Preview1 support remains incomplete; the current official
-    `WebAssembly/wasi-testsuite` `prod/testsuite-base` run reports `17/72`
+    `WebAssembly/wasi-testsuite` `prod/testsuite-base` run reports `16/72`
     Preview1 failures.
   - Required rows: every Preview1 descriptor, filesystem, stdio, clock, random,
     poll, and socket row checked, including `P1-PATH-OPEN-OFLAGS`,
@@ -1844,6 +1872,7 @@ copying their internals directly.
 | [x] | Preview1 `fd_renumber` target descriptor preflight | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "fd_renumber" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "fd_renumber" --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/renumber.wasm` | `fd_renumber` now returns `BADF` when the destination descriptor is not open and preserves the source descriptor; the official Preview1 suite dropped from `20/72` failures to `19/72`, so broader filesystem/symlink/directory/inode gaps remain. |
 | [x] | Preview1 `fd_close` preopen descriptor close | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "fd_close closes preopen descriptors without closing opened directories" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "fd_close closes preopen descriptors without closing opened directories" --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/close_preopen.wasm` | `fd_close` now closes preopen descriptors through the shared descriptor table while preserving child directory descriptors opened from that preopen; the official Preview1 suite dropped from `19/72` failures to `18/72`, so broader filesystem/symlink/directory/inode gaps remain. |
 | [x] | Preview1 `path_open` non-directory base fd preflight | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "path_open rejects file descriptors as directory bases" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "path_open rejects file descriptors as directory bases" --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/path_open_dirfd_not_dir.wasm` | `path_open` and shared path resolution now distinguish missing descriptors from live non-directory descriptors, returning `BADF` only for the former and `NOTDIR` for the latter; the official Preview1 suite dropped from `18/72` failures to `17/72`, so broader filesystem/symlink/directory/inode gaps remain. |
+| [x] | Preview1 directory fd seek-right masking | `lib/src/wasi/preview1/common/constants.dart`, `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart` | `dart test test/wasi_test.dart --name "path_open does not grant fd_seek rights to directories" --reporter=compact`; `dart test -p chrome test/wasi_test.dart --name "path_open does not grant fd_seek rights to directories" --reporter=compact`; `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/directory_seek.wasm` | Directory descriptors now mask `FD_SEEK` from base rights at descriptor construction while preserving inheriting rights for child opens; the official Preview1 suite dropped from `17/72` failures to `16/72`, so broader filesystem/symlink/directory/inode gaps remain. |
 | [x] | Component decoder, canonical validation base, canonical option placement, and strong-unique extern names | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart` | `dart test test/component_test.dart` | WIT/world ingestion, structured annotation resource/type rules, and broader official component suite coverage. |
 | [x] | Component instantiation import matching for known local child components | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "validates component instantiation indexes and value arguments" --reporter=compact`; `dart test test/component_test.dart --reporter=compact`; `dart test test/wasi_component_host_test.dart test/wasi_component_versioned_host_test.dart --reporter=compact`; `dart run tool/component_benchmark.dart --json`; `dart test --reporter=compact --concurrency=1`; `dart analyze` | Known local child component instantiation now rejects unknown argument names, missing required imports, and wrong argument sorts before adapter binding; imported/aliased component targets, cross-component type equivalence, generated worlds, and official suite coverage remain open. |
 | [x] | Component task-return borrow validation | `lib/src/wasm/backend/native/interpreter/component.dart`, `test/component_test.dart`, `tool/component_benchmark.dart` | `dart test test/component_test.dart --name "reports task.return result types containing borrow|reports missing canonical option requirements|reports invalid canonical result value type indexes" --reporter=compact`; `dart run tool/component_benchmark.dart --json` | Borrowed canonical `task.return` results are now rejected during validation; broader borrow, stream, future, nested-shape, generated-world, and component-suite coverage remains. |
@@ -1949,13 +1978,13 @@ This is the implementation state as of 2026-06-23 on `main`.
   conformance entry point only; full Preview1 support requires running the
   external suite and converting failures into checked implementation rows.
 - The official `WebAssembly/wasi-testsuite` `prod/testsuite-base` run now has
-  `17/72` Preview1 failures with `41` Preview3 tests skipped by the adapter
+  `16/72` Preview1 failures with `41` Preview3 tests skipped by the adapter
   capability filter. `renumber.wasm`, `close_preopen.wasm`, and
-  `path_open_dirfd_not_dir.wasm` are now passing; remaining Preview1 failures
-  are concentrated in symlink traversal, path normalization/trailing slash
-  errors, directory seek/open rights, directory entry scaling, and stable
-  device/inode metadata. The Preview3 skips are a real unsupported-state
-  signal, not a pass result or a support claim.
+  `path_open_dirfd_not_dir.wasm`, and `directory_seek.wasm` are now passing;
+  remaining Preview1 failures are concentrated in symlink traversal, path
+  normalization/trailing slash errors, directory open rights, directory entry
+  scaling, and stable device/inode metadata. The Preview3 skips are a real
+  unsupported-state signal, not a pass result or a support claim.
 - Component decoding and validation exist under
   `lib/src/wasm/backend/native/interpreter/component.dart`, and
   `lib/src/wasi/component/` now provides an internal typed resource table plus
@@ -2262,7 +2291,7 @@ performance visible while the support surface expands.
 
 1. `P1-OFFICIAL-FS-CONFORMANCE`
    - Why: Preview1 is the only public WASI surface today, and the official
-     `wasi-testsuite` run still has `17/72` Preview1 failures that must be
+     `wasi-testsuite` run still has `16/72` Preview1 failures that must be
      closed with real behavior before any full-support claim.
    - Do not: count skipped Preview3 tests as support or replace official
      failures with local-only helper tests.
@@ -2947,6 +2976,32 @@ performance visible while the support surface expands.
     descriptors return `NOTDIR`, directory and preopen descriptors continue
     through normal right and memory preflight, and failed `path_open` preserves
     the output fd pointer.
+  - Evidence update: this checked row plus the `Current Execution Board`
+    `Recently Checked` entry, verification matrix, and current baseline.
+  - Claim impact: closes one official Preview1 testsuite failure for
+    `SUPPORT-P1`; does not complete Preview1 full support or any P2/P3 gate.
+- [x] `P1-DIRECTORY-NO-SEEK-RIGHT` - Directory descriptors mask `FD_SEEK` from
+  base rights.
+  - Scope: shared Preview1 VFS directory descriptor capability modeling for
+    native/browser hosts.
+  - Edit targets: `lib/src/wasi/preview1/common/constants.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_test.dart --name "path_open does not grant fd_seek rights to directories" --reporter=compact`
+    failed before the fix because a directory opened with requested
+    `FD_SEEK` exposed that bit in `fd_fdstat_get`.
+  - Implementation gate:
+    `dart test test/wasi_test.dart --name "path_open does not grant fd_seek rights to directories" --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --name "path_open does not grant fd_seek rights to directories" --reporter=compact`;
+    `dart tool/wasi_testsuite_preview1_runner.dart --dir .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/fs-tests.dir::/ .dart_tool/wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/directory_seek.wasm`;
+    upstream `wasi-testsuite` rerun with the wasd adapter reported `16/72`
+    Preview1 failures after the fix, down from `17/72`.
+  - Performance gate: N/A; the change is a descriptor-construction mask and
+    does not add repeated syscall work.
+  - Done when: directory fdstat base rights exclude `FD_SEEK`, `fd_seek` on the
+    descriptor returns `ENOTCAPABLE` before output mutation, and inheriting
+    rights remain available for later child opens.
   - Evidence update: this checked row plus the `Current Execution Board`
     `Recently Checked` entry, verification matrix, and current baseline.
   - Claim impact: closes one official Preview1 testsuite failure for

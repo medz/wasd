@@ -98,6 +98,7 @@ const int rightSockShutdown = 1 << 28;
 const int rightSockAccept = 1 << 29;
 const int rightsKnownMask = (1 << 30) - 1;
 const int rightsAll = rightsKnownMask;
+const int rightsDirectoryBase = rightsAll & ~rightFdSeek;
 const int rightsSocket =
     rightFdRead |
     rightFdFdstatSetFlags |

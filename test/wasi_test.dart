@@ -42,6 +42,7 @@ const int _errnoNotsup = 58;
 const int _errnoNotcapable = 76;
 const int _errnoPipe = 64;
 const int _oflagCreat = 1;
+const int _oflagDirectory = 2;
 const int _oflagExcl = 4;
 const int _oflagTrunc = 8;
 const int _fdflagAppend = 1;
@@ -5798,6 +5799,67 @@ void main() {
         },
         skip: _skipOnNode(
           'Skipping on Node.js; path_open/fd_read behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'path_open does not grant fd_seek rights to directories',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/tmp'},
+            files: {
+              '/sandbox/assets/doom1.wad': Uint8List.fromList([7, 8, 9]),
+            },
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdFdstatGet =
+              preview1['fd_fdstat_get'] as FunctionImportExportValue;
+          final fdSeek = preview1['fd_seek'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 2192;
+          const openedFdPtr = 2224;
+          const fdstatPtr = 2240;
+          const offsetPtr = 2272;
+
+          final dirPath = utf8.encode('assets');
+          bytes.setAll(pathPtr, dirPath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              dirPath.length,
+              _oflagDirectory,
+              _rightFdSeek,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final dirFd = data.getUint32(openedFdPtr, Endian.little);
+
+          expect(fdFdstatGet.ref([dirFd, fdstatPtr]), 0);
+          expect(bytes[fdstatPtr], 3);
+          expect(_getUint64Le(data, fdstatPtr + 8) & _rightFdSeek, 0);
+
+          _setUint64Le(data, offsetPtr, 0xdecafbad);
+          expect(fdSeek.ref([dirFd, 0, 1, offsetPtr]), _errnoNotcapable);
+          expect(_getUint64Le(data, offsetPtr), 0xdecafbad);
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; path_open/fd_seek behavior is delegated to node:wasi.',
         ),
       );
 

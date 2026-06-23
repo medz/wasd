@@ -1184,7 +1184,10 @@ final class Preview1DescriptorRights {
     : this(base: base ?? rightsAll, inheriting: inheriting ?? 0);
 
   Preview1DescriptorRights.directory({int? base, int? inheriting})
-    : this(base: base ?? rightsAll, inheriting: inheriting ?? rightsAll);
+    : this(
+        base: (base ?? rightsDirectoryBase) & rightsDirectoryBase,
+        inheriting: inheriting ?? rightsAll,
+      );
 
   Preview1DescriptorRights.socket({
     int? base,
