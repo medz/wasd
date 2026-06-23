@@ -1003,10 +1003,11 @@ class WASI implements wasi_iface.WASI {
         (oflags & ~_oflagKnownMask) != 0) {
       return _errnoInval;
     }
-    final baseDirectory = _vfs.directoryPathForFd(dirFd);
-    if (baseDirectory == null) {
-      return _errnoBadf;
+    final directoryFd = _checkDirectoryFd(dirFd);
+    if (directoryFd != _errnoSuccess) {
+      return directoryFd;
     }
+    final baseDirectory = _vfs.directoryPathForFd(dirFd)!;
     final right = _checkDescriptorRight(dirFd, _rightPathOpen);
     if (right != _errnoSuccess) {
       return right;
@@ -1368,10 +1369,11 @@ class WASI implements wasi_iface.WASI {
     if ((lookupFlags & ~_lookupflagKnownMask) != 0) {
       return _errnoInval;
     }
-    final baseDirectory = _vfs.directoryPathForFd(dirFd);
-    if (baseDirectory == null) {
-      return _errnoBadf;
+    final directoryFd = _checkDirectoryFd(dirFd);
+    if (directoryFd != _errnoSuccess) {
+      return directoryFd;
     }
+    final baseDirectory = _vfs.directoryPathForFd(dirFd)!;
     final right = _checkDescriptorRight(dirFd, _rightPathFilestatGet);
     if (right != _errnoSuccess) {
       return right;
@@ -1520,6 +1522,15 @@ class WASI implements wasi_iface.WASI {
         : _errnoNotcapable;
   }
 
+  int _checkDirectoryFd(int fd) {
+    return switch (_vfs.descriptorKindForFd(fd)) {
+      null => _errnoBadf,
+      wasi_vfs.Preview1DescriptorKind.openDirectory ||
+      wasi_vfs.Preview1DescriptorKind.preopenDirectory => _errnoSuccess,
+      _ => _errnoNotdir,
+    };
+  }
+
   int _applyFilestatTimes({
     required wasi_vfs.Preview1VirtualNodeMetadata metadata,
     required int accessTimeNanos,
@@ -1579,10 +1590,11 @@ class WASI implements wasi_iface.WASI {
     required int pathPtr,
     required int pathLen,
   }) {
-    final baseDirectory = _vfs.directoryPathForFd(dirFd);
-    if (baseDirectory == null) {
-      return const _ResolvedPath.error(_errnoBadf);
+    final directoryFd = _checkDirectoryFd(dirFd);
+    if (directoryFd != _errnoSuccess) {
+      return _ResolvedPath.error(directoryFd);
     }
+    final baseDirectory = _vfs.directoryPathForFd(dirFd)!;
 
     final view = _memoryView();
     if (view == null) {

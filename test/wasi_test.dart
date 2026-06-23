@@ -37,6 +37,7 @@ const int _errnoBadf = 8;
 const int _errnoExist = 20;
 const int _errnoInval = 28;
 const int _errnoNotsock = 57;
+const int _errnoNotdir = 54;
 const int _errnoNotsup = 58;
 const int _errnoNotcapable = 76;
 const int _errnoPipe = 64;
@@ -5062,6 +5063,70 @@ void main() {
             utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + 6)),
             'abcdef',
           );
+        },
+        skip: _skipOnNode(
+          'Skipping on Node.js; path_open behavior is delegated to node:wasi.',
+        ),
+      );
+
+      test(
+        'path_open rejects file descriptors as directory bases',
+        () async {
+          final fileWasi = WASI(preopens: {'/sandbox': '/tmp'});
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final baseFilePath = utf8.encode('base_file.txt');
+          final childPath = utf8.encode('child.txt');
+          const pathPtr = 4864;
+          const childPathPtr = 4896;
+          const openedFdPtr = 4928;
+          const failedFdSentinel = 0xdecafbad;
+
+          bytes.setAll(pathPtr, baseFilePath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              baseFilePath.length,
+              _oflagCreat,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final fileFd = data.getUint32(openedFdPtr, Endian.little);
+
+          bytes.setAll(childPathPtr, childPath);
+          data.setUint32(openedFdPtr, failedFdSentinel, Endian.little);
+          expect(
+            pathOpen.ref([
+              fileFd,
+              0,
+              childPathPtr,
+              childPath.length,
+              _oflagCreat,
+              0,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            _errnoNotdir,
+          );
+          expect(data.getUint32(openedFdPtr, Endian.little), failedFdSentinel);
         },
         skip: _skipOnNode(
           'Skipping on Node.js; path_open behavior is delegated to node:wasi.',
