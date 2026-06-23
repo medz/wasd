@@ -79,6 +79,67 @@ world command {
       expect(environment.functions.single.signature, 'func()->list<entry>');
     });
 
+    test('parses local variant enum and flags type declarations', () {
+      const source = '''
+package acme:env@0.2.0;
+
+interface environment {
+  flags permissions {
+    read,
+    write,
+    execute,
+  }
+
+  enum color {
+    red,
+    blue,
+  }
+
+  variant lookup {
+    none,
+    name(string),
+    permissions(permissions),
+  }
+
+  describe: func(mode: lookup, color: color) -> permissions;
+}
+
+world command {
+  import environment;
+}
+''';
+
+      final document = WASIComponentWitDocument.parse(source);
+      final environment = document.interfaceNamed('environment')!;
+
+      expect(environment.flags.map((flags) => flags.name), ['permissions']);
+      expect(environment.flags.single.labels.map((label) => label.name), [
+        'read',
+        'write',
+        'execute',
+      ]);
+      expect(environment.enums.map((enum_) => enum_.name), ['color']);
+      expect(environment.enums.single.cases.map((case_) => case_.name), [
+        'red',
+        'blue',
+      ]);
+      expect(environment.variants.map((variant) => variant.name), ['lookup']);
+      expect(environment.variants.single.cases.map((case_) => case_.name), [
+        'none',
+        'name',
+        'permissions',
+      ]);
+      expect(environment.variants.single.cases.map((case_) => case_.type), [
+        isNull,
+        'string',
+        'permissions',
+      ]);
+      expect(
+        environment.functions.single.signature,
+        'func(mode:lookup,color:color)->permissions',
+      );
+    });
+
     test('parses annotated Preview3 async functions and world includes', () {
       const source = '''
 package wasi:cli@0.3.0;

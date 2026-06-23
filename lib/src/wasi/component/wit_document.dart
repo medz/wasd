@@ -86,9 +86,15 @@ final class WASIComponentWitInterface {
     required this.name,
     required List<WASIComponentWitFunction> functions,
     required List<WASIComponentWitRecord> records,
+    required List<WASIComponentWitVariant> variants,
+    required List<WASIComponentWitFlags> flags,
+    required List<WASIComponentWitEnum> enums,
     required this.span,
   }) : functions = List<WASIComponentWitFunction>.unmodifiable(functions),
-       records = List<WASIComponentWitRecord>.unmodifiable(records);
+       records = List<WASIComponentWitRecord>.unmodifiable(records),
+       variants = List<WASIComponentWitVariant>.unmodifiable(variants),
+       flags = List<WASIComponentWitFlags>.unmodifiable(flags),
+       enums = List<WASIComponentWitEnum>.unmodifiable(enums);
 
   /// Interface name.
   final String name;
@@ -99,6 +105,15 @@ final class WASIComponentWitInterface {
   /// Record declarations captured directly in this interface.
   final List<WASIComponentWitRecord> records;
 
+  /// Variant declarations captured directly in this interface.
+  final List<WASIComponentWitVariant> variants;
+
+  /// Flags declarations captured directly in this interface.
+  final List<WASIComponentWitFlags> flags;
+
+  /// Enum declarations captured directly in this interface.
+  final List<WASIComponentWitEnum> enums;
+
   /// Source span for the interface name.
   final WASIComponentWitSpan span;
 
@@ -107,6 +122,36 @@ final class WASIComponentWitInterface {
     for (final record in records) {
       if (record.name == name) {
         return record;
+      }
+    }
+    return null;
+  }
+
+  /// Returns the variant named [name], if this interface declares one.
+  WASIComponentWitVariant? variantNamed(String name) {
+    for (final variant in variants) {
+      if (variant.name == name) {
+        return variant;
+      }
+    }
+    return null;
+  }
+
+  /// Returns the flags type named [name], if this interface declares one.
+  WASIComponentWitFlags? flagsNamed(String name) {
+    for (final flagsType in flags) {
+      if (flagsType.name == name) {
+        return flagsType;
+      }
+    }
+    return null;
+  }
+
+  /// Returns the enum named [name], if this interface declares one.
+  WASIComponentWitEnum? enumNamed(String name) {
+    for (final enum_ in enums) {
+      if (enum_.name == name) {
+        return enum_;
       }
     }
     return null;
@@ -148,6 +193,94 @@ final class WASIComponentWitRecordField {
   final String type;
 
   /// Source span for the field name.
+  final WASIComponentWitSpan span;
+}
+
+/// Variant type declared directly in a WIT interface.
+final class WASIComponentWitVariant {
+  /// Creates a WIT variant declaration boundary.
+  WASIComponentWitVariant({
+    required this.name,
+    required List<WASIComponentWitVariantCase> cases,
+    required this.span,
+  }) : cases = List<WASIComponentWitVariantCase>.unmodifiable(cases);
+
+  /// Variant name.
+  final String name;
+
+  /// Ordered variant cases.
+  final List<WASIComponentWitVariantCase> cases;
+
+  /// Source span for the variant name.
+  final WASIComponentWitSpan span;
+}
+
+/// Case declared directly in a WIT variant.
+final class WASIComponentWitVariantCase {
+  /// Creates a WIT variant case boundary.
+  const WASIComponentWitVariantCase({
+    required this.name,
+    required this.type,
+    required this.span,
+  });
+
+  /// Case name.
+  final String name;
+
+  /// Compact payload type text, if this case carries a payload.
+  final String? type;
+
+  /// Source span for the case name.
+  final WASIComponentWitSpan span;
+}
+
+/// Flags type declared directly in a WIT interface.
+final class WASIComponentWitFlags {
+  /// Creates a WIT flags declaration boundary.
+  WASIComponentWitFlags({
+    required this.name,
+    required List<WASIComponentWitLabel> labels,
+    required this.span,
+  }) : labels = List<WASIComponentWitLabel>.unmodifiable(labels);
+
+  /// Flags type name.
+  final String name;
+
+  /// Ordered flag labels.
+  final List<WASIComponentWitLabel> labels;
+
+  /// Source span for the flags name.
+  final WASIComponentWitSpan span;
+}
+
+/// Enum type declared directly in a WIT interface.
+final class WASIComponentWitEnum {
+  /// Creates a WIT enum declaration boundary.
+  WASIComponentWitEnum({
+    required this.name,
+    required List<WASIComponentWitLabel> cases,
+    required this.span,
+  }) : cases = List<WASIComponentWitLabel>.unmodifiable(cases);
+
+  /// Enum name.
+  final String name;
+
+  /// Ordered enum cases.
+  final List<WASIComponentWitLabel> cases;
+
+  /// Source span for the enum name.
+  final WASIComponentWitSpan span;
+}
+
+/// Label declared in a WIT flags or enum type.
+final class WASIComponentWitLabel {
+  /// Creates a WIT label boundary.
+  const WASIComponentWitLabel({required this.name, required this.span});
+
+  /// Label name.
+  final String name;
+
+  /// Source span for the label name.
   final WASIComponentWitSpan span;
 }
 
@@ -440,18 +573,34 @@ final class _WitParser {
     _expectSymbol('{');
     final functions = <WASIComponentWitFunction>[];
     final records = <WASIComponentWitRecord>[];
-    _parseInterfaceBlock(functions, records, prefix: '');
+    final variants = <WASIComponentWitVariant>[];
+    final flags = <WASIComponentWitFlags>[];
+    final enums = <WASIComponentWitEnum>[];
+    _parseInterfaceBlock(
+      functions,
+      records,
+      variants,
+      flags,
+      enums,
+      prefix: '',
+    );
     return WASIComponentWitInterface(
       name: name.lexeme,
       functions: functions,
       records: records,
+      variants: variants,
+      flags: flags,
+      enums: enums,
       span: name.span,
     );
   }
 
   void _parseInterfaceBlock(
     List<WASIComponentWitFunction> functions,
-    List<WASIComponentWitRecord> records, {
+    List<WASIComponentWitRecord> records,
+    List<WASIComponentWitVariant> variantTypes,
+    List<WASIComponentWitFlags> flagsTypes,
+    List<WASIComponentWitEnum> enumTypes, {
     required String prefix,
   }) {
     while (!_checkSymbol('}') && !_checkKind(_WitTokenKind.eof)) {
@@ -461,15 +610,54 @@ final class _WitParser {
       }
       if (_matchWord('record')) {
         final record = _parseRecord();
-        final first = _recordNamed(records, record.name);
-        if (first != null) {
-          _fail(
-            record.span,
-            "duplicate record '${record.name}'; first declared at "
-            '${first.span.location}',
-          );
-        }
+        _failDuplicateInterfaceType(
+          record.name,
+          record.span,
+          records,
+          variantTypes,
+          flagsTypes,
+          enumTypes,
+        );
         records.add(record);
+        continue;
+      }
+      if (_matchWord('variant')) {
+        final variant = _parseVariant();
+        _failDuplicateInterfaceType(
+          variant.name,
+          variant.span,
+          records,
+          variantTypes,
+          flagsTypes,
+          enumTypes,
+        );
+        variantTypes.add(variant);
+        continue;
+      }
+      if (_matchWord('flags')) {
+        final flags = _parseFlags();
+        _failDuplicateInterfaceType(
+          flags.name,
+          flags.span,
+          records,
+          variantTypes,
+          flagsTypes,
+          enumTypes,
+        );
+        flagsTypes.add(flags);
+        continue;
+      }
+      if (_matchWord('enum')) {
+        final enum_ = _parseEnum();
+        _failDuplicateInterfaceType(
+          enum_.name,
+          enum_.span,
+          records,
+          variantTypes,
+          flagsTypes,
+          enumTypes,
+        );
+        enumTypes.add(enum_);
         continue;
       }
       if (_checkKind(_WitTokenKind.word)) {
@@ -493,6 +681,9 @@ final class _WitParser {
           _parseInterfaceBlock(
             functions,
             records,
+            variantTypes,
+            flagsTypes,
+            enumTypes,
             prefix: '$prefix${item.lexeme}.',
           );
           continue;
@@ -501,7 +692,14 @@ final class _WitParser {
       }
       if (_checkSymbol('{')) {
         _advance();
-        _parseInterfaceBlock(functions, records, prefix: prefix);
+        _parseInterfaceBlock(
+          functions,
+          records,
+          variantTypes,
+          flagsTypes,
+          enumTypes,
+          prefix: prefix,
+        );
         continue;
       }
       _advance();
@@ -540,6 +738,117 @@ final class _WitParser {
     );
   }
 
+  WASIComponentWitVariant _parseVariant() {
+    final name = _expectWord('variant name');
+    _expectSymbol('{');
+    final cases = <WASIComponentWitVariantCase>[];
+    while (!_checkSymbol('}') && !_checkKind(_WitTokenKind.eof)) {
+      if (_checkSymbol('@')) {
+        _skipAnnotation();
+        continue;
+      }
+      final case_ = _expectWord('variant case name');
+      final first = _variantCaseNamed(cases, case_.lexeme);
+      if (first != null) {
+        _fail(
+          case_.span,
+          "duplicate variant case '${case_.lexeme}'; first declared at "
+          '${first.span.location}',
+        );
+      }
+      final type = _matchSymbol('(')
+          ? _parseVariantCasePayloadType(case_.span)
+          : null;
+      cases.add(
+        WASIComponentWitVariantCase(
+          name: case_.lexeme,
+          type: type,
+          span: case_.span,
+        ),
+      );
+      _matchSymbol(',');
+    }
+    _expectSymbol('}');
+    return WASIComponentWitVariant(
+      name: name.lexeme,
+      cases: cases,
+      span: name.span,
+    );
+  }
+
+  String _parseVariantCasePayloadType(WASIComponentWitSpan start) {
+    final text = StringBuffer();
+    var parenDepth = 1;
+    var angleDepth = 0;
+    while (!_checkKind(_WitTokenKind.eof)) {
+      if (_checkSymbol('(')) {
+        parenDepth++;
+      } else if (_checkSymbol(')') && angleDepth == 0) {
+        parenDepth--;
+        if (parenDepth == 0) {
+          _advance();
+          final result = text.toString();
+          if (result.isEmpty) {
+            _fail(start, 'variant case payload has empty type');
+          }
+          return result;
+        }
+      } else if (_checkSymbol('<')) {
+        angleDepth++;
+      } else if (_checkSymbol('>') && angleDepth > 0) {
+        angleDepth--;
+      }
+      text.write(_current.lexeme);
+      _advance();
+    }
+    _fail(start, 'unterminated variant case payload type');
+  }
+
+  WASIComponentWitFlags _parseFlags() {
+    final name = _expectWord('flags name');
+    _expectSymbol('{');
+    final labels = _parseLabels('flag');
+    return WASIComponentWitFlags(
+      name: name.lexeme,
+      labels: labels,
+      span: name.span,
+    );
+  }
+
+  WASIComponentWitEnum _parseEnum() {
+    final name = _expectWord('enum name');
+    _expectSymbol('{');
+    final cases = _parseLabels('enum case');
+    return WASIComponentWitEnum(
+      name: name.lexeme,
+      cases: cases,
+      span: name.span,
+    );
+  }
+
+  List<WASIComponentWitLabel> _parseLabels(String labelKind) {
+    final labels = <WASIComponentWitLabel>[];
+    while (!_checkSymbol('}') && !_checkKind(_WitTokenKind.eof)) {
+      if (_checkSymbol('@')) {
+        _skipAnnotation();
+        continue;
+      }
+      final label = _expectWord(labelKind);
+      final first = _labelNamed(labels, label.lexeme);
+      if (first != null) {
+        _fail(
+          label.span,
+          "duplicate $labelKind '${label.lexeme}'; first declared at "
+          '${first.span.location}',
+        );
+      }
+      labels.add(WASIComponentWitLabel(name: label.lexeme, span: label.span));
+      _matchSymbol(',');
+    }
+    _expectSymbol('}');
+    return labels;
+  }
+
   WASIComponentWitRecord? _recordNamed(
     List<WASIComponentWitRecord> records,
     String name,
@@ -547,6 +856,78 @@ final class _WitParser {
     for (final record in records) {
       if (record.name == name) {
         return record;
+      }
+    }
+    return null;
+  }
+
+  WASIComponentWitVariantCase? _variantCaseNamed(
+    List<WASIComponentWitVariantCase> cases,
+    String name,
+  ) {
+    for (final case_ in cases) {
+      if (case_.name == name) {
+        return case_;
+      }
+    }
+    return null;
+  }
+
+  WASIComponentWitLabel? _labelNamed(
+    List<WASIComponentWitLabel> labels,
+    String name,
+  ) {
+    for (final label in labels) {
+      if (label.name == name) {
+        return label;
+      }
+    }
+    return null;
+  }
+
+  void _failDuplicateInterfaceType(
+    String name,
+    WASIComponentWitSpan span,
+    List<WASIComponentWitRecord> records,
+    List<WASIComponentWitVariant> variants,
+    List<WASIComponentWitFlags> flags,
+    List<WASIComponentWitEnum> enums,
+  ) {
+    final first = _interfaceTypeNamed(name, records, variants, flags, enums);
+    if (first == null) {
+      return;
+    }
+    _fail(
+      span,
+      "duplicate interface type '$name'; first ${first.kind} declared at "
+      '${first.span.location}',
+    );
+  }
+
+  ({String kind, WASIComponentWitSpan span})? _interfaceTypeNamed(
+    String name,
+    List<WASIComponentWitRecord> records,
+    List<WASIComponentWitVariant> variants,
+    List<WASIComponentWitFlags> flags,
+    List<WASIComponentWitEnum> enums,
+  ) {
+    final record = _recordNamed(records, name);
+    if (record != null) {
+      return (kind: 'record', span: record.span);
+    }
+    for (final variant in variants) {
+      if (variant.name == name) {
+        return (kind: 'variant', span: variant.span);
+      }
+    }
+    for (final flagsType in flags) {
+      if (flagsType.name == name) {
+        return (kind: 'flags', span: flagsType.span);
+      }
+    }
+    for (final enum_ in enums) {
+      if (enum_.name == name) {
+        return (kind: 'enum', span: enum_.span);
       }
     }
     return null;

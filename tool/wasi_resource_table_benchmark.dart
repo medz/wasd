@@ -67,6 +67,10 @@ Future<void> main(List<String> args) async {
       _benchmarkComponentWitListTupleAdapterProgramInvoke(options.iterations);
   final componentWitRecordAdapterProgramInvoke =
       _benchmarkComponentWitRecordAdapterProgramInvoke(options.iterations);
+  final componentWitVariantEnumFlagsAdapterProgramInvoke =
+      _benchmarkComponentWitVariantEnumFlagsAdapterProgramInvoke(
+        options.iterations,
+      );
   final componentAdapterStringProgramInvoke =
       _benchmarkComponentAdapterStringProgramInvoke(options.iterations);
   final componentAdapterStringFlatInvoke =
@@ -161,6 +165,8 @@ Future<void> main(List<String> args) async {
         componentWitListTupleAdapterProgramInvoke.toJson(),
     'component_wit_record_adapter_program_invoke':
         componentWitRecordAdapterProgramInvoke.toJson(),
+    'component_wit_variant_enum_flags_adapter_program_invoke':
+        componentWitVariantEnumFlagsAdapterProgramInvoke.toJson(),
     'component_adapter_string_program_invoke':
         componentAdapterStringProgramInvoke.toJson(),
     'component_adapter_string_flat_invoke': componentAdapterStringFlatInvoke
@@ -246,6 +252,7 @@ Future<void> _runWarmup(_Options options) async {
   _benchmarkComponentWitCompositeAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentWitListTupleAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentWitRecordAdapterProgramInvoke(_warmupIterations);
+  _benchmarkComponentWitVariantEnumFlagsAdapterProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringProgramInvoke(_warmupIterations);
   _benchmarkComponentAdapterStringFlatInvoke(_warmupIterations);
   _benchmarkComponentAdapterRecordFlatInvoke(_warmupIterations);
@@ -869,6 +876,71 @@ world command {
             as WasmComponentValueData;
     checksum += swapped.items[0].integer as int;
     checksum += swapped.items[1].integer as int;
+  }
+  watch.stop();
+
+  return _Metric(
+    operations: iterations,
+    totalMicros: watch.elapsedMicroseconds,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkComponentWitVariantEnumFlagsAdapterProgramInvoke(
+  int iterations,
+) {
+  const source = '''
+package acme:bench@0.2.0;
+
+interface access {
+  flags permissions {
+    read,
+    write,
+    execute,
+  }
+
+  enum decision {
+    allow,
+    deny,
+  }
+
+  variant request {
+    anonymous,
+    number(u32),
+  }
+
+  check: func(request: request, allowed: permissions) -> decision;
+}
+
+world command {
+  import access;
+}
+''';
+  final document = WASIComponentWitDocument.parse(source);
+  final program = WASIPreview2ComponentHost()
+      .prepareWitWorld(document, worldName: 'command')
+      .bindAdapters(
+        imports: {
+          'access.check': (args) {
+            final request = args[0] as WasmComponentValueData;
+            final allowed = args[1] as WasmComponentValueData;
+            final value = request.associatedValue?.integer as int? ?? 0;
+            final canRead = allowed.labels.contains('read');
+            return _enumValue(label: canRead && value >= 0 ? 'allow' : 'deny');
+          },
+        },
+      );
+  var checksum = 0;
+  final request = _u32VariantValue(label: 'number', value: 17);
+  final allowed = _flagsValue(const ['read', 'write']);
+  final args = <Object?>[request, allowed];
+
+  final watch = Stopwatch()..start();
+  for (var i = 0; i < iterations; i++) {
+    final decision =
+        program.invokeImport('access.check', args) as WasmComponentValueData;
+    checksum += decision.index ?? 0;
+    checksum += decision.label?.length ?? 0;
   }
   watch.stop();
 

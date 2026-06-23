@@ -151,10 +151,14 @@ final class WASIComponentWitAdapterValueType {
     this.element,
     List<WASIComponentWitAdapterValueType> elements = const [],
     List<WASIComponentWitAdapterRecordField> fields = const [],
+    List<String> labels = const [],
+    List<WASIComponentWitAdapterVariantCase> cases = const [],
     this.ok,
     this.error,
   }) : elements = List<WASIComponentWitAdapterValueType>.unmodifiable(elements),
-       fields = List<WASIComponentWitAdapterRecordField>.unmodifiable(fields);
+       fields = List<WASIComponentWitAdapterRecordField>.unmodifiable(fields),
+       labels = List<String>.unmodifiable(labels),
+       cases = List<WASIComponentWitAdapterVariantCase>.unmodifiable(cases);
 
   /// Creates a primitive WIT adapter value type.
   WASIComponentWitAdapterValueType.primitive({
@@ -206,6 +210,36 @@ final class WASIComponentWitAdapterValueType {
          fields: fields,
        );
 
+  /// Creates a named WIT `flags` adapter value type.
+  WASIComponentWitAdapterValueType.flags({
+    required String text,
+    required List<String> labels,
+  }) : this._(
+         kind: WASIComponentWitAdapterValueKind.flags,
+         text: text,
+         labels: labels,
+       );
+
+  /// Creates a named WIT `enum` adapter value type.
+  WASIComponentWitAdapterValueType.enumeration({
+    required String text,
+    required List<String> labels,
+  }) : this._(
+         kind: WASIComponentWitAdapterValueKind.enumeration,
+         text: text,
+         labels: labels,
+       );
+
+  /// Creates a named WIT `variant` adapter value type.
+  WASIComponentWitAdapterValueType.variant({
+    required String text,
+    required List<WASIComponentWitAdapterVariantCase> cases,
+  }) : this._(
+         kind: WASIComponentWitAdapterValueKind.variant,
+         text: text,
+         cases: cases,
+       );
+
   /// Creates a `result<T, E>` WIT adapter value type.
   WASIComponentWitAdapterValueType.result({
     required String text,
@@ -236,6 +270,12 @@ final class WASIComponentWitAdapterValueType {
   /// Record field types.
   final List<WASIComponentWitAdapterRecordField> fields;
 
+  /// Labels used by WIT `flags` and `enum` adapter value types.
+  final List<String> labels;
+
+  /// Variant case types.
+  final List<WASIComponentWitAdapterVariantCase> cases;
+
   /// Result success payload type.
   final WASIComponentWitAdapterValueType? ok;
 
@@ -258,6 +298,21 @@ final class WASIComponentWitAdapterRecordField {
   final WASIComponentWitAdapterValueType type;
 }
 
+/// WIT adapter variant case type.
+final class WASIComponentWitAdapterVariantCase {
+  /// Creates a WIT adapter variant case type.
+  const WASIComponentWitAdapterVariantCase({
+    required this.name,
+    required this.type,
+  });
+
+  /// WIT variant case name.
+  final String name;
+
+  /// Case payload type, if any.
+  final WASIComponentWitAdapterValueType? type;
+}
+
 /// WIT adapter value category.
 enum WASIComponentWitAdapterValueKind {
   /// Primitive WIT scalar/string type.
@@ -274,6 +329,15 @@ enum WASIComponentWitAdapterValueKind {
 
   /// Named WIT `record`.
   record,
+
+  /// Named WIT `flags`.
+  flags,
+
+  /// Named WIT `enum`.
+  enumeration,
+
+  /// Named WIT `variant`.
+  variant,
 
   /// `result`, `result<T>`, or `result<T, E>`.
   result,
@@ -571,7 +635,7 @@ _parseWitAdapterValueType(
   String text,
   String context,
   WASIComponentWitInterface interface, [
-  Set<String>? visitingRecords,
+  Set<String>? visitingTypes,
 ]) {
   final primitive = _witPrimitiveValueType(text);
   if (primitive != null) {
@@ -592,7 +656,7 @@ _parseWitAdapterValueType(
       optionArgs.single,
       '$context option payload',
       interface,
-      visitingRecords,
+      visitingTypes,
     );
     if (element.error != null) {
       return (type: null, error: element.error);
@@ -614,7 +678,7 @@ _parseWitAdapterValueType(
       listArgs.single,
       '$context list element',
       interface,
-      visitingRecords,
+      visitingTypes,
     );
     if (element.error != null) {
       return (type: null, error: element.error);
@@ -638,7 +702,7 @@ _parseWitAdapterValueType(
         tupleArgs[i],
         '$context tuple element[$i]',
         interface,
-        visitingRecords,
+        visitingTypes,
       );
       if (element.error != null) {
         return (type: null, error: element.error);
@@ -672,7 +736,7 @@ _parseWitAdapterValueType(
       resultArgs[0],
       '$context result ok payload',
       interface,
-      visitingRecords,
+      visitingTypes,
     );
     if (ok.error != null) {
       return (type: null, error: ok.error);
@@ -683,7 +747,7 @@ _parseWitAdapterValueType(
             resultArgs[1],
             '$context result error payload',
             interface,
-            visitingRecords,
+            visitingTypes,
           );
     if (error.error != null) {
       return (type: null, error: error.error);
@@ -699,8 +763,9 @@ _parseWitAdapterValueType(
   }
   final record = interface.recordNamed(text);
   if (record != null) {
-    final visiting = visitingRecords ?? <String>{};
-    if (!visiting.add(record.name)) {
+    final visiting = visitingTypes ?? <String>{};
+    final typeKey = 'record:${record.name}';
+    if (!visiting.add(typeKey)) {
       return (
         type: null,
         error: 'unsupported recursive WIT adapter $context type $text',
@@ -715,7 +780,7 @@ _parseWitAdapterValueType(
         visiting,
       );
       if (parsedField.error != null) {
-        visiting.remove(record.name);
+        visiting.remove(typeKey);
         return (type: null, error: parsedField.error);
       }
       fields.add(
@@ -725,9 +790,66 @@ _parseWitAdapterValueType(
         ),
       );
     }
-    visiting.remove(record.name);
+    visiting.remove(typeKey);
     return (
       type: WASIComponentWitAdapterValueType.record(text: text, fields: fields),
+      error: null,
+    );
+  }
+  final flags = interface.flagsNamed(text);
+  if (flags != null) {
+    return (
+      type: WASIComponentWitAdapterValueType.flags(
+        text: text,
+        labels: [for (final label in flags.labels) label.name],
+      ),
+      error: null,
+    );
+  }
+  final enum_ = interface.enumNamed(text);
+  if (enum_ != null) {
+    return (
+      type: WASIComponentWitAdapterValueType.enumeration(
+        text: text,
+        labels: [for (final case_ in enum_.cases) case_.name],
+      ),
+      error: null,
+    );
+  }
+  final variant = interface.variantNamed(text);
+  if (variant != null) {
+    final visiting = visitingTypes ?? <String>{};
+    final typeKey = 'variant:${variant.name}';
+    if (!visiting.add(typeKey)) {
+      return (
+        type: null,
+        error: 'unsupported recursive WIT adapter $context type $text',
+      );
+    }
+    final cases = <WASIComponentWitAdapterVariantCase>[];
+    for (final case_ in variant.cases) {
+      final caseType = case_.type == null
+          ? (type: null, error: null)
+          : _parseWitAdapterValueType(
+              case_.type!,
+              '$context variant ${variant.name}.${case_.name}',
+              interface,
+              visiting,
+            );
+      if (caseType.error != null) {
+        visiting.remove(typeKey);
+        return (type: null, error: caseType.error);
+      }
+      cases.add(
+        WASIComponentWitAdapterVariantCase(
+          name: case_.name,
+          type: caseType.type,
+        ),
+      );
+    }
+    visiting.remove(typeKey);
+    return (
+      type: WASIComponentWitAdapterValueType.variant(text: text, cases: cases),
       error: null,
     );
   }
@@ -739,12 +861,12 @@ _parseOptionalWitAdapterValueType(
   String text,
   String context,
   WASIComponentWitInterface interface, [
-  Set<String>? visitingRecords,
+  Set<String>? visitingTypes,
 ]) {
   if (text == '_' || text.isEmpty) {
     return (type: null, error: null);
   }
-  return _parseWitAdapterValueType(text, context, interface, visitingRecords);
+  return _parseWitAdapterValueType(text, context, interface, visitingTypes);
 }
 
 List<String>? _genericArgs(String name, String text) {
@@ -896,6 +1018,12 @@ Object? _validateWitAdapterValue(
       return _validateWitAdapterTupleValue(type, value, path);
     case WASIComponentWitAdapterValueKind.record:
       return _validateWitAdapterRecordValue(type, value, path);
+    case WASIComponentWitAdapterValueKind.flags:
+      return _validateWitAdapterFlagsValue(type, value, path);
+    case WASIComponentWitAdapterValueKind.enumeration:
+      return _validateWitAdapterEnumValue(type, value, path);
+    case WASIComponentWitAdapterValueKind.variant:
+      return _validateWitAdapterVariantValue(type, value, path);
     case WASIComponentWitAdapterValueKind.result:
       return _validateWitAdapterResultValue(type, value, path);
   }
@@ -1100,6 +1228,69 @@ Object? _validateWitAdapterRecordValue(
   return value;
 }
 
+Object? _validateWitAdapterFlagsValue(
+  WASIComponentWitAdapterValueType type,
+  Object? value,
+  String path,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != WasmComponentValueDataKind.flags) {
+    throw StateError('WIT adapter value $path does not match ${type.text}.');
+  }
+  final seen = <String>{};
+  for (final label in value.labels) {
+    if (!seen.add(label)) {
+      throw StateError('WIT adapter value $path has duplicate flag $label.');
+    }
+    if (!type.labels.contains(label)) {
+      throw StateError('WIT adapter value $path has unknown flag $label.');
+    }
+  }
+  return value;
+}
+
+Object? _validateWitAdapterEnumValue(
+  WASIComponentWitAdapterValueType type,
+  Object? value,
+  String path,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != WasmComponentValueDataKind.enumeration) {
+    throw StateError('WIT adapter value $path does not match ${type.text}.');
+  }
+  _witCaseIndex(type.labels, value, path, 'enum');
+  return value;
+}
+
+Object? _validateWitAdapterVariantValue(
+  WASIComponentWitAdapterValueType type,
+  Object? value,
+  String path,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != WasmComponentValueDataKind.variant) {
+    throw StateError('WIT adapter value $path does not match ${type.text}.');
+  }
+  final labels = [for (final case_ in type.cases) case_.name];
+  final index = _witCaseIndex(labels, value, path, 'variant');
+  final case_ = type.cases[index];
+  final associated = value.associatedValue;
+  final payloadType = case_.type;
+  if (payloadType == null) {
+    if (associated != null) {
+      throw StateError(
+        'WIT adapter value $path.${case_.name} does not take payload.',
+      );
+    }
+    return value;
+  }
+  if (associated == null) {
+    throw StateError('WIT adapter value $path.${case_.name} needs payload.');
+  }
+  _validateWitAdapterValue(payloadType, associated, '$path.${case_.name}');
+  return value;
+}
+
 Object? _validateWitAdapterResultValue(
   WASIComponentWitAdapterValueType type,
   Object? value,
@@ -1124,6 +1315,48 @@ Object? _validateWitAdapterResultValue(
   }
   _validateWitAdapterValue(payloadType, associated, '$path.$label');
   return value;
+}
+
+int _witCaseIndex(
+  List<String> labels,
+  WasmComponentValueData value,
+  String path,
+  String kind,
+) {
+  int? selected;
+  void select(int next, String source) {
+    if (selected != null && selected != next) {
+      throw StateError(
+        'WIT adapter value $path has conflicting $kind $source.',
+      );
+    }
+    selected = next;
+  }
+
+  final index = value.index;
+  if (index != null) {
+    if (index < 0 || index >= labels.length) {
+      throw StateError(
+        'WIT adapter value $path has invalid $kind index $index.',
+      );
+    }
+    select(index, 'index');
+  }
+  final label = value.label;
+  if (label != null) {
+    final labelIndex = labels.indexOf(label);
+    if (labelIndex < 0) {
+      throw StateError(
+        'WIT adapter value $path has invalid $kind label $label.',
+      );
+    }
+    select(labelIndex, 'label');
+  }
+  final result = selected;
+  if (result == null) {
+    throw StateError('WIT adapter value $path needs a $kind case.');
+  }
+  return result;
 }
 
 bool _witOptionIsSome(WasmComponentValueData value, String path) {

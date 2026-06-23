@@ -588,6 +588,119 @@ world command {
     });
 
     test(
+      'Preview2 and Preview3 wrappers execute WIT variants enums and flags',
+      () {
+        const source = '''
+package acme:access@0.2.0;
+
+interface access {
+  flags permissions {
+    read,
+    write,
+    execute,
+  }
+
+  enum decision {
+    allow,
+    deny,
+  }
+
+  variant request {
+    anonymous,
+    path(string),
+    inherit(permissions),
+  }
+
+  check: func(request: request, allowed: permissions) -> decision;
+}
+
+world command {
+  import access;
+}
+''';
+        final document = WASIComponentWitDocument.parse(source);
+        final preview2Plan = WASIPreview2ComponentHost().prepareWitWorld(
+          document,
+          worldName: 'command',
+        );
+        final preview3Plan = WASIPreview3ComponentHost().prepareWitWorld(
+          document,
+          worldName: 'command',
+        );
+        final seen = <String>[];
+
+        expect(preview2Plan.canBindAdapters, isTrue);
+        expect(preview3Plan.canBindAdapters, isTrue);
+
+        final program = preview2Plan.bindAdapters(
+          imports: {
+            'access.check': (args) {
+              final request = args[0] as WasmComponentValueData;
+              final allowed = args[1] as WasmComponentValueData;
+              seen.add('${request.label}:${allowed.labels.join(",")}');
+              return _decisionValue('allow');
+            },
+          },
+        );
+        final preview3Program = preview3Plan.bindAdapters(
+          imports: {'access.check': (_) => _decisionValue('deny')},
+        );
+
+        final decision =
+            program.invokeImport('access.check', [
+                  _requestPathValue('/tmp/config'),
+                  _permissionsValue(['read', 'write']),
+                ])
+                as WasmComponentValueData;
+        final inherited =
+            program.invokeImport('access.check', [
+                  _requestInheritValue(['execute']),
+                  _permissionsValue(['execute']),
+                ])
+                as WasmComponentValueData;
+        final preview3Decision =
+            preview3Program.invokeImport('access.check', [
+                  _requestAnonymousValue(),
+                  _permissionsValue(['read']),
+                ])
+                as WasmComponentValueData;
+
+        expect(decision.kind, WasmComponentValueDataKind.enumeration);
+        expect(decision.label, 'allow');
+        expect(inherited.label, 'allow');
+        expect(preview3Decision.label, 'deny');
+        expect(seen, ['path:read,write', 'inherit:execute']);
+
+        expect(
+          () => program.invokeImport('access.check', [
+            _badRequestPathValue(),
+            _permissionsValue(['read']),
+          ]),
+          throwsStateError,
+        );
+        expect(
+          () => program.invokeImport('access.check', [
+            _requestAnonymousValue(),
+            _permissionsValue(['delete']),
+          ]),
+          throwsStateError,
+        );
+        expect(seen, ['path:read,write', 'inherit:execute']);
+
+        final badResultProgram = preview2Plan.bindAdapters(
+          imports: {'access.check': (_) => _decisionValue('maybe')},
+        );
+        expect(
+          () => badResultProgram.invokeImport('access.check', [
+            _requestAnonymousValue(),
+            _permissionsValue(['read']),
+          ]),
+          throwsStateError,
+        );
+      },
+    );
+
+    test(
       'Preview2 wrapper rejects owned-resource async values at version gate',
       () {
         final streamComponent = WasmComponent.decode(
@@ -1574,6 +1687,60 @@ WasmComponentValueData _badEnvEntryListValue() {
         ],
       ),
     ],
+  );
+}
+
+WasmComponentValueData _permissionsValue(List<String> labels) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.flags,
+    rawBytes: Uint8List(0),
+    labels: labels,
+  );
+}
+
+WasmComponentValueData _decisionValue(String label) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.enumeration,
+    rawBytes: Uint8List(0),
+    label: label,
+  );
+}
+
+WasmComponentValueData _requestAnonymousValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.variant,
+    rawBytes: Uint8List(0),
+    label: 'anonymous',
+  );
+}
+
+WasmComponentValueData _requestPathValue(String path) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.variant,
+    rawBytes: Uint8List(0),
+    label: 'path',
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.string,
+      rawBytes: Uint8List(0),
+      string: path,
+    ),
+  );
+}
+
+WasmComponentValueData _requestInheritValue(List<String> labels) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.variant,
+    rawBytes: Uint8List(0),
+    label: 'inherit',
+    associatedValue: _permissionsValue(labels),
+  );
+}
+
+WasmComponentValueData _badRequestPathValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.variant,
+    rawBytes: Uint8List(0),
+    label: 'path',
   );
 }
 
