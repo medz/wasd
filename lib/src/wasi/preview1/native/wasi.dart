@@ -1617,7 +1617,13 @@ class WASI implements wasi_iface.WASI {
       return const wasi_vfs.Preview1VirtualOpenResult.missing();
     }
     if (type == io.FileSystemEntityType.directory) {
-      return const wasi_vfs.Preview1VirtualOpenResult.notSupported();
+      return _openHostDirectory(
+        guestPath: guestPath,
+        hostPath: hostPath,
+        rightsBase: rightsBase,
+        rightsInheriting: rightsInheriting,
+        descriptorFlags: descriptorFlags,
+      );
     }
     if (type == io.FileSystemEntityType.link) {
       return const wasi_vfs.Preview1VirtualOpenResult.notSupported();
@@ -1674,6 +1680,86 @@ class WASI implements wasi_iface.WASI {
         ? ''
         : normalized.substring(matchedGuestRoot.length + 1);
     return _joinHostPath(hostRoot, relative);
+  }
+
+  wasi_vfs.Preview1VirtualOpenResult _openHostDirectory({
+    required String guestPath,
+    required String hostPath,
+    required int rightsBase,
+    required int rightsInheriting,
+    required int descriptorFlags,
+  }) {
+    try {
+      final stat = io.Directory(hostPath).statSync();
+      final entries = _hostDirectoryEntries(hostPath);
+      return _vfs.openDirectoryHandle(
+        guestPath,
+        entries: entries,
+        metadata: _metadataFromHostStat(stat),
+        rightsBase: rightsBase,
+        rightsInheriting: rightsInheriting,
+        descriptorFlags: descriptorFlags,
+      );
+    } on io.FileSystemException {
+      return const wasi_vfs.Preview1VirtualOpenResult.missing();
+    }
+  }
+
+  List<wasi_vfs.Preview1DirectoryEntry> _hostDirectoryEntries(String hostPath) {
+    final entities = io.Directory(
+      hostPath,
+    ).listSync(recursive: false, followLinks: false);
+    final entries = <wasi_vfs.Preview1DirectoryEntry>[];
+    for (final entity in entities) {
+      final name = _hostEntityName(entity.path);
+      if (name.isEmpty) {
+        continue;
+      }
+      final type = io.FileSystemEntity.typeSync(
+        entity.path,
+        followLinks: false,
+      );
+      final fileType = _hostDirectoryEntryFileType(type);
+      if (fileType == null) {
+        continue;
+      }
+      entries.add(
+        wasi_vfs.Preview1DirectoryEntry(
+          name: name,
+          fileType: fileType,
+          inode: _hostEntityInode(entity),
+        ),
+      );
+    }
+    entries.sort((a, b) => a.name.compareTo(b.name));
+    return entries;
+  }
+
+  int? _hostDirectoryEntryFileType(io.FileSystemEntityType type) {
+    if (type == io.FileSystemEntityType.file) {
+      return _filetypeRegularFile;
+    }
+    if (type == io.FileSystemEntityType.directory) {
+      return _filetypeDirectory;
+    }
+    if (type == io.FileSystemEntityType.link) {
+      return _filetypeSymbolicLink;
+    }
+    return null;
+  }
+
+  int _hostEntityInode(io.FileSystemEntity entity) {
+    try {
+      return _metadataFromHostStat(entity.statSync()).inode;
+    } on io.FileSystemException {
+      return wasi_vfs.Preview1VirtualNodeMetadata().inode;
+    }
+  }
+
+  String _hostEntityName(String path) {
+    final sanitized = path.replaceAll('\\', '/');
+    final slash = sanitized.lastIndexOf('/');
+    return slash == -1 ? sanitized : sanitized.substring(slash + 1);
   }
 
   ({int errno, wasi_vfs.Preview1VirtualPathEntry? entry}) _hostPathEntry(
@@ -2154,6 +2240,7 @@ const int _fdstatSize = wasi_common.fdstatSize;
 const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
 const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
+const int _filetypeSymbolicLink = wasi_common.filetypeSymbolicLink;
 const int _oflagCreat = wasi_common.oflagCreat;
 const int _oflagDirectory = wasi_common.oflagDirectory;
 const int _oflagTrunc = wasi_common.oflagTrunc;

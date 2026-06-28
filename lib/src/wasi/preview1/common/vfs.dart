@@ -102,6 +102,10 @@ final class Preview1VirtualFileSystem {
   final Map<String, Preview1VirtualSymlink> _symlinksByGuestPath;
   final Map<int, Preview1OpenFile> _openFilesByFd = <int, Preview1OpenFile>{};
   final Map<int, String> _openDirectoriesByFd = <int, String>{};
+  final Map<int, List<Preview1DirectoryEntry>> _openDirectoryEntriesByFd =
+      <int, List<Preview1DirectoryEntry>>{};
+  final Map<int, Preview1VirtualNodeMetadata> _openDirectoryMetadataByFd =
+      <int, Preview1VirtualNodeMetadata>{};
   final Map<int, int> _openDirectoryFlagsByFd = <int, int>{};
   final Map<int, Preview1DescriptorRights> _openDirectoryRightsByFd =
       <int, Preview1DescriptorRights>{};
@@ -431,11 +435,19 @@ final class Preview1VirtualFileSystem {
     final openDirectory = _openDirectoriesByFd.remove(fromFd);
     if (openDirectory != null) {
       final flags = _openDirectoryFlagsByFd.remove(fromFd) ?? 0;
+      final entries = _openDirectoryEntriesByFd.remove(fromFd);
+      final metadata = _openDirectoryMetadataByFd.remove(fromFd);
       final rights =
           _openDirectoryRightsByFd.remove(fromFd) ??
           Preview1DescriptorRights.directory();
       _closeDescriptor(toFd);
       _openDirectoriesByFd[toFd] = openDirectory;
+      if (entries != null) {
+        _openDirectoryEntriesByFd[toFd] = entries;
+      }
+      if (metadata != null) {
+        _openDirectoryMetadataByFd[toFd] = metadata;
+      }
       _openDirectoryFlagsByFd[toFd] = flags;
       _openDirectoryRightsByFd[toFd] = rights;
       _advanceNextVirtualFdPast(toFd);
@@ -471,6 +483,10 @@ final class Preview1VirtualFileSystem {
       isPreopenDirectoryFd(fd) || isOpenDirectoryFd(fd);
 
   List<Preview1DirectoryEntry>? directoryEntriesForFd(int fd) {
+    final openedEntries = _openDirectoryEntriesByFd[fd];
+    if (openedEntries != null) {
+      return openedEntries;
+    }
     final directoryPath = directoryPathForFd(fd);
     if (directoryPath == null) {
       return null;
@@ -487,6 +503,10 @@ final class Preview1VirtualFileSystem {
     final socket = socketForFd(fd);
     if (socket != null) {
       return socket.metadata;
+    }
+    final openDirectoryMetadata = _openDirectoryMetadataByFd[fd];
+    if (openDirectoryMetadata != null) {
+      return openDirectoryMetadata;
     }
     final directoryPath = directoryPathForFd(fd);
     if (directoryPath == null) {
@@ -658,6 +678,12 @@ final class Preview1VirtualFileSystem {
     _directoryChildrenByGuestPath.remove(normalized);
     _directoryEntriesByGuestPath.remove(normalized);
     _openDirectoriesByFd.removeWhere((_, path) => path == normalized);
+    _openDirectoryEntriesByFd.removeWhere(
+      (fd, _) => !_openDirectoriesByFd.containsKey(fd),
+    );
+    _openDirectoryMetadataByFd.removeWhere(
+      (fd, _) => !_openDirectoriesByFd.containsKey(fd),
+    );
     _openDirectoryFlagsByFd.removeWhere(
       (fd, _) => !_openDirectoriesByFd.containsKey(fd),
     );
@@ -984,6 +1010,28 @@ final class Preview1VirtualFileSystem {
     return Preview1VirtualOpenResult.file(fd);
   }
 
+  Preview1VirtualOpenResult openDirectoryHandle(
+    String guestPath, {
+    required List<Preview1DirectoryEntry> entries,
+    required Preview1VirtualNodeMetadata metadata,
+    int? rightsBase,
+    int? rightsInheriting,
+    int descriptorFlags = 0,
+  }) {
+    final fd = _allocateVirtualFd();
+    _openDirectoriesByFd[fd] = normalizeGuestPath(guestPath);
+    _openDirectoryEntriesByFd[fd] = List<Preview1DirectoryEntry>.unmodifiable(
+      entries,
+    );
+    _openDirectoryMetadataByFd[fd] = metadata;
+    _openDirectoryFlagsByFd[fd] = descriptorFlags;
+    _openDirectoryRightsByFd[fd] = Preview1DescriptorRights.directory(
+      base: rightsBase,
+      inheriting: rightsInheriting,
+    );
+    return Preview1VirtualOpenResult.directory(fd);
+  }
+
   int acceptSocket({required int fd, required int descriptorFlags}) {
     final listener = socketForFd(fd);
     if (listener == null || !listener.isStream || !listener.canAccept) {
@@ -1244,6 +1292,8 @@ final class Preview1VirtualFileSystem {
     _openFilesByFd.remove(fd)?.close();
     _socketsByFd.remove(fd);
     _openDirectoriesByFd.remove(fd);
+    _openDirectoryEntriesByFd.remove(fd);
+    _openDirectoryMetadataByFd.remove(fd);
     _openDirectoryFlagsByFd.remove(fd);
     _openDirectoryRightsByFd.remove(fd);
     _preopenPathBytesByFd.remove(fd);

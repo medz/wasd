@@ -190,7 +190,8 @@ too broad to verify in one commit.
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
   - Checked child rows: `P1-JS-NODE-SHARED-HOST`,
     `P1-NATIVE-HOST-FS-READ-BACKING`, and
-    `P1-NATIVE-HOST-FS-PATH-METADATA`.
+    `P1-NATIVE-HOST-FS-PATH-METADATA`, and
+    `P1-NATIVE-HOST-FS-DIRECTORY-READDIR`.
   - Done when: local VM/browser/Node Preview1 suites pass with no unexpected
     skips, the official Preview1 suite has no untriaged failures, README/API
     claims match the verified host surface, and VFS/socket hot paths have
@@ -340,6 +341,38 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-NATIVE-HOST-FS-DIRECTORY-READDIR` - Native Preview1 host directories
+  can be opened and enumerated from the real host filesystem.
+  - Scope: Dart VM native Preview1 `path_open(O_DIRECTORY)` for real
+    directories below a configured preopen root, plus `fd_readdir` over a
+    deterministic snapshot of the host directory entries. Browser and Node JS
+    remain on the in-repo in-memory VFS.
+  - Edit targets: `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/native/wasi.dart`,
+    `test/wasi_native_host_fs_test.dart`, `README.md`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_native_host_fs_test.dart --reporter=compact`
+    failed before the fix because opening a real host `assets` directory with
+    `O_DIRECTORY` returned `ENOTSUP`.
+  - Implementation gate:
+    `dart test test/wasi_native_host_fs_test.dart --reporter=compact`;
+    `dart test test/wasi_test.dart --reporter=compact`;
+    `dart test -p node test/wasi_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
+    no recursive traversal or repeated polling in this row. Add host-directory
+    benchmark evidence before adding live refresh, recursive traversal, caching
+    invalidation, or large-directory optimization.
+  - Done when: `path_open(O_DIRECTORY)` opens a host directory below a native
+    preopen, `fd_readdir` returns sorted host file and directory entries with
+    file types, and `fd_close` releases the descriptor.
+  - Evidence update: this checked row, README support wording, and the
+    `P1-FULL-RUNTIME-GATE` checked-child list.
+  - Claim impact: advances native host filesystem enumeration; host writes,
+    host symlink resolution, full Preview1, Preview2, and Preview3 remain
+    incomplete.
 - [x] `P1-NATIVE-HOST-FS-PATH-METADATA` - Native Preview1
   `path_filestat_get` reports real host file and directory metadata.
   - Scope: Dart VM native Preview1 `path_filestat_get` for regular files,
@@ -359,15 +392,15 @@ too broad to verify in one commit.
     `dart analyze`.
   - Performance gate: N/A for direct metadata lookup. Add host filesystem
     benchmark evidence before repeated directory traversal, metadata caching,
-    or real `fd_readdir` support.
+    or large-directory `fd_readdir` optimization.
   - Done when: `path_filestat_get` reports `regular-file` plus byte size for a
     host file, reports `directory` for a host directory, and still returns
     `NOENT` for missing host paths.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
-  - Claim impact: advances native host filesystem metadata; host directory
-    enumeration, writes, symlink resolution, full Preview1, Preview2, and
-    Preview3 remain incomplete.
+  - Claim impact: advances native host filesystem metadata; host writes,
+    symlink resolution, full Preview1, Preview2, and Preview3 remain
+    incomplete.
 - [x] `P1-NATIVE-HOST-FS-READ-BACKING` - Native Preview1 preopens can read
   regular files from the real host filesystem.
   - Scope: Dart VM native Preview1 `path_open` for regular files below a
@@ -398,13 +431,13 @@ too broad to verify in one commit.
     its size is reported through `fd_filestat_get`, `fd_seek` can position from
     file end, `fd_read` returns host bytes, and `fd_close` releases the host
     handle. Existing-but-unsupported host writes return `ENOTCAPABLE`; host
-    directories and host symlinks return `ENOTSUP` until directory handles and
-    realpath containment are implemented.
+    symlinks return `ENOTSUP` until symlink resolution and realpath containment
+    are implemented.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
   - Claim impact: removes the native "preopens are memory-only" blocker for
-    read-only files; host filesystem writes, host directory enumeration, full
-    Preview1, Preview2, and Preview3 remain incomplete.
+    read-only files; host filesystem writes, full Preview1, Preview2, and
+    Preview3 remain incomplete.
 - [x] `P1-JS-NODE-SHARED-HOST` - Node.js Preview1 uses wasd's in-repo JS host
   instead of delegating to `node:wasi`.
   - Scope: JS Preview1 host selection and Node runtime parity for the same
