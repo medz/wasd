@@ -1446,9 +1446,32 @@ class WASI implements wasi_iface.WASI {
       followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
     );
     if (entry == null) {
-      return _errnoNoent;
+      final hostEntry = _hostPathEntry(normalizedPath);
+      if (hostEntry.errno != _errnoSuccess) {
+        return hostEntry.errno;
+      }
+      return _writeFilestatEntry(
+        bytes: bytes,
+        data: data,
+        filestatPtr: filestatPtr,
+        entry: hostEntry.entry!,
+      );
     }
 
+    return _writeFilestatEntry(
+      bytes: bytes,
+      data: data,
+      filestatPtr: filestatPtr,
+      entry: entry,
+    );
+  });
+
+  int _writeFilestatEntry({
+    required Uint8List bytes,
+    required ByteData data,
+    required int filestatPtr,
+    required wasi_vfs.Preview1VirtualPathEntry entry,
+  }) {
     bytes.fillRange(filestatPtr, filestatPtr + _filestatSize, 0);
     bytes[filestatPtr + 16] = entry.fileType;
     _setUint64(data, filestatPtr + 32, entry.size);
@@ -1458,7 +1481,7 @@ class WASI implements wasi_iface.WASI {
       metadata: entry.metadata,
     );
     return _errnoSuccess;
-  });
+  }
 
   wasm.FunctionImportExportValue get _pathFilestatSetTimesImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
@@ -1651,6 +1674,56 @@ class WASI implements wasi_iface.WASI {
         ? ''
         : normalized.substring(matchedGuestRoot.length + 1);
     return _joinHostPath(hostRoot, relative);
+  }
+
+  ({int errno, wasi_vfs.Preview1VirtualPathEntry? entry}) _hostPathEntry(
+    String guestPath,
+  ) {
+    final hostPath = _hostPathForGuestPath(guestPath);
+    if (hostPath == null) {
+      return (errno: _errnoNoent, entry: null);
+    }
+
+    final type = io.FileSystemEntity.typeSync(hostPath, followLinks: false);
+    if (type == io.FileSystemEntityType.notFound) {
+      return (errno: _errnoNoent, entry: null);
+    }
+    if (type == io.FileSystemEntityType.link) {
+      return (errno: _errnoNotsup, entry: null);
+    }
+
+    try {
+      switch (type) {
+        case io.FileSystemEntityType.file:
+          final stat = io.File(hostPath).statSync();
+          return (
+            errno: _errnoSuccess,
+            entry: wasi_vfs.Preview1VirtualPathEntry(
+              kind: wasi_vfs.Preview1VirtualPathEntryKind.file,
+              metadata: _metadataFromHostStat(stat),
+              size: stat.size,
+            ),
+          );
+        case io.FileSystemEntityType.directory:
+          final stat = io.Directory(hostPath).statSync();
+          return (
+            errno: _errnoSuccess,
+            entry: wasi_vfs.Preview1VirtualPathEntry(
+              kind: wasi_vfs.Preview1VirtualPathEntryKind.directory,
+              metadata: _metadataFromHostStat(stat),
+            ),
+          );
+        case io.FileSystemEntityType.link:
+        case io.FileSystemEntityType.notFound:
+          return (errno: _errnoNoent, entry: null);
+        case io.FileSystemEntityType.pipe:
+        case io.FileSystemEntityType.unixDomainSock:
+          return (errno: _errnoNotsup, entry: null);
+      }
+      return (errno: _errnoNotsup, entry: null);
+    } on io.FileSystemException {
+      return (errno: _errnoNoent, entry: null);
+    }
   }
 
   int _applyFilestatTimes({

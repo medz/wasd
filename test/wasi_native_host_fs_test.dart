@@ -16,9 +16,13 @@ const int _rightFdSeek = 1 << 2;
 const int _rightFdTell = 1 << 5;
 const int _rightFdWrite = 1 << 6;
 const int _rightFdFilestatGet = 1 << 21;
+const int _errnoNoent = 44;
 const int _errnoNotsup = 58;
 const int _errnoNotcapable = 76;
+const int _filestatFiletypeOffset = 16;
 const int _filestatSizeOffset = 32;
+const int _filetypeDirectory = 3;
+const int _filetypeRegularFile = 4;
 const int _oflagDirectory = 2;
 
 void main() {
@@ -178,5 +182,56 @@ void main() {
       0,
     );
     expect(fdClose.ref([data.getUint32(openedFdPtr, Endian.little)]), 0);
+  });
+
+  test('native path_filestat_get reports host filesystem metadata', () async {
+    final temp = await Directory.systemTemp.createTemp('wasd_host_stat_');
+    addTearDown(() => temp.delete(recursive: true));
+    File('${temp.path}/data.txt').writeAsStringSync('metadata');
+    Directory('${temp.path}/assets').createSync();
+
+    final wasi = WASI(preopens: {'/host': temp.path});
+    final result = await WebAssembly.instantiate(
+      wasiStartModuleBytes().buffer,
+      wasi.imports,
+    );
+    final instance = result.instance;
+    final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+    final pathFilestatGet =
+        preview1['path_filestat_get'] as FunctionImportExportValue;
+    final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+    wasi.finalizeBindings(instance, memory: memory);
+
+    final bytes = Uint8List.view(memory.buffer);
+    final data = ByteData.view(memory.buffer);
+    const pathPtr = 1024;
+    const filestatPtr = 1088;
+
+    final filePath = utf8.encode('data.txt');
+    bytes.setAll(pathPtr, filePath);
+    expect(
+      pathFilestatGet.ref([3, 0, pathPtr, filePath.length, filestatPtr]),
+      0,
+    );
+    expect(bytes[filestatPtr + _filestatFiletypeOffset], _filetypeRegularFile);
+    expect(
+      data.getUint64(filestatPtr + _filestatSizeOffset, Endian.little),
+      'metadata'.length,
+    );
+
+    final directoryPath = utf8.encode('assets');
+    bytes.setAll(pathPtr, directoryPath);
+    expect(
+      pathFilestatGet.ref([3, 0, pathPtr, directoryPath.length, filestatPtr]),
+      0,
+    );
+    expect(bytes[filestatPtr + _filestatFiletypeOffset], _filetypeDirectory);
+
+    final missingPath = utf8.encode('missing.txt');
+    bytes.setAll(pathPtr, missingPath);
+    expect(
+      pathFilestatGet.ref([3, 0, pathPtr, missingPath.length, filestatPtr]),
+      _errnoNoent,
+    );
   });
 }

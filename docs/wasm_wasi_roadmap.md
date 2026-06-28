@@ -188,8 +188,9 @@ too broad to verify in one commit.
     `tool/wasi_testsuite_wasd_adapter.py`.
   - Performance gate:
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
-  - Checked child rows: `P1-JS-NODE-SHARED-HOST` and
-    `P1-NATIVE-HOST-FS-READ-BACKING`.
+  - Checked child rows: `P1-JS-NODE-SHARED-HOST`,
+    `P1-NATIVE-HOST-FS-READ-BACKING`, and
+    `P1-NATIVE-HOST-FS-PATH-METADATA`.
   - Done when: local VM/browser/Node Preview1 suites pass with no unexpected
     skips, the official Preview1 suite has no untriaged failures, README/API
     claims match the verified host surface, and VFS/socket hot paths have
@@ -339,6 +340,34 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-NATIVE-HOST-FS-PATH-METADATA` - Native Preview1
+  `path_filestat_get` reports real host file and directory metadata.
+  - Scope: Dart VM native Preview1 `path_filestat_get` for regular files,
+    directories, and missing paths below a configured preopen root. Browser and
+    Node JS remain on the in-repo in-memory VFS.
+  - Edit targets: `lib/src/wasi/preview1/native/wasi.dart`,
+    `test/wasi_native_host_fs_test.dart`, `README.md`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_native_host_fs_test.dart --reporter=compact`
+    failed before the fix because a real host `data.txt` under `/host` returned
+    `NOENT` from `path_filestat_get`.
+  - Implementation gate:
+    `dart test test/wasi_native_host_fs_test.dart --reporter=compact`;
+    `dart test test/wasi_test.dart --reporter=compact`;
+    `dart test -p node test/wasi_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart analyze`.
+  - Performance gate: N/A for direct metadata lookup. Add host filesystem
+    benchmark evidence before repeated directory traversal, metadata caching,
+    or real `fd_readdir` support.
+  - Done when: `path_filestat_get` reports `regular-file` plus byte size for a
+    host file, reports `directory` for a host directory, and still returns
+    `NOENT` for missing host paths.
+  - Evidence update: this checked row, README support wording, and the
+    `P1-FULL-RUNTIME-GATE` checked-child list.
+  - Claim impact: advances native host filesystem metadata; host directory
+    enumeration, writes, symlink resolution, full Preview1, Preview2, and
+    Preview3 remain incomplete.
 - [x] `P1-NATIVE-HOST-FS-READ-BACKING` - Native Preview1 preopens can read
   regular files from the real host filesystem.
   - Scope: Dart VM native Preview1 `path_open` for regular files below a
