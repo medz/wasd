@@ -20,7 +20,10 @@ const int _rightFdReaddir = 1 << 14;
 const int _rightFdFilestatGet = 1 << 21;
 const int _rightFdFilestatSetSize = 1 << 22;
 const int _errnoExist = 20;
+const int _errnoIsdir = 31;
 const int _errnoNoent = 44;
+const int _errnoNotdir = 54;
+const int _errnoNotempty = 55;
 const int _filestatFiletypeOffset = 16;
 const int _filestatSizeOffset = 32;
 const int _filetypeDirectory = 3;
@@ -347,6 +350,97 @@ void main() {
     expect(File('${temp.path}/created.txt').readAsStringSync(), 'created');
     expect(fdClose.ref([createdFd]), 0);
   });
+
+  test(
+    'native host path mutations create and remove real filesystem entries',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('wasd_host_mutate_');
+      addTearDown(() => temp.delete(recursive: true));
+      File('${temp.path}/delete.txt').writeAsStringSync('delete');
+      File('${temp.path}/slash.txt').writeAsStringSync('slash');
+      File('${temp.path}/not-dir.txt').writeAsStringSync('file');
+      Directory('${temp.path}/empty').createSync();
+      final nonEmpty = Directory('${temp.path}/non-empty')..createSync();
+      File('${nonEmpty.path}/child.txt').writeAsStringSync('child');
+
+      final wasi = WASI(preopens: {'/host': temp.path});
+      final result = await WebAssembly.instantiate(
+        wasiStartModuleBytes().buffer,
+        wasi.imports,
+      );
+      final instance = result.instance;
+      final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+      final pathCreateDirectory =
+          preview1['path_create_directory'] as FunctionImportExportValue;
+      final pathUnlinkFile =
+          preview1['path_unlink_file'] as FunctionImportExportValue;
+      final pathRemoveDirectory =
+          preview1['path_remove_directory'] as FunctionImportExportValue;
+      final memory =
+          (instance.exports['memory'] as MemoryImportExportValue).ref;
+      wasi.finalizeBindings(instance, memory: memory);
+
+      final bytes = Uint8List.view(memory.buffer);
+      const pathPtr = 1024;
+
+      var path = utf8.encode('created-dir');
+      bytes.setAll(pathPtr, path);
+      expect(pathCreateDirectory.ref([3, pathPtr, path.length]), 0);
+      expect(Directory('${temp.path}/created-dir').existsSync(), isTrue);
+
+      expect(pathCreateDirectory.ref([3, pathPtr, path.length]), _errnoExist);
+
+      path = utf8.encode('delete.txt');
+      bytes.setAll(pathPtr, path);
+      expect(pathUnlinkFile.ref([3, pathPtr, path.length]), 0);
+      expect(File('${temp.path}/delete.txt').existsSync(), isFalse);
+
+      path = utf8.encode('slash.txt/');
+      bytes.setAll(pathPtr, path);
+      expect(pathUnlinkFile.ref([3, pathPtr, path.length]), _errnoNotdir);
+      expect(File('${temp.path}/slash.txt').existsSync(), isTrue);
+
+      path = utf8.encode('created-dir');
+      bytes.setAll(pathPtr, path);
+      expect(pathUnlinkFile.ref([3, pathPtr, path.length]), _errnoIsdir);
+      expect(Directory('${temp.path}/created-dir').existsSync(), isTrue);
+
+      path = utf8.encode('not-dir.txt');
+      bytes.setAll(pathPtr, path);
+      expect(pathRemoveDirectory.ref([3, pathPtr, path.length]), _errnoNotdir);
+      expect(File('${temp.path}/not-dir.txt').existsSync(), isTrue);
+
+      path = utf8.encode('non-empty');
+      bytes.setAll(pathPtr, path);
+      expect(
+        pathRemoveDirectory.ref([3, pathPtr, path.length]),
+        _errnoNotempty,
+      );
+      expect(Directory('${temp.path}/non-empty').existsSync(), isTrue);
+
+      path = utf8.encode('empty');
+      bytes.setAll(pathPtr, path);
+      expect(pathRemoveDirectory.ref([3, pathPtr, path.length]), 0);
+      expect(Directory('${temp.path}/empty').existsSync(), isFalse);
+
+      path = utf8.encode('created-dir');
+      bytes.setAll(pathPtr, path);
+      expect(pathRemoveDirectory.ref([3, pathPtr, path.length]), 0);
+      expect(Directory('${temp.path}/created-dir').existsSync(), isFalse);
+
+      path = utf8.encode('.');
+      bytes.setAll(pathPtr, path);
+      expect(
+        pathRemoveDirectory.ref([3, pathPtr, path.length]),
+        _errnoNotempty,
+      );
+      expect(Directory(temp.path).existsSync(), isTrue);
+
+      path = utf8.encode('missing');
+      bytes.setAll(pathPtr, path);
+      expect(pathRemoveDirectory.ref([3, pathPtr, path.length]), _errnoNoent);
+    },
+  );
 
   test('native root preopens map host filesystem children', () async {
     final temp = await Directory.systemTemp.createTemp('wasd_root_host_fs_');

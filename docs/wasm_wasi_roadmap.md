@@ -191,8 +191,9 @@ too broad to verify in one commit.
   - Checked child rows: `P1-JS-NODE-SHARED-HOST`,
     `P1-NATIVE-HOST-FS-READ-BACKING`,
     `P1-NATIVE-HOST-FS-PATH-METADATA`,
-    `P1-NATIVE-HOST-FS-DIRECTORY-READDIR`, and
-    `P1-NATIVE-HOST-FS-FILE-WRITEBACK`.
+    `P1-NATIVE-HOST-FS-DIRECTORY-READDIR`,
+    `P1-NATIVE-HOST-FS-FILE-WRITEBACK`, and
+    `P1-NATIVE-HOST-FS-BASIC-PATH-MUTATION`.
   - Done when: local VM/browser/Node Preview1 suites pass with no unexpected
     skips, the official Preview1 suite has no untriaged failures, README/API
     claims match the verified host surface, and VFS/socket hot paths have
@@ -342,6 +343,38 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-NATIVE-HOST-FS-BASIC-PATH-MUTATION` - Native Preview1 basic path
+  mutation syscalls create and delete real host filesystem entries.
+  - Scope: Dart VM native Preview1 `path_create_directory`,
+    `path_unlink_file`, and `path_remove_directory` below a configured real
+    host preopen root. Browser and Node JS remain on the in-repo in-memory VFS.
+  - Edit targets: `lib/src/wasi/preview1/native/wasi.dart`,
+    `test/wasi_native_host_fs_test.dart`, `README.md`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_native_host_fs_test.dart --reporter=compact`
+    failed before the fix because `path_create_directory` returned success
+    while creating only an in-memory VFS directory and no real host directory.
+  - Implementation gate:
+    `dart test test/wasi_native_host_fs_test.dart --reporter=compact`;
+    `dart test test/wasi_test.dart --reporter=compact`;
+    `dart test -p node test/wasi_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
+    no recursive traversal or broad host scan in this row. Add host mutation
+    benchmark evidence before recursive deletion, rename/link support, or
+    high-volume directory mutation.
+  - Done when: `path_create_directory` creates a real host directory,
+    `path_unlink_file` deletes a real host file and preserves trailing-slash
+    `NOTDIR`/directory `ISDIR` errors, `path_remove_directory` deletes only
+    empty host directories, returns `NOTEMPTY` for non-empty directories,
+    returns `NOTDIR` for files, and refuses to remove the preopen root.
+  - Evidence update: this checked row, README support wording, and the
+    `P1-FULL-RUNTIME-GATE` checked-child list.
+  - Claim impact: advances native host filesystem mutation; host rename, hard
+    link, symlink creation/readlink/resolution, full Preview1, Preview2, and
+    Preview3 remain incomplete.
 - [x] `P1-NATIVE-HOST-FS-FILE-WRITEBACK` - Native Preview1 host regular files
   persist writes, truncation, allocation, and creation to the real host
   filesystem.
@@ -376,9 +409,9 @@ too broad to verify in one commit.
     file instead of creating an in-memory shadow.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
-  - Claim impact: advances native host regular-file writeback; host directory
-    mutation, host symlink resolution/readlink, full Preview1, Preview2, and
-    Preview3 remain incomplete.
+  - Claim impact: advances native host regular-file writeback; host rename,
+    hard link, symlink creation/readlink/resolution, full Preview1, Preview2,
+    and Preview3 remain incomplete.
 - [x] `P1-NATIVE-HOST-FS-DIRECTORY-READDIR` - Native Preview1 host directories
   can be opened and enumerated from the real host filesystem.
   - Scope: Dart VM native Preview1 `path_open(O_DIRECTORY)` for real
