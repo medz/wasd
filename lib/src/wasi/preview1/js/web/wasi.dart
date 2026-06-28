@@ -56,7 +56,7 @@ class WASI implements wasi.WASI {
   final List<Uint8List> _argsData;
   final List<Uint8List> _envData;
   final wasi_vfs.Preview1VirtualFileSystem _vfs;
-  final wasi_vfs.Preview1VirtualOpenFile _stdinInput;
+  final wasi_vfs.Preview1OpenFile _stdinInput;
   static const int _maxWebCryptoGetRandomValuesLength = 65536;
 
   final Stopwatch _monotonicClock = Stopwatch()..start();
@@ -1126,6 +1126,10 @@ class WASI implements wasi.WASI {
         return _errnoNotdir;
       case wasi_vfs.Preview1VirtualOpenKind.symlinkLoop:
         return _errnoLoop;
+      case wasi_vfs.Preview1VirtualOpenKind.notCapable:
+        return _errnoNotcapable;
+      case wasi_vfs.Preview1VirtualOpenKind.notSupported:
+        return _errnoNotsup;
     }
   });
 
@@ -1751,7 +1755,7 @@ class WASI implements wasi.WASI {
   }
 
   int _readOpenFileIntoIov({
-    required wasi_vfs.Preview1VirtualOpenFile opened,
+    required wasi_vfs.Preview1OpenFile opened,
     required int iovs,
     required int iovsLen,
     required int nreadPtr,
@@ -1775,7 +1779,7 @@ class WASI implements wasi.WASI {
   }
 
   int _writeOpenFileFromIov({
-    required wasi_vfs.Preview1VirtualOpenFile opened,
+    required wasi_vfs.Preview1OpenFile opened,
     required int iovs,
     required int iovsLen,
     required int nwrittenPtr,
@@ -1976,6 +1980,7 @@ const int _errnoNosys = wasi_common.errnoNosys;
 const int _errnoNotdir = wasi_common.errnoNotdir;
 const int _errnoNotempty = wasi_common.errnoNotempty;
 const int _errnoNotcapable = wasi_common.errnoNotcapable;
+const int _errnoNotsup = wasi_common.errnoNotsup;
 const int _errnoLoop = wasi_common.errnoLoop;
 const int _errnoPerm = wasi_common.errnoPerm;
 const int _prestatSize = wasi_common.prestatSize;

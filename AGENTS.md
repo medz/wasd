@@ -10,7 +10,7 @@ Key implementation areas:
 - `lib/src/wasi/`: WASI host implementations and compatibility layers.
 - `lib/src/wasi/preview1/native/`: Dart VM and native Preview1 host behavior.
 - `lib/src/wasi/preview1/js/web/`: browser Preview1 host shim.
-- `lib/src/wasi/preview1/js/node/`: Node Preview1 bridge backed by `node:wasi`.
+- `lib/src/wasi/preview1/js/node/`: Node Preview1 bridge backed by the in-repo JS Preview1 host.
 - `test/`: unit, regression, README, runtime, and smoke tests.
 - `test/support/`: shared helpers and runtime detection.
 - `test/fixtures/`: checked-in binary fixtures.
@@ -25,8 +25,7 @@ This repository currently exposes a limited WASI Preview1 implementation. Do not
 
 Current runtime split matters:
 
-- `native` and `js/web` implement the in-repo Preview1 host surface.
-- `js/node` delegates Preview1 behavior to `node:wasi`.
+- `native`, `js/web`, and `js/node` implement the in-repo Preview1 host surface.
 - Browser and native behavior are intended to stay aligned for the supported Preview1 subset.
 
 When changing WASI behavior:

@@ -35,6 +35,7 @@ class WASI implements wasi_iface.WASI {
          for (final entry in env.entries)
            wasi_vfs.nulTerminated('${entry.key}=${entry.value}'),
        ],
+       _hostPreopensByGuestPath = _buildHostPreopens(preopens),
        _vfs = wasi_vfs.Preview1VirtualFileSystem(
          preopens: preopens,
          files: files,
@@ -51,8 +52,9 @@ class WASI implements wasi_iface.WASI {
   final wasi_iface.WASIProcRaiseHandler? _procRaiseHandler;
   final List<Uint8List> _argsData;
   final List<Uint8List> _envData;
+  final Map<String, String> _hostPreopensByGuestPath;
   final wasi_vfs.Preview1VirtualFileSystem _vfs;
-  final wasi_vfs.Preview1VirtualOpenFile _stdinInput;
+  final wasi_vfs.Preview1OpenFile _stdinInput;
   final math.Random _secureRandom = math.Random.secure();
   final Stopwatch _monotonicClock = Stopwatch()..start();
   final bool _traceSyscalls =
@@ -1095,7 +1097,7 @@ class WASI implements wasi_iface.WASI {
                 parentRights.inheriting) {
       return _errnoNotcapable;
     }
-    final opened = _vfs.openPath(
+    var opened = _vfs.openPath(
       openPath,
       rightsBase: requestedRightsBase,
       rightsInheriting: requestedRightsInheriting,
@@ -1103,6 +1105,16 @@ class WASI implements wasi_iface.WASI {
       oflags: oflags,
       hasTrailingSeparator: guestPath.hasTrailingSeparator,
     );
+    if (opened.kind == wasi_vfs.Preview1VirtualOpenKind.missing) {
+      opened = _openHostPreopenPath(
+        openPath,
+        rightsBase: requestedRightsBase,
+        rightsInheriting: requestedRightsInheriting,
+        descriptorFlags: descriptorFlags,
+        oflags: oflags,
+        hasTrailingSeparator: guestPath.hasTrailingSeparator,
+      );
+    }
     switch (opened.kind) {
       case wasi_vfs.Preview1VirtualOpenKind.file:
       case wasi_vfs.Preview1VirtualOpenKind.directory:
@@ -1118,6 +1130,10 @@ class WASI implements wasi_iface.WASI {
         return _errnoNotdir;
       case wasi_vfs.Preview1VirtualOpenKind.symlinkLoop:
         return _errnoLoop;
+      case wasi_vfs.Preview1VirtualOpenKind.notCapable:
+        return _errnoNotcapable;
+      case wasi_vfs.Preview1VirtualOpenKind.notSupported:
+        return _errnoNotsup;
     }
   });
 
@@ -1556,6 +1572,87 @@ class WASI implements wasi_iface.WASI {
     };
   }
 
+  wasi_vfs.Preview1VirtualOpenResult _openHostPreopenPath(
+    String guestPath, {
+    required int rightsBase,
+    required int rightsInheriting,
+    required int descriptorFlags,
+    required int oflags,
+    required bool hasTrailingSeparator,
+  }) {
+    final hostPath = _hostPathForGuestPath(guestPath);
+    if (hostPath == null) {
+      return const wasi_vfs.Preview1VirtualOpenResult.missing();
+    }
+    if ((rightsBase & _rightFdWrite) != 0 ||
+        (oflags & (_oflagCreat | _oflagTrunc)) != 0) {
+      return const wasi_vfs.Preview1VirtualOpenResult.notCapable();
+    }
+
+    final type = io.FileSystemEntity.typeSync(hostPath, followLinks: false);
+    if (type == io.FileSystemEntityType.notFound) {
+      return const wasi_vfs.Preview1VirtualOpenResult.missing();
+    }
+    if (type == io.FileSystemEntityType.directory) {
+      return const wasi_vfs.Preview1VirtualOpenResult.notSupported();
+    }
+    if (type == io.FileSystemEntityType.link) {
+      return const wasi_vfs.Preview1VirtualOpenResult.notSupported();
+    }
+    if (type != io.FileSystemEntityType.file) {
+      return const wasi_vfs.Preview1VirtualOpenResult.missing();
+    }
+    if (hasTrailingSeparator || (oflags & _oflagDirectory) != 0) {
+      return const wasi_vfs.Preview1VirtualOpenResult.notDirectory();
+    }
+
+    final file = io.File(hostPath);
+    try {
+      final opened = file.openSync(mode: io.FileMode.read);
+      final stat = file.statSync();
+      return _vfs.openFileHandle(
+        _Preview1NativeHostOpenFile(
+          opened,
+          metadata: _metadataFromHostStat(stat),
+          rights: wasi_vfs.Preview1DescriptorRights.file(
+            base: rightsBase,
+            inheriting: rightsInheriting,
+          ),
+          descriptorFlags: descriptorFlags,
+        ),
+      );
+    } on io.FileSystemException {
+      return const wasi_vfs.Preview1VirtualOpenResult.missing();
+    }
+  }
+
+  String? _hostPathForGuestPath(String guestPath) {
+    final normalized = wasi_vfs.normalizeGuestPath(guestPath);
+    String? matchedGuestRoot;
+    for (final guestRoot in _hostPreopensByGuestPath.keys) {
+      final matches = guestRoot == '/'
+          ? normalized.startsWith('/')
+          : normalized == guestRoot || normalized.startsWith('$guestRoot/');
+      if (matches) {
+        if (matchedGuestRoot == null ||
+            guestRoot.length > matchedGuestRoot.length) {
+          matchedGuestRoot = guestRoot;
+        }
+      }
+    }
+    if (matchedGuestRoot == null) {
+      return null;
+    }
+
+    final hostRoot = _hostPreopensByGuestPath[matchedGuestRoot]!;
+    final relative = matchedGuestRoot == '/'
+        ? normalized.substring(1)
+        : normalized == matchedGuestRoot
+        ? ''
+        : normalized.substring(matchedGuestRoot.length + 1);
+    return _joinHostPath(hostRoot, relative);
+  }
+
   int _applyFilestatTimes({
     required wasi_vfs.Preview1VirtualNodeMetadata metadata,
     required int accessTimeNanos,
@@ -1800,7 +1897,7 @@ class WASI implements wasi_iface.WASI {
   }
 
   int _readOpenFileIntoIov({
-    required wasi_vfs.Preview1VirtualOpenFile opened,
+    required wasi_vfs.Preview1OpenFile opened,
     required int iovs,
     required int iovsLen,
     required int nreadPtr,
@@ -1824,7 +1921,7 @@ class WASI implements wasi_iface.WASI {
   }
 
   int _writeOpenFileFromIov({
-    required wasi_vfs.Preview1VirtualOpenFile opened,
+    required wasi_vfs.Preview1OpenFile opened,
     required int iovs,
     required int iovsLen,
     required int nwrittenPtr,
@@ -1975,6 +2072,7 @@ const int _errnoNosys = wasi_common.errnoNosys;
 const int _errnoNotdir = wasi_common.errnoNotdir;
 const int _errnoNotempty = wasi_common.errnoNotempty;
 const int _errnoNotcapable = wasi_common.errnoNotcapable;
+const int _errnoNotsup = wasi_common.errnoNotsup;
 const int _errnoLoop = wasi_common.errnoLoop;
 const int _errnoPerm = wasi_common.errnoPerm;
 const int _prestatSize = wasi_common.prestatSize;
@@ -1984,6 +2082,7 @@ const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
 const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
 const int _oflagCreat = wasi_common.oflagCreat;
+const int _oflagDirectory = wasi_common.oflagDirectory;
 const int _oflagTrunc = wasi_common.oflagTrunc;
 const int _oflagKnownMask = wasi_common.oflagKnownMask;
 const int _fdflagKnownMask = wasi_common.fdflagKnownMask;
@@ -2094,6 +2193,114 @@ io.ProcessSignal? _hostProcessSignalFor(wasi_iface.WASIProcessSignal signal) =>
       wasi_iface.WASIProcessSignal.pwr => null,
       wasi_iface.WASIProcessSignal.sys => io.ProcessSignal.sigsys,
     };
+
+Map<String, String> _buildHostPreopens(Map<String, String> preopens) {
+  return {
+    for (final entry in preopens.entries)
+      wasi_vfs.normalizeGuestPath(entry.key): io.Directory(
+        entry.value,
+      ).absolute.path,
+  };
+}
+
+String _joinHostPath(String root, String relative) {
+  if (relative.isEmpty) {
+    return root;
+  }
+  var path = root;
+  final separator = io.Platform.pathSeparator;
+  for (final segment in relative.split('/')) {
+    if (segment.isEmpty || segment == '.') {
+      continue;
+    }
+    path = path.endsWith(separator)
+        ? '$path$segment'
+        : '$path$separator$segment';
+  }
+  return path;
+}
+
+wasi_vfs.Preview1VirtualNodeMetadata _metadataFromHostStat(io.FileStat stat) {
+  final metadata = wasi_vfs.Preview1VirtualNodeMetadata();
+  final accessed = stat.accessed.microsecondsSinceEpoch * 1000;
+  final modified = stat.modified.microsecondsSinceEpoch * 1000;
+  if (accessed > 0) {
+    metadata.accessTimeNanos = accessed;
+  }
+  if (modified > 0) {
+    metadata.modificationTimeNanos = modified;
+  }
+  return metadata;
+}
+
+final class _Preview1NativeHostOpenFile implements wasi_vfs.Preview1OpenFile {
+  _Preview1NativeHostOpenFile(
+    this._file, {
+    required this.metadata,
+    required this.rights,
+    required this.descriptorFlags,
+  });
+
+  final io.RandomAccessFile _file;
+
+  @override
+  final wasi_vfs.Preview1VirtualNodeMetadata metadata;
+
+  @override
+  final wasi_vfs.Preview1DescriptorRights rights;
+
+  @override
+  int descriptorFlags;
+
+  @override
+  int offset = 0;
+
+  @override
+  int get length => _file.lengthSync();
+
+  @override
+  int readInto(Uint8List target, int start, int length) {
+    final count = readAtInto(target, start, length, offset);
+    offset += count;
+    return count;
+  }
+
+  @override
+  int readAtInto(Uint8List target, int start, int length, int fileOffset) {
+    if (length <= 0 || fileOffset < 0 || start < 0 || start >= target.length) {
+      return 0;
+    }
+    final end = math.min(target.length, start + length);
+    final originalPosition = _file.positionSync();
+    try {
+      _file.setPositionSync(fileOffset);
+      return _file.readIntoSync(target, start, end);
+    } finally {
+      _file.setPositionSync(originalPosition);
+    }
+  }
+
+  @override
+  int writeFrom(Uint8List source, int start, int length) => 0;
+
+  @override
+  int writeAtFrom(Uint8List source, int start, int length, int fileOffset) => 0;
+
+  @override
+  void setLength(int length) {}
+
+  @override
+  void allocate(int offset, int length) {}
+
+  @override
+  void close() {
+    try {
+      _file.closeSync();
+    } on io.FileSystemException {
+      // WASI close is idempotent at this boundary.
+    }
+  }
+}
 
 int _asInt(Object? value) {
   if (value is int) {

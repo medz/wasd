@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'constants.dart';
 import 'vfs.dart';
 
-typedef _OpenFilePreflight = ({int errno, Preview1VirtualOpenFile? opened});
+typedef _OpenFilePreflight = ({int errno, Preview1OpenFile? opened});
 
 _OpenFilePreflight _openFileForDescriptor({
   required Preview1VirtualFileSystem vfs,
@@ -124,7 +124,7 @@ int preview1FdFilestatGet({
       ? vfs.openFileForFd(fd)
       : null;
   if (opened != null) {
-    _setUint64(data, filestatPtr + filestatSizeOffset, opened.bytes.length);
+    _setUint64(data, filestatPtr + filestatSizeOffset, opened.length);
   }
   final metadata = vfs.metadataForFd(fd);
   if (metadata != null) {
@@ -256,7 +256,7 @@ int preview1FdSeek({
   final base = switch (whence) {
     0 => 0,
     1 => opened.offset,
-    2 => opened.bytes.length,
+    2 => opened.length,
     _ => -1,
   };
   if (base < 0) {

@@ -172,6 +172,7 @@ too broad to verify in one commit.
   - Scope: Preview1 host behavior, public API wording, official testsuite
     deltas, and runtime alignment across native, browser JS, and Node JS.
   - Edit targets: `lib/src/wasi/preview1/`, `test/wasi_test.dart`,
+    `test/wasi_native_host_fs_test.dart`,
     `tool/wasi_testsuite_preview1_runner.dart`,
     `tool/wasi_testsuite_wasd_adapter.py`, README support tables, and this
     roadmap.
@@ -187,6 +188,8 @@ too broad to verify in one commit.
     `tool/wasi_testsuite_wasd_adapter.py`.
   - Performance gate:
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
+  - Checked child rows: `P1-JS-NODE-SHARED-HOST` and
+    `P1-NATIVE-HOST-FS-READ-BACKING`.
   - Done when: local VM/browser/Node Preview1 suites pass with no unexpected
     skips, the official Preview1 suite has no untriaged failures, README/API
     claims match the verified host surface, and VFS/socket hot paths have
@@ -336,6 +339,43 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-NATIVE-HOST-FS-READ-BACKING` - Native Preview1 preopens can read
+  regular files from the real host filesystem.
+  - Scope: Dart VM native Preview1 `path_open` for regular files below a
+    configured preopen root, plus `fd_read`, `fd_pread`, `fd_seek`,
+    `fd_tell`, and `fd_filestat_get` over a host-backed file handle. Browser
+    and Node JS stay on the in-repo in-memory VFS because they cannot use
+    `dart:io`.
+  - Edit targets: `lib/src/wasi/preview1/native/wasi.dart`,
+    `lib/src/wasi/preview1/common/vfs.dart`,
+    `lib/src/wasi/preview1/common/fd_syscalls.dart`,
+    `test/wasi_native_host_fs_test.dart`, `test/wasi_test.dart`,
+    `README.md`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_native_host_fs_test.dart --reporter=compact`
+    failed before the fix because `path_open` returned `NOENT` for a real
+    `hello.txt` inside a temporary host directory preopened as `/host`.
+  - Implementation gate:
+    `dart test test/wasi_native_host_fs_test.dart --reporter=compact`;
+    `dart test test/wasi_test.dart --reporter=compact`;
+    `dart test -p node test/wasi_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart analyze`.
+  - Performance gate: N/A for this first read-backed descriptor row; the native
+    implementation keeps host files as `RandomAccessFile` handles instead of
+    copying full files into memory. Run a host-filesystem benchmark before
+    adding directory traversal, writeback, or repeated metadata caching.
+  - Done when: a real host file under a configured native preopen can be opened,
+    its size is reported through `fd_filestat_get`, `fd_seek` can position from
+    file end, `fd_read` returns host bytes, and `fd_close` releases the host
+    handle. Existing-but-unsupported host writes return `ENOTCAPABLE`; host
+    directories and host symlinks return `ENOTSUP` until directory handles and
+    realpath containment are implemented.
+  - Evidence update: this checked row, README support wording, and the
+    `P1-FULL-RUNTIME-GATE` checked-child list.
+  - Claim impact: removes the native "preopens are memory-only" blocker for
+    read-only files; host filesystem writes, host directory enumeration, full
+    Preview1, Preview2, and Preview3 remain incomplete.
 - [x] `P1-JS-NODE-SHARED-HOST` - Node.js Preview1 uses wasd's in-repo JS host
   instead of delegating to `node:wasi`.
   - Scope: JS Preview1 host selection and Node runtime parity for the same
@@ -5605,7 +5645,10 @@ commit.
     host surface has
     syscall-level regression coverage, official/conformance-style workload
     coverage, error side-effect checks, and Node/browser/native runtime
-    alignment where the runtime owns behavior.
+    alignment where the runtime owns behavior. Native preopened host
+    filesystems must cover real file read/write, directory enumeration, path
+    metadata, mutation, and capability-boundary errors without forcing browser
+    or Node JS into `dart:io`-only abstractions.
   - Gate: full `test/wasi_test.dart`, targeted Chrome/Node Preview1 gates,
     wasi-testsuite-style Preview1 command/reactor fixtures, and VFS/socket
     benchmark evidence.

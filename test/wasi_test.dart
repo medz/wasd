@@ -699,7 +699,7 @@ void main() {
       );
       expect(
         () => Preview1VirtualFileSystem(
-          preopens: {'/sandbox': '/tmp'},
+          preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
           sockets: {3: WASIPreview1Socket()},
         ),
         throwsArgumentError,
@@ -707,7 +707,7 @@ void main() {
       expect(
         () => Preview1VirtualFileSystem(
           stdinFd: 3,
-          preopens: {'/sandbox': '/tmp'},
+          preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
         ),
         throwsArgumentError,
       );
@@ -866,7 +866,7 @@ void main() {
         wasi = WASI(
           args: ['app.wasm'],
           env: {'FOO': 'bar'},
-          preopens: {'/sandbox': '/tmp'},
+          preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
         );
         final result = await WebAssembly.instantiate(
           _wasiBytes.buffer,
@@ -1173,7 +1173,7 @@ void main() {
         'fd_close closes preopen descriptors without closing opened directories',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/assets/doom1.wad': Uint8List.fromList([7, 8, 9]),
             },
@@ -1415,7 +1415,7 @@ void main() {
             procRaiseHandler: raisedSignals.add,
             args: ['app.wasm'],
             env: {'FOO': 'bar'},
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
           );
           final signalResult = await WebAssembly.instantiate(
             _wasiBytes.buffer,
@@ -4137,7 +4137,7 @@ void main() {
         'path_open opens virtual file and fd_seek updates file offset',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/doom1.wad': Uint8List.fromList([1, 2, 3, 4]),
             },
@@ -4188,7 +4188,7 @@ void main() {
 
       test('fd_pread, fd_pwrite, and fd_write update virtual files', () async {
         final fileWasi = WASI(
-          preopens: {'/sandbox': '/tmp'},
+          preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
           files: {
             '/sandbox/data.txt': Uint8List.fromList(utf8.encode('abcdef')),
           },
@@ -4278,7 +4278,7 @@ void main() {
           const mutatedTargetPtr = 0x1650;
           const countPtr = 5824;
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/alias.txt': Uint8List.fromList([
                 mutatedTargetPtr & 0xff,
@@ -4347,7 +4347,7 @@ void main() {
         'fd_pwrite validates all iovs before mutating virtual files',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/preflight.txt': Uint8List.fromList(
                 utf8.encode('abcdef'),
@@ -4421,7 +4421,7 @@ void main() {
 
       test('fd read and write counts can target memory zero', () async {
         final fileWasi = WASI(
-          preopens: {'/sandbox': '/tmp'},
+          preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
           files: {
             '/sandbox/data.txt': Uint8List.fromList(utf8.encode('abcdef')),
           },
@@ -4507,7 +4507,7 @@ void main() {
         'path_open creates, exclusively opens, and truncates virtual files',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/existing.txt': Uint8List.fromList(
                 utf8.encode('abcdef'),
@@ -4617,7 +4617,7 @@ void main() {
 
       test('path_open create and truncate require directory rights', () async {
         final fileWasi = WASI(
-          preopens: {'/sandbox': '/tmp'},
+          preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
           files: {
             '/sandbox/existing.txt': Uint8List.fromList(utf8.encode('abcdef')),
           },
@@ -4710,7 +4710,9 @@ void main() {
       });
 
       test('path_open rejects file descriptors as directory bases', () async {
-        final fileWasi = WASI(preopens: {'/sandbox': '/tmp'});
+        final fileWasi = WASI(
+          preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
+        );
         final fileResult = await WebAssembly.instantiate(
           _wasiBytes.buffer,
           fileWasi.imports,
@@ -4771,7 +4773,7 @@ void main() {
         'fd_renumber moves virtual descriptors and requires an open target',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/source.txt': Uint8List.fromList(utf8.encode('abcd')),
               '/sandbox/target.txt': Uint8List.fromList(utf8.encode('WXYZ')),
@@ -4893,7 +4895,7 @@ void main() {
         'fd_fdstat_set_rights persists and enforces descriptor rights',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/data.txt': Uint8List.fromList(utf8.encode('abcdef')),
             },
@@ -4998,7 +5000,7 @@ void main() {
         'fd_tell, fd_filestat_set_size, and fd_allocate update file size',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/data.bin': Uint8List.fromList(utf8.encode('abcdef')),
             },
@@ -5094,7 +5096,7 @@ void main() {
         'fd_advise, fd_datasync, and fd_sync validate virtual descriptors',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/data.bin': Uint8List.fromList(utf8.encode('abcdef')),
             },
@@ -5151,7 +5153,7 @@ void main() {
         'fd_fdstat_set_flags persists descriptor flags and append mode',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/data.txt': Uint8List.fromList(utf8.encode('abcdef')),
             },
@@ -5232,7 +5234,7 @@ void main() {
         'fd_filestat_set_times and path_filestat_set_times persist virtual timestamps',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/data.bin': Uint8List.fromList(utf8.encode('abcdef')),
             },
@@ -5340,7 +5342,7 @@ void main() {
         'new virtual nodes start with non-zero filestat timestamps',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/existing.txt': Uint8List.fromList([1]),
             },
@@ -5413,7 +5415,7 @@ void main() {
         'path_open opens virtual directories and resolves nested files',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/assets/doom1.wad': Uint8List.fromList([7, 8, 9]),
             },
@@ -5491,7 +5493,7 @@ void main() {
         'path_open rejects absolute, escaping, nul, and file-slash paths',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/dir/nested/file': Uint8List.fromList(
                 utf8.encode('data'),
@@ -5558,7 +5560,7 @@ void main() {
 
       test('path_open does not grant fd_seek rights to directories', () async {
         final fileWasi = WASI(
-          preopens: {'/sandbox': '/tmp'},
+          preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
           files: {
             '/sandbox/assets/doom1.wad': Uint8List.fromList([7, 8, 9]),
           },
@@ -5614,7 +5616,9 @@ void main() {
       test(
         'path_open rejects directory read-write rights with O_DIRECTORY',
         () async {
-          final fileWasi = WASI(preopens: {'/sandbox': '/tmp'});
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
+          );
           final fileResult = await WebAssembly.instantiate(
             _wasiBytes.buffer,
             fileWasi.imports,
@@ -5671,7 +5675,7 @@ void main() {
         'fd_readdir reads virtual directory entries and respects cookies',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/assets/doom1.wad': Uint8List.fromList([7, 8, 9]),
               '/sandbox/assets/nested/map.wad': Uint8List.fromList([1]),
@@ -5775,7 +5779,7 @@ void main() {
         'filestat and readdir report stable virtual node identities',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/assets/a.txt': Uint8List.fromList([1]),
               '/sandbox/assets/b.txt': Uint8List.fromList([2]),
@@ -5913,7 +5917,7 @@ void main() {
         'fd_readdir keeps buffer full while directory entries remain',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               for (var index = 0; index < 100; index++)
                 '/sandbox/many/file.$index': Uint8List(0),
@@ -5989,7 +5993,7 @@ void main() {
         'path_create_directory, path_rename, path_unlink_file, and path_remove_directory update virtual paths',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/source.txt': Uint8List.fromList(utf8.encode('hello')),
             },
@@ -6083,7 +6087,9 @@ void main() {
       test(
         'path_rename replaces empty directories and rejects nonempty targets',
         () async {
-          final fileWasi = WASI(preopens: {'/sandbox': '/tmp'});
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
+          );
           final fileResult = await WebAssembly.instantiate(
             _wasiBytes.buffer,
             fileWasi.imports,
@@ -6226,7 +6232,7 @@ void main() {
 
       test('path mutation preserves trailing slash errors', () async {
         final fileWasi = WASI(
-          preopens: {'/sandbox': '/tmp'},
+          preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
           files: {
             '/sandbox/file.txt': Uint8List.fromList([1]),
             '/sandbox/target.txt': Uint8List.fromList([2]),
@@ -6354,7 +6360,7 @@ void main() {
 
       test('path_link creates hard links to virtual files', () async {
         final fileWasi = WASI(
-          preopens: {'/sandbox': '/tmp'},
+          preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
           files: {
             '/sandbox/source.txt': Uint8List.fromList(utf8.encode('hello')),
           },
@@ -6465,7 +6471,7 @@ void main() {
         'path_link handles directory, trailing slash, and symlink edges',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/source.txt': Uint8List.fromList(utf8.encode('hello')),
               '/sandbox/dir/existing.txt': Uint8List.fromList([1]),
@@ -6601,7 +6607,9 @@ void main() {
       test(
         'path_open rejects nofollow symlinks without resolving targets',
         () async {
-          final fileWasi = WASI(preopens: {'/sandbox': '/tmp'});
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
+          );
           final fileResult = await WebAssembly.instantiate(
             _wasiBytes.buffer,
             fileWasi.imports,
@@ -6749,7 +6757,7 @@ void main() {
         'path_symlink and path_readlink preserve virtual symlink targets',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/target.txt': Uint8List.fromList(utf8.encode('target')),
             },
@@ -6980,7 +6988,7 @@ void main() {
         'path_filestat_get reports file, directory, and missing paths',
         () async {
           final fileWasi = WASI(
-            preopens: {'/sandbox': '/tmp'},
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
             files: {
               '/sandbox/doom1.wad': Uint8List.fromList([1, 2, 3, 4]),
             },

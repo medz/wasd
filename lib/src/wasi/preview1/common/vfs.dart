@@ -100,8 +100,7 @@ final class Preview1VirtualFileSystem {
   final Map<String, Preview1VirtualFile> _filesByGuestPath;
   final Map<int, Preview1VirtualSocket> _socketsByFd;
   final Map<String, Preview1VirtualSymlink> _symlinksByGuestPath;
-  final Map<int, Preview1VirtualOpenFile> _openFilesByFd =
-      <int, Preview1VirtualOpenFile>{};
+  final Map<int, Preview1OpenFile> _openFilesByFd = <int, Preview1OpenFile>{};
   final Map<int, String> _openDirectoriesByFd = <int, String>{};
   final Map<int, int> _openDirectoryFlagsByFd = <int, int>{};
   final Map<int, Preview1DescriptorRights> _openDirectoryRightsByFd =
@@ -121,7 +120,7 @@ final class Preview1VirtualFileSystem {
   String? directoryPathForFd(int fd) =>
       _preopenGuestPathsByFd[fd] ?? _openDirectoriesByFd[fd];
 
-  Preview1VirtualOpenFile? openFileForFd(int fd) => _openFilesByFd[fd];
+  Preview1OpenFile? openFileForFd(int fd) => _openFilesByFd[fd];
 
   Preview1DescriptorKind? descriptorKindForFd(int fd) {
     final stdioKind = _stdioDescriptorsByFd[fd];
@@ -174,7 +173,7 @@ final class Preview1VirtualFileSystem {
   Preview1FdPollReadiness pollFdReadWrite({
     required int fd,
     required int eventType,
-    Preview1VirtualOpenFile? stdinInput,
+    Preview1OpenFile? stdinInput,
   }) {
     final descriptorKind = descriptorKindForFd(fd);
     if (descriptorKind == null) {
@@ -194,7 +193,7 @@ final class Preview1VirtualFileSystem {
   Preview1FdPollReadiness _pollFdRead(
     int fd,
     Preview1DescriptorKind descriptorKind,
-    Preview1VirtualOpenFile? stdinInput,
+    Preview1OpenFile? stdinInput,
   ) {
     if (descriptorKind == Preview1DescriptorKind.stdin) {
       if (!descriptorHasRight(fd, rightFdRead)) {
@@ -979,6 +978,12 @@ final class Preview1VirtualFileSystem {
     return Preview1VirtualOpenResult.file(fd);
   }
 
+  Preview1VirtualOpenResult openFileHandle(Preview1OpenFile opened) {
+    final fd = _allocateVirtualFd();
+    _openFilesByFd[fd] = opened;
+    return Preview1VirtualOpenResult.file(fd);
+  }
+
   int acceptSocket({required int fd, required int descriptorFlags}) {
     final listener = socketForFd(fd);
     if (listener == null || !listener.isStream || !listener.canAccept) {
@@ -1236,7 +1241,7 @@ final class Preview1VirtualFileSystem {
     _stdioDescriptorsByFd.remove(fd);
     _stdioRightsByFd.remove(fd);
     _stdioFlagsByFd.remove(fd);
-    _openFilesByFd.remove(fd);
+    _openFilesByFd.remove(fd)?.close();
     _socketsByFd.remove(fd);
     _openDirectoriesByFd.remove(fd);
     _openDirectoryFlagsByFd.remove(fd);
@@ -1654,7 +1659,7 @@ bool _rangesOverlap(int start, int end, int otherStart, int otherEnd) =>
     start < otherEnd && otherStart < end;
 
 int readOpenFileIntoIov({
-  required Preview1VirtualOpenFile opened,
+  required Preview1OpenFile opened,
   required Uint8List bytes,
   required ByteData data,
   required int iovs,
@@ -1705,7 +1710,7 @@ int readOpenFileIntoIov({
 }
 
 int writeOpenFileFromIov({
-  required Preview1VirtualOpenFile opened,
+  required Preview1OpenFile opened,
   required Uint8List bytes,
   required ByteData data,
   required int iovs,
@@ -1933,7 +1938,35 @@ final class Preview1VirtualSymlink {
   final Preview1VirtualNodeMetadata metadata = Preview1VirtualNodeMetadata();
 }
 
-final class Preview1VirtualOpenFile {
+abstract interface class Preview1OpenFile {
+  Preview1DescriptorRights get rights;
+
+  int get offset;
+  set offset(int value);
+
+  int get descriptorFlags;
+  set descriptorFlags(int value);
+
+  int get length;
+
+  Preview1VirtualNodeMetadata get metadata;
+
+  int readInto(Uint8List target, int start, int length);
+
+  int readAtInto(Uint8List target, int start, int length, int fileOffset);
+
+  int writeFrom(Uint8List source, int start, int length);
+
+  int writeAtFrom(Uint8List source, int start, int length, int fileOffset);
+
+  void setLength(int length);
+
+  void allocate(int offset, int length);
+
+  void close();
+}
+
+final class Preview1VirtualOpenFile implements Preview1OpenFile {
   Preview1VirtualOpenFile(
     this.file, {
     Preview1DescriptorRights? rights,
@@ -1944,25 +1977,33 @@ final class Preview1VirtualOpenFile {
     : this(Preview1VirtualFile(bytes));
 
   final Preview1VirtualFile file;
+  @override
   final Preview1DescriptorRights rights;
+  @override
   int offset = 0;
+  @override
   int descriptorFlags;
 
   Uint8List get bytes => file.bytes;
 
+  @override
   int get length => file.length;
 
+  @override
   Preview1VirtualNodeMetadata get metadata => file.metadata;
 
+  @override
   int readInto(Uint8List target, int start, int length) {
     final count = readAtInto(target, start, length, offset);
     offset += count;
     return count;
   }
 
+  @override
   int readAtInto(Uint8List target, int start, int length, int fileOffset) =>
       file.readAtInto(target, start, length, fileOffset);
 
+  @override
   int writeFrom(Uint8List source, int start, int length) {
     final fileOffset = (descriptorFlags & fdflagAppend) == 0
         ? offset
@@ -1972,12 +2013,18 @@ final class Preview1VirtualOpenFile {
     return written;
   }
 
+  @override
   int writeAtFrom(Uint8List source, int start, int length, int fileOffset) =>
       file.writeAtFrom(source, start, length, fileOffset);
 
+  @override
   void setLength(int length) => file.setLength(length);
 
+  @override
   void allocate(int offset, int length) => file.allocate(offset, length);
+
+  @override
+  void close() {}
 }
 
 final class Preview1VirtualSocket {
@@ -2079,6 +2126,8 @@ enum Preview1VirtualOpenKind {
   isDirectory,
   notDirectory,
   symlinkLoop,
+  notCapable,
+  notSupported,
 }
 
 enum Preview1PathMutationResult {
@@ -2143,6 +2192,12 @@ final class Preview1VirtualOpenResult {
 
   const Preview1VirtualOpenResult.symlinkLoop()
     : this._(Preview1VirtualOpenKind.symlinkLoop, null);
+
+  const Preview1VirtualOpenResult.notCapable()
+    : this._(Preview1VirtualOpenKind.notCapable, null);
+
+  const Preview1VirtualOpenResult.notSupported()
+    : this._(Preview1VirtualOpenKind.notSupported, null);
 
   final Preview1VirtualOpenKind kind;
   final int? fd;
