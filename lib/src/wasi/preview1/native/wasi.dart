@@ -1228,6 +1228,20 @@ class WASI implements wasi_iface.WASI {
           return newRight;
         }
 
+        final oldHostPath = _hostPathForGuestPath(oldPath.path!);
+        final newHostPath = _hostPathForGuestPath(newPath.path!);
+        if (oldHostPath != null && newHostPath != null) {
+          final hostResult = _renameHostPath(
+            oldGuestPath: oldPath.path!,
+            newGuestPath: newPath.path!,
+            oldHostPath: oldHostPath,
+            newHostPath: newHostPath,
+          );
+          if (hostResult != wasi_vfs.Preview1PathMutationResult.noEntry ||
+              _vfs.pathEntry(oldPath.path!, followSymlinks: false) == null) {
+            return _errnoFromPathMutationResult(hostResult);
+          }
+        }
         return _errnoFromPathMutationResult(
           _vfs.renamePath(oldPath: oldPath.path!, newPath: newPath.path!),
         );
@@ -1894,6 +1908,98 @@ class WASI implements wasi_iface.WASI {
       return wasi_vfs.Preview1PathMutationResult.success;
     } on io.FileSystemException {
       return _hostPathMutationError(hostPath);
+    }
+  }
+
+  wasi_vfs.Preview1PathMutationResult _renameHostPath({
+    required String oldGuestPath,
+    required String newGuestPath,
+    required String oldHostPath,
+    required String newHostPath,
+  }) {
+    if (_hostPreopensByGuestPath.containsKey(oldGuestPath)) {
+      return wasi_vfs.Preview1PathMutationResult.invalid;
+    }
+
+    final oldType = io.FileSystemEntity.typeSync(
+      oldHostPath,
+      followLinks: false,
+    );
+    if (oldType == io.FileSystemEntityType.notFound) {
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (_sameHostPath(oldHostPath, newHostPath)) {
+      return wasi_vfs.Preview1PathMutationResult.success;
+    }
+
+    final newParentType = io.FileSystemEntity.typeSync(
+      io.File(newHostPath).parent.path,
+      followLinks: false,
+    );
+    if (newParentType == io.FileSystemEntityType.notFound) {
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (newParentType != io.FileSystemEntityType.directory) {
+      return wasi_vfs.Preview1PathMutationResult.notDirectory;
+    }
+
+    final newType = io.FileSystemEntity.typeSync(
+      newHostPath,
+      followLinks: false,
+    );
+    if (oldType == io.FileSystemEntityType.directory) {
+      if (_isChildGuestPath(newGuestPath, oldGuestPath)) {
+        return wasi_vfs.Preview1PathMutationResult.invalid;
+      }
+      if (newType == io.FileSystemEntityType.file ||
+          newType == io.FileSystemEntityType.link) {
+        return wasi_vfs.Preview1PathMutationResult.notDirectory;
+      }
+      if (newType == io.FileSystemEntityType.directory &&
+          !_sameHostPath(oldHostPath, newHostPath)) {
+        final target = io.Directory(newHostPath);
+        try {
+          if (target.listSync(followLinks: false).isNotEmpty) {
+            return wasi_vfs.Preview1PathMutationResult.notEmpty;
+          }
+          target.deleteSync();
+        } on io.FileSystemException {
+          return _hostPathMutationError(newHostPath);
+        }
+      }
+      return _renameHostEntity(
+        type: oldType,
+        oldHostPath: oldHostPath,
+        newHostPath: newHostPath,
+      );
+    }
+
+    if (newType == io.FileSystemEntityType.directory) {
+      return wasi_vfs.Preview1PathMutationResult.isDirectory;
+    }
+    return _renameHostEntity(
+      type: oldType,
+      oldHostPath: oldHostPath,
+      newHostPath: newHostPath,
+    );
+  }
+
+  wasi_vfs.Preview1PathMutationResult _renameHostEntity({
+    required io.FileSystemEntityType type,
+    required String oldHostPath,
+    required String newHostPath,
+  }) {
+    try {
+      if (type == io.FileSystemEntityType.directory) {
+        io.Directory(oldHostPath).renameSync(newHostPath);
+      } else if (type == io.FileSystemEntityType.link) {
+        io.Link(oldHostPath).renameSync(newHostPath);
+      } else {
+        io.File(oldHostPath).renameSync(newHostPath);
+      }
+      return wasi_vfs.Preview1PathMutationResult.success;
+    } on io.FileSystemException {
+      return _hostPathMutationError(oldHostPath);
     }
   }
 
@@ -2585,6 +2691,18 @@ String _joinHostPath(String root, String relative) {
   }
   return path;
 }
+
+bool _isChildGuestPath(String path, String parent) {
+  final normalizedPath = wasi_vfs.normalizeGuestPath(path);
+  final normalizedParent = wasi_vfs.normalizeGuestPath(parent);
+  if (normalizedParent == '/') {
+    return normalizedPath != '/';
+  }
+  return normalizedPath.startsWith('$normalizedParent/');
+}
+
+bool _sameHostPath(String left, String right) =>
+    io.File(left).absolute.path == io.File(right).absolute.path;
 
 wasi_vfs.Preview1VirtualNodeMetadata _metadataFromHostStat(io.FileStat stat) {
   final metadata = wasi_vfs.Preview1VirtualNodeMetadata();

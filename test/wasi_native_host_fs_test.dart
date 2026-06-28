@@ -20,6 +20,7 @@ const int _rightFdReaddir = 1 << 14;
 const int _rightFdFilestatGet = 1 << 21;
 const int _rightFdFilestatSetSize = 1 << 22;
 const int _errnoExist = 20;
+const int _errnoInval = 28;
 const int _errnoIsdir = 31;
 const int _errnoNoent = 44;
 const int _errnoNotdir = 54;
@@ -441,6 +442,163 @@ void main() {
       expect(pathRemoveDirectory.ref([3, pathPtr, path.length]), _errnoNoent);
     },
   );
+
+  test('native host path_rename mutates real filesystem entries', () async {
+    final temp = await Directory.systemTemp.createTemp('wasd_host_rename_');
+    addTearDown(() => temp.delete(recursive: true));
+    File('${temp.path}/source.txt').writeAsStringSync('source');
+    File('${temp.path}/replace.txt').writeAsStringSync('replace');
+    final directory = Directory('${temp.path}/dir-source')..createSync();
+    File('${directory.path}/child.txt').writeAsStringSync('child');
+    Directory('${temp.path}/dir-target').createSync();
+    final nonEmptyTarget = Directory('${temp.path}/non-empty-target')
+      ..createSync();
+    File('${nonEmptyTarget.path}/child.txt').writeAsStringSync('target-child');
+
+    final wasi = WASI(preopens: {'/host': temp.path});
+    final result = await WebAssembly.instantiate(
+      wasiStartModuleBytes().buffer,
+      wasi.imports,
+    );
+    final instance = result.instance;
+    final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+    final pathRename = preview1['path_rename'] as FunctionImportExportValue;
+    final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+    wasi.finalizeBindings(instance, memory: memory);
+
+    final bytes = Uint8List.view(memory.buffer);
+    const oldPathPtr = 1024;
+    const newPathPtr = 1088;
+
+    var oldPath = utf8.encode('source.txt');
+    var newPath = utf8.encode('renamed.txt');
+    bytes.setAll(oldPathPtr, oldPath);
+    bytes.setAll(newPathPtr, newPath);
+    expect(
+      pathRename.ref([
+        3,
+        oldPathPtr,
+        oldPath.length,
+        3,
+        newPathPtr,
+        newPath.length,
+      ]),
+      0,
+    );
+    expect(File('${temp.path}/source.txt').existsSync(), isFalse);
+    expect(File('${temp.path}/renamed.txt').readAsStringSync(), 'source');
+
+    oldPath = utf8.encode('renamed.txt');
+    newPath = utf8.encode('replace.txt');
+    bytes.setAll(oldPathPtr, oldPath);
+    bytes.setAll(newPathPtr, newPath);
+    expect(
+      pathRename.ref([
+        3,
+        oldPathPtr,
+        oldPath.length,
+        3,
+        newPathPtr,
+        newPath.length,
+      ]),
+      0,
+    );
+    expect(File('${temp.path}/renamed.txt').existsSync(), isFalse);
+    expect(File('${temp.path}/replace.txt').readAsStringSync(), 'source');
+
+    oldPath = utf8.encode('dir-source');
+    newPath = utf8.encode('dir-renamed');
+    bytes.setAll(oldPathPtr, oldPath);
+    bytes.setAll(newPathPtr, newPath);
+    expect(
+      pathRename.ref([
+        3,
+        oldPathPtr,
+        oldPath.length,
+        3,
+        newPathPtr,
+        newPath.length,
+      ]),
+      0,
+    );
+    expect(Directory('${temp.path}/dir-source').existsSync(), isFalse);
+    expect(
+      File('${temp.path}/dir-renamed/child.txt').readAsStringSync(),
+      'child',
+    );
+
+    oldPath = utf8.encode('dir-renamed');
+    newPath = utf8.encode('dir-target');
+    bytes.setAll(oldPathPtr, oldPath);
+    bytes.setAll(newPathPtr, newPath);
+    expect(
+      pathRename.ref([
+        3,
+        oldPathPtr,
+        oldPath.length,
+        3,
+        newPathPtr,
+        newPath.length,
+      ]),
+      0,
+    );
+    expect(Directory('${temp.path}/dir-renamed').existsSync(), isFalse);
+    expect(
+      File('${temp.path}/dir-target/child.txt').readAsStringSync(),
+      'child',
+    );
+
+    oldPath = utf8.encode('dir-target');
+    newPath = utf8.encode('non-empty-target');
+    bytes.setAll(oldPathPtr, oldPath);
+    bytes.setAll(newPathPtr, newPath);
+    expect(
+      pathRename.ref([
+        3,
+        oldPathPtr,
+        oldPath.length,
+        3,
+        newPathPtr,
+        newPath.length,
+      ]),
+      _errnoNotempty,
+    );
+    expect(Directory('${temp.path}/dir-target').existsSync(), isTrue);
+    expect(Directory('${temp.path}/non-empty-target').existsSync(), isTrue);
+
+    oldPath = utf8.encode('.');
+    newPath = utf8.encode('moved-root');
+    bytes.setAll(oldPathPtr, oldPath);
+    bytes.setAll(newPathPtr, newPath);
+    expect(
+      pathRename.ref([
+        3,
+        oldPathPtr,
+        oldPath.length,
+        3,
+        newPathPtr,
+        newPath.length,
+      ]),
+      _errnoInval,
+    );
+    expect(Directory(temp.path).existsSync(), isTrue);
+
+    oldPath = utf8.encode('missing.txt');
+    newPath = utf8.encode('still-missing.txt');
+    bytes.setAll(oldPathPtr, oldPath);
+    bytes.setAll(newPathPtr, newPath);
+    expect(
+      pathRename.ref([
+        3,
+        oldPathPtr,
+        oldPath.length,
+        3,
+        newPathPtr,
+        newPath.length,
+      ]),
+      _errnoNoent,
+    );
+  });
 
   test('native root preopens map host filesystem children', () async {
     final temp = await Directory.systemTemp.createTemp('wasd_root_host_fs_');
