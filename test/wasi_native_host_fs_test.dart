@@ -15,15 +15,20 @@ const int _rightFdRead = 1 << 1;
 const int _rightFdSeek = 1 << 2;
 const int _rightFdTell = 1 << 5;
 const int _rightFdWrite = 1 << 6;
+const int _rightFdAllocate = 1 << 8;
 const int _rightFdReaddir = 1 << 14;
 const int _rightFdFilestatGet = 1 << 21;
+const int _rightFdFilestatSetSize = 1 << 22;
+const int _errnoExist = 20;
 const int _errnoNoent = 44;
-const int _errnoNotcapable = 76;
 const int _filestatFiletypeOffset = 16;
 const int _filestatSizeOffset = 32;
 const int _filetypeDirectory = 3;
 const int _filetypeRegularFile = 4;
+const int _oflagCreat = 1;
 const int _oflagDirectory = 2;
+const int _oflagExcl = 4;
+const int _oflagTrunc = 8;
 const int _direntSize = 24;
 const int _direntNextOffset = 0;
 const int _direntNameLengthOffset = 16;
@@ -64,6 +69,19 @@ List<({String name, int next, int type})> _readDirents(
     offset = nameEnd;
   }
   return entries;
+}
+
+void _writeSingleIov({
+  required Uint8List bytes,
+  required ByteData data,
+  required int iovPtr,
+  required int bufferPtr,
+  required String value,
+}) {
+  final encoded = utf8.encode(value);
+  bytes.setAll(bufferPtr, encoded);
+  data.setUint32(iovPtr, bufferPtr, Endian.little);
+  data.setUint32(iovPtr + 4, encoded.length, Endian.little);
 }
 
 void main() {
@@ -151,21 +169,6 @@ void main() {
 
     expect(fdClose.ref([fd]), 0);
 
-    expect(
-      pathOpen.ref([
-        3,
-        0,
-        pathPtr,
-        path.length,
-        0,
-        _rightFdWrite,
-        0,
-        0,
-        openedFdPtr,
-      ]),
-      _errnoNotcapable,
-    );
-
     final directoryPath = utf8.encode('dir');
     bytes.setAll(pathPtr, directoryPath);
     expect(
@@ -183,6 +186,166 @@ void main() {
       0,
     );
     expect(fdClose.ref([data.getUint32(openedFdPtr, Endian.little)]), 0);
+  });
+
+  test('native host files persist writes, resize, and create', () async {
+    final temp = await Directory.systemTemp.createTemp('wasd_host_write_');
+    addTearDown(() => temp.delete(recursive: true));
+    final file = File('${temp.path}/mutable.txt')..writeAsStringSync('abcdef');
+    final truncateFile = File('${temp.path}/truncate.txt')
+      ..writeAsStringSync('truncate-me');
+
+    final wasi = WASI(preopens: {'/host': temp.path});
+    final result = await WebAssembly.instantiate(
+      wasiStartModuleBytes().buffer,
+      wasi.imports,
+    );
+    final instance = result.instance;
+    final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+    final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+    final fdWrite = preview1['fd_write'] as FunctionImportExportValue;
+    final fdPwrite = preview1['fd_pwrite'] as FunctionImportExportValue;
+    final fdSeek = preview1['fd_seek'] as FunctionImportExportValue;
+    final fdTell = preview1['fd_tell'] as FunctionImportExportValue;
+    final fdFilestatSetSize =
+        preview1['fd_filestat_set_size'] as FunctionImportExportValue;
+    final fdAllocate = preview1['fd_allocate'] as FunctionImportExportValue;
+    final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+    final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+    wasi.finalizeBindings(instance, memory: memory);
+
+    final bytes = Uint8List.view(memory.buffer);
+    final data = ByteData.view(memory.buffer);
+    final path = utf8.encode('mutable.txt');
+    const pathPtr = 1024;
+    const openedFdPtr = 1056;
+    const iovPtr = 1072;
+    const writeBufferPtr = 1104;
+    const nwrittenPtr = 1152;
+    const newOffsetPtr = 1168;
+    bytes.setAll(pathPtr, path);
+
+    expect(
+      pathOpen.ref([
+        3,
+        0,
+        pathPtr,
+        path.length,
+        0,
+        _rightFdRead |
+            _rightFdWrite |
+            _rightFdSeek |
+            _rightFdTell |
+            _rightFdAllocate |
+            _rightFdFilestatGet |
+            _rightFdFilestatSetSize,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      0,
+    );
+    final fd = data.getUint32(openedFdPtr, Endian.little);
+
+    expect(fdSeek.ref([fd, 0, 2, newOffsetPtr]), 0);
+    _writeSingleIov(
+      bytes: bytes,
+      data: data,
+      iovPtr: iovPtr,
+      bufferPtr: writeBufferPtr,
+      value: '++',
+    );
+    expect(fdWrite.ref([fd, iovPtr, 1, nwrittenPtr]), 0);
+    expect(data.getUint32(nwrittenPtr, Endian.little), 2);
+    expect(file.readAsStringSync(), 'abcdef++');
+    expect(fdTell.ref([fd, newOffsetPtr]), 0);
+    expect(data.getUint64(newOffsetPtr, Endian.little), 8);
+
+    _writeSingleIov(
+      bytes: bytes,
+      data: data,
+      iovPtr: iovPtr,
+      bufferPtr: writeBufferPtr,
+      value: 'XY',
+    );
+    expect(fdPwrite.ref([fd, iovPtr, 1, 2, nwrittenPtr]), 0);
+    expect(data.getUint32(nwrittenPtr, Endian.little), 2);
+    expect(file.readAsStringSync(), 'abXYef++');
+    expect(fdTell.ref([fd, newOffsetPtr]), 0);
+    expect(data.getUint64(newOffsetPtr, Endian.little), 8);
+
+    expect(fdFilestatSetSize.ref([fd, 5]), 0);
+    expect(file.readAsStringSync(), 'abXYe');
+
+    expect(fdAllocate.ref([fd, 8, 3]), 0);
+    expect(file.lengthSync(), 11);
+    expect(file.readAsBytesSync().take(5), utf8.encode('abXYe'));
+
+    expect(fdClose.ref([fd]), 0);
+
+    final truncatePath = utf8.encode('truncate.txt');
+    bytes.setAll(pathPtr, truncatePath);
+    expect(
+      pathOpen.ref([
+        3,
+        0,
+        pathPtr,
+        truncatePath.length,
+        _oflagTrunc,
+        _rightFdRead | _rightFdWrite,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      0,
+    );
+    final truncateFd = data.getUint32(openedFdPtr, Endian.little);
+    expect(truncateFile.readAsStringSync(), isEmpty);
+    expect(fdClose.ref([truncateFd]), 0);
+
+    bytes.setAll(pathPtr, path);
+    expect(
+      pathOpen.ref([
+        3,
+        0,
+        pathPtr,
+        path.length,
+        _oflagCreat | _oflagExcl,
+        _rightFdRead,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      _errnoExist,
+    );
+
+    final createdPath = utf8.encode('created.txt');
+    bytes.setAll(pathPtr, createdPath);
+    expect(
+      pathOpen.ref([
+        3,
+        0,
+        pathPtr,
+        createdPath.length,
+        _oflagCreat,
+        _rightFdRead | _rightFdWrite,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      0,
+    );
+    final createdFd = data.getUint32(openedFdPtr, Endian.little);
+    _writeSingleIov(
+      bytes: bytes,
+      data: data,
+      iovPtr: iovPtr,
+      bufferPtr: writeBufferPtr,
+      value: 'created',
+    );
+    expect(fdWrite.ref([createdFd, iovPtr, 1, nwrittenPtr]), 0);
+    expect(File('${temp.path}/created.txt').readAsStringSync(), 'created');
+    expect(fdClose.ref([createdFd]), 0);
   });
 
   test('native root preopens map host filesystem children', () async {

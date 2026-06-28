@@ -189,9 +189,10 @@ too broad to verify in one commit.
   - Performance gate:
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
   - Checked child rows: `P1-JS-NODE-SHARED-HOST`,
-    `P1-NATIVE-HOST-FS-READ-BACKING`, and
-    `P1-NATIVE-HOST-FS-PATH-METADATA`, and
-    `P1-NATIVE-HOST-FS-DIRECTORY-READDIR`.
+    `P1-NATIVE-HOST-FS-READ-BACKING`,
+    `P1-NATIVE-HOST-FS-PATH-METADATA`,
+    `P1-NATIVE-HOST-FS-DIRECTORY-READDIR`, and
+    `P1-NATIVE-HOST-FS-FILE-WRITEBACK`.
   - Done when: local VM/browser/Node Preview1 suites pass with no unexpected
     skips, the official Preview1 suite has no untriaged failures, README/API
     claims match the verified host surface, and VFS/socket hot paths have
@@ -341,6 +342,43 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-NATIVE-HOST-FS-FILE-WRITEBACK` - Native Preview1 host regular files
+  persist writes, truncation, allocation, and creation to the real host
+  filesystem.
+  - Scope: Dart VM native Preview1 `path_open` for regular files below a
+    configured preopen root when `FD_WRITE`, `FD_ALLOCATE`,
+    `FD_FILESTAT_SET_SIZE`, `O_TRUNC`, or `O_CREAT` is requested. Browser and
+    Node JS remain on the in-repo in-memory VFS.
+  - Edit targets: `lib/src/wasi/preview1/native/wasi.dart`,
+    `test/wasi_native_host_fs_test.dart`, `README.md`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_native_host_fs_test.dart --reporter=compact`
+    failed before the fix because opening an existing host file with
+    `FD_WRITE` returned `ENOTCAPABLE`; the same test also exposed that
+    `O_CREAT` could create an in-memory shadow file instead of checking or
+    creating the host file.
+  - Implementation gate:
+    `dart test test/wasi_native_host_fs_test.dart --reporter=compact`;
+    `dart test test/wasi_test.dart --reporter=compact`;
+    `dart test -p node test/wasi_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
+    no recursive traversal or broad host scan in this row. Add host writeback
+    benchmark evidence before adding buffered write coalescing, fsync policy, or
+    high-volume file mutation support.
+  - Done when: `fd_write` appends or overwrites according to descriptor offset,
+    `fd_pwrite` writes at an explicit offset without moving the descriptor
+    offset, `fd_filestat_set_size` truncates host files, `fd_allocate` extends
+    host files, `O_TRUNC` truncates existing host files, `O_CREAT` creates a
+    real host file, and `O_CREAT|O_EXCL` returns `EXIST` for an existing host
+    file instead of creating an in-memory shadow.
+  - Evidence update: this checked row, README support wording, and the
+    `P1-FULL-RUNTIME-GATE` checked-child list.
+  - Claim impact: advances native host regular-file writeback; host directory
+    mutation, host symlink resolution/readlink, full Preview1, Preview2, and
+    Preview3 remain incomplete.
 - [x] `P1-NATIVE-HOST-FS-DIRECTORY-READDIR` - Native Preview1 host directories
   can be opened and enumerated from the real host filesystem.
   - Scope: Dart VM native Preview1 `path_open(O_DIRECTORY)` for real
@@ -370,9 +408,9 @@ too broad to verify in one commit.
     file types, and `fd_close` releases the descriptor.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
-  - Claim impact: advances native host filesystem enumeration; host writes,
-    host symlink resolution, full Preview1, Preview2, and Preview3 remain
-    incomplete.
+  - Claim impact: advances native host filesystem enumeration; host directory
+    mutation, host symlink resolution, full Preview1, Preview2, and Preview3
+    remain incomplete.
 - [x] `P1-NATIVE-HOST-FS-PATH-METADATA` - Native Preview1
   `path_filestat_get` reports real host file and directory metadata.
   - Scope: Dart VM native Preview1 `path_filestat_get` for regular files,
@@ -398,7 +436,7 @@ too broad to verify in one commit.
     `NOENT` for missing host paths.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
-  - Claim impact: advances native host filesystem metadata; host writes,
+  - Claim impact: advances native host filesystem metadata; host writeback,
     symlink resolution, full Preview1, Preview2, and Preview3 remain
     incomplete.
 - [x] `P1-NATIVE-HOST-FS-READ-BACKING` - Native Preview1 preopens can read
@@ -430,13 +468,12 @@ too broad to verify in one commit.
   - Done when: a real host file under a configured native preopen can be opened,
     its size is reported through `fd_filestat_get`, `fd_seek` can position from
     file end, `fd_read` returns host bytes, and `fd_close` releases the host
-    handle. Existing-but-unsupported host writes return `ENOTCAPABLE`; host
-    symlinks return `ENOTSUP` until symlink resolution and realpath containment
-    are implemented.
+    handle. Host symlinks return `ENOTSUP` until symlink resolution and
+    realpath containment are implemented.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
   - Claim impact: removes the native "preopens are memory-only" blocker for
-    read-only files; host filesystem writes, full Preview1, Preview2, and
+    read-only files; host filesystem writeback, full Preview1, Preview2, and
     Preview3 remain incomplete.
 - [x] `P1-JS-NODE-SHARED-HOST` - Node.js Preview1 uses wasd's in-repo JS host
   instead of delegating to `node:wasi`.

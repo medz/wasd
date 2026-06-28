@@ -1097,15 +1097,30 @@ class WASI implements wasi_iface.WASI {
                 parentRights.inheriting) {
       return _errnoNotcapable;
     }
-    var opened = _vfs.openPath(
-      openPath,
-      rightsBase: requestedRightsBase,
-      rightsInheriting: requestedRightsInheriting,
-      descriptorFlags: descriptorFlags,
-      oflags: oflags,
-      hasTrailingSeparator: guestPath.hasTrailingSeparator,
-    );
-    if (opened.kind == wasi_vfs.Preview1VirtualOpenKind.missing) {
+    final hasVirtualPathEntry =
+        _vfs.pathEntry(openPath, followSymlinks: false) != null;
+    var opened =
+        !hasVirtualPathEntry &&
+            (oflags & _oflagCreat) != 0 &&
+            _hostPathForGuestPath(openPath) != null
+        ? _openHostPreopenPath(
+            openPath,
+            rightsBase: requestedRightsBase,
+            rightsInheriting: requestedRightsInheriting,
+            descriptorFlags: descriptorFlags,
+            oflags: oflags,
+            hasTrailingSeparator: guestPath.hasTrailingSeparator,
+          )
+        : _vfs.openPath(
+            openPath,
+            rightsBase: requestedRightsBase,
+            rightsInheriting: requestedRightsInheriting,
+            descriptorFlags: descriptorFlags,
+            oflags: oflags,
+            hasTrailingSeparator: guestPath.hasTrailingSeparator,
+          );
+    if (opened.kind == wasi_vfs.Preview1VirtualOpenKind.missing &&
+        (oflags & _oflagCreat) == 0) {
       opened = _openHostPreopenPath(
         openPath,
         rightsBase: requestedRightsBase,
@@ -1607,16 +1622,44 @@ class WASI implements wasi_iface.WASI {
     if (hostPath == null) {
       return const wasi_vfs.Preview1VirtualOpenResult.missing();
     }
-    if ((rightsBase & _rightFdWrite) != 0 ||
-        (oflags & (_oflagCreat | _oflagTrunc)) != 0) {
-      return const wasi_vfs.Preview1VirtualOpenResult.notCapable();
-    }
+    final create = (oflags & _oflagCreat) != 0;
+    final exclusive = (oflags & _oflagExcl) != 0;
+    final truncate = (oflags & _oflagTrunc) != 0;
 
     final type = io.FileSystemEntity.typeSync(hostPath, followLinks: false);
     if (type == io.FileSystemEntityType.notFound) {
+      if (create) {
+        if (hasTrailingSeparator || (oflags & _oflagDirectory) != 0) {
+          return const wasi_vfs.Preview1VirtualOpenResult.missing();
+        }
+        final parentType = io.FileSystemEntity.typeSync(
+          io.File(hostPath).parent.path,
+          followLinks: false,
+        );
+        if (parentType == io.FileSystemEntityType.notFound) {
+          return const wasi_vfs.Preview1VirtualOpenResult.missing();
+        }
+        if (parentType != io.FileSystemEntityType.directory) {
+          return const wasi_vfs.Preview1VirtualOpenResult.notDirectory();
+        }
+        return _openHostFile(
+          hostPath: hostPath,
+          rightsBase: rightsBase,
+          rightsInheriting: rightsInheriting,
+          descriptorFlags: descriptorFlags,
+          create: true,
+          truncate: truncate,
+        );
+      }
       return const wasi_vfs.Preview1VirtualOpenResult.missing();
     }
     if (type == io.FileSystemEntityType.directory) {
+      if (create && exclusive) {
+        return const wasi_vfs.Preview1VirtualOpenResult.exists();
+      }
+      if (truncate) {
+        return const wasi_vfs.Preview1VirtualOpenResult.isDirectory();
+      }
       return _openHostDirectory(
         guestPath: guestPath,
         hostPath: hostPath,
@@ -1634,25 +1677,18 @@ class WASI implements wasi_iface.WASI {
     if (hasTrailingSeparator || (oflags & _oflagDirectory) != 0) {
       return const wasi_vfs.Preview1VirtualOpenResult.notDirectory();
     }
-
-    final file = io.File(hostPath);
-    try {
-      final opened = file.openSync(mode: io.FileMode.read);
-      final stat = file.statSync();
-      return _vfs.openFileHandle(
-        _Preview1NativeHostOpenFile(
-          opened,
-          metadata: _metadataFromHostStat(stat),
-          rights: wasi_vfs.Preview1DescriptorRights.file(
-            base: rightsBase,
-            inheriting: rightsInheriting,
-          ),
-          descriptorFlags: descriptorFlags,
-        ),
-      );
-    } on io.FileSystemException {
-      return const wasi_vfs.Preview1VirtualOpenResult.missing();
+    if (create && exclusive) {
+      return const wasi_vfs.Preview1VirtualOpenResult.exists();
     }
+
+    return _openHostFile(
+      hostPath: hostPath,
+      rightsBase: rightsBase,
+      rightsInheriting: rightsInheriting,
+      descriptorFlags: descriptorFlags,
+      create: false,
+      truncate: truncate,
+    );
   }
 
   String? _hostPathForGuestPath(String guestPath) {
@@ -1701,6 +1737,53 @@ class WASI implements wasi_iface.WASI {
         descriptorFlags: descriptorFlags,
       );
     } on io.FileSystemException {
+      return const wasi_vfs.Preview1VirtualOpenResult.missing();
+    }
+  }
+
+  wasi_vfs.Preview1VirtualOpenResult _openHostFile({
+    required String hostPath,
+    required int rightsBase,
+    required int rightsInheriting,
+    required int descriptorFlags,
+    required bool create,
+    required bool truncate,
+  }) {
+    final file = io.File(hostPath);
+    io.RandomAccessFile? opened;
+    try {
+      final requiresWriteHandle =
+          create ||
+          truncate ||
+          (rightsBase &
+                  (_rightFdWrite |
+                      _rightFdAllocate |
+                      _rightFdFilestatSetSize)) !=
+              0;
+      opened = file.openSync(
+        mode: requiresWriteHandle ? io.FileMode.append : io.FileMode.read,
+      );
+      if (truncate) {
+        opened.truncateSync(0);
+      }
+      final stat = file.statSync();
+      return _vfs.openFileHandle(
+        _Preview1NativeHostOpenFile(
+          opened,
+          metadata: _metadataFromHostStat(stat),
+          rights: wasi_vfs.Preview1DescriptorRights.file(
+            base: rightsBase,
+            inheriting: rightsInheriting,
+          ),
+          descriptorFlags: descriptorFlags,
+        ),
+      );
+    } on io.FileSystemException {
+      try {
+        opened?.closeSync();
+      } on io.FileSystemException {
+        // Preserve the open failure as the syscall result.
+      }
       return const wasi_vfs.Preview1VirtualOpenResult.missing();
     }
   }
@@ -2243,8 +2326,10 @@ const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
 const int _filetypeSymbolicLink = wasi_common.filetypeSymbolicLink;
 const int _oflagCreat = wasi_common.oflagCreat;
 const int _oflagDirectory = wasi_common.oflagDirectory;
+const int _oflagExcl = wasi_common.oflagExcl;
 const int _oflagTrunc = wasi_common.oflagTrunc;
 const int _oflagKnownMask = wasi_common.oflagKnownMask;
+const int _fdflagAppend = wasi_common.fdflagAppend;
 const int _fdflagKnownMask = wasi_common.fdflagKnownMask;
 const int _lookupflagSymlinkFollow = wasi_common.lookupflagSymlinkFollow;
 const int _lookupflagKnownMask = _lookupflagSymlinkFollow;
@@ -2263,6 +2348,8 @@ const int _rightFdRead = wasi_common.rightFdRead;
 const int _rightFdSync = wasi_common.rightFdSync;
 const int _rightFdWrite = wasi_common.rightFdWrite;
 const int _rightFdAdvise = wasi_common.rightFdAdvise;
+const int _rightFdAllocate = wasi_common.rightFdAllocate;
+const int _rightFdFilestatSetSize = wasi_common.rightFdFilestatSetSize;
 const int _rightPathCreateDirectory = wasi_common.rightPathCreateDirectory;
 const int _rightPathCreateFile = wasi_common.rightPathCreateFile;
 const int _rightPathLinkSource = wasi_common.rightPathLinkSource;
@@ -2355,12 +2442,14 @@ io.ProcessSignal? _hostProcessSignalFor(wasi_iface.WASIProcessSignal signal) =>
     };
 
 Map<String, String> _buildHostPreopens(Map<String, String> preopens) {
-  return {
-    for (final entry in preopens.entries)
-      wasi_vfs.normalizeGuestPath(entry.key): io.Directory(
-        entry.value,
-      ).absolute.path,
-  };
+  final hostPreopens = <String, String>{};
+  for (final entry in preopens.entries) {
+    final directory = io.Directory(entry.value).absolute;
+    if (directory.existsSync()) {
+      hostPreopens[wasi_vfs.normalizeGuestPath(entry.key)] = directory.path;
+    }
+  }
+  return hostPreopens;
 }
 
 String _joinHostPath(String root, String relative) {
@@ -2441,16 +2530,62 @@ final class _Preview1NativeHostOpenFile implements wasi_vfs.Preview1OpenFile {
   }
 
   @override
-  int writeFrom(Uint8List source, int start, int length) => 0;
+  int writeFrom(Uint8List source, int start, int length) {
+    final fileOffset = (descriptorFlags & _fdflagAppend) == 0
+        ? offset
+        : this.length;
+    final written = writeAtFrom(source, start, length, fileOffset);
+    offset = fileOffset + written;
+    return written;
+  }
 
   @override
-  int writeAtFrom(Uint8List source, int start, int length, int fileOffset) => 0;
+  int writeAtFrom(Uint8List source, int start, int length, int fileOffset) {
+    if (length <= 0 || fileOffset < 0 || start < 0 || start >= source.length) {
+      return 0;
+    }
+    final end = math.min(source.length, start + length);
+    if (end <= start) {
+      return 0;
+    }
+    final originalPosition = _file.positionSync();
+    try {
+      _file.setPositionSync(fileOffset);
+      _file.writeFromSync(source, start, end);
+      return end - start;
+    } on io.FileSystemException {
+      return 0;
+    } finally {
+      try {
+        _file.setPositionSync(originalPosition);
+      } on io.FileSystemException {
+        // Preserve the WASI syscall result from the actual write path.
+      }
+    }
+  }
 
   @override
-  void setLength(int length) {}
+  void setLength(int length) {
+    if (length < 0) {
+      return;
+    }
+    try {
+      _file.truncateSync(length);
+    } on io.FileSystemException {
+      // Preview1OpenFile cannot surface host resize errors yet.
+    }
+  }
 
   @override
-  void allocate(int offset, int length) {}
+  void allocate(int offset, int length) {
+    if (offset < 0 || length < 0 || offset + length < offset) {
+      return;
+    }
+    final requiredLength = offset + length;
+    if (requiredLength > this.length) {
+      setLength(requiredLength);
+    }
+  }
 
   @override
   void close() {
