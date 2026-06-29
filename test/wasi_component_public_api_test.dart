@@ -411,6 +411,102 @@ world filesystem-test {
       _expectUnitOk(rmdir);
       expect(temp.directoryExists('created'), isFalse);
     });
+
+    test('links and renames Preview3 filesystem real host paths', () async {
+      if (!hasDartIoRuntime) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      final temp = createHostTemp('wasd_p3_host_links_');
+      if (temp == null) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      addTearDown(temp.delete);
+      temp.writeFile('source.txt', 'source');
+
+      const source = '''
+package wasi-testsuite:test;
+
+world filesystem-test {
+  include wasi:filesystem/imports@0.3.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview3ComponentHost(
+        filesystemHost: WASIPreview3NativeFilesystemHost(
+          preopens: {'/': temp.path},
+          canMutate: true,
+        ),
+      );
+      final program = host.bindWitWorld(document, worldName: 'filesystem-test');
+      final directories =
+          program.invokeImport(
+                'wasi:filesystem/preopens@0.3.0.get-directories',
+                const [],
+              )
+              as WasmComponentValueData;
+      final root = _preopenHandle(directories, '/');
+
+      final link =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.link-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'source.txt',
+                  root,
+                  'hard.txt',
+                ],
+              )
+              as WasmComponentValueData;
+      _expectUnitOk(link);
+      expect(temp.readFile('hard.txt'), 'source');
+
+      temp.writeFile('source.txt', 'changed');
+      expect(temp.readFile('hard.txt'), 'changed');
+
+      final rename =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.rename-at',
+                [root, 'hard.txt', root, 'renamed.txt'],
+              )
+              as WasmComponentValueData;
+      _expectUnitOk(rename);
+      expect(temp.fileExists('hard.txt'), isFalse);
+      expect(temp.readFile('renamed.txt'), 'changed');
+
+      final symlink =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.symlink-at',
+                [root, 'source.txt', 'link.txt'],
+              )
+              as WasmComponentValueData;
+      _expectUnitOk(symlink);
+      expect(temp.symlinkExists('link.txt'), isTrue);
+      expect(temp.readLink('link.txt'), 'source.txt');
+
+      final readlink =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.readlink-at',
+                [root, 'link.txt'],
+              )
+              as WasmComponentValueData;
+      expect(_resultOk(readlink).string, 'source.txt');
+
+      final directoryRead =
+          program.invokeImport(
+                'wasi:filesystem/types@0.3.0.descriptor.read-directory',
+                [root],
+              )
+              as List<Object?>;
+      final entries =
+          directoryRead[0] as WASIComponentStream<WasmComponentValueData>;
+      expect(
+        entries.readable.read(8).map(_directoryEntryName),
+        containsAll(<String>['source.txt', 'renamed.txt', 'link.txt']),
+      );
+    });
   });
 }
 

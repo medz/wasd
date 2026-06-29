@@ -30,6 +30,7 @@ WASIPreview3FilesystemDirectory _nativeDirectory(
   final directory = io.Directory(hostPath).absolute;
   return WASIPreview3FilesystemDirectory.dynamic(
     canMutate: canMutate,
+    mutationContext: _NativeDirectoryContext(directory.path),
     entries: () =>
         _listNativeDirectoryEntries(directory.path, canMutate: canMutate),
     resolveEntry: (name) => _resolveNativeDirectoryEntry(
@@ -44,6 +45,27 @@ WASIPreview3FilesystemDirectory _nativeDirectory(
         ? (name) =>
               _createNativeFileChild(directory.path, name, canMutate: canMutate)
         : null,
+    link: canMutate
+        ? (oldName, targetDirectory, newName) => _linkNativeChild(
+            directory.path,
+            oldName,
+            targetDirectory,
+            newName,
+          )
+        : null,
+    rename: canMutate
+        ? (oldName, targetDirectory, newName) => _renameNativeChild(
+            directory.path,
+            oldName,
+            targetDirectory,
+            newName,
+          )
+        : null,
+    symlink: canMutate
+        ? (target, linkName) =>
+              _symlinkNativeChild(directory.path, target, linkName)
+        : null,
+    readLink: (name) => _readNativeLinkChild(directory.path, name),
     removeDirectory: canMutate
         ? (name) => _removeNativeDirectoryChild(directory.path, name)
         : null,
@@ -108,6 +130,10 @@ WASIPreview3FilesystemDirectoryEntry? _nativeEntryForPath(
         setSize: canMutate ? (size) => _setNativeFileSize(path, size) : null,
       );
     case io.FileSystemEntityType.link:
+      return WASIPreview3FilesystemDirectoryEntry.symbolicLink(
+        name,
+        target: io.Link(path).targetSync(),
+      );
     case io.FileSystemEntityType.notFound:
     case io.FileSystemEntityType.pipe:
     case io.FileSystemEntityType.unixDomainSock:
@@ -129,6 +155,161 @@ Uint8List _readNativeFileFrom(String path, BigInt offset) {
     return file.readSync(length - start);
   } finally {
     file.closeSync();
+  }
+}
+
+WASIPreview3FilesystemMutationResult _linkNativeChild(
+  String directoryPath,
+  String oldName,
+  WASIPreview3FilesystemDirectory targetDirectory,
+  String newName,
+) {
+  if (!_isSafeNativeChildName(oldName) || !_isSafeNativeChildName(newName)) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.invalid,
+    );
+  }
+  final targetContext = _nativeDirectoryContext(targetDirectory);
+  if (targetContext == null) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.invalid,
+    );
+  }
+  final oldPath = _joinNative(directoryPath, oldName);
+  final newPath = _joinNative(targetContext.path, newName);
+  final oldType = io.FileSystemEntity.typeSync(oldPath, followLinks: false);
+  if (oldType == io.FileSystemEntityType.notFound) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.noEntry,
+    );
+  }
+  if (oldType == io.FileSystemEntityType.directory) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.isDirectory,
+    );
+  }
+  if (io.FileSystemEntity.typeSync(newPath, followLinks: false) !=
+      io.FileSystemEntityType.notFound) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.exist,
+    );
+  }
+  try {
+    if (!_nativeHardLink(oldPath, newPath)) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.io,
+      );
+    }
+    return const WASIPreview3FilesystemMutationResult.ok();
+  } on io.FileSystemException {
+    return _nativeMutationFailure(newPath);
+  }
+}
+
+WASIPreview3FilesystemMutationResult _renameNativeChild(
+  String directoryPath,
+  String oldName,
+  WASIPreview3FilesystemDirectory targetDirectory,
+  String newName,
+) {
+  if (!_isSafeNativeChildName(oldName) || !_isSafeNativeChildName(newName)) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.invalid,
+    );
+  }
+  final targetContext = _nativeDirectoryContext(targetDirectory);
+  if (targetContext == null) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.invalid,
+    );
+  }
+  final oldPath = _joinNative(directoryPath, oldName);
+  final newPath = _joinNative(targetContext.path, newName);
+  final oldType = io.FileSystemEntity.typeSync(oldPath, followLinks: false);
+  if (oldType == io.FileSystemEntityType.notFound) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.noEntry,
+    );
+  }
+  if (io.FileSystemEntity.typeSync(newPath, followLinks: false) !=
+      io.FileSystemEntityType.notFound) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.exist,
+    );
+  }
+  try {
+    switch (oldType) {
+      case io.FileSystemEntityType.directory:
+        io.Directory(oldPath).renameSync(newPath);
+      case io.FileSystemEntityType.link:
+        io.Link(oldPath).renameSync(newPath);
+      case io.FileSystemEntityType.file:
+        io.File(oldPath).renameSync(newPath);
+      case io.FileSystemEntityType.pipe:
+      case io.FileSystemEntityType.unixDomainSock:
+      case io.FileSystemEntityType.notFound:
+        return const WASIPreview3FilesystemMutationResult.error(
+          WASIPreview3FilesystemMutationError.invalid,
+        );
+    }
+    return const WASIPreview3FilesystemMutationResult.ok();
+  } on io.FileSystemException {
+    return _nativeMutationFailure(oldPath);
+  }
+}
+
+WASIPreview3FilesystemMutationResult _symlinkNativeChild(
+  String directoryPath,
+  String target,
+  String linkName,
+) {
+  if (target.contains('\u0000') || !_isSafeNativeChildName(linkName)) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.invalid,
+    );
+  }
+  final linkPath = _joinNative(directoryPath, linkName);
+  if (io.FileSystemEntity.typeSync(linkPath, followLinks: false) !=
+      io.FileSystemEntityType.notFound) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.exist,
+    );
+  }
+  try {
+    io.Link(linkPath).createSync(target);
+    return const WASIPreview3FilesystemMutationResult.ok();
+  } on io.FileSystemException {
+    return _nativeMutationFailure(linkPath);
+  }
+}
+
+WASIPreview3FilesystemReadLinkResult _readNativeLinkChild(
+  String directoryPath,
+  String name,
+) {
+  if (!_isSafeNativeChildName(name)) {
+    return const WASIPreview3FilesystemReadLinkResult.error(
+      WASIPreview3FilesystemMutationError.invalid,
+    );
+  }
+  final path = _joinNative(directoryPath, name);
+  final type = io.FileSystemEntity.typeSync(path, followLinks: false);
+  if (type == io.FileSystemEntityType.notFound) {
+    return const WASIPreview3FilesystemReadLinkResult.error(
+      WASIPreview3FilesystemMutationError.noEntry,
+    );
+  }
+  if (type != io.FileSystemEntityType.link) {
+    return const WASIPreview3FilesystemReadLinkResult.error(
+      WASIPreview3FilesystemMutationError.invalid,
+    );
+  }
+  try {
+    return WASIPreview3FilesystemReadLinkResult.ok(io.Link(path).targetSync());
+  } on io.FileSystemException {
+    return const WASIPreview3FilesystemReadLinkResult.error(
+      WASIPreview3FilesystemMutationError.io,
+    );
   }
 }
 
@@ -449,6 +630,44 @@ String _basename(String path) {
   return index < 0 ? normalized : normalized.substring(index + 1);
 }
 
+_NativeDirectoryContext? _nativeDirectoryContext(
+  WASIPreview3FilesystemDirectory directory,
+) {
+  final context = directory.mutationContext;
+  return context is _NativeDirectoryContext ? context : null;
+}
+
+bool _nativeHardLink(String existingPath, String newPath) {
+  if (io.Platform.isWindows) {
+    return _windowsCreateHardLink(existingPath, newPath);
+  }
+  return _posixCreateHardLink(existingPath, newPath);
+}
+
+bool _posixCreateHardLink(String existingPath, String newPath) {
+  final existingPathPointer = existingPath.toNativeUtf8();
+  final newPathPointer = newPath.toNativeUtf8();
+  try {
+    return _posixLinkFunction()(existingPathPointer, newPathPointer) == 0;
+  } finally {
+    malloc.free(existingPathPointer);
+    malloc.free(newPathPointer);
+  }
+}
+
+bool _windowsCreateHardLink(String existingPath, String newPath) {
+  final createHardLink = _windowsCreateHardLinkFunction();
+  final newPathPointer = newPath.toNativeUtf16();
+  final existingPathPointer = existingPath.toNativeUtf16();
+  try {
+    return createHardLink(newPathPointer, existingPathPointer, ffi.nullptr) !=
+        0;
+  } finally {
+    malloc.free(newPathPointer);
+    malloc.free(existingPathPointer);
+  }
+}
+
 ffi.DynamicLibrary _openPosixCLibrary() {
   if (io.Platform.isLinux) {
     return ffi.DynamicLibrary.open('libc.so.6');
@@ -463,6 +682,8 @@ _PosixOpenDart? _cachedPosixOpen;
 _PosixPwriteDart? _cachedPosixPwrite;
 _PosixFtruncateDart? _cachedPosixFtruncate;
 _PosixCloseDart? _cachedPosixClose;
+_PosixLinkDart? _cachedPosixLink;
+_WindowsCreateHardLinkDart? _cachedWindowsCreateHardLink;
 
 _PosixOpenDart _posixOpenFunction() => _cachedPosixOpen ??= _openPosixCLibrary()
     .lookupFunction<_PosixOpenNative, _PosixOpenDart>('open');
@@ -480,6 +701,16 @@ _PosixFtruncateDart _posixFtruncateFunction() =>
 _PosixCloseDart _posixCloseFunction() =>
     _cachedPosixClose ??= _openPosixCLibrary()
         .lookupFunction<_PosixCloseNative, _PosixCloseDart>('close');
+
+_PosixLinkDart _posixLinkFunction() => _cachedPosixLink ??= _openPosixCLibrary()
+    .lookupFunction<_PosixLinkNative, _PosixLinkDart>('link');
+
+_WindowsCreateHardLinkDart _windowsCreateHardLinkFunction() =>
+    _cachedWindowsCreateHardLink ??= ffi.DynamicLibrary.open('kernel32.dll')
+        .lookupFunction<
+          _WindowsCreateHardLinkNative,
+          _WindowsCreateHardLinkDart
+        >('CreateHardLinkW');
 
 typedef _PosixOpenNative =
     ffi.Int32 Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Uint32);
@@ -500,5 +731,24 @@ typedef _PosixFtruncateDart = int Function(int, int);
 typedef _PosixCloseNative = ffi.Int32 Function(ffi.Int32);
 typedef _PosixCloseDart = int Function(int);
 
+typedef _PosixLinkNative =
+    ffi.Int32 Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>);
+typedef _PosixLinkDart = int Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>);
+
+typedef _WindowsCreateHardLinkNative =
+    ffi.Int32 Function(
+      ffi.Pointer<Utf16>,
+      ffi.Pointer<Utf16>,
+      ffi.Pointer<ffi.Void>,
+    );
+typedef _WindowsCreateHardLinkDart =
+    int Function(ffi.Pointer<Utf16>, ffi.Pointer<Utf16>, ffi.Pointer<ffi.Void>);
+
 const int _posixOpenWriteOnly = 1;
 final BigInt _maxI64 = (BigInt.one << 63) - BigInt.one;
+
+final class _NativeDirectoryContext {
+  const _NativeDirectoryContext(this.path);
+
+  final String path;
+}
