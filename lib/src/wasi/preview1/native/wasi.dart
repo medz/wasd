@@ -1117,6 +1117,7 @@ class WASI implements wasi_iface.WASI {
             descriptorFlags: descriptorFlags,
             oflags: oflags,
             hasTrailingSeparator: guestPath.hasTrailingSeparator,
+            followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
           )
         : _vfs.openPath(
             openPath,
@@ -1135,6 +1136,7 @@ class WASI implements wasi_iface.WASI {
         descriptorFlags: descriptorFlags,
         oflags: oflags,
         hasTrailingSeparator: guestPath.hasTrailingSeparator,
+        followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
       );
     }
     switch (opened.kind) {
@@ -1544,7 +1546,10 @@ class WASI implements wasi_iface.WASI {
       followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
     );
     if (entry == null) {
-      final hostEntry = _hostPathEntry(normalizedPath);
+      final hostEntry = _hostPathEntry(
+        normalizedPath,
+        followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
+      );
       if (hostEntry.errno != _errnoSuccess) {
         return hostEntry.errno;
       }
@@ -1700,16 +1705,18 @@ class WASI implements wasi_iface.WASI {
     required int descriptorFlags,
     required int oflags,
     required bool hasTrailingSeparator,
+    required bool followSymlinks,
   }) {
-    final hostPath = _hostPathForGuestPath(guestPath);
-    if (hostPath == null) {
+    final hostPreopenPath = _hostPreopenPathForGuestPath(guestPath);
+    if (hostPreopenPath == null) {
       return const wasi_vfs.Preview1VirtualOpenResult.missing();
     }
+    var hostPath = hostPreopenPath.hostPath;
     final create = (oflags & _oflagCreat) != 0;
     final exclusive = (oflags & _oflagExcl) != 0;
     final truncate = (oflags & _oflagTrunc) != 0;
 
-    final type = io.FileSystemEntity.typeSync(hostPath, followLinks: false);
+    var type = io.FileSystemEntity.typeSync(hostPath, followLinks: false);
     if (type == io.FileSystemEntityType.notFound) {
       if (create) {
         if (hasTrailingSeparator || (oflags & _oflagDirectory) != 0) {
@@ -1736,6 +1743,32 @@ class WASI implements wasi_iface.WASI {
       }
       return const wasi_vfs.Preview1VirtualOpenResult.missing();
     }
+    if (type == io.FileSystemEntityType.link) {
+      if (!followSymlinks) {
+        return const wasi_vfs.Preview1VirtualOpenResult.symlinkLoop();
+      }
+      if (create && exclusive) {
+        return const wasi_vfs.Preview1VirtualOpenResult.exists();
+      }
+      final resolved = _resolveHostSymlinkTarget(
+        linkHostPath: hostPath,
+        hostRoot: hostPreopenPath.hostRoot,
+      );
+      if (resolved.errno == _errnoNotcapable) {
+        return const wasi_vfs.Preview1VirtualOpenResult.notCapable();
+      }
+      if (resolved.errno == _errnoLoop) {
+        return const wasi_vfs.Preview1VirtualOpenResult.symlinkLoop();
+      }
+      if (resolved.errno == _errnoNoent) {
+        return const wasi_vfs.Preview1VirtualOpenResult.missing();
+      }
+      if (resolved.errno != _errnoSuccess) {
+        return const wasi_vfs.Preview1VirtualOpenResult.notSupported();
+      }
+      hostPath = resolved.hostPath!;
+      type = io.FileSystemEntity.typeSync(hostPath, followLinks: false);
+    }
     if (type == io.FileSystemEntityType.directory) {
       if (create && exclusive) {
         return const wasi_vfs.Preview1VirtualOpenResult.exists();
@@ -1750,9 +1783,6 @@ class WASI implements wasi_iface.WASI {
         rightsInheriting: rightsInheriting,
         descriptorFlags: descriptorFlags,
       );
-    }
-    if (type == io.FileSystemEntityType.link) {
-      return const wasi_vfs.Preview1VirtualOpenResult.notSupported();
     }
     if (type != io.FileSystemEntityType.file) {
       return const wasi_vfs.Preview1VirtualOpenResult.missing();
@@ -1774,7 +1804,11 @@ class WASI implements wasi_iface.WASI {
     );
   }
 
-  String? _hostPathForGuestPath(String guestPath) {
+  String? _hostPathForGuestPath(String guestPath) =>
+      _hostPreopenPathForGuestPath(guestPath)?.hostPath;
+
+  ({String guestRoot, String hostRoot, String hostPath})?
+  _hostPreopenPathForGuestPath(String guestPath) {
     final normalized = wasi_vfs.normalizeGuestPath(guestPath);
     String? matchedGuestRoot;
     for (final guestRoot in _hostPreopensByGuestPath.keys) {
@@ -1798,7 +1832,11 @@ class WASI implements wasi_iface.WASI {
         : normalized == matchedGuestRoot
         ? ''
         : normalized.substring(matchedGuestRoot.length + 1);
-    return _joinHostPath(hostRoot, relative);
+    return (
+      guestRoot: matchedGuestRoot,
+      hostRoot: hostRoot,
+      hostPath: _joinHostPath(hostRoot, relative),
+    );
   }
 
   wasi_vfs.Preview1VirtualOpenResult _openHostDirectory({
@@ -2191,6 +2229,71 @@ class WASI implements wasi_iface.WASI {
     }
   }
 
+  ({int errno, String? hostPath}) _resolveHostSymlinkTarget({
+    required String linkHostPath,
+    required String hostRoot,
+  }) {
+    late final String target;
+    try {
+      target = io.Link(linkHostPath).targetSync();
+    } on io.FileSystemException {
+      final type = io.FileSystemEntity.typeSync(
+        linkHostPath,
+        followLinks: false,
+      );
+      return (
+        errno: type == io.FileSystemEntityType.notFound
+            ? _errnoNoent
+            : _errnoPerm,
+        hostPath: null,
+      );
+    }
+
+    final targetHostPath = io.File(target).isAbsolute
+        ? target
+        : _joinNativeHostPath(io.Link(linkHostPath).parent.path, target);
+    final targetType = io.FileSystemEntity.typeSync(
+      targetHostPath,
+      followLinks: false,
+    );
+    if (targetType == io.FileSystemEntityType.notFound) {
+      return (errno: _errnoNoent, hostPath: null);
+    }
+
+    try {
+      final resolvedTarget = io.File(targetHostPath).resolveSymbolicLinksSync();
+      final resolvedRoot = io.Directory(hostRoot).resolveSymbolicLinksSync();
+      if (!_isHostPathWithinRoot(resolvedTarget, resolvedRoot)) {
+        return (errno: _errnoNotcapable, hostPath: null);
+      }
+      return (errno: _errnoSuccess, hostPath: resolvedTarget);
+    } on io.FileSystemException catch (error) {
+      final errno = _errnoFromHostResolveError(error);
+      if (errno != null) {
+        return (errno: errno, hostPath: null);
+      }
+      final currentType = io.FileSystemEntity.typeSync(
+        targetHostPath,
+        followLinks: false,
+      );
+      if (currentType == io.FileSystemEntityType.notFound) {
+        return (errno: _errnoNoent, hostPath: null);
+      }
+      if (currentType == io.FileSystemEntityType.link) {
+        return (errno: _errnoLoop, hostPath: null);
+      }
+      return (errno: _errnoPerm, hostPath: null);
+    }
+  }
+
+  int? _errnoFromHostResolveError(io.FileSystemException error) {
+    return switch (error.osError?.errorCode) {
+      2 => _errnoNoent,
+      40 || 62 => _errnoLoop,
+      _ => null,
+    };
+  }
+
   wasi_vfs.Preview1PathMutationResult _hostLinkFailure({
     required String oldHostPath,
     required String newHostPath,
@@ -2309,19 +2412,46 @@ class WASI implements wasi_iface.WASI {
   }
 
   ({int errno, wasi_vfs.Preview1VirtualPathEntry? entry}) _hostPathEntry(
-    String guestPath,
-  ) {
-    final hostPath = _hostPathForGuestPath(guestPath);
-    if (hostPath == null) {
+    String guestPath, {
+    required bool followSymlinks,
+  }) {
+    final hostPreopenPath = _hostPreopenPathForGuestPath(guestPath);
+    if (hostPreopenPath == null) {
       return (errno: _errnoNoent, entry: null);
     }
+    return _hostPathEntryForHostPath(
+      hostPath: hostPreopenPath.hostPath,
+      hostRoot: hostPreopenPath.hostRoot,
+      followSymlinks: followSymlinks,
+    );
+  }
 
+  ({int errno, wasi_vfs.Preview1VirtualPathEntry? entry})
+  _hostPathEntryForHostPath({
+    required String hostPath,
+    required String hostRoot,
+    required bool followSymlinks,
+  }) {
     final type = io.FileSystemEntity.typeSync(hostPath, followLinks: false);
     if (type == io.FileSystemEntityType.notFound) {
       return (errno: _errnoNoent, entry: null);
     }
     if (type == io.FileSystemEntityType.link) {
-      return (errno: _errnoNotsup, entry: null);
+      if (!followSymlinks) {
+        return _hostSymlinkPathEntry(hostPath);
+      }
+      final resolved = _resolveHostSymlinkTarget(
+        linkHostPath: hostPath,
+        hostRoot: hostRoot,
+      );
+      if (resolved.errno != _errnoSuccess) {
+        return (errno: resolved.errno, entry: null);
+      }
+      return _hostPathEntryForHostPath(
+        hostPath: resolved.hostPath!,
+        hostRoot: hostRoot,
+        followSymlinks: false,
+      );
     }
 
     try {
@@ -2356,6 +2486,23 @@ class WASI implements wasi_iface.WASI {
     } on io.FileSystemException {
       return (errno: _errnoNoent, entry: null);
     }
+  }
+
+  ({int errno, wasi_vfs.Preview1VirtualPathEntry? entry}) _hostSymlinkPathEntry(
+    String hostPath,
+  ) {
+    final target = _readHostSymlink(hostPath);
+    if (target.errno != _errnoSuccess) {
+      return (errno: target.errno, entry: null);
+    }
+    return (
+      errno: _errnoSuccess,
+      entry: wasi_vfs.Preview1VirtualPathEntry(
+        kind: wasi_vfs.Preview1VirtualPathEntryKind.symlink,
+        metadata: wasi_vfs.Preview1VirtualNodeMetadata(),
+        size: target.targetBytes!.length,
+      ),
+    );
   }
 
   int _applyFilestatTimes({
@@ -2930,6 +3077,28 @@ String _joinHostPath(String root, String relative) {
         : '$path$separator$segment';
   }
   return path;
+}
+
+String _joinNativeHostPath(String root, String relative) {
+  if (relative.isEmpty) {
+    return root;
+  }
+  final separator = io.Platform.pathSeparator;
+  return root.endsWith(separator)
+      ? '$root$relative'
+      : '$root$separator$relative';
+}
+
+bool _isHostPathWithinRoot(String path, String root) {
+  final normalizedPath = io.File(path).absolute.path;
+  final normalizedRoot = io.Directory(root).absolute.path;
+  final separator = io.Platform.pathSeparator;
+  if (normalizedRoot.endsWith(separator)) {
+    return normalizedPath == normalizedRoot ||
+        normalizedPath.startsWith(normalizedRoot);
+  }
+  return normalizedPath == normalizedRoot ||
+      normalizedPath.startsWith('$normalizedRoot$separator');
 }
 
 bool _isChildGuestPath(String path, String parent) {

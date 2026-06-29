@@ -196,7 +196,8 @@ too broad to verify in one commit.
     `P1-NATIVE-HOST-FS-BASIC-PATH-MUTATION`,
     `P1-NATIVE-HOST-FS-RENAME`, and
     `P1-NATIVE-HOST-FS-HARD-LINK`, and
-    `P1-NATIVE-HOST-FS-SYMLINK-READLINK`.
+    `P1-NATIVE-HOST-FS-SYMLINK-READLINK`, and
+    `P1-NATIVE-HOST-FS-SYMLINK-RESOLUTION`.
   - Done when: local VM/browser/Node Preview1 suites pass with no unexpected
     skips, the official Preview1 suite has no untriaged failures, README/API
     claims match the verified host surface, and VFS/socket hot paths have
@@ -346,12 +347,49 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-NATIVE-HOST-FS-SYMLINK-RESOLUTION` - Native Preview1 follows real
+  host symlinks only inside preopen roots.
+  - Scope: Dart VM native Preview1 `path_open` and `path_filestat_get` for host
+    symlinks below configured real host preopen roots. Browser and Node JS
+    remain on the in-repo in-memory VFS; full lstat-grade host symlink metadata
+    and symlink timestamp mutation remain incomplete.
+  - Edit targets: `lib/src/wasi/preview1/native/wasi.dart`,
+    `test/wasi_native_host_fs_test.dart`, `README.md`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_native_host_fs_test.dart --name "native host symlinks resolve only inside preopens" --reporter=compact`
+    first failed because no-follow `path_open` on a real host symlink returned
+    `NOTSUP` instead of `LOOP`, then exposed that dangling symlink chains were
+    being mapped to `LOOP` instead of `NOENT`.
+  - Implementation gate:
+    `dart test test/wasi_native_host_fs_test.dart --reporter=compact`;
+    `dart test test/wasi_test.dart --reporter=compact`;
+    `dart test -p node test/wasi_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
+    resolution is limited to the host symlink branch, uses canonical host path
+    containment checks, and does not add recursive scanning to ordinary VFS
+    paths.
+  - Done when: no-follow `path_open` on a real host symlink returns `LOOP`,
+    no-follow `path_filestat_get` reports symlink file type and target length,
+    follow `path_filestat_get` reports the target file metadata, follow
+    `path_open` reads the target file, follow `path_open(O_DIRECTORY)` opens
+    and enumerates directory symlink targets, symlinks resolving outside the
+    preopen return `NOTCAPABLE`, filesystem-root host preopens still permit
+    contained symlink targets, dangling symlink chains return `NOENT`, and
+    self-loops return `LOOP`.
+  - Evidence update: this checked row, README support wording, and the
+    `P1-FULL-RUNTIME-GATE` checked-child list.
+  - Claim impact: advances native host symlink resolution; full lstat-grade
+    host symlink metadata, host symlink timestamp mutation, full Preview1,
+    Preview2, and Preview3 remain incomplete.
 - [x] `P1-NATIVE-HOST-FS-SYMLINK-READLINK` - Native Preview1
   `path_symlink` and `path_readlink` operate on real host symlinks.
   - Scope: Dart VM native Preview1 symlink creation and readlink below
     configured real host preopen roots. Browser and Node JS remain on the
-    in-repo in-memory VFS; host symlink resolution and symlink metadata remain
-    incomplete.
+    in-repo in-memory VFS; full lstat-grade host symlink metadata and symlink
+    timestamp mutation remain incomplete.
   - Edit targets: `lib/src/wasi/preview1/native/wasi.dart`,
     `test/wasi_native_host_fs_test.dart`, `README.md`, and this roadmap.
   - Red test:
@@ -376,14 +414,14 @@ too broad to verify in one commit.
     parent directories return `NOENT`.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
-  - Claim impact: advances native host symlink support; host symlink
-    resolution, symlink metadata, full Preview1, Preview2, and Preview3 remain
-    incomplete.
+  - Claim impact: advances native host symlink support; full lstat-grade host
+    symlink metadata, host symlink timestamp mutation, full Preview1, Preview2,
+    and Preview3 remain incomplete.
 - [x] `P1-NATIVE-HOST-FS-HARD-LINK` - Native Preview1 `path_link` creates
   real host hard links.
   - Scope: Dart VM native Preview1 `path_link` for regular files below
     configured real host preopen roots. Browser and Node JS remain on the
-    in-repo in-memory VFS, and host symlink resolution and metadata remain
+    in-repo in-memory VFS, and full lstat-grade host symlink metadata remains
     incomplete.
   - Edit targets: `lib/src/wasi/preview1/native/wasi.dart`,
     `test/wasi_native_host_fs_test.dart`, `pubspec.yaml`, `README.md`, and this
@@ -408,9 +446,9 @@ too broad to verify in one commit.
     sources return `PERM`, and missing sources return `NOENT`.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
-  - Claim impact: advances native host filesystem mutation; host symlink
-    resolution, symlink metadata, full Preview1, Preview2, and Preview3 remain
-    incomplete.
+  - Claim impact: advances native host filesystem mutation; full lstat-grade
+    host symlink metadata, host symlink timestamp mutation, full Preview1,
+    Preview2, and Preview3 remain incomplete.
 - [x] `P1-NATIVE-HOST-FS-RENAME` - Native Preview1 `path_rename` mutates real
   host filesystem entries.
   - Scope: Dart VM native Preview1 `path_rename` for regular files and
@@ -440,9 +478,9 @@ too broad to verify in one commit.
     renaming a preopen root returns `INVAL`.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
-  - Claim impact: advances native host filesystem mutation; host symlink
-    resolution, symlink metadata, full Preview1, Preview2, and Preview3 remain
-    incomplete.
+  - Claim impact: advances native host filesystem mutation; full lstat-grade
+    host symlink metadata, host symlink timestamp mutation, full Preview1,
+    Preview2, and Preview3 remain incomplete.
 - [x] `P1-NATIVE-HOST-FS-BASIC-PATH-MUTATION` - Native Preview1 basic path
   mutation syscalls create and delete real host filesystem entries.
   - Scope: Dart VM native Preview1 `path_create_directory`,
@@ -472,9 +510,9 @@ too broad to verify in one commit.
     returns `NOTDIR` for files, and refuses to remove the preopen root.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
-  - Claim impact: advances native host filesystem mutation; host symlink
-    resolution, symlink metadata, full Preview1, Preview2, and Preview3 remain
-    incomplete.
+  - Claim impact: advances native host filesystem mutation; full lstat-grade
+    host symlink metadata, host symlink timestamp mutation, full Preview1,
+    Preview2, and Preview3 remain incomplete.
 - [x] `P1-NATIVE-HOST-FS-FILE-WRITEBACK` - Native Preview1 host regular files
   persist writes, truncation, allocation, and creation to the real host
   filesystem.
@@ -509,9 +547,9 @@ too broad to verify in one commit.
     file instead of creating an in-memory shadow.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
-  - Claim impact: advances native host regular-file writeback; host symlink
-    resolution, symlink metadata, full Preview1, Preview2, and Preview3 remain
-    incomplete.
+  - Claim impact: advances native host regular-file writeback; full lstat-grade
+    host symlink metadata, host symlink timestamp mutation, full Preview1,
+    Preview2, and Preview3 remain incomplete.
 - [x] `P1-NATIVE-HOST-FS-DIRECTORY-READDIR` - Native Preview1 host directories
   can be opened and enumerated from the real host filesystem.
   - Scope: Dart VM native Preview1 `path_open(O_DIRECTORY)` for real
@@ -542,8 +580,8 @@ too broad to verify in one commit.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
   - Claim impact: advances native host filesystem enumeration; host directory
-    mutation, host symlink resolution, full Preview1, Preview2, and Preview3
-    remain incomplete.
+    mutation, full lstat-grade host symlink metadata, full Preview1, Preview2,
+    and Preview3 remain incomplete.
 - [x] `P1-NATIVE-HOST-FS-PATH-METADATA` - Native Preview1
   `path_filestat_get` reports real host file and directory metadata.
   - Scope: Dart VM native Preview1 `path_filestat_get` for regular files,
@@ -570,8 +608,8 @@ too broad to verify in one commit.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
   - Claim impact: advances native host filesystem metadata; host writeback,
-    symlink resolution, full Preview1, Preview2, and Preview3 remain
-    incomplete.
+    full lstat-grade host symlink metadata, full Preview1, Preview2, and
+    Preview3 remain incomplete.
 - [x] `P1-NATIVE-HOST-FS-READ-BACKING` - Native Preview1 preopens can read
   regular files from the real host filesystem.
   - Scope: Dart VM native Preview1 `path_open` for regular files below a
@@ -601,8 +639,8 @@ too broad to verify in one commit.
   - Done when: a real host file under a configured native preopen can be opened,
     its size is reported through `fd_filestat_get`, `fd_seek` can position from
     file end, `fd_read` returns host bytes, and `fd_close` releases the host
-    handle. Host symlinks return `ENOTSUP` until symlink resolution and
-    realpath containment are implemented.
+    handle. Host symlinks are covered by the later symlink readlink and
+    contained-resolution rows.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
   - Claim impact: removes the native "preopens are memory-only" blocker for
@@ -2917,10 +2955,12 @@ This is the implementation state as of 2026-06-29 on `main`.
 - Native Preview1 preopens now bridge to the real host filesystem for regular
   file reads and writes, file creation/truncation/allocation, directory
   open/readdir, path metadata, create/delete/remove, rename, and regular-file
-  hard links, symlink creation, and readlink. `path_link` uses a direct host
-  hard-link syscall through FFI instead of shelling out or copying bytes.
-  Browser and Node JS stay on the portable in-memory VFS, and native host
-  symlink resolution and symlink metadata remain incomplete.
+  hard links, symlink creation/readlink, and symlink following for
+  `path_open`/`path_filestat_get` when the resolved target stays inside the
+  configured preopen. `path_link` uses a direct host hard-link syscall through
+  FFI instead of shelling out or copying bytes. Browser and Node JS stay on the
+  portable in-memory VFS, and full lstat-grade host symlink metadata plus host
+  symlink timestamp mutation remain incomplete.
 - The repository now includes `tool/wasi_testsuite_wasd_adapter.py` and
   `tool/wasi_testsuite_preview1_runner.dart`, allowing the upstream
   `WebAssembly/wasi-testsuite` runner to invoke wasd for `wasm32-wasip1`

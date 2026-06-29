@@ -22,6 +22,7 @@ const int _rightFdFilestatSetSize = 1 << 22;
 const int _errnoExist = 20;
 const int _errnoInval = 28;
 const int _errnoIsdir = 31;
+const int _errnoLoop = 32;
 const int _errnoNoent = 44;
 const int _errnoNotdir = 54;
 const int _errnoNotempty = 55;
@@ -31,6 +32,7 @@ const int _filestatFiletypeOffset = 16;
 const int _filestatSizeOffset = 32;
 const int _filetypeDirectory = 3;
 const int _filetypeRegularFile = 4;
+const int _filetypeSymbolicLink = 7;
 const int _oflagCreat = 1;
 const int _oflagDirectory = 2;
 const int _oflagExcl = 4;
@@ -832,6 +834,288 @@ void main() {
       ]),
       _errnoNoent,
     );
+  });
+
+  test('native host symlinks resolve only inside preopens', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'wasd_host_symlink_resolve_',
+    );
+    addTearDown(() => temp.delete(recursive: true));
+    final outside = File('${temp.path}_outside.txt')
+      ..writeAsStringSync('outside');
+    addTearDown(() {
+      if (outside.existsSync()) {
+        outside.deleteSync();
+      }
+    });
+    File('${temp.path}/target.txt').writeAsStringSync('target');
+    Link('${temp.path}/link.txt').createSync('target.txt');
+    Link('${temp.path}/escape.txt').createSync(outside.absolute.path);
+    Link('${temp.path}/dangling.txt').createSync('missing.txt');
+    Link('${temp.path}/chain.txt').createSync('dangling.txt');
+    Link('${temp.path}/self.txt').createSync('self.txt');
+    final directoryTarget = Directory('${temp.path}/dir')..createSync();
+    File('${directoryTarget.path}/child.txt').writeAsStringSync('child');
+    Link('${temp.path}/dir_link').createSync('dir');
+
+    final wasi = WASI(preopens: {'/host': temp.path});
+    final result = await WebAssembly.instantiate(
+      wasiStartModuleBytes().buffer,
+      wasi.imports,
+    );
+    final instance = result.instance;
+    final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+    final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+    final pathFilestatGet =
+        preview1['path_filestat_get'] as FunctionImportExportValue;
+    final fdRead = preview1['fd_read'] as FunctionImportExportValue;
+    final fdReaddir = preview1['fd_readdir'] as FunctionImportExportValue;
+    final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+    final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+    wasi.finalizeBindings(instance, memory: memory);
+
+    final bytes = Uint8List.view(memory.buffer);
+    final data = ByteData.view(memory.buffer);
+    const pathPtr = 1024;
+    const filestatPtr = 1088;
+    const openedFdPtr = 1160;
+    const iovPtr = 1184;
+    const readBufferPtr = 1216;
+    const readCountPtr = 1248;
+    const direntsPtr = 1280;
+    const bufusedPtr = 1600;
+
+    final linkPath = utf8.encode('link.txt');
+    bytes.setAll(pathPtr, linkPath);
+    expect(
+      pathOpen.ref([
+        3,
+        0,
+        pathPtr,
+        linkPath.length,
+        0,
+        _rightFdRead,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      _errnoLoop,
+    );
+
+    expect(
+      pathFilestatGet.ref([3, 0, pathPtr, linkPath.length, filestatPtr]),
+      0,
+    );
+    expect(bytes[filestatPtr + _filestatFiletypeOffset], _filetypeSymbolicLink);
+    expect(
+      data.getUint64(filestatPtr + _filestatSizeOffset, Endian.little),
+      'target.txt'.length,
+    );
+
+    expect(
+      pathFilestatGet.ref([3, 1, pathPtr, linkPath.length, filestatPtr]),
+      0,
+    );
+    expect(bytes[filestatPtr + _filestatFiletypeOffset], _filetypeRegularFile);
+    expect(
+      data.getUint64(filestatPtr + _filestatSizeOffset, Endian.little),
+      'target'.length,
+    );
+
+    expect(
+      pathOpen.ref([
+        3,
+        1,
+        pathPtr,
+        linkPath.length,
+        0,
+        _rightFdRead,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      0,
+    );
+    final openedFd = data.getUint32(openedFdPtr, Endian.little);
+    _writeSingleIov(
+      bytes: bytes,
+      data: data,
+      iovPtr: iovPtr,
+      bufferPtr: readBufferPtr,
+      value: '------',
+    );
+    expect(fdRead.ref([openedFd, iovPtr, 1, readCountPtr]), 0);
+    expect(data.getUint32(readCountPtr, Endian.little), 'target'.length);
+    expect(
+      utf8.decode(
+        bytes.sublist(readBufferPtr, readBufferPtr + 'target'.length),
+      ),
+      'target',
+    );
+    expect(fdClose.ref([openedFd]), 0);
+
+    final dirLinkPath = utf8.encode('dir_link');
+    bytes.setAll(pathPtr, dirLinkPath);
+    expect(
+      pathFilestatGet.ref([3, 1, pathPtr, dirLinkPath.length, filestatPtr]),
+      0,
+    );
+    expect(bytes[filestatPtr + _filestatFiletypeOffset], _filetypeDirectory);
+    expect(
+      pathOpen.ref([
+        3,
+        1,
+        pathPtr,
+        dirLinkPath.length,
+        _oflagDirectory,
+        _rightFdReaddir,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      0,
+    );
+    final dirFd = data.getUint32(openedFdPtr, Endian.little);
+    expect(fdReaddir.ref([dirFd, direntsPtr, 256, 0, bufusedPtr]), 0);
+    final bufused = data.getUint32(bufusedPtr, Endian.little);
+    final entries = _readDirents(bytes, data, direntsPtr, bufused);
+    expect(entries.map((entry) => entry.name).toList(), ['child.txt']);
+    expect(entries.single.type, _filetypeRegularFile);
+    expect(fdClose.ref([dirFd]), 0);
+
+    final escapePath = utf8.encode('escape.txt');
+    bytes.setAll(pathPtr, escapePath);
+    expect(
+      pathOpen.ref([
+        3,
+        1,
+        pathPtr,
+        escapePath.length,
+        0,
+        _rightFdRead,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      _errnoNotcapable,
+    );
+    expect(
+      pathFilestatGet.ref([3, 1, pathPtr, escapePath.length, filestatPtr]),
+      _errnoNotcapable,
+    );
+
+    final chainPath = utf8.encode('chain.txt');
+    bytes.setAll(pathPtr, chainPath);
+    expect(
+      pathOpen.ref([
+        3,
+        1,
+        pathPtr,
+        chainPath.length,
+        0,
+        _rightFdRead,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      _errnoNoent,
+    );
+    expect(
+      pathFilestatGet.ref([3, 1, pathPtr, chainPath.length, filestatPtr]),
+      _errnoNoent,
+    );
+
+    final selfPath = utf8.encode('self.txt');
+    bytes.setAll(pathPtr, selfPath);
+    expect(
+      pathOpen.ref([
+        3,
+        1,
+        pathPtr,
+        selfPath.length,
+        0,
+        _rightFdRead,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      _errnoLoop,
+    );
+    expect(
+      pathFilestatGet.ref([3, 1, pathPtr, selfPath.length, filestatPtr]),
+      _errnoLoop,
+    );
+  });
+
+  test('native root host preopens permit contained symlink targets', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'wasd_root_host_symlink_',
+    );
+    addTearDown(() => temp.delete(recursive: true));
+    File('${temp.path}/target.txt').writeAsStringSync('root target');
+    Link('${temp.path}/link.txt').createSync('target.txt');
+
+    final rootPath = Directory('/').absolute.path;
+    var guestPath = '${temp.absolute.path}${Platform.pathSeparator}link.txt';
+    if (guestPath.startsWith(rootPath)) {
+      guestPath = guestPath.substring(rootPath.length);
+    }
+    guestPath = guestPath.replaceAll('\\', '/');
+
+    final wasi = WASI(preopens: {'/': rootPath});
+    final result = await WebAssembly.instantiate(
+      wasiStartModuleBytes().buffer,
+      wasi.imports,
+    );
+    final instance = result.instance;
+    final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+    final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+    final fdRead = preview1['fd_read'] as FunctionImportExportValue;
+    final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+    final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+    wasi.finalizeBindings(instance, memory: memory);
+
+    final bytes = Uint8List.view(memory.buffer);
+    final data = ByteData.view(memory.buffer);
+    final path = utf8.encode(guestPath);
+    const pathPtr = 1024;
+    const openedFdPtr = 1160;
+    const iovPtr = 1184;
+    const readBufferPtr = 1216;
+    const readCountPtr = 1248;
+    bytes.setAll(pathPtr, path);
+
+    expect(
+      pathOpen.ref([
+        3,
+        1,
+        pathPtr,
+        path.length,
+        0,
+        _rightFdRead,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      0,
+    );
+    final openedFd = data.getUint32(openedFdPtr, Endian.little);
+    _writeSingleIov(
+      bytes: bytes,
+      data: data,
+      iovPtr: iovPtr,
+      bufferPtr: readBufferPtr,
+      value: '-----------',
+    );
+    expect(fdRead.ref([openedFd, iovPtr, 1, readCountPtr]), 0);
+    expect(data.getUint32(readCountPtr, Endian.little), 'root target'.length);
+    expect(
+      utf8.decode(
+        bytes.sublist(readBufferPtr, readBufferPtr + 'root target'.length),
+      ),
+      'root target',
+    );
+    expect(fdClose.ref([openedFd]), 0);
   });
 
   test('native root preopens map host filesystem children', () async {
