@@ -90,13 +90,17 @@ final class WASIComponentWitInterface {
     required List<WASIComponentWitFlags> flags,
     required List<WASIComponentWitEnum> enums,
     required List<WASIComponentWitResource> resources,
+    required List<WASIComponentWitTypeAlias> typeAliases,
+    required List<WASIComponentWitUse> uses,
     required this.span,
   }) : functions = List<WASIComponentWitFunction>.unmodifiable(functions),
        records = List<WASIComponentWitRecord>.unmodifiable(records),
        variants = List<WASIComponentWitVariant>.unmodifiable(variants),
        flags = List<WASIComponentWitFlags>.unmodifiable(flags),
        enums = List<WASIComponentWitEnum>.unmodifiable(enums),
-       resources = List<WASIComponentWitResource>.unmodifiable(resources);
+       resources = List<WASIComponentWitResource>.unmodifiable(resources),
+       typeAliases = List<WASIComponentWitTypeAlias>.unmodifiable(typeAliases),
+       uses = List<WASIComponentWitUse>.unmodifiable(uses);
 
   /// Interface name.
   final String name;
@@ -118,6 +122,12 @@ final class WASIComponentWitInterface {
 
   /// Resource declarations captured directly in this interface.
   final List<WASIComponentWitResource> resources;
+
+  /// Type aliases declared directly in this interface.
+  final List<WASIComponentWitTypeAlias> typeAliases;
+
+  /// `use` declarations captured directly in this interface.
+  final List<WASIComponentWitUse> uses;
 
   /// Source span for the interface name.
   final WASIComponentWitSpan span;
@@ -167,6 +177,28 @@ final class WASIComponentWitInterface {
     for (final resource in resources) {
       if (resource.name == name) {
         return resource;
+      }
+    }
+    return null;
+  }
+
+  /// Returns the type alias named [name], if this interface declares one.
+  WASIComponentWitTypeAlias? typeAliasNamed(String name) {
+    for (final alias in typeAliases) {
+      if (alias.name == name) {
+        return alias;
+      }
+    }
+    return null;
+  }
+
+  /// Returns the used type item aliased as [name], if this interface has one.
+  WASIComponentWitUseItem? useItemNamed(String name) {
+    for (final use in uses) {
+      for (final item in use.items) {
+        if (item.alias == name) {
+          return item;
+        }
       }
     }
     return null;
@@ -308,6 +340,67 @@ final class WASIComponentWitResource {
   final String name;
 
   /// Source span for the resource name.
+  final WASIComponentWitSpan span;
+}
+
+/// Type alias declared directly in a WIT interface.
+final class WASIComponentWitTypeAlias {
+  /// Creates a WIT type alias boundary.
+  const WASIComponentWitTypeAlias({
+    required this.name,
+    required this.target,
+    required this.span,
+  });
+
+  /// Alias name.
+  final String name;
+
+  /// Compact aliased type text after `=`.
+  final String target;
+
+  /// Source span for the alias name.
+  final WASIComponentWitSpan span;
+}
+
+/// WIT `use target.{items}` declaration captured in an interface.
+final class WASIComponentWitUse {
+  /// Creates a WIT use boundary.
+  WASIComponentWitUse({
+    required this.target,
+    required List<WASIComponentWitUseItem> items,
+    required this.span,
+  }) : items = List<WASIComponentWitUseItem>.unmodifiable(items);
+
+  /// Qualified interface target being used.
+  final WASIComponentWitTarget target;
+
+  /// Used items, preserving declaration order.
+  final List<WASIComponentWitUseItem> items;
+
+  /// Source span for the use declaration target.
+  final WASIComponentWitSpan span;
+}
+
+/// One item inside a WIT `use` declaration.
+final class WASIComponentWitUseItem {
+  /// Creates a WIT use item boundary.
+  const WASIComponentWitUseItem({
+    required this.name,
+    required this.alias,
+    required this.target,
+    required this.span,
+  });
+
+  /// Name exported by the used interface.
+  final String name;
+
+  /// Local alias available in the current interface.
+  final String alias;
+
+  /// Target interface containing [name].
+  final WASIComponentWitTarget target;
+
+  /// Source span for the item name.
   final WASIComponentWitSpan span;
 }
 
@@ -604,6 +697,8 @@ final class _WitParser {
     final flags = <WASIComponentWitFlags>[];
     final enums = <WASIComponentWitEnum>[];
     final resources = <WASIComponentWitResource>[];
+    final typeAliases = <WASIComponentWitTypeAlias>[];
+    final uses = <WASIComponentWitUse>[];
     _parseInterfaceBlock(
       functions,
       records,
@@ -611,7 +706,10 @@ final class _WitParser {
       flags,
       enums,
       resources,
+      typeAliases: typeAliases,
+      uses: uses,
       prefix: '',
+      receiverResource: null,
     );
     return WASIComponentWitInterface(
       name: name.lexeme,
@@ -621,6 +719,8 @@ final class _WitParser {
       flags: flags,
       enums: enums,
       resources: resources,
+      typeAliases: typeAliases,
+      uses: uses,
       span: name.span,
     );
   }
@@ -632,11 +732,45 @@ final class _WitParser {
     List<WASIComponentWitFlags> flagsTypes,
     List<WASIComponentWitEnum> enumTypes,
     List<WASIComponentWitResource> resourceTypes, {
+    required List<WASIComponentWitTypeAlias> typeAliases,
+    required List<WASIComponentWitUse> uses,
     required String prefix,
+    required String? receiverResource,
   }) {
     while (!_checkSymbol('}') && !_checkKind(_WitTokenKind.eof)) {
       if (_checkSymbol('@')) {
         _skipAnnotation();
+        continue;
+      }
+      if (_matchWord('use')) {
+        final use = _parseUse();
+        _failDuplicateUseItems(
+          use,
+          records,
+          variantTypes,
+          flagsTypes,
+          enumTypes,
+          resourceTypes,
+          typeAliases,
+          uses,
+        );
+        uses.add(use);
+        continue;
+      }
+      if (_matchWord('type')) {
+        final alias = _parseTypeAlias();
+        _failDuplicateInterfaceType(
+          alias.name,
+          alias.span,
+          records,
+          variantTypes,
+          flagsTypes,
+          enumTypes,
+          resourceTypes,
+          typeAliases,
+          uses,
+        );
+        typeAliases.add(alias);
         continue;
       }
       if (_matchWord('record')) {
@@ -649,6 +783,8 @@ final class _WitParser {
           flagsTypes,
           enumTypes,
           resourceTypes,
+          typeAliases,
+          uses,
         );
         records.add(record);
         continue;
@@ -663,6 +799,8 @@ final class _WitParser {
           flagsTypes,
           enumTypes,
           resourceTypes,
+          typeAliases,
+          uses,
         );
         variantTypes.add(variant);
         continue;
@@ -677,6 +815,8 @@ final class _WitParser {
           flagsTypes,
           enumTypes,
           resourceTypes,
+          typeAliases,
+          uses,
         );
         flagsTypes.add(flags);
         continue;
@@ -691,6 +831,8 @@ final class _WitParser {
           flagsTypes,
           enumTypes,
           resourceTypes,
+          typeAliases,
+          uses,
         );
         enumTypes.add(enum_);
         continue;
@@ -703,6 +845,8 @@ final class _WitParser {
           flagsTypes,
           enumTypes,
           resourceTypes,
+          typeAliases: typeAliases,
+          uses: uses,
           prefix: prefix,
         );
         continue;
@@ -711,7 +855,10 @@ final class _WitParser {
         final item = _current;
         _advance();
         if (_matchSymbol(':')) {
-          final signature = _parseInterfaceItemSignature(item.span);
+          final parsedSignature = _parseInterfaceItemSignature(item.span);
+          final signature = receiverResource == null
+              ? parsedSignature
+              : _withResourceReceiver(parsedSignature, receiverResource);
           if (_isFunctionSignature(signature)) {
             functions.add(
               WASIComponentWitFunction(
@@ -732,7 +879,10 @@ final class _WitParser {
             flagsTypes,
             enumTypes,
             resourceTypes,
+            typeAliases: typeAliases,
+            uses: uses,
             prefix: '$prefix${item.lexeme}.',
+            receiverResource: receiverResource,
           );
           continue;
         }
@@ -747,13 +897,90 @@ final class _WitParser {
           flagsTypes,
           enumTypes,
           resourceTypes,
+          typeAliases: typeAliases,
+          uses: uses,
           prefix: prefix,
+          receiverResource: receiverResource,
         );
         continue;
       }
       _advance();
     }
     _expectSymbol('}');
+  }
+
+  WASIComponentWitUse _parseUse() {
+    final targetStart = _current.span;
+    final targetText = StringBuffer();
+    while (!_checkKind(_WitTokenKind.eof)) {
+      if (_checkSymbol('.')) {
+        final dot = _current;
+        _advance();
+        if (_checkSymbol('{')) {
+          break;
+        }
+        targetText.write(dot.lexeme);
+        continue;
+      }
+      if (_checkSymbol(';') || _checkSymbol('}')) {
+        _fail(targetStart, 'unterminated WIT use declaration');
+      }
+      targetText.write(_current.lexeme);
+      _advance();
+    }
+    if (targetText.isEmpty) {
+      _fail(targetStart, 'expected WIT use target');
+    }
+    _expectSymbol('{');
+    final target = WASIComponentWitTarget(
+      text: targetText.toString(),
+      span: targetStart,
+    );
+    final items = <WASIComponentWitUseItem>[];
+    while (!_checkSymbol('}') && !_checkKind(_WitTokenKind.eof)) {
+      final item = _expectWord('use item name');
+      var alias = item.lexeme;
+      if (_matchWord('as')) {
+        alias = _expectWord('use item alias').lexeme;
+      }
+      final first = _useItemNamed(items, alias);
+      if (first != null) {
+        _fail(
+          item.span,
+          "duplicate use item alias '$alias'; first declared at "
+          '${first.span.location}',
+        );
+      }
+      items.add(
+        WASIComponentWitUseItem(
+          name: item.lexeme,
+          alias: alias,
+          target: target,
+          span: item.span,
+        ),
+      );
+      _matchSymbol(',');
+    }
+    _expectSymbol('}');
+    _expectSymbol(';');
+    if (items.isEmpty) {
+      _fail(targetStart, 'WIT use declaration must name at least one item');
+    }
+    return WASIComponentWitUse(target: target, items: items, span: targetStart);
+  }
+
+  WASIComponentWitTypeAlias _parseTypeAlias() {
+    final name = _expectWord('type alias name');
+    _expectSymbol('=');
+    final target = _parseInterfaceItemSignature(name.span);
+    if (target.isEmpty) {
+      _fail(name.span, "type alias '${name.lexeme}' has empty target");
+    }
+    return WASIComponentWitTypeAlias(
+      name: name.lexeme,
+      target: target,
+      span: name.span,
+    );
   }
 
   void _parseResource(
@@ -763,6 +990,8 @@ final class _WitParser {
     List<WASIComponentWitFlags> flagsTypes,
     List<WASIComponentWitEnum> enumTypes,
     List<WASIComponentWitResource> resourceTypes, {
+    required List<WASIComponentWitTypeAlias> typeAliases,
+    required List<WASIComponentWitUse> uses,
     required String prefix,
   }) {
     final name = _expectWord('resource name');
@@ -774,6 +1003,8 @@ final class _WitParser {
       flagsTypes,
       enumTypes,
       resourceTypes,
+      typeAliases,
+      uses,
     );
     resourceTypes.add(
       WASIComponentWitResource(name: name.lexeme, span: name.span),
@@ -789,7 +1020,10 @@ final class _WitParser {
       flagsTypes,
       enumTypes,
       resourceTypes,
+      typeAliases: typeAliases,
+      uses: uses,
       prefix: '$prefix${name.lexeme}.',
+      receiverResource: name.lexeme,
     );
   }
 
@@ -971,6 +1205,43 @@ final class _WitParser {
     return null;
   }
 
+  WASIComponentWitUseItem? _useItemNamed(
+    List<WASIComponentWitUseItem> items,
+    String alias,
+  ) {
+    for (final item in items) {
+      if (item.alias == alias) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  void _failDuplicateUseItems(
+    WASIComponentWitUse use,
+    List<WASIComponentWitRecord> records,
+    List<WASIComponentWitVariant> variants,
+    List<WASIComponentWitFlags> flags,
+    List<WASIComponentWitEnum> enums,
+    List<WASIComponentWitResource> resources,
+    List<WASIComponentWitTypeAlias> aliases,
+    List<WASIComponentWitUse> uses,
+  ) {
+    for (final item in use.items) {
+      _failDuplicateInterfaceType(
+        item.alias,
+        item.span,
+        records,
+        variants,
+        flags,
+        enums,
+        resources,
+        aliases,
+        uses,
+      );
+    }
+  }
+
   void _failDuplicateInterfaceType(
     String name,
     WASIComponentWitSpan span,
@@ -979,6 +1250,8 @@ final class _WitParser {
     List<WASIComponentWitFlags> flags,
     List<WASIComponentWitEnum> enums,
     List<WASIComponentWitResource> resources,
+    List<WASIComponentWitTypeAlias> aliases,
+    List<WASIComponentWitUse> uses,
   ) {
     final first = _interfaceTypeNamed(
       name,
@@ -987,6 +1260,8 @@ final class _WitParser {
       flags,
       enums,
       resources,
+      aliases,
+      uses,
     );
     if (first == null) {
       return;
@@ -1005,6 +1280,8 @@ final class _WitParser {
     List<WASIComponentWitFlags> flags,
     List<WASIComponentWitEnum> enums,
     List<WASIComponentWitResource> resources,
+    List<WASIComponentWitTypeAlias> aliases,
+    List<WASIComponentWitUse> uses,
   ) {
     final record = _recordNamed(records, name);
     if (record != null) {
@@ -1028,6 +1305,18 @@ final class _WitParser {
     for (final resource in resources) {
       if (resource.name == name) {
         return (kind: 'resource', span: resource.span);
+      }
+    }
+    for (final alias in aliases) {
+      if (alias.name == name) {
+        return (kind: 'type alias', span: alias.span);
+      }
+    }
+    for (final use in uses) {
+      for (final item in use.items) {
+        if (item.alias == name) {
+          return (kind: 'use item', span: item.span);
+        }
       }
     }
     return null;
@@ -1166,6 +1455,39 @@ final class _WitParser {
       _advance();
     }
     _fail(start, 'unterminated interface item signature');
+  }
+
+  String _withResourceReceiver(String signature, String resourceName) {
+    if (!_isFunctionSignature(signature) || signature.contains('self:')) {
+      return signature;
+    }
+    final receiver = 'self:borrow<$resourceName>';
+    final open = signature.indexOf('(');
+    if (open < 0) {
+      return '$signature($receiver)';
+    }
+    var depth = 0;
+    var angleDepth = 0;
+    for (var i = open; i < signature.length; i++) {
+      final code = signature.codeUnitAt(i);
+      final char = String.fromCharCode(code);
+      if (char == '<') {
+        angleDepth++;
+      } else if (char == '>' && angleDepth > 0) {
+        angleDepth--;
+      } else if (char == '(' && angleDepth == 0) {
+        depth++;
+      } else if (char == ')' && angleDepth == 0) {
+        depth--;
+        if (depth == 0) {
+          final params = signature.substring(open + 1, i);
+          final withReceiver = params.isEmpty ? receiver : '$receiver,$params';
+          return '${signature.substring(0, open + 1)}$withReceiver'
+              '${signature.substring(i)}';
+        }
+      }
+    }
+    return signature;
   }
 
   bool _isFunctionSignature(String signature) {

@@ -105,7 +105,12 @@ List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
           interfaceName: callbackInterfaceName,
           function: function,
           direction: item.direction,
-          signature: _parseWitAdapterSignature(function, interface),
+          signature: _parseWitAdapterSignature(
+            function,
+            interface,
+            document: interfaceDocument,
+            resolveTarget: resolveTarget,
+          ),
         ),
       );
     }
@@ -693,11 +698,18 @@ final class WASIComponentWitAdapterOperation {
 
 WASIComponentWitAdapterSignature _parseWitAdapterSignature(
   WASIComponentWitFunction function,
-  WASIComponentWitInterface interface,
-) {
+  WASIComponentWitInterface interface, {
+  required WASIComponentWitDocument document,
+  WASIComponentWitTargetResolver? resolveTarget,
+}) {
   final signature = function.signature;
   final isAsync = signature.startsWith('asyncfunc');
   final prefix = isAsync ? 'asyncfunc' : 'func';
+  final typeContext = _WitAdapterTypeContext(
+    document: document,
+    interface: interface,
+    resolveTarget: resolveTarget,
+  );
   if (signature == prefix) {
     return WASIComponentWitAdapterSignature._(
       params: const <WASIComponentWitAdapterParam>[],
@@ -732,7 +744,7 @@ WASIComponentWitAdapterSignature _parseWitAdapterSignature(
     final parsedResult = _parseWitAdapterValueType(
       suffix.substring(2),
       'result',
-      interface,
+      typeContext,
     );
     if (parsedResult.error != null) {
       return _unsupportedWitAdapterSignature(
@@ -764,7 +776,7 @@ WASIComponentWitAdapterSignature _parseWitAdapterSignature(
       final parsedType = _parseWitAdapterValueType(
         typeText,
         'parameter',
-        interface,
+        typeContext,
       );
       if (parsedType.error != null) {
         return _unsupportedWitAdapterSignature(
@@ -798,11 +810,38 @@ WASIComponentWitAdapterSignature _unsupportedWitAdapterSignature({
   );
 }
 
+final class _WitAdapterTypeContext {
+  const _WitAdapterTypeContext({
+    required this.document,
+    required this.interface,
+    required this.resolveTarget,
+  });
+
+  final WASIComponentWitDocument document;
+  final WASIComponentWitInterface interface;
+  final WASIComponentWitTargetResolver? resolveTarget;
+
+  _WitAdapterTypeContext withInterface(
+    WASIComponentWitDocument nextDocument,
+    WASIComponentWitInterface nextInterface,
+  ) {
+    return _WitAdapterTypeContext(
+      document: nextDocument,
+      interface: nextInterface,
+      resolveTarget: resolveTarget,
+    );
+  }
+
+  String get visitPrefix =>
+      '${document.package?.text ?? '<local>'}'
+      '/${interface.name}';
+}
+
 ({WASIComponentWitAdapterValueType? type, String? error})
 _parseWitAdapterValueType(
   String text,
   String context,
-  WASIComponentWitInterface interface, [
+  _WitAdapterTypeContext typeContext, [
   Set<String>? visitingTypes,
 ]) {
   final primitive = _witPrimitiveValueType(text);
@@ -823,7 +862,7 @@ _parseWitAdapterValueType(
     final element = _parseWitAdapterValueType(
       optionArgs.single,
       '$context option payload',
-      interface,
+      typeContext,
       visitingTypes,
     );
     if (element.error != null) {
@@ -845,7 +884,7 @@ _parseWitAdapterValueType(
     final element = _parseWitAdapterValueType(
       listArgs.single,
       '$context list element',
-      interface,
+      typeContext,
       visitingTypes,
     );
     if (element.error != null) {
@@ -865,7 +904,7 @@ _parseWitAdapterValueType(
       text,
       streamArgs,
       '$context stream element',
-      interface,
+      typeContext,
       visitingTypes,
     );
     if (element.error != null) {
@@ -885,7 +924,7 @@ _parseWitAdapterValueType(
       text,
       futureArgs,
       '$context future element',
-      interface,
+      typeContext,
       visitingTypes,
     );
     if (element.error != null) {
@@ -909,7 +948,7 @@ _parseWitAdapterValueType(
       final element = _parseWitAdapterValueType(
         tupleArgs[i],
         '$context tuple element[$i]',
-        interface,
+        typeContext,
         visitingTypes,
       );
       if (element.error != null) {
@@ -943,7 +982,7 @@ _parseWitAdapterValueType(
     final ok = _parseOptionalWitAdapterValueType(
       resultArgs[0],
       '$context result ok payload',
-      interface,
+      typeContext,
       visitingTypes,
     );
     if (ok.error != null) {
@@ -954,7 +993,7 @@ _parseWitAdapterValueType(
         : _parseOptionalWitAdapterValueType(
             resultArgs[1],
             '$context result error payload',
-            interface,
+            typeContext,
             visitingTypes,
           );
     if (error.error != null) {
@@ -975,14 +1014,33 @@ _parseWitAdapterValueType(
       text,
       borrowedResourceArgs,
       context,
-      interface,
+      typeContext,
       isBorrowed: true,
     );
   }
-  final record = interface.recordNamed(text);
+  final alias = typeContext.interface.typeAliasNamed(text);
+  if (alias != null) {
+    final visiting = visitingTypes ?? <String>{};
+    final typeKey = '${typeContext.visitPrefix}:alias:${alias.name}';
+    if (!visiting.add(typeKey)) {
+      return (
+        type: null,
+        error: 'unsupported recursive WIT adapter $context type $text',
+      );
+    }
+    final parsed = _parseWitAdapterValueType(
+      alias.target,
+      '$context alias ${alias.name}',
+      typeContext,
+      visiting,
+    );
+    visiting.remove(typeKey);
+    return parsed;
+  }
+  final record = typeContext.interface.recordNamed(text);
   if (record != null) {
     final visiting = visitingTypes ?? <String>{};
-    final typeKey = 'record:${record.name}';
+    final typeKey = '${typeContext.visitPrefix}:record:${record.name}';
     if (!visiting.add(typeKey)) {
       return (
         type: null,
@@ -994,7 +1052,7 @@ _parseWitAdapterValueType(
       final parsedField = _parseWitAdapterValueType(
         field.type,
         '$context record ${record.name}.${field.name}',
-        interface,
+        typeContext,
         visiting,
       );
       if (parsedField.error != null) {
@@ -1014,7 +1072,7 @@ _parseWitAdapterValueType(
       error: null,
     );
   }
-  final flags = interface.flagsNamed(text);
+  final flags = typeContext.interface.flagsNamed(text);
   if (flags != null) {
     return (
       type: WASIComponentWitAdapterValueType.flags(
@@ -1024,7 +1082,7 @@ _parseWitAdapterValueType(
       error: null,
     );
   }
-  final enum_ = interface.enumNamed(text);
+  final enum_ = typeContext.interface.enumNamed(text);
   if (enum_ != null) {
     return (
       type: WASIComponentWitAdapterValueType.enumeration(
@@ -1034,10 +1092,10 @@ _parseWitAdapterValueType(
       error: null,
     );
   }
-  final variant = interface.variantNamed(text);
+  final variant = typeContext.interface.variantNamed(text);
   if (variant != null) {
     final visiting = visitingTypes ?? <String>{};
-    final typeKey = 'variant:${variant.name}';
+    final typeKey = '${typeContext.visitPrefix}:variant:${variant.name}';
     if (!visiting.add(typeKey)) {
       return (
         type: null,
@@ -1051,7 +1109,7 @@ _parseWitAdapterValueType(
           : _parseWitAdapterValueType(
               case_.type!,
               '$context variant ${variant.name}.${case_.name}',
-              interface,
+              typeContext,
               visiting,
             );
       if (caseType.error != null) {
@@ -1071,7 +1129,7 @@ _parseWitAdapterValueType(
       error: null,
     );
   }
-  final resource = interface.resourceNamed(text);
+  final resource = typeContext.interface.resourceNamed(text);
   if (resource != null) {
     return (
       type: WASIComponentWitAdapterValueType.resource(
@@ -1082,7 +1140,111 @@ _parseWitAdapterValueType(
       error: null,
     );
   }
+  final used = _parseWitAdapterUsedValueType(
+    text,
+    context,
+    typeContext,
+    visitingTypes,
+  );
+  if (used.type != null || used.error != null) {
+    return used;
+  }
   return (type: null, error: 'unsupported WIT adapter $context type $text');
+}
+
+({WASIComponentWitAdapterValueType? type, String? error})
+_parseWitAdapterUsedValueType(
+  String text,
+  String context,
+  _WitAdapterTypeContext typeContext, [
+  Set<String>? visitingTypes,
+]) {
+  final used = typeContext.interface.useItemNamed(text);
+  if (used == null) {
+    return (type: null, error: null);
+  }
+  final resolved = typeContext.resolveTarget?.call(used.target.text);
+  final usedInterface = resolved?.document.interfaceNamed(resolved.memberName);
+  if (resolved == null || usedInterface == null) {
+    return (
+      type: null,
+      error:
+          'unknown WIT adapter $context used type ${used.target.text}.'
+          '${used.name}',
+    );
+  }
+  final usedContext = typeContext.withInterface(
+    resolved.document,
+    usedInterface,
+  );
+  final visiting = visitingTypes ?? <String>{};
+  final typeKey = '${usedContext.visitPrefix}:use:${used.name}';
+  if (!visiting.add(typeKey)) {
+    return (
+      type: null,
+      error: 'unsupported recursive WIT adapter $context type $text',
+    );
+  }
+  final parsed = _parseWitAdapterValueType(
+    used.name,
+    '$context use ${used.target.text}.${used.name}',
+    usedContext,
+    visiting,
+  );
+  visiting.remove(typeKey);
+  if (parsed.type == null || used.alias == used.name) {
+    return parsed;
+  }
+  final type = parsed.type!;
+  if (type.kind == WASIComponentWitAdapterValueKind.resource) {
+    return (
+      type: WASIComponentWitAdapterValueType.resource(
+        text: text,
+        resourceName: used.alias,
+        isBorrowed: type.isBorrowedResource,
+      ),
+      error: null,
+    );
+  }
+  return parsed;
+}
+
+({WASIComponentWitAdapterValueType? type, String? error})
+_parseWitAdapterUsedResourceValueType(
+  String text,
+  String resourceName,
+  String context,
+  _WitAdapterTypeContext typeContext, {
+  required bool isBorrowed,
+}) {
+  final used = typeContext.interface.useItemNamed(resourceName);
+  if (used == null) {
+    return (type: null, error: null);
+  }
+  final resolved = typeContext.resolveTarget?.call(used.target.text);
+  final usedInterface = resolved?.document.interfaceNamed(resolved.memberName);
+  if (resolved == null || usedInterface == null) {
+    return (
+      type: null,
+      error:
+          'unknown WIT adapter $context used resource ${used.target.text}.'
+          '${used.name}',
+    );
+  }
+  if (usedInterface.resourceNamed(used.name) == null) {
+    return (
+      type: null,
+      error: 'unknown WIT adapter $context resource type $resourceName',
+    );
+  }
+  return (
+    type: WASIComponentWitAdapterValueType.resource(
+      text: text,
+      resourceName: used.alias,
+      isBorrowed: isBorrowed,
+    ),
+    error: null,
+  );
 }
 
 ({WASIComponentWitAdapterValueType? type, String? error})
@@ -1090,7 +1252,7 @@ _parseWitAdapterAsyncElementValueType(
   String text,
   List<String> args,
   String context,
-  WASIComponentWitInterface interface, [
+  _WitAdapterTypeContext typeContext, [
   Set<String>? visitingTypes,
 ]) {
   if (args.length != 1 || args.single.isEmpty) {
@@ -1099,7 +1261,7 @@ _parseWitAdapterAsyncElementValueType(
   final element = _parseWitAdapterValueType(
     args.single,
     context,
-    interface,
+    typeContext,
     visitingTypes,
   );
   if (element.error != null) {
@@ -1151,14 +1313,24 @@ _parseWitAdapterResourceValueType(
   String text,
   List<String> args,
   String context,
-  WASIComponentWitInterface interface, {
+  _WitAdapterTypeContext typeContext, {
   required bool isBorrowed,
 }) {
   if (args.length != 1 || args.single.isEmpty) {
     return (type: null, error: 'unsupported WIT adapter $context type $text');
   }
-  final resource = interface.resourceNamed(args.single);
+  final resource = typeContext.interface.resourceNamed(args.single);
   if (resource == null) {
+    final usedResource = _parseWitAdapterUsedResourceValueType(
+      text,
+      args.single,
+      context,
+      typeContext,
+      isBorrowed: isBorrowed,
+    );
+    if (usedResource.type != null || usedResource.error != null) {
+      return usedResource;
+    }
     return (
       type: null,
       error: 'unknown WIT adapter $context resource type ${args.single}',
@@ -1178,13 +1350,13 @@ _parseWitAdapterResourceValueType(
 _parseOptionalWitAdapterValueType(
   String text,
   String context,
-  WASIComponentWitInterface interface, [
+  _WitAdapterTypeContext typeContext, [
   Set<String>? visitingTypes,
 ]) {
   if (text == '_' || text.isEmpty) {
     return (type: null, error: null);
   }
-  return _parseWitAdapterValueType(text, context, interface, visitingTypes);
+  return _parseWitAdapterValueType(text, context, typeContext, visitingTypes);
 }
 
 List<String>? _genericArgs(String name, String text) {

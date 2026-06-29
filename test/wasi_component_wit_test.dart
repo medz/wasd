@@ -168,9 +168,45 @@ world command {
         'stat',
       ]);
       expect(files.functions.map((function) => function.signature), [
-        'func()->u32',
+        'func(self:borrow<descriptor>)->u32',
         'func(path:string)->descriptor',
         'func(handle:borrow<descriptor>)->u32',
+      ]);
+    });
+
+    test('parses type aliases and use declarations in interfaces', () {
+      const source = '''
+package wasi:clocks@0.2.0;
+
+interface monotonic-clock {
+  use wasi:io/poll@0.2.0.{pollable};
+
+  type instant = u64;
+  type duration = u64;
+
+  now: func() -> instant;
+  subscribe-instant: func(when: instant) -> pollable;
+}
+
+world imports {
+  import monotonic-clock;
+}
+''';
+
+      final document = WASIComponentWitDocument.parse(source);
+      final clock = document.interfaceNamed('monotonic-clock')!;
+
+      expect(clock.typeAliases.map((alias) => alias.name), [
+        'instant',
+        'duration',
+      ]);
+      expect(clock.typeAliases.map((alias) => alias.target), ['u64', 'u64']);
+      expect(clock.uses.single.target.text, 'wasi:io/poll@0.2.0');
+      expect(clock.uses.single.items.map((item) => item.name), ['pollable']);
+      expect(clock.uses.single.items.map((item) => item.alias), ['pollable']);
+      expect(clock.functions.map((function) => function.signature), [
+        'func()->instant',
+        'func(when:instant)->pollable',
       ]);
     });
 

@@ -1563,8 +1563,8 @@ world command {
       final program = preview2Plan.bindAdapters(
         imports: {
           'files.descriptor.read': (args) {
-            seen.add(args.length);
-            return 7;
+            seen.add(args.single);
+            return (args.single as int) + 7;
           },
           'files.open': (args) {
             seen.add(args.single);
@@ -1578,7 +1578,7 @@ world command {
       );
       final preview3Program = preview3Plan.bindAdapters(
         imports: {
-          'files.descriptor.read': (_) => 11,
+          'files.descriptor.read': (args) => (args.single as int) + 11,
           'files.open': (_) => 51,
           'files.stat': (args) => args.single,
         },
@@ -1587,17 +1587,14 @@ world command {
       final handle = program.invokeImport('files.open', ['config']);
       expect(handle, 41);
       expect(program.invokeImport('files.stat', [handle]), 42);
-      expect(program.invokeImport('files.descriptor.read', const []), 7);
+      expect(program.invokeImport('files.descriptor.read', [handle]), 48);
       expect(preview3Program.invokeImport('files.open', ['config']), 51);
       expect(preview3Program.invokeImport('files.stat', [51]), 51);
-      expect(
-        preview3Program.invokeImport('files.descriptor.read', const []),
-        11,
-      );
-      expect(seen, ['config', 41, 0]);
+      expect(preview3Program.invokeImport('files.descriptor.read', [51]), 62);
+      expect(seen, ['config', 41, 41]);
 
       expect(() => program.invokeImport('files.stat', [-1]), throwsStateError);
-      expect(seen, ['config', 41, 0]);
+      expect(seen, ['config', 41, 41]);
 
       final badResultProgram = preview2Plan.bindAdapters(
         imports: {

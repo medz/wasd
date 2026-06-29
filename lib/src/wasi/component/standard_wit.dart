@@ -152,12 +152,15 @@ const String _wasiClocks020Source = '''
 package wasi:clocks@0.2.0;
 
 interface monotonic-clock {
-  resource pollable;
+  use wasi:io/poll@0.2.0.{pollable};
 
-  now: func() -> u64;
-  resolution: func() -> u64;
-  subscribe-instant: func(when: u64) -> pollable;
-  subscribe-duration: func(when: u64) -> pollable;
+  type instant = u64;
+  type duration = u64;
+
+  now: func() -> instant;
+  resolution: func() -> duration;
+  subscribe-instant: func(when: instant) -> pollable;
+  subscribe-duration: func(when: duration) -> pollable;
 }
 
 interface wall-clock {
@@ -181,8 +184,8 @@ package wasi:io@0.2.0;
 
 interface poll {
   resource pollable {
-    ready: func(self: borrow<pollable>) -> bool;
-    block: func(self: borrow<pollable>);
+    ready: func() -> bool;
+    block: func();
   }
 
   poll: func(in: list<borrow<pollable>>) -> list<u32>;
