@@ -155,15 +155,79 @@ WASIPreview3FilesystemDirectoryEntry? _nativeEntryForPath(
 WASIPreview3FilesystemMetadata _nativeMetadata(String path) {
   try {
     final stat = io.FileStat.statSync(path);
+    final info = _hostLstatInfo(path);
     return WASIPreview3FilesystemMetadata(
+      linkCount: info == null || info.linkCount <= 0
+          ? null
+          : BigInt.from(info.linkCount),
       size: BigInt.from(stat.size),
-      accessTimeNanos: _dateTimeNanos(stat.accessed),
-      modificationTimeNanos: _dateTimeNanos(stat.modified),
+      objectIdentity: info == null ? null : '${info.device}:${info.inode}',
+      accessTimeNanos: info == null
+          ? _dateTimeNanos(stat.accessed)
+          : BigInt.from(info.accessTimeNanos),
+      modificationTimeNanos: info == null
+          ? _dateTimeNanos(stat.modified)
+          : BigInt.from(info.modificationTimeNanos),
       statusChangeTimeNanos: _dateTimeNanos(stat.changed),
     );
   } on io.FileSystemException {
     return const WASIPreview3FilesystemMetadata();
   }
+}
+
+_HostLstatInfo? _hostLstatInfo(String hostPath) {
+  if (io.Platform.isWindows) {
+    return null;
+  }
+  final pathPointer = hostPath.toNativeUtf8();
+  final statBuffer = malloc<ffi.Uint8>(_hostStatBufferSize);
+  try {
+    if (_posixLstatFunction()(pathPointer, statBuffer.cast<ffi.Void>()) != 0) {
+      return null;
+    }
+    return (
+      device: _readHostStatDevice(statBuffer),
+      inode: _readHostStatInode(statBuffer),
+      linkCount: _readHostStatLinkCount(statBuffer),
+      accessTimeNanos: _readHostStatTimespecNanos(
+        statBuffer,
+        _hostStatAccessTimeOffset,
+      ),
+      modificationTimeNanos: _readHostStatTimespecNanos(
+        statBuffer,
+        _hostStatModificationTimeOffset,
+      ),
+    );
+  } catch (_) {
+    return null;
+  } finally {
+    malloc.free(pathPointer);
+    malloc.free(statBuffer);
+  }
+}
+
+int _readHostStatDevice(ffi.Pointer<ffi.Uint8> statBuffer) {
+  if (io.Platform.isMacOS || io.Platform.isIOS) {
+    return statBuffer.cast<ffi.Uint32>().value;
+  }
+  return statBuffer.cast<ffi.Uint64>().value;
+}
+
+int _readHostStatInode(ffi.Pointer<ffi.Uint8> statBuffer) {
+  return (statBuffer + _hostStatInodeOffset).cast<ffi.Uint64>().value;
+}
+
+int _readHostStatLinkCount(ffi.Pointer<ffi.Uint8> statBuffer) {
+  if (io.Platform.isMacOS || io.Platform.isIOS) {
+    return (statBuffer + _hostStatLinkCountOffset).cast<ffi.Uint16>().value;
+  }
+  return (statBuffer + _hostStatLinkCountOffset).cast<ffi.Uint64>().value;
+}
+
+int _readHostStatTimespecNanos(ffi.Pointer<ffi.Uint8> statBuffer, int offset) {
+  final seconds = (statBuffer + offset).cast<ffi.Int64>().value;
+  final nanos = (statBuffer + offset + 8).cast<ffi.Int64>().value;
+  return seconds * _nanosPerSecond + nanos;
 }
 
 BigInt _dateTimeNanos(DateTime value) =>
@@ -833,6 +897,7 @@ _PosixFtruncateDart? _cachedPosixFtruncate;
 _PosixCloseDart? _cachedPosixClose;
 _PosixLinkDart? _cachedPosixLink;
 _PosixUtimesDart? _cachedPosixUtimes;
+_PosixLstatDart? _cachedPosixLstat;
 _WindowsCreateHardLinkDart? _cachedWindowsCreateHardLink;
 
 _PosixOpenDart _posixOpenFunction() => _cachedPosixOpen ??= _openPosixCLibrary()
@@ -858,6 +923,10 @@ _PosixLinkDart _posixLinkFunction() => _cachedPosixLink ??= _openPosixCLibrary()
 _PosixUtimesDart _posixUtimesFunction() =>
     _cachedPosixUtimes ??= _openPosixCLibrary()
         .lookupFunction<_PosixUtimesNative, _PosixUtimesDart>('utimes');
+
+_PosixLstatDart _posixLstatFunction() =>
+    _cachedPosixLstat ??= _openPosixCLibrary()
+        .lookupFunction<_PosixLstatNative, _PosixLstatDart>('lstat');
 
 _WindowsCreateHardLinkDart _windowsCreateHardLinkFunction() =>
     _cachedWindowsCreateHardLink ??= ffi.DynamicLibrary.open('kernel32.dll')
@@ -894,6 +963,11 @@ typedef _PosixUtimesNative =
 typedef _PosixUtimesDart =
     int Function(ffi.Pointer<Utf8>, ffi.Pointer<_PosixTimeval>);
 
+typedef _PosixLstatNative =
+    ffi.Int32 Function(ffi.Pointer<Utf8>, ffi.Pointer<ffi.Void>);
+typedef _PosixLstatDart =
+    int Function(ffi.Pointer<Utf8>, ffi.Pointer<ffi.Void>);
+
 typedef _WindowsCreateHardLinkNative =
     ffi.Int32 Function(
       ffi.Pointer<Utf16>,
@@ -905,6 +979,15 @@ typedef _WindowsCreateHardLinkDart =
 
 const int _posixOpenWriteOnly = 1;
 final BigInt _maxI64 = (BigInt.one << 63) - BigInt.one;
+int get _hostStatAccessTimeOffset =>
+    io.Platform.isMacOS || io.Platform.isIOS ? 32 : 72;
+int get _hostStatModificationTimeOffset =>
+    io.Platform.isMacOS || io.Platform.isIOS ? 48 : 88;
+const int _hostStatInodeOffset = 8;
+int get _hostStatLinkCountOffset =>
+    io.Platform.isMacOS || io.Platform.isIOS ? 6 : 16;
+const int _nanosPerSecond = 1000000000;
+const int _hostStatBufferSize = 256;
 
 final class _PosixTimeval extends ffi.Struct {
   @ffi.IntPtr()
@@ -919,3 +1002,11 @@ final class _NativeDirectoryContext {
 
   final String path;
 }
+
+typedef _HostLstatInfo = ({
+  int device,
+  int inode,
+  int linkCount,
+  int accessTimeNanos,
+  int modificationTimeNanos,
+});

@@ -577,6 +577,41 @@ world filesystem-test {
       _expectUnitOk(link);
       expect(temp.readFile('hard.txt'), 'source');
 
+      final sourceFile =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'source.txt',
+                  _flagsValue(const <String>[]),
+                  _flagsValue(const <String>['read']),
+                ],
+              )
+              as WasmComponentValueData;
+      final hardFile =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'hard.txt',
+                  _flagsValue(const <String>[]),
+                  _flagsValue(const <String>['read']),
+                ],
+              )
+              as WasmComponentValueData;
+      expect(
+        await program.invokeImportAsync(
+          'wasi:filesystem/types@0.3.0.descriptor.is-same-object',
+          [
+            _resultHandle(_resultOk(sourceFile)),
+            _resultHandle(_resultOk(hardFile)),
+          ],
+        ),
+        isTrue,
+      );
+
       temp.writeFile('source.txt', 'changed');
       expect(temp.readFile('hard.txt'), 'changed');
 

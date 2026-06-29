@@ -160,6 +160,7 @@ final class WASIPreview3FilesystemMetadata {
   const WASIPreview3FilesystemMetadata({
     this.linkCount,
     this.size,
+    this.objectIdentity,
     this.accessTimeNanos,
     this.modificationTimeNanos,
     this.statusChangeTimeNanos,
@@ -170,6 +171,9 @@ final class WASIPreview3FilesystemMetadata {
 
   /// Current byte size, or null to use the descriptor's existing size provider.
   final BigInt? size;
+
+  /// Host-specific object identity used for `descriptor.is-same-object`.
+  final String? objectIdentity;
 
   /// Access timestamp in nanoseconds since the Unix epoch.
   final BigInt? accessTimeNanos;
@@ -1479,9 +1483,15 @@ base class WASIPreview3FilesystemHost {
   bool _isSameObject(int left, int right) {
     final leftDescriptor = _descriptors[left];
     final rightDescriptor = _descriptors[right];
-    return leftDescriptor != null &&
-        rightDescriptor != null &&
-        leftDescriptor.objectId == rightDescriptor.objectId;
+    if (leftDescriptor == null || rightDescriptor == null) {
+      return false;
+    }
+    final leftIdentity = leftDescriptor.metadata.objectIdentity;
+    final rightIdentity = rightDescriptor.metadata.objectIdentity;
+    if (leftIdentity != null && rightIdentity != null) {
+      return leftIdentity == rightIdentity;
+    }
+    return leftDescriptor.objectId == rightDescriptor.objectId;
   }
 
   WasmComponentValueData _metadataHash(int handle) {
