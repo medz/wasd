@@ -214,7 +214,7 @@ class WASI implements wasi.WASI {
           return _errnoInval;
         }
         int totalBytes = 0;
-        final output = _traceSyscalls ? <int>[] : null;
+        final output = BytesBuilder(copy: false);
 
         for (var index = 0; index < iovsLen; index++) {
           final entry = iovs + index * _iovecEntrySize;
@@ -228,14 +228,14 @@ class WASI implements wasi.WASI {
             if (buf + len > bytes.length) {
               return _errnoInval;
             }
-            output?.addAll(bytes.sublist(buf, buf + len));
+            output.add(Uint8List.sublistView(bytes, buf, buf + len));
           }
 
           totalBytes += len;
         }
 
-        if (_traceSyscalls && output != null && output.isNotEmpty) {
-          print(_decodeUtf8(output));
+        if (totalBytes > 0) {
+          _writeJsStdio(stdioKind!, output.takeBytes());
         }
 
         data.setUint32(nwrittenPtr, totalBytes, Endian.little);
@@ -3605,6 +3605,64 @@ const int _u32Max = 0xffffffff;
 final BigInt _u32Mask = BigInt.from(_u32Max);
 
 String _decodeUtf8(List<int> bytes) => utf8.decode(bytes, allowMalformed: true);
+
+void _writeJsStdio(
+  wasi_vfs.Preview1StdioDescriptorKind stdioKind,
+  List<int> bytes,
+) {
+  if (_writeNodeStdio(stdioKind, bytes)) {
+    return;
+  }
+  _writeConsoleStdio(stdioKind, bytes);
+}
+
+bool _writeNodeStdio(
+  wasi_vfs.Preview1StdioDescriptorKind stdioKind,
+  List<int> bytes,
+) {
+  final process = _requireNodeBuiltin('node:process');
+  if (process == null) {
+    return false;
+  }
+  final streamName = stdioKind == wasi_vfs.Preview1StdioDescriptorKind.stderr
+      ? 'stderr'
+      : 'stdout';
+  final stream = process.getProperty<JSObject?>(streamName.toJS);
+  if (stream == null) {
+    return false;
+  }
+
+  try {
+    final chunk = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+    stream.callMethodVarArgs<JSAny?>('write'.toJS, [chunk.toJS]);
+    return true;
+  } catch (_) {
+    try {
+      stream.callMethodVarArgs<JSAny?>('write'.toJS, [_decodeUtf8(bytes).toJS]);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
+void _writeConsoleStdio(
+  wasi_vfs.Preview1StdioDescriptorKind stdioKind,
+  List<int> bytes,
+) {
+  final console = globalContext.getProperty<JSObject?>('console'.toJS);
+  if (console == null) {
+    return;
+  }
+  final method = stdioKind == wasi_vfs.Preview1StdioDescriptorKind.stderr
+      ? 'error'
+      : 'log';
+  try {
+    console.callMethodVarArgs<JSAny?>(method.toJS, [_decodeUtf8(bytes).toJS]);
+  } catch (_) {
+    // Browsers without a console method should still report fd_write success.
+  }
+}
 
 Map<String, String> _buildNodeHostPreopens(Map<String, String> preopens) {
   if (!_isNodeJs()) {

@@ -9,6 +9,7 @@ import 'package:wasd/src/wasi/preview1/common/vfs.dart';
 import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
 import 'support/host_fs.dart';
+import 'support/node_stdio_spy.dart';
 import 'support/runtime_environment.dart';
 import 'support/wasm_fixtures.dart';
 import 'support/web_crypto_spy.dart';
@@ -1404,6 +1405,43 @@ void main() {
         final reported = data.getUint32(writtenPtr, Endian.little);
         expect(reported, textBytes.length);
       });
+
+      test(
+        'fd_write writes JS stdout and stderr through Node process streams',
+        () {
+          final spy = installNodeStdioSpy();
+          addTearDown(spy.restore);
+          final nodeWasi = WASI();
+          final preview1 = nodeWasi.imports['wasi_snapshot_preview1']!;
+          final fdWrite = preview1['fd_write'] as FunctionImportExportValue;
+          final nodeInstance = instance;
+          final memory =
+              (nodeInstance.exports['memory'] as MemoryImportExportValue).ref;
+          nodeWasi.finalizeBindings(nodeInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const iovPtr = 1152;
+          const bufferPtr = 1184;
+          const writtenPtr = 1216;
+
+          void writeStdio(int fd, String text) {
+            final textBytes = utf8.encode(text);
+            bytes.setAll(bufferPtr, textBytes);
+            data.setUint32(iovPtr, bufferPtr, Endian.little);
+            data.setUint32(iovPtr + 4, textBytes.length, Endian.little);
+            expect(fdWrite.ref([fd, iovPtr, 1, writtenPtr]), 0);
+            expect(data.getUint32(writtenPtr, Endian.little), textBytes.length);
+          }
+
+          writeStdio(1, 'node stdout');
+          writeStdio(2, 'node stderr');
+
+          expect(spy.stdout, <String>['node stdout']);
+          expect(spy.stderr, <String>['node stderr']);
+        },
+        skip: _skipUnlessNode('requires Node process stdio streams'),
+      );
 
       test('args_sizes_get and args_get write argv pointers and data', () {
         final preview1 = wasi.imports['wasi_snapshot_preview1']!;
