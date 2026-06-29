@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
+import 'integer_bounds.dart';
 import 'string_memory.dart';
 import 'unicode_scalar.dart';
 
@@ -1762,12 +1763,8 @@ bool _primitiveValueMatches(
       value is int && value >= -0x80000000 && value <= 0x7fffffff,
     WasmComponentPrimitiveValueType.u32 =>
       value is int && value >= 0 && value <= 0xffffffff,
-    WasmComponentPrimitiveValueType.s64 =>
-      value is int &&
-          value >= -0x8000000000000000 &&
-          value <= 0x7fffffffffffffff,
-    WasmComponentPrimitiveValueType.u64 =>
-      value is int && value >= 0 && value <= _u64Max,
+    WasmComponentPrimitiveValueType.s64 => wasiComponentIsI64Int(value),
+    WasmComponentPrimitiveValueType.u64 => wasiComponentIsU64Int(value),
     WasmComponentPrimitiveValueType.f32 ||
     WasmComponentPrimitiveValueType.f64 => value is num,
     WasmComponentPrimitiveValueType.char =>
@@ -1882,5 +1879,3 @@ int _alignTo(int value, int alignment) {
 }
 
 int _max(int a, int b) => a > b ? a : b;
-
-final int _u64Max = (BigInt.one << 64).toInt() - 1;

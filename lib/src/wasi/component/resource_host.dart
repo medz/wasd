@@ -1,4 +1,5 @@
 import '../../wasm/backend/native/interpreter/component.dart';
+import 'integer_bounds.dart';
 import 'resource_table.dart';
 
 /// Core representation type for a component resource.
@@ -733,9 +734,7 @@ void _validateRepresentation(
         return;
       }
     case WASIComponentResourceRepresentation.i64:
-      if (value is int &&
-          value >= -0x8000000000000000 &&
-          value <= 0x7fffffffffffffff) {
+      if (wasiComponentIsI64Int(value)) {
         return;
       }
     case WASIComponentResourceRepresentation.f32:
