@@ -5,6 +5,7 @@ import 'dart:js_interop';
 import 'dart:typed_data';
 
 import '../../module.dart' as wasm;
+import 'branch_hint_validator.dart' as branch_hints;
 import 'errors.dart' as js_errors;
 
 class Module implements wasm.Module {
@@ -16,6 +17,7 @@ class Module implements wasm.Module {
 
   static JSImportModule _compile(ByteBuffer bytes) {
     try {
+      branch_hints.validateBranchHintCustomSections(bytes);
       return JSImportModule(bytes.toJS);
     } catch (e, st) {
       js_errors.translateJsError(e, st);

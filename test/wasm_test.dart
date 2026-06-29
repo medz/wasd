@@ -168,6 +168,13 @@ void main() {
       module = await WebAssembly.compile(_wasmBytes.buffer);
     });
 
+    test('constructor rejects invalid branch hint custom section targets', () {
+      expect(
+        () => Module(_invalidBranchHintCustomSectionBytes.buffer),
+        throwsA(isA<CompileError>()),
+      );
+    });
+
     test('imports() returns empty list', () {
       expect(Module.imports(module), isEmpty);
     });
@@ -205,6 +212,13 @@ void main() {
     test('throws CompileError for invalid bytes', () async {
       await expectLater(
         WebAssembly.instantiate(_invalidBytes.buffer),
+        throwsA(isA<CompileError>()),
+      );
+    });
+
+    test('rejects invalid branch hint custom section targets', () async {
+      await expectLater(
+        WebAssembly.instantiate(_invalidBranchHintCustomSectionBytes.buffer),
         throwsA(isA<CompileError>()),
       );
     });

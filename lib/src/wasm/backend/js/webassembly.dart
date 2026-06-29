@@ -9,6 +9,7 @@ import 'dart:typed_data';
 import '../../instance.dart' as wasm;
 import '../../module.dart' as wasm;
 import '../../webassembly.dart' as wasm;
+import 'branch_hint_validator.dart' as branch_hints;
 import 'errors.dart' as js_errors;
 import 'instance.dart' as js_instance;
 import 'module.dart' as js_module;
@@ -25,6 +26,7 @@ class WebAssembly implements wasm.WebAssembly {
 
 Future<wasm.Module> compile(ByteBuffer bytes) async {
   try {
+    branch_hints.validateBranchHintCustomSections(bytes);
     return js_module.Module.fromHost(await _jsCompile(bytes.toJS).toDart);
   } catch (e, st) {
     js_errors.translateJsError(e, st);
@@ -46,6 +48,7 @@ Future<wasm.WebAssembly> instantiate(
   wasm.Imports imports = const {},
 ]) async {
   try {
+    branch_hints.validateBranchHintCustomSections(bytes);
     final result = await _jsInstantiateBytes(
       bytes.toJS,
       js_instance.createImportObject(imports),
@@ -94,7 +97,9 @@ Future<wasm.Instance> instantiateModule(
   }
 }
 
-bool validate(ByteBuffer bytes) => _jsValidate(bytes.toJS);
+bool validate(ByteBuffer bytes) =>
+    branch_hints.hasValidBranchHintCustomSections(bytes) &&
+    _jsValidate(bytes.toJS);
 
 /// Creates a JS [Response] backed by a [ReadableStream] fed from [source].
 ///
