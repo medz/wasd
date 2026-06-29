@@ -195,10 +195,11 @@ too broad to verify in one commit.
     `P1-NATIVE-HOST-FS-DIRECTORY-READDIR`,
     `P1-NATIVE-HOST-FS-FILE-WRITEBACK`,
     `P1-NATIVE-HOST-FS-BASIC-PATH-MUTATION`,
-    `P1-NATIVE-HOST-FS-RENAME`, and
-    `P1-NATIVE-HOST-FS-HARD-LINK`, and
-    `P1-NATIVE-HOST-FS-SYMLINK-READLINK`, and
-    `P1-NATIVE-HOST-FS-SYMLINK-RESOLUTION`.
+    `P1-NATIVE-HOST-FS-RENAME`,
+    `P1-NATIVE-HOST-FS-HARD-LINK`,
+    `P1-NATIVE-HOST-FS-SYMLINK-READLINK`,
+    `P1-NATIVE-HOST-FS-SYMLINK-RESOLUTION`, and
+    `P1-NATIVE-HOST-FS-TIMESTAMPS`.
   - Done when: local VM/browser/Node Preview1 suites pass with no unexpected
     skips, the official Preview1 suite has no untriaged failures, README/API
     claims match the verified host surface, and VFS/socket hot paths have
@@ -386,6 +387,40 @@ too broad to verify in one commit.
     targets. It does not complete `SUPPORT-WASM` because `spec_sync` reports
     upstream wasm spec-test updates are available and performance hotspots still
     need explicit acceptance or optimization policy.
+- [x] `P1-NATIVE-HOST-FS-TIMESTAMPS` - Native Preview1 timestamp mutation
+  updates real host regular files.
+  - Scope: Dart VM native Preview1 `fd_filestat_set_times` for host-backed
+    regular-file descriptors and `path_filestat_set_times` for regular files
+    below configured real host preopen roots. Browser and Node JS stay on the
+    portable in-memory VFS; host directory timestamp mutation and no-follow
+    host symlink timestamp mutation remain incomplete.
+  - Edit targets: `lib/src/wasi/preview1/native/wasi.dart`,
+    `test/wasi_native_host_fs_test.dart`, and this roadmap.
+  - Red test:
+    `dart test test/wasi_native_host_fs_test.dart --name "native filestat set times updates host files" --reporter=expanded`
+    first failed because `fd_filestat_set_times` returned success while the
+    host file access time still reported the old filesystem timestamp.
+  - Implementation gate:
+    `dart analyze lib/src/wasi/preview1/native/wasi.dart test/wasi_native_host_fs_test.dart`;
+    `dart test test/wasi_native_host_fs_test.dart --name "native filestat set times updates host files" --reporter=expanded`;
+    `dart test test/wasi_native_host_fs_test.dart --reporter=compact`;
+    `dart test test/wasi_test.dart --name "fd_filestat_set_times and path_filestat_set_times persist virtual timestamps" --reporter=compact`;
+    `dart test test/wasi_test.dart --reporter=compact`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; the
+    host timestamp path calls direct host file time syscalls for explicit
+    mutation requests and does not add scanning or caching to hot VFS lookups.
+  - Done when: `fd_filestat_set_times` updates host file access and modification
+    times and `fd_filestat_get` reports the updated values; then
+    `path_filestat_set_times` updates the same host file and
+    `path_filestat_get` reports the updated host values.
+  - Evidence update: this checked row, the `P1-FULL-RUNTIME-GATE`
+    checked-child list, the verification matrix, and current baseline.
+  - Claim impact: removes another native "preopens are memory-only" blocker for
+    host regular files. Full Preview1 still needs host directory/no-follow
+    symlink timestamp mutation, broader socket/runtime gates, and current
+    official-suite evidence.
 - [x] `P1-NATIVE-HOST-FS-SYMLINK-RESOLUTION` - Native Preview1 follows real
   host symlinks only inside preopen roots.
   - Scope: Dart VM native Preview1 `path_open` and `path_filestat_get` for host
@@ -2865,6 +2900,7 @@ copying their internals directly.
 | Status | Capability boundary | Evidence to inspect | Verification gate | Remaining gap |
 | --- | --- | --- | --- | --- |
 | [x] | Core Wasm all-target spec runner gate | `tool/spec_runner.dart`, `.dart_tool/spec_runner/spec_runner_all_core_after_runner_fix_20260629.md`, `.dart_tool/spec_runner/vm_core_latest.json`, `.dart_tool/spec_runner/js_core_latest.json`, `.dart_tool/spec_runner/wasm_core_latest.json` | `dart run tool/spec_runner.dart --target=all --suite=core --json=.dart_tool/spec_runner/spec_runner_all_core_after_runner_fix_20260629.json --report=.dart_tool/spec_runner/spec_runner_all_core_after_runner_fix_20260629.md`; `dart run tool/doom_instantiate_profile.dart --compile-breakdown --json`; `dart run tool/doom_instantiate_profile.dart --instantiate-breakdown --json` | Vendored core suite revision `c337f0d` passes VM/JS/wasm with `65205/65205` commands and zero skips. `tool/spec_sync.dart` still reports upstream wasm spec-test updates, so `SUPPORT-WASM` remains unchecked until the delta is refreshed or audited. |
+| [x] | Preview1 native host regular-file timestamps | `lib/src/wasi/preview1/native/wasi.dart`, `test/wasi_native_host_fs_test.dart` | `dart test test/wasi_native_host_fs_test.dart --name "native filestat set times updates host files" --reporter=expanded`; `dart test test/wasi_native_host_fs_test.dart --reporter=compact`; `dart test test/wasi_test.dart --name "fd_filestat_set_times and path_filestat_set_times persist virtual timestamps" --reporter=compact`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Host-backed regular-file `fd_filestat_set_times` and `path_filestat_set_times` now update real host file atime/mtime and report the updated values. Host directory and no-follow symlink timestamp mutation remain incomplete, so `SUPPORT-P1` stays unchecked. |
 | [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `path_open` create/exclusive/truncate is covered; full Preview1 conformance still needs broader syscall/spec-suite gates and remaining socket edges. |
 | [x] | Preview1 Node.js shared JS host parity | `lib/src/wasi/preview1/js/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test -p node test/wasi_test.dart --name "fd_read reads configured stdin bytes and advances offset|fd_pread, fd_pwrite, and fd_write update virtual files" --reporter=compact`; `dart test -p node test/wasi_test.dart --reporter=compact` | Node.js now uses wasd's in-repo JS Preview1 host, including configured stdin and virtual files, instead of `node:wasi`; full Preview1 still needs official testsuite and support-gate evidence. |
 | [x] | Preview1 native/browser fd count-pointer ABI | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test -p chrome test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Result count pointers at guest memory address `0` now write correctly for stdio and virtual-file fd read/write syscalls; full Preview1 still needs broader syscall/spec-suite gates. |
@@ -3008,12 +3044,13 @@ This is the implementation state as of 2026-06-29 on `main`.
 - Native Preview1 preopens now bridge to the real host filesystem for regular
   file reads and writes, file creation/truncation/allocation, directory
   open/readdir, path metadata, create/delete/remove, rename, and regular-file
-  hard links, symlink creation/readlink, and symlink following for
+  hard links, symlink creation/readlink, regular-file
+  `fd_filestat_set_times`/`path_filestat_set_times`, and symlink following for
   `path_open`/`path_filestat_get` when the resolved target stays inside the
   configured preopen. `path_link` uses a direct host hard-link syscall through
   FFI instead of shelling out or copying bytes. Browser and Node JS stay on the
   portable in-memory VFS, and full lstat-grade host symlink metadata plus host
-  symlink timestamp mutation remain incomplete.
+  directory/no-follow symlink timestamp mutation remain incomplete.
 - The repository now includes `tool/wasi_testsuite_wasd_adapter.py` and
   `tool/wasi_testsuite_preview1_runner.dart`, allowing the upstream
   `WebAssembly/wasi-testsuite` runner to invoke wasd for `wasm32-wasip1`

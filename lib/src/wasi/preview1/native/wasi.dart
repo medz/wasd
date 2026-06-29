@@ -767,16 +767,23 @@ class WASI implements wasi_iface.WASI {
         if (args.length < 4) {
           return _errnoInval;
         }
-        final metadata = _vfs.metadataForFd(_asInt(args[0]));
+        final fd = _asInt(args[0]);
+        final metadata = _vfs.metadataForFd(fd);
         if (metadata == null) {
           return _errnoBadf;
         }
-        final right = _checkDescriptorRight(
-          _asInt(args[0]),
-          _rightFdFilestatSetTimes,
-        );
+        final right = _checkDescriptorRight(fd, _rightFdFilestatSetTimes);
         if (right != _errnoSuccess) {
           return right;
+        }
+        final opened = _vfs.openFileForFd(fd);
+        if (opened is _Preview1NativeHostOpenFile) {
+          return _applyHostFileFilestatTimes(
+            opened,
+            accessTimeNanos: _asInt64(args[1]),
+            modificationTimeNanos: _asInt64(args[2]),
+            flags: _asInt(args[3]),
+          );
         }
         return _applyFilestatTimes(
           metadata: metadata,
@@ -1610,15 +1617,27 @@ class WASI implements wasi_iface.WASI {
         if (right != _errnoSuccess) {
           return right;
         }
+        final followSymlinks = (lookupFlags & _lookupflagSymlinkFollow) != 0;
         final entry = _vfs.pathEntry(
           resolved.path!,
-          followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
+          followSymlinks: followSymlinks,
         );
-        if (entry == null) {
+        if (entry != null) {
+          return _applyFilestatTimes(
+            metadata: entry.metadata,
+            accessTimeNanos: _asInt64(args[4]),
+            modificationTimeNanos: _asInt64(args[5]),
+            flags: _asInt(args[6]),
+          );
+        }
+        final hostPreopen = _hostPreopenPathForGuestPath(resolved.path!);
+        if (hostPreopen == null) {
           return _errnoNoent;
         }
-        return _applyFilestatTimes(
-          metadata: entry.metadata,
+        return _applyHostPathFilestatTimes(
+          hostPath: hostPreopen.hostPath,
+          hostRoot: hostPreopen.hostRoot,
+          followSymlinks: followSymlinks,
           accessTimeNanos: _asInt64(args[4]),
           modificationTimeNanos: _asInt64(args[5]),
           flags: _asInt(args[6]),
@@ -1891,6 +1910,7 @@ class WASI implements wasi_iface.WASI {
       return _vfs.openFileHandle(
         _Preview1NativeHostOpenFile(
           opened,
+          hostPath: hostPath,
           metadata: _metadataFromHostStat(stat),
           rights: wasi_vfs.Preview1DescriptorRights.file(
             base: rightsBase,
@@ -2511,17 +2531,108 @@ class WASI implements wasi_iface.WASI {
     required int modificationTimeNanos,
     required int flags,
   }) {
+    final update = _resolveFilestatTimeUpdate(
+      accessTimeNanos: accessTimeNanos,
+      modificationTimeNanos: modificationTimeNanos,
+      flags: flags,
+    );
+    if (update.errno != _errnoSuccess) {
+      return update.errno;
+    }
+    _applyResolvedFilestatTimes(metadata: metadata, update: update);
+    return _errnoSuccess;
+  }
+
+  int _applyHostFileFilestatTimes(
+    _Preview1NativeHostOpenFile opened, {
+    required int accessTimeNanos,
+    required int modificationTimeNanos,
+    required int flags,
+  }) {
+    final update = _resolveFilestatTimeUpdate(
+      accessTimeNanos: accessTimeNanos,
+      modificationTimeNanos: modificationTimeNanos,
+      flags: flags,
+    );
+    if (update.errno != _errnoSuccess) {
+      return update.errno;
+    }
+    return _applyHostFileResolvedFilestatTimes(
+      hostPath: opened.hostPath,
+      metadata: opened.metadata,
+      update: update,
+    );
+  }
+
+  int _applyHostPathFilestatTimes({
+    required String hostPath,
+    required String hostRoot,
+    required bool followSymlinks,
+    required int accessTimeNanos,
+    required int modificationTimeNanos,
+    required int flags,
+  }) {
+    final update = _resolveFilestatTimeUpdate(
+      accessTimeNanos: accessTimeNanos,
+      modificationTimeNanos: modificationTimeNanos,
+      flags: flags,
+    );
+    if (update.errno != _errnoSuccess) {
+      return update.errno;
+    }
+    var targetHostPath = hostPath;
+    var type = io.FileSystemEntity.typeSync(targetHostPath, followLinks: false);
+    if (type == io.FileSystemEntityType.link) {
+      if (!followSymlinks) {
+        return _errnoNotsup;
+      }
+      final resolved = _resolveHostSymlinkTarget(
+        linkHostPath: targetHostPath,
+        hostRoot: hostRoot,
+      );
+      if (resolved.errno != _errnoSuccess) {
+        return resolved.errno;
+      }
+      targetHostPath = resolved.hostPath!;
+      type = io.FileSystemEntity.typeSync(targetHostPath, followLinks: false);
+    }
+    if (type == io.FileSystemEntityType.notFound) {
+      return _errnoNoent;
+    }
+    if (type != io.FileSystemEntityType.file) {
+      return _errnoNotsup;
+    }
+    return _applyHostFileResolvedFilestatTimes(
+      hostPath: targetHostPath,
+      update: update,
+    );
+  }
+
+  ({int errno, int? accessTimeNanos, int? modificationTimeNanos})
+  _resolveFilestatTimeUpdate({
+    required int accessTimeNanos,
+    required int modificationTimeNanos,
+    required int flags,
+  }) {
     if ((flags & ~_filestatTimeKnownFlags) != 0 ||
         (flags & _filestatSetAccessTime) != 0 &&
             (flags & _filestatSetAccessTimeNow) != 0 ||
         (flags & _filestatSetModificationTime) != 0 &&
             (flags & _filestatSetModificationTimeNow) != 0) {
-      return _errnoInval;
+      return (
+        errno: _errnoInval,
+        accessTimeNanos: null,
+        modificationTimeNanos: null,
+      );
     }
     if ((flags & _filestatSetAccessTime) != 0 && accessTimeNanos < 0 ||
         (flags & _filestatSetModificationTime) != 0 &&
             modificationTimeNanos < 0) {
-      return _errnoInval;
+      return (
+        errno: _errnoInval,
+        accessTimeNanos: null,
+        modificationTimeNanos: null,
+      );
     }
 
     final now =
@@ -2529,17 +2640,83 @@ class WASI implements wasi_iface.WASI {
             (flags & _filestatSetModificationTimeNow) != 0)
         ? _clockNowNanos(_clockRealtime)
         : 0;
-    if ((flags & _filestatSetAccessTime) != 0) {
+    return (
+      errno: _errnoSuccess,
+      accessTimeNanos: (flags & _filestatSetAccessTime) != 0
+          ? accessTimeNanos
+          : (flags & _filestatSetAccessTimeNow) != 0
+          ? now
+          : null,
+      modificationTimeNanos: (flags & _filestatSetModificationTime) != 0
+          ? modificationTimeNanos
+          : (flags & _filestatSetModificationTimeNow) != 0
+          ? now
+          : null,
+    );
+  }
+
+  void _applyResolvedFilestatTimes({
+    required wasi_vfs.Preview1VirtualNodeMetadata metadata,
+    required ({int errno, int? accessTimeNanos, int? modificationTimeNanos})
+    update,
+  }) {
+    final accessTimeNanos = update.accessTimeNanos;
+    final modificationTimeNanos = update.modificationTimeNanos;
+    if (accessTimeNanos != null) {
       metadata.accessTimeNanos = accessTimeNanos;
-    } else if ((flags & _filestatSetAccessTimeNow) != 0) {
-      metadata.accessTimeNanos = now;
     }
-    if ((flags & _filestatSetModificationTime) != 0) {
+    if (modificationTimeNanos != null) {
       metadata.modificationTimeNanos = modificationTimeNanos;
-    } else if ((flags & _filestatSetModificationTimeNow) != 0) {
-      metadata.modificationTimeNanos = now;
     }
-    return _errnoSuccess;
+  }
+
+  int _applyHostFileResolvedFilestatTimes({
+    required String hostPath,
+    wasi_vfs.Preview1VirtualNodeMetadata? metadata,
+    required ({int errno, int? accessTimeNanos, int? modificationTimeNanos})
+    update,
+  }) {
+    DateTime dateTimeFromNanos(int nanos) {
+      return DateTime.fromMicrosecondsSinceEpoch(nanos ~/ 1000, isUtc: true);
+    }
+
+    try {
+      final file = io.File(hostPath);
+      final accessTimeNanos = update.accessTimeNanos;
+      final modificationTimeNanos = update.modificationTimeNanos;
+      if (accessTimeNanos != null) {
+        file.setLastAccessedSync(dateTimeFromNanos(accessTimeNanos));
+      }
+      if (modificationTimeNanos != null) {
+        file.setLastModifiedSync(dateTimeFromNanos(modificationTimeNanos));
+      }
+      if (metadata != null) {
+        _copyHostStatToMetadata(metadata, file.statSync());
+      }
+      return _errnoSuccess;
+    } on ArgumentError {
+      return _errnoInval;
+    } on io.FileSystemException {
+      if (io.FileSystemEntity.typeSync(hostPath, followLinks: false) ==
+          io.FileSystemEntityType.notFound) {
+        return _errnoNoent;
+      }
+      return _errnoPerm;
+    }
+  }
+
+  void _copyHostStatToMetadata(
+    wasi_vfs.Preview1VirtualNodeMetadata metadata,
+    io.FileStat stat,
+  ) {
+    final accessed = stat.accessed.microsecondsSinceEpoch * 1000;
+    final modified = stat.modified.microsecondsSinceEpoch * 1000;
+    if (accessed > 0) {
+      metadata.accessTimeNanos = accessed;
+    }
+    if (modified > 0) {
+      metadata.modificationTimeNanos = modified;
+    }
   }
 
   _ResolvedPath _resolvePath({
@@ -3197,12 +3374,14 @@ wasi_vfs.Preview1VirtualNodeMetadata _metadataFromHostStat(io.FileStat stat) {
 final class _Preview1NativeHostOpenFile implements wasi_vfs.Preview1OpenFile {
   _Preview1NativeHostOpenFile(
     this._file, {
+    required this.hostPath,
     required this.metadata,
     required this.rights,
     required this.descriptorFlags,
   });
 
   final io.RandomAccessFile _file;
+  final String hostPath;
 
   @override
   final wasi_vfs.Preview1VirtualNodeMetadata metadata;

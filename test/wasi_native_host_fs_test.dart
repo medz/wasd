@@ -19,6 +19,7 @@ const int _rightFdAllocate = 1 << 8;
 const int _rightFdReaddir = 1 << 14;
 const int _rightFdFilestatGet = 1 << 21;
 const int _rightFdFilestatSetSize = 1 << 22;
+const int _rightFdFilestatSetTimes = 1 << 23;
 const int _errnoExist = 20;
 const int _errnoInval = 28;
 const int _errnoIsdir = 31;
@@ -47,6 +48,8 @@ int _getUint64Le(ByteData data, int offset) {
   final high = data.getUint32(offset + 4, Endian.little);
   return low | (high << 32);
 }
+
+int _hostTimeNanos(DateTime value) => value.microsecondsSinceEpoch * 1000;
 
 List<({String name, int next, int type})> _readDirents(
   Uint8List bytes,
@@ -1208,6 +1211,92 @@ void main() {
       pathFilestatGet.ref([3, 0, pathPtr, missingPath.length, filestatPtr]),
       _errnoNoent,
     );
+  });
+
+  test('native filestat set times updates host files', () async {
+    final temp = await Directory.systemTemp.createTemp('wasd_host_times_');
+    addTearDown(() => temp.delete(recursive: true));
+    final file = File('${temp.path}/data.txt')..writeAsStringSync('metadata');
+
+    final wasi = WASI(preopens: {'/host': temp.path});
+    final result = await WebAssembly.instantiate(
+      wasiStartModuleBytes().buffer,
+      wasi.imports,
+    );
+    final instance = result.instance;
+    final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+    final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+    final fdFilestatGet =
+        preview1['fd_filestat_get'] as FunctionImportExportValue;
+    final fdFilestatSetTimes =
+        preview1['fd_filestat_set_times'] as FunctionImportExportValue;
+    final pathFilestatGet =
+        preview1['path_filestat_get'] as FunctionImportExportValue;
+    final pathFilestatSetTimes =
+        preview1['path_filestat_set_times'] as FunctionImportExportValue;
+    final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+    wasi.finalizeBindings(instance, memory: memory);
+
+    final bytes = Uint8List.view(memory.buffer);
+    final data = ByteData.view(memory.buffer);
+    final path = utf8.encode('data.txt');
+    const pathPtr = 1024;
+    const openedFdPtr = 1056;
+    const filestatPtr = 1088;
+    const timeFlags = 1 | 4;
+    final fdAccessTime = _hostTimeNanos(DateTime.utc(2024, 1, 2, 3, 4, 5));
+    final fdModificationTime = _hostTimeNanos(
+      DateTime.utc(2024, 1, 2, 3, 4, 6),
+    );
+    final pathAccessTime = _hostTimeNanos(DateTime.utc(2025, 2, 3, 4, 5, 6));
+    final pathModificationTime = _hostTimeNanos(
+      DateTime.utc(2025, 2, 3, 4, 5, 7),
+    );
+    bytes.setAll(pathPtr, path);
+
+    expect(
+      pathOpen.ref([
+        3,
+        0,
+        pathPtr,
+        path.length,
+        0,
+        _rightFdFilestatGet | _rightFdFilestatSetTimes,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      0,
+    );
+    final fd = data.getUint32(openedFdPtr, Endian.little);
+
+    expect(
+      fdFilestatSetTimes.ref([fd, fdAccessTime, fdModificationTime, timeFlags]),
+      0,
+    );
+    expect(_hostTimeNanos(file.lastAccessedSync()), fdAccessTime);
+    expect(_hostTimeNanos(file.lastModifiedSync()), fdModificationTime);
+    expect(fdFilestatGet.ref([fd, filestatPtr]), 0);
+    expect(_getUint64Le(data, filestatPtr + 40), fdAccessTime);
+    expect(_getUint64Le(data, filestatPtr + 48), fdModificationTime);
+
+    expect(
+      pathFilestatSetTimes.ref([
+        3,
+        0,
+        pathPtr,
+        path.length,
+        pathAccessTime,
+        pathModificationTime,
+        timeFlags,
+      ]),
+      0,
+    );
+    expect(_hostTimeNanos(file.lastAccessedSync()), pathAccessTime);
+    expect(_hostTimeNanos(file.lastModifiedSync()), pathModificationTime);
+    expect(pathFilestatGet.ref([3, 0, pathPtr, path.length, filestatPtr]), 0);
+    expect(_getUint64Le(data, filestatPtr + 40), pathAccessTime);
+    expect(_getUint64Le(data, filestatPtr + 48), pathModificationTime);
   });
 
   test('native fd_readdir lists host directory entries', () async {
