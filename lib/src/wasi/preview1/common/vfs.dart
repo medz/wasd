@@ -670,27 +670,26 @@ final class Preview1VirtualFileSystem {
       return Preview1PathMutationResult.notEmpty;
     }
 
+    final removedMetadata = _directoryMetadataByGuestPath[normalized];
+    final removedEntries = _directoryEntriesByGuestPath[normalized];
+    if (removedMetadata != null && removedEntries != null) {
+      removedMetadata.releaseLink();
+      final snapshotEntries = List<Preview1DirectoryEntry>.unmodifiable(
+        removedEntries,
+      );
+      for (final entry in _openDirectoriesByFd.entries) {
+        if (entry.value == normalized) {
+          _openDirectoryEntriesByFd[entry.key] = snapshotEntries;
+          _openDirectoryMetadataByFd[entry.key] = removedMetadata;
+        }
+      }
+    }
+
     _virtualDirectoryPaths.remove(normalized);
     _directoryMetadataByGuestPath.remove(normalized);
     _removeDirectoryChild(normalized);
     _directoryChildrenByGuestPath.remove(normalized);
     _directoryEntriesByGuestPath.remove(normalized);
-    _openDirectoriesByFd.removeWhere((_, path) => path == normalized);
-    _openDirectoryEntriesByFd.removeWhere(
-      (fd, _) => !_openDirectoriesByFd.containsKey(fd),
-    );
-    _openDirectoryMetadataByFd.removeWhere(
-      (fd, _) => !_openDirectoriesByFd.containsKey(fd),
-    );
-    _openDirectoryFlagsByFd.removeWhere(
-      (fd, _) => !_openDirectoriesByFd.containsKey(fd),
-    );
-    _openDirectoryRightsByFd.removeWhere(
-      (fd, _) => !_openDirectoriesByFd.containsKey(fd),
-    );
-    _openDirectoryHostPathsByFd.removeWhere(
-      (fd, _) => !_openDirectoriesByFd.containsKey(fd),
-    );
     _rebuildDirectoryEntriesForPaths({dirnameOfGuestPath(normalized)});
     return Preview1PathMutationResult.success;
   }
