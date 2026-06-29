@@ -1053,11 +1053,14 @@ class WASI implements wasi_iface.WASI {
     if (directoryFd != _errnoSuccess) {
       return directoryFd;
     }
-    final baseDirectory = _vfs.directoryPathForFd(dirFd)!;
     final right = _checkDescriptorRight(dirFd, _rightPathOpen);
     if (right != _errnoSuccess) {
       return right;
     }
+    if (_vfs.isDetachedOpenDirectoryFd(dirFd)) {
+      return _errnoNoent;
+    }
+    final baseDirectory = _vfs.directoryPathForFd(dirFd)!;
 
     final view = _memoryView();
     if (view == null) {
@@ -2875,6 +2878,9 @@ class WASI implements wasi_iface.WASI {
     final directoryFd = _checkDirectoryFd(dirFd);
     if (directoryFd != _errnoSuccess) {
       return _ResolvedPath.error(directoryFd);
+    }
+    if (_vfs.isDetachedOpenDirectoryFd(dirFd)) {
+      return const _ResolvedPath.error(_errnoNoent);
     }
     final baseDirectory = _vfs.directoryPathForFd(dirFd)!;
 

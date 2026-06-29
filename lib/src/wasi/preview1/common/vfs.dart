@@ -101,6 +101,7 @@ final class Preview1VirtualFileSystem {
   final Map<int, Preview1DescriptorRights> _openDirectoryRightsByFd =
       <int, Preview1DescriptorRights>{};
   final Map<int, String> _openDirectoryHostPathsByFd = <int, String>{};
+  final Set<int> _detachedOpenDirectoryFds = <int>{};
 
   late final Set<String> _virtualDirectoryPaths;
   late Map<String, Preview1VirtualNodeMetadata> _directoryMetadataByGuestPath;
@@ -427,6 +428,7 @@ final class Preview1VirtualFileSystem {
       final entries = _openDirectoryEntriesByFd.remove(fromFd);
       final metadata = _openDirectoryMetadataByFd.remove(fromFd);
       final hostPath = _openDirectoryHostPathsByFd.remove(fromFd);
+      final detached = _detachedOpenDirectoryFds.remove(fromFd);
       final rights =
           _openDirectoryRightsByFd.remove(fromFd) ??
           Preview1DescriptorRights.directory();
@@ -440,6 +442,9 @@ final class Preview1VirtualFileSystem {
       }
       if (hostPath != null) {
         _openDirectoryHostPathsByFd[toFd] = hostPath;
+      }
+      if (detached) {
+        _detachedOpenDirectoryFds.add(toFd);
       }
       _openDirectoryFlagsByFd[toFd] = flags;
       _openDirectoryRightsByFd[toFd] = rights;
@@ -471,6 +476,9 @@ final class Preview1VirtualFileSystem {
   bool isPreopenDirectoryFd(int fd) => _preopenGuestPathsByFd.containsKey(fd);
 
   bool isOpenDirectoryFd(int fd) => _openDirectoriesByFd.containsKey(fd);
+
+  bool isDetachedOpenDirectoryFd(int fd) =>
+      _detachedOpenDirectoryFds.contains(fd);
 
   String? openDirectoryHostPathForFd(int fd) => _openDirectoryHostPathsByFd[fd];
 
@@ -1160,6 +1168,7 @@ final class Preview1VirtualFileSystem {
       if (entry.value == normalized) {
         _openDirectoryEntriesByFd[entry.key] = snapshotEntries;
         _openDirectoryMetadataByFd[entry.key] = removedMetadata;
+        _detachedOpenDirectoryFds.add(entry.key);
       }
     }
   }
@@ -1261,6 +1270,7 @@ final class Preview1VirtualFileSystem {
     _openDirectoryEntriesByFd.remove(fd);
     _openDirectoryMetadataByFd.remove(fd);
     _openDirectoryHostPathsByFd.remove(fd);
+    _detachedOpenDirectoryFds.remove(fd);
     _openDirectoryFlagsByFd.remove(fd);
     _openDirectoryRightsByFd.remove(fd);
     _preopenPathBytesByFd.remove(fd);

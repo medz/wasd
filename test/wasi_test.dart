@@ -7840,6 +7840,7 @@ void main() {
           final fdFilestatGet =
               preview1['fd_filestat_get'] as FunctionImportExportValue;
           final fdReaddir = preview1['fd_readdir'] as FunctionImportExportValue;
+          final fdClose = preview1['fd_close'] as FunctionImportExportValue;
           final memory =
               (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
           fileWasi.finalizeBindings(fileInstance, memory: memory);
@@ -7852,11 +7853,21 @@ void main() {
           const filestatPtr = 4664;
           const direntsPtr = 4744;
           const bufusedPtr = 4872;
+          const sourceChildPathPtr = 4904;
+          const targetChildPathPtr = 4968;
+          const childNamePtr = 5032;
+          const sourceChildFdPtr = 5088;
 
           final sourcePath = utf8.encode('source');
           final targetPath = utf8.encode('target');
+          final sourceChildPath = utf8.encode('source/child.txt');
+          final targetChildPath = utf8.encode('target/child.txt');
+          final childName = utf8.encode('child.txt');
           bytes.setAll(sourcePathPtr, sourcePath);
           bytes.setAll(targetPathPtr, targetPath);
+          bytes.setAll(sourceChildPathPtr, sourceChildPath);
+          bytes.setAll(targetChildPathPtr, targetChildPath);
+          bytes.setAll(childNamePtr, childName);
 
           expect(
             pathCreateDirectory.ref([3, sourcePathPtr, sourcePath.length]),
@@ -7864,6 +7875,24 @@ void main() {
           );
           expect(
             pathCreateDirectory.ref([3, targetPathPtr, targetPath.length]),
+            0,
+          );
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              sourceChildPathPtr,
+              sourceChildPath.length,
+              _oflagCreat,
+              _rightsAll,
+              _rightsAll,
+              0,
+              sourceChildFdPtr,
+            ]),
+            0,
+          );
+          expect(
+            fdClose.ref([data.getUint32(sourceChildFdPtr, Endian.little)]),
             0,
           );
           expect(
@@ -7929,6 +7958,20 @@ void main() {
             0,
           );
           expect(_getUint64Le(data, filestatPtr + 8), sourceInode);
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              targetChildPathPtr,
+              targetChildPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(
+            bytes[filestatPtr + _filestatFiletypeOffset],
+            _filetypeRegularFile,
+          );
 
           bytes.fillRange(filestatPtr, filestatPtr + 64, 0);
           expect(fdFilestatGet.ref([targetFd, filestatPtr]), 0);
@@ -7944,6 +7987,20 @@ void main() {
           final bufused = data.getUint32(bufusedPtr, Endian.little);
           final entries = _readDirents(bytes, data, direntsPtr, bufused);
           expect(entries.map((entry) => entry.name), ['.', '..']);
+          expect(
+            pathOpen.ref([
+              targetFd,
+              0,
+              childNamePtr,
+              childName.length,
+              0,
+              _rightsAll,
+              _rightsAll,
+              0,
+              openedFdPtr,
+            ]),
+            _errnoNoent,
+          );
         },
       );
 
