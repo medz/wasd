@@ -13,6 +13,10 @@ final class NodeHostTemp {
 
   bool directoryExists(String relativePath) => false;
 
+  bool symlinkExists(String relativePath) => false;
+
+  String readLink(String relativePath) => '';
+
   void delete() {}
 }
 

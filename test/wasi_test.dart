@@ -4636,6 +4636,125 @@ void main() {
       );
 
       test(
+        'node preview1 creates real host links and symlinks',
+        () async {
+          final host = createNodeHostTemp('wasd_node_host_links_');
+          expect(host, isNotNull);
+          addTearDown(() => host?.delete());
+          host!
+            ..writeFile('source.txt', 'source')
+            ..writeFile('target.txt', 'target')
+            ..createDirectory('dir');
+
+          final fileWasi = WASI(preopens: {'/host': host.path});
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathLink = preview1['path_link'] as FunctionImportExportValue;
+          final pathSymlink =
+              preview1['path_symlink'] as FunctionImportExportValue;
+          final pathReadlink =
+              preview1['path_readlink'] as FunctionImportExportValue;
+          final pathUnlinkFile =
+              preview1['path_unlink_file'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 3360;
+          const secondPathPtr = 3424;
+          const readlinkBufferPtr = 3488;
+          const readlinkUsedPtr = 3552;
+
+          int writePath(int ptr, String path) {
+            final encoded = utf8.encode(path);
+            bytes.setAll(ptr, encoded);
+            return encoded.length;
+          }
+
+          int linkPath(String oldPath, String newPath, {int lookupFlags = 0}) {
+            final oldPathLen = writePath(pathPtr, oldPath);
+            final newPathLen = writePath(secondPathPtr, newPath);
+            return pathLink.ref([
+                  3,
+                  lookupFlags,
+                  pathPtr,
+                  oldPathLen,
+                  3,
+                  secondPathPtr,
+                  newPathLen,
+                ])
+                as int;
+          }
+
+          int symlinkPath(String target, String linkPath) {
+            final targetLen = writePath(pathPtr, target);
+            final linkLen = writePath(secondPathPtr, linkPath);
+            return pathSymlink.ref([
+                  pathPtr,
+                  targetLen,
+                  3,
+                  secondPathPtr,
+                  linkLen,
+                ])
+                as int;
+          }
+
+          int readlinkPath(String path) {
+            final pathLen = writePath(pathPtr, path);
+            return pathReadlink.ref([
+                  3,
+                  pathPtr,
+                  pathLen,
+                  readlinkBufferPtr,
+                  32,
+                  readlinkUsedPtr,
+                ])
+                as int;
+          }
+
+          expect(linkPath('source.txt', 'hard.txt'), 0);
+          expect(host.fileExists('hard.txt'), isTrue);
+          host.writeFile('source.txt', 'changed');
+          expect(host.readFile('hard.txt'), 'changed');
+          expect(
+            pathUnlinkFile.ref([3, pathPtr, writePath(pathPtr, 'source.txt')]),
+            0,
+          );
+          expect(host.fileExists('source.txt'), isFalse);
+          expect(host.readFile('hard.txt'), 'changed');
+          expect(linkPath('dir', 'dir-hard'), _errnoPerm);
+          expect(linkPath('hard.txt', 'missing/'), _errnoNoent);
+
+          expect(symlinkPath('target.txt', 'link.txt'), 0);
+          expect(host.symlinkExists('link.txt'), isTrue);
+          expect(host.readLink('link.txt'), 'target.txt');
+          expect(readlinkPath('link.txt'), 0);
+          final readlinkUsed = data.getUint32(readlinkUsedPtr, Endian.little);
+          expect(
+            utf8.decode(
+              bytes.sublist(
+                readlinkBufferPtr,
+                readlinkBufferPtr + readlinkUsed,
+              ),
+            ),
+            'target.txt',
+          );
+          expect(
+            symlinkPath('/absolute-target', 'absolute.txt'),
+            _errnoNotcapable,
+          );
+          expect(readlinkPath('target.txt'), _errnoInval);
+        },
+        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+      );
+
+      test(
         'fd_pread snapshots overlapping iovs before writing file bytes',
         () async {
           const iovPtr = 5248;

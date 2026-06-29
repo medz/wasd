@@ -36,6 +36,17 @@ final class NodeHostTemp {
   bool directoryExists(String relativePath) =>
       _entryMatches(relativePath, 'isDirectory');
 
+  bool symlinkExists(String relativePath) =>
+      _entryMatches(relativePath, 'isSymbolicLink');
+
+  String readLink(String relativePath) {
+    final result = _fs.callMethodVarArgs<JSAny?>('readlinkSync'.toJS, [
+      _join(relativePath).toJS,
+      'utf8'.toJS,
+    ]);
+    return _jsString(result).toDart;
+  }
+
   void delete() {
     final options = JSObject()
       ..['recursive'] = true.toJS
