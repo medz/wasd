@@ -85,6 +85,67 @@ void main() {
       expect(() => program.invoke(10, const <Object?>[]), throwsStateError);
     });
 
+    test('invokes error-context operations through canonical memory', () {
+      final host = WASIComponentCanonicalHost();
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final bytes = Uint8List.view(memory.buffer);
+      final data = ByteData.view(memory.buffer);
+      bytes.setAll(32, 'component failed'.codeUnits);
+      final program = host.bindCanonicalDefinitions(const [
+        WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.errorContextNew,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+        WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.errorContextDebugMessage,
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.realloc,
+              index: 0,
+            ),
+          ],
+        ),
+        WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.errorContextDrop,
+        ),
+      ]);
+
+      final handle = program.invokeWithMemory(0, memory, const <Object?>[
+        32,
+        16,
+      ]);
+      expect(
+        program.invokeWithMemory(
+          1,
+          memory,
+          <Object?>[handle],
+          resultPointer: 64,
+          realloc: (oldPointer, oldSize, alignment, newSize) {
+            expect(oldPointer, 0);
+            expect(oldSize, 0);
+            expect(alignment, 1);
+            expect(newSize, 16);
+            return 128;
+          },
+        ),
+        isNotNull,
+      );
+      expect(data.getUint32(64, Endian.little), 128);
+      expect(data.getUint32(68, Endian.little), 16);
+      expect(String.fromCharCodes(bytes.sublist(128, 144)), 'component failed');
+      expect(program.invokeWithMemory(2, memory, <Object?>[handle]), isNull);
+      expect(() => program.invoke(1, <Object?>[handle]), throwsStateError);
+    });
+
     test('shares table and waitable resolvers across component hosts', () {
       final host = WASIComponentCanonicalHost();
       final memory = Memory(const MemoryDescriptor(initial: 1));

@@ -443,6 +443,14 @@ final class WASIComponentCanonicalHost {
     return WASIComponentCanonicalOperation._(
       kind: definition.kind,
       invoke: (args) => program.invoke(0, args),
+      invokeWithMemory: (memory, args, realloc, resultPointer) =>
+          program.invokeWithMemory(
+            0,
+            memory,
+            args,
+            resultPointer: resultPointer,
+            realloc: realloc,
+          ),
     );
   }
 }

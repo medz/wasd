@@ -114,6 +114,51 @@ final class WASIComponentCanonicalErrorContextProgram {
         );
     }
   }
+
+  /// Invokes the canonical error-context operation with canonical memory
+  /// arguments and result storage.
+  Object? invokeWithMemory(
+    int canonicalIndex,
+    wasm.Memory memory,
+    List<Object?> args, {
+    int? resultPointer,
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    if (canonicalIndex < 0 || canonicalIndex >= operations.length) {
+      throw StateError(
+        'Unknown WASI component canonical error-context index: $canonicalIndex.',
+      );
+    }
+
+    final operation = operations[canonicalIndex];
+    switch (operation.kind) {
+      case WasmComponentCanonicalKind.errorContextNew:
+        _expectArity(canonicalIndex, args, 2);
+        _expectNoResultPointer(canonicalIndex, resultPointer);
+        return operation.createFromMemory(
+          memory,
+          _expectInt(canonicalIndex, args[0], 'string pointer'),
+          _expectInt(canonicalIndex, args[1], 'string length'),
+        );
+      case WasmComponentCanonicalKind.errorContextDebugMessage:
+        _expectArity(canonicalIndex, args, 1);
+        return operation.debugMessageIntoMemory(
+          _expectHandle(canonicalIndex, args.single),
+          memory,
+          _requireResultPointer(canonicalIndex, resultPointer),
+          _requireRealloc(canonicalIndex, realloc),
+        );
+      case WasmComponentCanonicalKind.errorContextDrop:
+        _expectArity(canonicalIndex, args, 1);
+        _expectNoResultPointer(canonicalIndex, resultPointer);
+        operation.drop(_expectHandle(canonicalIndex, args.single));
+        return null;
+      default:
+        throw UnsupportedError(
+          'Wasm component canonical ${operation.kind.name} is not executable by the error-context program.',
+        );
+    }
+  }
 }
 
 /// Executable form of a canonical error-context operation.
@@ -231,5 +276,44 @@ int _expectHandle(int canonicalIndex, Object? value) {
   }
   throw StateError(
     'WASI component canonical error-context index $canonicalIndex expected an i32 handle.',
+  );
+}
+
+int _expectInt(int canonicalIndex, Object? value, String name) {
+  if (value is int) {
+    return value;
+  }
+  throw StateError(
+    'WASI component canonical error-context index $canonicalIndex expected $name.',
+  );
+}
+
+int _requireResultPointer(int canonicalIndex, int? resultPointer) {
+  if (resultPointer != null) {
+    return resultPointer;
+  }
+  throw StateError(
+    'WASI component canonical error-context index $canonicalIndex requires a result pointer.',
+  );
+}
+
+void _expectNoResultPointer(int canonicalIndex, int? resultPointer) {
+  if (resultPointer == null) {
+    return;
+  }
+  throw StateError(
+    'WASI component canonical error-context index $canonicalIndex expected no result pointer.',
+  );
+}
+
+WASIComponentCanonicalRealloc _requireRealloc(
+  int canonicalIndex,
+  WASIComponentCanonicalRealloc? realloc,
+) {
+  if (realloc != null) {
+    return realloc;
+  }
+  throw UnsupportedError(
+    'WASI component canonical error-context index $canonicalIndex requires a realloc callback.',
   );
 }
