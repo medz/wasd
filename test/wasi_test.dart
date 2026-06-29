@@ -7724,6 +7724,101 @@ void main() {
       );
 
       test(
+        'path_rename treats virtual directory self-renames as no-ops',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathCreateDirectory =
+              preview1['path_create_directory'] as FunctionImportExportValue;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final pathRename =
+              preview1['path_rename'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
+          final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const dirPathPtr = 4496;
+          const nestedPathPtr = 4544;
+          const openedFdPtr = 4592;
+          const filestatPtr = 4616;
+
+          final dirPath = utf8.encode('self');
+          final nestedPath = utf8.encode('self/file.txt');
+          bytes.setAll(dirPathPtr, dirPath);
+          bytes.setAll(nestedPathPtr, nestedPath);
+
+          expect(pathCreateDirectory.ref([3, dirPathPtr, dirPath.length]), 0);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              nestedPathPtr,
+              nestedPath.length,
+              _oflagCreat,
+              _rightsAll,
+              _rightsAll,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          expect(fdClose.ref([data.getUint32(openedFdPtr, Endian.little)]), 0);
+
+          expect(
+            pathRename.ref([
+              3,
+              dirPathPtr,
+              dirPath.length,
+              3,
+              dirPathPtr,
+              dirPath.length,
+            ]),
+            0,
+          );
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              dirPathPtr,
+              dirPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(
+            bytes[filestatPtr + _filestatFiletypeOffset],
+            _filetypeDirectory,
+          );
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              nestedPathPtr,
+              nestedPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(
+            bytes[filestatPtr + _filestatFiletypeOffset],
+            _filetypeRegularFile,
+          );
+        },
+      );
+
+      test(
         'path_rename preserves open replaced virtual directory fds',
         () async {
           final fileWasi = WASI(

@@ -812,6 +812,9 @@ final class Preview1VirtualFileSystem {
     if (!_virtualDirectoryPaths.contains(oldNormalized)) {
       return Preview1PathMutationResult.noEntry;
     }
+    if (oldNormalized == newNormalized) {
+      return Preview1PathMutationResult.success;
+    }
     if (oldNormalized == '/' ||
         _preopenGuestPathsByFd.containsValue(oldNormalized) ||
         _isChildPath(newNormalized, oldNormalized)) {
