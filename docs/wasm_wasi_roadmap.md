@@ -114,10 +114,11 @@ too broad to verify in one commit.
     `tool/ensure_toolchains.sh --check`;
     `dart run tool/spec_testsuite_runner.dart --suite=core --output-json=.dart_tool/spec_runner/core.json --output-md=.dart_tool/spec_runner/core.md --prepare-root=.dart_tool/spec_runner/core_bundle --conversion-cache-dir=.dart_tool/spec_runner/conversion_cache`;
     `dart test test/wasm_test.dart test/wasm_predecode_test.dart`;
-    `dart run tool/spec_runner.dart --target=vm --suite=core`.
+    `dart run tool/spec_runner.dart --target=all --suite=core`.
   - Performance gate:
     `dart run tool/doom_instantiate_profile.dart --compile-breakdown --json`;
     `dart run tool/doom_instantiate_profile.dart --instantiate-breakdown --json`.
+  - Checked child rows: `CORE-ALL-TARGET-RUNNER-GATE`.
   - Done when: every official standardized core feature either passes on the
     selected backend or has a checked, narrow child row explaining the remaining
     unsupported proposal boundary; no untriaged core failures remain; compile
@@ -347,6 +348,44 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `CORE-ALL-TARGET-RUNNER-GATE` - Core Wasm spec gate runs reliably across
+  VM, JS, and wasm-compiled runner targets.
+  - Scope: `tool/spec_runner.dart` all-target core gate orchestration, not a
+    new Wasm opcode or public support claim. The row covers local regression
+    selection for VM vs JS, stale result-file protection, and the wasm-compiled
+    spec player Node stack budget.
+  - Edit targets: `tool/spec_runner.dart` and this roadmap.
+  - Red test:
+    `dart run tool/spec_runner.dart --target=all --suite=core --json=.dart_tool/spec_runner/spec_runner_all_core_current_20260629.json --report=.dart_tool/spec_runner/spec_runner_all_core_current_20260629.md`
+    failed before the fix because `js:js-tests` ran VM-only tests that call
+    `dart:io` process/filesystem APIs under dart2js/node, and
+    `wasm:core-player-wasm-run` failed with `RangeError: Maximum call stack size
+    exceeded`. The failure also exposed that the report step could read stale
+    result JSON after a player failure.
+  - Implementation gate:
+    `dart analyze tool/spec_runner.dart`;
+    `dart test -p node test/component_test.dart test/readme_snippets_test.dart test/wasm_memory_test.dart test/wasm_predecode_test.dart test/wasm_table_test.dart test/wasm_test.dart --reporter=compact`;
+    `dart run tool/spec_runner.dart --target=js --suite=core --no-component-subset --no-component-official --json=.dart_tool/spec_runner/spec_runner_js_core_after_runner_fix.json --report=.dart_tool/spec_runner/spec_runner_js_core_after_runner_fix.md`;
+    `dart run tool/spec_runner.dart --target=wasm --suite=core --no-component-subset --no-component-official --json=.dart_tool/spec_runner/spec_runner_wasm_core_after_runner_fix.json --report=.dart_tool/spec_runner/spec_runner_wasm_core_after_runner_fix.md`;
+    `dart run tool/spec_runner.dart --target=all --suite=core --json=.dart_tool/spec_runner/spec_runner_all_core_after_runner_fix_20260629.json --report=.dart_tool/spec_runner/spec_runner_all_core_after_runner_fix_20260629.md`.
+  - Performance gate:
+    `dart run tool/doom_instantiate_profile.dart --compile-breakdown --json`
+    reported `total_duration_ms=441` and `peak_rss_bytes=412581888`;
+    `dart run tool/doom_instantiate_profile.dart --instantiate-breakdown --json`
+    reported `total_duration_ms=660` and `peak_rss_bytes=685211648`.
+  - Done when: JS target local tests run only the portable component/readme
+    snippet/core Wasm subset, player result JSON is deleted before JS/wasm
+    player runs so stale reports cannot mask failures, wasm player runs Node
+    with `--stack-size=8192`, VM/JS/wasm core suite totals all report
+    `65205/65205` commands passed with zero skipped, and cross-target
+    consistency passes.
+  - Evidence update: this checked row, the `CORE-OFFICIAL-SPEC-COMPLETE`
+    checked-child list, `SUPPORT-WASM`, the verification matrix, and current
+    baseline.
+  - Claim impact: proves the current vendored core spec suite gate across
+    targets. It does not complete `SUPPORT-WASM` because `spec_sync` reports
+    upstream wasm spec-test updates are available and performance hotspots still
+    need explicit acceptance or optimization policy.
 - [x] `P1-NATIVE-HOST-FS-SYMLINK-RESOLUTION` - Native Preview1 follows real
   host symlinks only inside preopen roots.
   - Scope: Dart VM native Preview1 `path_open` and `path_filestat_get` for host
@@ -2661,8 +2700,12 @@ the roadmap can be complete while the version-level support claim remains
 unchecked.
 
 - [ ] `SUPPORT-WASM` - Full core Wasm support.
-  - Current: core module parsing and execution exist, with conformance work
-    still in progress.
+  - Current: the current vendored core spec suite revision `c337f0d` passes on
+    VM, JS, and wasm-compiled runner targets with `65205/65205` commands passed
+    and zero skips, but `tool/spec_sync.dart` reports upstream wasm spec-test
+    updates are available. Keep this unchecked until the vendored official
+    tests are refreshed or the delta is audited, and until compile/instantiate
+    profile budgets are explicitly accepted or optimized.
   - Required rows: checked spec-runner coverage rows for every remaining
     standardized core feature failure, plus `PERFORMANCE-GATES` for hot compile
     and instantiate paths.
@@ -2821,6 +2864,7 @@ copying their internals directly.
 
 | Status | Capability boundary | Evidence to inspect | Verification gate | Remaining gap |
 | --- | --- | --- | --- | --- |
+| [x] | Core Wasm all-target spec runner gate | `tool/spec_runner.dart`, `.dart_tool/spec_runner/spec_runner_all_core_after_runner_fix_20260629.md`, `.dart_tool/spec_runner/vm_core_latest.json`, `.dart_tool/spec_runner/js_core_latest.json`, `.dart_tool/spec_runner/wasm_core_latest.json` | `dart run tool/spec_runner.dart --target=all --suite=core --json=.dart_tool/spec_runner/spec_runner_all_core_after_runner_fix_20260629.json --report=.dart_tool/spec_runner/spec_runner_all_core_after_runner_fix_20260629.md`; `dart run tool/doom_instantiate_profile.dart --compile-breakdown --json`; `dart run tool/doom_instantiate_profile.dart --instantiate-breakdown --json` | Vendored core suite revision `c337f0d` passes VM/JS/wasm with `65205/65205` commands and zero skips. `tool/spec_sync.dart` still reports upstream wasm spec-test updates, so `SUPPORT-WASM` remains unchecked until the delta is refreshed or audited. |
 | [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `path_open` create/exclusive/truncate is covered; full Preview1 conformance still needs broader syscall/spec-suite gates and remaining socket edges. |
 | [x] | Preview1 Node.js shared JS host parity | `lib/src/wasi/preview1/js/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test -p node test/wasi_test.dart --name "fd_read reads configured stdin bytes and advances offset|fd_pread, fd_pwrite, and fd_write update virtual files" --reporter=compact`; `dart test -p node test/wasi_test.dart --reporter=compact` | Node.js now uses wasd's in-repo JS Preview1 host, including configured stdin and virtual files, instead of `node:wasi`; full Preview1 still needs official testsuite and support-gate evidence. |
 | [x] | Preview1 native/browser fd count-pointer ABI | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test -p chrome test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Result count pointers at guest memory address `0` now write correctly for stdio and virtual-file fd read/write syscalls; full Preview1 still needs broader syscall/spec-suite gates. |
@@ -2878,6 +2922,15 @@ copying their internals directly.
 
 This is the implementation state as of 2026-06-29 on `main`.
 
+- Core Wasm conformance against vendored spec-suite revision `c337f0d` now runs
+  through one all-target gate. VM, JS, and wasm-compiled spec players each
+  report `261` files, `65205/65205` commands passed, and zero skipped/failed
+  commands with cross-target consistency enabled. The gate uses a JS-portable
+  local test subset for dart2js/node, deletes player result JSON before JS/wasm
+  runs so stale output cannot mask failures, and runs the wasm player under
+  Node with `--stack-size=8192`. This is not a current-upstream `SUPPORT-WASM`
+  claim yet because `tool/spec_sync.dart` reports upstream wasm spec-test
+  updates are available.
 - Preview 1 is real but still incomplete. Native, browser JS, and Node JS hosts
   now share the in-repo Preview1 VFS/syscall model instead of delegating Node to
   `node:wasi`. Native and JS hosts share

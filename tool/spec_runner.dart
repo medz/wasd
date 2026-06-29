@@ -27,6 +27,13 @@ final class _SpecSuiteArtifacts {
   final String reportMarkdownPath;
 }
 
+final class _WasmPhaseTestFiles {
+  const _WasmPhaseTestFiles({required this.vm, required this.js});
+
+  final List<String> vm;
+  final List<String> js;
+}
+
 final class StepResult {
   StepResult({
     required this.name,
@@ -411,14 +418,14 @@ Future<List<StepResult>> _runVmSuite(
   required RunnerTarget target,
   required String? testsuiteDir,
   required bool strictProposals,
-  required List<String> wasmPhaseTestFiles,
+  required _WasmPhaseTestFiles wasmPhaseTestFiles,
 }) async {
   final steps = <StepResult>[];
   if (suite != RunnerSuite.proposal) {
     steps.add(
       await _runStep(
         name: 'vm-tests',
-        command: _dartTestCommand(wasmPhaseTestFiles, node: false),
+        command: _dartTestCommand(wasmPhaseTestFiles.vm, node: false),
       ),
     );
   }
@@ -450,7 +457,7 @@ Future<List<StepResult>> _runJsSuite(
   required RunnerTarget target,
   required String? testsuiteDir,
   required bool strictProposals,
-  required List<String> wasmPhaseTestFiles,
+  required _WasmPhaseTestFiles wasmPhaseTestFiles,
 }) async {
   final steps = <StepResult>[];
   final nodeCheck = await _runStep(
@@ -479,7 +486,7 @@ Future<List<StepResult>> _runJsSuite(
     steps.add(
       await _runStep(
         name: 'js-tests',
-        command: _dartTestCommand(wasmPhaseTestFiles, node: true),
+        command: _dartTestCommand(wasmPhaseTestFiles.js, node: true),
       ),
     );
   }
@@ -521,6 +528,7 @@ Future<List<StepResult>> _runJsSuite(
         optional: optional,
       ),
     );
+    _deleteIfExists(artifacts.resultJsonPath);
     steps.add(
       await _runStep(
         name: '${artifacts.stepPrefix}-player-js-run',
@@ -559,7 +567,7 @@ Future<List<StepResult>> _runWasmSuite(
   required RunnerTarget target,
   required String? testsuiteDir,
   required bool strictProposals,
-  required List<String> wasmPhaseTestFiles,
+  required _WasmPhaseTestFiles wasmPhaseTestFiles,
 }) async {
   final steps = <StepResult>[];
   if (suite != RunnerSuite.proposal) {
@@ -579,7 +587,7 @@ Future<List<StepResult>> _runWasmSuite(
     steps.add(
       await _runStep(
         name: 'vm-regression-after-wasm-compile',
-        command: _dartTestCommand(wasmPhaseTestFiles, node: false),
+        command: _dartTestCommand(wasmPhaseTestFiles.vm, node: false),
       ),
     );
   }
@@ -655,11 +663,13 @@ Future<List<StepResult>> _runWasmSuite(
         optional: optional,
       ),
     );
+    _deleteIfExists(artifacts.resultJsonPath);
     steps.add(
       await _runStep(
         name: '${artifacts.stepPrefix}-player-wasm-run',
         command: [
           'node',
+          '--stack-size=8192',
           'tool/run_spec_player_wasm.mjs',
           '.dart_tool/spec_runner/spec_testsuite_player.mjs',
           '.dart_tool/spec_runner/spec_testsuite_player.wasm',
@@ -691,7 +701,7 @@ Future<List<StepResult>> _runAllTargetsSuite(
   RunnerSuite suite, {
   required String? testsuiteDir,
   required bool strictProposals,
-  required List<String> wasmPhaseTestFiles,
+  required _WasmPhaseTestFiles wasmPhaseTestFiles,
 }) async {
   final steps = <StepResult>[];
   steps.addAll(
@@ -1094,12 +1104,20 @@ Future<StepResult> _runStep({
   );
 }
 
-Future<List<String>> _collectWasmPhaseTestFiles() async {
+void _deleteIfExists(String path) {
+  final file = File(path);
+  if (file.existsSync()) {
+    file.deleteSync();
+  }
+}
+
+Future<_WasmPhaseTestFiles> _collectWasmPhaseTestFiles() async {
   final testDir = Directory('test');
   if (!testDir.existsSync()) {
-    return const <String>[];
+    return const _WasmPhaseTestFiles(vm: <String>[], js: <String>[]);
   }
-  final files = <String>[];
+  final vmFiles = <String>[];
+  final jsFiles = <String>[];
   await for (final entity in testDir.list(recursive: false)) {
     if (entity is! File || !entity.path.endsWith('.dart')) {
       continue;
@@ -1110,10 +1128,28 @@ Future<List<String>> _collectWasmPhaseTestFiles() async {
     if (filename.startsWith('wasi')) {
       continue;
     }
-    files.add('test/$filename');
+    final testPath = 'test/$filename';
+    vmFiles.add(testPath);
+    final source = await entity.readAsString();
+    if (_isNodePortableTestSource(source)) {
+      jsFiles.add(testPath);
+    }
   }
-  files.sort();
-  return files;
+  vmFiles.sort();
+  jsFiles.sort();
+  return _WasmPhaseTestFiles(
+    vm: List.unmodifiable(vmFiles),
+    js: List.unmodifiable(jsFiles),
+  );
+}
+
+bool _isNodePortableTestSource(String source) {
+  return !source.contains("import 'dart:io'") &&
+      !source.contains('import "dart:io"') &&
+      !source.contains("import 'dart:ffi'") &&
+      !source.contains('import "dart:ffi"') &&
+      !source.contains("import 'dart:isolate'") &&
+      !source.contains('import "dart:isolate"');
 }
 
 List<String> _dartTestCommand(List<String> testFiles, {required bool node}) {
