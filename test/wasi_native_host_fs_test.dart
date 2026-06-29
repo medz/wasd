@@ -34,6 +34,7 @@ const int _filestatSizeOffset = 32;
 const int _filetypeDirectory = 3;
 const int _filetypeRegularFile = 4;
 const int _filetypeSymbolicLink = 7;
+const int _fdflagAppend = 1;
 const int _oflagCreat = 1;
 const int _oflagDirectory = 2;
 const int _oflagExcl = 4;
@@ -203,6 +204,8 @@ void main() {
     final temp = await Directory.systemTemp.createTemp('wasd_host_write_');
     addTearDown(() => temp.delete(recursive: true));
     final file = File('${temp.path}/mutable.txt')..writeAsStringSync('abcdef');
+    final appendFile = File('${temp.path}/append.txt')
+      ..writeAsStringSync('base');
     final truncateFile = File('${temp.path}/truncate.txt')
       ..writeAsStringSync('truncate-me');
 
@@ -357,6 +360,37 @@ void main() {
     expect(fdWrite.ref([createdFd, iovPtr, 1, nwrittenPtr]), 0);
     expect(File('${temp.path}/created.txt').readAsStringSync(), 'created');
     expect(fdClose.ref([createdFd]), 0);
+
+    final appendPath = utf8.encode('append.txt');
+    bytes.setAll(pathPtr, appendPath);
+    expect(
+      pathOpen.ref([
+        3,
+        0,
+        pathPtr,
+        appendPath.length,
+        0,
+        _rightFdRead | _rightFdWrite | _rightFdSeek | _rightFdTell,
+        0,
+        _fdflagAppend,
+        openedFdPtr,
+      ]),
+      0,
+    );
+    final appendFd = data.getUint32(openedFdPtr, Endian.little);
+    _writeSingleIov(
+      bytes: bytes,
+      data: data,
+      iovPtr: iovPtr,
+      bufferPtr: writeBufferPtr,
+      value: '++',
+    );
+    expect(fdPwrite.ref([appendFd, iovPtr, 1, 1, nwrittenPtr]), 0);
+    expect(data.getUint32(nwrittenPtr, Endian.little), 2);
+    expect(appendFile.readAsStringSync(), 'base++');
+    expect(fdTell.ref([appendFd, newOffsetPtr]), 0);
+    expect(data.getUint64(newOffsetPtr, Endian.little), 0);
+    expect(fdClose.ref([appendFd]), 0);
   });
 
   test('native host read-write files remain readable', () async {

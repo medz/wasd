@@ -1789,6 +1789,7 @@ int writeOpenFileFromIov({
   }
 
   var totalWritten = 0;
+  final append = (opened.descriptorFlags & fdflagAppend) != 0;
   for (var index = 0; index < iovsLen; index++) {
     final entry = iovs + index * iovecEntrySize;
     final buf = data.getUint32(entry, Endian.little);
@@ -1797,7 +1798,12 @@ int writeOpenFileFromIov({
     if (len > 0) {
       totalWritten += fileOffset == null
           ? opened.writeFrom(bytes, buf, len)
-          : opened.writeAtFrom(bytes, buf, len, fileOffset + totalWritten);
+          : opened.writeAtFrom(
+              bytes,
+              buf,
+              len,
+              append ? opened.length : fileOffset + totalWritten,
+            );
     }
   }
 

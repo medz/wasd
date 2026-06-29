@@ -943,6 +943,37 @@ void main() {
       expect(syncOpened.syncCount, 1);
     });
 
+    test('fd pwrite honors descriptor append flag', () {
+      final bytes = Uint8List(64);
+      final data = ByteData.view(bytes.buffer);
+      const iovPtr = 0;
+      const payloadPtr = 16;
+      const countPtr = 32;
+      bytes.setAll(payloadPtr, utf8.encode('XY'));
+      data.setUint32(iovPtr, payloadPtr, Endian.little);
+      data.setUint32(iovPtr + 4, 2, Endian.little);
+
+      final opened = Preview1VirtualOpenFile(
+        Preview1VirtualFile(Uint8List.fromList(utf8.encode('abcdef'))),
+        descriptorFlags: preview1_constants.fdflagAppend,
+      )..offset = 3;
+      expect(
+        writeOpenFileFromIov(
+          opened: opened,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nwrittenPtr: countPtr,
+          fileOffset: 1,
+        ),
+        0,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 2);
+      expect(utf8.decode(opened.bytes), 'abcdefXY');
+      expect(opened.offset, 3);
+    });
+
     test('fd read helpers honor descriptor rsync flag', () {
       final bytes = Uint8List(64);
       final data = ByteData.view(bytes.buffer);
