@@ -11,6 +11,7 @@ import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasi/component/wit_adapter.dart';
 import 'package:wasd/src/wasi/component/wit_document.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
+import 'package:wasd/src/wasi/preview3/cli.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasi/version.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
@@ -459,6 +460,148 @@ world clocks-test {
       expect(utcOffset.kind, WasmComponentValueDataKind.option);
       expect(utcOffset.isSome, isFalse);
       expect(debug, isA<String>());
+    });
+
+    test('Preview3 expands and binds standard WASI CLI imports', () async {
+      const source = '''
+package wasi-testsuite:test;
+
+world cli-test {
+  include wasi:cli/imports@0.3.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2Plan = WASIPreview2ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'cli-test',
+      );
+      final cli = WASIPreview3CliHost(
+        args: const <String>['cli-env.wasm', 'a', 'b', '42'],
+        env: const <String, String>{'foo': 'bar', 'baz': '42'},
+        initialCwd: '/workspace',
+        stdinData: const <int>[120, 121],
+      );
+      final preview3 = WASIPreview3ComponentHost(cliHost: cli);
+      final preview3Plan = preview3.prepareWitWorld(
+        document,
+        worldName: 'cli-test',
+      );
+
+      expect(preview2Plan.canIngest, isFalse);
+      expect(preview2Plan.versionErrors.map((error) => error.targetName), [
+        'wasi:cli/imports@0.3.0',
+      ]);
+      expect(preview3Plan.canIngest, isTrue);
+      expect(preview3Plan.canBindAdapters, isTrue);
+      expect(preview3Plan.bindingErrors, isEmpty);
+      expect(
+        preview3Plan.functions.map((function) => function.qualifiedName),
+        containsAll(<String>[
+          'wasi:cli/environment@0.3.0.get-environment',
+          'wasi:cli/environment@0.3.0.get-arguments',
+          'wasi:cli/environment@0.3.0.get-initial-cwd',
+          'wasi:cli/exit@0.3.0.exit',
+          'wasi:cli/exit@0.3.0.exit-with-code',
+          'wasi:cli/stdin@0.3.0.read-via-stream',
+          'wasi:cli/stdout@0.3.0.write-via-stream',
+          'wasi:cli/stderr@0.3.0.write-via-stream',
+          'wasi:cli/terminal-stdin@0.3.0.get-terminal-stdin',
+          'wasi:cli/terminal-stdout@0.3.0.get-terminal-stdout',
+          'wasi:cli/terminal-stderr@0.3.0.get-terminal-stderr',
+        ]),
+      );
+
+      final program = preview3.bindWitWorld(document, worldName: 'cli-test');
+      final environment =
+          program.invokeImport(
+                'wasi:cli/environment@0.3.0.get-environment',
+                const [],
+              )
+              as WasmComponentValueData;
+      final arguments =
+          program.invokeImport(
+                'wasi:cli/environment@0.3.0.get-arguments',
+                const [],
+              )
+              as WasmComponentValueData;
+      final cwd =
+          program.invokeImport(
+                'wasi:cli/environment@0.3.0.get-initial-cwd',
+                const [],
+              )
+              as WasmComponentValueData;
+      final terminal =
+          program.invokeImport(
+                'wasi:cli/terminal-stdout@0.3.0.get-terminal-stdout',
+                const [],
+              )
+              as WasmComponentValueData;
+
+      expect(_stringPairs(environment), contains(('foo', 'bar')));
+      expect(_stringPairs(environment), contains(('baz', '42')));
+      expect(_stringList(arguments), ['cli-env.wasm', 'a', 'b', '42']);
+      expect(_optionString(cwd), '/workspace');
+      expect(terminal.kind, WasmComponentValueDataKind.option);
+      expect(terminal.isSome, isFalse);
+
+      final stdinTuple =
+          program.invokeImport('wasi:cli/stdin@0.3.0.read-via-stream', const [])
+              as List<Object?>;
+      final stdinStream = stdinTuple[0] as WASIComponentStream<int>;
+      final stdinResult =
+          stdinTuple[1] as WASIComponentFuture<WasmComponentValueData>;
+      expect(stdinStream.readable.read(8), [120, 121]);
+      expect(stdinResult.readable.read().isOk, isTrue);
+
+      final stdoutStream = WASIComponentStream<int>('stdout-test');
+      stdoutStream.writable.writeAll(<int>[111, 107]);
+      stdoutStream.writable.close();
+      final stdoutResult =
+          program.invokeImport('wasi:cli/stdout@0.3.0.write-via-stream', [
+                stdoutStream,
+              ])
+              as WASIComponentFuture<WasmComponentValueData>;
+      expect((await stdoutResult.readable.readWhenReady()).isOk, isTrue);
+      expect(cli.stdoutBytes, [111, 107]);
+
+      final stderrStream = WASIComponentStream<int>('stderr-test');
+      stderrStream.writable.write(33);
+      stderrStream.writable.close();
+      final stderrResult =
+          program.invokeImport('wasi:cli/stderr@0.3.0.write-via-stream', [
+                stderrStream,
+              ])
+              as WASIComponentFuture<WasmComponentValueData>;
+      expect((await stderrResult.readable.readWhenReady()).isOk, isTrue);
+      expect(cli.stderrBytes, [33]);
+
+      expect(
+        () =>
+            program.invokeImport('wasi:cli/exit@0.3.0.exit', [_unitOkValue()]),
+        throwsA(
+          isA<WASIPreview3Exit>()
+              .having((error) => error.statusCode, 'statusCode', 0)
+              .having((error) => error.isSuccess, 'isSuccess', isTrue),
+        ),
+      );
+      expect(
+        () => program.invokeImport('wasi:cli/exit@0.3.0.exit', [
+          _unitOkCaseValue(),
+        ]),
+        throwsA(
+          isA<WASIPreview3Exit>()
+              .having((error) => error.statusCode, 'statusCode', 0)
+              .having((error) => error.isSuccess, 'isSuccess', isTrue),
+        ),
+      );
+      expect(
+        () => program.invokeImport('wasi:cli/exit@0.3.0.exit-with-code', [7]),
+        throwsA(
+          isA<WASIPreview3Exit>()
+              .having((error) => error.statusCode, 'statusCode', 7)
+              .having((error) => error.isSuccess, 'isSuccess', isFalse),
+        ),
+      );
     });
 
     test('Preview2 and Preview3 wrappers execute WIT world adapters', () {
@@ -2005,6 +2148,15 @@ WasmComponentValueData _unitOkValue() {
   );
 }
 
+WasmComponentValueData _unitOkCaseValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.result,
+    rawBytes: Uint8List(0),
+    index: 0,
+    label: 'ok',
+  );
+}
+
 WasmComponentValueData _u32StringErrorValue(String value) {
   return WasmComponentValueData(
     kind: WasmComponentValueDataKind.result,
@@ -2064,6 +2216,51 @@ List<int> _u8List(WasmComponentValueData value) {
       else
         throw StateError('expected u8 item, got ${item.kind.name}'),
   ];
+}
+
+List<String> _stringList(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.list) {
+    throw StateError('expected list<string>, got ${value.kind.name}');
+  }
+  return [
+    for (final item in value.items)
+      if (item.kind == WasmComponentValueDataKind.string)
+        item.string!
+      else
+        throw StateError('expected string item, got ${item.kind.name}'),
+  ];
+}
+
+List<(String, String)> _stringPairs(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.list) {
+    throw StateError(
+      'expected list<tuple<string, string>>, got ${value.kind.name}',
+    );
+  }
+  return [
+    for (final item in value.items)
+      if (item.kind == WasmComponentValueDataKind.tuple &&
+          item.items.length == 2 &&
+          item.items[0].kind == WasmComponentValueDataKind.string &&
+          item.items[1].kind == WasmComponentValueDataKind.string)
+        (item.items[0].string!, item.items[1].string!)
+      else
+        throw StateError('expected string tuple item, got ${item.kind.name}'),
+  ];
+}
+
+String? _optionString(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.option) {
+    throw StateError('expected option<string>, got ${value.kind.name}');
+  }
+  if (!(value.isSome ?? false)) {
+    return null;
+  }
+  final associated = value.associatedValue;
+  if (associated?.kind != WasmComponentValueDataKind.string) {
+    throw StateError('expected option<string> payload');
+  }
+  return associated!.string;
 }
 
 (BigInt, BigInt) _u64Tuple(WasmComponentValueData value) {

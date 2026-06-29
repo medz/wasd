@@ -7,6 +7,7 @@ import '../component/wit_adapter.dart';
 import '../component/wit_document.dart';
 import '../version.dart';
 import '../../wasm/backend/native/interpreter/component.dart';
+import 'cli.dart';
 import 'clocks.dart';
 import 'random.dart';
 
@@ -16,19 +17,38 @@ import 'random.dart';
 /// component profile while host capability gaps remain explicitly reported.
 final class WASIPreview3ComponentHost {
   /// Creates a Preview3 component host over [componentHost] or a new host.
-  WASIPreview3ComponentHost({WASIComponentHost? componentHost})
-    : versionedHost = WASIComponentVersionedHost(
-        version: WASIVersion.preview3,
-        componentHost: componentHost,
-      ),
-      _randomHost = WASIPreview3RandomHost(),
-      _clocksHost = WASIPreview3ClocksHost();
+  WASIPreview3ComponentHost({
+    WASIComponentHost? componentHost,
+    WASIPreview3CliHost? cliHost,
+    List<String> args = const <String>[],
+    Map<String, String> env = const <String, String>{},
+    String? initialCwd,
+    List<int> stdinData = const <int>[],
+    WASIPreview3CliOutputHandler? stdout,
+    WASIPreview3CliOutputHandler? stderr,
+  }) : versionedHost = WASIComponentVersionedHost(
+         version: WASIVersion.preview3,
+         componentHost: componentHost,
+       ),
+       _randomHost = WASIPreview3RandomHost(),
+       _clocksHost = WASIPreview3ClocksHost(),
+       _cliHost =
+           cliHost ??
+           WASIPreview3CliHost(
+             args: args,
+             env: env,
+             initialCwd: initialCwd,
+             stdinData: stdinData,
+             stdout: stdout,
+             stderr: stderr,
+           );
 
   /// Underlying versioned component-host facade.
   final WASIComponentVersionedHost versionedHost;
 
   final WASIPreview3RandomHost _randomHost;
   final WASIPreview3ClocksHost _clocksHost;
+  final WASIPreview3CliHost _cliHost;
 
   /// Preview3 version profile.
   WASIComponentVersionProfile get profile => versionedHost.profile;
@@ -36,11 +56,15 @@ final class WASIPreview3ComponentHost {
   /// Shared component host.
   WASIComponentHost get componentHost => versionedHost.componentHost;
 
+  /// CLI host state and captured stdio for standard `wasi:cli` imports.
+  WASIPreview3CliHost get cliHost => _cliHost;
+
   /// Standard Preview3 WIT import callbacks implemented by this host.
   late final Map<String, WASIComponentWitAdapterCallback> standardImports =
       Map<String, WASIComponentWitAdapterCallback>.unmodifiable({
         ..._randomHost.imports,
         ..._clocksHost.imports,
+        ..._cliHost.imports,
       });
 
   /// Prepares [component] for Preview3 component-host binding.

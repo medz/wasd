@@ -21,6 +21,12 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
       memberName: parsed.memberName,
     );
   }
+  if (parsed.packageName == 'wasi:cli' && parsed.version == '0.3.0') {
+    return WASIComponentWitResolvedTarget(
+      document: _wasiCli030Document,
+      memberName: parsed.memberName,
+    );
+  }
   return null;
 }
 
@@ -57,6 +63,12 @@ final WASIComponentWitDocument _wasiClocks030Document =
     WASIComponentWitDocument.parse(
       _wasiClocks030Source,
       sourceName: 'wasi:clocks@0.3.0',
+    );
+
+final WASIComponentWitDocument _wasiCli030Document =
+    WASIComponentWitDocument.parse(
+      _wasiCli030Source,
+      sourceName: 'wasi:cli@0.3.0',
     );
 
 const String _wasiRandom030Source = '''
@@ -121,5 +133,140 @@ world imports {
   import monotonic-clock;
   import system-clock;
   import timezone;
+}
+''';
+
+const String _wasiCli030Source = '''
+package wasi:cli@0.3.0;
+
+interface environment {
+  get-environment: func() -> list<tuple<string, string>>;
+  get-arguments: func() -> list<string>;
+  get-initial-cwd: func() -> option<string>;
+}
+
+interface exit {
+  exit: func(status: result);
+  exit-with-code: func(status-code: u8);
+}
+
+interface run {
+  run: async func() -> result;
+}
+
+interface types {
+  enum error-code {
+    io,
+    illegal-byte-sequence,
+    pipe,
+  }
+}
+
+interface stdin {
+  enum error-code {
+    io,
+    illegal-byte-sequence,
+    pipe,
+  }
+
+  read-via-stream: func() -> tuple<stream<u8>, future<result<_, error-code>>>;
+}
+
+interface stdout {
+  enum error-code {
+    io,
+    illegal-byte-sequence,
+    pipe,
+  }
+
+  write-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
+}
+
+interface stderr {
+  enum error-code {
+    io,
+    illegal-byte-sequence,
+    pipe,
+  }
+
+  write-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
+}
+
+interface terminal-input {
+  resource terminal-input;
+}
+
+interface terminal-output {
+  resource terminal-output;
+}
+
+interface terminal-stdin {
+  resource terminal-input;
+
+  get-terminal-stdin: func() -> option<terminal-input>;
+}
+
+interface terminal-stdout {
+  resource terminal-output;
+
+  get-terminal-stdout: func() -> option<terminal-output>;
+}
+
+interface terminal-stderr {
+  resource terminal-output;
+
+  get-terminal-stderr: func() -> option<terminal-output>;
+}
+
+world imports {
+  import environment;
+  import exit;
+  import types;
+  import stdin;
+  import stdout;
+  import stderr;
+  import terminal-input;
+  import terminal-output;
+  import terminal-stdin;
+  import terminal-stdout;
+  import terminal-stderr;
+  import wasi:clocks/types@0.3.0;
+  import wasi:clocks/monotonic-clock@0.3.0;
+  import wasi:clocks/system-clock@0.3.0;
+  import wasi:clocks/timezone@0.3.0;
+  import wasi:filesystem/types@0.3.0;
+  import wasi:filesystem/preopens@0.3.0;
+  import wasi:sockets/types@0.3.0;
+  import wasi:sockets/ip-name-lookup@0.3.0;
+  import wasi:random/random@0.3.0;
+  import wasi:random/insecure@0.3.0;
+  import wasi:random/insecure-seed@0.3.0;
+}
+
+world command {
+  import environment;
+  import exit;
+  import types;
+  import stdin;
+  import stdout;
+  import stderr;
+  import terminal-input;
+  import terminal-output;
+  import terminal-stdin;
+  import terminal-stdout;
+  import terminal-stderr;
+  import wasi:clocks/types@0.3.0;
+  import wasi:clocks/monotonic-clock@0.3.0;
+  import wasi:clocks/system-clock@0.3.0;
+  import wasi:clocks/timezone@0.3.0;
+  import wasi:filesystem/types@0.3.0;
+  import wasi:filesystem/preopens@0.3.0;
+  import wasi:sockets/types@0.3.0;
+  import wasi:sockets/ip-name-lookup@0.3.0;
+  import wasi:random/random@0.3.0;
+  import wasi:random/insecure@0.3.0;
+  import wasi:random/insecure-seed@0.3.0;
+
+  export run;
 }
 ''';

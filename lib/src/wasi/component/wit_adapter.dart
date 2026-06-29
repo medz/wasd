@@ -1534,19 +1534,24 @@ Object? _validateWitAdapterTupleValue(
   Object? value,
   String path,
 ) {
-  if (value is! WasmComponentValueData ||
-      value.kind != WasmComponentValueDataKind.tuple) {
+  final items = switch (value) {
+    WasmComponentValueData(kind: WasmComponentValueDataKind.tuple) =>
+      value.items,
+    List<Object?>() => value,
+    _ => null,
+  };
+  if (items == null) {
     throw StateError('WIT adapter value $path does not match ${type.text}.');
   }
   final elements = type.elements;
-  if (value.items.length != elements.length) {
+  if (items.length != elements.length) {
     throw StateError(
       'WIT adapter value $path expected ${elements.length} tuple fields, '
-      'got ${value.items.length}.',
+      'got ${items.length}.',
     );
   }
   for (var i = 0; i < elements.length; i++) {
-    _validateWitAdapterValue(elements[i], value.items[i], '$path.$i');
+    _validateWitAdapterValue(elements[i], items[i], '$path.$i');
   }
   return value;
 }

@@ -113,6 +113,37 @@ world clocks-test {
         contains('wasi:clocks/system-clock@0.3.0.now'),
       );
     });
+
+    test('binds standard Preview3 CLI imports from public API', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world cli-test {
+  include wasi:cli/imports@0.3.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview3ComponentHost(
+        args: const <String>['cli-env.wasm', 'a'],
+        env: const <String, String>{'foo': 'bar'},
+        stdinData: const <int>[65],
+      );
+      final program = host.bindWitWorld(document, worldName: 'cli-test');
+      final args =
+          program.invokeImport(
+                'wasi:cli/environment@0.3.0.get-arguments',
+                const [],
+              )
+              as WasmComponentValueData;
+
+      expect(args.kind, WasmComponentValueDataKind.list);
+      expect(args.items.map((item) => item.string), ['cli-env.wasm', 'a']);
+      expect(
+        host.standardImports,
+        contains('wasi:cli/stdin@0.3.0.read-via-stream'),
+      );
+      expect(host.cliHost.stdinData, [65]);
+    });
   });
 }
 
