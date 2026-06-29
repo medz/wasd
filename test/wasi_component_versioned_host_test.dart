@@ -282,6 +282,70 @@ world command {
       },
     );
 
+    test('Preview2 expands and binds standard WASI random imports', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world random-test {
+  include wasi:random/imports@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2 = WASIPreview2ComponentHost();
+      final plan = preview2.prepareWitWorld(document, worldName: 'random-test');
+
+      expect(plan.canIngest, isTrue);
+      expect(plan.canBindAdapters, isTrue);
+      expect(plan.bindingErrors, isEmpty);
+      expect(plan.functions.map((function) => function.qualifiedName), [
+        'wasi:random/random@0.2.0.get-random-bytes',
+        'wasi:random/random@0.2.0.get-random-u64',
+        'wasi:random/insecure@0.2.0.get-insecure-random-bytes',
+        'wasi:random/insecure@0.2.0.get-insecure-random-u64',
+        'wasi:random/insecure-seed@0.2.0.get-insecure-seed',
+      ]);
+
+      final program = preview2.bindWitWorld(document, worldName: 'random-test');
+      final bytes =
+          program.invokeImport('wasi:random/random@0.2.0.get-random-bytes', [
+                BigInt.from(8),
+              ])
+              as WasmComponentValueData;
+      final seedA =
+          program.invokeImport(
+                'wasi:random/insecure-seed@0.2.0.get-insecure-seed',
+                const [],
+              )
+              as WasmComponentValueData;
+      final seedB =
+          program.invokeImport(
+                'wasi:random/insecure-seed@0.2.0.get-insecure-seed',
+                const [],
+              )
+              as WasmComponentValueData;
+
+      expect(_u8List(bytes), hasLength(8));
+      expect(
+        program.invokeImport(
+          'wasi:random/random@0.2.0.get-random-u64',
+          const [],
+        ),
+        isA<BigInt>(),
+      );
+      expect(
+        program.invokeImport(
+          'wasi:random/insecure@0.2.0.get-insecure-random-u64',
+          const [],
+        ),
+        isA<BigInt>(),
+      );
+      expect(_u64Tuple(seedA), _u64Tuple(seedB));
+      expect(
+        preview2.standardImports,
+        contains('wasi:random/random@0.2.0.get-random-bytes'),
+      );
+    });
+
     test('Preview3 expands and binds standard WASI random imports', () {
       const source = '''
 package wasi-testsuite:test;

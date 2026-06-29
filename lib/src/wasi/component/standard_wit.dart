@@ -9,6 +9,12 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
   if (parsed == null) {
     return null;
   }
+  if (parsed.packageName == 'wasi:random' && parsed.version == '0.2.0') {
+    return WASIComponentWitResolvedTarget(
+      document: _wasiRandom020Document,
+      memberName: parsed.memberName,
+    );
+  }
   if (parsed.packageName == 'wasi:random' && parsed.version == '0.3.0') {
     return WASIComponentWitResolvedTarget(
       document: _wasiRandom030Document,
@@ -65,6 +71,12 @@ final WASIComponentWitDocument _wasiRandom030Document =
       sourceName: 'wasi:random@0.3.0',
     );
 
+final WASIComponentWitDocument _wasiRandom020Document =
+    WASIComponentWitDocument.parse(
+      _wasiRandom020Source,
+      sourceName: 'wasi:random@0.2.0',
+    );
+
 final WASIComponentWitDocument _wasiClocks030Document =
     WASIComponentWitDocument.parse(
       _wasiClocks030Source,
@@ -106,6 +118,11 @@ world imports {
   import insecure-seed;
 }
 ''';
+
+final String _wasiRandom020Source = _wasiRandom030Source.replaceAll(
+  '@0.3.0',
+  '@0.2.0',
+);
 
 const String _wasiClocks030Source = '''
 package wasi:clocks@0.3.0;

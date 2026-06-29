@@ -21,6 +21,7 @@ export 'component/waitable_set.dart';
 export 'component/wit_adapter.dart';
 export 'component/wit_document.dart';
 export 'preview2/component_host.dart';
+export 'preview2/random.dart';
 export 'preview3/cli.dart';
 export 'preview3/component_host.dart';
 export 'preview3/filesystem.dart';

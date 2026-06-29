@@ -3,9 +3,11 @@ import '../component/async_host.dart';
 import '../component/host.dart';
 import '../component/resource_host.dart';
 import '../component/versioned_host.dart';
+import '../component/wit_adapter.dart';
 import '../component/wit_document.dart';
 import '../version.dart';
 import '../../wasm/backend/native/interpreter/component.dart';
+import 'random.dart';
 
 /// WASI 0.2 / Preview2 component host boundary.
 ///
@@ -13,20 +15,34 @@ import '../../wasm/backend/native/interpreter/component.dart';
 /// mixed-version component host by hand.
 final class WASIPreview2ComponentHost {
   /// Creates a Preview2 component host over [componentHost] or a new host.
-  WASIPreview2ComponentHost({WASIComponentHost? componentHost})
-    : versionedHost = WASIComponentVersionedHost(
-        version: WASIVersion.preview2,
-        componentHost: componentHost,
-      );
+  WASIPreview2ComponentHost({
+    WASIComponentHost? componentHost,
+    WASIPreview2RandomHost? randomHost,
+  }) : versionedHost = WASIComponentVersionedHost(
+         version: WASIVersion.preview2,
+         componentHost: componentHost,
+       ),
+       _randomHost = randomHost ?? WASIPreview2RandomHost();
 
   /// Underlying versioned component-host facade.
   final WASIComponentVersionedHost versionedHost;
+
+  final WASIPreview2RandomHost _randomHost;
 
   /// Preview2 version profile.
   WASIComponentVersionProfile get profile => versionedHost.profile;
 
   /// Shared component host.
   WASIComponentHost get componentHost => versionedHost.componentHost;
+
+  /// Random host state for standard `wasi:random` imports.
+  WASIPreview2RandomHost get randomHost => _randomHost;
+
+  /// Standard Preview2 WIT import callbacks implemented by this host.
+  late final Map<String, WASIComponentWitAdapterCallback> standardImports =
+      Map<String, WASIComponentWitAdapterCallback>.unmodifiable({
+        ..._randomHost.imports,
+      });
 
   /// Prepares [component] for Preview2 component-host binding.
   WASIComponentVersionedBindingPlan prepareComponent(
@@ -42,6 +58,29 @@ final class WASIPreview2ComponentHost {
     String? worldName,
   }) {
     return versionedHost.prepareWitWorld(document, worldName: worldName);
+  }
+
+  /// Prepares and binds a Preview2 WIT world.
+  ///
+  /// Built-in standard WASI imports are supplied by default and can be
+  /// overridden by passing the same key in [imports].
+  WASIComponentWitAdapterProgram bindWitWorld(
+    WASIComponentWitDocument document, {
+    String? worldName,
+    Map<String, WASIComponentWitAdapterCallback> imports =
+        const <String, WASIComponentWitAdapterCallback>{},
+    Map<String, WASIComponentWitAdapterCallback> exports =
+        const <String, WASIComponentWitAdapterCallback>{},
+  }) {
+    return versionedHost.bindWitWorld(
+      document,
+      worldName: worldName,
+      imports: <String, WASIComponentWitAdapterCallback>{
+        ...standardImports,
+        ...imports,
+      },
+      exports: exports,
+    );
   }
 
   /// Prepares and binds Preview2 canonical `lift`/`lower` adapter operations.
