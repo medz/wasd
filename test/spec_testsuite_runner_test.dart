@@ -204,4 +204,15 @@ printf '{"commands":[]}' > "\$output"
     final groups = payload['group_stats'] as Map<String, Object?>;
     expect(groups.keys, ['core']);
   });
+
+  test(
+    'spec runner uses the portable threads check for JS proposals',
+    () async {
+      final source = await File('tool/spec_runner.dart').readAsString();
+
+      expect(source, contains('js-threads-portable-compile'));
+      expect(source, contains('tool/threads_portable_check.dart'));
+      expect(source, isNot(contains('test/threads_portable_test.dart')));
+    },
+  );
 }

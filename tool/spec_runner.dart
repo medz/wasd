@@ -496,14 +496,21 @@ Future<List<StepResult>> _runJsSuite(
     if (specSuite == _SpecSuiteKind.proposal) {
       steps.add(
         await _runStep(
-          name: 'js-threads-portable',
+          name: 'js-threads-portable-compile',
           command: [
             'dart',
-            'test',
-            '-p',
-            'node',
-            'test/threads_portable_test.dart',
+            'compile',
+            'js',
+            'tool/threads_portable_check.dart',
+            '-o',
+            '.dart_tool/spec_runner/threads_portable_check.js',
           ],
+        ),
+      );
+      steps.add(
+        await _runStep(
+          name: 'js-threads-portable-run',
+          command: ['node', '.dart_tool/spec_runner/threads_portable_check.js'],
         ),
       );
     }
