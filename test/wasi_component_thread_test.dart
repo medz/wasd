@@ -237,6 +237,33 @@ void main() {
       expect(() => program.invoke(9, const <Object?>[]), throwsStateError);
     });
 
+    test('executes thread.yield asynchronously', () async {
+      final host = WASIComponentThreadHost();
+      final yielded = <String>[];
+      final yieldOperation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.threadYield,
+        ),
+      );
+
+      final future = yieldOperation.threadYield().then(
+        (_) => yielded.add('done'),
+      );
+
+      expect(yielded, isEmpty);
+      await future;
+      expect(yielded, ['done']);
+
+      final program = WASIComponentCanonicalThreadProgram(
+        operations: [yieldOperation],
+      );
+      expect(program.invokeAsync(0, const <Object?>[]), completes);
+      expect(
+        () => program.invoke(0, const <Object?>[]),
+        throwsUnsupportedError,
+      );
+    });
+
     test('validates host configuration and unsupported thread definitions', () {
       expect(
         () => WASIComponentThreadHost(availableParallelism: 0),

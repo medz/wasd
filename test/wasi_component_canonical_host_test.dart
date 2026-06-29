@@ -134,6 +134,10 @@ void main() {
       final host = WASIComponentCanonicalHost();
 
       expect(
+        host.supportsCanonicalKind(WasmComponentCanonicalKind.threadYield),
+        isTrue,
+      );
+      expect(
         host.supportsCanonicalKind(WasmComponentCanonicalKind.threadIndex),
         isTrue,
       );
@@ -157,6 +161,25 @@ void main() {
         ),
         throwsUnsupportedError,
       );
+    });
+
+    test('binds thread.yield as an asynchronous canonical operation', () async {
+      final host = WASIComponentCanonicalHost();
+      final operation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.threadYield,
+        ),
+      );
+      final yielded = <String>[];
+
+      final future = operation
+          .invokeAsync(const <Object?>[])
+          .then((_) => yielded.add('done'));
+
+      expect(yielded, isEmpty);
+      await future;
+      expect(yielded, ['done']);
+      expect(() => operation.invoke(const <Object?>[]), throwsUnsupportedError);
     });
 
     test('reports all unsupported canonical definitions before binding', () {

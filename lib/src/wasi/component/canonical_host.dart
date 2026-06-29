@@ -248,6 +248,7 @@ final class WASIComponentCanonicalHost {
       case WasmComponentCanonicalKind.contextGet:
       case WasmComponentCanonicalKind.contextSet:
         return _bindContext(definition);
+      case WasmComponentCanonicalKind.threadYield:
       case WasmComponentCanonicalKind.threadIndex:
       case WasmComponentCanonicalKind.threadAvailableParallelism:
         return _bindThread(definition);
@@ -257,7 +258,6 @@ final class WASIComponentCanonicalHost {
         return _bindErrorContext(definition);
       case WasmComponentCanonicalKind.lift:
       case WasmComponentCanonicalKind.lower:
-      case WasmComponentCanonicalKind.threadYield:
       case WasmComponentCanonicalKind.threadNewIndirect:
       case WasmComponentCanonicalKind.threadSwitchTo:
       case WasmComponentCanonicalKind.threadSuspend:
@@ -364,6 +364,7 @@ final class WASIComponentCanonicalHost {
     return WASIComponentCanonicalOperation._(
       kind: definition.kind,
       invoke: (args) => program.invoke(0, args),
+      invokeAsync: (args) => program.invokeAsync(0, args),
     );
   }
 
@@ -590,6 +591,7 @@ String? _unsupportedCanonicalKindReason(WasmComponentCanonicalKind kind) {
     case WasmComponentCanonicalKind.taskCancel:
     case WasmComponentCanonicalKind.contextGet:
     case WasmComponentCanonicalKind.contextSet:
+    case WasmComponentCanonicalKind.threadYield:
     case WasmComponentCanonicalKind.threadIndex:
     case WasmComponentCanonicalKind.threadAvailableParallelism:
     case WasmComponentCanonicalKind.errorContextNew:
@@ -599,7 +601,6 @@ String? _unsupportedCanonicalKindReason(WasmComponentCanonicalKind kind) {
     case WasmComponentCanonicalKind.lift:
     case WasmComponentCanonicalKind.lower:
       return 'canonical lift/lower require typed core function adapter generation';
-    case WasmComponentCanonicalKind.threadYield:
     case WasmComponentCanonicalKind.threadNewIndirect:
     case WasmComponentCanonicalKind.threadSwitchTo:
     case WasmComponentCanonicalKind.threadSuspend:

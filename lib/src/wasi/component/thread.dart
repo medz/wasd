@@ -101,6 +101,11 @@ final class WASIComponentThreadHost {
     return _availableParallelism;
   }
 
+  /// Executes `thread.yield`.
+  Future<void> threadYield() {
+    return Future<void>.delayed(Duration.zero);
+  }
+
   /// Binds a decoded canonical thread definition.
   WASIComponentCanonicalThreadOperation bindCanonicalDefinition(
     WasmComponentCanonicalDefinition definition,
@@ -171,10 +176,27 @@ final class WASIComponentCanonicalThreadProgram {
       case WasmComponentCanonicalKind.threadAvailableParallelism:
         _expectArity(canonicalIndex, args, 0);
         return operation.threadAvailableParallelism();
+      case WasmComponentCanonicalKind.threadYield:
+        throw UnsupportedError(
+          'Wasm component canonical thread.yield is asynchronous; use invokeAsync.',
+        );
       default:
         throw UnsupportedError(
           'Wasm component canonical ${operation.kind.name} is not executable by the thread program.',
         );
+    }
+  }
+
+  /// Invokes the asynchronous canonical thread operation at [canonicalIndex].
+  Future<Object?> invokeAsync(int canonicalIndex, List<Object?> args) async {
+    final operation = _operationAt(canonicalIndex);
+    switch (operation.kind) {
+      case WasmComponentCanonicalKind.threadYield:
+        _expectArity(canonicalIndex, args, 0);
+        await operation.threadYield();
+        return null;
+      default:
+        return invoke(canonicalIndex, args);
     }
   }
 
@@ -216,6 +238,12 @@ final class WASIComponentCanonicalThreadOperation {
     return _host.threadAvailableParallelism();
   }
 
+  /// Executes `thread.yield`.
+  Future<void> threadYield() {
+    _requireKind(WasmComponentCanonicalKind.threadYield);
+    return _host.threadYield();
+  }
+
   void _requireKind(WasmComponentCanonicalKind expected) {
     if (kind != expected) {
       throw StateError(
@@ -226,7 +254,8 @@ final class WASIComponentCanonicalThreadOperation {
 }
 
 bool _isSupportedThreadCanonicalKind(WasmComponentCanonicalKind kind) {
-  return kind == WasmComponentCanonicalKind.threadIndex ||
+  return kind == WasmComponentCanonicalKind.threadYield ||
+      kind == WasmComponentCanonicalKind.threadIndex ||
       kind == WasmComponentCanonicalKind.threadAvailableParallelism;
 }
 
