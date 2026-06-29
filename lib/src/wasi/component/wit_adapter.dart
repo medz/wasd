@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import '../../wasm/backend/native/interpreter/component.dart';
 import 'unicode_scalar.dart';
 import 'wit_document.dart';
 
 /// Callback used by generated WIT adapter operations.
-typedef WASIComponentWitAdapterCallback = Object? Function(List<Object?> args);
+typedef WASIComponentWitAdapterCallback =
+    FutureOr<Object?> Function(List<Object?> args);
 
 /// Expands local WIT import/export interface functions from [world].
 List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
@@ -50,7 +53,7 @@ List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
   return List<WASIComponentWitFunctionBinding>.unmodifiable(functions);
 }
 
-/// Reports functions that cannot bind to executable synchronous adapters.
+/// Reports functions that cannot bind to executable adapters.
 List<WASIComponentWitAdapterBindingError> wasiComponentWitAdapterBindingErrors(
   List<WASIComponentWitFunctionBinding> functions,
 ) {
@@ -61,15 +64,6 @@ List<WASIComponentWitAdapterBindingError> wasiComponentWitAdapterBindingErrors(
     if (reason != null) {
       errors.add(
         WASIComponentWitAdapterBindingError(function: function, reason: reason),
-      );
-      continue;
-    }
-    if (signature.isAsync) {
-      errors.add(
-        WASIComponentWitAdapterBindingError(
-          function: function,
-          reason: 'async WIT function adapters require Preview3 scheduling',
-        ),
       );
     }
   }
@@ -126,8 +120,8 @@ final class WASIComponentWitAdapterSignature {
   /// Reason this signature cannot be bound by the current executable adapter.
   final String? unsupportedReason;
 
-  /// Whether the signature can be bound as a synchronous adapter.
-  bool get canBind => unsupportedReason == null && !isAsync;
+  /// Whether the signature can be bound as an executable adapter.
+  bool get canBind => unsupportedReason == null;
 }
 
 /// WIT adapter function parameter.
@@ -466,9 +460,19 @@ final class WASIComponentWitAdapterProgram {
     return _invoke(_imports, 'import', qualifiedName, args);
   }
 
+  /// Invokes an imported WIT function adapter by qualified name asynchronously.
+  Future<Object?> invokeImportAsync(String qualifiedName, List<Object?> args) {
+    return _invokeAsync(_imports, 'import', qualifiedName, args);
+  }
+
   /// Invokes an exported WIT function adapter by qualified name.
   Object? invokeExport(String qualifiedName, List<Object?> args) {
     return _invoke(_exports, 'export', qualifiedName, args);
+  }
+
+  /// Invokes an exported WIT function adapter by qualified name asynchronously.
+  Future<Object?> invokeExportAsync(String qualifiedName, List<Object?> args) {
+    return _invokeAsync(_exports, 'export', qualifiedName, args);
   }
 
   Object? _invoke(
@@ -482,6 +486,19 @@ final class WASIComponentWitAdapterProgram {
       throw StateError('Unknown WIT $direction adapter: $qualifiedName.');
     }
     return operation.invoke(args);
+  }
+
+  Future<Object?> _invokeAsync(
+    Map<String, WASIComponentWitAdapterOperation> operations,
+    String direction,
+    String qualifiedName,
+    List<Object?> args,
+  ) {
+    final operation = operations[qualifiedName];
+    if (operation == null) {
+      throw StateError('Unknown WIT $direction adapter: $qualifiedName.');
+    }
+    return operation.invokeAsync(args);
   }
 }
 
@@ -509,9 +526,40 @@ final class WASIComponentWitAdapterOperation {
     if (!signature.canBind) {
       throw StateError(
         'WIT adapter $qualifiedName is not executable: '
-        '${signature.unsupportedReason ?? 'async function'}.',
+        '${signature.unsupportedReason}.',
       );
     }
+    if (signature.isAsync) {
+      throw StateError('WIT adapter $qualifiedName is async; use invokeAsync.');
+    }
+
+    final checkedArgs = _validateArgs(args);
+    final result = _callback(List<Object?>.unmodifiable(checkedArgs));
+    if (result is Future) {
+      throw StateError(
+        'WIT adapter $qualifiedName returned a Future; use invokeAsync.',
+      );
+    }
+    return _validateResult(result);
+  }
+
+  /// Invokes this adapter asynchronously with validated WIT values.
+  Future<Object?> invokeAsync(List<Object?> args) async {
+    final signature = function.signature;
+    if (!signature.canBind) {
+      throw StateError(
+        'WIT adapter $qualifiedName is not executable: '
+        '${signature.unsupportedReason}.',
+      );
+    }
+
+    final checkedArgs = _validateArgs(args);
+    final result = await _callback(List<Object?>.unmodifiable(checkedArgs));
+    return _validateResult(result);
+  }
+
+  List<Object?> _validateArgs(List<Object?> args) {
+    final signature = function.signature;
     if (args.length != signature.params.length) {
       throw StateError(
         'WIT adapter $qualifiedName expected ${signature.params.length} '
@@ -529,8 +577,11 @@ final class WASIComponentWitAdapterOperation {
         ),
       );
     }
+    return checkedArgs;
+  }
 
-    final result = _callback(List<Object?>.unmodifiable(checkedArgs));
+  Object? _validateResult(Object? result) {
+    final signature = function.signature;
     final resultType = signature.result;
     if (resultType == null) {
       if (result != null) {

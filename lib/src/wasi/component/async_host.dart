@@ -512,9 +512,10 @@ final class WASIComponentAsyncEndpointHandles {
   /// Unpacks the canonical `i64` handle pair used by stream/future.new.
   factory WASIComponentAsyncEndpointHandles.unpack(int packed) {
     final bits = _normalizeI64Bits(packed, 'packed');
+    final writable = bits ~/ _u32Base;
     return WASIComponentAsyncEndpointHandles(
-      readable: bits & _u32Mask,
-      writable: (bits >> 32) & _u32Mask,
+      readable: bits - writable * _u32Base,
+      writable: writable,
     );
   }
 
@@ -525,10 +526,11 @@ final class WASIComponentAsyncEndpointHandles {
   final int writable;
 
   /// Canonical signed `i64` with readable in low bits and writable in high bits.
-  int get packed => (readable | (writable << 32)).toSigned(64);
+  int get packed => readable + writable * _u32Base;
 }
 
 const int _u32Mask = 0xffffffff;
+const int _u32Base = 0x100000000;
 const int _i64Min = -0x8000000000000000;
 
 /// Status returned by canonical async stream memory copy operations.
@@ -3287,7 +3289,7 @@ int _normalizeI64Bits(int value, String name) {
     if (value.bitLength > 64) {
       throw RangeError.value(value, name, 'does not fit in an unsigned i64');
     }
-    return value.toUnsigned(64);
+    return value;
   }
   if (value < _i64Min) {
     throw RangeError.value(value, name, 'does not fit in a signed i64');

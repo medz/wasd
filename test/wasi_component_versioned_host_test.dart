@@ -272,7 +272,7 @@ world command {
           preview3Plan.bindingErrors.map(
             (error) => error.function.qualifiedName,
           ),
-          containsAll(<String>['run.run', 'stdout.write-via-stream']),
+          ['stdout.write-via-stream'],
         );
         expect(preview3Plan.world.name, 'command');
         expect(preview3Plan.items.map((item) => item.target.text), [
@@ -344,6 +344,50 @@ world command {
         () => preview2Program.invokeImport('adder.add', [0x100000000, 1]),
         throwsStateError,
       );
+    });
+
+    test('Preview3 wrappers execute async WIT function adapters', () async {
+      const source = '''
+package acme:task@0.3.0;
+
+interface runner {
+  run: async func(seed: u32) -> u32;
+}
+
+world command {
+  import runner;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2Plan = WASIPreview2ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'command',
+      );
+      final preview3Plan = WASIPreview3ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'command',
+      );
+      final seen = <int>[];
+
+      expect(preview2Plan.canIngest, isFalse);
+      expect(preview2Plan.canBindAdapters, isFalse);
+      expect(preview3Plan.canIngest, isTrue);
+      expect(preview3Plan.canBindAdapters, isTrue);
+      expect(preview3Plan.bindingErrors, isEmpty);
+
+      final program = preview3Plan.bindAdapters(
+        imports: {
+          'runner.run': (args) async {
+            final seed = args.single as int;
+            seen.add(seed);
+            return seed + 1;
+          },
+        },
+      );
+
+      expect(() => program.invokeImport('runner.run', [41]), throwsStateError);
+      expect(await program.invokeImportAsync('runner.run', [41]), 42);
+      expect(seen, [41]);
     });
 
     test('Preview2 and Preview3 wrappers execute composite WIT values', () {
