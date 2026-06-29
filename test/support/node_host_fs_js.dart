@@ -31,6 +31,20 @@ final class NodeHostTemp {
     return _jsString(result).toDart;
   }
 
+  ({int accessTimeNanos, int modificationTimeNanos}) fileTimes(
+    String relativePath,
+  ) {
+    return _entryTimes(relativePath, followSymlinks: true);
+  }
+
+  ({int accessTimeNanos, int modificationTimeNanos}) directoryTimes(
+    String relativePath,
+  ) => _entryTimes(relativePath, followSymlinks: true);
+
+  ({int accessTimeNanos, int modificationTimeNanos}) symlinkTimes(
+    String relativePath,
+  ) => _entryTimes(relativePath, followSymlinks: false);
+
   bool fileExists(String relativePath) => _entryMatches(relativePath, 'isFile');
 
   bool directoryExists(String relativePath) =>
@@ -82,6 +96,26 @@ final class NodeHostTemp {
       relativePath.toJS,
     ]);
     return _jsString(result).toDart;
+  }
+
+  ({int accessTimeNanos, int modificationTimeNanos}) _entryTimes(
+    String relativePath, {
+    required bool followSymlinks,
+  }) {
+    final stat = _fs.callMethodVarArgs<JSAny?>(
+      (followSymlinks ? 'statSync' : 'lstatSync').toJS,
+      [_join(relativePath).toJS],
+    );
+    final object = stat as JSObject;
+    return (
+      accessTimeNanos: _statTimeNanos(object, 'atimeMs'),
+      modificationTimeNanos: _statTimeNanos(object, 'mtimeMs'),
+    );
+  }
+
+  int _statTimeNanos(JSObject stat, String property) {
+    final value = stat.getProperty<JSNumber?>(property.toJS);
+    return value == null ? 0 : (value.toDartDouble * 1000000).toInt();
   }
 }
 

@@ -9,6 +9,18 @@ final class NodeHostTemp {
 
   String readFile(String relativePath) => '';
 
+  ({int accessTimeNanos, int modificationTimeNanos}) fileTimes(
+    String relativePath,
+  ) => (accessTimeNanos: 0, modificationTimeNanos: 0);
+
+  ({int accessTimeNanos, int modificationTimeNanos}) directoryTimes(
+    String relativePath,
+  ) => (accessTimeNanos: 0, modificationTimeNanos: 0);
+
+  ({int accessTimeNanos, int modificationTimeNanos}) symlinkTimes(
+    String relativePath,
+  ) => (accessTimeNanos: 0, modificationTimeNanos: 0);
+
   bool fileExists(String relativePath) => false;
 
   bool directoryExists(String relativePath) => false;

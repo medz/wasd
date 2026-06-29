@@ -774,16 +774,23 @@ class WASI implements wasi.WASI {
         if (args.length < 4) {
           return _errnoInval;
         }
-        final metadata = _vfs.metadataForFd(_asInt(args[0]));
+        final fd = _asInt(args[0]);
+        final metadata = _vfs.metadataForFd(fd);
         if (metadata == null) {
           return _errnoBadf;
         }
-        final right = _checkDescriptorRight(
-          _asInt(args[0]),
-          _rightFdFilestatSetTimes,
-        );
+        final right = _checkDescriptorRight(fd, _rightFdFilestatSetTimes);
         if (right != _errnoSuccess) {
           return right;
+        }
+        final opened = _vfs.openFileForFd(fd);
+        if (opened is _Preview1NodeHostOpenFile) {
+          return _applyNodeHostFileFilestatTimes(
+            opened,
+            accessTimeNanos: _asInt64(args[1]),
+            modificationTimeNanos: _asInt64(args[2]),
+            flags: _asInt(args[3]),
+          );
         }
         return _applyFilestatTimes(
           metadata: metadata,
@@ -1642,15 +1649,29 @@ class WASI implements wasi.WASI {
         if (right != _errnoSuccess) {
           return right;
         }
+        final followSymlinks = (lookupFlags & _lookupflagSymlinkFollow) != 0;
         final entry = _vfs.pathEntry(
           resolved.path!,
-          followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
+          followSymlinks: followSymlinks,
         );
-        if (entry == null) {
+        if (entry != null) {
+          return _applyFilestatTimes(
+            metadata: entry.metadata,
+            accessTimeNanos: _asInt64(args[4]),
+            modificationTimeNanos: _asInt64(args[5]),
+            flags: _asInt(args[6]),
+          );
+        }
+        final fs = _requireNodeBuiltin('node:fs');
+        final hostPreopen = _nodeHostPreopenPathForGuestPath(resolved.path!);
+        if (fs == null || hostPreopen == null) {
           return _errnoNoent;
         }
-        return _applyFilestatTimes(
-          metadata: entry.metadata,
+        return _applyNodeHostPathFilestatTimes(
+          fs: fs,
+          hostPath: hostPreopen.hostPath,
+          hostRoot: hostPreopen.hostRoot,
+          followSymlinks: followSymlinks,
           accessTimeNanos: _asInt64(args[4]),
           modificationTimeNanos: _asInt64(args[5]),
           flags: _asInt(args[6]),
@@ -1725,17 +1746,122 @@ class WASI implements wasi.WASI {
     required int modificationTimeNanos,
     required int flags,
   }) {
+    final update = _resolveFilestatTimeUpdate(
+      accessTimeNanos: accessTimeNanos,
+      modificationTimeNanos: modificationTimeNanos,
+      flags: flags,
+    );
+    if (update.errno != _errnoSuccess) {
+      return update.errno;
+    }
+    _applyResolvedFilestatTimes(metadata: metadata, update: update);
+    return _errnoSuccess;
+  }
+
+  int _applyNodeHostFileFilestatTimes(
+    _Preview1NodeHostOpenFile opened, {
+    required int accessTimeNanos,
+    required int modificationTimeNanos,
+    required int flags,
+  }) {
+    final update = _resolveFilestatTimeUpdate(
+      accessTimeNanos: accessTimeNanos,
+      modificationTimeNanos: modificationTimeNanos,
+      flags: flags,
+    );
+    if (update.errno != _errnoSuccess) {
+      return update.errno;
+    }
+    return _applyNodeHostResolvedFilestatTimes(
+      fs: opened._fs,
+      fd: opened._fd,
+      metadata: opened.metadata,
+      update: update,
+    );
+  }
+
+  int _applyNodeHostPathFilestatTimes({
+    required JSObject fs,
+    required String hostPath,
+    required String hostRoot,
+    required bool followSymlinks,
+    required int accessTimeNanos,
+    required int modificationTimeNanos,
+    required int flags,
+  }) {
+    final update = _resolveFilestatTimeUpdate(
+      accessTimeNanos: accessTimeNanos,
+      modificationTimeNanos: modificationTimeNanos,
+      flags: flags,
+    );
+    if (update.errno != _errnoSuccess) {
+      return update.errno;
+    }
+
+    var targetHostPath = hostPath;
+    var stat = _nodeLstat(fs, targetHostPath);
+    if (stat == null) {
+      return _errnoNoent;
+    }
+    if (_nodeStatMethod(stat, 'isSymbolicLink')) {
+      if (!followSymlinks) {
+        return _applyNodeHostResolvedFilestatTimes(
+          fs: fs,
+          hostPath: targetHostPath,
+          noFollowSymlink: true,
+          update: update,
+        );
+      }
+      final resolved = _resolveNodeHostSymlinkTarget(
+        fs: fs,
+        linkHostPath: targetHostPath,
+        hostRoot: hostRoot,
+      );
+      if (resolved.errno != _errnoSuccess) {
+        return resolved.errno;
+      }
+      targetHostPath = resolved.hostPath!;
+      stat = _nodeLstat(fs, targetHostPath);
+      if (stat == null) {
+        return _errnoNoent;
+      }
+    }
+    if (!_nodeStatMethod(stat, 'isFile') &&
+        !_nodeStatMethod(stat, 'isDirectory')) {
+      return _errnoNotsup;
+    }
+    return _applyNodeHostResolvedFilestatTimes(
+      fs: fs,
+      hostPath: targetHostPath,
+      update: update,
+    );
+  }
+
+  ({int errno, int? accessTimeNanos, int? modificationTimeNanos})
+  _resolveFilestatTimeUpdate({
+    required int accessTimeNanos,
+    required int modificationTimeNanos,
+    required int flags,
+  }) {
     if ((flags & ~_filestatTimeKnownFlags) != 0 ||
         (flags & _filestatSetAccessTime) != 0 &&
             (flags & _filestatSetAccessTimeNow) != 0 ||
         (flags & _filestatSetModificationTime) != 0 &&
             (flags & _filestatSetModificationTimeNow) != 0) {
-      return _errnoInval;
+      return (
+        errno: _errnoInval,
+        accessTimeNanos: null,
+        modificationTimeNanos: null,
+      );
     }
     if ((flags & _filestatSetAccessTime) != 0 && accessTimeNanos < 0 ||
         (flags & _filestatSetModificationTime) != 0 &&
             modificationTimeNanos < 0) {
-      return _errnoInval;
+      return (
+        errno: _errnoInval,
+        accessTimeNanos: null,
+        modificationTimeNanos: null,
+      );
     }
 
     final now =
@@ -1743,17 +1869,112 @@ class WASI implements wasi.WASI {
             (flags & _filestatSetModificationTimeNow) != 0)
         ? _clockNowNanos(_clockRealtime)
         : 0;
-    if ((flags & _filestatSetAccessTime) != 0) {
+    return (
+      errno: _errnoSuccess,
+      accessTimeNanos: (flags & _filestatSetAccessTime) != 0
+          ? accessTimeNanos
+          : (flags & _filestatSetAccessTimeNow) != 0
+          ? now
+          : null,
+      modificationTimeNanos: (flags & _filestatSetModificationTime) != 0
+          ? modificationTimeNanos
+          : (flags & _filestatSetModificationTimeNow) != 0
+          ? now
+          : null,
+    );
+  }
+
+  void _applyResolvedFilestatTimes({
+    required wasi_vfs.Preview1VirtualNodeMetadata metadata,
+    required ({int errno, int? accessTimeNanos, int? modificationTimeNanos})
+    update,
+  }) {
+    final accessTimeNanos = update.accessTimeNanos;
+    final modificationTimeNanos = update.modificationTimeNanos;
+    if (accessTimeNanos != null) {
       metadata.accessTimeNanos = accessTimeNanos;
-    } else if ((flags & _filestatSetAccessTimeNow) != 0) {
-      metadata.accessTimeNanos = now;
     }
-    if ((flags & _filestatSetModificationTime) != 0) {
+    if (modificationTimeNanos != null) {
       metadata.modificationTimeNanos = modificationTimeNanos;
-    } else if ((flags & _filestatSetModificationTimeNow) != 0) {
-      metadata.modificationTimeNanos = now;
     }
-    return _errnoSuccess;
+  }
+
+  int _applyNodeHostResolvedFilestatTimes({
+    required JSObject fs,
+    int? fd,
+    String? hostPath,
+    wasi_vfs.Preview1VirtualNodeMetadata? metadata,
+    bool noFollowSymlink = false,
+    required ({int errno, int? accessTimeNanos, int? modificationTimeNanos})
+    update,
+  }) {
+    assert(fd != null || hostPath != null);
+    final stat = fd != null ? _nodeTryFstat(fs, fd) : _nodeLstat(fs, hostPath!);
+    if (stat == null) {
+      return fd != null ? _errnoBadf : _errnoNoent;
+    }
+
+    final accessTimeNanos =
+        update.accessTimeNanos ?? _nodeStatTimeNanos(stat, 'atimeMs');
+    final modificationTimeNanos =
+        update.modificationTimeNanos ?? _nodeStatTimeNanos(stat, 'mtimeMs');
+    if (accessTimeNanos == null || modificationTimeNanos == null) {
+      return _errnoInval;
+    }
+
+    try {
+      if (fd != null) {
+        fs.callMethodVarArgs<JSAny?>('futimesSync'.toJS, [
+          fd.toJS,
+          _nodeTimeSeconds(accessTimeNanos).toJS,
+          _nodeTimeSeconds(modificationTimeNanos).toJS,
+        ]);
+      } else {
+        fs.callMethodVarArgs<JSAny?>(
+          (noFollowSymlink ? 'lutimesSync' : 'utimesSync').toJS,
+          [
+            hostPath!.toJS,
+            _nodeTimeSeconds(accessTimeNanos).toJS,
+            _nodeTimeSeconds(modificationTimeNanos).toJS,
+          ],
+        );
+      }
+      if (metadata != null) {
+        final refreshed = fd != null
+            ? _nodeTryFstat(fs, fd)
+            : _nodeLstat(fs, hostPath!);
+        if (refreshed != null) {
+          _copyNodeStatToMetadata(metadata, refreshed);
+        }
+      }
+      return _errnoSuccess;
+    } catch (_) {
+      if (hostPath != null && _nodeLstat(fs, hostPath) == null) {
+        return _errnoNoent;
+      }
+      return _errnoPerm;
+    }
+  }
+
+  double _nodeTimeSeconds(int nanos) => nanos / 1000000000;
+
+  int? _nodeStatTimeNanos(JSObject stat, String property) {
+    final value = _nodeStatDouble(stat, property);
+    return value == null ? null : (value * 1000000).toInt();
+  }
+
+  void _copyNodeStatToMetadata(
+    wasi_vfs.Preview1VirtualNodeMetadata metadata,
+    JSObject stat,
+  ) {
+    final accessTimeNanos = _nodeStatTimeNanos(stat, 'atimeMs');
+    final modificationTimeNanos = _nodeStatTimeNanos(stat, 'mtimeMs');
+    if (accessTimeNanos != null && accessTimeNanos > 0) {
+      metadata.accessTimeNanos = accessTimeNanos;
+    }
+    if (modificationTimeNanos != null && modificationTimeNanos > 0) {
+      metadata.modificationTimeNanos = modificationTimeNanos;
+    }
   }
 
   int _writePollEvents({
@@ -2515,6 +2736,7 @@ class WASI implements wasi.WASI {
 
   ({int errno, wasi_vfs.Preview1VirtualPathEntry? entry})
   _nodeHostSymlinkPathEntry(JSObject fs, String hostPath) {
+    final stat = _nodeLstat(fs, hostPath);
     final target = _readNodeHostSymlink(fs, hostPath);
     if (target.errno != _errnoSuccess) {
       return (errno: target.errno, entry: null);
@@ -2523,7 +2745,7 @@ class WASI implements wasi.WASI {
       errno: _errnoSuccess,
       entry: wasi_vfs.Preview1VirtualPathEntry(
         kind: wasi_vfs.Preview1VirtualPathEntryKind.symlink,
-        metadata: wasi_vfs.Preview1VirtualNodeMetadata(),
+        metadata: _metadataFromNodeStat(stat),
         size: target.targetBytes!.length,
       ),
     );
@@ -3094,18 +3316,31 @@ JSObject? _requireNodeBuiltin(String name) {
 external JSAny _jsRequire(JSString module);
 
 void _setUint64(ByteData data, int offset, int value) {
-  final normalized = value.toUnsigned(64);
-  final low = normalized & 0xffffffff;
-  final high = (normalized >> 32) & 0xffffffff;
-  data.setUint32(offset, low, Endian.little);
-  data.setUint32(offset + 4, high, Endian.little);
+  if (value >= 0 && value <= _u32Max) {
+    data.setUint32(offset, value, Endian.little);
+    data.setUint32(offset + 4, 0, Endian.little);
+    return;
+  }
+  final normalized = BigInt.from(value).toUnsigned(64);
+  data.setUint32(offset, (normalized & _u32Mask).toInt(), Endian.little);
+  data.setUint32(
+    offset + 4,
+    ((normalized >> 32) & _u32Mask).toInt(),
+    Endian.little,
+  );
 }
 
 int _getUint64(ByteData data, int offset) {
   final low = data.getUint32(offset, Endian.little);
   final high = data.getUint32(offset + 4, Endian.little);
-  return (high << 32) | low;
+  if (high == 0) {
+    return low;
+  }
+  return ((BigInt.from(high) << 32) | BigInt.from(low)).toInt();
 }
+
+const int _u32Max = 0xffffffff;
+final BigInt _u32Mask = BigInt.from(_u32Max);
 
 String _decodeUtf8(List<int> bytes) => utf8.decode(bytes, allowMalformed: true);
 
@@ -3226,6 +3461,14 @@ JSObject _nodeFstat(JSObject fs, int fd) {
   return stat as JSObject;
 }
 
+JSObject? _nodeTryFstat(JSObject fs, int fd) {
+  try {
+    return _nodeFstat(fs, fd);
+  } catch (_) {
+    return null;
+  }
+}
+
 bool _nodeStatMethod(JSObject stat, String method) {
   final value = stat.callMethodVarArgs<JSAny?>(method.toJS, const []);
   return _jsString(value).toDart == 'true';
@@ -3302,7 +3545,21 @@ List<wasi_vfs.Preview1DirectoryEntry>? _nodeHostDirectoryEntries(
   if (names == null) {
     return null;
   }
-  final entries = <wasi_vfs.Preview1DirectoryEntry>[];
+  final currentStat = _nodeLstat(fs, hostPath);
+  final parentPath = _nodePathDirname(hostPath);
+  final parentStat = parentPath == null ? null : _nodeLstat(fs, parentPath);
+  final entries = <wasi_vfs.Preview1DirectoryEntry>[
+    wasi_vfs.Preview1DirectoryEntry(
+      name: '.',
+      fileType: _filetypeDirectory,
+      inode: _metadataFromNodeStat(currentStat).inode,
+    ),
+    wasi_vfs.Preview1DirectoryEntry(
+      name: '..',
+      fileType: _filetypeDirectory,
+      inode: _metadataFromNodeStat(parentStat ?? currentStat).inode,
+    ),
+  ];
   for (final name in names) {
     if (name.isEmpty) {
       continue;

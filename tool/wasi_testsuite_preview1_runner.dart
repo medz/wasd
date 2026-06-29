@@ -1,8 +1,6 @@
 import 'dart:io' as io;
-import 'dart:typed_data';
 
 import 'package:wasd/wasd.dart';
-import 'package:wasd/wasi.dart';
 
 Future<void> main(List<String> args) async {
   late final _RunnerOptions options;
@@ -33,10 +31,8 @@ Future<void> main(List<String> args) async {
   }
 
   final preopens = <String, String>{};
-  final files = <String, Uint8List>{};
   for (final dir in options.dirs) {
-    preopens[dir.guestPath] = dir.guestPath;
-    files.addAll(await _readDirectoryFiles(dir));
+    preopens[dir.guestPath] = dir.hostPath;
   }
 
   try {
@@ -45,7 +41,6 @@ Future<void> main(List<String> args) async {
       args: <String>[wasmPath, ...options.programArgs],
       env: options.env,
       preopens: preopens,
-      files: files,
     );
     final result = await WebAssembly.instantiate(
       wasmBytes.buffer,
@@ -58,56 +53,6 @@ Future<void> main(List<String> args) async {
       ..writeln(stackTrace);
     io.exitCode = 1;
   }
-}
-
-Future<Map<String, Uint8List>> _readDirectoryFiles(_PreopenDir dir) async {
-  final root = io.Directory(dir.hostPath);
-  if (!await root.exists()) {
-    throw ArgumentError.value(dir.hostPath, 'dir', 'does not exist');
-  }
-
-  final files = <String, Uint8List>{};
-  await for (final entity in root.list(recursive: true, followLinks: false)) {
-    if (entity is! io.File) {
-      continue;
-    }
-    final relative = _relativePath(root.path, entity.path);
-    final guestPath = _joinGuestPath(dir.guestPath, relative);
-    files[guestPath] = await entity.readAsBytes();
-  }
-  return files;
-}
-
-String _relativePath(String root, String path) {
-  final normalizedRoot = _normalizeHostPath(root);
-  final normalizedPath = _normalizeHostPath(path);
-  if (normalizedPath == normalizedRoot) {
-    return '';
-  }
-  final prefix = normalizedRoot.endsWith('/')
-      ? normalizedRoot
-      : '$normalizedRoot/';
-  if (!normalizedPath.startsWith(prefix)) {
-    throw ArgumentError.value(path, 'path', 'is not under $root');
-  }
-  return normalizedPath.substring(prefix.length);
-}
-
-String _normalizeHostPath(String path) =>
-    io.File(path).absolute.path.replaceAll(r'\', '/');
-
-String _joinGuestPath(String guestRoot, String relative) {
-  final normalizedRoot = guestRoot.startsWith('/') ? guestRoot : '/$guestRoot';
-  final root = normalizedRoot == '/' ? '' : normalizedRoot;
-  final cleanedRelative = relative
-      .replaceAll(r'\', '/')
-      .split('/')
-      .where((part) => part.isNotEmpty)
-      .join('/');
-  if (cleanedRelative.isEmpty) {
-    return normalizedRoot;
-  }
-  return '$root/$cleanedRelative';
 }
 
 final class _PreopenDir {

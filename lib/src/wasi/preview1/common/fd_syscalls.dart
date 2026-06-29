@@ -25,10 +25,22 @@ _OpenFilePreflight _openFileForDescriptor({
 }
 
 void _setUint64(ByteData data, int offset, int value) {
-  final normalized = value < 0 ? value + (1 << 64) : value;
-  data.setUint32(offset, normalized & 0xffffffff, Endian.little);
-  data.setUint32(offset + 4, normalized >>> 32, Endian.little);
+  if (value >= 0 && value <= _u32Max) {
+    data.setUint32(offset, value, Endian.little);
+    data.setUint32(offset + 4, 0, Endian.little);
+    return;
+  }
+  final normalized = BigInt.from(value).toUnsigned(64);
+  data.setUint32(offset, (normalized & _u32Mask).toInt(), Endian.little);
+  data.setUint32(
+    offset + 4,
+    ((normalized >> 32) & _u32Mask).toInt(),
+    Endian.little,
+  );
 }
+
+const int _u32Max = 0xffffffff;
+final BigInt _u32Mask = BigInt.from(_u32Max);
 
 int _filetypeForDescriptor(
   Preview1VirtualFileSystem vfs,

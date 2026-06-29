@@ -80,16 +80,40 @@ const int _eventTypeFdWrite = 2;
 const int _eventrwflagFdReadwriteHangup = 1;
 
 void _setUint64Le(ByteData data, int offset, int value) {
-  final normalized = value.toUnsigned(64);
-  data.setUint32(offset, normalized & 0xffffffff, Endian.little);
-  data.setUint32(offset + 4, normalized >>> 32, Endian.little);
+  if (value >= 0 && value <= _u32Max) {
+    data.setUint32(offset, value, Endian.little);
+    data.setUint32(offset + 4, 0, Endian.little);
+    return;
+  }
+  final normalized = BigInt.from(value).toUnsigned(64);
+  data.setUint32(offset, (normalized & _u32Mask).toInt(), Endian.little);
+  data.setUint32(
+    offset + 4,
+    ((normalized >> 32) & _u32Mask).toInt(),
+    Endian.little,
+  );
 }
 
 int _getUint64Le(ByteData data, int offset) {
   final low = data.getUint32(offset, Endian.little);
   final high = data.getUint32(offset + 4, Endian.little);
+  if (high == 0) {
+    return low;
+  }
+  return ((BigInt.from(high) << 32) | BigInt.from(low)).toInt();
+}
+
+BigInt _getUint64LeBigInt(ByteData data, int offset) {
+  final low = BigInt.from(data.getUint32(offset, Endian.little));
+  final high = BigInt.from(data.getUint32(offset + 4, Endian.little));
   return low | (high << 32);
 }
+
+BigInt _unixTimeNanos(DateTime value) =>
+    BigInt.from(value.microsecondsSinceEpoch) * BigInt.from(1000);
+
+const int _u32Max = 0xffffffff;
+final BigInt _u32Mask = BigInt.from(_u32Max);
 
 List<({int inode, String name, int next, int type})> _readDirents(
   Uint8List bytes,
@@ -4502,8 +4526,16 @@ void main() {
           expect(fdReaddir.ref([dirFd, direntsPtr, 256, 0, bufusedPtr]), 0);
           final bufused = data.getUint32(bufusedPtr, Endian.little);
           final entries = _readDirents(bytes, data, direntsPtr, bufused);
-          expect(entries.map((entry) => entry.name), ['a.txt', 'b.txt', 'sub']);
+          expect(entries.map((entry) => entry.name), [
+            '.',
+            '..',
+            'a.txt',
+            'b.txt',
+            'sub',
+          ]);
           expect(entries.map((entry) => entry.type), [
+            _filetypeDirectory,
+            _filetypeDirectory,
             _filetypeRegularFile,
             _filetypeRegularFile,
             _filetypeDirectory,
@@ -4527,7 +4559,12 @@ void main() {
             direntsPtr,
             nextBufused,
           );
-          expect(nextEntries.map((entry) => entry.name), ['b.txt', 'sub']);
+          expect(nextEntries.map((entry) => entry.name), [
+            '..',
+            'a.txt',
+            'b.txt',
+            'sub',
+          ]);
 
           expect(fdClose.ref([dirFd]), 0);
         },
@@ -4915,8 +4952,12 @@ void main() {
             direntsPtr,
             data.getUint32(bufusedPtr, Endian.little),
           );
-          expect(entries.map((entry) => entry.name), ['nested.txt']);
-          expect(entries.single.type, _filetypeRegularFile);
+          expect(entries.map((entry) => entry.name), ['.', '..', 'nested.txt']);
+          expect(entries.map((entry) => entry.type), [
+            _filetypeDirectory,
+            _filetypeDirectory,
+            _filetypeRegularFile,
+          ]);
           expect(fdClose.ref([dirFd]), 0);
 
           expect(
@@ -4943,6 +4984,227 @@ void main() {
             openPath('escape', lookupFlags: _lookupflagSymlinkFollow),
             _errnoNotcapable,
           );
+        },
+        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+      );
+
+      test(
+        'node preview1 updates real host file timestamps',
+        () async {
+          final host = createNodeHostTemp('wasd_node_host_times_');
+          expect(host, isNotNull);
+          addTearDown(() => host?.delete());
+          host!.writeFile('data.txt', 'metadata');
+
+          final fileWasi = WASI(preopens: {'/host': host.path});
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdFilestatGet =
+              preview1['fd_filestat_get'] as FunctionImportExportValue;
+          final fdFilestatSetTimes =
+              preview1['fd_filestat_set_times'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
+          final pathFilestatSetTimes =
+              preview1['path_filestat_set_times'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          final path = utf8.encode('data.txt');
+          const pathPtr = 4208;
+          const openedFdPtr = 4240;
+          const filestatPtr = 4256;
+          const timeFlags = 1 | 4;
+          final fdAccessTime = _unixTimeNanos(
+            DateTime.utc(2024, 3, 4, 5, 6, 7),
+          );
+          final fdModificationTime = _unixTimeNanos(
+            DateTime.utc(2024, 3, 4, 5, 6, 8),
+          );
+          final pathAccessTime = _unixTimeNanos(
+            DateTime.utc(2025, 4, 5, 6, 7, 8),
+          );
+          final pathModificationTime = _unixTimeNanos(
+            DateTime.utc(2025, 4, 5, 6, 7, 9),
+          );
+
+          bytes.setAll(pathPtr, path);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              path.length,
+              0,
+              _rightFdFdstatGet | _rightFdFilestatSetTimes,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final fd = data.getUint32(openedFdPtr, Endian.little);
+
+          expect(
+            fdFilestatSetTimes.ref([
+              fd,
+              fdAccessTime,
+              fdModificationTime,
+              timeFlags,
+            ]),
+            0,
+          );
+          var times = host.fileTimes('data.txt');
+          expect(BigInt.from(times.accessTimeNanos), fdAccessTime);
+          expect(BigInt.from(times.modificationTimeNanos), fdModificationTime);
+          expect(fdFilestatGet.ref([fd, filestatPtr]), 0);
+          expect(_getUint64LeBigInt(data, filestatPtr + 40), fdAccessTime);
+          expect(
+            _getUint64LeBigInt(data, filestatPtr + 48),
+            fdModificationTime,
+          );
+
+          expect(
+            pathFilestatSetTimes.ref([
+              3,
+              0,
+              pathPtr,
+              path.length,
+              pathAccessTime,
+              pathModificationTime,
+              timeFlags,
+            ]),
+            0,
+          );
+          times = host.fileTimes('data.txt');
+          expect(BigInt.from(times.accessTimeNanos), pathAccessTime);
+          expect(
+            BigInt.from(times.modificationTimeNanos),
+            pathModificationTime,
+          );
+          expect(
+            pathFilestatGet.ref([3, 0, pathPtr, path.length, filestatPtr]),
+            0,
+          );
+          expect(_getUint64LeBigInt(data, filestatPtr + 40), pathAccessTime);
+          expect(
+            _getUint64LeBigInt(data, filestatPtr + 48),
+            pathModificationTime,
+          );
+        },
+        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+      );
+
+      test(
+        'node preview1 updates real host directory and symlink timestamps',
+        () async {
+          final host = createNodeHostTemp('wasd_node_host_path_times_');
+          expect(host, isNotNull);
+          addTearDown(() => host?.delete());
+          host!
+            ..createDirectory('assets')
+            ..writeFile('target.txt', 'target')
+            ..createSymlink('target.txt', 'link.txt');
+          final targetModifiedBefore = host
+              .fileTimes('target.txt')
+              .modificationTimeNanos;
+
+          final wasi = WASI(preopens: {'/host': host.path});
+          final result = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            wasi.imports,
+          );
+          final instance = result.instance;
+          final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
+          final pathFilestatSetTimes =
+              preview1['path_filestat_set_times'] as FunctionImportExportValue;
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
+          wasi.finalizeBindings(instance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 4208;
+          const filestatPtr = 4256;
+          const mtimeOnly = 4;
+          final directoryMtime = _unixTimeNanos(
+            DateTime.utc(2024, 6, 7, 8, 9, 10),
+          );
+          final symlinkMtime = _unixTimeNanos(
+            DateTime.utc(2025, 7, 8, 9, 10, 11),
+          );
+
+          final directoryPath = utf8.encode('assets');
+          bytes.setAll(pathPtr, directoryPath);
+          expect(
+            pathFilestatSetTimes.ref([
+              3,
+              0,
+              pathPtr,
+              directoryPath.length,
+              BigInt.zero,
+              directoryMtime,
+              mtimeOnly,
+            ]),
+            0,
+          );
+          var times = host.directoryTimes('assets');
+          expect(BigInt.from(times.modificationTimeNanos), directoryMtime);
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              pathPtr,
+              directoryPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(bytes[filestatPtr + 16], _filetypeDirectory);
+          expect(_getUint64LeBigInt(data, filestatPtr + 48), directoryMtime);
+
+          final symlinkPath = utf8.encode('link.txt');
+          bytes.setAll(pathPtr, symlinkPath);
+          expect(
+            pathFilestatSetTimes.ref([
+              3,
+              0,
+              pathPtr,
+              symlinkPath.length,
+              BigInt.zero,
+              symlinkMtime,
+              mtimeOnly,
+            ]),
+            0,
+          );
+          expect(
+            host.fileTimes('target.txt').modificationTimeNanos,
+            targetModifiedBefore,
+          );
+          times = host.symlinkTimes('link.txt');
+          expect(BigInt.from(times.modificationTimeNanos), symlinkMtime);
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              pathPtr,
+              symlinkPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(bytes[filestatPtr + 16], _filetypeSymbolicLink);
+          expect(_getUint64LeBigInt(data, filestatPtr + 48), symlinkMtime);
         },
         skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
       );

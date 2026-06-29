@@ -982,8 +982,16 @@ void main() {
     expect(fdReaddir.ref([dirFd, direntsPtr, 256, 0, bufusedPtr]), 0);
     final bufused = data.getUint32(bufusedPtr, Endian.little);
     final entries = _readDirents(bytes, data, direntsPtr, bufused);
-    expect(entries.map((entry) => entry.name).toList(), ['child.txt']);
-    expect(entries.single.type, _filetypeRegularFile);
+    expect(entries.map((entry) => entry.name).toList(), [
+      '.',
+      '..',
+      'child.txt',
+    ]);
+    expect(entries.map((entry) => entry.type).toList(), [
+      _filetypeDirectory,
+      _filetypeDirectory,
+      _filetypeRegularFile,
+    ]);
     expect(fdClose.ref([dirFd]), 0);
 
     final escapePath = utf8.encode('escape.txt');
@@ -1299,6 +1307,96 @@ void main() {
     expect(_getUint64Le(data, filestatPtr + 48), pathModificationTime);
   });
 
+  test(
+    'native host path_filestat_set_times updates directories and nofollow symlinks',
+    () async {
+      if (Platform.isWindows) {
+        markTestSkipped('host symlink timestamp semantics are POSIX-specific');
+        return;
+      }
+
+      final temp = await Directory.systemTemp.createTemp(
+        'wasd_host_path_times_',
+      );
+      addTearDown(() => temp.delete(recursive: true));
+      final directory = Directory('${temp.path}/assets')..createSync();
+      final target = File('${temp.path}/target.txt')
+        ..writeAsStringSync('target');
+      Link('${temp.path}/link.txt').createSync('target.txt');
+      final targetModifiedBefore = _hostTimeNanos(target.lastModifiedSync());
+
+      final wasi = WASI(preopens: {'/host': temp.path});
+      final result = await WebAssembly.instantiate(
+        wasiStartModuleBytes().buffer,
+        wasi.imports,
+      );
+      final instance = result.instance;
+      final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+      final pathFilestatGet =
+          preview1['path_filestat_get'] as FunctionImportExportValue;
+      final pathFilestatSetTimes =
+          preview1['path_filestat_set_times'] as FunctionImportExportValue;
+      final memory =
+          (instance.exports['memory'] as MemoryImportExportValue).ref;
+      wasi.finalizeBindings(instance, memory: memory);
+
+      final bytes = Uint8List.view(memory.buffer);
+      final data = ByteData.view(memory.buffer);
+      const pathPtr = 1024;
+      const filestatPtr = 1088;
+      const mtimeOnly = 4;
+      final directoryMtime = _hostTimeNanos(DateTime.utc(2024, 6, 7, 8, 9, 10));
+      final symlinkMtime = _hostTimeNanos(DateTime.utc(2025, 7, 8, 9, 10, 11));
+
+      final directoryPath = utf8.encode('assets');
+      bytes.setAll(pathPtr, directoryPath);
+      expect(
+        pathFilestatSetTimes.ref([
+          3,
+          0,
+          pathPtr,
+          directoryPath.length,
+          0,
+          directoryMtime,
+          mtimeOnly,
+        ]),
+        0,
+      );
+      expect(_hostTimeNanos(directory.statSync().modified), directoryMtime);
+      expect(
+        pathFilestatGet.ref([3, 0, pathPtr, directoryPath.length, filestatPtr]),
+        0,
+      );
+      expect(bytes[filestatPtr + _filestatFiletypeOffset], _filetypeDirectory);
+      expect(_getUint64Le(data, filestatPtr + 48), directoryMtime);
+
+      final symlinkPath = utf8.encode('link.txt');
+      bytes.setAll(pathPtr, symlinkPath);
+      expect(
+        pathFilestatSetTimes.ref([
+          3,
+          0,
+          pathPtr,
+          symlinkPath.length,
+          0,
+          symlinkMtime,
+          mtimeOnly,
+        ]),
+        0,
+      );
+      expect(_hostTimeNanos(target.lastModifiedSync()), targetModifiedBefore);
+      expect(
+        pathFilestatGet.ref([3, 0, pathPtr, symlinkPath.length, filestatPtr]),
+        0,
+      );
+      expect(
+        bytes[filestatPtr + _filestatFiletypeOffset],
+        _filetypeSymbolicLink,
+      );
+      expect(_getUint64Le(data, filestatPtr + 48), symlinkMtime);
+    },
+  );
+
   test('native fd_readdir lists host directory entries', () async {
     final temp = await Directory.systemTemp.createTemp('wasd_host_readdir_');
     addTearDown(() => temp.delete(recursive: true));
@@ -1349,16 +1447,20 @@ void main() {
     final bufused = data.getUint32(bufusedPtr, Endian.little);
     final entries = _readDirents(bytes, data, direntsPtr, bufused);
     expect(entries.map((entry) => entry.name).toList(), [
+      '.',
+      '..',
       'a.txt',
       'b.txt',
       'sub',
     ]);
     expect(entries.map((entry) => entry.type).toList(), [
+      _filetypeDirectory,
+      _filetypeDirectory,
       _filetypeRegularFile,
       _filetypeRegularFile,
       _filetypeDirectory,
     ]);
-    expect(entries.map((entry) => entry.next).toList(), [1, 2, 3]);
+    expect(entries.map((entry) => entry.next).toList(), [1, 2, 3, 4, 5]);
 
     expect(fdClose.ref([dirFd]), 0);
   });

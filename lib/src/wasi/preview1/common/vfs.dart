@@ -2657,9 +2657,19 @@ List<Preview1DirectoryEntry> _directoryEntryList({
 }
 
 void _setUint64(ByteData data, int offset, int value) {
-  final normalized = value.toUnsigned(64);
-  final low = normalized & 0xffffffff;
-  final high = (normalized >> 32) & 0xffffffff;
-  data.setUint32(offset, low, Endian.little);
-  data.setUint32(offset + 4, high, Endian.little);
+  if (value >= 0 && value <= _u32Max) {
+    data.setUint32(offset, value, Endian.little);
+    data.setUint32(offset + 4, 0, Endian.little);
+    return;
+  }
+  final normalized = BigInt.from(value).toUnsigned(64);
+  data.setUint32(offset, (normalized & _u32Mask).toInt(), Endian.little);
+  data.setUint32(
+    offset + 4,
+    ((normalized >> 32) & _u32Mask).toInt(),
+    Endian.little,
+  );
 }
+
+const int _u32Max = 0xffffffff;
+final BigInt _u32Mask = BigInt.from(_u32Max);

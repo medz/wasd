@@ -585,7 +585,13 @@ class WASI implements wasi_iface.WASI {
         final bufferLength = _asInt(args[2]);
         final cookie = _asInt64(args[3]);
         final bufferUsedPtr = _asInt(args[4]);
-        final entries = _vfs.directoryEntriesForFd(fd);
+        final directoryPath = _vfs.directoryPathForFd(fd);
+        final hostPreopenPath = directoryPath == null
+            ? null
+            : _hostPreopenPathForGuestPath(directoryPath);
+        final entries = hostPreopenPath == null
+            ? _vfs.directoryEntriesForFd(fd)
+            : _hostDirectoryEntries(hostPreopenPath.hostPath);
         if (entries == null) {
           return _errnoBadf;
         }
@@ -1866,12 +1872,11 @@ class WASI implements wasi_iface.WASI {
     required int descriptorFlags,
   }) {
     try {
-      final stat = io.Directory(hostPath).statSync();
       final entries = _hostDirectoryEntries(hostPath);
       return _vfs.openDirectoryHandle(
         guestPath,
         entries: entries,
-        metadata: _metadataFromHostStat(stat),
+        metadata: _metadataFromHostPath(hostPath),
         rightsBase: rightsBase,
         rightsInheriting: rightsInheriting,
         descriptorFlags: descriptorFlags,
@@ -1906,12 +1911,11 @@ class WASI implements wasi_iface.WASI {
       if (truncate) {
         opened.truncateSync(0);
       }
-      final stat = file.statSync();
       return _vfs.openFileHandle(
         _Preview1NativeHostOpenFile(
           opened,
           hostPath: hostPath,
-          metadata: _metadataFromHostStat(stat),
+          metadata: _metadataFromHostPath(hostPath),
           rights: wasi_vfs.Preview1DescriptorRights.file(
             base: rightsBase,
             inheriting: rightsInheriting,
@@ -2145,7 +2149,8 @@ class WASI implements wasi_iface.WASI {
     if (oldType == io.FileSystemEntityType.directory) {
       return wasi_vfs.Preview1PathMutationResult.permissionDenied;
     }
-    if (oldType != io.FileSystemEntityType.file) {
+    if (oldType != io.FileSystemEntityType.file &&
+        oldType != io.FileSystemEntityType.link) {
       return oldType == io.FileSystemEntityType.notFound
           ? wasi_vfs.Preview1PathMutationResult.noEntry
           : wasi_vfs.Preview1PathMutationResult.permissionDenied;
@@ -2378,7 +2383,18 @@ class WASI implements wasi_iface.WASI {
     final entities = io.Directory(
       hostPath,
     ).listSync(recursive: false, followLinks: false);
-    final entries = <wasi_vfs.Preview1DirectoryEntry>[];
+    final entries = <wasi_vfs.Preview1DirectoryEntry>[
+      wasi_vfs.Preview1DirectoryEntry(
+        name: '.',
+        fileType: _filetypeDirectory,
+        inode: _hostPathInode(hostPath),
+      ),
+      wasi_vfs.Preview1DirectoryEntry(
+        name: '..',
+        fileType: _filetypeDirectory,
+        inode: _hostPathInode(io.Directory(hostPath).parent.path),
+      ),
+    ];
     for (final entity in entities) {
       final name = _hostEntityName(entity.path);
       if (name.isEmpty) {
@@ -2417,13 +2433,8 @@ class WASI implements wasi_iface.WASI {
     return null;
   }
 
-  int _hostEntityInode(io.FileSystemEntity entity) {
-    try {
-      return _metadataFromHostStat(entity.statSync()).inode;
-    } on io.FileSystemException {
-      return wasi_vfs.Preview1VirtualNodeMetadata().inode;
-    }
-  }
+  int _hostEntityInode(io.FileSystemEntity entity) =>
+      _hostPathInode(entity.path);
 
   String _hostEntityName(String path) {
     final sanitized = path.replaceAll('\\', '/');
@@ -2482,17 +2493,16 @@ class WASI implements wasi_iface.WASI {
             errno: _errnoSuccess,
             entry: wasi_vfs.Preview1VirtualPathEntry(
               kind: wasi_vfs.Preview1VirtualPathEntryKind.file,
-              metadata: _metadataFromHostStat(stat),
+              metadata: _metadataFromHostPath(hostPath),
               size: stat.size,
             ),
           );
         case io.FileSystemEntityType.directory:
-          final stat = io.Directory(hostPath).statSync();
           return (
             errno: _errnoSuccess,
             entry: wasi_vfs.Preview1VirtualPathEntry(
               kind: wasi_vfs.Preview1VirtualPathEntryKind.directory,
-              metadata: _metadataFromHostStat(stat),
+              metadata: _metadataFromHostPath(hostPath),
             ),
           );
         case io.FileSystemEntityType.link:
@@ -2519,7 +2529,7 @@ class WASI implements wasi_iface.WASI {
       errno: _errnoSuccess,
       entry: wasi_vfs.Preview1VirtualPathEntry(
         kind: wasi_vfs.Preview1VirtualPathEntryKind.symlink,
-        metadata: wasi_vfs.Preview1VirtualNodeMetadata(),
+        metadata: _metadataFromHostLstat(hostPath),
         size: target.targetBytes!.length,
       ),
     );
@@ -2584,7 +2594,12 @@ class WASI implements wasi_iface.WASI {
     var type = io.FileSystemEntity.typeSync(targetHostPath, followLinks: false);
     if (type == io.FileSystemEntityType.link) {
       if (!followSymlinks) {
-        return _errnoNotsup;
+        return _applyHostPathResolvedFilestatTimes(
+          hostPath: targetHostPath,
+          type: type,
+          noFollowSymlink: true,
+          update: update,
+        );
       }
       final resolved = _resolveHostSymlinkTarget(
         linkHostPath: targetHostPath,
@@ -2599,11 +2614,10 @@ class WASI implements wasi_iface.WASI {
     if (type == io.FileSystemEntityType.notFound) {
       return _errnoNoent;
     }
-    if (type != io.FileSystemEntityType.file) {
-      return _errnoNotsup;
-    }
-    return _applyHostFileResolvedFilestatTimes(
+    return _applyHostPathResolvedFilestatTimes(
       hostPath: targetHostPath,
+      type: type,
+      noFollowSymlink: false,
       update: update,
     );
   }
@@ -2676,6 +2690,27 @@ class WASI implements wasi_iface.WASI {
     required ({int errno, int? accessTimeNanos, int? modificationTimeNanos})
     update,
   }) {
+    final hostResult = _hostSetPathTimes(
+      hostPath: hostPath,
+      update: update,
+      noFollowSymlink: false,
+    );
+    switch (hostResult) {
+      case _HostSetPathTimesResult.success:
+        if (metadata != null) {
+          _copyHostPathTimesToMetadata(metadata, hostPath);
+        }
+        return _errnoSuccess;
+      case _HostSetPathTimesResult.noEntry:
+        return _errnoNoent;
+      case _HostSetPathTimesResult.invalid:
+        return _errnoInval;
+      case _HostSetPathTimesResult.permissionDenied:
+        return _errnoPerm;
+      case _HostSetPathTimesResult.unsupported:
+        break;
+    }
+
     DateTime dateTimeFromNanos(int nanos) {
       return DateTime.fromMicrosecondsSinceEpoch(nanos ~/ 1000, isUtc: true);
     }
@@ -2691,7 +2726,7 @@ class WASI implements wasi_iface.WASI {
         file.setLastModifiedSync(dateTimeFromNanos(modificationTimeNanos));
       }
       if (metadata != null) {
-        _copyHostStatToMetadata(metadata, file.statSync());
+        _copyHostPathTimesToMetadata(metadata, hostPath);
       }
       return _errnoSuccess;
     } on ArgumentError {
@@ -2705,18 +2740,35 @@ class WASI implements wasi_iface.WASI {
     }
   }
 
-  void _copyHostStatToMetadata(
-    wasi_vfs.Preview1VirtualNodeMetadata metadata,
-    io.FileStat stat,
-  ) {
-    final accessed = stat.accessed.microsecondsSinceEpoch * 1000;
-    final modified = stat.modified.microsecondsSinceEpoch * 1000;
-    if (accessed > 0) {
-      metadata.accessTimeNanos = accessed;
+  int _applyHostPathResolvedFilestatTimes({
+    required String hostPath,
+    required io.FileSystemEntityType type,
+    required bool noFollowSymlink,
+    required ({int errno, int? accessTimeNanos, int? modificationTimeNanos})
+    update,
+  }) {
+    if (type == io.FileSystemEntityType.file && !noFollowSymlink) {
+      return _applyHostFileResolvedFilestatTimes(
+        hostPath: hostPath,
+        update: update,
+      );
     }
-    if (modified > 0) {
-      metadata.modificationTimeNanos = modified;
+    if (type != io.FileSystemEntityType.directory &&
+        type != io.FileSystemEntityType.link) {
+      return _errnoNotsup;
     }
+
+    return switch (_hostSetPathTimes(
+      hostPath: hostPath,
+      update: update,
+      noFollowSymlink: noFollowSymlink,
+    )) {
+      _HostSetPathTimesResult.success => _errnoSuccess,
+      _HostSetPathTimesResult.noEntry => _errnoNoent,
+      _HostSetPathTimesResult.invalid => _errnoInval,
+      _HostSetPathTimesResult.permissionDenied => _errnoPerm,
+      _HostSetPathTimesResult.unsupported => _errnoNotsup,
+    };
   }
 
   _ResolvedPath _resolvePath({
@@ -3297,12 +3349,86 @@ bool _hostHardLink(String existingPath, String newPath) {
   return _posixCreateHardLink(existingPath, newPath);
 }
 
+_HostSetPathTimesResult _hostSetPathTimes({
+  required String hostPath,
+  required ({int errno, int? accessTimeNanos, int? modificationTimeNanos})
+  update,
+  required bool noFollowSymlink,
+}) {
+  if (io.Platform.isWindows) {
+    return _HostSetPathTimesResult.unsupported;
+  }
+  return _posixSetPathTimes(
+    hostPath: hostPath,
+    update: update,
+    noFollowSymlink: noFollowSymlink,
+  );
+}
+
+_HostSetPathTimesResult _posixSetPathTimes({
+  required String hostPath,
+  required ({int errno, int? accessTimeNanos, int? modificationTimeNanos})
+  update,
+  required bool noFollowSymlink,
+}) {
+  final pathPointer = hostPath.toNativeUtf8();
+  final times = malloc<_NativeTimespec>(2);
+  try {
+    _writeNativeTimespec(times, update.accessTimeNanos);
+    _writeNativeTimespec(times + 1, update.modificationTimeNanos);
+    final result = _posixUtimensatFunction()(
+      _posixAtFdcwd,
+      pathPointer,
+      times,
+      noFollowSymlink ? _posixAtSymlinkNoFollow : 0,
+    );
+    if (result == 0) {
+      return _HostSetPathTimesResult.success;
+    }
+    if (io.FileSystemEntity.typeSync(hostPath, followLinks: false) ==
+        io.FileSystemEntityType.notFound) {
+      return _HostSetPathTimesResult.noEntry;
+    }
+    return _HostSetPathTimesResult.permissionDenied;
+  } on ArgumentError {
+    return _HostSetPathTimesResult.invalid;
+  } on io.FileSystemException {
+    return _HostSetPathTimesResult.permissionDenied;
+  } catch (_) {
+    return _HostSetPathTimesResult.unsupported;
+  } finally {
+    malloc.free(pathPointer);
+    malloc.free(times);
+  }
+}
+
+void _writeNativeTimespec(ffi.Pointer<_NativeTimespec> target, int? timeNanos) {
+  final ref = target.ref;
+  if (timeNanos == null) {
+    ref.tvSec = 0;
+    ref.tvNsec = _posixUtimeOmit;
+    return;
+  }
+  ref.tvSec = timeNanos ~/ _nanosPerSecond;
+  ref.tvNsec = timeNanos.remainder(_nanosPerSecond);
+}
+
 bool _posixCreateHardLink(String existingPath, String newPath) {
-  final link = _posixLinkFunction();
   final existingPathPointer = existingPath.toNativeUtf8();
   final newPathPointer = newPath.toNativeUtf8();
   try {
-    return link(existingPathPointer, newPathPointer) == 0;
+    try {
+      return _posixLinkatFunction()(
+            _posixAtFdcwd,
+            existingPathPointer,
+            _posixAtFdcwd,
+            newPathPointer,
+            0,
+          ) ==
+          0;
+    } catch (_) {
+      return _posixLinkFunction()(existingPathPointer, newPathPointer) == 0;
+    }
   } finally {
     malloc.free(existingPathPointer);
     malloc.free(newPathPointer);
@@ -3323,10 +3449,27 @@ bool _windowsCreateHardLink(String existingPath, String newPath) {
 }
 
 _PosixLinkDart? _cachedPosixLink;
+_PosixLinkatDart? _cachedPosixLinkat;
+_PosixUtimensatDart? _cachedPosixUtimensat;
+_PosixLstatDart? _cachedPosixLstat;
 _WindowsCreateHardLinkDart? _cachedWindowsCreateHardLink;
 
 _PosixLinkDart _posixLinkFunction() => _cachedPosixLink ??= _openPosixCLibrary()
     .lookupFunction<_PosixLinkNative, _PosixLinkDart>('link');
+
+_PosixLinkatDart _posixLinkatFunction() =>
+    _cachedPosixLinkat ??= _openPosixCLibrary()
+        .lookupFunction<_PosixLinkatNative, _PosixLinkatDart>('linkat');
+
+_PosixUtimensatDart _posixUtimensatFunction() =>
+    _cachedPosixUtimensat ??= _openPosixCLibrary()
+        .lookupFunction<_PosixUtimensatNative, _PosixUtimensatDart>(
+          'utimensat',
+        );
+
+_PosixLstatDart _posixLstatFunction() =>
+    _cachedPosixLstat ??= _openPosixCLibrary()
+        .lookupFunction<_PosixLstatNative, _PosixLstatDart>('lstat');
 
 _WindowsCreateHardLinkDart _windowsCreateHardLinkFunction() =>
     _cachedWindowsCreateHardLink ??= ffi.DynamicLibrary.open('kernel32.dll')
@@ -3349,6 +3492,32 @@ typedef _PosixLinkNative =
     ffi.Int32 Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>);
 typedef _PosixLinkDart = int Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>);
 
+typedef _PosixLinkatNative =
+    ffi.Int32 Function(
+      ffi.Int32,
+      ffi.Pointer<Utf8>,
+      ffi.Int32,
+      ffi.Pointer<Utf8>,
+      ffi.Int32,
+    );
+typedef _PosixLinkatDart =
+    int Function(int, ffi.Pointer<Utf8>, int, ffi.Pointer<Utf8>, int);
+
+typedef _PosixUtimensatNative =
+    ffi.Int32 Function(
+      ffi.Int32,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<_NativeTimespec>,
+      ffi.Int32,
+    );
+typedef _PosixUtimensatDart =
+    int Function(int, ffi.Pointer<Utf8>, ffi.Pointer<_NativeTimespec>, int);
+
+typedef _PosixLstatNative =
+    ffi.Int32 Function(ffi.Pointer<Utf8>, ffi.Pointer<ffi.Void>);
+typedef _PosixLstatDart =
+    int Function(ffi.Pointer<Utf8>, ffi.Pointer<ffi.Void>);
+
 typedef _WindowsCreateHardLinkNative =
     ffi.Int32 Function(
       ffi.Pointer<Utf16>,
@@ -3357,6 +3526,22 @@ typedef _WindowsCreateHardLinkNative =
     );
 typedef _WindowsCreateHardLinkDart =
     int Function(ffi.Pointer<Utf16>, ffi.Pointer<Utf16>, ffi.Pointer<ffi.Void>);
+
+final class _NativeTimespec extends ffi.Struct {
+  @ffi.Int64()
+  external int tvSec;
+
+  @ffi.Int64()
+  external int tvNsec;
+}
+
+enum _HostSetPathTimesResult {
+  success,
+  noEntry,
+  invalid,
+  permissionDenied,
+  unsupported,
+}
 
 wasi_vfs.Preview1VirtualNodeMetadata _metadataFromHostStat(io.FileStat stat) {
   final metadata = wasi_vfs.Preview1VirtualNodeMetadata();
@@ -3370,6 +3555,119 @@ wasi_vfs.Preview1VirtualNodeMetadata _metadataFromHostStat(io.FileStat stat) {
   }
   return metadata;
 }
+
+wasi_vfs.Preview1VirtualNodeMetadata _metadataFromHostPath(String hostPath) {
+  final info = _hostLstatInfo(hostPath);
+  if (info == null) {
+    return _metadataFromHostStat(io.File(hostPath).statSync());
+  }
+  return _metadataFromHostStatInfo(info);
+}
+
+wasi_vfs.Preview1VirtualNodeMetadata _metadataFromHostLstat(String hostPath) {
+  final info = _hostLstatInfo(hostPath);
+  return info == null
+      ? wasi_vfs.Preview1VirtualNodeMetadata()
+      : _metadataFromHostStatInfo(info);
+}
+
+wasi_vfs.Preview1VirtualNodeMetadata _metadataFromHostStatInfo(
+  _HostLstatInfo info,
+) {
+  final metadata = wasi_vfs.Preview1VirtualNodeMetadata(inode: info.inode);
+  _copyHostStatInfoTimesToMetadata(metadata, info);
+  return metadata;
+}
+
+void _copyHostPathTimesToMetadata(
+  wasi_vfs.Preview1VirtualNodeMetadata metadata,
+  String hostPath,
+) {
+  final info = _hostLstatInfo(hostPath);
+  if (info == null) {
+    return;
+  }
+  _copyHostStatInfoTimesToMetadata(metadata, info);
+}
+
+void _copyHostStatInfoTimesToMetadata(
+  wasi_vfs.Preview1VirtualNodeMetadata metadata,
+  _HostLstatInfo info,
+) {
+  if (info.accessTimeNanos > 0) {
+    metadata.accessTimeNanos = info.accessTimeNanos;
+  }
+  if (info.modificationTimeNanos > 0) {
+    metadata.modificationTimeNanos = info.modificationTimeNanos;
+  }
+}
+
+int _hostPathInode(String hostPath) =>
+    _hostLstatInfo(hostPath)?.inode ??
+    wasi_vfs.Preview1VirtualNodeMetadata().inode;
+
+_HostLstatInfo? _hostLstatInfo(String hostPath) {
+  if (io.Platform.isWindows) {
+    return null;
+  }
+  final pathPointer = hostPath.toNativeUtf8();
+  final statBuffer = malloc<ffi.Uint8>(_hostStatBufferSize);
+  try {
+    if (_posixLstatFunction()(pathPointer, statBuffer.cast<ffi.Void>()) != 0) {
+      return null;
+    }
+    return (
+      inode: _readHostStatInode(statBuffer),
+      accessTimeNanos: _readHostStatTimespecNanos(
+        statBuffer,
+        _hostStatAccessTimeOffset,
+      ),
+      modificationTimeNanos: _readHostStatTimespecNanos(
+        statBuffer,
+        _hostStatModificationTimeOffset,
+      ),
+    );
+  } catch (_) {
+    return null;
+  } finally {
+    malloc.free(pathPointer);
+    malloc.free(statBuffer);
+  }
+}
+
+int _readHostStatInode(ffi.Pointer<ffi.Uint8> statBuffer) {
+  return (statBuffer + _hostStatInodeOffset).cast<ffi.Uint64>().value;
+}
+
+int _readHostStatTimespecNanos(ffi.Pointer<ffi.Uint8> statBuffer, int offset) {
+  final seconds = (statBuffer + offset).cast<ffi.Int64>().value;
+  final nanos = (statBuffer + offset + 8).cast<ffi.Int64>().value;
+  return seconds * _nanosPerSecond + nanos;
+}
+
+int get _posixAtFdcwd => io.Platform.isMacOS || io.Platform.isIOS ? -2 : -100;
+
+int get _posixAtSymlinkNoFollow =>
+    io.Platform.isMacOS || io.Platform.isIOS ? 0x20 : 0x100;
+
+int get _posixUtimeOmit =>
+    io.Platform.isMacOS || io.Platform.isIOS ? -2 : 1073741822;
+
+int get _hostStatAccessTimeOffset =>
+    io.Platform.isMacOS || io.Platform.isIOS ? 32 : 72;
+
+int get _hostStatModificationTimeOffset =>
+    io.Platform.isMacOS || io.Platform.isIOS ? 48 : 88;
+
+const int _hostStatInodeOffset = 8;
+const int _nanosPerSecond = 1000000000;
+const int _hostStatBufferSize = 256;
+
+typedef _HostLstatInfo = ({
+  int inode,
+  int accessTimeNanos,
+  int modificationTimeNanos,
+});
 
 final class _Preview1NativeHostOpenFile implements wasi_vfs.Preview1OpenFile {
   _Preview1NativeHostOpenFile(
