@@ -3786,7 +3786,7 @@ int? _nodeOpenSync(JSObject fs, String hostPath, String flags) {
   }
 }
 
-int _nodeReadSync(
+wasi_vfs.Preview1OpenFileIoResult _nodeReadSync(
   JSObject fs,
   int fd,
   Uint8List target,
@@ -3795,7 +3795,7 @@ int _nodeReadSync(
   int fileOffset,
 ) {
   if (length <= 0 || fileOffset < 0 || start < 0 || start >= target.length) {
-    return 0;
+    return (errno: _errnoSuccess, count: 0);
   }
   final end = math.min(target.length, start + length);
   try {
@@ -3806,13 +3806,13 @@ int _nodeReadSync(
       (end - start).toJS,
       fileOffset.toJS,
     ]);
-    return read.toDartDouble.toInt();
+    return (errno: _errnoSuccess, count: read.toDartDouble.toInt());
   } catch (_) {
-    return 0;
+    return (errno: _errnoIo, count: 0);
   }
 }
 
-int _nodeWriteSync(
+wasi_vfs.Preview1OpenFileIoResult _nodeWriteSync(
   JSObject fs,
   int fd,
   Uint8List source,
@@ -3821,7 +3821,7 @@ int _nodeWriteSync(
   int fileOffset,
 ) {
   if (length <= 0 || fileOffset < 0 || start < 0 || start >= source.length) {
-    return 0;
+    return (errno: _errnoSuccess, count: 0);
   }
   final end = math.min(source.length, start + length);
   try {
@@ -3832,9 +3832,9 @@ int _nodeWriteSync(
       (end - start).toJS,
       fileOffset.toJS,
     ]);
-    return written.toDartDouble.toInt();
+    return (errno: _errnoSuccess, count: written.toDartDouble.toInt());
   } catch (_) {
-    return 0;
+    return (errno: _errnoIo, count: 0);
   }
 }
 
@@ -3944,29 +3944,45 @@ final class _Preview1NodeHostOpenFile implements wasi_vfs.Preview1OpenFile {
   int get length => _nodeStatInt(_nodeFstat(_fs, _fd), 'size') ?? 0;
 
   @override
-  int readInto(Uint8List target, int start, int length) {
+  wasi_vfs.Preview1OpenFileIoResult readInto(
+    Uint8List target,
+    int start,
+    int length,
+  ) {
     final count = readAtInto(target, start, length, offset);
-    offset += count;
+    offset += count.count;
     return count;
   }
 
   @override
-  int readAtInto(Uint8List target, int start, int length, int fileOffset) =>
-      _nodeReadSync(_fs, _fd, target, start, length, fileOffset);
+  wasi_vfs.Preview1OpenFileIoResult readAtInto(
+    Uint8List target,
+    int start,
+    int length,
+    int fileOffset,
+  ) => _nodeReadSync(_fs, _fd, target, start, length, fileOffset);
 
   @override
-  int writeFrom(Uint8List source, int start, int length) {
+  wasi_vfs.Preview1OpenFileIoResult writeFrom(
+    Uint8List source,
+    int start,
+    int length,
+  ) {
     final fileOffset = (descriptorFlags & _fdflagAppend) == 0
         ? offset
         : this.length;
     final written = writeAtFrom(source, start, length, fileOffset);
-    offset = fileOffset + written;
+    offset = fileOffset + written.count;
     return written;
   }
 
   @override
-  int writeAtFrom(Uint8List source, int start, int length, int fileOffset) =>
-      _nodeWriteSync(_fs, _fd, source, start, length, fileOffset);
+  wasi_vfs.Preview1OpenFileIoResult writeAtFrom(
+    Uint8List source,
+    int start,
+    int length,
+    int fileOffset,
+  ) => _nodeWriteSync(_fs, _fd, source, start, length, fileOffset);
 
   @override
   int setLength(int length) {

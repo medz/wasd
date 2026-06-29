@@ -1752,9 +1752,16 @@ int readOpenFileIntoIov({
         : iovSnapshot[snapshotIndex + 1];
 
     if (len > 0) {
-      totalRead += fileOffset == null
+      final result = fileOffset == null
           ? opened.readInto(bytes, buf, len)
           : opened.readAtInto(bytes, buf, len, fileOffset + totalRead);
+      if (result.errno != errnoSuccess) {
+        if (totalRead == 0) {
+          return result.errno;
+        }
+        break;
+      }
+      totalRead += result.count;
     }
   }
 
@@ -1802,7 +1809,7 @@ int writeOpenFileFromIov({
     final len = data.getUint32(entry + 4, Endian.little);
 
     if (len > 0) {
-      totalWritten += fileOffset == null
+      final result = fileOffset == null
           ? opened.writeFrom(bytes, buf, len)
           : opened.writeAtFrom(
               bytes,
@@ -1810,6 +1817,13 @@ int writeOpenFileFromIov({
               len,
               append ? opened.length : fileOffset + totalWritten,
             );
+      if (result.errno != errnoSuccess) {
+        if (totalWritten == 0) {
+          return result.errno;
+        }
+        break;
+      }
+      totalWritten += result.count;
     }
   }
 
@@ -2030,6 +2044,8 @@ final class Preview1VirtualSymlink {
   final Preview1VirtualNodeMetadata metadata = Preview1VirtualNodeMetadata();
 }
 
+typedef Preview1OpenFileIoResult = ({int errno, int count});
+
 abstract interface class Preview1OpenFile {
   Preview1DescriptorRights get rights;
 
@@ -2043,13 +2059,23 @@ abstract interface class Preview1OpenFile {
 
   Preview1VirtualNodeMetadata get metadata;
 
-  int readInto(Uint8List target, int start, int length);
+  Preview1OpenFileIoResult readInto(Uint8List target, int start, int length);
 
-  int readAtInto(Uint8List target, int start, int length, int fileOffset);
+  Preview1OpenFileIoResult readAtInto(
+    Uint8List target,
+    int start,
+    int length,
+    int fileOffset,
+  );
 
-  int writeFrom(Uint8List source, int start, int length);
+  Preview1OpenFileIoResult writeFrom(Uint8List source, int start, int length);
 
-  int writeAtFrom(Uint8List source, int start, int length, int fileOffset);
+  Preview1OpenFileIoResult writeAtFrom(
+    Uint8List source,
+    int start,
+    int length,
+    int fileOffset,
+  );
 
   int setLength(int length);
 
@@ -2089,29 +2115,43 @@ final class Preview1VirtualOpenFile implements Preview1OpenFile {
   Preview1VirtualNodeMetadata get metadata => file.metadata;
 
   @override
-  int readInto(Uint8List target, int start, int length) {
+  Preview1OpenFileIoResult readInto(Uint8List target, int start, int length) {
     final count = readAtInto(target, start, length, offset);
-    offset += count;
+    offset += count.count;
     return count;
   }
 
   @override
-  int readAtInto(Uint8List target, int start, int length, int fileOffset) =>
-      file.readAtInto(target, start, length, fileOffset);
+  Preview1OpenFileIoResult readAtInto(
+    Uint8List target,
+    int start,
+    int length,
+    int fileOffset,
+  ) => (
+    errno: errnoSuccess,
+    count: file.readAtInto(target, start, length, fileOffset),
+  );
 
   @override
-  int writeFrom(Uint8List source, int start, int length) {
+  Preview1OpenFileIoResult writeFrom(Uint8List source, int start, int length) {
     final fileOffset = (descriptorFlags & fdflagAppend) == 0
         ? offset
         : file.length;
     final written = writeAtFrom(source, start, length, fileOffset);
-    offset = fileOffset + written;
+    offset = fileOffset + written.count;
     return written;
   }
 
   @override
-  int writeAtFrom(Uint8List source, int start, int length, int fileOffset) =>
-      file.writeAtFrom(source, start, length, fileOffset);
+  Preview1OpenFileIoResult writeAtFrom(
+    Uint8List source,
+    int start,
+    int length,
+    int fileOffset,
+  ) => (
+    errno: errnoSuccess,
+    count: file.writeAtFrom(source, start, length, fileOffset),
+  );
 
   @override
   int setLength(int length) {

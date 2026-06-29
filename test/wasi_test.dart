@@ -225,24 +225,36 @@ final class _SyncRecordingOpenFile implements Preview1OpenFile {
 
   int dataSyncCount = 0;
   int syncCount = 0;
+  int readErrno = preview1_constants.errnoSuccess;
+  int writeErrno = preview1_constants.errnoSuccess;
   int setLengthErrno = preview1_constants.errnoSuccess;
   int allocateErrno = preview1_constants.errnoSuccess;
   int dataSyncErrno = preview1_constants.errnoSuccess;
   int syncErrno = preview1_constants.errnoSuccess;
 
   @override
-  int readInto(Uint8List target, int start, int length) => length;
+  Preview1OpenFileIoResult readInto(Uint8List target, int start, int length) =>
+      (errno: readErrno, count: readErrno == 0 ? length : 0);
 
   @override
-  int readAtInto(Uint8List target, int start, int length, int fileOffset) =>
-      length;
+  Preview1OpenFileIoResult readAtInto(
+    Uint8List target,
+    int start,
+    int length,
+    int fileOffset,
+  ) => (errno: readErrno, count: readErrno == 0 ? length : 0);
 
   @override
-  int writeFrom(Uint8List source, int start, int length) => length;
+  Preview1OpenFileIoResult writeFrom(Uint8List source, int start, int length) =>
+      (errno: writeErrno, count: writeErrno == 0 ? length : 0);
 
   @override
-  int writeAtFrom(Uint8List source, int start, int length, int fileOffset) =>
-      length;
+  Preview1OpenFileIoResult writeAtFrom(
+    Uint8List source,
+    int start,
+    int length,
+    int fileOffset,
+  ) => (errno: writeErrno, count: writeErrno == 0 ? length : 0);
 
   @override
   int setLength(int length) => setLengthErrno;
@@ -979,6 +991,49 @@ void main() {
       expect(data.getUint32(countPtr, Endian.little), 1);
       expect(syncOpened.dataSyncCount, 0);
       expect(syncOpened.syncCount, 1);
+    });
+
+    test('fd read and write helpers propagate open file I/O errors', () {
+      final bytes = Uint8List(64);
+      final data = ByteData.view(bytes.buffer);
+      const iovPtr = 0;
+      const payloadPtr = 16;
+      const countPtr = 32;
+      bytes[payloadPtr] = 7;
+      data.setUint32(iovPtr, payloadPtr, Endian.little);
+      data.setUint32(iovPtr + 4, 1, Endian.little);
+
+      final readOpened = _SyncRecordingOpenFile()
+        ..readErrno = preview1_constants.errnoIo;
+      data.setUint32(countPtr, 0xfeedface, Endian.little);
+      expect(
+        readOpenFileIntoIov(
+          opened: readOpened,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nreadPtr: countPtr,
+        ),
+        preview1_constants.errnoIo,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+
+      final writeOpened = _SyncRecordingOpenFile()
+        ..writeErrno = preview1_constants.errnoIo;
+      data.setUint32(countPtr, 0xfeedface, Endian.little);
+      expect(
+        writeOpenFileFromIov(
+          opened: writeOpened,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nwrittenPtr: countPtr,
+        ),
+        preview1_constants.errnoIo,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
     });
 
     test('fd write helpers propagate synchronization failures', () {

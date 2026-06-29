@@ -3837,58 +3837,91 @@ final class _Preview1NativeHostOpenFile implements wasi_vfs.Preview1OpenFile {
   int get length => _file.lengthSync();
 
   @override
-  int readInto(Uint8List target, int start, int length) {
+  wasi_vfs.Preview1OpenFileIoResult readInto(
+    Uint8List target,
+    int start,
+    int length,
+  ) {
     final count = readAtInto(target, start, length, offset);
-    offset += count;
+    offset += count.count;
     return count;
   }
 
   @override
-  int readAtInto(Uint8List target, int start, int length, int fileOffset) {
+  wasi_vfs.Preview1OpenFileIoResult readAtInto(
+    Uint8List target,
+    int start,
+    int length,
+    int fileOffset,
+  ) {
     if (length <= 0 || fileOffset < 0 || start < 0 || start >= target.length) {
-      return 0;
+      return (errno: _errnoSuccess, count: 0);
     }
     final end = math.min(target.length, start + length);
-    final originalPosition = _file.positionSync();
+    int? originalPosition;
     try {
+      originalPosition = _file.positionSync();
       _file.setPositionSync(fileOffset);
-      return _file.readIntoSync(target, start, end);
+      return (
+        errno: _errnoSuccess,
+        count: _file.readIntoSync(target, start, end),
+      );
+    } on io.FileSystemException {
+      return (errno: _errnoIo, count: 0);
     } finally {
-      _file.setPositionSync(originalPosition);
+      if (originalPosition != null) {
+        try {
+          _file.setPositionSync(originalPosition);
+        } on io.FileSystemException {
+          // Preserve the WASI syscall result from the actual read path.
+        }
+      }
     }
   }
 
   @override
-  int writeFrom(Uint8List source, int start, int length) {
+  wasi_vfs.Preview1OpenFileIoResult writeFrom(
+    Uint8List source,
+    int start,
+    int length,
+  ) {
     final fileOffset = (descriptorFlags & _fdflagAppend) == 0
         ? offset
         : this.length;
     final written = writeAtFrom(source, start, length, fileOffset);
-    offset = fileOffset + written;
+    offset = fileOffset + written.count;
     return written;
   }
 
   @override
-  int writeAtFrom(Uint8List source, int start, int length, int fileOffset) {
+  wasi_vfs.Preview1OpenFileIoResult writeAtFrom(
+    Uint8List source,
+    int start,
+    int length,
+    int fileOffset,
+  ) {
     if (length <= 0 || fileOffset < 0 || start < 0 || start >= source.length) {
-      return 0;
+      return (errno: _errnoSuccess, count: 0);
     }
     final end = math.min(source.length, start + length);
     if (end <= start) {
-      return 0;
+      return (errno: _errnoSuccess, count: 0);
     }
-    final originalPosition = _file.positionSync();
+    int? originalPosition;
     try {
+      originalPosition = _file.positionSync();
       _file.setPositionSync(fileOffset);
       _file.writeFromSync(source, start, end);
-      return end - start;
+      return (errno: _errnoSuccess, count: end - start);
     } on io.FileSystemException {
-      return 0;
+      return (errno: _errnoIo, count: 0);
     } finally {
-      try {
-        _file.setPositionSync(originalPosition);
-      } on io.FileSystemException {
-        // Preserve the WASI syscall result from the actual write path.
+      if (originalPosition != null) {
+        try {
+          _file.setPositionSync(originalPosition);
+        } on io.FileSystemException {
+          // Preserve the WASI syscall result from the actual write path.
+        }
       }
     }
   }
