@@ -7736,6 +7736,7 @@ void main() {
             '/sandbox/file-over-link.txt': Uint8List.fromList(
               utf8.encode('replacement'),
             ),
+            '/sandbox/hard-source.txt': Uint8List.fromList(utf8.encode('hard')),
             '/sandbox/link-target.txt': Uint8List.fromList(
               utf8.encode('linked'),
             ),
@@ -7860,6 +7861,18 @@ void main() {
           }
         }
 
+        int pathFilestatErrno(String path, {int lookupFlags = 0}) {
+          final pathLen = writePath(oldPathPtr, path);
+          return pathFilestatGet.ref([
+                3,
+                lookupFlags,
+                oldPathPtr,
+                pathLen,
+                filestatPtr,
+              ])
+              as int;
+        }
+
         int fdLinkCount(int fd) {
           final errno = fdFilestatGet.ref([fd, filestatPtr]) as int;
           expect(errno, 0);
@@ -7909,6 +7922,33 @@ void main() {
         expect(fdLinkCount(fileTargetFd), 0);
         expect(readFd(fileTargetFd, 'target'.length), 'target');
 
+        final hardSourceFd = openFile('hard-source.txt');
+        final hardTargetPathLen = writePath(newPathPtr, 'hard-target.txt');
+        final hardSourcePathLen = writePath(oldPathPtr, 'hard-source.txt');
+        expect(
+          pathLink.ref([
+            3,
+            0,
+            oldPathPtr,
+            hardSourcePathLen,
+            3,
+            newPathPtr,
+            hardTargetPathLen,
+          ]),
+          0,
+        );
+        expectPathStat('hard-source.txt', linkCount: 2);
+        expect(renamePath('hard-source.txt', 'hard-target.txt'), 0);
+        expect(pathFilestatErrno('hard-source.txt'), _errnoNoent);
+        expectPathStat(
+          'hard-target.txt',
+          filetype: _filetypeRegularFile,
+          size: 'hard'.length,
+          linkCount: 1,
+        );
+        expect(fdLinkCount(hardSourceFd), 1);
+        expect(readFd(hardSourceFd, 'hard'.length), 'hard');
+
         expect(symlinkPath('link-target.txt', 'replace-link.txt'), 0);
         final hardLinkPathLen = writePath(newPathPtr, 'spare-link.txt');
         final replaceLinkPathLen = writePath(oldPathPtr, 'replace-link.txt');
@@ -7957,6 +7997,31 @@ void main() {
         expect(readlinkPath('symlink-victim.txt'), 'link-target.txt');
         expect(fdLinkCount(symlinkVictimFd), 0);
         expect(readFd(symlinkVictimFd, 'victim'.length), 'victim');
+
+        expect(symlinkPath('link-target.txt', 'same-link.txt'), 0);
+        final sameLinkPathLen = writePath(oldPathPtr, 'same-link.txt');
+        final sameLinkHardPathLen = writePath(newPathPtr, 'same-link-hard.txt');
+        expect(
+          pathLink.ref([
+            3,
+            0,
+            oldPathPtr,
+            sameLinkPathLen,
+            3,
+            newPathPtr,
+            sameLinkHardPathLen,
+          ]),
+          0,
+        );
+        expectPathStat('same-link.txt', linkCount: 2);
+        expect(renamePath('same-link.txt', 'same-link-hard.txt'), 0);
+        expect(pathFilestatErrno('same-link.txt'), _errnoNoent);
+        expectPathStat(
+          'same-link-hard.txt',
+          filetype: _filetypeSymbolicLink,
+          linkCount: 1,
+        );
+        expect(readlinkPath('same-link-hard.txt'), 'link-target.txt');
       });
 
       test('path mutation preserves trailing slash errors', () async {

@@ -756,6 +756,14 @@ final class Preview1VirtualFileSystem {
       }
       final replacedFile = _filesByGuestPath[newNormalized];
       if (identical(replacedFile, oldFile)) {
+        _filesByGuestPath.remove(oldNormalized);
+        oldFile.metadata.releaseLink();
+        _removeDirectoryChild(oldNormalized);
+        _setDirectoryChild(newNormalized, filetypeRegularFile);
+        _rebuildDirectoryEntriesForPaths({
+          dirnameOfGuestPath(oldNormalized),
+          dirnameOfGuestPath(newNormalized),
+        });
         return Preview1PathMutationResult.success;
       }
       if (replacedFile != null) {
@@ -787,6 +795,14 @@ final class Preview1VirtualFileSystem {
       }
       final replacedSymlink = _symlinksByGuestPath[newNormalized];
       if (identical(replacedSymlink, oldSymlink)) {
+        _symlinksByGuestPath.remove(oldNormalized);
+        oldSymlink.metadata.releaseLink();
+        _removeDirectoryChild(oldNormalized);
+        _setDirectoryChild(newNormalized, filetypeSymbolicLink);
+        _rebuildDirectoryEntriesForPaths({
+          dirnameOfGuestPath(oldNormalized),
+          dirnameOfGuestPath(newNormalized),
+        });
         return Preview1PathMutationResult.success;
       }
       final replacedFile = _filesByGuestPath.remove(newNormalized);
