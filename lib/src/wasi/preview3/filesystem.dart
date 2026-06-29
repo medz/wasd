@@ -20,6 +20,10 @@ typedef WASIPreview3FilesystemFileBytesProvider =
 /// Supplies the current byte length for a regular file.
 typedef WASIPreview3FilesystemFileSizeProvider = BigInt Function();
 
+/// Supplies current descriptor metadata for stat operations.
+typedef WASIPreview3FilesystemMetadataProvider =
+    WASIPreview3FilesystemMetadata Function();
+
 /// Writes regular-file bytes starting at byte [offset].
 typedef WASIPreview3FilesystemFileWriteCallback =
     WASIPreview3FilesystemMutationResult Function(
@@ -150,6 +154,33 @@ final class WASIPreview3FilesystemTimestampUpdate {
       accessTimeNanos != null || modificationTimeNanos != null;
 }
 
+/// Metadata returned by WASI 0.3 filesystem stat operations.
+final class WASIPreview3FilesystemMetadata {
+  /// Creates descriptor metadata.
+  const WASIPreview3FilesystemMetadata({
+    this.linkCount,
+    this.size,
+    this.accessTimeNanos,
+    this.modificationTimeNanos,
+    this.statusChangeTimeNanos,
+  });
+
+  /// Number of hard links, or null when the backing store cannot report it.
+  final BigInt? linkCount;
+
+  /// Current byte size, or null to use the descriptor's existing size provider.
+  final BigInt? size;
+
+  /// Access timestamp in nanoseconds since the Unix epoch.
+  final BigInt? accessTimeNanos;
+
+  /// Modification timestamp in nanoseconds since the Unix epoch.
+  final BigInt? modificationTimeNanos;
+
+  /// Status-change timestamp in nanoseconds since the Unix epoch.
+  final BigInt? statusChangeTimeNanos;
+}
+
 /// Result returned by Preview3 filesystem readlink callbacks.
 final class WASIPreview3FilesystemReadLinkResult {
   /// Creates a successful readlink result with [target].
@@ -188,6 +219,7 @@ final class WASIPreview3FilesystemDirectory {
         const <WASIPreview3FilesystemDirectoryEntry>[],
     this.canMutate = false,
     this.mutationContext,
+    WASIPreview3FilesystemMetadataProvider? metadata,
     WASIPreview3FilesystemDirectoryMutationCallback? createDirectory,
     WASIPreview3FilesystemDirectoryFileCreateCallback? createFile,
     WASIPreview3FilesystemDirectoryLinkCallback? link,
@@ -200,6 +232,7 @@ final class WASIPreview3FilesystemDirectory {
   }) : _entries = List<WASIPreview3FilesystemDirectoryEntry>.of(entries),
        _entriesProvider = null,
        _entryResolver = null,
+       _metadata = metadata,
        _createDirectory = createDirectory,
        _createFile = createFile,
        _link = link,
@@ -216,6 +249,7 @@ final class WASIPreview3FilesystemDirectory {
     WASIPreview3FilesystemDirectoryEntryResolver? resolveEntry,
     this.canMutate = false,
     this.mutationContext,
+    WASIPreview3FilesystemMetadataProvider? metadata,
     WASIPreview3FilesystemDirectoryMutationCallback? createDirectory,
     WASIPreview3FilesystemDirectoryFileCreateCallback? createFile,
     WASIPreview3FilesystemDirectoryLinkCallback? link,
@@ -228,6 +262,7 @@ final class WASIPreview3FilesystemDirectory {
   }) : _entries = <WASIPreview3FilesystemDirectoryEntry>[],
        _entriesProvider = entries,
        _entryResolver = resolveEntry,
+       _metadata = metadata,
        _createDirectory = createDirectory,
        _createFile = createFile,
        _link = link,
@@ -251,6 +286,7 @@ final class WASIPreview3FilesystemDirectory {
   final List<WASIPreview3FilesystemDirectoryEntry> _entries;
   final WASIPreview3FilesystemDirectoryEntriesProvider? _entriesProvider;
   final WASIPreview3FilesystemDirectoryEntryResolver? _entryResolver;
+  final WASIPreview3FilesystemMetadataProvider? _metadata;
   final WASIPreview3FilesystemDirectoryMutationCallback? _createDirectory;
   final WASIPreview3FilesystemDirectoryFileCreateCallback? _createFile;
   final WASIPreview3FilesystemDirectoryLinkCallback? _link;
@@ -439,6 +475,8 @@ final class WASIPreview3FilesystemDirectory {
       WASIPreview3FilesystemMutationError.readOnly,
     );
   }
+
+  WASIPreview3FilesystemMetadata? _currentMetadata() => _metadata?.call();
 
   WASIPreview3FilesystemMutationResult _setTimesAt(
     String name,
@@ -635,6 +673,7 @@ final class WASIPreview3FilesystemDirectoryEntry {
   WASIPreview3FilesystemDirectoryEntry.directory(
     this.name, {
     WASIPreview3FilesystemDirectory? directory,
+    WASIPreview3FilesystemMetadataProvider? metadata,
   }) : kind = WASIPreview3FilesystemDescriptorKind.directory,
        size = BigInt.zero,
        directory = directory ?? WASIPreview3FilesystemDirectory(),
@@ -642,6 +681,7 @@ final class WASIPreview3FilesystemDirectoryEntry {
        _bytes = Uint8List(0),
        _readBytes = null,
        _currentSize = null,
+       _metadata = metadata,
        _writeBytes = null,
        _setSize = null,
        _setTimes = null,
@@ -651,6 +691,7 @@ final class WASIPreview3FilesystemDirectoryEntry {
   WASIPreview3FilesystemDirectoryEntry.symbolicLink(
     this.name, {
     required String target,
+    WASIPreview3FilesystemMetadataProvider? metadata,
   }) : kind = WASIPreview3FilesystemDescriptorKind.symbolicLink,
        size = BigInt.from(target.length),
        directory = null,
@@ -658,6 +699,7 @@ final class WASIPreview3FilesystemDirectoryEntry {
        _bytes = Uint8List(0),
        _readBytes = null,
        _currentSize = null,
+       _metadata = metadata,
        _writeBytes = null,
        _setSize = null,
        _setTimes = null,
@@ -671,12 +713,14 @@ final class WASIPreview3FilesystemDirectoryEntry {
     this.canMutate = false,
     WASIPreview3FilesystemFileBytesProvider? readBytes,
     WASIPreview3FilesystemFileSizeProvider? currentSize,
+    WASIPreview3FilesystemMetadataProvider? metadata,
     WASIPreview3FilesystemFileWriteCallback? writeBytes,
     WASIPreview3FilesystemFileSetSizeCallback? setSize,
     WASIPreview3FilesystemSetTimesCallback? setTimes,
   }) : _bytes = Uint8List.fromList(bytes),
        _readBytes = readBytes,
        _currentSize = currentSize,
+       _metadata = metadata,
        _writeBytes = writeBytes,
        _setSize = setSize,
        _setTimes = setTimes,
@@ -706,12 +750,24 @@ final class WASIPreview3FilesystemDirectoryEntry {
   Uint8List _bytes;
   final WASIPreview3FilesystemFileBytesProvider? _readBytes;
   final WASIPreview3FilesystemFileSizeProvider? _currentSize;
+  final WASIPreview3FilesystemMetadataProvider? _metadata;
   final WASIPreview3FilesystemFileWriteCallback? _writeBytes;
   final WASIPreview3FilesystemFileSetSizeCallback? _setSize;
   final WASIPreview3FilesystemSetTimesCallback? _setTimes;
   final String? _linkTarget;
 
   BigInt get _size => _currentSize?.call() ?? size;
+
+  WASIPreview3FilesystemMetadata? _currentMetadata() {
+    final metadata = _metadata?.call();
+    if (metadata != null) {
+      return metadata;
+    }
+    if (kind == WASIPreview3FilesystemDescriptorKind.directory) {
+      return directory?._currentMetadata();
+    }
+    return null;
+  }
 
   Uint8List _bytesFrom(BigInt offset) {
     final reader = _readBytes;
@@ -817,11 +873,13 @@ final class WASIPreview3FilesystemDirectoryEntry {
         WASIPreview3FilesystemDirectoryEntry.directory(
           name,
           directory: directory,
+          metadata: _metadata,
         ),
       WASIPreview3FilesystemDescriptorKind.symbolicLink =>
         WASIPreview3FilesystemDirectoryEntry.symbolicLink(
           name,
           target: _linkTarget ?? '',
+          metadata: _metadata,
         ),
       WASIPreview3FilesystemDescriptorKind.regularFile =>
         WASIPreview3FilesystemDirectoryEntry.regularFile(
@@ -831,6 +889,7 @@ final class WASIPreview3FilesystemDirectoryEntry {
           canMutate: canMutate,
           readBytes: _readBytes,
           currentSize: _currentSize,
+          metadata: _metadata,
           writeBytes: _writeBytes,
           setSize: _setSize,
           setTimes: _setTimes,
@@ -1589,6 +1648,11 @@ final class _WASIPreview3FilesystemDescriptor {
 
   BigInt get currentSize => entry?._size ?? size;
 
+  WASIPreview3FilesystemMetadata get metadata =>
+      entry?._currentMetadata() ??
+      directory?._currentMetadata() ??
+      const WASIPreview3FilesystemMetadata();
+
   Uint8List bytesFrom(BigInt offset) {
     final entry = this.entry;
     if (entry != null) {
@@ -1798,13 +1862,14 @@ WasmComponentValueData _mutationResult(
 WasmComponentValueData _descriptorStatData(
   _WASIPreview3FilesystemDescriptor descriptor,
 ) {
+  final metadata = descriptor.metadata;
   return _record(<WasmComponentValueData>[
     _descriptorTypeData(descriptor.kind),
-    _integerData(BigInt.one),
-    _integerData(descriptor.currentSize),
-    _none(),
-    _none(),
-    _none(),
+    _integerData(metadata.linkCount ?? BigInt.one),
+    _integerData(metadata.size ?? descriptor.currentSize),
+    _optionalInstantData(metadata.accessTimeNanos),
+    _optionalInstantData(metadata.modificationTimeNanos),
+    _optionalInstantData(metadata.statusChangeTimeNanos),
   ]);
 }
 
@@ -1920,6 +1985,31 @@ WasmComponentValueData _variant(
     index: _variantIndex(label),
     label: label,
     associatedValue: associatedValue,
+  );
+}
+
+WasmComponentValueData _optionalInstantData(BigInt? nanos) {
+  if (nanos == null || nanos < BigInt.zero) {
+    return _none();
+  }
+  final seconds = nanos ~/ BigInt.from(1000000000);
+  final nanoseconds = (nanos.remainder(BigInt.from(1000000000))).toInt();
+  return _some(
+    _record(<WasmComponentValueData>[
+      _integerData(seconds),
+      _integerData(nanoseconds),
+    ]),
+  );
+}
+
+WasmComponentValueData _some(WasmComponentValueData value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    index: 1,
+    label: 'some',
+    isSome: true,
+    associatedValue: value,
   );
 }
 

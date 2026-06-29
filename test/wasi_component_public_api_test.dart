@@ -479,6 +479,17 @@ world filesystem-test {
         accessTimeNanos: fileAccess,
         modificationTimeNanos: fileModification,
       ));
+      final fileStat =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.stat',
+                [file],
+              )
+              as WasmComponentValueData;
+      expect(_descriptorAccessTimeNanos(_resultOk(fileStat)), fileAccess);
+      expect(
+        _descriptorModificationTimeNanos(_resultOk(fileStat)),
+        fileModification,
+      );
 
       final directoryAccess = _timestampNanos(1700000002, 111000000);
       final directoryModification = _timestampNanos(1700000003, 333000000);
@@ -499,6 +510,20 @@ world filesystem-test {
         accessTimeNanos: directoryAccess,
         modificationTimeNanos: directoryModification,
       ));
+      final directoryStat =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.stat-at',
+                [root, _flagsValue(const <String>[]), 'timed-dir'],
+              )
+              as WasmComponentValueData;
+      expect(
+        _descriptorAccessTimeNanos(_resultOk(directoryStat)),
+        directoryAccess,
+      );
+      expect(
+        _descriptorModificationTimeNanos(_resultOk(directoryStat)),
+        directoryModification,
+      );
     });
 
     test('links and renames Preview3 filesystem real host paths', () async {
@@ -636,6 +661,38 @@ void _expectUnitOk(WasmComponentValueData value) {
   }
 }
 
+int _descriptorAccessTimeNanos(WasmComponentValueData value) {
+  return _descriptorTimestampNanos(value, 3);
+}
+
+int _descriptorModificationTimeNanos(WasmComponentValueData value) {
+  return _descriptorTimestampNanos(value, 4);
+}
+
+int _descriptorTimestampNanos(WasmComponentValueData value, int index) {
+  if (value.kind != WasmComponentValueDataKind.record ||
+      value.items.length != 6) {
+    throw StateError('expected descriptor-stat');
+  }
+  final option = value.items[index];
+  if (option.kind != WasmComponentValueDataKind.option ||
+      !(option.isSome ?? option.index == 1 || option.label == 'some') ||
+      option.associatedValue == null) {
+    throw StateError('expected descriptor timestamp');
+  }
+  final instant = option.associatedValue!;
+  if (instant.kind != WasmComponentValueDataKind.record ||
+      instant.items.length != 2) {
+    throw StateError('expected instant');
+  }
+  final seconds = _integerBigInt(instant.items[0].integer);
+  final nanoseconds = _integerBigInt(instant.items[1].integer);
+  if (seconds == null || nanoseconds == null) {
+    throw StateError('expected instant integers');
+  }
+  return (seconds * BigInt.from(1000000000) + nanoseconds).toInt();
+}
+
 String _directoryEntryName(WasmComponentValueData value) {
   if (value.items.length != 2 ||
       value.items[1].kind != WasmComponentValueDataKind.string) {
@@ -679,6 +736,14 @@ WasmComponentValueData _timestampValue(int seconds, int nanoseconds) {
 
 int _timestampNanos(int seconds, int nanoseconds) =>
     seconds * 1000000000 + nanoseconds;
+
+BigInt? _integerBigInt(Object? integer) {
+  return switch (integer) {
+    BigInt() => integer,
+    int() => BigInt.from(integer),
+    _ => null,
+  };
+}
 
 Uint8List _emptyComponentBytes() => Uint8List.fromList(const <int>[
   0x00,

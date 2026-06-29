@@ -31,6 +31,7 @@ WASIPreview3FilesystemDirectory _nativeDirectory(
   return WASIPreview3FilesystemDirectory.dynamic(
     canMutate: canMutate,
     mutationContext: _NativeDirectoryContext(directory.path),
+    metadata: () => _nativeMetadata(directory.path),
     entries: () =>
         _listNativeDirectoryEntries(directory.path, canMutate: canMutate),
     resolveEntry: (name) => _resolveNativeDirectoryEntry(
@@ -120,12 +121,14 @@ WASIPreview3FilesystemDirectoryEntry? _nativeEntryForPath(
       return WASIPreview3FilesystemDirectoryEntry.directory(
         name,
         directory: _nativeDirectory(path, canMutate: canMutate),
+        metadata: () => _nativeMetadata(path),
       );
     case io.FileSystemEntityType.file:
       return WASIPreview3FilesystemDirectoryEntry.regularFile(
         name,
         canMutate: canMutate,
         currentSize: () => BigInt.from(io.File(path).lengthSync()),
+        metadata: () => _nativeMetadata(path),
         readBytes: (offset) => _readNativeFileFrom(path, offset),
         writeBytes: canMutate
             ? (offset, bytes) => _writeNativeFileAt(path, offset, bytes)
@@ -139,6 +142,7 @@ WASIPreview3FilesystemDirectoryEntry? _nativeEntryForPath(
       return WASIPreview3FilesystemDirectoryEntry.symbolicLink(
         name,
         target: io.Link(path).targetSync(),
+        metadata: () => _nativeMetadata(path),
       );
     case io.FileSystemEntityType.notFound:
     case io.FileSystemEntityType.pipe:
@@ -147,6 +151,23 @@ WASIPreview3FilesystemDirectoryEntry? _nativeEntryForPath(
   }
   return null;
 }
+
+WASIPreview3FilesystemMetadata _nativeMetadata(String path) {
+  try {
+    final stat = io.FileStat.statSync(path);
+    return WASIPreview3FilesystemMetadata(
+      size: BigInt.from(stat.size),
+      accessTimeNanos: _dateTimeNanos(stat.accessed),
+      modificationTimeNanos: _dateTimeNanos(stat.modified),
+      statusChangeTimeNanos: _dateTimeNanos(stat.changed),
+    );
+  } on io.FileSystemException {
+    return const WASIPreview3FilesystemMetadata();
+  }
+}
+
+BigInt _dateTimeNanos(DateTime value) =>
+    BigInt.from(value.toUtc().microsecondsSinceEpoch) * BigInt.from(1000);
 
 Uint8List _readNativeFileFrom(String path, BigInt offset) {
   final file = io.File(path).openSync(mode: io.FileMode.read);
