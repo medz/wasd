@@ -2013,6 +2013,10 @@ abstract interface class Preview1OpenFile {
 
   void allocate(int offset, int length);
 
+  void dataSync();
+
+  void sync();
+
   void close();
 }
 
@@ -2072,6 +2076,12 @@ final class Preview1VirtualOpenFile implements Preview1OpenFile {
 
   @override
   void allocate(int offset, int length) => file.allocate(offset, length);
+
+  @override
+  void dataSync() {}
+
+  @override
+  void sync() {}
 
   @override
   void close() {}

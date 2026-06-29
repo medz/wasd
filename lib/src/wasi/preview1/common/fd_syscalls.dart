@@ -83,6 +83,23 @@ int preview1FdAllocate({
   return errnoSuccess;
 }
 
+int preview1FdDatasync({
+  required Preview1VirtualFileSystem vfs,
+  required int fd,
+}) {
+  final preflight = _openFileForDescriptor(
+    vfs: vfs,
+    fd: fd,
+    rights: rightFdDatasync,
+  );
+  if (preflight.errno != errnoSuccess) {
+    return preflight.errno;
+  }
+
+  preflight.opened!.dataSync();
+  return errnoSuccess;
+}
+
 int preview1FdFdstatSetFlags({
   required Preview1VirtualFileSystem vfs,
   required int fd,
@@ -280,6 +297,20 @@ int preview1FdSeek({
   }
   opened.offset = next;
   _setUint64(data, newOffsetPtr, next);
+  return errnoSuccess;
+}
+
+int preview1FdSync({required Preview1VirtualFileSystem vfs, required int fd}) {
+  final preflight = _openFileForDescriptor(
+    vfs: vfs,
+    fd: fd,
+    rights: rightFdSync,
+  );
+  if (preflight.errno != errnoSuccess) {
+    return preflight.errno;
+  }
+
+  preflight.opened!.sync();
   return errnoSuccess;
 }
 

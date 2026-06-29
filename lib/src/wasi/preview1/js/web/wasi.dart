@@ -531,7 +531,7 @@ class WASI implements wasi.WASI {
         if (args.isEmpty) {
           return _errnoInval;
         }
-        return _checkDescriptorRight(_asInt(args[0]), _rightFdDatasync);
+        return wasi_fd.preview1FdDatasync(vfs: _vfs, fd: _asInt(args[0]));
       });
 
   wasm.FunctionImportExportValue get _fdPreadImport =>
@@ -635,7 +635,7 @@ class WASI implements wasi.WASI {
         if (args.isEmpty) {
           return _errnoInval;
         }
-        return _checkDescriptorRight(_asInt(args[0]), _rightFdSync);
+        return wasi_fd.preview1FdSync(vfs: _vfs, fd: _asInt(args[0]));
       });
 
   wasm.FunctionImportExportValue get _fdAllocateImport =>
@@ -3136,9 +3136,7 @@ const int _filestatTimeKnownFlags =
     _filestatSetAccessTimeNow |
     _filestatSetModificationTime |
     _filestatSetModificationTimeNow;
-const int _rightFdDatasync = wasi_common.rightFdDatasync;
 const int _rightFdRead = wasi_common.rightFdRead;
-const int _rightFdSync = wasi_common.rightFdSync;
 const int _rightFdWrite = wasi_common.rightFdWrite;
 const int _rightFdAdvise = wasi_common.rightFdAdvise;
 const int _rightFdAllocate = wasi_common.rightFdAllocate;
@@ -3681,6 +3679,22 @@ void _nodeTruncateSync(JSObject fs, int fd, int length) {
   }
 }
 
+void _nodeFdatasyncSync(JSObject fs, int fd) {
+  try {
+    fs.callMethodVarArgs<JSAny?>('fdatasyncSync'.toJS, [fd.toJS]);
+  } catch (_) {
+    // Preview1OpenFile cannot surface host sync errors yet.
+  }
+}
+
+void _nodeFsyncSync(JSObject fs, int fd) {
+  try {
+    fs.callMethodVarArgs<JSAny?>('fsyncSync'.toJS, [fd.toJS]);
+  } catch (_) {
+    // Preview1OpenFile cannot surface host sync errors yet.
+  }
+}
+
 void _nodeCloseSync(JSObject fs, int fd) {
   try {
     fs.callMethodVarArgs<JSAny?>('closeSync'.toJS, [fd.toJS]);
@@ -3782,6 +3796,16 @@ final class _Preview1NodeHostOpenFile implements wasi_vfs.Preview1OpenFile {
     if (requiredLength > this.length) {
       setLength(requiredLength);
     }
+  }
+
+  @override
+  void dataSync() {
+    _nodeFdatasyncSync(_fs, _fd);
+  }
+
+  @override
+  void sync() {
+    _nodeFsyncSync(_fs, _fd);
   }
 
   @override

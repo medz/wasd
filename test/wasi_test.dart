@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/preview1/common/constants.dart'
     as preview1_constants;
+import 'package:wasd/src/wasi/preview1/common/fd_syscalls.dart' as preview1_fd;
 import 'package:wasd/src/wasi/preview1/common/vfs.dart';
 import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
@@ -198,6 +199,61 @@ List<({int inode, String name, int next, int type})> _readDirents(
 
 Future<Object?> _awaitMaybeFuture(Object? value) async =>
     value is Future ? await value : value;
+
+final class _SyncRecordingOpenFile implements Preview1OpenFile {
+  _SyncRecordingOpenFile()
+    : metadata = Preview1VirtualNodeMetadata(),
+      rights = Preview1DescriptorRights.file();
+
+  @override
+  final Preview1VirtualNodeMetadata metadata;
+
+  @override
+  final Preview1DescriptorRights rights;
+
+  @override
+  int descriptorFlags = 0;
+
+  @override
+  int offset = 0;
+
+  @override
+  int get length => 0;
+
+  int dataSyncCount = 0;
+  int syncCount = 0;
+
+  @override
+  int readInto(Uint8List target, int start, int length) => 0;
+
+  @override
+  int readAtInto(Uint8List target, int start, int length, int fileOffset) => 0;
+
+  @override
+  int writeFrom(Uint8List source, int start, int length) => 0;
+
+  @override
+  int writeAtFrom(Uint8List source, int start, int length, int fileOffset) => 0;
+
+  @override
+  void setLength(int length) {}
+
+  @override
+  void allocate(int offset, int length) {}
+
+  @override
+  void dataSync() {
+    dataSyncCount++;
+  }
+
+  @override
+  void sync() {
+    syncCount++;
+  }
+
+  @override
+  void close() {}
+}
 
 void _writePollSubscription(
   ByteData data,
@@ -822,6 +878,21 @@ void main() {
         () => Preview1VirtualFileSystem(stdinFd: 10, stdoutFd: 10),
         throwsArgumentError,
       );
+    });
+
+    test('fd_datasync and fd_sync invoke open file synchronization', () {
+      final opened = _SyncRecordingOpenFile();
+      final vfs = Preview1VirtualFileSystem();
+      final openResult = vfs.openFileHandle(opened);
+      final fd = openResult.fd!;
+
+      expect(preview1_fd.preview1FdDatasync(vfs: vfs, fd: fd), 0);
+      expect(opened.dataSyncCount, 1);
+      expect(opened.syncCount, 0);
+
+      expect(preview1_fd.preview1FdSync(vfs: vfs, fd: fd), 0);
+      expect(opened.dataSyncCount, 1);
+      expect(opened.syncCount, 1);
     });
 
     test('imports has fd_write function', () {

@@ -359,6 +359,62 @@ void main() {
     expect(fdClose.ref([createdFd]), 0);
   });
 
+  test('native host read-write files remain readable', () async {
+    final temp = await Directory.systemTemp.createTemp('wasd_host_rw_');
+    addTearDown(() => temp.delete(recursive: true));
+    File('${temp.path}/rw.txt').writeAsStringSync('read-write');
+
+    final wasi = WASI(preopens: {'/host': temp.path});
+    final result = await WebAssembly.instantiate(
+      wasiStartModuleBytes().buffer,
+      wasi.imports,
+    );
+    final instance = result.instance;
+    final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+    final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+    final fdRead = preview1['fd_read'] as FunctionImportExportValue;
+    final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+    final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+    wasi.finalizeBindings(instance, memory: memory);
+
+    final bytes = Uint8List.view(memory.buffer);
+    final data = ByteData.view(memory.buffer);
+    final path = utf8.encode('rw.txt');
+    const pathPtr = 1024;
+    const openedFdPtr = 1056;
+    const iovPtr = 1072;
+    const readBufferPtr = 1104;
+    const nreadPtr = 1136;
+    bytes.setAll(pathPtr, path);
+
+    expect(
+      pathOpen.ref([
+        3,
+        0,
+        pathPtr,
+        path.length,
+        0,
+        _rightFdRead | _rightFdWrite,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      0,
+    );
+    final fd = data.getUint32(openedFdPtr, Endian.little);
+
+    data.setUint32(iovPtr, readBufferPtr, Endian.little);
+    data.setUint32(iovPtr + 4, 32, Endian.little);
+    expect(fdRead.ref([fd, iovPtr, 1, nreadPtr]), 0);
+    final nread = data.getUint32(nreadPtr, Endian.little);
+    expect(
+      utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + nread)),
+      'read-write',
+    );
+
+    expect(fdClose.ref([fd]), 0);
+  });
+
   test(
     'native host path mutations create and remove real filesystem entries',
     () async {

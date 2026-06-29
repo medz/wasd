@@ -524,7 +524,7 @@ class WASI implements wasi_iface.WASI {
         if (args.isEmpty) {
           return _errnoInval;
         }
-        return _checkDescriptorRight(_asInt(args[0]), _rightFdDatasync);
+        return wasi_fd.preview1FdDatasync(vfs: _vfs, fd: _asInt(args[0]));
       });
 
   wasm.FunctionImportExportValue get _fdPreadImport =>
@@ -634,7 +634,7 @@ class WASI implements wasi_iface.WASI {
         if (args.isEmpty) {
           return _errnoInval;
         }
-        return _checkDescriptorRight(_asInt(args[0]), _rightFdSync);
+        return wasi_fd.preview1FdSync(vfs: _vfs, fd: _asInt(args[0]));
       });
 
   wasm.FunctionImportExportValue get _fdAllocateImport =>
@@ -3182,9 +3182,7 @@ const int _filestatTimeKnownFlags =
     _filestatSetAccessTimeNow |
     _filestatSetModificationTime |
     _filestatSetModificationTimeNow;
-const int _rightFdDatasync = wasi_common.rightFdDatasync;
 const int _rightFdRead = wasi_common.rightFdRead;
-const int _rightFdSync = wasi_common.rightFdSync;
 const int _rightFdWrite = wasi_common.rightFdWrite;
 const int _rightFdAdvise = wasi_common.rightFdAdvise;
 const int _rightFdAllocate = wasi_common.rightFdAllocate;
@@ -3773,6 +3771,24 @@ final class _Preview1NativeHostOpenFile implements wasi_vfs.Preview1OpenFile {
     final requiredLength = offset + length;
     if (requiredLength > this.length) {
       setLength(requiredLength);
+    }
+  }
+
+  @override
+  void dataSync() {
+    _flush();
+  }
+
+  @override
+  void sync() {
+    _flush();
+  }
+
+  void _flush() {
+    try {
+      _file.flushSync();
+    } on io.FileSystemException {
+      // Preview1OpenFile cannot surface host sync errors yet.
     }
   }
 
