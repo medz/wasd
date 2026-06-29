@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import '../../wasm/backend/native/interpreter/component.dart';
@@ -19,6 +20,79 @@ typedef WASIPreview3FilesystemFileBytesProvider =
 /// Supplies the current byte length for a regular file.
 typedef WASIPreview3FilesystemFileSizeProvider = BigInt Function();
 
+/// Writes regular-file bytes starting at byte [offset].
+typedef WASIPreview3FilesystemFileWriteCallback =
+    WASIPreview3FilesystemMutationResult Function(
+      BigInt offset,
+      Uint8List bytes,
+    );
+
+/// Changes the byte length of a regular file.
+typedef WASIPreview3FilesystemFileSetSizeCallback =
+    WASIPreview3FilesystemMutationResult Function(BigInt size);
+
+/// Mutates one child entry inside a directory.
+typedef WASIPreview3FilesystemDirectoryMutationCallback =
+    WASIPreview3FilesystemMutationResult Function(String name);
+
+/// Creates and returns one regular-file entry inside a directory.
+typedef WASIPreview3FilesystemDirectoryFileCreateCallback =
+    WASIPreview3FilesystemDirectoryEntry? Function(String name);
+
+/// Filesystem mutation failures that map directly to WASI 0.3 error-code
+/// variants.
+enum WASIPreview3FilesystemMutationError {
+  /// Host permission denied.
+  access('access'),
+
+  /// Target already exists.
+  exist('exist'),
+
+  /// Invalid path, offset, or argument.
+  invalid('invalid'),
+
+  /// Host I/O failure.
+  io('io'),
+
+  /// A directory was used where a regular file was required.
+  isDirectory('is-directory'),
+
+  /// Target path does not exist.
+  noEntry('no-entry'),
+
+  /// A non-directory was used where a directory was required.
+  notDirectory('not-directory'),
+
+  /// Directory removal targeted a non-empty directory.
+  notEmpty('not-empty'),
+
+  /// Path escaped the permitted preopen tree.
+  notPermitted('not-permitted'),
+
+  /// Descriptor or backing store is read-only.
+  readOnly('read-only');
+
+  const WASIPreview3FilesystemMutationError(this.errorCode);
+
+  /// WIT `error-code` variant label.
+  final String errorCode;
+}
+
+/// Result returned by Preview3 filesystem mutation callbacks.
+final class WASIPreview3FilesystemMutationResult {
+  /// Creates a successful mutation result.
+  const WASIPreview3FilesystemMutationResult.ok() : error = null;
+
+  /// Creates a failed mutation result with a WASI filesystem [error].
+  const WASIPreview3FilesystemMutationResult.error(this.error);
+
+  /// WASI filesystem error reported by the mutation, or null on success.
+  final WASIPreview3FilesystemMutationError? error;
+
+  /// Whether the mutation succeeded.
+  bool get isOk => error == null;
+}
+
 /// WASI 0.3 filesystem object kind used by the Preview3 host.
 enum WASIPreview3FilesystemDescriptorKind {
   /// Directory descriptor.
@@ -35,34 +109,54 @@ final class WASIPreview3FilesystemDirectory {
     Iterable<WASIPreview3FilesystemDirectoryEntry> entries =
         const <WASIPreview3FilesystemDirectoryEntry>[],
     this.canMutate = false,
-  }) : entries = List<WASIPreview3FilesystemDirectoryEntry>.unmodifiable(
-         entries,
-       ),
+    WASIPreview3FilesystemDirectoryMutationCallback? createDirectory,
+    WASIPreview3FilesystemDirectoryFileCreateCallback? createFile,
+    WASIPreview3FilesystemDirectoryMutationCallback? removeDirectory,
+    WASIPreview3FilesystemDirectoryMutationCallback? unlinkFile,
+  }) : _entries = List<WASIPreview3FilesystemDirectoryEntry>.of(entries),
        _entriesProvider = null,
-       _entryResolver = null;
+       _entryResolver = null,
+       _createDirectory = createDirectory,
+       _createFile = createFile,
+       _removeDirectory = removeDirectory,
+       _unlinkFile = unlinkFile;
 
   /// Creates a directory whose contents are loaded from callbacks.
   WASIPreview3FilesystemDirectory.dynamic({
     required WASIPreview3FilesystemDirectoryEntriesProvider entries,
     WASIPreview3FilesystemDirectoryEntryResolver? resolveEntry,
     this.canMutate = false,
-  }) : entries = const <WASIPreview3FilesystemDirectoryEntry>[],
+    WASIPreview3FilesystemDirectoryMutationCallback? createDirectory,
+    WASIPreview3FilesystemDirectoryFileCreateCallback? createFile,
+    WASIPreview3FilesystemDirectoryMutationCallback? removeDirectory,
+    WASIPreview3FilesystemDirectoryMutationCallback? unlinkFile,
+  }) : _entries = <WASIPreview3FilesystemDirectoryEntry>[],
        _entriesProvider = entries,
-       _entryResolver = resolveEntry;
+       _entryResolver = resolveEntry,
+       _createDirectory = createDirectory,
+       _createFile = createFile,
+       _removeDirectory = removeDirectory,
+       _unlinkFile = unlinkFile;
 
   /// Entries returned by `descriptor.read-directory`.
-  final List<WASIPreview3FilesystemDirectoryEntry> entries;
+  List<WASIPreview3FilesystemDirectoryEntry> get entries =>
+      List<WASIPreview3FilesystemDirectoryEntry>.unmodifiable(_currentEntries);
 
   /// Whether descriptors opened for this directory can request mutation flags.
   final bool canMutate;
 
+  final List<WASIPreview3FilesystemDirectoryEntry> _entries;
   final WASIPreview3FilesystemDirectoryEntriesProvider? _entriesProvider;
   final WASIPreview3FilesystemDirectoryEntryResolver? _entryResolver;
+  final WASIPreview3FilesystemDirectoryMutationCallback? _createDirectory;
+  final WASIPreview3FilesystemDirectoryFileCreateCallback? _createFile;
+  final WASIPreview3FilesystemDirectoryMutationCallback? _removeDirectory;
+  final WASIPreview3FilesystemDirectoryMutationCallback? _unlinkFile;
 
   Iterable<WASIPreview3FilesystemDirectoryEntry> get _currentEntries {
     final provider = _entriesProvider;
     if (provider == null) {
-      return entries;
+      return _entries;
     }
     return provider();
   }
@@ -79,6 +173,179 @@ final class WASIPreview3FilesystemDirectory {
     }
     return null;
   }
+
+  WASIPreview3FilesystemMutationResult _createDirectoryAt(String name) {
+    if (!canMutate) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.readOnly,
+      );
+    }
+    if (!_isSimplePathSegment(name)) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.invalid,
+      );
+    }
+    final callback = _createDirectory;
+    if (callback != null) {
+      return callback(name);
+    }
+    if (_entriesProvider != null) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.readOnly,
+      );
+    }
+    if (_entryNamed(name) != null) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.exist,
+      );
+    }
+    _entries.add(
+      WASIPreview3FilesystemDirectoryEntry.directory(
+        name,
+        directory: WASIPreview3FilesystemDirectory(canMutate: canMutate),
+      ),
+    );
+    return const WASIPreview3FilesystemMutationResult.ok();
+  }
+
+  ({
+    WASIPreview3FilesystemDirectoryEntry? entry,
+    WASIPreview3FilesystemMutationResult result,
+  })
+  _createFileAt(String name) {
+    if (!canMutate) {
+      return (
+        entry: null,
+        result: const WASIPreview3FilesystemMutationResult.error(
+          WASIPreview3FilesystemMutationError.readOnly,
+        ),
+      );
+    }
+    if (!_isSimplePathSegment(name)) {
+      return (
+        entry: null,
+        result: const WASIPreview3FilesystemMutationResult.error(
+          WASIPreview3FilesystemMutationError.invalid,
+        ),
+      );
+    }
+    if (_entryNamed(name) != null) {
+      return (
+        entry: null,
+        result: const WASIPreview3FilesystemMutationResult.error(
+          WASIPreview3FilesystemMutationError.exist,
+        ),
+      );
+    }
+    final callback = _createFile;
+    if (callback != null) {
+      final entry = callback(name);
+      if (entry == null) {
+        return (
+          entry: null,
+          result: const WASIPreview3FilesystemMutationResult.error(
+            WASIPreview3FilesystemMutationError.io,
+          ),
+        );
+      }
+      return (
+        entry: entry,
+        result: const WASIPreview3FilesystemMutationResult.ok(),
+      );
+    }
+    if (_entriesProvider != null) {
+      return (
+        entry: null,
+        result: const WASIPreview3FilesystemMutationResult.error(
+          WASIPreview3FilesystemMutationError.readOnly,
+        ),
+      );
+    }
+    final entry = WASIPreview3FilesystemDirectoryEntry.regularFile(
+      name,
+      canMutate: canMutate,
+    );
+    _entries.add(entry);
+    return (
+      entry: entry,
+      result: const WASIPreview3FilesystemMutationResult.ok(),
+    );
+  }
+
+  WASIPreview3FilesystemMutationResult _removeDirectoryAt(String name) {
+    if (!canMutate) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.readOnly,
+      );
+    }
+    if (!_isSimplePathSegment(name)) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.invalid,
+      );
+    }
+    final entry = _entryNamed(name);
+    if (entry == null) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.noEntry,
+      );
+    }
+    if (entry.kind != WASIPreview3FilesystemDescriptorKind.directory) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.notDirectory,
+      );
+    }
+    if (entry.directory!._currentEntries.isNotEmpty) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.notEmpty,
+      );
+    }
+    final callback = _removeDirectory;
+    if (callback != null) {
+      return callback(name);
+    }
+    if (_entriesProvider != null) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.readOnly,
+      );
+    }
+    _entries.removeWhere((candidate) => candidate.name == name);
+    return const WASIPreview3FilesystemMutationResult.ok();
+  }
+
+  WASIPreview3FilesystemMutationResult _unlinkFileAt(String name) {
+    if (!canMutate) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.readOnly,
+      );
+    }
+    if (!_isSimplePathSegment(name)) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.invalid,
+      );
+    }
+    final entry = _entryNamed(name);
+    if (entry == null) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.noEntry,
+      );
+    }
+    if (entry.kind == WASIPreview3FilesystemDescriptorKind.directory) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.isDirectory,
+      );
+    }
+    final callback = _unlinkFile;
+    if (callback != null) {
+      return callback(name);
+    }
+    if (_entriesProvider != null) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.readOnly,
+      );
+    }
+    _entries.removeWhere((candidate) => candidate.name == name);
+    return const WASIPreview3FilesystemMutationResult.ok();
+  }
 }
 
 /// One directory entry exposed by [WASIPreview3FilesystemDirectory].
@@ -90,20 +357,28 @@ final class WASIPreview3FilesystemDirectoryEntry {
   }) : kind = WASIPreview3FilesystemDescriptorKind.directory,
        size = BigInt.zero,
        directory = directory ?? WASIPreview3FilesystemDirectory(),
-       bytes = Uint8List(0),
+       canMutate = directory?.canMutate ?? false,
+       _bytes = Uint8List(0),
        _readBytes = null,
-       _currentSize = null;
+       _currentSize = null,
+       _writeBytes = null,
+       _setSize = null;
 
   /// Creates a regular-file entry.
   WASIPreview3FilesystemDirectoryEntry.regularFile(
     this.name, {
     BigInt? size,
     List<int> bytes = const <int>[],
+    this.canMutate = false,
     WASIPreview3FilesystemFileBytesProvider? readBytes,
     WASIPreview3FilesystemFileSizeProvider? currentSize,
-  }) : bytes = Uint8List.fromList(bytes),
+    WASIPreview3FilesystemFileWriteCallback? writeBytes,
+    WASIPreview3FilesystemFileSetSizeCallback? setSize,
+  }) : _bytes = Uint8List.fromList(bytes),
        _readBytes = readBytes,
        _currentSize = currentSize,
+       _writeBytes = writeBytes,
+       _setSize = setSize,
        kind = WASIPreview3FilesystemDescriptorKind.regularFile,
        size = size ?? currentSize?.call() ?? BigInt.from(bytes.length),
        directory = null;
@@ -120,11 +395,17 @@ final class WASIPreview3FilesystemDirectoryEntry {
   /// Nested directory contents for directory entries.
   final WASIPreview3FilesystemDirectory? directory;
 
-  /// Immutable file contents for regular-file entries.
-  final Uint8List bytes;
+  /// Whether this entry can be opened with mutation flags.
+  final bool canMutate;
 
+  /// Immutable file contents for regular-file entries.
+  Uint8List get bytes => Uint8List.fromList(_bytes);
+
+  Uint8List _bytes;
   final WASIPreview3FilesystemFileBytesProvider? _readBytes;
   final WASIPreview3FilesystemFileSizeProvider? _currentSize;
+  final WASIPreview3FilesystemFileWriteCallback? _writeBytes;
+  final WASIPreview3FilesystemFileSetSizeCallback? _setSize;
 
   BigInt get _size => _currentSize?.call() ?? size;
 
@@ -133,10 +414,69 @@ final class WASIPreview3FilesystemDirectoryEntry {
     if (reader != null) {
       return reader(offset);
     }
-    final start = offset > BigInt.from(bytes.length)
-        ? bytes.length
+    final start = offset > BigInt.from(_bytes.length)
+        ? _bytes.length
         : offset.toInt();
-    return bytes.sublist(start);
+    return _bytes.sublist(start);
+  }
+
+  WASIPreview3FilesystemMutationResult _writeAt(BigInt offset, Uint8List data) {
+    if (kind != WASIPreview3FilesystemDescriptorKind.regularFile) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.isDirectory,
+      );
+    }
+    if (offset < BigInt.zero) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.invalid,
+      );
+    }
+    final callback = _writeBytes;
+    if (callback != null) {
+      return callback(offset, Uint8List.fromList(data));
+    }
+    if (!canMutate || _readBytes != null || _currentSize != null) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.readOnly,
+      );
+    }
+    final start = offset.toInt();
+    final end = start + data.length;
+    if (end > _bytes.length) {
+      final resized = Uint8List(end);
+      resized.setAll(0, _bytes);
+      _bytes = resized;
+    }
+    _bytes.setRange(start, end, data);
+    return const WASIPreview3FilesystemMutationResult.ok();
+  }
+
+  WASIPreview3FilesystemMutationResult _setSizeTo(BigInt nextSize) {
+    if (kind != WASIPreview3FilesystemDescriptorKind.regularFile) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.isDirectory,
+      );
+    }
+    if (nextSize < BigInt.zero) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.invalid,
+      );
+    }
+    final callback = _setSize;
+    if (callback != null) {
+      return callback(nextSize);
+    }
+    if (!canMutate || _readBytes != null || _currentSize != null) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.readOnly,
+      );
+    }
+    final length = nextSize.toInt();
+    final resized = Uint8List(length);
+    final preserved = length < _bytes.length ? length : _bytes.length;
+    resized.setRange(0, preserved, _bytes);
+    _bytes = resized;
+    return const WASIPreview3FilesystemMutationResult.ok();
   }
 }
 
@@ -173,9 +513,9 @@ base class WASIPreview3FilesystemHost {
         'wasi:filesystem/types@0.3.0.descriptor.read-via-stream': (args) =>
             _readViaStream(_handle(args[0]), _u64(args[1])),
         'wasi:filesystem/types@0.3.0.descriptor.write-via-stream': (args) =>
-            _writeViaStream(_handle(args[0])),
+            _writeViaStream(_handle(args[0]), args[1], _u64(args[2])),
         'wasi:filesystem/types@0.3.0.descriptor.append-via-stream': (args) =>
-            _writeViaStream(_handle(args[0])),
+            _appendViaStream(_handle(args[0]), args[1]),
         'wasi:filesystem/types@0.3.0.descriptor.advise': (args) =>
             _unitResultForDescriptor(_handle(args[0])),
         'wasi:filesystem/types@0.3.0.descriptor.sync-data': (args) =>
@@ -185,7 +525,7 @@ base class WASIPreview3FilesystemHost {
         'wasi:filesystem/types@0.3.0.descriptor.get-type': (args) =>
             _getType(_handle(args[0])),
         'wasi:filesystem/types@0.3.0.descriptor.set-size': (args) =>
-            _readonlyUnitResult(_handle(args[0])),
+            _setSize(_handle(args[0]), _u64(args[1])),
         'wasi:filesystem/types@0.3.0.descriptor.set-times': (args) =>
             _readonlyUnitResult(_handle(args[0])),
         'wasi:filesystem/types@0.3.0.descriptor.read-directory': (args) =>
@@ -193,7 +533,7 @@ base class WASIPreview3FilesystemHost {
         'wasi:filesystem/types@0.3.0.descriptor.sync': (args) =>
             _unitResultForDescriptor(_handle(args[0])),
         'wasi:filesystem/types@0.3.0.descriptor.create-directory-at': (args) =>
-            _readonlyUnitResult(_handle(args[0])),
+            _createDirectoryAt(_handle(args[0]), args[1] as String),
         'wasi:filesystem/types@0.3.0.descriptor.stat': (args) =>
             _stat(_handle(args[0])),
         'wasi:filesystem/types@0.3.0.descriptor.stat-at': (args) =>
@@ -205,18 +545,19 @@ base class WASIPreview3FilesystemHost {
         'wasi:filesystem/types@0.3.0.descriptor.open-at': (args) => _openAt(
           _handle(args[0]),
           args[2] as String,
+          args[3] as WasmComponentValueData,
           args[4] as WasmComponentValueData,
         ),
         'wasi:filesystem/types@0.3.0.descriptor.readlink-at': (args) =>
             _errorResult('invalid'),
         'wasi:filesystem/types@0.3.0.descriptor.remove-directory-at': (args) =>
-            _readonlyUnitResult(_handle(args[0])),
+            _removeDirectoryAt(_handle(args[0]), args[1] as String),
         'wasi:filesystem/types@0.3.0.descriptor.rename-at': (args) =>
             _readonlyUnitResult(_handle(args[0])),
         'wasi:filesystem/types@0.3.0.descriptor.symlink-at': (args) =>
             _readonlyUnitResult(_handle(args[0])),
         'wasi:filesystem/types@0.3.0.descriptor.unlink-file-at': (args) =>
-            _readonlyUnitResult(_handle(args[0])),
+            _unlinkFileAt(_handle(args[0]), args[1] as String),
         'wasi:filesystem/types@0.3.0.descriptor.is-same-object': (args) =>
             _isSameObject(_handle(args[0]), _handle(args[1])),
         'wasi:filesystem/types@0.3.0.descriptor.metadata-hash': (args) =>
@@ -257,12 +598,108 @@ base class WASIPreview3FilesystemHost {
     return <Object?>[stream, result];
   }
 
-  WASIComponentFuture<WasmComponentValueData> _writeViaStream(int handle) {
+  WASIComponentFuture<WasmComponentValueData> _writeViaStream(
+    int handle,
+    Object? streamValue,
+    BigInt offset,
+  ) {
     final result = WASIComponentFuture<WasmComponentValueData>(
       'filesystem-write-result-$handle',
     );
-    result.writable.complete(_readonlyUnitResult(handle));
+    final stream = _streamArgument(streamValue);
+    if (stream == null) {
+      result.writable.complete(_errorResult('invalid'));
+      return result;
+    }
+    final descriptor = _descriptors[handle];
+    final error = _writableDescriptorError(descriptor);
+    if (error != null) {
+      result.writable.complete(_errorResult(error));
+      return result;
+    }
+    unawaited(_drainWriteStream(descriptor!, stream, offset, result));
     return result;
+  }
+
+  WASIComponentFuture<WasmComponentValueData> _appendViaStream(
+    int handle,
+    Object? streamValue,
+  ) {
+    final result = WASIComponentFuture<WasmComponentValueData>(
+      'filesystem-append-result-$handle',
+    );
+    final stream = _streamArgument(streamValue);
+    if (stream == null) {
+      result.writable.complete(_errorResult('invalid'));
+      return result;
+    }
+    final descriptor = _descriptors[handle];
+    final error = _writableDescriptorError(descriptor);
+    if (error != null) {
+      result.writable.complete(_errorResult(error));
+      return result;
+    }
+    unawaited(
+      _drainWriteStream(descriptor!, stream, descriptor.currentSize, result),
+    );
+    return result;
+  }
+
+  Future<void> _drainWriteStream(
+    _WASIPreview3FilesystemDescriptor descriptor,
+    WASIComponentStream<int> stream,
+    BigInt initialOffset,
+    WASIComponentFuture<WasmComponentValueData> result,
+  ) async {
+    var offset = initialOffset;
+    try {
+      while (true) {
+        final chunk = await stream.readable.readWhenAvailable(8192);
+        if (chunk.isEmpty) {
+          break;
+        }
+        final mutation = descriptor.writeAt(offset, Uint8List.fromList(chunk));
+        if (!mutation.isOk) {
+          _completeWriteResult(result, _mutationResult(mutation));
+          return;
+        }
+        offset += BigInt.from(chunk.length);
+      }
+      _completeWriteResult(result, _unitOk());
+    } catch (_) {
+      _completeWriteResult(result, _errorResult('io'));
+    }
+  }
+
+  void _completeWriteResult(
+    WASIComponentFuture<WasmComponentValueData> result,
+    WasmComponentValueData value,
+  ) {
+    if (result.writable.canComplete) {
+      result.writable.complete(value);
+    }
+  }
+
+  WASIComponentStream<int>? _streamArgument(Object? value) {
+    if (value is WASIComponentStream<int>) {
+      return value;
+    }
+    return null;
+  }
+
+  String? _writableDescriptorError(
+    _WASIPreview3FilesystemDescriptor? descriptor,
+  ) {
+    if (descriptor == null) {
+      return 'bad-descriptor';
+    }
+    if (descriptor.kind == WASIPreview3FilesystemDescriptorKind.directory) {
+      return 'is-directory';
+    }
+    if (!descriptor.canMutate) {
+      return 'read-only';
+    }
+    return null;
   }
 
   WasmComponentValueData _unitResultForDescriptor(int handle) {
@@ -287,9 +724,24 @@ base class WASIPreview3FilesystemHost {
     return _ok(
       _flagsData(<String>[
         'read',
-        if (descriptor.canMutate) 'mutate-directory',
+        if (descriptor.kind ==
+                WASIPreview3FilesystemDescriptorKind.regularFile &&
+            descriptor.canMutate)
+          'write',
+        if (descriptor.kind == WASIPreview3FilesystemDescriptorKind.directory &&
+            descriptor.canMutate)
+          'mutate-directory',
       ]),
     );
+  }
+
+  WasmComponentValueData _setSize(int handle, BigInt size) {
+    final descriptor = _descriptors[handle];
+    final error = _writableDescriptorError(descriptor);
+    if (error != null) {
+      return _errorResult(error);
+    }
+    return _mutationResult(descriptor!.setSize(size));
   }
 
   WasmComponentValueData _getType(int handle) {
@@ -342,27 +794,127 @@ base class WASIPreview3FilesystemHost {
     return _ok(_descriptorStatData(descriptor));
   }
 
+  WasmComponentValueData _createDirectoryAt(int handle, String path) {
+    final target = _resolveMutationParent(handle, path);
+    final error = target.error;
+    if (error != null) {
+      return _errorResult(error);
+    }
+    final parent = target.parent!;
+    if (!parent.canMutate) {
+      return _errorResult('read-only');
+    }
+    return _mutationResult(parent.directory!._createDirectoryAt(target.name));
+  }
+
+  WasmComponentValueData _removeDirectoryAt(int handle, String path) {
+    final target = _resolveMutationParent(handle, path);
+    final error = target.error;
+    if (error != null) {
+      return _errorResult(error);
+    }
+    final parent = target.parent!;
+    if (!parent.canMutate) {
+      return _errorResult('read-only');
+    }
+    return _mutationResult(parent.directory!._removeDirectoryAt(target.name));
+  }
+
+  WasmComponentValueData _unlinkFileAt(int handle, String path) {
+    final target = _resolveMutationParent(handle, path);
+    final error = target.error;
+    if (error != null) {
+      return _errorResult(error);
+    }
+    final parent = target.parent!;
+    if (!parent.canMutate) {
+      return _errorResult('read-only');
+    }
+    return _mutationResult(parent.directory!._unlinkFileAt(target.name));
+  }
+
   WasmComponentValueData _openAt(
     int handle,
     String path,
+    WasmComponentValueData openFlags,
     WasmComponentValueData flags,
   ) {
     final base = _descriptors[handle];
     if (base == null) {
       return _errorResult('bad-descriptor');
     }
-    if (_flagsContainMutation(flags) && !base.canMutate) {
+    if ((_flagsContainMutation(flags) ||
+            _openFlagsContainMutation(openFlags)) &&
+        !base.canMutate) {
       return _errorResult('read-only');
     }
     final descriptor = _resolveAt(handle, path);
     if (descriptor == null) {
+      if (openFlags.labels.contains('create')) {
+        return _createFileAt(handle, path, flags);
+      }
       return _errorResult(
         _pathIsPermitted(path) ? 'no-entry' : 'not-permitted',
       );
     }
+    if (openFlags.labels.contains('create') &&
+        openFlags.labels.contains('exclusive')) {
+      return _errorResult('exist');
+    }
+    if (openFlags.labels.contains('directory') &&
+        descriptor.kind != WASIPreview3FilesystemDescriptorKind.directory) {
+      return _errorResult('not-directory');
+    }
+    if (_flagsContainMutation(flags) && !descriptor.canMutate) {
+      return _errorResult('read-only');
+    }
+    if (openFlags.labels.contains('truncate')) {
+      if (!descriptor.canMutate) {
+        return _errorResult('read-only');
+      }
+      final mutation = descriptor.setSize(BigInt.zero);
+      if (!mutation.isOk) {
+        return _mutationResult(mutation);
+      }
+    }
     final opened = descriptor.copyWithHandle(_nextHandle++);
     _descriptors[opened.handle] = opened;
     return _ok(_integerData(opened.handle));
+  }
+
+  WasmComponentValueData _createFileAt(
+    int handle,
+    String path,
+    WasmComponentValueData flags,
+  ) {
+    final target = _resolveMutationParent(handle, path);
+    final error = target.error;
+    if (error != null) {
+      return _errorResult(error);
+    }
+    final parent = target.parent!;
+    if (!parent.canMutate) {
+      return _errorResult('read-only');
+    }
+    final created = parent.directory!._createFileAt(target.name);
+    if (!created.result.isOk) {
+      return _mutationResult(created.result);
+    }
+    final guestPath = '${parent.guestPath}/${target.name}'.replaceAll(
+      '//',
+      '/',
+    );
+    final descriptor = _WASIPreview3FilesystemDescriptor.fromEntry(
+      handle: _nextHandle++,
+      objectId: _objectIdForPath(guestPath),
+      guestPath: guestPath,
+      entry: created.entry!,
+    );
+    if (_flagsContainMutation(flags) && !descriptor.canMutate) {
+      return _errorResult('read-only');
+    }
+    _descriptors[descriptor.handle] = descriptor;
+    return _ok(_integerData(descriptor.handle));
   }
 
   bool _isSameObject(int left, int right) {
@@ -429,6 +981,49 @@ base class WASIPreview3FilesystemHost {
     }
     return hash == 0 ? 1 : hash;
   }
+
+  ({_WASIPreview3FilesystemDescriptor? parent, String name, String? error})
+  _resolveMutationParent(int handle, String path) {
+    final base = _descriptors[handle];
+    if (base == null) {
+      return (parent: null, name: '', error: 'bad-descriptor');
+    }
+    if (base.directory == null) {
+      return (parent: null, name: '', error: 'not-directory');
+    }
+    if (!_pathIsPermitted(path)) {
+      return (parent: null, name: '', error: 'not-permitted');
+    }
+    final segments = path
+        .split('/')
+        .where((segment) => segment.isNotEmpty && segment != '.')
+        .toList();
+    if (segments.isEmpty || !_isSimplePathSegment(segments.last)) {
+      return (parent: null, name: '', error: 'invalid');
+    }
+    var current = base;
+    for (final segment in segments.take(segments.length - 1)) {
+      final directory = current.directory;
+      if (directory == null) {
+        return (parent: null, name: '', error: 'not-directory');
+      }
+      final entry = directory._entryNamed(segment);
+      if (entry == null) {
+        return (parent: null, name: '', error: 'no-entry');
+      }
+      if (entry.kind != WASIPreview3FilesystemDescriptorKind.directory) {
+        return (parent: null, name: '', error: 'not-directory');
+      }
+      final guestPath = '${current.guestPath}/$segment'.replaceAll('//', '/');
+      current = _WASIPreview3FilesystemDescriptor.fromEntry(
+        handle: _nextHandle,
+        objectId: _objectIdForPath(guestPath),
+        guestPath: guestPath,
+        entry: entry,
+      );
+    }
+    return (parent: current, name: segments.last, error: null);
+  }
 }
 
 final class _WASIPreview3FilesystemDescriptor {
@@ -476,7 +1071,7 @@ final class _WASIPreview3FilesystemDescriptor {
       kind: entry.kind,
       size: entry.size,
       directory: entry.directory,
-      canMutate: entry.directory?.canMutate ?? false,
+      canMutate: entry.canMutate,
       bytes: Uint8List(0),
       entry: entry,
     );
@@ -503,6 +1098,26 @@ final class _WASIPreview3FilesystemDescriptor {
         ? bytes.length
         : offset.toInt();
     return bytes.sublist(start);
+  }
+
+  WASIPreview3FilesystemMutationResult writeAt(BigInt offset, Uint8List data) {
+    final entry = this.entry;
+    if (entry == null) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.readOnly,
+      );
+    }
+    return entry._writeAt(offset, data);
+  }
+
+  WASIPreview3FilesystemMutationResult setSize(BigInt nextSize) {
+    final entry = this.entry;
+    if (entry == null) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.readOnly,
+      );
+    }
+    return entry._setSizeTo(nextSize);
   }
 
   _WASIPreview3FilesystemDescriptor copyWithHandle(int handle) {
@@ -539,6 +1154,15 @@ bool _pathIsPermitted(String path) {
   return true;
 }
 
+bool _isSimplePathSegment(String name) {
+  return name.isNotEmpty &&
+      name != '.' &&
+      name != '..' &&
+      !name.contains('/') &&
+      !name.contains('\\') &&
+      !name.contains('\u0000');
+}
+
 int _handle(Object? value) {
   return switch (value) {
     int() => value,
@@ -567,6 +1191,17 @@ int _stableStringHash(String value) {
 bool _flagsContainMutation(WasmComponentValueData flags) {
   return flags.labels.contains('write') ||
       flags.labels.contains('mutate-directory');
+}
+
+bool _openFlagsContainMutation(WasmComponentValueData flags) {
+  return flags.labels.contains('create') || flags.labels.contains('truncate');
+}
+
+WasmComponentValueData _mutationResult(
+  WASIPreview3FilesystemMutationResult result,
+) {
+  final error = result.error;
+  return error == null ? _unitOk() : _errorResult(error.errorCode);
 }
 
 WasmComponentValueData _descriptorStatData(

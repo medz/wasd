@@ -267,6 +267,150 @@ world filesystem-test {
         expect(fileStream.readable.read(8), [101, 108, 108, 111]);
       },
     );
+
+    test('mutates Preview3 filesystem real host files on Dart VM', () async {
+      if (!hasDartIoRuntime) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      final temp = createHostTemp('wasd_p3_host_mutate_');
+      if (temp == null) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      addTearDown(temp.delete);
+      temp.writeFile('note.txt', 'hello');
+
+      const source = '''
+package wasi-testsuite:test;
+
+world filesystem-test {
+  include wasi:filesystem/imports@0.3.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview3ComponentHost(
+        filesystemHost: WASIPreview3NativeFilesystemHost(
+          preopens: {'/': temp.path},
+          canMutate: true,
+        ),
+      );
+      final program = host.bindWitWorld(document, worldName: 'filesystem-test');
+      final directories =
+          program.invokeImport(
+                'wasi:filesystem/preopens@0.3.0.get-directories',
+                const [],
+              )
+              as WasmComponentValueData;
+      final root = _preopenHandle(directories, '/');
+      final opened =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'note.txt',
+                  _flagsValue(const <String>[]),
+                  _flagsValue(const <String>['read', 'write']),
+                ],
+              )
+              as WasmComponentValueData;
+      final file = _resultHandle(_resultOk(opened));
+
+      final patch = WASIComponentStream<int>('p3-file-write');
+      patch.writable.writeAll(<int>[88, 89]);
+      patch.writable.close();
+      final writeResult =
+          program.invokeImport(
+                'wasi:filesystem/types@0.3.0.descriptor.write-via-stream',
+                [file, patch, BigInt.from(1)],
+              )
+              as WASIComponentFuture<WasmComponentValueData>;
+      _expectUnitOk(await writeResult.readable.readWhenReady());
+      expect(temp.readFile('note.txt'), 'hXYlo');
+
+      final append = WASIComponentStream<int>('p3-file-append');
+      append.writable.write(33);
+      append.writable.close();
+      final appendResult =
+          program.invokeImport(
+                'wasi:filesystem/types@0.3.0.descriptor.append-via-stream',
+                [file, append],
+              )
+              as WASIComponentFuture<WasmComponentValueData>;
+      _expectUnitOk(await appendResult.readable.readWhenReady());
+      expect(temp.readFile('note.txt'), 'hXYlo!');
+
+      final resize =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.set-size',
+                [file, BigInt.from(3)],
+              )
+              as WasmComponentValueData;
+      _expectUnitOk(resize);
+      expect(temp.readFile('note.txt'), 'hXY');
+
+      final mkdir =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.create-directory-at',
+                [root, 'created'],
+              )
+              as WasmComponentValueData;
+      _expectUnitOk(mkdir);
+      expect(temp.directoryExists('created'), isTrue);
+
+      final created =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'created.txt',
+                  _flagsValue(const <String>['create']),
+                  _flagsValue(const <String>['read', 'write']),
+                ],
+              )
+              as WasmComponentValueData;
+      final createdFile = _resultHandle(_resultOk(created));
+      final createdBytes = WASIComponentStream<int>('p3-created-file-write');
+      createdBytes.writable.writeAll(<int>[110, 101, 119]);
+      createdBytes.writable.close();
+      final createWriteResult =
+          program.invokeImport(
+                'wasi:filesystem/types@0.3.0.descriptor.write-via-stream',
+                [createdFile, createdBytes, BigInt.zero],
+              )
+              as WASIComponentFuture<WasmComponentValueData>;
+      _expectUnitOk(await createWriteResult.readable.readWhenReady());
+      expect(temp.readFile('created.txt'), 'new');
+
+      final unlink =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.unlink-file-at',
+                [root, 'note.txt'],
+              )
+              as WasmComponentValueData;
+      _expectUnitOk(unlink);
+      expect(temp.fileExists('note.txt'), isFalse);
+
+      final unlinkCreated =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.unlink-file-at',
+                [root, 'created.txt'],
+              )
+              as WasmComponentValueData;
+      _expectUnitOk(unlinkCreated);
+      expect(temp.fileExists('created.txt'), isFalse);
+
+      final rmdir =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.remove-directory-at',
+                [root, 'created'],
+              )
+              as WasmComponentValueData;
+      _expectUnitOk(rmdir);
+      expect(temp.directoryExists('created'), isFalse);
+    });
   });
 }
 
@@ -298,6 +442,13 @@ int _resultHandle(WasmComponentValueData value) {
     return integer.toInt();
   }
   throw StateError('expected resource handle');
+}
+
+void _expectUnitOk(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.result ||
+      !(value.isOk ?? value.index == 0 || value.label == 'ok')) {
+    throw StateError('expected ok result');
+  }
 }
 
 String _directoryEntryName(WasmComponentValueData value) {
