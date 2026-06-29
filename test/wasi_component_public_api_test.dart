@@ -119,6 +119,42 @@ world random-test {
       );
     });
 
+    test('binds standard Preview2 clocks imports from public API', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world clocks-test {
+  include wasi:clocks/imports@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview2ComponentHost();
+      final program = host.bindWitWorld(document, worldName: 'clocks-test');
+      final now = program.invokeImport(
+        'wasi:clocks/monotonic-clock@0.2.0.now',
+        const [],
+      );
+      final wallNow =
+          program.invokeImport('wasi:clocks/wall-clock@0.2.0.now', const [])
+              as WasmComponentValueData;
+      final handle =
+          program.invokeImport(
+                'wasi:clocks/monotonic-clock@0.2.0.subscribe-duration',
+                [BigInt.zero],
+              )
+              as int;
+
+      expect(now, isA<BigInt>());
+      expect(wallNow.kind, WasmComponentValueDataKind.record);
+      expect(wallNow.items, hasLength(2));
+      expect(host.pollHost.table.contains(handle), isTrue);
+      expect(host.clocksHost.pollHost, same(host.pollHost));
+      expect(
+        host.standardImports,
+        contains('wasi:io/poll@0.2.0.pollable.ready'),
+      );
+    });
+
     test('binds standard Preview3 clocks imports from public API', () {
       const source = '''
 package wasi-testsuite:test;

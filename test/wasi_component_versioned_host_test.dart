@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
@@ -11,6 +12,7 @@ import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasi/component/wit_adapter.dart';
 import 'package:wasd/src/wasi/component/wit_document.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
+import 'package:wasd/src/wasi/preview2/poll.dart';
 import 'package:wasd/src/wasi/preview3/cli.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasi/preview3/filesystem.dart';
@@ -343,6 +345,151 @@ world random-test {
       expect(
         preview2.standardImports,
         contains('wasi:random/random@0.2.0.get-random-bytes'),
+      );
+    });
+
+    test('Preview2 expands and binds standard WASI clocks imports', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world clocks-test {
+  include wasi:clocks/imports@0.2.0;
+  import wasi:io/poll@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2 = WASIPreview2ComponentHost();
+      final plan = preview2.prepareWitWorld(document, worldName: 'clocks-test');
+
+      expect(plan.canIngest, isTrue);
+      expect(plan.canBindAdapters, isTrue);
+      expect(plan.bindingErrors, isEmpty);
+      expect(plan.functions.map((function) => function.qualifiedName), [
+        'wasi:clocks/monotonic-clock@0.2.0.now',
+        'wasi:clocks/monotonic-clock@0.2.0.resolution',
+        'wasi:clocks/monotonic-clock@0.2.0.subscribe-instant',
+        'wasi:clocks/monotonic-clock@0.2.0.subscribe-duration',
+        'wasi:clocks/wall-clock@0.2.0.now',
+        'wasi:clocks/wall-clock@0.2.0.resolution',
+        'wasi:io/poll@0.2.0.pollable.ready',
+        'wasi:io/poll@0.2.0.pollable.block',
+        'wasi:io/poll@0.2.0.poll',
+      ]);
+
+      final program = preview2.bindWitWorld(document, worldName: 'clocks-test');
+      final before =
+          program.invokeImport(
+                'wasi:clocks/monotonic-clock@0.2.0.now',
+                const [],
+              )
+              as BigInt;
+      final resolution =
+          program.invokeImport(
+                'wasi:clocks/monotonic-clock@0.2.0.resolution',
+                const [],
+              )
+              as BigInt;
+      final instantHandle =
+          program.invokeImport(
+                'wasi:clocks/monotonic-clock@0.2.0.subscribe-instant',
+                [before],
+              )
+              as int;
+      final durationHandle =
+          program.invokeImport(
+                'wasi:clocks/monotonic-clock@0.2.0.subscribe-duration',
+                [BigInt.zero],
+              )
+              as int;
+      final wallNow =
+          program.invokeImport('wasi:clocks/wall-clock@0.2.0.now', const [])
+              as WasmComponentValueData;
+      final wallResolution =
+          program.invokeImport(
+                'wasi:clocks/wall-clock@0.2.0.resolution',
+                const [],
+              )
+              as WasmComponentValueData;
+
+      expect(resolution, greaterThan(BigInt.zero));
+      expect(instantHandle, greaterThan(0));
+      expect(durationHandle, greaterThan(instantHandle));
+      expect(_datetimeNanoseconds(wallNow), lessThan(1000000000));
+      expect(_datetimeNanoseconds(wallResolution), lessThan(1000000000));
+      expect(
+        program.invokeImport('wasi:io/poll@0.2.0.pollable.ready', [
+          instantHandle,
+        ]),
+        isTrue,
+      );
+      expect(
+        program.invokeImport('wasi:io/poll@0.2.0.pollable.block', [
+          durationHandle,
+        ]),
+        isNull,
+      );
+      expect(
+        _u32List(
+          program.invokeImport('wasi:io/poll@0.2.0.poll', [
+                _resourceHandleList([instantHandle, durationHandle]),
+              ])
+              as WasmComponentValueData,
+        ),
+        [0, 1],
+      );
+      expect(
+        preview2.standardImports,
+        contains('wasi:clocks/monotonic-clock@0.2.0.subscribe-duration'),
+      );
+      expect(
+        preview2.standardImports,
+        contains('wasi:io/poll@0.2.0.pollable.ready'),
+      );
+    });
+
+    test('Preview2 poll host waits on pending pollables', () async {
+      final host = WASIPreview2PollHost();
+      final readySignal = Completer<void>();
+      var ready = false;
+      final handle = host.insert(
+        WASIPreview2Pollable(
+          isReady: () => ready,
+          waitReady: () => readySignal.future,
+        ),
+      );
+
+      expect(
+        host.imports['wasi:io/poll@0.2.0.pollable.ready']!([handle]),
+        isFalse,
+      );
+      final block = host.imports['wasi:io/poll@0.2.0.pollable.block']!([
+        handle,
+      ]);
+      expect(block, isA<Future<void>>());
+      var completed = false;
+      final wait = (block as Future<void>).then((_) {
+        completed = true;
+      });
+
+      await Future<void>.delayed(Duration.zero);
+      expect(completed, isFalse);
+
+      ready = true;
+      readySignal.complete();
+      await wait;
+
+      expect(
+        host.imports['wasi:io/poll@0.2.0.pollable.ready']!([handle]),
+        isTrue,
+      );
+      expect(
+        _u32List(
+          host.imports['wasi:io/poll@0.2.0.poll']!([
+                _resourceHandleList([handle]),
+              ])
+              as WasmComponentValueData,
+        ),
+        [0],
       );
     });
 
@@ -2460,6 +2607,43 @@ List<int> _u8List(WasmComponentValueData value) {
       else
         throw StateError('expected u8 item, got ${item.kind.name}'),
   ];
+}
+
+List<int> _u32List(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.list) {
+    throw StateError('expected list<u32>, got ${value.kind.name}');
+  }
+  return [
+    for (final item in value.items)
+      if (item.kind == WasmComponentValueDataKind.integer)
+        (item.integer as int)
+      else
+        throw StateError('expected u32 item, got ${item.kind.name}'),
+  ];
+}
+
+WasmComponentValueData _resourceHandleList(List<int> handles) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.list,
+    rawBytes: Uint8List(0),
+    items: [
+      for (final handle in handles)
+        WasmComponentValueData(
+          kind: WasmComponentValueDataKind.integer,
+          rawBytes: Uint8List(0),
+          integer: handle,
+        ),
+    ],
+  );
+}
+
+int _datetimeNanoseconds(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.record ||
+      value.items.length != 2 ||
+      value.items[1].kind != WasmComponentValueDataKind.integer) {
+    throw StateError('expected datetime, got ${value.kind.name}');
+  }
+  return value.items[1].integer as int;
 }
 
 List<String> _stringList(WasmComponentValueData value) {

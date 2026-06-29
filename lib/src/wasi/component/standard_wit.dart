@@ -15,6 +15,18 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
       memberName: parsed.memberName,
     );
   }
+  if (parsed.packageName == 'wasi:clocks' && parsed.version == '0.2.0') {
+    return WASIComponentWitResolvedTarget(
+      document: _wasiClocks020Document,
+      memberName: parsed.memberName,
+    );
+  }
+  if (parsed.packageName == 'wasi:io' && parsed.version == '0.2.0') {
+    return WASIComponentWitResolvedTarget(
+      document: _wasiIo020Document,
+      memberName: parsed.memberName,
+    );
+  }
   if (parsed.packageName == 'wasi:random' && parsed.version == '0.3.0') {
     return WASIComponentWitResolvedTarget(
       document: _wasiRandom030Document,
@@ -77,6 +89,18 @@ final WASIComponentWitDocument _wasiRandom020Document =
       sourceName: 'wasi:random@0.2.0',
     );
 
+final WASIComponentWitDocument _wasiClocks020Document =
+    WASIComponentWitDocument.parse(
+      _wasiClocks020Source,
+      sourceName: 'wasi:clocks@0.2.0',
+    );
+
+final WASIComponentWitDocument _wasiIo020Document =
+    WASIComponentWitDocument.parse(
+      _wasiIo020Source,
+      sourceName: 'wasi:io@0.2.0',
+    );
+
 final WASIComponentWitDocument _wasiClocks030Document =
     WASIComponentWitDocument.parse(
       _wasiClocks030Source,
@@ -123,6 +147,51 @@ final String _wasiRandom020Source = _wasiRandom030Source.replaceAll(
   '@0.3.0',
   '@0.2.0',
 );
+
+const String _wasiClocks020Source = '''
+package wasi:clocks@0.2.0;
+
+interface monotonic-clock {
+  resource pollable;
+
+  now: func() -> u64;
+  resolution: func() -> u64;
+  subscribe-instant: func(when: u64) -> pollable;
+  subscribe-duration: func(when: u64) -> pollable;
+}
+
+interface wall-clock {
+  record datetime {
+    seconds: u64,
+    nanoseconds: u32,
+  }
+
+  now: func() -> datetime;
+  resolution: func() -> datetime;
+}
+
+world imports {
+  import monotonic-clock;
+  import wall-clock;
+}
+''';
+
+const String _wasiIo020Source = '''
+package wasi:io@0.2.0;
+
+interface poll {
+  resource pollable {
+    ready: func(self: borrow<pollable>) -> bool;
+    block: func(self: borrow<pollable>);
+  }
+
+  poll: func(in: list<borrow<pollable>>) -> list<u32>;
+}
+
+world imports {
+  import poll;
+}
+''';
 
 const String _wasiClocks030Source = '''
 package wasi:clocks@0.3.0;

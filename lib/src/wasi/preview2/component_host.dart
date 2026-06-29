@@ -7,6 +7,8 @@ import '../component/wit_adapter.dart';
 import '../component/wit_document.dart';
 import '../version.dart';
 import '../../wasm/backend/native/interpreter/component.dart';
+import 'clocks.dart';
+import 'poll.dart';
 import 'random.dart';
 
 /// WASI 0.2 / Preview2 component host boundary.
@@ -17,17 +19,35 @@ final class WASIPreview2ComponentHost {
   /// Creates a Preview2 component host over [componentHost] or a new host.
   WASIPreview2ComponentHost({
     WASIComponentHost? componentHost,
+    WASIPreview2ClocksHost? clocksHost,
+    WASIPreview2PollHost? pollHost,
     WASIPreview2RandomHost? randomHost,
-  }) : versionedHost = WASIComponentVersionedHost(
+  }) : assert(
+         pollHost == null ||
+             clocksHost == null ||
+             identical(pollHost, clocksHost.pollHost),
+         'clocksHost and pollHost must share the same Preview2 poll host.',
+       ),
+       versionedHost = WASIComponentVersionedHost(
          version: WASIVersion.preview2,
          componentHost: componentHost,
        ),
+       _clocksHostOverride = clocksHost,
+       _pollHostOverride = pollHost,
        _randomHost = randomHost ?? WASIPreview2RandomHost();
 
   /// Underlying versioned component-host facade.
   final WASIComponentVersionedHost versionedHost;
 
+  final WASIPreview2ClocksHost? _clocksHostOverride;
+  final WASIPreview2PollHost? _pollHostOverride;
   final WASIPreview2RandomHost _randomHost;
+  late final WASIPreview2PollHost _pollHost =
+      _clocksHostOverride?.pollHost ??
+      _pollHostOverride ??
+      WASIPreview2PollHost(table: componentHost.table);
+  late final WASIPreview2ClocksHost _clocksHost =
+      _clocksHostOverride ?? WASIPreview2ClocksHost(pollHost: _pollHost);
 
   /// Preview2 version profile.
   WASIComponentVersionProfile get profile => versionedHost.profile;
@@ -38,10 +58,18 @@ final class WASIPreview2ComponentHost {
   /// Random host state for standard `wasi:random` imports.
   WASIPreview2RandomHost get randomHost => _randomHost;
 
+  /// Clocks host state for standard `wasi:clocks` imports.
+  WASIPreview2ClocksHost get clocksHost => _clocksHost;
+
+  /// Poll host state for standard `wasi:io/poll` imports.
+  WASIPreview2PollHost get pollHost => _pollHost;
+
   /// Standard Preview2 WIT import callbacks implemented by this host.
   late final Map<String, WASIComponentWitAdapterCallback> standardImports =
       Map<String, WASIComponentWitAdapterCallback>.unmodifiable({
         ..._randomHost.imports,
+        ..._clocksHost.imports,
+        ..._pollHost.imports,
       });
 
   /// Prepares [component] for Preview2 component-host binding.
