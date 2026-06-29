@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:wasd/src/wasi/preview1/common/constants.dart'
+    as preview1_constants;
 import 'package:wasd/src/wasi/preview1/common/vfs.dart';
 import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
@@ -78,6 +80,55 @@ const int _eventTypeClock = 0;
 const int _eventTypeFdRead = 1;
 const int _eventTypeFdWrite = 2;
 const int _eventrwflagFdReadwriteHangup = 1;
+
+const Set<String> _preview1StandardImports = <String>{
+  'args_get',
+  'args_sizes_get',
+  'clock_res_get',
+  'clock_time_get',
+  'environ_get',
+  'environ_sizes_get',
+  'fd_advise',
+  'fd_allocate',
+  'fd_close',
+  'fd_datasync',
+  'fd_fdstat_get',
+  'fd_fdstat_set_flags',
+  'fd_fdstat_set_rights',
+  'fd_filestat_get',
+  'fd_filestat_set_size',
+  'fd_filestat_set_times',
+  'fd_pread',
+  'fd_prestat_dir_name',
+  'fd_prestat_get',
+  'fd_pwrite',
+  'fd_read',
+  'fd_readdir',
+  'fd_renumber',
+  'fd_seek',
+  'fd_sync',
+  'fd_tell',
+  'fd_write',
+  'path_create_directory',
+  'path_filestat_get',
+  'path_filestat_set_times',
+  'path_link',
+  'path_open',
+  'path_readlink',
+  'path_remove_directory',
+  'path_rename',
+  'path_symlink',
+  'path_unlink_file',
+  'poll_oneoff',
+  'proc_exit',
+  'proc_raise',
+  'random_get',
+  'sched_yield',
+  'sock_accept',
+  'sock_recv',
+  'sock_send',
+  'sock_shutdown',
+};
 
 void _setUint64Le(ByteData data, int offset, int value) {
   if (value >= 0 && value <= _u32Max) {
@@ -195,6 +246,28 @@ void main() {
       final wasi = WASI();
       expect(wasi.imports.containsKey('wasi_snapshot_preview1'), isTrue);
     });
+
+    test(
+      'imports expose the full WASI Preview1 surface without ENOSYS slots',
+      () {
+        final wasi = WASI();
+        final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+
+        expect(
+          preview1_constants.preview1NosysImports,
+          isEmpty,
+          reason: 'Preview1 imports must not be backed by ENOSYS placeholders.',
+        );
+        expect(preview1.keys.toSet(), _preview1StandardImports);
+        for (final name in _preview1StandardImports) {
+          expect(
+            preview1[name],
+            isA<FunctionImportExportValue>(),
+            reason: '$name must be a callable Preview1 host function.',
+          );
+        }
+      },
+    );
 
     test('imports has proc_exit function', () {
       final wasi = WASI();
