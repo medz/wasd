@@ -43,6 +43,8 @@ const int _filetypeRegularFile = 4;
 const int _filetypeSocketDgram = 5;
 const int _filetypeSocketStream = 6;
 const int _filetypeSymbolicLink = 7;
+const int _filestatFiletypeOffset = 16;
+const int _filestatLinkCountOffset = 24;
 const int _errnoAgain = 6;
 const int _errnoBadf = 8;
 const int _errnoExist = 20;
@@ -5143,6 +5145,21 @@ void main() {
             ),
             'target.txt',
           );
+          expect(linkPath('link.txt', 'link-hard.txt'), 0);
+          expect(host.symlinkExists('link-hard.txt'), isTrue);
+          expect(host.readLink('link-hard.txt'), 'target.txt');
+          expect(
+            linkPath(
+              'link.txt',
+              'target-hard.txt',
+              lookupFlags: _lookupflagSymlinkFollow,
+            ),
+            0,
+          );
+          expect(host.fileExists('target-hard.txt'), isTrue);
+          expect(host.readFile('target-hard.txt'), 'target');
+          host.writeFile('target.txt', 'target changed');
+          expect(host.readFile('target-hard.txt'), 'target changed');
           expect(
             symlinkPath('/absolute-target', 'absolute.txt'),
             _errnoNotcapable,
@@ -7806,6 +7823,8 @@ void main() {
           final fileInstance = fileResult.instance;
           final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
           final pathLink = preview1['path_link'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
           final pathSymlink =
               preview1['path_symlink'] as FunctionImportExportValue;
           final pathReadlink =
@@ -7826,12 +7845,13 @@ void main() {
           const symlinkFollowPathPtr = 4064;
           const readlinkBufferPtr = 4096;
           const readlinkUsedPtr = 4144;
+          const filestatPtr = 4160;
 
           final sourcePath = utf8.encode('source.txt');
           final dirPath = utf8.encode('dir');
           final dirLinkPath = utf8.encode('dir-link');
           final trailingPath = utf8.encode('missing/');
-          final targetPath = utf8.encode('dangling-target');
+          final targetPath = utf8.encode('source.txt');
           final symlinkPath = utf8.encode('symlink');
           final symlinkHardPath = utf8.encode('symlink-hard');
           final symlinkFollowPath = utf8.encode('symlink-follow');
@@ -7909,7 +7929,7 @@ void main() {
                 readlinkBufferPtr + readlinkUsed,
               ),
             ),
-            'dangling-target',
+            'source.txt',
           );
           expect(
             pathLink.ref([
@@ -7921,8 +7941,44 @@ void main() {
               symlinkFollowPathPtr,
               symlinkFollowPath.length,
             ]),
+            0,
+          );
+          expect(
+            pathReadlink.ref([
+              3,
+              symlinkFollowPathPtr,
+              symlinkFollowPath.length,
+              readlinkBufferPtr,
+              32,
+              readlinkUsedPtr,
+            ]),
             _errnoInval,
           );
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              symlinkFollowPathPtr,
+              symlinkFollowPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(
+            bytes[filestatPtr + _filestatFiletypeOffset],
+            _filetypeRegularFile,
+          );
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              sourcePathPtr,
+              sourcePath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(_getUint64Le(data, filestatPtr + _filestatLinkCountOffset), 2);
         },
       );
 
@@ -8110,6 +8166,7 @@ void main() {
           final targetPath = utf8.encode('target.txt');
           final linkPath = utf8.encode('link.txt');
           final hardLinkPath = utf8.encode('hard.txt');
+          final followHardLinkPath = utf8.encode('target-hard.txt');
           const targetPathPtr = 3312;
           const linkPathPtr = 3344;
           const readlinkBufferPtr = 3376;
@@ -8120,10 +8177,12 @@ void main() {
           const readBufferPtr = 3552;
           const readCountPtr = 3584;
           const hardLinkPathPtr = 3616;
+          const followHardLinkPathPtr = 3648;
 
           bytes.setAll(targetPathPtr, targetPath);
           bytes.setAll(linkPathPtr, linkPath);
           bytes.setAll(hardLinkPathPtr, hardLinkPath);
+          bytes.setAll(followHardLinkPathPtr, followHardLinkPath);
           expect(
             pathSymlink.ref([
               targetPathPtr,
@@ -8240,11 +8299,71 @@ void main() {
               linkPathPtr,
               linkPath.length,
               3,
-              hardLinkPathPtr,
-              hardLinkPath.length,
+              followHardLinkPathPtr,
+              followHardLinkPath.length,
+            ]),
+            0,
+          );
+          expect(
+            pathReadlink.ref([
+              3,
+              followHardLinkPathPtr,
+              followHardLinkPath.length,
+              readlinkBufferPtr,
+              32,
+              readlinkUsedPtr,
             ]),
             _errnoInval,
           );
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              followHardLinkPathPtr,
+              followHardLinkPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(
+            bytes[filestatPtr + _filestatFiletypeOffset],
+            _filetypeRegularFile,
+          );
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              targetPathPtr,
+              targetPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(_getUint64Le(data, filestatPtr + _filestatLinkCountOffset), 2);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              followHardLinkPathPtr,
+              followHardLinkPath.length,
+              0,
+              _rightsAll,
+              _rightsAll,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final followFd = data.getUint32(openedFdPtr, Endian.little);
+          data.setUint32(iovPtr, readBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 6, Endian.little);
+          expect(fdPread.ref([followFd, iovPtr, 1, 0, readCountPtr]), 0);
+          expect(data.getUint32(readCountPtr, Endian.little), 6);
+          expect(
+            utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + 6)),
+            'target',
+          );
+          bytes.fillRange(readBufferPtr, readBufferPtr + 6, 0);
           expect(
             pathLink.ref([
               3,

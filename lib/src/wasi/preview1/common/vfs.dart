@@ -820,9 +820,15 @@ final class Preview1VirtualFileSystem {
   Preview1PathMutationResult linkPath({
     required String oldPath,
     required String newPath,
+    bool oldPathFollowSymlinks = false,
     bool newPathHasTrailingSeparator = false,
   }) {
-    final oldNormalized = normalizeGuestPath(oldPath);
+    final oldNormalized = oldPathFollowSymlinks
+        ? resolveSymlinkPath(oldPath)
+        : normalizeGuestPath(oldPath);
+    if (oldNormalized == null) {
+      return Preview1PathMutationResult.symlinkLoop;
+    }
     final newNormalized = normalizeGuestPath(newPath);
     if (newPathHasTrailingSeparator) {
       if (_virtualDirectoryPaths.contains(newNormalized)) {
@@ -2247,6 +2253,7 @@ enum Preview1PathMutationResult {
   notDirectory,
   notEmpty,
   notCapable,
+  symlinkLoop,
   permissionDenied,
 }
 

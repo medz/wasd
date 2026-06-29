@@ -34,6 +34,7 @@ const int _filestatSizeOffset = 32;
 const int _filetypeDirectory = 3;
 const int _filetypeRegularFile = 4;
 const int _filetypeSymbolicLink = 7;
+const int _lookupflagSymlinkFollow = 1;
 const int _fdflagAppend = 1;
 const int _oflagCreat = 1;
 const int _oflagDirectory = 2;
@@ -701,6 +702,8 @@ void main() {
     final temp = await Directory.systemTemp.createTemp('wasd_host_link_');
     addTearDown(() => temp.delete(recursive: true));
     final source = File('${temp.path}/source.txt')..writeAsStringSync('source');
+    final target = File('${temp.path}/target.txt')..writeAsStringSync('target');
+    Link('${temp.path}/symlink.txt').createSync('target.txt');
     File('${temp.path}/exists.txt').writeAsStringSync('exists');
     Directory('${temp.path}/dir').createSync();
 
@@ -746,6 +749,54 @@ void main() {
     expect(pathUnlinkFile.ref([3, oldPathPtr, oldPath.length]), 0);
     expect(source.existsSync(), isFalse);
     expect(linked.readAsStringSync(), 'changed');
+
+    oldPath = utf8.encode('symlink.txt');
+    newPath = utf8.encode('symlink-hard.txt');
+    bytes.setAll(oldPathPtr, oldPath);
+    bytes.setAll(newPathPtr, newPath);
+    expect(
+      pathLink.ref([
+        3,
+        0,
+        oldPathPtr,
+        oldPath.length,
+        3,
+        newPathPtr,
+        newPath.length,
+      ]),
+      0,
+    );
+    final symlinkHard = '${temp.path}/symlink-hard.txt';
+    expect(
+      FileSystemEntity.typeSync(symlinkHard, followLinks: false),
+      FileSystemEntityType.link,
+    );
+    expect(Link(symlinkHard).targetSync(), 'target.txt');
+
+    oldPath = utf8.encode('symlink.txt');
+    newPath = utf8.encode('target-hard.txt');
+    bytes.setAll(oldPathPtr, oldPath);
+    bytes.setAll(newPathPtr, newPath);
+    expect(
+      pathLink.ref([
+        3,
+        _lookupflagSymlinkFollow,
+        oldPathPtr,
+        oldPath.length,
+        3,
+        newPathPtr,
+        newPath.length,
+      ]),
+      0,
+    );
+    final targetHard = File('${temp.path}/target-hard.txt');
+    expect(
+      FileSystemEntity.typeSync(targetHard.path, followLinks: false),
+      FileSystemEntityType.file,
+    );
+    expect(targetHard.readAsStringSync(), 'target');
+    target.writeAsStringSync('target changed');
+    expect(targetHard.readAsStringSync(), 'target changed');
 
     oldPath = utf8.encode('linked.txt');
     newPath = utf8.encode('exists.txt');

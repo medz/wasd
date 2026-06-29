@@ -1308,9 +1308,8 @@ class WASI implements wasi.WASI {
         if ((lookupFlags & ~_lookupflagKnownMask) != 0) {
           return _errnoInval;
         }
-        if ((lookupFlags & _lookupflagSymlinkFollow) != 0) {
-          return _errnoInval;
-        }
+        final oldPathFollowSymlinks =
+            (lookupFlags & _lookupflagSymlinkFollow) != 0;
         final oldPath = _resolvePath(
           dirFd: _asInt(args[0]),
           pathPtr: _asInt(args[2]),
@@ -1343,17 +1342,23 @@ class WASI implements wasi.WASI {
         }
 
         final fs = _requireNodeBuiltin('node:fs');
-        final oldHostPath = _nodeHostPathForGuestPath(oldPath.path!);
+        final oldHostPreopen = _nodeHostPreopenPathForGuestPath(oldPath.path!);
         final newHostPath = _nodeHostPathForGuestPath(newPath.path!);
-        if (fs != null && oldHostPath != null && newHostPath != null) {
+        if (fs != null && oldHostPreopen != null && newHostPath != null) {
           final hostResult = _linkNodeHostPath(
             fs: fs,
-            oldHostPath: oldHostPath,
+            oldHostPath: oldHostPreopen.hostPath,
+            oldHostRoot: oldHostPreopen.hostRoot,
+            oldPathFollowSymlinks: oldPathFollowSymlinks,
             newHostPath: newHostPath,
             newPathHasTrailingSeparator: newPath.hasTrailingSeparator,
           );
           if (hostResult != wasi_vfs.Preview1PathMutationResult.noEntry ||
-              _vfs.pathEntry(oldPath.path!, followSymlinks: false) == null) {
+              _vfs.pathEntry(
+                    oldPath.path!,
+                    followSymlinks: oldPathFollowSymlinks,
+                  ) ==
+                  null) {
             return _errnoFromPathMutationResult(hostResult);
           }
         }
@@ -1362,6 +1367,7 @@ class WASI implements wasi.WASI {
           _vfs.linkPath(
             oldPath: oldPath.path!,
             newPath: newPath.path!,
+            oldPathFollowSymlinks: oldPathFollowSymlinks,
             newPathHasTrailingSeparator: newPath.hasTrailingSeparator,
           ),
         );
@@ -2489,6 +2495,8 @@ class WASI implements wasi.WASI {
   wasi_vfs.Preview1PathMutationResult _linkNodeHostPath({
     required JSObject fs,
     required String oldHostPath,
+    required String oldHostRoot,
+    required bool oldPathFollowSymlinks,
     required String newHostPath,
     required bool newPathHasTrailingSeparator,
   }) {
@@ -2520,9 +2528,40 @@ class WASI implements wasi.WASI {
       return wasi_vfs.Preview1PathMutationResult.exists;
     }
 
-    final oldStat = _nodeLstat(fs, oldHostPath);
+    var sourceHostPath = oldHostPath;
+    var oldStat = _nodeLstat(fs, sourceHostPath);
     if (oldStat == null) {
       return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (_nodeStatMethod(oldStat, 'isSymbolicLink')) {
+      if (!oldPathFollowSymlinks) {
+        final target = _readNodeHostSymlinkTarget(fs, sourceHostPath);
+        if (target.errno != _errnoSuccess) {
+          return _pathMutationResultFromErrno(target.errno);
+        }
+        try {
+          fs.callMethodVarArgs<JSAny?>('symlinkSync'.toJS, [
+            target.target!.toJS,
+            newHostPath.toJS,
+          ]);
+          return wasi_vfs.Preview1PathMutationResult.success;
+        } catch (_) {
+          return _nodeHostCreatePathFailure(fs, newHostPath);
+        }
+      }
+      final resolved = _resolveNodeHostSymlinkTarget(
+        fs: fs,
+        linkHostPath: sourceHostPath,
+        hostRoot: oldHostRoot,
+      );
+      if (resolved.errno != _errnoSuccess) {
+        return _pathMutationResultFromErrno(resolved.errno);
+      }
+      sourceHostPath = resolved.hostPath!;
+      oldStat = _nodeLstat(fs, sourceHostPath);
+      if (oldStat == null) {
+        return wasi_vfs.Preview1PathMutationResult.noEntry;
+      }
     }
     if (_nodeStatMethod(oldStat, 'isDirectory')) {
       return wasi_vfs.Preview1PathMutationResult.permissionDenied;
@@ -2533,7 +2572,7 @@ class WASI implements wasi.WASI {
 
     try {
       fs.callMethodVarArgs<JSAny?>('linkSync'.toJS, [
-        oldHostPath.toJS,
+        sourceHostPath.toJS,
         newHostPath.toJS,
       ]);
       return wasi_vfs.Preview1PathMutationResult.success;
@@ -3248,6 +3287,7 @@ int _errnoFromPathMutationResult(wasi_vfs.Preview1PathMutationResult result) =>
       wasi_vfs.Preview1PathMutationResult.notDirectory => _errnoNotdir,
       wasi_vfs.Preview1PathMutationResult.notEmpty => _errnoNotempty,
       wasi_vfs.Preview1PathMutationResult.notCapable => _errnoNotcapable,
+      wasi_vfs.Preview1PathMutationResult.symlinkLoop => _errnoLoop,
       wasi_vfs.Preview1PathMutationResult.permissionDenied => _errnoPerm,
     };
 
@@ -3613,6 +3653,17 @@ wasi_vfs.Preview1PathMutationResult _nodeHostLinkFailure({
   }
   return wasi_vfs.Preview1PathMutationResult.permissionDenied;
 }
+
+wasi_vfs.Preview1PathMutationResult _pathMutationResultFromErrno(int errno) =>
+    switch (errno) {
+      _errnoSuccess => wasi_vfs.Preview1PathMutationResult.success,
+      _errnoNoent => wasi_vfs.Preview1PathMutationResult.noEntry,
+      _errnoNotcapable => wasi_vfs.Preview1PathMutationResult.notCapable,
+      _errnoLoop => wasi_vfs.Preview1PathMutationResult.symlinkLoop,
+      _errnoNotdir => wasi_vfs.Preview1PathMutationResult.notDirectory,
+      _errnoIsdir => wasi_vfs.Preview1PathMutationResult.isDirectory,
+      _ => wasi_vfs.Preview1PathMutationResult.permissionDenied,
+    };
 
 bool _isChildGuestPath(String path, String parent) {
   final normalizedPath = wasi_vfs.normalizeGuestPath(path);
