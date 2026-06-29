@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/subtask.dart';
+import 'package:wasd/src/wasi/component/task.dart';
 import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
@@ -144,6 +145,46 @@ void main() {
       expect(String.fromCharCodes(bytes.sublist(128, 144)), 'component failed');
       expect(program.invokeWithMemory(2, memory, <Object?>[handle]), isNull);
       expect(() => program.invoke(1, <Object?>[handle]), throwsStateError);
+    });
+
+    test('invokes task.return through canonical memory', () {
+      final host = WASIComponentCanonicalHost();
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final bytes = Uint8List.view(memory.buffer);
+      final data = ByteData.view(memory.buffer);
+      bytes.setAll(96, 'task'.codeUnits);
+      data.setUint32(32, 96, Endian.little);
+      data.setUint32(36, 4, Endian.little);
+      final task = host.taskHost.createTask(name: 'canonical-task');
+      final program = host.bindCanonicalDefinitions(const [
+        WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.taskReturn,
+          result: WasmComponentCanonicalResult.value(
+            WasmComponentValueType.primitive(
+              WasmComponentPrimitiveValueType.string,
+            ),
+          ),
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.stringEncodingUtf8,
+            ),
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+      ]);
+
+      host.taskHost.runWithTask(task, () {
+        expect(
+          program.invokeWithMemory(0, memory, const <Object?>[32]),
+          isNull,
+        );
+      });
+
+      expect(task.state, WASIComponentTaskState.returned);
+      expect(task.result, 'task');
     });
 
     test('shares table and waitable resolvers across component hosts', () {

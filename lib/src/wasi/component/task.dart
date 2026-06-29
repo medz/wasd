@@ -1,6 +1,9 @@
 import '../../wasm/backend/native/interpreter/component.dart';
+import '../../wasm/memory.dart' as wasm;
 import 'current.dart';
+import 'string_memory.dart';
 import 'subtask.dart';
+import 'value_memory.dart';
 import 'waitable_set.dart';
 
 /// Callee-side Component Model task state.
@@ -203,8 +206,9 @@ final class WASIComponentTaskHost {
 
   /// Binds a decoded canonical task definition.
   WASIComponentCanonicalTaskOperation bindCanonicalDefinition(
-    WasmComponentCanonicalDefinition definition,
-  ) {
+    WasmComponentCanonicalDefinition definition, {
+    List<WasmComponentTypeDefinition> typeDefinitions = const [],
+  }) {
     if (!_isTaskCanonicalKind(definition.kind)) {
       throw UnsupportedError(
         'Wasm component canonical ${definition.kind.name} is not a task operation.',
@@ -214,6 +218,13 @@ final class WASIComponentTaskHost {
       host: this,
       kind: definition.kind,
       result: definition.result,
+      resultMemoryCodec: _taskReturnResultMemoryCodec(
+        definition,
+        typeDefinitions,
+      ),
+      stringEncoding: WASIComponentCanonicalStringEncoding.fromCanonicalOptions(
+        definition.options,
+      ),
     );
   }
 
@@ -224,7 +235,10 @@ final class WASIComponentTaskHost {
     return WASIComponentCanonicalTaskProgram(
       operations: List<WASIComponentCanonicalTaskOperation>.unmodifiable([
         for (final definition in component.canonicalDefinitions)
-          bindCanonicalDefinition(definition),
+          bindCanonicalDefinition(
+            definition,
+            typeDefinitions: component.typeDefinitions,
+          ),
       ]),
     );
   }
@@ -266,6 +280,39 @@ final class WASIComponentCanonicalTaskProgram {
     }
   }
 
+  /// Invokes the canonical task operation with canonical memory arguments.
+  Object? invokeWithMemory(
+    int canonicalIndex,
+    wasm.Memory memory,
+    List<Object?> args,
+  ) {
+    final operation = _operationAt(canonicalIndex);
+    switch (operation.kind) {
+      case WasmComponentCanonicalKind.taskReturn:
+        if (!operation.hasResult) {
+          _expectArity(canonicalIndex, args, 0);
+          operation.taskReturn();
+          return null;
+        }
+        _expectArity(canonicalIndex, args, 1);
+        operation.taskReturn(
+          result: operation.loadResultFromMemory(
+            memory,
+            _expectPointer(canonicalIndex, args.single),
+          ),
+        );
+        return null;
+      case WasmComponentCanonicalKind.taskCancel:
+        _expectArity(canonicalIndex, args, 0);
+        operation.taskCancel();
+        return null;
+      default:
+        throw UnsupportedError(
+          'Wasm component canonical ${operation.kind.name} is not executable by the task program.',
+        );
+    }
+  }
+
   WASIComponentCanonicalTaskOperation _operationAt(int canonicalIndex) {
     if (canonicalIndex < 0 || canonicalIndex >= operations.length) {
       throw StateError(
@@ -282,7 +329,10 @@ final class WASIComponentCanonicalTaskOperation {
     required WASIComponentTaskHost host,
     required this.kind,
     required this.result,
-  }) : _host = host;
+    required WASIComponentCanonicalValueMemoryCodec? resultMemoryCodec,
+    required this.stringEncoding,
+  }) : _host = host,
+       _resultMemoryCodec = resultMemoryCodec;
 
   final WASIComponentTaskHost _host;
 
@@ -292,6 +342,11 @@ final class WASIComponentCanonicalTaskOperation {
   /// Decoded `task.return` result metadata, if any.
   final WasmComponentCanonicalResult? result;
 
+  final WASIComponentCanonicalValueMemoryCodec? _resultMemoryCodec;
+
+  /// Canonical string encoding used by memory-backed return values.
+  final WASIComponentCanonicalStringEncoding stringEncoding;
+
   /// Whether `task.return` expects a result value.
   bool get hasResult => result?.valueType != null;
 
@@ -299,6 +354,18 @@ final class WASIComponentCanonicalTaskOperation {
   void taskReturn({Object? result}) {
     _requireKind(WasmComponentCanonicalKind.taskReturn);
     _host.taskReturn(result: result, hasResult: hasResult);
+  }
+
+  /// Loads a `task.return` result value from canonical memory.
+  Object? loadResultFromMemory(wasm.Memory memory, int pointer) {
+    _requireKind(WasmComponentCanonicalKind.taskReturn);
+    final codec = _resultMemoryCodec;
+    if (codec == null) {
+      throw UnsupportedError(
+        'WASI component canonical task.return result does not support memory-backed invocation.',
+      );
+    }
+    return codec.load(memory, pointer, stringEncoding: stringEncoding);
   }
 
   /// Executes `task.cancel`.
@@ -320,6 +387,23 @@ bool _isTaskCanonicalKind(WasmComponentCanonicalKind kind) =>
     kind == WasmComponentCanonicalKind.taskReturn ||
     kind == WasmComponentCanonicalKind.taskCancel;
 
+WASIComponentCanonicalValueMemoryCodec? _taskReturnResultMemoryCodec(
+  WasmComponentCanonicalDefinition definition,
+  List<WasmComponentTypeDefinition> typeDefinitions,
+) {
+  if (definition.kind != WasmComponentCanonicalKind.taskReturn) {
+    return null;
+  }
+  final resultType = definition.result?.valueType;
+  if (resultType == null) {
+    return null;
+  }
+  return WASIComponentCanonicalValueMemoryCodec.fromValueType(
+    resultType,
+    typeDefinitions,
+  );
+}
+
 void _expectArity(int canonicalIndex, List<Object?> args, int expected) {
   if (args.length != expected) {
     throw StateError(
@@ -327,4 +411,13 @@ void _expectArity(int canonicalIndex, List<Object?> args, int expected) {
       '$expected arguments, got ${args.length}.',
     );
   }
+}
+
+int _expectPointer(int canonicalIndex, Object? value) {
+  if (value is int && value >= 0) {
+    return value;
+  }
+  throw StateError(
+    'WASI component canonical task index $canonicalIndex expected a memory pointer.',
+  );
 }

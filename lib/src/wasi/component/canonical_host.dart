@@ -102,6 +102,9 @@ final class WASIComponentCanonicalHost {
     return WASIComponentCanonicalBindingPlan._(
       host: this,
       canonicalDefinitions: definitions,
+      typeDefinitions: List<WasmComponentTypeDefinition>.unmodifiable(
+        component.typeDefinitions,
+      ),
       validationErrors: List<WasmComponentValidationError>.unmodifiable(
         validationErrors,
       ),
@@ -125,6 +128,7 @@ final class WASIComponentCanonicalHost {
 
   WASIComponentCanonicalProgram _bindSupportedCanonicalDefinitions(
     List<WasmComponentCanonicalDefinition> definitions, {
+    List<WasmComponentTypeDefinition> typeDefinitions = const [],
     Map<int, WASIComponentCanonicalAdapterOperation> adapterOperations =
         const <int, WASIComponentCanonicalAdapterOperation>{},
   }) {
@@ -138,6 +142,7 @@ final class WASIComponentCanonicalHost {
         _bindSupportedCanonicalDefinition(
           definitions[canonicalIndex],
           canonicalIndex: canonicalIndex,
+          typeDefinitions: typeDefinitions,
           adapterOperations: adapterOperations,
         ),
       );
@@ -219,6 +224,7 @@ final class WASIComponentCanonicalHost {
     return _bindSupportedCanonicalDefinition(
       definition,
       canonicalIndex: 0,
+      typeDefinitions: const <WasmComponentTypeDefinition>[],
       adapterOperations: const <int, WASIComponentCanonicalAdapterOperation>{},
     );
   }
@@ -226,6 +232,7 @@ final class WASIComponentCanonicalHost {
   WASIComponentCanonicalOperation _bindSupportedCanonicalDefinition(
     WasmComponentCanonicalDefinition definition, {
     required int canonicalIndex,
+    required List<WasmComponentTypeDefinition> typeDefinitions,
     required Map<int, WASIComponentCanonicalAdapterOperation> adapterOperations,
   }) {
     switch (definition.kind) {
@@ -265,7 +272,7 @@ final class WASIComponentCanonicalHost {
         return _bindSubtask(definition);
       case WasmComponentCanonicalKind.taskReturn:
       case WasmComponentCanonicalKind.taskCancel:
-        return _bindTask(definition);
+        return _bindTask(definition, typeDefinitions);
       case WasmComponentCanonicalKind.contextGet:
       case WasmComponentCanonicalKind.contextSet:
         return _bindContext(definition);
@@ -399,13 +406,21 @@ final class WASIComponentCanonicalHost {
 
   WASIComponentCanonicalOperation _bindTask(
     WasmComponentCanonicalDefinition definition,
+    List<WasmComponentTypeDefinition> typeDefinitions,
   ) {
     final program = WASIComponentCanonicalTaskProgram(
-      operations: [taskHost.bindCanonicalDefinition(definition)],
+      operations: [
+        taskHost.bindCanonicalDefinition(
+          definition,
+          typeDefinitions: typeDefinitions,
+        ),
+      ],
     );
     return WASIComponentCanonicalOperation._(
       kind: definition.kind,
       invoke: (args) => program.invoke(0, args),
+      invokeWithMemory: (memory, args, _, _) =>
+          program.invokeWithMemory(0, memory, args),
     );
   }
 
@@ -460,6 +475,7 @@ final class WASIComponentCanonicalBindingPlan {
   const WASIComponentCanonicalBindingPlan._({
     required WASIComponentCanonicalHost host,
     required this.canonicalDefinitions,
+    required this.typeDefinitions,
     required this.validationErrors,
     required this.unsupportedDefinitions,
   }) : _host = host;
@@ -468,6 +484,9 @@ final class WASIComponentCanonicalBindingPlan {
 
   /// Canonical definitions captured when the plan was prepared.
   final List<WasmComponentCanonicalDefinition> canonicalDefinitions;
+
+  /// Component type definitions captured for memory-backed canonical values.
+  final List<WasmComponentTypeDefinition> typeDefinitions;
 
   /// Component validation errors that must be fixed before binding.
   final List<WasmComponentValidationError> validationErrors;
@@ -512,6 +531,7 @@ final class WASIComponentCanonicalBindingPlan {
         };
     return _host._bindSupportedCanonicalDefinitions(
       canonicalDefinitions,
+      typeDefinitions: typeDefinitions,
       adapterOperations: Map.unmodifiable(adaptersByCanonicalIndex),
     );
   }

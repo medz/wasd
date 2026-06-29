@@ -316,6 +316,113 @@ void main() {
       expect(host.currentTask, isNull);
     });
 
+    test('returns canonical memory-backed values', () {
+      final host = WASIComponentTaskHost();
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final bytes = Uint8List.view(memory.buffer);
+      final data = ByteData.view(memory.buffer);
+      bytes.setAll(96, 'done'.codeUnits);
+      data.setUint32(32, 96, Endian.little);
+      data.setUint32(36, 4, Endian.little);
+      final program = WASIComponentCanonicalTaskProgram(
+        operations: [
+          host.bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.taskReturn,
+              result: WasmComponentCanonicalResult.value(
+                WasmComponentValueType.primitive(
+                  WasmComponentPrimitiveValueType.string,
+                ),
+              ),
+              options: [
+                WasmComponentCanonicalOption(
+                  kind: WasmComponentCanonicalOptionKind.stringEncodingUtf8,
+                ),
+                WasmComponentCanonicalOption(
+                  kind: WasmComponentCanonicalOptionKind.memory,
+                  index: 0,
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+      final task = host.createTask(name: 'memory-result-task');
+
+      host.runWithTask(task, () {
+        expect(
+          program.invokeWithMemory(0, memory, const <Object?>[32]),
+          isNull,
+        );
+      });
+
+      expect(task.state, WASIComponentTaskState.returned);
+      expect(task.result, 'done');
+      expect(
+        () => program.invokeWithMemory(0, memory, const <Object?>[]),
+        throwsStateError,
+      );
+    });
+
+    test('returns type-indexed canonical memory values', () {
+      final host = WASIComponentTaskHost();
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 7, Endian.little);
+      data.setUint32(36, 9, Endian.little);
+      final recordType = WasmComponentTypeDefinition(
+        kind: WasmComponentTypeKind.definedValue,
+        definedValue: WasmComponentDefinedValueType(
+          kind: WasmComponentDefinedValueTypeKind.record,
+          fields: [
+            WasmComponentLabeledValueType(
+              label: 'left',
+              type: WasmComponentValueType.primitive(
+                WasmComponentPrimitiveValueType.u32,
+              ),
+            ),
+            WasmComponentLabeledValueType(
+              label: 'right',
+              type: WasmComponentValueType.primitive(
+                WasmComponentPrimitiveValueType.u32,
+              ),
+            ),
+          ],
+        ),
+      );
+      final program = WASIComponentCanonicalTaskProgram(
+        operations: [
+          host.bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.taskReturn,
+              result: WasmComponentCanonicalResult.value(
+                WasmComponentValueType.typeIndex(0),
+              ),
+              options: [
+                WasmComponentCanonicalOption(
+                  kind: WasmComponentCanonicalOptionKind.memory,
+                  index: 0,
+                ),
+              ],
+            ),
+            typeDefinitions: [recordType],
+          ),
+        ],
+      );
+      final task = host.createTask(name: 'record-result-task');
+
+      host.runWithTask(task, () {
+        expect(
+          program.invokeWithMemory(0, memory, const <Object?>[32]),
+          isNull,
+        );
+      });
+
+      final result = task.result as WasmComponentValueData;
+      expect(result.kind, WasmComponentValueDataKind.record);
+      expect(result.items.map((item) => item.integer), [7, 9]);
+    });
+
     test(
       'validates return arity, cancellation request, and active borrows',
       () {
