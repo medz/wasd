@@ -315,10 +315,20 @@ final class WASIComponentCanonicalHost {
     return WASIComponentCanonicalOperation._(
       kind: definition.kind,
       invoke: operation.invoke,
+      invokeAsync: operation.invokeAsync,
       invokeFlat: (args, memory, realloc) =>
           operation.invokeFlat(args, memory: memory, realloc: realloc),
+      invokeFlatAsync: (args, memory, realloc) =>
+          operation.invokeFlatAsync(args, memory: memory, realloc: realloc),
       invokeWithMemory: (memory, args, realloc, resultPointer) =>
           operation.invokeWithMemory(
+            memory,
+            _canonicalAdapterMemoryPointers(canonicalIndex, args),
+            resultPointer: resultPointer,
+            realloc: realloc,
+          ),
+      invokeWithMemoryAsync: (memory, args, realloc, resultPointer) =>
+          operation.invokeWithMemoryAsync(
             memory,
             _canonicalAdapterMemoryPointers(canonicalIndex, args),
             resultPointer: resultPointer,
@@ -840,6 +850,19 @@ final class WASIComponentCanonicalProgram {
     ).invokeFlat(args, memory: memory, realloc: realloc);
   }
 
+  /// Invokes a flat Canonical ABI operation by canonical index and waits when
+  /// supported.
+  Future<List<Object?>> invokeFlatAsync(
+    int canonicalIndex,
+    List<Object?> args, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    return _operationAt(
+      canonicalIndex,
+    ).invokeFlatAsync(args, memory: memory, realloc: realloc);
+  }
+
   /// Invokes a memory-backed canonical operation.
   Object? invokeWithMemory(
     int canonicalIndex,
@@ -907,6 +930,12 @@ typedef _WASIComponentInvokeFlat =
       wasm.Memory? memory,
       WASIComponentCanonicalRealloc? realloc,
     );
+typedef _WASIComponentInvokeFlatAsync =
+    Future<List<Object?>> Function(
+      List<Object?> args,
+      wasm.Memory? memory,
+      WASIComponentCanonicalRealloc? realloc,
+    );
 typedef _WASIComponentInvokeWithMemory =
     Object? Function(
       wasm.Memory memory,
@@ -929,12 +958,14 @@ final class WASIComponentCanonicalOperation {
     required _WASIComponentInvoke invoke,
     _WASIComponentInvokeAsync? invokeAsync,
     _WASIComponentInvokeFlat? invokeFlat,
+    _WASIComponentInvokeFlatAsync? invokeFlatAsync,
     _WASIComponentInvokeWithMemory? invokeWithMemory,
     _WASIComponentInvokeWithMemory? invokeWithMemoryEvent,
     _WASIComponentInvokeWithMemoryAsync? invokeWithMemoryAsync,
   }) : _invoke = invoke,
        _invokeAsync = invokeAsync,
        _invokeFlat = invokeFlat,
+       _invokeFlatAsync = invokeFlatAsync,
        _invokeWithMemory = invokeWithMemory,
        _invokeWithMemoryEvent = invokeWithMemoryEvent,
        _invokeWithMemoryAsync = invokeWithMemoryAsync;
@@ -945,6 +976,7 @@ final class WASIComponentCanonicalOperation {
   final _WASIComponentInvoke _invoke;
   final _WASIComponentInvokeAsync? _invokeAsync;
   final _WASIComponentInvokeFlat? _invokeFlat;
+  final _WASIComponentInvokeFlatAsync? _invokeFlatAsync;
   final _WASIComponentInvokeWithMemory? _invokeWithMemory;
   final _WASIComponentInvokeWithMemory? _invokeWithMemoryEvent;
   final _WASIComponentInvokeWithMemoryAsync? _invokeWithMemoryAsync;
@@ -976,6 +1008,22 @@ final class WASIComponentCanonicalOperation {
       );
     }
     return invokeFlat(args, memory, realloc);
+  }
+
+  /// Invokes this canonical operation asynchronously through flat Canonical ABI
+  /// scalars.
+  Future<List<Object?>> invokeFlatAsync(
+    List<Object?> args, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    final invokeFlatAsync = _invokeFlatAsync;
+    if (invokeFlatAsync != null) {
+      return invokeFlatAsync(args, memory, realloc);
+    }
+    return Future<List<Object?>>.value(
+      invokeFlat(args, memory: memory, realloc: realloc),
+    );
   }
 
   /// Invokes this canonical operation with [memory].

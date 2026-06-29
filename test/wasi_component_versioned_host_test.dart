@@ -1631,6 +1631,84 @@ world command {
       expect(preview3.componentHost.table.activeCount, 0);
     });
 
+    test('Preview3 wrapper executes async primitive adapters', () async {
+      final component = WasmComponent.decode(
+        canonicalAsyncPrimitiveLiftLowerComponentBytes(),
+      );
+      final preview2 = WASIPreview2ComponentHost();
+      final preview3 = WASIPreview3ComponentHost();
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+
+      final preview2Plan = preview2.prepareComponent(component);
+      expect(component.validate(), isEmpty);
+      expect(preview2Plan.canBindWithAdapters, isFalse);
+      expect(preview2Plan.versionErrors, hasLength(2));
+      expect(
+        preview2Plan.versionErrors.map((error) => error.capability.area),
+        everyElement(WASIComponentCanonicalCapabilityArea.asyncValue),
+      );
+
+      final binding = preview3.bindComponent(
+        component,
+        coreFunctions: {
+          0: (args) async {
+            expect(args, isEmpty);
+            return 61;
+          },
+        },
+        componentFunctions: {
+          0: (args) async {
+            expect(args, isEmpty);
+            return 71;
+          },
+        },
+      );
+
+      expect(binding.program.operations, hasLength(2));
+      expect(
+        () => binding.program.invoke(0, const <Object?>[]),
+        throwsUnsupportedError,
+      );
+      expect(
+        () => binding.program.invokeFlat(0, const <Object?>[]),
+        throwsUnsupportedError,
+      );
+      expect(
+        () => binding.program.invokeWithMemory(
+          0,
+          memory,
+          const <Object?>[],
+          resultPointer: 32,
+        ),
+        throwsUnsupportedError,
+      );
+      expect(await binding.program.invokeAsync(0, const <Object?>[]), 61);
+      expect(await binding.program.invokeAsync(1, const <Object?>[]), 71);
+      expect(await binding.program.invokeFlatAsync(0, const <Object?>[]), [61]);
+      expect(await binding.program.invokeFlatAsync(1, const <Object?>[]), [71]);
+      expect(
+        await binding.program.invokeWithMemoryAsync(
+          0,
+          memory,
+          const <Object?>[],
+          resultPointer: 32,
+        ),
+        61,
+      );
+      expect(data.getUint32(32, Endian.little), 61);
+      expect(
+        await binding.program.invokeWithMemoryAsync(
+          1,
+          memory,
+          const <Object?>[],
+          resultPointer: 40,
+        ),
+        71,
+      );
+      expect(data.getUint32(40, Endian.little), 71);
+    });
+
     test('Preview3 wrapper reports adapter resource handle uses', () {
       final component = WasmComponent.decode(
         canonicalResourceLiftComponentBytes(),

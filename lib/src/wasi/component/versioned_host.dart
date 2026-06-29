@@ -460,6 +460,19 @@ List<WASIComponentVersionSupportError> _versionSupportErrors(
   for (var index = 0; index < definitions.length; index++) {
     final definition = definitions[index];
     final capability = canonicalHost.canonicalKindCapability(definition.kind);
+    final preview3Capability = _preview3CanonicalCapability(definition);
+    if (preview3Capability != null &&
+        !profile.includesCapability(preview3Capability)) {
+      errors.add(
+        WASIComponentVersionSupportError(
+          canonicalIndex: index,
+          definition: definition,
+          profile: profile,
+          capability: preview3Capability,
+        ),
+      );
+      continue;
+    }
     if (!profile.includesCapability(capability)) {
       errors.add(
         WASIComponentVersionSupportError(
@@ -472,6 +485,26 @@ List<WASIComponentVersionSupportError> _versionSupportErrors(
     }
   }
   return List<WASIComponentVersionSupportError>.unmodifiable(errors);
+}
+
+WASIComponentCanonicalKindCapability? _preview3CanonicalCapability(
+  WasmComponentCanonicalDefinition definition,
+) {
+  return switch (definition.kind) {
+    WasmComponentCanonicalKind.lift || WasmComponentCanonicalKind.lower
+        when _hasCanonicalAsyncOption(definition) =>
+      WASIComponentCanonicalKindCapability(
+        kind: definition.kind,
+        area: WASIComponentCanonicalCapabilityArea.asyncValue,
+      ),
+    _ => null,
+  };
+}
+
+bool _hasCanonicalAsyncOption(WasmComponentCanonicalDefinition definition) {
+  return definition.options.any(
+    (option) => option.kind == WasmComponentCanonicalOptionKind.async,
+  );
 }
 
 WASIComponentWitWorld _selectWitWorld(
