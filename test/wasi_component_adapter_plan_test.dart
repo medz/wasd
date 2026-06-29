@@ -1335,6 +1335,109 @@ void main() {
       expect(() => plan.bind(), throwsStateError);
     });
 
+    test('binds string adapters into unified component host programs', () {
+      final component = WasmComponent.decode(
+        canonicalStringLiftLowerComponentBytes(),
+      );
+      final host = WASIComponentHost();
+      final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
+      final realloc = _bumpRealloc(memory);
+      final input = writeWASIComponentCanonicalString(
+        memory,
+        realloc,
+        'guest',
+        WASIComponentCanonicalStringEncoding.utf8,
+      );
+      writeWASIComponentMemoryStringRecord(memory, 32, input);
+
+      final plan = host.prepareComponent(component);
+      final binding = plan.bind(
+        coreFunctions: {
+          0: (args) {
+            expect(args, ['guest']);
+            return 'lifted:${args.single}';
+          },
+        },
+        componentFunctions: {
+          0: (args) {
+            expect(args, ['guest']);
+            return 'lowered:${args.single}';
+          },
+        },
+      );
+
+      final lifted = binding.program.invokeFlat(
+        0,
+        <Object?>[input.pointer, input.canonicalLength],
+        memory: memory,
+        realloc: realloc,
+      );
+      expect(lifted, hasLength(2));
+      expect(
+        readWASIComponentCanonicalString(
+          memory,
+          lifted[0]! as int,
+          lifted[1]! as int,
+          WASIComponentCanonicalStringEncoding.utf8,
+        ),
+        'lifted:guest',
+      );
+
+      final lowered = binding.program.invokeFlat(
+        1,
+        <Object?>[input.pointer, input.canonicalLength],
+        memory: memory,
+        realloc: realloc,
+      );
+      expect(lowered, hasLength(2));
+      expect(
+        readWASIComponentCanonicalString(
+          memory,
+          lowered[0]! as int,
+          lowered[1]! as int,
+          WASIComponentCanonicalStringEncoding.utf8,
+        ),
+        'lowered:guest',
+      );
+
+      expect(
+        binding.program.invokeWithMemory(
+          0,
+          memory,
+          const <int>[32],
+          resultPointer: 64,
+          realloc: realloc,
+        ),
+        'lifted:guest',
+      );
+      expect(
+        readWASIComponentCanonicalStringRecord(
+          memory,
+          64,
+          WASIComponentCanonicalStringEncoding.utf8,
+        ),
+        'lifted:guest',
+      );
+      expect(
+        binding.program.invokeWithMemory(
+          1,
+          memory,
+          const <int>[32],
+          resultPointer: 96,
+          realloc: realloc,
+        ),
+        'lowered:guest',
+      );
+      expect(
+        readWASIComponentCanonicalStringRecord(
+          memory,
+          96,
+          WASIComponentCanonicalStringEncoding.utf8,
+        ),
+        'lowered:guest',
+      );
+    });
+
     test('binds primitive adapter programs through Preview3 only', () {
       final component = WasmComponent.decode(
         canonicalPrimitiveLiftLowerComponentBytes(),
