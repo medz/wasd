@@ -47,6 +47,13 @@ final class NodeHostTemp {
     return _jsString(result).toDart;
   }
 
+  void createSymlink(String target, String relativePath) {
+    _fs.callMethodVarArgs<JSAny?>('symlinkSync'.toJS, [
+      target.toJS,
+      _join(relativePath).toJS,
+    ]);
+  }
+
   void delete() {
     final options = JSObject()
       ..['recursive'] = true.toJS

@@ -1578,9 +1578,35 @@ class WASI implements wasi.WASI {
       followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
     );
     if (entry == null) {
-      return _errnoNoent;
+      final hostEntry = _nodeHostPathEntry(
+        normalizedPath,
+        followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
+      );
+      if (hostEntry.errno != _errnoSuccess) {
+        return hostEntry.errno;
+      }
+      return _writeFilestatEntry(
+        bytes: bytes,
+        data: data,
+        filestatPtr: filestatPtr,
+        entry: hostEntry.entry!,
+      );
     }
 
+    return _writeFilestatEntry(
+      bytes: bytes,
+      data: data,
+      filestatPtr: filestatPtr,
+      entry: entry,
+    );
+  });
+
+  int _writeFilestatEntry({
+    required Uint8List bytes,
+    required ByteData data,
+    required int filestatPtr,
+    required wasi_vfs.Preview1VirtualPathEntry entry,
+  }) {
     bytes.fillRange(filestatPtr, filestatPtr + _filestatSize, 0);
     bytes[filestatPtr + 16] = entry.fileType;
     _setUint64(data, filestatPtr + 32, entry.size);
@@ -1590,7 +1616,7 @@ class WASI implements wasi.WASI {
       metadata: entry.metadata,
     );
     return _errnoSuccess;
-  });
+  }
 
   wasm.FunctionImportExportValue get _pathFilestatSetTimesImport =>
       wasm.ImportExportKind.function((List<Object?> args) {
@@ -1926,12 +1952,12 @@ class WASI implements wasi.WASI {
     if (fs == null) {
       return const wasi_vfs.Preview1VirtualOpenResult.missing();
     }
-    final hostPath = hostPreopenPath.hostPath;
+    var hostPath = hostPreopenPath.hostPath;
     final create = (oflags & _oflagCreat) != 0;
     final exclusive = (oflags & _oflagExcl) != 0;
     final truncate = (oflags & _oflagTrunc) != 0;
 
-    final stat = _nodeLstat(fs, hostPath);
+    var stat = _nodeLstat(fs, hostPath);
     if (stat == null) {
       if (!create) {
         return const wasi_vfs.Preview1VirtualOpenResult.missing();
@@ -1963,7 +1989,31 @@ class WASI implements wasi.WASI {
       if (!followSymlinks) {
         return const wasi_vfs.Preview1VirtualOpenResult.symlinkLoop();
       }
-      return const wasi_vfs.Preview1VirtualOpenResult.notSupported();
+      if (create && exclusive) {
+        return const wasi_vfs.Preview1VirtualOpenResult.exists();
+      }
+      final resolved = _resolveNodeHostSymlinkTarget(
+        fs: fs,
+        linkHostPath: hostPath,
+        hostRoot: hostPreopenPath.hostRoot,
+      );
+      if (resolved.errno == _errnoNotcapable) {
+        return const wasi_vfs.Preview1VirtualOpenResult.notCapable();
+      }
+      if (resolved.errno == _errnoLoop) {
+        return const wasi_vfs.Preview1VirtualOpenResult.symlinkLoop();
+      }
+      if (resolved.errno == _errnoNoent) {
+        return const wasi_vfs.Preview1VirtualOpenResult.missing();
+      }
+      if (resolved.errno != _errnoSuccess) {
+        return const wasi_vfs.Preview1VirtualOpenResult.notSupported();
+      }
+      hostPath = resolved.hostPath!;
+      stat = _nodeLstat(fs, hostPath);
+      if (stat == null) {
+        return const wasi_vfs.Preview1VirtualOpenResult.missing();
+      }
     }
     if (_nodeStatMethod(stat, 'isDirectory')) {
       if (create && exclusive) {
@@ -2307,12 +2357,26 @@ class WASI implements wasi.WASI {
     JSObject fs,
     String hostPath,
   ) {
+    final target = _readNodeHostSymlinkTarget(fs, hostPath);
+    if (target.errno != _errnoSuccess) {
+      return (errno: target.errno, targetBytes: null);
+    }
+    return (
+      errno: _errnoSuccess,
+      targetBytes: Uint8List.fromList(utf8.encode(target.target!)),
+    );
+  }
+
+  ({int errno, String? target}) _readNodeHostSymlinkTarget(
+    JSObject fs,
+    String hostPath,
+  ) {
     final stat = _nodeLstat(fs, hostPath);
     if (stat == null) {
-      return (errno: _errnoNoent, targetBytes: null);
+      return (errno: _errnoNoent, target: null);
     }
     if (!_nodeStatMethod(stat, 'isSymbolicLink')) {
-      return (errno: _errnoInval, targetBytes: null);
+      return (errno: _errnoInval, target: null);
     }
 
     try {
@@ -2320,16 +2384,149 @@ class WASI implements wasi.WASI {
         hostPath.toJS,
         'utf8'.toJS,
       ]);
-      return (
-        errno: _errnoSuccess,
-        targetBytes: Uint8List.fromList(utf8.encode(_jsString(target).toDart)),
-      );
+      return (errno: _errnoSuccess, target: _jsString(target).toDart);
     } catch (_) {
       return (
         errno: _nodeLstat(fs, hostPath) == null ? _errnoNoent : _errnoPerm,
-        targetBytes: null,
+        target: null,
       );
     }
+  }
+
+  ({int errno, String? hostPath}) _resolveNodeHostSymlinkTarget({
+    required JSObject fs,
+    required String linkHostPath,
+    required String hostRoot,
+  }) {
+    final target = _readNodeHostSymlinkTarget(fs, linkHostPath);
+    if (target.errno != _errnoSuccess) {
+      return (errno: target.errno, hostPath: null);
+    }
+    final path = _requireNodeBuiltin('node:path');
+    if (path == null) {
+      return (errno: _errnoNotsup, hostPath: null);
+    }
+    final targetHostPath = _nodePathIsAbsoluteWith(path, target.target!)
+        ? target.target!
+        : _nodeResolvePathWith(
+            path,
+            _nodePathDirname(linkHostPath) ?? hostRoot,
+            [target.target!],
+          );
+    final targetStat = _nodeLstat(fs, targetHostPath);
+    if (targetStat == null) {
+      return (errno: _errnoNoent, hostPath: null);
+    }
+
+    final resolvedTarget = _nodeRealpathSync(fs, targetHostPath);
+    final resolvedRoot = _nodeRealpathSync(fs, hostRoot);
+    if (resolvedTarget == null || resolvedRoot == null) {
+      final currentStat = _nodeLstat(fs, targetHostPath);
+      if (currentStat == null) {
+        return (errno: _errnoNoent, hostPath: null);
+      }
+      if (_nodeStatMethod(currentStat, 'isSymbolicLink')) {
+        return (errno: _errnoLoop, hostPath: null);
+      }
+      return (errno: _errnoPerm, hostPath: null);
+    }
+    if (!_nodePathWithinRoot(resolvedTarget, resolvedRoot)) {
+      return (errno: _errnoNotcapable, hostPath: null);
+    }
+    return (errno: _errnoSuccess, hostPath: resolvedTarget);
+  }
+
+  ({int errno, wasi_vfs.Preview1VirtualPathEntry? entry}) _nodeHostPathEntry(
+    String guestPath, {
+    required bool followSymlinks,
+  }) {
+    final fs = _requireNodeBuiltin('node:fs');
+    if (fs == null) {
+      return (errno: _errnoNoent, entry: null);
+    }
+    final hostPreopenPath = _nodeHostPreopenPathForGuestPath(guestPath);
+    if (hostPreopenPath == null) {
+      return (errno: _errnoNoent, entry: null);
+    }
+    return _nodeHostPathEntryForHostPath(
+      fs: fs,
+      hostPath: hostPreopenPath.hostPath,
+      hostRoot: hostPreopenPath.hostRoot,
+      followSymlinks: followSymlinks,
+    );
+  }
+
+  ({int errno, wasi_vfs.Preview1VirtualPathEntry? entry})
+  _nodeHostPathEntryForHostPath({
+    required JSObject fs,
+    required String hostPath,
+    required String hostRoot,
+    required bool followSymlinks,
+  }) {
+    final stat = _nodeLstat(fs, hostPath);
+    if (stat == null) {
+      return (errno: _errnoNoent, entry: null);
+    }
+
+    if (_nodeStatMethod(stat, 'isSymbolicLink')) {
+      if (!followSymlinks) {
+        return _nodeHostSymlinkPathEntry(fs, hostPath);
+      }
+      final resolved = _resolveNodeHostSymlinkTarget(
+        fs: fs,
+        linkHostPath: hostPath,
+        hostRoot: hostRoot,
+      );
+      if (resolved.errno != _errnoSuccess) {
+        return (errno: resolved.errno, entry: null);
+      }
+      return _nodeHostPathEntryForHostPath(
+        fs: fs,
+        hostPath: resolved.hostPath!,
+        hostRoot: hostRoot,
+        followSymlinks: false,
+      );
+    }
+
+    if (_nodeStatMethod(stat, 'isFile')) {
+      return (
+        errno: _errnoSuccess,
+        entry: wasi_vfs.Preview1VirtualPathEntry(
+          kind: wasi_vfs.Preview1VirtualPathEntryKind.file,
+          metadata: _metadataFromNodeStat(stat),
+          size: _nodeStatInt(stat, 'size') ?? 0,
+        ),
+      );
+    }
+    if (_nodeStatMethod(stat, 'isDirectory')) {
+      return (
+        errno: _errnoSuccess,
+        entry: wasi_vfs.Preview1VirtualPathEntry(
+          kind: wasi_vfs.Preview1VirtualPathEntryKind.directory,
+          metadata: _metadataFromNodeStat(stat),
+        ),
+      );
+    }
+    if (_nodeStatMethod(stat, 'isFIFO') || _nodeStatMethod(stat, 'isSocket')) {
+      return (errno: _errnoNotsup, entry: null);
+    }
+    return (errno: _errnoNoent, entry: null);
+  }
+
+  ({int errno, wasi_vfs.Preview1VirtualPathEntry? entry})
+  _nodeHostSymlinkPathEntry(JSObject fs, String hostPath) {
+    final target = _readNodeHostSymlink(fs, hostPath);
+    if (target.errno != _errnoSuccess) {
+      return (errno: target.errno, entry: null);
+    }
+    return (
+      errno: _errnoSuccess,
+      entry: wasi_vfs.Preview1VirtualPathEntry(
+        kind: wasi_vfs.Preview1VirtualPathEntryKind.symlink,
+        metadata: wasi_vfs.Preview1VirtualNodeMetadata(),
+        size: target.targetBytes!.length,
+      ),
+    );
   }
 
   List<wasi_vfs.Preview1DirectoryEntry>? _nodeHostDirectoryEntriesForGuestPath(
@@ -2990,6 +3187,24 @@ bool _nodePathWithinRoot(String hostPath, String hostRoot) {
     relative.toJS,
   ]);
   return _jsString(isAbsolute).toDart != 'true';
+}
+
+bool _nodePathIsAbsoluteWith(JSObject path, String hostPath) {
+  final isAbsolute = path.callMethodVarArgs<JSAny?>('isAbsolute'.toJS, [
+    hostPath.toJS,
+  ]);
+  return _jsString(isAbsolute).toDart == 'true';
+}
+
+String? _nodeRealpathSync(JSObject fs, String hostPath) {
+  try {
+    final resolved = fs.callMethodVarArgs<JSAny?>('realpathSync'.toJS, [
+      hostPath.toJS,
+    ]);
+    return _jsString(resolved).toDart;
+  } catch (_) {
+    return null;
+  }
 }
 
 JSObject? _nodeLstat(JSObject fs, String hostPath) {

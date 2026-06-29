@@ -17,6 +17,8 @@ final class NodeHostTemp {
 
   String readLink(String relativePath) => '';
 
+  void createSymlink(String target, String relativePath) {}
+
   void delete() {}
 }
 

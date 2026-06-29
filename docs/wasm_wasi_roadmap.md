@@ -277,8 +277,10 @@ too broad to verify in one commit.
     `SUPPORT-P1`, and README support wording.
   - Claim impact: removes the Node host path-mutation blocker for `SUPPORT-P1`;
     the later `P1-NODE-HOST-FS-LINK-SYMLINK` row covers hard links and symlink
-    create/readlink; symlink-follow resolution, symlink metadata, timestamps, and
-    final support-gate evidence remain separate P1 work.
+    create/readlink, and `P1-NODE-HOST-FS-SYMLINK-RESOLUTION` covers
+    follow/path metadata; timestamp mutation, full lstat-grade symlink
+    timestamp/set-times metadata, and final support-gate evidence remain
+    separate P1 work.
 - [x] `P1-NODE-HOST-FS-LINK-SYMLINK` - Node.js Preview1 host preopens support
   real hard-link creation plus symlink creation/readlink.
   - Scope: Node.js Preview1 `path_link` for regular host files and
@@ -307,9 +309,42 @@ too broad to verify in one commit.
   - Evidence update: this board, `P1-FULL-RUNTIME-GATE`, verification matrix,
     `SUPPORT-P1`, and README support wording.
   - Claim impact: removes the Node host hard-link and symlink create/readlink
-    blocker for `SUPPORT-P1`; Node host symlink-follow resolution, symlink
-    metadata, timestamps, and final support-gate evidence remain separate P1
-    work.
+    blocker for `SUPPORT-P1`; `P1-NODE-HOST-FS-SYMLINK-RESOLUTION` covers
+    follow/path metadata, while timestamp mutation, full lstat-grade symlink
+    timestamp/set-times metadata, and final support-gate evidence remain
+    separate P1 work.
+- [x] `P1-NODE-HOST-FS-SYMLINK-RESOLUTION` - Node.js Preview1 host preopens
+  follow real host symlinks for open and path metadata.
+  - Scope: Node.js Preview1 `path_open` and `path_filestat_get` for final
+    symlink targets below configured host preopens. Browser JS remains virtual;
+    native VM has the corresponding host symlink row checked separately.
+  - Edit targets: `lib/src/wasi/preview1/js/web/wasi.dart`,
+    `test/wasi_test.dart`, `test/support/node_host_fs*.dart`, README support
+    wording, and this roadmap.
+  - Red test:
+    `dart test -p node test/wasi_test.dart --name "node preview1 follows real host symlinks and reports path filestat" --reporter=expanded`
+    failed before the fix with `path_filestat_get` returning `NOENT(44)` for a
+    real host symlink because the Node host path metadata path only queried the
+    in-memory VFS.
+  - Implementation gate:
+    `dart test -p node test/wasi_test.dart --name "node preview1 follows real host symlinks and reports path filestat" --reporter=expanded`;
+    `dart test -p node test/wasi_test.dart --name "node preview1 (preopens use real host regular files|fd_readdir lists real host directories|mutates real host directory paths|creates real host links and symlinks|follows real host symlinks and reports path filestat)" --reporter=expanded`.
+  - Performance gate: no recursive traversal, broad host scan, or preopen-tree
+    snapshotting in this row. Node host symlink resolution uses direct
+    `lstatSync`/`readlinkSync`/`realpathSync` calls on the addressed path and
+    checks the resolved target against the resolved preopen root.
+  - Done when: no-follow `path_open` on a real host symlink reports `LOOP`;
+    follow `path_open` can read a symlinked host file and open a symlinked host
+    directory; `path_filestat_get` reports symlink type/target-size without
+    follow and target file/directory type/size with follow; dangling symlinks
+    report `NOENT`; self-loop symlinks report `LOOP`; and resolved targets
+    outside the preopen remain capability failures.
+  - Evidence update: this board, `P1-FULL-RUNTIME-GATE`, verification matrix,
+    `SUPPORT-P1`, and README support wording.
+  - Claim impact: removes the Node host symlink-follow and host path-filestat
+    blocker for `SUPPORT-P1`; Node host timestamp mutation, full lstat-grade
+    symlink timestamp/set-times metadata, and final support-gate evidence remain
+    separate P1 work.
 - [x] `P1-OFFICIAL-FS-CONFORMANCE` - Drive official Preview1 filesystem
   failures to zero one checked child at a time.
   - Scope: native/browser shared Preview1 VFS and syscall behavior exercised by
@@ -378,6 +413,7 @@ too broad to verify in one commit.
     `P1-NODE-HOST-FS-DIRECTORY-READDIR`,
     `P1-NODE-HOST-FS-BASIC-PATH-MUTATION`,
     `P1-NODE-HOST-FS-LINK-SYMLINK`,
+    `P1-NODE-HOST-FS-SYMLINK-RESOLUTION`,
     `P1-NATIVE-HOST-FS-READ-BACKING`,
     `P1-NATIVE-HOST-FS-PATH-METADATA`,
     `P1-NATIVE-HOST-FS-DIRECTORY-READDIR`,
@@ -537,6 +573,32 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-NODE-HOST-FS-SYMLINK-RESOLUTION` - Node.js Preview1 host preopens
+  follow real host symlinks for open and path metadata.
+  - Scope: Node.js Preview1 `path_open` and `path_filestat_get` final-symlink
+    behavior below configured host preopens.
+  - Edit targets: `lib/src/wasi/preview1/js/web/wasi.dart`,
+    `test/wasi_test.dart`, `test/support/node_host_fs*.dart`, README support
+    wording, and this roadmap.
+  - Red test:
+    `dart test -p node test/wasi_test.dart --name "node preview1 follows real host symlinks and reports path filestat" --reporter=expanded`
+    failed before the fix with `path_filestat_get` returning `NOENT(44)` for a
+    real host symlink.
+  - Implementation gate:
+    `dart test -p node test/wasi_test.dart --name "node preview1 follows real host symlinks and reports path filestat" --reporter=expanded`;
+    `dart test -p node test/wasi_test.dart --name "node preview1 (preopens use real host regular files|fd_readdir lists real host directories|mutates real host directory paths|creates real host links and symlinks|follows real host symlinks and reports path filestat)" --reporter=expanded`.
+  - Performance gate: no recursive traversal, broad host scan, or preopen-tree
+    snapshotting; the implementation uses direct Node `fs` path calls and
+    resolved-root capability checks.
+  - Done when: no-follow host symlinks return `LOOP`; follow opens and reports
+    symlinked host files/directories; dangling links return `NOENT`; self-loops
+    return `LOOP`; and resolved targets outside the preopen return
+    `NOTCAPABLE`.
+  - Evidence update: current execution board, `P1-FULL-RUNTIME-GATE`, support
+    gate, verification matrix, current baseline, README support wording, and
+    this recently checked entry.
+  - Claim impact: removes the Node host symlink-follow/path-filestat blocker for
+    `SUPPORT-P1`; it does not complete full Preview1, Preview2, or Preview3.
 - [x] `CORE-UPSTREAM-193E551-SPEC-REFRESH` - Current upstream standardized core
   testsuite passes after bulk-init bounds, converter, and suite-boundary fixes.
   - Scope: official WebAssembly core testsuite revision `193e551`, including
@@ -2997,9 +3059,11 @@ unchecked.
     host directory entries for preopen and opened directory `fd_readdir` flows,
     plus real host path mutation for create-directory, unlink-file,
     remove-directory, rename, hard-link, symlink-create, and symlink-readlink
-    flows. Node host symlink-follow resolution, symlink metadata, timestamp
-    mutation, and official support-gate evidence remain incomplete. Node
-    host-file and directory performance evidence now exists through
+    flows, plus real host symlink follow/path-metadata for final symlink targets
+    that resolve inside the configured preopen. Node host timestamp mutation,
+    full lstat-grade symlink timestamp/set-times metadata, and official
+    support-gate evidence remain incomplete. Node host-file and directory
+    performance evidence now exists through
     `tool/wasi_node_host_fs_benchmark.dart`. The current official
     `WebAssembly/wasi-testsuite` `prod/testsuite-base` run reports `PASS: 72
     tests passed (41 skipped)`. Keep this row unchecked until the package-level
@@ -3012,8 +3076,9 @@ unchecked.
     `P1-NODE-HOST-FS-READ-WRITE`, `P1-NODE-HOST-FS-BENCHMARK`,
     `P1-NODE-HOST-FS-DIRECTORY-READDIR`, and
     `P1-NODE-HOST-FS-BASIC-PATH-MUTATION`, and
-    `P1-NODE-HOST-FS-LINK-SYMLINK`, plus future official testsuite gap rows not
-    yet represented by a narrower ID.
+    `P1-NODE-HOST-FS-LINK-SYMLINK`,
+    `P1-NODE-HOST-FS-SYMLINK-RESOLUTION`, plus future official testsuite gap
+    rows not yet represented by a narrower ID.
   - Implementation gate:
     `dart test test/wasi_test.dart`;
     `dart test -p chrome test/wasi_test.dart`;
@@ -3147,10 +3212,11 @@ copying their internals directly.
 | [x] | Preview1 native host regular-file timestamps | `lib/src/wasi/preview1/native/wasi.dart`, `test/wasi_native_host_fs_test.dart` | `dart test test/wasi_native_host_fs_test.dart --name "native filestat set times updates host files" --reporter=expanded`; `dart test test/wasi_native_host_fs_test.dart --reporter=compact`; `dart test test/wasi_test.dart --name "fd_filestat_set_times and path_filestat_set_times persist virtual timestamps" --reporter=compact`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Host-backed regular-file `fd_filestat_set_times` and `path_filestat_set_times` now update real host file atime/mtime and report the updated values. Host directory and no-follow symlink timestamp mutation remain incomplete, so `SUPPORT-P1` stays unchecked. |
 | [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `path_open` create/exclusive/truncate is covered; full Preview1 conformance still needs broader syscall/spec-suite gates and remaining socket edges. |
 | [x] | Preview1 Node.js shared JS host parity | `lib/src/wasi/preview1/js/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test -p node test/wasi_test.dart --name "fd_read reads configured stdin bytes and advances offset|fd_pread, fd_pwrite, and fd_write update virtual files" --reporter=compact`; `dart test -p node test/wasi_test.dart --reporter=compact` | Node.js now uses wasd's in-repo JS Preview1 host, including configured stdin and virtual files, instead of `node:wasi`; full Preview1 still needs official testsuite and support-gate evidence. |
-| [x] | Preview1 Node.js host regular-file preopen backing | `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `test/support/node_host_fs*.dart`, `README.md` | `dart test -p node test/wasi_test.dart --name "node preview1 preopens use real host regular files" --reporter=expanded`; `dart test -p node test/wasi_test.dart --reporter=compact`; `dart test test/wasi_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart test test/readme_snippets_test.dart test/readme_commands_test.dart --reporter=compact`; `dart analyze test/wasi_test.dart lib/src/wasi/preview1/js/web/wasi.dart test/support/node_host_fs.dart test/support/node_host_fs_stub.dart test/support/node_host_fs_js.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Node preopened regular files now use live host filesystem descriptors for read, positioned read/write, create, truncate, `fd_filestat_set_size`, and `fd_allocate` without snapshotting files into the VFS. Later rows cover Node host directory readdir, basic path mutation, hard links, and symlink create/readlink; Node host symlink-follow resolution, symlink metadata, timestamps, and official support-gate evidence remain incomplete, so `SUPPORT-P1` stays unchecked. |
-| [x] | Preview1 Node.js host directory readdir backing | `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `test/support/node_host_fs*.dart`, `tool/wasi_node_host_fs_benchmark_js.dart`, `README.md` | `dart test -p node test/wasi_test.dart --name "node preview1 fd_readdir lists real host directories" --reporter=expanded`; `dart analyze lib/src/wasi/preview1/js/web/wasi.dart test/wasi_test.dart test/support/node_host_fs_js.dart test/support/node_host_fs_stub.dart tool/wasi_node_host_fs_benchmark.dart tool/wasi_node_host_fs_benchmark_js.dart`; `dart run tool/wasi_node_host_fs_benchmark.dart --iterations=25 --warmup=5 --payload-bytes=256 --json`; `dart run tool/wasi_node_host_fs_benchmark.dart --json` | Node preopen fd 3 now reads live host root directory entries, and `path_open(O_DIRECTORY)` opens a host directory descriptor whose `fd_readdir` reports deterministic one-level host entries without snapshotting the tree at `WASI` construction. Default benchmark reported host `497.26us` preopen readdir and `43.166us` directory open/readdir/close with host readback assertions passing. Later rows cover directory mutation, hard links, and symlink create/readlink. Symlink-follow resolution, symlink metadata, timestamps, and official support-gate evidence remain incomplete. |
-| [x] | Preview1 Node.js host path mutation backing | `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `test/support/node_host_fs*.dart`, `README.md` | `dart test -p node test/wasi_test.dart --name "node preview1 mutates real host directory paths" --reporter=expanded` failed before the fix because the host temp directory did not contain the created directory; the same command passes after the fix. Full verification for this row: `dart test -p node test/wasi_test.dart --name "node preview1 mutates real host directory paths" --reporter=expanded`; Node host regular-file and directory focused tests; VM/browser Preview1 regression suites; README command/snippet tests; `dart analyze`. | Node configured host preopens now execute `path_create_directory`, `path_unlink_file`, `path_remove_directory`, and `path_rename` through direct Node `fs` calls after preopen-root resolution and one-level type checks. Virtual files and browser JS remain on the in-memory VFS. Later rows cover host hard links and symlink create/readlink; symlink-follow resolution, symlink metadata, timestamps, and final support-gate evidence remain incomplete. |
-| [x] | Preview1 Node.js host link and symlink backing | `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `test/support/node_host_fs*.dart`, `README.md` | `dart test -p node test/wasi_test.dart --name "node preview1 creates real host links and symlinks" --reporter=expanded` failed before the fix with `path_link` returning `NOENT(44)` for a real host preopen file; the same command passes after the fix. Full verification for this row: `dart test -p node test/wasi_test.dart --name "node preview1 creates real host links and symlinks" --reporter=expanded`; Node host filesystem focused tests; VM/browser Preview1 regression suites; README command/snippet tests; `dart analyze`. | Node configured host preopens now execute `path_link`, `path_symlink`, and `path_readlink` through direct Node `fs` calls after preopen-root resolution and one-level type/parent checks. Virtual files and browser JS remain on the in-memory VFS. Node host symlink-follow resolution, symlink metadata, timestamps, and final support-gate evidence remain incomplete. |
+| [x] | Preview1 Node.js host regular-file preopen backing | `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `test/support/node_host_fs*.dart`, `README.md` | `dart test -p node test/wasi_test.dart --name "node preview1 preopens use real host regular files" --reporter=expanded`; `dart test -p node test/wasi_test.dart --reporter=compact`; `dart test test/wasi_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart test test/readme_snippets_test.dart test/readme_commands_test.dart --reporter=compact`; `dart analyze test/wasi_test.dart lib/src/wasi/preview1/js/web/wasi.dart test/support/node_host_fs.dart test/support/node_host_fs_stub.dart test/support/node_host_fs_js.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Node preopened regular files now use live host filesystem descriptors for read, positioned read/write, create, truncate, `fd_filestat_set_size`, and `fd_allocate` without snapshotting files into the VFS. Node host timestamp mutation, full lstat-grade symlink timestamp/set-times metadata, and official support-gate evidence remain incomplete, so `SUPPORT-P1` stays unchecked. |
+| [x] | Preview1 Node.js host directory readdir backing | `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `test/support/node_host_fs*.dart`, `tool/wasi_node_host_fs_benchmark_js.dart`, `README.md` | `dart test -p node test/wasi_test.dart --name "node preview1 fd_readdir lists real host directories" --reporter=expanded`; `dart analyze lib/src/wasi/preview1/js/web/wasi.dart test/wasi_test.dart test/support/node_host_fs_js.dart test/support/node_host_fs_stub.dart tool/wasi_node_host_fs_benchmark.dart tool/wasi_node_host_fs_benchmark_js.dart`; `dart run tool/wasi_node_host_fs_benchmark.dart --iterations=25 --warmup=5 --payload-bytes=256 --json`; `dart run tool/wasi_node_host_fs_benchmark.dart --json` | Node preopen fd 3 now reads live host root directory entries, and `path_open(O_DIRECTORY)` opens a host directory descriptor whose `fd_readdir` reports deterministic one-level host entries without snapshotting the tree at `WASI` construction. Default benchmark reported host `497.26us` preopen readdir and `43.166us` directory open/readdir/close with host readback assertions passing. Node host timestamp mutation, full lstat-grade symlink timestamp/set-times metadata, and official support-gate evidence remain incomplete. |
+| [x] | Preview1 Node.js host path mutation backing | `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `test/support/node_host_fs*.dart`, `README.md` | `dart test -p node test/wasi_test.dart --name "node preview1 mutates real host directory paths" --reporter=expanded` failed before the fix because the host temp directory did not contain the created directory; the same command passes after the fix. Full verification for this row: `dart test -p node test/wasi_test.dart --name "node preview1 mutates real host directory paths" --reporter=expanded`; Node host regular-file and directory focused tests; VM/browser Preview1 regression suites; README command/snippet tests; `dart analyze`. | Node configured host preopens now execute `path_create_directory`, `path_unlink_file`, `path_remove_directory`, and `path_rename` through direct Node `fs` calls after preopen-root resolution and one-level type checks. Virtual files and browser JS remain on the in-memory VFS. Node host timestamp mutation, full lstat-grade symlink timestamp/set-times metadata, and final support-gate evidence remain incomplete. |
+| [x] | Preview1 Node.js host link and symlink backing | `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `test/support/node_host_fs*.dart`, `README.md` | `dart test -p node test/wasi_test.dart --name "node preview1 creates real host links and symlinks" --reporter=expanded` failed before the fix with `path_link` returning `NOENT(44)` for a real host preopen file; the same command passes after the fix. Full verification for this row: `dart test -p node test/wasi_test.dart --name "node preview1 creates real host links and symlinks" --reporter=expanded`; Node host filesystem focused tests; VM/browser Preview1 regression suites; README command/snippet tests; `dart analyze`. | Node configured host preopens now execute `path_link`, `path_symlink`, and `path_readlink` through direct Node `fs` calls after preopen-root resolution and one-level type/parent checks. Virtual files and browser JS remain on the in-memory VFS. Node host timestamp mutation, full lstat-grade symlink timestamp/set-times metadata, and final support-gate evidence remain incomplete. |
+| [x] | Preview1 Node.js host symlink resolution and path metadata | `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `test/support/node_host_fs*.dart`, `README.md` | `dart test -p node test/wasi_test.dart --name "node preview1 follows real host symlinks and reports path filestat" --reporter=expanded` failed before the fix with `path_filestat_get` returning `NOENT(44)` for a real host symlink; the same command passes after the fix. Additional focused gate: `dart test -p node test/wasi_test.dart --name "node preview1 (preopens use real host regular files|fd_readdir lists real host directories|mutates real host directory paths|creates real host links and symlinks|follows real host symlinks and reports path filestat)" --reporter=expanded`. | Node configured host preopens now resolve final real host symlinks for `path_open` and `path_filestat_get` through direct `lstatSync`/`readlinkSync`/`realpathSync` calls and reject resolved targets outside the preopen with `NOTCAPABLE`. Virtual files and browser JS remain on the in-memory VFS. Node host timestamp mutation, full lstat-grade symlink timestamp/set-times metadata, and final support-gate evidence remain incomplete. |
 | [x] | Preview1 Node.js host filesystem benchmark | `tool/wasi_node_host_fs_benchmark.dart`, `tool/wasi_node_host_fs_benchmark_js.dart`, `tool/run_wasi_node_host_fs_benchmark.mjs`, `docs/wasm_wasi_roadmap.md` | `dart analyze tool/wasi_node_host_fs_benchmark.dart tool/wasi_node_host_fs_benchmark_js.dart`; `dart run tool/wasi_node_host_fs_benchmark.dart --iterations=25 --warmup=5 --payload-bytes=256 --json`; `dart run tool/wasi_node_host_fs_benchmark.dart --json` | The checked-in benchmark compiles a dart2js entrypoint, runs it under Node with a small harness for `require`/argv/async main, and records host-vs-virtual regular-file open, positioned read/write, create/truncate/resize/close, preopen readdir, and directory open/readdir/close timings. Default run reported host `29.866us` open/close, `1.36us` positioned read, `2.267us` positioned write, `112.037us` create/truncate/resize/close, `497.26us` preopen readdir, and `43.166us` directory open/readdir/close with host readback and resize assertions passing. |
 | [x] | Preview1 native/browser fd count-pointer ABI | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test -p chrome test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Result count pointers at guest memory address `0` now write correctly for stdio and virtual-file fd read/write syscalls; full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser virtual-file fd iovec aliasing and preflight | `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes|fd_pwrite validates all iovs before mutating virtual files"`; `dart test -p chrome test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes|fd_pwrite validates all iovs before mutating virtual files"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Virtual-file fd reads now snapshot overlapping iovec tables before guest-memory writes, and virtual-file fd writes preflight every iovec before mutating file bytes; full Preview1 still needs broader syscall/spec-suite gates. |
@@ -3304,10 +3370,13 @@ This is the implementation state as of 2026-06-29 on `main`.
   FFI instead of shelling out or copying bytes. Browser JS stays on the
   portable in-memory VFS by runtime constraint. Node JS now bridges configured
   preopened regular files to real host file descriptors, real host directory
-  entries to `fd_readdir`, basic path mutation to real host `fs` calls, and
-  hard-link plus symlink create/readlink calls to real host `fs` operations. Node
-  host symlink-follow resolution, symlink metadata, and timestamp mutation remain
-  explicit P1 blockers. The Node host-filesystem
+  entries to `fd_readdir`, basic path mutation to real host `fs` calls,
+  hard-link plus symlink create/readlink calls to real host `fs` operations, and
+  final symlink follow/path metadata through `path_open` and
+  `path_filestat_get` when the resolved target stays inside the configured
+  preopen. Node host timestamp mutation and full lstat-grade symlink
+  timestamp/set-times metadata remain explicit P1 blockers. The Node
+  host-filesystem
   benchmark entrypoint is `dart run tool/wasi_node_host_fs_benchmark.dart --json`;
   the current default run reports host `path_open`/close at `29.866us/op`, host
   positioned read at `1.36us/op`, host positioned write at `2.267us/op`, host

@@ -39,6 +39,7 @@ const int _filetypeDirectory = 3;
 const int _filetypeRegularFile = 4;
 const int _filetypeSocketDgram = 5;
 const int _filetypeSocketStream = 6;
+const int _filetypeSymbolicLink = 7;
 const int _errnoAgain = 6;
 const int _errnoBadf = 8;
 const int _errnoExist = 20;
@@ -4750,6 +4751,198 @@ void main() {
             _errnoNotcapable,
           );
           expect(readlinkPath('target.txt'), _errnoInval);
+        },
+        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+      );
+
+      test(
+        'node preview1 follows real host symlinks and reports path filestat',
+        () async {
+          final host = createNodeHostTemp('wasd_node_host_symlink_follow_');
+          expect(host, isNotNull);
+          addTearDown(() => host?.delete());
+          final outside = createNodeHostTemp('wasd_node_host_symlink_outside_');
+          expect(outside, isNotNull);
+          addTearDown(() => outside?.delete());
+          host!
+            ..writeFile('target.txt', 'target')
+            ..createDirectory('assets')
+            ..writeFile('assets/nested.txt', 'nested');
+          outside!.writeFile('escape.txt', 'escape');
+
+          final fileWasi = WASI(preopens: {'/host': host.path});
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathSymlink =
+              preview1['path_symlink'] as FunctionImportExportValue;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final fdReaddir = preview1['fd_readdir'] as FunctionImportExportValue;
+          final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const targetPathPtr = 3568;
+          const pathPtr = 3632;
+          const openedFdPtr = 3696;
+          const filestatPtr = 3712;
+          const iovPtr = 3792;
+          const readBufferPtr = 3824;
+          const readCountPtr = 3864;
+          const direntsPtr = 3888;
+          const bufusedPtr = 4176;
+
+          int writePath(int ptr, String path) {
+            final encoded = utf8.encode(path);
+            bytes.setAll(ptr, encoded);
+            return encoded.length;
+          }
+
+          int symlinkPath(String target, String linkPath) {
+            final targetLen = writePath(targetPathPtr, target);
+            final linkLen = writePath(pathPtr, linkPath);
+            return pathSymlink.ref([
+                  targetPathPtr,
+                  targetLen,
+                  3,
+                  pathPtr,
+                  linkLen,
+                ])
+                as int;
+          }
+
+          int pathFilestat(String path, {int lookupFlags = 0}) {
+            final pathLen = writePath(pathPtr, path);
+            bytes.fillRange(filestatPtr, filestatPtr + 64, 0);
+            return pathFilestatGet.ref([
+                  3,
+                  lookupFlags,
+                  pathPtr,
+                  pathLen,
+                  filestatPtr,
+                ])
+                as int;
+          }
+
+          int openPath(
+            String path, {
+            int lookupFlags = 0,
+            int oflags = 0,
+            int rightsBase = 0,
+          }) {
+            final pathLen = writePath(pathPtr, path);
+            data.setUint32(openedFdPtr, 0, Endian.little);
+            return pathOpen.ref([
+                  3,
+                  lookupFlags,
+                  pathPtr,
+                  pathLen,
+                  oflags,
+                  rightsBase,
+                  0,
+                  0,
+                  openedFdPtr,
+                ])
+                as int;
+          }
+
+          expect(symlinkPath('target.txt', 'link.txt'), 0);
+          expect(symlinkPath('assets', 'dir-link'), 0);
+          expect(symlinkPath('missing.txt', 'dangling'), 0);
+          expect(symlinkPath('self', 'self'), 0);
+          host.createSymlink('${outside.path}/escape.txt', 'escape');
+          expect(host.symlinkExists('link.txt'), isTrue);
+          expect(host.readLink('link.txt'), 'target.txt');
+
+          expect(pathFilestat('link.txt'), 0);
+          expect(bytes[filestatPtr + 16], _filetypeSymbolicLink);
+          expect(_getUint64Le(data, filestatPtr + 32), 'target.txt'.length);
+          expect(
+            pathFilestat('link.txt', lookupFlags: _lookupflagSymlinkFollow),
+            0,
+          );
+          expect(bytes[filestatPtr + 16], _filetypeRegularFile);
+          expect(_getUint64Le(data, filestatPtr + 32), 'target'.length);
+
+          expect(openPath('link.txt'), _errnoLoop);
+          expect(
+            openPath(
+              'link.txt',
+              lookupFlags: _lookupflagSymlinkFollow,
+              rightsBase: _rightFdRead | _rightFdSeek | _rightFdFdstatGet,
+            ),
+            0,
+          );
+          final fileFd = data.getUint32(openedFdPtr, Endian.little);
+          data.setUint32(iovPtr, readBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 6, Endian.little);
+          expect(fdPread.ref([fileFd, iovPtr, 1, 0, readCountPtr]), 0);
+          expect(data.getUint32(readCountPtr, Endian.little), 6);
+          expect(
+            utf8.decode(bytes.sublist(readBufferPtr, readBufferPtr + 6)),
+            'target',
+          );
+          expect(fdClose.ref([fileFd]), 0);
+
+          expect(
+            pathFilestat('dir-link', lookupFlags: _lookupflagSymlinkFollow),
+            0,
+          );
+          expect(bytes[filestatPtr + 16], _filetypeDirectory);
+          expect(
+            openPath(
+              'dir-link',
+              lookupFlags: _lookupflagSymlinkFollow,
+              oflags: _oflagDirectory,
+              rightsBase: _rightFdReaddir,
+            ),
+            0,
+          );
+          final dirFd = data.getUint32(openedFdPtr, Endian.little);
+          expect(fdReaddir.ref([dirFd, direntsPtr, 128, 0, bufusedPtr]), 0);
+          final entries = _readDirents(
+            bytes,
+            data,
+            direntsPtr,
+            data.getUint32(bufusedPtr, Endian.little),
+          );
+          expect(entries.map((entry) => entry.name), ['nested.txt']);
+          expect(entries.single.type, _filetypeRegularFile);
+          expect(fdClose.ref([dirFd]), 0);
+
+          expect(
+            pathFilestat('dangling', lookupFlags: _lookupflagSymlinkFollow),
+            _errnoNoent,
+          );
+          expect(
+            openPath('dangling', lookupFlags: _lookupflagSymlinkFollow),
+            _errnoNoent,
+          );
+          expect(
+            pathFilestat('self', lookupFlags: _lookupflagSymlinkFollow),
+            _errnoLoop,
+          );
+          expect(
+            openPath('self', lookupFlags: _lookupflagSymlinkFollow),
+            _errnoLoop,
+          );
+          expect(
+            pathFilestat('escape', lookupFlags: _lookupflagSymlinkFollow),
+            _errnoNotcapable,
+          );
+          expect(
+            openPath('escape', lookupFlags: _lookupflagSymlinkFollow),
+            _errnoNotcapable,
+          );
         },
         skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
       );
