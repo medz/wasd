@@ -4907,6 +4907,25 @@ void main() {
             'sub',
           ]);
 
+          host.writeFile('assets/c.txt', 'c');
+          bytes.fillRange(direntsPtr, direntsPtr + 256, 0);
+          expect(fdReaddir.ref([dirFd, direntsPtr, 256, 0, bufusedPtr]), 0);
+          final refreshedBufused = data.getUint32(bufusedPtr, Endian.little);
+          final refreshedEntries = _readDirents(
+            bytes,
+            data,
+            direntsPtr,
+            refreshedBufused,
+          );
+          expect(refreshedEntries.map((entry) => entry.name), [
+            '.',
+            '..',
+            'a.txt',
+            'b.txt',
+            'c.txt',
+            'sub',
+          ]);
+
           expect(fdClose.ref([dirFd]), 0);
         },
         skip: _skipUnlessNode('requires dart2js/node host filesystem access'),

@@ -592,13 +592,7 @@ class WASI implements wasi_iface.WASI {
         final cookie = _asInt64(args[3]);
         final bufferUsedPtr = _asInt(args[4]);
         final directoryPath = _vfs.directoryPathForFd(fd);
-        final hostPreopenPath = directoryPath == null
-            ? null
-            : _hostPreopenPathForGuestPath(directoryPath);
-        final entries = hostPreopenPath == null
-            ? _vfs.directoryEntriesForFd(fd)
-            : _hostDirectoryEntries(hostPreopenPath.hostPath);
-        if (entries == null) {
+        if (directoryPath == null) {
           return _errnoBadf;
         }
         final right = _checkDescriptorRight(fd, _rightFdReaddir);
@@ -621,6 +615,18 @@ class WASI implements wasi_iface.WASI {
             bufferUsedPtr < 0 ||
             bufferUsedPtr + 4 > bytes.length) {
           return _errnoInval;
+        }
+
+        final hostPreopenPath = _hostPreopenPathForGuestPath(directoryPath);
+        final entriesResult = hostPreopenPath == null
+            ? (errno: _errnoSuccess, entries: _vfs.directoryEntriesForFd(fd))
+            : _readHostDirectoryEntries(hostPreopenPath.hostPath);
+        if (entriesResult.errno != _errnoSuccess) {
+          return entriesResult.errno;
+        }
+        final entries = entriesResult.entries;
+        if (entries == null) {
+          return _errnoBadf;
         }
 
         final written = wasi_vfs.writeDirectoryEntries(
@@ -2383,6 +2389,22 @@ class WASI implements wasi_iface.WASI {
       return wasi_vfs.Preview1PathMutationResult.noEntry;
     }
     return wasi_vfs.Preview1PathMutationResult.permissionDenied;
+  }
+
+  ({int errno, List<wasi_vfs.Preview1DirectoryEntry>? entries})
+  _readHostDirectoryEntries(String hostPath) {
+    try {
+      return (errno: _errnoSuccess, entries: _hostDirectoryEntries(hostPath));
+    } on io.FileSystemException {
+      final type = io.FileSystemEntity.typeSync(hostPath, followLinks: false);
+      if (type == io.FileSystemEntityType.notFound) {
+        return (errno: _errnoNoent, entries: null);
+      }
+      if (type != io.FileSystemEntityType.directory) {
+        return (errno: _errnoNotdir, entries: null);
+      }
+      return (errno: _errnoPerm, entries: null);
+    }
   }
 
   List<wasi_vfs.Preview1DirectoryEntry> _hostDirectoryEntries(String hostPath) {

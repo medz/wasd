@@ -598,8 +598,8 @@ class WASI implements wasi.WASI {
         final bufferLength = _asInt(args[2]);
         final cookie = _asInt64(args[3]);
         final bufferUsedPtr = _asInt(args[4]);
-        final entries = _directoryEntriesForFd(fd);
-        if (entries == null) {
+        final directoryPath = _vfs.directoryPathForFd(fd);
+        if (directoryPath == null) {
           return _errnoBadf;
         }
         final right = _checkDescriptorRight(fd, _rightFdReaddir);
@@ -622,6 +622,15 @@ class WASI implements wasi.WASI {
             bufferUsedPtr < 0 ||
             bufferUsedPtr + 4 > bytes.length) {
           return _errnoInval;
+        }
+
+        final entriesResult = _directoryEntriesForFd(fd, directoryPath);
+        if (entriesResult.errno != _errnoSuccess) {
+          return entriesResult.errno;
+        }
+        final entries = entriesResult.entries;
+        if (entries == null) {
+          return _errnoBadf;
         }
 
         final written = wasi_vfs.writeDirectoryEntries(
@@ -2105,23 +2114,17 @@ class WASI implements wasi.WASI {
         : 0;
   }
 
-  List<wasi_vfs.Preview1DirectoryEntry>? _directoryEntriesForFd(int fd) {
+  ({int errno, List<wasi_vfs.Preview1DirectoryEntry>? entries})
+  _directoryEntriesForFd(int fd, String directoryPath) {
     final entries = _vfs.directoryEntriesForFd(fd);
     if (entries == null) {
-      return null;
+      return (errno: _errnoBadf, entries: null);
     }
-    if (_vfs.isPreopenDirectoryFd(fd)) {
-      final directoryPath = _vfs.directoryPathForFd(fd);
-      if (directoryPath != null) {
-        final hostEntries = _nodeHostDirectoryEntriesForGuestPath(
-          directoryPath,
-        );
-        if (hostEntries != null) {
-          return hostEntries;
-        }
-      }
+    final hostEntries = _nodeHostDirectoryEntriesForGuestPath(directoryPath);
+    if (hostEntries.handled) {
+      return (errno: hostEntries.errno, entries: hostEntries.entries);
     }
-    return entries;
+    return (errno: _errnoSuccess, entries: entries);
   }
 
   int _writeStringVector({
@@ -2757,22 +2760,51 @@ class WASI implements wasi.WASI {
     );
   }
 
-  List<wasi_vfs.Preview1DirectoryEntry>? _nodeHostDirectoryEntriesForGuestPath(
-    String guestPath,
-  ) {
+  ({bool handled, int errno, List<wasi_vfs.Preview1DirectoryEntry>? entries})
+  _nodeHostDirectoryEntriesForGuestPath(String guestPath) {
     final fs = _requireNodeBuiltin('node:fs');
     if (fs == null) {
-      return null;
+      return (handled: false, errno: _errnoSuccess, entries: null);
     }
     final hostPreopenPath = _nodeHostPreopenPathForGuestPath(guestPath);
     if (hostPreopenPath == null) {
-      return null;
+      return (handled: false, errno: _errnoSuccess, entries: null);
     }
-    final stat = _nodeLstat(fs, hostPreopenPath.hostPath);
-    if (stat == null || !_nodeStatMethod(stat, 'isDirectory')) {
-      return null;
+    var hostPath = hostPreopenPath.hostPath;
+    var stat = _nodeLstat(fs, hostPath);
+    if (stat == null) {
+      return (handled: true, errno: _errnoNoent, entries: null);
     }
-    return _nodeHostDirectoryEntries(fs, hostPreopenPath.hostPath);
+    if (_nodeStatMethod(stat, 'isSymbolicLink')) {
+      final resolved = _resolveNodeHostSymlinkTarget(
+        fs: fs,
+        linkHostPath: hostPath,
+        hostRoot: hostPreopenPath.hostRoot,
+      );
+      if (resolved.errno != _errnoSuccess) {
+        return (handled: true, errno: resolved.errno, entries: null);
+      }
+      hostPath = resolved.hostPath!;
+      stat = _nodeLstat(fs, hostPath);
+      if (stat == null) {
+        return (handled: true, errno: _errnoNoent, entries: null);
+      }
+    }
+    if (!_nodeStatMethod(stat, 'isDirectory')) {
+      return (handled: true, errno: _errnoNotdir, entries: null);
+    }
+    final entries = _nodeHostDirectoryEntries(fs, hostPath);
+    if (entries != null) {
+      return (handled: true, errno: _errnoSuccess, entries: entries);
+    }
+    final currentStat = _nodeLstat(fs, hostPath);
+    if (currentStat == null) {
+      return (handled: true, errno: _errnoNoent, entries: null);
+    }
+    if (!_nodeStatMethod(currentStat, 'isDirectory')) {
+      return (handled: true, errno: _errnoNotdir, entries: null);
+    }
+    return (handled: true, errno: _errnoPerm, entries: null);
   }
 
   ({String guestRoot, String hostRoot, String hostPath})?

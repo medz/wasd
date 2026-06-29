@@ -1552,6 +1552,13 @@ void main() {
     ]);
     expect(entries.map((entry) => entry.next).toList(), [1, 2, 3, 4, 5]);
 
+    data.setUint32(bufusedPtr, 0xfeedface, Endian.little);
+    bytes.fillRange(direntsPtr, direntsPtr + 32, 0xcc);
+    assets.deleteSync(recursive: true);
+    expect(fdReaddir.ref([dirFd, direntsPtr, 256, 0, bufusedPtr]), _errnoNoent);
+    expect(data.getUint32(bufusedPtr, Endian.little), 0xfeedface);
+    expect(bytes.sublist(direntsPtr, direntsPtr + 32), everyElement(0xcc));
+
     expect(fdClose.ref([dirFd]), 0);
   });
 }
