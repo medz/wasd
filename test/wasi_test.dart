@@ -2125,6 +2125,27 @@ void main() {
       );
 
       test(
+        'node proc_raise sends host signals without a handler',
+        () async {
+          final nodeWasi = WASI();
+          final nodeResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            nodeWasi.imports,
+          );
+          final nodeInstance = nodeResult.instance;
+          final procRaise =
+              nodeWasi.imports['wasi_snapshot_preview1']!['proc_raise']
+                  as FunctionImportExportValue;
+          final memory =
+              (nodeInstance.exports['memory'] as MemoryImportExportValue).ref;
+          nodeWasi.finalizeBindings(nodeInstance, memory: memory);
+
+          expect(procRaise.ref([27]), 0);
+        },
+        skip: _skipUnlessNode('requires node:process signal support'),
+      );
+
+      test(
         'poll_oneoff reports preview1 socket read readiness and hangup',
         () async {
           final readable = WASIPreview1Socket(receiveData: utf8.encode('abc'));

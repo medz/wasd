@@ -142,11 +142,11 @@ class WASI implements wasi.WASI {
         }
 
         final handler = _procRaiseHandler;
-        if (handler == null) {
-          return _errnoNosys;
+        if (handler != null) {
+          handler(signal);
+          return _errnoSuccess;
         }
-        handler(signal);
-        return _errnoSuccess;
+        return _raiseNodeProcessSignal(signal);
       });
 
   wasm.FunctionImportExportValue get _fdWriteImport =>
@@ -3453,6 +3453,62 @@ JSObject? _requireNodeBuiltin(String name) {
   }
   return null;
 }
+
+int _raiseNodeProcessSignal(wasi.WASIProcessSignal signal) {
+  final hostSignal = _nodeProcessSignalNameFor(signal);
+  if (hostSignal == null) {
+    return _errnoNosys;
+  }
+  final process = _requireNodeBuiltin('node:process');
+  final pid = process?.getProperty<JSNumber?>('pid'.toJS);
+  if (process == null || pid == null) {
+    return _errnoNosys;
+  }
+  try {
+    final raised = process.callMethodVarArgs<JSAny?>('kill'.toJS, [
+      pid,
+      hostSignal.toJS,
+    ]);
+    return _jsString(raised).toDart == 'true' ? _errnoSuccess : _errnoInval;
+  } catch (_) {
+    return _errnoNosys;
+  }
+}
+
+String? _nodeProcessSignalNameFor(wasi.WASIProcessSignal signal) =>
+    switch (signal) {
+      wasi.WASIProcessSignal.none => null,
+      wasi.WASIProcessSignal.hup => 'SIGHUP',
+      wasi.WASIProcessSignal.interrupt => 'SIGINT',
+      wasi.WASIProcessSignal.quit => 'SIGQUIT',
+      wasi.WASIProcessSignal.ill => 'SIGILL',
+      wasi.WASIProcessSignal.trap => 'SIGTRAP',
+      wasi.WASIProcessSignal.abrt => 'SIGABRT',
+      wasi.WASIProcessSignal.bus => 'SIGBUS',
+      wasi.WASIProcessSignal.fpe => 'SIGFPE',
+      wasi.WASIProcessSignal.kill => 'SIGKILL',
+      wasi.WASIProcessSignal.usr1 => 'SIGUSR1',
+      wasi.WASIProcessSignal.segv => 'SIGSEGV',
+      wasi.WASIProcessSignal.usr2 => 'SIGUSR2',
+      wasi.WASIProcessSignal.pipe => 'SIGPIPE',
+      wasi.WASIProcessSignal.alrm => 'SIGALRM',
+      wasi.WASIProcessSignal.term => 'SIGTERM',
+      wasi.WASIProcessSignal.chld => 'SIGCHLD',
+      wasi.WASIProcessSignal.cont => 'SIGCONT',
+      wasi.WASIProcessSignal.stop => 'SIGSTOP',
+      wasi.WASIProcessSignal.tstp => 'SIGTSTP',
+      wasi.WASIProcessSignal.ttin => 'SIGTTIN',
+      wasi.WASIProcessSignal.ttou => 'SIGTTOU',
+      wasi.WASIProcessSignal.urg => 'SIGURG',
+      wasi.WASIProcessSignal.xcpu => 'SIGXCPU',
+      wasi.WASIProcessSignal.xfsz => 'SIGXFSZ',
+      wasi.WASIProcessSignal.vtalrm => 'SIGVTALRM',
+      wasi.WASIProcessSignal.prof => 'SIGPROF',
+      wasi.WASIProcessSignal.winch => 'SIGWINCH',
+      wasi.WASIProcessSignal.poll => 'SIGPOLL',
+      wasi.WASIProcessSignal.pwr => null,
+      wasi.WASIProcessSignal.sys => 'SIGSYS',
+    };
 
 @JS('require')
 external JSAny _jsRequire(JSString module);
