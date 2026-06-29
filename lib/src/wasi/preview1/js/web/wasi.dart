@@ -993,6 +993,13 @@ class WASI implements wasi.WASI {
         if (right != _errnoSuccess) {
           return right;
         }
+        final fs = _requireNodeBuiltin('node:fs');
+        final hostPath = _nodeHostPathForGuestPath(resolved.path!);
+        if (fs != null && hostPath != null) {
+          return _errnoFromPathMutationResult(
+            _createNodeHostDirectory(fs, hostPath),
+          );
+        }
         return _errnoFromPathMutationResult(
           _vfs.createDirectory(resolved.path!),
         );
@@ -1195,6 +1202,18 @@ class WASI implements wasi.WASI {
         if (right != _errnoSuccess) {
           return right;
         }
+        final fs = _requireNodeBuiltin('node:fs');
+        final hostPath = _nodeHostPathForGuestPath(resolved.path!);
+        if (fs != null && hostPath != null) {
+          final hostResult =
+              _nodeHostPreopensByGuestPath.containsKey(resolved.path!)
+              ? wasi_vfs.Preview1PathMutationResult.notEmpty
+              : _removeNodeHostDirectory(fs, hostPath);
+          if (hostResult != wasi_vfs.Preview1PathMutationResult.noEntry ||
+              _vfs.pathEntry(resolved.path!, followSymlinks: false) == null) {
+            return _errnoFromPathMutationResult(hostResult);
+          }
+        }
         return _errnoFromPathMutationResult(
           _vfs.removeDirectory(resolved.path!),
         );
@@ -1234,6 +1253,23 @@ class WASI implements wasi.WASI {
         );
         if (newRight != _errnoSuccess) {
           return newRight;
+        }
+
+        final fs = _requireNodeBuiltin('node:fs');
+        final oldHostPath = _nodeHostPathForGuestPath(oldPath.path!);
+        final newHostPath = _nodeHostPathForGuestPath(newPath.path!);
+        if (fs != null && oldHostPath != null && newHostPath != null) {
+          final hostResult = _renameNodeHostPath(
+            fs: fs,
+            oldGuestPath: oldPath.path!,
+            newGuestPath: newPath.path!,
+            oldHostPath: oldHostPath,
+            newHostPath: newHostPath,
+          );
+          if (hostResult != wasi_vfs.Preview1PathMutationResult.noEntry ||
+              _vfs.pathEntry(oldPath.path!, followSymlinks: false) == null) {
+            return _errnoFromPathMutationResult(hostResult);
+          }
         }
 
         return _errnoFromPathMutationResult(
@@ -1416,6 +1452,19 @@ class WASI implements wasi.WASI {
         );
         if (right != _errnoSuccess) {
           return right;
+        }
+        final fs = _requireNodeBuiltin('node:fs');
+        final hostPath = _nodeHostPathForGuestPath(resolved.path!);
+        if (fs != null && hostPath != null) {
+          final hostResult = _unlinkNodeHostFile(
+            fs,
+            hostPath,
+            hasTrailingSeparator: resolved.hasTrailingSeparator,
+          );
+          if (hostResult != wasi_vfs.Preview1PathMutationResult.noEntry ||
+              _vfs.pathEntry(resolved.path!, followSymlinks: false) == null) {
+            return _errnoFromPathMutationResult(hostResult);
+          }
         }
         return _errnoFromPathMutationResult(
           _vfs.unlinkFile(
@@ -1929,6 +1978,175 @@ class WASI implements wasi.WASI {
     }
     final stat = _nodeLstat(fs, hostPreopenPath.hostPath);
     return stat != null && _nodeStatMethod(stat, 'isDirectory');
+  }
+
+  wasi_vfs.Preview1PathMutationResult _createNodeHostDirectory(
+    JSObject fs,
+    String hostPath,
+  ) {
+    if (_nodeLstat(fs, hostPath) != null) {
+      return wasi_vfs.Preview1PathMutationResult.exists;
+    }
+    final parent = _nodePathDirname(hostPath);
+    final parentStat = parent == null ? null : _nodeLstat(fs, parent);
+    if (parentStat == null) {
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (!_nodeStatMethod(parentStat, 'isDirectory')) {
+      return wasi_vfs.Preview1PathMutationResult.notDirectory;
+    }
+
+    try {
+      fs.callMethodVarArgs<JSAny?>('mkdirSync'.toJS, [hostPath.toJS]);
+      return wasi_vfs.Preview1PathMutationResult.success;
+    } catch (_) {
+      return _nodeHostCreatePathFailure(fs, hostPath);
+    }
+  }
+
+  wasi_vfs.Preview1PathMutationResult _removeNodeHostDirectory(
+    JSObject fs,
+    String hostPath,
+  ) {
+    final stat = _nodeLstat(fs, hostPath);
+    if (stat == null) {
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (!_nodeStatMethod(stat, 'isDirectory')) {
+      return wasi_vfs.Preview1PathMutationResult.notDirectory;
+    }
+
+    final names = _nodeReadDirectoryNames(fs, hostPath);
+    if (names == null) {
+      return _nodeHostPathMutationError(fs, hostPath);
+    }
+    if (names.isNotEmpty) {
+      return wasi_vfs.Preview1PathMutationResult.notEmpty;
+    }
+
+    try {
+      fs.callMethodVarArgs<JSAny?>('rmdirSync'.toJS, [hostPath.toJS]);
+      return wasi_vfs.Preview1PathMutationResult.success;
+    } catch (_) {
+      return _nodeHostPathMutationError(fs, hostPath);
+    }
+  }
+
+  wasi_vfs.Preview1PathMutationResult _unlinkNodeHostFile(
+    JSObject fs,
+    String hostPath, {
+    required bool hasTrailingSeparator,
+  }) {
+    final stat = _nodeLstat(fs, hostPath);
+    final isDirectory = stat != null && _nodeStatMethod(stat, 'isDirectory');
+    final isFile = stat != null && _nodeStatMethod(stat, 'isFile');
+    final isSymlink = stat != null && _nodeStatMethod(stat, 'isSymbolicLink');
+    if (hasTrailingSeparator) {
+      if (isDirectory) {
+        return wasi_vfs.Preview1PathMutationResult.isDirectory;
+      }
+      if (isFile || isSymlink) {
+        return wasi_vfs.Preview1PathMutationResult.notDirectory;
+      }
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (stat == null) {
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (isDirectory) {
+      return wasi_vfs.Preview1PathMutationResult.isDirectory;
+    }
+    if (!isFile && !isSymlink) {
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+
+    try {
+      fs.callMethodVarArgs<JSAny?>('unlinkSync'.toJS, [hostPath.toJS]);
+      return wasi_vfs.Preview1PathMutationResult.success;
+    } catch (_) {
+      return _nodeHostPathMutationError(fs, hostPath);
+    }
+  }
+
+  wasi_vfs.Preview1PathMutationResult _renameNodeHostPath({
+    required JSObject fs,
+    required String oldGuestPath,
+    required String newGuestPath,
+    required String oldHostPath,
+    required String newHostPath,
+  }) {
+    if (_nodeHostPreopensByGuestPath.containsKey(oldGuestPath)) {
+      return wasi_vfs.Preview1PathMutationResult.invalid;
+    }
+
+    final oldStat = _nodeLstat(fs, oldHostPath);
+    if (oldStat == null) {
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (oldHostPath == newHostPath) {
+      return wasi_vfs.Preview1PathMutationResult.success;
+    }
+
+    final newParent = _nodePathDirname(newHostPath);
+    final newParentStat = newParent == null ? null : _nodeLstat(fs, newParent);
+    if (newParentStat == null) {
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (!_nodeStatMethod(newParentStat, 'isDirectory')) {
+      return wasi_vfs.Preview1PathMutationResult.notDirectory;
+    }
+
+    final oldIsDirectory = _nodeStatMethod(oldStat, 'isDirectory');
+    final newStat = _nodeLstat(fs, newHostPath);
+    final newIsDirectory =
+        newStat != null && _nodeStatMethod(newStat, 'isDirectory');
+    if (oldIsDirectory) {
+      if (_isChildGuestPath(newGuestPath, oldGuestPath)) {
+        return wasi_vfs.Preview1PathMutationResult.invalid;
+      }
+      final newIsFile = newStat != null && _nodeStatMethod(newStat, 'isFile');
+      final newIsSymlink =
+          newStat != null && _nodeStatMethod(newStat, 'isSymbolicLink');
+      if (newIsFile || newIsSymlink) {
+        return wasi_vfs.Preview1PathMutationResult.notDirectory;
+      }
+      if (newIsDirectory) {
+        final names = _nodeReadDirectoryNames(fs, newHostPath);
+        if (names == null) {
+          return _nodeHostPathMutationError(fs, newHostPath);
+        }
+        if (names.isNotEmpty) {
+          return wasi_vfs.Preview1PathMutationResult.notEmpty;
+        }
+        try {
+          fs.callMethodVarArgs<JSAny?>('rmdirSync'.toJS, [newHostPath.toJS]);
+        } catch (_) {
+          return _nodeHostPathMutationError(fs, newHostPath);
+        }
+      }
+      return _renameNodeHostEntity(fs, oldHostPath, newHostPath);
+    }
+
+    if (newIsDirectory) {
+      return wasi_vfs.Preview1PathMutationResult.isDirectory;
+    }
+    return _renameNodeHostEntity(fs, oldHostPath, newHostPath);
+  }
+
+  wasi_vfs.Preview1PathMutationResult _renameNodeHostEntity(
+    JSObject fs,
+    String oldHostPath,
+    String newHostPath,
+  ) {
+    try {
+      fs.callMethodVarArgs<JSAny?>('renameSync'.toJS, [
+        oldHostPath.toJS,
+        newHostPath.toJS,
+      ]);
+      return wasi_vfs.Preview1PathMutationResult.success;
+    } catch (_) {
+      return _nodeHostPathMutationError(fs, oldHostPath);
+    }
   }
 
   List<wasi_vfs.Preview1DirectoryEntry>? _nodeHostDirectoryEntriesForGuestPath(
@@ -2613,6 +2831,43 @@ JSObject _nodeFstat(JSObject fs, int fd) {
 bool _nodeStatMethod(JSObject stat, String method) {
   final value = stat.callMethodVarArgs<JSAny?>(method.toJS, const []);
   return _jsString(value).toDart == 'true';
+}
+
+wasi_vfs.Preview1PathMutationResult _nodeHostCreatePathFailure(
+  JSObject fs,
+  String hostPath,
+) {
+  if (_nodeLstat(fs, hostPath) != null) {
+    return wasi_vfs.Preview1PathMutationResult.exists;
+  }
+  final parent = _nodePathDirname(hostPath);
+  final parentStat = parent == null ? null : _nodeLstat(fs, parent);
+  if (parentStat == null) {
+    return wasi_vfs.Preview1PathMutationResult.noEntry;
+  }
+  if (!_nodeStatMethod(parentStat, 'isDirectory')) {
+    return wasi_vfs.Preview1PathMutationResult.notDirectory;
+  }
+  return wasi_vfs.Preview1PathMutationResult.permissionDenied;
+}
+
+wasi_vfs.Preview1PathMutationResult _nodeHostPathMutationError(
+  JSObject fs,
+  String hostPath,
+) {
+  if (_nodeLstat(fs, hostPath) == null) {
+    return wasi_vfs.Preview1PathMutationResult.noEntry;
+  }
+  return wasi_vfs.Preview1PathMutationResult.permissionDenied;
+}
+
+bool _isChildGuestPath(String path, String parent) {
+  final normalizedPath = wasi_vfs.normalizeGuestPath(path);
+  final normalizedParent = wasi_vfs.normalizeGuestPath(parent);
+  if (normalizedParent == '/') {
+    return normalizedPath != '/';
+  }
+  return normalizedPath.startsWith('$normalizedParent/');
 }
 
 List<wasi_vfs.Preview1DirectoryEntry>? _nodeHostDirectoryEntries(

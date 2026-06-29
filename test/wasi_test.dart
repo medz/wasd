@@ -4534,6 +4534,108 @@ void main() {
       );
 
       test(
+        'node preview1 mutates real host directory paths',
+        () async {
+          final host = createNodeHostTemp('wasd_node_host_mutation_');
+          expect(host, isNotNull);
+          addTearDown(() => host?.delete());
+          host!
+            ..createDirectory('assets')
+            ..writeFile('assets/remove.txt', 'remove')
+            ..writeFile('assets/rename.txt', 'rename')
+            ..createDirectory('assets/empty')
+            ..createDirectory('assets/nonempty')
+            ..writeFile('assets/nonempty/child.txt', 'child')
+            ..createDirectory('assets/source-dir')
+            ..createDirectory('assets/target-empty');
+
+          final fileWasi = WASI(preopens: {'/host': host.path});
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathCreateDirectory =
+              preview1['path_create_directory'] as FunctionImportExportValue;
+          final pathUnlinkFile =
+              preview1['path_unlink_file'] as FunctionImportExportValue;
+          final pathRemoveDirectory =
+              preview1['path_remove_directory'] as FunctionImportExportValue;
+          final pathRename =
+              preview1['path_rename'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          const pathPtr = 3168;
+          const secondPathPtr = 3232;
+
+          int writePath(int ptr, String path) {
+            final encoded = utf8.encode(path);
+            bytes.setAll(ptr, encoded);
+            return encoded.length;
+          }
+
+          int createDirectory(String path) {
+            final pathLen = writePath(pathPtr, path);
+            return pathCreateDirectory.ref([3, pathPtr, pathLen]) as int;
+          }
+
+          int unlinkFile(String path) {
+            final pathLen = writePath(pathPtr, path);
+            return pathUnlinkFile.ref([3, pathPtr, pathLen]) as int;
+          }
+
+          int removeDirectory(String path) {
+            final pathLen = writePath(pathPtr, path);
+            return pathRemoveDirectory.ref([3, pathPtr, pathLen]) as int;
+          }
+
+          int renamePath(String oldPath, String newPath) {
+            final oldPathLen = writePath(pathPtr, oldPath);
+            final newPathLen = writePath(secondPathPtr, newPath);
+            return pathRename.ref([
+                  3,
+                  pathPtr,
+                  oldPathLen,
+                  3,
+                  secondPathPtr,
+                  newPathLen,
+                ])
+                as int;
+          }
+
+          expect(createDirectory('created'), 0);
+          expect(host.directoryExists('created'), isTrue);
+          expect(createDirectory('created'), _errnoExist);
+
+          expect(unlinkFile('assets/remove.txt'), 0);
+          expect(host.fileExists('assets/remove.txt'), isFalse);
+
+          expect(removeDirectory('assets/empty'), 0);
+          expect(host.directoryExists('assets/empty'), isFalse);
+          expect(removeDirectory('assets/nonempty'), _errnoNotempty);
+          expect(host.directoryExists('assets/nonempty'), isTrue);
+
+          expect(renamePath('assets/rename.txt', 'assets/renamed.txt'), 0);
+          expect(host.fileExists('assets/rename.txt'), isFalse);
+          expect(host.readFile('assets/renamed.txt'), 'rename');
+
+          expect(renamePath('assets/source-dir', 'assets/target-empty'), 0);
+          expect(host.directoryExists('assets/source-dir'), isFalse);
+          expect(host.directoryExists('assets/target-empty'), isTrue);
+          expect(
+            renamePath('assets/target-empty', 'assets/nonempty'),
+            _errnoNotempty,
+          );
+          expect(host.directoryExists('assets/target-empty'), isTrue);
+        },
+        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+      );
+
+      test(
         'fd_pread snapshots overlapping iovs before writing file bytes',
         () async {
           const iovPtr = 5248;

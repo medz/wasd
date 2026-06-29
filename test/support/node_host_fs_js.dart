@@ -31,11 +31,31 @@ final class NodeHostTemp {
     return _jsString(result).toDart;
   }
 
+  bool fileExists(String relativePath) => _entryMatches(relativePath, 'isFile');
+
+  bool directoryExists(String relativePath) =>
+      _entryMatches(relativePath, 'isDirectory');
+
   void delete() {
     final options = JSObject()
       ..['recursive'] = true.toJS
       ..['force'] = true.toJS;
     _fs.callMethodVarArgs<JSAny?>('rmSync'.toJS, [path.toJS, options]);
+  }
+
+  bool _entryMatches(String relativePath, String method) {
+    try {
+      final stat = _fs.callMethodVarArgs<JSAny?>('lstatSync'.toJS, [
+        _join(relativePath).toJS,
+      ]);
+      if (stat case final JSObject object) {
+        final result = object.callMethodVarArgs<JSAny?>(method.toJS, const []);
+        return _jsString(result).toDart == 'true';
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
   }
 
   String _join(String relativePath) {

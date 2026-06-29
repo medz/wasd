@@ -9,6 +9,10 @@ final class NodeHostTemp {
 
   String readFile(String relativePath) => '';
 
+  bool fileExists(String relativePath) => false;
+
+  bool directoryExists(String relativePath) => false;
+
   void delete() {}
 }
 
