@@ -61,15 +61,6 @@ final class Preview1VirtualFileSystem {
         entry.key: _stdioRightsFor(entry.value),
     };
     _stdioFlagsByFd = {for (final fd in _stdioDescriptorsByFd.keys) fd: 0};
-    _filePathsByLowerGuestPath = _indexFilePathsByLowerPath(_filesByGuestPath);
-    _filePathsByBasenameLower = _indexFilePathsByBasename(
-      _filesByGuestPath,
-      compact: false,
-    );
-    _filePathsByBasenameCompact = _indexFilePathsByBasename(
-      _filesByGuestPath,
-      compact: true,
-    );
     _virtualDirectoryPaths = _buildVirtualDirectorySet(
       preopenGuestPathsByFd: _preopenGuestPathsByFd,
       filesByGuestPath: _filesByGuestPath,
@@ -111,9 +102,6 @@ final class Preview1VirtualFileSystem {
       <int, Preview1DescriptorRights>{};
   final Map<int, String> _openDirectoryHostPathsByFd = <int, String>{};
 
-  late Map<String, List<String>> _filePathsByLowerGuestPath;
-  late Map<String, List<String>> _filePathsByBasenameLower;
-  late Map<String, List<String>> _filePathsByBasenameCompact;
   late final Set<String> _virtualDirectoryPaths;
   late Map<String, Preview1VirtualNodeMetadata> _directoryMetadataByGuestPath;
   late _DirectoryChildrenByPath _directoryChildrenByGuestPath;
@@ -573,15 +561,36 @@ final class Preview1VirtualFileSystem {
   String? resolveSymlinkPath(String guestPath, {int maxDepth = 16}) {
     var current = normalizeGuestPath(guestPath);
     for (var depth = 0; depth < maxDepth; depth++) {
-      final symlink = _symlinksByGuestPath[current];
-      if (symlink == null) {
+      final resolved = _resolveFirstSymlinkComponent(current);
+      if (resolved == null) {
         return current;
       }
-      current = normalizeGuestPath(
-        symlink.target.startsWith('/')
-            ? symlink.target
-            : joinGuestPath(dirnameOfGuestPath(current), symlink.target),
-      );
+      current = resolved;
+    }
+    return null;
+  }
+
+  String? _resolveFirstSymlinkComponent(String guestPath) {
+    final normalized = normalizeGuestPath(guestPath);
+    if (normalized == '/') {
+      return null;
+    }
+
+    final segments = normalized.substring(1).split('/');
+    var prefix = '';
+    for (var i = 0; i < segments.length; i++) {
+      prefix = prefix.isEmpty ? '/${segments[i]}' : '$prefix/${segments[i]}';
+      final symlink = _symlinksByGuestPath[prefix];
+      if (symlink == null) {
+        continue;
+      }
+      final targetPath = symlink.target.startsWith('/')
+          ? normalizeGuestPath(symlink.target)
+          : joinGuestPath(dirnameOfGuestPath(prefix), symlink.target);
+      final remaining = segments.skip(i + 1).join('/');
+      return remaining.isEmpty
+          ? targetPath
+          : joinGuestPath(targetPath, remaining);
     }
     return null;
   }
@@ -596,37 +605,7 @@ final class Preview1VirtualFileSystem {
 
   Preview1VirtualFile? lookupFile(String guestPath) {
     final normalized = normalizeGuestPath(guestPath);
-    final direct = _filesByGuestPath[normalized];
-    if (direct != null) {
-      return direct;
-    }
-
-    final caseInsensitive = _lookupIndexedFile(
-      _filePathsByLowerGuestPath,
-      normalized.toLowerCase(),
-    );
-    if (caseInsensitive != null) {
-      return caseInsensitive;
-    }
-
-    final basename = basenameOfGuestPath(normalized);
-    if (basename.isEmpty) {
-      return null;
-    }
-    final basenameLower = basename.toLowerCase();
-    final byBasenameLower = _lookupIndexedFile(
-      _filePathsByBasenameLower,
-      basenameLower,
-    );
-    if (byBasenameLower != null) {
-      return byBasenameLower;
-    }
-
-    final compactBasename = compactPathToken(basenameLower);
-    if (compactBasename.isEmpty) {
-      return null;
-    }
-    return _lookupIndexedFile(_filePathsByBasenameCompact, compactBasename);
+    return _filesByGuestPath[normalized];
   }
 
   bool isDirectoryPath(String guestPath) =>
@@ -735,7 +714,6 @@ final class Preview1VirtualFileSystem {
     }
 
     removedFile.metadata.releaseLink();
-    _unindexFilePath(normalized);
     _removeDirectoryChild(normalized);
     _rebuildDirectoryEntriesForPaths({dirnameOfGuestPath(normalized)});
     return Preview1PathMutationResult.success;
@@ -765,9 +743,7 @@ final class Preview1VirtualFileSystem {
         return Preview1PathMutationResult.exists;
       }
       _filesByGuestPath.remove(oldNormalized);
-      _unindexFilePath(oldNormalized);
       _filesByGuestPath[newNormalized] = oldFile;
-      _indexFilePath(newNormalized);
       _removeDirectoryChild(oldNormalized);
       _setDirectoryChild(newNormalized, filetypeRegularFile);
       _rebuildDirectoryEntriesForPaths({
@@ -858,7 +834,6 @@ final class Preview1VirtualFileSystem {
     if (oldFile != null) {
       _filesByGuestPath[newNormalized] = oldFile;
       oldFile.metadata.retainLink();
-      _indexFilePath(newNormalized);
       _setDirectoryChild(newNormalized, filetypeRegularFile);
       _rebuildDirectoryEntriesForPaths({dirnameOfGuestPath(newNormalized)});
       return Preview1PathMutationResult.success;
@@ -1005,7 +980,6 @@ final class Preview1VirtualFileSystem {
 
     final created = Preview1VirtualFile(Uint8List(0));
     _filesByGuestPath[normalized] = created;
-    _indexFilePath(normalized);
     _setDirectoryChild(normalized, filetypeRegularFile);
     _rebuildDirectoryEntriesForPaths({parent});
     final fd = _allocateVirtualFd();
@@ -1123,99 +1097,7 @@ final class Preview1VirtualFileSystem {
             '$newPath${path.substring(oldPath.length)}';
       }
     }
-    _rebuildFileIndexes();
     _rebuildDirectoryEntries();
-  }
-
-  void _rebuildFileIndexes() {
-    _filePathsByLowerGuestPath = _indexFilePathsByLowerPath(_filesByGuestPath);
-    _filePathsByBasenameLower = _indexFilePathsByBasename(
-      _filesByGuestPath,
-      compact: false,
-    );
-    _filePathsByBasenameCompact = _indexFilePathsByBasename(
-      _filesByGuestPath,
-      compact: true,
-    );
-  }
-
-  Preview1VirtualFile? _lookupIndexedFile(
-    Map<String, List<String>> index,
-    String key,
-  ) {
-    final paths = index[key];
-    if (paths == null || paths.isEmpty) {
-      return null;
-    }
-    return _filesByGuestPath[paths.first];
-  }
-
-  void _indexFilePath(String guestPath) {
-    final normalized = normalizeGuestPath(guestPath);
-    _addFileIndexPath(
-      _filePathsByLowerGuestPath,
-      normalized.toLowerCase(),
-      normalized,
-    );
-    final basenameLower = basenameOfGuestPath(normalized).toLowerCase();
-    if (basenameLower.isEmpty) {
-      return;
-    }
-    _addFileIndexPath(_filePathsByBasenameLower, basenameLower, normalized);
-    final compactBasename = compactPathToken(basenameLower);
-    if (compactBasename.isNotEmpty) {
-      _addFileIndexPath(
-        _filePathsByBasenameCompact,
-        compactBasename,
-        normalized,
-      );
-    }
-  }
-
-  void _unindexFilePath(String guestPath) {
-    final normalized = normalizeGuestPath(guestPath);
-    _removeFileIndexPath(
-      _filePathsByLowerGuestPath,
-      normalized.toLowerCase(),
-      normalized,
-    );
-    final basenameLower = basenameOfGuestPath(normalized).toLowerCase();
-    if (basenameLower.isEmpty) {
-      return;
-    }
-    _removeFileIndexPath(_filePathsByBasenameLower, basenameLower, normalized);
-    final compactBasename = compactPathToken(basenameLower);
-    if (compactBasename.isEmpty) {
-      return;
-    }
-    _removeFileIndexPath(
-      _filePathsByBasenameCompact,
-      compactBasename,
-      normalized,
-    );
-  }
-
-  void _addFileIndexPath(
-    Map<String, List<String>> index,
-    String key,
-    String path,
-  ) {
-    (index[key] ??= <String>[]).add(path);
-  }
-
-  void _removeFileIndexPath(
-    Map<String, List<String>> index,
-    String key,
-    String removedPath,
-  ) {
-    final paths = index[key];
-    if (paths == null) {
-      return;
-    }
-    paths.remove(removedPath);
-    if (paths.isEmpty) {
-      index.remove(key);
-    }
   }
 
   void _rebuildDirectoryEntries() {
@@ -2471,42 +2353,10 @@ String dirnameOfGuestPath(String path) {
   return slash <= 0 ? '/' : normalized.substring(0, slash);
 }
 
-String compactPathToken(String value) =>
-    value.replaceAll(RegExp(r'[^a-z0-9]'), '');
-
 Uint8List nulTerminated(String value) =>
     Uint8List.fromList(<int>[...utf8.encode(value), 0]);
 
 Uint8List pathBytes(String value) => Uint8List.fromList(utf8.encode(value));
-
-Map<String, List<String>> _indexFilePathsByLowerPath(
-  Map<String, Preview1VirtualFile> filesByGuestPath,
-) {
-  final indexed = <String, List<String>>{};
-  for (final entry in filesByGuestPath.entries) {
-    (indexed[entry.key.toLowerCase()] ??= <String>[]).add(entry.key);
-  }
-  return indexed;
-}
-
-Map<String, List<String>> _indexFilePathsByBasename(
-  Map<String, Preview1VirtualFile> filesByGuestPath, {
-  required bool compact,
-}) {
-  final indexed = <String, List<String>>{};
-  for (final entry in filesByGuestPath.entries) {
-    final basenameLower = basenameOfGuestPath(entry.key).toLowerCase();
-    if (basenameLower.isEmpty) {
-      continue;
-    }
-    final key = compact ? compactPathToken(basenameLower) : basenameLower;
-    if (key.isEmpty) {
-      continue;
-    }
-    (indexed[key] ??= <String>[]).add(entry.key);
-  }
-  return indexed;
-}
 
 Map<int, Preview1StdioDescriptorKind> _buildStdioDescriptors({
   required int stdinFd,

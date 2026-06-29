@@ -45,6 +45,7 @@ const int _filetypeSocketStream = 6;
 const int _filetypeSymbolicLink = 7;
 const int _filestatFiletypeOffset = 16;
 const int _filestatLinkCountOffset = 24;
+const int _filestatSizeOffset = 32;
 const int _errnoAgain = 6;
 const int _errnoBadf = 8;
 const int _errnoExist = 20;
@@ -1128,7 +1129,7 @@ void main() {
       expect(preview1['fd_seek'], isA<FunctionImportExportValue>());
     });
 
-    test('virtual file lookup indexes survive file path mutations', () {
+    test('virtual file lookup uses exact normalized paths after mutations', () {
       final vfs = Preview1VirtualFileSystem(
         preopens: const {'/sandbox': '/sandbox'},
         files: {
@@ -1139,8 +1140,9 @@ void main() {
         },
       );
 
-      expect(vfs.lookupFile('/sandbox/ALPHA.TXT')!.bytes.single, 1);
-      expect(vfs.lookupFile('/missing/NAME.WASM')!.bytes.single, 3);
+      expect(vfs.lookupFile('/sandbox/Alpha.TXT')!.bytes.single, 1);
+      expect(vfs.lookupFile('/sandbox/ALPHA.TXT'), isNull);
+      expect(vfs.lookupFile('/missing/NAME.WASM'), isNull);
       expect(
         vfs.linkPath(
           oldPath: '/sandbox/alpha.txt',
@@ -1155,7 +1157,8 @@ void main() {
         ),
         Preview1PathMutationResult.success,
       );
-      expect(vfs.lookupFile('/sandbox/renamed.txt')!.bytes.single, 2);
+      expect(vfs.lookupFile('/sandbox/Renamed.TXT')!.bytes.single, 2);
+      expect(vfs.lookupFile('/sandbox/renamed.txt'), isNull);
       expect(
         vfs.removeDirectory('/sandbox/dir'),
         Preview1PathMutationResult.notEmpty,
@@ -1165,12 +1168,13 @@ void main() {
         vfs.unlinkFile('/sandbox/Alpha.TXT'),
         Preview1PathMutationResult.success,
       );
-      expect(vfs.lookupFile('/sandbox/ALPHA.TXT')!.bytes.single, 2);
+      expect(vfs.lookupFile('/sandbox/ALPHA.TXT'), isNull);
       expect(
         vfs.unlinkFile('/sandbox/dir/Name.wasm'),
         Preview1PathMutationResult.success,
       );
-      expect(vfs.lookupFile('/missing/NAME.WASM')!.bytes.single, 4);
+      expect(vfs.lookupFile('/missing/NAME.WASM'), isNull);
+      expect(vfs.lookupFile('/sandbox/other/name.wasm')!.bytes.single, 4);
       expect(
         vfs.removeDirectory('/sandbox/dir'),
         Preview1PathMutationResult.success,
@@ -6811,6 +6815,10 @@ void main() {
           final fileInstance = fileResult.instance;
           final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
           final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final pathSymlink =
+              preview1['path_symlink'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
           final fdFdstatGet =
               preview1['fd_fdstat_get'] as FunctionImportExportValue;
           final fdRead = preview1['fd_read'] as FunctionImportExportValue;
@@ -6826,6 +6834,9 @@ void main() {
           const iovPtr = 2160;
           const bufferPtr = 2176;
           const nreadPtr = 2192;
+          const symlinkTargetPtr = 2208;
+          const symlinkPathPtr = 2240;
+          const filestatPtr = 2272;
 
           final dirPath = utf8.encode('assets');
           bytes.setAll(pathPtr, dirPath);
@@ -6870,6 +6881,58 @@ void main() {
           expect(fdRead.ref([fileFd, iovPtr, 1, nreadPtr]), 0);
           expect(data.getUint32(nreadPtr, Endian.little), 3);
           expect(bytes.sublist(bufferPtr, bufferPtr + 3), [7, 8, 9]);
+
+          final symlinkTarget = utf8.encode('assets');
+          final symlinkPath = utf8.encode('asset-link');
+          bytes.setAll(symlinkTargetPtr, symlinkTarget);
+          bytes.setAll(symlinkPathPtr, symlinkPath);
+          expect(
+            pathSymlink.ref([
+              symlinkTargetPtr,
+              symlinkTarget.length,
+              3,
+              symlinkPathPtr,
+              symlinkPath.length,
+            ]),
+            0,
+          );
+
+          final linkedNestedPath = utf8.encode('asset-link/doom1.wad');
+          bytes.setAll(pathPtr, linkedNestedPath);
+          expect(
+            pathOpen.ref([
+              3,
+              _lookupflagSymlinkFollow,
+              pathPtr,
+              linkedNestedPath.length,
+              0,
+              _rightsAll,
+              _rightsAll,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final linkedFileFd = data.getUint32(openedFdPtr, Endian.little);
+          bytes.fillRange(bufferPtr, bufferPtr + 3, 0);
+          expect(fdRead.ref([linkedFileFd, iovPtr, 1, nreadPtr]), 0);
+          expect(data.getUint32(nreadPtr, Endian.little), 3);
+          expect(bytes.sublist(bufferPtr, bufferPtr + 3), [7, 8, 9]);
+          expect(
+            pathFilestatGet.ref([
+              3,
+              _lookupflagSymlinkFollow,
+              pathPtr,
+              linkedNestedPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(
+            bytes[filestatPtr + _filestatFiletypeOffset],
+            _filetypeRegularFile,
+          );
+          expect(_getUint64Le(data, filestatPtr + _filestatSizeOffset), 3);
         },
       );
 
@@ -6929,6 +6992,9 @@ void main() {
           expect(data.getUint32(openedFdPtr, Endian.little), 0xdeadbeef);
 
           expect(openPath('dir/nested/file\u0000'), _errnoInval);
+          expect(data.getUint32(openedFdPtr, Endian.little), 0xdeadbeef);
+
+          expect(openPath('missing/nested/file'), _errnoNoent);
           expect(data.getUint32(openedFdPtr, Endian.little), 0xdeadbeef);
 
           expect(openPath('dir/nested/file/'), _errnoNotdir);
