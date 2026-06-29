@@ -130,7 +130,7 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
-    test('rejects unsupported scheduler-dependent canonical definitions', () {
+    test('separates unsupported definitions from adapter requirements', () {
       final host = WASIComponentCanonicalHost();
 
       expect(
@@ -159,7 +159,7 @@ void main() {
             kind: WasmComponentCanonicalKind.lower,
           ),
         ),
-        throwsUnsupportedError,
+        throwsA(isA<WASIComponentCanonicalHostAdapterException>()),
       );
     });
 
@@ -204,13 +204,9 @@ void main() {
 
       final unsupported = host.unsupportedCanonicalDefinitions(definitions);
 
-      expect(unsupported, hasLength(2));
-      expect(unsupported.map((definition) => definition.canonicalIndex), [
-        1,
-        2,
-      ]);
+      expect(unsupported, hasLength(1));
+      expect(unsupported.map((definition) => definition.canonicalIndex), [2]);
       expect(unsupported.map((definition) => definition.kind), [
-        WasmComponentCanonicalKind.lower,
         WasmComponentCanonicalKind.threadSuspend,
       ]);
       expect(
@@ -222,24 +218,18 @@ void main() {
                   (definition) => definition.canonicalIndex,
                 ),
                 'canonical indexes',
-                [1, 2],
+                [2],
               )
               .having(
                 (error) =>
                     error.definitions.map((definition) => definition.kind),
                 'canonical kinds',
-                [
-                  WasmComponentCanonicalKind.lower,
-                  WasmComponentCanonicalKind.threadSuspend,
-                ],
+                [WasmComponentCanonicalKind.threadSuspend],
               )
               .having(
                 (error) => error.toString(),
                 'message',
-                allOf(
-                  contains('canonical[1].lower'),
-                  contains('canonical[2].threadSuspend'),
-                ),
+                allOf(contains('canonical[2].threadSuspend')),
               ),
         ),
       );
@@ -265,15 +255,15 @@ void main() {
       final lower = host.canonicalKindCapability(
         WasmComponentCanonicalKind.lower,
       );
-      expect(lower.isSupported, isFalse);
+      expect(lower.isSupported, isTrue);
       expect(
         lower.area,
         WASIComponentCanonicalCapabilityArea.adapterGeneration,
       );
-      expect(lower.unsupportedReason, contains('typed core function'));
+      expect(lower.unsupportedReason, isNull);
       expect(
         host.supportsCanonicalKind(WasmComponentCanonicalKind.lower),
-        isFalse,
+        isTrue,
       );
 
       final threadSuspend = host.canonicalKindCapability(

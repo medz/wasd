@@ -179,26 +179,26 @@ void main() {
       expect(host.componentHost.table.activeCount, 0);
     });
 
-    test('keeps Preview3 host capability gaps separate from version gates', () {
-      final component = WasmComponent.decode(_canonicalMixedResourceBytes());
-      final host = WASIComponentVersionedHost(version: WASIVersion.preview3);
+    test(
+      'keeps Preview3 adapter callback requirements separate from gates',
+      () {
+        final component = WasmComponent.decode(_canonicalMixedResourceBytes());
+        final host = WASIComponentVersionedHost(version: WASIVersion.preview3);
 
-      final plan = host.prepareComponent(component, validate: false);
+        final plan = host.prepareComponent(component, validate: false);
 
-      expect(plan.canBind, isFalse);
-      expect(plan.versionErrors, isEmpty);
-      expect(plan.bindingErrors, isEmpty);
-      expect(plan.unsupportedDefinitions, hasLength(1));
-      expect(
-        plan.unsupportedDefinitions.single.kind,
-        WasmComponentCanonicalKind.lower,
-      );
-      expect(
-        () => plan.bind(),
-        throwsA(isA<WASIComponentCanonicalHostUnsupportedException>()),
-      );
-      expect(host.componentHost.table.activeCount, 0);
-    });
+        expect(plan.canBind, isFalse);
+        expect(plan.canBindWithAdapters, isFalse);
+        expect(plan.versionErrors, isEmpty);
+        expect(plan.bindingErrors, hasLength(1));
+        expect(plan.unsupportedDefinitions, isEmpty);
+        expect(
+          () => plan.bind(),
+          throwsA(isA<WASIComponentHostBindingException>()),
+        );
+        expect(host.componentHost.table.activeCount, 0);
+      },
+    );
   });
 
   group('fixed WASI component host versions', () {
@@ -1641,12 +1641,10 @@ world command {
 
       expect(component.validate(), isEmpty);
       expect(plan.canBind, isFalse);
+      expect(plan.canBindWithAdapters, isTrue);
       expect(plan.versionErrors, isEmpty);
-      expect(plan.unsupportedDefinitions, hasLength(1));
-      expect(
-        plan.unsupportedDefinitions.single.kind,
-        WasmComponentCanonicalKind.lift,
-      );
+      expect(plan.unsupportedDefinitions, isEmpty);
+      expect(plan.componentPlan.bindingErrors, isEmpty);
       expect(plan.resourceUses, hasLength(3));
       expect(plan.resourceUses.map((use) => use.path), [
         'canonical[0].param[0].owned',
@@ -1663,10 +1661,7 @@ world command {
         WASIComponentResourceRepresentation.i32,
         WASIComponentResourceRepresentation.i32,
       ]);
-      expect(
-        () => plan.bind(),
-        throwsA(isA<WASIComponentCanonicalHostUnsupportedException>()),
-      );
+      expect(() => plan.bind(), throwsStateError);
     });
   });
 }

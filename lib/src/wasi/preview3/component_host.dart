@@ -65,6 +65,10 @@ final class WASIPreview3ComponentHost {
   WASIComponentHostBinding bindComponent(
     WasmComponent component, {
     bool validate = true,
+    Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
+    Map<int, WASIComponentCanonicalAdapterCallback> componentFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
     String Function(WASIComponentResourceBinding binding)? resourceName,
     void Function(WASIComponentResourceBinding binding, Object resource)?
     onResourceDrop,
@@ -76,6 +80,8 @@ final class WASIPreview3ComponentHost {
     return versionedHost.bindComponent(
       component,
       validate: validate,
+      coreFunctions: coreFunctions,
+      componentFunctions: componentFunctions,
       resourceName: resourceName,
       onResourceDrop: onResourceDrop,
       asyncValueName: asyncValueName,

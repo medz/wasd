@@ -71,6 +71,10 @@ final class WASIComponentVersionedHost {
   WASIComponentHostBinding bindComponent(
     WasmComponent component, {
     bool validate = true,
+    Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
+    Map<int, WASIComponentCanonicalAdapterCallback> componentFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
     String Function(WASIComponentResourceBinding binding)? resourceName,
     void Function(WASIComponentResourceBinding binding, Object resource)?
     onResourceDrop,
@@ -80,6 +84,8 @@ final class WASIComponentVersionedHost {
     void Function(WASIComponentAsyncValueBinding binding)? onAsyncValueDrop,
   }) {
     return prepareComponent(component, validate: validate).bind(
+      coreFunctions: coreFunctions,
+      componentFunctions: componentFunctions,
       resourceName: resourceName,
       onResourceDrop: onResourceDrop,
       asyncValueName: asyncValueName,
@@ -213,6 +219,10 @@ final class WASIComponentVersionedBindingPlan {
   /// Whether [bind] can build a component host binding without throwing.
   bool get canBind => versionErrors.isEmpty && componentPlan.canBind;
 
+  /// Whether [bind] can build when executable adapter callbacks are supplied.
+  bool get canBindWithAdapters =>
+      versionErrors.isEmpty && componentPlan.canBindWithAdapters;
+
   /// Binds direct primitive canonical `lift`/`lower` adapter operations.
   WASIComponentCanonicalAdapterProgram bindAdapters({
     Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions =
@@ -231,6 +241,10 @@ final class WASIComponentVersionedBindingPlan {
 
   /// Defines component resources/async values and binds the canonical program.
   WASIComponentHostBinding bind({
+    Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
+    Map<int, WASIComponentCanonicalAdapterCallback> componentFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
     String Function(WASIComponentResourceBinding binding)? resourceName,
     void Function(WASIComponentResourceBinding binding, Object resource)?
     onResourceDrop,
@@ -243,6 +257,8 @@ final class WASIComponentVersionedBindingPlan {
       throw WASIComponentVersionUnsupportedException(versionErrors);
     }
     return componentPlan.bind(
+      coreFunctions: coreFunctions,
+      componentFunctions: componentFunctions,
       resourceName: resourceName,
       onResourceDrop: onResourceDrop,
       asyncValueName: asyncValueName,

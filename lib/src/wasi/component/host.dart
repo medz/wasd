@@ -48,6 +48,7 @@ final class WASIComponentHost {
     final bindingErrors = canonicalPlan.validationErrors.isEmpty
         ? _componentHostBindingErrors(
             canonicalPlan.canonicalDefinitions,
+            adapterPlans,
             asyncValueBindings,
           )
         : const <WASIComponentHostBindingError>[];
@@ -66,6 +67,10 @@ final class WASIComponentHost {
   WASIComponentHostBinding bindComponent(
     WasmComponent component, {
     bool validate = true,
+    Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
+    Map<int, WASIComponentCanonicalAdapterCallback> componentFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
     String Function(WASIComponentResourceBinding binding)? resourceName,
     void Function(WASIComponentResourceBinding binding, Object resource)?
     onResourceDrop,
@@ -75,6 +80,8 @@ final class WASIComponentHost {
     void Function(WASIComponentAsyncValueBinding binding)? onAsyncValueDrop,
   }) {
     return prepareComponent(component, validate: validate).bind(
+      coreFunctions: coreFunctions,
+      componentFunctions: componentFunctions,
       resourceName: resourceName,
       onResourceDrop: onResourceDrop,
       asyncValueName: asyncValueName,
@@ -127,6 +134,12 @@ final class WASIComponentHostBindingPlan {
   /// Whether [bind] can build a component host binding without throwing.
   bool get canBind => canonicalPlan.canBind && bindingErrors.isEmpty;
 
+  /// Whether [bind] can build when executable adapter callbacks are supplied.
+  bool get canBindWithAdapters =>
+      validationErrors.isEmpty &&
+      unsupportedDefinitions.isEmpty &&
+      bindingErrors.isEmpty;
+
   /// Binds direct primitive canonical `lift`/`lower` adapter operations.
   WASIComponentCanonicalAdapterProgram bindAdapters({
     Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions =
@@ -146,6 +159,10 @@ final class WASIComponentHostBindingPlan {
 
   /// Defines component resources and binds the canonical builtin program.
   WASIComponentHostBinding bind({
+    Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
+    Map<int, WASIComponentCanonicalAdapterCallback> componentFunctions =
+        const <int, WASIComponentCanonicalAdapterCallback>{},
     String Function(WASIComponentResourceBinding binding)? resourceName,
     void Function(WASIComponentResourceBinding binding, Object resource)?
     onResourceDrop,
@@ -165,6 +182,11 @@ final class WASIComponentHostBindingPlan {
     if (bindingErrors.isNotEmpty) {
       throw WASIComponentHostBindingException(bindingErrors);
     }
+    final adapterProgram = _host.canonicalHost.adapterHost.bindAdapterPlans(
+      adapterPlans,
+      coreFunctions: coreFunctions,
+      componentFunctions: componentFunctions,
+    );
     _host.canonicalHost.resourceHost.checkResourceBindingsAvailable(
       resourceBindings,
     );
@@ -187,7 +209,9 @@ final class WASIComponentHostBindingPlan {
       host: _host,
       resourceTypes: resourceTypes,
       asyncValueBindings: asyncValueBindings,
-      program: canonicalPlan.bind(),
+      program: canonicalPlan.bindWithAdapterOperations(
+        adapterProgram.operations,
+      ),
     );
   }
 }
@@ -265,15 +289,31 @@ final class WASIComponentHostBinding {
 
 List<WASIComponentHostBindingError> _componentHostBindingErrors(
   List<WasmComponentCanonicalDefinition> definitions,
+  List<WASIComponentCanonicalAdapterPlan> adapterPlans,
   List<WASIComponentAsyncValueBinding> asyncValueBindings,
 ) {
   final errors = <WASIComponentHostBindingError>[];
+  final adapterPlanIndexes = {
+    for (final plan in adapterPlans) plan.canonicalIndex,
+  };
   final asyncBindingsByTypeIndex = {
     for (final binding in asyncValueBindings)
       binding.componentTypeIndex: binding,
   };
   for (var index = 0; index < definitions.length; index++) {
     final definition = definitions[index];
+    if (_componentHostNeedsAdapterOperation(definition.kind) &&
+        !adapterPlanIndexes.contains(index)) {
+      errors.add(
+        WASIComponentHostBindingError(
+          canonicalIndex: index,
+          definition: definition,
+          reason:
+              'component host cannot derive an executable canonical adapter plan',
+        ),
+      );
+      continue;
+    }
     if (_componentHostNeedsAsyncValueBinding(definition.kind)) {
       final typeIndex = definition.typeIndex;
       final binding = typeIndex == null
@@ -304,6 +344,13 @@ List<WASIComponentHostBindingError> _componentHostBindingErrors(
     }
   }
   return List<WASIComponentHostBindingError>.unmodifiable(errors);
+}
+
+bool _componentHostNeedsAdapterOperation(WasmComponentCanonicalKind kind) {
+  return switch (kind) {
+    WasmComponentCanonicalKind.lift || WasmComponentCanonicalKind.lower => true,
+    _ => false,
+  };
 }
 
 bool _componentHostSupportsAsyncMemoryCopy(

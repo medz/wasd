@@ -3,7 +3,6 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/adapter_host.dart';
 import 'package:wasd/src/wasi/component/adapter_plan.dart';
-import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/string_memory.dart';
@@ -1312,9 +1311,10 @@ void main() {
       final plan = host.prepareComponent(component);
 
       expect(plan.canBind, isFalse);
+      expect(plan.canBindWithAdapters, isTrue);
       expect(plan.validationErrors, isEmpty);
       expect(plan.bindingErrors, isEmpty);
-      expect(plan.unsupportedDefinitions, hasLength(2));
+      expect(plan.unsupportedDefinitions, isEmpty);
       expect(plan.adapterPlans, hasLength(2));
 
       final program = plan.bindAdapters(
@@ -1325,10 +1325,14 @@ void main() {
       expect(program.operations, hasLength(2));
       expect(program.invoke(0, const <Object?>[]), 21);
       expect(program.invoke(1, const <Object?>[]), 22);
-      expect(
-        () => plan.bind(),
-        throwsA(isA<WASIComponentCanonicalHostUnsupportedException>()),
+      final binding = plan.bind(
+        coreFunctions: {0: (_) => 23},
+        componentFunctions: {0: (_) => 24},
       );
+      expect(binding.program.operations, hasLength(2));
+      expect(binding.program.invoke(0, const <Object?>[]), 23);
+      expect(binding.program.invoke(1, const <Object?>[]), 24);
+      expect(() => plan.bind(), throwsStateError);
     });
 
     test('binds primitive adapter programs through Preview3 only', () {
@@ -1341,7 +1345,9 @@ void main() {
       );
 
       expect(preview3Plan.canBind, isFalse);
+      expect(preview3Plan.canBindWithAdapters, isTrue);
       expect(preview3Plan.versionErrors, isEmpty);
+      expect(preview3Plan.unsupportedDefinitions, isEmpty);
       expect(preview3Plan.adapterPlans, hasLength(2));
 
       final program = preview3Plan.bindAdapters(
@@ -1351,6 +1357,12 @@ void main() {
 
       expect(program.invoke(0, const <Object?>[]), 31);
       expect(program.invoke(1, const <Object?>[]), 32);
+      final binding = preview3Plan.bind(
+        coreFunctions: {0: (_) => 33},
+        componentFunctions: {0: (_) => 34},
+      );
+      expect(binding.program.invoke(0, const <Object?>[]), 33);
+      expect(binding.program.invoke(1, const <Object?>[]), 34);
 
       final preview1Plan = WASIComponentVersionedHost(
         version: WASIVersion.preview1,

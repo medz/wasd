@@ -124,11 +124,23 @@ final class WASIComponentCanonicalHost {
   }
 
   WASIComponentCanonicalProgram _bindSupportedCanonicalDefinitions(
-    List<WasmComponentCanonicalDefinition> definitions,
-  ) {
+    List<WasmComponentCanonicalDefinition> definitions, {
+    Map<int, WASIComponentCanonicalAdapterOperation> adapterOperations =
+        const <int, WASIComponentCanonicalAdapterOperation>{},
+  }) {
     final operations = <WASIComponentCanonicalOperation>[];
-    for (final definition in definitions) {
-      operations.add(_bindSupportedCanonicalDefinition(definition));
+    for (
+      var canonicalIndex = 0;
+      canonicalIndex < definitions.length;
+      canonicalIndex++
+    ) {
+      operations.add(
+        _bindSupportedCanonicalDefinition(
+          definitions[canonicalIndex],
+          canonicalIndex: canonicalIndex,
+          adapterOperations: adapterOperations,
+        ),
+      );
     }
     return WASIComponentCanonicalProgram(
       operations: List<WASIComponentCanonicalOperation>.unmodifiable(
@@ -204,13 +216,22 @@ final class WASIComponentCanonicalHost {
         ),
       );
     }
-    return _bindSupportedCanonicalDefinition(definition);
+    return _bindSupportedCanonicalDefinition(
+      definition,
+      canonicalIndex: 0,
+      adapterOperations: const <int, WASIComponentCanonicalAdapterOperation>{},
+    );
   }
 
   WASIComponentCanonicalOperation _bindSupportedCanonicalDefinition(
-    WasmComponentCanonicalDefinition definition,
-  ) {
+    WasmComponentCanonicalDefinition definition, {
+    required int canonicalIndex,
+    required Map<int, WASIComponentCanonicalAdapterOperation> adapterOperations,
+  }) {
     switch (definition.kind) {
+      case WasmComponentCanonicalKind.lift:
+      case WasmComponentCanonicalKind.lower:
+        return _bindAdapter(definition, canonicalIndex, adapterOperations);
       case WasmComponentCanonicalKind.resourceNew:
       case WasmComponentCanonicalKind.resourceDrop:
       case WasmComponentCanonicalKind.resourceRep:
@@ -256,8 +277,6 @@ final class WASIComponentCanonicalHost {
       case WasmComponentCanonicalKind.errorContextDebugMessage:
       case WasmComponentCanonicalKind.errorContextDrop:
         return _bindErrorContext(definition);
-      case WasmComponentCanonicalKind.lift:
-      case WasmComponentCanonicalKind.lower:
       case WasmComponentCanonicalKind.threadNewIndirect:
       case WasmComponentCanonicalKind.threadSwitchTo:
       case WasmComponentCanonicalKind.threadSuspend:
@@ -269,6 +288,34 @@ final class WASIComponentCanonicalHost {
           'Unsupported canonical ${definition.kind.name} reached binding after preflight.',
         );
     }
+  }
+
+  WASIComponentCanonicalOperation _bindAdapter(
+    WasmComponentCanonicalDefinition definition,
+    int canonicalIndex,
+    Map<int, WASIComponentCanonicalAdapterOperation> adapterOperations,
+  ) {
+    final operation = adapterOperations[canonicalIndex];
+    if (operation == null) {
+      throw WASIComponentCanonicalHostAdapterException(
+        canonicalIndex: canonicalIndex,
+        definition: definition,
+        reason: 'missing executable canonical adapter operation',
+      );
+    }
+    if (operation.kind != definition.kind) {
+      throw WASIComponentCanonicalHostAdapterException(
+        canonicalIndex: canonicalIndex,
+        definition: definition,
+        reason:
+            'adapter operation kind ${operation.kind.name} does not match '
+            '${definition.kind.name}',
+      );
+    }
+    return WASIComponentCanonicalOperation._(
+      kind: definition.kind,
+      invoke: operation.invoke,
+    );
   }
 
   WASIComponentCanonicalOperation _bindResource(
@@ -404,10 +451,25 @@ final class WASIComponentCanonicalBindingPlan {
 
   /// Whether [bind] can build a canonical program without throwing.
   bool get canBind =>
-      validationErrors.isEmpty && unsupportedDefinitions.isEmpty;
+      validationErrors.isEmpty &&
+      unsupportedDefinitions.isEmpty &&
+      !requiresAdapterOperations;
+
+  /// Whether this plan needs executable `lift`/`lower` adapter operations.
+  bool get requiresAdapterOperations =>
+      canonicalDefinitions.any(_isCanonicalAdapterDefinition);
 
   /// Builds the canonical program after validation and capability preflight.
   WASIComponentCanonicalProgram bind() {
+    return bindWithAdapterOperations(
+      const <WASIComponentCanonicalAdapterOperation>[],
+    );
+  }
+
+  /// Builds the canonical program with executable `lift`/`lower` adapters.
+  WASIComponentCanonicalProgram bindWithAdapterOperations(
+    Iterable<WASIComponentCanonicalAdapterOperation> adapterOperations,
+  ) {
     if (validationErrors.isNotEmpty) {
       throw WASIComponentCanonicalHostValidationException(validationErrors);
     }
@@ -416,7 +478,39 @@ final class WASIComponentCanonicalBindingPlan {
         unsupportedDefinitions,
       );
     }
-    return _host._bindSupportedCanonicalDefinitions(canonicalDefinitions);
+    final adaptersByCanonicalIndex =
+        <int, WASIComponentCanonicalAdapterOperation>{
+          for (final operation in adapterOperations)
+            operation.canonicalIndex: operation,
+        };
+    return _host._bindSupportedCanonicalDefinitions(
+      canonicalDefinitions,
+      adapterOperations: Map.unmodifiable(adaptersByCanonicalIndex),
+    );
+  }
+}
+
+/// Thrown when canonical `lift`/`lower` lacks an executable adapter operation.
+final class WASIComponentCanonicalHostAdapterException implements Exception {
+  /// Creates an adapter binding exception.
+  const WASIComponentCanonicalHostAdapterException({
+    required this.canonicalIndex,
+    required this.definition,
+    required this.reason,
+  });
+
+  /// Canonical definition index in the decoded component.
+  final int canonicalIndex;
+
+  /// Canonical definition that required an adapter operation.
+  final WasmComponentCanonicalDefinition definition;
+
+  /// Why this adapter could not be bound.
+  final String reason;
+
+  @override
+  String toString() {
+    return 'canonical[$canonicalIndex].${definition.kind.name}: $reason';
   }
 }
 
@@ -596,11 +690,10 @@ String? _unsupportedCanonicalKindReason(WasmComponentCanonicalKind kind) {
     case WasmComponentCanonicalKind.threadAvailableParallelism:
     case WasmComponentCanonicalKind.errorContextNew:
     case WasmComponentCanonicalKind.errorContextDebugMessage:
-    case WasmComponentCanonicalKind.errorContextDrop:
-      return null;
     case WasmComponentCanonicalKind.lift:
     case WasmComponentCanonicalKind.lower:
-      return 'canonical lift/lower require typed core function adapter generation';
+    case WasmComponentCanonicalKind.errorContextDrop:
+      return null;
     case WasmComponentCanonicalKind.threadNewIndirect:
     case WasmComponentCanonicalKind.threadSwitchTo:
     case WasmComponentCanonicalKind.threadSuspend:
@@ -681,6 +774,15 @@ String _unsupportedCanonicalDefinitionMessage(
   String reason,
 ) {
   return 'canonical[$canonicalIndex].${kind.name}: $reason';
+}
+
+bool _isCanonicalAdapterDefinition(
+  WasmComponentCanonicalDefinition definition,
+) {
+  return switch (definition.kind) {
+    WasmComponentCanonicalKind.lift || WasmComponentCanonicalKind.lower => true,
+    _ => false,
+  };
 }
 
 /// Bound canonical program preserving component canonical index order.

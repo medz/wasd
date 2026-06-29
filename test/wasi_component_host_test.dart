@@ -57,11 +57,13 @@ void main() {
 
       expect(plan.validationErrors, isEmpty);
       expect(plan.resourceBindings, hasLength(1));
-      expect(plan.unsupportedDefinitions, hasLength(1));
+      expect(plan.unsupportedDefinitions, isEmpty);
+      expect(plan.bindingErrors, hasLength(1));
       expect(plan.canBind, isFalse);
+      expect(plan.canBindWithAdapters, isFalse);
       expect(
         () => plan.bind(),
-        throwsA(isA<WASIComponentCanonicalHostUnsupportedException>()),
+        throwsA(isA<WASIComponentHostBindingException>()),
       );
       expect(
         () => host.canonicalHost.resourceHost.defineResourceType<int>(
