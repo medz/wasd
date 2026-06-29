@@ -748,11 +748,23 @@ final class Preview1VirtualFileSystem {
 
     final oldFile = _filesByGuestPath[oldNormalized];
     if (oldFile != null) {
+      if (oldNormalized == newNormalized) {
+        return Preview1PathMutationResult.success;
+      }
       if (_virtualDirectoryPaths.contains(newNormalized)) {
         return Preview1PathMutationResult.isDirectory;
       }
-      if (_symlinksByGuestPath.containsKey(newNormalized)) {
-        return Preview1PathMutationResult.exists;
+      final replacedFile = _filesByGuestPath[newNormalized];
+      if (identical(replacedFile, oldFile)) {
+        return Preview1PathMutationResult.success;
+      }
+      if (replacedFile != null) {
+        _filesByGuestPath.remove(newNormalized);
+        replacedFile.metadata.releaseLink();
+      }
+      final replacedSymlink = _symlinksByGuestPath.remove(newNormalized);
+      if (replacedSymlink != null) {
+        replacedSymlink.metadata.releaseLink();
       }
       _filesByGuestPath.remove(oldNormalized);
       _filesByGuestPath[newNormalized] = oldFile;
@@ -767,10 +779,23 @@ final class Preview1VirtualFileSystem {
 
     final oldSymlink = _symlinksByGuestPath[oldNormalized];
     if (oldSymlink != null) {
-      if (_filesByGuestPath.containsKey(newNormalized) ||
-          _symlinksByGuestPath.containsKey(newNormalized) ||
-          _virtualDirectoryPaths.contains(newNormalized)) {
-        return Preview1PathMutationResult.exists;
+      if (oldNormalized == newNormalized) {
+        return Preview1PathMutationResult.success;
+      }
+      if (_virtualDirectoryPaths.contains(newNormalized)) {
+        return Preview1PathMutationResult.isDirectory;
+      }
+      final replacedSymlink = _symlinksByGuestPath[newNormalized];
+      if (identical(replacedSymlink, oldSymlink)) {
+        return Preview1PathMutationResult.success;
+      }
+      final replacedFile = _filesByGuestPath.remove(newNormalized);
+      if (replacedFile != null) {
+        replacedFile.metadata.releaseLink();
+      }
+      if (replacedSymlink != null) {
+        _symlinksByGuestPath.remove(newNormalized);
+        replacedSymlink.metadata.releaseLink();
       }
       _symlinksByGuestPath.remove(oldNormalized);
       _symlinksByGuestPath[newNormalized] = oldSymlink;

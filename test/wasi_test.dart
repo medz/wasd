@@ -7723,6 +7723,242 @@ void main() {
         },
       );
 
+      test('path_rename replaces virtual file and symlink entries', () async {
+        final fileWasi = WASI(
+          preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
+          files: {
+            '/sandbox/file-source.txt': Uint8List.fromList(
+              utf8.encode('source'),
+            ),
+            '/sandbox/file-target.txt': Uint8List.fromList(
+              utf8.encode('target'),
+            ),
+            '/sandbox/file-over-link.txt': Uint8List.fromList(
+              utf8.encode('replacement'),
+            ),
+            '/sandbox/link-target.txt': Uint8List.fromList(
+              utf8.encode('linked'),
+            ),
+            '/sandbox/symlink-victim.txt': Uint8List.fromList(
+              utf8.encode('victim'),
+            ),
+          },
+        );
+        final fileResult = await WebAssembly.instantiate(
+          _wasiBytes.buffer,
+          fileWasi.imports,
+        );
+        final fileInstance = fileResult.instance;
+        final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+        final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+        final pathRename = preview1['path_rename'] as FunctionImportExportValue;
+        final pathLink = preview1['path_link'] as FunctionImportExportValue;
+        final pathSymlink =
+            preview1['path_symlink'] as FunctionImportExportValue;
+        final pathReadlink =
+            preview1['path_readlink'] as FunctionImportExportValue;
+        final pathFilestatGet =
+            preview1['path_filestat_get'] as FunctionImportExportValue;
+        final fdFilestatGet =
+            preview1['fd_filestat_get'] as FunctionImportExportValue;
+        final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+        final memory =
+            (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+        fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+        final bytes = Uint8List.view(memory.buffer);
+        final data = ByteData.view(memory.buffer);
+        const oldPathPtr = 4608;
+        const newPathPtr = 4672;
+        const openedFdPtr = 4736;
+        const filestatPtr = 4752;
+        const iovPtr = 4824;
+        const readBufferPtr = 4864;
+        const readCountPtr = 4928;
+        const readlinkBufferPtr = 4944;
+        const readlinkUsedPtr = 5008;
+
+        int writePath(int ptr, String path) {
+          final encoded = utf8.encode(path);
+          bytes.setAll(ptr, encoded);
+          return encoded.length;
+        }
+
+        int renamePath(String oldPath, String newPath) {
+          final oldPathLen = writePath(oldPathPtr, oldPath);
+          final newPathLen = writePath(newPathPtr, newPath);
+          return pathRename.ref([
+                3,
+                oldPathPtr,
+                oldPathLen,
+                3,
+                newPathPtr,
+                newPathLen,
+              ])
+              as int;
+        }
+
+        int openFile(String path) {
+          final pathLen = writePath(oldPathPtr, path);
+          final errno =
+              pathOpen.ref([
+                    3,
+                    0,
+                    oldPathPtr,
+                    pathLen,
+                    0,
+                    _rightsAll,
+                    _rightsAll,
+                    0,
+                    openedFdPtr,
+                  ])
+                  as int;
+          expect(errno, 0);
+          return data.getUint32(openedFdPtr, Endian.little);
+        }
+
+        String readFd(int fd, int length) {
+          data.setUint32(iovPtr, readBufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, length, Endian.little);
+          expect(fdPread.ref([fd, iovPtr, 1, 0, readCountPtr]), 0);
+          final count = data.getUint32(readCountPtr, Endian.little);
+          expect(count, length);
+          return utf8.decode(
+            bytes.sublist(readBufferPtr, readBufferPtr + count),
+          );
+        }
+
+        void expectPathStat(
+          String path, {
+          int lookupFlags = 0,
+          int? filetype,
+          int? linkCount,
+          int? size,
+        }) {
+          final pathLen = writePath(oldPathPtr, path);
+          final errno =
+              pathFilestatGet.ref([
+                    3,
+                    lookupFlags,
+                    oldPathPtr,
+                    pathLen,
+                    filestatPtr,
+                  ])
+                  as int;
+          expect(errno, 0);
+          if (filetype != null) {
+            expect(bytes[filestatPtr + _filestatFiletypeOffset], filetype);
+          }
+          if (linkCount != null) {
+            expect(
+              _getUint64Le(data, filestatPtr + _filestatLinkCountOffset),
+              linkCount,
+            );
+          }
+          if (size != null) {
+            expect(_getUint64Le(data, filestatPtr + _filestatSizeOffset), size);
+          }
+        }
+
+        int fdLinkCount(int fd) {
+          final errno = fdFilestatGet.ref([fd, filestatPtr]) as int;
+          expect(errno, 0);
+          return _getUint64Le(data, filestatPtr + _filestatLinkCountOffset);
+        }
+
+        int symlinkPath(String target, String linkPath) {
+          final targetLen = writePath(oldPathPtr, target);
+          final linkLen = writePath(newPathPtr, linkPath);
+          return pathSymlink.ref([
+                oldPathPtr,
+                targetLen,
+                3,
+                newPathPtr,
+                linkLen,
+              ])
+              as int;
+        }
+
+        String readlinkPath(String path) {
+          final pathLen = writePath(oldPathPtr, path);
+          final errno =
+              pathReadlink.ref([
+                    3,
+                    oldPathPtr,
+                    pathLen,
+                    readlinkBufferPtr,
+                    64,
+                    readlinkUsedPtr,
+                  ])
+                  as int;
+          expect(errno, 0);
+          final used = data.getUint32(readlinkUsedPtr, Endian.little);
+          return utf8.decode(
+            bytes.sublist(readlinkBufferPtr, readlinkBufferPtr + used),
+          );
+        }
+
+        final fileTargetFd = openFile('file-target.txt');
+        expect(renamePath('file-source.txt', 'file-target.txt'), 0);
+        expectPathStat(
+          'file-target.txt',
+          filetype: _filetypeRegularFile,
+          size: 'source'.length,
+          linkCount: 1,
+        );
+        expect(fdLinkCount(fileTargetFd), 0);
+        expect(readFd(fileTargetFd, 'target'.length), 'target');
+
+        expect(symlinkPath('link-target.txt', 'replace-link.txt'), 0);
+        final hardLinkPathLen = writePath(newPathPtr, 'spare-link.txt');
+        final replaceLinkPathLen = writePath(oldPathPtr, 'replace-link.txt');
+        expect(
+          pathLink.ref([
+            3,
+            0,
+            oldPathPtr,
+            replaceLinkPathLen,
+            3,
+            newPathPtr,
+            hardLinkPathLen,
+          ]),
+          0,
+        );
+        expectPathStat('replace-link.txt', linkCount: 2);
+        expect(renamePath('file-over-link.txt', 'replace-link.txt'), 0);
+        expectPathStat(
+          'replace-link.txt',
+          filetype: _filetypeRegularFile,
+          size: 'replacement'.length,
+        );
+        expectPathStat('spare-link.txt', linkCount: 1);
+        expect(readlinkPath('spare-link.txt'), 'link-target.txt');
+        expect(
+          pathReadlink.ref([
+            3,
+            oldPathPtr,
+            writePath(oldPathPtr, 'replace-link.txt'),
+            readlinkBufferPtr,
+            64,
+            readlinkUsedPtr,
+          ]),
+          _errnoInval,
+        );
+
+        final symlinkVictimFd = openFile('symlink-victim.txt');
+        expect(symlinkPath('link-target.txt', 'moving-link.txt'), 0);
+        expect(renamePath('moving-link.txt', 'symlink-victim.txt'), 0);
+        expectPathStat('symlink-victim.txt', filetype: _filetypeSymbolicLink);
+        expectPathStat(
+          'symlink-victim.txt',
+          lookupFlags: _lookupflagSymlinkFollow,
+          filetype: _filetypeRegularFile,
+        );
+        expect(readlinkPath('symlink-victim.txt'), 'link-target.txt');
+        expect(fdLinkCount(symlinkVictimFd), 0);
+        expect(readFd(symlinkVictimFd, 'victim'.length), 'victim');
+      });
+
       test('path mutation preserves trailing slash errors', () async {
         final fileWasi = WASI(
           preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
