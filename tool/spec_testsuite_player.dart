@@ -273,8 +273,10 @@ final class _ScriptExecutionState {
         case 'assert_invalid':
         case 'assert_unlinkable':
         case 'assert_uninstantiable':
+        case 'assert_invalid_custom':
           return _handleAssertModuleFails(command);
         case 'assert_malformed':
+        case 'assert_malformed_custom':
           return _handleAssertMalformed(command);
         default:
           return _CommandResult.skip(
