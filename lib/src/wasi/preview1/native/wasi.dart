@@ -1451,14 +1451,19 @@ class WASI implements wasi_iface.WASI {
             targetPtr + targetLength > bytes.length) {
           return _errnoInval;
         }
-        final decodedTarget = utf8.decode(
-          bytes.sublist(targetPtr, targetPtr + targetLength),
-          allowMalformed: true,
+        final targetInfo = wasi_vfs.resolveSymlinkTargetInfo(
+          bytes: bytes,
+          targetPtr: targetPtr,
+          targetLen: targetLength,
         );
-        final nul = decodedTarget.indexOf('\u0000');
-        final target = nul == -1
-            ? decodedTarget
-            : decodedTarget.substring(0, nul);
+        if (targetInfo == null) {
+          return _errnoInval;
+        }
+        final targetErrno = wasi_vfs.errnoForSymlinkTargetInfo(targetInfo);
+        if (targetErrno != null) {
+          return targetErrno;
+        }
+        final target = targetInfo.target;
 
         final linkPath = _resolvePath(
           dirFd: _asInt(args[2]),

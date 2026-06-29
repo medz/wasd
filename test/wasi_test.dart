@@ -8374,6 +8374,10 @@ void main() {
           final linkPath = utf8.encode('link.txt');
           final hardLinkPath = utf8.encode('hard.txt');
           final followHardLinkPath = utf8.encode('target-hard.txt');
+          final nulTargetPath = utf8.encode('target.txt\u0000ignored');
+          final nulLinkPath = utf8.encode('nul-link.txt');
+          final absoluteTargetPath = utf8.encode('/target.txt');
+          final absoluteLinkPath = utf8.encode('absolute-link.txt');
           const targetPathPtr = 3312;
           const linkPathPtr = 3344;
           const readlinkBufferPtr = 3376;
@@ -8385,11 +8389,61 @@ void main() {
           const readCountPtr = 3584;
           const hardLinkPathPtr = 3616;
           const followHardLinkPathPtr = 3648;
+          const nulTargetPathPtr = 3680;
+          const nulLinkPathPtr = 3712;
+          const absoluteTargetPathPtr = 3744;
+          const absoluteLinkPathPtr = 3776;
 
           bytes.setAll(targetPathPtr, targetPath);
           bytes.setAll(linkPathPtr, linkPath);
           bytes.setAll(hardLinkPathPtr, hardLinkPath);
           bytes.setAll(followHardLinkPathPtr, followHardLinkPath);
+          bytes.setAll(nulTargetPathPtr, nulTargetPath);
+          bytes.setAll(nulLinkPathPtr, nulLinkPath);
+          bytes.setAll(absoluteTargetPathPtr, absoluteTargetPath);
+          bytes.setAll(absoluteLinkPathPtr, absoluteLinkPath);
+          expect(
+            pathSymlink.ref([
+              nulTargetPathPtr,
+              nulTargetPath.length,
+              3,
+              nulLinkPathPtr,
+              nulLinkPath.length,
+            ]),
+            _errnoInval,
+          );
+          expect(
+            pathReadlink.ref([
+              3,
+              nulLinkPathPtr,
+              nulLinkPath.length,
+              readlinkBufferPtr,
+              32,
+              readlinkUsedPtr,
+            ]),
+            _errnoNoent,
+          );
+          expect(
+            pathSymlink.ref([
+              absoluteTargetPathPtr,
+              absoluteTargetPath.length,
+              3,
+              absoluteLinkPathPtr,
+              absoluteLinkPath.length,
+            ]),
+            _errnoNotcapable,
+          );
+          expect(
+            pathReadlink.ref([
+              3,
+              absoluteLinkPathPtr,
+              absoluteLinkPath.length,
+              readlinkBufferPtr,
+              32,
+              readlinkUsedPtr,
+            ]),
+            _errnoNoent,
+          );
           expect(
             pathSymlink.ref([
               targetPathPtr,

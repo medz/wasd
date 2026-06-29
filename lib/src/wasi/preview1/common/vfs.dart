@@ -2228,6 +2228,18 @@ final class Preview1ResolvedGuestPathInfo {
   final bool escapesPreopen;
 }
 
+final class Preview1SymlinkTargetInfo {
+  const Preview1SymlinkTargetInfo({
+    required this.target,
+    required this.containsNul,
+    required this.isAbsolute,
+  });
+
+  final String target;
+  final bool containsNul;
+  final bool isAbsolute;
+}
+
 Preview1ResolvedGuestPathInfo? resolveGuestPathInfo({
   required Uint8List bytes,
   required String preopenPath,
@@ -2250,6 +2262,35 @@ Preview1ResolvedGuestPathInfo? resolveGuestPathInfo({
     isAbsolute: isAbsoluteGuestPath(normalizedPath),
     escapesPreopen: guestPathEscapesPreopen(normalizedPath),
   );
+}
+
+Preview1SymlinkTargetInfo? resolveSymlinkTargetInfo({
+  required Uint8List bytes,
+  required int targetPtr,
+  required int targetLen,
+}) {
+  if (targetPtr < 0 || targetLen < 0 || targetPtr + targetLen > bytes.length) {
+    return null;
+  }
+  final decoded = utf8.decode(
+    bytes.sublist(targetPtr, targetPtr + targetLen),
+    allowMalformed: true,
+  );
+  return Preview1SymlinkTargetInfo(
+    target: decoded,
+    containsNul: decoded.contains('\u0000'),
+    isAbsolute: isAbsoluteGuestPath(decoded),
+  );
+}
+
+int? errnoForSymlinkTargetInfo(Preview1SymlinkTargetInfo info) {
+  if (info.containsNul) {
+    return errnoInval;
+  }
+  if (info.isAbsolute) {
+    return errnoNotcapable;
+  }
+  return null;
 }
 
 String? resolveGuestPath({
