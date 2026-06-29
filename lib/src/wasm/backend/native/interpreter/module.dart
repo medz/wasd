@@ -256,10 +256,15 @@ final class WasmLocalDecl {
 }
 
 final class WasmCodeBody {
-  const WasmCodeBody({required this.locals, required this.instructions});
+  const WasmCodeBody({
+    required this.locals,
+    required this.instructions,
+    this.instructionStartOffset = 0,
+  });
 
   final List<WasmLocalDecl> locals;
   final Uint8List instructions;
+  final int instructionStartOffset;
 }
 
 final class WasmGlobalDef {
@@ -362,6 +367,7 @@ final class WasmModule {
     required this.importedMemoryCount,
     required this.importedGlobalCount,
     required this.importedTagCount,
+    this.branchHintCustomSections = const <Uint8List>[],
   });
 
   final List<WasmFunctionType> types;
@@ -382,6 +388,7 @@ final class WasmModule {
   final int importedMemoryCount;
   final int importedGlobalCount;
   final int importedTagCount;
+  final List<Uint8List> branchHintCustomSections;
 
   static int encodeElementGlobalRef(int globalIndex) {
     if (globalIndex < 0) {
@@ -439,6 +446,7 @@ final class WasmModule {
     final memories = <WasmMemoryType>[];
     final elements = <WasmElementSegment>[];
     final dataSegments = <WasmDataSegment>[];
+    final branchHintCustomSections = <Uint8List>[];
 
     var importedFunctionCount = 0;
     var importedTableCount = 0;
@@ -468,7 +476,10 @@ final class WasmModule {
 
       switch (sectionId) {
         case 0:
-          _parseCustomSection(sectionReader);
+          final customSection = _parseCustomSection(sectionReader);
+          if (customSection.name == _branchHintCustomSectionName) {
+            branchHintCustomSections.add(customSection.payload);
+          }
         case 1:
           _parseTypeSection(sectionReader, types);
         case 2:
@@ -549,14 +560,20 @@ final class WasmModule {
       importedMemoryCount: importedMemoryCount,
       importedGlobalCount: importedGlobalCount,
       importedTagCount: importedTagCount,
+      branchHintCustomSections: List.unmodifiable(branchHintCustomSections),
     );
   }
 
-  static void _parseCustomSection(ByteReader reader) {
+  static const String _branchHintCustomSectionName =
+      'metadata.code.branch_hint';
+
+  static ({String name, Uint8List payload}) _parseCustomSection(
+    ByteReader reader,
+  ) {
     // Custom section payload begins with a name string. Decoding the name
     // ensures malformed LEB lengths are rejected instead of silently ignored.
-    reader.readName();
-    reader.readRemainingBytes();
+    final name = reader.readName();
+    return (name: name, payload: reader.readRemainingBytes());
   }
 
   static void _parseTypeSection(
@@ -1546,6 +1563,7 @@ final class WasmModule {
         );
       }
 
+      final instructionStartOffset = bodyReader.offset;
       final instructions = bodyReader.readRemainingBytes();
       if (instructions.isEmpty || instructions.last != Opcodes.end) {
         throw const FormatException(
@@ -1553,7 +1571,13 @@ final class WasmModule {
         );
       }
 
-      sink.add(WasmCodeBody(locals: locals, instructions: instructions));
+      sink.add(
+        WasmCodeBody(
+          locals: locals,
+          instructions: instructions,
+          instructionStartOffset: instructionStartOffset,
+        ),
+      );
     }
   }
 

@@ -11,6 +11,97 @@ final _loopBranchBytes = loopBranchModuleBytes();
 final _importedAndLocalGlobalBytes = importedAndLocalGlobalModuleBytes();
 final _loopBackWithoutFunctionResultBytes =
     loopBackWithoutFunctionResultModuleBytes();
+final _invalidBranchHintCustomSectionBytes = Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x05,
+  0x01,
+  0x60,
+  0x01,
+  0x7f,
+  0x00,
+  0x03,
+  0x02,
+  0x01,
+  0x00,
+  0x05,
+  0x04,
+  0x01,
+  0x01,
+  0x01,
+  0x01,
+  0x00,
+  0x20,
+  0x19,
+  0x6d,
+  0x65,
+  0x74,
+  0x61,
+  0x64,
+  0x61,
+  0x74,
+  0x61,
+  0x2e,
+  0x63,
+  0x6f,
+  0x64,
+  0x65,
+  0x2e,
+  0x62,
+  0x72,
+  0x61,
+  0x6e,
+  0x63,
+  0x68,
+  0x5f,
+  0x68,
+  0x69,
+  0x6e,
+  0x74,
+  0x01,
+  0x00,
+  0x01,
+  0x07,
+  0x01,
+  0x01,
+  0x0a,
+  0x0c,
+  0x01,
+  0x0a,
+  0x01,
+  0x01,
+  0x7f,
+  0x20,
+  0x01,
+  0x20,
+  0x00,
+  0x46,
+  0x0f,
+  0x0b,
+  0x00,
+  0x0e,
+  0x04,
+  0x6e,
+  0x61,
+  0x6d,
+  0x65,
+  0x01,
+  0x07,
+  0x01,
+  0x00,
+  0x04,
+  0x74,
+  0x65,
+  0x73,
+  0x74,
+]);
 
 final _invalidBytes = Uint8List.fromList([0x00, 0x00, 0x00, 0x00]);
 
@@ -22,6 +113,13 @@ void main() {
 
     test('returns false for invalid bytes', () {
       expect(WebAssembly.validate(_invalidBytes.buffer), isFalse);
+    });
+
+    test('rejects invalid branch hint custom section targets', () {
+      expect(
+        WebAssembly.validate(_invalidBranchHintCustomSectionBytes.buffer),
+        isFalse,
+      );
     });
   });
 
@@ -41,6 +139,13 @@ void main() {
     test('rejects loop back-edge without enclosing function result', () async {
       await expectLater(
         WebAssembly.compile(_loopBackWithoutFunctionResultBytes.buffer),
+        throwsA(isA<CompileError>()),
+      );
+    });
+
+    test('rejects invalid branch hint custom section targets', () async {
+      await expectLater(
+        WebAssembly.compile(_invalidBranchHintCustomSectionBytes.buffer),
         throwsA(isA<CompileError>()),
       );
     });

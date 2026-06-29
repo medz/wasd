@@ -206,6 +206,88 @@ printf '{"commands":[]}' > "\$output"
   });
 
   test(
+    'core runner validates custom malformed and invalid assertions',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'wasd_spec_custom_assertions_',
+      );
+      addTearDown(() async {
+        if (await temp.exists()) {
+          await temp.delete(recursive: true);
+        }
+      });
+
+      await File('${temp.path}/custom.wast').writeAsString('(module)');
+
+      final fakeWast2Json = File('${temp.path}/fake_wast2json.sh');
+      await fakeWast2Json.writeAsString('''
+#!/bin/sh
+output=""
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
+    -o) shift; output="\$1" ;;
+  esac
+  shift
+done
+outdir="\$(dirname "\$output")"
+mkdir -p "\$outdir"
+printf '(module (@custom))' > "\$outdir/bad-custom.wat"
+printf '\\x00asm\\x01\\x00\\x00\\x00\\x01\\x02\\x01\\x00' > "\$outdir/bad-custom.wasm"
+cat > "\$output" <<'JSON'
+{
+  "commands": [
+    {
+      "type": "assert_malformed_custom",
+      "line": 1,
+      "filename": "bad-custom.wat",
+      "module_type": "text",
+      "text": "@custom annotation: missing section name"
+    },
+    {
+      "type": "assert_invalid_custom",
+      "line": 2,
+      "filename": "bad-custom.wasm",
+      "module_type": "binary",
+      "text": "@metadata.code.branch_hint annotation: invalid target"
+    }
+  ]
+}
+JSON
+''');
+      await Process.run('chmod', ['+x', fakeWast2Json.path]);
+
+      final fakeWat2Wasm = File('${temp.path}/wat2wasm');
+      await fakeWat2Wasm.writeAsString('''
+#!/bin/sh
+exit 1
+''');
+      await Process.run('chmod', ['+x', fakeWat2Wasm.path]);
+
+      final jsonPath = '${temp.path}/result.json';
+      final result = await Process.run(Platform.resolvedExecutable, [
+        'run',
+        'tool/spec_testsuite_runner.dart',
+        '--suite=core',
+        '--testsuite-dir=${temp.path}',
+        '--wast2json=${fakeWast2Json.path}',
+        '--no-conversion-cache',
+        '--output-json=$jsonPath',
+        '--output-md=${temp.path}/result.md',
+      ]);
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      final payload =
+          json.decode(await File(jsonPath).readAsString())
+              as Map<String, Object?>;
+      final totals = payload['totals'] as Map<String, Object?>;
+      expect(totals['files_total'], 1);
+      expect(totals['files_failed'], 0);
+      expect(totals['commands_skipped'], 0);
+      expect(totals['commands_passed'], 2);
+    },
+  );
+
+  test(
     'spec runner uses the portable threads check for JS proposals',
     () async {
       final source = await File('tool/spec_runner.dart').readAsString();

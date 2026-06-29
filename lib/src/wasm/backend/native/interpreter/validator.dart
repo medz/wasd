@@ -62,19 +62,138 @@ abstract final class WasmValidator {
     _validateTableInitializers(module);
     _validateElements(module);
     _validateDataSegments(module);
-    final collectedPredecodedFunctions = predecodedFunctions == null
-        ? null
-        : <PredecodedFunction>[];
+    final collectedPredecodedFunctions =
+        predecodedFunctions != null ||
+            module.branchHintCustomSections.isNotEmpty
+        ? <PredecodedFunction>[]
+        : null;
     _validateFunctions(
       module,
       features: features,
       predecodedFunctions: collectedPredecodedFunctions,
     );
+    if (module.branchHintCustomSections.isNotEmpty) {
+      _validateBranchHintCustomSections(module, collectedPredecodedFunctions!);
+    }
     if (predecodedFunctions != null) {
       predecodedFunctions
         ..clear()
         ..addAll(collectedPredecodedFunctions!);
     }
+  }
+
+  static void _validateBranchHintCustomSections(
+    WasmModule module,
+    List<PredecodedFunction> predecodedFunctions,
+  ) {
+    final hintedOffsetsByFunction = <int, Set<int>>{};
+    for (final payload in module.branchHintCustomSections) {
+      final reader = ByteReader(payload);
+      final functionCount = reader.readVarUint32();
+      for (var i = 0; i < functionCount; i++) {
+        final functionIndex = reader.readVarUint32();
+        final codeIndex = functionIndex - module.importedFunctionCount;
+        if (codeIndex < 0 || codeIndex >= module.codes.length) {
+          throw FormatException(
+            'Invalid branch hint function index: $functionIndex.',
+          );
+        }
+
+        final hintedOffsets = hintedOffsetsByFunction.putIfAbsent(
+          functionIndex,
+          () => <int>{},
+        );
+        final hintCount = reader.readVarUint32();
+        for (var j = 0; j < hintCount; j++) {
+          final bodyOffset = reader.readVarUint32();
+          final hintLength = reader.readVarUint32();
+          if (hintLength != 1) {
+            throw FormatException(
+              'Invalid branch hint payload length: $hintLength.',
+            );
+          }
+          final hint = reader.readByte();
+          if (hint != 0 && hint != 1) {
+            throw FormatException('Invalid branch hint value: $hint.');
+          }
+          if (!hintedOffsets.add(bodyOffset)) {
+            throw FormatException(
+              'Duplicate branch hint for function $functionIndex at body '
+              'offset $bodyOffset.',
+            );
+          }
+          if (!_isBranchHintTarget(
+            module.codes[codeIndex],
+            predecodedFunctions[codeIndex],
+            bodyOffset,
+          )) {
+            throw FormatException(
+              'Invalid branch hint target for function $functionIndex at '
+              'body offset $bodyOffset.',
+            );
+          }
+        }
+      }
+      reader.expectEof();
+    }
+  }
+
+  static bool _isBranchHintTarget(
+    WasmCodeBody body,
+    PredecodedFunction predecoded,
+    int bodyOffset,
+  ) {
+    final instructionOffset = bodyOffset - body.instructionStartOffset;
+    final startIndex = predecoded.instructionOffsets.indexOf(instructionOffset);
+    if (startIndex < 0) {
+      return false;
+    }
+
+    var controlDepth = 0;
+    for (var i = startIndex; i < predecoded.instructions.length; i++) {
+      final opcode = predecoded.instructions[i].opcode;
+      if (controlDepth == 0 && opcode == Opcodes.if_) {
+        return true;
+      }
+
+      switch (opcode) {
+        case Opcodes.block:
+        case Opcodes.loop:
+        case Opcodes.if_:
+        case Opcodes.tryLegacy:
+        case Opcodes.tryTable:
+          controlDepth++;
+        case Opcodes.end:
+        case Opcodes.delegate:
+          if (controlDepth == 0) {
+            return false;
+          }
+          controlDepth--;
+        case Opcodes.else_:
+        case Opcodes.catchTag:
+        case Opcodes.catchAll:
+          if (controlDepth == 0) {
+            return false;
+          }
+      }
+
+      if (controlDepth == 0 && _terminatesBranchHintTargetScan(opcode)) {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  static bool _terminatesBranchHintTargetScan(int opcode) {
+    return opcode == Opcodes.br ||
+        opcode == Opcodes.brTable ||
+        opcode == Opcodes.return_ ||
+        opcode == Opcodes.returnCall ||
+        opcode == Opcodes.returnCallIndirect ||
+        opcode == Opcodes.returnCallRef ||
+        opcode == Opcodes.throwTag ||
+        opcode == Opcodes.rethrowTag ||
+        opcode == Opcodes.throwRef;
   }
 
   static void _validateTypeReferences(WasmModule module) {

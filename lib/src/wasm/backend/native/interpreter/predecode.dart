@@ -135,10 +135,12 @@ final class PredecodedFunction {
   const PredecodedFunction({
     required this.localTypes,
     required this.instructions,
+    required this.instructionOffsets,
   });
 
   final List<WasmValueType> localTypes;
   final List<Instruction> instructions;
+  final List<int> instructionOffsets;
 }
 
 enum _ControlKind { block, loop, if_, tryTable, tryLegacy }
@@ -175,9 +177,18 @@ abstract final class WasmPredecoder {
 
     final reader = ByteReader(body.instructions);
     final instructions = <Instruction>[];
+    final instructionOffsets = <int>[];
     final controlStack = <_ControlFrame>[];
 
     while (!reader.isEOF) {
+      final instructionOffset = reader.offset;
+      final instructionCountBefore = instructions.length;
+      void recordInstructionOffsets() {
+        for (var i = instructionCountBefore; i < instructions.length; i++) {
+          instructionOffsets.add(instructionOffset);
+        }
+      }
+
       final opcode = reader.readByte();
       if (_isExceptionHandlingOpcode(opcode) && !features.exceptionHandling) {
         throw UnsupportedError(
@@ -511,6 +522,7 @@ abstract final class WasmPredecoder {
             if (frame.elseInstructionIndex != null) {
               instructions[frame.elseInstructionIndex!].endIndex = endIndex;
             }
+            recordInstructionOffsets();
             continue;
           }
 
@@ -520,9 +532,11 @@ abstract final class WasmPredecoder {
             );
           }
 
+          recordInstructionOffsets();
           return PredecodedFunction(
             localTypes: List.unmodifiable(localTypes),
             instructions: List.unmodifiable(instructions),
+            instructionOffsets: List.unmodifiable(instructionOffsets),
           );
 
         case Opcodes.br:
@@ -708,6 +722,7 @@ abstract final class WasmPredecoder {
             'Unsupported opcode in runtime: 0x${opcode.toRadixString(16)}',
           );
       }
+      recordInstructionOffsets();
     }
 
     throw const FormatException('Function body ended without final `end`.');

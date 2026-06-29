@@ -377,8 +377,10 @@ final class _ScriptExecutionState {
         case 'assert_invalid':
         case 'assert_unlinkable':
         case 'assert_uninstantiable':
+        case 'assert_invalid_custom':
           return _handleAssertModuleFails(command);
         case 'assert_malformed':
+        case 'assert_malformed_custom':
           return _handleAssertMalformed(command);
         default:
           return _CommandResult.skip(
@@ -2560,7 +2562,8 @@ Future<void> _annotateCommandsTextMalformedAssertions({
       continue;
     }
     final command = raw.cast<String, Object?>();
-    if (command['type'] != 'assert_malformed' ||
+    final type = command['type'];
+    if ((type != 'assert_malformed' && type != 'assert_malformed_custom') ||
         command['module_type'] != 'text') {
       continue;
     }
