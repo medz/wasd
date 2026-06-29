@@ -57,6 +57,27 @@ void main() {
       expect(lower.reallocIndex, isNull);
     });
 
+    test('plan async primitive lift and lower adapters', () {
+      final component = WasmComponent.decode(
+        canonicalAsyncPrimitiveLiftLowerComponentBytes(),
+      );
+
+      expect(component.validate(), isEmpty);
+
+      final plans = componentCanonicalAdapterPlans(component);
+
+      expect(plans, hasLength(2));
+      expect(plans.every((plan) => plan.isAsync), isTrue);
+      expect(plans[0].kind, WasmComponentCanonicalKind.lift);
+      expect(plans[0].params, isEmpty);
+      expect(plans[0].result!.byteLength, 4);
+      expect(plans[0].memoryIndex, 0);
+      expect(plans[1].kind, WasmComponentCanonicalKind.lower);
+      expect(plans[1].params, isEmpty);
+      expect(plans[1].result!.byteLength, 4);
+      expect(plans[1].memoryIndex, 0);
+    });
+
     test('plan string lift and lower value memory layouts', () {
       final component = WasmComponent.decode(
         canonicalStringLiftLowerComponentBytes(),
@@ -474,6 +495,75 @@ void main() {
         () => host.bindAdapterPlans(plans, coreFunctions: {0: (_) => 1}),
         throwsStateError,
       );
+    });
+
+    test('invokes async primitive adapter programs', () async {
+      final component = WasmComponent.decode(
+        canonicalAsyncPrimitiveLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final host = const WASIComponentCanonicalAdapterHost();
+      final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+
+      final program = host.bindAdapterPlans(
+        plans,
+        coreFunctions: {
+          0: (args) async {
+            expect(args, isEmpty);
+            return 31;
+          },
+        },
+        componentFunctions: {
+          0: (args) async {
+            expect(args, isEmpty);
+            return 41;
+          },
+        },
+      );
+
+      expect(
+        () => program.invoke(0, const <Object?>[]),
+        throwsUnsupportedError,
+      );
+      expect(
+        () => program.invokeFlat(0, const <Object?>[]),
+        throwsUnsupportedError,
+      );
+      expect(
+        () => program.invokeWithMemory(
+          0,
+          memory,
+          const <int>[],
+          resultPointer: 32,
+        ),
+        throwsUnsupportedError,
+      );
+
+      expect(await program.invokeAsync(0, const <Object?>[]), 31);
+      expect(await program.invokeAsync(1, const <Object?>[]), 41);
+      expect(await program.invokeFlatAsync(0, const <Object?>[]), [31]);
+      expect(await program.invokeFlatAsync(1, const <Object?>[]), [41]);
+      expect(
+        await program.invokeWithMemoryAsync(
+          0,
+          memory,
+          const <int>[],
+          resultPointer: 32,
+        ),
+        31,
+      );
+      expect(data.getUint32(32, Endian.little), 31);
+      expect(
+        await program.invokeWithMemoryAsync(
+          1,
+          memory,
+          const <int>[],
+          resultPointer: 40,
+        ),
+        41,
+      );
+      expect(data.getUint32(40, Endian.little), 41);
     });
 
     test('binds string adapter programs by decoded function indexes', () {

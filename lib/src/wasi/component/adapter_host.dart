@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import '../../wasm/backend/native/interpreter/component.dart';
@@ -9,7 +10,7 @@ import 'value_memory.dart';
 
 /// Function callback used by direct canonical adapter operations.
 typedef WASIComponentCanonicalAdapterCallback =
-    Object? Function(List<Object?> args);
+    FutureOr<Object?> Function(List<Object?> args);
 
 /// Host for executable canonical `lift`/`lower` adapter operations.
 ///
@@ -18,9 +19,9 @@ typedef WASIComponentCanonicalAdapterCallback =
 /// codec or canonical `u32` handle layouts. Direct invocations can pass
 /// `own`/`borrow` resource handles and `error-context` handles as canonical
 /// `u32` scalars; memory-backed invocations use the same canonical `u32`
-/// handle representation while still rejecting nested async values and async
-/// adapters instead of approximating scheduling semantics. Resource table
-/// ownership, borrow, and drop behavior remains a higher-level host concern.
+/// handle representation. Async adapters reuse the same codecs through the
+/// explicit asynchronous invocation entrypoints. Resource table ownership,
+/// borrow, and drop behavior remains a higher-level host concern.
 final class WASIComponentCanonicalAdapterHost {
   /// Creates a canonical adapter host.
   const WASIComponentCanonicalAdapterHost();
@@ -75,7 +76,6 @@ final class WASIComponentCanonicalAdapterHost {
               '${plan.canonicalIndex}: $index.',
             );
           }
-          _checkAdapterProgramPlan(plan);
           operations.add(
             WASIComponentCanonicalAdapterOperation._(
               plan: plan,
@@ -93,7 +93,6 @@ final class WASIComponentCanonicalAdapterHost {
               '${plan.canonicalIndex}: $index.',
             );
           }
-          _checkAdapterProgramPlan(plan);
           operations.add(
             WASIComponentCanonicalAdapterOperation._(
               plan: plan,
@@ -139,6 +138,17 @@ final class WASIComponentCanonicalAdapterProgram {
     return operation.invoke(args);
   }
 
+  /// Invokes the adapter operation at [canonicalIndex] asynchronously.
+  Future<Object?> invokeAsync(int canonicalIndex, List<Object?> args) async {
+    final operation = _operationsByCanonicalIndex[canonicalIndex];
+    if (operation == null) {
+      throw StateError(
+        'Unknown WASI component canonical adapter index: $canonicalIndex.',
+      );
+    }
+    return operation.invokeAsync(args);
+  }
+
   /// Invokes an adapter operation through flat Canonical ABI scalar values.
   List<Object?> invokeFlat(
     int canonicalIndex,
@@ -153,6 +163,27 @@ final class WASIComponentCanonicalAdapterProgram {
       );
     }
     return operation.invokeFlat(flatArgs, memory: memory, realloc: realloc);
+  }
+
+  /// Invokes an adapter operation asynchronously through flat Canonical ABI
+  /// scalar values.
+  Future<List<Object?>> invokeFlatAsync(
+    int canonicalIndex,
+    List<Object?> flatArgs, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) async {
+    final operation = _operationsByCanonicalIndex[canonicalIndex];
+    if (operation == null) {
+      throw StateError(
+        'Unknown WASI component canonical adapter index: $canonicalIndex.',
+      );
+    }
+    return operation.invokeFlatAsync(
+      flatArgs,
+      memory: memory,
+      realloc: realloc,
+    );
   }
 
   /// Invokes an adapter operation by loading parameters from canonical memory.
@@ -170,6 +201,29 @@ final class WASIComponentCanonicalAdapterProgram {
       );
     }
     return operation.invokeWithMemory(
+      memory,
+      paramPointers,
+      resultPointer: resultPointer,
+      realloc: realloc,
+    );
+  }
+
+  /// Invokes an adapter operation asynchronously by loading parameters from
+  /// canonical memory.
+  Future<Object?> invokeWithMemoryAsync(
+    int canonicalIndex,
+    wasm.Memory memory,
+    List<int> paramPointers, {
+    int? resultPointer,
+    WASIComponentCanonicalRealloc? realloc,
+  }) async {
+    final operation = _operationsByCanonicalIndex[canonicalIndex];
+    if (operation == null) {
+      throw StateError(
+        'Unknown WASI component canonical adapter index: $canonicalIndex.',
+      );
+    }
+    return operation.invokeWithMemoryAsync(
       memory,
       paramPointers,
       resultPointer: resultPointer,
@@ -222,19 +276,38 @@ final class WASIComponentCanonicalAdapterOperation {
 
   /// Invokes the adapter with direct component values.
   Object? invoke(List<Object?> args) {
+    _checkSyncInvokeSupported('direct value invocation', 'invokeAsync');
     _checkDirectInvokeSupported();
+    final directArgs = _validateDirectArgs(args);
+
+    final result = _callback(List<Object?>.unmodifiable(directArgs));
+    return _validateDirectResult(result);
+  }
+
+  /// Invokes the adapter asynchronously with direct component values.
+  Future<Object?> invokeAsync(List<Object?> args) async {
+    _checkDirectInvokeSupported();
+    final directArgs = _validateDirectArgs(args);
+
+    final result = await _callback(List<Object?>.unmodifiable(directArgs));
+    return _validateDirectResult(result);
+  }
+
+  List<Object?> _validateDirectArgs(List<Object?> args) {
     if (args.length != plan.params.length) {
       throw StateError(
         'WASI component canonical adapter index $canonicalIndex expected '
         '${plan.params.length} arguments, got ${args.length}.',
       );
     }
-    final directArgs = <Object?>[];
-    for (var i = 0; i < plan.params.length; i++) {
-      directArgs.add(_validateDirectValue(plan.params[i], args[i]));
-    }
+    return List<Object?>.generate(
+      plan.params.length,
+      (index) => _validateDirectValue(plan.params[index], args[index]),
+      growable: false,
+    );
+  }
 
-    final result = _callback(List<Object?>.unmodifiable(directArgs));
+  Object? _validateDirectResult(Object? result) {
     final resultPlan = plan.result;
     if (resultPlan == null) {
       if (result != null) {
@@ -253,6 +326,68 @@ final class WASIComponentCanonicalAdapterOperation {
     wasm.Memory? memory,
     WASIComponentCanonicalRealloc? realloc,
   }) {
+    _checkSyncInvokeSupported('flat value invocation', 'invokeFlatAsync');
+    final args = _loadFlatArgs(flatArgs, memory);
+
+    final result = _invokeFlatCallback(args);
+    return _storeFlatResult(result, memory, realloc);
+  }
+
+  /// Invokes the adapter asynchronously through flat Canonical ABI scalar
+  /// values.
+  Future<List<Object?>> invokeFlatAsync(
+    List<Object?> flatArgs, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) async {
+    final args = _loadFlatArgs(flatArgs, memory);
+
+    final result = await _invokeFlatCallbackAsync(args);
+    return _storeFlatResult(result, memory, realloc);
+  }
+
+  /// Invokes the adapter with parameter/result values stored in memory.
+  Object? invokeWithMemory(
+    wasm.Memory memory,
+    List<int> paramPointers, {
+    int? resultPointer,
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    _checkSyncInvokeSupported(
+      'memory-backed invocation',
+      'invokeWithMemoryAsync',
+    );
+    _checkMemoryInvokeSupported();
+    final args = _loadMemoryArgs(memory, paramPointers);
+    final result = _callback(List<Object?>.unmodifiable(args));
+    return _storeMemoryResult(
+      memory,
+      result,
+      resultPointer: resultPointer,
+      realloc: realloc,
+    );
+  }
+
+  /// Invokes the adapter asynchronously with parameter/result values stored in
+  /// memory.
+  Future<Object?> invokeWithMemoryAsync(
+    wasm.Memory memory,
+    List<int> paramPointers, {
+    int? resultPointer,
+    WASIComponentCanonicalRealloc? realloc,
+  }) async {
+    _checkMemoryInvokeSupported();
+    final args = _loadMemoryArgs(memory, paramPointers);
+    final result = await _callback(List<Object?>.unmodifiable(args));
+    return _storeMemoryResult(
+      memory,
+      result,
+      resultPointer: resultPointer,
+      realloc: realloc,
+    );
+  }
+
+  List<Object?> _loadFlatArgs(List<Object?> flatArgs, wasm.Memory? memory) {
     var offset = 0;
     final args = <Object?>[];
     for (final param in plan.params) {
@@ -272,10 +407,21 @@ final class WASIComponentCanonicalAdapterOperation {
         '$offset flat arguments, got ${flatArgs.length}.',
       );
     }
+    return args;
+  }
 
-    final result = _invokeFlatCallback(args);
+  List<Object?> _storeFlatResult(
+    Object? result,
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  ) {
     final resultPlan = plan.result;
     if (resultPlan == null) {
+      if (result != null) {
+        throw StateError(
+          'WASI component canonical adapter index $canonicalIndex expected no result.',
+        );
+      }
       return const <Object?>[];
     }
     return _storeFlatValue(
@@ -287,14 +433,7 @@ final class WASIComponentCanonicalAdapterOperation {
     );
   }
 
-  /// Invokes the adapter with parameter/result values stored in memory.
-  Object? invokeWithMemory(
-    wasm.Memory memory,
-    List<int> paramPointers, {
-    int? resultPointer,
-    WASIComponentCanonicalRealloc? realloc,
-  }) {
-    _checkMemoryInvokeSupported();
+  List<Object?> _loadMemoryArgs(wasm.Memory memory, List<int> paramPointers) {
     if (paramPointers.length != plan.params.length) {
       throw StateError(
         'WASI component canonical adapter index $canonicalIndex expected '
@@ -302,7 +441,7 @@ final class WASIComponentCanonicalAdapterOperation {
         '${paramPointers.length}.',
       );
     }
-    final args = List<Object?>.generate(
+    return List<Object?>.generate(
       plan.params.length,
       (index) => plan.params[index].memoryCodec!.load(
         memory,
@@ -311,7 +450,14 @@ final class WASIComponentCanonicalAdapterOperation {
       ),
       growable: false,
     );
-    final result = _callback(List<Object?>.unmodifiable(args));
+  }
+
+  Object? _storeMemoryResult(
+    wasm.Memory memory,
+    Object? result, {
+    required int? resultPointer,
+    required WASIComponentCanonicalRealloc? realloc,
+  }) {
     final resultPlan = plan.result;
     if (resultPlan == null) {
       if (result != null) {
@@ -341,6 +487,16 @@ final class WASIComponentCanonicalAdapterOperation {
     return result;
   }
 
+  void _checkSyncInvokeSupported(String mode, String asyncMethod) {
+    if (!plan.isAsync) {
+      return;
+    }
+    throw UnsupportedError(
+      'WASI component canonical adapter index $canonicalIndex uses async; '
+      'use $asyncMethod for $mode.',
+    );
+  }
+
   void _checkDirectInvokeSupported() {
     if (_directValueSupported) {
       return;
@@ -361,6 +517,20 @@ final class WASIComponentCanonicalAdapterOperation {
 
   Object? _invokeFlatCallback(List<Object?> args) {
     final result = _callback(List<Object?>.unmodifiable(args));
+    final resultPlan = plan.result;
+    if (resultPlan == null) {
+      if (result != null) {
+        throw StateError(
+          'WASI component canonical adapter index $canonicalIndex expected no result.',
+        );
+      }
+      return null;
+    }
+    return result;
+  }
+
+  Future<Object?> _invokeFlatCallbackAsync(List<Object?> args) async {
+    final result = await _callback(List<Object?>.unmodifiable(args));
     final resultPlan = plan.result;
     if (resultPlan == null) {
       if (result != null) {
@@ -1705,11 +1875,6 @@ void _requireAdapterKind(
 }
 
 void _checkDirectValuePlan(WASIComponentCanonicalAdapterPlan plan) {
-  if (plan.isAsync) {
-    throw UnsupportedError(
-      'WASI component canonical adapter index ${plan.canonicalIndex} uses async.',
-    );
-  }
   for (final param in plan.params) {
     _checkDirectValue(plan, param);
   }
@@ -1720,9 +1885,6 @@ void _checkDirectValuePlan(WASIComponentCanonicalAdapterPlan plan) {
 }
 
 bool _supportsDirectValuePlan(WASIComponentCanonicalAdapterPlan plan) {
-  if (plan.isAsync) {
-    return false;
-  }
   for (final param in plan.params) {
     if (!_supportsDirectValue(param)) {
       return false;
@@ -1738,9 +1900,6 @@ bool _supportsDirectValue(WASIComponentCanonicalAdapterValuePlan value) {
 }
 
 bool _supportsMemoryValuePlan(WASIComponentCanonicalAdapterPlan plan) {
-  if (plan.isAsync) {
-    return false;
-  }
   for (final param in plan.params) {
     if (!_supportsMemoryValue(param)) {
       return false;
@@ -1758,14 +1917,6 @@ bool _supportsDirectHandleValue(WASIComponentCanonicalAdapterValuePlan value) {
   final kind = value.flatLayout?.kind;
   return kind == WASIComponentCanonicalAdapterFlatValueKind.resource ||
       kind == WASIComponentCanonicalAdapterFlatValueKind.errorContext;
-}
-
-void _checkAdapterProgramPlan(WASIComponentCanonicalAdapterPlan plan) {
-  if (plan.isAsync) {
-    throw UnsupportedError(
-      'WASI component canonical adapter index ${plan.canonicalIndex} uses async.',
-    );
-  }
 }
 
 void _checkDirectValue(
