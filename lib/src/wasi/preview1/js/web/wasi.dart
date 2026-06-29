@@ -2120,6 +2120,18 @@ class WASI implements wasi.WASI {
     if (entries == null) {
       return (errno: _errnoBadf, entries: null);
     }
+    final openedHostPath = _vfs.openDirectoryHostPathForFd(fd);
+    if (openedHostPath != null) {
+      final fs = _requireNodeBuiltin('node:fs');
+      if (fs == null) {
+        return (errno: _errnoSuccess, entries: entries);
+      }
+      return _nodeHostDirectoryEntriesForHostPath(
+        fs: fs,
+        hostPath: openedHostPath,
+        followSymlinks: false,
+      );
+    }
     final hostEntries = _nodeHostDirectoryEntriesForGuestPath(directoryPath);
     if (hostEntries.handled) {
       return (errno: hostEntries.errno, entries: hostEntries.entries);
@@ -2793,18 +2805,43 @@ class WASI implements wasi.WASI {
     if (!_nodeStatMethod(stat, 'isDirectory')) {
       return (handled: true, errno: _errnoNotdir, entries: null);
     }
+    final result = _nodeHostDirectoryEntriesForHostPath(
+      fs: fs,
+      hostPath: hostPath,
+      followSymlinks: true,
+    );
+    return (handled: true, errno: result.errno, entries: result.entries);
+  }
+
+  ({int errno, List<wasi_vfs.Preview1DirectoryEntry>? entries})
+  _nodeHostDirectoryEntriesForHostPath({
+    required JSObject fs,
+    required String hostPath,
+    required bool followSymlinks,
+  }) {
+    final stat = followSymlinks
+        ? _nodeStat(fs, hostPath)
+        : _nodeLstat(fs, hostPath);
+    if (stat == null) {
+      return (errno: _errnoNoent, entries: null);
+    }
+    if (!_nodeStatMethod(stat, 'isDirectory')) {
+      return (errno: _errnoNotdir, entries: null);
+    }
     final entries = _nodeHostDirectoryEntries(fs, hostPath);
     if (entries != null) {
-      return (handled: true, errno: _errnoSuccess, entries: entries);
+      return (errno: _errnoSuccess, entries: entries);
     }
-    final currentStat = _nodeLstat(fs, hostPath);
+    final currentStat = followSymlinks
+        ? _nodeStat(fs, hostPath)
+        : _nodeLstat(fs, hostPath);
     if (currentStat == null) {
-      return (handled: true, errno: _errnoNoent, entries: null);
+      return (errno: _errnoNoent, entries: null);
     }
     if (!_nodeStatMethod(currentStat, 'isDirectory')) {
-      return (handled: true, errno: _errnoNotdir, entries: null);
+      return (errno: _errnoNotdir, entries: null);
     }
-    return (handled: true, errno: _errnoPerm, entries: null);
+    return (errno: _errnoPerm, entries: null);
   }
 
   ({String guestRoot, String hostRoot, String hostPath})?
@@ -2863,6 +2900,7 @@ class WASI implements wasi.WASI {
       guestPath,
       entries: entries,
       metadata: _metadataFromNodeStat(stat),
+      hostPath: hostPath,
       rightsBase: rightsBase,
       rightsInheriting: rightsInheriting,
       descriptorFlags: descriptorFlags,
@@ -3483,6 +3521,18 @@ JSObject? _nodeLstat(JSObject fs, String hostPath) {
     final stat = fs.callMethodVarArgs<JSAny?>('lstatSync'.toJS, [
       hostPath.toJS,
     ]);
+    if (stat case final JSObject object) {
+      return object;
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+JSObject? _nodeStat(JSObject fs, String hostPath) {
+  try {
+    final stat = fs.callMethodVarArgs<JSAny?>('statSync'.toJS, [hostPath.toJS]);
     if (stat case final JSObject object) {
       return object;
     }

@@ -109,6 +109,7 @@ final class Preview1VirtualFileSystem {
   final Map<int, int> _openDirectoryFlagsByFd = <int, int>{};
   final Map<int, Preview1DescriptorRights> _openDirectoryRightsByFd =
       <int, Preview1DescriptorRights>{};
+  final Map<int, String> _openDirectoryHostPathsByFd = <int, String>{};
 
   late Map<String, List<String>> _filePathsByLowerGuestPath;
   late Map<String, List<String>> _filePathsByBasenameLower;
@@ -437,6 +438,7 @@ final class Preview1VirtualFileSystem {
       final flags = _openDirectoryFlagsByFd.remove(fromFd) ?? 0;
       final entries = _openDirectoryEntriesByFd.remove(fromFd);
       final metadata = _openDirectoryMetadataByFd.remove(fromFd);
+      final hostPath = _openDirectoryHostPathsByFd.remove(fromFd);
       final rights =
           _openDirectoryRightsByFd.remove(fromFd) ??
           Preview1DescriptorRights.directory();
@@ -447,6 +449,9 @@ final class Preview1VirtualFileSystem {
       }
       if (metadata != null) {
         _openDirectoryMetadataByFd[toFd] = metadata;
+      }
+      if (hostPath != null) {
+        _openDirectoryHostPathsByFd[toFd] = hostPath;
       }
       _openDirectoryFlagsByFd[toFd] = flags;
       _openDirectoryRightsByFd[toFd] = rights;
@@ -478,6 +483,8 @@ final class Preview1VirtualFileSystem {
   bool isPreopenDirectoryFd(int fd) => _preopenGuestPathsByFd.containsKey(fd);
 
   bool isOpenDirectoryFd(int fd) => _openDirectoriesByFd.containsKey(fd);
+
+  String? openDirectoryHostPathForFd(int fd) => _openDirectoryHostPathsByFd[fd];
 
   bool isDirectoryFd(int fd) =>
       isPreopenDirectoryFd(fd) || isOpenDirectoryFd(fd);
@@ -688,6 +695,9 @@ final class Preview1VirtualFileSystem {
       (fd, _) => !_openDirectoriesByFd.containsKey(fd),
     );
     _openDirectoryRightsByFd.removeWhere(
+      (fd, _) => !_openDirectoriesByFd.containsKey(fd),
+    );
+    _openDirectoryHostPathsByFd.removeWhere(
       (fd, _) => !_openDirectoriesByFd.containsKey(fd),
     );
     _rebuildDirectoryEntriesForPaths({dirnameOfGuestPath(normalized)});
@@ -1014,6 +1024,7 @@ final class Preview1VirtualFileSystem {
     String guestPath, {
     required List<Preview1DirectoryEntry> entries,
     required Preview1VirtualNodeMetadata metadata,
+    String? hostPath,
     int? rightsBase,
     int? rightsInheriting,
     int descriptorFlags = 0,
@@ -1024,6 +1035,9 @@ final class Preview1VirtualFileSystem {
       entries,
     );
     _openDirectoryMetadataByFd[fd] = metadata;
+    if (hostPath != null) {
+      _openDirectoryHostPathsByFd[fd] = hostPath;
+    }
     _openDirectoryFlagsByFd[fd] = descriptorFlags;
     _openDirectoryRightsByFd[fd] = Preview1DescriptorRights.directory(
       base: rightsBase,
@@ -1294,6 +1308,7 @@ final class Preview1VirtualFileSystem {
     _openDirectoriesByFd.remove(fd);
     _openDirectoryEntriesByFd.remove(fd);
     _openDirectoryMetadataByFd.remove(fd);
+    _openDirectoryHostPathsByFd.remove(fd);
     _openDirectoryFlagsByFd.remove(fd);
     _openDirectoryRightsByFd.remove(fd);
     _preopenPathBytesByFd.remove(fd);

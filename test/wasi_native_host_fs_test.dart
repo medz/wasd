@@ -936,9 +936,15 @@ void main() {
     addTearDown(() => temp.delete(recursive: true));
     final outside = File('${temp.path}_outside.txt')
       ..writeAsStringSync('outside');
+    final outsideDirectory = Directory('${temp.path}_outside_dir')
+      ..createSync();
+    File('${outsideDirectory.path}/escape.txt').writeAsStringSync('escape');
     addTearDown(() {
       if (outside.existsSync()) {
         outside.deleteSync();
+      }
+      if (outsideDirectory.existsSync()) {
+        outsideDirectory.deleteSync(recursive: true);
       }
     });
     File('${temp.path}/target.txt').writeAsStringSync('target');
@@ -1081,6 +1087,18 @@ void main() {
       _filetypeDirectory,
       _filetypeDirectory,
       _filetypeRegularFile,
+    ]);
+    Link('${temp.path}/dir_link')
+      ..deleteSync()
+      ..createSync(outsideDirectory.absolute.path);
+    bytes.fillRange(direntsPtr, direntsPtr + 256, 0);
+    expect(fdReaddir.ref([dirFd, direntsPtr, 256, 0, bufusedPtr]), 0);
+    final stableBufused = data.getUint32(bufusedPtr, Endian.little);
+    final stableEntries = _readDirents(bytes, data, direntsPtr, stableBufused);
+    expect(stableEntries.map((entry) => entry.name).toList(), [
+      '.',
+      '..',
+      'child.txt',
     ]);
     expect(fdClose.ref([dirFd]), 0);
 

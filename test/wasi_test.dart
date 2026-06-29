@@ -5179,6 +5179,8 @@ void main() {
           final pathOpen = preview1['path_open'] as FunctionImportExportValue;
           final pathFilestatGet =
               preview1['path_filestat_get'] as FunctionImportExportValue;
+          final pathUnlinkFile =
+              preview1['path_unlink_file'] as FunctionImportExportValue;
           final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
           final fdReaddir = preview1['fd_readdir'] as FunctionImportExportValue;
           final fdClose = preview1['fd_close'] as FunctionImportExportValue;
@@ -5228,6 +5230,11 @@ void main() {
                   filestatPtr,
                 ])
                 as int;
+          }
+
+          int unlinkPath(String path) {
+            final pathLen = writePath(pathPtr, path);
+            return pathUnlinkFile.ref([3, pathPtr, pathLen]) as int;
           }
 
           int openPath(
@@ -5317,6 +5324,21 @@ void main() {
             _filetypeDirectory,
             _filetypeDirectory,
             _filetypeRegularFile,
+          ]);
+          expect(unlinkPath('dir-link'), 0);
+          host.createSymlink(outside.path, 'dir-link');
+          bytes.fillRange(direntsPtr, direntsPtr + 128, 0);
+          expect(fdReaddir.ref([dirFd, direntsPtr, 128, 0, bufusedPtr]), 0);
+          final stableEntries = _readDirents(
+            bytes,
+            data,
+            direntsPtr,
+            data.getUint32(bufusedPtr, Endian.little),
+          );
+          expect(stableEntries.map((entry) => entry.name), [
+            '.',
+            '..',
+            'nested.txt',
           ]);
           expect(fdClose.ref([dirFd]), 0);
 

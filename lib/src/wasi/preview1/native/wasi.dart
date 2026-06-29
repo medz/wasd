@@ -617,10 +617,18 @@ class WASI implements wasi_iface.WASI {
           return _errnoInval;
         }
 
-        final hostPreopenPath = _hostPreopenPathForGuestPath(directoryPath);
-        final entriesResult = hostPreopenPath == null
+        final openedHostPath = _vfs.openDirectoryHostPathForFd(fd);
+        final hostPreopenPath = openedHostPath == null
+            ? _hostPreopenPathForGuestPath(directoryPath)
+            : null;
+        final entriesResult = openedHostPath != null
+            ? _readHostDirectoryEntries(openedHostPath, followSymlinks: false)
+            : hostPreopenPath == null
             ? (errno: _errnoSuccess, entries: _vfs.directoryEntriesForFd(fd))
-            : _readHostDirectoryEntries(hostPreopenPath.hostPath);
+            : _readHostDirectoryEntries(
+                hostPreopenPath.hostPath,
+                followSymlinks: true,
+              );
         if (entriesResult.errno != _errnoSuccess) {
           return entriesResult.errno;
         }
@@ -1889,6 +1897,7 @@ class WASI implements wasi_iface.WASI {
         guestPath,
         entries: entries,
         metadata: _metadataFromHostPath(hostPath),
+        hostPath: hostPath,
         rightsBase: rightsBase,
         rightsInheriting: rightsInheriting,
         descriptorFlags: descriptorFlags,
@@ -2392,11 +2401,24 @@ class WASI implements wasi_iface.WASI {
   }
 
   ({int errno, List<wasi_vfs.Preview1DirectoryEntry>? entries})
-  _readHostDirectoryEntries(String hostPath) {
+  _readHostDirectoryEntries(String hostPath, {required bool followSymlinks}) {
     try {
+      final type = io.FileSystemEntity.typeSync(
+        hostPath,
+        followLinks: followSymlinks,
+      );
+      if (type == io.FileSystemEntityType.notFound) {
+        return (errno: _errnoNoent, entries: null);
+      }
+      if (type != io.FileSystemEntityType.directory) {
+        return (errno: _errnoNotdir, entries: null);
+      }
       return (errno: _errnoSuccess, entries: _hostDirectoryEntries(hostPath));
     } on io.FileSystemException {
-      final type = io.FileSystemEntity.typeSync(hostPath, followLinks: false);
+      final type = io.FileSystemEntity.typeSync(
+        hostPath,
+        followLinks: followSymlinks,
+      );
       if (type == io.FileSystemEntityType.notFound) {
         return (errno: _errnoNoent, entries: null);
       }
