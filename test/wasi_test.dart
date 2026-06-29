@@ -33,7 +33,10 @@ const int _rightPollFdReadwrite = 1 << 27;
 const int _rightSockShutdown = 1 << 28;
 const int _rightSockAccept = 1 << 29;
 const int _rightPathOpen = 1 << 13;
+const int _rightFdReaddir = 1 << 14;
 const int _rightsAll = (1 << 30) - 1;
+const int _filetypeDirectory = 3;
+const int _filetypeRegularFile = 4;
 const int _filetypeSocketDgram = 5;
 const int _filetypeSocketStream = 6;
 const int _errnoAgain = 6;
@@ -4427,6 +4430,105 @@ void main() {
             0,
           ]);
           expect(fdClose.ref([sizedFd]), 0);
+        },
+        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+      );
+
+      test(
+        'node preview1 fd_readdir lists real host directories',
+        () async {
+          final host = createNodeHostTemp('wasd_node_host_readdir_');
+          expect(host, isNotNull);
+          addTearDown(() => host?.delete());
+          host!
+            ..createDirectory('assets')
+            ..writeFile('assets/b.txt', 'b')
+            ..writeFile('assets/a.txt', 'a')
+            ..createDirectory('assets/sub');
+
+          final fileWasi = WASI(preopens: {'/host': host.path});
+          host.writeFile('later.txt', 'after-construction');
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdReaddir = preview1['fd_readdir'] as FunctionImportExportValue;
+          final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 2480;
+          const openedFdPtr = 2520;
+          const direntsPtr = 2560;
+          const bufusedPtr = 2944;
+
+          expect(fdReaddir.ref([3, direntsPtr, 256, 0, bufusedPtr]), 0);
+          final rootBufused = data.getUint32(bufusedPtr, Endian.little);
+          final rootEntries = _readDirents(
+            bytes,
+            data,
+            direntsPtr,
+            rootBufused,
+          );
+          expect(rootEntries.map((entry) => entry.name), contains('later.txt'));
+          expect(rootEntries.map((entry) => entry.name), contains('assets'));
+
+          final dirPath = utf8.encode('assets');
+          bytes.setAll(pathPtr, dirPath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              dirPath.length,
+              _oflagDirectory,
+              _rightFdReaddir,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final dirFd = data.getUint32(openedFdPtr, Endian.little);
+
+          bytes.fillRange(direntsPtr, direntsPtr + 256, 0);
+          expect(fdReaddir.ref([dirFd, direntsPtr, 256, 0, bufusedPtr]), 0);
+          final bufused = data.getUint32(bufusedPtr, Endian.little);
+          final entries = _readDirents(bytes, data, direntsPtr, bufused);
+          expect(entries.map((entry) => entry.name), ['a.txt', 'b.txt', 'sub']);
+          expect(entries.map((entry) => entry.type), [
+            _filetypeRegularFile,
+            _filetypeRegularFile,
+            _filetypeDirectory,
+          ]);
+
+          bytes.fillRange(direntsPtr, direntsPtr + 256, 0);
+          expect(
+            fdReaddir.ref([
+              dirFd,
+              direntsPtr,
+              256,
+              entries.first.next,
+              bufusedPtr,
+            ]),
+            0,
+          );
+          final nextBufused = data.getUint32(bufusedPtr, Endian.little);
+          final nextEntries = _readDirents(
+            bytes,
+            data,
+            direntsPtr,
+            nextBufused,
+          );
+          expect(nextEntries.map((entry) => entry.name), ['b.txt', 'sub']);
+
+          expect(fdClose.ref([dirFd]), 0);
         },
         skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
       );

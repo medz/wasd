@@ -23,6 +23,7 @@ const int _bufferPtr = 2368;
 const int _countPtr = 2496;
 const int _filestatPtr = 2528;
 const int _readChunkBytes = 32;
+const int _direntBufferBytes = 16384;
 
 final Uint8List _writeChunk = Uint8List.fromList(
   utf8.encode('wasd-node-host-fs-benchmark-io'),
@@ -49,16 +50,24 @@ Future<Map<String, Object?>> _runBenchmark(_Options options) async {
     final payloadText = _asciiPayload(options.payloadBytes);
     temp
       ..writeFile('data.bin', payloadText)
-      ..writeFile('mutable.bin', payloadText);
+      ..writeFile('mutable.bin', payloadText)
+      ..createDirectory('assets')
+      ..writeFile('assets/a.txt', 'a')
+      ..writeFile('assets/b.txt', 'b')
+      ..createDirectory('assets/sub');
 
     final host = await _BenchmarkContext.create(
       preopens: <String, String>{'/host': temp.path},
     );
+    temp.writeFile('late-root.txt', 'created after WASI construction');
     final virtual = await _BenchmarkContext.create(
       preopens: const <String, String>{'/virtual': '/virtual'},
       files: <String, Uint8List>{
         '/virtual/data.bin': Uint8List.fromList(utf8.encode(payloadText)),
         '/virtual/mutable.bin': Uint8List.fromList(utf8.encode(payloadText)),
+        '/virtual/assets/a.txt': Uint8List.fromList(utf8.encode('a')),
+        '/virtual/assets/b.txt': Uint8List.fromList(utf8.encode('b')),
+        '/virtual/assets/sub/child.txt': Uint8List.fromList(utf8.encode('s')),
       },
     );
 
@@ -105,6 +114,22 @@ Future<Map<String, Object?>> _runBenchmark(_Options options) async {
         'virtual-created',
         options,
       ).toJson(),
+      'host_preopen_readdir': _benchmarkPreopenReaddir(host, options).toJson(),
+      'virtual_preopen_readdir': _benchmarkPreopenReaddir(
+        virtual,
+        options,
+      ).toJson(),
+      'host_directory_open_readdir_close': _benchmarkDirectoryOpenReaddirClose(
+        host,
+        'assets',
+        options,
+      ).toJson(),
+      'virtual_directory_open_readdir_close':
+          _benchmarkDirectoryOpenReaddirClose(
+            virtual,
+            'assets',
+            options,
+          ).toJson(),
     };
 
     final hostMutable = temp.readFile('mutable.bin');
@@ -119,6 +144,25 @@ Future<Map<String, Object?>> _runBenchmark(_Options options) async {
         '$createdSize',
       );
     }
+    final hostPreopenEntries = host.readDirectoryNames(3);
+    if (!hostPreopenEntries.contains('late-root.txt') ||
+        !hostPreopenEntries.contains('assets')) {
+      throw StateError(
+        'host preopen readdir did not report live root entries: '
+        '$hostPreopenEntries',
+      );
+    }
+    final hostAssetsFd = host.openDirectory('assets');
+    final hostAssetEntries = host.readDirectoryNames(hostAssetsFd);
+    host.close(hostAssetsFd);
+    if (!hostAssetEntries.contains('a.txt') ||
+        !hostAssetEntries.contains('b.txt') ||
+        !hostAssetEntries.contains('sub')) {
+      throw StateError(
+        'host directory readdir did not report live asset entries: '
+        '$hostAssetEntries',
+      );
+    }
 
     return <String, Object?>{
       'runtime': 'node-js',
@@ -131,6 +175,8 @@ Future<Map<String, Object?>> _runBenchmark(_Options options) async {
       'assertions': <String, Object?>{
         'host_positioned_write_readback': true,
         'host_resize_size_bytes': createdSize,
+        'host_preopen_readdir_readback': true,
+        'host_directory_readdir_readback': true,
       },
     };
   } finally {
@@ -152,6 +198,10 @@ void _warmUp(
   _benchmarkPositionedWrite(virtual, 'mutable.bin', warmup);
   _benchmarkCreateTruncateResize(host, 'host-warmup', warmup);
   _benchmarkCreateTruncateResize(virtual, 'virtual-warmup', warmup);
+  _benchmarkPreopenReaddir(host, warmup);
+  _benchmarkPreopenReaddir(virtual, warmup);
+  _benchmarkDirectoryOpenReaddirClose(host, 'assets', warmup);
+  _benchmarkDirectoryOpenReaddirClose(virtual, 'assets', warmup);
 }
 
 _Metric _benchmarkOpenClose(
@@ -257,11 +307,45 @@ _Metric _benchmarkCreateTruncateResize(
   );
 }
 
+_Metric _benchmarkPreopenReaddir(_BenchmarkContext context, _Options options) {
+  var checksum = 0;
+  final startMicros = _nowMicros();
+  for (var i = 0; i < options.iterations; i++) {
+    checksum += context.readdir(3);
+  }
+  return _Metric(
+    operations: options.iterations,
+    totalMicros: _nowMicros() - startMicros,
+    checksum: checksum,
+  );
+}
+
+_Metric _benchmarkDirectoryOpenReaddirClose(
+  _BenchmarkContext context,
+  String path,
+  _Options options,
+) {
+  var checksum = 0;
+  final startMicros = _nowMicros();
+  for (var i = 0; i < options.iterations; i++) {
+    final fd = context.openDirectory(path);
+    checksum += fd;
+    checksum += context.readdir(fd);
+    context.close(fd);
+  }
+  return _Metric(
+    operations: options.iterations,
+    totalMicros: _nowMicros() - startMicros,
+    checksum: checksum,
+  );
+}
+
 const int _readRights =
     wasi.rightFdRead |
     wasi.rightFdSeek |
     wasi.rightFdTell |
     wasi.rightFdFilestatGet;
+const int _directoryRights = wasi.rightFdReaddir | wasi.rightFdFilestatGet;
 const int _writeRights =
     wasi.rightFdWrite |
     wasi.rightFdSeek |
@@ -276,6 +360,7 @@ final class _BenchmarkContext {
     required this.fdClose,
     required this.fdPread,
     required this.fdPwrite,
+    required this.fdReaddir,
     required this.fdFilestatGet,
     required this.fdFilestatSetSize,
     required this.fdAllocate,
@@ -287,6 +372,7 @@ final class _BenchmarkContext {
   final FunctionImportExportValue fdClose;
   final FunctionImportExportValue fdPread;
   final FunctionImportExportValue fdPwrite;
+  final FunctionImportExportValue fdReaddir;
   final FunctionImportExportValue fdFilestatGet;
   final FunctionImportExportValue fdFilestatSetSize;
   final FunctionImportExportValue fdAllocate;
@@ -311,6 +397,7 @@ final class _BenchmarkContext {
       fdClose: imports['fd_close'] as FunctionImportExportValue,
       fdPread: imports['fd_pread'] as FunctionImportExportValue,
       fdPwrite: imports['fd_pwrite'] as FunctionImportExportValue,
+      fdReaddir: imports['fd_readdir'] as FunctionImportExportValue,
       fdFilestatGet: imports['fd_filestat_get'] as FunctionImportExportValue,
       fdFilestatSetSize:
           imports['fd_filestat_set_size'] as FunctionImportExportValue,
@@ -338,6 +425,44 @@ final class _BenchmarkContext {
       throw StateError('path_open($path) failed with errno $errno');
     }
     return data.getUint32(_openedFdPtr, Endian.little);
+  }
+
+  int openDirectory(String path) =>
+      openFile(path, _directoryRights, oflags: wasi.oflagDirectory);
+
+  int readdir(int fd) {
+    final errno = fdReaddir.ref([
+      fd,
+      _bufferPtr,
+      _direntBufferBytes,
+      0,
+      _countPtr,
+    ]);
+    if (errno != 0) {
+      throw StateError('fd_readdir($fd) failed with errno $errno');
+    }
+    return data.getUint32(_countPtr, Endian.little);
+  }
+
+  List<String> readDirectoryNames(int fd) {
+    final used = readdir(fd);
+    final names = <String>[];
+    var offset = _bufferPtr;
+    final end = _bufferPtr + used;
+    while (offset + wasi.direntSize <= end) {
+      final nameLength = data.getUint32(
+        offset + wasi.direntNameLengthOffset,
+        Endian.little,
+      );
+      final namePtr = offset + wasi.direntSize;
+      final nameEnd = namePtr + nameLength;
+      if (nameEnd > end) {
+        break;
+      }
+      names.add(utf8.decode(bytes.sublist(namePtr, nameEnd)));
+      offset = nameEnd;
+    }
+    return names;
   }
 
   int pread(int fd, {required int length, required int offset}) {
@@ -424,6 +549,14 @@ final class _NodeHostTemp {
     _fs.callMethodVarArgs<JSAny?>('writeFileSync'.toJS, [
       _join(relativePath).toJS,
       content.toJS,
+    ]);
+  }
+
+  void createDirectory(String relativePath) {
+    final options = JSObject()..['recursive'] = true.toJS;
+    _fs.callMethodVarArgs<JSAny?>('mkdirSync'.toJS, [
+      _join(relativePath).toJS,
+      options,
     ]);
   }
 

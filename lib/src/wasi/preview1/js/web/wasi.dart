@@ -592,7 +592,7 @@ class WASI implements wasi.WASI {
         final bufferLength = _asInt(args[2]);
         final cookie = _asInt64(args[3]);
         final bufferUsedPtr = _asInt(args[4]);
-        final entries = _vfs.directoryEntriesForFd(fd);
+        final entries = _directoryEntriesForFd(fd);
         if (entries == null) {
           return _errnoBadf;
         }
@@ -1107,11 +1107,20 @@ class WASI implements wasi.WASI {
     }
     final hasNodeHostPreopens = _nodeHostPreopensByGuestPath.isNotEmpty;
     final followSymlinks = (lookupFlags & _lookupflagSymlinkFollow) != 0;
+    final vfsEntry = hasNodeHostPreopens
+        ? _vfs.pathEntry(openPath, followSymlinks: false)
+        : null;
+    final preferNodeHostDirectory =
+        hasNodeHostPreopens &&
+        (oflags & _oflagCreat) == 0 &&
+        vfsEntry?.kind == wasi_vfs.Preview1VirtualPathEntryKind.directory &&
+        _nodeHostPathIsDirectory(openPath);
     wasi_vfs.Preview1VirtualOpenResult opened;
-    if (hasNodeHostPreopens &&
-        (oflags & _oflagCreat) != 0 &&
-        _nodeHostPathForGuestPath(openPath) != null &&
-        _vfs.pathEntry(openPath, followSymlinks: false) == null) {
+    if (preferNodeHostDirectory ||
+        hasNodeHostPreopens &&
+            (oflags & _oflagCreat) != 0 &&
+            _nodeHostPathForGuestPath(openPath) != null &&
+            vfsEntry == null) {
       opened = _openNodeHostPreopenPath(
         openPath,
         rightsBase: requestedRightsBase,
@@ -1749,6 +1758,25 @@ class WASI implements wasi.WASI {
         : 0;
   }
 
+  List<wasi_vfs.Preview1DirectoryEntry>? _directoryEntriesForFd(int fd) {
+    final entries = _vfs.directoryEntriesForFd(fd);
+    if (entries == null) {
+      return null;
+    }
+    if (_vfs.isPreopenDirectoryFd(fd)) {
+      final directoryPath = _vfs.directoryPathForFd(fd);
+      if (directoryPath != null) {
+        final hostEntries = _nodeHostDirectoryEntriesForGuestPath(
+          directoryPath,
+        );
+        if (hostEntries != null) {
+          return hostEntries;
+        }
+      }
+    }
+    return entries;
+  }
+
   int _writeStringVector({
     required List<Uint8List> strings,
     required int ptrTable,
@@ -1850,7 +1878,21 @@ class WASI implements wasi.WASI {
       if (truncate) {
         return const wasi_vfs.Preview1VirtualOpenResult.isDirectory();
       }
-      return const wasi_vfs.Preview1VirtualOpenResult.notSupported();
+      final requestsOnlyFileReadWriteRights =
+          (rightsBase & _rightFdWrite) != 0 &&
+          (rightsBase & ~(_rightFdRead | _rightFdWrite)) == 0;
+      if ((oflags & _oflagDirectory) != 0 && requestsOnlyFileReadWriteRights) {
+        return const wasi_vfs.Preview1VirtualOpenResult.isDirectory();
+      }
+      return _openNodeHostDirectory(
+        fs: fs,
+        guestPath: guestPath,
+        hostPath: hostPath,
+        stat: stat,
+        rightsBase: rightsBase,
+        rightsInheriting: rightsInheriting,
+        descriptorFlags: descriptorFlags,
+      );
     }
     if (!_nodeStatMethod(stat, 'isFile')) {
       return const wasi_vfs.Preview1VirtualOpenResult.missing();
@@ -1875,6 +1917,37 @@ class WASI implements wasi.WASI {
 
   String? _nodeHostPathForGuestPath(String guestPath) =>
       _nodeHostPreopenPathForGuestPath(guestPath)?.hostPath;
+
+  bool _nodeHostPathIsDirectory(String guestPath) {
+    final fs = _requireNodeBuiltin('node:fs');
+    if (fs == null) {
+      return false;
+    }
+    final hostPreopenPath = _nodeHostPreopenPathForGuestPath(guestPath);
+    if (hostPreopenPath == null) {
+      return false;
+    }
+    final stat = _nodeLstat(fs, hostPreopenPath.hostPath);
+    return stat != null && _nodeStatMethod(stat, 'isDirectory');
+  }
+
+  List<wasi_vfs.Preview1DirectoryEntry>? _nodeHostDirectoryEntriesForGuestPath(
+    String guestPath,
+  ) {
+    final fs = _requireNodeBuiltin('node:fs');
+    if (fs == null) {
+      return null;
+    }
+    final hostPreopenPath = _nodeHostPreopenPathForGuestPath(guestPath);
+    if (hostPreopenPath == null) {
+      return null;
+    }
+    final stat = _nodeLstat(fs, hostPreopenPath.hostPath);
+    if (stat == null || !_nodeStatMethod(stat, 'isDirectory')) {
+      return null;
+    }
+    return _nodeHostDirectoryEntries(fs, hostPreopenPath.hostPath);
+  }
 
   ({String guestRoot, String hostRoot, String hostPath})?
   _nodeHostPreopenPathForGuestPath(String guestPath) {
@@ -1912,6 +1985,29 @@ class WASI implements wasi.WASI {
       guestRoot: matchedGuestRoot,
       hostRoot: hostRoot,
       hostPath: hostPath,
+    );
+  }
+
+  wasi_vfs.Preview1VirtualOpenResult _openNodeHostDirectory({
+    required JSObject fs,
+    required String guestPath,
+    required String hostPath,
+    required JSObject stat,
+    required int rightsBase,
+    required int rightsInheriting,
+    required int descriptorFlags,
+  }) {
+    final entries = _nodeHostDirectoryEntries(fs, hostPath);
+    if (entries == null) {
+      return const wasi_vfs.Preview1VirtualOpenResult.missing();
+    }
+    return _vfs.openDirectoryHandle(
+      guestPath,
+      entries: entries,
+      metadata: _metadataFromNodeStat(stat),
+      rightsBase: rightsBase,
+      rightsInheriting: rightsInheriting,
+      descriptorFlags: descriptorFlags,
     );
   }
 
@@ -2200,6 +2296,7 @@ const int _fdstatSize = wasi_common.fdstatSize;
 const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
 const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
+const int _filetypeSymbolicLink = wasi_common.filetypeSymbolicLink;
 const int _oflagCreat = wasi_common.oflagCreat;
 const int _oflagDirectory = wasi_common.oflagDirectory;
 const int _oflagExcl = wasi_common.oflagExcl;
@@ -2516,6 +2613,64 @@ JSObject _nodeFstat(JSObject fs, int fd) {
 bool _nodeStatMethod(JSObject stat, String method) {
   final value = stat.callMethodVarArgs<JSAny?>(method.toJS, const []);
   return _jsString(value).toDart == 'true';
+}
+
+List<wasi_vfs.Preview1DirectoryEntry>? _nodeHostDirectoryEntries(
+  JSObject fs,
+  String hostPath,
+) {
+  final names = _nodeReadDirectoryNames(fs, hostPath);
+  if (names == null) {
+    return null;
+  }
+  final entries = <wasi_vfs.Preview1DirectoryEntry>[];
+  for (final name in names) {
+    if (name.isEmpty) {
+      continue;
+    }
+    final childPath = _nodeResolvePath(hostPath, name);
+    final stat = _nodeLstat(fs, childPath);
+    if (stat == null) {
+      continue;
+    }
+    final fileType = _nodeDirectoryEntryFileType(stat);
+    if (fileType == null) {
+      continue;
+    }
+    entries.add(
+      wasi_vfs.Preview1DirectoryEntry(
+        name: name,
+        fileType: fileType,
+        inode: _metadataFromNodeStat(stat).inode,
+      ),
+    );
+  }
+  entries.sort((a, b) => a.name.compareTo(b.name));
+  return entries;
+}
+
+List<String>? _nodeReadDirectoryNames(JSObject fs, String hostPath) {
+  try {
+    final names = fs.callMethodVarArgs<JSArray<JSString>>('readdirSync'.toJS, [
+      hostPath.toJS,
+    ]);
+    return names.toDart.map((name) => name.toDart).toList(growable: false);
+  } catch (_) {
+    return null;
+  }
+}
+
+int? _nodeDirectoryEntryFileType(JSObject stat) {
+  if (_nodeStatMethod(stat, 'isFile')) {
+    return _filetypeRegularFile;
+  }
+  if (_nodeStatMethod(stat, 'isDirectory')) {
+    return _filetypeDirectory;
+  }
+  if (_nodeStatMethod(stat, 'isSymbolicLink')) {
+    return _filetypeSymbolicLink;
+  }
+  return null;
 }
 
 int? _nodeOpenSync(JSObject fs, String hostPath, String flags) {

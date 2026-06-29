@@ -15,6 +15,14 @@ final class NodeHostTemp {
     ]);
   }
 
+  void createDirectory(String relativePath) {
+    final options = JSObject()..['recursive'] = true.toJS;
+    _fs.callMethodVarArgs<JSAny?>('mkdirSync'.toJS, [
+      _join(relativePath).toJS,
+      options,
+    ]);
+  }
+
   String readFile(String relativePath) {
     final result = _fs.callMethodVarArgs<JSAny?>('readFileSync'.toJS, [
       _join(relativePath).toJS,

@@ -5,6 +5,8 @@ final class NodeHostTemp {
 
   void writeFile(String relativePath, String content) {}
 
+  void createDirectory(String relativePath) {}
+
   String readFile(String relativePath) => '';
 
   void delete() {}
