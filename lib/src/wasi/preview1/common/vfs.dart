@@ -495,6 +495,36 @@ final class Preview1VirtualFileSystem {
     }
   }
 
+  void renameOpenDirectoryFdsForHostRename({
+    required String oldGuestPath,
+    required String newGuestPath,
+    required String oldHostPath,
+    required String newHostPath,
+  }) {
+    final oldGuest = normalizeGuestPath(oldGuestPath);
+    final newGuest = normalizeGuestPath(newGuestPath);
+    final oldHost = _trimTrailingHostSeparators(oldHostPath);
+    final newHost = _trimTrailingHostSeparators(newHostPath);
+
+    for (final entry in _openDirectoriesByFd.entries.toList()) {
+      final guestPath = entry.value;
+      if (guestPath != oldGuest && !_isChildPath(guestPath, oldGuest)) {
+        continue;
+      }
+      final hostPath = _openDirectoryHostPathsByFd[entry.key];
+      if (hostPath == null || !_isHostPathAtOrUnder(hostPath, oldHost)) {
+        continue;
+      }
+
+      final guestSuffix = guestPath.substring(oldGuest.length);
+      final hostSuffix = _trimTrailingHostSeparators(
+        hostPath,
+      ).substring(oldHost.length);
+      _openDirectoriesByFd[entry.key] = '$newGuest$guestSuffix';
+      _openDirectoryHostPathsByFd[entry.key] = '$newHost$hostSuffix';
+    }
+  }
+
   void refreshOpenDirectoryEntriesForFd(
     int fd,
     List<Preview1DirectoryEntry> entries,
@@ -2678,6 +2708,26 @@ bool _isChildPath(String path, String parent) {
     return normalizedPath != '/';
   }
   return normalizedPath.startsWith('$normalizedParent/');
+}
+
+bool _isHostPathAtOrUnder(String path, String parent) {
+  final normalizedPath = _trimTrailingHostSeparators(path);
+  final normalizedParent = _trimTrailingHostSeparators(parent);
+  return normalizedPath == normalizedParent ||
+      normalizedPath.startsWith('$normalizedParent/') ||
+      normalizedPath.startsWith('$normalizedParent\\');
+}
+
+String _trimTrailingHostSeparators(String path) {
+  var end = path.length;
+  while (end > 1) {
+    final codeUnit = path.codeUnitAt(end - 1);
+    if (codeUnit != 0x2f && codeUnit != 0x5c) {
+      break;
+    }
+    end--;
+  }
+  return end == path.length ? path : path.substring(0, end);
 }
 
 _DirectoryChildrenByPath _buildDirectoryChildrenByPath({

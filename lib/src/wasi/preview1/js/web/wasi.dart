@@ -1298,6 +1298,14 @@ class WASI implements wasi.WASI {
             oldHostPath: oldHostPath,
             newHostPath: newHostPath,
           );
+          if (hostResult == wasi_vfs.Preview1PathMutationResult.success) {
+            _vfs.renameOpenDirectoryFdsForHostRename(
+              oldGuestPath: oldPath.path!,
+              newGuestPath: newPath.path!,
+              oldHostPath: oldHostPath,
+              newHostPath: newHostPath,
+            );
+          }
           if (hostResult != wasi_vfs.Preview1PathMutationResult.noEntry ||
               _vfs.pathEntry(oldPath.path!, followSymlinks: false) == null) {
             return _errnoFromPathMutationResult(hostResult);
@@ -2482,6 +2490,7 @@ class WASI implements wasi.WASI {
           return wasi_vfs.Preview1PathMutationResult.notEmpty;
         }
         try {
+          _vfs.detachOpenDirectoryFdsForPath(newGuestPath);
           fs.callMethodVarArgs<JSAny?>('rmdirSync'.toJS, [newHostPath.toJS]);
         } catch (_) {
           return _nodeHostPathMutationError(fs, newHostPath);

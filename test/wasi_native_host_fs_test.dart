@@ -700,6 +700,94 @@ void main() {
     );
   });
 
+  test('native host directory fds follow renamed host directories', () async {
+    final temp = await Directory.systemTemp.createTemp('wasd_host_rename_fd_');
+    addTearDown(() => temp.delete(recursive: true));
+    final source = Directory('${temp.path}/source')..createSync();
+    File('${source.path}/child.txt').writeAsStringSync('child');
+
+    final wasi = WASI(preopens: {'/host': temp.path});
+    final result = await WebAssembly.instantiate(
+      wasiStartModuleBytes().buffer,
+      wasi.imports,
+    );
+    final instance = result.instance;
+    final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+    final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+    final pathRename = preview1['path_rename'] as FunctionImportExportValue;
+    final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+    final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+    final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+    wasi.finalizeBindings(instance, memory: memory);
+
+    final bytes = Uint8List.view(memory.buffer);
+    final data = ByteData.view(memory.buffer);
+    const pathPtr = 1024;
+    const secondPathPtr = 1088;
+    const openedFdPtr = 1152;
+    const iovPtr = 1168;
+    const bufferPtr = 1200;
+    const nreadPtr = 1232;
+
+    int writePath(int ptr, String path) {
+      final encoded = utf8.encode(path);
+      bytes.setAll(ptr, encoded);
+      return encoded.length;
+    }
+
+    var pathLen = writePath(pathPtr, 'source');
+    expect(
+      pathOpen.ref([
+        3,
+        0,
+        pathPtr,
+        pathLen,
+        _oflagDirectory,
+        _rightPathOpen,
+        _rightFdRead | _rightFdSeek,
+        0,
+        openedFdPtr,
+      ]),
+      0,
+    );
+    final dirFd = data.getUint32(openedFdPtr, Endian.little);
+
+    final oldPathLen = writePath(pathPtr, 'source');
+    final newPathLen = writePath(secondPathPtr, 'renamed');
+    expect(
+      pathRename.ref([3, pathPtr, oldPathLen, 3, secondPathPtr, newPathLen]),
+      0,
+    );
+    Directory('${temp.path}/source').createSync();
+    File('${temp.path}/source/child.txt').writeAsStringSync('wrong');
+
+    pathLen = writePath(pathPtr, 'child.txt');
+    expect(
+      pathOpen.ref([
+        dirFd,
+        0,
+        pathPtr,
+        pathLen,
+        0,
+        _rightFdRead | _rightFdSeek,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      0,
+    );
+    final childFd = data.getUint32(openedFdPtr, Endian.little);
+
+    data.setUint32(iovPtr, bufferPtr, Endian.little);
+    data.setUint32(iovPtr + 4, 8, Endian.little);
+    expect(fdPread.ref([childFd, iovPtr, 1, 0, nreadPtr]), 0);
+    final nread = data.getUint32(nreadPtr, Endian.little);
+    expect(utf8.decode(bytes.sublist(bufferPtr, bufferPtr + nread)), 'child');
+
+    expect(fdClose.ref([childFd]), 0);
+    expect(fdClose.ref([dirFd]), 0);
+  });
+
   test('native host path_link creates real hard links', () async {
     final temp = await Directory.systemTemp.createTemp('wasd_host_link_');
     addTearDown(() => temp.delete(recursive: true));

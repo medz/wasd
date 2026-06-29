@@ -1294,6 +1294,14 @@ class WASI implements wasi_iface.WASI {
             oldHostPath: oldHostPath,
             newHostPath: newHostPath,
           );
+          if (hostResult == wasi_vfs.Preview1PathMutationResult.success) {
+            _vfs.renameOpenDirectoryFdsForHostRename(
+              oldGuestPath: oldPath.path!,
+              newGuestPath: newPath.path!,
+              oldHostPath: oldHostPath,
+              newHostPath: newHostPath,
+            );
+          }
           if (hostResult != wasi_vfs.Preview1PathMutationResult.noEntry ||
               _vfs.pathEntry(oldPath.path!, followSymlinks: false) == null) {
             return _errnoFromPathMutationResult(hostResult);
@@ -2121,6 +2129,7 @@ class WASI implements wasi_iface.WASI {
           if (target.listSync(followLinks: false).isNotEmpty) {
             return wasi_vfs.Preview1PathMutationResult.notEmpty;
           }
+          _vfs.detachOpenDirectoryFdsForPath(newGuestPath);
           target.deleteSync();
         } on io.FileSystemException {
           return _hostPathMutationError(newHostPath);

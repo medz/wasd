@@ -5282,6 +5282,113 @@ void main() {
       );
 
       test(
+        'node preview1 directory fds follow renamed host directories',
+        () async {
+          final host = createNodeHostTemp('wasd_node_host_rename_fd_');
+          expect(host, isNotNull);
+          addTearDown(() => host?.delete());
+          host!
+            ..createDirectory('source')
+            ..writeFile('source/child.txt', 'child');
+
+          final fileWasi = WASI(preopens: {'/host': host.path});
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final pathRename =
+              preview1['path_rename'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 3600;
+          const secondPathPtr = 3664;
+          const openedFdPtr = 3728;
+          const iovPtr = 3744;
+          const bufferPtr = 3776;
+          const nreadPtr = 3808;
+
+          int writePath(int ptr, String path) {
+            final encoded = utf8.encode(path);
+            bytes.setAll(ptr, encoded);
+            return encoded.length;
+          }
+
+          var pathLen = writePath(pathPtr, 'source');
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              pathLen,
+              _oflagDirectory,
+              _rightPathOpen,
+              _rightFdRead | _rightFdSeek,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final dirFd = data.getUint32(openedFdPtr, Endian.little);
+
+          final oldPathLen = writePath(pathPtr, 'source');
+          final newPathLen = writePath(secondPathPtr, 'renamed');
+          expect(
+            pathRename.ref([
+              3,
+              pathPtr,
+              oldPathLen,
+              3,
+              secondPathPtr,
+              newPathLen,
+            ]),
+            0,
+          );
+          host
+            ..createDirectory('source')
+            ..writeFile('source/child.txt', 'wrong');
+
+          pathLen = writePath(pathPtr, 'child.txt');
+          expect(
+            pathOpen.ref([
+              dirFd,
+              0,
+              pathPtr,
+              pathLen,
+              0,
+              _rightFdRead | _rightFdSeek,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final childFd = data.getUint32(openedFdPtr, Endian.little);
+
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 8, Endian.little);
+          expect(fdPread.ref([childFd, iovPtr, 1, 0, nreadPtr]), 0);
+          final nread = data.getUint32(nreadPtr, Endian.little);
+          expect(
+            utf8.decode(bytes.sublist(bufferPtr, bufferPtr + nread)),
+            'child',
+          );
+
+          expect(fdClose.ref([childFd]), 0);
+          expect(fdClose.ref([dirFd]), 0);
+        },
+        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+      );
+
+      test(
         'node preview1 creates real host links and symlinks',
         () async {
           final host = createNodeHostTemp('wasd_node_host_links_');
