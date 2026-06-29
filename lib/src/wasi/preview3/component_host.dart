@@ -7,6 +7,7 @@ import '../component/wit_adapter.dart';
 import '../component/wit_document.dart';
 import '../version.dart';
 import '../../wasm/backend/native/interpreter/component.dart';
+import 'clocks.dart';
 import 'random.dart';
 
 /// WASI 0.3 / Preview3 component host boundary.
@@ -20,12 +21,14 @@ final class WASIPreview3ComponentHost {
         version: WASIVersion.preview3,
         componentHost: componentHost,
       ),
-      _randomHost = WASIPreview3RandomHost();
+      _randomHost = WASIPreview3RandomHost(),
+      _clocksHost = WASIPreview3ClocksHost();
 
   /// Underlying versioned component-host facade.
   final WASIComponentVersionedHost versionedHost;
 
   final WASIPreview3RandomHost _randomHost;
+  final WASIPreview3ClocksHost _clocksHost;
 
   /// Preview3 version profile.
   WASIComponentVersionProfile get profile => versionedHost.profile;
@@ -34,8 +37,11 @@ final class WASIPreview3ComponentHost {
   WASIComponentHost get componentHost => versionedHost.componentHost;
 
   /// Standard Preview3 WIT import callbacks implemented by this host.
-  Map<String, WASIComponentWitAdapterCallback> get standardImports =>
-      _randomHost.imports;
+  late final Map<String, WASIComponentWitAdapterCallback> standardImports =
+      Map<String, WASIComponentWitAdapterCallback>.unmodifiable({
+        ..._randomHost.imports,
+        ..._clocksHost.imports,
+      });
 
   /// Prepares [component] for Preview3 component-host binding.
   WASIComponentVersionedBindingPlan prepareComponent(

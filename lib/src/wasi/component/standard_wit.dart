@@ -15,6 +15,12 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
       memberName: parsed.memberName,
     );
   }
+  if (parsed.packageName == 'wasi:clocks' && parsed.version == '0.3.0') {
+    return WASIComponentWitResolvedTarget(
+      document: _wasiClocks030Document,
+      memberName: parsed.memberName,
+    );
+  }
   return null;
 }
 
@@ -47,6 +53,12 @@ final WASIComponentWitDocument _wasiRandom030Document =
       sourceName: 'wasi:random@0.3.0',
     );
 
+final WASIComponentWitDocument _wasiClocks030Document =
+    WASIComponentWitDocument.parse(
+      _wasiClocks030Source,
+      sourceName: 'wasi:clocks@0.3.0',
+    );
+
 const String _wasiRandom030Source = '''
 package wasi:random@0.3.0;
 
@@ -68,5 +80,46 @@ world imports {
   import random;
   import insecure;
   import insecure-seed;
+}
+''';
+
+const String _wasiClocks030Source = '''
+package wasi:clocks@0.3.0;
+
+interface types {}
+
+interface monotonic-clock {
+  now: func() -> u64;
+  get-resolution: func() -> u64;
+  wait-until: async func(when: u64);
+  wait-for: async func(how-long: u64);
+}
+
+interface system-clock {
+  record instant {
+    seconds: s64,
+    nanoseconds: u32,
+  }
+
+  now: func() -> instant;
+  get-resolution: func() -> u64;
+}
+
+interface timezone {
+  record instant {
+    seconds: s64,
+    nanoseconds: u32,
+  }
+
+  iana-id: func() -> option<string>;
+  utc-offset: func(when: instant) -> option<s64>;
+  to-debug-string: func() -> string;
+}
+
+world imports {
+  import types;
+  import monotonic-clock;
+  import system-clock;
+  import timezone;
 }
 ''';

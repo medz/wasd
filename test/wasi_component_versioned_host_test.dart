@@ -364,6 +364,103 @@ world random-test {
       expect(_u64Tuple(seedA), _u64Tuple(seedB));
     });
 
+    test('Preview3 expands and binds standard WASI clocks imports', () async {
+      const source = '''
+package wasi-testsuite:test;
+
+world clocks-test {
+  include wasi:clocks/imports@0.3.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2Plan = WASIPreview2ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'clocks-test',
+      );
+      final preview3 = WASIPreview3ComponentHost();
+      final preview3Plan = preview3.prepareWitWorld(
+        document,
+        worldName: 'clocks-test',
+      );
+
+      expect(preview2Plan.canIngest, isFalse);
+      expect(preview2Plan.versionErrors.map((error) => error.targetName), [
+        'wasi:clocks/imports@0.3.0',
+      ]);
+      expect(preview3Plan.canIngest, isTrue);
+      expect(preview3Plan.canBindAdapters, isTrue);
+      expect(preview3Plan.functions.map((function) => function.qualifiedName), [
+        'wasi:clocks/monotonic-clock@0.3.0.now',
+        'wasi:clocks/monotonic-clock@0.3.0.get-resolution',
+        'wasi:clocks/monotonic-clock@0.3.0.wait-until',
+        'wasi:clocks/monotonic-clock@0.3.0.wait-for',
+        'wasi:clocks/system-clock@0.3.0.now',
+        'wasi:clocks/system-clock@0.3.0.get-resolution',
+        'wasi:clocks/timezone@0.3.0.iana-id',
+        'wasi:clocks/timezone@0.3.0.utc-offset',
+        'wasi:clocks/timezone@0.3.0.to-debug-string',
+      ]);
+
+      final program = preview3.bindWitWorld(document, worldName: 'clocks-test');
+      final before =
+          program.invokeImport(
+                'wasi:clocks/monotonic-clock@0.3.0.now',
+                const [],
+              )
+              as BigInt;
+      final resolution =
+          program.invokeImport(
+                'wasi:clocks/monotonic-clock@0.3.0.get-resolution',
+                const [],
+              )
+              as BigInt;
+      await program.invokeImportAsync(
+        'wasi:clocks/monotonic-clock@0.3.0.wait-for',
+        [BigInt.from(1000)],
+      );
+      await program.invokeImportAsync(
+        'wasi:clocks/monotonic-clock@0.3.0.wait-until',
+        [BigInt.zero],
+      );
+      final after =
+          program.invokeImport(
+                'wasi:clocks/monotonic-clock@0.3.0.now',
+                const [],
+              )
+              as BigInt;
+      final instant =
+          program.invokeImport('wasi:clocks/system-clock@0.3.0.now', const [])
+              as WasmComponentValueData;
+      final systemResolution =
+          program.invokeImport(
+                'wasi:clocks/system-clock@0.3.0.get-resolution',
+                const [],
+              )
+              as BigInt;
+      final timezone =
+          program.invokeImport('wasi:clocks/timezone@0.3.0.iana-id', const [])
+              as WasmComponentValueData;
+      final utcOffset =
+          program.invokeImport('wasi:clocks/timezone@0.3.0.utc-offset', [
+                instant,
+              ])
+              as WasmComponentValueData;
+      final debug = program.invokeImport(
+        'wasi:clocks/timezone@0.3.0.to-debug-string',
+        const [],
+      );
+
+      expect(resolution, greaterThan(BigInt.zero));
+      expect(after, greaterThanOrEqualTo(before));
+      expect(_instantNanoseconds(instant), lessThan(1000000000));
+      expect(systemResolution, greaterThan(BigInt.zero));
+      expect(timezone.kind, WasmComponentValueDataKind.option);
+      expect(timezone.isSome, isFalse);
+      expect(utcOffset.kind, WasmComponentValueDataKind.option);
+      expect(utcOffset.isSome, isFalse);
+      expect(debug, isA<String>());
+    });
+
     test('Preview2 and Preview3 wrappers execute WIT world adapters', () {
       const source = '''
 package acme:math@0.2.0;
@@ -1989,6 +2086,19 @@ BigInt _u64Data(WasmComponentValueData value) {
     return BigInt.from(integer);
   }
   throw StateError('expected integer payload, got $integer');
+}
+
+int _instantNanoseconds(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.record ||
+      value.items.length != 2) {
+    throw StateError('expected clock instant, got ${value.kind.name}');
+  }
+  final nanos = value.items[1];
+  if (nanos.kind != WasmComponentValueDataKind.integer ||
+      nanos.integer is! int) {
+    throw StateError('expected instant nanoseconds u32');
+  }
+  return nanos.integer as int;
 }
 
 WasmComponentValueData _stringTupleListValue(List<(String, String)> rows) {

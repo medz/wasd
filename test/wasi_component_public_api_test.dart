@@ -90,6 +90,29 @@ world random-test {
         contains('wasi:random/insecure-seed@0.3.0.get-insecure-seed'),
       );
     });
+
+    test('binds standard Preview3 clocks imports from public API', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world clocks-test {
+  include wasi:clocks/imports@0.3.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview3ComponentHost();
+      final program = host.bindWitWorld(document, worldName: 'clocks-test');
+      final now = program.invokeImport(
+        'wasi:clocks/monotonic-clock@0.3.0.now',
+        const [],
+      );
+
+      expect(now, isA<BigInt>());
+      expect(
+        host.standardImports,
+        contains('wasi:clocks/system-clock@0.3.0.now'),
+      );
+    });
   });
 }
 
