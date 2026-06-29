@@ -1756,14 +1756,27 @@ class WASI implements wasi.WASI {
           return _errnoInval;
         }
 
-        _writePollEvents(
+        final pollStartMonotonic = _clockNowNanos(_clockMonotonic);
+        final waitNanos = _writePollEvents(
           bytes: bytes,
           data: data,
           inPtr: inPtr,
           outPtr: outPtr,
           nsubscriptions: nsubscriptions,
           neventsPtr: neventsPtr,
+          pollStartMonotonic: pollStartMonotonic,
         );
+        if (waitNanos > 0 && _sleepSyncForNanos(waitNanos)) {
+          _writePollEvents(
+            bytes: bytes,
+            data: data,
+            inPtr: inPtr,
+            outPtr: outPtr,
+            nsubscriptions: nsubscriptions,
+            neventsPtr: neventsPtr,
+            pollStartMonotonic: pollStartMonotonic,
+          );
+        }
         return _errnoSuccess;
       });
 
@@ -2024,6 +2037,7 @@ class WASI implements wasi.WASI {
     required int outPtr,
     required int nsubscriptions,
     required int neventsPtr,
+    required int pollStartMonotonic,
   }) {
     var eventCount = 0;
     var earliestWaitNanos = 0;
@@ -2042,6 +2056,7 @@ class WASI implements wasi.WASI {
           data: data,
           subscriptionPtr: subscriptionPtr,
           nowMonotonic: nowMonotonic,
+          pollStartMonotonic: pollStartMonotonic,
         );
         if (clockWaitNanos == _clockSubscriptionInvalid) {
           errno = _errnoInval;
@@ -2108,6 +2123,7 @@ class WASI implements wasi.WASI {
     required ByteData data,
     required int subscriptionPtr,
     required int nowMonotonic,
+    required int pollStartMonotonic,
   }) {
     final clockId = data.getUint32(
       subscriptionPtr + _subscriptionClockIdOffset,
@@ -2125,10 +2141,14 @@ class WASI implements wasi.WASI {
         (flags & ~_subscriptionClockAbstime) != 0) {
       return _clockSubscriptionInvalid;
     }
+    if ((flags & _subscriptionClockAbstime) == 0) {
+      final deadline = pollStartMonotonic + timeout;
+      final remaining = deadline - nowMonotonic;
+      return remaining > 0 ? remaining : 0;
+    }
+
     final now = _clockNowNanos(clockId);
-    final deadline = (flags & _subscriptionClockAbstime) != 0
-        ? timeout
-        : now + timeout;
+    final deadline = timeout;
     final remaining = deadline - now;
     if (clockId == _clockMonotonic) {
       return remaining > 0 ? remaining : 0;
@@ -2137,6 +2157,44 @@ class WASI implements wasi.WASI {
     return adjustedDeadline > nowMonotonic
         ? adjustedDeadline - nowMonotonic
         : 0;
+  }
+
+  bool _sleepSyncForNanos(int nanos) {
+    if (nanos <= 0) {
+      return true;
+    }
+    if (!_isNodeJs()) {
+      return false;
+    }
+    final atomics = globalContext.getProperty<JSObject?>('Atomics'.toJS);
+    final sharedArrayBufferConstructor = globalContext.getProperty<JSFunction?>(
+      'SharedArrayBuffer'.toJS,
+    );
+    final int32ArrayConstructor = globalContext.getProperty<JSFunction?>(
+      'Int32Array'.toJS,
+    );
+    if (atomics == null ||
+        sharedArrayBufferConstructor == null ||
+        int32ArrayConstructor == null) {
+      return false;
+    }
+
+    final milliseconds = (nanos / 1000000).ceil();
+    try {
+      final buffer = sharedArrayBufferConstructor.callAsConstructor<JSObject>(
+        4.toJS,
+      );
+      final array = int32ArrayConstructor.callAsConstructor<JSObject>(buffer);
+      atomics.callMethodVarArgs<JSAny?>('wait'.toJS, [
+        array,
+        0.toJS,
+        0.toJS,
+        milliseconds.toJS,
+      ]);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   ({int errno, List<wasi_vfs.Preview1DirectoryEntry>? entries})

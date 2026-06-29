@@ -8,6 +8,7 @@ import 'package:wasd/src/wasi/preview1/common/fd_syscalls.dart' as preview1_fd;
 import 'package:wasd/src/wasi/preview1/common/vfs.dart';
 import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
+import 'support/host_fs.dart';
 import 'support/node_host_fs.dart';
 import 'support/runtime_environment.dart';
 import 'support/wasm_fixtures.dart';
@@ -19,6 +20,11 @@ Object? _skipUnlessBrowser(String reason) =>
     isBrowserJsRuntime ? false : reason;
 
 Object? _skipUnlessNode(String reason) => isNodeJsRuntime ? false : reason;
+
+Object? _skipUnlessNative(String reason) =>
+    !isNodeJsRuntime && !isBrowserJsRuntime ? false : reason;
+
+Object? _skipIfBrowser(String reason) => isBrowserJsRuntime ? reason : false;
 
 const int _rightFdRead = 1 << 1;
 const int _rightFdSeek = 1 << 2;
@@ -74,6 +80,7 @@ const int _subscriptionSize = 48;
 const int _subscriptionTagOffset = 8;
 const int _subscriptionFdReadwriteFdOffset = 16;
 const int _subscriptionClockIdOffset = 16;
+const int _subscriptionClockTimeoutOffset = 24;
 const int _subscriptionClockFlagsOffset = 40;
 const int _eventSize = 32;
 const int _eventErrorOffset = 8;
@@ -2098,6 +2105,60 @@ void main() {
             _errnoInval,
           );
         },
+      );
+
+      test(
+        'poll_oneoff waits for monotonic clock timeouts',
+        () async {
+          final pollWasi = WASI();
+          final pollResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            pollWasi.imports,
+          );
+          final pollInstance = pollResult.instance;
+          final pollOneoff =
+              pollWasi.imports['wasi_snapshot_preview1']!['poll_oneoff']
+                  as FunctionImportExportValue;
+          final memory =
+              (pollInstance.exports['memory'] as MemoryImportExportValue).ref;
+          pollWasi.finalizeBindings(pollInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const inPtr = 2448;
+          const outPtr = 2544;
+          const neventsPtr = 2640;
+          _writePollSubscription(
+            data,
+            inPtr,
+            userdata: 0x1234,
+            tag: _eventTypeClock,
+          );
+          data.setUint32(inPtr + _subscriptionClockIdOffset, 1, Endian.little);
+          _setUint64Le(data, inPtr + _subscriptionClockTimeoutOffset, 30000000);
+
+          final elapsed = Stopwatch()..start();
+          expect(
+            await _awaitMaybeFuture(
+              pollOneoff.ref([inPtr, outPtr, 1, neventsPtr]),
+            ),
+            0,
+          );
+          elapsed.stop();
+
+          expect(
+            elapsed.elapsedMilliseconds,
+            greaterThanOrEqualTo(15),
+            reason: 'poll_oneoff must not complete before the clock timeout.',
+          );
+          expect(data.getUint32(neventsPtr, Endian.little), 1);
+          expect(_getUint64Le(data, outPtr), 0x1234);
+          expect(bytes[outPtr + _eventTypeOffset], _eventTypeClock);
+          expect(data.getUint16(outPtr + _eventErrorOffset, Endian.little), 0);
+        },
+        skip: _skipIfBrowser(
+          'browser main-thread WASI poll cannot synchronously block',
+        ),
       );
 
       test(
@@ -4819,6 +4880,83 @@ void main() {
           'zzXYef',
         );
       });
+
+      test(
+        'native preview1 host files support read/write descriptors',
+        () async {
+          final host = createHostTemp('wasd_native_host_rw_');
+          expect(host, isNotNull);
+          addTearDown(() => host?.delete());
+          host!.writeFile('rw.txt', 'abcdef');
+
+          final fileWasi = WASI(preopens: {'/host': host.path});
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdRead = preview1['fd_read'] as FunctionImportExportValue;
+          final fdWrite = preview1['fd_write'] as FunctionImportExportValue;
+          final fdSeek = preview1['fd_seek'] as FunctionImportExportValue;
+          final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 4240;
+          const openedFdPtr = 4272;
+          const iovPtr = 4288;
+          const bufferPtr = 4320;
+          const countPtr = 4360;
+          const offsetPtr = 4384;
+
+          final path = utf8.encode('rw.txt');
+          bytes.setAll(pathPtr, path);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              path.length,
+              0,
+              _rightFdRead |
+                  _rightFdWrite |
+                  _rightFdSeek |
+                  _rightFdTell |
+                  _rightFdFdstatGet,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final fd = data.getUint32(openedFdPtr, Endian.little);
+
+          expect(fdSeek.ref([fd, 2, 0, offsetPtr]), 0);
+          bytes.setAll(bufferPtr, utf8.encode('XY'));
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 2, Endian.little);
+          expect(fdWrite.ref([fd, iovPtr, 1, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 2);
+          expect(host.readFile('rw.txt'), 'abXYef');
+
+          expect(fdSeek.ref([fd, 0, 0, offsetPtr]), 0);
+          bytes.fillRange(bufferPtr, bufferPtr + 8, 0);
+          data.setUint32(iovPtr + 4, 6, Endian.little);
+          expect(fdRead.ref([fd, iovPtr, 1, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 6);
+          expect(
+            utf8.decode(bytes.sublist(bufferPtr, bufferPtr + 6)),
+            'abXYef',
+          );
+          expect(fdClose.ref([fd]), 0);
+        },
+        skip: _skipUnlessNative('requires Dart VM host filesystem access'),
+      );
 
       test(
         'node preview1 preopens use real host regular files',

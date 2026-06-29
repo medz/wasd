@@ -1742,6 +1742,7 @@ class WASI implements wasi_iface.WASI {
           return _errnoInval;
         }
 
+        final pollStartMonotonic = _clockNowNanos(_clockMonotonic);
         var waitNanos = _writePollEvents(
           bytes: bytes,
           data: data,
@@ -1749,6 +1750,7 @@ class WASI implements wasi_iface.WASI {
           outPtr: outPtr,
           nsubscriptions: nsubscriptions,
           neventsPtr: neventsPtr,
+          pollStartMonotonic: pollStartMonotonic,
         );
         if (waitNanos > 0) {
           io.sleep(_durationFromNanos(waitNanos));
@@ -1759,6 +1761,7 @@ class WASI implements wasi_iface.WASI {
             outPtr: outPtr,
             nsubscriptions: nsubscriptions,
             neventsPtr: neventsPtr,
+            pollStartMonotonic: pollStartMonotonic,
           );
         }
         return _errnoSuccess;
@@ -2944,6 +2947,7 @@ class WASI implements wasi_iface.WASI {
     required int outPtr,
     required int nsubscriptions,
     required int neventsPtr,
+    required int pollStartMonotonic,
   }) {
     var eventCount = 0;
     var earliestWaitNanos = 0;
@@ -2962,6 +2966,7 @@ class WASI implements wasi_iface.WASI {
           data: data,
           subscriptionPtr: subscriptionPtr,
           nowMonotonic: nowMonotonic,
+          pollStartMonotonic: pollStartMonotonic,
         );
         if (clockWaitNanos == _clockSubscriptionInvalid) {
           errno = _errnoInval;
@@ -3028,6 +3033,7 @@ class WASI implements wasi_iface.WASI {
     required ByteData data,
     required int subscriptionPtr,
     required int nowMonotonic,
+    required int pollStartMonotonic,
   }) {
     final clockId = data.getUint32(
       subscriptionPtr + _subscriptionClockIdOffset,
@@ -3045,10 +3051,14 @@ class WASI implements wasi_iface.WASI {
         (flags & ~_subscriptionClockAbstime) != 0) {
       return _clockSubscriptionInvalid;
     }
+    if ((flags & _subscriptionClockAbstime) == 0) {
+      final deadline = pollStartMonotonic + timeout;
+      final remaining = deadline - nowMonotonic;
+      return remaining > 0 ? remaining : 0;
+    }
+
     final now = _clockNowNanos(clockId);
-    final deadline = (flags & _subscriptionClockAbstime) != 0
-        ? timeout
-        : now + timeout;
+    final deadline = timeout;
     final remaining = deadline - now;
     if (clockId == _clockMonotonic) {
       return remaining > 0 ? remaining : 0;
