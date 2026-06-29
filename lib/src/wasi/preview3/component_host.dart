@@ -9,6 +9,7 @@ import '../version.dart';
 import '../../wasm/backend/native/interpreter/component.dart';
 import 'cli.dart';
 import 'clocks.dart';
+import 'filesystem.dart';
 import 'random.dart';
 
 /// WASI 0.3 / Preview3 component host boundary.
@@ -20,6 +21,7 @@ final class WASIPreview3ComponentHost {
   WASIPreview3ComponentHost({
     WASIComponentHost? componentHost,
     WASIPreview3CliHost? cliHost,
+    WASIPreview3FilesystemHost? filesystemHost,
     List<String> args = const <String>[],
     Map<String, String> env = const <String, String>{},
     String? initialCwd,
@@ -41,7 +43,8 @@ final class WASIPreview3ComponentHost {
              stdinData: stdinData,
              stdout: stdout,
              stderr: stderr,
-           );
+           ),
+       _filesystemHost = filesystemHost ?? WASIPreview3FilesystemHost();
 
   /// Underlying versioned component-host facade.
   final WASIComponentVersionedHost versionedHost;
@@ -49,6 +52,7 @@ final class WASIPreview3ComponentHost {
   final WASIPreview3RandomHost _randomHost;
   final WASIPreview3ClocksHost _clocksHost;
   final WASIPreview3CliHost _cliHost;
+  final WASIPreview3FilesystemHost _filesystemHost;
 
   /// Preview3 version profile.
   WASIComponentVersionProfile get profile => versionedHost.profile;
@@ -59,12 +63,16 @@ final class WASIPreview3ComponentHost {
   /// CLI host state and captured stdio for standard `wasi:cli` imports.
   WASIPreview3CliHost get cliHost => _cliHost;
 
+  /// Filesystem host state for standard `wasi:filesystem` imports.
+  WASIPreview3FilesystemHost get filesystemHost => _filesystemHost;
+
   /// Standard Preview3 WIT import callbacks implemented by this host.
   late final Map<String, WASIComponentWitAdapterCallback> standardImports =
       Map<String, WASIComponentWitAdapterCallback>.unmodifiable({
         ..._randomHost.imports,
         ..._clocksHost.imports,
         ..._cliHost.imports,
+        ..._filesystemHost.imports,
       });
 
   /// Prepares [component] for Preview3 component-host binding.

@@ -13,6 +13,7 @@ import 'package:wasd/src/wasi/component/wit_document.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
 import 'package:wasd/src/wasi/preview3/cli.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
+import 'package:wasd/src/wasi/preview3/filesystem.dart';
 import 'package:wasd/src/wasi/version.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
@@ -603,6 +604,185 @@ world cli-test {
         ),
       );
     });
+
+    test(
+      'Preview3 expands and binds standard WASI filesystem imports',
+      () async {
+        const source = '''
+package wasi-testsuite:test;
+
+world filesystem-test {
+  include wasi:filesystem/imports@0.3.0;
+}
+''';
+        final document = WASIComponentWitDocument.parse(source);
+        final filesystem = WASIPreview3FilesystemHost(
+          preopens: {
+            '/': WASIPreview3FilesystemDirectory(
+              entries: [
+                WASIPreview3FilesystemDirectoryEntry.directory('etc'),
+                WASIPreview3FilesystemDirectoryEntry.regularFile(
+                  'hello.txt',
+                  bytes: const <int>[104, 101, 108, 108, 111],
+                ),
+              ],
+            ),
+            '/cache': WASIPreview3FilesystemDirectory(),
+          },
+        );
+        final preview3 = WASIPreview3ComponentHost(filesystemHost: filesystem);
+        final plan = preview3.prepareWitWorld(
+          document,
+          worldName: 'filesystem-test',
+        );
+
+        expect(plan.canIngest, isTrue);
+        expect(plan.canBindAdapters, isTrue);
+        expect(plan.bindingErrors, isEmpty);
+        expect(
+          plan.functions.map((function) => function.qualifiedName),
+          containsAll(<String>[
+            'wasi:filesystem/preopens@0.3.0.get-directories',
+            'wasi:filesystem/types@0.3.0.descriptor.get-flags',
+            'wasi:filesystem/types@0.3.0.descriptor.get-type',
+            'wasi:filesystem/types@0.3.0.descriptor.stat',
+            'wasi:filesystem/types@0.3.0.descriptor.read-directory',
+            'wasi:filesystem/types@0.3.0.descriptor.metadata-hash',
+            'wasi:filesystem/types@0.3.0.descriptor.is-same-object',
+          ]),
+        );
+
+        final program = preview3.bindWitWorld(
+          document,
+          worldName: 'filesystem-test',
+        );
+        final directories =
+            program.invokeImport(
+                  'wasi:filesystem/preopens@0.3.0.get-directories',
+                  const [],
+                )
+                as WasmComponentValueData;
+        final preopens = _filesystemPreopens(directories);
+
+        expect(preopens.map((preopen) => preopen.$2), ['/', '/cache']);
+        expect(preopens.map((preopen) => preopen.$1).toSet(), hasLength(2));
+
+        final root = preopens.first.$1;
+        final flags =
+            await program.invokeImportAsync(
+                  'wasi:filesystem/types@0.3.0.descriptor.get-flags',
+                  [root],
+                )
+                as WasmComponentValueData;
+        final type =
+            await program.invokeImportAsync(
+                  'wasi:filesystem/types@0.3.0.descriptor.get-type',
+                  [root],
+                )
+                as WasmComponentValueData;
+        final stat =
+            await program.invokeImportAsync(
+                  'wasi:filesystem/types@0.3.0.descriptor.stat',
+                  [root],
+                )
+                as WasmComponentValueData;
+        final sameObject =
+            await program.invokeImportAsync(
+                  'wasi:filesystem/types@0.3.0.descriptor.is-same-object',
+                  [root, root],
+                )
+                as bool;
+        final hash =
+            await program.invokeImportAsync(
+                  'wasi:filesystem/types@0.3.0.descriptor.metadata-hash',
+                  [root],
+                )
+                as WasmComponentValueData;
+        final directoryRead =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.3.0.descriptor.read-directory',
+                  [root],
+                )
+                as List<Object?>;
+        final entries =
+            directoryRead[0] as WASIComponentStream<WasmComponentValueData>;
+        final readResult =
+            directoryRead[1] as WASIComponentFuture<WasmComponentValueData>;
+
+        expect(_resultOk(flags).labels, contains('read'));
+        expect(_variantLabel(_resultOk(type)), 'directory');
+        expect(_descriptorStatType(_resultOk(stat)), 'directory');
+        expect(sameObject, isTrue);
+        expect(_metadataHashLower(_resultOk(hash)), isNot(BigInt.zero));
+        expect(
+          (await entries.readable.readWhenAvailable(
+            8,
+          )).map(_directoryEntryName).toList(),
+          ['etc', 'hello.txt'],
+        );
+        expect((await readResult.readable.readWhenReady()).isOk, isTrue);
+
+        final opened =
+            await program.invokeImportAsync(
+                  'wasi:filesystem/types@0.3.0.descriptor.open-at',
+                  [
+                    root,
+                    _flagsValue(const <String>[]),
+                    'hello.txt',
+                    _flagsValue(const <String>[]),
+                    _flagsValue(const <String>['read']),
+                  ],
+                )
+                as WasmComponentValueData;
+        final file = _resourceHandle(_resultOk(opened));
+        final fileType =
+            await program.invokeImportAsync(
+                  'wasi:filesystem/types@0.3.0.descriptor.get-type',
+                  [file],
+                )
+                as WasmComponentValueData;
+        final fileStat =
+            await program.invokeImportAsync(
+                  'wasi:filesystem/types@0.3.0.descriptor.stat-at',
+                  [root, _flagsValue(const <String>[]), 'hello.txt'],
+                )
+                as WasmComponentValueData;
+        final fileHash =
+            await program.invokeImportAsync(
+                  'wasi:filesystem/types@0.3.0.descriptor.metadata-hash-at',
+                  [root, _flagsValue(const <String>[]), 'hello.txt'],
+                )
+                as WasmComponentValueData;
+        final denied =
+            await program.invokeImportAsync(
+                  'wasi:filesystem/types@0.3.0.descriptor.open-at',
+                  [
+                    root,
+                    _flagsValue(const <String>[]),
+                    'hello.txt',
+                    _flagsValue(const <String>[]),
+                    _flagsValue(const <String>['write']),
+                  ],
+                )
+                as WasmComponentValueData;
+        final fileRead =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.3.0.descriptor.read-via-stream',
+                  [file, BigInt.from(1)],
+                )
+                as List<Object?>;
+        final fileStream = fileRead[0] as WASIComponentStream<int>;
+        final fileReadResult =
+            fileRead[1] as WASIComponentFuture<WasmComponentValueData>;
+
+        expect(_variantLabel(_resultOk(fileType)), 'regular-file');
+        expect(_descriptorStatType(_resultOk(fileStat)), 'regular-file');
+        expect(_metadataHashLower(_resultOk(fileHash)), isNot(BigInt.zero));
+        expect(_resultErrorLabel(denied), 'read-only');
+        expect(fileStream.readable.read(8), [101, 108, 108, 111]);
+        expect((await fileReadResult.readable.readWhenReady()).isOk, isTrue);
+      },
+    );
 
     test('Preview2 and Preview3 wrappers execute WIT world adapters', () {
       const source = '''
@@ -2247,6 +2427,104 @@ List<(String, String)> _stringPairs(WasmComponentValueData value) {
       else
         throw StateError('expected string tuple item, got ${item.kind.name}'),
   ];
+}
+
+List<(int, String)> _filesystemPreopens(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.list) {
+    throw StateError(
+      'expected list<tuple<descriptor, string>>, got ${value.kind.name}',
+    );
+  }
+  return [
+    for (final item in value.items)
+      if (item.kind == WasmComponentValueDataKind.tuple &&
+          item.items.length == 2 &&
+          item.items[0].kind == WasmComponentValueDataKind.integer &&
+          item.items[1].kind == WasmComponentValueDataKind.string)
+        (_resourceHandle(item.items[0]), item.items[1].string!)
+      else
+        throw StateError(
+          'expected filesystem preopen tuple item, got ${item.kind.name}',
+        ),
+  ];
+}
+
+WasmComponentValueData _resultOk(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.result ||
+      !(value.isOk ?? value.label == 'ok' || value.index == 0)) {
+    throw StateError('expected ok result, got ${value.kind.name}');
+  }
+  final associated = value.associatedValue;
+  if (associated == null) {
+    throw StateError('expected ok result payload');
+  }
+  return associated;
+}
+
+String _variantLabel(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.variant) {
+    throw StateError('expected variant, got ${value.kind.name}');
+  }
+  return value.label ?? 'case-${value.index}';
+}
+
+String _descriptorStatType(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.record ||
+      value.items.length != 6) {
+    throw StateError('expected descriptor-stat, got ${value.kind.name}');
+  }
+  return _variantLabel(value.items[0]);
+}
+
+BigInt _metadataHashLower(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.record ||
+      value.items.length != 2) {
+    throw StateError('expected metadata-hash-value, got ${value.kind.name}');
+  }
+  return _u64Data(value.items[0]);
+}
+
+int _resourceHandle(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.integer) {
+    throw StateError('expected resource handle, got ${value.kind.name}');
+  }
+  final integer = value.integer;
+  if (integer is int) {
+    return integer;
+  }
+  if (integer is BigInt) {
+    return integer.toInt();
+  }
+  throw StateError('expected resource handle payload, got $integer');
+}
+
+String _resultErrorLabel(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.result ||
+      (value.isOk ?? value.label == 'ok' || value.index == 0)) {
+    throw StateError('expected error result, got ${value.kind.name}');
+  }
+  final associated = value.associatedValue;
+  if (associated == null) {
+    throw StateError('expected error result payload');
+  }
+  return _variantLabel(associated);
+}
+
+String _directoryEntryName(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.record ||
+      value.items.length != 2 ||
+      value.items[1].kind != WasmComponentValueDataKind.string) {
+    throw StateError('expected directory-entry, got ${value.kind.name}');
+  }
+  return value.items[1].string!;
+}
+
+WasmComponentValueData _flagsValue(List<String> labels) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.flags,
+    rawBytes: Uint8List(0),
+    labels: labels,
+  );
 }
 
 String? _optionString(WasmComponentValueData value) {

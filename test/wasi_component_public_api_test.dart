@@ -144,6 +144,46 @@ world cli-test {
       );
       expect(host.cliHost.stdinData, [65]);
     });
+
+    test('binds standard Preview3 filesystem imports from public API', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world filesystem-test {
+  import wasi:filesystem/preopens@0.3.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final filesystem = WASIPreview3FilesystemHost(
+        preopens: {
+          '/': WASIPreview3FilesystemDirectory(
+            entries: [
+              WASIPreview3FilesystemDirectoryEntry.regularFile(
+                'config.json',
+                size: BigInt.from(2),
+              ),
+            ],
+          ),
+        },
+      );
+      final host = WASIPreview3ComponentHost(filesystemHost: filesystem);
+      final program = host.bindWitWorld(document, worldName: 'filesystem-test');
+      final directories =
+          program.invokeImport(
+                'wasi:filesystem/preopens@0.3.0.get-directories',
+                const [],
+              )
+              as WasmComponentValueData;
+
+      expect(directories.kind, WasmComponentValueDataKind.list);
+      expect(directories.items, hasLength(1));
+      expect(directories.items.single.items[1].string, '/');
+      expect(
+        host.standardImports,
+        contains('wasi:filesystem/types@0.3.0.descriptor.stat'),
+      );
+      expect(host.filesystemHost, same(filesystem));
+    });
   });
 }
 

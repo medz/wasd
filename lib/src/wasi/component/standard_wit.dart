@@ -27,6 +27,12 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
       memberName: parsed.memberName,
     );
   }
+  if (parsed.packageName == 'wasi:filesystem' && parsed.version == '0.3.0') {
+    return WASIComponentWitResolvedTarget(
+      document: _wasiFilesystem030Document,
+      memberName: parsed.memberName,
+    );
+  }
   return null;
 }
 
@@ -69,6 +75,12 @@ final WASIComponentWitDocument _wasiCli030Document =
     WASIComponentWitDocument.parse(
       _wasiCli030Source,
       sourceName: 'wasi:cli@0.3.0',
+    );
+
+final WASIComponentWitDocument _wasiFilesystem030Document =
+    WASIComponentWitDocument.parse(
+      _wasiFilesystem030Source,
+      sourceName: 'wasi:filesystem@0.3.0',
     );
 
 const String _wasiRandom030Source = '''
@@ -268,5 +280,164 @@ world command {
   import wasi:random/insecure-seed@0.3.0;
 
   export run;
+}
+''';
+
+const String _wasiFilesystem030Source = '''
+package wasi:filesystem@0.3.0;
+
+interface types {
+  record instant {
+    seconds: s64,
+    nanoseconds: u32,
+  }
+
+  variant descriptor-type {
+    block-device,
+    character-device,
+    directory,
+    fifo,
+    symbolic-link,
+    regular-file,
+    socket,
+    other(option<string>),
+  }
+
+  flags descriptor-flags {
+    read,
+    write,
+    file-integrity-sync,
+    data-integrity-sync,
+    requested-write-sync,
+    mutate-directory,
+  }
+
+  flags path-flags {
+    symlink-follow,
+  }
+
+  flags open-flags {
+    create,
+    directory,
+    exclusive,
+    truncate,
+  }
+
+  record descriptor-stat {
+    type: descriptor-type,
+    link-count: u64,
+    size: u64,
+    data-access-timestamp: option<instant>,
+    data-modification-timestamp: option<instant>,
+    status-change-timestamp: option<instant>,
+  }
+
+  variant new-timestamp {
+    no-change,
+    now,
+    timestamp(instant),
+  }
+
+  record directory-entry {
+    type: descriptor-type,
+    name: string,
+  }
+
+  variant error-code {
+    access,
+    already,
+    bad-descriptor,
+    busy,
+    deadlock,
+    quota,
+    exist,
+    file-too-large,
+    illegal-byte-sequence,
+    in-progress,
+    interrupted,
+    invalid,
+    io,
+    is-directory,
+    loop,
+    too-many-links,
+    message-size,
+    name-too-long,
+    no-device,
+    no-entry,
+    no-lock,
+    insufficient-memory,
+    insufficient-space,
+    not-directory,
+    not-empty,
+    not-recoverable,
+    unsupported,
+    no-tty,
+    no-such-device,
+    overflow,
+    not-permitted,
+    pipe,
+    read-only,
+    invalid-seek,
+    text-file-busy,
+    cross-device,
+    other(option<string>),
+  }
+
+  enum advice {
+    normal,
+    sequential,
+    random,
+    will-need,
+    dont-need,
+    no-reuse,
+  }
+
+  record metadata-hash-value {
+    lower: u64,
+    upper: u64,
+  }
+
+  resource descriptor;
+
+  descriptor {
+    read-via-stream: func(self: borrow<descriptor>, offset: u64) -> tuple<stream<u8>, future<result<_, error-code>>>;
+    write-via-stream: func(self: borrow<descriptor>, data: stream<u8>, offset: u64) -> future<result<_, error-code>>;
+    append-via-stream: func(self: borrow<descriptor>, data: stream<u8>) -> future<result<_, error-code>>;
+    advise: async func(self: borrow<descriptor>, offset: u64, length: u64, advice: advice) -> result<_, error-code>;
+    sync-data: async func(self: borrow<descriptor>) -> result<_, error-code>;
+    get-flags: async func(self: borrow<descriptor>) -> result<descriptor-flags, error-code>;
+    get-type: async func(self: borrow<descriptor>) -> result<descriptor-type, error-code>;
+    set-size: async func(self: borrow<descriptor>, size: u64) -> result<_, error-code>;
+    set-times: async func(self: borrow<descriptor>, data-access-timestamp: new-timestamp, data-modification-timestamp: new-timestamp) -> result<_, error-code>;
+    read-directory: func(self: borrow<descriptor>) -> tuple<stream<directory-entry>, future<result<_, error-code>>>;
+    sync: async func(self: borrow<descriptor>) -> result<_, error-code>;
+    create-directory-at: async func(self: borrow<descriptor>, path: string) -> result<_, error-code>;
+    stat: async func(self: borrow<descriptor>) -> result<descriptor-stat, error-code>;
+    stat-at: async func(self: borrow<descriptor>, path-flags: path-flags, path: string) -> result<descriptor-stat, error-code>;
+    set-times-at: async func(self: borrow<descriptor>, path-flags: path-flags, path: string, data-access-timestamp: new-timestamp, data-modification-timestamp: new-timestamp) -> result<_, error-code>;
+    link-at: async func(self: borrow<descriptor>, old-path-flags: path-flags, old-path: string, new-descriptor: borrow<descriptor>, new-path: string) -> result<_, error-code>;
+    open-at: async func(self: borrow<descriptor>, path-flags: path-flags, path: string, open-flags: open-flags, flags: descriptor-flags) -> result<descriptor, error-code>;
+    readlink-at: async func(self: borrow<descriptor>, path: string) -> result<string, error-code>;
+    remove-directory-at: async func(self: borrow<descriptor>, path: string) -> result<_, error-code>;
+    rename-at: async func(self: borrow<descriptor>, old-path: string, new-descriptor: borrow<descriptor>, new-path: string) -> result<_, error-code>;
+    symlink-at: async func(self: borrow<descriptor>, old-path: string, new-path: string) -> result<_, error-code>;
+    unlink-file-at: async func(self: borrow<descriptor>, path: string) -> result<_, error-code>;
+    is-same-object: async func(self: borrow<descriptor>, other: borrow<descriptor>) -> bool;
+    metadata-hash: async func(self: borrow<descriptor>) -> result<metadata-hash-value, error-code>;
+    metadata-hash-at: async func(self: borrow<descriptor>, path-flags: path-flags, path: string) -> result<metadata-hash-value, error-code>;
+  }
+}
+
+interface preopens {
+  resource descriptor;
+
+  get-directories: func() -> list<tuple<descriptor, string>>;
+}
+
+world imports {
+  import wasi:clocks/types@0.3.0;
+  import wasi:clocks/system-clock@0.3.0;
+  import types;
+  import preopens;
 }
 ''';
