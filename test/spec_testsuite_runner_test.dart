@@ -90,6 +90,59 @@ exit 0
     },
   );
 
+  test(
+    'component official runner reports pinned async validator xfails',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'wasd_component_official_xfail_',
+      );
+      addTearDown(() async {
+        if (await temp.exists()) {
+          await temp.delete(recursive: true);
+        }
+      });
+
+      final testsuite = Directory('${temp.path}/component-tests');
+      await Directory('${testsuite.path}/async').create(recursive: true);
+      await File(
+        '${testsuite.path}/async/cross-abi-calls.wast',
+      ).writeAsString('(component)');
+
+      final fakeWasmTools = File('${temp.path}/fake_wasm_tools.sh');
+      await fakeWasmTools.writeAsString('''
+#!/bin/sh
+if [ "\$1" = "--version" ]; then
+  echo "wasm-tools 1.252.0"
+  exit 0
+fi
+echo "error: 1 test failures in \$2:" >&2
+echo 'the `async` canonical option requires an async function type' >&2
+exit 1
+''');
+      await Process.run('chmod', ['+x', fakeWasmTools.path]);
+
+      final jsonPath = '${temp.path}/component.json';
+      final result = await Process.run(Platform.resolvedExecutable, [
+        'run',
+        'tool/component_official_runner.dart',
+        '--testsuite-dir=${testsuite.path}',
+        '--wasm-tools-bin=${fakeWasmTools.path}',
+        '--include-pattern=^async/cross-abi-calls\\.wast\$',
+        '--json=$jsonPath',
+        '--markdown=${temp.path}/component.md',
+      ]);
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      final payload =
+          json.decode(await File(jsonPath).readAsString())
+              as Map<String, Object?>;
+      final totals = payload['totals'] as Map<String, Object?>;
+      expect(payload['status'], 'passed');
+      expect(totals['files_failed'], 0);
+      expect(totals['files_xfailed'], 1);
+    },
+  );
+
   test('core suite collection excludes legacy proposal files', () async {
     final temp = await Directory.systemTemp.createTemp('wasd_spec_runner_');
     addTearDown(() async {

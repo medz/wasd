@@ -25,6 +25,14 @@ const Map<String, String> _defaultExpectedFailureReasonPatterns =
       // wasm-tools currently rejects `stream<char>` payload typing.
       'async/same-component-stream-future.wast':
           '`stream<char>` is not valid at this time',
+      // Current wasm-tools validation disagrees with these upstream async
+      // tests on whether `canon ... async` targets an async function type.
+      'async/cross-abi-calls.wast':
+          'the `async` canonical option requires an async function type',
+      'async/drop-cross-task-borrow.wast':
+          'the `async` canonical option requires an async function type',
+      'async/trap-on-reenter.wast':
+          'the `async` canonical option requires an async function type',
       // Parser token coverage gap in current wasm-tools release.
       'async/trap-if-block-and-sync.wast': 'unexpected token, expected one of:',
     };
