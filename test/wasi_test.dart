@@ -7723,6 +7723,135 @@ void main() {
         },
       );
 
+      test(
+        'path_rename preserves open replaced virtual directory fds',
+        () async {
+          final fileWasi = WASI(
+            preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},
+          );
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathCreateDirectory =
+              preview1['path_create_directory'] as FunctionImportExportValue;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final pathRename =
+              preview1['path_rename'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
+          final fdFilestatGet =
+              preview1['fd_filestat_get'] as FunctionImportExportValue;
+          final fdReaddir = preview1['fd_readdir'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const sourcePathPtr = 4560;
+          const targetPathPtr = 4600;
+          const openedFdPtr = 4640;
+          const filestatPtr = 4664;
+          const direntsPtr = 4744;
+          const bufusedPtr = 4872;
+
+          final sourcePath = utf8.encode('source');
+          final targetPath = utf8.encode('target');
+          bytes.setAll(sourcePathPtr, sourcePath);
+          bytes.setAll(targetPathPtr, targetPath);
+
+          expect(
+            pathCreateDirectory.ref([3, sourcePathPtr, sourcePath.length]),
+            0,
+          );
+          expect(
+            pathCreateDirectory.ref([3, targetPathPtr, targetPath.length]),
+            0,
+          );
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              sourcePathPtr,
+              sourcePath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          final sourceInode = _getUint64Le(data, filestatPtr + 8);
+
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              targetPathPtr,
+              targetPath.length,
+              _oflagDirectory,
+              _rightsAll,
+              _rightsAll,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final targetFd = data.getUint32(openedFdPtr, Endian.little);
+          expect(fdFilestatGet.ref([targetFd, filestatPtr]), 0);
+          final openedTargetInode = _getUint64Le(data, filestatPtr + 8);
+          expect(openedTargetInode, isNot(sourceInode));
+
+          expect(
+            pathRename.ref([
+              3,
+              sourcePathPtr,
+              sourcePath.length,
+              3,
+              targetPathPtr,
+              targetPath.length,
+            ]),
+            0,
+          );
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              sourcePathPtr,
+              sourcePath.length,
+              filestatPtr,
+            ]),
+            _errnoNoent,
+          );
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              targetPathPtr,
+              targetPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(_getUint64Le(data, filestatPtr + 8), sourceInode);
+
+          bytes.fillRange(filestatPtr, filestatPtr + 64, 0);
+          expect(fdFilestatGet.ref([targetFd, filestatPtr]), 0);
+          expect(
+            bytes[filestatPtr + _filestatFiletypeOffset],
+            _filetypeDirectory,
+          );
+          expect(_getUint64Le(data, filestatPtr + 8), openedTargetInode);
+          expect(_getUint64Le(data, filestatPtr + _filestatLinkCountOffset), 0);
+
+          bytes.fillRange(direntsPtr, direntsPtr + 128, 0);
+          expect(fdReaddir.ref([targetFd, direntsPtr, 128, 0, bufusedPtr]), 0);
+          final bufused = data.getUint32(bufusedPtr, Endian.little);
+          final entries = _readDirents(bytes, data, direntsPtr, bufused);
+          expect(entries.map((entry) => entry.name), ['.', '..']);
+        },
+      );
+
       test('path_rename replaces virtual file and symlink entries', () async {
         final fileWasi = WASI(
           preopens: {'/sandbox': '/__wasd_nonexistent_preopen__'},

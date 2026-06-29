@@ -670,21 +670,7 @@ final class Preview1VirtualFileSystem {
       return Preview1PathMutationResult.notEmpty;
     }
 
-    final removedMetadata = _directoryMetadataByGuestPath[normalized];
-    final removedEntries = _directoryEntriesByGuestPath[normalized];
-    if (removedMetadata != null && removedEntries != null) {
-      removedMetadata.releaseLink();
-      final snapshotEntries = List<Preview1DirectoryEntry>.unmodifiable(
-        removedEntries,
-      );
-      for (final entry in _openDirectoriesByFd.entries) {
-        if (entry.value == normalized) {
-          _openDirectoryEntriesByFd[entry.key] = snapshotEntries;
-          _openDirectoryMetadataByFd[entry.key] = removedMetadata;
-        }
-      }
-    }
-
+    _preserveUnlinkedDirectoryForOpenFds(normalized);
     _virtualDirectoryPaths.remove(normalized);
     _directoryMetadataByGuestPath.remove(normalized);
     _removeDirectoryChild(normalized);
@@ -838,6 +824,9 @@ final class Preview1VirtualFileSystem {
     if (_virtualDirectoryPaths.contains(newNormalized)) {
       if (_directoryChildrenByGuestPath[newNormalized]?.isNotEmpty ?? false) {
         return Preview1PathMutationResult.notEmpty;
+      }
+      if (oldNormalized != newNormalized) {
+        _preserveUnlinkedDirectoryForOpenFds(newNormalized);
       }
     }
 
@@ -1150,6 +1139,26 @@ final class Preview1VirtualFileSystem {
       }
     }
     _rebuildDirectoryEntries();
+  }
+
+  void _preserveUnlinkedDirectoryForOpenFds(String guestPath) {
+    final normalized = normalizeGuestPath(guestPath);
+    final removedMetadata = _directoryMetadataByGuestPath[normalized];
+    final removedEntries = _directoryEntriesByGuestPath[normalized];
+    if (removedMetadata == null || removedEntries == null) {
+      return;
+    }
+
+    removedMetadata.releaseLink();
+    final snapshotEntries = List<Preview1DirectoryEntry>.unmodifiable(
+      removedEntries,
+    );
+    for (final entry in _openDirectoriesByFd.entries) {
+      if (entry.value == normalized) {
+        _openDirectoryEntriesByFd[entry.key] = snapshotEntries;
+        _openDirectoryMetadataByFd[entry.key] = removedMetadata;
+      }
+    }
   }
 
   void _rebuildDirectoryEntries() {
