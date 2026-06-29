@@ -25,6 +25,7 @@ const int _errnoIsdir = 31;
 const int _errnoNoent = 44;
 const int _errnoNotdir = 54;
 const int _errnoNotempty = 55;
+const int _errnoPerm = 63;
 const int _filestatFiletypeOffset = 16;
 const int _filestatSizeOffset = 32;
 const int _filetypeDirectory = 3;
@@ -590,6 +591,108 @@ void main() {
     expect(
       pathRename.ref([
         3,
+        oldPathPtr,
+        oldPath.length,
+        3,
+        newPathPtr,
+        newPath.length,
+      ]),
+      _errnoNoent,
+    );
+  });
+
+  test('native host path_link creates real hard links', () async {
+    final temp = await Directory.systemTemp.createTemp('wasd_host_link_');
+    addTearDown(() => temp.delete(recursive: true));
+    final source = File('${temp.path}/source.txt')..writeAsStringSync('source');
+    File('${temp.path}/exists.txt').writeAsStringSync('exists');
+    Directory('${temp.path}/dir').createSync();
+
+    final wasi = WASI(preopens: {'/host': temp.path});
+    final result = await WebAssembly.instantiate(
+      wasiStartModuleBytes().buffer,
+      wasi.imports,
+    );
+    final instance = result.instance;
+    final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+    final pathLink = preview1['path_link'] as FunctionImportExportValue;
+    final pathUnlinkFile =
+        preview1['path_unlink_file'] as FunctionImportExportValue;
+    final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+    wasi.finalizeBindings(instance, memory: memory);
+
+    final bytes = Uint8List.view(memory.buffer);
+    const oldPathPtr = 1024;
+    const newPathPtr = 1088;
+
+    var oldPath = utf8.encode('source.txt');
+    var newPath = utf8.encode('linked.txt');
+    bytes.setAll(oldPathPtr, oldPath);
+    bytes.setAll(newPathPtr, newPath);
+    expect(
+      pathLink.ref([
+        3,
+        0,
+        oldPathPtr,
+        oldPath.length,
+        3,
+        newPathPtr,
+        newPath.length,
+      ]),
+      0,
+    );
+    final linked = File('${temp.path}/linked.txt');
+    expect(linked.readAsStringSync(), 'source');
+
+    source.writeAsStringSync('changed');
+    expect(linked.readAsStringSync(), 'changed');
+
+    expect(pathUnlinkFile.ref([3, oldPathPtr, oldPath.length]), 0);
+    expect(source.existsSync(), isFalse);
+    expect(linked.readAsStringSync(), 'changed');
+
+    oldPath = utf8.encode('linked.txt');
+    newPath = utf8.encode('exists.txt');
+    bytes.setAll(oldPathPtr, oldPath);
+    bytes.setAll(newPathPtr, newPath);
+    expect(
+      pathLink.ref([
+        3,
+        0,
+        oldPathPtr,
+        oldPath.length,
+        3,
+        newPathPtr,
+        newPath.length,
+      ]),
+      _errnoExist,
+    );
+
+    oldPath = utf8.encode('dir');
+    newPath = utf8.encode('dir-link');
+    bytes.setAll(oldPathPtr, oldPath);
+    bytes.setAll(newPathPtr, newPath);
+    expect(
+      pathLink.ref([
+        3,
+        0,
+        oldPathPtr,
+        oldPath.length,
+        3,
+        newPathPtr,
+        newPath.length,
+      ]),
+      _errnoPerm,
+    );
+
+    oldPath = utf8.encode('missing.txt');
+    newPath = utf8.encode('missing-link.txt');
+    bytes.setAll(oldPathPtr, oldPath);
+    bytes.setAll(newPathPtr, newPath);
+    expect(
+      pathLink.ref([
+        3,
+        0,
         oldPathPtr,
         oldPath.length,
         3,

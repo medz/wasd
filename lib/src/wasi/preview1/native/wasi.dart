@@ -1,7 +1,10 @@
 import 'dart:convert';
+import 'dart:ffi' as ffi;
 import 'dart:io' as io;
 import 'dart:math' as math;
 import 'dart:typed_data';
+
+import 'package:ffi/ffi.dart';
 
 import '../../../wasm/instance.dart' as wasm;
 import '../../../wasm/memory.dart' as wasm;
@@ -1290,6 +1293,20 @@ class WASI implements wasi_iface.WASI {
           return newRight;
         }
 
+        final oldHostPath = _hostPathForGuestPath(oldPath.path!);
+        final newHostPath = _hostPathForGuestPath(newPath.path!);
+        if (oldHostPath != null && newHostPath != null) {
+          final hostResult = _linkHostPath(
+            oldHostPath: oldHostPath,
+            newHostPath: newHostPath,
+            newPathHasTrailingSeparator: newPath.hasTrailingSeparator,
+          );
+          if (hostResult != wasi_vfs.Preview1PathMutationResult.noEntry ||
+              _vfs.pathEntry(oldPath.path!, followSymlinks: false) == null) {
+            return _errnoFromPathMutationResult(hostResult);
+          }
+        }
+
         return _errnoFromPathMutationResult(
           _vfs.linkPath(
             oldPath: oldPath.path!,
@@ -2003,6 +2020,109 @@ class WASI implements wasi_iface.WASI {
     }
   }
 
+  wasi_vfs.Preview1PathMutationResult _linkHostPath({
+    required String oldHostPath,
+    required String newHostPath,
+    required bool newPathHasTrailingSeparator,
+  }) {
+    final newType = io.FileSystemEntity.typeSync(
+      newHostPath,
+      followLinks: false,
+    );
+    if (newPathHasTrailingSeparator) {
+      if (newType == io.FileSystemEntityType.directory) {
+        return wasi_vfs.Preview1PathMutationResult.exists;
+      }
+      if (newType == io.FileSystemEntityType.file ||
+          newType == io.FileSystemEntityType.link) {
+        return wasi_vfs.Preview1PathMutationResult.notDirectory;
+      }
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+
+    final newParentType = io.FileSystemEntity.typeSync(
+      io.File(newHostPath).parent.path,
+      followLinks: false,
+    );
+    if (newParentType == io.FileSystemEntityType.notFound) {
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (newParentType != io.FileSystemEntityType.directory) {
+      return wasi_vfs.Preview1PathMutationResult.notDirectory;
+    }
+    if (newType != io.FileSystemEntityType.notFound) {
+      return wasi_vfs.Preview1PathMutationResult.exists;
+    }
+
+    final oldType = io.FileSystemEntity.typeSync(
+      oldHostPath,
+      followLinks: false,
+    );
+    if (oldType == io.FileSystemEntityType.directory) {
+      return wasi_vfs.Preview1PathMutationResult.permissionDenied;
+    }
+    if (oldType != io.FileSystemEntityType.file) {
+      return oldType == io.FileSystemEntityType.notFound
+          ? wasi_vfs.Preview1PathMutationResult.noEntry
+          : wasi_vfs.Preview1PathMutationResult.permissionDenied;
+    }
+
+    return _createHostHardLink(
+      oldHostPath: oldHostPath,
+      newHostPath: newHostPath,
+    );
+  }
+
+  wasi_vfs.Preview1PathMutationResult _createHostHardLink({
+    required String oldHostPath,
+    required String newHostPath,
+  }) {
+    try {
+      if (_hostHardLink(oldHostPath, newHostPath)) {
+        return wasi_vfs.Preview1PathMutationResult.success;
+      }
+    } on ArgumentError {
+      return wasi_vfs.Preview1PathMutationResult.permissionDenied;
+    } on UnsupportedError {
+      return wasi_vfs.Preview1PathMutationResult.permissionDenied;
+    }
+    return _hostLinkFailure(oldHostPath: oldHostPath, newHostPath: newHostPath);
+  }
+
+  wasi_vfs.Preview1PathMutationResult _hostLinkFailure({
+    required String oldHostPath,
+    required String newHostPath,
+  }) {
+    final newType = io.FileSystemEntity.typeSync(
+      newHostPath,
+      followLinks: false,
+    );
+    if (newType != io.FileSystemEntityType.notFound) {
+      return wasi_vfs.Preview1PathMutationResult.exists;
+    }
+    final newParentType = io.FileSystemEntity.typeSync(
+      io.File(newHostPath).parent.path,
+      followLinks: false,
+    );
+    if (newParentType == io.FileSystemEntityType.notFound) {
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (newParentType != io.FileSystemEntityType.directory) {
+      return wasi_vfs.Preview1PathMutationResult.notDirectory;
+    }
+    final oldType = io.FileSystemEntity.typeSync(
+      oldHostPath,
+      followLinks: false,
+    );
+    if (oldType == io.FileSystemEntityType.notFound) {
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (oldType == io.FileSystemEntityType.directory) {
+      return wasi_vfs.Preview1PathMutationResult.permissionDenied;
+    }
+    return wasi_vfs.Preview1PathMutationResult.permissionDenied;
+  }
+
   wasi_vfs.Preview1PathMutationResult _hostPathMutationError(String hostPath) {
     if (io.FileSystemEntity.typeSync(hostPath, followLinks: false) ==
         io.FileSystemEntityType.notFound) {
@@ -2703,6 +2823,74 @@ bool _isChildGuestPath(String path, String parent) {
 
 bool _sameHostPath(String left, String right) =>
     io.File(left).absolute.path == io.File(right).absolute.path;
+
+bool _hostHardLink(String existingPath, String newPath) {
+  if (io.Platform.isWindows) {
+    return _windowsCreateHardLink(existingPath, newPath);
+  }
+  return _posixCreateHardLink(existingPath, newPath);
+}
+
+bool _posixCreateHardLink(String existingPath, String newPath) {
+  final link = _posixLinkFunction();
+  final existingPathPointer = existingPath.toNativeUtf8();
+  final newPathPointer = newPath.toNativeUtf8();
+  try {
+    return link(existingPathPointer, newPathPointer) == 0;
+  } finally {
+    malloc.free(existingPathPointer);
+    malloc.free(newPathPointer);
+  }
+}
+
+bool _windowsCreateHardLink(String existingPath, String newPath) {
+  final createHardLink = _windowsCreateHardLinkFunction();
+  final newPathPointer = newPath.toNativeUtf16();
+  final existingPathPointer = existingPath.toNativeUtf16();
+  try {
+    return createHardLink(newPathPointer, existingPathPointer, ffi.nullptr) !=
+        0;
+  } finally {
+    malloc.free(newPathPointer);
+    malloc.free(existingPathPointer);
+  }
+}
+
+_PosixLinkDart? _cachedPosixLink;
+_WindowsCreateHardLinkDart? _cachedWindowsCreateHardLink;
+
+_PosixLinkDart _posixLinkFunction() => _cachedPosixLink ??= _openPosixCLibrary()
+    .lookupFunction<_PosixLinkNative, _PosixLinkDart>('link');
+
+_WindowsCreateHardLinkDart _windowsCreateHardLinkFunction() =>
+    _cachedWindowsCreateHardLink ??= ffi.DynamicLibrary.open('kernel32.dll')
+        .lookupFunction<
+          _WindowsCreateHardLinkNative,
+          _WindowsCreateHardLinkDart
+        >('CreateHardLinkW');
+
+ffi.DynamicLibrary _openPosixCLibrary() {
+  if (io.Platform.isLinux) {
+    return ffi.DynamicLibrary.open('libc.so.6');
+  }
+  if (io.Platform.isAndroid) {
+    return ffi.DynamicLibrary.open('libc.so');
+  }
+  return ffi.DynamicLibrary.process();
+}
+
+typedef _PosixLinkNative =
+    ffi.Int32 Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>);
+typedef _PosixLinkDart = int Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>);
+
+typedef _WindowsCreateHardLinkNative =
+    ffi.Int32 Function(
+      ffi.Pointer<Utf16>,
+      ffi.Pointer<Utf16>,
+      ffi.Pointer<ffi.Void>,
+    );
+typedef _WindowsCreateHardLinkDart =
+    int Function(ffi.Pointer<Utf16>, ffi.Pointer<Utf16>, ffi.Pointer<ffi.Void>);
 
 wasi_vfs.Preview1VirtualNodeMetadata _metadataFromHostStat(io.FileStat stat) {
   final metadata = wasi_vfs.Preview1VirtualNodeMetadata();

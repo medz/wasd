@@ -192,9 +192,10 @@ too broad to verify in one commit.
     `P1-NATIVE-HOST-FS-READ-BACKING`,
     `P1-NATIVE-HOST-FS-PATH-METADATA`,
     `P1-NATIVE-HOST-FS-DIRECTORY-READDIR`,
-    `P1-NATIVE-HOST-FS-FILE-WRITEBACK`, and
-    `P1-NATIVE-HOST-FS-BASIC-PATH-MUTATION`, and
-    `P1-NATIVE-HOST-FS-RENAME`.
+    `P1-NATIVE-HOST-FS-FILE-WRITEBACK`,
+    `P1-NATIVE-HOST-FS-BASIC-PATH-MUTATION`,
+    `P1-NATIVE-HOST-FS-RENAME`, and
+    `P1-NATIVE-HOST-FS-HARD-LINK`.
   - Done when: local VM/browser/Node Preview1 suites pass with no unexpected
     skips, the official Preview1 suite has no untriaged failures, README/API
     claims match the verified host surface, and VFS/socket hot paths have
@@ -344,6 +345,38 @@ too broad to verify in one commit.
 
 ### Recently Checked
 
+- [x] `P1-NATIVE-HOST-FS-HARD-LINK` - Native Preview1 `path_link` creates
+  real host hard links.
+  - Scope: Dart VM native Preview1 `path_link` for regular files below
+    configured real host preopen roots. Browser and Node JS remain on the
+    in-repo in-memory VFS, and host symlink creation/readlink/resolution remain
+    incomplete.
+  - Edit targets: `lib/src/wasi/preview1/native/wasi.dart`,
+    `test/wasi_native_host_fs_test.dart`, `pubspec.yaml`, `README.md`, and this
+    roadmap.
+  - Red test:
+    `dart test test/wasi_native_host_fs_test.dart --name "native host path_link creates real hard links" --reporter=compact`
+    failed before the fix because linking a real host `source.txt` returned
+    `NOENT` through the in-memory VFS path.
+  - Implementation gate:
+    `dart test test/wasi_native_host_fs_test.dart --reporter=compact`;
+    `dart test test/wasi_test.dart --reporter=compact`;
+    `dart test -p node test/wasi_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart analyze`.
+  - Performance gate:
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`;
+    native hard links use one FFI host syscall instead of shelling out or
+    copying file contents, and this row adds no recursive host scan.
+  - Done when: `path_link` creates a real host hard link for a regular file,
+    writes through one path are visible from the other, unlinking one path keeps
+    the other path readable, existing targets return `EXIST`, directory
+    sources return `PERM`, and missing sources return `NOENT`.
+  - Evidence update: this checked row, README support wording, and the
+    `P1-FULL-RUNTIME-GATE` checked-child list.
+  - Claim impact: advances native host filesystem mutation; host symlink
+    creation/readlink/resolution, full Preview1, Preview2, and Preview3 remain
+    incomplete.
 - [x] `P1-NATIVE-HOST-FS-RENAME` - Native Preview1 `path_rename` mutates real
   host filesystem entries.
   - Scope: Dart VM native Preview1 `path_rename` for regular files and
@@ -373,9 +406,9 @@ too broad to verify in one commit.
     renaming a preopen root returns `INVAL`.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
-  - Claim impact: advances native host filesystem mutation; host hard link,
-    symlink creation/readlink/resolution, full Preview1, Preview2, and Preview3
-    remain incomplete.
+  - Claim impact: advances native host filesystem mutation; host symlink
+    creation/readlink/resolution, full Preview1, Preview2, and Preview3 remain
+    incomplete.
 - [x] `P1-NATIVE-HOST-FS-BASIC-PATH-MUTATION` - Native Preview1 basic path
   mutation syscalls create and delete real host filesystem entries.
   - Scope: Dart VM native Preview1 `path_create_directory`,
@@ -405,9 +438,9 @@ too broad to verify in one commit.
     returns `NOTDIR` for files, and refuses to remove the preopen root.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
-  - Claim impact: advances native host filesystem mutation; host hard link,
-    symlink creation/readlink/resolution, full Preview1, Preview2, and Preview3
-    remain incomplete.
+  - Claim impact: advances native host filesystem mutation; host symlink
+    creation/readlink/resolution, full Preview1, Preview2, and Preview3 remain
+    incomplete.
 - [x] `P1-NATIVE-HOST-FS-FILE-WRITEBACK` - Native Preview1 host regular files
   persist writes, truncation, allocation, and creation to the real host
   filesystem.
@@ -442,9 +475,9 @@ too broad to verify in one commit.
     file instead of creating an in-memory shadow.
   - Evidence update: this checked row, README support wording, and the
     `P1-FULL-RUNTIME-GATE` checked-child list.
-  - Claim impact: advances native host regular-file writeback; host hard link,
-    symlink creation/readlink/resolution, full Preview1, Preview2, and Preview3
-    remain incomplete.
+  - Claim impact: advances native host regular-file writeback; host symlink
+    creation/readlink/resolution, full Preview1, Preview2, and Preview3 remain
+    incomplete.
 - [x] `P1-NATIVE-HOST-FS-DIRECTORY-READDIR` - Native Preview1 host directories
   can be opened and enumerated from the real host filesystem.
   - Scope: Dart VM native Preview1 `path_open(O_DIRECTORY)` for real
@@ -2847,6 +2880,13 @@ This is the implementation state as of 2026-06-23 on `main`.
   copying it a second time, while caller-owned `writeMessage` lists still keep
   defensive copy semantics. The owned-buffer hook is hidden from the public
   `package:wasd/wasi.dart` export so the user-facing socket API stays small.
+- Native Preview1 preopens now bridge to the real host filesystem for regular
+  file reads and writes, file creation/truncation/allocation, directory
+  open/readdir, path metadata, create/delete/remove, rename, and regular-file
+  hard links. `path_link` uses a direct host hard-link syscall through FFI
+  instead of shelling out or copying bytes. Browser and Node JS stay on the
+  portable in-memory VFS, and native host symlink creation/readlink/resolution
+  remains incomplete.
 - The repository now includes `tool/wasi_testsuite_wasd_adapter.py` and
   `tool/wasi_testsuite_preview1_runner.dart`, allowing the upstream
   `WebAssembly/wasi-testsuite` runner to invoke wasd for `wasm32-wasip1`
