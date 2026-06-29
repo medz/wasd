@@ -570,6 +570,18 @@ final class Preview1VirtualFileSystem {
     return null;
   }
 
+  String? resolveParentSymlinkPath(String guestPath) {
+    final normalized = normalizeGuestPath(guestPath);
+    if (normalized == '/') {
+      return normalized;
+    }
+    final parent = resolveSymlinkPath(dirnameOfGuestPath(normalized));
+    if (parent == null) {
+      return null;
+    }
+    return joinGuestPath(parent, basenameOfGuestPath(normalized));
+  }
+
   String? _resolveFirstSymlinkComponent(String guestPath) {
     final normalized = normalizeGuestPath(guestPath);
     if (normalized == '/') {

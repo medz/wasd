@@ -1090,7 +1090,7 @@ class WASI implements wasi.WASI {
     }
     final normalizedPath = wasi_vfs.normalizeGuestPath(guestPath.path);
     final openPath = (lookupFlags & _lookupflagSymlinkFollow) == 0
-        ? normalizedPath
+        ? _vfs.resolveParentSymlinkPath(normalizedPath)
         : _vfs.resolveSymlinkPath(normalizedPath);
     if (openPath == null) {
       return _errnoNoent;
@@ -1605,13 +1605,16 @@ class WASI implements wasi.WASI {
     }
 
     final normalizedPath = wasi_vfs.normalizeGuestPath(guestPath.path);
-    final entry = _vfs.pathEntry(
-      normalizedPath,
-      followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
-    );
+    final statPath = (lookupFlags & _lookupflagSymlinkFollow) == 0
+        ? _vfs.resolveParentSymlinkPath(normalizedPath)
+        : _vfs.resolveSymlinkPath(normalizedPath);
+    if (statPath == null) {
+      return _errnoNoent;
+    }
+    final entry = _vfs.pathEntry(statPath, followSymlinks: false);
     if (entry == null) {
       final hostEntry = _nodeHostPathEntry(
-        normalizedPath,
+        statPath,
         followSymlinks: (lookupFlags & _lookupflagSymlinkFollow) != 0,
       );
       if (hostEntry.errno != _errnoSuccess) {
@@ -3074,8 +3077,12 @@ class WASI implements wasi.WASI {
     if (pathErrno != null) {
       return _ResolvedPath.error(pathErrno);
     }
+    final resolvedPath = _vfs.resolveParentSymlinkPath(guestPath.path);
+    if (resolvedPath == null) {
+      return const _ResolvedPath.error(_errnoNoent);
+    }
     return _ResolvedPath.path(
-      wasi_vfs.normalizeGuestPath(guestPath.path),
+      resolvedPath,
       hasTrailingSeparator: guestPath.hasTrailingSeparator,
     );
   }

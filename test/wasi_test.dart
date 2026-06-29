@@ -7462,6 +7462,8 @@ void main() {
               preview1['path_unlink_file'] as FunctionImportExportValue;
           final pathRemoveDirectory =
               preview1['path_remove_directory'] as FunctionImportExportValue;
+          final pathSymlink =
+              preview1['path_symlink'] as FunctionImportExportValue;
           final pathFilestatGet =
               preview1['path_filestat_get'] as FunctionImportExportValue;
           final memory =
@@ -7472,8 +7474,13 @@ void main() {
           const pathPtr = 2688;
           const newPathPtr = 2720;
           const filestatPtr = 2760;
+          const symlinkPathPtr = 2832;
+          const nestedPathPtr = 2864;
 
           final dirPath = utf8.encode('work');
+          final dirLinkPath = utf8.encode('work-link');
+          final nestedViaLinkPath = utf8.encode('work-link/nested');
+          final nestedPath = utf8.encode('work/nested');
           bytes.setAll(pathPtr, dirPath);
           expect(pathCreateDirectory.ref([3, pathPtr, dirPath.length]), 0);
           expect(
@@ -7481,6 +7488,42 @@ void main() {
             0,
           );
           expect(bytes[filestatPtr + 16], 3);
+          bytes.setAll(symlinkPathPtr, dirLinkPath);
+          expect(
+            pathSymlink.ref([
+              pathPtr,
+              dirPath.length,
+              3,
+              symlinkPathPtr,
+              dirLinkPath.length,
+            ]),
+            0,
+          );
+          bytes.setAll(nestedPathPtr, nestedViaLinkPath);
+          expect(
+            pathCreateDirectory.ref([
+              3,
+              nestedPathPtr,
+              nestedViaLinkPath.length,
+            ]),
+            0,
+          );
+          bytes.setAll(nestedPathPtr, nestedPath);
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              nestedPathPtr,
+              nestedPath.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(bytes[filestatPtr + 16], 3);
+          expect(
+            pathRemoveDirectory.ref([3, nestedPathPtr, nestedPath.length]),
+            0,
+          );
 
           final oldPath = utf8.encode('source.txt');
           final renamedPath = utf8.encode('work/renamed.txt');
@@ -8110,23 +8153,30 @@ void main() {
           final pathSymlink =
               preview1['path_symlink'] as FunctionImportExportValue;
           final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
           final memory =
               (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
           fileWasi.finalizeBindings(fileInstance, memory: memory);
 
           final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
           const targetPathPtr = 4176;
           const symlinkPathPtr = 4208;
           const danglingTargetPtr = 4240;
           const danglingPathPtr = 4272;
           const selfPathPtr = 4304;
           const openedFdPtr = 4336;
+          const nestedPathPtr = 4352;
+          const filestatPtr = 4384;
 
           final targetPath = utf8.encode('target');
           final symlinkPath = utf8.encode('symlink');
           final danglingTarget = utf8.encode('missing-target');
           final danglingPath = utf8.encode('dangling');
           final selfPath = utf8.encode('self');
+          final nestedPath = utf8.encode('target/nested.txt');
+          final nestedViaSymlink = utf8.encode('symlink/nested.txt');
           bytes.setAll(targetPathPtr, targetPath);
           bytes.setAll(symlinkPathPtr, symlinkPath);
           bytes.setAll(danglingTargetPtr, danglingTarget);
@@ -8188,6 +8238,52 @@ void main() {
               openedFdPtr,
             ]),
             0,
+          );
+          bytes.setAll(nestedPathPtr, nestedPath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              nestedPathPtr,
+              nestedPath.length,
+              _oflagCreat,
+              _rightsAll,
+              _rightsAll,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          final createdFd = data.getUint32(openedFdPtr, Endian.little);
+          bytes.setAll(nestedPathPtr, nestedViaSymlink);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              nestedPathPtr,
+              nestedViaSymlink.length,
+              0,
+              _rightsAll,
+              _rightsAll,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          expect(data.getUint32(openedFdPtr, Endian.little), isNot(createdFd));
+          expect(
+            pathFilestatGet.ref([
+              3,
+              0,
+              nestedPathPtr,
+              nestedViaSymlink.length,
+              filestatPtr,
+            ]),
+            0,
+          );
+          expect(
+            bytes[filestatPtr + _filestatFiletypeOffset],
+            _filetypeRegularFile,
           );
 
           expect(
