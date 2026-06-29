@@ -629,10 +629,19 @@ class WASI implements wasi_iface.WASI {
                 hostPreopenPath.hostPath,
                 followSymlinks: true,
               );
-        if (entriesResult.errno != _errnoSuccess) {
+        List<wasi_vfs.Preview1DirectoryEntry>? entries;
+        if (entriesResult.errno == _errnoSuccess) {
+          entries = entriesResult.entries;
+          if (openedHostPath != null && entries != null) {
+            _vfs.refreshOpenDirectoryEntriesForFd(fd, entries);
+          }
+        } else if (openedHostPath != null &&
+            entriesResult.errno == _errnoNoent) {
+          _vfs.detachOpenDirectoryFd(fd);
+          entries = _vfs.directoryEntriesForFd(fd);
+        } else {
           return entriesResult.errno;
         }
-        final entries = entriesResult.entries;
         if (entries == null) {
           return _errnoBadf;
         }
@@ -1227,6 +1236,9 @@ class WASI implements wasi_iface.WASI {
               _hostPreopensByGuestPath.containsKey(resolved.path!)
               ? wasi_vfs.Preview1PathMutationResult.notEmpty
               : _removeHostDirectory(hostPath);
+          if (hostResult == wasi_vfs.Preview1PathMutationResult.success) {
+            _vfs.detachOpenDirectoryFdsForPath(resolved.path!);
+          }
           if (hostResult != wasi_vfs.Preview1PathMutationResult.noEntry ||
               _vfs.pathEntry(resolved.path!, followSymlinks: false) == null) {
             return _errnoFromPathMutationResult(hostResult);

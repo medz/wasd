@@ -16,6 +16,7 @@ const int _rightFdSeek = 1 << 2;
 const int _rightFdTell = 1 << 5;
 const int _rightFdWrite = 1 << 6;
 const int _rightFdAllocate = 1 << 8;
+const int _rightPathOpen = 1 << 13;
 const int _rightFdReaddir = 1 << 14;
 const int _rightFdFilestatGet = 1 << 21;
 const int _rightFdFilestatSetSize = 1 << 22;
@@ -1610,6 +1611,12 @@ void main() {
     final instance = result.instance;
     final preview1 = wasi.imports['wasi_snapshot_preview1']!;
     final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+    final pathCreateDirectory =
+        preview1['path_create_directory'] as FunctionImportExportValue;
+    final pathRemoveDirectory =
+        preview1['path_remove_directory'] as FunctionImportExportValue;
+    final pathUnlinkFile =
+        preview1['path_unlink_file'] as FunctionImportExportValue;
     final fdReaddir = preview1['fd_readdir'] as FunctionImportExportValue;
     final fdClose = preview1['fd_close'] as FunctionImportExportValue;
     final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
@@ -1622,6 +1629,8 @@ void main() {
     const openedFdPtr = 1056;
     const direntsPtr = 1088;
     const bufusedPtr = 1408;
+    const recreatedPathPtr = 1424;
+    const childNamePtr = 1488;
     bytes.setAll(pathPtr, path);
 
     expect(
@@ -1631,8 +1640,8 @@ void main() {
         pathPtr,
         path.length,
         _oflagDirectory,
-        _rightFdReaddir,
-        0,
+        _rightFdReaddir | _rightPathOpen,
+        _rightFdRead,
         0,
         openedFdPtr,
       ]),
@@ -1659,11 +1668,95 @@ void main() {
     ]);
     expect(entries.map((entry) => entry.next).toList(), [1, 2, 3, 4, 5]);
 
+    File('${assets.path}/c.txt').writeAsStringSync('c');
+    bytes.fillRange(direntsPtr, direntsPtr + 256, 0);
+    expect(fdReaddir.ref([dirFd, direntsPtr, 256, 0, bufusedPtr]), 0);
+    final refreshedBufused = data.getUint32(bufusedPtr, Endian.little);
+    final refreshedEntries = _readDirents(
+      bytes,
+      data,
+      direntsPtr,
+      refreshedBufused,
+    );
+    expect(refreshedEntries.map((entry) => entry.name).toList(), [
+      '.',
+      '..',
+      'a.txt',
+      'b.txt',
+      'c.txt',
+      'sub',
+    ]);
+
+    for (final child in ['a.txt', 'b.txt', 'c.txt']) {
+      final childPath = utf8.encode('assets/$child');
+      bytes.setAll(recreatedPathPtr, childPath);
+      expect(pathUnlinkFile.ref([3, recreatedPathPtr, childPath.length]), 0);
+    }
+    final subPath = utf8.encode('assets/sub');
+    bytes.setAll(recreatedPathPtr, subPath);
+    expect(pathRemoveDirectory.ref([3, recreatedPathPtr, subPath.length]), 0);
+    bytes.setAll(pathPtr, path);
+    expect(pathRemoveDirectory.ref([3, pathPtr, path.length]), 0);
+    expect(assets.existsSync(), isFalse);
+
+    bytes.fillRange(direntsPtr, direntsPtr + 256, 0);
+    expect(fdReaddir.ref([dirFd, direntsPtr, 256, 0, bufusedPtr]), 0);
+    final detachedBufused = data.getUint32(bufusedPtr, Endian.little);
+    final detachedEntries = _readDirents(
+      bytes,
+      data,
+      direntsPtr,
+      detachedBufused,
+    );
+    expect(detachedEntries.map((entry) => entry.name).toList(), [
+      '.',
+      '..',
+      'a.txt',
+      'b.txt',
+      'c.txt',
+      'sub',
+    ]);
+
+    bytes.setAll(pathPtr, path);
+    expect(pathCreateDirectory.ref([3, pathPtr, path.length]), 0);
+    final recreatedPath = utf8.encode('assets/recreated.txt');
+    bytes.setAll(recreatedPathPtr, recreatedPath);
+    expect(
+      pathOpen.ref([
+        3,
+        0,
+        recreatedPathPtr,
+        recreatedPath.length,
+        _oflagCreat,
+        _rightFdRead,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      0,
+    );
+    expect(fdClose.ref([data.getUint32(openedFdPtr, Endian.little)]), 0);
+    final childName = utf8.encode('recreated.txt');
+    bytes.setAll(childNamePtr, childName);
+    expect(
+      pathOpen.ref([
+        dirFd,
+        0,
+        childNamePtr,
+        childName.length,
+        0,
+        _rightFdRead,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      _errnoNoent,
+    );
+
     data.setUint32(bufusedPtr, 0xfeedface, Endian.little);
     bytes.fillRange(direntsPtr, direntsPtr + 32, 0xcc);
-    assets.deleteSync(recursive: true);
-    expect(fdReaddir.ref([dirFd, direntsPtr, 256, 0, bufusedPtr]), _errnoNoent);
-    expect(data.getUint32(bufusedPtr, Endian.little), 0xfeedface);
+    expect(fdReaddir.ref([dirFd, direntsPtr, 0, 0, bufusedPtr]), 0);
+    expect(data.getUint32(bufusedPtr, Endian.little), 0);
     expect(bytes.sublist(direntsPtr, direntsPtr + 32), everyElement(0xcc));
 
     expect(fdClose.ref([dirFd]), 0);

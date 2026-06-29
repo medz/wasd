@@ -4827,6 +4827,12 @@ void main() {
           final fileInstance = fileResult.instance;
           final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
           final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final pathCreateDirectory =
+              preview1['path_create_directory'] as FunctionImportExportValue;
+          final pathRemoveDirectory =
+              preview1['path_remove_directory'] as FunctionImportExportValue;
+          final pathUnlinkFile =
+              preview1['path_unlink_file'] as FunctionImportExportValue;
           final fdReaddir = preview1['fd_readdir'] as FunctionImportExportValue;
           final fdClose = preview1['fd_close'] as FunctionImportExportValue;
           final memory =
@@ -4860,8 +4866,8 @@ void main() {
               pathPtr,
               dirPath.length,
               _oflagDirectory,
-              _rightFdReaddir,
-              0,
+              _rightFdReaddir | _rightPathOpen,
+              _rightFdRead,
               0,
               openedFdPtr,
             ]),
@@ -4931,6 +4937,72 @@ void main() {
             'c.txt',
             'sub',
           ]);
+
+          for (final child in ['a.txt', 'b.txt', 'c.txt']) {
+            final childPath = utf8.encode('assets/$child');
+            bytes.setAll(pathPtr, childPath);
+            expect(pathUnlinkFile.ref([3, pathPtr, childPath.length]), 0);
+          }
+          final subPath = utf8.encode('assets/sub');
+          bytes.setAll(pathPtr, subPath);
+          expect(pathRemoveDirectory.ref([3, pathPtr, subPath.length]), 0);
+          bytes.setAll(pathPtr, dirPath);
+          expect(pathRemoveDirectory.ref([3, pathPtr, dirPath.length]), 0);
+          expect(host.directoryExists('assets'), isFalse);
+
+          bytes.fillRange(direntsPtr, direntsPtr + 256, 0);
+          expect(fdReaddir.ref([dirFd, direntsPtr, 256, 0, bufusedPtr]), 0);
+          final detachedBufused = data.getUint32(bufusedPtr, Endian.little);
+          final detachedEntries = _readDirents(
+            bytes,
+            data,
+            direntsPtr,
+            detachedBufused,
+          );
+          expect(detachedEntries.map((entry) => entry.name), [
+            '.',
+            '..',
+            'a.txt',
+            'b.txt',
+            'c.txt',
+            'sub',
+          ]);
+
+          bytes.setAll(pathPtr, dirPath);
+          expect(pathCreateDirectory.ref([3, pathPtr, dirPath.length]), 0);
+          final recreatedPath = utf8.encode('assets/recreated.txt');
+          bytes.setAll(pathPtr, recreatedPath);
+          expect(
+            pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              recreatedPath.length,
+              _oflagCreat,
+              _rightFdRead,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            0,
+          );
+          expect(fdClose.ref([data.getUint32(openedFdPtr, Endian.little)]), 0);
+          final childName = utf8.encode('recreated.txt');
+          bytes.setAll(pathPtr, childName);
+          expect(
+            pathOpen.ref([
+              dirFd,
+              0,
+              pathPtr,
+              childName.length,
+              0,
+              _rightFdRead,
+              0,
+              0,
+              openedFdPtr,
+            ]),
+            _errnoNoent,
+          );
 
           expect(fdClose.ref([dirFd]), 0);
         },

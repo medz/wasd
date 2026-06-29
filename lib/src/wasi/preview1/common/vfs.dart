@@ -480,6 +480,32 @@ final class Preview1VirtualFileSystem {
   bool isDetachedOpenDirectoryFd(int fd) =>
       _detachedOpenDirectoryFds.contains(fd);
 
+  void detachOpenDirectoryFd(int fd) {
+    if (_openDirectoriesByFd.containsKey(fd)) {
+      _detachedOpenDirectoryFds.add(fd);
+    }
+  }
+
+  void detachOpenDirectoryFdsForPath(String guestPath) {
+    final normalized = normalizeGuestPath(guestPath);
+    for (final entry in _openDirectoriesByFd.entries) {
+      if (entry.value == normalized) {
+        _detachedOpenDirectoryFds.add(entry.key);
+      }
+    }
+  }
+
+  void refreshOpenDirectoryEntriesForFd(
+    int fd,
+    List<Preview1DirectoryEntry> entries,
+  ) {
+    if (_openDirectoriesByFd.containsKey(fd)) {
+      _openDirectoryEntriesByFd[fd] = List<Preview1DirectoryEntry>.unmodifiable(
+        entries,
+      );
+    }
+  }
+
   String? openDirectoryHostPathForFd(int fd) => _openDirectoryHostPathsByFd[fd];
 
   bool isDirectoryFd(int fd) =>
