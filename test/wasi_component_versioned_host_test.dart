@@ -2,11 +2,13 @@ import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/async_host.dart';
+import 'package:wasd/src/wasi/component/async_values.dart';
 import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
 import 'package:wasd/src/wasi/component/versioned_host.dart';
 import 'package:wasd/src/wasi/component/waitable_set.dart';
+import 'package:wasd/src/wasi/component/wit_adapter.dart';
 import 'package:wasd/src/wasi/component/wit_document.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
@@ -267,13 +269,8 @@ world command {
         );
         expect(preview3Plan.canIngest, isTrue);
         expect(preview3Plan.versionErrors, isEmpty);
-        expect(preview3Plan.canBindAdapters, isFalse);
-        expect(
-          preview3Plan.bindingErrors.map(
-            (error) => error.function.qualifiedName,
-          ),
-          ['stdout.write-via-stream'],
-        );
+        expect(preview3Plan.canBindAdapters, isTrue);
+        expect(preview3Plan.bindingErrors, isEmpty);
         expect(preview3Plan.world.name, 'command');
         expect(preview3Plan.items.map((item) => item.target.text), [
           'run',
@@ -388,6 +385,74 @@ world command {
       expect(() => program.invokeImport('runner.run', [41]), throwsStateError);
       expect(await program.invokeImportAsync('runner.run', [41]), 42);
       expect(seen, [41]);
+    });
+
+    test('Preview3 wrappers execute stream and future WIT adapters', () {
+      const source = '''
+package wasi:cli@0.3.0;
+
+interface stdout {
+  write-via-stream: func(data: stream<u8>) -> future<result>;
+}
+
+world command {
+  export stdout;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2Plan = WASIPreview2ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'command',
+      );
+      final preview3Plan = WASIPreview3ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'command',
+      );
+      final bytes = <int>[];
+
+      expect(preview2Plan.canIngest, isFalse);
+      expect(preview2Plan.canBindAdapters, isFalse);
+      expect(preview3Plan.canIngest, isTrue);
+      expect(preview3Plan.canBindAdapters, isTrue);
+      expect(preview3Plan.bindingErrors, isEmpty);
+      expect(
+        preview3Plan.functions.single.signature.params.single.type.kind,
+        WASIComponentWitAdapterValueKind.stream,
+      );
+      expect(
+        preview3Plan.functions.single.signature.result!.kind,
+        WASIComponentWitAdapterValueKind.future,
+      );
+
+      final program = preview3Plan.bindAdapters(
+        exports: {
+          'stdout.write-via-stream': (args) {
+            final stream = args.single as WASIComponentStream<int>;
+            bytes.addAll(stream.readable.read(4));
+            final result = WASIComponentFuture<WasmComponentValueData>(
+              'stdout-result',
+            );
+            result.writable.complete(_unitOkValue());
+            return result;
+          },
+        },
+      );
+      final stream = WASIComponentStream<int>('stdout-bytes');
+      stream.writable.writeAll(<int>[104, 105]);
+      stream.writable.close();
+
+      final result =
+          program.invokeExport('stdout.write-via-stream', [stream])
+              as WASIComponentFuture<WasmComponentValueData>;
+      final status = result.readable.read();
+
+      expect(bytes, [104, 105]);
+      expect(status.kind, WasmComponentValueDataKind.result);
+      expect(status.isOk, isTrue);
+      expect(
+        () => program.invokeExport('stdout.write-via-stream', [0]),
+        throwsStateError,
+      );
     });
 
     test('Preview2 and Preview3 wrappers execute composite WIT values', () {
@@ -1673,6 +1738,16 @@ WasmComponentValueData _u32StringOkValue(int value) {
       rawBytes: Uint8List(0),
       integer: value,
     ),
+  );
+}
+
+WasmComponentValueData _unitOkValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.result,
+    rawBytes: Uint8List(0),
+    index: 0,
+    label: 'ok',
+    isOk: true,
   );
 }
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../../wasm/backend/native/interpreter/component.dart';
+import 'async_values.dart';
 import 'unicode_scalar.dart';
 import 'wit_document.dart';
 
@@ -186,6 +187,26 @@ final class WASIComponentWitAdapterValueType {
          element: element,
        );
 
+  /// Creates a `stream<T>` WIT adapter value type.
+  WASIComponentWitAdapterValueType.stream({
+    required String text,
+    required WASIComponentWitAdapterValueType element,
+  }) : this._(
+         kind: WASIComponentWitAdapterValueKind.stream,
+         text: text,
+         element: element,
+       );
+
+  /// Creates a `future<T>` WIT adapter value type.
+  WASIComponentWitAdapterValueType.future({
+    required String text,
+    required WASIComponentWitAdapterValueType element,
+  }) : this._(
+         kind: WASIComponentWitAdapterValueKind.future,
+         text: text,
+         element: element,
+       );
+
   /// Creates a `tuple<T...>` WIT adapter value type.
   WASIComponentWitAdapterValueType.tuple({
     required String text,
@@ -337,6 +358,12 @@ enum WASIComponentWitAdapterValueKind {
 
   /// `list<T>`.
   list,
+
+  /// `stream<T>`.
+  stream,
+
+  /// `future<T>`.
+  future,
 
   /// `tuple<T...>`.
   tuple,
@@ -765,6 +792,46 @@ _parseWitAdapterValueType(
       error: null,
     );
   }
+  final streamArgs = _genericArgs('stream', text);
+  if (streamArgs != null) {
+    final element = _parseWitAdapterAsyncElementValueType(
+      text,
+      streamArgs,
+      '$context stream element',
+      interface,
+      visitingTypes,
+    );
+    if (element.error != null) {
+      return (type: null, error: element.error);
+    }
+    return (
+      type: WASIComponentWitAdapterValueType.stream(
+        text: text,
+        element: element.type!,
+      ),
+      error: null,
+    );
+  }
+  final futureArgs = _genericArgs('future', text);
+  if (futureArgs != null) {
+    final element = _parseWitAdapterAsyncElementValueType(
+      text,
+      futureArgs,
+      '$context future element',
+      interface,
+      visitingTypes,
+    );
+    if (element.error != null) {
+      return (type: null, error: element.error);
+    }
+    return (
+      type: WASIComponentWitAdapterValueType.future(
+        text: text,
+        element: element.type!,
+      ),
+      error: null,
+    );
+  }
   final tupleArgs = _genericArgs('tuple', text);
   if (tupleArgs != null) {
     if (tupleArgs.isEmpty || tupleArgs.any((arg) => arg.isEmpty)) {
@@ -949,6 +1016,67 @@ _parseWitAdapterValueType(
     );
   }
   return (type: null, error: 'unsupported WIT adapter $context type $text');
+}
+
+({WASIComponentWitAdapterValueType? type, String? error})
+_parseWitAdapterAsyncElementValueType(
+  String text,
+  List<String> args,
+  String context,
+  WASIComponentWitInterface interface, [
+  Set<String>? visitingTypes,
+]) {
+  if (args.length != 1 || args.single.isEmpty) {
+    return (type: null, error: 'unsupported WIT adapter $context type $text');
+  }
+  final element = _parseWitAdapterValueType(
+    args.single,
+    context,
+    interface,
+    visitingTypes,
+  );
+  if (element.error != null) {
+    return (type: null, error: element.error);
+  }
+  if (_containsWitAdapterAsyncValueType(element.type!)) {
+    return (
+      type: null,
+      error: 'unsupported nested async WIT adapter $context type $text',
+    );
+  }
+  return element;
+}
+
+bool _containsWitAdapterAsyncValueType(WASIComponentWitAdapterValueType type) {
+  switch (type.kind) {
+    case WASIComponentWitAdapterValueKind.stream:
+    case WASIComponentWitAdapterValueKind.future:
+      return true;
+    case WASIComponentWitAdapterValueKind.option:
+    case WASIComponentWitAdapterValueKind.list:
+      return _containsWitAdapterAsyncValueType(type.element!);
+    case WASIComponentWitAdapterValueKind.tuple:
+      return type.elements.any(_containsWitAdapterAsyncValueType);
+    case WASIComponentWitAdapterValueKind.record:
+      return type.fields.any(
+        (field) => _containsWitAdapterAsyncValueType(field.type),
+      );
+    case WASIComponentWitAdapterValueKind.variant:
+      return type.cases.any((case_) {
+        final caseType = case_.type;
+        return caseType != null && _containsWitAdapterAsyncValueType(caseType);
+      });
+    case WASIComponentWitAdapterValueKind.result:
+      final ok = type.ok;
+      final error = type.error;
+      return (ok != null && _containsWitAdapterAsyncValueType(ok)) ||
+          (error != null && _containsWitAdapterAsyncValueType(error));
+    case WASIComponentWitAdapterValueKind.primitive:
+    case WASIComponentWitAdapterValueKind.flags:
+    case WASIComponentWitAdapterValueKind.enumeration:
+    case WASIComponentWitAdapterValueKind.resource:
+      return false;
+  }
 }
 
 ({WASIComponentWitAdapterValueType? type, String? error})
@@ -1137,6 +1265,10 @@ Object? _validateWitAdapterValue(
       return _validateWitAdapterOptionValue(type, value, path);
     case WASIComponentWitAdapterValueKind.list:
       return _validateWitAdapterListValue(type, value, path);
+    case WASIComponentWitAdapterValueKind.stream:
+      return _validateWitAdapterStreamValue(type, value, path);
+    case WASIComponentWitAdapterValueKind.future:
+      return _validateWitAdapterFutureValue(type, value, path);
     case WASIComponentWitAdapterValueKind.tuple:
       return _validateWitAdapterTupleValue(type, value, path);
     case WASIComponentWitAdapterValueKind.record:
@@ -1152,6 +1284,28 @@ Object? _validateWitAdapterValue(
     case WASIComponentWitAdapterValueKind.result:
       return _validateWitAdapterResultValue(type, value, path);
   }
+}
+
+Object? _validateWitAdapterStreamValue(
+  WASIComponentWitAdapterValueType type,
+  Object? value,
+  String path,
+) {
+  if (value is WASIComponentStream) {
+    return value;
+  }
+  throw StateError('WIT adapter value $path does not match ${type.text}.');
+}
+
+Object? _validateWitAdapterFutureValue(
+  WASIComponentWitAdapterValueType type,
+  Object? value,
+  String path,
+) {
+  if (value is WASIComponentFuture) {
+    return value;
+  }
+  throw StateError('WIT adapter value $path does not match ${type.text}.');
 }
 
 Object? _validateWitAdapterPrimitiveValue(

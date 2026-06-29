@@ -511,10 +511,11 @@ final class WASIComponentAsyncEndpointHandles {
 
   /// Unpacks the canonical `i64` handle pair used by stream/future.new.
   factory WASIComponentAsyncEndpointHandles.unpack(int packed) {
-    final bits = _normalizeI64Bits(packed, 'packed');
-    final writable = bits ~/ _u32Base;
+    _checkI64Bits(packed, 'packed');
+    final signedHigh = _floorDivideByU32Base(packed);
+    final writable = signedHigh < 0 ? signedHigh + _u32Base : signedHigh;
     return WASIComponentAsyncEndpointHandles(
-      readable: bits - writable * _u32Base,
+      readable: packed - signedHigh * _u32Base,
       writable: writable,
     );
   }
@@ -526,12 +527,16 @@ final class WASIComponentAsyncEndpointHandles {
   final int writable;
 
   /// Canonical signed `i64` with readable in low bits and writable in high bits.
-  int get packed => readable + writable * _u32Base;
+  int get packed {
+    final bits = readable + writable * _u32Base;
+    return bits >= _i64SignBit ? bits - _i64SignBit - _i64SignBit : bits;
+  }
 }
 
 const int _u32Mask = 0xffffffff;
 const int _u32Base = 0x100000000;
 const int _i64Min = -0x8000000000000000;
+const int _i64SignBit = 0x8000000000000000;
 
 /// Status returned by canonical async stream memory copy operations.
 enum WASIComponentAsyncCopyStatus {
@@ -3284,17 +3289,23 @@ void _checkU32Handle(int handle, String name) {
   }
 }
 
-int _normalizeI64Bits(int value, String name) {
+void _checkI64Bits(int value, String name) {
   if (value >= 0) {
     if (value.bitLength > 64) {
       throw RangeError.value(value, name, 'does not fit in an unsigned i64');
     }
-    return value;
+    return;
   }
   if (value < _i64Min) {
     throw RangeError.value(value, name, 'does not fit in a signed i64');
   }
-  return value.toUnsigned(64);
+}
+
+int _floorDivideByU32Base(int value) {
+  if (value >= 0) {
+    return value ~/ _u32Base;
+  }
+  return -(((-value) + _u32Base - 1) ~/ _u32Base);
 }
 
 void _expectArity(int canonicalIndex, List<Object?> args, int expected) {

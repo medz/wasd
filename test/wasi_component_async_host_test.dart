@@ -9,6 +9,7 @@ import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
 
 import 'support/component_fixtures.dart' as component_fixtures;
+import 'support/runtime_environment.dart';
 
 void main() {
   group('WASIComponentAsyncHost', () {
@@ -33,34 +34,46 @@ void main() {
       expect(() => program.invoke(2, const <Object?>[]), throwsStateError);
     });
 
-    test('packs endpoint handles as canonical i64 bit patterns', () {
-      final handles = WASIComponentAsyncEndpointHandles(
-        readable: 0xffffffff,
-        writable: 0x80000000,
-      );
+    test(
+      'packs endpoint handles as canonical i64 bit patterns',
+      () {
+        final handles = WASIComponentAsyncEndpointHandles(
+          readable: 0xffffffff,
+          writable: 0x80000000,
+        );
 
-      expect(handles.packed, isNegative);
+        expect(handles.packed, isNegative);
 
-      final signed = WASIComponentAsyncEndpointHandles.unpack(handles.packed);
-      expect(signed.readable, 0xffffffff);
-      expect(signed.writable, 0x80000000);
+        final signed = WASIComponentAsyncEndpointHandles.unpack(handles.packed);
+        expect(signed.readable, 0xffffffff);
+        expect(signed.writable, 0x80000000);
 
-      final unsigned = WASIComponentAsyncEndpointHandles.unpack(
-        handles.packed.toUnsigned(64),
-      );
-      expect(unsigned.readable, 0xffffffff);
-      expect(unsigned.writable, 0x80000000);
+        final unsigned = WASIComponentAsyncEndpointHandles.unpack(
+          handles.packed.toUnsigned(64),
+        );
+        expect(unsigned.readable, 0xffffffff);
+        expect(unsigned.writable, 0x80000000);
 
-      expect(
-        () => WASIComponentAsyncEndpointHandles(
-          readable: 0x100000000,
-          writable: 1,
-        ),
-        throwsRangeError,
-      );
-      expect(WASIComponentAsyncEndpointHandles.unpack(-1).readable, 0xffffffff);
-      expect(WASIComponentAsyncEndpointHandles.unpack(-1).writable, 0xffffffff);
-    });
+        expect(
+          () => WASIComponentAsyncEndpointHandles(
+            readable: 0x100000000,
+            writable: 1,
+          ),
+          throwsRangeError,
+        );
+        expect(
+          WASIComponentAsyncEndpointHandles.unpack(-1).readable,
+          0xffffffff,
+        );
+        expect(
+          WASIComponentAsyncEndpointHandles.unpack(-1).writable,
+          0xffffffff,
+        );
+      },
+      skip: isNodeJsRuntime || isBrowserJsRuntime
+          ? 'Dart JS int cannot precisely represent full-width i64 handles.'
+          : false,
+    );
 
     test('binds decoded canonical stream definitions as a program', () {
       final component = WasmComponent.decode(_canonicalStreamProgramBytes());

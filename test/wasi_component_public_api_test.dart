@@ -60,6 +60,8 @@ world command {
         );
         expect(preview3.canIngest, isTrue);
         expect(preview3.versionErrors, isEmpty);
+        expect(preview3.canBindAdapters, isTrue);
+        expect(preview3.bindingErrors, isEmpty);
         expect(preview3.world.name, 'command');
       },
     );
