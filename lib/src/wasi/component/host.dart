@@ -6,11 +6,10 @@ import 'canonical_host.dart';
 import 'resource_host.dart';
 import 'resource_table.dart';
 
-/// Internal component host adapter over shared WASI component primitives.
+/// Component host adapter over shared WASI component primitives.
 ///
 /// This adapter coordinates decoded component validation, resource type
-/// binding, and canonical builtin binding. It is intentionally internal and
-/// does not make public WASI Preview2/Preview3 support claims.
+/// binding, and canonical builtin binding.
 final class WASIComponentHost {
   /// Creates a component host over [canonicalHost] or a new shared host.
   WASIComponentHost({WASIComponentCanonicalHost? canonicalHost})

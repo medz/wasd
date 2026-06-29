@@ -7,11 +7,10 @@ import 'unicode_scalar.dart';
 
 /// Canonical ABI memory codec for one component value type.
 ///
-/// This is intentionally internal. It implements the Canonical ABI
-/// `alignment`/`elem_size`/`load`/`store` path used by stream/future copy
-/// buffers. Dynamic string/list values are represented by their canonical
-/// `(ptr, len)` record and use [WASIComponentCanonicalRealloc] when storing
-/// payloads.
+/// It implements the Canonical ABI `alignment`/`elem_size`/`load`/`store` path
+/// used by stream/future copy buffers. Dynamic string/list values are
+/// represented by their canonical `(ptr, len)` record and use
+/// [WASIComponentCanonicalRealloc] when storing payloads.
 /// Resource handle-table semantics and borrow tracking are reported as
 /// unsupported instead of being approximated. Resource and error-context
 /// handles can be represented as plain canonical `u32` values when the caller

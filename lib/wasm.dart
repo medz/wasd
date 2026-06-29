@@ -1,5 +1,6 @@
 export 'src/wasm/errors.dart';
 export 'src/wasm/exception.dart';
+export 'src/wasm/component.dart';
 export 'src/wasm/global.dart';
 export 'src/wasm/instance.dart';
 export 'src/wasm/memory.dart';

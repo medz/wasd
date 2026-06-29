@@ -9,13 +9,12 @@ import 'resource_host.dart';
 import 'wit_adapter.dart';
 import 'wit_document.dart';
 
-/// Versioned component-host facade for future WASI Preview2/Preview3 adapters.
+/// Versioned component-host facade for WASI Preview2/Preview3 adapters.
 ///
-/// This is intentionally internal. It separates version profile checks from
-/// host capability checks so P2/P3 adapters can report whether a canonical
-/// definition is outside the selected WASI version surface or inside the
-/// version surface but not implemented by the current host yet. It is not a
-/// public runtime support claim.
+/// It separates version profile checks from host capability checks so P2/P3
+/// adapters can report whether a canonical definition is outside the selected
+/// WASI version surface or inside the version surface but not implemented by
+/// the current host yet.
 final class WASIComponentVersionedHost {
   /// Creates a versioned host facade for [version].
   WASIComponentVersionedHost({
@@ -27,7 +26,7 @@ final class WASIComponentVersionedHost {
   /// Version profile enforced by this facade.
   final WASIComponentVersionProfile profile;
 
-  /// Shared internal component host.
+  /// Shared component host.
   final WASIComponentHost componentHost;
 
   /// Prepares [component] against the selected WASI version and host support.

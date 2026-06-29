@@ -7,11 +7,10 @@ import '../component/wit_document.dart';
 import '../version.dart';
 import '../../wasm/backend/native/interpreter/component.dart';
 
-/// Internal WASI 0.3 / Preview3 component host boundary.
+/// WASI 0.3 / Preview3 component host boundary.
 ///
 /// This fixed-version wrapper keeps Preview3 adapter code on the async-aware
 /// component profile while host capability gaps remain explicitly reported.
-/// It is not exported as public runtime support.
 final class WASIPreview3ComponentHost {
   /// Creates a Preview3 component host over [componentHost] or a new host.
   WASIPreview3ComponentHost({WASIComponentHost? componentHost})

@@ -22,8 +22,7 @@ final class WASIComponentAsyncEndpointStateError extends StateError {
 
 /// In-memory runtime state for a Component Model `stream<T>` value.
 ///
-/// This is a host-side primitive for future WASI 0.3 canonical stream
-/// bindings. It deliberately models readable and writable endpoints separately
+/// This host-side primitive models readable and writable endpoints separately
 /// so canonical `stream.new`, `stream.read`, `stream.write`, cancellation, and
 /// drop operations can be layered on top without mixing ownership rules into
 /// the queue implementation.
@@ -87,9 +86,9 @@ final class WASIComponentReadableStream<T> {
 
   /// Returns a Dart future that completes when values or stream closure arrive.
   ///
-  /// This is the internal completion primitive used by future WASI 0.3 async
-  /// scheduling. The synchronous [read] API remains useful for polling already
-  /// queued host-side canonical operations.
+  /// Completion primitive used by WASI 0.3 async scheduling. The synchronous
+  /// [read] API remains useful for polling already queued host-side canonical
+  /// operations.
   Future<List<T>> readWhenAvailable(int maxElements) {
     return _state.readWhenAvailable(maxElements);
   }
@@ -234,9 +233,9 @@ final class WASIComponentReadableFuture<T> {
 
   /// Returns a Dart future that completes when this component future is ready.
   ///
-  /// This is the internal completion primitive used by future WASI 0.3 async
-  /// scheduling. The synchronous [read] API remains useful for already-ready
-  /// host-side canonical operations.
+  /// Completion primitive used by WASI 0.3 async scheduling. The synchronous
+  /// [read] API remains useful for already-ready host-side canonical
+  /// operations.
   Future<T> readWhenReady() {
     return _state.readWhenReady();
   }

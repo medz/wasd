@@ -1,4 +1,4 @@
-/// A nominal resource type for future WASI component hosts.
+/// A nominal resource type for WASI component hosts.
 ///
 /// Component Model resources are nominal, so two resource definitions with the
 /// same Dart representation type must still have different handle spaces.
@@ -27,7 +27,7 @@ final class WASIComponentResourceType<T extends Object> {
   }
 }
 
-/// A typed resource table for future WASI component hosts.
+/// A typed resource table for WASI component hosts.
 ///
 /// Component resources are represented as opaque integer handles. The table
 /// keeps the host objects typed, rejects stale handles, and prevents dropping a

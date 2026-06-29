@@ -7,11 +7,10 @@ import '../component/wit_document.dart';
 import '../version.dart';
 import '../../wasm/backend/native/interpreter/component.dart';
 
-/// Internal WASI 0.2 / Preview2 component host boundary.
+/// WASI 0.2 / Preview2 component host boundary.
 ///
 /// This fixed-version wrapper keeps Preview2 adapter code from constructing a
-/// mixed-version component host by hand. It is not exported as public runtime
-/// support.
+/// mixed-version component host by hand.
 final class WASIPreview2ComponentHost {
   /// Creates a Preview2 component host over [componentHost] or a new host.
   WASIPreview2ComponentHost({WASIComponentHost? componentHost})

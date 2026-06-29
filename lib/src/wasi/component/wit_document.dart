@@ -1,8 +1,8 @@
-/// Internal WIT document boundary model for future Preview2/Preview3 adapters.
+/// WIT document boundary model for Preview2/Preview3 adapters.
 ///
 /// This parser intentionally stops at package/interface/world boundaries. It
 /// gives adapter generation a structured, diagnosable input without claiming
-/// full WIT semantic coverage or public WASI component support.
+/// full WIT semantic coverage.
 final class WASIComponentWitDocument {
   /// Creates a parsed WIT document from already-normalized declarations.
   WASIComponentWitDocument({
@@ -12,7 +12,7 @@ final class WASIComponentWitDocument {
   }) : interfaces = List<WASIComponentWitInterface>.unmodifiable(interfaces),
        worlds = List<WASIComponentWitWorld>.unmodifiable(worlds);
 
-  /// Parses [source] into the internal package/interface/world boundary model.
+  /// Parses [source] into the package/interface/world boundary model.
   factory WASIComponentWitDocument.parse(
     String source, {
     String sourceName = '<wit>',

@@ -7,8 +7,9 @@ const String _defaultMarkdownPath =
     '.dart_tool/spec_runner/component_official_failures.md';
 const String _defaultTestsuiteDir = 'third_party/component-model-tests/test';
 const String _defaultPortableFeatures =
-    'component-model,cm-values,cm-async,cm-async-builtins,cm-async-stackful,'
-    'cm-threading,cm-map,cm-gc,cm-fixed-length-lists';
+    'component-model,cm-values,cm-async,cm-more-async-builtins,'
+    'cm-async-stackful,cm-threading,cm-error-context,cm-map,cm-gc,'
+    'cm-fixed-length-lists';
 const String _testsuiteSubmoduleHint =
     'Initialize testsuite submodule: '
     'git submodule update --init --recursive third_party/component-model-tests';

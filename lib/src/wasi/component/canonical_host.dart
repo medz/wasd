@@ -13,11 +13,11 @@ import 'task.dart';
 import 'thread.dart';
 import 'waitable_set.dart';
 
-/// Internal Component Model canonical host facade.
+/// Component Model canonical host facade.
 ///
-/// This does not make P2/P3 public API claims. It binds the canonical builtins
-/// already implemented by the focused component hosts into one canonical-indexed
-/// program so future versioned WASI adapters can use one execution boundary.
+/// This binds the canonical builtins implemented by the focused component
+/// hosts into one canonical-indexed program so versioned WASI adapters can use
+/// one execution boundary.
 final class WASIComponentCanonicalHost {
   /// Creates a canonical host over shared component runtime state.
   WASIComponentCanonicalHost({

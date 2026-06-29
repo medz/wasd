@@ -12,11 +12,9 @@ import 'waitable_set.dart';
 
 /// Binds decoded canonical stream/future definitions to executable primitives.
 ///
-/// This is an internal host layer for Component Model async work. It binds
-/// validated `stream.*` and `future.*` definitions to typed Dart endpoint
-/// primitives, including primitive, owned-resource-handle, composite, and
-/// dynamic string/list stream/future memory copies, so later P3 host adapters
-/// can reuse one execution model.
+/// This host layer binds validated `stream.*` and `future.*` definitions to
+/// typed Dart endpoint primitives, including primitive, owned-resource-handle,
+/// composite, and dynamic string/list stream/future memory copies.
 final class WASIComponentAsyncHost {
   /// Creates an async host backed by [table] or a new resource table.
   WASIComponentAsyncHost({

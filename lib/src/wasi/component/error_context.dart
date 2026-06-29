@@ -14,10 +14,8 @@ final class WASIComponentErrorContext {
 
 /// Binds canonical `error-context.*` definitions to a resource table.
 ///
-/// This is an internal execution layer for Component Model canonical builtins.
-/// It shares the canonical string memory adapter used by other component
-/// memory-copy paths. Direct core `realloc` integration remains future adapter
-/// work.
+/// This host shares the canonical string memory adapter used by other component
+/// memory-copy paths. Direct core `realloc` integration remains adapter work.
 final class WASIComponentErrorContextHost {
   /// Creates an error-context host backed by [table] or a new resource table.
   WASIComponentErrorContextHost({WASIComponentResourceTable? table})
