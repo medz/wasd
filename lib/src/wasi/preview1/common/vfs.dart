@@ -1755,6 +1755,9 @@ int readOpenFileIntoIov({
     }
   }
 
+  if (totalRead > 0) {
+    _syncOpenFileAfterRead(opened);
+  }
   data.setUint32(nreadPtr, totalRead, Endian.little);
   return errnoSuccess;
 }
@@ -1811,6 +1814,18 @@ void _syncOpenFileAfterWrite(Preview1OpenFile opened) {
     opened.sync();
   } else if ((flags & fdflagDsync) != 0) {
     opened.dataSync();
+  }
+}
+
+void _syncOpenFileAfterRead(Preview1OpenFile opened) {
+  final flags = opened.descriptorFlags;
+  if ((flags & fdflagRsync) == 0) {
+    return;
+  }
+  if ((flags & fdflagDsync) != 0 && (flags & fdflagSync) == 0) {
+    opened.dataSync();
+  } else {
+    opened.sync();
   }
 }
 

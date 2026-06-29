@@ -224,10 +224,11 @@ final class _SyncRecordingOpenFile implements Preview1OpenFile {
   int syncCount = 0;
 
   @override
-  int readInto(Uint8List target, int start, int length) => 0;
+  int readInto(Uint8List target, int start, int length) => length;
 
   @override
-  int readAtInto(Uint8List target, int start, int length, int fileOffset) => 0;
+  int readAtInto(Uint8List target, int start, int length, int fileOffset) =>
+      length;
 
   @override
   int writeFrom(Uint8List source, int start, int length) => length;
@@ -940,6 +941,71 @@ void main() {
       expect(data.getUint32(countPtr, Endian.little), 1);
       expect(syncOpened.dataSyncCount, 0);
       expect(syncOpened.syncCount, 1);
+    });
+
+    test('fd read helpers honor descriptor rsync flag', () {
+      final bytes = Uint8List(64);
+      final data = ByteData.view(bytes.buffer);
+      const iovPtr = 0;
+      const payloadPtr = 16;
+      const countPtr = 32;
+      data.setUint32(iovPtr, payloadPtr, Endian.little);
+      data.setUint32(iovPtr + 4, 1, Endian.little);
+
+      final opened = _SyncRecordingOpenFile()
+        ..descriptorFlags = preview1_constants.fdflagRsync;
+      expect(
+        readOpenFileIntoIov(
+          opened: opened,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nreadPtr: countPtr,
+        ),
+        0,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 1);
+      expect(opened.syncCount, 1);
+      expect(opened.dataSyncCount, 0);
+
+      final dataSyncOpened = _SyncRecordingOpenFile()
+        ..descriptorFlags =
+            preview1_constants.fdflagRsync | preview1_constants.fdflagDsync;
+      expect(
+        readOpenFileIntoIov(
+          opened: dataSyncOpened,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nreadPtr: countPtr,
+          fileOffset: 0,
+        ),
+        0,
+      );
+      expect(dataSyncOpened.dataSyncCount, 1);
+      expect(dataSyncOpened.syncCount, 0);
+
+      final fullSyncOpened = _SyncRecordingOpenFile()
+        ..descriptorFlags =
+            preview1_constants.fdflagRsync |
+            preview1_constants.fdflagDsync |
+            preview1_constants.fdflagSync;
+      expect(
+        readOpenFileIntoIov(
+          opened: fullSyncOpened,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nreadPtr: countPtr,
+          fileOffset: 0,
+        ),
+        0,
+      );
+      expect(fullSyncOpened.dataSyncCount, 0);
+      expect(fullSyncOpened.syncCount, 1);
     });
 
     test('imports has fd_write function', () {
