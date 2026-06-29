@@ -412,6 +412,95 @@ world filesystem-test {
       expect(temp.directoryExists('created'), isFalse);
     });
 
+    test('sets Preview3 filesystem real host timestamps on Dart VM', () async {
+      if (!hasDartIoRuntime) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      final temp = createHostTemp('wasd_p3_host_times_');
+      if (temp == null) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      addTearDown(temp.delete);
+      temp.writeFile('timed.txt', 'time');
+      temp.createDirectory('timed-dir');
+
+      const source = '''
+package wasi-testsuite:test;
+
+world filesystem-test {
+  include wasi:filesystem/imports@0.3.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview3ComponentHost(
+        filesystemHost: WASIPreview3NativeFilesystemHost(
+          preopens: {'/': temp.path},
+          canMutate: true,
+        ),
+      );
+      final program = host.bindWitWorld(document, worldName: 'filesystem-test');
+      final directories =
+          program.invokeImport(
+                'wasi:filesystem/preopens@0.3.0.get-directories',
+                const [],
+              )
+              as WasmComponentValueData;
+      final root = _preopenHandle(directories, '/');
+      final opened =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'timed.txt',
+                  _flagsValue(const <String>[]),
+                  _flagsValue(const <String>['read', 'write']),
+                ],
+              )
+              as WasmComponentValueData;
+      final file = _resultHandle(_resultOk(opened));
+
+      final fileAccess = _timestampNanos(1700000000, 123000000);
+      final fileModification = _timestampNanos(1700000001, 456000000);
+      final fileTimes =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.set-times',
+                [
+                  file,
+                  _timestampValue(1700000000, 123000000),
+                  _timestampValue(1700000001, 456000000),
+                ],
+              )
+              as WasmComponentValueData;
+      _expectUnitOk(fileTimes);
+      expect(temp.fileTimes('timed.txt'), (
+        accessTimeNanos: fileAccess,
+        modificationTimeNanos: fileModification,
+      ));
+
+      final directoryAccess = _timestampNanos(1700000002, 111000000);
+      final directoryModification = _timestampNanos(1700000003, 333000000);
+      final directoryTimes =
+          await program.invokeImportAsync(
+                'wasi:filesystem/types@0.3.0.descriptor.set-times-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'timed-dir',
+                  _timestampValue(1700000002, 111000000),
+                  _timestampValue(1700000003, 333000000),
+                ],
+              )
+              as WasmComponentValueData;
+      _expectUnitOk(directoryTimes);
+      expect(temp.directoryTimes('timed-dir'), (
+        accessTimeNanos: directoryAccess,
+        modificationTimeNanos: directoryModification,
+      ));
+    });
+
     test('links and renames Preview3 filesystem real host paths', () async {
       if (!hasDartIoRuntime) {
         markTestSkipped('requires dart:io host filesystem access');
@@ -562,6 +651,34 @@ WasmComponentValueData _flagsValue(List<String> labels) {
     labels: labels,
   );
 }
+
+WasmComponentValueData _timestampValue(int seconds, int nanoseconds) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.variant,
+    rawBytes: Uint8List(0),
+    index: 2,
+    label: 'timestamp',
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.record,
+      rawBytes: Uint8List(0),
+      items: [
+        WasmComponentValueData(
+          kind: WasmComponentValueDataKind.integer,
+          rawBytes: Uint8List(0),
+          integer: BigInt.from(seconds),
+        ),
+        WasmComponentValueData(
+          kind: WasmComponentValueDataKind.integer,
+          rawBytes: Uint8List(0),
+          integer: nanoseconds,
+        ),
+      ],
+    ),
+  );
+}
+
+int _timestampNanos(int seconds, int nanoseconds) =>
+    seconds * 1000000000 + nanoseconds;
 
 Uint8List _emptyComponentBytes() => Uint8List.fromList(const <int>[
   0x00,

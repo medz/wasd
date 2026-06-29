@@ -31,6 +31,12 @@ typedef WASIPreview3FilesystemFileWriteCallback =
 typedef WASIPreview3FilesystemFileSetSizeCallback =
     WASIPreview3FilesystemMutationResult Function(BigInt size);
 
+/// Updates access and modification timestamps for one filesystem object.
+typedef WASIPreview3FilesystemSetTimesCallback =
+    WASIPreview3FilesystemMutationResult Function(
+      WASIPreview3FilesystemTimestampUpdate update,
+    );
+
 /// Mutates one child entry inside a directory.
 typedef WASIPreview3FilesystemDirectoryMutationCallback =
     WASIPreview3FilesystemMutationResult Function(String name);
@@ -97,7 +103,10 @@ enum WASIPreview3FilesystemMutationError {
   notPermitted('not-permitted'),
 
   /// Descriptor or backing store is read-only.
-  readOnly('read-only');
+  readOnly('read-only'),
+
+  /// Operation is not supported by the host backing store.
+  unsupported('unsupported');
 
   const WASIPreview3FilesystemMutationError(this.errorCode);
 
@@ -118,6 +127,27 @@ final class WASIPreview3FilesystemMutationResult {
 
   /// Whether the mutation succeeded.
   bool get isOk => error == null;
+}
+
+/// Timestamp update requested by WASI 0.3 filesystem operations.
+final class WASIPreview3FilesystemTimestampUpdate {
+  /// Creates a timestamp update.
+  const WASIPreview3FilesystemTimestampUpdate({
+    this.accessTimeNanos,
+    this.modificationTimeNanos,
+  });
+
+  /// New access timestamp in nanoseconds since the Unix epoch, or null to keep
+  /// the existing value.
+  final BigInt? accessTimeNanos;
+
+  /// New modification timestamp in nanoseconds since the Unix epoch, or null to
+  /// keep the existing value.
+  final BigInt? modificationTimeNanos;
+
+  /// Whether either timestamp should change.
+  bool get hasChanges =>
+      accessTimeNanos != null || modificationTimeNanos != null;
 }
 
 /// Result returned by Preview3 filesystem readlink callbacks.
@@ -164,6 +194,7 @@ final class WASIPreview3FilesystemDirectory {
     WASIPreview3FilesystemDirectoryRenameCallback? rename,
     WASIPreview3FilesystemDirectorySymlinkCallback? symlink,
     WASIPreview3FilesystemDirectoryReadLinkCallback? readLink,
+    WASIPreview3FilesystemSetTimesCallback? setTimes,
     WASIPreview3FilesystemDirectoryMutationCallback? removeDirectory,
     WASIPreview3FilesystemDirectoryMutationCallback? unlinkFile,
   }) : _entries = List<WASIPreview3FilesystemDirectoryEntry>.of(entries),
@@ -175,6 +206,7 @@ final class WASIPreview3FilesystemDirectory {
        _rename = rename,
        _symlink = symlink,
        _readLink = readLink,
+       _setTimes = setTimes,
        _removeDirectory = removeDirectory,
        _unlinkFile = unlinkFile;
 
@@ -190,6 +222,7 @@ final class WASIPreview3FilesystemDirectory {
     WASIPreview3FilesystemDirectoryRenameCallback? rename,
     WASIPreview3FilesystemDirectorySymlinkCallback? symlink,
     WASIPreview3FilesystemDirectoryReadLinkCallback? readLink,
+    WASIPreview3FilesystemSetTimesCallback? setTimes,
     WASIPreview3FilesystemDirectoryMutationCallback? removeDirectory,
     WASIPreview3FilesystemDirectoryMutationCallback? unlinkFile,
   }) : _entries = <WASIPreview3FilesystemDirectoryEntry>[],
@@ -201,6 +234,7 @@ final class WASIPreview3FilesystemDirectory {
        _rename = rename,
        _symlink = symlink,
        _readLink = readLink,
+       _setTimes = setTimes,
        _removeDirectory = removeDirectory,
        _unlinkFile = unlinkFile;
 
@@ -223,6 +257,7 @@ final class WASIPreview3FilesystemDirectory {
   final WASIPreview3FilesystemDirectoryRenameCallback? _rename;
   final WASIPreview3FilesystemDirectorySymlinkCallback? _symlink;
   final WASIPreview3FilesystemDirectoryReadLinkCallback? _readLink;
+  final WASIPreview3FilesystemSetTimesCallback? _setTimes;
   final WASIPreview3FilesystemDirectoryMutationCallback? _removeDirectory;
   final WASIPreview3FilesystemDirectoryMutationCallback? _unlinkFile;
 
@@ -383,6 +418,52 @@ final class WASIPreview3FilesystemDirectory {
     }
     _entries.removeWhere((candidate) => candidate.name == name);
     return const WASIPreview3FilesystemMutationResult.ok();
+  }
+
+  WASIPreview3FilesystemMutationResult _setTimesTo(
+    WASIPreview3FilesystemTimestampUpdate update,
+  ) {
+    if (!canMutate) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.readOnly,
+      );
+    }
+    if (!update.hasChanges) {
+      return const WASIPreview3FilesystemMutationResult.ok();
+    }
+    final callback = _setTimes;
+    if (callback != null) {
+      return callback(update);
+    }
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.readOnly,
+    );
+  }
+
+  WASIPreview3FilesystemMutationResult _setTimesAt(
+    String name,
+    WASIPreview3FilesystemTimestampUpdate update,
+  ) {
+    if (!canMutate) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.readOnly,
+      );
+    }
+    if (!_isSimplePathSegment(name)) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.invalid,
+      );
+    }
+    final entry = _entryNamed(name);
+    if (entry == null) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.noEntry,
+      );
+    }
+    if (!update.hasChanges) {
+      return const WASIPreview3FilesystemMutationResult.ok();
+    }
+    return entry._setTimesTo(update);
   }
 
   WASIPreview3FilesystemMutationResult _linkAt(
@@ -563,6 +644,7 @@ final class WASIPreview3FilesystemDirectoryEntry {
        _currentSize = null,
        _writeBytes = null,
        _setSize = null,
+       _setTimes = null,
        _linkTarget = null;
 
   /// Creates a symbolic-link entry.
@@ -578,6 +660,7 @@ final class WASIPreview3FilesystemDirectoryEntry {
        _currentSize = null,
        _writeBytes = null,
        _setSize = null,
+       _setTimes = null,
        _linkTarget = target;
 
   /// Creates a regular-file entry.
@@ -590,11 +673,13 @@ final class WASIPreview3FilesystemDirectoryEntry {
     WASIPreview3FilesystemFileSizeProvider? currentSize,
     WASIPreview3FilesystemFileWriteCallback? writeBytes,
     WASIPreview3FilesystemFileSetSizeCallback? setSize,
+    WASIPreview3FilesystemSetTimesCallback? setTimes,
   }) : _bytes = Uint8List.fromList(bytes),
        _readBytes = readBytes,
        _currentSize = currentSize,
        _writeBytes = writeBytes,
        _setSize = setSize,
+       _setTimes = setTimes,
        _linkTarget = null,
        kind = WASIPreview3FilesystemDescriptorKind.regularFile,
        size = size ?? currentSize?.call() ?? BigInt.from(bytes.length),
@@ -623,6 +708,7 @@ final class WASIPreview3FilesystemDirectoryEntry {
   final WASIPreview3FilesystemFileSizeProvider? _currentSize;
   final WASIPreview3FilesystemFileWriteCallback? _writeBytes;
   final WASIPreview3FilesystemFileSetSizeCallback? _setSize;
+  final WASIPreview3FilesystemSetTimesCallback? _setTimes;
   final String? _linkTarget;
 
   BigInt get _size => _currentSize?.call() ?? size;
@@ -697,6 +783,34 @@ final class WASIPreview3FilesystemDirectoryEntry {
     return const WASIPreview3FilesystemMutationResult.ok();
   }
 
+  WASIPreview3FilesystemMutationResult _setTimesTo(
+    WASIPreview3FilesystemTimestampUpdate update,
+  ) {
+    if (!canMutate) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.readOnly,
+      );
+    }
+    if (!update.hasChanges) {
+      return const WASIPreview3FilesystemMutationResult.ok();
+    }
+    if (kind == WASIPreview3FilesystemDescriptorKind.directory) {
+      return directory!._setTimesTo(update);
+    }
+    if (kind != WASIPreview3FilesystemDescriptorKind.regularFile) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.unsupported,
+      );
+    }
+    final callback = _setTimes;
+    if (callback != null) {
+      return callback(update);
+    }
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.readOnly,
+    );
+  }
+
   WASIPreview3FilesystemDirectoryEntry _renamed(String name) {
     return switch (kind) {
       WASIPreview3FilesystemDescriptorKind.directory =>
@@ -719,6 +833,7 @@ final class WASIPreview3FilesystemDirectoryEntry {
           currentSize: _currentSize,
           writeBytes: _writeBytes,
           setSize: _setSize,
+          setTimes: _setTimes,
         ),
     };
   }
@@ -771,7 +886,7 @@ base class WASIPreview3FilesystemHost {
         'wasi:filesystem/types@0.3.0.descriptor.set-size': (args) =>
             _setSize(_handle(args[0]), _u64(args[1])),
         'wasi:filesystem/types@0.3.0.descriptor.set-times': (args) =>
-            _readonlyUnitResult(_handle(args[0])),
+            _setTimes(_handle(args[0]), args[1], args[2]),
         'wasi:filesystem/types@0.3.0.descriptor.read-directory': (args) =>
             _readDirectory(_handle(args[0])),
         'wasi:filesystem/types@0.3.0.descriptor.sync': (args) =>
@@ -783,7 +898,7 @@ base class WASIPreview3FilesystemHost {
         'wasi:filesystem/types@0.3.0.descriptor.stat-at': (args) =>
             _statAt(_handle(args[0]), args[2] as String),
         'wasi:filesystem/types@0.3.0.descriptor.set-times-at': (args) =>
-            _readonlyUnitResult(_handle(args[0])),
+            _setTimesAt(_handle(args[0]), args[2] as String, args[3], args[4]),
         'wasi:filesystem/types@0.3.0.descriptor.link-at': (args) => _linkAt(
           _handle(args[0]),
           args[2] as String,
@@ -969,13 +1084,6 @@ base class WASIPreview3FilesystemHost {
     return _unitOk();
   }
 
-  WasmComponentValueData _readonlyUnitResult(int handle) {
-    if (!_descriptors.containsKey(handle)) {
-      return _errorResult('bad-descriptor');
-    }
-    return _errorResult('read-only');
-  }
-
   WasmComponentValueData _getFlags(int handle) {
     final descriptor = _descriptors[handle];
     if (descriptor == null) {
@@ -1002,6 +1110,26 @@ base class WASIPreview3FilesystemHost {
       return _errorResult(error);
     }
     return _mutationResult(descriptor!.setSize(size));
+  }
+
+  WasmComponentValueData _setTimes(
+    int handle,
+    Object? accessTimestamp,
+    Object? modificationTimestamp,
+  ) {
+    final descriptor = _descriptors[handle];
+    if (descriptor == null) {
+      return _errorResult('bad-descriptor');
+    }
+    final update = _timestampUpdate(accessTimestamp, modificationTimestamp);
+    final error = update.error;
+    if (error != null) {
+      return _errorResult(error);
+    }
+    if (!descriptor.canMutate) {
+      return _errorResult('read-only');
+    }
+    return _mutationResult(descriptor.setTimes(update.update!));
   }
 
   WasmComponentValueData _getType(int handle) {
@@ -1065,6 +1193,31 @@ base class WASIPreview3FilesystemHost {
       return _errorResult('read-only');
     }
     return _mutationResult(parent.directory!._createDirectoryAt(target.name));
+  }
+
+  WasmComponentValueData _setTimesAt(
+    int handle,
+    String path,
+    Object? accessTimestamp,
+    Object? modificationTimestamp,
+  ) {
+    final target = _resolveMutationParent(handle, path);
+    final targetError = target.error;
+    if (targetError != null) {
+      return _errorResult(targetError);
+    }
+    final update = _timestampUpdate(accessTimestamp, modificationTimestamp);
+    final updateError = update.error;
+    if (updateError != null) {
+      return _errorResult(updateError);
+    }
+    final parent = target.parent!;
+    if (!parent.canMutate) {
+      return _errorResult('read-only');
+    }
+    return _mutationResult(
+      parent.directory!._setTimesAt(target.name, update.update!),
+    );
   }
 
   WasmComponentValueData _removeDirectoryAt(int handle, String path) {
@@ -1467,6 +1620,22 @@ final class _WASIPreview3FilesystemDescriptor {
     return entry._setSizeTo(nextSize);
   }
 
+  WASIPreview3FilesystemMutationResult setTimes(
+    WASIPreview3FilesystemTimestampUpdate update,
+  ) {
+    final entry = this.entry;
+    if (entry != null) {
+      return entry._setTimesTo(update);
+    }
+    final directory = this.directory;
+    if (directory != null) {
+      return directory._setTimesTo(update);
+    }
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.readOnly,
+    );
+  }
+
   _WASIPreview3FilesystemDescriptor copyWithHandle(int handle) {
     return _WASIPreview3FilesystemDescriptor._(
       handle: handle,
@@ -1523,6 +1692,81 @@ BigInt _u64(Object? value) {
     BigInt() => value,
     int() => BigInt.from(value),
     _ => BigInt.zero,
+  };
+}
+
+({WASIPreview3FilesystemTimestampUpdate? update, String? error})
+_timestampUpdate(Object? accessTimestamp, Object? modificationTimestamp) {
+  final now =
+      BigInt.from(DateTime.now().toUtc().microsecondsSinceEpoch) *
+      BigInt.from(1000);
+  final access = _timestampNanosFromUpdate(accessTimestamp, now);
+  final accessError = access.error;
+  if (accessError != null) {
+    return (update: null, error: accessError);
+  }
+  final modification = _timestampNanosFromUpdate(modificationTimestamp, now);
+  final modificationError = modification.error;
+  if (modificationError != null) {
+    return (update: null, error: modificationError);
+  }
+  return (
+    update: WASIPreview3FilesystemTimestampUpdate(
+      accessTimeNanos: access.nanos,
+      modificationTimeNanos: modification.nanos,
+    ),
+    error: null,
+  );
+}
+
+({BigInt? nanos, String? error}) _timestampNanosFromUpdate(
+  Object? value,
+  BigInt now,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != WasmComponentValueDataKind.variant) {
+    return (nanos: null, error: 'invalid');
+  }
+  final label = value.label;
+  final index = value.index;
+  if (label == 'no-change' || (label == null && index == 0)) {
+    return (nanos: null, error: null);
+  }
+  if (label == 'now' || (label == null && index == 1)) {
+    return (nanos: now, error: null);
+  }
+  if (label == 'timestamp' || (label == null && index == 2)) {
+    final instant = value.associatedValue;
+    if (instant == null) {
+      return (nanos: null, error: 'invalid');
+    }
+    return _instantNanos(instant);
+  }
+  return (nanos: null, error: 'invalid');
+}
+
+({BigInt? nanos, String? error}) _instantNanos(WasmComponentValueData instant) {
+  if (instant.kind != WasmComponentValueDataKind.record ||
+      instant.items.length != 2) {
+    return (nanos: null, error: 'invalid');
+  }
+  final seconds = _integerBigInt(instant.items[0].integer);
+  final nanoseconds = _integerBigInt(instant.items[1].integer);
+  if (seconds == null ||
+      nanoseconds == null ||
+      seconds < BigInt.zero ||
+      nanoseconds < BigInt.zero ||
+      nanoseconds >= BigInt.from(1000000000)) {
+    return (nanos: null, error: 'invalid');
+  }
+  return (nanos: seconds * BigInt.from(1000000000) + nanoseconds, error: null);
+}
+
+BigInt? _integerBigInt(Object? integer) {
+  return switch (integer) {
+    BigInt() => integer,
+    int() => BigInt.from(integer),
+    _ => null,
   };
 }
 

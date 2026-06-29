@@ -66,6 +66,9 @@ WASIPreview3FilesystemDirectory _nativeDirectory(
               _symlinkNativeChild(directory.path, target, linkName)
         : null,
     readLink: (name) => _readNativeLinkChild(directory.path, name),
+    setTimes: canMutate
+        ? (update) => _setNativePathTimes(directory.path, update)
+        : null,
     removeDirectory: canMutate
         ? (name) => _removeNativeDirectoryChild(directory.path, name)
         : null,
@@ -128,6 +131,9 @@ WASIPreview3FilesystemDirectoryEntry? _nativeEntryForPath(
             ? (offset, bytes) => _writeNativeFileAt(path, offset, bytes)
             : null,
         setSize: canMutate ? (size) => _setNativeFileSize(path, size) : null,
+        setTimes: canMutate
+            ? (update) => _setNativePathTimes(path, update)
+            : null,
       );
     case io.FileSystemEntityType.link:
       return WASIPreview3FilesystemDirectoryEntry.symbolicLink(
@@ -478,6 +484,128 @@ WASIPreview3FilesystemMutationResult _setNativeFileSize(
   return _rewriteNativeFileSize(path, size.toInt());
 }
 
+WASIPreview3FilesystemMutationResult _setNativePathTimes(
+  String path,
+  WASIPreview3FilesystemTimestampUpdate update,
+) {
+  if (!update.hasChanges) {
+    return const WASIPreview3FilesystemMutationResult.ok();
+  }
+  final accessTime = _dateTimeFromWasiNanos(update.accessTimeNanos);
+  final modificationTime = _dateTimeFromWasiNanos(update.modificationTimeNanos);
+  if ((update.accessTimeNanos != null && accessTime == null) ||
+      (update.modificationTimeNanos != null && modificationTime == null)) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.invalid,
+    );
+  }
+  final type = io.FileSystemEntity.typeSync(path, followLinks: false);
+  try {
+    switch (type) {
+      case io.FileSystemEntityType.file:
+        if (!io.Platform.isWindows) {
+          return _posixSetNativePathTimes(path, accessTime, modificationTime);
+        }
+        final file = io.File(path);
+        if (accessTime != null) {
+          file.setLastAccessedSync(accessTime);
+        }
+        if (modificationTime != null) {
+          file.setLastModifiedSync(modificationTime);
+        }
+      case io.FileSystemEntityType.directory:
+        if (!io.Platform.isWindows) {
+          return _posixSetNativePathTimes(path, accessTime, modificationTime);
+        }
+        return const WASIPreview3FilesystemMutationResult.error(
+          WASIPreview3FilesystemMutationError.unsupported,
+        );
+      case io.FileSystemEntityType.link:
+        return const WASIPreview3FilesystemMutationResult.error(
+          WASIPreview3FilesystemMutationError.unsupported,
+        );
+      case io.FileSystemEntityType.notFound:
+        return const WASIPreview3FilesystemMutationResult.error(
+          WASIPreview3FilesystemMutationError.noEntry,
+        );
+      case io.FileSystemEntityType.pipe:
+      case io.FileSystemEntityType.unixDomainSock:
+        return const WASIPreview3FilesystemMutationResult.error(
+          WASIPreview3FilesystemMutationError.invalid,
+        );
+    }
+    return const WASIPreview3FilesystemMutationResult.ok();
+  } on io.FileSystemException {
+    return _nativeMutationFailure(path);
+  } on ArgumentError {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.invalid,
+    );
+  }
+}
+
+WASIPreview3FilesystemMutationResult _posixSetNativePathTimes(
+  String path,
+  DateTime? accessTime,
+  DateTime? modificationTime,
+) {
+  final stat = io.FileStat.statSync(path);
+  final effectiveAccessTime = accessTime ?? stat.accessed;
+  final effectiveModificationTime = modificationTime ?? stat.modified;
+  final pathPointer = path.toNativeUtf8();
+  final times = calloc<_PosixTimeval>(2);
+  try {
+    _writePosixTimeval(times, 0, effectiveAccessTime);
+    _writePosixTimeval(times, 1, effectiveModificationTime);
+    if (_posixUtimesFunction()(pathPointer, times) != 0) {
+      if (io.FileSystemEntity.typeSync(path, followLinks: false) ==
+          io.FileSystemEntityType.notFound) {
+        return const WASIPreview3FilesystemMutationResult.error(
+          WASIPreview3FilesystemMutationError.noEntry,
+        );
+      }
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.io,
+      );
+    }
+    return const WASIPreview3FilesystemMutationResult.ok();
+  } catch (_) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.io,
+    );
+  } finally {
+    calloc.free(times);
+    malloc.free(pathPointer);
+  }
+}
+
+void _writePosixTimeval(
+  ffi.Pointer<_PosixTimeval> times,
+  int index,
+  DateTime value,
+) {
+  final microseconds = value.toUtc().microsecondsSinceEpoch;
+  times[index].tvSec = microseconds ~/ 1000000;
+  times[index].tvUsec = microseconds.remainder(1000000);
+}
+
+DateTime? _dateTimeFromWasiNanos(BigInt? nanos) {
+  if (nanos == null) {
+    return null;
+  }
+  if (nanos < BigInt.zero || nanos > _maxI64) {
+    return null;
+  }
+  try {
+    final microseconds = (nanos ~/ BigInt.from(1000)).toInt();
+    return DateTime.fromMicrosecondsSinceEpoch(microseconds, isUtc: true);
+  } on ArgumentError {
+    return null;
+  } on UnsupportedError {
+    return null;
+  }
+}
+
 WASIPreview3FilesystemMutationResult _posixWriteNativeFileAt(
   String path,
   int offset,
@@ -683,6 +811,7 @@ _PosixPwriteDart? _cachedPosixPwrite;
 _PosixFtruncateDart? _cachedPosixFtruncate;
 _PosixCloseDart? _cachedPosixClose;
 _PosixLinkDart? _cachedPosixLink;
+_PosixUtimesDart? _cachedPosixUtimes;
 _WindowsCreateHardLinkDart? _cachedWindowsCreateHardLink;
 
 _PosixOpenDart _posixOpenFunction() => _cachedPosixOpen ??= _openPosixCLibrary()
@@ -704,6 +833,10 @@ _PosixCloseDart _posixCloseFunction() =>
 
 _PosixLinkDart _posixLinkFunction() => _cachedPosixLink ??= _openPosixCLibrary()
     .lookupFunction<_PosixLinkNative, _PosixLinkDart>('link');
+
+_PosixUtimesDart _posixUtimesFunction() =>
+    _cachedPosixUtimes ??= _openPosixCLibrary()
+        .lookupFunction<_PosixUtimesNative, _PosixUtimesDart>('utimes');
 
 _WindowsCreateHardLinkDart _windowsCreateHardLinkFunction() =>
     _cachedWindowsCreateHardLink ??= ffi.DynamicLibrary.open('kernel32.dll')
@@ -735,6 +868,11 @@ typedef _PosixLinkNative =
     ffi.Int32 Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>);
 typedef _PosixLinkDart = int Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>);
 
+typedef _PosixUtimesNative =
+    ffi.Int32 Function(ffi.Pointer<Utf8>, ffi.Pointer<_PosixTimeval>);
+typedef _PosixUtimesDart =
+    int Function(ffi.Pointer<Utf8>, ffi.Pointer<_PosixTimeval>);
+
 typedef _WindowsCreateHardLinkNative =
     ffi.Int32 Function(
       ffi.Pointer<Utf16>,
@@ -746,6 +884,14 @@ typedef _WindowsCreateHardLinkDart =
 
 const int _posixOpenWriteOnly = 1;
 final BigInt _maxI64 = (BigInt.one << 63) - BigInt.one;
+
+final class _PosixTimeval extends ffi.Struct {
+  @ffi.IntPtr()
+  external int tvSec;
+
+  @ffi.IntPtr()
+  external int tvUsec;
+}
 
 final class _NativeDirectoryContext {
   const _NativeDirectoryContext(this.path);
