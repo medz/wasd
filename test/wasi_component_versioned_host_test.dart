@@ -280,6 +280,90 @@ world command {
       },
     );
 
+    test('Preview3 expands and binds standard WASI random imports', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world random-test {
+  include wasi:random/imports@0.3.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2Plan = WASIPreview2ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'random-test',
+      );
+      final preview3 = WASIPreview3ComponentHost();
+      final preview3Plan = preview3.prepareWitWorld(
+        document,
+        worldName: 'random-test',
+      );
+
+      expect(preview2Plan.canIngest, isFalse);
+      expect(preview2Plan.versionErrors.map((error) => error.targetName), [
+        'wasi:random/imports@0.3.0',
+      ]);
+      expect(preview3Plan.canIngest, isTrue);
+      expect(preview3Plan.canBindAdapters, isTrue);
+      expect(preview3Plan.functions.map((function) => function.qualifiedName), [
+        'wasi:random/random@0.3.0.get-random-bytes',
+        'wasi:random/random@0.3.0.get-random-u64',
+        'wasi:random/insecure@0.3.0.get-insecure-random-bytes',
+        'wasi:random/insecure@0.3.0.get-insecure-random-u64',
+        'wasi:random/insecure-seed@0.3.0.get-insecure-seed',
+      ]);
+
+      final program = preview3.bindWitWorld(document, worldName: 'random-test');
+      final bytesA =
+          program.invokeImport('wasi:random/random@0.3.0.get-random-bytes', [
+                BigInt.from(16),
+              ])
+              as WasmComponentValueData;
+      final bytesB =
+          program.invokeImport('wasi:random/random@0.3.0.get-random-bytes', [
+                BigInt.from(16),
+              ])
+              as WasmComponentValueData;
+      final insecureA =
+          program.invokeImport(
+                'wasi:random/insecure@0.3.0.get-insecure-random-bytes',
+                [BigInt.from(16)],
+              )
+              as WasmComponentValueData;
+      final seedA =
+          program.invokeImport(
+                'wasi:random/insecure-seed@0.3.0.get-insecure-seed',
+                const [],
+              )
+              as WasmComponentValueData;
+      final seedB =
+          program.invokeImport(
+                'wasi:random/insecure-seed@0.3.0.get-insecure-seed',
+                const [],
+              )
+              as WasmComponentValueData;
+
+      expect(_u8List(bytesA), hasLength(16));
+      expect(_u8List(bytesB), hasLength(16));
+      expect(_u8List(bytesA), isNot(_u8List(bytesB)));
+      expect(_u8List(insecureA), hasLength(16));
+      expect(
+        program.invokeImport(
+          'wasi:random/random@0.3.0.get-random-u64',
+          const [],
+        ),
+        isA<BigInt>(),
+      );
+      expect(
+        program.invokeImport(
+          'wasi:random/insecure@0.3.0.get-insecure-random-u64',
+          const [],
+        ),
+        isA<BigInt>(),
+      );
+      expect(_u64Tuple(seedA), _u64Tuple(seedB));
+    });
+
     test('Preview2 and Preview3 wrappers execute WIT world adapters', () {
       const source = '''
 package acme:math@0.2.0;
@@ -1870,6 +1954,41 @@ WasmComponentValueData _shortSeedTupleValue() {
       ),
     ],
   );
+}
+
+List<int> _u8List(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.list) {
+    throw StateError('expected list<u8>, got ${value.kind.name}');
+  }
+  return [
+    for (final item in value.items)
+      if (item.kind == WasmComponentValueDataKind.integer)
+        item.integer as int
+      else
+        throw StateError('expected u8 item, got ${item.kind.name}'),
+  ];
+}
+
+(BigInt, BigInt) _u64Tuple(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.tuple ||
+      value.items.length != 2) {
+    throw StateError('expected tuple<u64, u64>, got ${value.kind.name}');
+  }
+  return (_u64Data(value.items[0]), _u64Data(value.items[1]));
+}
+
+BigInt _u64Data(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.integer) {
+    throw StateError('expected u64, got ${value.kind.name}');
+  }
+  final integer = value.integer;
+  if (integer is BigInt) {
+    return integer;
+  }
+  if (integer is int) {
+    return BigInt.from(integer);
+  }
+  throw StateError('expected integer payload, got $integer');
 }
 
 WasmComponentValueData _stringTupleListValue(List<(String, String)> rows) {

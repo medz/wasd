@@ -3,9 +3,11 @@ import '../component/async_host.dart';
 import '../component/host.dart';
 import '../component/resource_host.dart';
 import '../component/versioned_host.dart';
+import '../component/wit_adapter.dart';
 import '../component/wit_document.dart';
 import '../version.dart';
 import '../../wasm/backend/native/interpreter/component.dart';
+import 'random.dart';
 
 /// WASI 0.3 / Preview3 component host boundary.
 ///
@@ -17,16 +19,23 @@ final class WASIPreview3ComponentHost {
     : versionedHost = WASIComponentVersionedHost(
         version: WASIVersion.preview3,
         componentHost: componentHost,
-      );
+      ),
+      _randomHost = WASIPreview3RandomHost();
 
   /// Underlying versioned component-host facade.
   final WASIComponentVersionedHost versionedHost;
+
+  final WASIPreview3RandomHost _randomHost;
 
   /// Preview3 version profile.
   WASIComponentVersionProfile get profile => versionedHost.profile;
 
   /// Shared component host.
   WASIComponentHost get componentHost => versionedHost.componentHost;
+
+  /// Standard Preview3 WIT import callbacks implemented by this host.
+  Map<String, WASIComponentWitAdapterCallback> get standardImports =>
+      _randomHost.imports;
 
   /// Prepares [component] for Preview3 component-host binding.
   WASIComponentVersionedBindingPlan prepareComponent(
@@ -42,6 +51,29 @@ final class WASIPreview3ComponentHost {
     String? worldName,
   }) {
     return versionedHost.prepareWitWorld(document, worldName: worldName);
+  }
+
+  /// Prepares and binds a Preview3 WIT world.
+  ///
+  /// Built-in standard WASI imports are supplied by default and can be
+  /// overridden by passing the same key in [imports].
+  WASIComponentWitAdapterProgram bindWitWorld(
+    WASIComponentWitDocument document, {
+    String? worldName,
+    Map<String, WASIComponentWitAdapterCallback> imports =
+        const <String, WASIComponentWitAdapterCallback>{},
+    Map<String, WASIComponentWitAdapterCallback> exports =
+        const <String, WASIComponentWitAdapterCallback>{},
+  }) {
+    return versionedHost.bindWitWorld(
+      document,
+      worldName: worldName,
+      imports: <String, WASIComponentWitAdapterCallback>{
+        ...standardImports,
+        ...imports,
+      },
+      exports: exports,
+    );
   }
 
   /// Prepares and binds Preview3 canonical `lift`/`lower` adapter operations.

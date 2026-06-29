@@ -9,40 +9,100 @@ import 'wit_document.dart';
 typedef WASIComponentWitAdapterCallback =
     FutureOr<Object?> Function(List<Object?> args);
 
-/// Expands local WIT import/export interface functions from [world].
+/// Resolves a qualified WIT target such as `wasi:random/imports@0.3.0`.
+typedef WASIComponentWitTargetResolver =
+    WASIComponentWitResolvedTarget? Function(String target);
+
+/// Standard or external WIT target resolved to a parsed document member.
+final class WASIComponentWitResolvedTarget {
+  /// Creates a resolved WIT target.
+  const WASIComponentWitResolvedTarget({
+    required this.document,
+    required this.memberName,
+  });
+
+  /// Parsed WIT document containing [memberName].
+  final WASIComponentWitDocument document;
+
+  /// Interface or world member name inside [document].
+  final String memberName;
+
+  /// Canonical interface callback name for [interfaceName].
+  String qualifiedInterfaceName(String interfaceName) {
+    final package = document.package;
+    if (package == null) {
+      return interfaceName;
+    }
+    final version = package.version == null ? '' : '@${package.version}';
+    return '${package.namespace}:${package.name}/$interfaceName$version';
+  }
+}
+
+/// Expands local and resolved WIT import/export interface functions from [world].
 List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
   WASIComponentWitDocument document,
-  WASIComponentWitWorld world, [
+  WASIComponentWitWorld world, {
+  WASIComponentWitTargetResolver? resolveTarget,
   Set<String>? visiting,
-]) {
+  String Function(String interfaceName)? qualifyInterfaceName,
+}) {
   final active = visiting ?? <String>{};
-  if (!active.add(world.name)) {
+  final visitKey = _witWorldVisitKey(document, world);
+  if (!active.add(visitKey)) {
     return const <WASIComponentWitFunctionBinding>[];
   }
   final functions = <WASIComponentWitFunctionBinding>[];
   for (final item in world.items) {
     final target = item.target;
-    if (target.isQualified) {
-      continue;
-    }
     if (item.direction == WASIComponentWitWorldItemDirection.include) {
+      if (target.isQualified) {
+        final resolved = resolveTarget?.call(target.text);
+        final included = resolved?.document.worldNamed(resolved.memberName);
+        if (resolved != null && included != null) {
+          functions.addAll(
+            wasiComponentWitWorldFunctions(
+              resolved.document,
+              included,
+              resolveTarget: resolveTarget,
+              visiting: active,
+              qualifyInterfaceName: resolved.qualifiedInterfaceName,
+            ),
+          );
+        }
+        continue;
+      }
       final included = document.worldNamed(target.text);
       if (included != null) {
         functions.addAll(
-          wasiComponentWitWorldFunctions(document, included, active),
+          wasiComponentWitWorldFunctions(
+            document,
+            included,
+            resolveTarget: resolveTarget,
+            visiting: active,
+            qualifyInterfaceName: qualifyInterfaceName,
+          ),
         );
       }
       continue;
     }
-    final interface = document.interfaceNamed(target.text);
+    final resolved = target.isQualified
+        ? resolveTarget?.call(target.text)
+        : null;
+    final interfaceDocument = resolved?.document ?? document;
+    final interfaceName = resolved?.memberName ?? target.text;
+    final interface = interfaceDocument.interfaceNamed(interfaceName);
     if (interface == null) {
       continue;
     }
+    final callbackInterfaceName =
+        resolved?.qualifiedInterfaceName(interface.name) ??
+        qualifyInterfaceName?.call(interface.name) ??
+        interface.name;
     for (final function in interface.functions) {
       functions.add(
         WASIComponentWitFunctionBinding._(
           item: item,
-          interfaceName: interface.name,
+          interfaceName: callbackInterfaceName,
           function: function,
           direction: item.direction,
           signature: _parseWitAdapterSignature(function, interface),
@@ -50,8 +110,15 @@ List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
       );
     }
   }
-  active.remove(world.name);
+  active.remove(visitKey);
   return List<WASIComponentWitFunctionBinding>.unmodifiable(functions);
+}
+
+String _witWorldVisitKey(
+  WASIComponentWitDocument document,
+  WASIComponentWitWorld world,
+) {
+  return '${document.package?.text ?? '<local>'}#${world.name}';
 }
 
 /// Reports functions that cannot bind to executable adapters.
@@ -71,7 +138,7 @@ List<WASIComponentWitAdapterBindingError> wasiComponentWitAdapterBindingErrors(
   return List<WASIComponentWitAdapterBindingError>.unmodifiable(errors);
 }
 
-/// A local WIT interface function expanded from a world boundary.
+/// A WIT interface function expanded from a world boundary.
 final class WASIComponentWitFunctionBinding {
   const WASIComponentWitFunctionBinding._({
     required this.item,

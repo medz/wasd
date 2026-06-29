@@ -6,6 +6,7 @@ import 'async_host.dart';
 import 'canonical_host.dart';
 import 'host.dart';
 import 'resource_host.dart';
+import 'standard_wit.dart';
 import 'wit_adapter.dart';
 import 'wit_document.dart';
 
@@ -101,7 +102,11 @@ final class WASIComponentVersionedHost {
   }) {
     final world = _selectWitWorld(document, worldName);
     final errors = _witWorldVersionErrors(profile, document, world);
-    final functions = wasiComponentWitWorldFunctions(document, world);
+    final functions = wasiComponentWitWorldFunctions(
+      document,
+      world,
+      resolveTarget: resolveWASIComponentStandardWitTarget,
+    );
     return WASIComponentVersionedWitWorldPlan._(
       profile: profile,
       document: document,
@@ -109,6 +114,21 @@ final class WASIComponentVersionedHost {
       versionErrors: errors,
       functions: functions,
     );
+  }
+
+  /// Prepares and binds a WIT world through this version profile.
+  WASIComponentWitAdapterProgram bindWitWorld(
+    WASIComponentWitDocument document, {
+    String? worldName,
+    Map<String, WASIComponentWitAdapterCallback> imports =
+        const <String, WASIComponentWitAdapterCallback>{},
+    Map<String, WASIComponentWitAdapterCallback> exports =
+        const <String, WASIComponentWitAdapterCallback>{},
+  }) {
+    return prepareWitWorld(
+      document,
+      worldName: worldName,
+    ).bindAdapters(imports: imports, exports: exports);
   }
 }
 

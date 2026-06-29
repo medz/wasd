@@ -65,6 +65,31 @@ world command {
         expect(preview3.world.name, 'command');
       },
     );
+
+    test('binds standard Preview3 random imports from public API', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world random-test {
+  include wasi:random/imports@0.3.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview3ComponentHost();
+      final program = host.bindWitWorld(document, worldName: 'random-test');
+      final bytes =
+          program.invokeImport('wasi:random/random@0.3.0.get-random-bytes', [
+                BigInt.from(4),
+              ])
+              as WasmComponentValueData;
+
+      expect(bytes.kind, WasmComponentValueDataKind.list);
+      expect(bytes.items, hasLength(4));
+      expect(
+        host.standardImports,
+        contains('wasi:random/insecure-seed@0.3.0.get-insecure-seed'),
+      );
+    });
   });
 }
 
