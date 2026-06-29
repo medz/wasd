@@ -185,6 +185,26 @@ void main() {
     });
   });
 
+  group('Host-created memory and tables', () {
+    test('memory can omit maximum pages', () {
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+
+      expect(memory.buffer.lengthInBytes, 65536);
+      expect(memory.grow(0), 1);
+    });
+
+    test('table can omit maximum elements', () {
+      final table = Table(
+        const TableDescriptor<ExternRef, Object?>(TableKind.externref, 1),
+      );
+
+      expect(table.length, 1);
+      expect(table.get(0), isNull);
+      expect(table.grow(1), 1);
+      expect(table.length, 2);
+    });
+  });
+
   group('Interpreter local ops', () {
     late Instance instance;
 

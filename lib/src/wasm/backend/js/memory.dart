@@ -3,18 +3,13 @@ library;
 
 import 'dart:typed_data';
 import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 
 import '../../memory.dart' as wasm;
 
 class Memory implements wasm.Memory {
   Memory(wasm.MemoryDescriptor descriptor)
-    : host = JSMemory(
-        MemoryDescriptor(
-          initial: descriptor.initial,
-          maximum: descriptor.maximum,
-          shared: descriptor.shared,
-        ),
-      );
+    : host = JSMemory(_toHostMemoryDescriptor(descriptor));
 
   final JSMemory host;
 
@@ -39,4 +34,17 @@ extension type JSMemory._(JSObject _) implements JSObject {
 
   external int grow(int delta);
   external JSArrayBuffer get buffer;
+}
+
+MemoryDescriptor _toHostMemoryDescriptor(wasm.MemoryDescriptor descriptor) {
+  final object = JSObject()..['initial'] = descriptor.initial.toJS;
+  final maximum = descriptor.maximum;
+  if (maximum != null) {
+    object['maximum'] = maximum.toJS;
+  }
+  final shared = descriptor.shared;
+  if (shared != null) {
+    object['shared'] = shared.toJS;
+  }
+  return MemoryDescriptor._(object);
 }

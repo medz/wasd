@@ -2,6 +2,7 @@
 library;
 
 import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 
 import '../../table.dart' as wasm;
 import '../../value.dart';
@@ -52,11 +53,7 @@ JSTable createHost<T extends Value<T, V>, V extends Object?>(
   wasm.TableDescriptor<T, V> descriptor,
   JSAny? value,
 ) {
-  final tableDescriptor = JSTableDescriptor(
-    element: (descriptor.element.alias ?? descriptor.element.name).toJS,
-    initial: descriptor.initial,
-    maximum: descriptor.maximum,
-  );
+  final tableDescriptor = _toHostTableDescriptor(descriptor);
   if (value == null) {
     return JSTable(tableDescriptor);
   }
@@ -79,4 +76,18 @@ extension type JSTable._(JSObject _) implements JSObject {
   external JSAny? get(int index);
   external void set(int index, JSAny? value);
   external int grow(int delta, [JSAny? value]);
+}
+
+JSTableDescriptor _toHostTableDescriptor<
+  T extends Value<T, V>,
+  V extends Object?
+>(wasm.TableDescriptor<T, V> descriptor) {
+  final object = JSObject()
+    ..['element'] = (descriptor.element.alias ?? descriptor.element.name).toJS
+    ..['initial'] = descriptor.initial.toJS;
+  final maximum = descriptor.maximum;
+  if (maximum != null) {
+    object['maximum'] = maximum.toJS;
+  }
+  return JSTableDescriptor._(object);
 }
