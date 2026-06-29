@@ -7,26 +7,26 @@ import 'src/spec_player_bridge_io.dart'
     as player_bridge;
 import 'src/spec_v128_codec.dart' as spec_v128;
 import 'package:wasd/wasd.dart';
-import '_native_wasm_bridge.dart' as _native;
+import '_native_wasm_bridge.dart' as native_bridge;
 
-typedef WasmFeatureSet = _native.WasmFeatureSet;
-typedef WasmFeatureProfile = _native.WasmFeatureProfile;
-typedef WasmModule = _native.WasmModule;
-typedef WasmInstance = _native.WasmInstance;
-typedef WasmImports = _native.WasmImports;
-typedef WasmImport = _native.WasmImport;
-typedef WasmImportKind = _native.WasmImportKind;
-typedef WasmHostFunction = _native.WasmHostFunction;
-typedef WasmGlobalType = _native.WasmGlobalType;
-typedef WasmMemory = _native.WasmMemory;
-typedef WasmTable = _native.WasmTable;
-typedef WasmTagImport = _native.WasmTagImport;
-typedef WasmRefType = _native.WasmRefType;
-typedef WasmValueType = _native.WasmValueType;
-typedef WasmF32Bits = _native.WasmF32Bits;
-typedef WasmF64Bits = _native.WasmF64Bits;
-typedef WasmVm = _native.WasmVm;
-typedef RuntimeGlobal = _native.RuntimeGlobal;
+typedef WasmFeatureSet = native_bridge.WasmFeatureSet;
+typedef WasmFeatureProfile = native_bridge.WasmFeatureProfile;
+typedef WasmModule = native_bridge.WasmModule;
+typedef WasmInstance = native_bridge.WasmInstance;
+typedef WasmImports = native_bridge.WasmImports;
+typedef WasmImport = native_bridge.WasmImport;
+typedef WasmImportKind = native_bridge.WasmImportKind;
+typedef WasmHostFunction = native_bridge.WasmHostFunction;
+typedef WasmGlobalType = native_bridge.WasmGlobalType;
+typedef WasmMemory = native_bridge.WasmMemory;
+typedef WasmTable = native_bridge.WasmTable;
+typedef WasmTagImport = native_bridge.WasmTagImport;
+typedef WasmRefType = native_bridge.WasmRefType;
+typedef WasmValueType = native_bridge.WasmValueType;
+typedef WasmF32Bits = native_bridge.WasmF32Bits;
+typedef WasmF64Bits = native_bridge.WasmF64Bits;
+typedef WasmVm = native_bridge.WasmVm;
+typedef RuntimeGlobal = native_bridge.RuntimeGlobal;
 
 enum _SpecSuite { core, proposal, all }
 
@@ -239,7 +239,6 @@ final class _FileResult {
     required this.commandsSkipped,
     required this.skipReasonCounts,
     required this.passed,
-    this.durationMs = 0,
     this.conversionCacheHit = false,
     this.firstFailureLine,
     this.firstFailureReason,
@@ -256,7 +255,7 @@ final class _FileResult {
   final int commandsSkipped;
   final Map<String, int> skipReasonCounts;
   final bool passed;
-  int durationMs;
+  int durationMs = 0;
   final bool conversionCacheHit;
   final int? firstFailureLine;
   final String? firstFailureReason;
@@ -2470,7 +2469,7 @@ Future<String> _conversionCacheKey({
   required String file,
   required _WastConverter converter,
 }) async {
-  var hash = _FNV64();
+  final hash = _FNV64();
   hash.addString('wasd-spec-conversion-cache-v1');
   hash.addString(converter.kind.name);
   hash.addString(converter.binary);
@@ -2814,9 +2813,10 @@ List<String> _collectSuiteFiles(String testsuiteDir, _SpecSuite suite) {
     }
     final normalized = entity.path.replaceAll('\\', '/');
     final inProposal = normalized.contains('/proposals/');
+    final inLegacy = normalized.contains('/legacy/');
     switch (suite) {
       case _SpecSuite.core:
-        if (!inProposal) {
+        if (!inProposal && !inLegacy) {
           files.add(entity.path);
         }
       case _SpecSuite.proposal:

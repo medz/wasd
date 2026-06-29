@@ -1,5 +1,6 @@
 import 'package:test/test.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/module.dart';
+import 'package:wasd/src/wasm/backend/native/interpreter/runtime_ops.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/table.dart';
 
 void main() {
@@ -40,6 +41,48 @@ void main() {
       );
 
       expect(target.snapshot(), <int?>[null, 7, null, 9]);
+    });
+  });
+
+  group('RuntimeTableOps.initFromElementSegment', () {
+    test('validates zero-length source bounds after elem.drop', () {
+      final table = WasmTable(refType: WasmRefType.funcref, min: 4);
+
+      expect(
+        () => RuntimeTableOps.initFromElementSegment(
+          segment: null,
+          segmentIndex: 0,
+          table: table,
+          sourceOffset: 0,
+          destinationOffset: table.length,
+          length: 0,
+        ),
+        returnsNormally,
+      );
+
+      expect(
+        () => RuntimeTableOps.initFromElementSegment(
+          segment: null,
+          segmentIndex: 0,
+          table: table,
+          sourceOffset: 1,
+          destinationOffset: 0,
+          length: 0,
+        ),
+        throwsStateError,
+      );
+
+      expect(
+        () => RuntimeTableOps.initFromElementSegment(
+          segment: null,
+          segmentIndex: 0,
+          table: table,
+          sourceOffset: 0,
+          destinationOffset: table.length + 1,
+          length: 0,
+        ),
+        throwsStateError,
+      );
     });
   });
 }

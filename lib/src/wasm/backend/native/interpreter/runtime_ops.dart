@@ -388,14 +388,8 @@ final class RuntimeMemoryOps {
     required int destinationOffset,
     required int length,
   }) {
-    if (segment == null) {
-      if (length == 0) {
-        return;
-      }
-      throw StateError('memory.init on dropped data segment $segmentIndex.');
-    }
-    if (sourceOffset > segment.length ||
-        length > segment.length - sourceOffset) {
+    final segmentLength = segment?.length ?? 0;
+    if (sourceOffset > segmentLength || length > segmentLength - sourceOffset) {
       throw StateError('memory.init source out of bounds.');
     }
     if (destinationOffset > memory.lengthInBytes ||
@@ -405,9 +399,13 @@ final class RuntimeMemoryOps {
     if (length == 0) {
       return;
     }
+    final source = segment;
+    if (source == null) {
+      throw StateError('memory.init on dropped data segment $segmentIndex.');
+    }
     memory.writeBytesFromList(
       destinationOffset,
-      segment,
+      source,
       sourceOffset: sourceOffset,
       length: length,
     );
@@ -465,14 +463,8 @@ final class RuntimeTableOps {
     required int destinationOffset,
     required int length,
   }) {
-    if (segment == null) {
-      if (length == 0) {
-        return;
-      }
-      throw StateError('table.init on dropped element segment $segmentIndex.');
-    }
-    if (sourceOffset > segment.length ||
-        length > segment.length - sourceOffset) {
+    final segmentLength = segment?.length ?? 0;
+    if (sourceOffset > segmentLength || length > segmentLength - sourceOffset) {
       throw StateError('table.init source out of bounds.');
     }
     if (destinationOffset > table.length ||
@@ -482,9 +474,13 @@ final class RuntimeTableOps {
     if (length == 0) {
       return;
     }
+    final source = segment;
+    if (source == null) {
+      throw StateError('table.init on dropped element segment $segmentIndex.');
+    }
     table.initializeRange(
       destinationOffset,
-      segment,
+      source,
       sourceOffset: sourceOffset,
       length: length,
     );
