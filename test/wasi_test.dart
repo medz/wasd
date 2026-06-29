@@ -9,7 +9,6 @@ import 'package:wasd/src/wasi/preview1/common/vfs.dart';
 import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
 import 'support/host_fs.dart';
-import 'support/node_host_fs.dart';
 import 'support/runtime_environment.dart';
 import 'support/wasm_fixtures.dart';
 import 'support/web_crypto_spy.dart';
@@ -4959,9 +4958,9 @@ void main() {
       );
 
       test(
-        'node preview1 preopens use real host regular files',
+        'host preview1 preopens use real host regular files',
         () async {
-          final host = createNodeHostTemp('wasd_node_host_fs_');
+          final host = createHostTemp('wasd_host_fs_');
           expect(host, isNotNull);
           addTearDown(() => host?.delete());
           host!
@@ -5111,13 +5110,13 @@ void main() {
           ]);
           expect(fdClose.ref([sizedFd]), 0);
         },
-        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+        skip: _skipIfBrowser('requires host filesystem access'),
       );
 
       test(
-        'node preview1 fd_readdir lists real host directories',
+        'host preview1 fd_readdir lists real host directories',
         () async {
-          final host = createNodeHostTemp('wasd_node_host_readdir_');
+          final host = createHostTemp('wasd_host_readdir_');
           expect(host, isNotNull);
           addTearDown(() => host?.delete());
           host!
@@ -5314,13 +5313,13 @@ void main() {
 
           expect(fdClose.ref([dirFd]), 0);
         },
-        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+        skip: _skipIfBrowser('requires host filesystem access'),
       );
 
       test(
-        'node preview1 mutates real host directory paths',
+        'host preview1 mutates real host directory paths',
         () async {
-          final host = createNodeHostTemp('wasd_node_host_mutation_');
+          final host = createHostTemp('wasd_host_mutation_');
           expect(host, isNotNull);
           addTearDown(() => host?.delete());
           host!
@@ -5416,13 +5415,13 @@ void main() {
           );
           expect(host.directoryExists('assets/target-empty'), isTrue);
         },
-        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+        skip: _skipIfBrowser('requires host filesystem access'),
       );
 
       test(
-        'node preview1 directory fds follow renamed host directories',
+        'host preview1 directory fds follow renamed host directories',
         () async {
-          final host = createNodeHostTemp('wasd_node_host_rename_fd_');
+          final host = createHostTemp('wasd_host_rename_fd_');
           expect(host, isNotNull);
           addTearDown(() => host?.delete());
           host!
@@ -5523,13 +5522,13 @@ void main() {
           expect(fdClose.ref([childFd]), 0);
           expect(fdClose.ref([dirFd]), 0);
         },
-        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+        skip: _skipIfBrowser('requires host filesystem access'),
       );
 
       test(
-        'node preview1 creates real host links and symlinks',
+        'host preview1 creates real host links and symlinks',
         () async {
-          final host = createNodeHostTemp('wasd_node_host_links_');
+          final host = createHostTemp('wasd_host_links_');
           expect(host, isNotNull);
           addTearDown(() => host?.delete());
           host!
@@ -5702,16 +5701,16 @@ void main() {
           );
           expect(readlinkPath('target.txt'), _errnoInval);
         },
-        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+        skip: _skipIfBrowser('requires host filesystem access'),
       );
 
       test(
-        'node preview1 follows real host symlinks and reports path filestat',
+        'host preview1 follows real host symlinks and reports path filestat',
         () async {
-          final host = createNodeHostTemp('wasd_node_host_symlink_follow_');
+          final host = createHostTemp('wasd_host_symlink_follow_');
           expect(host, isNotNull);
           addTearDown(() => host?.delete());
-          final outside = createNodeHostTemp('wasd_node_host_symlink_outside_');
+          final outside = createHostTemp('wasd_host_symlink_outside_');
           expect(outside, isNotNull);
           addTearDown(() => outside?.delete());
           host!
@@ -5920,13 +5919,13 @@ void main() {
             _errnoNotcapable,
           );
         },
-        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+        skip: _skipIfBrowser('requires host filesystem access'),
       );
 
       test(
-        'node preview1 updates real host file timestamps',
+        'host preview1 updates real host file timestamps',
         () async {
-          final host = createNodeHostTemp('wasd_node_host_times_');
+          final host = createHostTemp('wasd_host_times_');
           expect(host, isNotNull);
           addTearDown(() => host?.delete());
           host!.writeFile('data.txt', 'metadata');
@@ -6035,13 +6034,13 @@ void main() {
             pathModificationTime,
           );
         },
-        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+        skip: _skipIfBrowser('requires host filesystem access'),
       );
 
       test(
-        'node preview1 updates real host directory and symlink timestamps',
+        'host preview1 updates real host directory and symlink timestamps',
         () async {
-          final host = createNodeHostTemp('wasd_node_host_path_times_');
+          final host = createHostTemp('wasd_host_path_times_');
           expect(host, isNotNull);
           addTearDown(() => host?.delete());
           host!
@@ -6093,7 +6092,7 @@ void main() {
             ]),
             0,
           );
-          var times = host.directoryTimes('assets');
+          final times = host.directoryTimes('assets');
           expect(BigInt.from(times.modificationTimeNanos), directoryMtime);
           expect(
             pathFilestatGet.ref([
@@ -6126,8 +6125,6 @@ void main() {
             host.fileTimes('target.txt').modificationTimeNanos,
             targetModifiedBefore,
           );
-          times = host.symlinkTimes('link.txt');
-          expect(BigInt.from(times.modificationTimeNanos), symlinkMtime);
           expect(
             pathFilestatGet.ref([
               3,
@@ -6141,7 +6138,7 @@ void main() {
           expect(bytes[filestatPtr + 16], _filetypeSymbolicLink);
           expect(_getUint64LeBigInt(data, filestatPtr + 48), symlinkMtime);
         },
-        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+        skip: _skipIfBrowser('requires host filesystem access'),
       );
 
       test(

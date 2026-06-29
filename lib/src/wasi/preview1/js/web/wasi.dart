@@ -2163,9 +2163,6 @@ class WASI implements wasi.WASI {
     if (nanos <= 0) {
       return true;
     }
-    if (!_isNodeJs()) {
-      return false;
-    }
     final atomics = globalContext.getProperty<JSObject?>('Atomics'.toJS);
     final sharedArrayBufferConstructor = globalContext.getProperty<JSFunction?>(
       'SharedArrayBuffer'.toJS,
