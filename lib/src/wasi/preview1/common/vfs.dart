@@ -1798,8 +1798,20 @@ int writeOpenFileFromIov({
     }
   }
 
+  if (totalWritten > 0) {
+    _syncOpenFileAfterWrite(opened);
+  }
   data.setUint32(nwrittenPtr, totalWritten, Endian.little);
   return errnoSuccess;
+}
+
+void _syncOpenFileAfterWrite(Preview1OpenFile opened) {
+  final flags = opened.descriptorFlags;
+  if ((flags & fdflagSync) != 0) {
+    opened.sync();
+  } else if ((flags & fdflagDsync) != 0) {
+    opened.dataSync();
+  }
 }
 
 int writeSocketFromIov({

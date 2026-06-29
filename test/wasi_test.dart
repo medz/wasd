@@ -230,10 +230,11 @@ final class _SyncRecordingOpenFile implements Preview1OpenFile {
   int readAtInto(Uint8List target, int start, int length, int fileOffset) => 0;
 
   @override
-  int writeFrom(Uint8List source, int start, int length) => 0;
+  int writeFrom(Uint8List source, int start, int length) => length;
 
   @override
-  int writeAtFrom(Uint8List source, int start, int length, int fileOffset) => 0;
+  int writeAtFrom(Uint8List source, int start, int length, int fileOffset) =>
+      length;
 
   @override
   void setLength(int length) {}
@@ -893,6 +894,52 @@ void main() {
       expect(preview1_fd.preview1FdSync(vfs: vfs, fd: fd), 0);
       expect(opened.dataSyncCount, 1);
       expect(opened.syncCount, 1);
+    });
+
+    test('fd write helpers honor descriptor synchronization flags', () {
+      final bytes = Uint8List(64);
+      final data = ByteData.view(bytes.buffer);
+      const iovPtr = 0;
+      const payloadPtr = 16;
+      const countPtr = 32;
+      bytes[payloadPtr] = 7;
+      data.setUint32(iovPtr, payloadPtr, Endian.little);
+      data.setUint32(iovPtr + 4, 1, Endian.little);
+
+      final dataSyncOpened = _SyncRecordingOpenFile()
+        ..descriptorFlags = preview1_constants.fdflagDsync;
+      expect(
+        writeOpenFileFromIov(
+          opened: dataSyncOpened,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nwrittenPtr: countPtr,
+        ),
+        0,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 1);
+      expect(dataSyncOpened.dataSyncCount, 1);
+      expect(dataSyncOpened.syncCount, 0);
+
+      final syncOpened = _SyncRecordingOpenFile()
+        ..descriptorFlags = preview1_constants.fdflagSync;
+      expect(
+        writeOpenFileFromIov(
+          opened: syncOpened,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nwrittenPtr: countPtr,
+          fileOffset: 0,
+        ),
+        0,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 1);
+      expect(syncOpened.dataSyncCount, 0);
+      expect(syncOpened.syncCount, 1);
     });
 
     test('imports has fd_write function', () {
