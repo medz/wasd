@@ -24,3 +24,5 @@ export 'preview2/component_host.dart';
 export 'preview3/cli.dart';
 export 'preview3/component_host.dart';
 export 'preview3/filesystem.dart';
+export 'preview3/native/filesystem_stub.dart'
+    if (dart.library.io) 'preview3/native/filesystem.dart';

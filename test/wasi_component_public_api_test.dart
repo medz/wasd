@@ -4,6 +4,9 @@ import 'package:test/test.dart';
 import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
 
+import 'support/host_fs.dart';
+import 'support/runtime_environment.dart';
+
 void main() {
   group('public WASI component API', () {
     test('decodes components and prepares fixed Preview2/Preview3 hosts', () {
@@ -184,7 +187,133 @@ world filesystem-test {
       );
       expect(host.filesystemHost, same(filesystem));
     });
+
+    test(
+      'binds Preview3 filesystem imports to real host files on Dart VM',
+      () async {
+        if (!hasDartIoRuntime) {
+          markTestSkipped('requires dart:io host filesystem access');
+          return;
+        }
+        final temp = createHostTemp('wasd_p3_host_fs_');
+        if (temp == null) {
+          markTestSkipped('requires dart:io host filesystem access');
+          return;
+        }
+        addTearDown(temp.delete);
+        temp.writeFile('hello.txt', 'hello');
+        temp.createDirectory('etc');
+        temp.writeFile('etc/config.txt', 'cfg');
+
+        const source = '''
+package wasi-testsuite:test;
+
+world filesystem-test {
+  include wasi:filesystem/imports@0.3.0;
+}
+''';
+        final document = WASIComponentWitDocument.parse(source);
+        final host = WASIPreview3ComponentHost(
+          filesystemHost: WASIPreview3NativeFilesystemHost(
+            preopens: {'/': temp.path},
+          ),
+        );
+        final program = host.bindWitWorld(
+          document,
+          worldName: 'filesystem-test',
+        );
+        final directories =
+            program.invokeImport(
+                  'wasi:filesystem/preopens@0.3.0.get-directories',
+                  const [],
+                )
+                as WasmComponentValueData;
+        final root = _preopenHandle(directories, '/');
+        final directoryRead =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.3.0.descriptor.read-directory',
+                  [root],
+                )
+                as List<Object?>;
+        final entries =
+            directoryRead[0] as WASIComponentStream<WasmComponentValueData>;
+        final opened =
+            await program.invokeImportAsync(
+                  'wasi:filesystem/types@0.3.0.descriptor.open-at',
+                  [
+                    root,
+                    _flagsValue(const <String>[]),
+                    'hello.txt',
+                    _flagsValue(const <String>[]),
+                    _flagsValue(const <String>['read']),
+                  ],
+                )
+                as WasmComponentValueData;
+
+        expect(
+          entries.readable.read(8).map(_directoryEntryName),
+          containsAll(<String>['hello.txt', 'etc']),
+        );
+
+        final file = _resultHandle(_resultOk(opened));
+        final fileRead =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.3.0.descriptor.read-via-stream',
+                  [file, BigInt.from(1)],
+                )
+                as List<Object?>;
+        final fileStream = fileRead[0] as WASIComponentStream<int>;
+
+        expect(fileStream.readable.read(8), [101, 108, 108, 111]);
+      },
+    );
   });
+}
+
+int _preopenHandle(WasmComponentValueData value, String path) {
+  for (final item in value.items) {
+    if (item.items.length == 2 && item.items[1].string == path) {
+      return _resultHandle(item.items[0]);
+    }
+  }
+  throw StateError('missing preopen $path');
+}
+
+WasmComponentValueData _resultOk(WasmComponentValueData value) {
+  final associated = value.associatedValue;
+  if (value.kind != WasmComponentValueDataKind.result ||
+      !(value.isOk ?? value.index == 0 || value.label == 'ok') ||
+      associated == null) {
+    throw StateError('expected ok result');
+  }
+  return associated;
+}
+
+int _resultHandle(WasmComponentValueData value) {
+  final integer = value.integer;
+  if (integer is int) {
+    return integer;
+  }
+  if (integer is BigInt) {
+    return integer.toInt();
+  }
+  throw StateError('expected resource handle');
+}
+
+String _directoryEntryName(WasmComponentValueData value) {
+  if (value.items.length != 2 ||
+      value.items[1].kind != WasmComponentValueDataKind.string) {
+    throw StateError('expected directory entry');
+  }
+  return value.items[1].string!;
+}
+
+WasmComponentValueData _flagsValue(List<String> labels) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.flags,
+    rawBytes: Uint8List(0),
+    labels: labels,
+  );
 }
 
 Uint8List _emptyComponentBytes() => Uint8List.fromList(const <int>[

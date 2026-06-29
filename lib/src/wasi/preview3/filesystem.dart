@@ -4,6 +4,21 @@ import '../../wasm/backend/native/interpreter/component.dart';
 import '../component/async_values.dart';
 import '../component/wit_adapter.dart';
 
+/// Supplies the current entries for a filesystem directory.
+typedef WASIPreview3FilesystemDirectoryEntriesProvider =
+    Iterable<WASIPreview3FilesystemDirectoryEntry> Function();
+
+/// Resolves one child entry by name without forcing a full directory scan.
+typedef WASIPreview3FilesystemDirectoryEntryResolver =
+    WASIPreview3FilesystemDirectoryEntry? Function(String name);
+
+/// Reads regular-file bytes starting at a byte [offset].
+typedef WASIPreview3FilesystemFileBytesProvider =
+    Uint8List Function(BigInt offset);
+
+/// Supplies the current byte length for a regular file.
+typedef WASIPreview3FilesystemFileSizeProvider = BigInt Function();
+
 /// WASI 0.3 filesystem object kind used by the Preview3 host.
 enum WASIPreview3FilesystemDescriptorKind {
   /// Directory descriptor.
@@ -22,13 +37,48 @@ final class WASIPreview3FilesystemDirectory {
     this.canMutate = false,
   }) : entries = List<WASIPreview3FilesystemDirectoryEntry>.unmodifiable(
          entries,
-       );
+       ),
+       _entriesProvider = null,
+       _entryResolver = null;
+
+  /// Creates a directory whose contents are loaded from callbacks.
+  WASIPreview3FilesystemDirectory.dynamic({
+    required WASIPreview3FilesystemDirectoryEntriesProvider entries,
+    WASIPreview3FilesystemDirectoryEntryResolver? resolveEntry,
+    this.canMutate = false,
+  }) : entries = const <WASIPreview3FilesystemDirectoryEntry>[],
+       _entriesProvider = entries,
+       _entryResolver = resolveEntry;
 
   /// Entries returned by `descriptor.read-directory`.
   final List<WASIPreview3FilesystemDirectoryEntry> entries;
 
   /// Whether descriptors opened for this directory can request mutation flags.
   final bool canMutate;
+
+  final WASIPreview3FilesystemDirectoryEntriesProvider? _entriesProvider;
+  final WASIPreview3FilesystemDirectoryEntryResolver? _entryResolver;
+
+  Iterable<WASIPreview3FilesystemDirectoryEntry> get _currentEntries {
+    final provider = _entriesProvider;
+    if (provider == null) {
+      return entries;
+    }
+    return provider();
+  }
+
+  WASIPreview3FilesystemDirectoryEntry? _entryNamed(String name) {
+    final resolver = _entryResolver;
+    if (resolver != null) {
+      return resolver(name);
+    }
+    for (final entry in _currentEntries) {
+      if (entry.name == name) {
+        return entry;
+      }
+    }
+    return null;
+  }
 }
 
 /// One directory entry exposed by [WASIPreview3FilesystemDirectory].
@@ -40,16 +90,22 @@ final class WASIPreview3FilesystemDirectoryEntry {
   }) : kind = WASIPreview3FilesystemDescriptorKind.directory,
        size = BigInt.zero,
        directory = directory ?? WASIPreview3FilesystemDirectory(),
-       bytes = Uint8List(0);
+       bytes = Uint8List(0),
+       _readBytes = null,
+       _currentSize = null;
 
   /// Creates a regular-file entry.
   WASIPreview3FilesystemDirectoryEntry.regularFile(
     this.name, {
     BigInt? size,
     List<int> bytes = const <int>[],
+    WASIPreview3FilesystemFileBytesProvider? readBytes,
+    WASIPreview3FilesystemFileSizeProvider? currentSize,
   }) : bytes = Uint8List.fromList(bytes),
+       _readBytes = readBytes,
+       _currentSize = currentSize,
        kind = WASIPreview3FilesystemDescriptorKind.regularFile,
-       size = size ?? BigInt.from(bytes.length),
+       size = size ?? currentSize?.call() ?? BigInt.from(bytes.length),
        directory = null;
 
   /// Entry name relative to the containing directory.
@@ -66,10 +122,26 @@ final class WASIPreview3FilesystemDirectoryEntry {
 
   /// Immutable file contents for regular-file entries.
   final Uint8List bytes;
+
+  final WASIPreview3FilesystemFileBytesProvider? _readBytes;
+  final WASIPreview3FilesystemFileSizeProvider? _currentSize;
+
+  BigInt get _size => _currentSize?.call() ?? size;
+
+  Uint8List _bytesFrom(BigInt offset) {
+    final reader = _readBytes;
+    if (reader != null) {
+      return reader(offset);
+    }
+    final start = offset > BigInt.from(bytes.length)
+        ? bytes.length
+        : offset.toInt();
+    return bytes.sublist(start);
+  }
 }
 
 /// WASI 0.3 `wasi:filesystem` host imports.
-final class WASIPreview3FilesystemHost {
+base class WASIPreview3FilesystemHost {
   /// Creates a filesystem host with preopened guest directories.
   WASIPreview3FilesystemHost({
     Map<String, WASIPreview3FilesystemDirectory> preopens =
@@ -179,10 +251,7 @@ final class WASIPreview3FilesystemHost {
       result.writable.complete(_errorResult('is-directory'));
       return <Object?>[stream, result];
     }
-    final start = offset > BigInt.from(descriptor.bytes.length)
-        ? descriptor.bytes.length
-        : offset.toInt();
-    stream.writable.writeAll(descriptor.bytes.sublist(start));
+    stream.writable.writeAll(descriptor.bytesFrom(offset));
     stream.writable.close();
     result.writable.complete(_unitOk());
     return <Object?>[stream, result];
@@ -249,7 +318,7 @@ final class WASIPreview3FilesystemHost {
       result.writable.complete(_errorResult('not-directory'));
       return <Object?>[stream, result];
     }
-    for (final entry in descriptor.directory!.entries) {
+    for (final entry in descriptor.directory!._currentEntries) {
       stream.writable.write(_directoryEntryData(entry));
     }
     stream.writable.close();
@@ -337,9 +406,7 @@ final class WASIPreview3FilesystemHost {
       if (directory == null) {
         return null;
       }
-      final entry = directory.entries
-          .where((candidate) => candidate.name == segment)
-          .firstOrNull;
+      final entry = directory._entryNamed(segment);
       if (entry == null) {
         return null;
       }
@@ -374,6 +441,7 @@ final class _WASIPreview3FilesystemDescriptor {
     required this.directory,
     required this.canMutate,
     required this.bytes,
+    required this.entry,
   });
 
   factory _WASIPreview3FilesystemDescriptor.directory({
@@ -391,6 +459,7 @@ final class _WASIPreview3FilesystemDescriptor {
       directory: directory,
       canMutate: directory.canMutate,
       bytes: Uint8List(0),
+      entry: null,
     );
   }
 
@@ -408,7 +477,8 @@ final class _WASIPreview3FilesystemDescriptor {
       size: entry.size,
       directory: entry.directory,
       canMutate: entry.directory?.canMutate ?? false,
-      bytes: entry.bytes,
+      bytes: Uint8List(0),
+      entry: entry,
     );
   }
 
@@ -420,6 +490,20 @@ final class _WASIPreview3FilesystemDescriptor {
   final WASIPreview3FilesystemDirectory? directory;
   final bool canMutate;
   final Uint8List bytes;
+  final WASIPreview3FilesystemDirectoryEntry? entry;
+
+  BigInt get currentSize => entry?._size ?? size;
+
+  Uint8List bytesFrom(BigInt offset) {
+    final entry = this.entry;
+    if (entry != null) {
+      return entry._bytesFrom(offset);
+    }
+    final start = offset > BigInt.from(bytes.length)
+        ? bytes.length
+        : offset.toInt();
+    return bytes.sublist(start);
+  }
 
   _WASIPreview3FilesystemDescriptor copyWithHandle(int handle) {
     return _WASIPreview3FilesystemDescriptor._(
@@ -431,6 +515,7 @@ final class _WASIPreview3FilesystemDescriptor {
       directory: directory,
       canMutate: canMutate,
       bytes: bytes,
+      entry: entry,
     );
   }
 }
@@ -490,7 +575,7 @@ WasmComponentValueData _descriptorStatData(
   return _record(<WasmComponentValueData>[
     _descriptorTypeData(descriptor.kind),
     _integerData(BigInt.one),
-    _integerData(descriptor.size),
+    _integerData(descriptor.currentSize),
     _none(),
     _none(),
     _none(),
@@ -511,16 +596,20 @@ WasmComponentValueData _metadataHashData(
 ) {
   var lower = BigInt.from(descriptor.objectId);
   lower = (lower << 32) ^ BigInt.from(descriptor.guestPath.length);
-  lower ^= descriptor.size;
+  lower ^= descriptor.currentSize;
   var upper = BigInt.from(descriptor.kind.index + 1);
   final directory = descriptor.directory;
   if (directory != null) {
-    for (final entry in directory.entries) {
+    for (final entry in directory._currentEntries) {
       upper ^= BigInt.from(_stableStringHash(entry.name));
       upper = (upper << 5) ^ BigInt.from(entry.kind.index + 1);
       for (final byte in entry.bytes) {
         upper = ((upper << 5) ^ BigInt.from(byte)) & _u64Mask;
       }
+    }
+  } else {
+    for (final byte in descriptor.bytesFrom(BigInt.zero)) {
+      upper = ((upper << 5) ^ BigInt.from(byte)) & _u64Mask;
     }
   }
   return _record(<WasmComponentValueData>[

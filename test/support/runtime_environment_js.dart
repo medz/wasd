@@ -14,3 +14,5 @@ bool get isNodeJsRuntime {
 }
 
 bool get isBrowserJsRuntime => !isNodeJsRuntime;
+
+bool get hasDartIoRuntime => false;
