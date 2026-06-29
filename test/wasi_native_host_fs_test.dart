@@ -30,6 +30,7 @@ const int _errnoNotempty = 55;
 const int _errnoNotcapable = 76;
 const int _errnoPerm = 63;
 const int _filestatFiletypeOffset = 16;
+const int _filestatLinkCountOffset = 24;
 const int _filestatSizeOffset = 32;
 const int _filetypeDirectory = 3;
 const int _filetypeRegularFile = 4;
@@ -715,14 +716,18 @@ void main() {
     final instance = result.instance;
     final preview1 = wasi.imports['wasi_snapshot_preview1']!;
     final pathLink = preview1['path_link'] as FunctionImportExportValue;
+    final pathFilestatGet =
+        preview1['path_filestat_get'] as FunctionImportExportValue;
     final pathUnlinkFile =
         preview1['path_unlink_file'] as FunctionImportExportValue;
     final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
     wasi.finalizeBindings(instance, memory: memory);
 
     final bytes = Uint8List.view(memory.buffer);
+    final data = ByteData.view(memory.buffer);
     const oldPathPtr = 1024;
     const newPathPtr = 1088;
+    const filestatPtr = 1152;
 
     var oldPath = utf8.encode('source.txt');
     var newPath = utf8.encode('linked.txt');
@@ -745,6 +750,11 @@ void main() {
 
     source.writeAsStringSync('changed');
     expect(linked.readAsStringSync(), 'changed');
+    expect(
+      pathFilestatGet.ref([3, 0, oldPathPtr, oldPath.length, filestatPtr]),
+      0,
+    );
+    expect(_getUint64Le(data, filestatPtr + _filestatLinkCountOffset), 2);
 
     expect(pathUnlinkFile.ref([3, oldPathPtr, oldPath.length]), 0);
     expect(source.existsSync(), isFalse);
@@ -795,6 +805,13 @@ void main() {
       FileSystemEntityType.file,
     );
     expect(targetHard.readAsStringSync(), 'target');
+    oldPath = utf8.encode('target.txt');
+    bytes.setAll(oldPathPtr, oldPath);
+    expect(
+      pathFilestatGet.ref([3, 0, oldPathPtr, oldPath.length, filestatPtr]),
+      0,
+    );
+    expect(_getUint64Le(data, filestatPtr + _filestatLinkCountOffset), 2);
     target.writeAsStringSync('target changed');
     expect(targetHard.readAsStringSync(), 'target changed');
 

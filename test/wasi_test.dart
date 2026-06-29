@@ -5054,6 +5054,8 @@ void main() {
           final fileInstance = fileResult.instance;
           final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
           final pathLink = preview1['path_link'] as FunctionImportExportValue;
+          final pathFilestatGet =
+              preview1['path_filestat_get'] as FunctionImportExportValue;
           final pathSymlink =
               preview1['path_symlink'] as FunctionImportExportValue;
           final pathReadlink =
@@ -5070,6 +5072,7 @@ void main() {
           const secondPathPtr = 3424;
           const readlinkBufferPtr = 3488;
           const readlinkUsedPtr = 3552;
+          const filestatPtr = 3568;
 
           int writePath(int ptr, String path) {
             final encoded = utf8.encode(path);
@@ -5118,10 +5121,20 @@ void main() {
                 as int;
           }
 
+          int linkCount(String path) {
+            final pathLen = writePath(pathPtr, path);
+            final errno =
+                pathFilestatGet.ref([3, 0, pathPtr, pathLen, filestatPtr])
+                    as int;
+            expect(errno, 0);
+            return _getUint64Le(data, filestatPtr + _filestatLinkCountOffset);
+          }
+
           expect(linkPath('source.txt', 'hard.txt'), 0);
           expect(host.fileExists('hard.txt'), isTrue);
           host.writeFile('source.txt', 'changed');
           expect(host.readFile('hard.txt'), 'changed');
+          expect(linkCount('source.txt'), 2);
           expect(
             pathUnlinkFile.ref([3, pathPtr, writePath(pathPtr, 'source.txt')]),
             0,
@@ -5158,6 +5171,7 @@ void main() {
           );
           expect(host.fileExists('target-hard.txt'), isTrue);
           expect(host.readFile('target-hard.txt'), 'target');
+          expect(linkCount('target.txt'), 2);
           host.writeFile('target.txt', 'target changed');
           expect(host.readFile('target-hard.txt'), 'target changed');
           expect(

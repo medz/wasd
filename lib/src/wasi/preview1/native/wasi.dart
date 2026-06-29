@@ -3658,6 +3658,9 @@ wasi_vfs.Preview1VirtualNodeMetadata _metadataFromHostStatInfo(
   _HostLstatInfo info,
 ) {
   final metadata = wasi_vfs.Preview1VirtualNodeMetadata(inode: info.inode);
+  if (info.linkCount > 0) {
+    metadata.linkCount = info.linkCount;
+  }
   _copyHostStatInfoTimesToMetadata(metadata, info);
   return metadata;
 }
@@ -3701,6 +3704,7 @@ _HostLstatInfo? _hostLstatInfo(String hostPath) {
     }
     return (
       inode: _readHostStatInode(statBuffer),
+      linkCount: _readHostStatLinkCount(statBuffer),
       accessTimeNanos: _readHostStatTimespecNanos(
         statBuffer,
         _hostStatAccessTimeOffset,
@@ -3720,6 +3724,13 @@ _HostLstatInfo? _hostLstatInfo(String hostPath) {
 
 int _readHostStatInode(ffi.Pointer<ffi.Uint8> statBuffer) {
   return (statBuffer + _hostStatInodeOffset).cast<ffi.Uint64>().value;
+}
+
+int _readHostStatLinkCount(ffi.Pointer<ffi.Uint8> statBuffer) {
+  if (io.Platform.isMacOS || io.Platform.isIOS) {
+    return (statBuffer + _hostStatLinkCountOffset).cast<ffi.Uint16>().value;
+  }
+  return (statBuffer + _hostStatLinkCountOffset).cast<ffi.Uint64>().value;
 }
 
 int _readHostStatTimespecNanos(ffi.Pointer<ffi.Uint8> statBuffer, int offset) {
@@ -3743,11 +3754,14 @@ int get _hostStatModificationTimeOffset =>
     io.Platform.isMacOS || io.Platform.isIOS ? 48 : 88;
 
 const int _hostStatInodeOffset = 8;
+int get _hostStatLinkCountOffset =>
+    io.Platform.isMacOS || io.Platform.isIOS ? 6 : 16;
 const int _nanosPerSecond = 1000000000;
 const int _hostStatBufferSize = 256;
 
 typedef _HostLstatInfo = ({
   int inode,
+  int linkCount,
   int accessTimeNanos,
   int modificationTimeNanos,
 });

@@ -3850,6 +3850,10 @@ wasi_vfs.Preview1VirtualNodeMetadata _metadataFromNodeStat(JSObject? stat) {
   if (stat == null) {
     return metadata;
   }
+  final linkCount = _nodeStatInt(stat, 'nlink');
+  if (linkCount != null && linkCount > 0) {
+    metadata.linkCount = linkCount;
+  }
   final accessedMs = _nodeStatDouble(stat, 'atimeMs');
   final modifiedMs = _nodeStatDouble(stat, 'mtimeMs');
   if (accessedMs != null && accessedMs > 0) {
