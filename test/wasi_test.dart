@@ -1730,6 +1730,59 @@ void main() {
       );
 
       test(
+        'stdio descriptors report capability errors for unsupported directions',
+        () async {
+          final stdioWasi = WASI();
+          final stdioResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            stdioWasi.imports,
+          );
+          final stdioInstance = stdioResult.instance;
+          final preview1 = stdioWasi.imports['wasi_snapshot_preview1']!;
+          final fdWrite = preview1['fd_write'] as FunctionImportExportValue;
+          final fdRead = preview1['fd_read'] as FunctionImportExportValue;
+          final fdFdstatGet =
+              preview1['fd_fdstat_get'] as FunctionImportExportValue;
+          final memory =
+              (stdioInstance.exports['memory'] as MemoryImportExportValue).ref;
+          stdioWasi.finalizeBindings(stdioInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const iovPtr = 1960;
+          const bufferPtr = 1984;
+          const countPtr = 2000;
+          const fdstatPtr = 2016;
+          bytes[bufferPtr] = 1;
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 1, Endian.little);
+          data.setUint32(countPtr, 0xfeedface, Endian.little);
+
+          int rightsBaseFor(int fd) {
+            expect(fdFdstatGet.ref([fd, fdstatPtr]), 0);
+            return _getUint64Le(data, fdstatPtr + 8);
+          }
+
+          final stdinRights = rightsBaseFor(0);
+          final stdoutRights = rightsBaseFor(1);
+          final stderrRights = rightsBaseFor(2);
+          expect(stdinRights & _rightFdRead, _rightFdRead);
+          expect(stdinRights & _rightFdWrite, 0);
+          expect(stdoutRights & _rightFdRead, 0);
+          expect(stdoutRights & _rightFdWrite, _rightFdWrite);
+          expect(stderrRights & _rightFdRead, 0);
+          expect(stderrRights & _rightFdWrite, _rightFdWrite);
+
+          expect(fdWrite.ref([0, iovPtr, 1, countPtr]), _errnoNotcapable);
+          expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+          expect(fdRead.ref([1, iovPtr, 1, countPtr]), _errnoNotcapable);
+          expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+          expect(fdRead.ref([2, iovPtr, 1, countPtr]), _errnoNotcapable);
+          expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+        },
+      );
+
+      test(
         'proc_raise validates preview1 signals while basic scheduling syscalls succeed',
         () async {
           final raisedSignals = <WASIProcessSignal>[];
@@ -4504,7 +4557,7 @@ void main() {
           expect(fdSeek.ref([openedFd, 2, 0, newOffsetPtr]), 0);
           expect(data.getUint32(newOffsetPtr, Endian.little), 2);
           expect(data.getUint32(newOffsetPtr + 4, Endian.little), 0);
-          expect(fdSeek.ref([1, 0, 0, newOffsetPtr]), 8);
+          expect(fdSeek.ref([1, 0, 0, newOffsetPtr]), _errnoNotcapable);
         },
       );
 

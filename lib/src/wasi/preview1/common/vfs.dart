@@ -57,8 +57,8 @@ final class Preview1VirtualFileSystem {
       socketFds: sockets.keys,
     );
     _stdioRightsByFd = {
-      for (final fd in _stdioDescriptorsByFd.keys)
-        fd: Preview1DescriptorRights.file(),
+      for (final entry in _stdioDescriptorsByFd.entries)
+        entry.key: _stdioRightsFor(entry.value),
     };
     _stdioFlagsByFd = {for (final fd in _stdioDescriptorsByFd.keys) fd: 0};
     _filePathsByLowerGuestPath = _indexFilePathsByLowerPath(_filesByGuestPath);
@@ -2496,6 +2496,20 @@ Map<int, Preview1StdioDescriptorKind> _buildStdioDescriptors({
     stdoutFd: Preview1StdioDescriptorKind.stdout,
     stderrFd: Preview1StdioDescriptorKind.stderr,
   };
+}
+
+Preview1DescriptorRights _stdioRightsFor(Preview1StdioDescriptorKind kind) {
+  const commonRights =
+      rightFdFdstatSetFlags | rightFdFilestatGet | rightPollFdReadwrite;
+  final directionRights = switch (kind) {
+    Preview1StdioDescriptorKind.stdin => rightFdRead,
+    Preview1StdioDescriptorKind.stdout ||
+    Preview1StdioDescriptorKind.stderr => rightFdWrite,
+  };
+  return Preview1DescriptorRights(
+    base: commonRights | directionRights,
+    inheriting: 0,
+  );
 }
 
 void _validateInitialDescriptorNamespace({

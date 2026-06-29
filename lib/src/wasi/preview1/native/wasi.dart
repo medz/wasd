@@ -163,12 +163,15 @@ class WASI implements wasi_iface.WASI {
             stdioKind == wasi_vfs.Preview1StdioDescriptorKind.stdout ||
             stdioKind == wasi_vfs.Preview1StdioDescriptorKind.stderr;
         if (!isOutput) {
-          if (opened == null && socket == null) {
+          if (_vfs.descriptorKindForFd(fd) == null) {
             return _errnoBadf;
           }
           final right = _checkDescriptorRight(fd, _rightFdWrite);
           if (right != _errnoSuccess) {
             return right;
+          }
+          if (opened == null && socket == null) {
+            return _errnoBadf;
           }
           if (socket != null) {
             final view = _memoryView();
@@ -465,7 +468,7 @@ class WASI implements wasi_iface.WASI {
             ? _stdinInput
             : opened;
         final isDirectory = _vfs.isOpenDirectoryFd(fd);
-        if (input == null && socket == null) {
+        if (_vfs.descriptorKindForFd(fd) == null) {
           return _errnoBadf;
         }
         if (isDirectory) {
@@ -474,6 +477,9 @@ class WASI implements wasi_iface.WASI {
         final right = _checkDescriptorRight(fd, _rightFdRead);
         if (right != _errnoSuccess) {
           return right;
+        }
+        if (input == null && socket == null) {
+          return _errnoBadf;
         }
         if (socket != null) {
           final view = _memoryView();
