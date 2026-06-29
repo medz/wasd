@@ -76,8 +76,7 @@ Do not work on P2/P3 until this phase is complete.
     `dart analyze`
 
 - [x] `README-SUPPORT-MATRIX`
-  - Status: README no longer carries the long stale Limitations prose; support
-    claims are expressed as a concise version/runtime matrix.
+  - Status: README support claims match verified runtime behavior.
   - Green evidence:
     `dart test test/readme_snippets_test.dart test/readme_commands_test.dart --reporter=compact`
     `dart analyze`
