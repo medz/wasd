@@ -140,26 +140,35 @@ too broad to verify in one commit.
   - Claim impact: completes the official standardized core conformance
     prerequisite for `SUPPORT-WASM`; public support wording and performance
     budget acceptance still live in the support gate.
-- [ ] `P1-NODE-HOST-FS-READ-WRITE` - Node.js Preview1 preopens must be backed by
+- [x] `P1-NODE-HOST-FS-READ-WRITE` - Node.js Preview1 preopens are backed by
   the real host filesystem for regular files, not by the portable in-memory VFS.
   - Scope: Node.js Preview1 `path_open`, `fd_read`, `fd_pread`, `fd_write`,
-    `fd_pwrite`, `fd_seek`, `fd_tell`, and `fd_filestat_get` for regular files
-    below configured preopen directories. Browser JS remains virtual; native VM
-    already has a separate real-host-filesystem bridge.
-  - Edit targets: `lib/src/wasi/preview1/js/wasi.dart`, a Node-specific JS
-    bridge under `lib/src/wasi/preview1/js/`, `test/wasi_test.dart`, and README
-    support wording if the public runtime claim changes.
+    `fd_pwrite`, `fd_seek`, `fd_tell`, `fd_filestat_get`,
+    `fd_filestat_set_size`, `fd_allocate`, `O_TRUNC`, and `O_CREAT` for regular
+    files below configured preopen directories. Browser JS remains virtual;
+    native VM already has a broader real-host-filesystem bridge.
+  - Edit targets: `lib/src/wasi/preview1/js/web/wasi.dart`,
+    `test/wasi_test.dart`, `test/support/node_host_fs*.dart`, README support
+    wording, and this roadmap.
   - Red test:
     `dart test -p node test/wasi_test.dart --name "node preview1 preopens use real host regular files"`
-    should fail today because Node preopens are satisfied by the in-memory VFS
-    instead of live host file descriptors/readback.
+    failed before the fix with `path_open` returning `NOENT(44)` because Node
+    preopens were satisfied by the in-memory VFS instead of live host file
+    descriptors/readback.
   - Implementation gate:
     `dart test -p node test/wasi_test.dart --name "node preview1 preopens use real host regular files" --reporter=expanded`;
     `dart test -p node test/wasi_test.dart --reporter=compact`;
-    `dart test test/wasi_test.dart --reporter=compact`.
+    `dart test test/wasi_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`;
+    `dart test test/readme_snippets_test.dart test/readme_commands_test.dart --reporter=compact`;
+    `dart analyze test/wasi_test.dart lib/src/wasi/preview1/js/web/wasi.dart test/support/node_host_fs.dart test/support/node_host_fs_stub.dart test/support/node_host_fs_js.dart`.
   - Performance gate:
-    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`; add a
-    Node host-FS benchmark before expanding beyond regular files.
+    `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`
+    reported baseline `path_open_close.per_operation_us=1.2045`,
+    `file_fd_read_write.per_operation_us=0.2915`, and
+    `socket_poll_readiness.per_operation_us=0.4244545454545455`; keep
+    `P1-NODE-HOST-FS-BENCHMARK` as the next required row before expanding
+    beyond regular files into directory traversal/mutation work.
   - Done when: a Node Preview1 preopen reads an existing host regular file
     without snapshotting it into the virtual VFS, writes/truncates/allocation
     persist to the host file, positioned IO and seek/tell operate on the host
@@ -170,6 +179,53 @@ too broad to verify in one commit.
   - Claim impact: removes the Node memory-only regular-file blocker for
     `SUPPORT-P1`; directory enumeration, mutation, links, symlinks, timestamps,
     and official-suite evidence remain separate P1 work.
+- [ ] `P1-NODE-HOST-FS-BENCHMARK` - Add a Node.js host-regular-file benchmark
+  before expanding the host filesystem bridge beyond regular files.
+  - Scope: dart2js/Node benchmark coverage for Node host preopen regular-file
+    `path_open`, positioned read/write, create, truncate, set-size, allocate,
+    and close cycles, with a comparable virtual-file baseline.
+  - Edit targets: `tool/` benchmark runner, `.dart_tool/` generated output only
+    at runtime, README/roadmap evidence wording if public performance claims
+    change.
+  - Red test: N/A; this is a performance evidence row. The benchmark must fail
+    non-zero if Node is unavailable or if any host readback/resize assertion
+    fails.
+  - Implementation gate: a checked-in command such as
+    `dart run tool/wasi_node_host_fs_benchmark.dart --json` or an equivalent
+    compile-to-JS/Node wrapper that runs from the repo root.
+  - Performance gate: record per-operation microseconds for host
+    open/read/write/resize/create/close and the virtual-file baseline.
+  - Done when: Node host-file numbers are reproducible locally, no benchmark
+    path snapshots host files into memory, and future Node directory/mutation
+    work has an explicit comparison point.
+  - Evidence update: this board, verification matrix, and `SUPPORT-P1`.
+  - Claim impact: performance evidence only; does not complete additional
+    Preview1 filesystem semantics.
+- [ ] `P1-NODE-HOST-FS-DIRECTORY-READDIR` - Node.js Preview1 preopened host
+  directories must support real host directory open and readdir.
+  - Scope: Node.js Preview1 `path_open(O_DIRECTORY)`, directory descriptor
+    rights, `fd_readdir`, `fd_filestat_get`, and deterministic snapshot
+    behavior for directories below configured preopen directories.
+  - Edit targets: `lib/src/wasi/preview1/js/web/wasi.dart`,
+    `test/wasi_test.dart`, `test/support/node_host_fs*.dart`, README support
+    wording, and this roadmap.
+  - Red test:
+    `dart test -p node test/wasi_test.dart --name "node preview1 preopens enumerate real host directories" --reporter=expanded`
+    should fail today because Node host directories are still not bridged.
+  - Implementation gate:
+    focused Node test above; `dart test -p node test/wasi_test.dart --reporter=compact`;
+    `dart test test/wasi_test.dart --reporter=compact`;
+    `dart test -p chrome test/wasi_test.dart --reporter=compact`.
+  - Performance gate: `P1-NODE-HOST-FS-BENCHMARK` must be checked first, then
+    extended with directory open/readdir measurements.
+  - Done when: Node `fd_readdir` reports host directory entries from a
+    configured preopen without snapshotting the entire tree at `WASI`
+    construction and still rejects paths escaping the preopen root.
+  - Evidence update: this board, `P1-FULL-RUNTIME-GATE`, verification matrix,
+    `SUPPORT-P1`, and README support wording.
+  - Claim impact: removes the Node host-directory enumeration blocker for
+    `SUPPORT-P1`; directory mutation, links, symlinks, timestamps, and official
+    suite evidence remain separate P1 work.
 - [x] `P1-OFFICIAL-FS-CONFORMANCE` - Drive official Preview1 filesystem
   failures to zero one checked child at a time.
   - Scope: native/browser shared Preview1 VFS and syscall behavior exercised by
@@ -231,8 +287,10 @@ too broad to verify in one commit.
     `tool/wasi_testsuite_wasd_adapter.py`.
   - Performance gate:
     `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json`.
-  - Open child rows: `P1-NODE-HOST-FS-READ-WRITE`.
+  - Open child rows: `P1-NODE-HOST-FS-BENCHMARK`,
+    `P1-NODE-HOST-FS-DIRECTORY-READDIR`.
   - Checked child rows: `P1-JS-NODE-SHARED-HOST`,
+    `P1-NODE-HOST-FS-READ-WRITE`,
     `P1-NATIVE-HOST-FS-READ-BACKING`,
     `P1-NATIVE-HOST-FS-PATH-METADATA`,
     `P1-NATIVE-HOST-FS-DIRECTORY-READDIR`,
@@ -2847,18 +2905,21 @@ unchecked.
 - [ ] `SUPPORT-P1` - Full WASI Preview1 support.
   - Current: `WASI(...)` provides a real Preview1 host surface. Native and JS
     runtimes now use in-repo Preview1 hosts; Node no longer delegates to
-    `node:wasi`, but Node preopened directories still use the portable
-    in-memory VFS rather than a real Node host filesystem bridge. The current
-    official `WebAssembly/wasi-testsuite` `prod/testsuite-base` run reports
-    `PASS: 72 tests passed (41 skipped)`. Keep this row unchecked until the
-    package-level Preview1 support claim is reconciled across VM, browser,
+    `node:wasi`, and Node configured preopened regular files now use real host
+    file descriptors for live read/write/create/truncate/resize flows. Node
+    host directory enumeration, directory mutation, links, symlinks, timestamp
+    mutation, and Node host-file benchmark evidence remain incomplete. The
+    current official `WebAssembly/wasi-testsuite` `prod/testsuite-base` run
+    reports `PASS: 72 tests passed (41 skipped)`. Keep this row unchecked until
+    the package-level Preview1 support claim is reconciled across VM, browser,
     Node, README/API wording, and any non-testsuite Preview1 gaps.
   - Required rows: every Preview1 descriptor, filesystem, stdio, clock, random,
     poll, and socket row checked, including `P1-PATH-OPEN-OFLAGS`,
     `P1-SOCKET-CONFORMANCE` child rows, `P1-OFFICIAL-TESTSUITE-ADAPTER`,
-    `P1-OFFICIAL-FS-CONFORMANCE` child rows, `P1-JS-NODE-SHARED-HOST`, and
-    `P1-NODE-HOST-FS-READ-WRITE`, plus future official testsuite gap rows not
-    yet represented by a narrower ID.
+    `P1-OFFICIAL-FS-CONFORMANCE` child rows, `P1-JS-NODE-SHARED-HOST`,
+    `P1-NODE-HOST-FS-READ-WRITE`, `P1-NODE-HOST-FS-BENCHMARK`, and
+    `P1-NODE-HOST-FS-DIRECTORY-READDIR`, plus future official testsuite gap
+    rows not yet represented by a narrower ID.
   - Implementation gate:
     `dart test test/wasi_test.dart`;
     `dart test -p chrome test/wasi_test.dart`;
@@ -2992,6 +3053,7 @@ copying their internals directly.
 | [x] | Preview1 native host regular-file timestamps | `lib/src/wasi/preview1/native/wasi.dart`, `test/wasi_native_host_fs_test.dart` | `dart test test/wasi_native_host_fs_test.dart --name "native filestat set times updates host files" --reporter=expanded`; `dart test test/wasi_native_host_fs_test.dart --reporter=compact`; `dart test test/wasi_test.dart --name "fd_filestat_set_times and path_filestat_set_times persist virtual timestamps" --reporter=compact`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Host-backed regular-file `fd_filestat_set_times` and `path_filestat_set_times` now update real host file atime/mtime and report the updated values. Host directory and no-follow symlink timestamp mutation remain incomplete, so `SUPPORT-P1` stays unchecked. |
 | [x] | Preview1 native/browser VFS descriptor subset | `lib/src/wasi/preview1/common/vfs.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | `path_open` create/exclusive/truncate is covered; full Preview1 conformance still needs broader syscall/spec-suite gates and remaining socket edges. |
 | [x] | Preview1 Node.js shared JS host parity | `lib/src/wasi/preview1/js/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart` | `dart test -p node test/wasi_test.dart --name "fd_read reads configured stdin bytes and advances offset|fd_pread, fd_pwrite, and fd_write update virtual files" --reporter=compact`; `dart test -p node test/wasi_test.dart --reporter=compact` | Node.js now uses wasd's in-repo JS Preview1 host, including configured stdin and virtual files, instead of `node:wasi`; full Preview1 still needs official testsuite and support-gate evidence. |
+| [x] | Preview1 Node.js host regular-file preopen backing | `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `test/support/node_host_fs*.dart`, `README.md` | `dart test -p node test/wasi_test.dart --name "node preview1 preopens use real host regular files" --reporter=expanded`; `dart test -p node test/wasi_test.dart --reporter=compact`; `dart test test/wasi_test.dart --reporter=compact`; `dart test -p chrome test/wasi_test.dart --reporter=compact`; `dart test test/readme_snippets_test.dart test/readme_commands_test.dart --reporter=compact`; `dart analyze test/wasi_test.dart lib/src/wasi/preview1/js/web/wasi.dart test/support/node_host_fs.dart test/support/node_host_fs_stub.dart test/support/node_host_fs_js.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Node preopened regular files now use live host filesystem descriptors for read, positioned read/write, create, truncate, `fd_filestat_set_size`, and `fd_allocate` without snapshotting files into the VFS. Node host directories, mutation, links, symlinks, timestamps, dedicated Node host-file benchmark evidence, and official support-gate evidence remain incomplete, so `SUPPORT-P1` stays unchecked. |
 | [x] | Preview1 native/browser fd count-pointer ABI | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test -p chrome test/wasi_test.dart --name "fd read and write counts can target memory zero"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Result count pointers at guest memory address `0` now write correctly for stdio and virtual-file fd read/write syscalls; full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser virtual-file fd iovec aliasing and preflight | `lib/src/wasi/preview1/common/vfs.dart`, `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes|fd_pwrite validates all iovs before mutating virtual files"`; `dart test -p chrome test/wasi_test.dart --name "fd_pread snapshots overlapping iovs before writing file bytes|fd_pwrite validates all iovs before mutating virtual files"`; `dart test test/wasi_test.dart`; `dart test -p chrome test/wasi_test.dart`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Virtual-file fd reads now snapshot overlapping iovec tables before guest-memory writes, and virtual-file fd writes preflight every iovec before mutating file bytes; full Preview1 still needs broader syscall/spec-suite gates. |
 | [x] | Preview1 native/browser clock and poll-clock validation | `lib/src/wasi/preview1/native/wasi.dart`, `lib/src/wasi/preview1/js/web/wasi.dart`, `test/wasi_test.dart`, `tool/wasi_vfs_benchmark.dart` | `dart test test/wasi_test.dart --name "clock_time_get"`; `dart test -p chrome test/wasi_test.dart --name "clock_time_get"`; `dart test test/wasi_test.dart --name "poll_oneoff"`; `dart test -p chrome test/wasi_test.dart --name "poll_oneoff"`; `dart run tool/wasi_vfs_benchmark.dart --distribution=all --json` | Unsupported `clock_time_get` ids now preserve output memory and return `EINVAL`; invalid `poll_oneoff` clock subscriptions now report event `EINVAL`; full Preview1 still needs broader syscall/spec-suite gates. |
@@ -3061,7 +3123,8 @@ This is the implementation state as of 2026-06-29 on `main`.
   accepted or optimized.
 - Preview 1 is real but still incomplete. Native, browser JS, and Node JS hosts
   now share the in-repo Preview1 VFS/syscall model instead of delegating Node to
-  `node:wasi`. Native and JS hosts share
+  `node:wasi`, and Node now bridges configured preopened regular files to live
+  host file descriptors. Native and JS hosts share
   `lib/src/wasi/preview1/common/vfs.dart` for virtual files, directories,
   readdir state, hard links, symlinks/readlink, configured stream/datagram
   sockets, descriptor flags, descriptor rights, descriptor times, descriptor
@@ -3141,11 +3204,12 @@ This is the implementation state as of 2026-06-29 on `main`.
   `path_open`/`path_filestat_get` when the resolved target stays inside the
   configured preopen. `path_link` uses a direct host hard-link syscall through
   FFI instead of shelling out or copying bytes. Browser JS stays on the
-  portable in-memory VFS by runtime constraint. Node JS currently also stays on
-  the portable in-memory VFS, which is an explicit `P1-NODE-HOST-FS-READ-WRITE`
-  blocker before full Preview1 can be claimed. Full lstat-grade host symlink
-  metadata plus host directory/no-follow symlink timestamp mutation remain
-  incomplete.
+  portable in-memory VFS by runtime constraint. Node JS now bridges configured
+  preopened regular files to real host file descriptors, but host directory
+  enumeration/mutation, links/symlinks, timestamp mutation, and dedicated
+  host-file benchmark evidence remain explicit P1 blockers. Full lstat-grade
+  host symlink metadata plus host directory/no-follow symlink timestamp
+  mutation remain incomplete.
 - The repository now includes `tool/wasi_testsuite_wasd_adapter.py` and
   `tool/wasi_testsuite_preview1_runner.dart`, allowing the upstream
   `WebAssembly/wasi-testsuite` runner to invoke wasd for `wasm32-wasip1`

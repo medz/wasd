@@ -5,6 +5,7 @@ import 'package:test/test.dart';
 import 'package:wasd/src/wasi/preview1/common/vfs.dart';
 import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
+import 'support/node_host_fs.dart';
 import 'support/runtime_environment.dart';
 import 'support/wasm_fixtures.dart';
 import 'support/web_crypto_spy.dart';
@@ -14,14 +15,19 @@ final _wasiBytes = wasiStartModuleBytes();
 Object? _skipUnlessBrowser(String reason) =>
     isBrowserJsRuntime ? false : reason;
 
+Object? _skipUnlessNode(String reason) => isNodeJsRuntime ? false : reason;
+
 const int _rightFdRead = 1 << 1;
 const int _rightFdSeek = 1 << 2;
 const int _rightFdDatasync = 1;
 const int _rightFdFdstatSetFlags = 1 << 3;
 const int _rightFdSync = 1 << 4;
+const int _rightFdTell = 1 << 5;
 const int _rightFdWrite = 1 << 6;
 const int _rightFdAdvise = 1 << 7;
+const int _rightFdAllocate = 1 << 8;
 const int _rightFdFdstatGet = 1 << 21;
+const int _rightFdFilestatSetSize = 1 << 22;
 const int _rightFdFilestatSetTimes = 1 << 23;
 const int _rightPollFdReadwrite = 1 << 27;
 const int _rightSockShutdown = 1 << 28;
@@ -4268,6 +4274,162 @@ void main() {
           'zzXYef',
         );
       });
+
+      test(
+        'node preview1 preopens use real host regular files',
+        () async {
+          final host = createNodeHostTemp('wasd_node_host_fs_');
+          expect(host, isNotNull);
+          addTearDown(() => host?.delete());
+          host!
+            ..writeFile('live.txt', 'before')
+            ..writeFile('mutable.txt', 'abcdef');
+
+          final fileWasi = WASI(preopens: {'/host': host.path});
+          host.writeFile('live.txt', 'after');
+          final fileResult = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            fileWasi.imports,
+          );
+          final fileInstance = fileResult.instance;
+          final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
+          final fdRead = preview1['fd_read'] as FunctionImportExportValue;
+          final fdWrite = preview1['fd_write'] as FunctionImportExportValue;
+          final fdPread = preview1['fd_pread'] as FunctionImportExportValue;
+          final fdPwrite = preview1['fd_pwrite'] as FunctionImportExportValue;
+          final fdSeek = preview1['fd_seek'] as FunctionImportExportValue;
+          final fdTell = preview1['fd_tell'] as FunctionImportExportValue;
+          final fdFilestatGet =
+              preview1['fd_filestat_get'] as FunctionImportExportValue;
+          final fdFilestatSetSize =
+              preview1['fd_filestat_set_size'] as FunctionImportExportValue;
+          final fdAllocate =
+              preview1['fd_allocate'] as FunctionImportExportValue;
+          final fdClose = preview1['fd_close'] as FunctionImportExportValue;
+          final memory =
+              (fileInstance.exports['memory'] as MemoryImportExportValue).ref;
+          fileWasi.finalizeBindings(fileInstance, memory: memory);
+
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const pathPtr = 2240;
+          const openedFdPtr = 2260;
+          const iovPtr = 2272;
+          const bufferPtr = 2304;
+          const countPtr = 2336;
+          const filestatPtr = 2352;
+          const newOffsetPtr = 2432;
+
+          int openHostFile(String path, int rights, {int oflags = 0}) {
+            final pathBytes = utf8.encode(path);
+            bytes.setAll(pathPtr, pathBytes);
+            final errno = pathOpen.ref([
+              3,
+              0,
+              pathPtr,
+              pathBytes.length,
+              oflags,
+              rights,
+              0,
+              0,
+              openedFdPtr,
+            ]);
+            expect(errno, 0);
+            return data.getUint32(openedFdPtr, Endian.little);
+          }
+
+          final liveFd = openHostFile(
+            'live.txt',
+            _rightFdRead | _rightFdSeek | _rightFdTell | _rightFdFdstatGet,
+          );
+          expect(fdFilestatGet.ref([liveFd, filestatPtr]), 0);
+          expect(_getUint64Le(data, filestatPtr + 32), 'after'.length);
+
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 2, Endian.little);
+          expect(fdRead.ref([liveFd, iovPtr, 1, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 2);
+          expect(utf8.decode(bytes.sublist(bufferPtr, bufferPtr + 2)), 'af');
+          expect(fdTell.ref([liveFd, newOffsetPtr]), 0);
+          expect(_getUint64Le(data, newOffsetPtr), 2);
+          expect(fdSeek.ref([liveFd, 1, 0, newOffsetPtr]), 0);
+          expect(_getUint64Le(data, newOffsetPtr), 1);
+
+          data.setUint32(iovPtr + 4, 16, Endian.little);
+          expect(fdPread.ref([liveFd, iovPtr, 1, 0, countPtr]), 0);
+          final liveRead = data.getUint32(countPtr, Endian.little);
+          expect(
+            utf8.decode(bytes.sublist(bufferPtr, bufferPtr + liveRead)),
+            'after',
+          );
+          expect(fdClose.ref([liveFd]), 0);
+
+          final mutableFd = openHostFile(
+            'mutable.txt',
+            _rightFdWrite | _rightFdSeek | _rightFdTell | _rightFdFdstatGet,
+          );
+          expect(fdSeek.ref([mutableFd, 2, 0, newOffsetPtr]), 0);
+          bytes.setAll(bufferPtr, utf8.encode('NODE'));
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 4, Endian.little);
+          expect(fdWrite.ref([mutableFd, iovPtr, 1, countPtr]), 0);
+          expect(data.getUint32(countPtr, Endian.little), 4);
+          expect(fdTell.ref([mutableFd, newOffsetPtr]), 0);
+          expect(_getUint64Le(data, newOffsetPtr), 6);
+          expect(fdClose.ref([mutableFd]), 0);
+          expect(host.readFile('mutable.txt'), 'abNODE');
+
+          final createdFd = openHostFile(
+            'created.txt',
+            _rightFdWrite | _rightFdSeek | _rightFdFdstatGet,
+            oflags: _oflagCreat,
+          );
+          bytes.setAll(bufferPtr, utf8.encode('new'));
+          data.setUint32(iovPtr, bufferPtr, Endian.little);
+          data.setUint32(iovPtr + 4, 3, Endian.little);
+          expect(fdPwrite.ref([createdFd, iovPtr, 1, 0, countPtr]), 0);
+          expect(fdClose.ref([createdFd]), 0);
+          expect(host.readFile('created.txt'), 'new');
+
+          host.writeFile('truncate.txt', '123456');
+          final truncateFd = openHostFile(
+            'truncate.txt',
+            _rightFdWrite | _rightFdSeek | _rightFdFdstatGet,
+            oflags: _oflagTrunc,
+          );
+          expect(fdFilestatGet.ref([truncateFd, filestatPtr]), 0);
+          expect(_getUint64Le(data, filestatPtr + 32), 0);
+          expect(fdClose.ref([truncateFd]), 0);
+          expect(host.readFile('truncate.txt'), isEmpty);
+
+          host.writeFile('sized.txt', 'abcdef');
+          final sizedFd = openHostFile(
+            'sized.txt',
+            _rightFdWrite |
+                _rightFdSeek |
+                _rightFdTell |
+                _rightFdFdstatGet |
+                _rightFdFilestatSetSize |
+                _rightFdAllocate,
+          );
+          expect(fdFilestatSetSize.ref([sizedFd, 3]), 0);
+          expect(host.readFile('sized.txt'), 'abc');
+          expect(fdAllocate.ref([sizedFd, 6, 2]), 0);
+          expect(host.readFile('sized.txt').codeUnits, <int>[
+            0x61,
+            0x62,
+            0x63,
+            0,
+            0,
+            0,
+            0,
+            0,
+          ]);
+          expect(fdClose.ref([sizedFd]), 0);
+        },
+        skip: _skipUnlessNode('requires dart2js/node host filesystem access'),
+      );
 
       test(
         'fd_pread snapshots overlapping iovs before writing file bytes',

@@ -39,6 +39,7 @@ class WASI implements wasi.WASI {
          for (final entry in env.entries)
            wasi_vfs.nulTerminated('${entry.key}=${entry.value}'),
        ],
+       _nodeHostPreopensByGuestPath = _buildNodeHostPreopens(preopens),
        _vfs = wasi_vfs.Preview1VirtualFileSystem(
          preopens: preopens,
          files: files,
@@ -55,6 +56,7 @@ class WASI implements wasi.WASI {
   final wasi.WASIProcRaiseHandler? _procRaiseHandler;
   final List<Uint8List> _argsData;
   final List<Uint8List> _envData;
+  final Map<String, String> _nodeHostPreopensByGuestPath;
   final wasi_vfs.Preview1VirtualFileSystem _vfs;
   final wasi_vfs.Preview1OpenFile _stdinInput;
   static const int _maxWebCryptoGetRandomValuesLength = 65536;
@@ -1103,14 +1105,45 @@ class WASI implements wasi.WASI {
                 parentRights.inheriting) {
       return _errnoNotcapable;
     }
-    final opened = _vfs.openPath(
-      openPath,
-      rightsBase: requestedRightsBase,
-      rightsInheriting: requestedRightsInheriting,
-      descriptorFlags: descriptorFlags,
-      oflags: oflags,
-      hasTrailingSeparator: guestPath.hasTrailingSeparator,
-    );
+    final hasNodeHostPreopens = _nodeHostPreopensByGuestPath.isNotEmpty;
+    final followSymlinks = (lookupFlags & _lookupflagSymlinkFollow) != 0;
+    wasi_vfs.Preview1VirtualOpenResult opened;
+    if (hasNodeHostPreopens &&
+        (oflags & _oflagCreat) != 0 &&
+        _nodeHostPathForGuestPath(openPath) != null &&
+        _vfs.pathEntry(openPath, followSymlinks: false) == null) {
+      opened = _openNodeHostPreopenPath(
+        openPath,
+        rightsBase: requestedRightsBase,
+        rightsInheriting: requestedRightsInheriting,
+        descriptorFlags: descriptorFlags,
+        oflags: oflags,
+        hasTrailingSeparator: guestPath.hasTrailingSeparator,
+        followSymlinks: followSymlinks,
+      );
+    } else {
+      opened = _vfs.openPath(
+        openPath,
+        rightsBase: requestedRightsBase,
+        rightsInheriting: requestedRightsInheriting,
+        descriptorFlags: descriptorFlags,
+        oflags: oflags,
+        hasTrailingSeparator: guestPath.hasTrailingSeparator,
+      );
+      if (hasNodeHostPreopens &&
+          opened.kind == wasi_vfs.Preview1VirtualOpenKind.missing &&
+          (oflags & _oflagCreat) == 0) {
+        opened = _openNodeHostPreopenPath(
+          openPath,
+          rightsBase: requestedRightsBase,
+          rightsInheriting: requestedRightsInheriting,
+          descriptorFlags: descriptorFlags,
+          oflags: oflags,
+          hasTrailingSeparator: guestPath.hasTrailingSeparator,
+          followSymlinks: followSymlinks,
+        );
+      }
+    }
     switch (opened.kind) {
       case wasi_vfs.Preview1VirtualOpenKind.file:
       case wasi_vfs.Preview1VirtualOpenKind.directory:
@@ -1754,6 +1787,184 @@ class WASI implements wasi.WASI {
     return _errnoSuccess;
   }
 
+  wasi_vfs.Preview1VirtualOpenResult _openNodeHostPreopenPath(
+    String guestPath, {
+    required int rightsBase,
+    required int rightsInheriting,
+    required int descriptorFlags,
+    required int oflags,
+    required bool hasTrailingSeparator,
+    required bool followSymlinks,
+  }) {
+    final hostPreopenPath = _nodeHostPreopenPathForGuestPath(guestPath);
+    if (hostPreopenPath == null) {
+      return const wasi_vfs.Preview1VirtualOpenResult.missing();
+    }
+    final fs = _requireNodeBuiltin('node:fs');
+    if (fs == null) {
+      return const wasi_vfs.Preview1VirtualOpenResult.missing();
+    }
+    final hostPath = hostPreopenPath.hostPath;
+    final create = (oflags & _oflagCreat) != 0;
+    final exclusive = (oflags & _oflagExcl) != 0;
+    final truncate = (oflags & _oflagTrunc) != 0;
+
+    final stat = _nodeLstat(fs, hostPath);
+    if (stat == null) {
+      if (!create) {
+        return const wasi_vfs.Preview1VirtualOpenResult.missing();
+      }
+      if (hasTrailingSeparator || (oflags & _oflagDirectory) != 0) {
+        return const wasi_vfs.Preview1VirtualOpenResult.missing();
+      }
+      final parent = _nodePathDirname(hostPath);
+      final parentStat = parent == null ? null : _nodeLstat(fs, parent);
+      if (parentStat == null) {
+        return const wasi_vfs.Preview1VirtualOpenResult.missing();
+      }
+      if (!_nodeStatMethod(parentStat, 'isDirectory')) {
+        return const wasi_vfs.Preview1VirtualOpenResult.notDirectory();
+      }
+      return _openNodeHostFile(
+        fs: fs,
+        hostPath: hostPath,
+        rightsBase: rightsBase,
+        rightsInheriting: rightsInheriting,
+        descriptorFlags: descriptorFlags,
+        create: true,
+        exclusive: exclusive,
+        truncate: truncate,
+      );
+    }
+
+    if (_nodeStatMethod(stat, 'isSymbolicLink')) {
+      if (!followSymlinks) {
+        return const wasi_vfs.Preview1VirtualOpenResult.symlinkLoop();
+      }
+      return const wasi_vfs.Preview1VirtualOpenResult.notSupported();
+    }
+    if (_nodeStatMethod(stat, 'isDirectory')) {
+      if (create && exclusive) {
+        return const wasi_vfs.Preview1VirtualOpenResult.exists();
+      }
+      if (truncate) {
+        return const wasi_vfs.Preview1VirtualOpenResult.isDirectory();
+      }
+      return const wasi_vfs.Preview1VirtualOpenResult.notSupported();
+    }
+    if (!_nodeStatMethod(stat, 'isFile')) {
+      return const wasi_vfs.Preview1VirtualOpenResult.missing();
+    }
+    if (hasTrailingSeparator || (oflags & _oflagDirectory) != 0) {
+      return const wasi_vfs.Preview1VirtualOpenResult.notDirectory();
+    }
+    if (create && exclusive) {
+      return const wasi_vfs.Preview1VirtualOpenResult.exists();
+    }
+    return _openNodeHostFile(
+      fs: fs,
+      hostPath: hostPath,
+      rightsBase: rightsBase,
+      rightsInheriting: rightsInheriting,
+      descriptorFlags: descriptorFlags,
+      create: false,
+      exclusive: false,
+      truncate: truncate,
+    );
+  }
+
+  String? _nodeHostPathForGuestPath(String guestPath) =>
+      _nodeHostPreopenPathForGuestPath(guestPath)?.hostPath;
+
+  ({String guestRoot, String hostRoot, String hostPath})?
+  _nodeHostPreopenPathForGuestPath(String guestPath) {
+    if (_nodeHostPreopensByGuestPath.isEmpty) {
+      return null;
+    }
+    final normalized = wasi_vfs.normalizeGuestPath(guestPath);
+    String? matchedGuestRoot;
+    for (final guestRoot in _nodeHostPreopensByGuestPath.keys) {
+      final matches = guestRoot == '/'
+          ? normalized.startsWith('/')
+          : normalized == guestRoot || normalized.startsWith('$guestRoot/');
+      if (matches) {
+        if (matchedGuestRoot == null ||
+            guestRoot.length > matchedGuestRoot.length) {
+          matchedGuestRoot = guestRoot;
+        }
+      }
+    }
+    if (matchedGuestRoot == null) {
+      return null;
+    }
+
+    final hostRoot = _nodeHostPreopensByGuestPath[matchedGuestRoot]!;
+    final relative = matchedGuestRoot == '/'
+        ? normalized.substring(1)
+        : normalized == matchedGuestRoot
+        ? ''
+        : normalized.substring(matchedGuestRoot.length + 1);
+    final hostPath = _nodeResolvePath(hostRoot, relative);
+    if (!_nodePathWithinRoot(hostPath, hostRoot)) {
+      return null;
+    }
+    return (
+      guestRoot: matchedGuestRoot,
+      hostRoot: hostRoot,
+      hostPath: hostPath,
+    );
+  }
+
+  wasi_vfs.Preview1VirtualOpenResult _openNodeHostFile({
+    required JSObject fs,
+    required String hostPath,
+    required int rightsBase,
+    required int rightsInheriting,
+    required int descriptorFlags,
+    required bool create,
+    required bool exclusive,
+    required bool truncate,
+  }) {
+    final requiresWriteHandle =
+        create ||
+        truncate ||
+        (rightsBase &
+                (_rightFdWrite | _rightFdAllocate | _rightFdFilestatSetSize)) !=
+            0;
+    final flags = create
+        ? exclusive
+              ? 'wx+'
+              : 'w+'
+        : requiresWriteHandle
+        ? 'r+'
+        : 'r';
+    final fd = _nodeOpenSync(fs, hostPath, flags);
+    if (fd == null) {
+      return const wasi_vfs.Preview1VirtualOpenResult.missing();
+    }
+    try {
+      if (truncate) {
+        _nodeTruncateSync(fs, fd, 0);
+      }
+      final stat = _nodeFstat(fs, fd);
+      return _vfs.openFileHandle(
+        _Preview1NodeHostOpenFile(
+          fs,
+          fd,
+          metadata: _metadataFromNodeStat(stat),
+          rights: wasi_vfs.Preview1DescriptorRights.file(
+            base: rightsBase,
+            inheriting: rightsInheriting,
+          ),
+          descriptorFlags: descriptorFlags,
+        ),
+      );
+    } catch (_) {
+      _nodeCloseSync(fs, fd);
+      return const wasi_vfs.Preview1VirtualOpenResult.missing();
+    }
+  }
+
   int _readOpenFileIntoIov({
     required wasi_vfs.Preview1OpenFile opened,
     required int iovs,
@@ -1990,8 +2201,11 @@ const int _filetypeCharacterDevice = wasi_common.filetypeCharacterDevice;
 const int _filetypeDirectory = wasi_common.filetypeDirectory;
 const int _filetypeRegularFile = wasi_common.filetypeRegularFile;
 const int _oflagCreat = wasi_common.oflagCreat;
+const int _oflagDirectory = wasi_common.oflagDirectory;
+const int _oflagExcl = wasi_common.oflagExcl;
 const int _oflagTrunc = wasi_common.oflagTrunc;
 const int _oflagKnownMask = wasi_common.oflagKnownMask;
+const int _fdflagAppend = wasi_common.fdflagAppend;
 const int _fdflagKnownMask = wasi_common.fdflagKnownMask;
 const int _lookupflagSymlinkFollow = wasi_common.lookupflagSymlinkFollow;
 const int _lookupflagKnownMask = _lookupflagSymlinkFollow;
@@ -2010,6 +2224,7 @@ const int _rightFdRead = wasi_common.rightFdRead;
 const int _rightFdSync = wasi_common.rightFdSync;
 const int _rightFdWrite = wasi_common.rightFdWrite;
 const int _rightFdAdvise = wasi_common.rightFdAdvise;
+const int _rightFdAllocate = wasi_common.rightFdAllocate;
 const int _rightPathCreateDirectory = wasi_common.rightPathCreateDirectory;
 const int _rightPathCreateFile = wasi_common.rightPathCreateFile;
 const int _rightPathLinkSource = wasi_common.rightPathLinkSource;
@@ -2022,6 +2237,7 @@ const int _rightPathRenameTarget = wasi_common.rightPathRenameTarget;
 const int _rightPathFilestatGet = wasi_common.rightPathFilestatGet;
 const int _rightPathFilestatSetSize = wasi_common.rightPathFilestatSetSize;
 const int _rightPathFilestatSetTimes = wasi_common.rightPathFilestatSetTimes;
+const int _rightFdFilestatSetSize = wasi_common.rightFdFilestatSetSize;
 const int _rightFdFilestatSetTimes = wasi_common.rightFdFilestatSetTimes;
 const int _rightPathSymlink = wasi_common.rightPathSymlink;
 const int _rightPathRemoveDirectory = wasi_common.rightPathRemoveDirectory;
@@ -2164,6 +2380,21 @@ JSObject? _requireNodeWebCrypto() {
   return null;
 }
 
+JSObject? _requireNodeBuiltin(String name) {
+  if (!_isNodeJs()) {
+    return null;
+  }
+  final require = globalContext.getProperty<JSAny?>('require'.toJS);
+  if (require == null) {
+    return null;
+  }
+  final module = _jsRequire(name.toJS);
+  if (module case final JSObject object) {
+    return object;
+  }
+  return null;
+}
+
 @JS('require')
 external JSAny _jsRequire(JSString module);
 
@@ -2182,6 +2413,291 @@ int _getUint64(ByteData data, int offset) {
 }
 
 String _decodeUtf8(List<int> bytes) => utf8.decode(bytes, allowMalformed: true);
+
+Map<String, String> _buildNodeHostPreopens(Map<String, String> preopens) {
+  if (!_isNodeJs()) {
+    return const <String, String>{};
+  }
+  final fs = _requireNodeBuiltin('node:fs');
+  final path = _requireNodeBuiltin('node:path');
+  if (fs == null || path == null) {
+    return const <String, String>{};
+  }
+  final hostPreopens = <String, String>{};
+  for (final entry in preopens.entries) {
+    final resolved = _nodeResolvePathWith(path, entry.value);
+    final stat = _nodeLstat(fs, resolved);
+    if (stat != null && _nodeStatMethod(stat, 'isDirectory')) {
+      hostPreopens[wasi_vfs.normalizeGuestPath(entry.key)] = resolved;
+    }
+  }
+  return hostPreopens;
+}
+
+String _nodeResolvePath(String root, String relative) {
+  final path = _requireNodeBuiltin('node:path');
+  if (path == null) {
+    return relative.isEmpty ? root : '$root/$relative';
+  }
+  final segments = relative
+      .split('/')
+      .where((segment) => segment.isNotEmpty && segment != '.');
+  return _nodeResolvePathWith(path, root, segments);
+}
+
+String _nodeResolvePathWith(
+  JSObject path,
+  String root, [
+  Iterable<String> segments = const <String>[],
+]) {
+  final args = <JSAny?>[
+    root.toJS,
+    for (final segment in segments) segment.toJS,
+  ];
+  final resolved = path.callMethodVarArgs<JSAny?>('resolve'.toJS, args);
+  return _jsString(resolved).toDart;
+}
+
+String? _nodePathDirname(String hostPath) {
+  final path = _requireNodeBuiltin('node:path');
+  if (path == null) {
+    return null;
+  }
+  final dirname = path.callMethodVarArgs<JSAny?>('dirname'.toJS, [
+    hostPath.toJS,
+  ]);
+  return _jsString(dirname).toDart;
+}
+
+bool _nodePathWithinRoot(String hostPath, String hostRoot) {
+  final path = _requireNodeBuiltin('node:path');
+  if (path == null) {
+    return false;
+  }
+  final relative = _jsString(
+    path.callMethodVarArgs<JSAny?>('relative'.toJS, [
+      hostRoot.toJS,
+      hostPath.toJS,
+    ]),
+  ).toDart;
+  if (relative.isEmpty) {
+    return true;
+  }
+  if (relative == '..' ||
+      relative.startsWith('../') ||
+      relative.startsWith(r'..\')) {
+    return false;
+  }
+  final isAbsolute = path.callMethodVarArgs<JSAny?>('isAbsolute'.toJS, [
+    relative.toJS,
+  ]);
+  return _jsString(isAbsolute).toDart != 'true';
+}
+
+JSObject? _nodeLstat(JSObject fs, String hostPath) {
+  try {
+    final stat = fs.callMethodVarArgs<JSAny?>('lstatSync'.toJS, [
+      hostPath.toJS,
+    ]);
+    if (stat case final JSObject object) {
+      return object;
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+JSObject _nodeFstat(JSObject fs, int fd) {
+  final stat = fs.callMethodVarArgs<JSAny?>('fstatSync'.toJS, [fd.toJS]);
+  return stat as JSObject;
+}
+
+bool _nodeStatMethod(JSObject stat, String method) {
+  final value = stat.callMethodVarArgs<JSAny?>(method.toJS, const []);
+  return _jsString(value).toDart == 'true';
+}
+
+int? _nodeOpenSync(JSObject fs, String hostPath, String flags) {
+  try {
+    final fd = fs.callMethodVarArgs<JSNumber>('openSync'.toJS, [
+      hostPath.toJS,
+      flags.toJS,
+    ]);
+    return fd.toDartDouble.toInt();
+  } catch (_) {
+    return null;
+  }
+}
+
+int _nodeReadSync(
+  JSObject fs,
+  int fd,
+  Uint8List target,
+  int start,
+  int length,
+  int fileOffset,
+) {
+  if (length <= 0 || fileOffset < 0 || start < 0 || start >= target.length) {
+    return 0;
+  }
+  final end = math.min(target.length, start + length);
+  try {
+    final read = fs.callMethodVarArgs<JSNumber>('readSync'.toJS, [
+      fd.toJS,
+      target.toJS,
+      start.toJS,
+      (end - start).toJS,
+      fileOffset.toJS,
+    ]);
+    return read.toDartDouble.toInt();
+  } catch (_) {
+    return 0;
+  }
+}
+
+int _nodeWriteSync(
+  JSObject fs,
+  int fd,
+  Uint8List source,
+  int start,
+  int length,
+  int fileOffset,
+) {
+  if (length <= 0 || fileOffset < 0 || start < 0 || start >= source.length) {
+    return 0;
+  }
+  final end = math.min(source.length, start + length);
+  try {
+    final written = fs.callMethodVarArgs<JSNumber>('writeSync'.toJS, [
+      fd.toJS,
+      source.toJS,
+      start.toJS,
+      (end - start).toJS,
+      fileOffset.toJS,
+    ]);
+    return written.toDartDouble.toInt();
+  } catch (_) {
+    return 0;
+  }
+}
+
+void _nodeTruncateSync(JSObject fs, int fd, int length) {
+  try {
+    fs.callMethodVarArgs<JSAny?>('ftruncateSync'.toJS, [fd.toJS, length.toJS]);
+  } catch (_) {
+    // Preview1OpenFile cannot surface host resize errors yet.
+  }
+}
+
+void _nodeCloseSync(JSObject fs, int fd) {
+  try {
+    fs.callMethodVarArgs<JSAny?>('closeSync'.toJS, [fd.toJS]);
+  } catch (_) {
+    // WASI close is idempotent at this boundary.
+  }
+}
+
+wasi_vfs.Preview1VirtualNodeMetadata _metadataFromNodeStat(JSObject? stat) {
+  final inode = stat == null ? null : _nodeStatInt(stat, 'ino');
+  final metadata = wasi_vfs.Preview1VirtualNodeMetadata(
+    inode: inode == null || inode <= 0 ? null : inode,
+  );
+  if (stat == null) {
+    return metadata;
+  }
+  final accessedMs = _nodeStatDouble(stat, 'atimeMs');
+  final modifiedMs = _nodeStatDouble(stat, 'mtimeMs');
+  if (accessedMs != null && accessedMs > 0) {
+    metadata.accessTimeNanos = (accessedMs * 1000000).toInt();
+  }
+  if (modifiedMs != null && modifiedMs > 0) {
+    metadata.modificationTimeNanos = (modifiedMs * 1000000).toInt();
+  }
+  return metadata;
+}
+
+int? _nodeStatInt(JSObject stat, String property) =>
+    stat.getProperty<JSNumber?>(property.toJS)?.toDartDouble.toInt();
+
+double? _nodeStatDouble(JSObject stat, String property) =>
+    stat.getProperty<JSNumber?>(property.toJS)?.toDartDouble;
+
+final class _Preview1NodeHostOpenFile implements wasi_vfs.Preview1OpenFile {
+  _Preview1NodeHostOpenFile(
+    this._fs,
+    this._fd, {
+    required this.metadata,
+    required this.rights,
+    required this.descriptorFlags,
+  });
+
+  final JSObject _fs;
+  final int _fd;
+
+  @override
+  final wasi_vfs.Preview1VirtualNodeMetadata metadata;
+
+  @override
+  final wasi_vfs.Preview1DescriptorRights rights;
+
+  @override
+  int descriptorFlags;
+
+  @override
+  int offset = 0;
+
+  @override
+  int get length => _nodeStatInt(_nodeFstat(_fs, _fd), 'size') ?? 0;
+
+  @override
+  int readInto(Uint8List target, int start, int length) {
+    final count = readAtInto(target, start, length, offset);
+    offset += count;
+    return count;
+  }
+
+  @override
+  int readAtInto(Uint8List target, int start, int length, int fileOffset) =>
+      _nodeReadSync(_fs, _fd, target, start, length, fileOffset);
+
+  @override
+  int writeFrom(Uint8List source, int start, int length) {
+    final fileOffset = (descriptorFlags & _fdflagAppend) == 0
+        ? offset
+        : this.length;
+    final written = writeAtFrom(source, start, length, fileOffset);
+    offset = fileOffset + written;
+    return written;
+  }
+
+  @override
+  int writeAtFrom(Uint8List source, int start, int length, int fileOffset) =>
+      _nodeWriteSync(_fs, _fd, source, start, length, fileOffset);
+
+  @override
+  void setLength(int length) {
+    if (length >= 0) {
+      _nodeTruncateSync(_fs, _fd, length);
+    }
+  }
+
+  @override
+  void allocate(int offset, int length) {
+    if (offset < 0 || length < 0 || offset + length < offset) {
+      return;
+    }
+    final requiredLength = offset + length;
+    if (requiredLength > this.length) {
+      setLength(requiredLength);
+    }
+  }
+
+  @override
+  void close() {
+    _nodeCloseSync(_fs, _fd);
+  }
+}
 
 final class _MemoryView {
   _MemoryView(this.bytes, this.data);
