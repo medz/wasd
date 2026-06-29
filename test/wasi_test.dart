@@ -225,6 +225,10 @@ final class _SyncRecordingOpenFile implements Preview1OpenFile {
 
   int dataSyncCount = 0;
   int syncCount = 0;
+  int setLengthErrno = preview1_constants.errnoSuccess;
+  int allocateErrno = preview1_constants.errnoSuccess;
+  int dataSyncErrno = preview1_constants.errnoSuccess;
+  int syncErrno = preview1_constants.errnoSuccess;
 
   @override
   int readInto(Uint8List target, int start, int length) => length;
@@ -241,19 +245,21 @@ final class _SyncRecordingOpenFile implements Preview1OpenFile {
       length;
 
   @override
-  void setLength(int length) {}
+  int setLength(int length) => setLengthErrno;
 
   @override
-  void allocate(int offset, int length) {}
+  int allocate(int offset, int length) => allocateErrno;
 
   @override
-  void dataSync() {
+  int dataSync() {
     dataSyncCount++;
+    return dataSyncErrno;
   }
 
   @override
-  void sync() {
+  int sync() {
     syncCount++;
+    return syncErrno;
   }
 
   @override
@@ -900,6 +906,35 @@ void main() {
       expect(opened.syncCount, 1);
     });
 
+    test('fd mutation helpers propagate open file I/O errors', () {
+      final opened = _SyncRecordingOpenFile()
+        ..setLengthErrno = preview1_constants.errnoIo
+        ..allocateErrno = preview1_constants.errnoIo
+        ..dataSyncErrno = preview1_constants.errnoIo
+        ..syncErrno = preview1_constants.errnoIo;
+      final vfs = Preview1VirtualFileSystem();
+      final fd = vfs.openFileHandle(opened).fd!;
+
+      expect(
+        preview1_fd.preview1FdFilestatSetSize(vfs: vfs, fd: fd, size: 4),
+        preview1_constants.errnoIo,
+      );
+      expect(
+        preview1_fd.preview1FdAllocate(vfs: vfs, fd: fd, offset: 0, length: 4),
+        preview1_constants.errnoIo,
+      );
+      expect(
+        preview1_fd.preview1FdDatasync(vfs: vfs, fd: fd),
+        preview1_constants.errnoIo,
+      );
+      expect(
+        preview1_fd.preview1FdSync(vfs: vfs, fd: fd),
+        preview1_constants.errnoIo,
+      );
+      expect(opened.dataSyncCount, 1);
+      expect(opened.syncCount, 1);
+    });
+
     test('fd write helpers honor descriptor synchronization flags', () {
       final bytes = Uint8List(64);
       final data = ByteData.view(bytes.buffer);
@@ -944,6 +979,36 @@ void main() {
       expect(data.getUint32(countPtr, Endian.little), 1);
       expect(syncOpened.dataSyncCount, 0);
       expect(syncOpened.syncCount, 1);
+    });
+
+    test('fd write helpers propagate synchronization failures', () {
+      final bytes = Uint8List(64);
+      final data = ByteData.view(bytes.buffer);
+      const iovPtr = 0;
+      const payloadPtr = 16;
+      const countPtr = 32;
+      bytes[payloadPtr] = 7;
+      data.setUint32(iovPtr, payloadPtr, Endian.little);
+      data.setUint32(iovPtr + 4, 1, Endian.little);
+      data.setUint32(countPtr, 0xfeedface, Endian.little);
+
+      final opened = _SyncRecordingOpenFile()
+        ..descriptorFlags = preview1_constants.fdflagSync
+        ..syncErrno = preview1_constants.errnoIo;
+
+      expect(
+        writeOpenFileFromIov(
+          opened: opened,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nwrittenPtr: countPtr,
+        ),
+        preview1_constants.errnoIo,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+      expect(opened.syncCount, 1);
     });
 
     test('fd pwrite honors descriptor append flag', () {
@@ -1040,6 +1105,35 @@ void main() {
       );
       expect(fullSyncOpened.dataSyncCount, 0);
       expect(fullSyncOpened.syncCount, 1);
+    });
+
+    test('fd read helpers propagate synchronization failures', () {
+      final bytes = Uint8List(64);
+      final data = ByteData.view(bytes.buffer);
+      const iovPtr = 0;
+      const payloadPtr = 16;
+      const countPtr = 32;
+      data.setUint32(iovPtr, payloadPtr, Endian.little);
+      data.setUint32(iovPtr + 4, 1, Endian.little);
+      data.setUint32(countPtr, 0xfeedface, Endian.little);
+
+      final opened = _SyncRecordingOpenFile()
+        ..descriptorFlags = preview1_constants.fdflagRsync
+        ..syncErrno = preview1_constants.errnoIo;
+
+      expect(
+        readOpenFileIntoIov(
+          opened: opened,
+          bytes: bytes,
+          data: data,
+          iovs: iovPtr,
+          iovsLen: 1,
+          nreadPtr: countPtr,
+        ),
+        preview1_constants.errnoIo,
+      );
+      expect(data.getUint32(countPtr, Endian.little), 0xfeedface);
+      expect(opened.syncCount, 1);
     });
 
     test('imports has fd_write function', () {

@@ -3265,6 +3265,7 @@ const int _errnoSuccess = wasi_common.errnoSuccess;
 const int _errnoInval = wasi_common.errnoInval;
 const int _errnoBadf = wasi_common.errnoBadf;
 const int _errnoExist = wasi_common.errnoExist;
+const int _errnoIo = wasi_common.errnoIo;
 const int _errnoIsdir = wasi_common.errnoIsdir;
 const int _errnoNoent = wasi_common.errnoNoent;
 const int _errnoNosys = wasi_common.errnoNosys;
@@ -3893,43 +3894,43 @@ final class _Preview1NativeHostOpenFile implements wasi_vfs.Preview1OpenFile {
   }
 
   @override
-  void setLength(int length) {
+  int setLength(int length) {
     if (length < 0) {
-      return;
+      return _errnoInval;
     }
     try {
       _file.truncateSync(length);
+      return _errnoSuccess;
     } on io.FileSystemException {
-      // Preview1OpenFile cannot surface host resize errors yet.
+      return _errnoIo;
     }
   }
 
   @override
-  void allocate(int offset, int length) {
+  int allocate(int offset, int length) {
     if (offset < 0 || length < 0 || offset + length < offset) {
-      return;
+      return _errnoInval;
     }
     final requiredLength = offset + length;
-    if (requiredLength > this.length) {
-      setLength(requiredLength);
+    final currentLength = this.length;
+    if (requiredLength > currentLength) {
+      return setLength(requiredLength);
     }
+    return _errnoSuccess;
   }
 
   @override
-  void dataSync() {
-    _flush();
-  }
+  int dataSync() => _flush();
 
   @override
-  void sync() {
-    _flush();
-  }
+  int sync() => _flush();
 
-  void _flush() {
+  int _flush() {
     try {
       _file.flushSync();
+      return _errnoSuccess;
     } on io.FileSystemException {
-      // Preview1OpenFile cannot surface host sync errors yet.
+      return _errnoIo;
     }
   }
 

@@ -79,8 +79,7 @@ int preview1FdAllocate({
     return errnoInval;
   }
 
-  opened.allocate(offset, length);
-  return errnoSuccess;
+  return opened.allocate(offset, length);
 }
 
 int preview1FdDatasync({
@@ -96,8 +95,7 @@ int preview1FdDatasync({
     return preflight.errno;
   }
 
-  preflight.opened!.dataSync();
-  return errnoSuccess;
+  return preflight.opened!.dataSync();
 }
 
 int preview1FdFdstatSetFlags({
@@ -186,8 +184,7 @@ int preview1FdFilestatSetSize({
     return errnoInval;
   }
 
-  opened.setLength(size);
-  return errnoSuccess;
+  return opened.setLength(size);
 }
 
 int preview1FdPread({
@@ -310,8 +307,7 @@ int preview1FdSync({required Preview1VirtualFileSystem vfs, required int fd}) {
     return preflight.errno;
   }
 
-  preflight.opened!.sync();
-  return errnoSuccess;
+  return preflight.opened!.sync();
 }
 
 int preview1FdTell({

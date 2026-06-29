@@ -1759,7 +1759,10 @@ int readOpenFileIntoIov({
   }
 
   if (totalRead > 0) {
-    _syncOpenFileAfterRead(opened);
+    final syncErrno = _syncOpenFileAfterRead(opened);
+    if (syncErrno != errnoSuccess) {
+      return syncErrno;
+    }
   }
   data.setUint32(nreadPtr, totalRead, Endian.little);
   return errnoSuccess;
@@ -1811,31 +1814,34 @@ int writeOpenFileFromIov({
   }
 
   if (totalWritten > 0) {
-    _syncOpenFileAfterWrite(opened);
+    final syncErrno = _syncOpenFileAfterWrite(opened);
+    if (syncErrno != errnoSuccess) {
+      return syncErrno;
+    }
   }
   data.setUint32(nwrittenPtr, totalWritten, Endian.little);
   return errnoSuccess;
 }
 
-void _syncOpenFileAfterWrite(Preview1OpenFile opened) {
+int _syncOpenFileAfterWrite(Preview1OpenFile opened) {
   final flags = opened.descriptorFlags;
   if ((flags & fdflagSync) != 0) {
-    opened.sync();
+    return opened.sync();
   } else if ((flags & fdflagDsync) != 0) {
-    opened.dataSync();
+    return opened.dataSync();
   }
+  return errnoSuccess;
 }
 
-void _syncOpenFileAfterRead(Preview1OpenFile opened) {
+int _syncOpenFileAfterRead(Preview1OpenFile opened) {
   final flags = opened.descriptorFlags;
   if ((flags & fdflagRsync) == 0) {
-    return;
+    return errnoSuccess;
   }
   if ((flags & fdflagDsync) != 0 && (flags & fdflagSync) == 0) {
-    opened.dataSync();
-  } else {
-    opened.sync();
+    return opened.dataSync();
   }
+  return opened.sync();
 }
 
 int writeSocketFromIov({
@@ -2045,13 +2051,13 @@ abstract interface class Preview1OpenFile {
 
   int writeAtFrom(Uint8List source, int start, int length, int fileOffset);
 
-  void setLength(int length);
+  int setLength(int length);
 
-  void allocate(int offset, int length);
+  int allocate(int offset, int length);
 
-  void dataSync();
+  int dataSync();
 
-  void sync();
+  int sync();
 
   void close();
 }
@@ -2108,16 +2114,22 @@ final class Preview1VirtualOpenFile implements Preview1OpenFile {
       file.writeAtFrom(source, start, length, fileOffset);
 
   @override
-  void setLength(int length) => file.setLength(length);
+  int setLength(int length) {
+    file.setLength(length);
+    return errnoSuccess;
+  }
 
   @override
-  void allocate(int offset, int length) => file.allocate(offset, length);
+  int allocate(int offset, int length) {
+    file.allocate(offset, length);
+    return errnoSuccess;
+  }
 
   @override
-  void dataSync() {}
+  int dataSync() => errnoSuccess;
 
   @override
-  void sync() {}
+  int sync() => errnoSuccess;
 
   @override
   void close() {}

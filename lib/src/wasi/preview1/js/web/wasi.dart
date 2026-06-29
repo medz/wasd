@@ -3243,6 +3243,7 @@ const int _errnoSuccess = wasi_common.errnoSuccess;
 const int _errnoInval = wasi_common.errnoInval;
 const int _errnoBadf = wasi_common.errnoBadf;
 const int _errnoExist = wasi_common.errnoExist;
+const int _errnoIo = wasi_common.errnoIo;
 const int _errnoIsdir = wasi_common.errnoIsdir;
 const int _errnoNoent = wasi_common.errnoNoent;
 const int _errnoNosys = wasi_common.errnoNosys;
@@ -3837,27 +3838,30 @@ int _nodeWriteSync(
   }
 }
 
-void _nodeTruncateSync(JSObject fs, int fd, int length) {
+int _nodeTruncateSync(JSObject fs, int fd, int length) {
   try {
     fs.callMethodVarArgs<JSAny?>('ftruncateSync'.toJS, [fd.toJS, length.toJS]);
+    return _errnoSuccess;
   } catch (_) {
-    // Preview1OpenFile cannot surface host resize errors yet.
+    return _errnoIo;
   }
 }
 
-void _nodeFdatasyncSync(JSObject fs, int fd) {
+int _nodeFdatasyncSync(JSObject fs, int fd) {
   try {
     fs.callMethodVarArgs<JSAny?>('fdatasyncSync'.toJS, [fd.toJS]);
+    return _errnoSuccess;
   } catch (_) {
-    // Preview1OpenFile cannot surface host sync errors yet.
+    return _errnoIo;
   }
 }
 
-void _nodeFsyncSync(JSObject fs, int fd) {
+int _nodeFsyncSync(JSObject fs, int fd) {
   try {
     fs.callMethodVarArgs<JSAny?>('fsyncSync'.toJS, [fd.toJS]);
+    return _errnoSuccess;
   } catch (_) {
-    // Preview1OpenFile cannot surface host sync errors yet.
+    return _errnoIo;
   }
 }
 
@@ -3965,32 +3969,31 @@ final class _Preview1NodeHostOpenFile implements wasi_vfs.Preview1OpenFile {
       _nodeWriteSync(_fs, _fd, source, start, length, fileOffset);
 
   @override
-  void setLength(int length) {
-    if (length >= 0) {
-      _nodeTruncateSync(_fs, _fd, length);
+  int setLength(int length) {
+    if (length < 0) {
+      return _errnoInval;
     }
+    return _nodeTruncateSync(_fs, _fd, length);
   }
 
   @override
-  void allocate(int offset, int length) {
+  int allocate(int offset, int length) {
     if (offset < 0 || length < 0 || offset + length < offset) {
-      return;
+      return _errnoInval;
     }
     final requiredLength = offset + length;
-    if (requiredLength > this.length) {
-      setLength(requiredLength);
+    final currentLength = this.length;
+    if (requiredLength > currentLength) {
+      return setLength(requiredLength);
     }
+    return _errnoSuccess;
   }
 
   @override
-  void dataSync() {
-    _nodeFdatasyncSync(_fs, _fd);
-  }
+  int dataSync() => _nodeFdatasyncSync(_fs, _fd);
 
   @override
-  void sync() {
-    _nodeFsyncSync(_fs, _fd);
-  }
+  int sync() => _nodeFsyncSync(_fs, _fd);
 
   @override
   void close() {
