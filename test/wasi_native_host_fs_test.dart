@@ -715,7 +715,10 @@ void main() {
     );
     final instance = result.instance;
     final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+    final pathOpen = preview1['path_open'] as FunctionImportExportValue;
     final pathLink = preview1['path_link'] as FunctionImportExportValue;
+    final fdFilestatGet =
+        preview1['fd_filestat_get'] as FunctionImportExportValue;
     final pathFilestatGet =
         preview1['path_filestat_get'] as FunctionImportExportValue;
     final pathUnlinkFile =
@@ -728,11 +731,27 @@ void main() {
     const oldPathPtr = 1024;
     const newPathPtr = 1088;
     const filestatPtr = 1152;
+    const openedFdPtr = 1232;
 
     var oldPath = utf8.encode('source.txt');
     var newPath = utf8.encode('linked.txt');
     bytes.setAll(oldPathPtr, oldPath);
     bytes.setAll(newPathPtr, newPath);
+    expect(
+      pathOpen.ref([
+        3,
+        0,
+        oldPathPtr,
+        oldPath.length,
+        0,
+        _rightFdFilestatGet,
+        0,
+        0,
+        openedFdPtr,
+      ]),
+      0,
+    );
+    final sourceFd = data.getUint32(openedFdPtr, Endian.little);
     expect(
       pathLink.ref([
         3,
@@ -754,6 +773,8 @@ void main() {
       pathFilestatGet.ref([3, 0, oldPathPtr, oldPath.length, filestatPtr]),
       0,
     );
+    expect(_getUint64Le(data, filestatPtr + _filestatLinkCountOffset), 2);
+    expect(fdFilestatGet.ref([sourceFd, filestatPtr]), 0);
     expect(_getUint64Le(data, filestatPtr + _filestatLinkCountOffset), 2);
 
     expect(pathUnlinkFile.ref([3, oldPathPtr, oldPath.length]), 0);

@@ -5053,7 +5053,10 @@ void main() {
           );
           final fileInstance = fileResult.instance;
           final preview1 = fileWasi.imports['wasi_snapshot_preview1']!;
+          final pathOpen = preview1['path_open'] as FunctionImportExportValue;
           final pathLink = preview1['path_link'] as FunctionImportExportValue;
+          final fdFilestatGet =
+              preview1['fd_filestat_get'] as FunctionImportExportValue;
           final pathFilestatGet =
               preview1['path_filestat_get'] as FunctionImportExportValue;
           final pathSymlink =
@@ -5073,6 +5076,7 @@ void main() {
           const readlinkBufferPtr = 3488;
           const readlinkUsedPtr = 3552;
           const filestatPtr = 3568;
+          const openedFdPtr = 3648;
 
           int writePath(int ptr, String path) {
             final encoded = utf8.encode(path);
@@ -5130,11 +5134,38 @@ void main() {
             return _getUint64Le(data, filestatPtr + _filestatLinkCountOffset);
           }
 
+          int openFile(String path) {
+            final pathLen = writePath(pathPtr, path);
+            final errno =
+                pathOpen.ref([
+                      3,
+                      0,
+                      pathPtr,
+                      pathLen,
+                      0,
+                      _rightFdFdstatGet,
+                      0,
+                      0,
+                      openedFdPtr,
+                    ])
+                    as int;
+            expect(errno, 0);
+            return data.getUint32(openedFdPtr, Endian.little);
+          }
+
+          int fdLinkCount(int fd) {
+            final errno = fdFilestatGet.ref([fd, filestatPtr]) as int;
+            expect(errno, 0);
+            return _getUint64Le(data, filestatPtr + _filestatLinkCountOffset);
+          }
+
+          final sourceFd = openFile('source.txt');
           expect(linkPath('source.txt', 'hard.txt'), 0);
           expect(host.fileExists('hard.txt'), isTrue);
           host.writeFile('source.txt', 'changed');
           expect(host.readFile('hard.txt'), 'changed');
           expect(linkCount('source.txt'), 2);
+          expect(fdLinkCount(sourceFd), 2);
           expect(
             pathUnlinkFile.ref([3, pathPtr, writePath(pathPtr, 'source.txt')]),
             0,

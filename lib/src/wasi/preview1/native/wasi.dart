@@ -768,6 +768,10 @@ class WASI implements wasi_iface.WASI {
         final fd = _asInt(args[0]);
         final bufPtr = _asInt(args[1]);
 
+        final opened = _vfs.openFileForFd(fd);
+        if (opened is _Preview1NativeHostOpenFile) {
+          opened.refreshMetadata();
+        }
         final view = _memoryView();
         return wasi_fd.preview1FdFilestatGet(
           vfs: _vfs,
@@ -2782,7 +2786,7 @@ class WASI implements wasi_iface.WASI {
     switch (hostResult) {
       case _HostSetPathTimesResult.success:
         if (metadata != null) {
-          _copyHostPathTimesToMetadata(metadata, hostPath);
+          _copyHostPathStatToMetadata(metadata, hostPath);
         }
         return _errnoSuccess;
       case _HostSetPathTimesResult.noEntry:
@@ -2810,7 +2814,7 @@ class WASI implements wasi_iface.WASI {
         file.setLastModifiedSync(dateTimeFromNanos(modificationTimeNanos));
       }
       if (metadata != null) {
-        _copyHostPathTimesToMetadata(metadata, hostPath);
+        _copyHostPathStatToMetadata(metadata, hostPath);
       }
       return _errnoSuccess;
     } on ArgumentError {
@@ -3658,28 +3662,32 @@ wasi_vfs.Preview1VirtualNodeMetadata _metadataFromHostStatInfo(
   _HostLstatInfo info,
 ) {
   final metadata = wasi_vfs.Preview1VirtualNodeMetadata(inode: info.inode);
-  if (info.linkCount > 0) {
-    metadata.linkCount = info.linkCount;
-  }
-  _copyHostStatInfoTimesToMetadata(metadata, info);
+  _copyHostStatInfoToMetadata(metadata, info);
   return metadata;
 }
 
-void _copyHostPathTimesToMetadata(
+void _copyHostPathStatToMetadata(
   wasi_vfs.Preview1VirtualNodeMetadata metadata,
-  String hostPath,
-) {
+  String hostPath, {
+  bool requireSameInode = false,
+}) {
   final info = _hostLstatInfo(hostPath);
   if (info == null) {
     return;
   }
-  _copyHostStatInfoTimesToMetadata(metadata, info);
+  if (requireSameInode && info.inode != metadata.inode) {
+    return;
+  }
+  _copyHostStatInfoToMetadata(metadata, info);
 }
 
-void _copyHostStatInfoTimesToMetadata(
+void _copyHostStatInfoToMetadata(
   wasi_vfs.Preview1VirtualNodeMetadata metadata,
   _HostLstatInfo info,
 ) {
+  if (info.linkCount > 0) {
+    metadata.linkCount = info.linkCount;
+  }
   if (info.accessTimeNanos > 0) {
     metadata.accessTimeNanos = info.accessTimeNanos;
   }
@@ -3780,6 +3788,10 @@ final class _Preview1NativeHostOpenFile implements wasi_vfs.Preview1OpenFile {
 
   @override
   final wasi_vfs.Preview1VirtualNodeMetadata metadata;
+
+  void refreshMetadata() {
+    _copyHostPathStatToMetadata(metadata, hostPath, requireSameInode: true);
+  }
 
   @override
   final wasi_vfs.Preview1DescriptorRights rights;

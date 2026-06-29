@@ -764,6 +764,10 @@ class WASI implements wasi.WASI {
         final fd = _asInt(args[0]);
         final bufPtr = _asInt(args[1]);
 
+        final opened = _vfs.openFileForFd(fd);
+        if (opened is _Preview1NodeHostOpenFile) {
+          opened.refreshMetadata();
+        }
         final view = _memoryView();
         return wasi_fd.preview1FdFilestatGet(
           vfs: _vfs,
@@ -1988,14 +1992,7 @@ class WASI implements wasi.WASI {
     wasi_vfs.Preview1VirtualNodeMetadata metadata,
     JSObject stat,
   ) {
-    final accessTimeNanos = _nodeStatTimeNanos(stat, 'atimeMs');
-    final modificationTimeNanos = _nodeStatTimeNanos(stat, 'mtimeMs');
-    if (accessTimeNanos != null && accessTimeNanos > 0) {
-      metadata.accessTimeNanos = accessTimeNanos;
-    }
-    if (modificationTimeNanos != null && modificationTimeNanos > 0) {
-      metadata.modificationTimeNanos = modificationTimeNanos;
-    }
+    _copyNodeStatFieldsToMetadata(metadata, stat);
   }
 
   int _writePollEvents({
@@ -3850,19 +3847,26 @@ wasi_vfs.Preview1VirtualNodeMetadata _metadataFromNodeStat(JSObject? stat) {
   if (stat == null) {
     return metadata;
   }
+  _copyNodeStatFieldsToMetadata(metadata, stat);
+  return metadata;
+}
+
+void _copyNodeStatFieldsToMetadata(
+  wasi_vfs.Preview1VirtualNodeMetadata metadata,
+  JSObject stat,
+) {
   final linkCount = _nodeStatInt(stat, 'nlink');
   if (linkCount != null && linkCount > 0) {
     metadata.linkCount = linkCount;
   }
   final accessedMs = _nodeStatDouble(stat, 'atimeMs');
-  final modifiedMs = _nodeStatDouble(stat, 'mtimeMs');
   if (accessedMs != null && accessedMs > 0) {
     metadata.accessTimeNanos = (accessedMs * 1000000).toInt();
   }
+  final modifiedMs = _nodeStatDouble(stat, 'mtimeMs');
   if (modifiedMs != null && modifiedMs > 0) {
     metadata.modificationTimeNanos = (modifiedMs * 1000000).toInt();
   }
-  return metadata;
 }
 
 int? _nodeStatInt(JSObject stat, String property) =>
@@ -3885,6 +3889,13 @@ final class _Preview1NodeHostOpenFile implements wasi_vfs.Preview1OpenFile {
 
   @override
   final wasi_vfs.Preview1VirtualNodeMetadata metadata;
+
+  void refreshMetadata() {
+    final stat = _nodeTryFstat(_fs, _fd);
+    if (stat != null) {
+      _copyNodeStatFieldsToMetadata(metadata, stat);
+    }
+  }
 
   @override
   final wasi_vfs.Preview1DescriptorRights rights;
