@@ -1355,6 +1355,22 @@ class WASI implements wasi_iface.WASI {
         }
 
         final symlink = _vfs.symlinkForPath(resolved.path!);
+        final hostPath = _hostPathForGuestPath(resolved.path!);
+        if (hostPath != null) {
+          final hostSymlink = _readHostSymlink(hostPath);
+          if (hostSymlink.errno == _errnoSuccess) {
+            final targetBytes = hostSymlink.targetBytes!;
+            final bytesToWrite = math.min(bufferLength, targetBytes.length);
+            if (bytesToWrite > 0) {
+              bytes.setRange(bufferPtr, bufferPtr + bytesToWrite, targetBytes);
+            }
+            data.setUint32(bufferUsedPtr, bytesToWrite, Endian.little);
+            return _errnoSuccess;
+          }
+          if (hostSymlink.errno != _errnoNoent || symlink == null) {
+            return hostSymlink.errno;
+          }
+        }
         if (symlink == null) {
           return _vfs.pathEntry(resolved.path!) == null
               ? _errnoNoent
@@ -1410,6 +1426,16 @@ class WASI implements wasi_iface.WASI {
         final right = _checkDescriptorRight(_asInt(args[2]), _rightPathSymlink);
         if (right != _errnoSuccess) {
           return right;
+        }
+        final hostPath = _hostPathForGuestPath(linkPath.path!);
+        if (hostPath != null) {
+          return _errnoFromPathMutationResult(
+            _createHostSymlink(
+              target: target,
+              linkHostPath: hostPath,
+              hasTrailingSeparator: linkPath.hasTrailingSeparator,
+            ),
+          );
         }
         return _errnoFromPathMutationResult(
           _vfs.createSymlink(
@@ -2089,6 +2115,82 @@ class WASI implements wasi_iface.WASI {
     return _hostLinkFailure(oldHostPath: oldHostPath, newHostPath: newHostPath);
   }
 
+  wasi_vfs.Preview1PathMutationResult _createHostSymlink({
+    required String target,
+    required String linkHostPath,
+    required bool hasTrailingSeparator,
+  }) {
+    if (wasi_vfs.isAbsoluteGuestPath(target)) {
+      return wasi_vfs.Preview1PathMutationResult.notCapable;
+    }
+
+    final linkType = io.FileSystemEntity.typeSync(
+      linkHostPath,
+      followLinks: false,
+    );
+    if (hasTrailingSeparator) {
+      if (linkType == io.FileSystemEntityType.directory) {
+        return wasi_vfs.Preview1PathMutationResult.exists;
+      }
+      if (linkType == io.FileSystemEntityType.file ||
+          linkType == io.FileSystemEntityType.link) {
+        return wasi_vfs.Preview1PathMutationResult.notDirectory;
+      }
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (linkType != io.FileSystemEntityType.notFound) {
+      return wasi_vfs.Preview1PathMutationResult.exists;
+    }
+
+    final parentType = io.FileSystemEntity.typeSync(
+      io.Link(linkHostPath).parent.path,
+      followLinks: false,
+    );
+    if (parentType == io.FileSystemEntityType.notFound) {
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (parentType != io.FileSystemEntityType.directory) {
+      return wasi_vfs.Preview1PathMutationResult.notDirectory;
+    }
+
+    try {
+      io.Link(linkHostPath).createSync(target);
+      return wasi_vfs.Preview1PathMutationResult.success;
+    } on io.FileSystemException {
+      return _hostCreatePathFailure(linkHostPath);
+    }
+  }
+
+  ({int errno, Uint8List? targetBytes}) _readHostSymlink(String hostPath) {
+    final type = io.FileSystemEntity.typeSync(hostPath, followLinks: false);
+    if (type == io.FileSystemEntityType.notFound) {
+      return (errno: _errnoNoent, targetBytes: null);
+    }
+    if (type != io.FileSystemEntityType.link) {
+      return (errno: _errnoInval, targetBytes: null);
+    }
+
+    try {
+      return (
+        errno: _errnoSuccess,
+        targetBytes: Uint8List.fromList(
+          utf8.encode(io.Link(hostPath).targetSync()),
+        ),
+      );
+    } on io.FileSystemException {
+      final currentType = io.FileSystemEntity.typeSync(
+        hostPath,
+        followLinks: false,
+      );
+      return (
+        errno: currentType == io.FileSystemEntityType.notFound
+            ? _errnoNoent
+            : _errnoPerm,
+        targetBytes: null,
+      );
+    }
+  }
+
   wasi_vfs.Preview1PathMutationResult _hostLinkFailure({
     required String oldHostPath,
     required String newHostPath,
@@ -2119,6 +2221,24 @@ class WASI implements wasi_iface.WASI {
     }
     if (oldType == io.FileSystemEntityType.directory) {
       return wasi_vfs.Preview1PathMutationResult.permissionDenied;
+    }
+    return wasi_vfs.Preview1PathMutationResult.permissionDenied;
+  }
+
+  wasi_vfs.Preview1PathMutationResult _hostCreatePathFailure(String hostPath) {
+    final type = io.FileSystemEntity.typeSync(hostPath, followLinks: false);
+    if (type != io.FileSystemEntityType.notFound) {
+      return wasi_vfs.Preview1PathMutationResult.exists;
+    }
+    final parentType = io.FileSystemEntity.typeSync(
+      io.File(hostPath).parent.path,
+      followLinks: false,
+    );
+    if (parentType == io.FileSystemEntityType.notFound) {
+      return wasi_vfs.Preview1PathMutationResult.noEntry;
+    }
+    if (parentType != io.FileSystemEntityType.directory) {
+      return wasi_vfs.Preview1PathMutationResult.notDirectory;
     }
     return wasi_vfs.Preview1PathMutationResult.permissionDenied;
   }

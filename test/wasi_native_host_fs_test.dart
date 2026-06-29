@@ -25,6 +25,7 @@ const int _errnoIsdir = 31;
 const int _errnoNoent = 44;
 const int _errnoNotdir = 54;
 const int _errnoNotempty = 55;
+const int _errnoNotcapable = 76;
 const int _errnoPerm = 63;
 const int _filestatFiletypeOffset = 16;
 const int _filestatSizeOffset = 32;
@@ -698,6 +699,136 @@ void main() {
         3,
         newPathPtr,
         newPath.length,
+      ]),
+      _errnoNoent,
+    );
+  });
+
+  test('native host path_symlink creates real symbolic links', () async {
+    final temp = await Directory.systemTemp.createTemp('wasd_host_symlink_');
+    addTearDown(() => temp.delete(recursive: true));
+    File('${temp.path}/target.txt').writeAsStringSync('target');
+    File('${temp.path}/exists.txt').writeAsStringSync('exists');
+
+    final wasi = WASI(preopens: {'/host': temp.path});
+    final result = await WebAssembly.instantiate(
+      wasiStartModuleBytes().buffer,
+      wasi.imports,
+    );
+    final instance = result.instance;
+    final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+    final pathSymlink = preview1['path_symlink'] as FunctionImportExportValue;
+    final pathReadlink = preview1['path_readlink'] as FunctionImportExportValue;
+    final pathUnlinkFile =
+        preview1['path_unlink_file'] as FunctionImportExportValue;
+    final memory = (instance.exports['memory'] as MemoryImportExportValue).ref;
+    wasi.finalizeBindings(instance, memory: memory);
+
+    final bytes = Uint8List.view(memory.buffer);
+    final data = ByteData.view(memory.buffer);
+    const targetPtr = 1024;
+    const linkPathPtr = 1088;
+    const readlinkBufferPtr = 1152;
+    const readlinkUsedPtr = 1216;
+
+    var target = utf8.encode('target.txt');
+    var linkPath = utf8.encode('link.txt');
+    bytes.setAll(targetPtr, target);
+    bytes.setAll(linkPathPtr, linkPath);
+    expect(
+      pathSymlink.ref([
+        targetPtr,
+        target.length,
+        3,
+        linkPathPtr,
+        linkPath.length,
+      ]),
+      0,
+    );
+    final link = Link('${temp.path}/link.txt');
+    expect(
+      FileSystemEntity.typeSync(link.path, followLinks: false),
+      FileSystemEntityType.link,
+    );
+    expect(link.targetSync(), 'target.txt');
+
+    expect(
+      pathReadlink.ref([
+        3,
+        linkPathPtr,
+        linkPath.length,
+        readlinkBufferPtr,
+        32,
+        readlinkUsedPtr,
+      ]),
+      0,
+    );
+    final readlinkUsed = data.getUint32(readlinkUsedPtr, Endian.little);
+    expect(
+      utf8.decode(
+        bytes.sublist(readlinkBufferPtr, readlinkBufferPtr + readlinkUsed),
+      ),
+      'target.txt',
+    );
+
+    expect(pathUnlinkFile.ref([3, linkPathPtr, linkPath.length]), 0);
+    expect(
+      FileSystemEntity.typeSync(link.path, followLinks: false),
+      FileSystemEntityType.notFound,
+    );
+    expect(File('${temp.path}/target.txt').readAsStringSync(), 'target');
+
+    linkPath = utf8.encode('exists.txt');
+    bytes.setAll(linkPathPtr, linkPath);
+    expect(
+      pathSymlink.ref([
+        targetPtr,
+        target.length,
+        3,
+        linkPathPtr,
+        linkPath.length,
+      ]),
+      _errnoExist,
+    );
+    expect(
+      pathReadlink.ref([
+        3,
+        linkPathPtr,
+        linkPath.length,
+        readlinkBufferPtr,
+        32,
+        readlinkUsedPtr,
+      ]),
+      _errnoInval,
+    );
+
+    target = utf8.encode('/absolute.txt');
+    linkPath = utf8.encode('absolute-link.txt');
+    bytes.setAll(targetPtr, target);
+    bytes.setAll(linkPathPtr, linkPath);
+    expect(
+      pathSymlink.ref([
+        targetPtr,
+        target.length,
+        3,
+        linkPathPtr,
+        linkPath.length,
+      ]),
+      _errnoNotcapable,
+    );
+    expect(Link('${temp.path}/absolute-link.txt').existsSync(), isFalse);
+
+    target = utf8.encode('target.txt');
+    linkPath = utf8.encode('missing/link.txt');
+    bytes.setAll(targetPtr, target);
+    bytes.setAll(linkPathPtr, linkPath);
+    expect(
+      pathSymlink.ref([
+        targetPtr,
+        target.length,
+        3,
+        linkPathPtr,
+        linkPath.length,
       ]),
       _errnoNoent,
     );
