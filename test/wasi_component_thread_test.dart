@@ -246,18 +246,22 @@ void main() {
         ),
       );
 
-      final future = yieldOperation.threadYield().then(
-        (_) => yielded.add('done'),
-      );
+      final future = yieldOperation.threadYield().then((result) {
+        yielded.add('done');
+        return result;
+      });
 
       expect(yielded, isEmpty);
-      await future;
+      expect(await future, 0);
       expect(yielded, ['done']);
 
       final program = WASIComponentCanonicalThreadProgram(
         operations: [yieldOperation],
       );
-      expect(program.invokeAsync(0, const <Object?>[]), completes);
+      await expectLater(
+        program.invokeAsync(0, const <Object?>[]),
+        completion(0),
+      );
       expect(
         () => program.invoke(0, const <Object?>[]),
         throwsUnsupportedError,

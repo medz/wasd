@@ -172,12 +172,13 @@ void main() {
       );
       final yielded = <String>[];
 
-      final future = operation
-          .invokeAsync(const <Object?>[])
-          .then((_) => yielded.add('done'));
+      final future = operation.invokeAsync(const <Object?>[]).then((result) {
+        yielded.add('done');
+        return result;
+      });
 
       expect(yielded, isEmpty);
-      await future;
+      expect(await future, 0);
       expect(yielded, ['done']);
       expect(() => operation.invoke(const <Object?>[]), throwsUnsupportedError);
     });

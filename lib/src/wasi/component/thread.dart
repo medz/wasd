@@ -102,8 +102,11 @@ final class WASIComponentThreadHost {
   }
 
   /// Executes `thread.yield`.
-  Future<void> threadYield() {
-    return Future<void>.delayed(Duration.zero);
+  ///
+  /// Returns the Canonical ABI event code for a normal yield completion.
+  Future<int> threadYield() async {
+    await Future<void>.delayed(Duration.zero);
+    return 0;
   }
 
   /// Binds a decoded canonical thread definition.
@@ -193,8 +196,7 @@ final class WASIComponentCanonicalThreadProgram {
     switch (operation.kind) {
       case WasmComponentCanonicalKind.threadYield:
         _expectArity(canonicalIndex, args, 0);
-        await operation.threadYield();
-        return null;
+        return await operation.threadYield();
       default:
         return invoke(canonicalIndex, args);
     }
@@ -239,7 +241,7 @@ final class WASIComponentCanonicalThreadOperation {
   }
 
   /// Executes `thread.yield`.
-  Future<void> threadYield() {
+  Future<int> threadYield() {
     _requireKind(WasmComponentCanonicalKind.threadYield);
     return _host.threadYield();
   }
