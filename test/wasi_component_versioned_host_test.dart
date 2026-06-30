@@ -12,6 +12,7 @@ import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasi/component/wit_adapter.dart';
 import 'package:wasd/src/wasi/component/wit_document.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
+import 'package:wasd/src/wasi/preview2/io.dart';
 import 'package:wasd/src/wasi/preview2/poll.dart';
 import 'package:wasd/src/wasi/preview3/cli.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
@@ -492,6 +493,163 @@ world clocks-test {
         [0],
       );
     });
+
+    test(
+      'Preview2 expands and binds standard WASI io streams imports',
+      () async {
+        const source = '''
+package wasi-testsuite:test;
+
+world io-test {
+  import wasi:io/error@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+        final document = WASIComponentWitDocument.parse(source);
+        final preview2 = WASIPreview2ComponentHost();
+        final input = preview2.streamsHost.insertInputStream(
+          WASIPreview2InputStream(bytes: const <int>[1, 2, 3, 4], closed: true),
+        );
+        final output = preview2.streamsHost.insertOutputStream();
+        final plan = preview2.prepareWitWorld(document, worldName: 'io-test');
+
+        expect(plan.canIngest, isTrue);
+        expect(plan.canBindAdapters, isTrue);
+        expect(plan.bindingErrors, isEmpty);
+        expect(plan.functions.map((function) => function.qualifiedName), [
+          'wasi:io/error@0.2.0.error.to-debug-string',
+          'wasi:io/streams@0.2.0.input-stream.read',
+          'wasi:io/streams@0.2.0.input-stream.blocking-read',
+          'wasi:io/streams@0.2.0.input-stream.skip',
+          'wasi:io/streams@0.2.0.input-stream.blocking-skip',
+          'wasi:io/streams@0.2.0.input-stream.subscribe',
+          'wasi:io/streams@0.2.0.output-stream.check-write',
+          'wasi:io/streams@0.2.0.output-stream.write',
+          'wasi:io/streams@0.2.0.output-stream.blocking-write-and-flush',
+          'wasi:io/streams@0.2.0.output-stream.flush',
+          'wasi:io/streams@0.2.0.output-stream.blocking-flush',
+          'wasi:io/streams@0.2.0.output-stream.subscribe',
+          'wasi:io/streams@0.2.0.output-stream.write-zeroes',
+          'wasi:io/streams@0.2.0.output-stream.blocking-write-zeroes-and-flush',
+          'wasi:io/streams@0.2.0.output-stream.splice',
+          'wasi:io/streams@0.2.0.output-stream.blocking-splice',
+          'wasi:io/poll@0.2.0.pollable.ready',
+          'wasi:io/poll@0.2.0.pollable.block',
+          'wasi:io/poll@0.2.0.poll',
+        ]);
+
+        final program = preview2.bindWitWorld(document, worldName: 'io-test');
+        final read =
+            program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+                  input,
+                  BigInt.from(2),
+                ])
+                as WasmComponentValueData;
+        final skipped =
+            program.invokeImport('wasi:io/streams@0.2.0.input-stream.skip', [
+                  input,
+                  BigInt.one,
+                ])
+                as WasmComponentValueData;
+        final pollable =
+            program.invokeImport(
+                  'wasi:io/streams@0.2.0.input-stream.subscribe',
+                  [input],
+                )
+                as int;
+        final permit =
+            program.invokeImport(
+                  'wasi:io/streams@0.2.0.output-stream.check-write',
+                  [output],
+                )
+                as WasmComponentValueData;
+        final write = program.invokeImport(
+          'wasi:io/streams@0.2.0.output-stream.write',
+          [
+            output,
+            _u8ListValue([9, 8]),
+          ],
+        );
+        final zeroes = program.invokeImport(
+          'wasi:io/streams@0.2.0.output-stream.write-zeroes',
+          [output, BigInt.from(2)],
+        );
+        final splice =
+            program.invokeImport('wasi:io/streams@0.2.0.output-stream.splice', [
+                  output,
+                  input,
+                  BigInt.from(8),
+                ])
+                as WasmComponentValueData;
+        final closed =
+            program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+                  input,
+                  BigInt.one,
+                ])
+                as WasmComponentValueData;
+
+        expect(_u8List(_resultOk(read)), [1, 2]);
+        expect(_u64Data(_resultOk(skipped)), BigInt.one);
+        expect(
+          program.invokeImport('wasi:io/poll@0.2.0.pollable.ready', [pollable]),
+          isTrue,
+        );
+        expect(_u64Data(_resultOk(permit)), greaterThan(BigInt.zero));
+        expect((write as WasmComponentValueData).isOk, isTrue);
+        expect((zeroes as WasmComponentValueData).isOk, isTrue);
+        expect(_u64Data(_resultOk(splice)), BigInt.one);
+        expect(preview2.streamsHost.outputStream(output).bytes, [
+          9,
+          8,
+          0,
+          0,
+          4,
+        ]);
+        expect(_resultErrorLabel(closed), 'closed');
+        expect(
+          preview2.standardImports,
+          contains('wasi:io/streams@0.2.0.output-stream.splice'),
+        );
+
+        final failedInput = preview2.streamsHost.insertInputStream(
+          WASIPreview2InputStream()..fail('read failed'),
+        );
+        final failed =
+            program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+                  failedInput,
+                  BigInt.one,
+                ])
+                as WasmComponentValueData;
+        final errorHandle = _streamErrorHandle(failed);
+
+        expect(
+          program.invokeImport('wasi:io/error@0.2.0.error.to-debug-string', [
+            errorHandle,
+          ]),
+          'read failed',
+        );
+
+        final pending = WASIPreview2InputStream();
+        final pendingHandle = preview2.streamsHost.insertInputStream(pending);
+        var completed = false;
+        final blockingRead = program
+            .invokeImportAsync(
+              'wasi:io/streams@0.2.0.input-stream.blocking-read',
+              [pendingHandle, BigInt.one],
+            )
+            .then((value) {
+              completed = true;
+              return value as WasmComponentValueData;
+            });
+
+        await Future<void>.delayed(Duration.zero);
+        expect(completed, isFalse);
+
+        pending.append(const <int>[42]);
+        expect(_u8List(_resultOk(await blockingRead)), [42]);
+        expect(completed, isTrue);
+      },
+    );
 
     test('Preview3 expands and binds standard WASI random imports', () {
       const source = '''
@@ -2634,6 +2792,21 @@ WasmComponentValueData _resourceHandleList(List<int> handles) {
   );
 }
 
+WasmComponentValueData _u8ListValue(List<int> bytes) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.list,
+    rawBytes: Uint8List(0),
+    items: [
+      for (final byte in bytes)
+        WasmComponentValueData(
+          kind: WasmComponentValueDataKind.integer,
+          rawBytes: Uint8List(0),
+          integer: byte,
+        ),
+    ],
+  );
+}
+
 int _datetimeNanoseconds(WasmComponentValueData value) {
   if (value.kind != WasmComponentValueDataKind.record ||
       value.items.length != 2 ||
@@ -2753,6 +2926,20 @@ String _resultErrorLabel(WasmComponentValueData value) {
     throw StateError('expected error result payload');
   }
   return _variantLabel(associated);
+}
+
+int _streamErrorHandle(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.result ||
+      (value.isOk ?? value.label == 'ok' || value.index == 0)) {
+    throw StateError('expected error result, got ${value.kind.name}');
+  }
+  final associated = value.associatedValue;
+  if (associated == null ||
+      associated.kind != WasmComponentValueDataKind.variant ||
+      associated.associatedValue == null) {
+    throw StateError('expected stream-error payload');
+  }
+  return _resourceHandle(associated.associatedValue!);
 }
 
 String _directoryEntryName(WasmComponentValueData value) {

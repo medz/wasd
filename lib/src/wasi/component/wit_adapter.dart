@@ -1163,9 +1163,8 @@ _parseWitAdapterUsedValueType(
   if (used == null) {
     return (type: null, error: null);
   }
-  final resolved = typeContext.resolveTarget?.call(used.target.text);
-  final usedInterface = resolved?.document.interfaceNamed(resolved.memberName);
-  if (resolved == null || usedInterface == null) {
+  final resolved = _resolveWitAdapterUsedInterface(typeContext, used.target);
+  if (resolved == null) {
     return (
       type: null,
       error:
@@ -1175,7 +1174,7 @@ _parseWitAdapterUsedValueType(
   }
   final usedContext = typeContext.withInterface(
     resolved.document,
-    usedInterface,
+    resolved.interface,
   );
   final visiting = visitingTypes ?? <String>{};
   final typeKey = '${usedContext.visitPrefix}:use:${used.name}';
@@ -1221,9 +1220,8 @@ _parseWitAdapterUsedResourceValueType(
   if (used == null) {
     return (type: null, error: null);
   }
-  final resolved = typeContext.resolveTarget?.call(used.target.text);
-  final usedInterface = resolved?.document.interfaceNamed(resolved.memberName);
-  if (resolved == null || usedInterface == null) {
+  final resolved = _resolveWitAdapterUsedInterface(typeContext, used.target);
+  if (resolved == null) {
     return (
       type: null,
       error:
@@ -1231,7 +1229,7 @@ _parseWitAdapterUsedResourceValueType(
           '${used.name}',
     );
   }
-  if (usedInterface.resourceNamed(used.name) == null) {
+  if (resolved.interface.resourceNamed(used.name) == null) {
     return (
       type: null,
       error: 'unknown WIT adapter $context resource type $resourceName',
@@ -1245,6 +1243,27 @@ _parseWitAdapterUsedResourceValueType(
     ),
     error: null,
   );
+}
+
+({WASIComponentWitDocument document, WASIComponentWitInterface interface})?
+_resolveWitAdapterUsedInterface(
+  _WitAdapterTypeContext typeContext,
+  WASIComponentWitTarget target,
+) {
+  if (target.isLocal) {
+    final interface = typeContext.document.interfaceNamed(target.text);
+    return interface == null
+        ? null
+        : (document: typeContext.document, interface: interface);
+  }
+  final resolved = typeContext.resolveTarget?.call(target.text);
+  if (resolved == null) {
+    return null;
+  }
+  final interface = resolved.document.interfaceNamed(resolved.memberName);
+  return interface == null
+      ? null
+      : (document: resolved.document, interface: interface);
 }
 
 ({WASIComponentWitAdapterValueType? type, String? error})

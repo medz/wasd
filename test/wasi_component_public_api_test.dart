@@ -155,6 +155,50 @@ world clocks-test {
       );
     });
 
+    test('binds standard Preview2 io streams imports from public API', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world io-test {
+  include wasi:io/imports@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview2ComponentHost();
+      final input = host.streamsHost.insertInputStream(
+        WASIPreview2InputStream(bytes: const <int>[5, 6], closed: true),
+      );
+      final output = host.streamsHost.insertOutputStream();
+      final program = host.bindWitWorld(document, worldName: 'io-test');
+      final read =
+          program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+                input,
+                BigInt.from(2),
+              ])
+              as WasmComponentValueData;
+
+      program.invokeImport('wasi:io/streams@0.2.0.output-stream.check-write', [
+        output,
+      ]);
+      final write = program.invokeImport(
+        'wasi:io/streams@0.2.0.output-stream.write',
+        [
+          output,
+          _u8ListValue([7, 8]),
+        ],
+      );
+
+      expect(_u8List(_resultOk(read)), [5, 6]);
+      _expectUnitOk(write as WasmComponentValueData);
+      expect(host.streamsHost.outputStream(output).bytes, [7, 8]);
+      expect(host.streamsHost.pollHost, same(host.pollHost));
+      expect(host.streamsHost.errorHost, same(host.errorHost));
+      expect(
+        host.standardImports,
+        contains('wasi:io/streams@0.2.0.input-stream.read'),
+      );
+    });
+
     test('binds standard Preview3 clocks imports from public API', () {
       const source = '''
 package wasi-testsuite:test;
@@ -748,6 +792,34 @@ int _resultHandle(WasmComponentValueData value) {
     return integer.toInt();
   }
   throw StateError('expected resource handle');
+}
+
+List<int> _u8List(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.list) {
+    throw StateError('expected list<u8>');
+  }
+  return [
+    for (final item in value.items)
+      if (item.kind == WasmComponentValueDataKind.integer)
+        item.integer as int
+      else
+        throw StateError('expected u8 item'),
+  ];
+}
+
+WasmComponentValueData _u8ListValue(List<int> bytes) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.list,
+    rawBytes: Uint8List(0),
+    items: [
+      for (final byte in bytes)
+        WasmComponentValueData(
+          kind: WasmComponentValueDataKind.integer,
+          rawBytes: Uint8List(0),
+          integer: byte,
+        ),
+    ],
+  );
 }
 
 void _expectUnitOk(WasmComponentValueData value) {

@@ -22,6 +22,7 @@ export 'component/wit_adapter.dart';
 export 'component/wit_document.dart';
 export 'preview2/clocks.dart';
 export 'preview2/component_host.dart';
+export 'preview2/io.dart';
 export 'preview2/poll.dart';
 export 'preview2/random.dart';
 export 'preview3/cli.dart';

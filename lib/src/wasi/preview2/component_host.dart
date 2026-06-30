@@ -8,6 +8,7 @@ import '../component/wit_document.dart';
 import '../version.dart';
 import '../../wasm/backend/native/interpreter/component.dart';
 import 'clocks.dart';
+import 'io.dart';
 import 'poll.dart';
 import 'random.dart';
 
@@ -20,32 +21,62 @@ final class WASIPreview2ComponentHost {
   WASIPreview2ComponentHost({
     WASIComponentHost? componentHost,
     WASIPreview2ClocksHost? clocksHost,
+    WASIPreview2IoErrorHost? errorHost,
     WASIPreview2PollHost? pollHost,
     WASIPreview2RandomHost? randomHost,
+    WASIPreview2StreamsHost? streamsHost,
   }) : assert(
          pollHost == null ||
              clocksHost == null ||
              identical(pollHost, clocksHost.pollHost),
          'clocksHost and pollHost must share the same Preview2 poll host.',
        ),
+       assert(
+         pollHost == null ||
+             streamsHost == null ||
+             identical(pollHost, streamsHost.pollHost),
+         'streamsHost and pollHost must share the same Preview2 poll host.',
+       ),
+       assert(
+         errorHost == null ||
+             streamsHost == null ||
+             identical(errorHost, streamsHost.errorHost),
+         'streamsHost and errorHost must share the same Preview2 error host.',
+       ),
        versionedHost = WASIComponentVersionedHost(
          version: WASIVersion.preview2,
          componentHost: componentHost,
        ),
        _clocksHostOverride = clocksHost,
+       _errorHostOverride = errorHost,
        _pollHostOverride = pollHost,
-       _randomHost = randomHost ?? WASIPreview2RandomHost();
+       _randomHost = randomHost ?? WASIPreview2RandomHost(),
+       _streamsHostOverride = streamsHost;
 
   /// Underlying versioned component-host facade.
   final WASIComponentVersionedHost versionedHost;
 
   final WASIPreview2ClocksHost? _clocksHostOverride;
+  final WASIPreview2IoErrorHost? _errorHostOverride;
   final WASIPreview2PollHost? _pollHostOverride;
   final WASIPreview2RandomHost _randomHost;
+  final WASIPreview2StreamsHost? _streamsHostOverride;
   late final WASIPreview2PollHost _pollHost =
       _clocksHostOverride?.pollHost ??
+      _streamsHostOverride?.pollHost ??
       _pollHostOverride ??
       WASIPreview2PollHost(table: componentHost.table);
+  late final WASIPreview2IoErrorHost _errorHost =
+      _streamsHostOverride?.errorHost ??
+      _errorHostOverride ??
+      WASIPreview2IoErrorHost(table: componentHost.table);
+  late final WASIPreview2StreamsHost _streamsHost =
+      _streamsHostOverride ??
+      WASIPreview2StreamsHost(
+        table: componentHost.table,
+        pollHost: _pollHost,
+        errorHost: _errorHost,
+      );
   late final WASIPreview2ClocksHost _clocksHost =
       _clocksHostOverride ?? WASIPreview2ClocksHost(pollHost: _pollHost);
 
@@ -61,15 +92,23 @@ final class WASIPreview2ComponentHost {
   /// Clocks host state for standard `wasi:clocks` imports.
   WASIPreview2ClocksHost get clocksHost => _clocksHost;
 
+  /// Error host state for standard `wasi:io/error` imports.
+  WASIPreview2IoErrorHost get errorHost => _errorHost;
+
   /// Poll host state for standard `wasi:io/poll` imports.
   WASIPreview2PollHost get pollHost => _pollHost;
+
+  /// Streams host state for standard `wasi:io/streams` imports.
+  WASIPreview2StreamsHost get streamsHost => _streamsHost;
 
   /// Standard Preview2 WIT import callbacks implemented by this host.
   late final Map<String, WASIComponentWitAdapterCallback> standardImports =
       Map<String, WASIComponentWitAdapterCallback>.unmodifiable({
         ..._randomHost.imports,
+        ..._errorHost.imports,
         ..._clocksHost.imports,
         ..._pollHost.imports,
+        ..._streamsHost.imports,
       });
 
   /// Prepares [component] for Preview2 component-host binding.
