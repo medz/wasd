@@ -20,6 +20,7 @@ export 'component/versioned_host.dart';
 export 'component/waitable_set.dart';
 export 'component/wit_adapter.dart';
 export 'component/wit_document.dart';
+export 'preview2/cli.dart';
 export 'preview2/clocks.dart';
 export 'preview2/component_host.dart';
 export 'preview2/io.dart';

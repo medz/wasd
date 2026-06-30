@@ -11,6 +11,7 @@ import 'package:wasd/src/wasi/component/versioned_host.dart';
 import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasi/component/wit_adapter.dart';
 import 'package:wasd/src/wasi/component/wit_document.dart';
+import 'package:wasd/src/wasi/preview2/cli.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
 import 'package:wasd/src/wasi/preview2/io.dart';
 import 'package:wasd/src/wasi/preview2/poll.dart';
@@ -650,6 +651,155 @@ world io-test {
         expect(completed, isTrue);
       },
     );
+
+    test('Preview2 expands and binds standard WASI CLI interfaces', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world cli-test {
+  import wasi:cli/environment@0.2.0;
+  import wasi:cli/exit@0.2.0;
+  import wasi:cli/stdin@0.2.0;
+  import wasi:cli/stdout@0.2.0;
+  import wasi:cli/stderr@0.2.0;
+  import wasi:cli/terminal-stdin@0.2.0;
+  import wasi:cli/terminal-stdout@0.2.0;
+  import wasi:cli/terminal-stderr@0.2.0;
+  import wasi:io/streams@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final cli = WASIPreview2CliHost(
+        args: const <String>['cli-env.wasm', 'a', 'b'],
+        env: const <String, String>{'foo': 'bar', 'baz': '42'},
+        initialCwd: '/workspace',
+        stdinData: const <int>[120, 121],
+      );
+      final preview2 = WASIPreview2ComponentHost(cliHost: cli);
+      final plan = preview2.prepareWitWorld(document, worldName: 'cli-test');
+
+      expect(preview2.streamsHost, same(cli.streamsHost));
+      expect(plan.canIngest, isTrue);
+      expect(plan.canBindAdapters, isTrue);
+      expect(plan.bindingErrors, isEmpty);
+      expect(
+        plan.functions.map((function) => function.qualifiedName),
+        containsAll(<String>[
+          'wasi:cli/environment@0.2.0.get-environment',
+          'wasi:cli/environment@0.2.0.get-arguments',
+          'wasi:cli/environment@0.2.0.initial-cwd',
+          'wasi:cli/exit@0.2.0.exit',
+          'wasi:cli/stdin@0.2.0.get-stdin',
+          'wasi:cli/stdout@0.2.0.get-stdout',
+          'wasi:cli/stderr@0.2.0.get-stderr',
+          'wasi:cli/terminal-stdin@0.2.0.get-terminal-stdin',
+          'wasi:cli/terminal-stdout@0.2.0.get-terminal-stdout',
+          'wasi:cli/terminal-stderr@0.2.0.get-terminal-stderr',
+          'wasi:io/streams@0.2.0.input-stream.read',
+          'wasi:io/streams@0.2.0.output-stream.write',
+        ]),
+      );
+
+      final program = preview2.bindWitWorld(document, worldName: 'cli-test');
+      final environment =
+          program.invokeImport(
+                'wasi:cli/environment@0.2.0.get-environment',
+                const [],
+              )
+              as WasmComponentValueData;
+      final arguments =
+          program.invokeImport(
+                'wasi:cli/environment@0.2.0.get-arguments',
+                const [],
+              )
+              as WasmComponentValueData;
+      final cwd =
+          program.invokeImport(
+                'wasi:cli/environment@0.2.0.initial-cwd',
+                const [],
+              )
+              as WasmComponentValueData;
+      final terminal =
+          program.invokeImport(
+                'wasi:cli/terminal-stdout@0.2.0.get-terminal-stdout',
+                const [],
+              )
+              as WasmComponentValueData;
+
+      expect(_stringPairs(environment), contains(('foo', 'bar')));
+      expect(_stringPairs(environment), contains(('baz', '42')));
+      expect(_stringList(arguments), ['cli-env.wasm', 'a', 'b']);
+      expect(_optionString(cwd), '/workspace');
+      expect(terminal.kind, WasmComponentValueDataKind.option);
+      expect(terminal.isSome, isFalse);
+
+      final stdin =
+          program.invokeImport('wasi:cli/stdin@0.2.0.get-stdin', const [])
+              as int;
+      final read =
+          program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+                stdin,
+                BigInt.from(8),
+              ])
+              as WasmComponentValueData;
+      expect(_u8List(_resultOk(read)), [120, 121]);
+
+      final stdout =
+          program.invokeImport('wasi:cli/stdout@0.2.0.get-stdout', const [])
+              as int;
+      program.invokeImport('wasi:io/streams@0.2.0.output-stream.check-write', [
+        stdout,
+      ]);
+      final stdoutWrite = program.invokeImport(
+        'wasi:io/streams@0.2.0.output-stream.write',
+        [
+          stdout,
+          _u8ListValue([111, 107]),
+        ],
+      );
+      expect((stdoutWrite as WasmComponentValueData).isOk, isTrue);
+      expect(cli.stdoutBytes, [111, 107]);
+
+      final stderr =
+          program.invokeImport('wasi:cli/stderr@0.2.0.get-stderr', const [])
+              as int;
+      program.invokeImport('wasi:io/streams@0.2.0.output-stream.check-write', [
+        stderr,
+      ]);
+      final stderrWrite = program.invokeImport(
+        'wasi:io/streams@0.2.0.output-stream.write',
+        [
+          stderr,
+          _u8ListValue([33]),
+        ],
+      );
+      expect((stderrWrite as WasmComponentValueData).isOk, isTrue);
+      expect(cli.stderrBytes, [33]);
+
+      expect(
+        () =>
+            program.invokeImport('wasi:cli/exit@0.2.0.exit', [_unitOkValue()]),
+        throwsA(
+          isA<WASIPreview2Exit>()
+              .having((error) => error.statusCode, 'statusCode', 0)
+              .having((error) => error.isSuccess, 'isSuccess', isTrue),
+        ),
+      );
+      expect(
+        () => program.invokeImport('wasi:cli/exit@0.2.0.exit', [
+          _unitErrorValue(),
+        ]),
+        throwsA(
+          isA<WASIPreview2Exit>()
+              .having((error) => error.statusCode, 'statusCode', 1)
+              .having((error) => error.isSuccess, 'isSuccess', isFalse),
+        ),
+      );
+      expect(
+        preview2.standardImports,
+        contains('wasi:cli/stdin@0.2.0.get-stdin'),
+      );
+    });
 
     test('Preview3 expands and binds standard WASI random imports', () {
       const source = '''
@@ -2700,6 +2850,16 @@ WasmComponentValueData _unitOkCaseValue() {
     rawBytes: Uint8List(0),
     index: 0,
     label: 'ok',
+  );
+}
+
+WasmComponentValueData _unitErrorValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.result,
+    rawBytes: Uint8List(0),
+    index: 1,
+    label: 'error',
+    isOk: false,
   );
 }
 

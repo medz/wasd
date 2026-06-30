@@ -199,6 +199,63 @@ world io-test {
       );
     });
 
+    test('binds standard Preview2 CLI imports from public API', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world cli-test {
+  import wasi:cli/environment@0.2.0;
+  import wasi:cli/stdin@0.2.0;
+  import wasi:cli/stdout@0.2.0;
+  import wasi:io/streams@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview2ComponentHost(
+        args: const <String>['cli-env.wasm', 'a'],
+        env: const <String, String>{'foo': 'bar'},
+        stdinData: const <int>[65],
+      );
+      final program = host.bindWitWorld(document, worldName: 'cli-test');
+      final args =
+          program.invokeImport(
+                'wasi:cli/environment@0.2.0.get-arguments',
+                const [],
+              )
+              as WasmComponentValueData;
+      final stdin =
+          program.invokeImport('wasi:cli/stdin@0.2.0.get-stdin', const [])
+              as int;
+      final read =
+          program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+                stdin,
+                BigInt.one,
+              ])
+              as WasmComponentValueData;
+      final stdout =
+          program.invokeImport('wasi:cli/stdout@0.2.0.get-stdout', const [])
+              as int;
+
+      program.invokeImport('wasi:io/streams@0.2.0.output-stream.check-write', [
+        stdout,
+      ]);
+      final write = program.invokeImport(
+        'wasi:io/streams@0.2.0.output-stream.write',
+        [
+          stdout,
+          _u8ListValue([66]),
+        ],
+      );
+
+      expect(args.kind, WasmComponentValueDataKind.list);
+      expect(args.items.map((item) => item.string), ['cli-env.wasm', 'a']);
+      expect(_u8List(_resultOk(read)), [65]);
+      _expectUnitOk(write as WasmComponentValueData);
+      expect(host.cliHost.stdoutBytes, [66]);
+      expect(host.cliHost.streamsHost, same(host.streamsHost));
+      expect(host.standardImports, contains('wasi:cli/stdin@0.2.0.get-stdin'));
+    });
+
     test('binds standard Preview3 clocks imports from public API', () {
       const source = '''
 package wasi-testsuite:test;

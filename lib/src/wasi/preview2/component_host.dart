@@ -7,6 +7,7 @@ import '../component/wit_adapter.dart';
 import '../component/wit_document.dart';
 import '../version.dart';
 import '../../wasm/backend/native/interpreter/component.dart';
+import 'cli.dart';
 import 'clocks.dart';
 import 'io.dart';
 import 'poll.dart';
@@ -20,11 +21,16 @@ final class WASIPreview2ComponentHost {
   /// Creates a Preview2 component host over [componentHost] or a new host.
   WASIPreview2ComponentHost({
     WASIComponentHost? componentHost,
+    WASIPreview2CliHost? cliHost,
     WASIPreview2ClocksHost? clocksHost,
     WASIPreview2IoErrorHost? errorHost,
     WASIPreview2PollHost? pollHost,
     WASIPreview2RandomHost? randomHost,
     WASIPreview2StreamsHost? streamsHost,
+    List<String> args = const <String>[],
+    Map<String, String> env = const <String, String>{},
+    String? initialCwd,
+    List<int> stdinData = const <int>[],
   }) : assert(
          pollHost == null ||
              clocksHost == null ||
@@ -38,24 +44,64 @@ final class WASIPreview2ComponentHost {
          'streamsHost and pollHost must share the same Preview2 poll host.',
        ),
        assert(
+         clocksHost == null ||
+             streamsHost == null ||
+             identical(clocksHost.pollHost, streamsHost.pollHost),
+         'clocksHost and streamsHost must share the same Preview2 poll host.',
+       ),
+       assert(
          errorHost == null ||
              streamsHost == null ||
              identical(errorHost, streamsHost.errorHost),
          'streamsHost and errorHost must share the same Preview2 error host.',
        ),
+       assert(
+         streamsHost == null ||
+             cliHost == null ||
+             identical(streamsHost, cliHost.streamsHost),
+         'cliHost and streamsHost must share the same Preview2 streams host.',
+       ),
+       assert(
+         pollHost == null ||
+             cliHost == null ||
+             identical(pollHost, cliHost.streamsHost.pollHost),
+         'cliHost and pollHost must share the same Preview2 poll host.',
+       ),
+       assert(
+         errorHost == null ||
+             cliHost == null ||
+             identical(errorHost, cliHost.streamsHost.errorHost),
+         'cliHost and errorHost must share the same Preview2 error host.',
+       ),
+       assert(
+         clocksHost == null ||
+             cliHost == null ||
+             identical(clocksHost.pollHost, cliHost.streamsHost.pollHost),
+         'cliHost and clocksHost must share the same Preview2 poll host.',
+       ),
        versionedHost = WASIComponentVersionedHost(
          version: WASIVersion.preview2,
          componentHost: componentHost,
        ),
+       _cliHostOverride = cliHost,
+       _cliArgs = List<String>.unmodifiable(args),
+       _cliEnv = Map<String, String>.unmodifiable(env),
+       _cliInitialCwd = initialCwd,
+       _cliStdinData = List<int>.unmodifiable(stdinData),
        _clocksHostOverride = clocksHost,
        _errorHostOverride = errorHost,
        _pollHostOverride = pollHost,
        _randomHost = randomHost ?? WASIPreview2RandomHost(),
-       _streamsHostOverride = streamsHost;
+       _streamsHostOverride = streamsHost ?? cliHost?.streamsHost;
 
   /// Underlying versioned component-host facade.
   final WASIComponentVersionedHost versionedHost;
 
+  final WASIPreview2CliHost? _cliHostOverride;
+  final List<String> _cliArgs;
+  final Map<String, String> _cliEnv;
+  final String? _cliInitialCwd;
+  final List<int> _cliStdinData;
   final WASIPreview2ClocksHost? _clocksHostOverride;
   final WASIPreview2IoErrorHost? _errorHostOverride;
   final WASIPreview2PollHost? _pollHostOverride;
@@ -79,6 +125,15 @@ final class WASIPreview2ComponentHost {
       );
   late final WASIPreview2ClocksHost _clocksHost =
       _clocksHostOverride ?? WASIPreview2ClocksHost(pollHost: _pollHost);
+  late final WASIPreview2CliHost _cliHost =
+      _cliHostOverride ??
+      WASIPreview2CliHost(
+        streamsHost: _streamsHost,
+        args: _cliArgs,
+        env: _cliEnv,
+        initialCwd: _cliInitialCwd,
+        stdinData: _cliStdinData,
+      );
 
   /// Preview2 version profile.
   WASIComponentVersionProfile get profile => versionedHost.profile;
@@ -101,6 +156,9 @@ final class WASIPreview2ComponentHost {
   /// Streams host state for standard `wasi:io/streams` imports.
   WASIPreview2StreamsHost get streamsHost => _streamsHost;
 
+  /// CLI host state and stdio resources for standard `wasi:cli` imports.
+  WASIPreview2CliHost get cliHost => _cliHost;
+
   /// Standard Preview2 WIT import callbacks implemented by this host.
   late final Map<String, WASIComponentWitAdapterCallback> standardImports =
       Map<String, WASIComponentWitAdapterCallback>.unmodifiable({
@@ -109,6 +167,7 @@ final class WASIPreview2ComponentHost {
         ..._clocksHost.imports,
         ..._pollHost.imports,
         ..._streamsHost.imports,
+        ..._cliHost.imports,
       });
 
   /// Prepares [component] for Preview2 component-host binding.

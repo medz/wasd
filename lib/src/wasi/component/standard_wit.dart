@@ -27,6 +27,12 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
       memberName: parsed.memberName,
     );
   }
+  if (parsed.packageName == 'wasi:cli' && parsed.version == '0.2.0') {
+    return WASIComponentWitResolvedTarget(
+      document: _wasiCli020Document,
+      memberName: parsed.memberName,
+    );
+  }
   if (parsed.packageName == 'wasi:random' && parsed.version == '0.3.0') {
     return WASIComponentWitResolvedTarget(
       document: _wasiRandom030Document,
@@ -99,6 +105,12 @@ final WASIComponentWitDocument _wasiIo020Document =
     WASIComponentWitDocument.parse(
       _wasiIo020Source,
       sourceName: 'wasi:io@0.2.0',
+    );
+
+final WASIComponentWitDocument _wasiCli020Document =
+    WASIComponentWitDocument.parse(
+      _wasiCli020Source,
+      sourceName: 'wasi:cli@0.2.0',
     );
 
 final WASIComponentWitDocument _wasiClocks030Document =
@@ -231,6 +243,68 @@ interface streams {
 world imports {
   import streams;
   import poll;
+}
+''';
+
+const String _wasiCli020Source = '''
+package wasi:cli@0.2.0;
+
+interface environment {
+  get-environment: func() -> list<tuple<string, string>>;
+  get-arguments: func() -> list<string>;
+  initial-cwd: func() -> option<string>;
+}
+
+interface exit {
+  exit: func(status: result);
+}
+
+interface run {
+  run: func() -> result;
+}
+
+interface stdin {
+  use wasi:io/streams@0.2.0.{input-stream};
+
+  get-stdin: func() -> input-stream;
+}
+
+interface stdout {
+  use wasi:io/streams@0.2.0.{output-stream};
+
+  get-stdout: func() -> output-stream;
+}
+
+interface stderr {
+  use wasi:io/streams@0.2.0.{output-stream};
+
+  get-stderr: func() -> output-stream;
+}
+
+interface terminal-input {
+  resource terminal-input;
+}
+
+interface terminal-output {
+  resource terminal-output;
+}
+
+interface terminal-stdin {
+  use terminal-input.{terminal-input};
+
+  get-terminal-stdin: func() -> option<terminal-input>;
+}
+
+interface terminal-stdout {
+  use terminal-output.{terminal-output};
+
+  get-terminal-stdout: func() -> option<terminal-output>;
+}
+
+interface terminal-stderr {
+  use terminal-output.{terminal-output};
+
+  get-terminal-stderr: func() -> option<terminal-output>;
 }
 ''';
 
