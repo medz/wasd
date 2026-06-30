@@ -256,6 +256,95 @@ world cli-test {
       expect(host.standardImports, contains('wasi:cli/stdin@0.2.0.get-stdin'));
     });
 
+    test('binds Preview2 filesystem imports to real host files on Dart VM', () {
+      if (!hasDartIoRuntime) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      final temp = createHostTemp('wasd_p2_host_fs_');
+      if (temp == null) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      addTearDown(temp.delete);
+      temp.writeFile('note.txt', 'hello');
+
+      const source = '''
+package wasi-testsuite:test;
+
+world filesystem-test {
+  include wasi:filesystem/imports@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final filesystem = WASIPreview2NativeFilesystemHost(
+        preopens: {'/': temp.path},
+        canMutate: true,
+      );
+      final host = WASIPreview2ComponentHost(filesystemHost: filesystem);
+      final program = host.bindWitWorld(document, worldName: 'filesystem-test');
+      final directories =
+          program.invokeImport(
+                'wasi:filesystem/preopens@0.2.0.get-directories',
+                const [],
+              )
+              as WasmComponentValueData;
+      final root = _preopenHandle(directories, '/');
+      final opened =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'note.txt',
+                  _flagsValue(const <String>[]),
+                  _flagsValue(const <String>['read', 'write']),
+                ],
+              )
+              as WasmComponentValueData;
+      final file = _resultHandle(_resultOk(opened));
+      final read =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.read-via-stream',
+                [file, BigInt.one],
+              )
+              as WasmComponentValueData;
+      final input = _resultHandle(_resultOk(read));
+      final inputBytes =
+          program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+                input,
+                BigInt.from(8),
+              ])
+              as WasmComponentValueData;
+      final write =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.write-via-stream',
+                [file, BigInt.from(1)],
+              )
+              as WasmComponentValueData;
+      final output = _resultHandle(_resultOk(write));
+
+      program.invokeImport('wasi:io/streams@0.2.0.output-stream.check-write', [
+        output,
+      ]);
+      _expectUnitOk(
+        program.invokeImport('wasi:io/streams@0.2.0.output-stream.write', [
+              output,
+              _u8ListValue([88, 89]),
+            ])
+            as WasmComponentValueData,
+      );
+
+      expect(_u8List(_resultOk(inputBytes)), [101, 108, 108, 111]);
+      expect(temp.readFile('note.txt'), 'hXYlo');
+      expect(host.filesystemHost, same(filesystem));
+      expect(
+        host.standardImports,
+        contains('wasi:filesystem/types@0.2.0.descriptor.open-at'),
+      );
+    });
+
     test('binds standard Preview3 clocks imports from public API', () {
       const source = '''
 package wasi-testsuite:test;

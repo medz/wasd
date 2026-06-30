@@ -13,6 +13,7 @@ import 'package:wasd/src/wasi/component/wit_adapter.dart';
 import 'package:wasd/src/wasi/component/wit_document.dart';
 import 'package:wasd/src/wasi/preview2/cli.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
+import 'package:wasd/src/wasi/preview2/filesystem.dart';
 import 'package:wasd/src/wasi/preview2/io.dart';
 import 'package:wasd/src/wasi/preview2/poll.dart';
 import 'package:wasd/src/wasi/preview3/cli.dart';
@@ -798,6 +799,215 @@ world cli-test {
       expect(
         preview2.standardImports,
         contains('wasi:cli/stdin@0.2.0.get-stdin'),
+      );
+    });
+
+    test('Preview2 expands and binds standard WASI filesystem imports', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world filesystem-test {
+  include wasi:filesystem/imports@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+      final note = WASIPreview2FilesystemDirectoryEntry.regularFile(
+        'note.txt',
+        bytes: const <int>[104, 101, 108, 108, 111],
+        canMutate: true,
+      );
+      final blocked = WASIPreview2FilesystemDirectoryEntry.regularFile(
+        'blocked.txt',
+        canMutate: true,
+        writeBytes: (_, _) => const WASIPreview2FilesystemMutationResult.error(
+          WASIPreview2FilesystemMutationError.readOnly,
+        ),
+      );
+      final filesystem = WASIPreview2FilesystemHost(
+        preopens: {
+          '/': WASIPreview2FilesystemDirectory(
+            canMutate: true,
+            entries: [
+              note,
+              blocked,
+              WASIPreview2FilesystemDirectoryEntry.directory('etc'),
+            ],
+          ),
+        },
+      );
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2 = WASIPreview2ComponentHost(filesystemHost: filesystem);
+      final plan = preview2.prepareWitWorld(
+        document,
+        worldName: 'filesystem-test',
+      );
+
+      expect(filesystem.streamsHost, same(preview2.streamsHost));
+      expect(plan.canIngest, isTrue);
+      expect(plan.canBindAdapters, isTrue);
+      expect(plan.bindingErrors, isEmpty);
+      expect(
+        plan.functions.map((function) => function.qualifiedName),
+        containsAll(<String>[
+          'wasi:filesystem/preopens@0.2.0.get-directories',
+          'wasi:filesystem/types@0.2.0.descriptor.get-flags',
+          'wasi:filesystem/types@0.2.0.descriptor.get-type',
+          'wasi:filesystem/types@0.2.0.descriptor.stat',
+          'wasi:filesystem/types@0.2.0.descriptor.open-at',
+          'wasi:filesystem/types@0.2.0.descriptor.read-via-stream',
+          'wasi:filesystem/types@0.2.0.descriptor.write-via-stream',
+          'wasi:filesystem/types@0.2.0.descriptor.read',
+          'wasi:filesystem/types@0.2.0.descriptor.write',
+          'wasi:filesystem/types@0.2.0.descriptor.read-directory',
+          'wasi:filesystem/types@0.2.0.directory-entry-stream.read-directory-entry',
+          'wasi:filesystem/types@0.2.0.filesystem-error-code',
+          'wasi:io/streams@0.2.0.input-stream.read',
+          'wasi:io/streams@0.2.0.output-stream.write',
+        ]),
+      );
+
+      final program = preview2.bindWitWorld(
+        document,
+        worldName: 'filesystem-test',
+      );
+      final directories =
+          program.invokeImport(
+                'wasi:filesystem/preopens@0.2.0.get-directories',
+                const [],
+              )
+              as WasmComponentValueData;
+      final root = _filesystemPreopens(directories).single.$1;
+      final directoryRead =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.read-directory',
+                [root],
+              )
+              as WasmComponentValueData;
+      final directoryStream = _resourceHandle(_resultOk(directoryRead));
+      final firstEntry =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.directory-entry-stream.read-directory-entry',
+                [directoryStream],
+              )
+              as WasmComponentValueData;
+      final opened =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'note.txt',
+                  _flagsValue(const <String>[]),
+                  _flagsValue(const <String>['read', 'write']),
+                ],
+              )
+              as WasmComponentValueData;
+      final file = _resourceHandle(_resultOk(opened));
+      final fileType =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.get-type',
+                [file],
+              )
+              as WasmComponentValueData;
+      final fileStat =
+          program.invokeImport('wasi:filesystem/types@0.2.0.descriptor.stat', [
+                file,
+              ])
+              as WasmComponentValueData;
+      final directRead =
+          program.invokeImport('wasi:filesystem/types@0.2.0.descriptor.read', [
+                file,
+                BigInt.from(3),
+                BigInt.from(1),
+              ])
+              as WasmComponentValueData;
+      final streamRead =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.read-via-stream',
+                [file, BigInt.from(2)],
+              )
+              as WasmComponentValueData;
+      final input = _resourceHandle(_resultOk(streamRead));
+      final inputBytes =
+          program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+                input,
+                BigInt.from(8),
+              ])
+              as WasmComponentValueData;
+      final streamWrite =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.write-via-stream',
+                [file, BigInt.one],
+              )
+              as WasmComponentValueData;
+      final output = _resourceHandle(_resultOk(streamWrite));
+
+      program.invokeImport('wasi:io/streams@0.2.0.output-stream.check-write', [
+        output,
+      ]);
+      final outputWrite =
+          program.invokeImport('wasi:io/streams@0.2.0.output-stream.write', [
+                output,
+                _u8ListValue([88, 89]),
+              ])
+              as WasmComponentValueData;
+      final directWrite =
+          program.invokeImport('wasi:filesystem/types@0.2.0.descriptor.write', [
+                file,
+                _u8ListValue([33]),
+                BigInt.from(5),
+              ])
+              as WasmComponentValueData;
+      final blockedOpened =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'blocked.txt',
+                  _flagsValue(const <String>[]),
+                  _flagsValue(const <String>['write']),
+                ],
+              )
+              as WasmComponentValueData;
+      final blockedFile = _resourceHandle(_resultOk(blockedOpened));
+      final blockedWriteStream =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.write-via-stream',
+                [blockedFile, BigInt.zero],
+              )
+              as WasmComponentValueData;
+      final blockedOutput = _resourceHandle(_resultOk(blockedWriteStream));
+
+      program.invokeImport('wasi:io/streams@0.2.0.output-stream.check-write', [
+        blockedOutput,
+      ]);
+      final blockedWrite =
+          program.invokeImport('wasi:io/streams@0.2.0.output-stream.write', [
+                blockedOutput,
+                _u8ListValue([1]),
+              ])
+              as WasmComponentValueData;
+      final filesystemError =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.filesystem-error-code',
+                [_streamErrorHandle(blockedWrite)],
+              )
+              as WasmComponentValueData;
+
+      expect(_optionDirectoryEntryName(_resultOk(firstEntry)), 'note.txt');
+      expect(_caseLabel(_resultOk(fileType)), 'regular-file');
+      expect(_descriptorStatType(_resultOk(fileStat)), 'regular-file');
+      expect(_readBytes(directRead), [101, 108, 108]);
+      expect(_readReachedEnd(directRead), isFalse);
+      expect(_u8List(_resultOk(inputBytes)), [108, 108, 111]);
+      expect(outputWrite.isOk, isTrue);
+      expect(_u64Data(_resultOk(directWrite)), BigInt.one);
+      expect(note.bytes, [104, 88, 89, 108, 111, 33]);
+      expect(_optionCaseLabel(filesystemError), 'read-only');
+      expect(
+        preview2.standardImports,
+        contains('wasi:filesystem/types@0.2.0.descriptor.open-at'),
       );
     });
 
@@ -3046,12 +3256,20 @@ String _variantLabel(WasmComponentValueData value) {
   return value.label ?? 'case-${value.index}';
 }
 
+String _caseLabel(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.variant &&
+      value.kind != WasmComponentValueDataKind.enumeration) {
+    throw StateError('expected case value, got ${value.kind.name}');
+  }
+  return value.label ?? 'case-${value.index}';
+}
+
 String _descriptorStatType(WasmComponentValueData value) {
   if (value.kind != WasmComponentValueDataKind.record ||
       value.items.length != 6) {
     throw StateError('expected descriptor-stat, got ${value.kind.name}');
   }
-  return _variantLabel(value.items[0]);
+  return _caseLabel(value.items[0]);
 }
 
 BigInt _metadataHashLower(WasmComponentValueData value) {
@@ -3111,6 +3329,36 @@ String _directoryEntryName(WasmComponentValueData value) {
   return value.items[1].string!;
 }
 
+String? _optionDirectoryEntryName(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.option) {
+    throw StateError(
+      'expected option<directory-entry>, got ${value.kind.name}',
+    );
+  }
+  if (!(value.isSome ?? false)) {
+    return null;
+  }
+  final associated = value.associatedValue;
+  if (associated == null) {
+    throw StateError('expected directory-entry payload');
+  }
+  return _directoryEntryName(associated);
+}
+
+String? _optionCaseLabel(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.option) {
+    throw StateError('expected option case, got ${value.kind.name}');
+  }
+  if (!(value.isSome ?? false)) {
+    return null;
+  }
+  final associated = value.associatedValue;
+  if (associated == null) {
+    throw StateError('expected option case payload');
+  }
+  return _caseLabel(associated);
+}
+
 WasmComponentValueData _flagsValue(List<String> labels) {
   return WasmComponentValueData(
     kind: WasmComponentValueDataKind.flags,
@@ -3153,6 +3401,29 @@ BigInt _u64Data(WasmComponentValueData value) {
     return BigInt.from(integer);
   }
   throw StateError('expected integer payload, got $integer');
+}
+
+WasmComponentValueData _readTuple(WasmComponentValueData value) {
+  return _resultOk(value);
+}
+
+List<int> _readBytes(WasmComponentValueData value) {
+  final tuple = _readTuple(value);
+  if (tuple.kind != WasmComponentValueDataKind.tuple ||
+      tuple.items.length != 2) {
+    throw StateError('expected read tuple, got ${tuple.kind.name}');
+  }
+  return _u8List(tuple.items[0]);
+}
+
+bool _readReachedEnd(WasmComponentValueData value) {
+  final tuple = _readTuple(value);
+  if (tuple.kind != WasmComponentValueDataKind.tuple ||
+      tuple.items.length != 2 ||
+      tuple.items[1].kind != WasmComponentValueDataKind.boolean) {
+    throw StateError('expected read tuple eof flag, got ${tuple.kind.name}');
+  }
+  return tuple.items[1].boolean!;
 }
 
 int _instantNanoseconds(WasmComponentValueData value) {

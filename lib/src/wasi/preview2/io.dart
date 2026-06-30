@@ -39,6 +39,11 @@ final class WASIPreview2IoErrorHost {
     return table.insert<WASIPreview2IoError>(_errorType, error);
   }
 
+  /// Returns the debug string for an owned error [handle].
+  String debugString(int handle) {
+    return _debugString(handle);
+  }
+
   String _debugString(int handle) {
     return table.borrow<WASIPreview2IoError, String>(
       _errorType,
@@ -136,10 +141,14 @@ final class WASIPreview2InputStream {
 /// Host-owned WASI 0.2 `output-stream`.
 final class WASIPreview2OutputStream {
   /// Creates an output byte stream.
-  WASIPreview2OutputStream({int maxWriteSize = 65536})
-    : _maxWriteSize = _validMaxWriteSize(maxWriteSize);
+  WASIPreview2OutputStream({
+    int maxWriteSize = 65536,
+    String? Function(Uint8List bytes)? onWrite,
+  }) : _maxWriteSize = _validMaxWriteSize(maxWriteSize),
+       _onWrite = onWrite;
 
   final int _maxWriteSize;
+  final String? Function(Uint8List bytes)? _onWrite;
   final List<int> _bytes = <int>[];
   bool _closed = false;
   String? _failed;
@@ -179,6 +188,10 @@ final class WASIPreview2OutputStream {
       throw StateError(
         'WASI output-stream write exceeded the last check-write permit.',
       );
+    }
+    final writeError = _onWrite?.call(Uint8List.fromList(bytes));
+    if (writeError != null) {
+      return _StreamOutcome<void>.failed(writeError);
     }
     _bytes.addAll(bytes);
     _writePermit -= bytes.length;
