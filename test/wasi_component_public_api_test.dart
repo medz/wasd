@@ -256,6 +256,70 @@ world cli-test {
       expect(host.standardImports, contains('wasi:cli/stdin@0.2.0.get-stdin'));
     });
 
+    test('binds standard Preview2 sockets imports from public API', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world sockets-test {
+  include wasi:sockets/imports@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview2ComponentHost();
+      final program = host.bindWitWorld(document, worldName: 'sockets-test');
+      final network =
+          program.invokeImport(
+                'wasi:sockets/instance-network@0.2.0.instance-network',
+                const [],
+              )
+              as int;
+      final tcpSocket =
+          program.invokeImport(
+                'wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket',
+                [_enumValue('ipv4')],
+              )
+              as WasmComponentValueData;
+      final lookupStream =
+          program.invokeImport(
+                'wasi:sockets/ip-name-lookup@0.2.0.resolve-addresses',
+                [network, '127.0.0.1'],
+              )
+              as WasmComponentValueData;
+      final stream = _resultHandle(_resultOk(lookupStream));
+      final firstAddress =
+          program.invokeImport(
+                'wasi:sockets/ip-name-lookup@0.2.0.resolve-address-stream.resolve-next-address',
+                [stream],
+              )
+              as WasmComponentValueData;
+      final pollable =
+          program.invokeImport(
+                'wasi:sockets/ip-name-lookup@0.2.0.resolve-address-stream.subscribe',
+                [stream],
+              )
+              as int;
+      final localAddress =
+          program.invokeImport(
+                'wasi:sockets/tcp@0.2.0.tcp-socket.local-address',
+                [_resultHandle(_resultOk(tcpSocket))],
+              )
+              as WasmComponentValueData;
+
+      expect(_resultHandle(_resultOk(tcpSocket)), isNonZero);
+      expect(_optionIpAddressLabel(_resultOk(firstAddress)), 'ipv4');
+      expect(_resultErrorLabel(localAddress), 'invalid-state');
+      expect(
+        program.invokeImport('wasi:io/poll@0.2.0.pollable.ready', [pollable]),
+        isTrue,
+      );
+      expect(host.socketsHost.pollHost, same(host.pollHost));
+      expect(
+        host.standardImports,
+        contains('wasi:sockets/ip-name-lookup@0.2.0.resolve-addresses'),
+      );
+    });
+
     test('binds Preview2 filesystem imports to real host files on Dart VM', () {
       if (!hasDartIoRuntime) {
         markTestSkipped('requires dart:io host filesystem access');
@@ -940,6 +1004,37 @@ int _resultHandle(WasmComponentValueData value) {
   throw StateError('expected resource handle');
 }
 
+String _resultErrorLabel(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.result ||
+      (value.isOk ?? value.index == 0 || value.label == 'ok') ||
+      value.associatedValue == null) {
+    throw StateError('expected error result');
+  }
+  return _caseLabel(value.associatedValue!);
+}
+
+String _caseLabel(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.variant &&
+      value.kind != WasmComponentValueDataKind.enumeration) {
+    throw StateError('expected case value');
+  }
+  return value.label ?? 'case-${value.index}';
+}
+
+String? _optionIpAddressLabel(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.option) {
+    throw StateError('expected option<ip-address>');
+  }
+  if (!(value.isSome ?? value.index == 1 || value.label == 'some')) {
+    return null;
+  }
+  final associated = value.associatedValue;
+  if (associated == null) {
+    throw StateError('expected ip-address payload');
+  }
+  return _caseLabel(associated);
+}
+
 List<int> _u8List(WasmComponentValueData value) {
   if (value.kind != WasmComponentValueDataKind.list) {
     throw StateError('expected list<u8>');
@@ -965,6 +1060,14 @@ WasmComponentValueData _u8ListValue(List<int> bytes) {
           integer: byte,
         ),
     ],
+  );
+}
+
+WasmComponentValueData _enumValue(String label) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.enumeration,
+    rawBytes: Uint8List(0),
+    label: label,
   );
 }
 

@@ -29,6 +29,7 @@ export 'preview2/native/filesystem_stub.dart'
     if (dart.library.io) 'preview2/native/filesystem.dart';
 export 'preview2/poll.dart';
 export 'preview2/random.dart';
+export 'preview2/sockets.dart';
 export 'preview3/cli.dart';
 export 'preview3/component_host.dart';
 export 'preview3/filesystem.dart';

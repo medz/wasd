@@ -39,6 +39,12 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
       memberName: parsed.memberName,
     );
   }
+  if (parsed.packageName == 'wasi:sockets' && parsed.version == '0.2.0') {
+    return WASIComponentWitResolvedTarget(
+      document: _wasiSockets020Document,
+      memberName: parsed.memberName,
+    );
+  }
   if (parsed.packageName == 'wasi:random' && parsed.version == '0.3.0') {
     return WASIComponentWitResolvedTarget(
       document: _wasiRandom030Document,
@@ -123,6 +129,12 @@ final WASIComponentWitDocument _wasiFilesystem020Document =
     WASIComponentWitDocument.parse(
       _wasiFilesystem020Source,
       sourceName: 'wasi:filesystem@0.2.0',
+    );
+
+final WASIComponentWitDocument _wasiSockets020Document =
+    WASIComponentWitDocument.parse(
+      _wasiSockets020Source,
+      sourceName: 'wasi:sockets@0.2.0',
     );
 
 final WASIComponentWitDocument _wasiClocks030Document =
@@ -317,6 +329,221 @@ interface terminal-stderr {
   use terminal-output.{terminal-output};
 
   get-terminal-stderr: func() -> option<terminal-output>;
+}
+
+world imports {
+  include wasi:clocks/imports@0.2.0;
+  include wasi:filesystem/imports@0.2.0;
+  include wasi:sockets/imports@0.2.0;
+  include wasi:random/imports@0.2.0;
+  include wasi:io/imports@0.2.0;
+
+  import environment;
+  import exit;
+  import stdin;
+  import stdout;
+  import stderr;
+  import terminal-input;
+  import terminal-output;
+  import terminal-stdin;
+  import terminal-stdout;
+  import terminal-stderr;
+}
+
+world command {
+  include imports;
+
+  export run;
+}
+''';
+
+const String _wasiSockets020Source = '''
+package wasi:sockets@0.2.0;
+
+interface network {
+  resource network;
+
+  enum error-code {
+    unknown,
+    access-denied,
+    not-supported,
+    invalid-argument,
+    out-of-memory,
+    timeout,
+    concurrency-conflict,
+    not-in-progress,
+    would-block,
+    invalid-state,
+    new-socket-limit,
+    address-not-bindable,
+    address-in-use,
+    remote-unreachable,
+    connection-refused,
+    connection-reset,
+    connection-aborted,
+    datagram-too-large,
+    name-unresolvable,
+    temporary-resolver-failure,
+    permanent-resolver-failure,
+  }
+
+  enum ip-address-family {
+    ipv4,
+    ipv6,
+  }
+
+  type ipv4-address = tuple<u8, u8, u8, u8>;
+  type ipv6-address = tuple<u16, u16, u16, u16, u16, u16, u16, u16>;
+
+  variant ip-address {
+    ipv4(ipv4-address),
+    ipv6(ipv6-address),
+  }
+
+  record ipv4-socket-address {
+    port: u16,
+    address: ipv4-address,
+  }
+
+  record ipv6-socket-address {
+    port: u16,
+    flow-info: u32,
+    address: ipv6-address,
+    scope-id: u32,
+  }
+
+  variant ip-socket-address {
+    ipv4(ipv4-socket-address),
+    ipv6(ipv6-socket-address),
+  }
+}
+
+interface instance-network {
+  use network.{network};
+
+  instance-network: func() -> network;
+}
+
+interface ip-name-lookup {
+  use wasi:io/poll@0.2.0.{pollable};
+  use network.{network, error-code, ip-address};
+
+  resolve-addresses: func(network: borrow<network>, name: string) -> result<resolve-address-stream, error-code>;
+
+  resource resolve-address-stream {
+    resolve-next-address: func() -> result<option<ip-address>, error-code>;
+    subscribe: func() -> pollable;
+  }
+}
+
+interface tcp {
+  use wasi:io/streams@0.2.0.{input-stream, output-stream};
+  use wasi:io/poll@0.2.0.{pollable};
+  use wasi:clocks/monotonic-clock@0.2.0.{duration};
+  use network.{network, error-code, ip-socket-address, ip-address-family};
+
+  enum shutdown-type {
+    receive,
+    send,
+    both,
+  }
+
+  resource tcp-socket {
+    start-bind: func(network: borrow<network>, local-address: ip-socket-address) -> result<_, error-code>;
+    finish-bind: func() -> result<_, error-code>;
+    start-connect: func(network: borrow<network>, remote-address: ip-socket-address) -> result<_, error-code>;
+    finish-connect: func() -> result<tuple<input-stream, output-stream>, error-code>;
+    start-listen: func() -> result<_, error-code>;
+    finish-listen: func() -> result<_, error-code>;
+    accept: func() -> result<tuple<tcp-socket, input-stream, output-stream>, error-code>;
+    local-address: func() -> result<ip-socket-address, error-code>;
+    remote-address: func() -> result<ip-socket-address, error-code>;
+    is-listening: func() -> bool;
+    address-family: func() -> ip-address-family;
+    set-listen-backlog-size: func(value: u64) -> result<_, error-code>;
+    keep-alive-enabled: func() -> result<bool, error-code>;
+    set-keep-alive-enabled: func(value: bool) -> result<_, error-code>;
+    keep-alive-idle-time: func() -> result<duration, error-code>;
+    set-keep-alive-idle-time: func(value: duration) -> result<_, error-code>;
+    keep-alive-interval: func() -> result<duration, error-code>;
+    set-keep-alive-interval: func(value: duration) -> result<_, error-code>;
+    keep-alive-count: func() -> result<u32, error-code>;
+    set-keep-alive-count: func(value: u32) -> result<_, error-code>;
+    hop-limit: func() -> result<u8, error-code>;
+    set-hop-limit: func(value: u8) -> result<_, error-code>;
+    receive-buffer-size: func() -> result<u64, error-code>;
+    set-receive-buffer-size: func(value: u64) -> result<_, error-code>;
+    send-buffer-size: func() -> result<u64, error-code>;
+    set-send-buffer-size: func(value: u64) -> result<_, error-code>;
+    subscribe: func() -> pollable;
+    shutdown: func(shutdown-type: shutdown-type) -> result<_, error-code>;
+  }
+}
+
+interface tcp-create-socket {
+  use network.{error-code, ip-address-family};
+  use tcp.{tcp-socket};
+
+  create-tcp-socket: func(address-family: ip-address-family) -> result<tcp-socket, error-code>;
+}
+
+interface udp {
+  use wasi:io/poll@0.2.0.{pollable};
+  use network.{network, error-code, ip-socket-address, ip-address-family};
+
+  record incoming-datagram {
+    data: list<u8>,
+    remote-address: ip-socket-address,
+  }
+
+  record outgoing-datagram {
+    data: list<u8>,
+    remote-address: option<ip-socket-address>,
+  }
+
+  resource udp-socket {
+    start-bind: func(network: borrow<network>, local-address: ip-socket-address) -> result<_, error-code>;
+    finish-bind: func() -> result<_, error-code>;
+    stream: func(remote-address: option<ip-socket-address>) -> result<tuple<incoming-datagram-stream, outgoing-datagram-stream>, error-code>;
+    local-address: func() -> result<ip-socket-address, error-code>;
+    remote-address: func() -> result<ip-socket-address, error-code>;
+    address-family: func() -> ip-address-family;
+    unicast-hop-limit: func() -> result<u8, error-code>;
+    set-unicast-hop-limit: func(value: u8) -> result<_, error-code>;
+    receive-buffer-size: func() -> result<u64, error-code>;
+    set-receive-buffer-size: func(value: u64) -> result<_, error-code>;
+    send-buffer-size: func() -> result<u64, error-code>;
+    set-send-buffer-size: func(value: u64) -> result<_, error-code>;
+    subscribe: func() -> pollable;
+  }
+
+  resource incoming-datagram-stream {
+    receive: func(max-results: u64) -> result<list<incoming-datagram>, error-code>;
+    subscribe: func() -> pollable;
+  }
+
+  resource outgoing-datagram-stream {
+    check-send: func() -> result<u64, error-code>;
+    send: func(datagrams: list<outgoing-datagram>) -> result<u64, error-code>;
+    subscribe: func() -> pollable;
+  }
+}
+
+interface udp-create-socket {
+  use network.{error-code, ip-address-family};
+  use udp.{udp-socket};
+
+  create-udp-socket: func(address-family: ip-address-family) -> result<udp-socket, error-code>;
+}
+
+world imports {
+  import instance-network;
+  import network;
+  import udp;
+  import udp-create-socket;
+  import tcp;
+  import tcp-create-socket;
+  import ip-name-lookup;
 }
 ''';
 

@@ -802,6 +802,152 @@ world cli-test {
       );
     });
 
+    test('Preview2 expands and binds standard WASI sockets imports', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world sockets-test {
+  include wasi:sockets/imports@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2 = WASIPreview2ComponentHost();
+      final plan = preview2.prepareWitWorld(
+        document,
+        worldName: 'sockets-test',
+      );
+
+      expect(plan.canIngest, isTrue);
+      expect(plan.canBindAdapters, isTrue);
+      expect(plan.bindingErrors, isEmpty);
+      expect(
+        plan.functions.map((function) => function.qualifiedName),
+        containsAll(<String>[
+          'wasi:sockets/instance-network@0.2.0.instance-network',
+          'wasi:sockets/ip-name-lookup@0.2.0.resolve-addresses',
+          'wasi:sockets/ip-name-lookup@0.2.0.resolve-address-stream.resolve-next-address',
+          'wasi:sockets/ip-name-lookup@0.2.0.resolve-address-stream.subscribe',
+          'wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket',
+          'wasi:sockets/tcp@0.2.0.tcp-socket.local-address',
+          'wasi:sockets/tcp@0.2.0.tcp-socket.subscribe',
+          'wasi:sockets/tcp@0.2.0.tcp-socket.shutdown',
+          'wasi:sockets/udp-create-socket@0.2.0.create-udp-socket',
+          'wasi:sockets/udp@0.2.0.udp-socket.stream',
+          'wasi:sockets/udp@0.2.0.incoming-datagram-stream.receive',
+          'wasi:sockets/udp@0.2.0.outgoing-datagram-stream.send',
+          'wasi:io/poll@0.2.0.pollable.ready',
+        ]),
+      );
+
+      final program = preview2.bindWitWorld(
+        document,
+        worldName: 'sockets-test',
+      );
+      final network =
+          program.invokeImport(
+                'wasi:sockets/instance-network@0.2.0.instance-network',
+                const [],
+              )
+              as int;
+      final tcpSocket =
+          program.invokeImport(
+                'wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket',
+                [_enumValue('ipv4')],
+              )
+              as WasmComponentValueData;
+      final udpSocket =
+          program.invokeImport(
+                'wasi:sockets/udp-create-socket@0.2.0.create-udp-socket',
+                [_enumValue('ipv6')],
+              )
+              as WasmComponentValueData;
+      final lookupStream =
+          program.invokeImport(
+                'wasi:sockets/ip-name-lookup@0.2.0.resolve-addresses',
+                [network, '127.0.0.1'],
+              )
+              as WasmComponentValueData;
+      final streamHandle = _resourceHandle(_resultOk(lookupStream));
+      final firstAddress =
+          program.invokeImport(
+                'wasi:sockets/ip-name-lookup@0.2.0.resolve-address-stream.resolve-next-address',
+                [streamHandle],
+              )
+              as WasmComponentValueData;
+      final secondAddress =
+          program.invokeImport(
+                'wasi:sockets/ip-name-lookup@0.2.0.resolve-address-stream.resolve-next-address',
+                [streamHandle],
+              )
+              as WasmComponentValueData;
+      final lookupPollable =
+          program.invokeImport(
+                'wasi:sockets/ip-name-lookup@0.2.0.resolve-address-stream.subscribe',
+                [streamHandle],
+              )
+              as int;
+      final localAddress =
+          program.invokeImport(
+                'wasi:sockets/tcp@0.2.0.tcp-socket.local-address',
+                [_resourceHandle(_resultOk(tcpSocket))],
+              )
+              as WasmComponentValueData;
+      final shutdown =
+          program.invokeImport('wasi:sockets/tcp@0.2.0.tcp-socket.shutdown', [
+                _resourceHandle(_resultOk(tcpSocket)),
+                _enumValue('both'),
+              ])
+              as WasmComponentValueData;
+
+      expect(_resourceHandle(_resultOk(tcpSocket)), isNonZero);
+      expect(_resourceHandle(_resultOk(udpSocket)), isNonZero);
+      expect(_optionIpAddressLabel(_resultOk(firstAddress)), 'ipv4');
+      expect(_optionIpAddressLabel(_resultOk(secondAddress)), isNull);
+      expect(
+        program.invokeImport('wasi:io/poll@0.2.0.pollable.ready', [
+          lookupPollable,
+        ]),
+        isTrue,
+      );
+      expect(_resultErrorLabel(localAddress), 'invalid-state');
+      expect(_resultErrorLabel(shutdown), 'invalid-state');
+      expect(
+        preview2.standardImports,
+        contains('wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket'),
+      );
+    });
+
+    test('Preview2 CLI imports include official WASI sockets imports', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world cli-test {
+  include wasi:cli/imports@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2 = WASIPreview2ComponentHost();
+      final plan = preview2.prepareWitWorld(document, worldName: 'cli-test');
+
+      expect(plan.canIngest, isTrue);
+      expect(plan.canBindAdapters, isTrue);
+      expect(plan.bindingErrors, isEmpty);
+      expect(
+        plan.functions.map((function) => function.qualifiedName),
+        containsAll(<String>[
+          'wasi:cli/environment@0.2.0.get-environment',
+          'wasi:filesystem/preopens@0.2.0.get-directories',
+          'wasi:sockets/instance-network@0.2.0.instance-network',
+          'wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket',
+          'wasi:sockets/udp-create-socket@0.2.0.create-udp-socket',
+          'wasi:sockets/ip-name-lookup@0.2.0.resolve-addresses',
+          'wasi:random/random@0.2.0.get-random-bytes',
+          'wasi:io/streams@0.2.0.input-stream.read',
+        ]),
+      );
+    });
+
     test('Preview2 expands and binds standard WASI filesystem imports', () {
       const source = '''
 package wasi-testsuite:test;
@@ -3303,7 +3449,7 @@ String _resultErrorLabel(WasmComponentValueData value) {
   if (associated == null) {
     throw StateError('expected error result payload');
   }
-  return _variantLabel(associated);
+  return _caseLabel(associated);
 }
 
 int _streamErrorHandle(WasmComponentValueData value) {
@@ -3357,6 +3503,28 @@ String? _optionCaseLabel(WasmComponentValueData value) {
     throw StateError('expected option case payload');
   }
   return _caseLabel(associated);
+}
+
+String? _optionIpAddressLabel(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.option) {
+    throw StateError('expected option<ip-address>, got ${value.kind.name}');
+  }
+  if (!(value.isSome ?? false)) {
+    return null;
+  }
+  final associated = value.associatedValue;
+  if (associated == null) {
+    throw StateError('expected ip-address payload');
+  }
+  return _caseLabel(associated);
+}
+
+WasmComponentValueData _enumValue(String label) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.enumeration,
+    rawBytes: Uint8List(0),
+    label: label,
+  );
 }
 
 WasmComponentValueData _flagsValue(List<String> labels) {
