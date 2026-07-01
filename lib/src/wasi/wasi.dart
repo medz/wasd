@@ -4,6 +4,8 @@ import '../wasm/instance.dart';
 import '../wasm/memory.dart';
 import '../wasm/module.dart';
 import 'preview1/socket.dart';
+import 'preview2/component_host.dart';
+import 'preview2/sockets.dart';
 import 'version.dart';
 import 'preview1/native/wasi.dart'
     if (dart.library.js_interop) 'preview1/js/wasi.dart'
@@ -159,6 +161,37 @@ abstract interface class WASI {
       sockets: sockets,
       procRaiseHandler: procRaiseHandler,
       version: version,
+    );
+  }
+
+  /// Creates a WASI 0.2 / Preview2 component host.
+  ///
+  /// Preview2 is a component-model host surface rather than a core-module
+  /// import object, so it is exposed as a component host instead of through
+  /// [imports].
+  static WASIPreview2ComponentHost preview2({
+    List<String> args = const <String>[],
+    Map<String, String> env = const <String, String>{},
+    String? initialCwd,
+    List<int> stdinData = const <int>[],
+    Map<String, String> preopens = const <String, String>{},
+    bool canMutatePreopens = false,
+    bool? terminalStdin,
+    bool? terminalStdout,
+    bool? terminalStderr,
+    WASIPreview2AddressResolver? resolveAddresses,
+  }) {
+    return WASIPreview2ComponentHost(
+      args: args,
+      env: env,
+      initialCwd: initialCwd,
+      stdinData: stdinData,
+      preopens: preopens,
+      canMutatePreopens: canMutatePreopens,
+      terminalStdin: terminalStdin,
+      terminalStdout: terminalStdout,
+      terminalStderr: terminalStderr,
+      resolveAddresses: resolveAddresses,
     );
   }
 

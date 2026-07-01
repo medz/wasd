@@ -105,6 +105,12 @@ final class WASIPreview2ComponentHost {
     Map<String, String> env = const <String, String>{},
     String? initialCwd,
     List<int> stdinData = const <int>[],
+    Map<String, String> preopens = const <String, String>{},
+    bool canMutatePreopens = false,
+    bool? terminalStdin,
+    bool? terminalStdout,
+    bool? terminalStderr,
+    WASIPreview2AddressResolver? resolveAddresses,
   }) : assert(
          pollHost == null ||
              clocksHost == null ||
@@ -276,6 +282,12 @@ final class WASIPreview2ComponentHost {
        _cliEnv = Map<String, String>.unmodifiable(env),
        _cliInitialCwd = initialCwd,
        _cliStdinData = List<int>.unmodifiable(stdinData),
+       _cliTerminalStdin = terminalStdin,
+       _cliTerminalStdout = terminalStdout,
+       _cliTerminalStderr = terminalStderr,
+       _filesystemPreopens = Map<String, String>.unmodifiable(preopens),
+       _filesystemCanMutatePreopens = canMutatePreopens,
+       _resolveAddresses = resolveAddresses,
        _clocksHostOverride = clocksHost,
        _errorHostOverride = errorHost,
        _filesystemHostOverride = filesystemHost,
@@ -298,6 +310,12 @@ final class WASIPreview2ComponentHost {
   final Map<String, String> _cliEnv;
   final String? _cliInitialCwd;
   final List<int> _cliStdinData;
+  final bool? _cliTerminalStdin;
+  final bool? _cliTerminalStdout;
+  final bool? _cliTerminalStderr;
+  final Map<String, String> _filesystemPreopens;
+  final bool _filesystemCanMutatePreopens;
+  final WASIPreview2AddressResolver? _resolveAddresses;
   final WASIPreview2ClocksHost? _clocksHostOverride;
   final WASIPreview2IoErrorHost? _errorHostOverride;
   final WASIPreview2FilesystemHost? _filesystemHostOverride;
@@ -336,16 +354,33 @@ final class WASIPreview2ComponentHost {
         env: _cliEnv,
         initialCwd: _cliInitialCwd,
         stdinData: _cliStdinData,
+        terminalStdin:
+            _cliTerminalStdin ?? native_defaults.isNativeStdinTerminal(),
+        terminalStdout:
+            _cliTerminalStdout ?? native_defaults.isNativeStdoutTerminal(),
+        terminalStderr:
+            _cliTerminalStderr ?? native_defaults.isNativeStderrTerminal(),
       );
   late final WASIPreview2FilesystemHost _filesystemHost =
       _filesystemHostOverride ??
-      WASIPreview2FilesystemHost(streamsHost: _streamsHost);
+      native_defaults.createDefaultPreview2FilesystemHost(
+        preopens: _filesystemPreopens,
+        canMutate: _filesystemCanMutatePreopens,
+        streamsHost: _streamsHost,
+      );
   late final WASIPreview2SocketsHost _socketsHost =
       _socketsHostOverride ??
-      WASIPreview2SocketsHost(pollHost: _pollHost, streamsHost: _streamsHost);
+      native_defaults.createDefaultPreview2SocketsHost(
+        pollHost: _pollHost,
+        streamsHost: _streamsHost,
+        resolveAddresses: _resolveAddresses,
+      );
   late final WASIPreview2HttpHost _httpHost =
       _httpHostOverride ??
-      WASIPreview2HttpHost(pollHost: _pollHost, streamsHost: _streamsHost);
+      native_defaults.createDefaultPreview2HttpHost(
+        pollHost: _pollHost,
+        streamsHost: _streamsHost,
+      );
 
   /// Preview2 version profile.
   WASIComponentVersionProfile get profile => versionedHost.profile;

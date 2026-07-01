@@ -21,6 +21,23 @@ void main() {
       expect(preview3.prepareComponent(component).canBind, isTrue);
     });
 
+    test('creates Preview2 component hosts through the WASI facade', () {
+      final host = WASI.preview2(
+        args: const <String>['command.wasm', 'arg'],
+        env: const <String, String>{'mode': 'test'},
+        terminalStdout: true,
+      );
+
+      expect(host.profile, same(WASIComponentVersionProfile.preview2));
+      expect(host.cliHost.args, ['command.wasm', 'arg']);
+      expect(host.cliHost.env, {'mode': 'test'});
+      expect(host.cliHost.terminalStdoutHandle, isNotNull);
+      expect(
+        host.standardImports,
+        contains('wasi:cli/stdout@0.2.0.get-stdout'),
+      );
+    });
+
     test(
       'exposes WIT world ingestion through versioned Preview2/3 profiles',
       () {
@@ -352,12 +369,32 @@ world http-test {
               ])
               as WasmComponentValueData;
 
-      expect(_resultErrorLabel(handled), 'configuration-error');
+      expect(
+        _resultErrorLabel(handled),
+        hasDartIoRuntime ? 'HTTP-request-URI-invalid' : 'configuration-error',
+      );
       expect(host.httpHost.streamsHost, same(host.streamsHost));
       expect(
         host.standardImports,
         contains('wasi:http/outgoing-handler@0.2.0.handle'),
       );
+    });
+
+    test('creates default Preview2 native backends on Dart VM', () {
+      final host = WASIPreview2ComponentHost();
+      if (!hasDartIoRuntime) {
+        expect(host.filesystemHost, isA<WASIPreview2FilesystemHost>());
+        expect(host.socketsHost, isA<WASIPreview2SocketsHost>());
+        expect(host.httpHost, isA<WASIPreview2HttpHost>());
+        return;
+      }
+
+      expect(host.filesystemHost, isA<WASIPreview2NativeFilesystemHost>());
+      expect(host.socketsHost, isA<WASIPreview2NativeSocketsHost>());
+      expect(host.httpHost, isA<WASIPreview2NativeHttpHost>());
+      expect(host.filesystemHost.streamsHost, same(host.streamsHost));
+      expect(host.socketsHost.streamsHost, same(host.streamsHost));
+      expect(host.httpHost.streamsHost, same(host.streamsHost));
     });
 
     test('creates a native Preview2 host with real Dart VM backends', () {
