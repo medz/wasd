@@ -1080,6 +1080,12 @@ world sockets-test {
                   BigInt.from(8),
                 ])
                 as WasmComponentValueData;
+        final listenerPollable =
+            program.invokeImport(
+                  'wasi:sockets/tcp@0.2.0.tcp-socket.subscribe',
+                  [listener],
+                )
+                as int;
 
         expect(_u8List(_resultOk(received)), [7, 8, 9]);
         expect(
@@ -1093,15 +1099,309 @@ world sockets-test {
           isA<WasmComponentValueData>(),
         );
         expect(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/tcp@0.2.0.tcp-socket.remote-address',
+                  [client],
+                )
+                as WasmComponentValueData,
+          ),
+          isA<WasmComponentValueData>(),
+        );
+        expect(
           program.invokeImport(
             'wasi:sockets/tcp@0.2.0.tcp-socket.is-listening',
             [listener],
           ),
           isTrue,
         );
+        expect(
+          program.invokeImport('wasi:io/poll@0.2.0.pollable.ready', [
+            listenerPollable,
+          ]),
+          isFalse,
+        );
         expect(backend.acceptedConnections, 1);
       },
     );
+
+    test('Preview2 sockets exposes TCP and UDP socket options', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world sockets-test {
+  include wasi:sockets/imports@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2 = WASIPreview2ComponentHost(
+        socketsHost: WASIPreview2SocketsHost(
+          backend: _LoopbackSocketsBackend(),
+        ),
+      );
+      final program = preview2.bindWitWorld(
+        document,
+        worldName: 'sockets-test',
+      );
+      final tcp = _resourceHandle(
+        _resultOk(
+          program.invokeImport(
+                'wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket',
+                [_enumValue('ipv4')],
+              )
+              as WasmComponentValueData,
+        ),
+      );
+      final udp = _resourceHandle(
+        _resultOk(
+          program.invokeImport(
+                'wasi:sockets/udp-create-socket@0.2.0.create-udp-socket',
+                [_enumValue('ipv6')],
+              )
+              as WasmComponentValueData,
+        ),
+      );
+
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:sockets/tcp@0.2.0.tcp-socket.set-keep-alive-enabled',
+              [tcp, true],
+            )
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:sockets/tcp@0.2.0.tcp-socket.set-keep-alive-idle-time',
+              [tcp, BigInt.from(11)],
+            )
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:sockets/tcp@0.2.0.tcp-socket.set-keep-alive-interval',
+              [tcp, BigInt.from(12)],
+            )
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:sockets/tcp@0.2.0.tcp-socket.set-keep-alive-count',
+              [tcp, 13],
+            )
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:sockets/tcp@0.2.0.tcp-socket.set-hop-limit',
+              [tcp, 64],
+            )
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:sockets/tcp@0.2.0.tcp-socket.set-receive-buffer-size',
+              [tcp, BigInt.from(4096)],
+            )
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:sockets/tcp@0.2.0.tcp-socket.set-send-buffer-size',
+              [tcp, BigInt.from(8192)],
+            )
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:sockets/tcp@0.2.0.tcp-socket.set-listen-backlog-size',
+              [tcp, BigInt.from(32)],
+            )
+            as WasmComponentValueData,
+      );
+
+      expect(
+        _caseLabel(
+          program.invokeImport(
+                'wasi:sockets/tcp@0.2.0.tcp-socket.address-family',
+                [tcp],
+              )
+              as WasmComponentValueData,
+        ),
+        'ipv4',
+      );
+      expect(
+        _resultBool(
+          program.invokeImport(
+                'wasi:sockets/tcp@0.2.0.tcp-socket.keep-alive-enabled',
+                [tcp],
+              )
+              as WasmComponentValueData,
+        ),
+        isTrue,
+      );
+      expect(
+        _u64Data(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/tcp@0.2.0.tcp-socket.keep-alive-idle-time',
+                  [tcp],
+                )
+                as WasmComponentValueData,
+          ),
+        ),
+        BigInt.from(11),
+      );
+      expect(
+        _u64Data(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/tcp@0.2.0.tcp-socket.keep-alive-interval',
+                  [tcp],
+                )
+                as WasmComponentValueData,
+          ),
+        ),
+        BigInt.from(12),
+      );
+      expect(
+        _u64Data(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/tcp@0.2.0.tcp-socket.keep-alive-count',
+                  [tcp],
+                )
+                as WasmComponentValueData,
+          ),
+        ),
+        BigInt.from(13),
+      );
+      expect(
+        _u64Data(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/tcp@0.2.0.tcp-socket.hop-limit',
+                  [tcp],
+                )
+                as WasmComponentValueData,
+          ),
+        ),
+        BigInt.from(64),
+      );
+      expect(
+        _u64Data(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/tcp@0.2.0.tcp-socket.receive-buffer-size',
+                  [tcp],
+                )
+                as WasmComponentValueData,
+          ),
+        ),
+        BigInt.from(4096),
+      );
+      expect(
+        _u64Data(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/tcp@0.2.0.tcp-socket.send-buffer-size',
+                  [tcp],
+                )
+                as WasmComponentValueData,
+          ),
+        ),
+        BigInt.from(8192),
+      );
+      expect(
+        _resultErrorLabel(
+          program.invokeImport(
+                'wasi:sockets/tcp@0.2.0.tcp-socket.set-hop-limit',
+                [tcp, 0],
+              )
+              as WasmComponentValueData,
+        ),
+        'invalid-argument',
+      );
+
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:sockets/udp@0.2.0.udp-socket.set-unicast-hop-limit',
+              [udp, 42],
+            )
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:sockets/udp@0.2.0.udp-socket.set-receive-buffer-size',
+              [udp, BigInt.from(2048)],
+            )
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:sockets/udp@0.2.0.udp-socket.set-send-buffer-size',
+              [udp, BigInt.from(4096)],
+            )
+            as WasmComponentValueData,
+      );
+
+      expect(
+        _caseLabel(
+          program.invokeImport(
+                'wasi:sockets/udp@0.2.0.udp-socket.address-family',
+                [udp],
+              )
+              as WasmComponentValueData,
+        ),
+        'ipv6',
+      );
+      expect(
+        _u64Data(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/udp@0.2.0.udp-socket.unicast-hop-limit',
+                  [udp],
+                )
+                as WasmComponentValueData,
+          ),
+        ),
+        BigInt.from(42),
+      );
+      expect(
+        _u64Data(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/udp@0.2.0.udp-socket.receive-buffer-size',
+                  [udp],
+                )
+                as WasmComponentValueData,
+          ),
+        ),
+        BigInt.from(2048),
+      );
+      expect(
+        _u64Data(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/udp@0.2.0.udp-socket.send-buffer-size',
+                  [udp],
+                )
+                as WasmComponentValueData,
+          ),
+        ),
+        BigInt.from(4096),
+      );
+      expect(
+        _resultErrorLabel(
+          program.invokeImport(
+                'wasi:sockets/udp@0.2.0.udp-socket.set-unicast-hop-limit',
+                [udp, 0],
+              )
+              as WasmComponentValueData,
+        ),
+        'invalid-argument',
+      );
+    });
 
     test('Preview2 sockets backend sends and receives UDP datagrams', () {
       const source = '''
@@ -1109,6 +1409,7 @@ package wasi-testsuite:test;
 
 world sockets-test {
   include wasi:sockets/imports@0.2.0;
+  include wasi:io/imports@0.2.0;
 }
 ''';
       final document = WASIComponentWitDocument.parse(source);
@@ -1157,6 +1458,23 @@ world sockets-test {
               ])
               as WasmComponentValueData;
       final (incoming, outgoing) = _udpStreamPair(_resultOk(streams));
+      final socketPollable =
+          program.invokeImport('wasi:sockets/udp@0.2.0.udp-socket.subscribe', [
+                socket,
+              ])
+              as int;
+      final incomingPollable =
+          program.invokeImport(
+                'wasi:sockets/udp@0.2.0.incoming-datagram-stream.subscribe',
+                [incoming],
+              )
+              as int;
+      final outgoingPollable =
+          program.invokeImport(
+                'wasi:sockets/udp@0.2.0.outgoing-datagram-stream.subscribe',
+                [outgoing],
+              )
+              as int;
       final permit =
           program.invokeImport(
                 'wasi:sockets/udp@0.2.0.outgoing-datagram-stream.check-send',
@@ -1181,6 +1499,44 @@ world sockets-test {
               )
               as WasmComponentValueData;
 
+      expect(
+        _resultOk(
+          program.invokeImport(
+                'wasi:sockets/udp@0.2.0.udp-socket.local-address',
+                [socket],
+              )
+              as WasmComponentValueData,
+        ),
+        isA<WasmComponentValueData>(),
+      );
+      expect(
+        _resultErrorLabel(
+          program.invokeImport(
+                'wasi:sockets/udp@0.2.0.udp-socket.remote-address',
+                [socket],
+              )
+              as WasmComponentValueData,
+        ),
+        'invalid-state',
+      );
+      expect(
+        program.invokeImport('wasi:io/poll@0.2.0.pollable.ready', [
+          socketPollable,
+        ]),
+        isTrue,
+      );
+      expect(
+        program.invokeImport('wasi:io/poll@0.2.0.pollable.ready', [
+          incomingPollable,
+        ]),
+        isFalse,
+      );
+      expect(
+        program.invokeImport('wasi:io/poll@0.2.0.pollable.ready', [
+          outgoingPollable,
+        ]),
+        isTrue,
+      );
       expect(_u64Data(_resultOk(permit)), greaterThan(BigInt.zero));
       expect(_u64Data(_resultOk(sent)), BigInt.one);
       expect(_udpDatagramPayloads(_resultOk(received)), [
@@ -1464,6 +1820,12 @@ world http-test {
                 [response],
               )
               as int;
+      final responseHeaders =
+          program.invokeImport(
+                'wasi:http/types@0.2.0.incoming-response.headers',
+                [response],
+              )
+              as int;
       final incomingBody = _resourceHandle(
         _resultOk(
           program.invokeImport(
@@ -1489,6 +1851,15 @@ world http-test {
               as WasmComponentValueData;
 
       expect(status, 201);
+      expect(
+        _httpFieldEntryValues(
+          _httpFieldEntries(_fieldsEntries(program, responseHeaders)),
+          'x-reply',
+        ),
+        [
+          [111, 107],
+        ],
+      );
       expect(_u8List(_resultOk(bytes)), [104, 105]);
       expect(backend.requestCount, 1);
       expect(backend.lastMethod, 'POST');
@@ -1497,6 +1868,471 @@ world http-test {
       expect(backend.lastBody, [1, 2, 3]);
       expect(backend.lastHeaderNames, contains('x-test'));
     });
+
+    test(
+      'Preview2 HTTP resources expose fields requests responses and trailers',
+      () {
+        const source = '''
+package wasi-testsuite:test;
+
+world http-test {
+  import wasi:http/types@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+        final document = WASIComponentWitDocument.parse(source);
+        final preview2 = WASIPreview2ComponentHost();
+        final program = preview2.bindWitWorld(document, worldName: 'http-test');
+        final fields = _resourceHandle(
+          _resultOk(
+            program.invokeImport('wasi:http/types@0.2.0.fields.from-list', [
+                  _httpFieldListValue([
+                    ('x-test', [49]),
+                    ('x-test', [50]),
+                  ]),
+                ])
+                as WasmComponentValueData,
+          ),
+        );
+
+        expect(
+          _httpFieldValues(
+            program.invokeImport('wasi:http/types@0.2.0.fields.get', [
+                  fields,
+                  'X-Test',
+                ])
+                as WasmComponentValueData,
+          ),
+          [
+            [49],
+            [50],
+          ],
+        );
+        expect(
+          program.invokeImport('wasi:http/types@0.2.0.fields.has', [
+            fields,
+            'x-test',
+          ]),
+          isTrue,
+        );
+        _expectUnitOk(
+          program.invokeImport('wasi:http/types@0.2.0.fields.set', [
+                fields,
+                'x-set',
+                _httpFieldValuesValue([
+                  [51],
+                  [52],
+                ]),
+              ])
+              as WasmComponentValueData,
+        );
+        _expectUnitOk(
+          program.invokeImport('wasi:http/types@0.2.0.fields.delete', [
+                fields,
+                'x-test',
+              ])
+              as WasmComponentValueData,
+        );
+        final clonedFields =
+            program.invokeImport('wasi:http/types@0.2.0.fields.clone', [fields])
+                as int;
+        _expectUnitOk(
+          program.invokeImport('wasi:http/types@0.2.0.fields.append', [
+                clonedFields,
+                'x-clone',
+                _u8ListValue([53]),
+              ])
+              as WasmComponentValueData,
+        );
+
+        final clonedFieldEntries = _httpFieldEntries(
+          _fieldsEntries(program, clonedFields),
+        );
+        expect(_httpFieldEntryValues(clonedFieldEntries, 'x-set'), [
+          [51],
+          [52],
+        ]);
+        expect(_httpFieldEntryValues(clonedFieldEntries, 'x-clone'), [
+          [53],
+        ]);
+        expect(
+          program.invokeImport('wasi:http/types@0.2.0.fields.has', [
+            fields,
+            'x-test',
+          ]),
+          isFalse,
+        );
+
+        final request =
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.outgoing-request.constructor',
+                  [clonedFields],
+                )
+                as int;
+        expect(
+          _caseLabel(
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.outgoing-request.method',
+                  [request],
+                )
+                as WasmComponentValueData,
+          ),
+          'get',
+        );
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:http/types@0.2.0.outgoing-request.set-method',
+                [request, _variantCaseValue('patch', 8)],
+              )
+              as WasmComponentValueData,
+        );
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:http/types@0.2.0.outgoing-request.set-scheme',
+                [request, _someValue(_variantCaseValue('HTTPS', 1))],
+              )
+              as WasmComponentValueData,
+        );
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:http/types@0.2.0.outgoing-request.set-authority',
+                [request, _someValue(_stringValue('api.example.test'))],
+              )
+              as WasmComponentValueData,
+        );
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:http/types@0.2.0.outgoing-request.set-path-with-query',
+                [request, _someValue(_stringValue('/v1?q=1'))],
+              )
+              as WasmComponentValueData,
+        );
+
+        expect(
+          _caseLabel(
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.outgoing-request.method',
+                  [request],
+                )
+                as WasmComponentValueData,
+          ),
+          'patch',
+        );
+        expect(
+          _caseLabel(
+            _optionPayload(
+              program.invokeImport(
+                    'wasi:http/types@0.2.0.outgoing-request.scheme',
+                    [request],
+                  )
+                  as WasmComponentValueData,
+            ),
+          ),
+          'HTTPS',
+        );
+        expect(
+          _optionString(
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.outgoing-request.authority',
+                  [request],
+                )
+                as WasmComponentValueData,
+          ),
+          'api.example.test',
+        );
+        expect(
+          _optionString(
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.outgoing-request.path-with-query',
+                  [request],
+                )
+                as WasmComponentValueData,
+          ),
+          '/v1?q=1',
+        );
+        final requestHeaders =
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.outgoing-request.headers',
+                  [request],
+                )
+                as int;
+        expect(
+          _httpFieldEntryValues(
+            _httpFieldEntries(_fieldsEntries(program, requestHeaders)),
+            'x-clone',
+          ),
+          [
+            [53],
+          ],
+        );
+
+        final options =
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.request-options.constructor',
+                  const [],
+                )
+                as int;
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:http/types@0.2.0.request-options.set-connect-timeout',
+                [options, _someValue(_integerValue(BigInt.from(1000)))],
+              )
+              as WasmComponentValueData,
+        );
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:http/types@0.2.0.request-options.set-first-byte-timeout',
+                [options, _someValue(_integerValue(BigInt.from(2000)))],
+              )
+              as WasmComponentValueData,
+        );
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:http/types@0.2.0.request-options.set-between-bytes-timeout',
+                [options, _someValue(_integerValue(BigInt.from(3000)))],
+              )
+              as WasmComponentValueData,
+        );
+        expect(
+          _optionU64(
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.request-options.connect-timeout',
+                  [options],
+                )
+                as WasmComponentValueData,
+          ),
+          BigInt.from(1000),
+        );
+        expect(
+          _optionU64(
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.request-options.first-byte-timeout',
+                  [options],
+                )
+                as WasmComponentValueData,
+          ),
+          BigInt.from(2000),
+        );
+        expect(
+          _optionU64(
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.request-options.between-bytes-timeout',
+                  [options],
+                )
+                as WasmComponentValueData,
+          ),
+          BigInt.from(3000),
+        );
+
+        final responseHeaders = _resourceHandle(
+          _resultOk(
+            program.invokeImport('wasi:http/types@0.2.0.fields.from-list', [
+                  _httpFieldListValue([
+                    ('x-response', [54]),
+                  ]),
+                ])
+                as WasmComponentValueData,
+          ),
+        );
+        final response =
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.outgoing-response.constructor',
+                  [responseHeaders],
+                )
+                as int;
+        expect(
+          program.invokeImport(
+            'wasi:http/types@0.2.0.outgoing-response.status-code',
+            [response],
+          ),
+          200,
+        );
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:http/types@0.2.0.outgoing-response.set-status-code',
+                [response, 202],
+              )
+              as WasmComponentValueData,
+        );
+        expect(
+          program.invokeImport(
+            'wasi:http/types@0.2.0.outgoing-response.status-code',
+            [response],
+          ),
+          202,
+        );
+        final clonedResponseHeaders =
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.outgoing-response.headers',
+                  [response],
+                )
+                as int;
+        expect(
+          _httpFieldEntryValues(
+            _httpFieldEntries(_fieldsEntries(program, clonedResponseHeaders)),
+            'x-response',
+          ),
+          [
+            [54],
+          ],
+        );
+        expect(
+          _resourceHandle(
+            _resultOk(
+              program.invokeImport(
+                    'wasi:http/types@0.2.0.outgoing-response.body',
+                    [response],
+                  )
+                  as WasmComponentValueData,
+            ),
+          ),
+          isNonZero,
+        );
+        final outparam = WASIPreview2HttpResponseOutparam();
+        final outparamHandle = preview2.httpHost.insertResponseOutparam(
+          outparam,
+        );
+        expect(
+          program.invokeImport('wasi:http/types@0.2.0.response-outparam.set', [
+            outparamHandle,
+            _resultOkValue(_integerValue(response)),
+          ]),
+          isNull,
+        );
+        expect(outparam.response?.value?.statusCode, 202);
+
+        final incomingRequest = preview2.httpHost.insertIncomingRequest(
+          WASIPreview2HttpIncomingRequest(
+            method: const WASIPreview2HttpMethod.standard('post'),
+            headers: WASIPreview2HttpFields(
+              entries: const <WASIPreview2HttpFieldEntry>[
+                WASIPreview2HttpFieldEntry('x-incoming', <int>[55]),
+              ],
+              mutable: false,
+            ),
+            pathWithQuery: '/incoming?q=1',
+            scheme: const WASIPreview2HttpScheme.standard('HTTPS'),
+            authority: 'svc.example.test',
+            body: WASIPreview2HttpIncomingBody(
+              WASIPreview2InputStream(bytes: const <int>[56], closed: true),
+              trailers: WASIPreview2HttpFutureTrailers.completed(
+                WASIPreview2HttpResult<WASIPreview2HttpFields?>.ok(
+                  WASIPreview2HttpFields(
+                    entries: const <WASIPreview2HttpFieldEntry>[
+                      WASIPreview2HttpFieldEntry('x-trailer', <int>[57]),
+                    ],
+                    mutable: false,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        expect(
+          _caseLabel(
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.incoming-request.method',
+                  [incomingRequest],
+                )
+                as WasmComponentValueData,
+          ),
+          'post',
+        );
+        expect(
+          _optionString(
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.incoming-request.path-with-query',
+                  [incomingRequest],
+                )
+                as WasmComponentValueData,
+          ),
+          '/incoming?q=1',
+        );
+        expect(
+          _caseLabel(
+            _optionPayload(
+              program.invokeImport(
+                    'wasi:http/types@0.2.0.incoming-request.scheme',
+                    [incomingRequest],
+                  )
+                  as WasmComponentValueData,
+            ),
+          ),
+          'HTTPS',
+        );
+        expect(
+          _optionString(
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.incoming-request.authority',
+                  [incomingRequest],
+                )
+                as WasmComponentValueData,
+          ),
+          'svc.example.test',
+        );
+        final incomingHeaders =
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.incoming-request.headers',
+                  [incomingRequest],
+                )
+                as int;
+        expect(
+          _httpFieldEntryValues(
+            _httpFieldEntries(_fieldsEntries(program, incomingHeaders)),
+            'x-incoming',
+          ),
+          [
+            [55],
+          ],
+        );
+        final incomingBody = _resourceHandle(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.incoming-request.consume',
+                  [incomingRequest],
+                )
+                as WasmComponentValueData,
+          ),
+        );
+        final futureTrailers =
+            program.invokeImport('wasi:http/types@0.2.0.incoming-body.finish', [
+                  incomingBody,
+                ])
+                as int;
+        final trailersPollable =
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.future-trailers.subscribe',
+                  [futureTrailers],
+                )
+                as int;
+        expect(
+          program.invokeImport('wasi:io/poll@0.2.0.pollable.ready', [
+            trailersPollable,
+          ]),
+          isTrue,
+        );
+        final trailers =
+            program.invokeImport('wasi:http/types@0.2.0.future-trailers.get', [
+                  futureTrailers,
+                ])
+                as WasmComponentValueData;
+        final trailerFields = _optionHandle(
+          _resultOk(_resultOk(_optionPayload(trailers))),
+        );
+
+        expect(trailerFields, isNotNull);
+        expect(
+          _httpFieldEntryValues(
+            _httpFieldEntries(_fieldsEntries(program, trailerFields!)),
+            'x-trailer',
+          ),
+          [
+            [57],
+          ],
+        );
+      },
+    );
 
     test('Preview2 HTTP maps errors and informational outparams', () {
       const source = '''
@@ -1819,6 +2655,28 @@ world filesystem-test {
               )
               as WasmComponentValueData;
       final file = _resourceHandle(_resultOk(opened));
+      _expectUnitOk(
+        program.invokeImport('wasi:filesystem/types@0.2.0.descriptor.advise', [
+              file,
+              BigInt.zero,
+              BigInt.from(6),
+              _enumValue('sequential'),
+            ])
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:filesystem/types@0.2.0.descriptor.sync-data',
+              [file],
+            )
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport('wasi:filesystem/types@0.2.0.descriptor.sync', [
+              file,
+            ])
+            as WasmComponentValueData,
+      );
       final fileType =
           program.invokeImport(
                 'wasi:filesystem/types@0.2.0.descriptor.get-type',
@@ -1829,6 +2687,18 @@ world filesystem-test {
           program.invokeImport('wasi:filesystem/types@0.2.0.descriptor.stat', [
                 file,
               ])
+              as WasmComponentValueData;
+      final fileHash =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.metadata-hash',
+                [file],
+              )
+              as WasmComponentValueData;
+      final noteHashAt =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.metadata-hash-at',
+                [root, _flagsValue(const <String>[]), 'note.txt'],
+              )
               as WasmComponentValueData;
       final directRead =
           program.invokeImport('wasi:filesystem/types@0.2.0.descriptor.read', [
@@ -1914,6 +2784,8 @@ world filesystem-test {
       expect(_optionDirectoryEntryName(_resultOk(firstEntry)), 'note.txt');
       expect(_caseLabel(_resultOk(fileType)), 'regular-file');
       expect(_descriptorStatType(_resultOk(fileStat)), 'regular-file');
+      expect(_metadataHashLower(_resultOk(fileHash)), isNot(BigInt.zero));
+      expect(_metadataHashLower(_resultOk(noteHashAt)), isNot(BigInt.zero));
       expect(_readBytes(directRead), [101, 108, 108]);
       expect(_readReachedEnd(directRead), isFalse);
       expect(_u8List(_resultOk(inputBytes)), [108, 108, 111]);
@@ -4123,6 +4995,55 @@ WasmComponentValueData _httpFieldListValue(List<(String, List<int>)> entries) {
   );
 }
 
+WasmComponentValueData _httpFieldValuesValue(List<List<int>> values) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.list,
+    rawBytes: Uint8List(0),
+    items: [for (final value in values) _u8ListValue(value)],
+  );
+}
+
+WasmComponentValueData _fieldsEntries(
+  WASIComponentWitAdapterProgram program,
+  int fields,
+) {
+  return program.invokeImport('wasi:http/types@0.2.0.fields.entries', [fields])
+      as WasmComponentValueData;
+}
+
+List<List<int>> _httpFieldValues(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.list) {
+    throw StateError('expected list<field-value>, got ${value.kind.name}');
+  }
+  return [for (final item in value.items) _u8List(item)];
+}
+
+List<(String, List<int>)> _httpFieldEntries(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.list) {
+    throw StateError('expected list<field>, got ${value.kind.name}');
+  }
+  return [
+    for (final item in value.items)
+      if (item.kind == WasmComponentValueDataKind.tuple &&
+          item.items.length == 2 &&
+          item.items[0].kind == WasmComponentValueDataKind.string)
+        (item.items[0].string!, _u8List(item.items[1]))
+      else
+        throw StateError('expected HTTP field tuple, got ${item.kind.name}'),
+  ];
+}
+
+List<List<int>> _httpFieldEntryValues(
+  List<(String, List<int>)> entries,
+  String name,
+) {
+  final lower = name.toLowerCase();
+  return [
+    for (final entry in entries)
+      if (entry.$1.toLowerCase() == lower) entry.$2,
+  ];
+}
+
 int _datetimeNanoseconds(WasmComponentValueData value) {
   if (value.kind != WasmComponentValueDataKind.record ||
       value.items.length != 2 ||
@@ -4372,6 +5293,20 @@ WasmComponentValueData _optionPayload(WasmComponentValueData value) {
   return value.associatedValue!;
 }
 
+BigInt? _optionU64(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.option) {
+    throw StateError('expected option<u64>, got ${value.kind.name}');
+  }
+  if (!(value.isSome ?? value.label == 'some' || value.index == 1)) {
+    return null;
+  }
+  final associated = value.associatedValue;
+  if (associated == null) {
+    throw StateError('expected option<u64> payload');
+  }
+  return _u64Data(associated);
+}
+
 (BigInt, BigInt) _u64Tuple(WasmComponentValueData value) {
   if (value.kind != WasmComponentValueDataKind.tuple ||
       value.items.length != 2) {
@@ -4392,6 +5327,15 @@ BigInt _u64Data(WasmComponentValueData value) {
     return BigInt.from(integer);
   }
   throw StateError('expected integer payload, got $integer');
+}
+
+bool _resultBool(WasmComponentValueData value) {
+  final result = _resultOk(value);
+  if (result.kind != WasmComponentValueDataKind.boolean ||
+      result.boolean == null) {
+    throw StateError('expected bool result, got ${result.kind.name}');
+  }
+  return result.boolean!;
 }
 
 WasmComponentValueData _readTuple(WasmComponentValueData value) {
