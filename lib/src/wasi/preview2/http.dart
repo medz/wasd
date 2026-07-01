@@ -260,10 +260,35 @@ final class WASIPreview2HttpRequestOptions {
 /// Preview2 response outparam resource.
 final class WASIPreview2HttpResponseOutparam {
   WASIPreview2HttpResult<WASIPreview2HttpOutgoingResponse>? _response;
+  final List<WASIPreview2HttpInformationalResponse> _informationalResponses =
+      <WASIPreview2HttpInformationalResponse>[];
 
   /// Stored response, when set.
   WASIPreview2HttpResult<WASIPreview2HttpOutgoingResponse>? get response =>
       _response;
+
+  /// Informational responses sent before the final response.
+  List<WASIPreview2HttpInformationalResponse> get informationalResponses =>
+      List<WASIPreview2HttpInformationalResponse>.unmodifiable(
+        _informationalResponses,
+      );
+
+  /// Sends an informational response before the final response.
+  WASIPreview2HttpResult<void> sendInformational(
+    int status,
+    WASIPreview2HttpFields headers,
+  ) {
+    if (_response != null || status < 100 || status > 199) {
+      return const WASIPreview2HttpResult<void>.error('HTTP-protocol-error');
+    }
+    _informationalResponses.add(
+      WASIPreview2HttpInformationalResponse(
+        status: status,
+        headers: headers.immutableClone(),
+      ),
+    );
+    return const WASIPreview2HttpResult<void>.ok(null);
+  }
 
   /// Sets the response once.
   bool set(WASIPreview2HttpResult<WASIPreview2HttpOutgoingResponse> response) {
@@ -273,6 +298,21 @@ final class WASIPreview2HttpResponseOutparam {
     _response = response;
     return true;
   }
+}
+
+/// Preview2 informational response sent through a response outparam.
+final class WASIPreview2HttpInformationalResponse {
+  /// Creates an informational response.
+  const WASIPreview2HttpInformationalResponse({
+    required this.status,
+    required this.headers,
+  });
+
+  /// Informational status code.
+  final int status;
+
+  /// Informational headers.
+  final WASIPreview2HttpFields headers;
 }
 
 /// Preview2 incoming HTTP response.
@@ -665,7 +705,8 @@ base class WASIPreview2HttpHost {
   /// Standard `wasi:http@0.2.0` import callbacks.
   late final Map<String, WASIComponentWitAdapterCallback>
   imports = Map<String, WASIComponentWitAdapterCallback>.unmodifiable({
-    'wasi:http/types@0.2.0.http-error-code': (args) => _none(),
+    'wasi:http/types@0.2.0.http-error-code': (args) =>
+        _httpErrorCode(_handle(args.single)),
     'wasi:http/types@0.2.0.fields.constructor': (_) =>
         _insertFields(WASIPreview2HttpFields()),
     'wasi:http/types@0.2.0.fields.from-list': (args) =>
@@ -755,7 +796,7 @@ base class WASIPreview2HttpHost {
       return _unitOk();
     },
     'wasi:http/types@0.2.0.response-outparam.send-informational': (args) =>
-        _errorCodeResult('internal-error'),
+        _sendInformational(_handle(args[0]), _u16(args[1]), _handle(args[2])),
     'wasi:http/types@0.2.0.response-outparam.set': (args) {
       _setResponseOutparam(_handle(args[0]), args[1]);
       return null;
@@ -885,6 +926,12 @@ base class WASIPreview2HttpHost {
         handle,
       );
 
+  WasmComponentValueData _httpErrorCode(int handle) {
+    final debugString = streamsHost.errorHost.debugString(handle);
+    final code = _httpErrorCodeFromDebugString(debugString);
+    return code == null ? _none() : _some(_errorCodeData(code));
+  }
+
   WasmComponentValueData _fieldsFromList(Object? value) {
     final entries = _fieldEntriesFromData(value);
     final invalid = entries.any(
@@ -990,6 +1037,17 @@ base class WASIPreview2HttpHost {
   ) {
     final trailers = _optionalFields(trailersValue);
     final result = _outgoingBody(handle).finish(trailers);
+    return result.isOk ? _unitOk() : _errorCodeResult(result.errorCode!);
+  }
+
+  WasmComponentValueData _sendInformational(
+    int outparamHandle,
+    int status,
+    int headersHandle,
+  ) {
+    final result = _responseOutparam(
+      outparamHandle,
+    ).sendInformational(status, _fields(headersHandle));
     return result.isOk ? _unitOk() : _errorCodeResult(result.errorCode!);
   }
 
@@ -1253,6 +1311,26 @@ WasmComponentValueData _fieldsEntriesData(
 String _errorCodeFromData(Object? value) {
   final data = _variantData(value);
   return data.label ?? _caseLabel(_httpErrorCodeCases, data.index);
+}
+
+String? _httpErrorCodeFromDebugString(String debugString) {
+  if (_httpErrorCodeCases.contains(debugString)) {
+    return debugString;
+  }
+  final normalized = debugString.toLowerCase();
+  if (normalized.contains('response') && normalized.contains('timeout')) {
+    return 'HTTP-response-timeout';
+  }
+  if (normalized.contains('connection') && normalized.contains('timeout')) {
+    return 'connection-timeout';
+  }
+  if (normalized.contains('connection') && normalized.contains('refused')) {
+    return 'connection-refused';
+  }
+  if (normalized.contains('dns')) {
+    return 'DNS-error';
+  }
+  return null;
 }
 
 WasmComponentValueData _errorCodeResult(String code) =>

@@ -1450,6 +1450,75 @@ world http-test {
       expect(backend.lastHeaderNames, contains('x-test'));
     });
 
+    test('Preview2 HTTP maps errors and informational outparams', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world http-test {
+  import wasi:http/types@0.2.0;
+  import wasi:io/error@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2 = WASIPreview2ComponentHost();
+      final program = preview2.bindWitWorld(document, worldName: 'http-test');
+      final timeoutError = preview2.errorHost.insert(
+        const WASIPreview2IoError('HTTP-response-timeout'),
+      );
+      final unknownError = preview2.errorHost.insert(
+        const WASIPreview2IoError('application error'),
+      );
+      final timeoutCode =
+          program.invokeImport('wasi:http/types@0.2.0.http-error-code', [
+                timeoutError,
+              ])
+              as WasmComponentValueData;
+      final unknownCode =
+          program.invokeImport('wasi:http/types@0.2.0.http-error-code', [
+                unknownError,
+              ])
+              as WasmComponentValueData;
+      final outparam = WASIPreview2HttpResponseOutparam();
+      final outparamHandle = preview2.httpHost.insertResponseOutparam(outparam);
+      final fields =
+          program.invokeImport(
+                'wasi:http/types@0.2.0.fields.constructor',
+                const [],
+              )
+              as int;
+      _expectUnitOk(
+        program.invokeImport('wasi:http/types@0.2.0.fields.append', [
+              fields,
+              'x-info',
+              _u8ListValue([111, 107]),
+            ])
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:http/types@0.2.0.response-outparam.send-informational',
+              [outparamHandle, 103, fields],
+            )
+            as WasmComponentValueData,
+      );
+      final invalidInformational =
+          program.invokeImport(
+                'wasi:http/types@0.2.0.response-outparam.send-informational',
+                [outparamHandle, 200, fields],
+              )
+              as WasmComponentValueData;
+
+      expect(_optionCaseLabel(timeoutCode), 'HTTP-response-timeout');
+      expect(_optionCaseLabel(unknownCode), isNull);
+      expect(outparam.informationalResponses, hasLength(1));
+      expect(outparam.informationalResponses.single.status, 103);
+      expect(
+        outparam.informationalResponses.single.headers.entries.single.name,
+        'x-info',
+      );
+      expect(_resultErrorLabel(invalidInformational), 'HTTP-protocol-error');
+    });
+
     test('Preview2 HTTP proxy export sets response outparam', () {
       const source = '''
 package wasi-testsuite:test;
@@ -4178,7 +4247,7 @@ String? _optionCaseLabel(WasmComponentValueData value) {
   if (value.kind != WasmComponentValueDataKind.option) {
     throw StateError('expected option case, got ${value.kind.name}');
   }
-  if (!(value.isSome ?? false)) {
+  if (!(value.isSome ?? value.label == 'some' || value.index == 1)) {
     return null;
   }
   final associated = value.associatedValue;

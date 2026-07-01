@@ -12,6 +12,7 @@ final class WASIPreview2NativeFilesystemHost
   WASIPreview2NativeFilesystemHost({
     required Map<String, String> preopens,
     bool canMutate = false,
+    super.streamsHost,
   }) : super(
          preopens: <String, WASIPreview2FilesystemDirectory>{
            for (final entry in preopens.entries)

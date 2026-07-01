@@ -360,6 +360,71 @@ world http-test {
       );
     });
 
+    test('creates a native Preview2 host with real Dart VM backends', () {
+      if (!hasDartIoRuntime) {
+        markTestSkipped('requires dart:io native backends');
+        return;
+      }
+      final temp = createHostTemp('wasd_p2_native_host_');
+      if (temp == null) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      addTearDown(temp.delete);
+      temp.writeFile('native.txt', 'ok');
+
+      const source = '''
+package wasi-testsuite:test;
+
+world native-host-test {
+  import wasi:cli/environment@0.2.0;
+  import wasi:filesystem/preopens@0.2.0;
+  import wasi:http/outgoing-handler@0.2.0;
+  import wasi:io/streams@0.2.0;
+  import wasi:sockets/instance-network@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview2ComponentHost.native(
+        args: const <String>['component.wasm'],
+        env: const <String, String>{'mode': 'native'},
+        preopens: {'/': temp.path},
+        canMutatePreopens: true,
+      );
+      final program = host.bindWitWorld(
+        document,
+        worldName: 'native-host-test',
+      );
+      final directories =
+          program.invokeImport(
+                'wasi:filesystem/preopens@0.2.0.get-directories',
+                const [],
+              )
+              as WasmComponentValueData;
+      final args =
+          program.invokeImport(
+                'wasi:cli/environment@0.2.0.get-arguments',
+                const [],
+              )
+              as WasmComponentValueData;
+
+      expect(host.filesystemHost, isA<WASIPreview2NativeFilesystemHost>());
+      expect(host.socketsHost, isA<WASIPreview2NativeSocketsHost>());
+      expect(host.httpHost, isA<WASIPreview2NativeHttpHost>());
+      expect(host.filesystemHost.streamsHost, same(host.streamsHost));
+      expect(host.socketsHost.streamsHost, same(host.streamsHost));
+      expect(host.httpHost.streamsHost, same(host.streamsHost));
+      expect(host.cliHost.streamsHost, same(host.streamsHost));
+      expect(host.streamsHost.pollHost, same(host.pollHost));
+      expect(host.streamsHost.errorHost, same(host.errorHost));
+      expect(_preopenHandle(directories, '/'), isNonNegative);
+      expect(args.items.map((item) => item.string), ['component.wasm']);
+      expect(
+        host.standardImports,
+        contains('wasi:http/outgoing-handler@0.2.0.handle'),
+      );
+    });
+
     test(
       'binds Preview2 sockets imports to Dart VM loopback sockets',
       () async {

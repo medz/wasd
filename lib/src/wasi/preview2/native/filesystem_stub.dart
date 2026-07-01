@@ -7,6 +7,7 @@ final class WASIPreview2NativeFilesystemHost
   WASIPreview2NativeFilesystemHost({
     required Map<String, String> preopens,
     bool canMutate = false,
+    super.streamsHost,
   }) : super() {
     throw UnsupportedError(
       'WASIPreview2NativeFilesystemHost requires dart:io.',

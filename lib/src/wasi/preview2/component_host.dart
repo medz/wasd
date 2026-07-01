@@ -15,12 +15,72 @@ import 'io.dart';
 import 'poll.dart';
 import 'random.dart';
 import 'sockets.dart';
+import 'native/default_hosts_stub.dart'
+    if (dart.library.io) 'native/default_hosts.dart'
+    as native_defaults;
 
 /// WASI 0.2 / Preview2 component host boundary.
 ///
 /// This fixed-version wrapper keeps Preview2 adapter code from constructing a
 /// mixed-version component host by hand.
 final class WASIPreview2ComponentHost {
+  /// Creates a Dart VM-native Preview2 component host.
+  ///
+  /// The default constructor keeps a portable in-memory host for JS/browser
+  /// runtimes. This factory wires filesystem, sockets, HTTP, CLI, streams,
+  /// pollables, and errors through one shared component resource table on
+  /// `dart:io` runtimes.
+  factory WASIPreview2ComponentHost.native({
+    WASIComponentHost? componentHost,
+    List<String> args = const <String>[],
+    Map<String, String> env = const <String, String>{},
+    String? initialCwd,
+    List<int> stdinData = const <int>[],
+    Map<String, String> preopens = const <String, String>{},
+    bool canMutatePreopens = false,
+    WASIPreview2AddressResolver? resolveAddresses,
+  }) {
+    final host = componentHost ?? WASIComponentHost();
+    final pollHost = WASIPreview2PollHost(table: host.table);
+    final errorHost = WASIPreview2IoErrorHost(table: host.table);
+    final streamsHost = WASIPreview2StreamsHost(
+      table: host.table,
+      pollHost: pollHost,
+      errorHost: errorHost,
+    );
+    final cliHost = WASIPreview2CliHost(
+      streamsHost: streamsHost,
+      args: args,
+      env: env,
+      initialCwd: initialCwd,
+      stdinData: stdinData,
+    );
+
+    return WASIPreview2ComponentHost(
+      componentHost: host,
+      pollHost: pollHost,
+      errorHost: errorHost,
+      streamsHost: streamsHost,
+      clocksHost: WASIPreview2ClocksHost(pollHost: pollHost),
+      cliHost: cliHost,
+      filesystemHost: native_defaults.createNativePreview2FilesystemHost(
+        preopens: preopens,
+        canMutate: canMutatePreopens,
+        streamsHost: streamsHost,
+      ),
+      socketsHost: native_defaults.createNativePreview2SocketsHost(
+        pollHost: pollHost,
+        streamsHost: streamsHost,
+        resolveAddresses: resolveAddresses,
+      ),
+      httpHost: native_defaults.createNativePreview2HttpHost(
+        pollHost: pollHost,
+        streamsHost: streamsHost,
+      ),
+      randomHost: WASIPreview2RandomHost(),
+    );
+  }
+
   /// Creates a Preview2 component host over [componentHost] or a new host.
   WASIPreview2ComponentHost({
     WASIComponentHost? componentHost,
