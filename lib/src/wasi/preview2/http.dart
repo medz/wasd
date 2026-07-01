@@ -342,6 +342,9 @@ final class WASIPreview2HttpOutgoingResponse {
 
   WASIPreview2HttpOutgoingBody? _body;
 
+  /// Outgoing response body, when created.
+  WASIPreview2HttpOutgoingBody? get bodyResource => _body;
+
   /// Returns the outgoing body on the first call, or null afterwards.
   WASIPreview2HttpOutgoingBody? takeBody() {
     if (_body != null) {
@@ -353,6 +356,9 @@ final class WASIPreview2HttpOutgoingResponse {
 
 /// Preview2 outgoing body resource.
 final class WASIPreview2HttpOutgoingBody {
+  final StreamController<List<int>> _chunks = StreamController<List<int>>();
+  final Completer<WASIPreview2HttpResult<void>> _done =
+      Completer<WASIPreview2HttpResult<void>>();
   WASIPreview2OutputStream? _stream;
   WASIPreview2HttpFields? _trailers;
   bool _finished = false;
@@ -361,12 +367,29 @@ final class WASIPreview2HttpOutgoingBody {
   List<int> get bytes =>
       List<int>.unmodifiable(_stream?.bytes ?? const <int>[]);
 
+  /// Body chunks written after the output stream is taken.
+  Stream<List<int>> get chunks => _chunks.stream;
+
+  /// Completes when the body is finished.
+  Future<WASIPreview2HttpResult<void>> get done => _done.future;
+
+  /// Whether [finish] has been called.
+  bool get isFinished => _finished;
+
   /// Returns the output stream on the first call, or null afterwards.
   WASIPreview2OutputStream? takeStream() {
     if (_stream != null || _finished) {
       return null;
     }
-    return _stream = WASIPreview2OutputStream();
+    return _stream = WASIPreview2OutputStream(
+      onWrite: (chunk) {
+        if (_finished || _chunks.isClosed) {
+          return 'stream-closed';
+        }
+        _chunks.add(chunk);
+        return null;
+      },
+    );
   }
 
   /// Finishes the body with optional trailers.
@@ -377,6 +400,10 @@ final class WASIPreview2HttpOutgoingBody {
     _finished = true;
     _trailers = trailers?.immutableClone();
     _stream?.close();
+    unawaited(_chunks.close());
+    if (!_done.isCompleted) {
+      _done.complete(const WASIPreview2HttpResult<void>.ok(null));
+    }
     return const WASIPreview2HttpResult<void>.ok(null);
   }
 
@@ -1414,6 +1441,9 @@ int _u8(Object? value) {
     int() when value >= 0 && value <= 0xff => value,
     BigInt() when value >= BigInt.zero && value <= BigInt.from(0xff) =>
       value.toInt(),
+    WasmComponentValueData(kind: WasmComponentValueDataKind.integer) => _u8(
+      value.integer,
+    ),
     _ => throw StateError('Expected u8 value, got $value.'),
   };
 }
@@ -1423,6 +1453,9 @@ int _u16(Object? value) {
     int() when value >= 0 && value <= 0xffff => value,
     BigInt() when value >= BigInt.zero && value <= BigInt.from(0xffff) =>
       value.toInt(),
+    WasmComponentValueData(kind: WasmComponentValueDataKind.integer) => _u16(
+      value.integer,
+    ),
     _ => throw StateError('Expected u16 value, got $value.'),
   };
 }
@@ -1431,6 +1464,9 @@ BigInt _u64(Object? value) {
   return switch (value) {
     int() when value >= 0 => BigInt.from(value),
     BigInt() when value >= BigInt.zero => value,
+    WasmComponentValueData(kind: WasmComponentValueDataKind.integer) => _u64(
+      value.integer,
+    ),
     _ => throw StateError('Expected u64 value, got $value.'),
   };
 }

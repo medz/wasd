@@ -1406,6 +1406,157 @@ world http-test {
       expect(backend.lastHeaderNames, contains('x-test'));
     });
 
+    test('Preview2 HTTP proxy export sets response outparam', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world proxy-test {
+  include wasi:http/proxy@0.2.8;
+  import wasi:http/types@0.2.8;
+  include wasi:io/imports@0.2.8;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2 = WASIPreview2ComponentHost();
+      final plan = preview2.prepareWitWorld(document, worldName: 'proxy-test');
+
+      expect(plan.canIngest, isTrue);
+      expect(plan.canBindAdapters, isTrue);
+      expect(plan.bindingErrors, isEmpty);
+      expect(
+        plan.functions.map((function) => function.qualifiedName),
+        containsAll(<String>[
+          'wasi:http/outgoing-handler@0.2.8.handle',
+          'wasi:http/types@0.2.8.outgoing-response.constructor',
+          'wasi:http/types@0.2.8.response-outparam.set',
+          'wasi:http/incoming-handler@0.2.8.handle',
+        ]),
+      );
+
+      late final WASIComponentWitAdapterProgram program;
+      program = preview2.bindWitWorld(
+        document,
+        worldName: 'proxy-test',
+        exports: {
+          'wasi:http/incoming-handler@0.2.8.handle': (args) {
+            final request = args[0] as int;
+            final responseOut = args[1] as int;
+            final path =
+                program.invokeImport(
+                      'wasi:http/types@0.2.8.incoming-request.path-with-query',
+                      [request],
+                    )
+                    as WasmComponentValueData;
+
+            expect(_optionString(path), '/proxy');
+
+            final fields =
+                program.invokeImport(
+                      'wasi:http/types@0.2.8.fields.constructor',
+                      const [],
+                    )
+                    as int;
+            _expectUnitOk(
+              program.invokeImport('wasi:http/types@0.2.8.fields.append', [
+                    fields,
+                    'x-proxy',
+                    _u8ListValue([111, 107]),
+                  ])
+                  as WasmComponentValueData,
+            );
+            final response =
+                program.invokeImport(
+                      'wasi:http/types@0.2.8.outgoing-response.constructor',
+                      [fields],
+                    )
+                    as int;
+            _expectUnitOk(
+              program.invokeImport(
+                    'wasi:http/types@0.2.8.outgoing-response.set-status-code',
+                    [response, 204],
+                  )
+                  as WasmComponentValueData,
+            );
+            final outgoingBody = _resourceHandle(
+              _resultOk(
+                program.invokeImport(
+                      'wasi:http/types@0.2.8.outgoing-response.body',
+                      [response],
+                    )
+                    as WasmComponentValueData,
+              ),
+            );
+            final output = _resourceHandle(
+              _resultOk(
+                program.invokeImport(
+                      'wasi:http/types@0.2.8.outgoing-body.write',
+                      [outgoingBody],
+                    )
+                    as WasmComponentValueData,
+              ),
+            );
+
+            program.invokeImport(
+              'wasi:io/streams@0.2.8.output-stream.check-write',
+              [output],
+            );
+            _expectUnitOk(
+              program.invokeImport(
+                    'wasi:io/streams@0.2.8.output-stream.write',
+                    [
+                      output,
+                      _u8ListValue([111, 107]),
+                    ],
+                  )
+                  as WasmComponentValueData,
+            );
+            _expectUnitOk(
+              program.invokeImport(
+                    'wasi:http/types@0.2.8.outgoing-body.finish',
+                    [outgoingBody, _noneValue()],
+                  )
+                  as WasmComponentValueData,
+            );
+            program.invokeImport(
+              'wasi:http/types@0.2.8.response-outparam.set',
+              [responseOut, _resultOkValue(_integerValue(response))],
+            );
+            return null;
+          },
+        },
+      );
+      final responseOutparam = WASIPreview2HttpResponseOutparam();
+      final incoming = preview2.httpHost.insertIncomingRequest(
+        WASIPreview2HttpIncomingRequest(
+          method: const WASIPreview2HttpMethod.standard('get'),
+          headers: WASIPreview2HttpFields(),
+          pathWithQuery: '/proxy',
+          scheme: const WASIPreview2HttpScheme.standard('HTTP'),
+          authority: 'example.test',
+        ),
+      );
+      final responseOut = preview2.httpHost.insertResponseOutparam(
+        responseOutparam,
+      );
+
+      expect(
+        program.invokeExport('wasi:http/incoming-handler@0.2.8.handle', [
+          incoming,
+          responseOut,
+        ]),
+        isNull,
+      );
+
+      final responseResult = responseOutparam.response;
+      expect(responseResult, isNotNull);
+      expect(responseResult!.isOk, isTrue);
+      final response = responseResult.value!;
+      expect(response.statusCode, 204);
+      expect(response.headers.entries.map((entry) => entry.name), ['x-proxy']);
+      expect(response.bodyResource?.bytes, [111, 107]);
+      expect(response.bodyResource?.isFinished, isTrue);
+    });
+
     test('Preview2 expands and binds standard WASI filesystem imports', () {
       const source = '''
 package wasi-testsuite:test;
@@ -3658,6 +3809,17 @@ WasmComponentValueData _unitOkValue() {
   );
 }
 
+WasmComponentValueData _resultOkValue(WasmComponentValueData value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.result,
+    rawBytes: Uint8List(0),
+    index: 0,
+    label: 'ok',
+    isOk: true,
+    associatedValue: value,
+  );
+}
+
 WasmComponentValueData _unitOkCaseValue() {
   return WasmComponentValueData(
     kind: WasmComponentValueDataKind.result,
@@ -4016,7 +4178,7 @@ String? _optionString(WasmComponentValueData value) {
   if (value.kind != WasmComponentValueDataKind.option) {
     throw StateError('expected option<string>, got ${value.kind.name}');
   }
-  if (!(value.isSome ?? false)) {
+  if (!(value.isSome ?? value.label == 'some' || value.index == 1)) {
     return null;
   }
   final associated = value.associatedValue;

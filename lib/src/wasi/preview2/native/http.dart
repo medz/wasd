@@ -52,25 +52,18 @@ final class _NativeHttpBackend implements WASIPreview2HttpBackend {
       for (final entry in request.headers.entries) {
         ioRequest.headers.add(entry.name, String.fromCharCodes(entry.value));
       }
-      final body = request.bodyResource?.bytes ?? const <int>[];
-      if (body.isNotEmpty) {
-        ioRequest.add(body);
-      }
-      var close = ioRequest.close();
-      final firstByteTimeout = _durationFromNanos(options?.firstByteTimeout);
-      if (firstByteTimeout != null) {
-        close = close.timeout(firstByteTimeout);
-      }
-      final ioResponse = await close;
-      final input = WASIPreview2InputStream();
-      ioResponse.listen(
-        input.append,
-        onError: (Object error, StackTrace stackTrace) {
-          input.fail(error.toString());
-        },
-        onDone: input.close,
-        cancelOnError: true,
+      final bodyResult = await _writeRequestBody(
+        ioRequest,
+        request.bodyResource,
       );
+      if (!bodyResult.isOk) {
+        return WASIPreview2HttpResult<WASIPreview2HttpIncomingResponse>.error(
+          bodyResult.errorCode!,
+        );
+      }
+      final ioResponse = await ioRequest.close();
+      final input = WASIPreview2InputStream();
+      _pipeResponseBody(ioResponse, input, options);
       return WASIPreview2HttpResult<WASIPreview2HttpIncomingResponse>.ok(
         WASIPreview2HttpIncomingResponse(
           status: ioResponse.statusCode,
@@ -98,6 +91,87 @@ final class _NativeHttpBackend implements WASIPreview2HttpBackend {
         WASIPreview2HttpIncomingResponse
       >.error('internal-error');
     }
+  }
+}
+
+Future<WASIPreview2HttpResult<void>> _writeRequestBody(
+  io.HttpClientRequest request,
+  WASIPreview2HttpOutgoingBody? body,
+) async {
+  if (body == null) {
+    return const WASIPreview2HttpResult<void>.ok(null);
+  }
+  try {
+    await for (final chunk in body.chunks) {
+      if (chunk.isNotEmpty) {
+        request.add(chunk);
+      }
+    }
+    return await body.done;
+  } on Object {
+    return const WASIPreview2HttpResult<void>.error('internal-error');
+  }
+}
+
+void _pipeResponseBody(
+  io.HttpClientResponse response,
+  WASIPreview2InputStream input,
+  WASIPreview2HttpRequestOptions? options,
+) {
+  final firstByteTimeout = _durationFromNanos(options?.firstByteTimeout);
+  final betweenBytesTimeout = _durationFromNanos(options?.betweenBytesTimeout);
+  Timer? timeout;
+  var failed = false;
+  late final StreamSubscription<List<int>> subscription;
+
+  void cancelTimeout() {
+    timeout?.cancel();
+    timeout = null;
+  }
+
+  void failTimeout() {
+    failed = true;
+    cancelTimeout();
+    input.fail('HTTP-response-timeout');
+    unawaited(subscription.cancel());
+  }
+
+  void armTimeout(Duration duration) {
+    cancelTimeout();
+    timeout = Timer(duration, failTimeout);
+  }
+
+  subscription = response.listen(
+    (chunk) {
+      if (failed) {
+        return;
+      }
+      cancelTimeout();
+      input.append(chunk);
+      if (betweenBytesTimeout != null) {
+        armTimeout(betweenBytesTimeout);
+      }
+    },
+    onError: (Object error, StackTrace stackTrace) {
+      if (failed) {
+        return;
+      }
+      failed = true;
+      cancelTimeout();
+      input.fail(error.toString());
+    },
+    onDone: () {
+      if (failed) {
+        return;
+      }
+      cancelTimeout();
+      input.close();
+    },
+    cancelOnError: true,
+  );
+
+  if (firstByteTimeout != null) {
+    armTimeout(firstByteTimeout);
   }
 }
 

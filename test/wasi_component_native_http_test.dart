@@ -108,6 +108,15 @@ world http-test {
               as WasmComponentValueData,
         ),
       );
+      final future = _handle(
+        _resultOk(
+          program.invokeImport('wasi:http/outgoing-handler@0.2.0.handle', [
+                request,
+                _noneValue(),
+              ])
+              as WasmComponentValueData,
+        ),
+      );
       program.invokeImport('wasi:io/streams@0.2.0.output-stream.check-write', [
         output,
       ]);
@@ -126,15 +135,6 @@ world http-test {
             as WasmComponentValueData,
       );
 
-      final future = _handle(
-        _resultOk(
-          program.invokeImport('wasi:http/outgoing-handler@0.2.0.handle', [
-                request,
-                _noneValue(),
-              ])
-              as WasmComponentValueData,
-        ),
-      );
       await _block(
         program,
         'wasi:http/types@0.2.0.future-incoming-response.subscribe',
@@ -188,6 +188,161 @@ world http-test {
       expect(host.httpHost.streamsHost, same(host.streamsHost));
     },
   );
+
+  test('Preview2 native HTTP host times out delayed response bodies', () async {
+    final server = await io.ServerSocket.bind(
+      io.InternetAddress.loopbackIPv4,
+      0,
+    );
+    addTearDown(() async {
+      await server.close();
+    });
+    server.listen((socket) {
+      socket.listen((_) {}, onError: (_) {});
+      unawaited(
+        (() async {
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+          socket.add(
+            'HTTP/1.1 200 OK\r\n'
+                    'Content-Length: 1\r\n'
+                    'Connection: close\r\n'
+                    '\r\n'
+                .codeUnits,
+          );
+          await socket.flush();
+          await Future<void>.delayed(const Duration(milliseconds: 75));
+          try {
+            socket.add(const <int>[65]);
+            await socket.flush();
+            await socket.close();
+          } on Object {
+            socket.destroy();
+          }
+        })(),
+      );
+    });
+
+    const source = '''
+package wasi-testsuite:test;
+
+world http-timeout-test {
+  import wasi:http/types@0.2.0;
+  import wasi:http/outgoing-handler@0.2.0;
+  import wasi:io/error@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+    final document = WASIComponentWitDocument.parse(source);
+    final host = WASIPreview2ComponentHost(
+      httpHost: WASIPreview2NativeHttpHost(),
+    );
+    final program = host.bindWitWorld(document, worldName: 'http-timeout-test');
+    final headers =
+        program.invokeImport(
+              'wasi:http/types@0.2.0.fields.constructor',
+              const [],
+            )
+            as int;
+    final request =
+        program.invokeImport(
+              'wasi:http/types@0.2.0.outgoing-request.constructor',
+              [headers],
+            )
+            as int;
+
+    _expectUnitOk(
+      program.invokeImport(
+            'wasi:http/types@0.2.0.outgoing-request.set-scheme',
+            [request, _someValue(_variantValue('HTTP'))],
+          )
+          as WasmComponentValueData,
+    );
+    _expectUnitOk(
+      program.invokeImport(
+            'wasi:http/types@0.2.0.outgoing-request.set-authority',
+            [request, _someValue(_stringValue('127.0.0.1:${server.port}'))],
+          )
+          as WasmComponentValueData,
+    );
+    _expectUnitOk(
+      program.invokeImport(
+            'wasi:http/types@0.2.0.outgoing-request.set-path-with-query',
+            [request, _someValue(_stringValue('/timeout'))],
+          )
+          as WasmComponentValueData,
+    );
+    final options =
+        program.invokeImport(
+              'wasi:http/types@0.2.0.request-options.constructor',
+              const [],
+            )
+            as int;
+    _expectUnitOk(
+      program.invokeImport(
+            'wasi:http/types@0.2.0.request-options.set-first-byte-timeout',
+            [options, _someValue(_integerValue(BigInt.from(5000000)))],
+          )
+          as WasmComponentValueData,
+    );
+    final future = _handle(
+      _resultOk(
+        program.invokeImport('wasi:http/outgoing-handler@0.2.0.handle', [
+              request,
+              _someValue(_integerValue(options)),
+            ])
+            as WasmComponentValueData,
+      ),
+    );
+
+    await _block(
+      program,
+      'wasi:http/types@0.2.0.future-incoming-response.subscribe',
+      future,
+    );
+    final ready =
+        program.invokeImport(
+              'wasi:http/types@0.2.0.future-incoming-response.get',
+              [future],
+            )
+            as WasmComponentValueData;
+    final response = _handle(_resultOk(_resultOk(_optionPayload(ready))));
+    final incomingBody = _handle(
+      _resultOk(
+        program.invokeImport(
+              'wasi:http/types@0.2.0.incoming-response.consume',
+              [response],
+            )
+            as WasmComponentValueData,
+      ),
+    );
+    final input = _handle(
+      _resultOk(
+        program.invokeImport('wasi:http/types@0.2.0.incoming-body.%stream', [
+              incomingBody,
+            ])
+            as WasmComponentValueData,
+      ),
+    );
+    await _block(
+      program,
+      'wasi:io/streams@0.2.0.input-stream.subscribe',
+      input,
+    );
+    final read =
+        program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+              input,
+              BigInt.one,
+            ])
+            as WasmComponentValueData;
+    final error = _streamErrorHandle(read);
+
+    expect(
+      program.invokeImport('wasi:io/error@0.2.0.error.to-debug-string', [
+        error,
+      ]),
+      'HTTP-response-timeout',
+    );
+  });
 }
 
 Future<void> _block(
@@ -251,6 +406,20 @@ List<int> _u8List(WasmComponentValueData value) {
   ];
 }
 
+int _streamErrorHandle(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.result ||
+      (value.isOk ?? value.index == 0 || value.label == 'ok')) {
+    throw StateError('expected stream error');
+  }
+  final associated = value.associatedValue;
+  if (associated == null ||
+      associated.kind != WasmComponentValueDataKind.variant ||
+      associated.associatedValue == null) {
+    throw StateError('expected stream error payload');
+  }
+  return _handle(associated.associatedValue!);
+}
+
 WasmComponentValueData _httpFieldListValue(List<(String, List<int>)> entries) {
   return WasmComponentValueData(
     kind: WasmComponentValueDataKind.list,
@@ -282,6 +451,14 @@ WasmComponentValueData _stringValue(String value) {
     kind: WasmComponentValueDataKind.string,
     rawBytes: Uint8List(0),
     string: value,
+  );
+}
+
+WasmComponentValueData _integerValue(Object value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.integer,
+    rawBytes: Uint8List(0),
+    integer: value,
   );
 }
 
