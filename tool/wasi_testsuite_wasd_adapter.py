@@ -7,7 +7,8 @@ from typing import Dict, List, Optional, Tuple
 
 DART = shlex.split(os.getenv("DART", "dart"), posix=os.name != "nt")
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_RUNNER = _REPO_ROOT / "tool" / "wasi_testsuite_preview1_runner.dart"
+_P1_RUNNER = _REPO_ROOT / "tool" / "wasi_testsuite_preview1_runner.dart"
+_P2_RUNNER = _REPO_ROOT / "tool" / "wasi_testsuite_preview2_component_runner.dart"
 
 
 def get_name() -> str:
@@ -16,7 +17,7 @@ def get_name() -> str:
 
 def get_version() -> str:
     result = subprocess.run(
-        DART + [str(_RUNNER), "--version"],
+        DART + [str(_P1_RUNNER), "--version"],
         encoding="UTF-8",
         capture_output=True,
         check=True,
@@ -25,7 +26,7 @@ def get_version() -> str:
 
 
 def get_wasi_versions() -> List[str]:
-    return ["wasm32-wasip1"]
+    return ["wasm32-wasip1", "wasm32-wasip2"]
 
 
 def get_wasi_worlds() -> List[str]:
@@ -39,7 +40,7 @@ def compute_argv(
     wasi_world: str,
     wasi_version: str,
 ) -> List[str]:
-    if wasi_version != "wasm32-wasip1":
+    if wasi_version not in {"wasm32-wasip1", "wasm32-wasip2"}:
         raise ValueError(f"unsupported WASI version for wasd adapter: {wasi_version}")
     if wasi_world != "wasi:cli/command":
         raise ValueError(f"unsupported WASI world for wasd adapter: {wasi_world}")
@@ -47,7 +48,7 @@ def compute_argv(
     args, env, root = args_env_root
     argv: List[str] = []
     argv += DART
-    argv += [str(_RUNNER)]
+    argv += [str(_runner_for(wasi_version))]
     for key, value in env.items():
         argv += ["--env", f"{key}={value}"]
     if root:
@@ -55,3 +56,11 @@ def compute_argv(
     argv += [test_path]
     argv += args
     return argv
+
+
+def _runner_for(wasi_version: str) -> Path:
+    if wasi_version == "wasm32-wasip1":
+        return _P1_RUNNER
+    if wasi_version == "wasm32-wasip2":
+        return _P2_RUNNER
+    raise ValueError(f"unsupported WASI version for wasd adapter: {wasi_version}")
