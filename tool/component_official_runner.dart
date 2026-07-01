@@ -36,11 +36,16 @@ const Map<String, String> _defaultExpectedFailureReasonPatterns =
       // Parser token coverage gap in current wasm-tools release.
       'async/trap-if-block-and-sync.wast': 'unexpected token, expected one of:',
     };
-const Map<String, String> _allFeaturesAdditionalExpectedFailureReasonPatterns =
-    <String, String>{
-      // Known wasm-tools/parser drift for package-name parsing assertions.
-      'wasm-tools/import.wast': 'should have failed with: expected `/` after',
-    };
+const Map<String, String>
+_allFeaturesAdditionalExpectedFailureReasonPatterns = <String, String>{
+  // Known wasm-tools/parser drift for package-name parsing assertions.
+  'wasm-tools/import.wast': 'should have failed with: expected `/` after',
+  // Known wasm-tools validation drift for canonical ABI rejection tests.
+  'wasm-tools/memory64.wast':
+      'should have failed with: canonical ABI memory is not a 32-bit linear memory',
+  'wasm-tools/resources.wast':
+      'should have failed with: resources can only be represented by `i32`',
+};
 const Map<String, String>
 _allGroupsAdditionalExpectedFailureReasonPatterns = <String, String>{
   // Wasmtime policy assertions do not match raw wasm-tools validation behavior.

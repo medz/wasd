@@ -1216,6 +1216,50 @@ world sockets-test {
       );
     });
 
+    test('Preview2 covers every standard WASI 0.2.x host import', () {
+      for (var patch = 0; patch <= 8; patch++) {
+        final version = '0.2.$patch';
+        final document = WASIComponentWitDocument.parse('''
+package wasi-testsuite:preview2-coverage;
+
+world all-imports {
+  include wasi:random/imports@$version;
+  include wasi:clocks/imports@$version;
+  include wasi:io/imports@$version;
+  include wasi:cli/imports@$version;
+  include wasi:filesystem/imports@$version;
+  include wasi:sockets/imports@$version;
+  include wasi:http/imports@$version;
+  import wasi:http/types@$version;
+}
+''');
+        final preview2 = WASIPreview2ComponentHost();
+        final plan = preview2.prepareWitWorld(
+          document,
+          worldName: 'all-imports',
+        );
+        final importedFunctions = plan.functions
+            .where(
+              (function) =>
+                  function.direction ==
+                  WASIComponentWitWorldItemDirection.import,
+            )
+            .map((function) => function.qualifiedName)
+            .toSet();
+        final missing =
+            importedFunctions
+                .where((name) => !preview2.standardImports.containsKey(name))
+                .toList()
+              ..sort();
+
+        expect(plan.canIngest, isTrue, reason: version);
+        expect(plan.canBindAdapters, isTrue, reason: version);
+        expect(plan.bindingErrors, isEmpty, reason: version);
+        expect(importedFunctions.length, greaterThan(120), reason: version);
+        expect(missing, isEmpty, reason: version);
+      }
+    });
+
     test('Preview2 expands and binds standard WASI HTTP imports', () {
       const source = '''
 package wasi-testsuite:test;
