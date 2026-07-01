@@ -1,3 +1,17 @@
+## 0.3.0
+
+- Stabilize Preview1 command-module support with real host filesystem preopens
+  across Dart VM and Node.js, including host-backed file, directory, symlink,
+  and timestamp behavior.
+- Record the current WebAssembly core and WASI Preview1 conformance gates in an
+  executable TODO under `doc/`.
+- Add Preview2 component host/import coverage for standard `wasi:io`,
+  `wasi:cli`, `wasi:filesystem`, and `wasi:sockets` packages.
+- Add Preview3 component host/filesystem/async-profile scaffolding without
+  claiming full Preview3 runtime coverage.
+- Keep unsupported Preview2 and Preview3 operations explicit through WASI error
+  results instead of reporting fake success.
+
 ## 0.2.0
 
 - Restructure the package around explicit `package:wasd/wasm.dart` and `package:wasd/wasi.dart` entrypoints, with `package:wasd/wasd.dart` re-exporting both surfaces.

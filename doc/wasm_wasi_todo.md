@@ -18,7 +18,7 @@ Ship real, verifiable support for:
 - WASI 0.1 / Preview1 across native VM, browser JS, and Node JS for the supported
   runtime model.
 
-Do not work on P2/P3 until this phase is complete.
+P2/P3 work starts only after these P1 gates are green.
 
 ## Current Evidence
 
@@ -90,7 +90,10 @@ Do not work on P2/P3 until this phase is complete.
 ## Next Blocking TODO
 
 - [ ] `SUPPORT-P2`
-  - Deferred until `SUPPORT-P1` is checked.
+  - Status: in progress. Component host/import coverage exists for standard
+    `wasi:io`, `wasi:cli`, `wasi:filesystem`, and `wasi:sockets`; full runtime
+    coverage and conformance closeout are not complete.
 
 - [ ] `SUPPORT-P3`
-  - Deferred until `SUPPORT-P1` is checked.
+  - Status: in progress. Component host/filesystem/async-profile scaffolding is
+    present; full runtime coverage and conformance closeout are not complete.

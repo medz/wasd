@@ -38,7 +38,7 @@ Or add manually in `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  wasd: ^0.2.0
+  wasd: ^0.3.0
 ```
 
 ## Quick Start
@@ -167,8 +167,8 @@ dart test test/wasi_test.dart test/wasm_test.dart
 | WASI Version | Status |
 | --- | --- |
 | Preview 1 | Supported for `wasi_snapshot_preview1` command modules |
-| Preview 2 | Not implemented |
-| Preview 3 | Not implemented |
+| Preview 2 | Partial component host/import support for `wasi:io`, `wasi:cli`, `wasi:filesystem`, and `wasi:sockets`; full Preview2 runtime coverage is still in progress |
+| Preview 3 | Partial component host/filesystem/async-profile support; full Preview3 runtime coverage is still in progress |
 
 ### Runtime Support
 
