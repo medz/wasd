@@ -167,7 +167,7 @@ dart test test/wasi_test.dart test/wasm_test.dart
 | WASI Version | Status |
 | --- | --- |
 | Preview 1 | Supported for `wasi_snapshot_preview1` command modules |
-| Preview 2 | Partial component host/import support for `wasi:io`, `wasi:cli`, `wasi:filesystem`, and `wasi:sockets`; full Preview2 runtime coverage is still in progress |
+| Preview 2 | Component host/import support for current WASI 0.2.x packages through `0.2.8`: `random`, `clocks`, `io`, `cli`, `filesystem`, `sockets`, and `http`; Dart VM native adapters cover filesystem, sockets, and outgoing HTTP |
 | Preview 3 | Partial component host/filesystem/async-profile support; full Preview3 runtime coverage is still in progress |
 
 ### Runtime Support

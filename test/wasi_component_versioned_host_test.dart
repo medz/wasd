@@ -14,8 +14,10 @@ import 'package:wasd/src/wasi/component/wit_document.dart';
 import 'package:wasd/src/wasi/preview2/cli.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
 import 'package:wasd/src/wasi/preview2/filesystem.dart';
+import 'package:wasd/src/wasi/preview2/http.dart';
 import 'package:wasd/src/wasi/preview2/io.dart';
 import 'package:wasd/src/wasi/preview2/poll.dart';
+import 'package:wasd/src/wasi/preview2/sockets.dart';
 import 'package:wasd/src/wasi/preview3/cli.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasi/preview3/filesystem.dart';
@@ -918,6 +920,227 @@ world sockets-test {
       );
     });
 
+    test(
+      'Preview2 sockets backend completes TCP listen connect and accept',
+      () {
+        const source = '''
+package wasi-testsuite:test;
+
+world sockets-test {
+  include wasi:sockets/imports@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+        final document = WASIComponentWitDocument.parse(source);
+        final backend = _LoopbackSocketsBackend();
+        final preview2 = WASIPreview2ComponentHost(
+          socketsHost: WASIPreview2SocketsHost(backend: backend),
+        );
+        final program = preview2.bindWitWorld(
+          document,
+          worldName: 'sockets-test',
+        );
+        final network =
+            program.invokeImport(
+                  'wasi:sockets/instance-network@0.2.0.instance-network',
+                  const [],
+                )
+                as int;
+        final listener = _resourceHandle(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket',
+                  [_enumValue('ipv4')],
+                )
+                as WasmComponentValueData,
+          ),
+        );
+        final client = _resourceHandle(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket',
+                  [_enumValue('ipv4')],
+                )
+                as WasmComponentValueData,
+          ),
+        );
+
+        _expectUnitOk(
+          program.invokeImport('wasi:sockets/tcp@0.2.0.tcp-socket.start-bind', [
+                listener,
+                network,
+                _ipv4SocketAddressValue(port: 8080),
+              ])
+              as WasmComponentValueData,
+        );
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:sockets/tcp@0.2.0.tcp-socket.finish-bind',
+                [listener],
+              )
+              as WasmComponentValueData,
+        );
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:sockets/tcp@0.2.0.tcp-socket.start-listen',
+                [listener],
+              )
+              as WasmComponentValueData,
+        );
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:sockets/tcp@0.2.0.tcp-socket.finish-listen',
+                [listener],
+              )
+              as WasmComponentValueData,
+        );
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:sockets/tcp@0.2.0.tcp-socket.start-connect',
+                [client, network, _ipv4SocketAddressValue(port: 8080)],
+              )
+              as WasmComponentValueData,
+        );
+        final connect =
+            program.invokeImport(
+                  'wasi:sockets/tcp@0.2.0.tcp-socket.finish-connect',
+                  [client],
+                )
+                as WasmComponentValueData;
+        final accept =
+            program.invokeImport('wasi:sockets/tcp@0.2.0.tcp-socket.accept', [
+                  listener,
+                ])
+                as WasmComponentValueData;
+        final clientStreams = _tcpStreamPair(_resultOk(connect));
+        final accepted = _tcpAcceptTuple(_resultOk(accept));
+
+        program.invokeImport(
+          'wasi:io/streams@0.2.0.output-stream.check-write',
+          [clientStreams.output],
+        );
+        _expectUnitOk(
+          program.invokeImport('wasi:io/streams@0.2.0.output-stream.write', [
+                clientStreams.output,
+                _u8ListValue([7, 8, 9]),
+              ])
+              as WasmComponentValueData,
+        );
+        final received =
+            program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+                  accepted.input,
+                  BigInt.from(8),
+                ])
+                as WasmComponentValueData;
+
+        expect(_u8List(_resultOk(received)), [7, 8, 9]);
+        expect(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/tcp@0.2.0.tcp-socket.local-address',
+                  [client],
+                )
+                as WasmComponentValueData,
+          ),
+          isA<WasmComponentValueData>(),
+        );
+        expect(
+          program.invokeImport(
+            'wasi:sockets/tcp@0.2.0.tcp-socket.is-listening',
+            [listener],
+          ),
+          isTrue,
+        );
+        expect(backend.acceptedConnections, 1);
+      },
+    );
+
+    test('Preview2 sockets backend sends and receives UDP datagrams', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world sockets-test {
+  include wasi:sockets/imports@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final backend = _LoopbackSocketsBackend();
+      final preview2 = WASIPreview2ComponentHost(
+        socketsHost: WASIPreview2SocketsHost(backend: backend),
+      );
+      final program = preview2.bindWitWorld(
+        document,
+        worldName: 'sockets-test',
+      );
+      final network =
+          program.invokeImport(
+                'wasi:sockets/instance-network@0.2.0.instance-network',
+                const [],
+              )
+              as int;
+      final socket = _resourceHandle(
+        _resultOk(
+          program.invokeImport(
+                'wasi:sockets/udp-create-socket@0.2.0.create-udp-socket',
+                [_enumValue('ipv4')],
+              )
+              as WasmComponentValueData,
+        ),
+      );
+
+      _expectUnitOk(
+        program.invokeImport('wasi:sockets/udp@0.2.0.udp-socket.start-bind', [
+              socket,
+              network,
+              _ipv4SocketAddressValue(port: 9090),
+            ])
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport('wasi:sockets/udp@0.2.0.udp-socket.finish-bind', [
+              socket,
+            ])
+            as WasmComponentValueData,
+      );
+      final streams =
+          program.invokeImport('wasi:sockets/udp@0.2.0.udp-socket.stream', [
+                socket,
+                _noneValue(),
+              ])
+              as WasmComponentValueData;
+      final (incoming, outgoing) = _udpStreamPair(_resultOk(streams));
+      final permit =
+          program.invokeImport(
+                'wasi:sockets/udp@0.2.0.outgoing-datagram-stream.check-send',
+                [outgoing],
+              )
+              as WasmComponentValueData;
+      final sent =
+          program.invokeImport(
+                'wasi:sockets/udp@0.2.0.outgoing-datagram-stream.send',
+                [
+                  outgoing,
+                  _outgoingDatagramsValue([
+                    ([1, 2, 3], _ipv4SocketAddressValue(port: 9090)),
+                  ]),
+                ],
+              )
+              as WasmComponentValueData;
+      final received =
+          program.invokeImport(
+                'wasi:sockets/udp@0.2.0.incoming-datagram-stream.receive',
+                [incoming, BigInt.from(4)],
+              )
+              as WasmComponentValueData;
+
+      expect(_u64Data(_resultOk(permit)), greaterThan(BigInt.zero));
+      expect(_u64Data(_resultOk(sent)), BigInt.one);
+      expect(_udpDatagramPayloads(_resultOk(received)), [
+        [1, 2, 3],
+      ]);
+      expect(backend.sentDatagrams, 1);
+    });
+
     test('Preview2 CLI imports include official WASI sockets imports', () {
       const source = '''
 package wasi-testsuite:test;
@@ -946,6 +1169,241 @@ world cli-test {
           'wasi:io/streams@0.2.0.input-stream.read',
         ]),
       );
+    });
+
+    test('Preview2 binds current 0.2.x standard WIT patch imports', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world sockets-test {
+  include wasi:sockets/imports@0.2.8;
+  include wasi:io/imports@0.2.8;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2 = WASIPreview2ComponentHost();
+      final plan = preview2.prepareWitWorld(
+        document,
+        worldName: 'sockets-test',
+      );
+
+      expect(plan.canIngest, isTrue);
+      expect(plan.canBindAdapters, isTrue);
+      expect(
+        plan.functions.map((function) => function.qualifiedName),
+        containsAll(<String>[
+          'wasi:sockets/instance-network@0.2.8.instance-network',
+          'wasi:sockets/tcp-create-socket@0.2.8.create-tcp-socket',
+          'wasi:io/poll@0.2.8.pollable.ready',
+        ]),
+      );
+
+      final program = preview2.bindWitWorld(
+        document,
+        worldName: 'sockets-test',
+      );
+      final tcpSocket =
+          program.invokeImport(
+                'wasi:sockets/tcp-create-socket@0.2.8.create-tcp-socket',
+                [_enumValue('ipv4')],
+              )
+              as WasmComponentValueData;
+
+      expect(_resourceHandle(_resultOk(tcpSocket)), isNonZero);
+      expect(
+        preview2.standardImports,
+        contains('wasi:sockets/tcp-create-socket@0.2.8.create-tcp-socket'),
+      );
+    });
+
+    test('Preview2 expands and binds standard WASI HTTP imports', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world http-test {
+  include wasi:http/imports@0.2.8;
+  import wasi:http/types@0.2.8;
+  include wasi:io/imports@0.2.8;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final preview2 = WASIPreview2ComponentHost();
+      final plan = preview2.prepareWitWorld(document, worldName: 'http-test');
+
+      expect(plan.canIngest, isTrue);
+      expect(plan.canBindAdapters, isTrue);
+      expect(plan.bindingErrors, isEmpty);
+      expect(
+        plan.functions.map((function) => function.qualifiedName),
+        containsAll(<String>[
+          'wasi:http/outgoing-handler@0.2.8.handle',
+          'wasi:http/types@0.2.8.fields.constructor',
+          'wasi:http/types@0.2.8.fields.from-list',
+          'wasi:http/types@0.2.8.outgoing-request.constructor',
+          'wasi:http/types@0.2.8.outgoing-body.write',
+          'wasi:http/types@0.2.8.future-incoming-response.get',
+          'wasi:http/types@0.2.8.incoming-body.%stream',
+          'wasi:cli/stdout@0.2.8.get-stdout',
+          'wasi:random/random@0.2.8.get-random-bytes',
+        ]),
+      );
+      expect(
+        preview2.standardImports,
+        contains('wasi:http/outgoing-handler@0.2.8.handle'),
+      );
+    });
+
+    test('Preview2 HTTP backend completes outgoing request response flow', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world http-test {
+  import wasi:http/types@0.2.0;
+  import wasi:http/outgoing-handler@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final backend = _LoopbackHttpBackend();
+      final preview2 = WASIPreview2ComponentHost(
+        httpHost: WASIPreview2HttpHost(backend: backend),
+      );
+      final program = preview2.bindWitWorld(document, worldName: 'http-test');
+      final headers = _resourceHandle(
+        _resultOk(
+          program.invokeImport('wasi:http/types@0.2.0.fields.from-list', [
+                _httpFieldListValue([
+                  ('x-test', [111, 107]),
+                ]),
+              ])
+              as WasmComponentValueData,
+        ),
+      );
+      final request =
+          program.invokeImport(
+                'wasi:http/types@0.2.0.outgoing-request.constructor',
+                [headers],
+              )
+              as int;
+
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:http/types@0.2.0.outgoing-request.set-method',
+              [request, _variantCaseValue('post', 2)],
+            )
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:http/types@0.2.0.outgoing-request.set-scheme',
+              [request, _someValue(_variantValue('HTTP'))],
+            )
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:http/types@0.2.0.outgoing-request.set-authority',
+              [request, _someValue(_stringValue('example.test'))],
+            )
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:http/types@0.2.0.outgoing-request.set-path-with-query',
+              [request, _someValue(_stringValue('/hello?x=1'))],
+            )
+            as WasmComponentValueData,
+      );
+      final outgoingBody = _resourceHandle(
+        _resultOk(
+          program.invokeImport('wasi:http/types@0.2.0.outgoing-request.body', [
+                request,
+              ])
+              as WasmComponentValueData,
+        ),
+      );
+      final output = _resourceHandle(
+        _resultOk(
+          program.invokeImport('wasi:http/types@0.2.0.outgoing-body.write', [
+                outgoingBody,
+              ])
+              as WasmComponentValueData,
+        ),
+      );
+      program.invokeImport('wasi:io/streams@0.2.0.output-stream.check-write', [
+        output,
+      ]);
+      _expectUnitOk(
+        program.invokeImport('wasi:io/streams@0.2.0.output-stream.write', [
+              output,
+              _u8ListValue([1, 2, 3]),
+            ])
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport('wasi:http/types@0.2.0.outgoing-body.finish', [
+              outgoingBody,
+              _noneValue(),
+            ])
+            as WasmComponentValueData,
+      );
+
+      final future = _resourceHandle(
+        _resultOk(
+          program.invokeImport('wasi:http/outgoing-handler@0.2.0.handle', [
+                request,
+                _noneValue(),
+              ])
+              as WasmComponentValueData,
+        ),
+      );
+      final ready =
+          program.invokeImport(
+                'wasi:http/types@0.2.0.future-incoming-response.get',
+                [future],
+              )
+              as WasmComponentValueData;
+      final response = _resourceHandle(
+        _resultOk(_resultOk(_optionPayload(ready))),
+      );
+      final status =
+          program.invokeImport(
+                'wasi:http/types@0.2.0.incoming-response.status',
+                [response],
+              )
+              as int;
+      final incomingBody = _resourceHandle(
+        _resultOk(
+          program.invokeImport(
+                'wasi:http/types@0.2.0.incoming-response.consume',
+                [response],
+              )
+              as WasmComponentValueData,
+        ),
+      );
+      final input = _resourceHandle(
+        _resultOk(
+          program.invokeImport('wasi:http/types@0.2.0.incoming-body.%stream', [
+                incomingBody,
+              ])
+              as WasmComponentValueData,
+        ),
+      );
+      final bytes =
+          program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+                input,
+                BigInt.from(8),
+              ])
+              as WasmComponentValueData;
+
+      expect(status, 201);
+      expect(_u8List(_resultOk(bytes)), [104, 105]);
+      expect(backend.requestCount, 1);
+      expect(backend.lastMethod, 'POST');
+      expect(backend.lastAuthority, 'example.test');
+      expect(backend.lastPathWithQuery, '/hello?x=1');
+      expect(backend.lastBody, [1, 2, 3]);
+      expect(backend.lastHeaderNames, contains('x-test'));
     });
 
     test('Preview2 expands and binds standard WASI filesystem imports', () {
@@ -3323,6 +3781,25 @@ WasmComponentValueData _u8ListValue(List<int> bytes) {
   );
 }
 
+WasmComponentValueData _stringValue(String value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.string,
+    rawBytes: Uint8List(0),
+    string: value,
+  );
+}
+
+WasmComponentValueData _httpFieldListValue(List<(String, List<int>)> entries) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.list,
+    rawBytes: Uint8List(0),
+    items: [
+      for (final entry in entries)
+        _tupleValue([_stringValue(entry.$1), _u8ListValue(entry.$2)]),
+    ],
+  );
+}
+
 int _datetimeNanoseconds(WasmComponentValueData value) {
   if (value.kind != WasmComponentValueDataKind.record ||
       value.items.length != 2 ||
@@ -3549,6 +4026,15 @@ String? _optionString(WasmComponentValueData value) {
   return associated!.string;
 }
 
+WasmComponentValueData _optionPayload(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.option ||
+      !(value.isSome ?? value.label == 'some' || value.index == 1) ||
+      value.associatedValue == null) {
+    throw StateError('expected some option payload');
+  }
+  return value.associatedValue!;
+}
+
 (BigInt, BigInt) _u64Tuple(WasmComponentValueData value) {
   if (value.kind != WasmComponentValueDataKind.tuple ||
       value.items.length != 2) {
@@ -3605,6 +4091,457 @@ int _instantNanoseconds(WasmComponentValueData value) {
     throw StateError('expected instant nanoseconds u32');
   }
   return nanos.integer as int;
+}
+
+void _expectUnitOk(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.result ||
+      !(value.isOk ?? value.label == 'ok' || value.index == 0)) {
+    throw StateError('expected unit ok result, got ${value.kind.name}');
+  }
+}
+
+({int input, int output}) _tcpStreamPair(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.tuple ||
+      value.items.length != 2) {
+    throw StateError('expected tcp stream pair, got ${value.kind.name}');
+  }
+  return (
+    input: _resourceHandle(value.items[0]),
+    output: _resourceHandle(value.items[1]),
+  );
+}
+
+({int socket, int input, int output}) _tcpAcceptTuple(
+  WasmComponentValueData value,
+) {
+  if (value.kind != WasmComponentValueDataKind.tuple ||
+      value.items.length != 3) {
+    throw StateError('expected tcp accept tuple, got ${value.kind.name}');
+  }
+  return (
+    socket: _resourceHandle(value.items[0]),
+    input: _resourceHandle(value.items[1]),
+    output: _resourceHandle(value.items[2]),
+  );
+}
+
+(int, int) _udpStreamPair(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.tuple ||
+      value.items.length != 2) {
+    throw StateError('expected udp stream pair, got ${value.kind.name}');
+  }
+  return (_resourceHandle(value.items[0]), _resourceHandle(value.items[1]));
+}
+
+List<List<int>> _udpDatagramPayloads(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.list) {
+    throw StateError('expected datagram list, got ${value.kind.name}');
+  }
+  return [
+    for (final item in value.items)
+      if (item.kind == WasmComponentValueDataKind.record &&
+          item.items.length == 2)
+        _u8List(item.items[0])
+      else
+        throw StateError('expected datagram record, got ${item.kind.name}'),
+  ];
+}
+
+WasmComponentValueData _ipv4SocketAddressValue({
+  required int port,
+  int a = 127,
+  int b = 0,
+  int c = 0,
+  int d = 1,
+}) {
+  return _variantValue(
+    'ipv4',
+    _recordValue([
+      _integerValue(port),
+      _tupleValue([
+        _integerValue(a),
+        _integerValue(b),
+        _integerValue(c),
+        _integerValue(d),
+      ]),
+    ]),
+  );
+}
+
+WasmComponentValueData _outgoingDatagramsValue(
+  List<(List<int>, WasmComponentValueData)> datagrams,
+) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.list,
+    rawBytes: Uint8List(0),
+    items: [
+      for (final (bytes, remoteAddress) in datagrams)
+        _recordValue([_u8ListValue(bytes), _someValue(remoteAddress)]),
+    ],
+  );
+}
+
+WasmComponentValueData _someValue(WasmComponentValueData value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    index: 1,
+    label: 'some',
+    isSome: true,
+    associatedValue: value,
+  );
+}
+
+WasmComponentValueData _noneValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    index: 0,
+    label: 'none',
+    isSome: false,
+  );
+}
+
+WasmComponentValueData _variantValue(
+  String label, [
+  WasmComponentValueData? associatedValue,
+]) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.variant,
+    rawBytes: Uint8List(0),
+    index: label == 'ipv6' ? 1 : 0,
+    label: label,
+    associatedValue: associatedValue,
+  );
+}
+
+WasmComponentValueData _variantCaseValue(
+  String label,
+  int index, [
+  WasmComponentValueData? associatedValue,
+]) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.variant,
+    rawBytes: Uint8List(0),
+    index: index,
+    label: label,
+    associatedValue: associatedValue,
+  );
+}
+
+WasmComponentValueData _recordValue(List<WasmComponentValueData> items) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.record,
+    rawBytes: Uint8List(0),
+    items: items,
+  );
+}
+
+WasmComponentValueData _tupleValue(List<WasmComponentValueData> items) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.tuple,
+    rawBytes: Uint8List(0),
+    items: items,
+  );
+}
+
+WasmComponentValueData _integerValue(Object value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.integer,
+    rawBytes: Uint8List(0),
+    integer: value,
+  );
+}
+
+final class _LoopbackHttpBackend implements WASIPreview2HttpBackend {
+  int requestCount = 0;
+  String? lastMethod;
+  String? lastAuthority;
+  String? lastPathWithQuery;
+  List<String> lastHeaderNames = const <String>[];
+  List<int> lastBody = const <int>[];
+
+  @override
+  WASIPreview2HttpResult<WASIPreview2HttpFutureIncomingResponse> handle(
+    WASIPreview2HttpOutgoingRequest request,
+    WASIPreview2HttpRequestOptions? options,
+  ) {
+    requestCount++;
+    lastMethod = request.method.wireName;
+    lastAuthority = request.authority;
+    lastPathWithQuery = request.pathWithQuery;
+    lastHeaderNames = [
+      for (final entry in request.headers.entries) entry.name.toLowerCase(),
+    ];
+    lastBody = request.bodyResource?.bytes ?? const <int>[];
+    return WASIPreview2HttpResult<WASIPreview2HttpFutureIncomingResponse>.ok(
+      WASIPreview2HttpFutureIncomingResponse.completed(
+        WASIPreview2HttpResult<WASIPreview2HttpIncomingResponse>.ok(
+          WASIPreview2HttpIncomingResponse(
+            status: 201,
+            headers: WASIPreview2HttpFields(
+              entries: const <WASIPreview2HttpFieldEntry>[
+                WASIPreview2HttpFieldEntry('x-reply', <int>[111, 107]),
+              ],
+              mutable: false,
+            ),
+            body: WASIPreview2HttpIncomingBody(
+              WASIPreview2InputStream(
+                bytes: const <int>[104, 105],
+                closed: true,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _LoopbackSocketsBackend implements WASIPreview2SocketsBackend {
+  final Map<String, _LoopbackTcpListener> _tcpListeners = {};
+  final Map<String, _LoopbackUdpBinding> _udpBindings = {};
+  int _nextPort = 49152;
+
+  int acceptedConnections = 0;
+  int sentDatagrams = 0;
+
+  @override
+  WASIPreview2SocketOperation<WASIPreview2IpSocketAddress> startTcpBind(
+    WASIPreview2IpSocketAddress localAddress,
+  ) {
+    return WASIPreview2SocketOperation<WASIPreview2IpSocketAddress>.completed(
+      WASIPreview2SocketResult<WASIPreview2IpSocketAddress>.ok(
+        _materializePort(localAddress),
+      ),
+    );
+  }
+
+  @override
+  WASIPreview2SocketOperation<WASIPreview2TcpConnection> startTcpConnect({
+    required WASIPreview2IpSocketAddress remoteAddress,
+    WASIPreview2IpSocketAddress? localAddress,
+  }) {
+    final listener = _tcpListeners[_addressKey(remoteAddress)];
+    if (listener == null) {
+      return WASIPreview2SocketOperation<WASIPreview2TcpConnection>.completed(
+        const WASIPreview2SocketResult<WASIPreview2TcpConnection>.error(
+          'connection-refused',
+        ),
+      );
+    }
+    final clientLocal = _materializePort(
+      localAddress ??
+          WASIPreview2IpSocketAddress.ipv4(port: 0, a: 127, b: 0, c: 0, d: 1),
+    );
+    final clientInput = WASIPreview2InputStream();
+    final serverInput = WASIPreview2InputStream();
+    final clientOutput = WASIPreview2OutputStream(
+      onWrite: (bytes) {
+        serverInput.append(bytes);
+        return null;
+      },
+    );
+    final serverOutput = WASIPreview2OutputStream(
+      onWrite: (bytes) {
+        clientInput.append(bytes);
+        return null;
+      },
+    );
+    final clientConnection = WASIPreview2TcpConnection(
+      inputStream: clientInput,
+      outputStream: clientOutput,
+      localAddress: clientLocal,
+      remoteAddress: remoteAddress,
+    );
+    final serverConnection = WASIPreview2TcpConnection(
+      inputStream: serverInput,
+      outputStream: serverOutput,
+      localAddress: remoteAddress,
+      remoteAddress: clientLocal,
+    );
+    listener.enqueue(serverConnection);
+    acceptedConnections++;
+    return WASIPreview2SocketOperation<WASIPreview2TcpConnection>.completed(
+      WASIPreview2SocketResult<WASIPreview2TcpConnection>.ok(clientConnection),
+    );
+  }
+
+  @override
+  WASIPreview2SocketOperation<WASIPreview2TcpListener> startTcpListen({
+    required WASIPreview2IpSocketAddress localAddress,
+    required BigInt backlog,
+  }) {
+    final address = _materializePort(localAddress);
+    final listener = _LoopbackTcpListener(address);
+    _tcpListeners[_addressKey(address)] = listener;
+    return WASIPreview2SocketOperation<WASIPreview2TcpListener>.completed(
+      WASIPreview2SocketResult<WASIPreview2TcpListener>.ok(listener),
+    );
+  }
+
+  @override
+  WASIPreview2SocketOperation<WASIPreview2UdpBinding> startUdpBind(
+    WASIPreview2IpSocketAddress localAddress,
+  ) {
+    final address = _materializePort(localAddress);
+    final binding = _LoopbackUdpBinding(this, address);
+    _udpBindings[_addressKey(address)] = binding;
+    return WASIPreview2SocketOperation<WASIPreview2UdpBinding>.completed(
+      WASIPreview2SocketResult<WASIPreview2UdpBinding>.ok(binding),
+    );
+  }
+
+  WASIPreview2IpSocketAddress _materializePort(
+    WASIPreview2IpSocketAddress address,
+  ) {
+    if (address.port != 0) {
+      return address;
+    }
+    return WASIPreview2IpSocketAddress.ipv4(
+      port: _nextPort++,
+      a: address.address.parts[0],
+      b: address.address.parts[1],
+      c: address.address.parts[2],
+      d: address.address.parts[3],
+    );
+  }
+
+  String _addressKey(WASIPreview2IpSocketAddress address) =>
+      '${address.host}:${address.port}';
+}
+
+final class _LoopbackTcpListener implements WASIPreview2TcpListener {
+  _LoopbackTcpListener(this.localAddress);
+
+  @override
+  final WASIPreview2IpSocketAddress localAddress;
+
+  final List<WASIPreview2TcpConnection> _queue = [];
+  final List<Completer<void>> _waiters = [];
+  bool _closed = false;
+
+  @override
+  bool get canAccept => _queue.isNotEmpty || _closed;
+
+  @override
+  Future<void> waitAccept() {
+    if (canAccept) {
+      return Future<void>.value();
+    }
+    final completer = Completer<void>();
+    _waiters.add(completer);
+    return completer.future;
+  }
+
+  @override
+  WASIPreview2SocketResult<WASIPreview2TcpConnection> accept() {
+    if (_queue.isEmpty) {
+      return const WASIPreview2SocketResult<WASIPreview2TcpConnection>.error(
+        'would-block',
+      );
+    }
+    return WASIPreview2SocketResult<WASIPreview2TcpConnection>.ok(
+      _queue.removeAt(0),
+    );
+  }
+
+  @override
+  void close() {
+    _closed = true;
+    _notify();
+  }
+
+  void enqueue(WASIPreview2TcpConnection connection) {
+    _queue.add(connection);
+    _notify();
+  }
+
+  void _notify() {
+    final waiters = List<Completer<void>>.of(_waiters);
+    _waiters.clear();
+    for (final waiter in waiters) {
+      if (!waiter.isCompleted) {
+        waiter.complete();
+      }
+    }
+  }
+}
+
+final class _LoopbackUdpBinding implements WASIPreview2UdpBinding {
+  _LoopbackUdpBinding(this.backend, this.localAddress);
+
+  final _LoopbackSocketsBackend backend;
+
+  @override
+  final WASIPreview2IpSocketAddress localAddress;
+
+  @override
+  WASIPreview2IpSocketAddress? get remoteAddress => null;
+
+  @override
+  BigInt get sendCapacity => BigInt.from(64);
+
+  @override
+  bool get canReceive => _queue.isNotEmpty;
+
+  @override
+  bool get canSend => true;
+
+  final List<WASIPreview2IncomingDatagram> _queue = [];
+
+  @override
+  Future<void> waitReceive() => Future<void>.value();
+
+  @override
+  Future<void> waitSend() => Future<void>.value();
+
+  @override
+  WASIPreview2SocketResult<List<WASIPreview2IncomingDatagram>> receive(
+    BigInt maxResults,
+  ) {
+    final count = maxResults.toInt() < _queue.length
+        ? maxResults.toInt()
+        : _queue.length;
+    final datagrams = _queue.sublist(0, count);
+    _queue.removeRange(0, count);
+    return WASIPreview2SocketResult<List<WASIPreview2IncomingDatagram>>.ok(
+      datagrams,
+    );
+  }
+
+  @override
+  WASIPreview2SocketResult<BigInt> send(
+    List<WASIPreview2OutgoingDatagram> datagrams,
+  ) {
+    var sent = 0;
+    for (final datagram in datagrams) {
+      final remoteAddress = datagram.remoteAddress;
+      if (remoteAddress == null) {
+        return const WASIPreview2SocketResult<BigInt>.error(
+          'remote-unreachable',
+        );
+      }
+      final target = backend._udpBindings[backend._addressKey(remoteAddress)];
+      if (target == null) {
+        return const WASIPreview2SocketResult<BigInt>.error(
+          'remote-unreachable',
+        );
+      }
+      target._queue.add(
+        WASIPreview2IncomingDatagram(
+          data: Uint8List.fromList(datagram.data),
+          remoteAddress: localAddress,
+        ),
+      );
+      sent++;
+      backend.sentDatagrams++;
+    }
+    return WASIPreview2SocketResult<BigInt>.ok(BigInt.from(sent));
+  }
+
+  @override
+  void close() {}
 }
 
 WasmComponentValueData _stringTupleListValue(List<(String, String)> rows) {

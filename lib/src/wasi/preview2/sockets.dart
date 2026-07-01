@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../component/resource_table.dart';
 import '../component/wit_adapter.dart';
+import 'io.dart';
 import 'poll.dart';
 
 /// Address family for WASI 0.2 sockets.
@@ -56,6 +58,9 @@ final class WASIPreview2IpAddress {
 
   final List<int> _parts;
 
+  /// Address segments as 4 IPv4 octets or 8 IPv6 16-bit segments.
+  List<int> get parts => _parts;
+
   WasmComponentValueData _toWit() {
     return _variantData(
       family == WASIPreview2IpAddressFamily.ipv4 ? 'ipv4' : 'ipv6',
@@ -68,39 +73,445 @@ final class WASIPreview2IpAddress {
   }
 }
 
+/// IP socket address used by WASI 0.2 sockets.
+final class WASIPreview2IpSocketAddress {
+  /// Creates an IPv4 socket address.
+  WASIPreview2IpSocketAddress.ipv4({
+    required int port,
+    required int a,
+    required int b,
+    required int c,
+    required int d,
+  }) : this._(
+         address: WASIPreview2IpAddress.ipv4(a, b, c, d),
+         port: _validatePart(port, 0xffff, 'port'),
+         flowInfo: 0,
+         scopeId: 0,
+       );
+
+  /// Creates an IPv6 socket address.
+  WASIPreview2IpSocketAddress.ipv6({
+    required int port,
+    required int a,
+    required int b,
+    required int c,
+    required int d,
+    required int e,
+    required int f,
+    required int g,
+    required int h,
+    int flowInfo = 0,
+    int scopeId = 0,
+  }) : this._(
+         address: WASIPreview2IpAddress.ipv6(a, b, c, d, e, f, g, h),
+         port: _validatePart(port, 0xffff, 'port'),
+         flowInfo: _validatePart(flowInfo, 0xffffffff, 'flowInfo'),
+         scopeId: _validatePart(scopeId, 0xffffffff, 'scopeId'),
+       );
+
+  WASIPreview2IpSocketAddress._({
+    required this.address,
+    required this.port,
+    required this.flowInfo,
+    required this.scopeId,
+  });
+
+  /// IP address family.
+  WASIPreview2IpAddressFamily get family => address.family;
+
+  /// IP address.
+  final WASIPreview2IpAddress address;
+
+  /// TCP/UDP port.
+  final int port;
+
+  /// IPv6 flow information, or zero for IPv4.
+  final int flowInfo;
+
+  /// IPv6 scope id, or zero for IPv4.
+  final int scopeId;
+
+  /// Host string suitable for Dart networking APIs.
+  String get host {
+    final parts = address.parts;
+    if (address.family == WASIPreview2IpAddressFamily.ipv4) {
+      return parts.join('.');
+    }
+    return parts.map((part) => part.toRadixString(16)).join(':');
+  }
+
+  WasmComponentValueData _toWit() {
+    final parts = address.parts;
+    if (address.family == WASIPreview2IpAddressFamily.ipv4) {
+      return _variantData(
+        'ipv4',
+        _recordData([
+          _integerData(port),
+          _tupleData([for (final part in parts) _integerData(part)]),
+        ]),
+      );
+    }
+    return _variantData(
+      'ipv6',
+      _recordData([
+        _integerData(port),
+        _integerData(flowInfo),
+        _tupleData([for (final part in parts) _integerData(part)]),
+        _integerData(scopeId),
+      ]),
+    );
+  }
+
+  static WASIPreview2IpSocketAddress? _fromWit(Object? value) {
+    if (value is! WasmComponentValueData ||
+        value.kind != WasmComponentValueDataKind.variant ||
+        value.associatedValue == null) {
+      return null;
+    }
+    final label = value.label;
+    if (label == 'ipv4' || (label == null && value.index == 0)) {
+      final record = value.associatedValue!;
+      if (record.kind != WasmComponentValueDataKind.record ||
+          record.items.length != 2) {
+        return null;
+      }
+      final port = _u16Data(record.items[0]);
+      final address = _u8Tuple(record.items[1], 4);
+      if (port == null || address == null) {
+        return null;
+      }
+      return WASIPreview2IpSocketAddress.ipv4(
+        port: port,
+        a: address[0],
+        b: address[1],
+        c: address[2],
+        d: address[3],
+      );
+    }
+    if (label == 'ipv6' || (label == null && value.index == 1)) {
+      final record = value.associatedValue!;
+      if (record.kind != WasmComponentValueDataKind.record ||
+          record.items.length != 4) {
+        return null;
+      }
+      final port = _u16Data(record.items[0]);
+      final flowInfo = _u32Data(record.items[1]);
+      final address = _u16Tuple(record.items[2], 8);
+      final scopeId = _u32Data(record.items[3]);
+      if (port == null ||
+          flowInfo == null ||
+          address == null ||
+          scopeId == null) {
+        return null;
+      }
+      return WASIPreview2IpSocketAddress.ipv6(
+        port: port,
+        a: address[0],
+        b: address[1],
+        c: address[2],
+        d: address[3],
+        e: address[4],
+        f: address[5],
+        g: address[6],
+        h: address[7],
+        flowInfo: flowInfo,
+        scopeId: scopeId,
+      );
+    }
+    return null;
+  }
+}
+
 /// Resolves a WASI socket name to zero or more IP addresses.
 typedef WASIPreview2AddressResolver =
     Iterable<WASIPreview2IpAddress> Function(String name);
 
-/// WASI 0.2 `wasi:sockets` host imports.
-final class WASIPreview2SocketsHost {
-  /// Creates a sockets host backed by [table] or [pollHost].
-  factory WASIPreview2SocketsHost({
-    WASIComponentResourceTable? table,
-    WASIPreview2PollHost? pollHost,
-    WASIPreview2AddressResolver? resolveAddresses,
-  }) {
-    final resolvedTable =
-        table ?? pollHost?.table ?? WASIComponentResourceTable();
-    if (pollHost != null && !identical(resolvedTable, pollHost.table)) {
-      throw ArgumentError.value(
-        pollHost,
-        'pollHost',
-        'must use the same component resource table as sockets',
-      );
-    }
-    return WASIPreview2SocketsHost._(
-      table: resolvedTable,
-      pollHost: pollHost ?? WASIPreview2PollHost(table: resolvedTable),
-      resolveAddresses: resolveAddresses ?? _defaultAddressResolver,
+/// Result returned by a Preview2 sockets backend operation.
+final class WASIPreview2SocketResult<T> {
+  /// Successful socket operation.
+  const WASIPreview2SocketResult.ok(this.value) : errorCode = null;
+
+  /// Failed socket operation with a WASI `error-code` label.
+  const WASIPreview2SocketResult.error(this.errorCode) : value = null;
+
+  /// Success payload.
+  final T? value;
+
+  /// WASI `error-code` label on failure.
+  final String? errorCode;
+
+  /// Whether this result is successful.
+  bool get isOk => errorCode == null;
+}
+
+/// Non-blocking operation used by Preview2 start/finish socket APIs.
+final class WASIPreview2SocketOperation<T> {
+  /// Creates an already-completed operation.
+  WASIPreview2SocketOperation.completed(WASIPreview2SocketResult<T> result)
+    : _result = result,
+      _ready = null;
+
+  /// Creates an operation completed by [future].
+  WASIPreview2SocketOperation.pending(
+    Future<WASIPreview2SocketResult<T>> future,
+  ) : _ready = Completer<void>() {
+    future.then(
+      (result) {
+        _result = result;
+        _completeReady();
+      },
+      onError: (Object error) {
+        _result = WASIPreview2SocketResult<T>.error('unknown');
+        _completeReady();
+      },
     );
   }
+
+  WASIPreview2SocketResult<T>? _result;
+  final Completer<void>? _ready;
+
+  /// Whether [resultOrNull] is available without blocking.
+  bool get isReady => _result != null;
+
+  /// Completed result, or null while pending.
+  WASIPreview2SocketResult<T>? get resultOrNull => _result;
+
+  /// Completes when the operation can be finished.
+  Future<void> waitReady() {
+    final ready = _ready;
+    return ready == null || isReady ? Future<void>.value() : ready.future;
+  }
+
+  void _completeReady() {
+    final ready = _ready;
+    if (ready != null && !ready.isCompleted) {
+      ready.complete();
+    }
+  }
+}
+
+/// Connected TCP streams returned by a sockets backend.
+final class WASIPreview2TcpConnection {
+  /// Creates a TCP connection model.
+  const WASIPreview2TcpConnection({
+    required this.inputStream,
+    required this.outputStream,
+    required this.localAddress,
+    required this.remoteAddress,
+    this.close,
+  });
+
+  /// Input bytes received from the peer.
+  final WASIPreview2InputStream inputStream;
+
+  /// Output bytes written to the peer.
+  final WASIPreview2OutputStream outputStream;
+
+  /// Local socket address.
+  final WASIPreview2IpSocketAddress localAddress;
+
+  /// Remote socket address.
+  final WASIPreview2IpSocketAddress remoteAddress;
+
+  /// Optional close hook.
+  final void Function(String shutdownType)? close;
+}
+
+/// Listening TCP socket returned by a sockets backend.
+abstract interface class WASIPreview2TcpListener {
+  /// Bound local address.
+  WASIPreview2IpSocketAddress get localAddress;
+
+  /// Whether [accept] can return a connection without `would-block`.
+  bool get canAccept;
+
+  /// Completes when [accept] may make progress.
+  Future<void> waitAccept();
+
+  /// Attempts to accept a queued connection.
+  WASIPreview2SocketResult<WASIPreview2TcpConnection> accept();
+
+  /// Closes the listener.
+  void close();
+}
+
+/// Incoming UDP datagram returned by a sockets backend.
+final class WASIPreview2IncomingDatagram {
+  /// Creates an incoming datagram.
+  const WASIPreview2IncomingDatagram({
+    required this.data,
+    required this.remoteAddress,
+  });
+
+  /// Datagram payload.
+  final Uint8List data;
+
+  /// Sender address.
+  final WASIPreview2IpSocketAddress remoteAddress;
+}
+
+/// Outgoing UDP datagram passed to a sockets backend.
+final class WASIPreview2OutgoingDatagram {
+  /// Creates an outgoing datagram.
+  const WASIPreview2OutgoingDatagram({required this.data, this.remoteAddress});
+
+  /// Datagram payload.
+  final Uint8List data;
+
+  /// Destination address, or null to use the connected peer.
+  final WASIPreview2IpSocketAddress? remoteAddress;
+}
+
+/// Bound UDP socket returned by a sockets backend.
+abstract interface class WASIPreview2UdpBinding {
+  /// Bound local address.
+  WASIPreview2IpSocketAddress get localAddress;
+
+  /// Connected remote address, if the backend has one.
+  WASIPreview2IpSocketAddress? get remoteAddress;
+
+  /// Max datagrams accepted by one `send` call.
+  BigInt get sendCapacity;
+
+  /// Whether a receive operation can make progress.
+  bool get canReceive;
+
+  /// Whether a send operation can make progress.
+  bool get canSend;
+
+  /// Completes when receive may make progress.
+  Future<void> waitReceive();
+
+  /// Completes when send may make progress.
+  Future<void> waitSend();
+
+  /// Receives up to [maxResults] datagrams.
+  WASIPreview2SocketResult<List<WASIPreview2IncomingDatagram>> receive(
+    BigInt maxResults,
+  );
+
+  /// Sends [datagrams].
+  WASIPreview2SocketResult<BigInt> send(
+    List<WASIPreview2OutgoingDatagram> datagrams,
+  );
+
+  /// Closes the binding.
+  void close();
+}
+
+/// Backend used by [WASIPreview2SocketsHost] for real socket I/O.
+abstract interface class WASIPreview2SocketsBackend {
+  /// Starts TCP bind.
+  WASIPreview2SocketOperation<WASIPreview2IpSocketAddress> startTcpBind(
+    WASIPreview2IpSocketAddress localAddress,
+  );
+
+  /// Starts TCP connect.
+  WASIPreview2SocketOperation<WASIPreview2TcpConnection> startTcpConnect({
+    required WASIPreview2IpSocketAddress remoteAddress,
+    WASIPreview2IpSocketAddress? localAddress,
+  });
+
+  /// Starts TCP listen.
+  WASIPreview2SocketOperation<WASIPreview2TcpListener> startTcpListen({
+    required WASIPreview2IpSocketAddress localAddress,
+    required BigInt backlog,
+  });
+
+  /// Starts UDP bind.
+  WASIPreview2SocketOperation<WASIPreview2UdpBinding> startUdpBind(
+    WASIPreview2IpSocketAddress localAddress,
+  );
+}
+
+/// Backend that reports unsupported for OS socket operations.
+final class WASIPreview2UnsupportedSocketsBackend
+    implements WASIPreview2SocketsBackend {
+  /// Creates the default unsupported sockets backend.
+  const WASIPreview2UnsupportedSocketsBackend();
+
+  @override
+  WASIPreview2SocketOperation<WASIPreview2IpSocketAddress> startTcpBind(
+    WASIPreview2IpSocketAddress localAddress,
+  ) {
+    return WASIPreview2SocketOperation<WASIPreview2IpSocketAddress>.completed(
+      const WASIPreview2SocketResult<WASIPreview2IpSocketAddress>.error(
+        'not-supported',
+      ),
+    );
+  }
+
+  @override
+  WASIPreview2SocketOperation<WASIPreview2TcpConnection> startTcpConnect({
+    required WASIPreview2IpSocketAddress remoteAddress,
+    WASIPreview2IpSocketAddress? localAddress,
+  }) {
+    return WASIPreview2SocketOperation<WASIPreview2TcpConnection>.completed(
+      const WASIPreview2SocketResult<WASIPreview2TcpConnection>.error(
+        'not-supported',
+      ),
+    );
+  }
+
+  @override
+  WASIPreview2SocketOperation<WASIPreview2TcpListener> startTcpListen({
+    required WASIPreview2IpSocketAddress localAddress,
+    required BigInt backlog,
+  }) {
+    return WASIPreview2SocketOperation<WASIPreview2TcpListener>.completed(
+      const WASIPreview2SocketResult<WASIPreview2TcpListener>.error(
+        'not-supported',
+      ),
+    );
+  }
+
+  @override
+  WASIPreview2SocketOperation<WASIPreview2UdpBinding> startUdpBind(
+    WASIPreview2IpSocketAddress localAddress,
+  ) {
+    return WASIPreview2SocketOperation<WASIPreview2UdpBinding>.completed(
+      const WASIPreview2SocketResult<WASIPreview2UdpBinding>.error(
+        'not-supported',
+      ),
+    );
+  }
+}
+
+/// WASI 0.2 `wasi:sockets` host imports.
+base class WASIPreview2SocketsHost {
+  /// Creates a sockets host backed by [table] or [pollHost].
+  WASIPreview2SocketsHost({
+    WASIComponentResourceTable? table,
+    WASIPreview2PollHost? pollHost,
+    WASIPreview2StreamsHost? streamsHost,
+    WASIPreview2AddressResolver? resolveAddresses,
+    WASIPreview2SocketsBackend? backend,
+  }) : this._resolved(
+         _resolveSocketsHostParts(table, pollHost, streamsHost),
+         resolveAddresses: resolveAddresses,
+         backend: backend,
+       );
+
+  WASIPreview2SocketsHost._resolved(
+    _ResolvedSocketsHostParts parts, {
+    WASIPreview2AddressResolver? resolveAddresses,
+    WASIPreview2SocketsBackend? backend,
+  }) : this._(
+         table: parts.table,
+         pollHost: parts.pollHost,
+         streamsHost: parts.streamsHost,
+         resolveAddresses: resolveAddresses ?? _defaultAddressResolver,
+         backend: backend ?? const WASIPreview2UnsupportedSocketsBackend(),
+       );
 
   WASIPreview2SocketsHost._({
     required this.table,
     required this.pollHost,
+    required this.streamsHost,
     required WASIPreview2AddressResolver resolveAddresses,
-  }) : _resolveAddresses = resolveAddresses;
+    required WASIPreview2SocketsBackend backend,
+  }) : _resolveAddresses = resolveAddresses,
+       _backend = backend;
 
   /// Component resource table that owns sockets resources.
   final WASIComponentResourceTable table;
@@ -108,7 +519,11 @@ final class WASIPreview2SocketsHost {
   /// Poll host used by sockets `subscribe` operations.
   final WASIPreview2PollHost pollHost;
 
+  /// Streams host used by connected TCP streams.
+  final WASIPreview2StreamsHost streamsHost;
+
   final WASIPreview2AddressResolver _resolveAddresses;
+  final WASIPreview2SocketsBackend _backend;
 
   late final WASIComponentResourceType<_WASIPreview2Network> _networkType =
       table.defineType<_WASIPreview2Network>(
@@ -241,7 +656,7 @@ final class WASIPreview2SocketsHost {
     'wasi:sockets/tcp@0.2.0.tcp-socket.subscribe': (args) =>
         _tcpSubscribe(_handle(args[0])),
     'wasi:sockets/tcp@0.2.0.tcp-socket.shutdown': (args) =>
-        _tcpShutdown(_handle(args[0])),
+        _tcpShutdown(_handle(args[0]), args[1]),
     'wasi:sockets/udp-create-socket@0.2.0.create-udp-socket': (args) =>
         _createUdpSocket(args[0]),
     'wasi:sockets/udp@0.2.0.udp-socket.start-bind': (args) =>
@@ -249,7 +664,7 @@ final class WASIPreview2SocketsHost {
     'wasi:sockets/udp@0.2.0.udp-socket.finish-bind': (args) =>
         _udpFinishBind(_handle(args[0])),
     'wasi:sockets/udp@0.2.0.udp-socket.stream': (args) =>
-        _udpStream(_handle(args[0])),
+        _udpStream(_handle(args[0]), args[1]),
     'wasi:sockets/udp@0.2.0.udp-socket.local-address': (args) =>
         _udpLocalAddress(_handle(args[0])),
     'wasi:sockets/udp@0.2.0.udp-socket.remote-address': (args) =>
@@ -283,7 +698,7 @@ final class WASIPreview2SocketsHost {
     'wasi:sockets/udp@0.2.0.udp-socket.subscribe': (args) =>
         _udpSubscribe(_handle(args[0])),
     'wasi:sockets/udp@0.2.0.incoming-datagram-stream.receive': (args) =>
-        _receiveDatagrams(_handle(args[0])),
+        _receiveDatagrams(_handle(args[0]), _u64(args[1])),
     'wasi:sockets/udp@0.2.0.incoming-datagram-stream.subscribe': (args) =>
         _incomingDatagramSubscribe(_handle(args[0])),
     'wasi:sockets/udp@0.2.0.outgoing-datagram-stream.check-send': (args) =>
@@ -372,13 +787,32 @@ final class WASIPreview2SocketsHost {
     if (socket.state != _TcpSocketState.unbound) {
       return _errorResult('invalid-state');
     }
-    return _errorResult('not-supported');
+    socket.pendingBind = _backend.startTcpBind(address);
+    socket.state = _TcpSocketState.binding;
+    return _ok();
   }
 
   WasmComponentValueData _tcpFinishBind(int handle) {
-    return _tcpSocket(handle) == null
-        ? _errorResult('invalid-argument')
-        : _errorResult('not-in-progress');
+    final socket = _tcpSocket(handle);
+    if (socket == null) {
+      return _errorResult('invalid-argument');
+    }
+    final operation = socket.pendingBind;
+    if (operation == null) {
+      return _errorResult('not-in-progress');
+    }
+    final result = operation.resultOrNull;
+    if (result == null) {
+      return _errorResult('would-block');
+    }
+    socket.pendingBind = null;
+    if (!result.isOk) {
+      socket.state = _TcpSocketState.unbound;
+      return _errorResult(result.errorCode!);
+    }
+    socket.localAddress = result.value!._toWit();
+    socket.state = _TcpSocketState.bound;
+    return _ok();
   }
 
   WasmComponentValueData _tcpStartConnect(
@@ -398,13 +832,42 @@ final class WASIPreview2SocketsHost {
         socket.state != _TcpSocketState.bound) {
       return _errorResult('invalid-state');
     }
-    return _errorResult('not-supported');
+    socket.pendingConnect = _backend.startTcpConnect(
+      localAddress: socket.localAddressAddress,
+      remoteAddress: address,
+    );
+    socket.state = _TcpSocketState.connecting;
+    return _ok();
   }
 
   WasmComponentValueData _tcpFinishConnect(int handle) {
-    return _tcpSocket(handle) == null
-        ? _errorResult('invalid-argument')
-        : _errorResult('not-in-progress');
+    final socket = _tcpSocket(handle);
+    if (socket == null) {
+      return _errorResult('invalid-argument');
+    }
+    final operation = socket.pendingConnect;
+    if (operation == null) {
+      return _errorResult('not-in-progress');
+    }
+    final result = operation.resultOrNull;
+    if (result == null) {
+      return _errorResult('would-block');
+    }
+    socket.pendingConnect = null;
+    if (!result.isOk) {
+      socket.state = socket.localAddress == null
+          ? _TcpSocketState.unbound
+          : _TcpSocketState.bound;
+      return _errorResult(result.errorCode!);
+    }
+    final connection = result.value!;
+    final input = streamsHost.insertInputStream(connection.inputStream);
+    final output = streamsHost.insertOutputStream(connection.outputStream);
+    socket.connection = connection;
+    socket.localAddress = connection.localAddress._toWit();
+    socket.remoteAddress = connection.remoteAddress._toWit();
+    socket.state = _TcpSocketState.connected;
+    return _ok(_tupleData([_integerData(input), _integerData(output)]));
   }
 
   WasmComponentValueData _tcpStartListen(int handle) {
@@ -415,13 +878,40 @@ final class WASIPreview2SocketsHost {
     if (socket.state != _TcpSocketState.bound) {
       return _errorResult('invalid-state');
     }
-    return _errorResult('not-supported');
+    final localAddress = socket.localAddressAddress;
+    if (localAddress == null) {
+      return _errorResult('invalid-state');
+    }
+    socket.pendingListen = _backend.startTcpListen(
+      localAddress: localAddress,
+      backlog: socket.listenBacklog,
+    );
+    socket.state = _TcpSocketState.listeningStarting;
+    return _ok();
   }
 
   WasmComponentValueData _tcpFinishListen(int handle) {
-    return _tcpSocket(handle) == null
-        ? _errorResult('invalid-argument')
-        : _errorResult('not-in-progress');
+    final socket = _tcpSocket(handle);
+    if (socket == null) {
+      return _errorResult('invalid-argument');
+    }
+    final operation = socket.pendingListen;
+    if (operation == null) {
+      return _errorResult('not-in-progress');
+    }
+    final result = operation.resultOrNull;
+    if (result == null) {
+      return _errorResult('would-block');
+    }
+    socket.pendingListen = null;
+    if (!result.isOk) {
+      socket.state = _TcpSocketState.bound;
+      return _errorResult(result.errorCode!);
+    }
+    socket.listener = result.value!;
+    socket.localAddress = result.value!.localAddress._toWit();
+    socket.state = _TcpSocketState.listening;
+    return _ok();
   }
 
   WasmComponentValueData _tcpAccept(int handle) {
@@ -429,9 +919,27 @@ final class WASIPreview2SocketsHost {
     if (socket == null) {
       return _errorResult('invalid-argument');
     }
-    return socket.state == _TcpSocketState.listening
-        ? _errorResult('would-block')
-        : _errorResult('invalid-state');
+    if (socket.state != _TcpSocketState.listening || socket.listener == null) {
+      return _errorResult('invalid-state');
+    }
+    final result = socket.listener!.accept();
+    if (!result.isOk) {
+      return _errorResult(result.errorCode!);
+    }
+    final connection = result.value!;
+    final acceptedSocket = table.insert<_WASIPreview2TcpSocket>(
+      _tcpSocketType,
+      _WASIPreview2TcpSocket.connected(socket.family, connection),
+    );
+    final input = streamsHost.insertInputStream(connection.inputStream);
+    final output = streamsHost.insertOutputStream(connection.outputStream);
+    return _ok(
+      _tupleData([
+        _integerData(acceptedSocket),
+        _integerData(input),
+        _integerData(output),
+      ]),
+    );
   }
 
   WasmComponentValueData _tcpLocalAddress(int handle) {
@@ -452,14 +960,16 @@ final class WASIPreview2SocketsHost {
     return address == null ? _errorResult('invalid-state') : _ok(address);
   }
 
-  WasmComponentValueData _tcpShutdown(int handle) {
+  WasmComponentValueData _tcpShutdown(int handle, Object? shutdownType) {
     final socket = _tcpSocket(handle);
     if (socket == null) {
       return _errorResult('invalid-argument');
     }
-    return socket.state == _TcpSocketState.connected
-        ? _ok()
-        : _errorResult('invalid-state');
+    if (socket.state != _TcpSocketState.connected) {
+      return _errorResult('invalid-state');
+    }
+    socket.connection?.close?.call(_caseLabelFromData(shutdownType));
+    return _ok();
   }
 
   WasmComponentValueData _udpStartBind(
@@ -478,23 +988,64 @@ final class WASIPreview2SocketsHost {
     if (socket.bound) {
       return _errorResult('invalid-state');
     }
-    return _errorResult('not-supported');
+    socket.pendingBind = _backend.startUdpBind(address);
+    return _ok();
   }
 
   WasmComponentValueData _udpFinishBind(int handle) {
-    return _udpSocket(handle) == null
-        ? _errorResult('invalid-argument')
-        : _errorResult('not-in-progress');
-  }
-
-  WasmComponentValueData _udpStream(int handle) {
     final socket = _udpSocket(handle);
     if (socket == null) {
       return _errorResult('invalid-argument');
     }
-    return socket.bound
-        ? _errorResult('not-supported')
-        : _errorResult('invalid-state');
+    final operation = socket.pendingBind;
+    if (operation == null) {
+      return _errorResult('not-in-progress');
+    }
+    final result = operation.resultOrNull;
+    if (result == null) {
+      return _errorResult('would-block');
+    }
+    socket.pendingBind = null;
+    if (!result.isOk) {
+      return _errorResult(result.errorCode!);
+    }
+    socket.binding = result.value!;
+    socket.bound = true;
+    socket.localAddress = result.value!.localAddress._toWit();
+    return _ok();
+  }
+
+  WasmComponentValueData _udpStream(int handle, Object? remoteAddressValue) {
+    final socket = _udpSocket(handle);
+    if (socket == null) {
+      return _errorResult('invalid-argument');
+    }
+    final binding = socket.binding;
+    if (!socket.bound || binding == null) {
+      return _errorResult('invalid-state');
+    }
+    final remoteAddressResult = _optionalIpSocketAddressFromData(
+      remoteAddressValue,
+    );
+    final remoteAddress = remoteAddressResult.address;
+    if (!remoteAddressResult.valid ||
+        (remoteAddress != null && remoteAddress.family != socket.family)) {
+      return _errorResult('invalid-argument');
+    }
+    if (remoteAddress != null) {
+      socket.remoteAddress = remoteAddress._toWit();
+    } else if (binding.remoteAddress case final boundRemote?) {
+      socket.remoteAddress = boundRemote._toWit();
+    }
+    final incoming = table.insert<_WASIPreview2IncomingDatagramStream>(
+      _incomingDatagramStreamType,
+      _WASIPreview2IncomingDatagramStream(binding, remoteAddress),
+    );
+    final outgoing = table.insert<_WASIPreview2OutgoingDatagramStream>(
+      _outgoingDatagramStreamType,
+      _WASIPreview2OutgoingDatagramStream(binding, remoteAddress),
+    );
+    return _ok(_tupleData([_integerData(incoming), _integerData(outgoing)]));
   }
 
   WasmComponentValueData _udpLocalAddress(int handle) {
@@ -515,28 +1066,59 @@ final class WASIPreview2SocketsHost {
     return address == null ? _errorResult('invalid-state') : _ok(address);
   }
 
-  WasmComponentValueData _receiveDatagrams(int handle) {
-    return _incomingDatagramStream(handle) == null
-        ? _errorResult('invalid-argument')
-        : _ok(_listData(const <WasmComponentValueData>[]));
+  WasmComponentValueData _receiveDatagrams(int handle, BigInt maxResults) {
+    final stream = _incomingDatagramStream(handle);
+    if (stream == null) {
+      return _errorResult('invalid-argument');
+    }
+    final result = stream.binding.receive(maxResults);
+    if (!result.isOk) {
+      return _errorResult(result.errorCode!);
+    }
+    final remoteFilter = stream.remoteAddress;
+    final datagrams = remoteFilter == null
+        ? result.value!
+        : result.value!
+              .where(
+                (datagram) =>
+                    _sameAddress(datagram.remoteAddress, remoteFilter),
+              )
+              .toList(growable: false);
+    return _ok(
+      _listData([
+        for (final datagram in datagrams)
+          _recordData([
+            _u8ListData(datagram.data),
+            datagram.remoteAddress._toWit(),
+          ]),
+      ]),
+    );
   }
 
   WasmComponentValueData _checkDatagramSend(int handle) {
-    return _outgoingDatagramStream(handle) == null
-        ? _errorResult('invalid-argument')
-        : _ok(_integerData(BigInt.zero));
+    final stream = _outgoingDatagramStream(handle);
+    if (stream == null) {
+      return _errorResult('invalid-argument');
+    }
+    return stream.binding.canSend
+        ? _ok(_integerData(stream.binding.sendCapacity))
+        : _errorResult('would-block');
   }
 
   WasmComponentValueData _sendDatagrams(int handle, Object? value) {
-    if (_outgoingDatagramStream(handle) == null) {
+    final stream = _outgoingDatagramStream(handle);
+    if (stream == null) {
       return _errorResult('invalid-argument');
     }
-    if (value is WasmComponentValueData &&
-        value.kind == WasmComponentValueDataKind.list &&
-        value.items.isEmpty) {
-      return _ok(_integerData(BigInt.zero));
+    final datagrams = _outgoingDatagramsFromData(value, stream.remoteAddress);
+    if (datagrams == null) {
+      return _errorResult('invalid-argument');
     }
-    return _errorResult('not-supported');
+    final result = stream.binding.send(datagrams);
+    if (!result.isOk) {
+      return _errorResult(result.errorCode!);
+    }
+    return _ok(_integerData(result.value!));
   }
 
   bool _tcpIsListening(int handle) {
@@ -548,7 +1130,24 @@ final class WASIPreview2SocketsHost {
   }
 
   int _tcpSubscribe(int handle) {
-    _requireTcpSocket(handle);
+    final socket = _requireTcpSocket(handle);
+    if (socket.pendingBind case final operation?) {
+      return _operationPollable(operation);
+    }
+    if (socket.pendingConnect case final operation?) {
+      return _operationPollable(operation);
+    }
+    if (socket.pendingListen case final operation?) {
+      return _operationPollable(operation);
+    }
+    if (socket.listener case final listener?) {
+      return pollHost.insert(
+        WASIPreview2Pollable(
+          isReady: () => listener.canAccept,
+          waitReady: listener.waitAccept,
+        ),
+      );
+    }
     return _readyPollable();
   }
 
@@ -557,18 +1156,53 @@ final class WASIPreview2SocketsHost {
   }
 
   int _udpSubscribe(int handle) {
-    _requireUdpSocket(handle);
+    final socket = _requireUdpSocket(handle);
+    if (socket.pendingBind case final operation?) {
+      return _operationPollable(operation);
+    }
+    if (socket.binding case final binding?) {
+      return pollHost.insert(
+        WASIPreview2Pollable(
+          isReady: () => binding.canReceive || binding.canSend,
+          waitReady: () async {
+            await Future.any(<Future<void>>[
+              binding.waitReceive(),
+              binding.waitSend(),
+            ]);
+          },
+        ),
+      );
+    }
     return _readyPollable();
   }
 
   int _incomingDatagramSubscribe(int handle) {
-    _requireIncomingDatagramStream(handle);
-    return _readyPollable();
+    final stream = _requireIncomingDatagramStream(handle);
+    return pollHost.insert(
+      WASIPreview2Pollable(
+        isReady: () => stream.binding.canReceive,
+        waitReady: stream.binding.waitReceive,
+      ),
+    );
   }
 
   int _outgoingDatagramSubscribe(int handle) {
-    _requireOutgoingDatagramStream(handle);
-    return _readyPollable();
+    final stream = _requireOutgoingDatagramStream(handle);
+    return pollHost.insert(
+      WASIPreview2Pollable(
+        isReady: () => stream.binding.canSend,
+        waitReady: stream.binding.waitSend,
+      ),
+    );
+  }
+
+  int _operationPollable<T>(WASIPreview2SocketOperation<T> operation) {
+    return pollHost.insert(
+      WASIPreview2Pollable(
+        isReady: () => operation.isReady,
+        waitReady: operation.waitReady,
+      ),
+    );
   }
 
   int _readyPollable() {
@@ -829,6 +1463,66 @@ final class WASIPreview2SocketsHost {
   }
 }
 
+final class _ResolvedSocketsHostParts {
+  const _ResolvedSocketsHostParts({
+    required this.table,
+    required this.pollHost,
+    required this.streamsHost,
+  });
+
+  final WASIComponentResourceTable table;
+  final WASIPreview2PollHost pollHost;
+  final WASIPreview2StreamsHost streamsHost;
+}
+
+_ResolvedSocketsHostParts _resolveSocketsHostParts(
+  WASIComponentResourceTable? table,
+  WASIPreview2PollHost? pollHost,
+  WASIPreview2StreamsHost? streamsHost,
+) {
+  final resolvedTable =
+      table ??
+      pollHost?.table ??
+      streamsHost?.table ??
+      WASIComponentResourceTable();
+  if (pollHost != null && !identical(resolvedTable, pollHost.table)) {
+    throw ArgumentError.value(
+      pollHost,
+      'pollHost',
+      'must use the same component resource table as sockets',
+    );
+  }
+  if (streamsHost != null && !identical(resolvedTable, streamsHost.table)) {
+    throw ArgumentError.value(
+      streamsHost,
+      'streamsHost',
+      'must use the same component resource table as sockets',
+    );
+  }
+  final resolvedPollHost =
+      pollHost ??
+      streamsHost?.pollHost ??
+      WASIPreview2PollHost(table: resolvedTable);
+  if (streamsHost != null &&
+      !identical(resolvedPollHost, streamsHost.pollHost)) {
+    throw ArgumentError.value(
+      streamsHost,
+      'streamsHost',
+      'must use the same Preview2 poll host as sockets',
+    );
+  }
+  return _ResolvedSocketsHostParts(
+    table: resolvedTable,
+    pollHost: resolvedPollHost,
+    streamsHost:
+        streamsHost ??
+        WASIPreview2StreamsHost(
+          table: resolvedTable,
+          pollHost: resolvedPollHost,
+        ),
+  );
+}
+
 final class _WASIPreview2Network {
   const _WASIPreview2Network(this.id);
 
@@ -850,15 +1544,36 @@ final class _WASIPreview2ResolveAddressStream {
   }
 }
 
-enum _TcpSocketState { unbound, bound, listening, connected }
+enum _TcpSocketState {
+  unbound,
+  binding,
+  bound,
+  connecting,
+  listeningStarting,
+  listening,
+  connected,
+}
 
 final class _WASIPreview2TcpSocket {
   _WASIPreview2TcpSocket(this.family);
+
+  _WASIPreview2TcpSocket.connected(
+    this.family,
+    WASIPreview2TcpConnection connection,
+  ) : state = _TcpSocketState.connected,
+      connection = connection,
+      localAddress = connection.localAddress._toWit(),
+      remoteAddress = connection.remoteAddress._toWit();
 
   final WASIPreview2IpAddressFamily family;
   _TcpSocketState state = _TcpSocketState.unbound;
   WasmComponentValueData? localAddress;
   WasmComponentValueData? remoteAddress;
+  WASIPreview2SocketOperation<WASIPreview2IpSocketAddress>? pendingBind;
+  WASIPreview2SocketOperation<WASIPreview2TcpConnection>? pendingConnect;
+  WASIPreview2SocketOperation<WASIPreview2TcpListener>? pendingListen;
+  WASIPreview2TcpListener? listener;
+  WASIPreview2TcpConnection? connection;
   BigInt listenBacklog = BigInt.from(128);
   bool keepAlive = false;
   BigInt keepAliveIdle = BigInt.from(7200000000000);
@@ -867,6 +1582,9 @@ final class _WASIPreview2TcpSocket {
   int hopLimit = 64;
   BigInt receiveBuffer = BigInt.from(65536);
   BigInt sendBuffer = BigInt.from(65536);
+
+  WASIPreview2IpSocketAddress? get localAddressAddress =>
+      WASIPreview2IpSocketAddress._fromWit(localAddress);
 }
 
 final class _WASIPreview2UdpSocket {
@@ -876,17 +1594,25 @@ final class _WASIPreview2UdpSocket {
   bool bound = false;
   WasmComponentValueData? localAddress;
   WasmComponentValueData? remoteAddress;
+  WASIPreview2SocketOperation<WASIPreview2UdpBinding>? pendingBind;
+  WASIPreview2UdpBinding? binding;
   int hopLimit = 64;
   BigInt receiveBuffer = BigInt.from(65536);
   BigInt sendBuffer = BigInt.from(65536);
 }
 
 final class _WASIPreview2IncomingDatagramStream {
-  const _WASIPreview2IncomingDatagramStream();
+  const _WASIPreview2IncomingDatagramStream(this.binding, this.remoteAddress);
+
+  final WASIPreview2UdpBinding binding;
+  final WASIPreview2IpSocketAddress? remoteAddress;
 }
 
 final class _WASIPreview2OutgoingDatagramStream {
-  const _WASIPreview2OutgoingDatagramStream();
+  const _WASIPreview2OutgoingDatagramStream(this.binding, this.remoteAddress);
+
+  final WASIPreview2UdpBinding binding;
+  final WASIPreview2IpSocketAddress? remoteAddress;
 }
 
 Iterable<WASIPreview2IpAddress> _defaultAddressResolver(String name) {
@@ -987,40 +1713,24 @@ WASIPreview2IpAddressFamily? _addressFamilyFromData(Object? value) {
   return null;
 }
 
-WasmComponentValueData? _ipSocketAddressFromData(Object? value) {
+WASIPreview2IpSocketAddress? _ipSocketAddressFromData(Object? value) {
+  return WASIPreview2IpSocketAddress._fromWit(value);
+}
+
+({bool valid, WASIPreview2IpSocketAddress? address})
+_optionalIpSocketAddressFromData(Object? value) {
   if (value is! WasmComponentValueData ||
-      value.kind != WasmComponentValueDataKind.variant) {
-    return null;
+      value.kind != WasmComponentValueDataKind.option) {
+    return (valid: false, address: null);
   }
-  final label = value.label;
-  if (label == 'ipv4' || (label == null && value.index == 0)) {
-    return value;
+  final isSome = value.isSome ?? value.label == 'some' || value.index == 1;
+  if (!isSome) {
+    return (valid: true, address: null);
   }
-  if (label == 'ipv6' || (label == null && value.index == 1)) {
-    return value;
-  }
-  return null;
-}
-
-WASIPreview2IpAddressFamily? _ipSocketAddressFamily(
-  WasmComponentValueData address,
-) {
-  if (address.label == 'ipv4' ||
-      (address.label == null && address.index == 0)) {
-    return WASIPreview2IpAddressFamily.ipv4;
-  }
-  if (address.label == 'ipv6' ||
-      (address.label == null && address.index == 1)) {
-    return WASIPreview2IpAddressFamily.ipv6;
-  }
-  return null;
-}
-
-extension on WasmComponentValueData? {
-  WASIPreview2IpAddressFamily? get family {
-    final value = this;
-    return value == null ? null : _ipSocketAddressFamily(value);
-  }
+  final address = WASIPreview2IpSocketAddress._fromWit(value.associatedValue);
+  return address == null
+      ? (valid: false, address: null)
+      : (valid: true, address: address);
 }
 
 int _validatePart(int value, int max, String name) {
@@ -1062,6 +1772,155 @@ BigInt _u64(Object? value) {
     int() when value >= 0 => BigInt.from(value),
     _ => throw StateError('Expected u64 value, got $value.'),
   };
+}
+
+int? _u16Data(WasmComponentValueData value) {
+  final integer = value.kind == WasmComponentValueDataKind.integer
+      ? value.integer
+      : null;
+  return switch (integer) {
+    int() when integer >= 0 && integer <= 0xffff => integer,
+    BigInt() when integer >= BigInt.zero && integer <= BigInt.from(0xffff) =>
+      integer.toInt(),
+    _ => null,
+  };
+}
+
+int? _u32Data(WasmComponentValueData value) {
+  final integer = value.kind == WasmComponentValueDataKind.integer
+      ? value.integer
+      : null;
+  return switch (integer) {
+    int() when integer >= 0 && integer <= 0xffffffff => integer,
+    BigInt()
+        when integer >= BigInt.zero && integer <= BigInt.from(0xffffffff) =>
+      integer.toInt(),
+    _ => null,
+  };
+}
+
+List<int>? _u8Tuple(WasmComponentValueData value, int length) {
+  if (value.kind != WasmComponentValueDataKind.tuple ||
+      value.items.length != length) {
+    return null;
+  }
+  final parts = <int>[];
+  for (final item in value.items) {
+    final integer = item.kind == WasmComponentValueDataKind.integer
+        ? item.integer
+        : null;
+    final part = switch (integer) {
+      int() when integer >= 0 && integer <= 0xff => integer,
+      BigInt() when integer >= BigInt.zero && integer <= BigInt.from(0xff) =>
+        integer.toInt(),
+      _ => null,
+    };
+    if (part == null) {
+      return null;
+    }
+    parts.add(part);
+  }
+  return parts;
+}
+
+List<int>? _u16Tuple(WasmComponentValueData value, int length) {
+  if (value.kind != WasmComponentValueDataKind.tuple ||
+      value.items.length != length) {
+    return null;
+  }
+  final parts = <int>[];
+  for (final item in value.items) {
+    final part = _u16Data(item);
+    if (part == null) {
+      return null;
+    }
+    parts.add(part);
+  }
+  return parts;
+}
+
+List<WASIPreview2OutgoingDatagram>? _outgoingDatagramsFromData(
+  Object? value,
+  WASIPreview2IpSocketAddress? streamRemoteAddress,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != WasmComponentValueDataKind.list) {
+    return null;
+  }
+  final datagrams = <WASIPreview2OutgoingDatagram>[];
+  for (final item in value.items) {
+    if (item.kind != WasmComponentValueDataKind.record ||
+        item.items.length != 2) {
+      return null;
+    }
+    final data = _u8ListFromData(item.items[0]);
+    final remoteResult = _optionalIpSocketAddressFromData(item.items[1]);
+    if (data == null || !remoteResult.valid) {
+      return null;
+    }
+    datagrams.add(
+      WASIPreview2OutgoingDatagram(
+        data: Uint8List.fromList(data),
+        remoteAddress: remoteResult.address ?? streamRemoteAddress,
+      ),
+    );
+  }
+  return datagrams;
+}
+
+List<int>? _u8ListFromData(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.list) {
+    return null;
+  }
+  final bytes = <int>[];
+  for (final item in value.items) {
+    final integer = item.kind == WasmComponentValueDataKind.integer
+        ? item.integer
+        : null;
+    final byte = switch (integer) {
+      int() when integer >= 0 && integer <= 0xff => integer,
+      BigInt() when integer >= BigInt.zero && integer <= BigInt.from(0xff) =>
+        integer.toInt(),
+      _ => null,
+    };
+    if (byte == null) {
+      return null;
+    }
+    bytes.add(byte);
+  }
+  return bytes;
+}
+
+bool _sameAddress(
+  WASIPreview2IpSocketAddress a,
+  WASIPreview2IpSocketAddress b,
+) {
+  if (a.family != b.family ||
+      a.port != b.port ||
+      a.flowInfo != b.flowInfo ||
+      a.scopeId != b.scopeId) {
+    return false;
+  }
+  final left = a.address.parts;
+  final right = b.address.parts;
+  if (left.length != right.length) {
+    return false;
+  }
+  for (var i = 0; i < left.length; i++) {
+    if (left[i] != right[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+String _caseLabelFromData(Object? value) {
+  if (value is WasmComponentValueData &&
+      (value.kind == WasmComponentValueDataKind.enumeration ||
+          value.kind == WasmComponentValueDataKind.variant)) {
+    return value.label ?? 'case-${value.index}';
+  }
+  return 'unknown';
 }
 
 WasmComponentValueData _addressFamilyData(WASIPreview2IpAddressFamily? family) {
@@ -1143,12 +2002,24 @@ WasmComponentValueData _tupleData(List<WasmComponentValueData> items) {
   );
 }
 
+WasmComponentValueData _recordData(List<WasmComponentValueData> items) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.record,
+    rawBytes: Uint8List(0),
+    items: items,
+  );
+}
+
 WasmComponentValueData _listData(List<WasmComponentValueData> items) {
   return WasmComponentValueData(
     kind: WasmComponentValueDataKind.list,
     rawBytes: Uint8List(0),
     items: items,
   );
+}
+
+WasmComponentValueData _u8ListData(List<int> bytes) {
+  return _listData([for (final byte in bytes) _integerData(byte)]);
 }
 
 WasmComponentValueData _integerData(Object value) {

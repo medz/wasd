@@ -10,6 +10,7 @@ import '../../wasm/backend/native/interpreter/component.dart';
 import 'cli.dart';
 import 'clocks.dart';
 import 'filesystem.dart';
+import 'http.dart';
 import 'io.dart';
 import 'poll.dart';
 import 'random.dart';
@@ -27,6 +28,7 @@ final class WASIPreview2ComponentHost {
     WASIPreview2ClocksHost? clocksHost,
     WASIPreview2IoErrorHost? errorHost,
     WASIPreview2FilesystemHost? filesystemHost,
+    WASIPreview2HttpHost? httpHost,
     WASIPreview2PollHost? pollHost,
     WASIPreview2RandomHost? randomHost,
     WASIPreview2SocketsHost? socketsHost,
@@ -74,8 +76,14 @@ final class WASIPreview2ComponentHost {
        assert(
          streamsHost == null ||
              socketsHost == null ||
-             identical(streamsHost.pollHost, socketsHost.pollHost),
-         'socketsHost and streamsHost must share the same Preview2 poll host.',
+             identical(streamsHost, socketsHost.streamsHost),
+         'socketsHost and streamsHost must share the same Preview2 streams host.',
+       ),
+       assert(
+         errorHost == null ||
+             socketsHost == null ||
+             identical(errorHost, socketsHost.streamsHost.errorHost),
+         'socketsHost and errorHost must share the same Preview2 error host.',
        ),
        assert(
          streamsHost == null ||
@@ -149,6 +157,48 @@ final class WASIPreview2ComponentHost {
              ),
          'filesystemHost and socketsHost must share the same Preview2 poll host.',
        ),
+       assert(
+         pollHost == null ||
+             httpHost == null ||
+             identical(pollHost, httpHost.pollHost),
+         'httpHost and pollHost must share the same Preview2 poll host.',
+       ),
+       assert(
+         streamsHost == null ||
+             httpHost == null ||
+             identical(streamsHost, httpHost.streamsHost),
+         'httpHost and streamsHost must share the same Preview2 streams host.',
+       ),
+       assert(
+         errorHost == null ||
+             httpHost == null ||
+             identical(errorHost, httpHost.streamsHost.errorHost),
+         'httpHost and errorHost must share the same Preview2 error host.',
+       ),
+       assert(
+         clocksHost == null ||
+             httpHost == null ||
+             identical(clocksHost.pollHost, httpHost.pollHost),
+         'httpHost and clocksHost must share the same Preview2 poll host.',
+       ),
+       assert(
+         cliHost == null ||
+             httpHost == null ||
+             identical(cliHost.streamsHost, httpHost.streamsHost),
+         'httpHost and cliHost must share the same Preview2 streams host.',
+       ),
+       assert(
+         filesystemHost == null ||
+             httpHost == null ||
+             identical(filesystemHost.streamsHost, httpHost.streamsHost),
+         'httpHost and filesystemHost must share the same Preview2 streams host.',
+       ),
+       assert(
+         socketsHost == null ||
+             httpHost == null ||
+             identical(socketsHost.streamsHost, httpHost.streamsHost),
+         'httpHost and socketsHost must share the same Preview2 streams host.',
+       ),
        versionedHost = WASIComponentVersionedHost(
          version: WASIVersion.preview2,
          componentHost: componentHost,
@@ -161,11 +211,16 @@ final class WASIPreview2ComponentHost {
        _clocksHostOverride = clocksHost,
        _errorHostOverride = errorHost,
        _filesystemHostOverride = filesystemHost,
+       _httpHostOverride = httpHost,
        _pollHostOverride = pollHost,
        _randomHost = randomHost ?? WASIPreview2RandomHost(),
        _socketsHostOverride = socketsHost,
        _streamsHostOverride =
-           streamsHost ?? cliHost?.streamsHost ?? filesystemHost?.streamsHost;
+           streamsHost ??
+           cliHost?.streamsHost ??
+           filesystemHost?.streamsHost ??
+           socketsHost?.streamsHost ??
+           httpHost?.streamsHost;
 
   /// Underlying versioned component-host facade.
   final WASIComponentVersionedHost versionedHost;
@@ -178,6 +233,7 @@ final class WASIPreview2ComponentHost {
   final WASIPreview2ClocksHost? _clocksHostOverride;
   final WASIPreview2IoErrorHost? _errorHostOverride;
   final WASIPreview2FilesystemHost? _filesystemHostOverride;
+  final WASIPreview2HttpHost? _httpHostOverride;
   final WASIPreview2PollHost? _pollHostOverride;
   final WASIPreview2RandomHost _randomHost;
   final WASIPreview2SocketsHost? _socketsHostOverride;
@@ -186,10 +242,13 @@ final class WASIPreview2ComponentHost {
       _clocksHostOverride?.pollHost ??
       _streamsHostOverride?.pollHost ??
       _socketsHostOverride?.pollHost ??
+      _httpHostOverride?.pollHost ??
       _pollHostOverride ??
       WASIPreview2PollHost(table: componentHost.table);
   late final WASIPreview2IoErrorHost _errorHost =
       _streamsHostOverride?.errorHost ??
+      _socketsHostOverride?.streamsHost.errorHost ??
+      _httpHostOverride?.streamsHost.errorHost ??
       _errorHostOverride ??
       WASIPreview2IoErrorHost(table: componentHost.table);
   late final WASIPreview2StreamsHost _streamsHost =
@@ -214,7 +273,11 @@ final class WASIPreview2ComponentHost {
       _filesystemHostOverride ??
       WASIPreview2FilesystemHost(streamsHost: _streamsHost);
   late final WASIPreview2SocketsHost _socketsHost =
-      _socketsHostOverride ?? WASIPreview2SocketsHost(pollHost: _pollHost);
+      _socketsHostOverride ??
+      WASIPreview2SocketsHost(pollHost: _pollHost, streamsHost: _streamsHost);
+  late final WASIPreview2HttpHost _httpHost =
+      _httpHostOverride ??
+      WASIPreview2HttpHost(pollHost: _pollHost, streamsHost: _streamsHost);
 
   /// Preview2 version profile.
   WASIComponentVersionProfile get profile => versionedHost.profile;
@@ -246,18 +309,24 @@ final class WASIPreview2ComponentHost {
   /// Sockets host state for standard `wasi:sockets` imports.
   WASIPreview2SocketsHost get socketsHost => _socketsHost;
 
+  /// HTTP host state for standard `wasi:http` imports.
+  WASIPreview2HttpHost get httpHost => _httpHost;
+
   /// Standard Preview2 WIT import callbacks implemented by this host.
   late final Map<String, WASIComponentWitAdapterCallback> standardImports =
-      Map<String, WASIComponentWitAdapterCallback>.unmodifiable({
-        ..._randomHost.imports,
-        ..._errorHost.imports,
-        ..._clocksHost.imports,
-        ..._pollHost.imports,
-        ..._streamsHost.imports,
-        ..._cliHost.imports,
-        ..._filesystemHost.imports,
-        ..._socketsHost.imports,
-      });
+      Map<String, WASIComponentWitAdapterCallback>.unmodifiable(
+        _withPreview2PatchAliases({
+          ..._randomHost.imports,
+          ..._errorHost.imports,
+          ..._clocksHost.imports,
+          ..._pollHost.imports,
+          ..._streamsHost.imports,
+          ..._cliHost.imports,
+          ..._filesystemHost.imports,
+          ..._socketsHost.imports,
+          ..._httpHost.imports,
+        }),
+      );
 
   /// Prepares [component] for Preview2 component-host binding.
   WASIComponentVersionedBindingPlan prepareComponent(
@@ -343,4 +412,19 @@ final class WASIPreview2ComponentHost {
       onAsyncValueDrop: onAsyncValueDrop,
     );
   }
+}
+
+Map<String, WASIComponentWitAdapterCallback> _withPreview2PatchAliases(
+  Map<String, WASIComponentWitAdapterCallback> imports,
+) {
+  final result = <String, WASIComponentWitAdapterCallback>{...imports};
+  for (final entry in imports.entries) {
+    if (!entry.key.contains('@0.2.0')) {
+      continue;
+    }
+    for (var patch = 1; patch <= 8; patch++) {
+      result[entry.key.replaceAll('@0.2.0', '@0.2.$patch')] = entry.value;
+    }
+  }
+  return result;
 }

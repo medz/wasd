@@ -24,9 +24,14 @@ export 'preview2/cli.dart';
 export 'preview2/clocks.dart';
 export 'preview2/component_host.dart';
 export 'preview2/filesystem.dart';
+export 'preview2/http.dart';
 export 'preview2/io.dart';
 export 'preview2/native/filesystem_stub.dart'
     if (dart.library.io) 'preview2/native/filesystem.dart';
+export 'preview2/native/http_stub.dart'
+    if (dart.library.io) 'preview2/native/http.dart';
+export 'preview2/native/sockets_stub.dart'
+    if (dart.library.io) 'preview2/native/sockets.dart';
 export 'preview2/poll.dart';
 export 'preview2/random.dart';
 export 'preview2/sockets.dart';

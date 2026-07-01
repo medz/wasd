@@ -9,39 +9,76 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
   if (parsed == null) {
     return null;
   }
-  if (parsed.packageName == 'wasi:random' && parsed.version == '0.2.0') {
+  if (parsed.packageName == 'wasi:random' &&
+      _isPreview2PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
-      document: _wasiRandom020Document,
+      document: _preview2Document(
+        _wasiRandom020Source,
+        'wasi:random',
+        parsed.version!,
+      ),
       memberName: parsed.memberName,
     );
   }
-  if (parsed.packageName == 'wasi:clocks' && parsed.version == '0.2.0') {
+  if (parsed.packageName == 'wasi:clocks' &&
+      _isPreview2PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
-      document: _wasiClocks020Document,
+      document: _preview2Document(
+        _wasiClocks020Source,
+        'wasi:clocks',
+        parsed.version!,
+      ),
       memberName: parsed.memberName,
     );
   }
-  if (parsed.packageName == 'wasi:io' && parsed.version == '0.2.0') {
+  if (parsed.packageName == 'wasi:io' &&
+      _isPreview2PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
-      document: _wasiIo020Document,
+      document: _preview2Document(_wasiIo020Source, 'wasi:io', parsed.version!),
       memberName: parsed.memberName,
     );
   }
-  if (parsed.packageName == 'wasi:cli' && parsed.version == '0.2.0') {
+  if (parsed.packageName == 'wasi:cli' &&
+      _isPreview2PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
-      document: _wasiCli020Document,
+      document: _preview2Document(
+        _wasiCli020Source,
+        'wasi:cli',
+        parsed.version!,
+      ),
       memberName: parsed.memberName,
     );
   }
-  if (parsed.packageName == 'wasi:filesystem' && parsed.version == '0.2.0') {
+  if (parsed.packageName == 'wasi:filesystem' &&
+      _isPreview2PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
-      document: _wasiFilesystem020Document,
+      document: _preview2Document(
+        _wasiFilesystem020Source,
+        'wasi:filesystem',
+        parsed.version!,
+      ),
       memberName: parsed.memberName,
     );
   }
-  if (parsed.packageName == 'wasi:sockets' && parsed.version == '0.2.0') {
+  if (parsed.packageName == 'wasi:sockets' &&
+      _isPreview2PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
-      document: _wasiSockets020Document,
+      document: _preview2Document(
+        _wasiSockets020Source,
+        'wasi:sockets',
+        parsed.version!,
+      ),
+      memberName: parsed.memberName,
+    );
+  }
+  if (parsed.packageName == 'wasi:http' &&
+      _isPreview2PatchVersion(parsed.version)) {
+    return WASIComponentWitResolvedTarget(
+      document: _preview2Document(
+        _wasiHttp020Source,
+        'wasi:http',
+        parsed.version!,
+      ),
       memberName: parsed.memberName,
     );
   }
@@ -72,6 +109,36 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
   return null;
 }
 
+bool _isPreview2PatchVersion(String? version) {
+  if (version == null) {
+    return false;
+  }
+  final match = RegExp(r'^0\.2\.(\d+)$').firstMatch(version);
+  if (match == null) {
+    return false;
+  }
+  final patch = int.tryParse(match.group(1)!);
+  return patch != null && patch >= 0 && patch <= 8;
+}
+
+final Map<String, WASIComponentWitDocument> _preview2Documents =
+    <String, WASIComponentWitDocument>{};
+
+WASIComponentWitDocument _preview2Document(
+  String source,
+  String packageName,
+  String version,
+) {
+  final key = '$packageName@$version';
+  return _preview2Documents.putIfAbsent(
+    key,
+    () => WASIComponentWitDocument.parse(
+      source.replaceAll('@0.2.0', '@$version'),
+      sourceName: key,
+    ),
+  );
+}
+
 ({String packageName, String memberName, String? version})?
 _parseQualifiedWitTarget(String target) {
   final slash = target.indexOf('/');
@@ -99,42 +166,6 @@ final WASIComponentWitDocument _wasiRandom030Document =
     WASIComponentWitDocument.parse(
       _wasiRandom030Source,
       sourceName: 'wasi:random@0.3.0',
-    );
-
-final WASIComponentWitDocument _wasiRandom020Document =
-    WASIComponentWitDocument.parse(
-      _wasiRandom020Source,
-      sourceName: 'wasi:random@0.2.0',
-    );
-
-final WASIComponentWitDocument _wasiClocks020Document =
-    WASIComponentWitDocument.parse(
-      _wasiClocks020Source,
-      sourceName: 'wasi:clocks@0.2.0',
-    );
-
-final WASIComponentWitDocument _wasiIo020Document =
-    WASIComponentWitDocument.parse(
-      _wasiIo020Source,
-      sourceName: 'wasi:io@0.2.0',
-    );
-
-final WASIComponentWitDocument _wasiCli020Document =
-    WASIComponentWitDocument.parse(
-      _wasiCli020Source,
-      sourceName: 'wasi:cli@0.2.0',
-    );
-
-final WASIComponentWitDocument _wasiFilesystem020Document =
-    WASIComponentWitDocument.parse(
-      _wasiFilesystem020Source,
-      sourceName: 'wasi:filesystem@0.2.0',
-    );
-
-final WASIComponentWitDocument _wasiSockets020Document =
-    WASIComponentWitDocument.parse(
-      _wasiSockets020Source,
-      sourceName: 'wasi:sockets@0.2.0',
     );
 
 final WASIComponentWitDocument _wasiClocks030Document =
@@ -544,6 +575,222 @@ world imports {
   import tcp;
   import tcp-create-socket;
   import ip-name-lookup;
+}
+''';
+
+const String _wasiHttp020Source = '''
+package wasi:http@0.2.0;
+
+interface types {
+  use wasi:clocks/monotonic-clock@0.2.0.{duration};
+  use wasi:io/streams@0.2.0.{input-stream, output-stream};
+  use wasi:io/error@0.2.0.{error as io-error};
+  use wasi:io/poll@0.2.0.{pollable};
+
+  variant method {
+    get,
+    head,
+    post,
+    put,
+    delete,
+    connect,
+    options,
+    trace,
+    patch,
+    other(string),
+  }
+
+  variant scheme {
+    HTTP,
+    HTTPS,
+    other(string),
+  }
+
+  variant error-code {
+    DNS-timeout,
+    DNS-error(DNS-error-payload),
+    destination-not-found,
+    destination-unavailable,
+    destination-IP-prohibited,
+    destination-IP-unroutable,
+    connection-refused,
+    connection-terminated,
+    connection-timeout,
+    connection-read-timeout,
+    connection-write-timeout,
+    connection-limit-reached,
+    TLS-protocol-error,
+    TLS-certificate-error,
+    TLS-alert-received(TLS-alert-received-payload),
+    HTTP-request-denied,
+    HTTP-request-length-required,
+    HTTP-request-body-size(option<u64>),
+    HTTP-request-method-invalid,
+    HTTP-request-URI-invalid,
+    HTTP-request-URI-too-long,
+    HTTP-request-header-section-size(option<u32>),
+    HTTP-request-header-size(option<field-size-payload>),
+    HTTP-request-trailer-section-size(option<u32>),
+    HTTP-request-trailer-size(field-size-payload),
+    HTTP-response-incomplete,
+    HTTP-response-header-section-size(option<u32>),
+    HTTP-response-header-size(field-size-payload),
+    HTTP-response-body-size(option<u64>),
+    HTTP-response-trailer-section-size(option<u32>),
+    HTTP-response-trailer-size(field-size-payload),
+    HTTP-response-transfer-coding(option<string>),
+    HTTP-response-content-coding(option<string>),
+    HTTP-response-timeout,
+    HTTP-upgrade-failed,
+    HTTP-protocol-error,
+    loop-detected,
+    configuration-error,
+    internal-error(option<string>),
+  }
+
+  record DNS-error-payload {
+    rcode: option<string>,
+    info-code: option<u16>,
+  }
+
+  record TLS-alert-received-payload {
+    alert-id: option<u8>,
+    alert-message: option<string>,
+  }
+
+  record field-size-payload {
+    field-name: option<string>,
+    field-size: option<u32>,
+  }
+
+  http-error-code: func(err: borrow<io-error>) -> option<error-code>;
+
+  variant header-error {
+    invalid-syntax,
+    forbidden,
+    immutable,
+  }
+
+  type field-name = field-key;
+  type field-key = string;
+  type field-value = list<u8>;
+
+  resource fields {
+    constructor();
+    from-list: static func(entries: list<tuple<field-name, field-value>>) -> result<fields, header-error>;
+    get: func(name: field-name) -> list<field-value>;
+    has: func(name: field-name) -> bool;
+    set: func(name: field-name, value: list<field-value>) -> result<_, header-error>;
+    delete: func(name: field-name) -> result<_, header-error>;
+    append: func(name: field-name, value: field-value) -> result<_, header-error>;
+    entries: func() -> list<tuple<field-name, field-value>>;
+    clone: func() -> fields;
+  }
+
+  type headers = fields;
+  type trailers = fields;
+
+  resource incoming-request {
+    method: func() -> method;
+    path-with-query: func() -> option<string>;
+    scheme: func() -> option<scheme>;
+    authority: func() -> option<string>;
+    headers: func() -> headers;
+    consume: func() -> result<incoming-body>;
+  }
+
+  resource outgoing-request {
+    constructor(headers: headers);
+    body: func() -> result<outgoing-body>;
+    method: func() -> method;
+    set-method: func(method: method) -> result;
+    path-with-query: func() -> option<string>;
+    set-path-with-query: func(path-with-query: option<string>) -> result;
+    scheme: func() -> option<scheme>;
+    set-scheme: func(scheme: option<scheme>) -> result;
+    authority: func() -> option<string>;
+    set-authority: func(authority: option<string>) -> result;
+    headers: func() -> headers;
+  }
+
+  resource request-options {
+    constructor();
+    connect-timeout: func() -> option<duration>;
+    set-connect-timeout: func(duration: option<duration>) -> result;
+    first-byte-timeout: func() -> option<duration>;
+    set-first-byte-timeout: func(duration: option<duration>) -> result;
+    between-bytes-timeout: func() -> option<duration>;
+    set-between-bytes-timeout: func(duration: option<duration>) -> result;
+  }
+
+  resource response-outparam {
+    send-informational: func(status: u16, headers: headers) -> result<_, error-code>;
+    set: static func(param: response-outparam, response: result<outgoing-response, error-code>);
+  }
+
+  type status-code = u16;
+
+  resource incoming-response {
+    status: func() -> status-code;
+    headers: func() -> headers;
+    consume: func() -> result<incoming-body>;
+  }
+
+  resource incoming-body {
+    %stream: func() -> result<input-stream>;
+    finish: static func(this: incoming-body) -> future-trailers;
+  }
+
+  resource future-trailers {
+    subscribe: func() -> pollable;
+    get: func() -> option<result<result<option<trailers>, error-code>>>;
+  }
+
+  resource outgoing-response {
+    constructor(headers: headers);
+    status-code: func() -> status-code;
+    set-status-code: func(status-code: status-code) -> result;
+    headers: func() -> headers;
+    body: func() -> result<outgoing-body>;
+  }
+
+  resource outgoing-body {
+    write: func() -> result<output-stream>;
+    finish: static func(this: outgoing-body, trailers: option<trailers>) -> result<_, error-code>;
+  }
+
+  resource future-incoming-response {
+    subscribe: func() -> pollable;
+    get: func() -> option<result<result<incoming-response, error-code>>>;
+  }
+}
+
+interface incoming-handler {
+  use types.{incoming-request, response-outparam};
+
+  handle: func(request: incoming-request, response-out: response-outparam);
+}
+
+interface outgoing-handler {
+  use types.{outgoing-request, request-options, future-incoming-response, error-code};
+
+  handle: func(request: outgoing-request, options: option<request-options>) -> result<future-incoming-response, error-code>;
+}
+
+world imports {
+  import wasi:clocks/monotonic-clock@0.2.0;
+  import wasi:clocks/wall-clock@0.2.0;
+  import wasi:random/random@0.2.0;
+  import wasi:cli/stdout@0.2.0;
+  import wasi:cli/stderr@0.2.0;
+  import wasi:cli/stdin@0.2.0;
+  import outgoing-handler;
+}
+
+world proxy {
+  include imports;
+
+  export incoming-handler;
 }
 ''';
 

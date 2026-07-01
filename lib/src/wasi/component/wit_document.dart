@@ -854,11 +854,25 @@ final class _WitParser {
       if (_checkKind(_WitTokenKind.word)) {
         final item = _current;
         _advance();
+        if (receiverResource != null &&
+            item.lexeme == 'constructor' &&
+            _checkSymbol('(')) {
+          final params = _parseConstructorParams(item.span);
+          functions.add(
+            WASIComponentWitFunction(
+              name: '$prefix${item.lexeme}',
+              signature: 'func($params)->$receiverResource',
+              span: item.span,
+            ),
+          );
+          continue;
+        }
         if (_matchSymbol(':')) {
           final parsedSignature = _parseInterfaceItemSignature(item.span);
-          final signature = receiverResource == null
-              ? parsedSignature
-              : _withResourceReceiver(parsedSignature, receiverResource);
+          final signature = _normalizeResourceFunctionSignature(
+            parsedSignature,
+            receiverResource,
+          );
           if (_isFunctionSignature(signature)) {
             functions.add(
               WASIComponentWitFunction(
@@ -907,6 +921,32 @@ final class _WitParser {
       _advance();
     }
     _expectSymbol('}');
+  }
+
+  String _parseConstructorParams(WASIComponentWitSpan start) {
+    final text = StringBuffer();
+    _expectSymbol('(');
+    var parenDepth = 1;
+    var angleDepth = 0;
+    while (!_checkKind(_WitTokenKind.eof)) {
+      if (_checkSymbol('(')) {
+        parenDepth++;
+      } else if (_checkSymbol(')') && angleDepth == 0) {
+        parenDepth--;
+        if (parenDepth == 0) {
+          _advance();
+          _expectSymbol(';');
+          return text.toString();
+        }
+      } else if (_checkSymbol('<')) {
+        angleDepth++;
+      } else if (_checkSymbol('>') && angleDepth > 0) {
+        angleDepth--;
+      }
+      text.write(_current.lexeme);
+      _advance();
+    }
+    _fail(start, 'unterminated resource constructor');
   }
 
   WASIComponentWitUse _parseUse() {
@@ -1455,6 +1495,19 @@ final class _WitParser {
       _advance();
     }
     _fail(start, 'unterminated interface item signature');
+  }
+
+  String _normalizeResourceFunctionSignature(
+    String signature,
+    String? resourceName,
+  ) {
+    if (signature.startsWith('staticfunc')) {
+      return signature.replaceFirst('staticfunc', 'func');
+    }
+    if (resourceName == null) {
+      return signature;
+    }
+    return _withResourceReceiver(signature, resourceName);
   }
 
   String _withResourceReceiver(String signature, String resourceName) {

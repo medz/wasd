@@ -320,6 +320,175 @@ world sockets-test {
       );
     });
 
+    test('binds standard Preview2 HTTP imports from public API', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world http-test {
+  import wasi:http/types@0.2.0;
+  import wasi:http/outgoing-handler@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview2ComponentHost();
+      final program = host.bindWitWorld(document, worldName: 'http-test');
+      final fields =
+          program.invokeImport(
+                'wasi:http/types@0.2.0.fields.constructor',
+                const [],
+              )
+              as int;
+      final request =
+          program.invokeImport(
+                'wasi:http/types@0.2.0.outgoing-request.constructor',
+                [fields],
+              )
+              as int;
+      final handled =
+          program.invokeImport('wasi:http/outgoing-handler@0.2.0.handle', [
+                request,
+                _noneValue(),
+              ])
+              as WasmComponentValueData;
+
+      expect(_resultErrorLabel(handled), 'configuration-error');
+      expect(host.httpHost.streamsHost, same(host.streamsHost));
+      expect(
+        host.standardImports,
+        contains('wasi:http/outgoing-handler@0.2.0.handle'),
+      );
+    });
+
+    test(
+      'binds Preview2 sockets imports to Dart VM loopback sockets',
+      () async {
+        if (!hasDartIoRuntime) {
+          markTestSkipped('requires dart:io sockets');
+          return;
+        }
+        const source = '''
+package wasi-testsuite:test;
+
+world sockets-test {
+  include wasi:sockets/imports@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+        final document = WASIComponentWitDocument.parse(source);
+        final sockets = WASIPreview2NativeSocketsHost();
+        final host = WASIPreview2ComponentHost(socketsHost: sockets);
+        final program = host.bindWitWorld(document, worldName: 'sockets-test');
+        final network =
+            program.invokeImport(
+                  'wasi:sockets/instance-network@0.2.0.instance-network',
+                  const [],
+                )
+                as int;
+        final listener = _resultHandle(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket',
+                  [_enumValue('ipv4')],
+                )
+                as WasmComponentValueData,
+          ),
+        );
+
+        _expectUnitOk(
+          program.invokeImport('wasi:sockets/tcp@0.2.0.tcp-socket.start-bind', [
+                listener,
+                network,
+                _ipv4SocketAddressValue(port: 0),
+              ])
+              as WasmComponentValueData,
+        );
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:sockets/tcp@0.2.0.tcp-socket.finish-bind',
+                [listener],
+              )
+              as WasmComponentValueData,
+        );
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:sockets/tcp@0.2.0.tcp-socket.start-listen',
+                [listener],
+              )
+              as WasmComponentValueData,
+        );
+        await _blockTcp(program, listener);
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:sockets/tcp@0.2.0.tcp-socket.finish-listen',
+                [listener],
+              )
+              as WasmComponentValueData,
+        );
+        final listenerAddress = _resultOk(
+          program.invokeImport(
+                'wasi:sockets/tcp@0.2.0.tcp-socket.local-address',
+                [listener],
+              )
+              as WasmComponentValueData,
+        );
+        final client = _resultHandle(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket',
+                  [_enumValue('ipv4')],
+                )
+                as WasmComponentValueData,
+          ),
+        );
+
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:sockets/tcp@0.2.0.tcp-socket.start-connect',
+                [client, network, listenerAddress],
+              )
+              as WasmComponentValueData,
+        );
+        await _blockTcp(program, client);
+        final connected =
+            program.invokeImport(
+                  'wasi:sockets/tcp@0.2.0.tcp-socket.finish-connect',
+                  [client],
+                )
+                as WasmComponentValueData;
+        await _blockTcp(program, listener);
+        final accepted =
+            program.invokeImport('wasi:sockets/tcp@0.2.0.tcp-socket.accept', [
+                  listener,
+                ])
+                as WasmComponentValueData;
+        final clientStreams = _tcpStreamPair(_resultOk(connected));
+        final acceptedStreams = _tcpAcceptTuple(_resultOk(accepted));
+
+        program.invokeImport(
+          'wasi:io/streams@0.2.0.output-stream.check-write',
+          [clientStreams.output],
+        );
+        _expectUnitOk(
+          program.invokeImport('wasi:io/streams@0.2.0.output-stream.write', [
+                clientStreams.output,
+                _u8ListValue([4, 5, 6]),
+              ])
+              as WasmComponentValueData,
+        );
+        await _blockInput(program, acceptedStreams.input);
+        final received =
+            program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+                  acceptedStreams.input,
+                  BigInt.from(8),
+                ])
+                as WasmComponentValueData;
+
+        expect(_u8List(_resultOk(received)), [4, 5, 6]);
+        expect(sockets.streamsHost, same(host.streamsHost));
+      },
+    );
+
     test('binds Preview2 filesystem imports to real host files on Dart VM', () {
       if (!hasDartIoRuntime) {
         markTestSkipped('requires dart:io host filesystem access');
@@ -1071,11 +1240,131 @@ WasmComponentValueData _enumValue(String label) {
   );
 }
 
+WasmComponentValueData _noneValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    index: 0,
+    label: 'none',
+  );
+}
+
 void _expectUnitOk(WasmComponentValueData value) {
   if (value.kind != WasmComponentValueDataKind.result ||
       !(value.isOk ?? value.index == 0 || value.label == 'ok')) {
     throw StateError('expected ok result');
   }
+}
+
+Future<void> _blockTcp(
+  WASIComponentWitAdapterProgram program,
+  int socket,
+) async {
+  final pollable =
+      program.invokeImport('wasi:sockets/tcp@0.2.0.tcp-socket.subscribe', [
+            socket,
+          ])
+          as int;
+  await program.invokeImportAsync('wasi:io/poll@0.2.0.pollable.block', [
+    pollable,
+  ]);
+}
+
+Future<void> _blockInput(
+  WASIComponentWitAdapterProgram program,
+  int input,
+) async {
+  final pollable =
+      program.invokeImport('wasi:io/streams@0.2.0.input-stream.subscribe', [
+            input,
+          ])
+          as int;
+  await program.invokeImportAsync('wasi:io/poll@0.2.0.pollable.block', [
+    pollable,
+  ]);
+}
+
+({int input, int output}) _tcpStreamPair(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.tuple ||
+      value.items.length != 2) {
+    throw StateError('expected tcp stream pair');
+  }
+  return (
+    input: _resultHandle(value.items[0]),
+    output: _resultHandle(value.items[1]),
+  );
+}
+
+({int socket, int input, int output}) _tcpAcceptTuple(
+  WasmComponentValueData value,
+) {
+  if (value.kind != WasmComponentValueDataKind.tuple ||
+      value.items.length != 3) {
+    throw StateError('expected tcp accept tuple');
+  }
+  return (
+    socket: _resultHandle(value.items[0]),
+    input: _resultHandle(value.items[1]),
+    output: _resultHandle(value.items[2]),
+  );
+}
+
+WasmComponentValueData _ipv4SocketAddressValue({
+  required int port,
+  int a = 127,
+  int b = 0,
+  int c = 0,
+  int d = 1,
+}) {
+  return _variantValue(
+    'ipv4',
+    _recordValue([
+      _integerValue(port),
+      _tupleValue([
+        _integerValue(a),
+        _integerValue(b),
+        _integerValue(c),
+        _integerValue(d),
+      ]),
+    ]),
+  );
+}
+
+WasmComponentValueData _variantValue(
+  String label, [
+  WasmComponentValueData? associatedValue,
+]) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.variant,
+    rawBytes: Uint8List(0),
+    index: label == 'ipv6' ? 1 : 0,
+    label: label,
+    associatedValue: associatedValue,
+  );
+}
+
+WasmComponentValueData _recordValue(List<WasmComponentValueData> items) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.record,
+    rawBytes: Uint8List(0),
+    items: items,
+  );
+}
+
+WasmComponentValueData _tupleValue(List<WasmComponentValueData> items) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.tuple,
+    rawBytes: Uint8List(0),
+    items: items,
+  );
+}
+
+WasmComponentValueData _integerValue(Object value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.integer,
+    rawBytes: Uint8List(0),
+    integer: value,
+  );
 }
 
 int _descriptorAccessTimeNanos(WasmComponentValueData value) {
