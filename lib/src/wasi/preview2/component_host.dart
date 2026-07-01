@@ -38,6 +38,9 @@ final class WASIPreview2ComponentHost {
     List<int> stdinData = const <int>[],
     Map<String, String> preopens = const <String, String>{},
     bool canMutatePreopens = false,
+    bool? terminalStdin,
+    bool? terminalStdout,
+    bool? terminalStderr,
     WASIPreview2AddressResolver? resolveAddresses,
   }) {
     final host = componentHost ?? WASIComponentHost();
@@ -54,6 +57,11 @@ final class WASIPreview2ComponentHost {
       env: env,
       initialCwd: initialCwd,
       stdinData: stdinData,
+      terminalStdin: terminalStdin ?? native_defaults.isNativeStdinTerminal(),
+      terminalStdout:
+          terminalStdout ?? native_defaults.isNativeStdoutTerminal(),
+      terminalStderr:
+          terminalStderr ?? native_defaults.isNativeStderrTerminal(),
     );
 
     return WASIPreview2ComponentHost(

@@ -1,3 +1,5 @@
+import 'dart:io' as io;
+
 import '../filesystem.dart';
 import '../http.dart';
 import '../io.dart';
@@ -34,3 +36,14 @@ WASIPreview2HttpHost createNativePreview2HttpHost({
   required WASIPreview2PollHost pollHost,
   required WASIPreview2StreamsHost streamsHost,
 }) => WASIPreview2NativeHttpHost(pollHost: pollHost, streamsHost: streamsHost);
+
+/// Whether native stdin is attached to a terminal.
+bool isNativeStdinTerminal() => io.stdin.hasTerminal;
+
+/// Whether native stdout is attached to a terminal.
+bool isNativeStdoutTerminal() =>
+    io.stdioType(io.stdout) == io.StdioType.terminal;
+
+/// Whether native stderr is attached to a terminal.
+bool isNativeStderrTerminal() =>
+    io.stdioType(io.stderr) == io.StdioType.terminal;

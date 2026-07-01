@@ -4,6 +4,18 @@ import '../../wasm/backend/native/interpreter/component.dart';
 import '../component/wit_adapter.dart';
 import 'io.dart';
 
+/// Host-owned WASI 0.2 terminal input marker.
+final class WASIPreview2TerminalInput {
+  /// Creates a terminal input marker.
+  const WASIPreview2TerminalInput();
+}
+
+/// Host-owned WASI 0.2 terminal output marker.
+final class WASIPreview2TerminalOutput {
+  /// Creates a terminal output marker.
+  const WASIPreview2TerminalOutput();
+}
+
 /// Exception used to terminate a WASI 0.2 command instance.
 final class WASIPreview2Exit implements Exception {
   /// Creates a Preview2 command exit marker.
@@ -31,13 +43,19 @@ final class WASIPreview2CliHost {
     WASIPreview2InputStream? stdin,
     WASIPreview2OutputStream? stdout,
     WASIPreview2OutputStream? stderr,
+    bool terminalStdin = false,
+    bool terminalStdout = false,
+    bool terminalStderr = false,
   }) : streamsHost = streamsHost ?? WASIPreview2StreamsHost(),
        args = List<String>.unmodifiable(args),
        env = Map<String, String>.unmodifiable(env),
        stdinData = Uint8List.fromList(stdinData),
        _stdin = stdin,
        _stdout = stdout,
-       _stderr = stderr;
+       _stderr = stderr,
+       _terminalStdin = terminalStdin,
+       _terminalStdout = terminalStdout,
+       _terminalStderr = terminalStderr;
 
   /// Shared Preview2 streams host backing stdin, stdout, and stderr handles.
   final WASIPreview2StreamsHost streamsHost;
@@ -57,6 +75,18 @@ final class WASIPreview2CliHost {
   final WASIPreview2InputStream? _stdin;
   final WASIPreview2OutputStream? _stdout;
   final WASIPreview2OutputStream? _stderr;
+  final bool _terminalStdin;
+  final bool _terminalStdout;
+  final bool _terminalStderr;
+
+  late final _terminalInputType = streamsHost.table
+      .defineType<WASIPreview2TerminalInput>(
+        'wasi:cli/terminal-input@0.2.0.terminal-input',
+      );
+  late final _terminalOutputType = streamsHost.table
+      .defineType<WASIPreview2TerminalOutput>(
+        'wasi:cli/terminal-output@0.2.0.terminal-output',
+      );
 
   /// Owned `input-stream` handle returned by `stdin.get-stdin`.
   late final int stdinHandle = streamsHost.insertInputStream(
@@ -68,6 +98,30 @@ final class WASIPreview2CliHost {
 
   /// Owned `output-stream` handle returned by `stderr.get-stderr`.
   late final int stderrHandle = streamsHost.insertOutputStream(_stderr);
+
+  /// Owned `terminal-input` handle returned when stdin is a terminal.
+  late final int? terminalStdinHandle = _terminalStdin
+      ? streamsHost.table.insert<WASIPreview2TerminalInput>(
+          _terminalInputType,
+          const WASIPreview2TerminalInput(),
+        )
+      : null;
+
+  /// Owned `terminal-output` handle returned when stdout is a terminal.
+  late final int? terminalStdoutHandle = _terminalStdout
+      ? streamsHost.table.insert<WASIPreview2TerminalOutput>(
+          _terminalOutputType,
+          const WASIPreview2TerminalOutput(),
+        )
+      : null;
+
+  /// Owned `terminal-output` handle returned when stderr is a terminal.
+  late final int? terminalStderrHandle = _terminalStderr
+      ? streamsHost.table.insert<WASIPreview2TerminalOutput>(
+          _terminalOutputType,
+          const WASIPreview2TerminalOutput(),
+        )
+      : null;
 
   /// Host stdout stream state.
   WASIPreview2OutputStream get stdoutStream =>
@@ -93,9 +147,12 @@ final class WASIPreview2CliHost {
         'wasi:cli/stdin@0.2.0.get-stdin': (_) => stdinHandle,
         'wasi:cli/stdout@0.2.0.get-stdout': (_) => stdoutHandle,
         'wasi:cli/stderr@0.2.0.get-stderr': (_) => stderrHandle,
-        'wasi:cli/terminal-stdin@0.2.0.get-terminal-stdin': (_) => _none(),
-        'wasi:cli/terminal-stdout@0.2.0.get-terminal-stdout': (_) => _none(),
-        'wasi:cli/terminal-stderr@0.2.0.get-terminal-stderr': (_) => _none(),
+        'wasi:cli/terminal-stdin@0.2.0.get-terminal-stdin': (_) =>
+            _optionalHandle(terminalStdinHandle),
+        'wasi:cli/terminal-stdout@0.2.0.get-terminal-stdout': (_) =>
+            _optionalHandle(terminalStdoutHandle),
+        'wasi:cli/terminal-stderr@0.2.0.get-terminal-stderr': (_) =>
+            _optionalHandle(terminalStderrHandle),
       });
 
   WasmComponentValueData _environmentData() {
@@ -196,5 +253,23 @@ WasmComponentValueData _none() {
     index: 0,
     label: 'none',
     isSome: false,
+  );
+}
+
+WasmComponentValueData _optionalHandle(int? handle) {
+  if (handle == null) {
+    return _none();
+  }
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    index: 1,
+    label: 'some',
+    isSome: true,
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.integer,
+      rawBytes: Uint8List(0),
+      integer: handle,
+    ),
   );
 }

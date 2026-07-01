@@ -378,6 +378,9 @@ package wasi-testsuite:test;
 
 world native-host-test {
   import wasi:cli/environment@0.2.0;
+  import wasi:cli/terminal-stdin@0.2.0;
+  import wasi:cli/terminal-stdout@0.2.0;
+  import wasi:cli/terminal-stderr@0.2.0;
   import wasi:filesystem/preopens@0.2.0;
   import wasi:http/outgoing-handler@0.2.0;
   import wasi:io/streams@0.2.0;
@@ -390,6 +393,9 @@ world native-host-test {
         env: const <String, String>{'mode': 'native'},
         preopens: {'/': temp.path},
         canMutatePreopens: true,
+        terminalStdin: true,
+        terminalStdout: true,
+        terminalStderr: true,
       );
       final program = host.bindWitWorld(
         document,
@@ -407,6 +413,24 @@ world native-host-test {
                 const [],
               )
               as WasmComponentValueData;
+      final terminalStdin =
+          program.invokeImport(
+                'wasi:cli/terminal-stdin@0.2.0.get-terminal-stdin',
+                const [],
+              )
+              as WasmComponentValueData;
+      final terminalStdout =
+          program.invokeImport(
+                'wasi:cli/terminal-stdout@0.2.0.get-terminal-stdout',
+                const [],
+              )
+              as WasmComponentValueData;
+      final terminalStderr =
+          program.invokeImport(
+                'wasi:cli/terminal-stderr@0.2.0.get-terminal-stderr',
+                const [],
+              )
+              as WasmComponentValueData;
 
       expect(host.filesystemHost, isA<WASIPreview2NativeFilesystemHost>());
       expect(host.socketsHost, isA<WASIPreview2NativeSocketsHost>());
@@ -419,6 +443,21 @@ world native-host-test {
       expect(host.streamsHost.errorHost, same(host.errorHost));
       expect(_preopenHandle(directories, '/'), isNonNegative);
       expect(args.items.map((item) => item.string), ['component.wasm']);
+      expect(_optionHandle(terminalStdin), host.cliHost.terminalStdinHandle);
+      expect(_optionHandle(terminalStdout), host.cliHost.terminalStdoutHandle);
+      expect(_optionHandle(terminalStderr), host.cliHost.terminalStderrHandle);
+      expect(
+        host.streamsHost.table.contains(_optionHandle(terminalStdin)!),
+        isTrue,
+      );
+      expect(
+        host.streamsHost.table.contains(_optionHandle(terminalStdout)!),
+        isTrue,
+      );
+      expect(
+        host.streamsHost.table.contains(_optionHandle(terminalStderr)!),
+        isTrue,
+      );
       expect(
         host.standardImports,
         contains('wasi:http/outgoing-handler@0.2.0.handle'),
@@ -641,6 +680,391 @@ world filesystem-test {
         host.standardImports,
         contains('wasi:filesystem/types@0.2.0.descriptor.open-at'),
       );
+    });
+
+    test('mutates Preview2 filesystem real host files on Dart VM', () {
+      if (!hasDartIoRuntime) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      final temp = createHostTemp('wasd_p2_host_mutate_');
+      if (temp == null) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      addTearDown(temp.delete);
+      temp.writeFile('note.txt', 'hello');
+
+      const source = '''
+package wasi-testsuite:test;
+
+world filesystem-test {
+  include wasi:filesystem/imports@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview2ComponentHost(
+        filesystemHost: WASIPreview2NativeFilesystemHost(
+          preopens: {'/': temp.path},
+          canMutate: true,
+        ),
+      );
+      final program = host.bindWitWorld(document, worldName: 'filesystem-test');
+      final directories =
+          program.invokeImport(
+                'wasi:filesystem/preopens@0.2.0.get-directories',
+                const [],
+              )
+              as WasmComponentValueData;
+      final root = _preopenHandle(directories, '/');
+      final opened =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'note.txt',
+                  _flagsValue(const <String>[]),
+                  _flagsValue(const <String>['read', 'write']),
+                ],
+              )
+              as WasmComponentValueData;
+      final file = _resultHandle(_resultOk(opened));
+
+      final write =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.write-via-stream',
+                [file, BigInt.from(1)],
+              )
+              as WasmComponentValueData;
+      final output = _resultHandle(_resultOk(write));
+      program.invokeImport('wasi:io/streams@0.2.0.output-stream.check-write', [
+        output,
+      ]);
+      _expectUnitOk(
+        program.invokeImport('wasi:io/streams@0.2.0.output-stream.write', [
+              output,
+              _u8ListValue([88, 89]),
+            ])
+            as WasmComponentValueData,
+      );
+      expect(temp.readFile('note.txt'), 'hXYlo');
+
+      final append =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.append-via-stream',
+                [file],
+              )
+              as WasmComponentValueData;
+      final appendOutput = _resultHandle(_resultOk(append));
+      program.invokeImport('wasi:io/streams@0.2.0.output-stream.check-write', [
+        appendOutput,
+      ]);
+      _expectUnitOk(
+        program.invokeImport('wasi:io/streams@0.2.0.output-stream.write', [
+              appendOutput,
+              _u8ListValue([33]),
+            ])
+            as WasmComponentValueData,
+      );
+      expect(temp.readFile('note.txt'), 'hXYlo!');
+
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:filesystem/types@0.2.0.descriptor.set-size',
+              [file, BigInt.from(3)],
+            )
+            as WasmComponentValueData,
+      );
+      expect(temp.readFile('note.txt'), 'hXY');
+
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:filesystem/types@0.2.0.descriptor.create-directory-at',
+              [root, 'created'],
+            )
+            as WasmComponentValueData,
+      );
+      expect(temp.directoryExists('created'), isTrue);
+
+      final created =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'created.txt',
+                  _flagsValue(const <String>['create']),
+                  _flagsValue(const <String>['read', 'write']),
+                ],
+              )
+              as WasmComponentValueData;
+      final createdFile = _resultHandle(_resultOk(created));
+      final createdWrite =
+          program.invokeImport('wasi:filesystem/types@0.2.0.descriptor.write', [
+                createdFile,
+                _u8ListValue([110, 101, 119]),
+                BigInt.zero,
+              ])
+              as WasmComponentValueData;
+      expect(_integerBigInt(_resultOk(createdWrite).integer), BigInt.from(3));
+      expect(temp.readFile('created.txt'), 'new');
+
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:filesystem/types@0.2.0.descriptor.unlink-file-at',
+              [root, 'note.txt'],
+            )
+            as WasmComponentValueData,
+      );
+      expect(temp.fileExists('note.txt'), isFalse);
+
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:filesystem/types@0.2.0.descriptor.unlink-file-at',
+              [root, 'created.txt'],
+            )
+            as WasmComponentValueData,
+      );
+      expect(temp.fileExists('created.txt'), isFalse);
+
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:filesystem/types@0.2.0.descriptor.remove-directory-at',
+              [root, 'created'],
+            )
+            as WasmComponentValueData,
+      );
+      expect(temp.directoryExists('created'), isFalse);
+    });
+
+    test('sets Preview2 filesystem real host timestamps on Dart VM', () {
+      if (!hasDartIoRuntime) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      final temp = createHostTemp('wasd_p2_host_times_');
+      if (temp == null) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      addTearDown(temp.delete);
+      temp.writeFile('timed.txt', 'time');
+      temp.createDirectory('timed-dir');
+
+      const source = '''
+package wasi-testsuite:test;
+
+world filesystem-test {
+  include wasi:filesystem/imports@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview2ComponentHost(
+        filesystemHost: WASIPreview2NativeFilesystemHost(
+          preopens: {'/': temp.path},
+          canMutate: true,
+        ),
+      );
+      final program = host.bindWitWorld(document, worldName: 'filesystem-test');
+      final directories =
+          program.invokeImport(
+                'wasi:filesystem/preopens@0.2.0.get-directories',
+                const [],
+              )
+              as WasmComponentValueData;
+      final root = _preopenHandle(directories, '/');
+      final opened =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'timed.txt',
+                  _flagsValue(const <String>[]),
+                  _flagsValue(const <String>['read', 'write']),
+                ],
+              )
+              as WasmComponentValueData;
+      final file = _resultHandle(_resultOk(opened));
+
+      final fileAccess = _timestampNanos(1700000000, 123000000);
+      final fileModification = _timestampNanos(1700000001, 456000000);
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:filesystem/types@0.2.0.descriptor.set-times',
+              [
+                file,
+                _timestampValue(1700000000, 123000000),
+                _timestampValue(1700000001, 456000000),
+              ],
+            )
+            as WasmComponentValueData,
+      );
+      expect(temp.fileTimes('timed.txt'), (
+        accessTimeNanos: fileAccess,
+        modificationTimeNanos: fileModification,
+      ));
+      final fileStat =
+          program.invokeImport('wasi:filesystem/types@0.2.0.descriptor.stat', [
+                file,
+              ])
+              as WasmComponentValueData;
+      expect(_descriptorAccessTimeNanos(_resultOk(fileStat)), fileAccess);
+      expect(
+        _descriptorModificationTimeNanos(_resultOk(fileStat)),
+        fileModification,
+      );
+
+      final directoryAccess = _timestampNanos(1700000002, 111000000);
+      final directoryModification = _timestampNanos(1700000003, 333000000);
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:filesystem/types@0.2.0.descriptor.set-times-at',
+              [
+                root,
+                _flagsValue(const <String>[]),
+                'timed-dir',
+                _timestampValue(1700000002, 111000000),
+                _timestampValue(1700000003, 333000000),
+              ],
+            )
+            as WasmComponentValueData,
+      );
+      expect(temp.directoryTimes('timed-dir'), (
+        accessTimeNanos: directoryAccess,
+        modificationTimeNanos: directoryModification,
+      ));
+      final directoryStat =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.stat-at',
+                [root, _flagsValue(const <String>[]), 'timed-dir'],
+              )
+              as WasmComponentValueData;
+      expect(
+        _descriptorAccessTimeNanos(_resultOk(directoryStat)),
+        directoryAccess,
+      );
+      expect(
+        _descriptorModificationTimeNanos(_resultOk(directoryStat)),
+        directoryModification,
+      );
+    });
+
+    test('links and renames Preview2 filesystem real host paths', () {
+      if (!hasDartIoRuntime) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      final temp = createHostTemp('wasd_p2_host_links_');
+      if (temp == null) {
+        markTestSkipped('requires dart:io host filesystem access');
+        return;
+      }
+      addTearDown(temp.delete);
+      temp.writeFile('source.txt', 'source');
+
+      const source = '''
+package wasi-testsuite:test;
+
+world filesystem-test {
+  include wasi:filesystem/imports@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview2ComponentHost(
+        filesystemHost: WASIPreview2NativeFilesystemHost(
+          preopens: {'/': temp.path},
+          canMutate: true,
+        ),
+      );
+      final program = host.bindWitWorld(document, worldName: 'filesystem-test');
+      final directories =
+          program.invokeImport(
+                'wasi:filesystem/preopens@0.2.0.get-directories',
+                const [],
+              )
+              as WasmComponentValueData;
+      final root = _preopenHandle(directories, '/');
+
+      _expectUnitOk(
+        program.invokeImport('wasi:filesystem/types@0.2.0.descriptor.link-at', [
+              root,
+              _flagsValue(const <String>[]),
+              'source.txt',
+              root,
+              'hard.txt',
+            ])
+            as WasmComponentValueData,
+      );
+      expect(temp.readFile('hard.txt'), 'source');
+
+      final sourceFile =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'source.txt',
+                  _flagsValue(const <String>[]),
+                  _flagsValue(const <String>['read']),
+                ],
+              )
+              as WasmComponentValueData;
+      final hardFile =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'hard.txt',
+                  _flagsValue(const <String>[]),
+                  _flagsValue(const <String>['read']),
+                ],
+              )
+              as WasmComponentValueData;
+      expect(
+        program.invokeImport(
+          'wasi:filesystem/types@0.2.0.descriptor.is-same-object',
+          [
+            _resultHandle(_resultOk(sourceFile)),
+            _resultHandle(_resultOk(hardFile)),
+          ],
+        ),
+        isTrue,
+      );
+
+      temp.writeFile('source.txt', 'changed');
+      expect(temp.readFile('hard.txt'), 'changed');
+
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:filesystem/types@0.2.0.descriptor.rename-at',
+              [root, 'hard.txt', root, 'renamed.txt'],
+            )
+            as WasmComponentValueData,
+      );
+      expect(temp.fileExists('hard.txt'), isFalse);
+      expect(temp.readFile('renamed.txt'), 'changed');
+
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:filesystem/types@0.2.0.descriptor.symlink-at',
+              [root, 'source.txt', 'link.txt'],
+            )
+            as WasmComponentValueData,
+      );
+      expect(temp.symlinkExists('link.txt'), isTrue);
+      expect(temp.readLink('link.txt'), 'source.txt');
+
+      final readlink =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.readlink-at',
+                [root, 'link.txt'],
+              )
+              as WasmComponentValueData;
+      expect(_resultOk(readlink).string, 'source.txt');
     });
 
     test('binds standard Preview3 clocks imports from public API', () {
@@ -1236,6 +1660,21 @@ int _resultHandle(WasmComponentValueData value) {
     return integer.toInt();
   }
   throw StateError('expected resource handle');
+}
+
+int? _optionHandle(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.option) {
+    throw StateError('expected option<resource>');
+  }
+  final isSome = value.isSome ?? value.index == 1 || value.label == 'some';
+  if (!isSome) {
+    return null;
+  }
+  final associated = value.associatedValue;
+  if (associated == null) {
+    throw StateError('expected option resource payload');
+  }
+  return _resultHandle(associated);
 }
 
 String _resultErrorLabel(WasmComponentValueData value) {

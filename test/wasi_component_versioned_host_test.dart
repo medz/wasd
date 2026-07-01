@@ -804,6 +804,54 @@ world cli-test {
       );
     });
 
+    test('Preview2 CLI exposes configured terminal resources', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world cli-test {
+  import wasi:cli/terminal-stdin@0.2.0;
+  import wasi:cli/terminal-stdout@0.2.0;
+  import wasi:cli/terminal-stderr@0.2.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final cli = WASIPreview2CliHost(
+        terminalStdin: true,
+        terminalStdout: true,
+        terminalStderr: true,
+      );
+      final preview2 = WASIPreview2ComponentHost(cliHost: cli);
+      final program = preview2.bindWitWorld(document, worldName: 'cli-test');
+      final stdin =
+          program.invokeImport(
+                'wasi:cli/terminal-stdin@0.2.0.get-terminal-stdin',
+                const [],
+              )
+              as WasmComponentValueData;
+      final stdout =
+          program.invokeImport(
+                'wasi:cli/terminal-stdout@0.2.0.get-terminal-stdout',
+                const [],
+              )
+              as WasmComponentValueData;
+      final stderr =
+          program.invokeImport(
+                'wasi:cli/terminal-stderr@0.2.0.get-terminal-stderr',
+                const [],
+              )
+              as WasmComponentValueData;
+      final stdinHandle = _optionHandle(stdin);
+      final stdoutHandle = _optionHandle(stdout);
+      final stderrHandle = _optionHandle(stderr);
+
+      expect(stdinHandle, cli.terminalStdinHandle);
+      expect(stdoutHandle, cli.terminalStdoutHandle);
+      expect(stderrHandle, cli.terminalStderrHandle);
+      expect(preview2.streamsHost.table.contains(stdinHandle!), isTrue);
+      expect(preview2.streamsHost.table.contains(stdoutHandle!), isTrue);
+      expect(preview2.streamsHost.table.contains(stderrHandle!), isTrue);
+    });
+
     test('Preview2 expands and binds standard WASI sockets imports', () {
       const source = '''
 package wasi-testsuite:test;
@@ -4190,6 +4238,20 @@ int _resourceHandle(WasmComponentValueData value) {
     return integer.toInt();
   }
   throw StateError('expected resource handle payload, got $integer');
+}
+
+int? _optionHandle(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.option) {
+    throw StateError('expected option<resource>, got ${value.kind.name}');
+  }
+  if (!(value.isSome ?? value.label == 'some' || value.index == 1)) {
+    return null;
+  }
+  final associated = value.associatedValue;
+  if (associated == null) {
+    throw StateError('expected option<resource> payload');
+  }
+  return _resourceHandle(associated);
 }
 
 String _resultErrorLabel(WasmComponentValueData value) {

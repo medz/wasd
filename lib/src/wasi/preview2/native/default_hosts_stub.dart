@@ -29,3 +29,12 @@ WASIPreview2HttpHost createNativePreview2HttpHost({
 }) {
   throw UnsupportedError('WASIPreview2ComponentHost.native requires dart:io.');
 }
+
+/// Non-native platforms do not expose a native stdin terminal.
+bool isNativeStdinTerminal() => false;
+
+/// Non-native platforms do not expose a native stdout terminal.
+bool isNativeStdoutTerminal() => false;
+
+/// Non-native platforms do not expose a native stderr terminal.
+bool isNativeStderrTerminal() => false;
