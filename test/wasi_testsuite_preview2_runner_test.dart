@@ -72,7 +72,7 @@ print(json.dumps(payload))
   );
 
   test(
-    'Preview2 component runner does not pass components without execution',
+    'Preview2 component runner rejects components without command exports',
     () async {
       final temp = await Directory.systemTemp.createTemp('wasd_wasip2_runner_');
       addTearDown(() async {
@@ -115,7 +115,61 @@ print(json.dumps(payload))
       ]);
 
       expect(result.exitCode, 1, reason: '${result.stdout}\n${result.stderr}');
-      expect(result.stderr, contains('cannot execute component exports yet'));
+      expect(result.stderr, contains('does not export wasi:cli/run@0.2.x'));
+    },
+  );
+
+  test(
+    'Preview2 component runner executes a minimal command component',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'wasd_wasip2_command_',
+      );
+      addTearDown(() async {
+        if (await temp.exists()) {
+          await temp.delete(recursive: true);
+        }
+      });
+      final component = File('${temp.path}/run.component.wasm');
+      await component.writeAsBytes(_minimalPreview2CommandComponentBytes());
+
+      final result = await Process.run(Platform.resolvedExecutable, <String>[
+        'run',
+        'tool/wasi_testsuite_preview2_component_runner.dart',
+        '--dir=${temp.path}::/',
+        component.path,
+        'a',
+        'b',
+      ]);
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    },
+  );
+
+  test(
+    'Preview2 component runner executes a lowered standard import',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('wasd_wasip2_lower_');
+      addTearDown(() async {
+        if (await temp.exists()) {
+          await temp.delete(recursive: true);
+        }
+      });
+      final component = await _compileComponentWat(
+        temp,
+        'random_call',
+        _loweredRandomCommandWat,
+      );
+
+      final result = await Process.run(Platform.resolvedExecutable, <String>[
+        'run',
+        'tool/wasi_testsuite_preview2_component_runner.dart',
+        component.path,
+        'a',
+        'b',
+      ]);
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
     },
   );
 
@@ -239,3 +293,269 @@ with open(args.json_output_location, "w", encoding="utf-8") as f:
     },
   );
 }
+
+Future<File> _compileComponentWat(
+  Directory directory,
+  String name,
+  String source,
+) async {
+  final wat = File('${directory.path}/$name.wat');
+  final wasm = File('${directory.path}/$name.wasm');
+  await wat.writeAsString(source);
+  final result = await Process.run('.toolchains/bin/wasm-tools', <String>[
+    'parse',
+    wat.path,
+    '-o',
+    wasm.path,
+  ]);
+  expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+  return wasm;
+}
+
+const String _loweredRandomCommandWat = r'''
+(component
+  (type $get_ty (func (result u64)))
+  (type $random_ty (instance
+    (export "get-random-u64" (func (type $get_ty)))))
+  (import "wasi:random/random@0.2.0" (instance $random (type $random_ty)))
+  (alias export $random "get-random-u64" (func $get_random_u64))
+  (core func $get_random_u64_core (canon lower (func $get_random_u64)))
+  (core instance $random_core
+    (export "get-random-u64" (func $get_random_u64_core)))
+
+  (core module $main
+    (import "random" "get-random-u64"
+      (func $get_random_u64 (result i64)))
+    (func (export "run") (result i32)
+      call $get_random_u64
+      drop
+      i32.const 0))
+  (core instance $main_i
+    (instantiate $main (with "random" (instance $random_core))))
+  (alias core export $main_i "run" (core func $run_core))
+  (type $run_ty (func (result (result))))
+  (func $run (type $run_ty) (canon lift (core func $run_core)))
+  (instance $run_instance (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.0" (instance $run_instance))
+)
+''';
+
+List<int> _minimalPreview2CommandComponentBytes() => const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x01,
+  0x2f,
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x05,
+  0x01,
+  0x60,
+  0x00,
+  0x01,
+  0x7f,
+  0x03,
+  0x02,
+  0x01,
+  0x00,
+  0x07,
+  0x07,
+  0x01,
+  0x03,
+  0x72,
+  0x75,
+  0x6e,
+  0x00,
+  0x00,
+  0x0a,
+  0x06,
+  0x01,
+  0x04,
+  0x00,
+  0x41,
+  0x00,
+  0x0b,
+  0x00,
+  0x09,
+  0x04,
+  0x6e,
+  0x61,
+  0x6d,
+  0x65,
+  0x00,
+  0x02,
+  0x01,
+  0x6d,
+  0x02,
+  0x04,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x06,
+  0x09,
+  0x01,
+  0x00,
+  0x00,
+  0x01,
+  0x00,
+  0x03,
+  0x72,
+  0x75,
+  0x6e,
+  0x07,
+  0x08,
+  0x02,
+  0x6a,
+  0x00,
+  0x00,
+  0x40,
+  0x00,
+  0x00,
+  0x00,
+  0x08,
+  0x06,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x05,
+  0x0a,
+  0x01,
+  0x01,
+  0x01,
+  0x00,
+  0x03,
+  0x72,
+  0x75,
+  0x6e,
+  0x01,
+  0x00,
+  0x0b,
+  0x18,
+  0x01,
+  0x00,
+  0x12,
+  0x77,
+  0x61,
+  0x73,
+  0x69,
+  0x3a,
+  0x63,
+  0x6c,
+  0x69,
+  0x2f,
+  0x72,
+  0x75,
+  0x6e,
+  0x40,
+  0x30,
+  0x2e,
+  0x32,
+  0x2e,
+  0x30,
+  0x05,
+  0x00,
+  0x00,
+  0x00,
+  0x55,
+  0x0e,
+  0x63,
+  0x6f,
+  0x6d,
+  0x70,
+  0x6f,
+  0x6e,
+  0x65,
+  0x6e,
+  0x74,
+  0x2d,
+  0x6e,
+  0x61,
+  0x6d,
+  0x65,
+  0x01,
+  0x0d,
+  0x00,
+  0x00,
+  0x01,
+  0x00,
+  0x08,
+  0x72,
+  0x75,
+  0x6e,
+  0x5f,
+  0x63,
+  0x6f,
+  0x72,
+  0x65,
+  0x01,
+  0x06,
+  0x00,
+  0x11,
+  0x01,
+  0x00,
+  0x01,
+  0x6d,
+  0x01,
+  0x06,
+  0x00,
+  0x12,
+  0x01,
+  0x00,
+  0x01,
+  0x69,
+  0x01,
+  0x07,
+  0x01,
+  0x01,
+  0x00,
+  0x03,
+  0x72,
+  0x75,
+  0x6e,
+  0x01,
+  0x0a,
+  0x03,
+  0x01,
+  0x01,
+  0x06,
+  0x72,
+  0x75,
+  0x6e,
+  0x5f,
+  0x74,
+  0x79,
+  0x01,
+  0x10,
+  0x05,
+  0x01,
+  0x00,
+  0x0c,
+  0x72,
+  0x75,
+  0x6e,
+  0x5f,
+  0x69,
+  0x6e,
+  0x73,
+  0x74,
+  0x61,
+  0x6e,
+  0x63,
+  0x65,
+];

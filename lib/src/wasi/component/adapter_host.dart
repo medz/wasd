@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
 import 'adapter_plan.dart';
+import 'integer_bounds.dart';
 import 'string_memory.dart';
 import 'unicode_scalar.dart';
 import 'value_memory.dart';
@@ -1730,9 +1731,13 @@ Object? _componentPrimitiveToFlatValue(
     WasmComponentPrimitiveValueType.s16 ||
     WasmComponentPrimitiveValueType.u16 ||
     WasmComponentPrimitiveValueType.s32 ||
-    WasmComponentPrimitiveValueType.u32 ||
-    WasmComponentPrimitiveValueType.s64 ||
-    WasmComponentPrimitiveValueType.u64 => direct as int,
+    WasmComponentPrimitiveValueType.u32 => direct as int,
+    WasmComponentPrimitiveValueType.s64 => wasiComponentI64ToInt(
+      direct as Object,
+    ),
+    WasmComponentPrimitiveValueType.u64 => wasiComponentU64ToInt(
+      direct as Object,
+    ),
     WasmComponentPrimitiveValueType.f32 ||
     WasmComponentPrimitiveValueType.f64 => direct as num,
     WasmComponentPrimitiveValueType.char => _stringToFlatChar(path, direct),
@@ -1765,7 +1770,7 @@ Object? _primitiveValueFromData(
     case WasmComponentPrimitiveValueType.s64:
     case WasmComponentPrimitiveValueType.u64:
       if (value.kind == WasmComponentValueDataKind.integer &&
-          value.integer is int) {
+          (value.integer is int || value.integer is BigInt)) {
         return value.integer;
       }
     case WasmComponentPrimitiveValueType.f32:

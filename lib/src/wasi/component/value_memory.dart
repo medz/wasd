@@ -1620,9 +1620,17 @@ void _writePrimitive(
     case WasmComponentPrimitiveValueType.errorContext:
       data.setUint32(offset, value as int, Endian.little);
     case WasmComponentPrimitiveValueType.s64:
-      data.setInt64(offset, value as int, Endian.little);
+      data.setInt64(
+        offset,
+        wasiComponentI64ToInt(value as Object),
+        Endian.little,
+      );
     case WasmComponentPrimitiveValueType.u64:
-      data.setUint64(offset, value as int, Endian.little);
+      data.setUint64(
+        offset,
+        wasiComponentU64ToInt(value as Object),
+        Endian.little,
+      );
     case WasmComponentPrimitiveValueType.f32:
       data.setFloat32(offset, (value as num).toDouble(), Endian.little);
     case WasmComponentPrimitiveValueType.f64:
@@ -1708,7 +1716,7 @@ Object? _primitiveValueFromData(
     case WasmComponentPrimitiveValueType.u64:
     case WasmComponentPrimitiveValueType.errorContext:
       if (value.kind == WasmComponentValueDataKind.integer &&
-          value.integer is int) {
+          (value.integer is int || value.integer is BigInt)) {
         return value.integer;
       }
     case WasmComponentPrimitiveValueType.f32:

@@ -57,7 +57,7 @@ Future<void> main(List<String> args) async {
       canMutatePreopens: true,
     );
     final plan = host.prepareComponent(component);
-    if (!plan.canBind) {
+    if (!plan.canBindWithAdapters) {
       io.stderr.writeln('wasd-preview2-runner bind preflight failed:');
       for (final error in plan.versionErrors) {
         io.stderr.writeln('- $error');
@@ -75,11 +75,8 @@ Future<void> main(List<String> args) async {
       return;
     }
 
-    host.bindComponent(component);
-    io.stderr.writeln(
-      'wasd-preview2-runner cannot execute component exports yet.',
-    );
-    io.exitCode = 1;
+    final result = await WASIPreview2CommandRunner(host).run(component);
+    io.exitCode = result.exitCode;
   } on Object catch (error, stackTrace) {
     io.stderr
       ..writeln('wasd-preview2-runner failed: $error')
