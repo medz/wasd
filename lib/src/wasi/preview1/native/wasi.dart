@@ -29,10 +29,14 @@ class WASI implements wasi_iface.WASI {
     int stdout = 1,
     int stderr = 2,
     Map<int, WASIPreview1Socket> sockets = const <int, WASIPreview1Socket>{},
+    wasi_iface.WASIOutputSink? stdoutSink,
+    wasi_iface.WASIOutputSink? stderrSink,
     wasi_iface.WASIProcRaiseHandler? procRaiseHandler,
     wasi_iface.WASIVersion version = wasi_iface.WASIVersion.preview1,
   }) : _returnOnExit = returnOnExit,
        _procRaiseHandler = procRaiseHandler,
+       _stdoutSink = stdoutSink,
+       _stderrSink = stderrSink,
        _argsData = [for (final arg in args) wasi_vfs.nulTerminated(arg)],
        _envData = [
          for (final entry in env.entries)
@@ -53,6 +57,8 @@ class WASI implements wasi_iface.WASI {
 
   final bool _returnOnExit;
   final wasi_iface.WASIProcRaiseHandler? _procRaiseHandler;
+  final wasi_iface.WASIOutputSink? _stdoutSink;
+  final wasi_iface.WASIOutputSink? _stderrSink;
   final List<Uint8List> _argsData;
   final List<Uint8List> _envData;
   final Map<String, String> _hostPreopensByGuestPath;
@@ -235,16 +241,30 @@ class WASI implements wasi_iface.WASI {
         }
 
         if (output.isNotEmpty) {
-          if (stdioKind == wasi_vfs.Preview1StdioDescriptorKind.stdout) {
-            io.stdout.add(output);
-          } else {
-            io.stderr.add(output);
-          }
+          _writeStdio(stdioKind!, Uint8List.fromList(output));
         }
 
         data.setUint32(nwrittenPtr, totalBytes, Endian.little);
         return _errnoSuccess;
       });
+
+  void _writeStdio(
+    wasi_vfs.Preview1StdioDescriptorKind stdioKind,
+    Uint8List output,
+  ) {
+    final sink = stdioKind == wasi_vfs.Preview1StdioDescriptorKind.stdout
+        ? _stdoutSink
+        : _stderrSink;
+    if (sink != null) {
+      sink(output);
+      return;
+    }
+    if (stdioKind == wasi_vfs.Preview1StdioDescriptorKind.stdout) {
+      io.stdout.add(output);
+    } else {
+      io.stderr.add(output);
+    }
+  }
 
   wasm.FunctionImportExportValue
   get _argsSizesGetImport => wasm.ImportExportKind.function((

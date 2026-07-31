@@ -20,6 +20,12 @@ export 'version.dart';
 /// signal behavior. Returning normally reports success to the guest.
 typedef WASIProcRaiseHandler = void Function(WASIProcessSignal signal);
 
+/// Receives a byte chunk written by a WASI Preview1 stdout or stderr stream.
+///
+/// Output sinks run synchronously as part of `fd_write`. Each invocation
+/// receives bytes detached from the guest's linear memory.
+typedef WASIOutputSink = void Function(Uint8List bytes);
+
 /// WASI Preview1 process signal values.
 enum WASIProcessSignal {
   /// Reserved no-signal value.
@@ -144,6 +150,8 @@ abstract interface class WASI {
     int stdout = 1,
     int stderr = 2,
     Map<int, WASIPreview1Socket> sockets = const <int, WASIPreview1Socket>{},
+    WASIOutputSink? stdoutSink,
+    WASIOutputSink? stderrSink,
     WASIProcRaiseHandler? procRaiseHandler,
     WASIVersion version = WASIVersion.preview1,
   }) {
@@ -159,6 +167,8 @@ abstract interface class WASI {
       stdout: stdout,
       stderr: stderr,
       sockets: sockets,
+      stdoutSink: stdoutSink,
+      stderrSink: stderrSink,
       procRaiseHandler: procRaiseHandler,
       version: version,
     );

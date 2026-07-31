@@ -129,6 +129,19 @@ Future<void> main() async {
 Uint8List loadWasiModuleBytes() => throw UnimplementedError();
 ```
 
+To capture guest output instead of forwarding it to the host process streams,
+provide per-instance byte sinks. Sinks receive raw bytes synchronously, so the
+host chooses whether to buffer, stream, or limit the output.
+
+```dart
+import 'dart:typed_data';
+import 'package:wasd/wasd.dart';
+
+final stdout = BytesBuilder();
+final stderr = BytesBuilder();
+final wasi = WASI(stdoutSink: stdout.add, stderrSink: stderr.add);
+```
+
 ## Module Metadata
 
 ```dart

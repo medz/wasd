@@ -30,10 +30,14 @@ class WASI implements wasi.WASI {
     int stdout = 1,
     int stderr = 2,
     Map<int, WASIPreview1Socket> sockets = const <int, WASIPreview1Socket>{},
+    wasi.WASIOutputSink? stdoutSink,
+    wasi.WASIOutputSink? stderrSink,
     wasi.WASIProcRaiseHandler? procRaiseHandler,
     wasi.WASIVersion version = wasi.WASIVersion.preview1,
   }) : _returnOnExit = returnOnExit,
        _procRaiseHandler = procRaiseHandler,
+       _stdoutSink = stdoutSink,
+       _stderrSink = stderrSink,
        _argsData = [for (final arg in args) wasi_vfs.nulTerminated(arg)],
        _envData = [
          for (final entry in env.entries)
@@ -54,6 +58,8 @@ class WASI implements wasi.WASI {
 
   final bool _returnOnExit;
   final wasi.WASIProcRaiseHandler? _procRaiseHandler;
+  final wasi.WASIOutputSink? _stdoutSink;
+  final wasi.WASIOutputSink? _stderrSink;
   final List<Uint8List> _argsData;
   final List<Uint8List> _envData;
   final Map<String, String> _nodeHostPreopensByGuestPath;
@@ -235,12 +241,26 @@ class WASI implements wasi.WASI {
         }
 
         if (totalBytes > 0) {
-          _writeJsStdio(stdioKind!, output.takeBytes());
+          _writeStdio(stdioKind!, Uint8List.fromList(output.takeBytes()));
         }
 
         data.setUint32(nwrittenPtr, totalBytes, Endian.little);
         return _errnoSuccess;
       });
+
+  void _writeStdio(
+    wasi_vfs.Preview1StdioDescriptorKind stdioKind,
+    Uint8List output,
+  ) {
+    final sink = stdioKind == wasi_vfs.Preview1StdioDescriptorKind.stdout
+        ? _stdoutSink
+        : _stderrSink;
+    if (sink != null) {
+      sink(output);
+      return;
+    }
+    _writeJsStdio(stdioKind, output);
+  }
 
   wasm.FunctionImportExportValue
   get _argsSizesGetImport => wasm.ImportExportKind.function((

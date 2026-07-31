@@ -125,12 +125,21 @@ void main() {
     });
 
     test('wasi snippet style start returns exit code', () async {
-      final wasi = WASI(args: const ['demo'], env: const {'FOO': 'bar'});
+      final stdout = BytesBuilder();
+      final stderr = BytesBuilder();
+      final wasi = WASI(
+        args: const ['demo'],
+        env: const {'FOO': 'bar'},
+        stdoutSink: stdout.add,
+        stderrSink: stderr.add,
+      );
       final runtime = await WebAssembly.instantiate(
         _wasiStartModuleBytes.buffer,
         wasi.imports,
       );
       expect(wasi.start(runtime.instance), 42);
+      expect(stdout.toBytes(), isEmpty);
+      expect(stderr.toBytes(), isEmpty);
     });
   });
 }

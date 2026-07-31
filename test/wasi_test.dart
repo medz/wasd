@@ -1407,6 +1407,98 @@ void main() {
       });
 
       test(
+        'fd_write forwards isolated stdout and stderr byte snapshots',
+        () async {
+          final stdout = BytesBuilder(copy: false);
+          final stderr = BytesBuilder(copy: false);
+          final capturingWasi = WASI(
+            stdoutSink: stdout.add,
+            stderrSink: stderr.add,
+          );
+          final result = await WebAssembly.instantiate(
+            _wasiBytes.buffer,
+            capturingWasi.imports,
+          );
+          final capturingInstance = result.instance;
+          final memory =
+              (capturingInstance.exports['memory'] as MemoryImportExportValue)
+                  .ref;
+          capturingWasi.finalizeBindings(capturingInstance, memory: memory);
+          final fdWrite =
+              capturingWasi.imports['wasi_snapshot_preview1']!['fd_write']
+                  as FunctionImportExportValue;
+          final bytes = Uint8List.view(memory.buffer);
+          final data = ByteData.view(memory.buffer);
+          const iovPtr = 128;
+          const bufferPtr = 256;
+          const writtenPtr = 1024;
+
+          void write(int fd, List<int> output) {
+            bytes.setAll(bufferPtr, output);
+            data.setUint32(iovPtr, bufferPtr, Endian.little);
+            data.setUint32(iovPtr + 4, output.length, Endian.little);
+            expect(fdWrite.ref([fd, iovPtr, 1, writtenPtr]), 0);
+            expect(data.getUint32(writtenPtr, Endian.little), output.length);
+          }
+
+          write(1, <int>[0, 255, 1]);
+          bytes[bufferPtr] = 42;
+          write(2, <int>[2, 254, 3]);
+          write(1, const <int>[]);
+
+          expect(stdout.toBytes(), <int>[0, 255, 1]);
+          expect(stderr.toBytes(), <int>[2, 254, 3]);
+        },
+      );
+
+      test(
+        'fd_write keeps output sinks isolated between WASI instances',
+        () async {
+          final firstOutput = BytesBuilder(copy: false);
+          final secondOutput = BytesBuilder(copy: false);
+
+          Future<void> writeFrom(
+            WASI wasi,
+            BytesBuilder output,
+            List<int> text,
+          ) async {
+            final result = await WebAssembly.instantiate(
+              _wasiBytes.buffer,
+              wasi.imports,
+            );
+            final localInstance = result.instance;
+            final memory =
+                (localInstance.exports['memory'] as MemoryImportExportValue)
+                    .ref;
+            wasi.finalizeBindings(localInstance, memory: memory);
+            final fdWrite =
+                wasi.imports['wasi_snapshot_preview1']!['fd_write']
+                    as FunctionImportExportValue;
+            final bytes = Uint8List.view(memory.buffer);
+            final data = ByteData.view(memory.buffer);
+            const iovPtr = 128;
+            const bufferPtr = 256;
+            const writtenPtr = 1024;
+            bytes.setAll(bufferPtr, text);
+            data.setUint32(iovPtr, bufferPtr, Endian.little);
+            data.setUint32(iovPtr + 4, text.length, Endian.little);
+
+            expect(fdWrite.ref([1, iovPtr, 1, writtenPtr]), 0);
+            expect(data.getUint32(writtenPtr, Endian.little), text.length);
+            expect(output.toBytes(), text);
+          }
+
+          await writeFrom(WASI(stdoutSink: firstOutput.add), firstOutput, [1]);
+          await writeFrom(WASI(stdoutSink: secondOutput.add), secondOutput, [
+            2,
+          ]);
+
+          expect(firstOutput.toBytes(), <int>[1]);
+          expect(secondOutput.toBytes(), <int>[2]);
+        },
+      );
+
+      test(
         'fd_write writes JS stdout and stderr through Node process streams',
         () {
           final spy = installNodeStdioSpy();
