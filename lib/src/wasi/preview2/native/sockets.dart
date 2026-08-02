@@ -396,6 +396,8 @@ WASIPreview2TcpConnection _tcpConnection(io.Socket socket) {
       // Closing still needs to run after a failed flush.
     }
     try {
+      // Socket.close() closes only the IOSink/send half; destroy() closes both,
+      // so the receive subscription remains active.
       await socket.close();
     } on Object {
       // Socket shutdown is best-effort after the synchronous WASI result.
