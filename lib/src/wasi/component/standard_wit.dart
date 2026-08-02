@@ -42,7 +42,7 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
       _isPreview2PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
       document: _preview2Document(
-        _wasiCli020Source,
+        parsed.version == '0.2.12' ? _wasiCli0212Source : _wasiCli020Source,
         'wasi:cli',
         parsed.version!,
       ),
@@ -118,7 +118,7 @@ bool _isPreview2PatchVersion(String? version) {
     return false;
   }
   final patch = int.tryParse(match.group(1)!);
-  return patch != null && patch >= 0 && patch <= 8;
+  return patch != null && patch >= 0 && patch <= 12;
 }
 
 final Map<String, WASIComponentWitDocument> _preview2Documents =
@@ -387,6 +387,12 @@ world command {
   export run;
 }
 ''';
+
+final String _wasiCli0212Source = _wasiCli020Source.replaceFirst(
+  '  exit: func(status: result);',
+  '''  exit: func(status: result);
+  exit-with-code: func(status-code: u8);''',
+);
 
 const String _wasiSockets020Source = '''
 package wasi:sockets@0.2.0;

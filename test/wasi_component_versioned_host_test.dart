@@ -1580,8 +1580,8 @@ world cli-test {
 package wasi-testsuite:test;
 
 world sockets-test {
-  include wasi:sockets/imports@0.2.8;
-  include wasi:io/imports@0.2.8;
+  include wasi:sockets/imports@0.2.12;
+  include wasi:io/imports@0.2.12;
 }
 ''';
       final document = WASIComponentWitDocument.parse(source);
@@ -1596,9 +1596,9 @@ world sockets-test {
       expect(
         plan.functions.map((function) => function.qualifiedName),
         containsAll(<String>[
-          'wasi:sockets/instance-network@0.2.8.instance-network',
-          'wasi:sockets/tcp-create-socket@0.2.8.create-tcp-socket',
-          'wasi:io/poll@0.2.8.pollable.ready',
+          'wasi:sockets/instance-network@0.2.12.instance-network',
+          'wasi:sockets/tcp-create-socket@0.2.12.create-tcp-socket',
+          'wasi:io/poll@0.2.12.pollable.ready',
         ]),
       );
 
@@ -1608,7 +1608,7 @@ world sockets-test {
       );
       final tcpSocket =
           program.invokeImport(
-                'wasi:sockets/tcp-create-socket@0.2.8.create-tcp-socket',
+                'wasi:sockets/tcp-create-socket@0.2.12.create-tcp-socket',
                 [_enumValue('ipv4')],
               )
               as WasmComponentValueData;
@@ -1616,12 +1616,12 @@ world sockets-test {
       expect(_resourceHandle(_resultOk(tcpSocket)), isNonZero);
       expect(
         preview2.standardImports,
-        contains('wasi:sockets/tcp-create-socket@0.2.8.create-tcp-socket'),
+        contains('wasi:sockets/tcp-create-socket@0.2.12.create-tcp-socket'),
       );
     });
 
     test('Preview2 covers every standard WASI 0.2.x host import', () {
-      for (var patch = 0; patch <= 8; patch++) {
+      for (var patch = 0; patch <= 12; patch++) {
         final version = '0.2.$patch';
         final document = WASIComponentWitDocument.parse('''
 package wasi-testsuite:preview2-coverage;
@@ -1661,6 +1661,11 @@ world all-imports {
         expect(plan.bindingErrors, isEmpty, reason: version);
         expect(importedFunctions.length, greaterThan(120), reason: version);
         expect(missing, isEmpty, reason: version);
+        expect(
+          importedFunctions.contains('wasi:cli/exit@$version.exit-with-code'),
+          patch == 12,
+          reason: version,
+        );
       }
     });
 

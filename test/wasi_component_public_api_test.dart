@@ -273,6 +273,35 @@ world cli-test {
       expect(host.standardImports, contains('wasi:cli/stdin@0.2.0.get-stdin'));
     });
 
+    test('binds stable WASI 0.2.12 exit-with-code from public API', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world cli-test {
+  import wasi:cli/exit@0.2.12;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview2ComponentHost();
+      final program = host.bindWitWorld(document, worldName: 'cli-test');
+
+      expect(
+        host.standardImports,
+        contains('wasi:cli/exit@0.2.12.exit-with-code'),
+      );
+      expect(
+        () => program.invokeImport(
+          'wasi:cli/exit@0.2.12.exit-with-code',
+          const [7],
+        ),
+        throwsA(
+          isA<WASIPreview2Exit>()
+              .having((error) => error.statusCode, 'statusCode', 7)
+              .having((error) => error.isSuccess, 'isSuccess', isFalse),
+        ),
+      );
+    });
+
     test('binds standard Preview2 sockets imports from public API', () {
       const source = '''
 package wasi-testsuite:test;

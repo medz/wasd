@@ -428,6 +428,8 @@ final class WASIPreview2ComponentHost {
           ..._filesystemHost.imports,
           ..._socketsHost.imports,
           ..._httpHost.imports,
+          'wasi:cli/exit@0.2.12.exit-with-code': (args) =>
+              throw WASIPreview2Exit(_preview2ExitCode(args.single)),
         }),
       );
 
@@ -525,9 +527,20 @@ Map<String, WASIComponentWitAdapterCallback> _withPreview2PatchAliases(
     if (!entry.key.contains('@0.2.0')) {
       continue;
     }
-    for (var patch = 1; patch <= 8; patch++) {
+    for (var patch = 1; patch <= 12; patch++) {
       result[entry.key.replaceAll('@0.2.0', '@0.2.$patch')] = entry.value;
     }
   }
   return result;
+}
+
+int _preview2ExitCode(Object? value) {
+  return switch (value) {
+    int() when value >= 0 && value <= 0xff => value,
+    BigInt() when value >= BigInt.zero && value <= BigInt.from(0xff) =>
+      value.toInt(),
+    WasmComponentValueData(kind: WasmComponentValueDataKind.integer) =>
+      _preview2ExitCode(value.integer),
+    _ => throw StateError('Expected WASI CLI u8 exit code, got $value.'),
+  };
 }
