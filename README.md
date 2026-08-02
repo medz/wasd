@@ -241,6 +241,8 @@ proposal packages, and full Preview3 execution remain out of scope.
 
 When `dart:io` cannot faithfully implement a Preview2 socket operation, the
 native adapter returns `not-supported` instead of reporting simulated success.
+Native TCP bind/listen is currently unsupported; native TCP connect and UDP
+bind/connect remain available.
 
 Dart `HttpClient` does not expose HTTP trailers. Native outgoing-handler
 requests with trailers and incoming responses that declare trailers therefore
@@ -250,10 +252,11 @@ host caller.
 Native outgoing HTTP preserves encoded response bodies and redirect responses;
 it does not transparently decompress content or follow redirects.
 
-The socket resolver performs dependency-free IDNA ToASCII conversion for
-canonical Unicode labels. Labels that require Unicode normalization tables or
-ContextJ/ContextO processing are rejected with `invalid-argument` instead of
-producing a non-canonical DNS name.
+The socket resolver performs dependency-free IDNA ToASCII conversion for a
+conservative canonical Unicode subset and validates existing A-labels.
+Disallowed symbols, malformed A-labels, and labels that require Unicode
+normalization tables or ContextJ/ContextO processing are rejected with
+`invalid-argument` instead of producing a non-canonical DNS name.
 
 ## Contributing
 

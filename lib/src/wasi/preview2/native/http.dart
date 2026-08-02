@@ -68,10 +68,25 @@ final class _NativeHttpBackend implements WASIPreview2HttpBackend {
     io.HttpClientRequest? ioRequest;
     try {
       final method = request.method.wireName;
-      var open = _client.openUrl(method, uri);
+      final pendingOpen = _client.openUrl(method, uri);
+      var open = pendingOpen;
       final connectTimeout = _durationFromNanos(options?.connectTimeout);
       if (connectTimeout != null) {
-        open = open.timeout(connectTimeout);
+        var timedOut = false;
+        open = pendingOpen.timeout(
+          connectTimeout,
+          onTimeout: () {
+            timedOut = true;
+            throw TimeoutException('connect-timeout');
+          },
+        );
+        unawaited(
+          pendingOpen.then<void>((lateRequest) {
+            if (timedOut) {
+              _abortRequest(lateRequest, TimeoutException('connect-timeout'));
+            }
+          }, onError: (Object _, StackTrace _) {}),
+        );
       }
       ioRequest = await open;
       ioRequest.followRedirects = false;
@@ -248,12 +263,12 @@ WASIPreview2HttpFutureTrailers? _responseTrailers(
 
 String _responseBodyError(Object error) {
   if (error is io.HttpException) {
-    return _trailersUnsupportedError;
+    return _httpProtocolError;
   }
   if (error is io.SocketException) {
     return _socketHttpErrorCode(error);
   }
-  return error.toString();
+  return 'internal-error';
 }
 
 Uri? _uriForRequest(WASIPreview2HttpOutgoingRequest request) {
@@ -324,4 +339,5 @@ String _socketHttpErrorCode(io.SocketException error) {
 }
 
 const int _maxDurationMicroseconds = 86400000000;
-const String _trailersUnsupportedError = 'HTTP-protocol-error';
+const String _httpProtocolError = 'HTTP-protocol-error';
+const String _trailersUnsupportedError = _httpProtocolError;

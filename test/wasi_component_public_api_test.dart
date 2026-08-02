@@ -401,10 +401,7 @@ world http-test {
               ])
               as WasmComponentValueData;
 
-      expect(
-        _resultErrorLabel(handled),
-        hasDartIoRuntime ? 'HTTP-request-URI-invalid' : 'configuration-error',
-      );
+      expect(_resultErrorLabel(handled), 'HTTP-request-URI-invalid');
       expect(host.httpHost.streamsHost, same(host.streamsHost));
       expect(
         host.standardImports,
@@ -1069,6 +1066,12 @@ world filesystem-test {
       );
       expect(temp.fileExists('hard.txt'), isFalse);
       expect(temp.readFile('renamed.txt'), 'changed');
+
+      // Windows symlink creation may require elevated privileges, and link
+      // sizes do not have the POSIX byte-length contract checked below.
+      if (!temp.path.startsWith('/')) {
+        return;
+      }
 
       _expectUnitOk(
         program.invokeImport(

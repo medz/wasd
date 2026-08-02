@@ -74,16 +74,16 @@ void main() {
     test('decodes the Linux arm64 glibc fields', () {
       _expectDecoded(
         abi: Abi.linuxArm64,
-        byteLength: 136,
+        byteLength: 120,
         deviceOffset: 0,
         deviceWidth: 8,
         inodeOffset: 8,
-        linkCountOffset: 24,
-        linkCountWidth: 8,
-        sizeOffset: 56,
-        accessTimeOffset: 88,
-        modificationTimeOffset: 104,
-        statusChangeTimeOffset: 120,
+        linkCountOffset: 20,
+        linkCountWidth: 4,
+        sizeOffset: 48,
+        accessTimeOffset: 72,
+        modificationTimeOffset: 88,
+        statusChangeTimeOffset: 104,
       );
     });
 
@@ -106,7 +106,7 @@ void main() {
     test('rejects truncated snapshots', () {
       final layout = WASIPreview2NativeStatLayout.forAbi(Abi.linuxArm64)!;
 
-      expect(layout.read(Uint8List(135)), isNull);
+      expect(layout.read(Uint8List(119)), isNull);
     });
 
     test('clamps negative size and preserves the full u64 link count', () {

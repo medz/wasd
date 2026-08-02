@@ -15,6 +15,7 @@ coverage/
 
 # Repository-only development files
 .claude/
+.gitattributes
 .gitignore
 .gitmodules
 .idea/

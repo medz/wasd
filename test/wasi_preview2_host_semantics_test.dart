@@ -1,3 +1,6 @@
+@TestOn('vm')
+library;
+
 import 'dart:async';
 import 'dart:io' as io;
 import 'dart:mirrors' as mirrors;
@@ -202,9 +205,12 @@ world test {
         '192.0.2.1::',
         '999.0.0.1',
         '😀.example',
+        '€.example',
         'bad\u200d.example',
         'e\u0301.example',
         'مثالa.example',
+        'xn--.example',
+        'xn--a.example',
         '${List<String>.filled(64, 'a').join()}.example',
       ]) {
         final result =
@@ -246,6 +252,7 @@ world test {
         'مِثال.إختبار',
         'דוגמה.ישראל',
         'παράδειγμα.δοκιμή',
+        'xn--bcher-kva.example',
         'ExAmPle.COM.',
         '123',
       ]) {
@@ -268,6 +275,7 @@ world test {
         'xn--mgbh0fb9c.xn--kgbechtv',
         'xn--6dbbec0c.xn--4dbrk0ce',
         'xn--hxajbheg2az3al.xn--jxalpdlp',
+        'xn--bcher-kva.example',
         'example.com.',
         '123',
       ]);
@@ -852,6 +860,32 @@ world test {
           );
         }
         expect(backend.tcpConnectCount, 0);
+
+        final ipv6Socket = _resultHandle(
+          imports['wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket']!(
+                <Object?>[_enum('ipv6', 1)],
+              )!
+              as WasmComponentValueData,
+        );
+        expect(
+          _resultError(
+            imports['wasi:sockets/tcp@0.2.0.tcp-socket.start-connect']!(
+                  <Object?>[
+                    ipv6Socket,
+                    network,
+                    _ipv6SocketAddress(
+                      port: 9000,
+                      f: 0xffff,
+                      g: 0xc000,
+                      h: 0x0201,
+                    ),
+                  ],
+                )!
+                as WasmComponentValueData,
+          ),
+          'invalid-argument',
+        );
+        expect(backend.tcpConnectCount, 0);
         expect(
           _resultError(
             imports['wasi:sockets/tcp@0.2.0.tcp-socket.start-connect']!(
@@ -1382,7 +1416,7 @@ world test {
       sockets.table.dropNamed('wasi:sockets/udp@0.2.0.udp-socket', socket);
     });
 
-    test('native listener termination closes queued connections', () async {
+    test('native listener termination preserves queued connections', () async {
       final backend = _nativeSocketsBackend();
       final operation = backend.startTcpListen(
         localAddress: WASIPreview2IpSocketAddress.ipv4(
@@ -1420,9 +1454,12 @@ world test {
       await _waitUntil(() => _nativeListenerClosed(listener));
 
       final accept = listener.accept();
-      expect(accept.isOk, isFalse);
-      expect(accept.errorCode, 'connection-aborted');
+      expect(accept.isOk, isTrue, reason: accept.errorCode);
+      accept.value!.dispose!();
       await clientClosed.future.timeout(const Duration(seconds: 5));
+      final exhausted = listener.accept();
+      expect(exhausted.isOk, isFalse);
+      expect(exhausted.errorCode, 'connection-aborted');
     });
 
     test('dropping TCP and UDP socket resources closes their backends', () {
@@ -1533,114 +1570,175 @@ world test {
       );
     });
 
-    test('native socket drop closes live TCP and UDP OS resources', () async {
-      final server = await io.ServerSocket.bind(
-        io.InternetAddress.loopbackIPv4,
-        0,
-      );
-      final accepted = Completer<io.Socket>();
-      final serverSubscription = server.listen(accepted.complete);
-      addTearDown(() async {
-        await serverSubscription.cancel();
-        await server.close();
-      });
+    test(
+      'native TCP send shutdown flushes and socket drops close OS resources',
+      () async {
+        final server = await io.ServerSocket.bind(
+          io.InternetAddress.loopbackIPv4,
+          0,
+        );
+        final accepted = Completer<io.Socket>();
+        final serverSubscription = server.listen(accepted.complete);
+        addTearDown(() async {
+          await serverSubscription.cancel();
+          await server.close();
+        });
 
-      final sockets = WASIPreview2NativeSocketsHost();
-      final imports = sockets.imports;
-      final network =
-          imports['wasi:sockets/instance-network@0.2.0.instance-network']!(
-                const <Object?>[],
+        final sockets = WASIPreview2NativeSocketsHost();
+        final imports = sockets.imports;
+        final network =
+            imports['wasi:sockets/instance-network@0.2.0.instance-network']!(
+                  const <Object?>[],
+                )!
+                as int;
+        final tcp = _resultHandle(
+          imports['wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket']!(
+                <Object?>[_enum('ipv4', 0)],
               )!
-              as int;
-      final tcp = _resultHandle(
-        imports['wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket']!(
-              <Object?>[_enum('ipv4', 0)],
-            )!
-            as WasmComponentValueData,
-      );
-      expect(
-        _resultError(
-          imports['wasi:sockets/tcp@0.2.0.tcp-socket.start-connect']!(<Object?>[
-                tcp,
-                network,
-                _ipv4SocketAddress(port: server.port),
-              ])!
               as WasmComponentValueData,
-        ),
-        isNull,
-      );
-      final tcpFinish = await _finishTcpConnect(sockets, tcp);
-      expect(_resultError(tcpFinish), isNull);
-      final tcpStreams = _resultPair(tcpFinish);
-      final peer = await accepted.future.timeout(const Duration(seconds: 5));
-      final peerClosed = Completer<void>();
-      peer.listen(
-        (_) {},
-        onDone: peerClosed.complete,
-        onError: (Object _) {
-          if (!peerClosed.isCompleted) {
-            peerClosed.complete();
-          }
-        },
-      );
-      addTearDown(peer.destroy);
+        );
+        expect(
+          _resultError(
+            imports['wasi:sockets/tcp@0.2.0.tcp-socket.start-connect']!(
+                  <Object?>[
+                    tcp,
+                    network,
+                    _ipv4SocketAddress(port: server.port),
+                  ],
+                )!
+                as WasmComponentValueData,
+          ),
+          isNull,
+        );
+        final tcpFinish = await _finishTcpConnect(sockets, tcp);
+        expect(_resultError(tcpFinish), isNull);
+        final tcpStreams = _resultPair(tcpFinish);
+        final peer = await accepted.future.timeout(const Duration(seconds: 5));
+        final peerReceived = Completer<List<int>>();
+        final received = <int>[];
+        peer.listen(
+          received.addAll,
+          onDone: () => peerReceived.complete(List<int>.of(received)),
+          onError: (Object error, StackTrace stackTrace) {
+            if (!peerReceived.isCompleted) {
+              peerReceived.completeError(error, stackTrace);
+            }
+          },
+        );
+        addTearDown(peer.destroy);
 
-      expect(
-        _resultError(
-          imports['wasi:sockets/tcp@0.2.0.tcp-socket.shutdown']!(<Object?>[
-                tcp,
-                _enum('send', 1),
-              ])!
+        const sentBeforeShutdown = <int>[1, 2, 3, 4];
+        final write =
+            sockets
+                    .streamsHost
+                    .imports['wasi:io/streams@0.2.0.output-stream.blocking-write-and-flush']!(
+                  <Object?>[
+                    tcpStreams.$2,
+                    _list(<WasmComponentValueData>[
+                      for (final byte in sentBeforeShutdown) _integer(byte),
+                    ]),
+                  ],
+                )!
+                as WasmComponentValueData;
+        expect(_resultError(write), isNull);
+
+        expect(
+          _resultError(
+            imports['wasi:sockets/tcp@0.2.0.tcp-socket.shutdown']!(<Object?>[
+                  tcp,
+                  _enum('send', 1),
+                ])!
+                as WasmComponentValueData,
+          ),
+          isNull,
+        );
+        expect(
+          await peerReceived.future.timeout(const Duration(seconds: 5)),
+          sentBeforeShutdown,
+        );
+
+        const receivedAfterShutdown = <int>[9, 8, 7];
+        peer.add(receivedAfterShutdown);
+        await peer.flush();
+        await _waitUntil(
+          () => sockets.streamsHost.inputStream(tcpStreams.$1).isReadable,
+        );
+        final read =
+            sockets
+                    .streamsHost
+                    .imports['wasi:io/streams@0.2.0.input-stream.read']!(
+                  <Object?>[
+                    tcpStreams.$1,
+                    BigInt.from(receivedAfterShutdown.length),
+                  ],
+                )!
+                as WasmComponentValueData;
+        expect(_resultError(read), isNull);
+        expect(
+          read.associatedValue!.items
+              .map((byte) => (byte.integer! as num).toInt())
+              .toList(growable: false),
+          receivedAfterShutdown,
+        );
+        sockets.table.dropNamed(
+          'wasi:io/streams@0.2.0.input-stream',
+          tcpStreams.$1,
+        );
+        sockets.table.dropNamed(
+          'wasi:io/streams@0.2.0.output-stream',
+          tcpStreams.$2,
+        );
+        sockets.table.dropNamed('wasi:sockets/tcp@0.2.0.tcp-socket', tcp);
+
+        final reservation = await io.RawDatagramSocket.bind(
+          io.InternetAddress.loopbackIPv4,
+          0,
+        );
+        final port = reservation.port;
+        reservation.close();
+        await Future<void>.delayed(Duration.zero);
+        final udp = _resultHandle(
+          imports['wasi:sockets/udp-create-socket@0.2.0.create-udp-socket']!(
+                <Object?>[_enum('ipv4', 0)],
+              )!
               as WasmComponentValueData,
-        ),
-        'not-supported',
-      );
-      sockets.table.dropNamed(
-        'wasi:io/streams@0.2.0.input-stream',
-        tcpStreams.$1,
-      );
-      sockets.table.dropNamed(
-        'wasi:io/streams@0.2.0.output-stream',
-        tcpStreams.$2,
-      );
-      sockets.table.dropNamed('wasi:sockets/tcp@0.2.0.tcp-socket', tcp);
-      await peerClosed.future.timeout(const Duration(seconds: 5));
+        );
+        expect(
+          _resultError(
+            imports['wasi:sockets/udp@0.2.0.udp-socket.start-bind']!(<Object?>[
+                  udp,
+                  network,
+                  _ipv4SocketAddress(port: port),
+                ])!
+                as WasmComponentValueData,
+          ),
+          isNull,
+        );
+        expect(_resultError(await _finishUdpBind(sockets, udp)), isNull);
+        sockets.table.dropNamed('wasi:sockets/udp@0.2.0.udp-socket', udp);
+        await Future<void>.delayed(Duration.zero);
 
-      final reservation = await io.RawDatagramSocket.bind(
-        io.InternetAddress.loopbackIPv4,
-        0,
-      );
-      final port = reservation.port;
-      reservation.close();
-      await Future<void>.delayed(Duration.zero);
-      final udp = _resultHandle(
-        imports['wasi:sockets/udp-create-socket@0.2.0.create-udp-socket']!(
-              <Object?>[_enum('ipv4', 0)],
-            )!
-            as WasmComponentValueData,
-      );
-      expect(
-        _resultError(
-          imports['wasi:sockets/udp@0.2.0.udp-socket.start-bind']!(<Object?>[
-                udp,
-                network,
-                _ipv4SocketAddress(port: port),
-              ])!
-              as WasmComponentValueData,
-        ),
-        isNull,
-      );
-      expect(_resultError(await _finishUdpBind(sockets, udp)), isNull);
-      sockets.table.dropNamed('wasi:sockets/udp@0.2.0.udp-socket', udp);
-      await Future<void>.delayed(Duration.zero);
+        final rebound = await _bindUdpEventually(port);
+        rebound.close();
+      },
+    );
+  });
+}
 
-      final rebound = await io.RawDatagramSocket.bind(
+Future<io.RawDatagramSocket> _bindUdpEventually(int port) async {
+  for (var attempt = 0; ; attempt++) {
+    try {
+      return await io.RawDatagramSocket.bind(
         io.InternetAddress.loopbackIPv4,
         port,
       );
-      rebound.close();
-    });
-  });
+    } on io.SocketException {
+      if (attempt == 19) {
+        rethrow;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
 }
 
 final class _FailingSocketsBackend implements WASIPreview2SocketsBackend {
@@ -1994,6 +2092,38 @@ WasmComponentValueData _ipv4SocketAddress({
       _integer(c),
       _integer(d),
     ]),
+  ]),
+);
+
+WasmComponentValueData _ipv6SocketAddress({
+  required int port,
+  int a = 0,
+  int b = 0,
+  int c = 0,
+  int d = 0,
+  int e = 0,
+  int f = 0,
+  int g = 0,
+  int h = 1,
+  int flowInfo = 0,
+  int scopeId = 0,
+}) => _variant(
+  'ipv6',
+  1,
+  _record(<WasmComponentValueData>[
+    _integer(port),
+    _integer(flowInfo),
+    _tuple(<WasmComponentValueData>[
+      _integer(a),
+      _integer(b),
+      _integer(c),
+      _integer(d),
+      _integer(e),
+      _integer(f),
+      _integer(g),
+      _integer(h),
+    ]),
+    _integer(scopeId),
   ]),
 );
 

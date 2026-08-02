@@ -93,7 +93,7 @@ final class WASIComponentHost {
 
 /// Prepared component host binding report.
 final class WASIComponentHostBindingPlan {
-  const WASIComponentHostBindingPlan._({
+  WASIComponentHostBindingPlan._({
     required WASIComponentHost host,
     required this.canonicalPlan,
     required this.resourceBindings,
@@ -104,6 +104,7 @@ final class WASIComponentHostBindingPlan {
   }) : _host = host;
 
   final WASIComponentHost _host;
+  bool _isBound = false;
 
   /// Prepared canonical binding plan for the same component.
   final WASIComponentCanonicalBindingPlan canonicalPlan;
@@ -182,6 +183,10 @@ final class WASIComponentHostBindingPlan {
     if (bindingErrors.isNotEmpty) {
       throw WASIComponentHostBindingException(bindingErrors);
     }
+    if (_isBound) {
+      throw StateError('WASI component host binding plan was already bound.');
+    }
+    _isBound = true;
     final adapterProgram = _host.canonicalHost.adapterHost.bindAdapterPlans(
       adapterPlans,
       coreFunctions: coreFunctions,

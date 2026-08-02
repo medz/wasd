@@ -1704,6 +1704,10 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
         final descriptor = export?.descriptor;
         if (export != null && descriptor != null) {
           final sort = _componentSortIndexForExternDescriptor(descriptor);
+          final introduced = _componentTypeDefinitionIntroducedByTypeExport(
+            descriptor,
+            localTypeDefinitions,
+          );
           exports[_componentExternName(
             export.name,
             export.versionSuffix,
@@ -1728,14 +1732,7 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
             value: descriptor.kind == WasmComponentExternKind.value
                 ? descriptor.valueType
                 : null,
-            typeDefinition: _componentTypeDefinitionIntroducedByTypeExport(
-              descriptor,
-              localTypeDefinitions,
-            ),
-          );
-          final introduced = _componentTypeDefinitionIntroducedByTypeExport(
-            descriptor,
-            localTypeDefinitions,
+            typeDefinition: introduced,
           );
           if (introduced != null) {
             addLocalType(

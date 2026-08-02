@@ -114,19 +114,19 @@ const WASIPreview2NativeStatLayout _linuxX64 = WASIPreview2NativeStatLayout._(
   statusChangeTimeOffset: 104,
 );
 
-// glibc's generic LP64 layout differs from Linux x64 before st_size.
+// glibc's generic LP64 layout for aarch64 uses a 32-bit nlink_t.
 const WASIPreview2NativeStatLayout _linuxArm64 = WASIPreview2NativeStatLayout._(
-  minimumByteLength: 136,
+  minimumByteLength: 120,
   deviceOffset: 0,
   deviceWidth: _UnsignedWidth.uint64,
   inodeOffset: 8,
   inodeWidth: _UnsignedWidth.uint64,
-  linkCountOffset: 24,
-  linkCountWidth: _UnsignedWidth.uint64,
-  sizeOffset: 56,
-  accessTimeOffset: 88,
-  modificationTimeOffset: 104,
-  statusChangeTimeOffset: 120,
+  linkCountOffset: 20,
+  linkCountWidth: _UnsignedWidth.uint32,
+  sizeOffset: 48,
+  accessTimeOffset: 72,
+  modificationTimeOffset: 88,
+  statusChangeTimeOffset: 104,
 );
 
 const WASIPreview2NativeStatLayout _androidArm64 =

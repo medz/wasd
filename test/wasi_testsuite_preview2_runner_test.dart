@@ -1,9 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:wasd/wasi.dart';
 import 'package:wasd/wasm.dart';
+
+import '../tool/wasi_testsuite_preview2_component_runner.dart'
+    as component_runner_tool;
 
 void main() {
   test(
@@ -118,6 +122,53 @@ print(json.dumps(payload))
 
       expect(result.exitCode, 1, reason: '${result.stdout}\n${result.stderr}');
       expect(result.stderr, contains('does not export wasi:cli/run@0.2.x'));
+    },
+  );
+
+  test(
+    'Preview2 runner flushes buffered output when execution fails',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'wasd_wasip2_failed_output_',
+      );
+      addTearDown(() async {
+        if (await temp.exists()) {
+          await temp.delete(recursive: true);
+        }
+      });
+      final host = WASIPreview2ComponentHost.native();
+      _writeCliOutput(host, 'stdout', [111, 117, 116]);
+      _writeCliOutput(host, 'stderr', [101, 114, 114]);
+      final stdoutFile = File('${temp.path}/stdout.txt');
+      final stderrFile = File('${temp.path}/stderr.txt');
+      final stdout = stdoutFile.openWrite();
+      final stderr = stderrFile.openWrite();
+      final component = WasmComponent.decode(
+        Uint8List.fromList(const <int>[
+          0x00,
+          0x61,
+          0x73,
+          0x6d,
+          0x0d,
+          0x00,
+          0x01,
+          0x00,
+        ]),
+      );
+
+      await expectLater(
+        component_runner_tool.runPreview2CommandWithBufferedOutput(
+          host,
+          component,
+          stdout: stdout,
+          stderr: stderr,
+        ),
+        throwsA(isA<WASIPreview2ComponentExecutionException>()),
+      );
+      await Future.wait(<Future<void>>[stdout.close(), stderr.close()]);
+
+      expect(await stdoutFile.readAsString(), 'out');
+      expect(await stderrFile.readAsString(), 'err');
     },
   );
 
@@ -244,6 +295,57 @@ print(json.dumps(payload))
         'type_alias',
         _typeAliasCommandWat,
       );
+
+      final result = await Process.run(Platform.resolvedExecutable, <String>[
+        'run',
+        'tool/wasi_testsuite_preview2_component_runner.dart',
+        component.path,
+      ]);
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    },
+  );
+
+  test('component type exports preserve abstract resource identity', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'wasd_component_resource_identity_',
+    );
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+    final fixture = await _compileComponentWat(
+      temp,
+      'resource_identity',
+      _resourceTypeIdentityComponentWat,
+    );
+    final component = WasmComponent.decode(await fixture.readAsBytes());
+    final resources = component.componentTypeIndexDefinitions.where(
+      (definition) => definition.kind == WasmComponentTypeKind.resource,
+    );
+
+    expect(resources, hasLength(2));
+    expect(identical(resources.first, resources.last), isTrue);
+  });
+
+  test(
+    'Preview2 component runner executes a synchronous lifted start',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'wasd_wasip2_sync_start_',
+      );
+      addTearDown(() async {
+        if (await temp.exists()) {
+          await temp.delete(recursive: true);
+        }
+      });
+      final component = await _compileComponentWat(
+        temp,
+        'synchronous_start',
+        _synchronousStartCommandWat,
+      );
+      await _insertEmptyComponentStart(component, functionIndex: 0);
 
       final result = await Process.run(Platform.resolvedExecutable, <String>[
         'run',
@@ -413,14 +515,15 @@ Future<File> _compileComponentWat(
   final wat = File('${directory.path}/$name.wat');
   final wasm = File('${directory.path}/$name.wasm');
   await wat.writeAsString(source);
-  final result = await Process.run('.toolchains/bin/wasm-tools', <String>[
+  final wasmTools = _wasmToolsPath();
+  final result = await Process.run(wasmTools, <String>[
     'parse',
     wat.path,
     '-o',
     wasm.path,
   ]);
   expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
-  final validation = await Process.run('.toolchains/bin/wasm-tools', <String>[
+  final validation = await Process.run(wasmTools, <String>[
     'validate',
     '--features',
     'component-model',
@@ -432,6 +535,63 @@ Future<File> _compileComponentWat(
     reason: '${validation.stdout}\n${validation.stderr}',
   );
   return wasm;
+}
+
+void _writeCliOutput(
+  WASIPreview2ComponentHost host,
+  String stream,
+  List<int> bytes,
+) {
+  final handle =
+      host.standardImports['wasi:cli/$stream@0.2.0.get-$stream']!(const [])
+          as int;
+  host.standardImports['wasi:io/streams@0.2.0.output-stream.check-write']!([
+    handle,
+  ]);
+  host.standardImports['wasi:io/streams@0.2.0.output-stream.write']!([
+    handle,
+    WasmComponentValueData(
+      kind: WasmComponentValueDataKind.list,
+      rawBytes: Uint8List(0),
+      items: [
+        for (final byte in bytes)
+          WasmComponentValueData(
+            kind: WasmComponentValueDataKind.integer,
+            rawBytes: Uint8List(0),
+            integer: byte,
+          ),
+      ],
+    ),
+  ]);
+}
+
+String _wasmToolsPath() {
+  final executable = File(
+    '.toolchains/bin/${Platform.isWindows ? 'wasm-tools.exe' : 'wasm-tools'}',
+  );
+  if (!executable.existsSync()) {
+    fail(
+      'Missing wasm-tools executable at ${executable.path}; '
+      'run tool/ensure_toolchains.sh first.',
+    );
+  }
+  return executable.path;
+}
+
+Future<void> _insertEmptyComponentStart(
+  File componentFile, {
+  required int functionIndex,
+}) async {
+  final sourceBytes = await componentFile.readAsBytes();
+  final component = WasmComponent.decode(sourceBytes);
+  final bytes = sourceBytes.toList();
+  final canonicalSection = component.sections.lastWhere(
+    (section) => section.id == 8,
+  );
+  final insertionOffset =
+      canonicalSection.payloadOffset + canonicalSection.payloadSize;
+  bytes.insertAll(insertionOffset, <int>[9, 3, functionIndex, 0, 0]);
+  await componentFile.writeAsBytes(bytes);
 }
 
 const String _loweredRandomCommandWat = r'''
@@ -540,6 +700,34 @@ const String _typeAliasCommandWat = r'''
   (func $run (type $run_ty) (canon lift (core func $run_core)))
   (instance $run_instance (export "run" (func $run)))
   (export "wasi:cli/run@0.2.0" (instance $run_instance))
+)
+''';
+
+const String _synchronousStartCommandWat = r'''
+(component
+  (core module $main
+    (func (export "start"))
+    (func (export "run") (result i32) i32.const 0))
+  (core instance $main_i (instantiate $main))
+  (alias core export $main_i "start" (core func $start_core))
+  (alias core export $main_i "run" (core func $run_core))
+  (type $start_ty (func))
+  (func $start (type $start_ty) (canon lift (core func $start_core)))
+  (type $run_ty (func (result (result))))
+  (func $run (type $run_ty) (canon lift (core func $run_core)))
+  (instance $run_instance (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.0" (instance $run_instance))
+)
+''';
+
+const String _resourceTypeIdentityComponentWat = r'''
+(component
+  (type $interface (instance
+    (export "resource" (type (sub resource)))
+    (export "same-resource" (type (eq 0)))))
+  (import "interface" (instance $interface_import (type $interface)))
+  (alias export $interface_import "resource" (type $resource))
+  (alias export $interface_import "same-resource" (type $same_resource))
 )
 ''';
 

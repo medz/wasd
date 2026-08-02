@@ -167,7 +167,13 @@ final class _NativeTcpListener implements WASIPreview2TcpListener {
   }
 
   @override
-  void close() => _terminate(closeServer: true);
+  void close() {
+    _terminate(closeServer: true);
+    for (final connection in _queue) {
+      connection.dispose?.call();
+    }
+    _queue.clear();
+  }
 
   void _terminate({bool closeServer = false}) {
     if (_closed) {
@@ -178,10 +184,6 @@ final class _NativeTcpListener implements WASIPreview2TcpListener {
       unawaited(_subscription.cancel());
       unawaited(_server.close());
     }
-    for (final connection in _queue) {
-      connection.dispose?.call();
-    }
-    _queue.clear();
     _notify();
   }
 
@@ -214,6 +216,9 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
           );
         }
         _notifyReceive();
+      } else if (event == io.RawSocketEvent.write) {
+        _sendReady = true;
+        _notifySend();
       }
     });
   }
@@ -222,7 +227,9 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
   late final StreamSubscription<io.RawSocketEvent> _subscription;
   final List<WASIPreview2IncomingDatagram> _queue = [];
   final List<Completer<void>> _receiveWaiters = [];
+  final List<Completer<void>> _sendWaiters = [];
   bool _closed = false;
+  bool _sendReady = true;
 
   @override
   final WASIPreview2IpSocketAddress localAddress;
@@ -237,7 +244,7 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
   bool get canReceive => _queue.isNotEmpty || _closed;
 
   @override
-  bool get canSend => !_closed;
+  bool get canSend => !_closed && _sendReady;
 
   @override
   Future<void> waitReceive() {
@@ -250,7 +257,14 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
   }
 
   @override
-  Future<void> waitSend() => Future<void>.value();
+  Future<void> waitSend() {
+    if (canSend || _closed) {
+      return Future<void>.value();
+    }
+    final completer = Completer<void>();
+    _sendWaiters.add(completer);
+    return completer.future;
+  }
 
   @override
   WASIPreview2SocketResult<List<WASIPreview2IncomingDatagram>> receive(
@@ -278,6 +292,9 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
     if (_closed) {
       return const WASIPreview2SocketResult<BigInt>.error('invalid-state');
     }
+    if (!_sendReady) {
+      return WASIPreview2SocketResult<BigInt>.ok(BigInt.zero);
+    }
     var sent = 0;
     for (final datagram in datagrams) {
       final remoteAddress = datagram.remoteAddress;
@@ -291,6 +308,11 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
         _internetAddress(remoteAddress),
         remoteAddress.port,
       );
+      if (bytes == 0) {
+        _sendReady = false;
+        _socket.writeEventsEnabled = true;
+        return WASIPreview2SocketResult<BigInt>.ok(BigInt.from(sent));
+      }
       if (bytes != datagram.data.length) {
         return sent == 0
             ? const WASIPreview2SocketResult<BigInt>.error('datagram-too-large')
@@ -310,6 +332,7 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
     _subscription.cancel();
     _socket.close();
     _notifyReceive();
+    _notifySend();
   }
 
   void _notifyReceive() {
@@ -321,15 +344,28 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
       }
     }
   }
+
+  void _notifySend() {
+    final waiters = List<Completer<void>>.of(_sendWaiters);
+    _sendWaiters.clear();
+    for (final waiter in waiters) {
+      if (!waiter.isCompleted) {
+        waiter.complete();
+      }
+    }
+  }
 }
 
 WASIPreview2TcpConnection _tcpConnection(io.Socket socket) {
   final input = WASIPreview2InputStream();
   var disposed = false;
+  var receiveShutdown = false;
+  var sendShutdown = false;
+  Future<void>? sendClose;
   late final StreamSubscription<Uint8List> subscription;
   final output = WASIPreview2OutputStream(
     onWrite: (bytes) {
-      if (disposed) {
+      if (disposed || sendShutdown) {
         return 'socket is closed';
       }
       try {
@@ -345,14 +381,64 @@ WASIPreview2TcpConnection _tcpConnection(io.Socket socket) {
       return;
     }
     disposed = true;
+    receiveShutdown = true;
+    sendShutdown = true;
     output.close();
     input.close();
     subscription.cancel();
     socket.destroy();
   }
 
+  Future<void> closeSend() => sendClose ??= (() async {
+    try {
+      await socket.flush();
+    } on Object {
+      // Closing still needs to run after a failed flush.
+    }
+    try {
+      await socket.close();
+    } on Object {
+      // Socket shutdown is best-effort after the synchronous WASI result.
+    }
+  })();
+
+  String? shutdown(String type) {
+    if (disposed) {
+      return 'invalid-state';
+    }
+    if (type == 'receive') {
+      if (!receiveShutdown) {
+        receiveShutdown = true;
+        input.close();
+        unawaited(subscription.cancel());
+      }
+      return null;
+    }
+    if (type == 'send') {
+      if (!sendShutdown) {
+        sendShutdown = true;
+        output.close();
+        unawaited(closeSend());
+      }
+      return null;
+    }
+    if (type == 'both') {
+      receiveShutdown = true;
+      sendShutdown = true;
+      input.close();
+      output.close();
+      unawaited(closeSend().whenComplete(subscription.cancel));
+      return null;
+    }
+    return 'invalid-argument';
+  }
+
   subscription = socket.listen(
-    input.append,
+    (bytes) {
+      if (!disposed && !receiveShutdown) {
+        input.append(bytes);
+      }
+    },
     onError: (Object error) => input.fail(error.toString()),
     onDone: input.close,
     cancelOnError: false,
@@ -362,7 +448,7 @@ WASIPreview2TcpConnection _tcpConnection(io.Socket socket) {
     outputStream: output,
     localAddress: _socketAddress(socket.address, socket.port),
     remoteAddress: _socketAddress(socket.remoteAddress, socket.remotePort),
-    close: (_) => dispose(),
+    shutdown: shutdown,
     dispose: dispose,
   );
 }

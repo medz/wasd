@@ -253,6 +253,23 @@ void main() {
       },
     );
 
+    test('rejects duplicate resolved resource names before defining types', () {
+      final component = WasmComponent.decode(_twoImportedResourceTypesBytes());
+      final host = WASIComponentResourceHost();
+      final bindings = host.componentResourceBindings(component);
+
+      expect(
+        () => host.createResourceBindingSet<int>(
+          bindings,
+          nameForBinding: (_) => 'duplicate',
+        ),
+        throwsStateError,
+      );
+
+      final bindingSet = host.createResourceBindingSet<int>(bindings);
+      expect(bindingSet.resourceTypes.map((type) => type.id), [0, 1]);
+    });
+
     test(
       'binds canonical operations for aliased instance resource exports',
       () {

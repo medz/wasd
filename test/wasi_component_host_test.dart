@@ -47,6 +47,7 @@ void main() {
       expect(binding.program.invoke(2, <Object?>[handle]), isNull);
       expect(dropped, [321]);
       expect(host.table.activeCount, 0);
+      expect(() => plan.bind(), throwsStateError);
     });
 
     test('does not bind resources when canonical capabilities are missing', () {

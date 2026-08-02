@@ -75,16 +75,30 @@ Future<void> main(List<String> args) async {
       return;
     }
 
-    final result = await WASIPreview2CommandRunner(host).run(component);
-    io.stdout.add(host.cliHost.stdoutBytes);
-    io.stderr.add(host.cliHost.stderrBytes);
-    await Future.wait(<Future<void>>[io.stdout.flush(), io.stderr.flush()]);
+    final result = await runPreview2CommandWithBufferedOutput(host, component);
     io.exitCode = result.exitCode;
   } on Object catch (error, stackTrace) {
     io.stderr
       ..writeln('wasd-preview2-runner failed: $error')
       ..writeln(stackTrace);
     io.exitCode = 1;
+  }
+}
+
+Future<WASIPreview2CommandResult> runPreview2CommandWithBufferedOutput(
+  WASIPreview2ComponentHost host,
+  WasmComponent component, {
+  io.IOSink? stdout,
+  io.IOSink? stderr,
+}) async {
+  final output = stdout ?? io.stdout;
+  final errorOutput = stderr ?? io.stderr;
+  try {
+    return await WASIPreview2CommandRunner(host).run(component);
+  } finally {
+    output.add(host.cliHost.stdoutBytes);
+    errorOutput.add(host.cliHost.stderrBytes);
+    await Future.wait(<Future<void>>[output.flush(), errorOutput.flush()]);
   }
 }
 

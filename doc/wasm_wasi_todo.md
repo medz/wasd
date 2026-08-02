@@ -118,9 +118,10 @@ P2/P3 work starts only after these P1 gates are green.
   - Native limitation: Dart `HttpClient` has no trailer API, so outgoing HTTP
     requests with trailers and incoming responses declaring trailers fail
     explicitly; proxy response trailers are preserved.
-  - Resolver limitation: dependency-free IDNA ToASCII covers canonical labels;
-    labels requiring Unicode normalization tables or ContextJ/ContextO are
-    rejected explicitly.
+  - Resolver limitation: dependency-free IDNA ToASCII covers a conservative
+    canonical subset and validates existing A-labels; disallowed symbols,
+    malformed A-labels, and labels requiring Unicode normalization tables or
+    ContextJ/ContextO are rejected explicitly.
 
 - [ ] `SUPPORT-P3`
   - Status: in progress. Component host/filesystem/async-profile scaffolding is

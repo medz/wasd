@@ -1580,7 +1580,7 @@ base class WASIPreview2FilesystemHost {
     if (descriptorError != null) {
       return _errorResult(descriptorError);
     }
-    if (targetPath.startsWith('/')) {
+    if (!_isRelativeWasiPath(targetPath)) {
       return _errorResult('not-permitted');
     }
     final target = _resolveMutationParent(handle, linkPath);
@@ -1627,6 +1627,10 @@ base class WASIPreview2FilesystemHost {
     }
     if (base.directory == null) {
       return _errorResult('not-directory');
+    }
+    if (openFlags.labels.contains('truncate') &&
+        !flags.labels.contains('write')) {
+      return _errorResult('invalid');
     }
     if ((_flagsContainMutation(flags) ||
             _openFlagsContainMutation(openFlags)) &&

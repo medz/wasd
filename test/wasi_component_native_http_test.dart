@@ -60,6 +60,48 @@ void main() {
     expect(closeFailure.abortCalls, 1);
   });
 
+  test('Preview2 native HTTP aborts requests opened after timeout', () async {
+    final pendingRequest = Completer<io.HttpClientRequest>();
+    final nativeRequest = _RecordingHttpClientRequest();
+    final host = native_http.WASIPreview2NativeHttpHost(
+      client: _RecordingHttpClient(pendingRequest.future),
+    );
+    final options = WASIPreview2HttpRequestOptions()
+      ..connectTimeout = BigInt.zero;
+
+    final handled = host.backend.handle(_outgoingRequest(), options);
+    expect(handled.isOk, isTrue);
+    await handled.value!.waitReady();
+    expect(nativeRequest.abortCalls, 0);
+
+    pendingRequest.complete(nativeRequest);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(nativeRequest.abortCalls, 1);
+    expect(nativeRequest.closeCalls, 0);
+  });
+
+  test('Preview2 native HTTP hides response stream error details', () async {
+    const secret = '/private/host/path:8443';
+    for (final (error, expected) in <(Object, String)>[
+      (StateError(secret), 'internal-error'),
+      (const io.HttpException(secret), 'HTTP-protocol-error'),
+    ]) {
+      final response = _RecordingHttpClientResponse(
+        headers: _RecordingHttpHeaders(null),
+        streamError: error,
+      );
+      final result = await _nativeGet(
+        Uri.parse('http://example.test/'),
+        _RecordingHttpClient(_RecordingHttpClientRequest(response: response)),
+        captureBodyError: true,
+      );
+
+      expect(result.bodyError, expected);
+      expect(result.bodyError, isNot(contains(secret)));
+    }
+  });
+
   test('Preview2 native HTTP rejects unsupported outgoing trailers', () async {
     const source = '''
 package wasi-testsuite:test;
@@ -938,15 +980,26 @@ world http-timeout-range-test {
 }
 
 Future<
-  ({int status, List<int> body, String? contentEncoding, String? contentLength})
+  ({
+    int status,
+    List<int> body,
+    String? bodyError,
+    String? contentEncoding,
+    String? contentLength,
+  })
 >
-_nativeGet(Uri uri, io.HttpClient client) async {
+_nativeGet(
+  Uri uri,
+  io.HttpClient client, {
+  bool captureBodyError = false,
+}) async {
   const source = '''
 package wasi-testsuite:test;
 
 world http-get-test {
   import wasi:http/types@0.2.0;
   import wasi:http/outgoing-handler@0.2.0;
+  import wasi:io/error@0.2.0;
   include wasi:io/imports@0.2.0;
 }
 ''';
@@ -1055,6 +1108,7 @@ world http-get-test {
     ),
   );
   final body = <int>[];
+  String? bodyError;
   while (true) {
     await _block(
       program,
@@ -1068,8 +1122,19 @@ world http-get-test {
             ])
             as WasmComponentValueData;
     if (!(read.isOk ?? read.index == 0 || read.label == 'ok')) {
-      if (_resultErrorLabel(read) != 'closed') {
-        throw StateError('unexpected response body error');
+      final label = _resultErrorLabel(read);
+      if (label == 'last-operation-failed') {
+        final error = _streamErrorHandle(read);
+        bodyError =
+            program.invokeImport('wasi:io/error@0.2.0.error.to-debug-string', [
+                  error,
+                ])
+                as String;
+        if (!captureBodyError) {
+          throw StateError('unexpected response body error: $bodyError');
+        }
+      } else if (label != 'closed') {
+        throw StateError('unexpected response body error: $label');
       }
       break;
     }
@@ -1078,6 +1143,7 @@ world http-get-test {
   return (
     status: status,
     body: body,
+    bodyError: bodyError,
     contentEncoding: firstHeader(io.HttpHeaders.contentEncodingHeader),
     contentLength: firstHeader(io.HttpHeaders.contentLengthHeader),
   );
@@ -1104,9 +1170,10 @@ WASIPreview2HttpOutgoingRequest _outgoingRequest({
 }
 
 final class _RecordingHttpClient implements io.HttpClient {
-  _RecordingHttpClient(this.request);
+  _RecordingHttpClient(FutureOr<io.HttpClientRequest> request)
+    : _request = Future<io.HttpClientRequest>.value(request);
 
-  final io.HttpClientRequest request;
+  final Future<io.HttpClientRequest> _request;
 
   @override
   bool autoUncompress = true;
@@ -1115,7 +1182,7 @@ final class _RecordingHttpClient implements io.HttpClient {
   String? userAgent = 'Dart/test';
 
   @override
-  Future<io.HttpClientRequest> openUrl(String method, Uri url) async => request;
+  Future<io.HttpClientRequest> openUrl(String method, Uri url) => _request;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -1198,8 +1265,11 @@ final class _RecordingHttpClientResponse extends Stream<List<int>>
     implements io.HttpClientResponse {
   _RecordingHttpClientResponse({
     required this.headers,
-    required List<List<int>> chunks,
-  }) : _stream = Stream<List<int>>.fromIterable(chunks);
+    List<List<int>> chunks = const <List<int>>[],
+    Object? streamError,
+  }) : _stream = streamError == null
+           ? Stream<List<int>>.fromIterable(chunks)
+           : Stream<List<int>>.error(streamError);
 
   final Stream<List<int>> _stream;
 

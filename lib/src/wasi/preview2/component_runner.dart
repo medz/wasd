@@ -103,10 +103,17 @@ final class _Preview2ComponentRuntime {
   final Map<int, WASIComponentCanonicalAdapterCallback> _adapterCoreCallbacks =
       <int, WASIComponentCanonicalAdapterCallback>{};
   final Map<int, WASIComponentCanonicalAdapterCallback>
+  _synchronousAdapterCoreCallbacks =
+      <int, WASIComponentCanonicalAdapterCallback>{};
+  final Map<int, WASIComponentCanonicalAdapterCallback>
   _adapterComponentCallbacks = <int, WASIComponentCanonicalAdapterCallback>{};
+  final Map<int, WASIComponentCanonicalAdapterCallback>
+  _synchronousAdapterComponentCallbacks =
+      <int, WASIComponentCanonicalAdapterCallback>{};
 
   late final WASIComponentHostBinding _binding;
   late final WASIComponentCanonicalAdapterProgram _adapterProgram;
+  late final WASIComponentCanonicalAdapterProgram _synchronousAdapterProgram;
   var _decodedTypeDefinitionCount = 0;
 
   Future<int> runCommand() => host.componentHost.table.runScoped(() async {
@@ -152,6 +159,10 @@ final class _Preview2ComponentRuntime {
     _adapterProgram = plan.bindAdapters(
       coreFunctions: _adapterCoreCallbacks,
       componentFunctions: _adapterComponentCallbacks,
+    );
+    _synchronousAdapterProgram = plan.bindAdapters(
+      coreFunctions: _synchronousAdapterCoreCallbacks,
+      componentFunctions: _synchronousAdapterComponentCallbacks,
     );
     _binding = plan.bind(
       coreFunctions: _adapterCoreCallbacks,
@@ -200,6 +211,14 @@ final class _Preview2ComponentRuntime {
               }
               return _coreFunctions[index].invoke(args);
             };
+            _synchronousAdapterCoreCallbacks[index] = (args) {
+              if (index < 0 || index >= _coreFunctions.length) {
+                throw WASIPreview2ComponentExecutionException(
+                  'Canonical lift references unavailable core function $index.',
+                );
+              }
+              return _coreFunctions[index].invokeSync(args);
+            };
           }
           final postReturnIndex = plan.postReturnIndex;
           if (postReturnIndex != null) {
@@ -213,6 +232,16 @@ final class _Preview2ComponentRuntime {
               }
               return _coreFunctions[postReturnIndex].invoke(args);
             };
+            _synchronousAdapterCoreCallbacks[postReturnIndex] = (args) {
+              if (postReturnIndex < 0 ||
+                  postReturnIndex >= _coreFunctions.length) {
+                throw WASIPreview2ComponentExecutionException(
+                  'Canonical lift references unavailable post-return core '
+                  'function $postReturnIndex.',
+                );
+              }
+              return _coreFunctions[postReturnIndex].invokeSync(args);
+            };
           }
         case WasmComponentCanonicalKind.lower:
           final index = plan.definition.functionIndex;
@@ -224,6 +253,14 @@ final class _Preview2ComponentRuntime {
                 );
               }
               return _componentFunctions[index].invoke(args);
+            };
+            _synchronousAdapterComponentCallbacks[index] = (args) {
+              if (index < 0 || index >= _componentFunctions.length) {
+                throw WASIPreview2ComponentExecutionException(
+                  'Canonical lower references unavailable component function $index.',
+                );
+              }
+              return _componentFunctions[index].invokeSynchronously(args);
             };
           }
         default:
@@ -590,6 +627,12 @@ final class _Preview2ComponentRuntime {
           _ComponentFunction(
             name: 'canonical[$canonicalIndex].lift',
             invoke: (args) => _adapterProgram.invokeLiftedCoreAsync(
+              canonicalIndex,
+              args,
+              memory: _canonicalMemory(definition),
+              realloc: _canonicalRealloc(definition),
+            ),
+            invokeSync: (args) => _synchronousAdapterProgram.invokeLiftedCore(
               canonicalIndex,
               args,
               memory: _canonicalMemory(definition),
@@ -1096,7 +1139,7 @@ final class _Preview2ComponentRuntime {
       );
     }
     final function = _componentFunctions[start.functionIndex];
-    final result = function.invokeSync(const <Object?>[]);
+    final result = function.invokeSynchronously(const <Object?>[]);
     if (result is Future) {
       throw const WASIPreview2ComponentExecutionException(
         'Async component start is not executable in the Preview2 runner yet.',
@@ -1312,12 +1355,21 @@ final class _CoreExport {
 }
 
 final class _ComponentFunction {
-  const _ComponentFunction({required this.name, required this.invoke});
+  const _ComponentFunction({
+    required this.name,
+    required this.invoke,
+    this.invokeSync,
+  });
 
   final String name;
   final FutureOr<Object?> Function(List<Object?> args) invoke;
+  final Object? Function(List<Object?> args)? invokeSync;
 
-  Object? invokeSync(List<Object?> args) {
+  Object? invokeSynchronously(List<Object?> args) {
+    final synchronous = invokeSync;
+    if (synchronous != null) {
+      return synchronous(args);
+    }
     final result = invoke(args);
     if (result is Future) {
       throw WASIPreview2ComponentExecutionException(

@@ -209,8 +209,12 @@ final class WASIPreview2HttpOutgoingRequest {
     if (_body != null) {
       return null;
     }
+    final contentLength = _contentLength(headers);
+    if (contentLength.invalid) {
+      return null;
+    }
     return _body = WASIPreview2HttpOutgoingBody(
-      contentLength: _contentLength(headers),
+      contentLength: contentLength.value,
     );
   }
 }
@@ -399,13 +403,13 @@ WASIPreview2HttpFutureTrailers _futureTrailersForStream(
         return const WASIPreview2HttpResult<WASIPreview2HttpFields?>.ok(null);
       }
       await trailers.waitReady();
-      final read = trailers._take();
-      if (read == null || read.alreadyTaken) {
+      final completion = trailers._completion;
+      if (completion == null) {
         return const WASIPreview2HttpResult<WASIPreview2HttpFields?>.error(
           'internal-error',
         );
       }
-      return read.value!;
+      return completion;
     }),
   );
 }
@@ -440,8 +444,12 @@ final class WASIPreview2HttpOutgoingResponse {
     if (_body != null) {
       return null;
     }
+    final contentLength = _contentLength(headers);
+    if (contentLength.invalid) {
+      return null;
+    }
     return _body = WASIPreview2HttpOutgoingBody(
-      contentLength: _contentLength(headers),
+      contentLength: contentLength.value,
     );
   }
 }
@@ -643,6 +651,8 @@ final class WASIPreview2HttpFutureTrailers {
 
   /// Whether the trailers are ready.
   bool get isReady => _result != null;
+
+  WASIPreview2HttpResult<WASIPreview2HttpFields?>? get _completion => _result;
 
   /// Waits for readiness.
   Future<void> waitReady() {
@@ -1787,40 +1797,45 @@ int _handle(Object? value) {
   };
 }
 
-BigInt? _contentLength(WASIPreview2HttpFields fields) {
+({BigInt? value, bool invalid}) _contentLength(WASIPreview2HttpFields fields) {
   final values = <BigInt>[];
   for (final rawValue in fields.values('content-length')) {
     final parts = String.fromCharCodes(rawValue).split(',');
     for (final part in parts) {
       final text = part.trim();
       if (text.isEmpty || text.codeUnits.any((code) => !_isDigit(code))) {
-        return BigInt.from(-1);
+        return (value: null, invalid: true);
       }
       values.add(BigInt.parse(text));
     }
   }
   if (values.isEmpty) {
-    return null;
+    return (value: null, invalid: false);
   }
   final expected = values.first;
   return values.every((value) => value == expected)
-      ? expected
-      : BigInt.from(-1);
+      ? (value: expected, invalid: false)
+      : (value: null, invalid: true);
 }
 
 String? _outgoingRequestValidationError(
   WASIPreview2HttpOutgoingRequest request,
 ) {
-  final scheme = request.scheme;
-  if (scheme != null &&
-      (scheme.label == 'HTTP' || scheme.label == 'HTTPS') &&
-      request.authority == null) {
+  final scheme = request.scheme?.wireName ?? 'http';
+  final authority = request.authority;
+  final isHttp = scheme == 'http' || scheme == 'https';
+  if (isHttp && authority == null) {
+    return 'HTTP-request-URI-invalid';
+  }
+  if (authority != null &&
+      (!_validAuthority(authority) ||
+          (isHttp && _authorityHasUserInfo(authority)))) {
     return 'HTTP-request-URI-invalid';
   }
   if (request.headers.has('host')) {
     return 'HTTP-request-denied';
   }
-  if (_contentLength(request.headers)?.isNegative ?? false) {
+  if (_contentLength(request.headers).invalid) {
     return 'HTTP-request-body-size';
   }
   return null;
@@ -1874,6 +1889,8 @@ bool _validAuthority(String value) {
       !uri.hasQuery &&
       !uri.hasFragment;
 }
+
+bool _authorityHasUserInfo(String value) => value.contains('@');
 
 bool _isUriPchar(int code) =>
     _isAlpha(code) ||

@@ -42,7 +42,9 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
       _isPreview2PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
       document: _preview2Document(
-        parsed.version == '0.2.12' ? _wasiCli0212Source : _wasiCli020Source,
+        _hasStableCliExitWithCode(parsed.version!)
+            ? _wasiCli0212Source
+            : _wasiCli020Source,
         'wasi:cli',
         parsed.version!,
       ),
@@ -120,6 +122,9 @@ bool _isPreview2PatchVersion(String? version) {
   final patch = int.tryParse(match.group(1)!);
   return patch != null && patch >= 0 && patch <= 12;
 }
+
+bool _hasStableCliExitWithCode(String version) =>
+    int.parse(version.substring('0.2.'.length)) >= 12;
 
 final Map<String, WASIComponentWitDocument> _preview2Documents =
     <String, WASIComponentWitDocument>{};
@@ -407,11 +412,21 @@ world command {
 }
 ''';
 
-final String _wasiCli0212Source = _wasiCli020Source.replaceFirst(
-  '  exit: func(status: result);',
-  '''  exit: func(status: result);
+const String _wasiCliExitSignature = '  exit: func(status: result);';
+
+final String _wasiCli0212Source = _replaceRequired(
+  _wasiCli020Source,
+  _wasiCliExitSignature,
+  '''$_wasiCliExitSignature
   exit-with-code: func(status-code: u8);''',
 );
+
+String _replaceRequired(String source, String pattern, String replacement) {
+  if (!source.contains(pattern)) {
+    throw StateError('Required standard WIT declaration is missing: $pattern');
+  }
+  return source.replaceFirst(pattern, replacement);
+}
 
 const String _wasiSockets020Source = '''
 package wasi:sockets@0.2.0;

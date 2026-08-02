@@ -2148,27 +2148,19 @@ String? _toAsciiDomainLabel(String label) {
     return null;
   }
   final runes = folded.runes.toList(growable: false);
-  if (_isCombiningMark(runes.first) ||
-      !_hasSupportedCombiningMarks(runes) ||
-      !_hasValidMinimalBidi(runes)) {
-    return null;
-  }
-  var hasNonAscii = false;
-  for (final rune in runes) {
-    if (rune <= 0x7f) {
-      if (!_asciiDomainRune(rune)) {
-        return null;
-      }
-    } else {
-      hasNonAscii = true;
-      if (!_isConservativeIdnaRune(rune)) {
-        return null;
-      }
+  if (folded.startsWith('xn--')) {
+    final decoded = _punycodeDecode(folded.substring(4));
+    if (decoded == null ||
+        !_validConservativeIdnaRunes(decoded, requireNonAscii: true) ||
+        'xn--${_punycodeEncode(decoded)}' != folded) {
+      return null;
     }
+    return folded.length <= 63 ? folded : null;
   }
-  if (hasNonAscii && folded.startsWith('xn--')) {
+  if (!_validConservativeIdnaRunes(runes)) {
     return null;
   }
+  final hasNonAscii = runes.any((rune) => rune > 0x7f);
   final ascii = hasNonAscii ? 'xn--${_punycodeEncode(runes)}' : folded;
   if (ascii.isEmpty || ascii.length > 63) {
     return null;
@@ -2182,6 +2174,35 @@ String? _toAsciiDomainLabel(String label) {
   return ascii;
 }
 
+bool _validConservativeIdnaRunes(
+  List<int> runes, {
+  bool requireNonAscii = false,
+}) {
+  if (runes.isEmpty ||
+      runes.first == 0x2d ||
+      runes.last == 0x2d ||
+      _isCombiningMark(runes.first) ||
+      (runes.length >= 4 && runes[2] == 0x2d && runes[3] == 0x2d) ||
+      !_hasSupportedCombiningMarks(runes) ||
+      !_hasValidMinimalBidi(runes)) {
+    return false;
+  }
+  var hasNonAscii = false;
+  for (final rune in runes) {
+    if (rune <= 0x7f) {
+      if (!_asciiDomainRune(rune)) {
+        return false;
+      }
+      continue;
+    }
+    hasNonAscii = true;
+    if (!_isConservativeIdnaRune(rune)) {
+      return false;
+    }
+  }
+  return !requireNonAscii || hasNonAscii;
+}
+
 bool _asciiDomainRune(int rune) {
   return (rune >= 0x30 && rune <= 0x39) ||
       (rune >= 0x41 && rune <= 0x5a) ||
@@ -2190,39 +2211,39 @@ bool _asciiDomainRune(int rune) {
 }
 
 bool _isConservativeIdnaRune(int rune) {
-  if (rune < 0xa0 ||
-      rune == 0xa0 ||
-      rune == 0xfffd ||
-      (rune >= 0xd800 && rune <= 0xdfff) ||
-      (rune >= 0xfdd0 && rune <= 0xfdef) ||
-      (rune & 0xffff) == 0xfffe ||
-      (rune & 0xffff) == 0xffff) {
-    return false;
-  }
-  if (rune == 0x1680 ||
-      (rune >= 0x2000 && rune <= 0x206f) ||
-      (rune >= 0x2600 && rune <= 0x27bf) ||
-      (rune >= 0x3000 && rune <= 0x303f) ||
-      (rune >= 0xfb1d && rune <= 0xfdff) ||
-      (rune >= 0xfe70 && rune <= 0xfeff) ||
-      (rune >= 0xe000 && rune <= 0xf8ff) ||
-      (rune >= 0xf0000 && rune <= 0xffffd) ||
-      (rune >= 0x100000 && rune <= 0x10fffd) ||
-      (rune >= 0xfe00 && rune <= 0xfe0f) ||
-      (rune >= 0x1f000 && rune <= 0x1faff) ||
-      (rune >= 0xe0100 && rune <= 0xe01ef) ||
-      (rune >= 0xe0000 && rune <= 0xe007f) ||
-      (rune >= 0xff00 && rune <= 0xffef) ||
-      rune == 0x00ad ||
-      rune == 0x034f ||
-      rune == 0x00b7 ||
-      rune == 0x0375 ||
-      rune == 0x05f3 ||
-      rune == 0x05f4 ||
-      rune == 0x30fb) {
-    return false;
-  }
-  return true;
+  return _isCombiningMark(rune) ||
+      (rune >= 0x00c0 && rune <= 0x00d6) ||
+      (rune >= 0x00d8 && rune <= 0x00f6) ||
+      (rune >= 0x00f8 && rune <= 0x02af) ||
+      (rune >= 0x0370 && rune <= 0x0373) ||
+      (rune >= 0x0376 && rune <= 0x0377) ||
+      (rune >= 0x037b && rune <= 0x037d) ||
+      rune == 0x037f ||
+      rune == 0x0386 ||
+      (rune >= 0x0388 && rune <= 0x038a) ||
+      rune == 0x038c ||
+      (rune >= 0x038e && rune <= 0x03a1) ||
+      (rune >= 0x03a3 && rune <= 0x03f5) ||
+      (rune >= 0x03f7 && rune <= 0x0481) ||
+      (rune >= 0x048a && rune <= 0x052f) ||
+      (rune >= 0x0531 && rune <= 0x0556) ||
+      (rune >= 0x0560 && rune <= 0x0588) ||
+      (rune >= 0x05d0 && rune <= 0x05ea) ||
+      (rune >= 0x05ef && rune <= 0x05f2) ||
+      (rune >= 0x0620 && rune <= 0x063f) ||
+      (rune >= 0x0641 && rune <= 0x064a) ||
+      (rune >= 0x0660 && rune <= 0x0669) ||
+      (rune >= 0x066e && rune <= 0x066f) ||
+      (rune >= 0x0671 && rune <= 0x06d3) ||
+      rune == 0x06d5 ||
+      (rune >= 0x06ee && rune <= 0x06fc) ||
+      rune == 0x06ff ||
+      (rune >= 0x06f0 && rune <= 0x06f9) ||
+      (rune >= 0x3041 && rune <= 0x3096) ||
+      (rune >= 0x30a1 && rune <= 0x30fa) ||
+      (rune >= 0x3400 && rune <= 0x4dbf) ||
+      (rune >= 0x4e00 && rune <= 0x9fff) ||
+      (rune >= 0xac00 && rune <= 0xd7a3);
 }
 
 bool _isCombiningMark(int rune) {
@@ -2315,6 +2336,88 @@ bool _isIdnaDigit(int rune) {
   return (rune >= 0x30 && rune <= 0x39) ||
       (rune >= 0x0660 && rune <= 0x0669) ||
       (rune >= 0x06f0 && rune <= 0x06f9);
+}
+
+List<int>? _punycodeDecode(String input) {
+  const base = 36;
+  const tMin = 1;
+  const tMax = 26;
+  const initialBias = 72;
+  const initialCodePoint = 0x80;
+  const maxDelta = 0x7fffffff;
+
+  if (input.isEmpty) {
+    return null;
+  }
+  final output = <int>[];
+  final delimiter = input.lastIndexOf('-');
+  var inputIndex = 0;
+  if (delimiter >= 0) {
+    for (var index = 0; index < delimiter; index++) {
+      final code = input.codeUnitAt(index);
+      if (code > 0x7f) {
+        return null;
+      }
+      output.add(code);
+    }
+    inputIndex = delimiter + 1;
+  }
+
+  var codePoint = initialCodePoint;
+  var delta = 0;
+  var bias = initialBias;
+  while (inputIndex < input.length) {
+    final oldDelta = delta;
+    var weight = 1;
+    for (var k = base; ; k += base) {
+      if (inputIndex >= input.length) {
+        return null;
+      }
+      final digit = _punycodeDigitValue(input.codeUnitAt(inputIndex++));
+      if (digit == null || digit > (maxDelta - delta) ~/ weight) {
+        return null;
+      }
+      delta += digit * weight;
+      final threshold = k <= bias
+          ? tMin
+          : k >= bias + tMax
+          ? tMax
+          : k - bias;
+      if (digit < threshold) {
+        break;
+      }
+      final factor = base - threshold;
+      if (weight > maxDelta ~/ factor) {
+        return null;
+      }
+      weight *= factor;
+    }
+
+    final outputLength = output.length + 1;
+    bias = _adaptPunycodeBias(delta - oldDelta, outputLength, oldDelta == 0);
+    final increment = delta ~/ outputLength;
+    if (increment > 0x10ffff - codePoint) {
+      return null;
+    }
+    codePoint += increment;
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
+      return null;
+    }
+    delta %= outputLength;
+    output.insert(delta, codePoint);
+    delta++;
+  }
+  return output;
+}
+
+int? _punycodeDigitValue(int code) {
+  if (code >= 0x61 && code <= 0x7a) {
+    return code - 0x61;
+  }
+  if (code >= 0x30 && code <= 0x39) {
+    return code - 0x30 + 26;
+  }
+  return null;
 }
 
 String _punycodeEncode(List<int> input) {
@@ -2688,9 +2791,7 @@ bool _isValidTcpRemoteAddress(WASIPreview2IpSocketAddress address) {
     return !multicast && !limitedBroadcast;
   }
   final multicast = parts[0] & 0xff00 == 0xff00;
-  final ipv4Mapped =
-      parts.take(5).every((part) => part == 0) && parts[5] == 0xffff;
-  return !multicast && !ipv4Mapped;
+  return !multicast && !_isIpv4MappedIpv6(address.address);
 }
 
 bool _isAnyAddress(WASIPreview2IpAddress address) {

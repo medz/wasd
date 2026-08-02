@@ -2146,19 +2146,43 @@ world http-test {
           (
             name: 'HTTP without authority',
             headers: <(String, List<int>)>[],
-            setAuthority: false,
+            setScheme: true,
+            authority: null,
+            errorCode: 'HTTP-request-URI-invalid',
+          ),
+          (
+            name: 'default HTTP without authority',
+            headers: <(String, List<int>)>[],
+            setScheme: false,
+            authority: null,
+            errorCode: 'HTTP-request-URI-invalid',
+          ),
+          (
+            name: 'HTTP userinfo authority',
+            headers: <(String, List<int>)>[],
+            setScheme: true,
+            authority: 'user@example.test',
+            errorCode: 'HTTP-request-URI-invalid',
+          ),
+          (
+            name: 'HTTP empty userinfo authority',
+            headers: <(String, List<int>)>[],
+            setScheme: true,
+            authority: '@example.test',
             errorCode: 'HTTP-request-URI-invalid',
           ),
           (
             name: 'Host header',
             headers: <(String, List<int>)>[('Host', 'other.example'.codeUnits)],
-            setAuthority: true,
+            setScheme: true,
+            authority: 'example.test',
             errorCode: 'HTTP-request-denied',
           ),
           (
             name: 'malformed Content-Length',
             headers: <(String, List<int>)>[('Content-Length', '+5'.codeUnits)],
-            setAuthority: true,
+            setScheme: true,
+            authority: 'example.test',
             errorCode: 'HTTP-request-body-size',
           ),
           (
@@ -2167,7 +2191,8 @@ world http-test {
               ('Content-Length', '5'.codeUnits),
               ('content-length', '6'.codeUnits),
             ],
-            setAuthority: true,
+            setScheme: true,
+            authority: 'example.test',
             errorCode: 'HTTP-request-body-size',
           ),
         ];
@@ -2195,18 +2220,20 @@ world http-test {
                     [headers],
                   )
                   as int;
-          _expectUnitOk(
-            program.invokeImport(
-                  'wasi:http/types@0.2.0.outgoing-request.set-scheme',
-                  [request, _someValue(_variantValue('HTTP'))],
-                )
-                as WasmComponentValueData,
-          );
-          if (invalidRequest.setAuthority) {
+          if (invalidRequest.setScheme) {
+            _expectUnitOk(
+              program.invokeImport(
+                    'wasi:http/types@0.2.0.outgoing-request.set-scheme',
+                    [request, _someValue(_variantValue('HTTP'))],
+                  )
+                  as WasmComponentValueData,
+            );
+          }
+          if (invalidRequest.authority case final authority?) {
             _expectUnitOk(
               program.invokeImport(
                     'wasi:http/types@0.2.0.outgoing-request.set-authority',
-                    [request, _someValue(_stringValue('example.test'))],
+                    [request, _someValue(_stringValue(authority))],
                   )
                   as WasmComponentValueData,
             );
@@ -3036,6 +3063,29 @@ world http-test {
         worldName: 'http-test',
       );
 
+      final malformedHeaders = _resourceHandle(
+        _resultOk(
+          program.invokeImport('wasi:http/types@0.2.0.fields.from-list', [
+                _httpFieldListValue([('content-length', '+3'.codeUnits)]),
+              ])
+              as WasmComponentValueData,
+        ),
+      );
+      final malformedResponse =
+          program.invokeImport(
+                'wasi:http/types@0.2.0.outgoing-response.constructor',
+                [malformedHeaders],
+              )
+              as int;
+      expect(
+        (program.invokeImport('wasi:http/types@0.2.0.outgoing-response.body', [
+                  malformedResponse,
+                ])
+                as WasmComponentValueData)
+            .isOk,
+        isFalse,
+      );
+
       WasmComponentValueData finishBody(List<int> bytes) {
         final headers = _resourceHandle(
           _resultOk(
@@ -3161,12 +3211,15 @@ world http-test {
         await gatedTrailers.waitReady();
         expect(gatedTrailers.isReady, isTrue);
 
-        int finishBody(WASIPreview2InputStream stream) {
+        int finishBody(
+          WASIPreview2InputStream stream, {
+          WASIPreview2HttpFutureTrailers? trailers,
+        }) {
           final request = preview2.httpHost.insertIncomingRequest(
             WASIPreview2HttpIncomingRequest(
               method: const WASIPreview2HttpMethod.standard('get'),
               headers: WASIPreview2HttpFields(),
-              body: WASIPreview2HttpIncomingBody(stream),
+              body: WASIPreview2HttpIncomingBody(stream, trailers: trailers),
             ),
           );
           final body = _resourceHandle(
@@ -3249,6 +3302,47 @@ world http-test {
         final bodyResult = _resultOk(_optionPayload(failedResult));
 
         expect(_resultErrorLabel(bodyResult), 'HTTP-response-timeout');
+
+        final suppliedTrailers = WASIPreview2HttpFutureTrailers.completed(
+          WASIPreview2HttpResult<WASIPreview2HttpFields?>.ok(
+            WASIPreview2HttpFields(
+              entries: const <WASIPreview2HttpFieldEntry>[
+                WASIPreview2HttpFieldEntry('x-shared', <int>[49]),
+              ],
+            ),
+          ),
+        );
+        final firstStream = WASIPreview2InputStream();
+        final secondStream = WASIPreview2InputStream();
+        final sharedHandles = <int>[
+          finishBody(firstStream, trailers: suppliedTrailers),
+          finishBody(secondStream, trailers: suppliedTrailers),
+        ];
+        firstStream.close();
+        secondStream.close();
+        await Future<void>.delayed(Duration.zero);
+
+        for (final handle in sharedHandles) {
+          final result =
+              program.invokeImport(
+                    'wasi:http/types@0.2.0.future-trailers.get',
+                    [handle],
+                  )
+                  as WasmComponentValueData;
+          final fields = _optionHandle(
+            _resultOk(_resultOk(_optionPayload(result))),
+          );
+          expect(fields, isNotNull);
+          expect(
+            _httpFieldEntryValues(
+              _httpFieldEntries(_fieldsEntries(program, fields!)),
+              'x-shared',
+            ),
+            [
+              [49],
+            ],
+          );
+        }
       },
     );
 
@@ -3813,6 +3907,19 @@ world filesystem-test {
           descriptorFlags: const <String>['write'],
         );
         expect(_resultErrorLabel(createDirectory), 'no-entry');
+        final rejectedTruncate = openAt(
+          'root.txt',
+          openFlags: const <String>['truncate'],
+        );
+        expect(_resultErrorLabel(rejectedTruncate), 'invalid');
+        final rootFile = _resourceHandle(_resultOk(openAt('root.txt')));
+        final rootFileRead =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.read',
+                  <Object?>[rootFile, BigInt.one, BigInt.zero],
+                )
+                as WasmComponentValueData;
+        expect(_readBytes(rootFileRead), const <int>[1]);
         final missingStat =
             program.invokeImport(
                   'wasi:filesystem/types@0.2.0.descriptor.stat-at',
@@ -3832,6 +3939,13 @@ world filesystem-test {
                 )
                 as WasmComponentValueData;
         expect(_resultErrorLabel(absoluteSymlink), 'not-permitted');
+        final nulSymlink =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.symlink-at',
+                  <Object?>[root, 'bad\u0000target', 'created-nul'],
+                )
+                as WasmComponentValueData;
+        expect(_resultErrorLabel(nulSymlink), 'not-permitted');
         final absoluteReadlink =
             program.invokeImport(
                   'wasi:filesystem/types@0.2.0.descriptor.readlink-at',

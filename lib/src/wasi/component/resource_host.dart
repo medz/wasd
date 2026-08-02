@@ -136,6 +136,15 @@ final class WASIComponentResourceHost {
           in resourceBindings ?? componentResourceBindings(component))
         binding.componentTypeIndex: binding,
     };
+    final componentTypeIndexes =
+        Map<WasmComponentTypeDefinition, int>.identity();
+    final componentDefinitions = component.componentTypeIndexDefinitions;
+    for (var index = 0; index < componentDefinitions.length; index++) {
+      componentTypeIndexes.putIfAbsent(
+        componentDefinitions[index],
+        () => index,
+      );
+    }
     final uses = <WASIComponentResourceUse>[];
 
     for (
@@ -155,7 +164,7 @@ final class WASIComponentResourceHost {
       final definitions = context.typeDefinitions;
       final bindingsByTypeIndex = _resourceBindingsForTypeContext(
         definitions,
-        component.componentTypeIndexDefinitions,
+        componentTypeIndexes,
         componentBindingsByTypeIndex,
       );
 
@@ -242,11 +251,23 @@ final class WASIComponentResourceHost {
         ? bindings
         : bindings.toList(growable: false);
     _checkResourceBindingDescriptors(bindingList);
+    final resolvedNames = <String>[];
+    final seenNames = <String>{};
+    for (final binding in bindingList) {
+      final name = nameForBinding?.call(binding) ?? binding.name;
+      if (!seenNames.add(name)) {
+        throw StateError(
+          'WASI component resource name $name is bound more than once.',
+        );
+      }
+      resolvedNames.add(name);
+    }
     final types = <WASIComponentResourceType<T>>[];
     final registered = <int, _RegisteredResourceType>{};
-    for (final binding in bindingList) {
+    for (var index = 0; index < bindingList.length; index++) {
+      final binding = bindingList[index];
       final type = table.defineType<T>(
-        nameForBinding?.call(binding) ?? binding.name,
+        resolvedNames[index],
         onDrop: onDrop == null ? null : (resource) => onDrop(binding, resource),
       );
       types.add(type);
@@ -585,7 +606,7 @@ WasmComponentFunctionTypeContext? _canonicalAdapterFunctionTypeContext(
 
 Map<int, WASIComponentResourceBinding> _resourceBindingsForTypeContext(
   List<WasmComponentTypeDefinition> definitions,
-  List<WasmComponentTypeDefinition> componentDefinitions,
+  Map<WasmComponentTypeDefinition, int> componentTypeIndexes,
   Map<int, WASIComponentResourceBinding> componentBindings,
 ) {
   final bindings = <int, WASIComponentResourceBinding>{};
@@ -595,9 +616,10 @@ Map<int, WASIComponentResourceBinding> _resourceBindingsForTypeContext(
         definition.resource == null) {
       continue;
     }
-    final componentIndex = componentDefinitions.indexWhere(
-      (candidate) => identical(candidate, definition),
-    );
+    final componentIndex = componentTypeIndexes[definition];
+    if (componentIndex == null) {
+      continue;
+    }
     final binding = componentBindings[componentIndex];
     if (binding != null) {
       bindings[index] = binding;
