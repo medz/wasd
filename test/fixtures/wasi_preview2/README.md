@@ -44,6 +44,36 @@ Generate from the verified source and adapter files at the repository root:
 Wasmtime distributes the source and adapter under
 [Apache-2.0 WITH LLVM-exception](../../../third_party/component-model-tests/test/wasmtime/LICENSE-Apache-2.0_WITH_LLVM-exception).
 
+## `wasi_cli_0_2_12_exit_with_code.component.wasm`
+
+This is a fixed, offline command fixture for the stable
+`wasi:cli/exit@0.2.12.exit-with-code` function. Its guest lowers the imported
+function, requests process exit code 7, and exports `wasi:cli/run@0.2.12`.
+
+The component is handwritten against the official stable
+[`exit.wit`](https://github.com/WebAssembly/WASI/blob/v0.2.12/proposals/cli/wit/exit.wit).
+
+- Source: `wasi_cli_0_2_12_exit_with_code.component.wat`
+  - Size: 1,068 bytes
+  - SHA-256:
+    `e743b5e0f5f88de84b9a4d00684b422f633ec06d97c1eef4fabb00b8b7d9b313`
+- Generator: `wasm-tools 1.252.0 (d66d4364c 2026-06-12)`
+- Generated component:
+  - Size: 488 bytes
+  - SHA-256:
+    `5728b22e11f5187a874d40a21545120aae1e59430d55ac3f0b8ba69f7a8e0424`
+
+Generate the component from the checked-in source at the repository root:
+
+```sh
+.toolchains/bin/wasm-tools parse \
+  test/fixtures/wasi_preview2/wasi_cli_0_2_12_exit_with_code.component.wat \
+  -o test/fixtures/wasi_preview2/wasi_cli_0_2_12_exit_with_code.component.wasm
+
+.toolchains/bin/wasm-tools validate \
+  test/fixtures/wasi_preview2/wasi_cli_0_2_12_exit_with_code.component.wasm
+```
+
 ## `wasi_http_0_2_12_static_response.component.wasm`
 
 This is a fixed, offline fixture for a stable `wasi:http/proxy` component. Its
