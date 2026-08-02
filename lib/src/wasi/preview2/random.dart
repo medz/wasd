@@ -5,6 +5,8 @@ import '../../wasm/backend/native/interpreter/component.dart';
 import '../component/wit_adapter.dart';
 import '../preview3/secure_random.dart' as secure_random;
 
+const int _maxRandomBytesPerCall = 64 * 1024;
+
 /// WASI 0.2 `wasi:random` host imports.
 final class WASIPreview2RandomHost {
   /// Creates a random host import provider.
@@ -78,8 +80,11 @@ int _length(Object? value) {
       },
     _ => BigInt.from(-1),
   };
-  if (length < BigInt.zero || length > BigInt.from(0x7fffffff)) {
-    throw StateError('WASI random byte length is not allocatable: $value.');
+  if (length < BigInt.zero || length > BigInt.from(_maxRandomBytesPerCall)) {
+    throw StateError(
+      'WASI random byte length must be between 0 and '
+      '$_maxRandomBytesPerCall bytes: $value.',
+    );
   }
   return length.toInt();
 }

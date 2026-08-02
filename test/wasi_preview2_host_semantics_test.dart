@@ -3,6 +3,7 @@ library;
 
 import 'dart:async';
 import 'dart:io' as io;
+import 'dart:math' as math;
 import 'dart:mirrors' as mirrors;
 import 'dart:typed_data';
 
@@ -37,7 +38,7 @@ world test {
 
     test('returns exactly the requested Preview2 random byte length', () {
       final imports = WASIPreview2ComponentHost().standardImports;
-      final length = BigInt.from(65537);
+      final length = BigInt.from(65536);
 
       for (final name in <String>[
         'wasi:random/random@0.2.12.get-random-bytes',
@@ -51,6 +52,34 @@ world test {
           reason: name,
         );
       }
+    });
+
+    test('traps oversized Preview2 random requests before generation', () {
+      final random = _CountingRandom();
+      final imports = WASIPreview2ComponentHost(
+        randomHost: WASIPreview2RandomHost(
+          secureRandom: random,
+          insecureRandom: random,
+        ),
+      ).standardImports;
+
+      for (final name in <String>[
+        'wasi:random/random@0.2.12.get-random-bytes',
+        'wasi:random/insecure@0.2.12.get-insecure-random-bytes',
+      ]) {
+        expect(
+          () => imports[name]!(<Object?>[BigInt.from(65537)]),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              contains('65536'),
+            ),
+          ),
+          reason: name,
+        );
+      }
+      expect(random.nextIntCalls, 0);
     });
 
     test('poll traps for an empty pollable list', () {
@@ -1723,6 +1752,22 @@ world test {
       },
     );
   });
+}
+
+final class _CountingRandom implements math.Random {
+  int nextIntCalls = 0;
+
+  @override
+  bool nextBool() => false;
+
+  @override
+  double nextDouble() => 0;
+
+  @override
+  int nextInt(int max) {
+    nextIntCalls++;
+    return 0;
+  }
 }
 
 Future<io.RawDatagramSocket> _bindUdpEventually(int port) async {
