@@ -42,7 +42,9 @@ WASIComponentWitResolvedTarget? resolveWASIComponentStandardWitTarget(
       _isPreview2PatchVersion(parsed.version)) {
     return WASIComponentWitResolvedTarget(
       document: _preview2Document(
-        _wasiCli020Source,
+        _hasStableCliExitWithCode(parsed.version!)
+            ? _wasiCli0212Source
+            : _wasiCli020Source,
         'wasi:cli',
         parsed.version!,
       ),
@@ -118,8 +120,11 @@ bool _isPreview2PatchVersion(String? version) {
     return false;
   }
   final patch = int.tryParse(match.group(1)!);
-  return patch != null && patch >= 0 && patch <= 8;
+  return patch != null && patch >= 0 && patch <= 12;
 }
+
+bool _hasStableCliExitWithCode(String version) =>
+    int.parse(version.substring('0.2.'.length)) >= 12;
 
 final Map<String, WASIComponentWitDocument> _preview2Documents =
     <String, WASIComponentWitDocument>{};
@@ -210,10 +215,29 @@ world imports {
 }
 ''';
 
-final String _wasiRandom020Source = _wasiRandom030Source.replaceAll(
-  '@0.3.0',
-  '@0.2.0',
-);
+const String _wasiRandom020Source = '''
+package wasi:random@0.2.0;
+
+interface random {
+  get-random-bytes: func(len: u64) -> list<u8>;
+  get-random-u64: func() -> u64;
+}
+
+interface insecure {
+  get-insecure-random-bytes: func(len: u64) -> list<u8>;
+  get-insecure-random-u64: func() -> u64;
+}
+
+interface insecure-seed {
+  insecure-seed: func() -> tuple<u64, u64>;
+}
+
+world imports {
+  import random;
+  import insecure;
+  import insecure-seed;
+}
+''';
 
 const String _wasiClocks020Source = '''
 package wasi:clocks@0.2.0;
@@ -387,6 +411,22 @@ world command {
   export run;
 }
 ''';
+
+const String _wasiCliExitSignature = '  exit: func(status: result);';
+
+final String _wasiCli0212Source = _replaceRequired(
+  _wasiCli020Source,
+  _wasiCliExitSignature,
+  '''$_wasiCliExitSignature
+  exit-with-code: func(status-code: u8);''',
+);
+
+String _replaceRequired(String source, String pattern, String replacement) {
+  if (!source.contains(pattern)) {
+    throw StateError('Required standard WIT declaration is missing: $pattern');
+  }
+  return source.replaceFirst(pattern, replacement);
+}
 
 const String _wasiSockets020Source = '''
 package wasi:sockets@0.2.0;

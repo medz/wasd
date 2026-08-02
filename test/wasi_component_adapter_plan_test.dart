@@ -669,6 +669,100 @@ void main() {
       );
     });
 
+    test('invokes lowered core functions with an indirect result', () {
+      final component = WasmComponent.decode(
+        canonicalRecordLiftLowerComponentBytes(),
+      );
+      final plans = componentCanonicalAdapterPlans(component);
+      final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      final program = const WASIComponentCanonicalAdapterHost()
+          .bindAdapterPlans(
+            plans,
+            coreFunctions: {0: (_) => null},
+            componentFunctions: {
+              0: (args) {
+                final record = args.single! as WasmComponentValueData;
+                expect(record.items.map((item) => item.integer), [31, 32]);
+                return _u32CompositeValue(
+                  WasmComponentValueDataKind.record,
+                  const [41, 42],
+                );
+              },
+            },
+          );
+
+      expect(
+        program.invokeLoweredCore(1, const [31, 32, 64], memory: memory),
+        isEmpty,
+      );
+      expect(data.getUint32(64, Endian.little), 41);
+      expect(data.getUint32(68, Endian.little), 42);
+    });
+
+    test('invokes lowered core functions with indirect parameters', () {
+      const valueType = WasmComponentValueType.primitive(
+        WasmComponentPrimitiveValueType.u32,
+      );
+      final codec = WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
+        valueType,
+        const <WasmComponentTypeDefinition>[],
+      )!;
+      final params = List<WASIComponentCanonicalAdapterValuePlan>.generate(
+        17,
+        (index) => WASIComponentCanonicalAdapterValuePlan(
+          path: 'canonical[0].param[$index]',
+          label: 'p$index',
+          type: valueType,
+          memoryCodec: codec,
+          flatLayout:
+              const WASIComponentCanonicalAdapterFlatValuePlan.primitive(
+                WasmComponentPrimitiveValueType.u32,
+              ),
+          resourceUses: const <WASIComponentResourceUse>[],
+        ),
+      );
+      final plan = WASIComponentCanonicalAdapterPlan(
+        canonicalIndex: 0,
+        definition: const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.lower,
+          functionIndex: 0,
+        ),
+        functionType: WasmComponentFunctionType(
+          params: [
+            for (var index = 0; index < params.length; index++)
+              WasmComponentLabeledValueType(label: 'p$index', type: valueType),
+          ],
+        ),
+        params: params,
+        result: null,
+        resourceUses: const <WASIComponentResourceUse>[],
+        stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+        memoryIndex: 0,
+        reallocIndex: null,
+        postReturnIndex: null,
+        callbackIndex: null,
+        isAsync: false,
+      );
+      final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      for (var index = 0; index < 17; index++) {
+        data.setUint32(64 + index * 4, index + 1, Endian.little);
+      }
+      final program = const WASIComponentCanonicalAdapterHost()
+          .bindAdapterPlans(
+            [plan],
+            componentFunctions: {
+              0: (args) {
+                expect(args, List<Object?>.generate(17, (index) => index + 1));
+                return null;
+              },
+            },
+          );
+
+      expect(program.invokeLoweredCore(0, const [64], memory: memory), isEmpty);
+    });
+
     test(
       'invokes handle-aware record adapter programs through canonical value memory',
       () {
@@ -1164,6 +1258,249 @@ void main() {
       expect(() => program.invokeFlat(0, const <Object?>[1]), throwsStateError);
     });
 
+    test('lifts core integer bit patterns with component signedness', () {
+      final cases =
+          <
+            ({
+              WasmComponentPrimitiveValueType primitive,
+              Object coreValue,
+              Object componentValue,
+            })
+          >[
+            (
+              primitive: WasmComponentPrimitiveValueType.s8,
+              coreValue: 0xff,
+              componentValue: -1,
+            ),
+            (
+              primitive: WasmComponentPrimitiveValueType.u8,
+              coreValue: -1,
+              componentValue: 0xff,
+            ),
+            (
+              primitive: WasmComponentPrimitiveValueType.s16,
+              coreValue: 0xffff,
+              componentValue: -1,
+            ),
+            (
+              primitive: WasmComponentPrimitiveValueType.u16,
+              coreValue: -1,
+              componentValue: 0xffff,
+            ),
+            (
+              primitive: WasmComponentPrimitiveValueType.s32,
+              coreValue: 0xffffffff,
+              componentValue: -1,
+            ),
+            (
+              primitive: WasmComponentPrimitiveValueType.u32,
+              coreValue: -1,
+              componentValue: 0xffffffff,
+            ),
+            (
+              primitive: WasmComponentPrimitiveValueType.s64,
+              coreValue: BigInt.parse('-9223372036854775808'),
+              componentValue: BigInt.parse('-9223372036854775808'),
+            ),
+            (
+              primitive: WasmComponentPrimitiveValueType.u64,
+              coreValue: -1,
+              componentValue: BigInt.parse('ffffffffffffffff', radix: 16),
+            ),
+          ];
+
+      for (final case_ in cases) {
+        Object? actual;
+        final program = const WASIComponentCanonicalAdapterHost()
+            .bindAdapterPlans(
+              [_primitiveLowerPlan(case_.primitive)],
+              componentFunctions: {
+                0: (args) {
+                  actual = args.single;
+                  return null;
+                },
+              },
+            );
+
+        expect(
+          program.invokeLoweredCore(0, <Object?>[case_.coreValue]),
+          isEmpty,
+          reason: case_.primitive.name,
+        );
+        expect(actual, case_.componentValue, reason: case_.primitive.name);
+      }
+    });
+
+    test('coerces joined variant payload types in both directions', () {
+      final lowerPlan = _mixedVariantAdapterPlan(
+        canonicalIndex: 0,
+        kind: WasmComponentCanonicalKind.lower,
+      );
+      final liftPlan = _mixedVariantAdapterPlan(
+        canonicalIndex: 1,
+        kind: WasmComponentCanonicalKind.lift,
+      );
+      Object? loweredValue;
+      List<Object?>? liftedCoreArgs;
+      final program = const WASIComponentCanonicalAdapterHost()
+          .bindAdapterPlans(
+            [lowerPlan, liftPlan],
+            coreFunctions: {
+              0: (args) {
+                liftedCoreArgs = args;
+                return null;
+              },
+            },
+            componentFunctions: {
+              0: (args) {
+                loweredValue = args.single;
+                return null;
+              },
+            },
+          );
+
+      expect(
+        program.invokeLoweredCore(0, const <Object?>[0, 0x3fc00000]),
+        isEmpty,
+      );
+      final lowered = loweredValue! as WasmComponentValueData;
+      expect(lowered.label, 'float');
+      expect(lowered.associatedValue!.floatingPoint, 1.5);
+
+      expect(
+        program.invokeLiftedCore(1, <Object?>[_floatVariantValue(1.5)]),
+        isNull,
+      );
+      expect(liftedCoreArgs, [0, 0x3fc00000]);
+    });
+
+    test('coerces wide joined variant payload types in both directions', () {
+      final lowerPlan = _wideVariantAdapterPlan(
+        canonicalIndex: 0,
+        kind: WasmComponentCanonicalKind.lower,
+      );
+      final liftPlan = _wideVariantAdapterPlan(
+        canonicalIndex: 1,
+        kind: WasmComponentCanonicalKind.lift,
+      );
+      final bits = BigInt.parse('3ff8000000000000', radix: 16);
+      Object? loweredValue;
+      List<Object?>? liftedCoreArgs;
+      final program = const WASIComponentCanonicalAdapterHost()
+          .bindAdapterPlans(
+            [lowerPlan, liftPlan],
+            coreFunctions: {
+              0: (args) {
+                liftedCoreArgs = args;
+                return null;
+              },
+            },
+            componentFunctions: {
+              0: (args) {
+                loweredValue = args.single;
+                return null;
+              },
+            },
+          );
+
+      expect(program.invokeLoweredCore(0, <Object?>[0, bits]), isEmpty);
+      final lowered = loweredValue! as WasmComponentValueData;
+      expect(lowered.label, 'float');
+      expect(lowered.associatedValue!.floatingPoint, 1.5);
+
+      expect(
+        program.invokeLiftedCore(1, <Object?>[_floatVariantValue(1.5)]),
+        isNull,
+      );
+      expect(liftedCoreArgs, [0, bits]);
+    });
+
+    test('blocks lowered imports during post-return and restores state', () {
+      late WASIComponentCanonicalAdapterProgram program;
+      var lowerCalls = 0;
+      program = const WASIComponentCanonicalAdapterHost().bindAdapterPlans(
+        [
+          _unitAdapterPlan(
+            canonicalIndex: 0,
+            kind: WasmComponentCanonicalKind.lift,
+            postReturnIndex: 1,
+          ),
+          _unitAdapterPlan(
+            canonicalIndex: 1,
+            kind: WasmComponentCanonicalKind.lower,
+          ),
+        ],
+        coreFunctions: {
+          0: (_) => null,
+          1: (_) => program.invokeLoweredCore(1, const <Object?>[]),
+        },
+        componentFunctions: {
+          0: (_) {
+            lowerCalls++;
+            return null;
+          },
+        },
+      );
+
+      expect(
+        () => program.invokeLiftedCore(0, const <Object?>[]),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('post-return or realloc'),
+          ),
+        ),
+      );
+      expect(lowerCalls, 0);
+      expect(program.invokeLoweredCore(1, const <Object?>[]), isEmpty);
+      expect(lowerCalls, 1);
+    });
+
+    test('blocks lowered imports during realloc and restores state', () {
+      late WASIComponentCanonicalAdapterProgram program;
+      var lowerCalls = 0;
+      program = const WASIComponentCanonicalAdapterHost().bindAdapterPlans(
+        [
+          _stringLiftPlan(canonicalIndex: 0),
+          _unitAdapterPlan(
+            canonicalIndex: 1,
+            kind: WasmComponentCanonicalKind.lower,
+          ),
+        ],
+        coreFunctions: {0: (_) => null},
+        componentFunctions: {
+          0: (_) {
+            lowerCalls++;
+            return null;
+          },
+        },
+      );
+      final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
+
+      expect(
+        () => program.invokeLiftedCore(
+          0,
+          const <Object?>['x'],
+          memory: memory,
+          realloc: (_, _, _, _) {
+            program.invokeLoweredCore(1, const <Object?>[]);
+            return 32;
+          },
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('post-return or realloc'),
+          ),
+        ),
+      );
+      expect(lowerCalls, 0);
+      expect(program.invokeLoweredCore(1, const <Object?>[]), isEmpty);
+      expect(lowerCalls, 1);
+    });
+
     test('invokes error-context adapter programs through flat handles', () {
       final component = WasmComponent.decode(
         canonicalErrorContextLiftLowerComponentBytes(),
@@ -1175,7 +1512,7 @@ void main() {
         plans,
         coreFunctions: {
           1: (args) {
-            expect(args, [17]);
+            expect(args.single, anyOf(17, 0xffffffff, 0));
             return 19;
           },
         },
@@ -1189,14 +1526,8 @@ void main() {
 
       expect(program.invokeFlat(0, const <Object?>[17]), [19]);
       expect(program.invokeFlat(1, const <Object?>[23]), [29]);
-      expect(
-        () => program.invokeFlat(0, const <Object?>[-1]),
-        throwsStateError,
-      );
-      expect(
-        () => program.invokeFlat(0, const <Object?>[0x100000000]),
-        throwsStateError,
-      );
+      expect(program.invokeFlat(0, const <Object?>[-1]), [19]);
+      expect(program.invokeFlat(0, const <Object?>[0x100000000]), [19]);
       expect(program.invoke(0, const <Object?>[17]), 19);
       expect(program.invoke(1, const <Object?>[23]), 29);
       expect(() => program.invoke(0, const <Object?>[-1]), throwsStateError);
@@ -1693,13 +2024,15 @@ void main() {
             plan.adapterPlans,
             coreFunctions: {
               adapter.definition.coreFunctionIndex!: (args) {
-                expect(args, [101, 202]);
+                expect(args[0], anyOf(101, 0xffffffff, 0));
+                expect(args[1], 202);
                 return 303;
               },
             },
           );
 
       expect(program.invokeFlat(0, const <Object?>[101, 202]), [303]);
+      expect(program.invokeLiftedCore(0, const <Object?>[101, 202]), 303);
       expect(program.invoke(0, const <Object?>[101, 202]), 303);
       expect(
         program.invokeWithMemory(0, memory, const <int>[
@@ -1709,14 +2042,8 @@ void main() {
         303,
       );
       expect(data.getUint32(44, Endian.little), 303);
-      expect(
-        () => program.invokeFlat(0, const <Object?>[-1, 202]),
-        throwsStateError,
-      );
-      expect(
-        () => program.invokeFlat(0, const <Object?>[0x100000000, 202]),
-        throwsStateError,
-      );
+      expect(program.invokeFlat(0, const <Object?>[-1, 202]), [303]);
+      expect(program.invokeFlat(0, const <Object?>[0x100000000, 202]), [303]);
       expect(
         () => host.componentHost.canonicalHost.adapterHost
             .bindLiftCoreFunction(adapter, (_) => -1)
@@ -1731,6 +2058,278 @@ void main() {
       );
     });
   });
+}
+
+WASIComponentCanonicalAdapterPlan _primitiveLowerPlan(
+  WasmComponentPrimitiveValueType primitive,
+) {
+  final type = WasmComponentValueType.primitive(primitive);
+  return WASIComponentCanonicalAdapterPlan(
+    canonicalIndex: 0,
+    definition: const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.lower,
+      functionIndex: 0,
+    ),
+    functionType: WasmComponentFunctionType(
+      params: [WasmComponentLabeledValueType(label: 'value', type: type)],
+    ),
+    params: [
+      WASIComponentCanonicalAdapterValuePlan(
+        path: 'canonical[0].param[0].value',
+        label: 'value',
+        type: type,
+        memoryCodec:
+            WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
+              type,
+              const <WasmComponentTypeDefinition>[],
+            ),
+        flatLayout: WASIComponentCanonicalAdapterFlatValuePlan.primitive(
+          primitive,
+        ),
+        resourceUses: const <WASIComponentResourceUse>[],
+      ),
+    ],
+    result: null,
+    resourceUses: const <WASIComponentResourceUse>[],
+    stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+    memoryIndex: null,
+    reallocIndex: null,
+    postReturnIndex: null,
+    callbackIndex: null,
+    isAsync: false,
+  );
+}
+
+WASIComponentCanonicalAdapterPlan _mixedVariantAdapterPlan({
+  required int canonicalIndex,
+  required WasmComponentCanonicalKind kind,
+}) {
+  const type = WasmComponentValueType.typeIndex(0);
+  const definitions = <WasmComponentTypeDefinition>[
+    WasmComponentTypeDefinition(
+      kind: WasmComponentTypeKind.definedValue,
+      definedValue: WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.variant,
+        cases: [
+          WasmComponentVariantCase(
+            label: 'float',
+            type: WasmComponentValueType.primitive(
+              WasmComponentPrimitiveValueType.f32,
+            ),
+          ),
+          WasmComponentVariantCase(
+            label: 'integer',
+            type: WasmComponentValueType.primitive(
+              WasmComponentPrimitiveValueType.u32,
+            ),
+          ),
+        ],
+      ),
+    ),
+  ];
+  const layout = WASIComponentCanonicalAdapterFlatValuePlan.variant(
+    cases: [
+      WASIComponentCanonicalAdapterFlatCasePlan(
+        label: 'float',
+        value: WASIComponentCanonicalAdapterFlatValuePlan.primitive(
+          WasmComponentPrimitiveValueType.f32,
+        ),
+      ),
+      WASIComponentCanonicalAdapterFlatCasePlan(
+        label: 'integer',
+        value: WASIComponentCanonicalAdapterFlatValuePlan.primitive(
+          WasmComponentPrimitiveValueType.u32,
+        ),
+      ),
+    ],
+  );
+  final valuePlan = WASIComponentCanonicalAdapterValuePlan(
+    path: 'canonical[$canonicalIndex].param[0].value',
+    label: 'value',
+    type: type,
+    memoryCodec: WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
+      type,
+      definitions,
+    ),
+    flatLayout: layout,
+    resourceUses: const <WASIComponentResourceUse>[],
+  );
+  return WASIComponentCanonicalAdapterPlan(
+    canonicalIndex: canonicalIndex,
+    definition: WasmComponentCanonicalDefinition(
+      kind: kind,
+      coreFunctionIndex: kind == WasmComponentCanonicalKind.lift ? 0 : null,
+      functionIndex: kind == WasmComponentCanonicalKind.lower ? 0 : null,
+    ),
+    functionType: const WasmComponentFunctionType(
+      params: [WasmComponentLabeledValueType(label: 'value', type: type)],
+    ),
+    params: [valuePlan],
+    result: null,
+    resourceUses: const <WASIComponentResourceUse>[],
+    stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+    memoryIndex: null,
+    reallocIndex: null,
+    postReturnIndex: null,
+    callbackIndex: null,
+    isAsync: false,
+  );
+}
+
+WASIComponentCanonicalAdapterPlan _wideVariantAdapterPlan({
+  required int canonicalIndex,
+  required WasmComponentCanonicalKind kind,
+}) {
+  const type = WasmComponentValueType.typeIndex(0);
+  const definitions = <WasmComponentTypeDefinition>[
+    WasmComponentTypeDefinition(
+      kind: WasmComponentTypeKind.definedValue,
+      definedValue: WasmComponentDefinedValueType(
+        kind: WasmComponentDefinedValueTypeKind.variant,
+        cases: [
+          WasmComponentVariantCase(
+            label: 'float',
+            type: WasmComponentValueType.primitive(
+              WasmComponentPrimitiveValueType.f64,
+            ),
+          ),
+          WasmComponentVariantCase(
+            label: 'integer',
+            type: WasmComponentValueType.primitive(
+              WasmComponentPrimitiveValueType.u32,
+            ),
+          ),
+        ],
+      ),
+    ),
+  ];
+  const layout = WASIComponentCanonicalAdapterFlatValuePlan.variant(
+    cases: [
+      WASIComponentCanonicalAdapterFlatCasePlan(
+        label: 'float',
+        value: WASIComponentCanonicalAdapterFlatValuePlan.primitive(
+          WasmComponentPrimitiveValueType.f64,
+        ),
+      ),
+      WASIComponentCanonicalAdapterFlatCasePlan(
+        label: 'integer',
+        value: WASIComponentCanonicalAdapterFlatValuePlan.primitive(
+          WasmComponentPrimitiveValueType.u32,
+        ),
+      ),
+    ],
+  );
+  final valuePlan = WASIComponentCanonicalAdapterValuePlan(
+    path: 'canonical[$canonicalIndex].param[0].value',
+    label: 'value',
+    type: type,
+    memoryCodec: WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
+      type,
+      definitions,
+    ),
+    flatLayout: layout,
+    resourceUses: const <WASIComponentResourceUse>[],
+  );
+  return WASIComponentCanonicalAdapterPlan(
+    canonicalIndex: canonicalIndex,
+    definition: WasmComponentCanonicalDefinition(
+      kind: kind,
+      coreFunctionIndex: kind == WasmComponentCanonicalKind.lift ? 0 : null,
+      functionIndex: kind == WasmComponentCanonicalKind.lower ? 0 : null,
+    ),
+    functionType: const WasmComponentFunctionType(
+      params: [WasmComponentLabeledValueType(label: 'value', type: type)],
+    ),
+    params: [valuePlan],
+    result: null,
+    resourceUses: const <WASIComponentResourceUse>[],
+    stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+    memoryIndex: null,
+    reallocIndex: null,
+    postReturnIndex: null,
+    callbackIndex: null,
+    isAsync: false,
+  );
+}
+
+WasmComponentValueData _floatVariantValue(double value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.variant,
+    rawBytes: Uint8List(0),
+    label: 'float',
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.floatingPoint,
+      rawBytes: Uint8List(0),
+      floatingPoint: value,
+    ),
+  );
+}
+
+WASIComponentCanonicalAdapterPlan _unitAdapterPlan({
+  required int canonicalIndex,
+  required WasmComponentCanonicalKind kind,
+  int? postReturnIndex,
+}) {
+  return WASIComponentCanonicalAdapterPlan(
+    canonicalIndex: canonicalIndex,
+    definition: WasmComponentCanonicalDefinition(
+      kind: kind,
+      coreFunctionIndex: kind == WasmComponentCanonicalKind.lift ? 0 : null,
+      functionIndex: kind == WasmComponentCanonicalKind.lower ? 0 : null,
+    ),
+    functionType: const WasmComponentFunctionType(params: []),
+    params: const <WASIComponentCanonicalAdapterValuePlan>[],
+    result: null,
+    resourceUses: const <WASIComponentResourceUse>[],
+    stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+    memoryIndex: null,
+    reallocIndex: null,
+    postReturnIndex: postReturnIndex,
+    callbackIndex: null,
+    isAsync: false,
+  );
+}
+
+WASIComponentCanonicalAdapterPlan _stringLiftPlan({
+  required int canonicalIndex,
+}) {
+  const type = WasmComponentValueType.primitive(
+    WasmComponentPrimitiveValueType.string,
+  );
+  return WASIComponentCanonicalAdapterPlan(
+    canonicalIndex: canonicalIndex,
+    definition: const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.lift,
+      coreFunctionIndex: 0,
+    ),
+    functionType: const WasmComponentFunctionType(
+      params: [WasmComponentLabeledValueType(label: 'value', type: type)],
+    ),
+    params: [
+      WASIComponentCanonicalAdapterValuePlan(
+        path: 'canonical[$canonicalIndex].param[0].value',
+        label: 'value',
+        type: type,
+        memoryCodec:
+            WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
+              type,
+              const <WasmComponentTypeDefinition>[],
+            ),
+        flatLayout: const WASIComponentCanonicalAdapterFlatValuePlan.primitive(
+          WasmComponentPrimitiveValueType.string,
+        ),
+        resourceUses: const <WASIComponentResourceUse>[],
+      ),
+    ],
+    result: null,
+    resourceUses: const <WASIComponentResourceUse>[],
+    stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+    memoryIndex: 0,
+    reallocIndex: 0,
+    postReturnIndex: null,
+    callbackIndex: null,
+    isAsync: false,
+  );
 }
 
 WASIComponentCanonicalRealloc _bumpRealloc(

@@ -1,0 +1,2 @@
+test/fixtures/wasi_preview2/*.wat -text
+test/fixtures/wasi_preview2/*.wasm binary

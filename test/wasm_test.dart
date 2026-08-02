@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:wasd/src/wasm/host_control_flow.dart';
 import 'package:wasd/wasm.dart';
 import 'support/wasm_fixtures.dart';
 
@@ -11,6 +12,7 @@ final _loopBranchBytes = loopBranchModuleBytes();
 final _importedAndLocalGlobalBytes = importedAndLocalGlobalModuleBytes();
 final _loopBackWithoutFunctionResultBytes =
     loopBackWithoutFunctionResultModuleBytes();
+final _wasiStartBytes = wasiStartModuleBytes();
 final _invalidBranchHintCustomSectionBytes = Uint8List.fromList(const <int>[
   0x00,
   0x61,
@@ -251,6 +253,37 @@ void main() {
     });
   });
 
+  group('Host control flow', () {
+    test('preserves synchronous host control-flow exceptions', () async {
+      final marker = _TestHostControlFlowException();
+      final result = await WebAssembly.instantiate(_wasiStartBytes.buffer, {
+        'wasi_snapshot_preview1': {
+          'proc_exit': ImportExportKind.function((_) => throw marker),
+        },
+      });
+      final start =
+          (result.instance.exports['_start']! as FunctionImportExportValue).ref;
+
+      expect(() => start(const []), throwsA(same(marker)));
+    });
+
+    test('preserves async host control-flow exceptions', () async {
+      final marker = _TestHostControlFlowException();
+      final result = await WebAssembly.instantiate(_wasiStartBytes.buffer, {
+        'wasi_snapshot_preview1': {
+          'proc_exit': ImportExportKind.function((_) async => throw marker),
+        },
+      });
+      final start =
+          (result.instance.exports['_start']! as FunctionImportExportValue).ref;
+
+      await expectLater(
+        Future<Object?>.sync(() => start(const [])),
+        throwsA(same(marker)),
+      );
+    });
+  });
+
   group('Instance exports', () {
     late Instance instance;
 
@@ -413,3 +446,6 @@ void main() {
     });
   });
 }
+
+final class _TestHostControlFlowException
+    implements WasmHostControlFlowException {}

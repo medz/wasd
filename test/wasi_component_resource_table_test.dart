@@ -77,6 +77,241 @@ void main() {
       expect(() => table.get<String>(streamType, handle), throwsStateError);
     });
 
+    test('takes ownership without invoking the resource destructor', () {
+      final table = WASIComponentResourceTable();
+      final dropped = <String>[];
+      final streamType = table.defineType<String>(
+        'stream',
+        onDrop: dropped.add,
+      );
+      final handle = table.insert<String>(streamType, 'stream');
+
+      expect(table.take<String>(streamType, handle), 'stream');
+      expect(table.activeCount, 0);
+      expect(table.contains(handle), isFalse);
+      expect(dropped, isEmpty);
+      expect(() => table.take<String>(streamType, handle), throwsStateError);
+    });
+
+    test('cleans scoped resources in reverse order', () async {
+      final table = WASIComponentResourceTable();
+      final dropped = <String>[];
+      final resourceType = table.defineType<String>(
+        'resource',
+        onDrop: dropped.add,
+      );
+      final persistent = table.insertPersistent<String>(
+        resourceType,
+        'persistent',
+      );
+
+      await table.runScoped(() async {
+        table.insert<String>(resourceType, 'first');
+        table.insert<String>(resourceType, 'second');
+      });
+
+      expect(dropped, ['second', 'first']);
+      expect(table.activeCount, 1);
+      expect(table.get<String>(resourceType, persistent), 'persistent');
+    });
+
+    test('continues scoped cleanup after a destructor throws', () async {
+      final table = WASIComponentResourceTable();
+      final dropped = <String>[];
+      final resourceType = table.defineType<String>(
+        'resource',
+        onDrop: (resource) {
+          dropped.add(resource);
+          if (resource == 'second') {
+            throw StateError('drop failed');
+          }
+        },
+      );
+
+      await expectLater(
+        table.runScoped(() async {
+          table.insert<String>(resourceType, 'first');
+          table.insert<String>(resourceType, 'second');
+          table.insert<String>(resourceType, 'third');
+        }),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'drop failed',
+          ),
+        ),
+      );
+
+      expect(dropped, ['third', 'second', 'first']);
+      expect(table.activeCount, 0);
+    });
+
+    test('preserves callback errors when scoped destructors throw', () async {
+      final table = WASIComponentResourceTable();
+      final dropped = <String>[];
+      final resourceType = table.defineType<String>(
+        'resource',
+        onDrop: (resource) {
+          dropped.add(resource);
+          if (resource == 'second') {
+            throw StateError('drop failed');
+          }
+        },
+      );
+
+      await expectLater(
+        table.runScoped<void>(() async {
+          table.insert<String>(resourceType, 'first');
+          table.insert<String>(resourceType, 'second');
+          throw ArgumentError('callback failed');
+        }),
+        throwsA(
+          isA<ArgumentError>().having(
+            (error) => error.message,
+            'message',
+            'callback failed',
+          ),
+        ),
+      );
+
+      expect(dropped, ['second', 'first']);
+      expect(table.activeCount, 0);
+    });
+
+    test(
+      'rejects allocations from asynchronous work after scope close',
+      () async {
+        final table = WASIComponentResourceTable();
+        final resourceType = table.defineType<String>('resource');
+        final release = Completer<void>();
+        late Future<int> lateAllocation;
+
+        await table.runScoped<void>(() {
+          lateAllocation = release.future.then(
+            (_) => table.insert<String>(resourceType, 'late'),
+          );
+        });
+        release.complete();
+
+        await expectLater(lateAllocation, throwsStateError);
+        expect(table.activeCount, 0);
+      },
+    );
+
+    test('isolates resource access across nested scopes', () async {
+      final table = WASIComponentResourceTable();
+      final parentType = table.defineType<String>('parent');
+      final childType = table.defineType<String>('child');
+
+      await table.runScoped<void>(() async {
+        final parent = table.insert<String>(parentType, 'parent');
+
+        await table.runScoped<void>(() async {
+          final child = table.insert<String>(childType, 'child');
+
+          expect(() => table.get<String>(parentType, parent), throwsStateError);
+          expect(
+            () => table.drop<String>(parentType, parent),
+            throwsStateError,
+          );
+          expect(() => table.attachChild(parent, child), throwsStateError);
+        });
+
+        expect(table.get<String>(parentType, parent), 'parent');
+      });
+
+      expect(table.activeCount, 0);
+    });
+
+    test('keeps persistent resources inaccessible to runtime scopes', () async {
+      final table = WASIComponentResourceTable();
+      final resourceType = table.defineType<String>('resource');
+      final persistent = table.insertPersistent<String>(
+        resourceType,
+        'persistent',
+      );
+
+      await table.runScoped<void>(() async {
+        expect(
+          () => table.get<String>(resourceType, persistent),
+          throwsStateError,
+        );
+        expect(
+          () => table.drop<String>(resourceType, persistent),
+          throwsStateError,
+        );
+      });
+
+      expect(table.get<String>(resourceType, persistent), 'persistent');
+      table.drop<String>(resourceType, persistent);
+      expect(table.activeCount, 0);
+    });
+
+    test('keeps concurrent resource scopes isolated', () async {
+      final table = WASIComponentResourceTable();
+      final resourceType = table.defineType<String>('resource');
+      final firstReady = Completer<void>();
+      final secondReady = Completer<void>();
+      final releaseFirst = Completer<void>();
+      final releaseSecond = Completer<void>();
+      late int firstHandle;
+      late int secondHandle;
+
+      final first = table.runScoped(() async {
+        firstHandle = table.insert<String>(resourceType, 'first');
+        firstReady.complete();
+        await releaseFirst.future;
+      });
+      final second = table.runScoped(() async {
+        secondHandle = table.insert<String>(resourceType, 'second');
+        secondReady.complete();
+        await releaseSecond.future;
+      });
+      await Future.wait([firstReady.future, secondReady.future]);
+
+      releaseFirst.complete();
+      await first;
+      expect(table.contains(firstHandle), isFalse);
+      expect(table.contains(secondHandle), isTrue);
+
+      releaseSecond.complete();
+      await second;
+      expect(table.contains(secondHandle), isFalse);
+      expect(table.activeCount, 0);
+    });
+
+    test('prevents transferring parents with live child handles', () {
+      final table = WASIComponentResourceTable();
+      final parentType = table.defineType<String>('parent');
+      final childType = table.defineType<String>('child');
+      final parent = table.insert<String>(parentType, 'parent');
+      final child = table.insert<String>(childType, 'child');
+      table.attachChild(parent, child);
+
+      expect(() => table.drop<String>(parentType, parent), throwsStateError);
+      expect(() => table.take<String>(parentType, parent), throwsStateError);
+
+      expect(table.take<String>(childType, child), 'child');
+      expect(table.take<String>(parentType, parent), 'parent');
+      expect(table.activeCount, 0);
+    });
+
+    test('rejects ambiguous named resource drops', () {
+      final table = WASIComponentResourceTable();
+      final firstType = table.defineType<String>('resource');
+      final secondType = table.defineType<String>('resource');
+      final first = table.insert<String>(firstType, 'first');
+      final second = table.insert<String>(secondType, 'second');
+
+      expect(() => table.dropNamed('resource', first), throwsStateError);
+      expect(() => table.dropNamed('resource', second), throwsStateError);
+
+      table.drop<String>(secondType, second);
+      table.dropNamed('resource', first);
+      expect(table.activeCount, 0);
+    });
+
     test('keeps hot reused handles in the canonical u32 range', () {
       final table = WASIComponentResourceTable();
       final streamType = table.defineType<int>('stream');
@@ -133,6 +368,20 @@ void main() {
       });
 
       table.drop<String>(socketType, handle);
+      expect(table.activeCount, 0);
+    });
+
+    test('prevents taking borrowed resources', () {
+      final table = WASIComponentResourceTable();
+      final socketType = table.defineType<String>('socket');
+      final handle = table.insert<String>(socketType, 'socket');
+
+      table.borrow<String, void>(socketType, handle, (resource) {
+        expect(resource, 'socket');
+        expect(() => table.take<String>(socketType, handle), throwsStateError);
+      });
+
+      expect(table.take<String>(socketType, handle), 'socket');
       expect(table.activeCount, 0);
     });
 

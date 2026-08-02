@@ -23,6 +23,7 @@ export 'component/wit_document.dart';
 export 'preview2/cli.dart';
 export 'preview2/clocks.dart';
 export 'preview2/component_host.dart';
+export 'preview2/component_runner.dart';
 export 'preview2/filesystem.dart';
 export 'preview2/http.dart';
 export 'preview2/io.dart';

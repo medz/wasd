@@ -1,3 +1,22 @@
+## 0.4.0
+
+- Execute stable WASI 0.2.12 `wasi:cli/command` and `wasi:http/proxy`
+  components on the native Dart VM backend.
+- Implement the synchronous Canonical ABI paths required by those verified
+  WASI 0.2.12 worlds and fixtures, including lowering/lifting, indirect values,
+  post-return, nested component index spaces, and nominal resource ownership.
+- Add scoped resource cleanup and ownership enforcement across Preview2 CLI,
+  filesystem, I/O, sockets, and HTTP hosts.
+- Align stable host semantics for stream permits and terminal errors,
+  symlink-safe filesystem paths and byte-accurate metadata, socket and DNS
+  lifecycles, dependency-free IDNA ToASCII names, and wire-faithful HTTP
+  redirects, content coding, body, and trailer completion.
+- Verify command execution against a Wasmtime Preview2 fixture and proxy
+  execution against components generated from the official WASI 0.2.12 WIT.
+- Keep Dart `HttpClient` trailer limitations explicit: outgoing-handler
+  requests and incoming responses that declare trailers report
+  `HTTP-protocol-error`, while proxy response trailers remain available.
+
 ## 0.3.0
 
 - Stabilize Preview1 command-module support with real host filesystem preopens

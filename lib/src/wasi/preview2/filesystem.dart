@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import '../../wasm/backend/native/interpreter/component.dart';
@@ -34,6 +35,10 @@ typedef WASIPreview2FilesystemFileWriteCallback =
 /// Changes the byte length of a regular file.
 typedef WASIPreview2FilesystemFileSetSizeCallback =
     WASIPreview2FilesystemMutationResult Function(BigInt size);
+
+/// Synchronizes file contents to the backing store.
+typedef WASIPreview2FilesystemFileSyncCallback =
+    WASIPreview2FilesystemMutationResult Function();
 
 /// Updates access and modification timestamps for one filesystem object.
 typedef WASIPreview2FilesystemSetTimesCallback =
@@ -237,7 +242,14 @@ final class WASIPreview2FilesystemDirectory {
     WASIPreview2FilesystemSetTimesCallback? setTimes,
     WASIPreview2FilesystemDirectoryMutationCallback? removeDirectory,
     WASIPreview2FilesystemDirectoryMutationCallback? unlinkFile,
+    bool? createdFileCanMutate,
+    bool? createdFileSupportsSync,
+    bool? createdFileSupportsSyncData,
   }) : _entries = List<WASIPreview2FilesystemDirectoryEntry>.of(entries),
+       createdFileCanMutate = createdFileCanMutate ?? canMutate,
+       createdFileSupportsSync = createdFileSupportsSync ?? createFile == null,
+       createdFileSupportsSyncData =
+           createdFileSupportsSyncData ?? createFile == null,
        _entriesProvider = null,
        _entryResolver = null,
        _metadata = metadata,
@@ -267,7 +279,11 @@ final class WASIPreview2FilesystemDirectory {
     WASIPreview2FilesystemSetTimesCallback? setTimes,
     WASIPreview2FilesystemDirectoryMutationCallback? removeDirectory,
     WASIPreview2FilesystemDirectoryMutationCallback? unlinkFile,
+    bool? createdFileCanMutate,
+    this.createdFileSupportsSync = false,
+    this.createdFileSupportsSyncData = false,
   }) : _entries = <WASIPreview2FilesystemDirectoryEntry>[],
+       createdFileCanMutate = createdFileCanMutate ?? canMutate,
        _entriesProvider = entries,
        _entryResolver = resolveEntry,
        _metadata = metadata,
@@ -287,6 +303,15 @@ final class WASIPreview2FilesystemDirectory {
 
   /// Whether descriptors opened for this directory can request mutation flags.
   final bool canMutate;
+
+  /// Whether files created by this directory can be opened for mutation.
+  final bool createdFileCanMutate;
+
+  /// Whether files created by this directory support `sync`.
+  final bool createdFileSupportsSync;
+
+  /// Whether files created by this directory support `sync-data`.
+  final bool createdFileSupportsSyncData;
 
   /// Opaque host-specific context available to mutation callbacks.
   final Object? mutationContext;
@@ -482,31 +507,6 @@ final class WASIPreview2FilesystemDirectory {
 
   WASIPreview2FilesystemMetadata? _currentMetadata() => _metadata?.call();
 
-  WASIPreview2FilesystemMutationResult _setTimesAt(
-    String name,
-    WASIPreview2FilesystemTimestampUpdate update,
-  ) {
-    if (!canMutate) {
-      return const WASIPreview2FilesystemMutationResult.error(
-        WASIPreview2FilesystemMutationError.readOnly,
-      );
-    }
-    if (!_isSimplePathSegment(name)) {
-      return const WASIPreview2FilesystemMutationResult.error(
-        WASIPreview2FilesystemMutationError.invalid,
-      );
-    }
-    final entry = _entryNamed(name);
-    if (entry == null) {
-      return const WASIPreview2FilesystemMutationResult.error(
-        WASIPreview2FilesystemMutationError.noEntry,
-      );
-    }
-    return update.hasChanges
-        ? entry._setTimesTo(update)
-        : const WASIPreview2FilesystemMutationResult.ok();
-  }
-
   WASIPreview2FilesystemMutationResult _linkAt(
     String oldName,
     WASIPreview2FilesystemDirectory targetDirectory,
@@ -687,6 +687,8 @@ final class WASIPreview2FilesystemDirectoryEntry {
        _metadata = metadata,
        _writeBytes = null,
        _setSize = null,
+       _syncData = null,
+       _sync = null,
        _setTimes = null,
        _linkTarget = null;
 
@@ -696,7 +698,7 @@ final class WASIPreview2FilesystemDirectoryEntry {
     required String target,
     WASIPreview2FilesystemMetadataProvider? metadata,
   }) : kind = WASIPreview2FilesystemDescriptorKind.symbolicLink,
-       size = BigInt.from(target.length),
+       size = BigInt.from(utf8.encode(target).length),
        directory = null,
        canMutate = false,
        _bytes = Uint8List(0),
@@ -705,6 +707,8 @@ final class WASIPreview2FilesystemDirectoryEntry {
        _metadata = metadata,
        _writeBytes = null,
        _setSize = null,
+       _syncData = null,
+       _sync = null,
        _setTimes = null,
        _linkTarget = target;
 
@@ -719,6 +723,8 @@ final class WASIPreview2FilesystemDirectoryEntry {
     WASIPreview2FilesystemMetadataProvider? metadata,
     WASIPreview2FilesystemFileWriteCallback? writeBytes,
     WASIPreview2FilesystemFileSetSizeCallback? setSize,
+    WASIPreview2FilesystemFileSyncCallback? syncData,
+    WASIPreview2FilesystemFileSyncCallback? sync,
     WASIPreview2FilesystemSetTimesCallback? setTimes,
   }) : _bytes = Uint8List.fromList(bytes),
        _readBytes = readBytes,
@@ -726,6 +732,8 @@ final class WASIPreview2FilesystemDirectoryEntry {
        _metadata = metadata,
        _writeBytes = writeBytes,
        _setSize = setSize,
+       _syncData = syncData,
+       _sync = sync,
        _setTimes = setTimes,
        _linkTarget = null,
        kind = WASIPreview2FilesystemDescriptorKind.regularFile,
@@ -756,10 +764,16 @@ final class WASIPreview2FilesystemDirectoryEntry {
   final WASIPreview2FilesystemMetadataProvider? _metadata;
   final WASIPreview2FilesystemFileWriteCallback? _writeBytes;
   final WASIPreview2FilesystemFileSetSizeCallback? _setSize;
+  final WASIPreview2FilesystemFileSyncCallback? _syncData;
+  final WASIPreview2FilesystemFileSyncCallback? _sync;
   final WASIPreview2FilesystemSetTimesCallback? _setTimes;
   final String? _linkTarget;
 
-  BigInt get _size => _currentSize?.call() ?? BigInt.from(_bytes.length);
+  BigInt get _size =>
+      _currentSize?.call() ??
+      (kind == WASIPreview2FilesystemDescriptorKind.symbolicLink
+          ? size
+          : BigInt.from(_bytes.length));
 
   WASIPreview2FilesystemMetadata? _currentMetadata() {
     final metadata = _metadata?.call();
@@ -870,6 +884,50 @@ final class WASIPreview2FilesystemDirectoryEntry {
     );
   }
 
+  WASIPreview2FilesystemMutationResult _syncDataTo() {
+    if (kind != WASIPreview2FilesystemDescriptorKind.regularFile) {
+      return const WASIPreview2FilesystemMutationResult.error(
+        WASIPreview2FilesystemMutationError.unsupported,
+      );
+    }
+    final callback = _syncData;
+    if (callback != null) {
+      return callback();
+    }
+    if (_readBytes == null && _currentSize == null) {
+      return const WASIPreview2FilesystemMutationResult.ok();
+    }
+    return const WASIPreview2FilesystemMutationResult.error(
+      WASIPreview2FilesystemMutationError.unsupported,
+    );
+  }
+
+  bool get _supportsSyncData =>
+      kind == WASIPreview2FilesystemDescriptorKind.regularFile &&
+      (_syncData != null || _readBytes == null && _currentSize == null);
+
+  WASIPreview2FilesystemMutationResult _syncTo() {
+    if (kind != WASIPreview2FilesystemDescriptorKind.regularFile) {
+      return const WASIPreview2FilesystemMutationResult.error(
+        WASIPreview2FilesystemMutationError.unsupported,
+      );
+    }
+    final callback = _sync;
+    if (callback != null) {
+      return callback();
+    }
+    if (_readBytes == null && _currentSize == null) {
+      return const WASIPreview2FilesystemMutationResult.ok();
+    }
+    return const WASIPreview2FilesystemMutationResult.error(
+      WASIPreview2FilesystemMutationError.unsupported,
+    );
+  }
+
+  bool get _supportsSync =>
+      kind == WASIPreview2FilesystemDescriptorKind.regularFile &&
+      (_sync != null || _readBytes == null && _currentSize == null);
+
   WASIPreview2FilesystemDirectoryEntry _renamed(String name) {
     return switch (kind) {
       WASIPreview2FilesystemDescriptorKind.directory =>
@@ -895,6 +953,8 @@ final class WASIPreview2FilesystemDirectoryEntry {
           metadata: _metadata,
           writeBytes: _writeBytes,
           setSize: _setSize,
+          syncData: _syncData,
+          sync: _sync,
           setTimes: _setTimes,
         ),
       WASIPreview2FilesystemDescriptorKind.unknown =>
@@ -931,8 +991,7 @@ base class WASIPreview2FilesystemHost {
         guestPath: guestPath,
         directory: entry.value,
       );
-      final handle = _insertDescriptor(descriptor);
-      _preopens.add((handle, guestPath));
+      _preopens.add((descriptor, guestPath));
     }
   }
 
@@ -972,7 +1031,7 @@ base class WASIPreview2FilesystemHost {
       );
 
   int _nextObjectId = 1;
-  final _preopens = <(int, String)>[];
+  final _preopens = <(_WASIPreview2FilesystemDescriptor, String)>[];
 
   /// Import callbacks keyed by canonical WIT adapter names.
   late final Map<String, WASIComponentWitAdapterCallback>
@@ -987,7 +1046,7 @@ base class WASIPreview2FilesystemHost {
     'wasi:filesystem/types@0.2.0.descriptor.advise': (args) =>
         _unitResultForDescriptor(_handle(args[0])),
     'wasi:filesystem/types@0.2.0.descriptor.sync-data': (args) =>
-        _unitResultForDescriptor(_handle(args[0])),
+        _syncData(_handle(args[0])),
     'wasi:filesystem/types@0.2.0.descriptor.get-flags': (args) =>
         _getFlags(_handle(args[0])),
     'wasi:filesystem/types@0.2.0.descriptor.get-type': (args) =>
@@ -1003,23 +1062,34 @@ base class WASIPreview2FilesystemHost {
     'wasi:filesystem/types@0.2.0.descriptor.read-directory': (args) =>
         _readDirectory(_handle(args[0])),
     'wasi:filesystem/types@0.2.0.descriptor.sync': (args) =>
-        _unitResultForDescriptor(_handle(args[0])),
+        _sync(_handle(args[0])),
     'wasi:filesystem/types@0.2.0.descriptor.create-directory-at': (args) =>
         _createDirectoryAt(_handle(args[0]), args[1] as String),
     'wasi:filesystem/types@0.2.0.descriptor.stat': (args) =>
         _stat(_handle(args[0])),
-    'wasi:filesystem/types@0.2.0.descriptor.stat-at': (args) =>
-        _statAt(_handle(args[0]), args[2] as String),
+    'wasi:filesystem/types@0.2.0.descriptor.stat-at': (args) => _statAt(
+      _handle(args[0]),
+      args[1] as WasmComponentValueData,
+      args[2] as String,
+    ),
     'wasi:filesystem/types@0.2.0.descriptor.set-times-at': (args) =>
-        _setTimesAt(_handle(args[0]), args[2] as String, args[3], args[4]),
+        _setTimesAt(
+          _handle(args[0]),
+          args[1] as WasmComponentValueData,
+          args[2] as String,
+          args[3],
+          args[4],
+        ),
     'wasi:filesystem/types@0.2.0.descriptor.link-at': (args) => _linkAt(
       _handle(args[0]),
+      args[1] as WasmComponentValueData,
       args[2] as String,
       _handle(args[3]),
       args[4] as String,
     ),
     'wasi:filesystem/types@0.2.0.descriptor.open-at': (args) => _openAt(
       _handle(args[0]),
+      args[1] as WasmComponentValueData,
       args[2] as String,
       args[3] as WasmComponentValueData,
       args[4] as WasmComponentValueData,
@@ -1043,7 +1113,11 @@ base class WASIPreview2FilesystemHost {
     'wasi:filesystem/types@0.2.0.descriptor.metadata-hash': (args) =>
         _metadataHash(_handle(args[0])),
     'wasi:filesystem/types@0.2.0.descriptor.metadata-hash-at': (args) =>
-        _metadataHashAt(_handle(args[0]), args[2] as String),
+        _metadataHashAt(
+          _handle(args[0]),
+          args[1] as WasmComponentValueData,
+          args[2] as String,
+        ),
     'wasi:filesystem/types@0.2.0.directory-entry-stream.read-directory-entry':
         (args) => _readDirectoryEntry(_handle(args[0])),
     'wasi:filesystem/types@0.2.0.filesystem-error-code': (args) =>
@@ -1070,9 +1144,9 @@ base class WASIPreview2FilesystemHost {
 
   WasmComponentValueData _getDirectories() {
     return _list([
-      for (final (handle, guestPath) in _preopens)
+      for (final (descriptor, guestPath) in _preopens)
         _tuple(<WasmComponentValueData>[
-          _integerData(handle),
+          _integerData(_insertDescriptor(descriptor)),
           _stringData(guestPath),
         ]),
     ]);
@@ -1131,17 +1205,40 @@ base class WASIPreview2FilesystemHost {
     if (descriptor.kind != WASIPreview2FilesystemDescriptorKind.regularFile) {
       return 'invalid';
     }
+    if (!descriptor.flags.contains('read')) {
+      return 'not-permitted';
+    }
     return null;
   }
 
   String? _writableDescriptorError(
     _WASIPreview2FilesystemDescriptor? descriptor,
   ) {
-    final readError = _readableDescriptorError(descriptor);
-    if (readError != null) {
-      return readError;
+    if (descriptor == null) {
+      return 'bad-descriptor';
     }
-    if (!descriptor!.canMutate) {
+    if (descriptor.kind == WASIPreview2FilesystemDescriptorKind.directory) {
+      return 'is-directory';
+    }
+    if (descriptor.kind != WASIPreview2FilesystemDescriptorKind.regularFile) {
+      return 'invalid';
+    }
+    if (!descriptor.canMutate || !descriptor.flags.contains('write')) {
+      return 'read-only';
+    }
+    return null;
+  }
+
+  String? _mutableDirectoryDescriptorError(int handle) {
+    final descriptor = _descriptor(handle);
+    if (descriptor == null) {
+      return 'bad-descriptor';
+    }
+    if (descriptor.directory == null) {
+      return 'not-directory';
+    }
+    if (!descriptor.canMutate ||
+        !descriptor.flags.contains('mutate-directory')) {
       return 'read-only';
     }
     return null;
@@ -1151,21 +1248,43 @@ base class WASIPreview2FilesystemHost {
     return _descriptor(handle) == null ? _errorResult('bad-descriptor') : _ok();
   }
 
+  WasmComponentValueData _syncData(int handle) {
+    final descriptor = _descriptor(handle);
+    if (descriptor == null) {
+      return _errorResult('bad-descriptor');
+    }
+    if (descriptor.kind != WASIPreview2FilesystemDescriptorKind.regularFile) {
+      return _errorResult('unsupported');
+    }
+    if (!descriptor.flags.contains('write')) {
+      return _ok();
+    }
+    return _mutationResult(descriptor.syncData());
+  }
+
+  WasmComponentValueData _sync(int handle) {
+    final descriptor = _descriptor(handle);
+    if (descriptor == null) {
+      return _errorResult('bad-descriptor');
+    }
+    if (descriptor.kind != WASIPreview2FilesystemDescriptorKind.regularFile) {
+      return _errorResult('unsupported');
+    }
+    if (!descriptor.flags.contains('write')) {
+      return _ok();
+    }
+    return _mutationResult(descriptor.sync());
+  }
+
   WasmComponentValueData _getFlags(int handle) {
     final descriptor = _descriptor(handle);
     if (descriptor == null) {
       return _errorResult('bad-descriptor');
     }
     return _ok(
-      _flagsData(<String>[
-        'read',
-        if (descriptor.kind ==
-                WASIPreview2FilesystemDescriptorKind.regularFile &&
-            descriptor.canMutate)
-          'write',
-        if (descriptor.kind == WASIPreview2FilesystemDescriptorKind.directory &&
-            descriptor.canMutate)
-          'mutate-directory',
+      _flagsData([
+        for (final flag in _descriptorFlagOrder)
+          if (descriptor.flags.contains(flag)) flag,
       ]),
     );
   }
@@ -1193,7 +1312,11 @@ base class WASIPreview2FilesystemHost {
     if (error != null) {
       return _errorResult(error);
     }
-    if (!descriptor.canMutate) {
+    final mutationAllowed =
+        descriptor.kind == WASIPreview2FilesystemDescriptorKind.directory
+        ? descriptor.flags.contains('mutate-directory')
+        : descriptor.flags.contains('write');
+    if (!descriptor.canMutate || !mutationAllowed) {
       return _errorResult('read-only');
     }
     return _mutationResult(descriptor.setTimes(update.update!));
@@ -1244,6 +1367,9 @@ base class WASIPreview2FilesystemHost {
     if (directory == null) {
       return _errorResult('not-directory');
     }
+    if (!descriptor.flags.contains('read')) {
+      return _errorResult('not-permitted');
+    }
     final stream = table.insert<_WASIPreview2DirectoryEntryStream>(
       _directoryEntryStreamType,
       _WASIPreview2DirectoryEntryStream(directory.entries),
@@ -1279,14 +1405,27 @@ base class WASIPreview2FilesystemHost {
     return _ok(_descriptorStatData(descriptor));
   }
 
-  WasmComponentValueData _statAt(int handle, String path) {
-    final descriptor = _resolveAt(handle, path);
-    return descriptor == null
-        ? _errorResult(_pathIsPermitted(path) ? 'no-entry' : 'not-permitted')
-        : _ok(_descriptorStatData(descriptor));
+  WasmComponentValueData _statAt(
+    int handle,
+    WasmComponentValueData flags,
+    String path,
+  ) {
+    final resolved = _resolveAtResult(
+      handle,
+      path,
+      followFinalSymlink: flags.labels.contains('symlink-follow'),
+    );
+    final error = resolved.error;
+    return error == null
+        ? _ok(_descriptorStatData(resolved.descriptor!))
+        : _errorResult(error);
   }
 
   WasmComponentValueData _createDirectoryAt(int handle, String path) {
+    final descriptorError = _mutableDirectoryDescriptorError(handle);
+    if (descriptorError != null) {
+      return _errorResult(descriptorError);
+    }
     final target = _resolveMutationParent(handle, path);
     final error = target.error;
     if (error != null) {
@@ -1301,30 +1440,37 @@ base class WASIPreview2FilesystemHost {
 
   WasmComponentValueData _setTimesAt(
     int handle,
+    WasmComponentValueData flags,
     String path,
     Object? accessTimestamp,
     Object? modificationTimestamp,
   ) {
-    final target = _resolveMutationParent(handle, path);
-    final targetError = target.error;
-    if (targetError != null) {
-      return _errorResult(targetError);
+    final descriptorError = _mutableDirectoryDescriptorError(handle);
+    if (descriptorError != null) {
+      return _errorResult(descriptorError);
     }
     final update = _timestampUpdate(accessTimestamp, modificationTimestamp);
     final updateError = update.error;
     if (updateError != null) {
       return _errorResult(updateError);
     }
-    final parent = target.parent!;
-    if (!parent.canMutate) {
-      return _errorResult('read-only');
-    }
-    return _mutationResult(
-      parent.directory!._setTimesAt(target.name, update.update!),
+    final resolved = _resolveAtResult(
+      handle,
+      path,
+      followFinalSymlink: flags.labels.contains('symlink-follow'),
     );
+    final resolvedError = resolved.error;
+    if (resolvedError != null) {
+      return _errorResult(resolvedError);
+    }
+    return _mutationResult(resolved.descriptor!.setTimes(update.update!));
   }
 
   WasmComponentValueData _removeDirectoryAt(int handle, String path) {
+    final descriptorError = _mutableDirectoryDescriptorError(handle);
+    if (descriptorError != null) {
+      return _errorResult(descriptorError);
+    }
     final target = _resolveMutationParent(handle, path);
     final error = target.error;
     if (error != null) {
@@ -1338,6 +1484,10 @@ base class WASIPreview2FilesystemHost {
   }
 
   WasmComponentValueData _unlinkFileAt(int handle, String path) {
+    final descriptorError = _mutableDirectoryDescriptorError(handle);
+    if (descriptorError != null) {
+      return _errorResult(descriptorError);
+    }
     final target = _resolveMutationParent(handle, path);
     final error = target.error;
     if (error != null) {
@@ -1352,11 +1502,20 @@ base class WASIPreview2FilesystemHost {
 
   WasmComponentValueData _linkAt(
     int oldHandle,
+    WasmComponentValueData oldPathFlags,
     String oldPath,
     int newHandle,
     String newPath,
   ) {
-    final source = _resolveMutationParent(oldHandle, oldPath);
+    final targetDescriptorError = _mutableDirectoryDescriptorError(newHandle);
+    if (targetDescriptorError != null) {
+      return _errorResult(targetDescriptorError);
+    }
+    final source = _resolveExistingMutationTarget(
+      oldHandle,
+      oldPath,
+      followFinalSymlink: oldPathFlags.labels.contains('symlink-follow'),
+    );
     final sourceError = source.error;
     if (sourceError != null) {
       return _errorResult(sourceError);
@@ -1385,6 +1544,14 @@ base class WASIPreview2FilesystemHost {
     int newHandle,
     String newPath,
   ) {
+    final sourceDescriptorError = _mutableDirectoryDescriptorError(oldHandle);
+    if (sourceDescriptorError != null) {
+      return _errorResult(sourceDescriptorError);
+    }
+    final targetDescriptorError = _mutableDirectoryDescriptorError(newHandle);
+    if (targetDescriptorError != null) {
+      return _errorResult(targetDescriptorError);
+    }
     final source = _resolveMutationParent(oldHandle, oldPath);
     final sourceError = source.error;
     if (sourceError != null) {
@@ -1409,6 +1576,13 @@ base class WASIPreview2FilesystemHost {
     String targetPath,
     String linkPath,
   ) {
+    final descriptorError = _mutableDirectoryDescriptorError(handle);
+    if (descriptorError != null) {
+      return _errorResult(descriptorError);
+    }
+    if (!_isRelativeWasiPath(targetPath)) {
+      return _errorResult('not-permitted');
+    }
     final target = _resolveMutationParent(handle, linkPath);
     final error = target.error;
     if (error != null) {
@@ -1434,11 +1608,15 @@ base class WASIPreview2FilesystemHost {
     if (readError != null) {
       return _errorResult(readError.errorCode);
     }
-    return _ok(_stringData(result.target ?? ''));
+    final linkTarget = result.target ?? '';
+    return linkTarget.startsWith('/')
+        ? _errorResult('not-permitted')
+        : _ok(_stringData(linkTarget));
   }
 
   WasmComponentValueData _openAt(
     int handle,
+    WasmComponentValueData pathFlags,
     String path,
     WasmComponentValueData openFlags,
     WasmComponentValueData flags,
@@ -1447,19 +1625,31 @@ base class WASIPreview2FilesystemHost {
     if (base == null) {
       return _errorResult('bad-descriptor');
     }
+    if (base.directory == null) {
+      return _errorResult('not-directory');
+    }
+    if (openFlags.labels.contains('truncate') &&
+        !flags.labels.contains('write')) {
+      return _errorResult('invalid');
+    }
     if ((_flagsContainMutation(flags) ||
             _openFlagsContainMutation(openFlags)) &&
-        !base.canMutate) {
+        (!base.canMutate || !base.flags.contains('mutate-directory'))) {
       return _errorResult('read-only');
     }
-    final descriptor = _resolveAt(handle, path);
+    final resolved = _resolveAtResult(
+      handle,
+      path,
+      followFinalSymlink: pathFlags.labels.contains('symlink-follow'),
+    );
+    final descriptor = resolved.descriptor;
     if (descriptor == null) {
-      if (openFlags.labels.contains('create')) {
+      if (openFlags.labels.contains('create') &&
+          !openFlags.labels.contains('directory') &&
+          resolved.error == 'no-entry') {
         return _createFileAt(handle, path, flags);
       }
-      return _errorResult(
-        _pathIsPermitted(path) ? 'no-entry' : 'not-permitted',
-      );
+      return _errorResult(resolved.error ?? 'no-entry');
     }
     if (openFlags.labels.contains('create') &&
         openFlags.labels.contains('exclusive')) {
@@ -1472,16 +1662,31 @@ base class WASIPreview2FilesystemHost {
     if (_flagsContainMutation(flags) && !descriptor.canMutate) {
       return _errorResult('read-only');
     }
+    if (flags.labels.contains('mutate-directory') &&
+        descriptor.kind != WASIPreview2FilesystemDescriptorKind.directory) {
+      return _errorResult('invalid');
+    }
+    if (flags.labels.contains('write') &&
+        flags.labels.contains('file-integrity-sync') &&
+        !descriptor.supportsSync) {
+      return _errorResult('unsupported');
+    }
+    if (flags.labels.contains('write') &&
+        flags.labels.contains('data-integrity-sync') &&
+        !descriptor.supportsSyncData) {
+      return _errorResult('unsupported');
+    }
+    final openedDescriptor = descriptor.withFlags(flags.labels);
     if (openFlags.labels.contains('truncate')) {
       if (!descriptor.canMutate) {
         return _errorResult('read-only');
       }
-      final mutation = descriptor.setSize(BigInt.zero);
+      final mutation = openedDescriptor.setSize(BigInt.zero);
       if (!mutation.isOk) {
         return _mutationResult(mutation);
       }
     }
-    return _ok(_integerData(_insertDescriptor(descriptor)));
+    return _ok(_integerData(_insertDescriptor(openedDescriptor)));
   }
 
   WasmComponentValueData _createFileAt(
@@ -1498,7 +1703,24 @@ base class WASIPreview2FilesystemHost {
     if (!parent.canMutate) {
       return _errorResult('read-only');
     }
-    final created = parent.directory!._createFileAt(target.name);
+    final directory = parent.directory!;
+    if (flags.labels.contains('mutate-directory')) {
+      return _errorResult('invalid');
+    }
+    if (_flagsContainMutation(flags) && !directory.createdFileCanMutate) {
+      return _errorResult('read-only');
+    }
+    if (flags.labels.contains('write') &&
+        flags.labels.contains('file-integrity-sync') &&
+        !directory.createdFileSupportsSync) {
+      return _errorResult('unsupported');
+    }
+    if (flags.labels.contains('write') &&
+        flags.labels.contains('data-integrity-sync') &&
+        !directory.createdFileSupportsSyncData) {
+      return _errorResult('unsupported');
+    }
+    final created = directory._createFileAt(target.name);
     if (!created.result.isOk) {
       return _mutationResult(created.result);
     }
@@ -1511,10 +1733,9 @@ base class WASIPreview2FilesystemHost {
       guestPath: guestPath,
       entry: created.entry!,
     );
-    if (_flagsContainMutation(flags) && !descriptor.canMutate) {
-      return _errorResult('read-only');
-    }
-    return _ok(_integerData(_insertDescriptor(descriptor)));
+    return _ok(
+      _integerData(_insertDescriptor(descriptor.withFlags(flags.labels))),
+    );
   }
 
   bool _isSameObject(int left, int right) {
@@ -1539,12 +1760,20 @@ base class WASIPreview2FilesystemHost {
     return _ok(_metadataHashData(descriptor));
   }
 
-  WasmComponentValueData _metadataHashAt(int handle, String path) {
-    final descriptor = _resolveAt(handle, path);
-    if (descriptor == null) {
-      return _errorResult('no-entry');
-    }
-    return _ok(_metadataHashData(descriptor));
+  WasmComponentValueData _metadataHashAt(
+    int handle,
+    WasmComponentValueData flags,
+    String path,
+  ) {
+    final resolved = _resolveAtResult(
+      handle,
+      path,
+      followFinalSymlink: flags.labels.contains('symlink-follow'),
+    );
+    final error = resolved.error;
+    return error == null
+        ? _ok(_metadataHashData(resolved.descriptor!))
+        : _errorResult(error);
   }
 
   WasmComponentValueData _filesystemErrorCode(int errorHandle) {
@@ -1555,35 +1784,106 @@ base class WASIPreview2FilesystemHost {
     return _none();
   }
 
-  _WASIPreview2FilesystemDescriptor? _resolveAt(int handle, String path) {
+  ({_WASIPreview2FilesystemDescriptor? descriptor, String? error})
+  _resolveAtResult(int handle, String path, {bool followFinalSymlink = false}) {
     final base = _descriptor(handle);
-    if (base?.directory == null || !_pathIsPermitted(path)) {
-      return null;
+    if (base == null) {
+      return (descriptor: null, error: 'bad-descriptor');
+    }
+    if (base.directory == null) {
+      return (descriptor: null, error: 'not-directory');
+    }
+    if (!_isRelativeWasiPath(path)) {
+      return (descriptor: null, error: 'not-permitted');
     }
     if (path.isEmpty || path == '.') {
-      return base;
+      return (descriptor: base, error: null);
     }
-    var current = base!;
-    for (final segment in path.split('/')) {
+    final segments = path
+        .split('/')
+        .where((segment) => segment.isNotEmpty)
+        .toList();
+    return _resolveSegments(
+      base,
+      segments,
+      followFinalSymlink: followFinalSymlink,
+      symlinkDepth: 0,
+    );
+  }
+
+  ({_WASIPreview2FilesystemDescriptor? descriptor, String? error})
+  _resolveSegments(
+    _WASIPreview2FilesystemDescriptor base,
+    List<String> segments, {
+    required bool followFinalSymlink,
+    required int symlinkDepth,
+  }) {
+    var depth = symlinkDepth;
+    var pending = List<String>.of(segments);
+    var index = 0;
+    var current = base;
+    final directories = <_WASIPreview2FilesystemDescriptor>[base];
+    while (index < pending.length) {
+      final segment = pending[index++];
       if (segment.isEmpty || segment == '.') {
+        continue;
+      }
+      if (segment == '..') {
+        if (directories.length == 1) {
+          return (descriptor: null, error: 'not-permitted');
+        }
+        directories.removeLast();
+        current = directories.last;
         continue;
       }
       final directory = current.directory;
       if (directory == null) {
-        return null;
+        return (descriptor: null, error: 'not-directory');
       }
       final entry = directory._entryNamed(segment);
       if (entry == null) {
-        return null;
+        return (descriptor: null, error: 'no-entry');
       }
       final guestPath = '${current.guestPath}/$segment'.replaceAll('//', '/');
-      current = _WASIPreview2FilesystemDescriptor.fromEntry(
+      final next = _WASIPreview2FilesystemDescriptor.fromEntry(
         objectId: _objectIdForPath(guestPath),
         guestPath: guestPath,
         entry: entry,
       );
+      final isFinal = index == pending.length;
+      if (entry.kind == WASIPreview2FilesystemDescriptorKind.symbolicLink &&
+          (!isFinal || followFinalSymlink)) {
+        final target = entry._linkTarget;
+        if (target == null || !_isRelativeWasiPath(target)) {
+          return (descriptor: null, error: 'not-permitted');
+        }
+        depth++;
+        if (depth > 40) {
+          return (descriptor: null, error: 'loop');
+        }
+        final targetSegments = target
+            .split('/')
+            .where((part) => part.isNotEmpty)
+            .toList();
+        if (targetSegments.isEmpty) {
+          return (descriptor: null, error: 'no-entry');
+        }
+        pending = <String>[...targetSegments, ...pending.skip(index)];
+        index = 0;
+        current = directories.last;
+        continue;
+      }
+      if (!isFinal) {
+        if (next.directory == null) {
+          return (descriptor: null, error: 'not-directory');
+        }
+        directories.add(next);
+        current = next;
+        continue;
+      }
+      return (descriptor: next, error: null);
     }
-    return current;
+    return (descriptor: current, error: null);
   }
 
   int _objectIdForPath(String path) {
@@ -1596,6 +1896,37 @@ base class WASIPreview2FilesystemHost {
   }
 
   ({_WASIPreview2FilesystemDescriptor? parent, String name, String? error})
+  _resolveExistingMutationTarget(
+    int handle,
+    String path, {
+    required bool followFinalSymlink,
+  }) {
+    final base = _descriptor(handle);
+    if (base == null) {
+      return (parent: null, name: '', error: 'bad-descriptor');
+    }
+    final resolved = _resolveAtResult(
+      handle,
+      path,
+      followFinalSymlink: followFinalSymlink,
+    );
+    final error = resolved.error;
+    if (error != null) {
+      return (parent: null, name: '', error: error);
+    }
+    final targetPath = resolved.descriptor!.guestPath;
+    final basePath = base.guestPath;
+    final prefix = basePath == '/' ? '/' : '$basePath/';
+    if (targetPath == basePath) {
+      return (parent: null, name: '', error: 'invalid');
+    }
+    if (!targetPath.startsWith(prefix)) {
+      return (parent: null, name: '', error: 'not-permitted');
+    }
+    return _resolveMutationParent(handle, targetPath.substring(prefix.length));
+  }
+
+  ({_WASIPreview2FilesystemDescriptor? parent, String name, String? error})
   _resolveMutationParent(int handle, String path) {
     final base = _descriptor(handle);
     if (base == null) {
@@ -1604,37 +1935,33 @@ base class WASIPreview2FilesystemHost {
     if (base.directory == null) {
       return (parent: null, name: '', error: 'not-directory');
     }
-    if (!_pathIsPermitted(path)) {
+    if (!_isRelativeWasiPath(path)) {
       return (parent: null, name: '', error: 'not-permitted');
     }
     final segments = path
         .split('/')
-        .where((segment) => segment.isNotEmpty && segment != '.')
+        .where((segment) => segment.isNotEmpty)
         .toList();
     if (segments.isEmpty || !_isSimplePathSegment(segments.last)) {
       return (parent: null, name: '', error: 'invalid');
     }
-    var current = base;
-    for (final segment in segments.take(segments.length - 1)) {
-      final directory = current.directory;
-      if (directory == null) {
-        return (parent: null, name: '', error: 'not-directory');
-      }
-      final entry = directory._entryNamed(segment);
-      if (entry == null) {
-        return (parent: null, name: '', error: 'no-entry');
-      }
-      if (entry.kind != WASIPreview2FilesystemDescriptorKind.directory) {
-        return (parent: null, name: '', error: 'not-directory');
-      }
-      final guestPath = '${current.guestPath}/$segment'.replaceAll('//', '/');
-      current = _WASIPreview2FilesystemDescriptor.fromEntry(
-        objectId: _objectIdForPath(guestPath),
-        guestPath: guestPath,
-        entry: entry,
-      );
+    if (segments.length == 1) {
+      return (parent: base, name: segments.single, error: null);
     }
-    return (parent: current, name: segments.last, error: null);
+    final resolvedParent = _resolveAtResult(
+      handle,
+      segments.take(segments.length - 1).join('/'),
+      followFinalSymlink: true,
+    );
+    final error = resolvedParent.error;
+    if (error != null) {
+      return (parent: null, name: '', error: error);
+    }
+    final parent = resolvedParent.descriptor!;
+    if (parent.directory == null) {
+      return (parent: null, name: '', error: 'not-directory');
+    }
+    return (parent: parent, name: segments.last, error: null);
   }
 }
 
@@ -1662,6 +1989,7 @@ final class _WASIPreview2FilesystemDescriptor {
     required this.size,
     required this.directory,
     required this.canMutate,
+    required this.flags,
     required this.bytes,
     required this.entry,
   });
@@ -1678,6 +2006,10 @@ final class _WASIPreview2FilesystemDescriptor {
       size: BigInt.zero,
       directory: directory,
       canMutate: directory.canMutate,
+      flags: Set<String>.unmodifiable(<String>{
+        'read',
+        if (directory.canMutate) 'mutate-directory',
+      }),
       bytes: Uint8List(0),
       entry: null,
     );
@@ -1695,6 +2027,15 @@ final class _WASIPreview2FilesystemDescriptor {
       size: entry.size,
       directory: entry.directory,
       canMutate: entry.canMutate,
+      flags: Set<String>.unmodifiable(<String>{
+        'read',
+        if (entry.kind == WASIPreview2FilesystemDescriptorKind.regularFile &&
+            entry.canMutate)
+          'write',
+        if (entry.kind == WASIPreview2FilesystemDescriptorKind.directory &&
+            entry.canMutate)
+          'mutate-directory',
+      }),
       bytes: Uint8List(0),
       entry: entry,
     );
@@ -1706,10 +2047,29 @@ final class _WASIPreview2FilesystemDescriptor {
   final BigInt size;
   final WASIPreview2FilesystemDirectory? directory;
   final bool canMutate;
+  final Set<String> flags;
   final Uint8List bytes;
   final WASIPreview2FilesystemDirectoryEntry? entry;
 
   BigInt get currentSize => entry?._size ?? size;
+
+  bool get supportsSyncData => entry?._supportsSyncData ?? false;
+
+  bool get supportsSync => entry?._supportsSync ?? false;
+
+  _WASIPreview2FilesystemDescriptor withFlags(Iterable<String> flags) {
+    return _WASIPreview2FilesystemDescriptor._(
+      objectId: objectId,
+      guestPath: guestPath,
+      kind: kind,
+      size: size,
+      directory: directory,
+      canMutate: canMutate,
+      flags: Set<String>.unmodifiable(flags),
+      bytes: bytes,
+      entry: entry,
+    );
+  }
 
   WASIPreview2FilesystemMetadata get metadata =>
       entry?._currentMetadata() ??
@@ -1734,7 +2094,8 @@ final class _WASIPreview2FilesystemDescriptor {
         WASIPreview2FilesystemMutationError.readOnly,
       );
     }
-    return entry._writeAt(offset, data);
+    final result = entry._writeAt(offset, data);
+    return result.isOk ? _syncAfterWrite(entry) : result;
   }
 
   WASIPreview2FilesystemMutationResult setSize(BigInt nextSize) {
@@ -1744,7 +2105,20 @@ final class _WASIPreview2FilesystemDescriptor {
         WASIPreview2FilesystemMutationError.readOnly,
       );
     }
-    return entry._setSizeTo(nextSize);
+    final result = entry._setSizeTo(nextSize);
+    return result.isOk ? _syncAfterWrite(entry) : result;
+  }
+
+  WASIPreview2FilesystemMutationResult _syncAfterWrite(
+    WASIPreview2FilesystemDirectoryEntry entry,
+  ) {
+    if (flags.contains('file-integrity-sync')) {
+      return entry._syncTo();
+    }
+    if (flags.contains('data-integrity-sync')) {
+      return entry._syncDataTo();
+    }
+    return const WASIPreview2FilesystemMutationResult.ok();
   }
 
   WASIPreview2FilesystemMutationResult setTimes(
@@ -1762,6 +2136,26 @@ final class _WASIPreview2FilesystemDescriptor {
       WASIPreview2FilesystemMutationError.readOnly,
     );
   }
+
+  WASIPreview2FilesystemMutationResult syncData() {
+    final entry = this.entry;
+    if (entry == null) {
+      return const WASIPreview2FilesystemMutationResult.error(
+        WASIPreview2FilesystemMutationError.unsupported,
+      );
+    }
+    return entry._syncDataTo();
+  }
+
+  WASIPreview2FilesystemMutationResult sync() {
+    final entry = this.entry;
+    if (entry == null) {
+      return const WASIPreview2FilesystemMutationResult.error(
+        WASIPreview2FilesystemMutationError.unsupported,
+      );
+    }
+    return entry._syncTo();
+  }
 }
 
 String _normalizePreopenPath(String path) {
@@ -1771,17 +2165,8 @@ String _normalizePreopenPath(String path) {
   return path.startsWith('/') ? path : '/$path';
 }
 
-bool _pathIsPermitted(String path) {
-  if (path.startsWith('/') || path.contains('\u0000')) {
-    return false;
-  }
-  for (final segment in path.split('/')) {
-    if (segment == '..') {
-      return false;
-    }
-  }
-  return true;
-}
+bool _isRelativeWasiPath(String path) =>
+    !path.startsWith('/') && !path.contains('\u0000');
 
 bool _isSimplePathSegment(String name) {
   return name.isNotEmpty &&
@@ -1896,6 +2281,15 @@ bool _flagsContainMutation(WasmComponentValueData flags) {
   return flags.labels.contains('write') ||
       flags.labels.contains('mutate-directory');
 }
+
+const List<String> _descriptorFlagOrder = <String>[
+  'read',
+  'write',
+  'file-integrity-sync',
+  'data-integrity-sync',
+  'requested-write-sync',
+  'mutate-directory',
+];
 
 bool _openFlagsContainMutation(WasmComponentValueData flags) {
   return flags.labels.contains('create') || flags.labels.contains('truncate');

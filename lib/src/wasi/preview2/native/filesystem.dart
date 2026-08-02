@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:ffi' as ffi;
 import 'dart:io' as io;
 import 'dart:typed_data';
@@ -5,6 +6,7 @@ import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 
 import '../filesystem.dart';
+import 'stat_layout.dart';
 
 /// Dart VM-backed WASI 0.2 filesystem host.
 final class WASIPreview2NativeFilesystemHost
@@ -31,6 +33,9 @@ WASIPreview2FilesystemDirectory _nativeDirectory(
   final directory = io.Directory(hostPath).absolute;
   return WASIPreview2FilesystemDirectory.dynamic(
     canMutate: canMutate,
+    createdFileCanMutate: canMutate,
+    createdFileSupportsSync: true,
+    createdFileSupportsSyncData: true,
     mutationContext: _NativeDirectoryContext(directory.path),
     metadata: () => _nativeMetadata(directory.path),
     entries: () =>
@@ -138,15 +143,21 @@ WASIPreview2FilesystemDirectoryEntry? _nativeEntryForPath(
             ? (offset, bytes) => _writeNativeFileAt(path, offset, bytes)
             : null,
         setSize: canMutate ? (size) => _setNativeFileSize(path, size) : null,
+        syncData: () => _syncNativeFile(path),
+        sync: () => _syncNativeFile(path),
         setTimes: canMutate
             ? (update) => _setNativePathTimes(path, update)
             : null,
       );
     case io.FileSystemEntityType.link:
+      final target = io.Link(path).targetSync();
       return WASIPreview2FilesystemDirectoryEntry.symbolicLink(
         name,
-        target: io.Link(path).targetSync(),
-        metadata: () => _nativeMetadata(path),
+        target: target,
+        metadata: () => _nativeMetadata(
+          path,
+          symlinkFallbackSize: BigInt.from(utf8.encode(target).length),
+        ),
       );
     case io.FileSystemEntityType.notFound:
     case io.FileSystemEntityType.pipe:
@@ -156,22 +167,23 @@ WASIPreview2FilesystemDirectoryEntry? _nativeEntryForPath(
   return null;
 }
 
-WASIPreview2FilesystemMetadata _nativeMetadata(String path) {
+WASIPreview2FilesystemMetadata _nativeMetadata(
+  String path, {
+  BigInt? symlinkFallbackSize,
+}) {
   try {
+    final metadata = _hostLstatMetadata(path);
+    if (metadata != null) {
+      return metadata;
+    }
+    if (symlinkFallbackSize != null) {
+      return WASIPreview2FilesystemMetadata(size: symlinkFallbackSize);
+    }
     final stat = io.FileStat.statSync(path);
-    final info = _hostLstatInfo(path);
     return WASIPreview2FilesystemMetadata(
-      linkCount: info == null || info.linkCount <= 0
-          ? null
-          : BigInt.from(info.linkCount),
-      size: BigInt.from(stat.size),
-      objectIdentity: info == null ? null : '${info.device}:${info.inode}',
-      accessTimeNanos: info == null
-          ? _dateTimeNanos(stat.accessed)
-          : BigInt.from(info.accessTimeNanos),
-      modificationTimeNanos: info == null
-          ? _dateTimeNanos(stat.modified)
-          : BigInt.from(info.modificationTimeNanos),
+      size: stat.size < 0 ? null : BigInt.from(stat.size),
+      accessTimeNanos: _dateTimeNanos(stat.accessed),
+      modificationTimeNanos: _dateTimeNanos(stat.modified),
       statusChangeTimeNanos: _dateTimeNanos(stat.changed),
     );
   } on io.FileSystemException {
@@ -179,59 +191,28 @@ WASIPreview2FilesystemMetadata _nativeMetadata(String path) {
   }
 }
 
-_HostLstatInfo? _hostLstatInfo(String hostPath) {
-  if (io.Platform.isWindows) {
+WASIPreview2FilesystemMetadata? _hostLstatMetadata(String hostPath) {
+  final abi = ffi.Abi.current();
+  final layout = WASIPreview2NativeStatLayout.forAbi(abi);
+  if (layout == null) {
     return null;
   }
   final pathPointer = hostPath.toNativeUtf8();
   final statBuffer = malloc<ffi.Uint8>(_hostStatBufferSize);
   try {
-    if (_posixLstatFunction()(pathPointer, statBuffer.cast<ffi.Void>()) != 0) {
+    final lstat = _posixLstatFunction(
+      WASIPreview2NativeStatLayout.lstatSymbolForAbi(abi),
+    );
+    if (lstat(pathPointer, statBuffer.cast<ffi.Void>()) != 0) {
       return null;
     }
-    return (
-      device: _readHostStatDevice(statBuffer),
-      inode: _readHostStatInode(statBuffer),
-      linkCount: _readHostStatLinkCount(statBuffer),
-      accessTimeNanos: _readHostStatTimespecNanos(
-        statBuffer,
-        _hostStatAccessTimeOffset,
-      ),
-      modificationTimeNanos: _readHostStatTimespecNanos(
-        statBuffer,
-        _hostStatModificationTimeOffset,
-      ),
-    );
+    return layout.read(statBuffer.asTypedList(_hostStatBufferSize));
   } catch (_) {
     return null;
   } finally {
     malloc.free(pathPointer);
     malloc.free(statBuffer);
   }
-}
-
-int _readHostStatDevice(ffi.Pointer<ffi.Uint8> statBuffer) {
-  if (io.Platform.isMacOS || io.Platform.isIOS) {
-    return statBuffer.cast<ffi.Uint32>().value;
-  }
-  return statBuffer.cast<ffi.Uint64>().value;
-}
-
-int _readHostStatInode(ffi.Pointer<ffi.Uint8> statBuffer) {
-  return (statBuffer + _hostStatInodeOffset).cast<ffi.Uint64>().value;
-}
-
-int _readHostStatLinkCount(ffi.Pointer<ffi.Uint8> statBuffer) {
-  if (io.Platform.isMacOS || io.Platform.isIOS) {
-    return (statBuffer + _hostStatLinkCountOffset).cast<ffi.Uint16>().value;
-  }
-  return (statBuffer + _hostStatLinkCountOffset).cast<ffi.Uint64>().value;
-}
-
-int _readHostStatTimespecNanos(ffi.Pointer<ffi.Uint8> statBuffer, int offset) {
-  final seconds = (statBuffer + offset).cast<ffi.Int64>().value;
-  final nanos = (statBuffer + offset + 8).cast<ffi.Int64>().value;
-  return seconds * _nanosPerSecond + nanos;
 }
 
 BigInt _dateTimeNanos(DateTime value) =>
@@ -613,6 +594,36 @@ WASIPreview2FilesystemMutationResult _setNativeFileSize(
   return _rewriteNativeFileSize(path, size.toInt());
 }
 
+WASIPreview2FilesystemMutationResult _syncNativeFile(String path) {
+  final type = io.FileSystemEntity.typeSync(path, followLinks: false);
+  if (type == io.FileSystemEntityType.notFound) {
+    return const WASIPreview2FilesystemMutationResult.error(
+      WASIPreview2FilesystemMutationError.noEntry,
+    );
+  }
+  if (type != io.FileSystemEntityType.file) {
+    return const WASIPreview2FilesystemMutationResult.error(
+      WASIPreview2FilesystemMutationError.unsupported,
+    );
+  }
+  io.RandomAccessFile? file;
+  try {
+    file = io.File(path).openSync(mode: io.FileMode.append);
+    file.flushSync();
+    file.closeSync();
+    file = null;
+    return const WASIPreview2FilesystemMutationResult.ok();
+  } on io.FileSystemException {
+    return _nativeMutationFailure(path);
+  } finally {
+    try {
+      file?.closeSync();
+    } on io.FileSystemException {
+      // Preserve the flush/open error result above.
+    }
+  }
+}
+
 WASIPreview2FilesystemMutationResult _posixSetNativeFileSize(
   String path,
   int size,
@@ -900,9 +911,9 @@ _PosixUtimesDart _posixUtimesFunction() =>
     _cachedPosixUtimes ??= _openPosixCLibrary()
         .lookupFunction<_PosixUtimesNative, _PosixUtimesDart>('utimes');
 
-_PosixLstatDart _posixLstatFunction() =>
+_PosixLstatDart _posixLstatFunction(String symbol) =>
     _cachedPosixLstat ??= _openPosixCLibrary()
-        .lookupFunction<_PosixLstatNative, _PosixLstatDart>('lstat');
+        .lookupFunction<_PosixLstatNative, _PosixLstatDart>(symbol);
 
 _WindowsCreateHardLinkDart _windowsCreateHardLinkFunction() =>
     _cachedWindowsCreateHardLink ??= ffi.DynamicLibrary.open('kernel32.dll')
@@ -954,14 +965,6 @@ typedef _WindowsCreateHardLinkDart =
     int Function(ffi.Pointer<Utf16>, ffi.Pointer<Utf16>, ffi.Pointer<ffi.Void>);
 
 const int _posixOpenWriteOnly = 1;
-int get _hostStatAccessTimeOffset =>
-    io.Platform.isMacOS || io.Platform.isIOS ? 32 : 72;
-int get _hostStatModificationTimeOffset =>
-    io.Platform.isMacOS || io.Platform.isIOS ? 48 : 88;
-const int _hostStatInodeOffset = 8;
-int get _hostStatLinkCountOffset =>
-    io.Platform.isMacOS || io.Platform.isIOS ? 6 : 16;
-const int _nanosPerSecond = 1000000000;
 const int _hostStatBufferSize = 256;
 
 final class _PosixTimeval extends ffi.Struct {
@@ -971,14 +974,6 @@ final class _PosixTimeval extends ffi.Struct {
   @ffi.IntPtr()
   external int tvUsec;
 }
-
-typedef _HostLstatInfo = ({
-  int device,
-  int inode,
-  int linkCount,
-  int accessTimeNanos,
-  int modificationTimeNanos,
-});
 
 String _joinNative(String directoryPath, String name) {
   if (directoryPath.endsWith(io.Platform.pathSeparator)) {

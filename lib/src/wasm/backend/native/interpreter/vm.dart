@@ -3,6 +3,7 @@
 import 'dart:typed_data';
 import 'dart:math' as math;
 
+import '../../../host_control_flow.dart';
 import 'int64.dart';
 import 'memory.dart';
 import 'module.dart';
@@ -3938,7 +3939,7 @@ final class WasmVm {
           }
           pc = handledPc;
         } catch (error, stackTrace) {
-          if (error.runtimeType.toString() == '_WasiExit') {
+          if (error is WasmHostControlFlowException) {
             rethrow;
           }
           Error.throwWithStackTrace(

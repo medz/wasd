@@ -73,6 +73,9 @@ final class WASIPreview2PollHost {
 
   FutureOr<WasmComponentValueData> _poll(Object? value) {
     final handles = _handles(value);
+    if (handles.isEmpty) {
+      throw StateError('WASI poll requires at least one pollable.');
+    }
     final ready = _readyIndexes(handles);
     if (ready.isNotEmpty) {
       return _u32List(ready);
@@ -81,9 +84,6 @@ final class WASIPreview2PollHost {
   }
 
   Future<WasmComponentValueData> _pollAsync(List<int> handles) async {
-    if (handles.isEmpty) {
-      return _u32List(const <int>[]);
-    }
     while (true) {
       await Future.any([
         for (final handle in handles)

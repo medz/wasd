@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import '../../../host_control_flow.dart';
 import 'byte_reader.dart';
 import 'features.dart';
 import 'int64.dart';
@@ -5324,7 +5325,7 @@ final class WasmInstance {
         }
         pc = handledPc;
       } catch (error, stackTrace) {
-        if (error.runtimeType.toString() == '_WasiExit') {
+        if (error is WasmHostControlFlowException) {
           rethrow;
         }
         Error.throwWithStackTrace(

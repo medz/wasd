@@ -7,11 +7,13 @@ import 'package:wasd/src/wasi/component/async_values.dart';
 import 'package:wasd/src/wasi/component/canonical_host.dart';
 import 'package:wasd/src/wasi/component/host.dart';
 import 'package:wasd/src/wasi/component/resource_host.dart';
+import 'package:wasd/src/wasi/component/resource_table.dart';
 import 'package:wasd/src/wasi/component/versioned_host.dart';
 import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasi/component/wit_adapter.dart';
 import 'package:wasd/src/wasi/component/wit_document.dart';
 import 'package:wasd/src/wasi/preview2/cli.dart';
+import 'package:wasd/src/wasi/preview2/clocks.dart';
 import 'package:wasd/src/wasi/preview2/component_host.dart';
 import 'package:wasd/src/wasi/preview2/filesystem.dart';
 import 'package:wasd/src/wasi/preview2/http.dart';
@@ -211,6 +213,35 @@ void main() {
   });
 
   group('fixed WASI component host versions', () {
+    test('rejects Preview2 overrides backed by different resource tables', () {
+      final firstTable = WASIComponentResourceTable();
+      final secondTable = WASIComponentResourceTable();
+
+      expect(
+        () => WASIPreview2ComponentHost(
+          errorHost: WASIPreview2IoErrorHost(table: firstTable),
+          clocksHost: WASIPreview2ClocksHost(
+            pollHost: WASIPreview2PollHost(table: secondTable),
+          ),
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('rejects HTTP streams wired to a different poll host', () {
+      final table = WASIComponentResourceTable();
+      final streams = WASIPreview2StreamsHost(table: table);
+
+      expect(
+        () => WASIPreview2HttpHost(
+          table: table,
+          pollHost: WASIPreview2PollHost(table: table),
+          streamsHost: streams,
+        ),
+        throwsArgumentError,
+      );
+    });
+
     test('Preview2 wrapper enforces the Preview2 profile', () {
       final resourceComponent = WasmComponent.decode(
         _canonicalResourceProgramBytes(),
@@ -309,7 +340,7 @@ world random-test {
         'wasi:random/random@0.2.0.get-random-u64',
         'wasi:random/insecure@0.2.0.get-insecure-random-bytes',
         'wasi:random/insecure@0.2.0.get-insecure-random-u64',
-        'wasi:random/insecure-seed@0.2.0.get-insecure-seed',
+        'wasi:random/insecure-seed@0.2.0.insecure-seed',
       ]);
 
       final program = preview2.bindWitWorld(document, worldName: 'random-test');
@@ -320,13 +351,13 @@ world random-test {
               as WasmComponentValueData;
       final seedA =
           program.invokeImport(
-                'wasi:random/insecure-seed@0.2.0.get-insecure-seed',
+                'wasi:random/insecure-seed@0.2.0.insecure-seed',
                 const [],
               )
               as WasmComponentValueData;
       final seedB =
           program.invokeImport(
-                'wasi:random/insecure-seed@0.2.0.get-insecure-seed',
+                'wasi:random/insecure-seed@0.2.0.insecure-seed',
                 const [],
               )
               as WasmComponentValueData;
@@ -574,6 +605,10 @@ world io-test {
             _u8ListValue([9, 8]),
           ],
         );
+        program.invokeImport(
+          'wasi:io/streams@0.2.0.output-stream.check-write',
+          [output],
+        );
         final zeroes = program.invokeImport(
           'wasi:io/streams@0.2.0.output-stream.write-zeroes',
           [output, BigInt.from(2)],
@@ -649,9 +684,164 @@ world io-test {
         await Future<void>.delayed(Duration.zero);
         expect(completed, isFalse);
 
+        pending.append(const <int>[]);
+        await Future<void>.delayed(Duration.zero);
+        expect(completed, isFalse);
+
         pending.append(const <int>[42]);
         expect(_u8List(_resultOk(await blockingRead)), [42]);
         expect(completed, isTrue);
+      },
+    );
+
+    test(
+      'Preview2 streams consume write permits and terminal failures once',
+      () {
+        const source = '''
+package wasi-testsuite:test;
+
+world io-test {
+  import wasi:io/error@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+        final preview2 = WASIPreview2ComponentHost();
+        final program = preview2.bindWitWorld(
+          WASIComponentWitDocument.parse(source),
+          worldName: 'io-test',
+        );
+        final output = preview2.streamsHost.insertOutputStream(
+          WASIPreview2OutputStream(maxWriteSize: 2),
+        );
+
+        program.invokeImport(
+          'wasi:io/streams@0.2.0.output-stream.check-write',
+          [output],
+        );
+        _expectUnitOk(
+          program.invokeImport('wasi:io/streams@0.2.0.output-stream.write', [
+                output,
+                _u8ListValue([1]),
+              ])
+              as WasmComponentValueData,
+        );
+        expect(
+          () => program.invokeImport(
+            'wasi:io/streams@0.2.0.output-stream.write',
+            [
+              output,
+              _u8ListValue([2]),
+            ],
+          ),
+          throwsStateError,
+        );
+        program.invokeImport(
+          'wasi:io/streams@0.2.0.output-stream.check-write',
+          [output],
+        );
+        _expectUnitOk(
+          program.invokeImport('wasi:io/streams@0.2.0.output-stream.write', [
+                output,
+                _u8ListValue([2, 3]),
+              ])
+              as WasmComponentValueData,
+        );
+        expect(preview2.streamsHost.outputStream(output).bytes, [1, 2, 3]);
+
+        final failedInput = preview2.streamsHost.insertInputStream(
+          WASIPreview2InputStream(bytes: const <int>[8, 9])
+            ..fail('input failed'),
+        );
+        final firstRead =
+            program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+                  failedInput,
+                  BigInt.one,
+                ])
+                as WasmComponentValueData;
+        final secondRead =
+            program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+                  failedInput,
+                  BigInt.one,
+                ])
+                as WasmComponentValueData;
+        final skippedAfterFailure =
+            program.invokeImport('wasi:io/streams@0.2.0.input-stream.skip', [
+                  failedInput,
+                  BigInt.one,
+                ])
+                as WasmComponentValueData;
+        final blockingReadAfterFailure = program.invokeImport(
+          'wasi:io/streams@0.2.0.input-stream.blocking-read',
+          [failedInput, BigInt.one],
+        );
+
+        expect(_resultErrorLabel(firstRead), 'last-operation-failed');
+        expect(
+          program.invokeImport('wasi:io/error@0.2.0.error.to-debug-string', [
+            _streamErrorHandle(firstRead),
+          ]),
+          'input failed',
+        );
+        expect(_resultErrorLabel(secondRead), 'closed');
+        expect(_resultErrorLabel(skippedAfterFailure), 'closed');
+        expect(
+          _resultErrorLabel(blockingReadAfterFailure as WasmComponentValueData),
+          'closed',
+        );
+
+        final failedOutput = preview2.streamsHost.insertOutputStream(
+          WASIPreview2OutputStream()..fail('output failed'),
+        );
+        final firstCheck =
+            program.invokeImport(
+                  'wasi:io/streams@0.2.0.output-stream.check-write',
+                  [failedOutput],
+                )
+                as WasmComponentValueData;
+        final secondCheck =
+            program.invokeImport(
+                  'wasi:io/streams@0.2.0.output-stream.check-write',
+                  [failedOutput],
+                )
+                as WasmComponentValueData;
+
+        expect(_resultErrorLabel(firstCheck), 'last-operation-failed');
+        expect(
+          program.invokeImport('wasi:io/error@0.2.0.error.to-debug-string', [
+            _streamErrorHandle(firstCheck),
+          ]),
+          'output failed',
+        );
+        expect(_resultErrorLabel(secondCheck), 'closed');
+
+        final callbackOutput = preview2.streamsHost.insertOutputStream(
+          WASIPreview2OutputStream(onWrite: (_) => 'sink failed'),
+        );
+        program.invokeImport(
+          'wasi:io/streams@0.2.0.output-stream.check-write',
+          [callbackOutput],
+        );
+        final failedWrite =
+            program.invokeImport('wasi:io/streams@0.2.0.output-stream.write', [
+                  callbackOutput,
+                  _u8ListValue([4]),
+                ])
+                as WasmComponentValueData;
+        final checkAfterFailedWrite =
+            program.invokeImport(
+                  'wasi:io/streams@0.2.0.output-stream.check-write',
+                  [callbackOutput],
+                )
+                as WasmComponentValueData;
+
+        expect(_resultErrorLabel(failedWrite), 'last-operation-failed');
+        expect(
+          program.invokeImport('wasi:io/error@0.2.0.error.to-debug-string', [
+            _streamErrorHandle(failedWrite),
+          ]),
+          'sink failed',
+        );
+        expect(_resultErrorLabel(checkAfterFailedWrite), 'closed');
       },
     );
 
@@ -844,15 +1034,43 @@ world cli-test {
       final stdoutHandle = _optionHandle(stdout);
       final stderrHandle = _optionHandle(stderr);
 
-      expect(stdinHandle, cli.terminalStdinHandle);
-      expect(stdoutHandle, cli.terminalStdoutHandle);
-      expect(stderrHandle, cli.terminalStderrHandle);
+      expect(stdinHandle, isNot(cli.terminalStdinHandle));
+      expect(stdoutHandle, isNot(cli.terminalStdoutHandle));
+      expect(stderrHandle, isNot(cli.terminalStderrHandle));
       expect(preview2.streamsHost.table.contains(stdinHandle!), isTrue);
       expect(preview2.streamsHost.table.contains(stdoutHandle!), isTrue);
       expect(preview2.streamsHost.table.contains(stderrHandle!), isTrue);
     });
 
-    test('Preview2 expands and binds standard WASI sockets imports', () {
+    test('Preview2 runtime scopes cannot access CLI anchor handles', () async {
+      final cli = WASIPreview2CliHost();
+      final preview2 = WASIPreview2ComponentHost(cliHost: cli);
+      final table = preview2.componentHost.table;
+      final stdoutAnchor = cli.stdoutHandle;
+
+      await table.runScoped<void>(() async {
+        final stdout =
+            preview2.standardImports['wasi:cli/stdout@0.2.0.get-stdout']!(
+                  const <Object?>[],
+                )
+                as int;
+
+        expect(stdout, isNot(stdoutAnchor));
+        expect(
+          () => preview2.streamsHost.outputStream(stdoutAnchor),
+          throwsStateError,
+        );
+        expect(
+          preview2.streamsHost.outputStream(stdout),
+          same(cli.stdoutStream),
+        );
+      });
+
+      expect(table.contains(stdoutAnchor), isTrue);
+      expect(table.activeCount, 1);
+    });
+
+    test('Preview2 expands and binds standard WASI sockets imports', () async {
       const source = '''
 package wasi-testsuite:test;
 
@@ -919,6 +1137,15 @@ world sockets-test {
               )
               as WasmComponentValueData;
       final streamHandle = _resourceHandle(_resultOk(lookupStream));
+      final lookupPollable =
+          program.invokeImport(
+                'wasi:sockets/ip-name-lookup@0.2.0.resolve-address-stream.subscribe',
+                [streamHandle],
+              )
+              as int;
+      await program.invokeImportAsync('wasi:io/poll@0.2.0.pollable.block', [
+        lookupPollable,
+      ]);
       final firstAddress =
           program.invokeImport(
                 'wasi:sockets/ip-name-lookup@0.2.0.resolve-address-stream.resolve-next-address',
@@ -931,12 +1158,6 @@ world sockets-test {
                 [streamHandle],
               )
               as WasmComponentValueData;
-      final lookupPollable =
-          program.invokeImport(
-                'wasi:sockets/ip-name-lookup@0.2.0.resolve-address-stream.subscribe',
-                [streamHandle],
-              )
-              as int;
       final localAddress =
           program.invokeImport(
                 'wasi:sockets/tcp@0.2.0.tcp-socket.local-address',
@@ -1580,8 +1801,8 @@ world cli-test {
 package wasi-testsuite:test;
 
 world sockets-test {
-  include wasi:sockets/imports@0.2.8;
-  include wasi:io/imports@0.2.8;
+  include wasi:sockets/imports@0.2.12;
+  include wasi:io/imports@0.2.12;
 }
 ''';
       final document = WASIComponentWitDocument.parse(source);
@@ -1596,9 +1817,9 @@ world sockets-test {
       expect(
         plan.functions.map((function) => function.qualifiedName),
         containsAll(<String>[
-          'wasi:sockets/instance-network@0.2.8.instance-network',
-          'wasi:sockets/tcp-create-socket@0.2.8.create-tcp-socket',
-          'wasi:io/poll@0.2.8.pollable.ready',
+          'wasi:sockets/instance-network@0.2.12.instance-network',
+          'wasi:sockets/tcp-create-socket@0.2.12.create-tcp-socket',
+          'wasi:io/poll@0.2.12.pollable.ready',
         ]),
       );
 
@@ -1608,7 +1829,7 @@ world sockets-test {
       );
       final tcpSocket =
           program.invokeImport(
-                'wasi:sockets/tcp-create-socket@0.2.8.create-tcp-socket',
+                'wasi:sockets/tcp-create-socket@0.2.12.create-tcp-socket',
                 [_enumValue('ipv4')],
               )
               as WasmComponentValueData;
@@ -1616,12 +1837,12 @@ world sockets-test {
       expect(_resourceHandle(_resultOk(tcpSocket)), isNonZero);
       expect(
         preview2.standardImports,
-        contains('wasi:sockets/tcp-create-socket@0.2.8.create-tcp-socket'),
+        contains('wasi:sockets/tcp-create-socket@0.2.12.create-tcp-socket'),
       );
     });
 
     test('Preview2 covers every standard WASI 0.2.x host import', () {
-      for (var patch = 0; patch <= 8; patch++) {
+      for (var patch = 0; patch <= 12; patch++) {
         final version = '0.2.$patch';
         final document = WASIComponentWitDocument.parse('''
 package wasi-testsuite:preview2-coverage;
@@ -1661,6 +1882,11 @@ world all-imports {
         expect(plan.bindingErrors, isEmpty, reason: version);
         expect(importedFunctions.length, greaterThan(120), reason: version);
         expect(missing, isEmpty, reason: version);
+        expect(
+          importedFunctions.contains('wasi:cli/exit@$version.exit-with-code'),
+          patch == 12,
+          reason: version,
+        );
       }
     });
 
@@ -1733,6 +1959,7 @@ world http-test {
                 [headers],
               )
               as int;
+      expect(preview2.componentHost.table.contains(headers), isFalse);
 
       _expectUnitOk(
         program.invokeImport(
@@ -1788,23 +2015,58 @@ world http-test {
             ])
             as WasmComponentValueData,
       );
+      expect(preview2.componentHost.table.contains(outgoingBody), isTrue);
+      expect(preview2.componentHost.table.contains(output), isTrue);
+      Object? finishError;
+      try {
+        program.invokeImport('wasi:http/types@0.2.0.outgoing-body.finish', [
+          outgoingBody,
+          _noneValue(),
+        ]);
+      } on StateError catch (error) {
+        finishError = error;
+      }
+      expect(finishError.toString(), contains('child handles'));
+      expect(preview2.componentHost.table.contains(outgoingBody), isTrue);
+      expect(preview2.componentHost.table.contains(output), isTrue);
+      preview2.componentHost.table.dropNamed(
+        'wasi:io/streams@0.2.0.output-stream',
+        output,
+      );
+      final trailers =
+          program.invokeImport(
+                'wasi:http/types@0.2.0.fields.constructor',
+                const [],
+              )
+              as int;
       _expectUnitOk(
         program.invokeImport('wasi:http/types@0.2.0.outgoing-body.finish', [
               outgoingBody,
-              _noneValue(),
+              _someValue(_integerValue(trailers)),
             ])
             as WasmComponentValueData,
       );
+      expect(preview2.componentHost.table.contains(outgoingBody), isFalse);
+      expect(preview2.componentHost.table.contains(trailers), isFalse);
+
+      final options =
+          program.invokeImport(
+                'wasi:http/types@0.2.0.request-options.constructor',
+                const [],
+              )
+              as int;
 
       final future = _resourceHandle(
         _resultOk(
           program.invokeImport('wasi:http/outgoing-handler@0.2.0.handle', [
                 request,
-                _noneValue(),
+                _someValue(_integerValue(options)),
               ])
               as WasmComponentValueData,
         ),
       );
+      expect(preview2.componentHost.table.contains(request), isFalse);
+      expect(preview2.componentHost.table.contains(options), isFalse);
       final ready =
           program.invokeImport(
                 'wasi:http/types@0.2.0.future-incoming-response.get',
@@ -1868,6 +2130,157 @@ world http-test {
       expect(backend.lastBody, [1, 2, 3]);
       expect(backend.lastHeaderNames, contains('x-test'));
     });
+
+    test(
+      'Preview2 outgoing handler rejects invalid requests before backend I/O',
+      () {
+        const source = '''
+package wasi-testsuite:test;
+
+world http-test {
+  import wasi:http/types@0.2.0;
+  import wasi:http/outgoing-handler@0.2.0;
+}
+''';
+        final invalidRequests = [
+          (
+            name: 'HTTP without authority',
+            headers: <(String, List<int>)>[],
+            setScheme: true,
+            authority: null,
+            errorCode: 'HTTP-request-URI-invalid',
+          ),
+          (
+            name: 'default HTTP without authority',
+            headers: <(String, List<int>)>[],
+            setScheme: false,
+            authority: null,
+            errorCode: 'HTTP-request-URI-invalid',
+          ),
+          (
+            name: 'HTTP userinfo authority',
+            headers: <(String, List<int>)>[],
+            setScheme: true,
+            authority: 'user@example.test',
+            errorCode: 'HTTP-request-URI-invalid',
+          ),
+          (
+            name: 'HTTP empty userinfo authority',
+            headers: <(String, List<int>)>[],
+            setScheme: true,
+            authority: '@example.test',
+            errorCode: 'HTTP-request-URI-invalid',
+          ),
+          (
+            name: 'Host header',
+            headers: <(String, List<int>)>[('Host', 'other.example'.codeUnits)],
+            setScheme: true,
+            authority: 'example.test',
+            errorCode: 'HTTP-request-denied',
+          ),
+          (
+            name: 'malformed Content-Length',
+            headers: <(String, List<int>)>[('Content-Length', '+5'.codeUnits)],
+            setScheme: true,
+            authority: 'example.test',
+            errorCode: 'HTTP-request-body-size',
+          ),
+          (
+            name: 'conflicting Content-Length',
+            headers: <(String, List<int>)>[
+              ('Content-Length', '5'.codeUnits),
+              ('content-length', '6'.codeUnits),
+            ],
+            setScheme: true,
+            authority: 'example.test',
+            errorCode: 'HTTP-request-body-size',
+          ),
+        ];
+
+        for (final invalidRequest in invalidRequests) {
+          final backend = _LoopbackHttpBackend();
+          final preview2 = WASIPreview2ComponentHost(
+            httpHost: WASIPreview2HttpHost(backend: backend),
+          );
+          final program = preview2.bindWitWorld(
+            WASIComponentWitDocument.parse(source),
+            worldName: 'http-test',
+          );
+          final headers = _resourceHandle(
+            _resultOk(
+              program.invokeImport('wasi:http/types@0.2.0.fields.from-list', [
+                    _httpFieldListValue(invalidRequest.headers),
+                  ])
+                  as WasmComponentValueData,
+            ),
+          );
+          final request =
+              program.invokeImport(
+                    'wasi:http/types@0.2.0.outgoing-request.constructor',
+                    [headers],
+                  )
+                  as int;
+          if (invalidRequest.setScheme) {
+            _expectUnitOk(
+              program.invokeImport(
+                    'wasi:http/types@0.2.0.outgoing-request.set-scheme',
+                    [request, _someValue(_variantValue('HTTP'))],
+                  )
+                  as WasmComponentValueData,
+            );
+          }
+          if (invalidRequest.authority case final authority?) {
+            _expectUnitOk(
+              program.invokeImport(
+                    'wasi:http/types@0.2.0.outgoing-request.set-authority',
+                    [request, _someValue(_stringValue(authority))],
+                  )
+                  as WasmComponentValueData,
+            );
+          }
+          final options =
+              program.invokeImport(
+                    'wasi:http/types@0.2.0.request-options.constructor',
+                    const [],
+                  )
+                  as int;
+
+          final handled =
+              program.invokeImport('wasi:http/outgoing-handler@0.2.0.handle', [
+                    request,
+                    _someValue(_integerValue(options)),
+                  ])
+                  as WasmComponentValueData;
+
+          expect(
+            _resultErrorLabel(handled),
+            invalidRequest.errorCode,
+            reason: invalidRequest.name,
+          );
+          final error = handled.associatedValue!;
+          if (invalidRequest.errorCode == 'HTTP-request-body-size') {
+            expect(
+              error.associatedValue?.kind,
+              WasmComponentValueDataKind.option,
+            );
+            expect(error.associatedValue?.index, 0);
+          } else {
+            expect(error.associatedValue, isNull);
+          }
+          expect(
+            preview2.componentHost.table.contains(request),
+            isFalse,
+            reason: invalidRequest.name,
+          );
+          expect(
+            preview2.componentHost.table.contains(options),
+            isFalse,
+            reason: invalidRequest.name,
+          );
+          expect(backend.requestCount, 0, reason: invalidRequest.name);
+        }
+      },
+    );
 
     test(
       'Preview2 HTTP resources expose fields requests responses and trailers',
@@ -2140,6 +2553,7 @@ world http-test {
                   [responseHeaders],
                 )
                 as int;
+        expect(preview2.componentHost.table.contains(responseHeaders), isFalse);
         expect(
           program.invokeImport(
             'wasi:http/types@0.2.0.outgoing-response.status-code',
@@ -2176,6 +2590,10 @@ world http-test {
             [54],
           ],
         );
+        preview2.componentHost.table.dropNamed(
+          'wasi:http/types@0.2.0.fields',
+          clonedResponseHeaders,
+        );
         expect(
           _resourceHandle(
             _resultOk(
@@ -2200,6 +2618,8 @@ world http-test {
           isNull,
         );
         expect(outparam.response?.value?.statusCode, 202);
+        expect(preview2.componentHost.table.contains(outparamHandle), isFalse);
+        expect(preview2.componentHost.table.contains(response), isFalse);
 
         final incomingRequest = preview2.httpHost.insertIncomingRequest(
           WASIPreview2HttpIncomingRequest(
@@ -2300,6 +2720,7 @@ world http-test {
                   incomingBody,
                 ])
                 as int;
+        expect(preview2.componentHost.table.contains(incomingBody), isFalse);
         final trailersPollable =
             program.invokeImport(
                   'wasi:http/types@0.2.0.future-trailers.subscribe',
@@ -2362,6 +2783,36 @@ world http-test {
                 unknownError,
               ])
               as WasmComponentValueData;
+      const payloadCases = <String>{
+        'DNS-error',
+        'TLS-alert-received',
+        'HTTP-request-body-size',
+        'HTTP-request-header-section-size',
+        'HTTP-request-header-size',
+        'HTTP-request-trailer-section-size',
+        'HTTP-request-trailer-size',
+        'HTTP-response-header-section-size',
+        'HTTP-response-header-size',
+        'HTTP-response-body-size',
+        'HTTP-response-trailer-section-size',
+        'HTTP-response-trailer-size',
+        'HTTP-response-transfer-coding',
+        'HTTP-response-content-coding',
+        'internal-error',
+      };
+      for (final errorCode in payloadCases) {
+        final errorHandle = preview2.errorHost.insert(
+          WASIPreview2IoError(errorCode),
+        );
+        final option =
+            program.invokeImport('wasi:http/types@0.2.0.http-error-code', [
+                  errorHandle,
+                ])
+                as WasmComponentValueData;
+        final error = _optionPayload(option);
+        expect(_caseLabel(error), errorCode);
+        expect(error.associatedValue, isNotNull, reason: errorCode);
+      }
       final outparam = WASIPreview2HttpResponseOutparam();
       final outparamHandle = preview2.httpHost.insertResponseOutparam(outparam);
       final fields =
@@ -2385,12 +2836,20 @@ world http-test {
             )
             as WasmComponentValueData,
       );
+      expect(preview2.componentHost.table.contains(fields), isFalse);
+      final invalidFields =
+          program.invokeImport(
+                'wasi:http/types@0.2.0.fields.constructor',
+                const [],
+              )
+              as int;
       final invalidInformational =
           program.invokeImport(
                 'wasi:http/types@0.2.0.response-outparam.send-informational',
-                [outparamHandle, 200, fields],
+                [outparamHandle, 200, invalidFields],
               )
               as WasmComponentValueData;
+      expect(preview2.componentHost.table.contains(invalidFields), isFalse);
 
       expect(_optionCaseLabel(timeoutCode), 'HTTP-response-timeout');
       expect(_optionCaseLabel(unknownCode), isNull);
@@ -2401,6 +2860,23 @@ world http-test {
         'x-info',
       );
       expect(_resultErrorLabel(invalidInformational), 'HTTP-protocol-error');
+
+      final errorOutparam = WASIPreview2HttpResponseOutparam();
+      final errorOutparamHandle = preview2.httpHost.insertResponseOutparam(
+        errorOutparam,
+      );
+      expect(
+        program.invokeImport('wasi:http/types@0.2.0.response-outparam.set', [
+          errorOutparamHandle,
+          _resultErrorValue(_variantCaseValue('HTTP-protocol-error', 35)),
+        ]),
+        isNull,
+      );
+      expect(
+        preview2.componentHost.table.contains(errorOutparamHandle),
+        isFalse,
+      );
+      expect(errorOutparam.response?.errorCode, 'HTTP-protocol-error');
     });
 
     test('Preview2 HTTP proxy export sets response outparam', () {
@@ -2467,6 +2943,7 @@ world proxy-test {
                       [fields],
                     )
                     as int;
+            expect(preview2.componentHost.table.contains(fields), isFalse);
             _expectUnitOk(
               program.invokeImport(
                     'wasi:http/types@0.2.8.outgoing-response.set-status-code',
@@ -2507,6 +2984,17 @@ world proxy-test {
                   )
                   as WasmComponentValueData,
             );
+            expect(
+              () => program.invokeImport(
+                'wasi:http/types@0.2.8.outgoing-body.finish',
+                [outgoingBody, _noneValue()],
+              ),
+              throwsStateError,
+            );
+            preview2.componentHost.table.dropNamed(
+              'wasi:io/streams@0.2.0.output-stream',
+              output,
+            );
             _expectUnitOk(
               program.invokeImport(
                     'wasi:http/types@0.2.8.outgoing-body.finish',
@@ -2514,10 +3002,16 @@ world proxy-test {
                   )
                   as WasmComponentValueData,
             );
+            expect(
+              preview2.componentHost.table.contains(outgoingBody),
+              isFalse,
+            );
             program.invokeImport(
               'wasi:http/types@0.2.8.response-outparam.set',
               [responseOut, _resultOkValue(_integerValue(response))],
             );
+            expect(preview2.componentHost.table.contains(responseOut), isFalse);
+            expect(preview2.componentHost.table.contains(response), isFalse);
             return null;
           },
         },
@@ -2553,6 +3047,968 @@ world proxy-test {
       expect(response.bodyResource?.bytes, [111, 107]);
       expect(response.bodyResource?.isFinished, isTrue);
     });
+
+    test('Preview2 outgoing body finish enforces Content-Length', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world http-test {
+  import wasi:http/types@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+      final preview2 = WASIPreview2ComponentHost();
+      final program = preview2.bindWitWorld(
+        WASIComponentWitDocument.parse(source),
+        worldName: 'http-test',
+      );
+
+      final malformedHeaders = _resourceHandle(
+        _resultOk(
+          program.invokeImport('wasi:http/types@0.2.0.fields.from-list', [
+                _httpFieldListValue([('content-length', '+3'.codeUnits)]),
+              ])
+              as WasmComponentValueData,
+        ),
+      );
+      final malformedResponse =
+          program.invokeImport(
+                'wasi:http/types@0.2.0.outgoing-response.constructor',
+                [malformedHeaders],
+              )
+              as int;
+      expect(
+        (program.invokeImport('wasi:http/types@0.2.0.outgoing-response.body', [
+                  malformedResponse,
+                ])
+                as WasmComponentValueData)
+            .isOk,
+        isFalse,
+      );
+
+      WasmComponentValueData finishBody(List<int> bytes) {
+        final headers = _resourceHandle(
+          _resultOk(
+            program.invokeImport('wasi:http/types@0.2.0.fields.from-list', [
+                  _httpFieldListValue([
+                    ('content-length', [51]),
+                  ]),
+                ])
+                as WasmComponentValueData,
+          ),
+        );
+        final request =
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.outgoing-request.constructor',
+                  [headers],
+                )
+                as int;
+        final body = _resourceHandle(
+          _resultOk(
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.outgoing-request.body',
+                  [request],
+                )
+                as WasmComponentValueData,
+          ),
+        );
+        final output = _resourceHandle(
+          _resultOk(
+            program.invokeImport('wasi:http/types@0.2.0.outgoing-body.write', [
+                  body,
+                ])
+                as WasmComponentValueData,
+          ),
+        );
+        program.invokeImport(
+          'wasi:io/streams@0.2.0.output-stream.check-write',
+          [output],
+        );
+        _expectUnitOk(
+          program.invokeImport('wasi:io/streams@0.2.0.output-stream.write', [
+                output,
+                _u8ListValue(bytes),
+              ])
+              as WasmComponentValueData,
+        );
+        preview2.componentHost.table.dropNamed(
+          'wasi:io/streams@0.2.0.output-stream',
+          output,
+        );
+        return program.invokeImport(
+              'wasi:http/types@0.2.0.outgoing-body.finish',
+              [body, _noneValue()],
+            )
+            as WasmComponentValueData;
+      }
+
+      expect(_resultErrorLabel(finishBody([1, 2])), 'HTTP-protocol-error');
+      _expectUnitOk(finishBody([1, 2, 3]));
+    });
+
+    test('Preview2 HTTP fields own immutable copies of entry values', () {
+      final sourceValue = <int>[49];
+      final fields = WASIPreview2HttpFields(
+        entries: <WASIPreview2HttpFieldEntry>[
+          WASIPreview2HttpFieldEntry('content-length', sourceValue),
+        ],
+        mutable: false,
+      );
+      final clone = fields.immutableClone();
+
+      sourceValue[0] = 50;
+
+      expect(fields.entries.single.value, [49]);
+      expect(clone.entries.single.value, [49]);
+      expect(
+        identical(fields.entries.single.value, clone.entries.single.value),
+        isFalse,
+      );
+      expect(() => fields.entries.single.value[0] = 51, throwsUnsupportedError);
+      expect(() => clone.entries.single.value.add(52), throwsUnsupportedError);
+    });
+
+    test('Preview2 incoming request without a body exposes closed input', () {
+      final request = WASIPreview2HttpIncomingRequest(
+        method: const WASIPreview2HttpMethod.standard('get'),
+        headers: WASIPreview2HttpFields(),
+      );
+
+      final body = request.consume()!;
+      final stream = body.takeStream()!;
+
+      expect(stream.isReadable, isTrue);
+      expect(body.finish().isReady, isTrue);
+    });
+
+    test(
+      'Preview2 future trailers follow incoming body completion and errors',
+      () async {
+        const source = '''
+package wasi-testsuite:test;
+
+world http-test {
+  import wasi:http/types@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+        final preview2 = WASIPreview2ComponentHost();
+        final program = preview2.bindWitWorld(
+          WASIComponentWitDocument.parse(source),
+          worldName: 'http-test',
+        );
+
+        final gatedStream = WASIPreview2InputStream();
+        final gatedTrailers = WASIPreview2HttpIncomingBody(
+          gatedStream,
+          trailers: WASIPreview2HttpFutureTrailers.completed(
+            const WASIPreview2HttpResult<WASIPreview2HttpFields?>.ok(null),
+          ),
+        ).finish();
+
+        expect(gatedTrailers.isReady, isFalse);
+        gatedStream.close();
+        await gatedTrailers.waitReady();
+        expect(gatedTrailers.isReady, isTrue);
+
+        int finishBody(
+          WASIPreview2InputStream stream, {
+          WASIPreview2HttpFutureTrailers? trailers,
+        }) {
+          final request = preview2.httpHost.insertIncomingRequest(
+            WASIPreview2HttpIncomingRequest(
+              method: const WASIPreview2HttpMethod.standard('get'),
+              headers: WASIPreview2HttpFields(),
+              body: WASIPreview2HttpIncomingBody(stream, trailers: trailers),
+            ),
+          );
+          final body = _resourceHandle(
+            _resultOk(
+              program.invokeImport(
+                    'wasi:http/types@0.2.0.incoming-request.consume',
+                    [request],
+                  )
+                  as WasmComponentValueData,
+            ),
+          );
+          return program.invokeImport(
+                'wasi:http/types@0.2.0.incoming-body.finish',
+                [body],
+              )
+              as int;
+        }
+
+        final cleanStream = WASIPreview2InputStream();
+        final cleanTrailers = finishBody(cleanStream);
+        final cleanPollable =
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.future-trailers.subscribe',
+                  [cleanTrailers],
+                )
+                as int;
+
+        expect(
+          program.invokeImport('wasi:io/poll@0.2.0.pollable.ready', [
+            cleanPollable,
+          ]),
+          isFalse,
+        );
+        cleanStream.close();
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          program.invokeImport('wasi:io/poll@0.2.0.pollable.ready', [
+            cleanPollable,
+          ]),
+          isTrue,
+        );
+        final cleanResult =
+            program.invokeImport('wasi:http/types@0.2.0.future-trailers.get', [
+                  cleanTrailers,
+                ])
+                as WasmComponentValueData;
+        expect(
+          _optionHandle(_resultOk(_resultOk(_optionPayload(cleanResult)))),
+          isNull,
+        );
+
+        final failedStream = WASIPreview2InputStream();
+        final failedTrailers = finishBody(failedStream);
+        final failedPollable =
+            program.invokeImport(
+                  'wasi:http/types@0.2.0.future-trailers.subscribe',
+                  [failedTrailers],
+                )
+                as int;
+
+        expect(
+          program.invokeImport('wasi:io/poll@0.2.0.pollable.ready', [
+            failedPollable,
+          ]),
+          isFalse,
+        );
+        failedStream.fail('HTTP-response-timeout');
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          program.invokeImport('wasi:io/poll@0.2.0.pollable.ready', [
+            failedPollable,
+          ]),
+          isTrue,
+        );
+        final failedResult =
+            program.invokeImport('wasi:http/types@0.2.0.future-trailers.get', [
+                  failedTrailers,
+                ])
+                as WasmComponentValueData;
+        final bodyResult = _resultOk(_optionPayload(failedResult));
+
+        expect(_resultErrorLabel(bodyResult), 'HTTP-response-timeout');
+
+        final suppliedTrailers = WASIPreview2HttpFutureTrailers.completed(
+          WASIPreview2HttpResult<WASIPreview2HttpFields?>.ok(
+            WASIPreview2HttpFields(
+              entries: const <WASIPreview2HttpFieldEntry>[
+                WASIPreview2HttpFieldEntry('x-shared', <int>[49]),
+              ],
+            ),
+          ),
+        );
+        final firstStream = WASIPreview2InputStream();
+        final secondStream = WASIPreview2InputStream();
+        final sharedHandles = <int>[
+          finishBody(firstStream, trailers: suppliedTrailers),
+          finishBody(secondStream, trailers: suppliedTrailers),
+        ];
+        firstStream.close();
+        secondStream.close();
+        await Future<void>.delayed(Duration.zero);
+
+        for (final handle in sharedHandles) {
+          final result =
+              program.invokeImport(
+                    'wasi:http/types@0.2.0.future-trailers.get',
+                    [handle],
+                  )
+                  as WasmComponentValueData;
+          final fields = _optionHandle(
+            _resultOk(_resultOk(_optionPayload(result))),
+          );
+          expect(fields, isNotNull);
+          expect(
+            _httpFieldEntryValues(
+              _httpFieldEntries(_fieldsEntries(program, fields!)),
+              'x-shared',
+            ),
+            [
+              [49],
+            ],
+          );
+        }
+      },
+    );
+
+    test('Preview2 preopens allocate only runtime-scoped handles', () async {
+      final table = WASIComponentResourceTable();
+      final filesystem = WASIPreview2FilesystemHost(
+        table: table,
+        preopens: <String, WASIPreview2FilesystemDirectory>{
+          '/workspace': WASIPreview2FilesystemDirectory(),
+        },
+      );
+
+      expect(table.activeCount, 0);
+      await table.runScoped<void>(() async {
+        final directories =
+            filesystem
+                    .imports['wasi:filesystem/preopens@0.2.0.get-directories']!(
+                  const <Object?>[],
+                )
+                as WasmComponentValueData;
+        final descriptor = _filesystemPreopens(directories).single.$1;
+
+        expect(table.contains(descriptor), isTrue);
+        expect(table.activeCount, 1);
+      });
+      expect(table.activeCount, 0);
+    });
+
+    test(
+      'Preview2 filesystem preserves descriptor flags and follows symlinks only when requested',
+      () {
+        const source = '''
+package wasi-testsuite:test;
+
+world filesystem-test {
+  include wasi:filesystem/imports@0.2.0;
+}
+''';
+        const unicodeLinkTarget = '目标';
+        final dynamicallyCreatedEntries =
+            <WASIPreview2FilesystemDirectoryEntry>[];
+        var dynamicCreateCalls = 0;
+        var noteSetTimesCalls = 0;
+        final linkedSources = <String>[];
+        final dynamicDirectory = WASIPreview2FilesystemDirectory.dynamic(
+          canMutate: true,
+          entries: () => dynamicallyCreatedEntries,
+          resolveEntry: (name) {
+            for (final entry in dynamicallyCreatedEntries) {
+              if (entry.name == name) {
+                return entry;
+              }
+            }
+            return null;
+          },
+          createFile: (name) {
+            dynamicCreateCalls++;
+            final entry = WASIPreview2FilesystemDirectoryEntry.regularFile(
+              name,
+              canMutate: true,
+              currentSize: () => BigInt.zero,
+              readBytes: (_) => Uint8List(0),
+              writeBytes: (_, _) =>
+                  const WASIPreview2FilesystemMutationResult.ok(),
+            );
+            dynamicallyCreatedEntries.add(entry);
+            return entry;
+          },
+        );
+        final filesystem = WASIPreview2FilesystemHost(
+          preopens: {
+            '/': WASIPreview2FilesystemDirectory(
+              canMutate: true,
+              link: (oldName, _, _) {
+                linkedSources.add(oldName);
+                return const WASIPreview2FilesystemMutationResult.ok();
+              },
+              entries: [
+                WASIPreview2FilesystemDirectoryEntry.regularFile(
+                  'note.txt',
+                  bytes: const <int>[104, 101, 108, 108, 111],
+                  canMutate: true,
+                  setTimes: (_) {
+                    noteSetTimesCalls++;
+                    return const WASIPreview2FilesystemMutationResult.ok();
+                  },
+                ),
+                WASIPreview2FilesystemDirectoryEntry.symbolicLink(
+                  'note-link',
+                  target: 'note.txt',
+                ),
+                WASIPreview2FilesystemDirectoryEntry.symbolicLink(
+                  'unicode-link',
+                  target: unicodeLinkTarget,
+                ),
+                WASIPreview2FilesystemDirectoryEntry.regularFile(
+                  'external.txt',
+                  canMutate: true,
+                  readBytes: (_) => Uint8List(0),
+                  currentSize: () => BigInt.zero,
+                  writeBytes: (_, _) =>
+                      const WASIPreview2FilesystemMutationResult.ok(),
+                ),
+                WASIPreview2FilesystemDirectoryEntry.directory(
+                  'dynamic',
+                  directory: dynamicDirectory,
+                ),
+                WASIPreview2FilesystemDirectoryEntry.symbolicLink(
+                  'dynamic-link',
+                  target: 'dynamic',
+                ),
+                WASIPreview2FilesystemDirectoryEntry.symbolicLink(
+                  'loop-a',
+                  target: 'loop-b',
+                ),
+                WASIPreview2FilesystemDirectoryEntry.symbolicLink(
+                  'loop-b',
+                  target: 'loop-a',
+                ),
+              ],
+            ),
+          },
+        );
+        final program = WASIPreview2ComponentHost(filesystemHost: filesystem)
+            .bindWitWorld(
+              WASIComponentWitDocument.parse(source),
+              worldName: 'filesystem-test',
+            );
+        final directories =
+            program.invokeImport(
+                  'wasi:filesystem/preopens@0.2.0.get-directories',
+                  const [],
+                )
+                as WasmComponentValueData;
+        final root = _filesystemPreopens(directories).single.$1;
+
+        int open(String path, List<String> pathFlags, List<String> flags) {
+          final result =
+              program.invokeImport(
+                    'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                    [
+                      root,
+                      _flagsValue(pathFlags),
+                      path,
+                      _flagsValue(const <String>[]),
+                      _flagsValue(flags),
+                    ],
+                  )
+                  as WasmComponentValueData;
+          return _resourceHandle(_resultOk(result));
+        }
+
+        final readOnly = open('note.txt', const [], const ['read']);
+        final readOnlyFlags =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.get-flags',
+                  [readOnly],
+                )
+                as WasmComponentValueData;
+        final deniedWrite =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.write',
+                  [
+                    readOnly,
+                    _u8ListValue([33]),
+                    BigInt.zero,
+                  ],
+                )
+                as WasmComponentValueData;
+        expect(_resultOk(readOnlyFlags).labels, ['read']);
+        expect(_resultErrorLabel(deniedWrite), 'read-only');
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.sync-data',
+                [readOnly],
+              )
+              as WasmComponentValueData,
+        );
+        _expectUnitOk(
+          program.invokeImport('wasi:filesystem/types@0.2.0.descriptor.sync', [
+                readOnly,
+              ])
+              as WasmComponentValueData,
+        );
+
+        final writeOnly = open('note.txt', const [], const ['write']);
+        final writeOnlyFlags =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.get-flags',
+                  [writeOnly],
+                )
+                as WasmComponentValueData;
+        final deniedRead =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.read',
+                  [writeOnly, BigInt.one, BigInt.zero],
+                )
+                as WasmComponentValueData;
+        expect(_resultOk(writeOnlyFlags).labels, ['write']);
+        expect(_resultErrorLabel(deniedRead), 'not-permitted');
+
+        final unsupportedSyncOpen =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                  [
+                    root,
+                    _flagsValue(const <String>[]),
+                    'external.txt',
+                    _flagsValue(const <String>[]),
+                    _flagsValue(const <String>['write', 'file-integrity-sync']),
+                  ],
+                )
+                as WasmComponentValueData;
+        expect(_resultErrorLabel(unsupportedSyncOpen), 'unsupported');
+
+        final dynamic = open('dynamic', const [], const [
+          'read',
+          'mutate-directory',
+        ]);
+        final rejectedDynamicCreate =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                  [
+                    dynamic,
+                    _flagsValue(const <String>[]),
+                    'must-not-exist.txt',
+                    _flagsValue(const <String>['create']),
+                    _flagsValue(const <String>['write', 'file-integrity-sync']),
+                  ],
+                )
+                as WasmComponentValueData;
+        expect(_resultErrorLabel(rejectedDynamicCreate), 'unsupported');
+        expect(dynamicCreateCalls, 0);
+        expect(dynamicallyCreatedEntries, isEmpty);
+
+        final rejectedDirectoryFlagCreate =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                  [
+                    root,
+                    _flagsValue(const <String>[]),
+                    'invalid-created-file.txt',
+                    _flagsValue(const <String>['create']),
+                    _flagsValue(const <String>['write', 'mutate-directory']),
+                  ],
+                )
+                as WasmComponentValueData;
+        expect(_resultErrorLabel(rejectedDirectoryFlagCreate), 'invalid');
+        final missingAfterRejectedCreate =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                  [
+                    root,
+                    _flagsValue(const <String>[]),
+                    'invalid-created-file.txt',
+                    _flagsValue(const <String>[]),
+                    _flagsValue(const <String>['read']),
+                  ],
+                )
+                as WasmComponentValueData;
+        expect(_resultErrorLabel(missingAfterRejectedCreate), 'no-entry');
+
+        final createdThroughDirectorySymlink =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                  [
+                    root,
+                    _flagsValue(const <String>[]),
+                    'dynamic-link/created.txt',
+                    _flagsValue(const <String>['create']),
+                    _flagsValue(const <String>['write']),
+                  ],
+                )
+                as WasmComponentValueData;
+        expect(createdThroughDirectorySymlink.isOk, isTrue);
+        expect(dynamicCreateCalls, 1);
+        expect(dynamicallyCreatedEntries.map((entry) => entry.name), [
+          'created.txt',
+        ]);
+
+        final loopCreate =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                  [
+                    root,
+                    _flagsValue(const <String>['symlink-follow']),
+                    'loop-a',
+                    _flagsValue(const <String>['create']),
+                    _flagsValue(const <String>['write']),
+                  ],
+                )
+                as WasmComponentValueData;
+        expect(_resultErrorLabel(loopCreate), 'loop');
+
+        final nonDirectoryCreate =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                  [
+                    root,
+                    _flagsValue(const <String>[]),
+                    'note.txt/child.txt',
+                    _flagsValue(const <String>['create']),
+                    _flagsValue(const <String>['write']),
+                  ],
+                )
+                as WasmComponentValueData;
+        expect(_resultErrorLabel(nonDirectoryCreate), 'not-directory');
+
+        final link = open('note-link', const [], const ['read']);
+        final followed = open(
+          'note-link',
+          const ['symlink-follow'],
+          const ['read'],
+        );
+        final linkType =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.get-type',
+                  [link],
+                )
+                as WasmComponentValueData;
+        final followedType =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.get-type',
+                  [followed],
+                )
+                as WasmComponentValueData;
+        final followedRead =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.read',
+                  [followed, BigInt.from(5), BigInt.zero],
+                )
+                as WasmComponentValueData;
+        expect(_caseLabel(_resultOk(linkType)), 'symbolic-link');
+        expect(_caseLabel(_resultOk(followedType)), 'regular-file');
+        expect(_readBytes(followedRead), [104, 101, 108, 108, 111]);
+
+        final linkStat =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.stat-at',
+                  [root, _flagsValue(const <String>[]), 'note-link'],
+                )
+                as WasmComponentValueData;
+        final followedStat =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.stat-at',
+                  [
+                    root,
+                    _flagsValue(const <String>['symlink-follow']),
+                    'note-link',
+                  ],
+                )
+                as WasmComponentValueData;
+        final unicodeLinkStat =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.stat-at',
+                  [root, _flagsValue(const <String>[]), 'unicode-link'],
+                )
+                as WasmComponentValueData;
+        final unicodeReadlink =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.readlink-at',
+                  [root, 'unicode-link'],
+                )
+                as WasmComponentValueData;
+        expect(_descriptorStatType(_resultOk(linkStat)), 'symbolic-link');
+        expect(_descriptorStatType(_resultOk(followedStat)), 'regular-file');
+        expect(_descriptorStatSize(_resultOk(unicodeLinkStat)), BigInt.from(6));
+        expect(_resultOk(unicodeReadlink).string, unicodeLinkTarget);
+
+        final targetHash =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.metadata-hash-at',
+                  [root, _flagsValue(const <String>[]), 'note.txt'],
+                )
+                as WasmComponentValueData;
+        final linkHash =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.metadata-hash-at',
+                  [root, _flagsValue(const <String>[]), 'note-link'],
+                )
+                as WasmComponentValueData;
+        final followedHash =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.metadata-hash-at',
+                  [
+                    root,
+                    _flagsValue(const <String>['symlink-follow']),
+                    'note-link',
+                  ],
+                )
+                as WasmComponentValueData;
+        expect(
+          _metadataHashLower(_resultOk(linkHash)),
+          isNot(_metadataHashLower(_resultOk(targetHash))),
+        );
+        expect(
+          _metadataHashLower(_resultOk(followedHash)),
+          _metadataHashLower(_resultOk(targetHash)),
+        );
+
+        final noFollowSetTimes =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.set-times-at',
+                  [
+                    root,
+                    _flagsValue(const <String>[]),
+                    'note-link',
+                    _variantCaseValue('now', 1),
+                    _variantCaseValue('no-change', 0),
+                  ],
+                )
+                as WasmComponentValueData;
+        expect(_resultErrorLabel(noFollowSetTimes), 'read-only');
+        expect(noteSetTimesCalls, 0);
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.set-times-at',
+                [
+                  root,
+                  _flagsValue(const <String>['symlink-follow']),
+                  'note-link',
+                  _variantCaseValue('now', 1),
+                  _variantCaseValue('no-change', 0),
+                ],
+              )
+              as WasmComponentValueData,
+        );
+        expect(noteSetTimesCalls, 1);
+
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.link-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'note-link',
+                  root,
+                  'linked-symlink',
+                ],
+              )
+              as WasmComponentValueData,
+        );
+        _expectUnitOk(
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.link-at',
+                [
+                  root,
+                  _flagsValue(const <String>['symlink-follow']),
+                  'note-link',
+                  root,
+                  'linked-target',
+                ],
+              )
+              as WasmComponentValueData,
+        );
+        expect(linkedSources, ['note-link', 'note.txt']);
+
+        final directorySync =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.sync',
+                  [root],
+                )
+                as WasmComponentValueData;
+        final directorySyncData =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.sync-data',
+                  [root],
+                )
+                as WasmComponentValueData;
+        expect(_resultErrorLabel(directorySync), 'unsupported');
+        expect(_resultErrorLabel(directorySyncData), 'unsupported');
+      },
+    );
+
+    test(
+      'Preview2 filesystem keeps create and symlink resolution beneath the preopen',
+      () {
+        const source = '''
+package wasi-testsuite:test;
+
+world filesystem-test {
+  include wasi:filesystem/imports@0.2.0;
+}
+''';
+        final nested = WASIPreview2FilesystemDirectory(
+          canMutate: true,
+          entries: <WASIPreview2FilesystemDirectoryEntry>[
+            WASIPreview2FilesystemDirectoryEntry.regularFile(
+              'nested.txt',
+              bytes: const <int>[2],
+            ),
+            WASIPreview2FilesystemDirectoryEntry.symbolicLink(
+              'self',
+              target: '.',
+            ),
+            WASIPreview2FilesystemDirectoryEntry.symbolicLink(
+              'up',
+              target: '..',
+            ),
+          ],
+        );
+        final filesystem = WASIPreview2FilesystemHost(
+          preopens: <String, WASIPreview2FilesystemDirectory>{
+            '/': WASIPreview2FilesystemDirectory(
+              canMutate: true,
+              entries: <WASIPreview2FilesystemDirectoryEntry>[
+                WASIPreview2FilesystemDirectoryEntry.regularFile(
+                  'root.txt',
+                  bytes: const <int>[1],
+                ),
+                WASIPreview2FilesystemDirectoryEntry.directory(
+                  'nested',
+                  directory: nested,
+                ),
+                WASIPreview2FilesystemDirectoryEntry.symbolicLink(
+                  'absolute',
+                  target: '/outside',
+                ),
+                WASIPreview2FilesystemDirectoryEntry.symbolicLink(
+                  'escape',
+                  target: '..',
+                ),
+              ],
+            ),
+          },
+        );
+        final program = WASIPreview2ComponentHost(filesystemHost: filesystem)
+            .bindWitWorld(
+              WASIComponentWitDocument.parse(source),
+              worldName: 'filesystem-test',
+            );
+        final directories =
+            program.invokeImport(
+                  'wasi:filesystem/preopens@0.2.0.get-directories',
+                  const <Object?>[],
+                )
+                as WasmComponentValueData;
+        final root = _filesystemPreopens(directories).single.$1;
+
+        WasmComponentValueData openAt(
+          String path, {
+          List<String> pathFlags = const <String>[],
+          List<String> openFlags = const <String>[],
+          List<String> descriptorFlags = const <String>['read'],
+        }) {
+          return program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                <Object?>[
+                  root,
+                  _flagsValue(pathFlags),
+                  path,
+                  _flagsValue(openFlags),
+                  _flagsValue(descriptorFlags),
+                ],
+              )
+              as WasmComponentValueData;
+        }
+
+        final createDirectory = openAt(
+          'must-remain-missing',
+          openFlags: const <String>['create', 'directory'],
+          descriptorFlags: const <String>['write'],
+        );
+        expect(_resultErrorLabel(createDirectory), 'no-entry');
+        final rejectedTruncate = openAt(
+          'root.txt',
+          openFlags: const <String>['truncate'],
+        );
+        expect(_resultErrorLabel(rejectedTruncate), 'invalid');
+        final rootFile = _resourceHandle(_resultOk(openAt('root.txt')));
+        final rootFileRead =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.read',
+                  <Object?>[rootFile, BigInt.one, BigInt.zero],
+                )
+                as WasmComponentValueData;
+        expect(_readBytes(rootFileRead), const <int>[1]);
+        final missingStat =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.stat-at',
+                  <Object?>[
+                    root,
+                    _flagsValue(const <String>[]),
+                    'must-remain-missing',
+                  ],
+                )
+                as WasmComponentValueData;
+        expect(_resultErrorLabel(missingStat), 'no-entry');
+
+        final absoluteSymlink =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.symlink-at',
+                  <Object?>[root, '/outside', 'created-absolute'],
+                )
+                as WasmComponentValueData;
+        expect(_resultErrorLabel(absoluteSymlink), 'not-permitted');
+        final nulSymlink =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.symlink-at',
+                  <Object?>[root, 'bad\u0000target', 'created-nul'],
+                )
+                as WasmComponentValueData;
+        expect(_resultErrorLabel(nulSymlink), 'not-permitted');
+        final absoluteReadlink =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.readlink-at',
+                  <Object?>[root, 'absolute'],
+                )
+                as WasmComponentValueData;
+        expect(_resultErrorLabel(absoluteReadlink), 'not-permitted');
+
+        for (final path in <String>[
+          'nested/../root.txt',
+          'nested/up/root.txt',
+        ]) {
+          final file = _resourceHandle(_resultOk(openAt(path)));
+          final read =
+              program.invokeImport(
+                    'wasi:filesystem/types@0.2.0.descriptor.read',
+                    <Object?>[file, BigInt.one, BigInt.zero],
+                  )
+                  as WasmComponentValueData;
+          expect(_readBytes(read), const <int>[1], reason: path);
+        }
+
+        final nestedFile = _resourceHandle(
+          _resultOk(openAt('nested/self/nested.txt')),
+        );
+        final nestedRead =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.read',
+                  <Object?>[nestedFile, BigInt.one, BigInt.zero],
+                )
+                as WasmComponentValueData;
+        expect(_readBytes(nestedRead), const <int>[2]);
+
+        expect(
+          openAt(
+            'nested/../created.txt',
+            openFlags: const <String>['create'],
+            descriptorFlags: const <String>['write'],
+          ).isOk,
+          isTrue,
+        );
+        final createdStat =
+            program.invokeImport(
+                  'wasi:filesystem/types@0.2.0.descriptor.stat-at',
+                  <Object?>[root, _flagsValue(const <String>[]), 'created.txt'],
+                )
+                as WasmComponentValueData;
+        expect(createdStat.isOk, isTrue);
+
+        expect(_resultErrorLabel(openAt('../root.txt')), 'not-permitted');
+        expect(_resultErrorLabel(openAt('escape/root.txt')), 'not-permitted');
+        expect(
+          _resultErrorLabel(
+            openAt(
+              'nested/../../escaped.txt',
+              openFlags: const <String>['create'],
+              descriptorFlags: const <String>['write'],
+            ),
+          ),
+          'not-permitted',
+        );
+      },
+    );
 
     test('Preview2 expands and binds standard WASI filesystem imports', () {
       const source = '''
@@ -2629,6 +4085,16 @@ world filesystem-test {
               )
               as WasmComponentValueData;
       final root = _filesystemPreopens(directories).single.$1;
+      final nextDirectories =
+          program.invokeImport(
+                'wasi:filesystem/preopens@0.2.0.get-directories',
+                const [],
+              )
+              as WasmComponentValueData;
+      final nextRoot = _filesystemPreopens(nextDirectories).single.$1;
+      expect(nextRoot, isNot(root));
+      expect(filesystem.table.contains(root), isTrue);
+      expect(filesystem.table.contains(nextRoot), isTrue);
       final directoryRead =
           program.invokeImport(
                 'wasi:filesystem/types@0.2.0.descriptor.read-directory',
@@ -4853,6 +6319,17 @@ WasmComponentValueData _resultOkValue(WasmComponentValueData value) {
   );
 }
 
+WasmComponentValueData _resultErrorValue(WasmComponentValueData value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.result,
+    rawBytes: Uint8List(0),
+    index: 1,
+    label: 'error',
+    isOk: false,
+    associatedValue: value,
+  );
+}
+
 WasmComponentValueData _unitOkCaseValue() {
   return WasmComponentValueData(
     kind: WasmComponentValueDataKind.result,
@@ -5137,6 +6614,14 @@ String _descriptorStatType(WasmComponentValueData value) {
     throw StateError('expected descriptor-stat, got ${value.kind.name}');
   }
   return _caseLabel(value.items[0]);
+}
+
+BigInt _descriptorStatSize(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.record ||
+      value.items.length != 6) {
+    throw StateError('expected descriptor-stat, got ${value.kind.name}');
+  }
+  return _u64Data(value.items[2]);
 }
 
 BigInt _metadataHashLower(WasmComponentValueData value) {

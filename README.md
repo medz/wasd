@@ -17,7 +17,8 @@ WASD is a Dart package for:
 - Compiling and instantiating modules from bytes or streams
 - Instantiating modules with host imports
 - Executing exported functions from Dart
-- Running WASI Preview1 workloads
+- Running WASI Preview1 command modules
+- Running stable WASI 0.2.12 command and HTTP proxy components on Dart VM
 - Inspecting module imports/exports/custom sections
 
 ## Why WASD
@@ -25,7 +26,7 @@ WASD is a Dart package for:
 - Pure Dart core runtime, aligned with Dart/Flutter embedding workflows
 - Public API that mirrors WebAssembly-style operations (`compile`, `instantiate`, `validate`)
 - Explicit host integration via import maps and typed wrappers
-- Built-in WASI Preview1 host surface through `WASI`
+- Built-in WASI Preview1 host plus Preview2 command/proxy runners through `WASI`
 - Regression-oriented tests and conformance tooling in-repo
 
 ## Installation
@@ -38,7 +39,7 @@ Or add manually in `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  wasd: ^0.3.0
+  wasd: ^0.4.0
 ```
 
 ## Quick Start
@@ -50,8 +51,8 @@ dart run example/wasm_cli.dart
 dart run example/wasm_cli.dart 3 9
 ```
 
-The Flutter DOOM example has its own guide in
-[`example/doom/README.md`](example/doom/README.md).
+The Flutter DOOM example has its own guide in the
+[GitHub repository](https://github.com/medz/wasd/tree/main/example/doom).
 
 Minimal module invocation:
 
@@ -142,6 +143,48 @@ final stderr = BytesBuilder();
 final wasi = WASI(stdoutSink: stdout.add, stderrSink: stderr.add);
 ```
 
+## WASI Preview2 (Dart VM)
+
+Decode a stable [WASI 0.2.12](https://github.com/WebAssembly/WASI/blob/main/specifications/wasi-0.2.12/Overview.md)
+`wasi:cli/command` component and run it with the native Preview2 host:
+
+```dart
+import 'dart:io';
+import 'package:wasd/wasd.dart';
+
+Future<void> main() async {
+  final bytes = await File('app.component.wasm').readAsBytes();
+  final component = WasmComponent.decode(bytes);
+  final host = WASI.preview2(args: const ['app.component.wasm']);
+  final result = await WASIPreview2CommandRunner(host).run(component);
+
+  print('exitCode=${result.exitCode}');
+}
+```
+
+`WASIPreview2ProxyRunner` executes stable `wasi:http/proxy` incoming handlers
+against a `WASIPreview2HttpIncomingRequest`. Preview2 execution is currently
+native Dart VM only and targets the synchronous Canonical ABI required by
+these stable WASI 0.2.12 worlds.
+
+```dart
+final proxyComponent = WasmComponent.decode(
+  await File('proxy.component.wasm').readAsBytes(),
+);
+final proxyHost = WASI.preview2();
+final request = WASIPreview2HttpIncomingRequest(
+  method: const WASIPreview2HttpMethod.standard('get'),
+  headers: WASIPreview2HttpFields(),
+  pathWithQuery: '/',
+  scheme: const WASIPreview2HttpScheme.standard('HTTP'),
+  authority: 'example.test',
+);
+final response = await WASIPreview2ProxyRunner(proxyHost).handle(
+  proxyComponent,
+  request,
+);
+```
+
 ## Module Metadata
 
 ```dart
@@ -165,6 +208,7 @@ Uint8List loadYourModuleBytes() => throw UnimplementedError();
 ```bash
 dart analyze
 dart test test/wasi_test.dart test/wasm_test.dart
+dart test test/wasi_preview2_conformance_test.dart test/wasi_preview2_http_proxy_toolchain_test.dart
 ```
 
 ## Compatibility Snapshot
@@ -180,16 +224,39 @@ dart test test/wasi_test.dart test/wasm_test.dart
 | WASI Version | Status |
 | --- | --- |
 | Preview 1 | Supported for `wasi_snapshot_preview1` command modules |
-| Preview 2 | Component host/import support for current WASI 0.2.x packages through `0.2.8`: `random`, `clocks`, `io`, `cli`, `filesystem`, `sockets`, and `http`; Dart VM native adapters cover filesystem, sockets, and outgoing HTTP |
-| Preview 3 | Partial component host/filesystem/async-profile support; full Preview3 runtime coverage is still in progress |
+| Preview 2 | Native Dart VM execution for stable WASI 0.2.12 `wasi:cli/command` and `wasi:http/proxy` components, with the required `random`, `clocks`, `io`, `cli`, `filesystem`, `sockets`, and `http` host import bindings |
+| Preview 3 | Not supported for execution; experimental host/filesystem/async scaffolding remains available |
 
 ### Runtime Support
 
-| Runtime | Preview1 host | Filesystem model |
-| --- | --- | --- |
-| Dart VM | In-repo `wasi_snapshot_preview1`; passes official `wasm32-wasip1` wasi-testsuite command modules | Real host preopens plus portable in-memory VFS |
-| Node.js | In-repo `wasi_snapshot_preview1`, not `node:wasi` | Real host preopens plus portable in-memory VFS |
-| Browser JS | In-repo `wasi_snapshot_preview1` | Portable in-memory VFS |
+| Runtime | Preview1 host | Preview2 runner | Filesystem model |
+| --- | --- | --- | --- |
+| Dart VM | In-repo `wasi_snapshot_preview1`; passes official `wasm32-wasip1` wasi-testsuite command modules | Stable WASI 0.2.12 command and HTTP proxy components | Real host preopens plus portable in-memory VFS |
+| Node.js | In-repo `wasi_snapshot_preview1`, not `node:wasi` | Not yet supported | Real host preopens plus portable in-memory VFS |
+| Browser JS | In-repo `wasi_snapshot_preview1` | Not yet supported | Portable in-memory VFS |
+
+The Preview2 runner deliberately does not claim general Component Model
+coverage. Component Model 0.3 async/future/stream/task features, experimental
+proposal packages, and full Preview3 execution remain out of scope.
+
+When `dart:io` cannot faithfully implement a Preview2 socket operation, the
+native adapter returns `not-supported` instead of reporting simulated success.
+Native TCP bind/listen is currently unsupported; native TCP connect and UDP
+bind/connect remain available.
+
+Dart `HttpClient` does not expose HTTP trailers. Native outgoing-handler
+requests with trailers and incoming responses that declare trailers therefore
+report `HTTP-protocol-error`; proxy response trailers remain available to the
+host caller.
+
+Native outgoing HTTP preserves encoded response bodies and redirect responses;
+it does not transparently decompress content or follow redirects.
+
+The socket resolver performs dependency-free IDNA ToASCII conversion for a
+conservative canonical Unicode subset and validates existing A-labels.
+Disallowed symbols, malformed A-labels, and labels that require Unicode
+normalization tables or ContextJ/ContextO processing are rejected with
+`invalid-argument` instead of producing a non-canonical DNS name.
 
 ## Contributing
 

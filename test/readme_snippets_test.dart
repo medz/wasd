@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
@@ -140,6 +142,43 @@ void main() {
       expect(wasi.start(runtime.instance), 42);
       expect(stdout.toBytes(), isEmpty);
       expect(stderr.toBytes(), isEmpty);
+    });
+
+    test('Preview2 command snippet executes a stable component', () async {
+      final bytes = File(
+        'test/fixtures/wasi_preview2/wasmtime_v47_0_3_hello.component.wasm',
+      ).readAsBytesSync();
+      final component = WasmComponent.decode(bytes);
+      final host = WASI.preview2(args: const ['app.component.wasm']);
+
+      final result = await WASIPreview2CommandRunner(host).run(component);
+
+      expect(result.exitCode, 0);
+      expect(utf8.decode(host.cliHost.stdoutBytes), 'Hello, world!\n');
+    });
+
+    test('Preview2 proxy snippet executes a stable component', () async {
+      final proxyComponent = WasmComponent.decode(
+        File(
+          'test/fixtures/wasi_preview2/'
+          'wasi_http_0_2_12_static_response.component.wasm',
+        ).readAsBytesSync(),
+      );
+      final proxyHost = WASI.preview2();
+      final request = WASIPreview2HttpIncomingRequest(
+        method: const WASIPreview2HttpMethod.standard('get'),
+        headers: WASIPreview2HttpFields(),
+        pathWithQuery: '/',
+        scheme: const WASIPreview2HttpScheme.standard('HTTP'),
+        authority: 'example.test',
+      );
+
+      final response = await WASIPreview2ProxyRunner(
+        proxyHost,
+      ).handle(proxyComponent, request);
+
+      expect(response.response?.isOk, isTrue);
+      expect(response.response?.value?.statusCode, 200);
     });
   });
 }

@@ -224,7 +224,16 @@ final class WASIPreview2IpSocketAddress {
 
 /// Resolves a WASI socket name to zero or more IP addresses.
 typedef WASIPreview2AddressResolver =
-    Iterable<WASIPreview2IpAddress> Function(String name);
+    FutureOr<Iterable<WASIPreview2IpAddress>> Function(String name);
+
+/// A standardized failure reported by a Preview2 address resolver.
+final class WASIPreview2AddressResolverError implements Exception {
+  /// Creates a resolver failure with a WASI sockets [errorCode].
+  const WASIPreview2AddressResolverError(this.errorCode);
+
+  /// WASI sockets error label returned by `resolve-next-address`.
+  final String errorCode;
+}
 
 /// Result returned by a Preview2 sockets backend operation.
 final class WASIPreview2SocketResult<T> {
@@ -249,19 +258,28 @@ final class WASIPreview2SocketOperation<T> {
   /// Creates an already-completed operation.
   WASIPreview2SocketOperation.completed(WASIPreview2SocketResult<T> result)
     : _result = result,
-      _ready = null;
+      _ready = null,
+      _disposeValue = null;
 
   /// Creates an operation completed by [future].
   WASIPreview2SocketOperation.pending(
-    Future<WASIPreview2SocketResult<T>> future,
-  ) : _ready = Completer<void>() {
+    Future<WASIPreview2SocketResult<T>> future, {
+    void Function(T value)? disposeValue,
+  }) : _ready = Completer<void>(),
+       _disposeValue = disposeValue {
     future.then(
       (result) {
-        _result = result;
+        if (_disposed) {
+          _disposeResult(result);
+        } else {
+          _result = result;
+        }
         _completeReady();
       },
       onError: (Object error) {
-        _result = WASIPreview2SocketResult<T>.error('unknown');
+        if (!_disposed) {
+          _result = WASIPreview2SocketResult<T>.error('unknown');
+        }
         _completeReady();
       },
     );
@@ -269,6 +287,9 @@ final class WASIPreview2SocketOperation<T> {
 
   WASIPreview2SocketResult<T>? _result;
   final Completer<void>? _ready;
+  final void Function(T value)? _disposeValue;
+  void Function(T value)? _fallbackDisposeValue;
+  bool _disposed = false;
 
   /// Whether [resultOrNull] is available without blocking.
   bool get isReady => _result != null;
@@ -288,6 +309,27 @@ final class WASIPreview2SocketOperation<T> {
       ready.complete();
     }
   }
+
+  /// Releases a pending result, using [disposeValue] as a fallback disposer.
+  void dispose({void Function(T value)? disposeValue}) {
+    if (_disposed) {
+      return;
+    }
+    _fallbackDisposeValue = disposeValue;
+    _disposed = true;
+    final result = _result;
+    _result = null;
+    if (result != null) {
+      _disposeResult(result);
+    }
+  }
+
+  void _disposeResult(WASIPreview2SocketResult<T> result) {
+    final value = result.value;
+    if (value != null) {
+      (_disposeValue ?? _fallbackDisposeValue)?.call(value);
+    }
+  }
 }
 
 /// Connected TCP streams returned by a sockets backend.
@@ -299,6 +341,8 @@ final class WASIPreview2TcpConnection {
     required this.localAddress,
     required this.remoteAddress,
     this.close,
+    this.shutdown,
+    this.dispose,
   });
 
   /// Input bytes received from the peer.
@@ -315,6 +359,25 @@ final class WASIPreview2TcpConnection {
 
   /// Optional close hook.
   final void Function(String shutdownType)? close;
+
+  /// Optional shutdown hook which returns a WASI socket error label.
+  final String? Function(String shutdownType)? shutdown;
+
+  /// Optional hook used when the owning socket resource is dropped.
+  final void Function()? dispose;
+}
+
+/// Optional backend capability marker for socket options.
+///
+/// Backends which implement this interface can explicitly reject options that
+/// their underlying platform API cannot faithfully apply. Backends which do
+/// not implement it retain the portable in-memory option model.
+abstract interface class WASIPreview2SocketOptionsBackend {
+  /// Whether TCP socket option getters and setters are implemented.
+  bool get supportsTcpSocketOptions;
+
+  /// Whether UDP socket option getters and setters are implemented.
+  bool get supportsUdpSocketOptions;
 }
 
 /// Listening TCP socket returned by a sockets backend.
@@ -539,26 +602,28 @@ base class WASIPreview2SocketsHost {
   late final WASIComponentResourceType<_WASIPreview2TcpSocket> _tcpSocketType =
       table.defineType<_WASIPreview2TcpSocket>(
         'wasi:sockets/tcp@0.2.0.tcp-socket',
+        onDrop: _dropTcpSocket,
       );
 
   late final WASIComponentResourceType<_WASIPreview2UdpSocket> _udpSocketType =
       table.defineType<_WASIPreview2UdpSocket>(
         'wasi:sockets/udp@0.2.0.udp-socket',
+        onDrop: _dropUdpSocket,
       );
 
   late final WASIComponentResourceType<_WASIPreview2IncomingDatagramStream>
   _incomingDatagramStreamType = table
       .defineType<_WASIPreview2IncomingDatagramStream>(
         'wasi:sockets/udp@0.2.0.incoming-datagram-stream',
+        onDrop: (stream) => stream.generation.release(),
       );
 
   late final WASIComponentResourceType<_WASIPreview2OutgoingDatagramStream>
   _outgoingDatagramStreamType = table
       .defineType<_WASIPreview2OutgoingDatagramStream>(
         'wasi:sockets/udp@0.2.0.outgoing-datagram-stream',
+        onDrop: (stream) => stream.generation.release(),
       );
-
-  int _nextNetworkId = 1;
 
   /// Standard `wasi:sockets@0.2.0` import callbacks.
   late final Map<String, WASIComponentWitAdapterCallback>
@@ -712,7 +777,7 @@ base class WASIPreview2SocketsHost {
   int _instanceNetwork() {
     return table.insert<_WASIPreview2Network>(
       _networkType,
-      _WASIPreview2Network(_nextNetworkId++),
+      const _WASIPreview2Network(0),
     );
   }
 
@@ -720,13 +785,26 @@ base class WASIPreview2SocketsHost {
     if (_network(networkHandle) == null) {
       return _errorResult('invalid-argument');
     }
-    final addresses = _resolveAddresses(name).toList(growable: false);
-    if (addresses.isEmpty) {
-      return _errorResult('name-unresolvable');
+    final literal = WASIPreview2IpAddress._parseLiteral(name);
+    final resolverName = literal == null ? _toAsciiDomainName(name) : null;
+    if (literal == null && resolverName == null) {
+      return _errorResult('invalid-argument');
+    }
+    _WASIPreview2ResolveAddressStream stream;
+    try {
+      stream = _WASIPreview2ResolveAddressStream(
+        literal == null
+            ? _resolveAddresses(resolverName!)
+            : <WASIPreview2IpAddress>[literal],
+      );
+    } on Object catch (error) {
+      stream = _WASIPreview2ResolveAddressStream.failed(
+        _addressResolverErrorCode(error),
+      );
     }
     final handle = table.insert<_WASIPreview2ResolveAddressStream>(
       _resolveAddressStreamType,
-      _WASIPreview2ResolveAddressStream(addresses),
+      stream,
     );
     return _ok(_integerData(handle));
   }
@@ -736,15 +814,24 @@ base class WASIPreview2SocketsHost {
     if (stream == null) {
       return _errorResult('invalid-argument');
     }
-    final address = stream.next();
+    final result = stream.next();
+    if (!result.isOk) {
+      return _errorResult(result.errorCode!);
+    }
+    final address = result.value;
     return _ok(address == null ? _none() : _some(address._toWit()));
   }
 
   int _subscribeResolveStream(int handle) {
-    _requireResolveAddressStream(handle);
-    return pollHost.insert(
-      WASIPreview2Pollable(isReady: () => true, waitReady: () async {}),
+    final stream = _requireResolveAddressStream(handle);
+    final pollable = pollHost.insert(
+      WASIPreview2Pollable(
+        isReady: () => stream.isReady,
+        waitReady: stream.waitReady,
+      ),
     );
+    table.attachChild(handle, pollable);
+    return pollable;
   }
 
   WasmComponentValueData _createTcpSocket(Object? familyValue) {
@@ -777,7 +864,8 @@ base class WASIPreview2SocketsHost {
     Object? addressValue,
   ) {
     final socket = _tcpSocket(handle);
-    if (socket == null || _network(networkHandle) == null) {
+    final network = _network(networkHandle);
+    if (socket == null || network == null) {
       return _errorResult('invalid-argument');
     }
     final address = _ipSocketAddressFromData(addressValue);
@@ -787,7 +875,14 @@ base class WASIPreview2SocketsHost {
     if (socket.state != _TcpSocketState.unbound) {
       return _errorResult('invalid-state');
     }
-    socket.pendingBind = _backend.startTcpBind(address);
+    final operation = _backend.startTcpBind(address);
+    final immediate = operation.resultOrNull;
+    if (immediate != null && !immediate.isOk) {
+      operation.dispose();
+      return _errorResult(immediate.errorCode!);
+    }
+    socket.pendingBind = operation;
+    socket.pendingNetworkId = network.id;
     socket.state = _TcpSocketState.binding;
     return _ok();
   }
@@ -807,10 +902,13 @@ base class WASIPreview2SocketsHost {
     }
     socket.pendingBind = null;
     if (!result.isOk) {
+      socket.pendingNetworkId = null;
       socket.state = _TcpSocketState.unbound;
       return _errorResult(result.errorCode!);
     }
     socket.localAddress = result.value!._toWit();
+    socket.networkId = socket.pendingNetworkId;
+    socket.pendingNetworkId = null;
     socket.state = _TcpSocketState.bound;
     return _ok();
   }
@@ -821,21 +919,28 @@ base class WASIPreview2SocketsHost {
     Object? addressValue,
   ) {
     final socket = _tcpSocket(handle);
-    if (socket == null || _network(networkHandle) == null) {
+    final network = _network(networkHandle);
+    if (socket == null || network == null) {
       return _errorResult('invalid-argument');
     }
     final address = _ipSocketAddressFromData(addressValue);
-    if (address == null || address.family != socket.family) {
+    if (address == null ||
+        address.family != socket.family ||
+        !_isValidTcpRemoteAddress(address)) {
       return _errorResult('invalid-argument');
     }
     if (socket.state != _TcpSocketState.unbound &&
         socket.state != _TcpSocketState.bound) {
       return _errorResult('invalid-state');
     }
+    if (socket.networkId case final networkId? when networkId != network.id) {
+      return _errorResult('invalid-argument');
+    }
     socket.pendingConnect = _backend.startTcpConnect(
       localAddress: socket.localAddressAddress,
       remoteAddress: address,
     );
+    socket.pendingNetworkId = network.id;
     socket.state = _TcpSocketState.connecting;
     return _ok();
   }
@@ -855,17 +960,20 @@ base class WASIPreview2SocketsHost {
     }
     socket.pendingConnect = null;
     if (!result.isOk) {
-      socket.state = socket.localAddress == null
-          ? _TcpSocketState.unbound
-          : _TcpSocketState.bound;
+      socket.pendingNetworkId = null;
+      socket.state = _TcpSocketState.closed;
       return _errorResult(result.errorCode!);
     }
     final connection = result.value!;
     final input = streamsHost.insertInputStream(connection.inputStream);
     final output = streamsHost.insertOutputStream(connection.outputStream);
+    table.attachChild(handle, input);
+    table.attachChild(handle, output);
     socket.connection = connection;
     socket.localAddress = connection.localAddress._toWit();
     socket.remoteAddress = connection.remoteAddress._toWit();
+    socket.networkId = socket.pendingNetworkId;
+    socket.pendingNetworkId = null;
     socket.state = _TcpSocketState.connected;
     return _ok(_tupleData([_integerData(input), _integerData(output)]));
   }
@@ -933,6 +1041,8 @@ base class WASIPreview2SocketsHost {
     );
     final input = streamsHost.insertInputStream(connection.inputStream);
     final output = streamsHost.insertOutputStream(connection.outputStream);
+    table.attachChild(acceptedSocket, input);
+    table.attachChild(acceptedSocket, output);
     return _ok(
       _tupleData([
         _integerData(acceptedSocket),
@@ -968,7 +1078,25 @@ base class WASIPreview2SocketsHost {
     if (socket.state != _TcpSocketState.connected) {
       return _errorResult('invalid-state');
     }
-    socket.connection?.close?.call(_caseLabelFromData(shutdownType));
+    final type = _caseLabelFromData(shutdownType);
+    if (type != 'receive' && type != 'send' && type != 'both') {
+      return _errorResult('invalid-argument');
+    }
+    final connection = socket.connection;
+    if (connection == null) {
+      return _errorResult('invalid-state');
+    }
+    final shutdown = connection.shutdown;
+    if (shutdown != null) {
+      final error = shutdown(type);
+      return error == null ? _ok() : _errorResult(error);
+    }
+    if (type != 'both') {
+      return _errorResult('not-supported');
+    }
+    connection.close?.call(type);
+    connection.inputStream.close();
+    connection.outputStream.close();
     return _ok();
   }
 
@@ -978,17 +1106,19 @@ base class WASIPreview2SocketsHost {
     Object? addressValue,
   ) {
     final socket = _udpSocket(handle);
-    if (socket == null || _network(networkHandle) == null) {
+    final network = _network(networkHandle);
+    if (socket == null || network == null) {
       return _errorResult('invalid-argument');
     }
     final address = _ipSocketAddressFromData(addressValue);
     if (address == null || address.family != socket.family) {
       return _errorResult('invalid-argument');
     }
-    if (socket.bound) {
+    if (socket.bound || socket.pendingBind != null) {
       return _errorResult('invalid-state');
     }
     socket.pendingBind = _backend.startUdpBind(address);
+    socket.pendingNetworkId = network.id;
     return _ok();
   }
 
@@ -1007,10 +1137,13 @@ base class WASIPreview2SocketsHost {
     }
     socket.pendingBind = null;
     if (!result.isOk) {
+      socket.pendingNetworkId = null;
       return _errorResult(result.errorCode!);
     }
     socket.binding = result.value!;
     socket.bound = true;
+    socket.networkId = socket.pendingNetworkId;
+    socket.pendingNetworkId = null;
     socket.localAddress = result.value!.localAddress._toWit();
     return _ok();
   }
@@ -1029,22 +1162,25 @@ base class WASIPreview2SocketsHost {
     );
     final remoteAddress = remoteAddressResult.address;
     if (!remoteAddressResult.valid ||
-        (remoteAddress != null && remoteAddress.family != socket.family)) {
+        (remoteAddress != null &&
+            (remoteAddress.family != socket.family ||
+                !_isValidUdpRemoteAddress(remoteAddress)))) {
       return _errorResult('invalid-argument');
     }
-    if (remoteAddress != null) {
-      socket.remoteAddress = remoteAddress._toWit();
-    } else if (binding.remoteAddress case final boundRemote?) {
-      socket.remoteAddress = boundRemote._toWit();
-    }
+    socket.remoteAddress = remoteAddress?._toWit();
+    socket.streamGeneration?.invalidate();
+    final generation = _WASIPreview2UdpStreamGeneration();
+    socket.streamGeneration = generation;
     final incoming = table.insert<_WASIPreview2IncomingDatagramStream>(
       _incomingDatagramStreamType,
-      _WASIPreview2IncomingDatagramStream(binding, remoteAddress),
+      _WASIPreview2IncomingDatagramStream(binding, remoteAddress, generation),
     );
     final outgoing = table.insert<_WASIPreview2OutgoingDatagramStream>(
       _outgoingDatagramStreamType,
-      _WASIPreview2OutgoingDatagramStream(binding, remoteAddress),
+      _WASIPreview2OutgoingDatagramStream(binding, remoteAddress, generation),
     );
+    table.attachChild(handle, incoming);
+    table.attachChild(handle, outgoing);
     return _ok(_tupleData([_integerData(incoming), _integerData(outgoing)]));
   }
 
@@ -1070,6 +1206,9 @@ base class WASIPreview2SocketsHost {
     final stream = _incomingDatagramStream(handle);
     if (stream == null) {
       return _errorResult('invalid-argument');
+    }
+    if (!stream.generation.isActive) {
+      return _errorResult('invalid-state');
     }
     final result = stream.binding.receive(maxResults);
     if (!result.isOk) {
@@ -1100,9 +1239,14 @@ base class WASIPreview2SocketsHost {
     if (stream == null) {
       return _errorResult('invalid-argument');
     }
-    return stream.binding.canSend
-        ? _ok(_integerData(stream.binding.sendCapacity))
-        : _errorResult('would-block');
+    if (!stream.generation.isActive) {
+      return _errorResult('invalid-state');
+    }
+    final permit = stream.binding.canSend
+        ? stream.binding.sendCapacity
+        : BigInt.zero;
+    stream.sendPermit = permit;
+    return _ok(_integerData(permit));
   }
 
   WasmComponentValueData _sendDatagrams(int handle, Object? value) {
@@ -1110,15 +1254,48 @@ base class WASIPreview2SocketsHost {
     if (stream == null) {
       return _errorResult('invalid-argument');
     }
-    final datagrams = _outgoingDatagramsFromData(value, stream.remoteAddress);
+    if (!stream.generation.isActive) {
+      return _errorResult('invalid-state');
+    }
+    final permit = stream.sendPermit;
+    if (permit == null) {
+      throw StateError('send requires a preceding check-send');
+    }
+    stream.sendPermit = null;
+    if (value is WasmComponentValueData &&
+        value.kind == WasmComponentValueDataKind.list &&
+        BigInt.from(value.items.length) > permit) {
+      throw StateError('send exceeds the preceding check-send permit');
+    }
+    final datagrams = _outgoingDatagramsFromData(
+      value,
+      stream.remoteAddress,
+      stream.binding.localAddress.family,
+    );
     if (datagrams == null) {
       return _errorResult('invalid-argument');
     }
-    final result = stream.binding.send(datagrams);
-    if (!result.isOk) {
-      return _errorResult(result.errorCode!);
+    var sent = BigInt.zero;
+    for (final datagram in datagrams) {
+      final result = stream.binding.send(<WASIPreview2OutgoingDatagram>[
+        datagram,
+      ]);
+      if (!result.isOk) {
+        return sent == BigInt.zero
+            ? _errorResult(result.errorCode!)
+            : _ok(_integerData(sent));
+      }
+      if (result.value == BigInt.zero) {
+        break;
+      }
+      if (result.value != BigInt.one) {
+        return sent == BigInt.zero
+            ? _errorResult('unknown')
+            : _ok(_integerData(sent));
+      }
+      sent += BigInt.one;
     }
-    return _ok(_integerData(result.value!));
+    return _ok(_integerData(sent));
   }
 
   bool _tcpIsListening(int handle) {
@@ -1131,24 +1308,14 @@ base class WASIPreview2SocketsHost {
 
   int _tcpSubscribe(int handle) {
     final socket = _requireTcpSocket(handle);
-    if (socket.pendingBind case final operation?) {
-      return _operationPollable(operation);
-    }
-    if (socket.pendingConnect case final operation?) {
-      return _operationPollable(operation);
-    }
-    if (socket.pendingListen case final operation?) {
-      return _operationPollable(operation);
-    }
-    if (socket.listener case final listener?) {
-      return pollHost.insert(
-        WASIPreview2Pollable(
-          isReady: () => listener.canAccept,
-          waitReady: listener.waitAccept,
-        ),
-      );
-    }
-    return _readyPollable();
+    final pollable = pollHost.insert(
+      WASIPreview2Pollable(
+        isReady: () => _tcpSocketReady(socket),
+        waitReady: () => _waitTcpSocketReady(socket),
+      ),
+    );
+    table.attachChild(handle, pollable);
+    return pollable;
   }
 
   WasmComponentValueData _udpAddressFamily(int handle) {
@@ -1157,58 +1324,109 @@ base class WASIPreview2SocketsHost {
 
   int _udpSubscribe(int handle) {
     final socket = _requireUdpSocket(handle);
-    if (socket.pendingBind case final operation?) {
-      return _operationPollable(operation);
-    }
-    if (socket.binding case final binding?) {
-      return pollHost.insert(
-        WASIPreview2Pollable(
-          isReady: () => binding.canReceive || binding.canSend,
-          waitReady: () async {
-            await Future.any(<Future<void>>[
-              binding.waitReceive(),
-              binding.waitSend(),
-            ]);
-          },
-        ),
-      );
-    }
-    return _readyPollable();
+    final pollable = pollHost.insert(
+      WASIPreview2Pollable(
+        isReady: () => _udpSocketReady(socket),
+        waitReady: () => _waitUdpSocketReady(socket),
+      ),
+    );
+    table.attachChild(handle, pollable);
+    return pollable;
   }
 
   int _incomingDatagramSubscribe(int handle) {
     final stream = _requireIncomingDatagramStream(handle);
-    return pollHost.insert(
+    final pollable = pollHost.insert(
       WASIPreview2Pollable(
-        isReady: () => stream.binding.canReceive,
-        waitReady: stream.binding.waitReceive,
+        isReady: () => !stream.generation.isActive || stream.binding.canReceive,
+        waitReady: () => stream.generation.isActive
+            ? Future.any<void>([
+                stream.binding.waitReceive(),
+                stream.generation.waitInactive(),
+              ])
+            : Future<void>.value(),
       ),
     );
+    table.attachChild(handle, pollable);
+    return pollable;
   }
 
   int _outgoingDatagramSubscribe(int handle) {
     final stream = _requireOutgoingDatagramStream(handle);
-    return pollHost.insert(
+    final pollable = pollHost.insert(
       WASIPreview2Pollable(
-        isReady: () => stream.binding.canSend,
-        waitReady: stream.binding.waitSend,
+        isReady: () => !stream.generation.isActive || stream.binding.canSend,
+        waitReady: () => stream.generation.isActive
+            ? Future.any<void>([
+                stream.binding.waitSend(),
+                stream.generation.waitInactive(),
+              ])
+            : Future<void>.value(),
       ),
     );
+    table.attachChild(handle, pollable);
+    return pollable;
   }
 
-  int _operationPollable<T>(WASIPreview2SocketOperation<T> operation) {
-    return pollHost.insert(
-      WASIPreview2Pollable(
-        isReady: () => operation.isReady,
-        waitReady: operation.waitReady,
-      ),
-    );
+  bool _tcpSocketReady(_WASIPreview2TcpSocket socket) {
+    return switch (socket.state) {
+      _TcpSocketState.binding => socket.pendingBind?.isReady ?? true,
+      _TcpSocketState.connecting => socket.pendingConnect?.isReady ?? true,
+      _TcpSocketState.listeningStarting =>
+        socket.pendingListen?.isReady ?? true,
+      _TcpSocketState.listening => socket.listener?.canAccept ?? true,
+      _ => true,
+    };
   }
 
-  int _readyPollable() {
-    return pollHost.insert(
-      WASIPreview2Pollable(isReady: () => true, waitReady: () async {}),
-    );
+  Future<void> _waitTcpSocketReady(_WASIPreview2TcpSocket socket) {
+    return switch (socket.state) {
+      _TcpSocketState.binding =>
+        socket.pendingBind?.waitReady() ?? Future<void>.value(),
+      _TcpSocketState.connecting =>
+        socket.pendingConnect?.waitReady() ?? Future<void>.value(),
+      _TcpSocketState.listeningStarting =>
+        socket.pendingListen?.waitReady() ?? Future<void>.value(),
+      _TcpSocketState.listening =>
+        socket.listener?.waitAccept() ?? Future<void>.value(),
+      _ => Future<void>.value(),
+    };
+  }
+
+  bool _udpSocketReady(_WASIPreview2UdpSocket socket) {
+    final operation = socket.pendingBind;
+    if (operation != null) {
+      return operation.isReady;
+    }
+    final binding = socket.binding;
+    return binding == null || binding.canReceive || binding.canSend;
+  }
+
+  Future<void> _waitUdpSocketReady(_WASIPreview2UdpSocket socket) {
+    final operation = socket.pendingBind;
+    if (operation != null) {
+      return operation.waitReady();
+    }
+    final binding = socket.binding;
+    if (binding == null) {
+      return Future<void>.value();
+    }
+    return Future.any<void>(<Future<void>>[
+      binding.waitReceive(),
+      binding.waitSend(),
+    ]);
+  }
+
+  bool get _supportsTcpSocketOptions {
+    final backend = _backend;
+    return backend is! WASIPreview2SocketOptionsBackend ||
+        (backend as WASIPreview2SocketOptionsBackend).supportsTcpSocketOptions;
+  }
+
+  bool get _supportsUdpSocketOptions {
+    final backend = _backend;
+    return backend is! WASIPreview2SocketOptionsBackend ||
+        (backend as WASIPreview2SocketOptionsBackend).supportsUdpSocketOptions;
   }
 
   WasmComponentValueData _tcpBoolOption(
@@ -1216,9 +1434,13 @@ base class WASIPreview2SocketsHost {
     bool Function(_WASIPreview2TcpSocket socket) read,
   ) {
     final socket = _tcpSocket(handle);
-    return socket == null
-        ? _errorResult('invalid-argument')
-        : _ok(_boolData(read(socket)));
+    if (socket == null) {
+      return _errorResult('invalid-argument');
+    }
+    if (!_supportsTcpSocketOptions) {
+      return _errorResult('not-supported');
+    }
+    return _ok(_boolData(read(socket)));
   }
 
   WasmComponentValueData _tcpSetBoolOption(
@@ -1230,6 +1452,9 @@ base class WASIPreview2SocketsHost {
     if (socket == null) {
       return _errorResult('invalid-argument');
     }
+    if (!_supportsTcpSocketOptions) {
+      return _errorResult('not-supported');
+    }
     write(socket, value);
     return _ok();
   }
@@ -1239,9 +1464,13 @@ base class WASIPreview2SocketsHost {
     int Function(_WASIPreview2TcpSocket socket) read,
   ) {
     final socket = _tcpSocket(handle);
-    return socket == null
-        ? _errorResult('invalid-argument')
-        : _ok(_integerData(read(socket)));
+    if (socket == null) {
+      return _errorResult('invalid-argument');
+    }
+    if (!_supportsTcpSocketOptions) {
+      return _errorResult('not-supported');
+    }
+    return _ok(_integerData(read(socket)));
   }
 
   WasmComponentValueData _tcpSetU8Option(
@@ -1252,6 +1481,9 @@ base class WASIPreview2SocketsHost {
     final socket = _tcpSocket(handle);
     if (socket == null) {
       return _errorResult('invalid-argument');
+    }
+    if (!_supportsTcpSocketOptions) {
+      return _errorResult('not-supported');
     }
     if (value == 0) {
       return _errorResult('invalid-argument');
@@ -1265,9 +1497,13 @@ base class WASIPreview2SocketsHost {
     int Function(_WASIPreview2TcpSocket socket) read,
   ) {
     final socket = _tcpSocket(handle);
-    return socket == null
-        ? _errorResult('invalid-argument')
-        : _ok(_integerData(read(socket)));
+    if (socket == null) {
+      return _errorResult('invalid-argument');
+    }
+    if (!_supportsTcpSocketOptions) {
+      return _errorResult('not-supported');
+    }
+    return _ok(_integerData(read(socket)));
   }
 
   WasmComponentValueData _tcpSetU32Option(
@@ -1278,6 +1514,9 @@ base class WASIPreview2SocketsHost {
     final socket = _tcpSocket(handle);
     if (socket == null) {
       return _errorResult('invalid-argument');
+    }
+    if (!_supportsTcpSocketOptions) {
+      return _errorResult('not-supported');
     }
     if (value == 0) {
       return _errorResult('invalid-argument');
@@ -1291,9 +1530,13 @@ base class WASIPreview2SocketsHost {
     BigInt Function(_WASIPreview2TcpSocket socket) read,
   ) {
     final socket = _tcpSocket(handle);
-    return socket == null
-        ? _errorResult('invalid-argument')
-        : _ok(_integerData(read(socket)));
+    if (socket == null) {
+      return _errorResult('invalid-argument');
+    }
+    if (!_supportsTcpSocketOptions) {
+      return _errorResult('not-supported');
+    }
+    return _ok(_integerData(read(socket)));
   }
 
   WasmComponentValueData _tcpSetU64Option(
@@ -1304,6 +1547,9 @@ base class WASIPreview2SocketsHost {
     final socket = _tcpSocket(handle);
     if (socket == null) {
       return _errorResult('invalid-argument');
+    }
+    if (!_supportsTcpSocketOptions) {
+      return _errorResult('not-supported');
     }
     if (value <= BigInt.zero) {
       return _errorResult('invalid-argument');
@@ -1325,9 +1571,13 @@ base class WASIPreview2SocketsHost {
     int Function(_WASIPreview2UdpSocket socket) read,
   ) {
     final socket = _udpSocket(handle);
-    return socket == null
-        ? _errorResult('invalid-argument')
-        : _ok(_integerData(read(socket)));
+    if (socket == null) {
+      return _errorResult('invalid-argument');
+    }
+    if (!_supportsUdpSocketOptions) {
+      return _errorResult('not-supported');
+    }
+    return _ok(_integerData(read(socket)));
   }
 
   WasmComponentValueData _udpSetU8Option(
@@ -1338,6 +1588,9 @@ base class WASIPreview2SocketsHost {
     final socket = _udpSocket(handle);
     if (socket == null) {
       return _errorResult('invalid-argument');
+    }
+    if (!_supportsUdpSocketOptions) {
+      return _errorResult('not-supported');
     }
     if (value == 0) {
       return _errorResult('invalid-argument');
@@ -1351,9 +1604,13 @@ base class WASIPreview2SocketsHost {
     BigInt Function(_WASIPreview2UdpSocket socket) read,
   ) {
     final socket = _udpSocket(handle);
-    return socket == null
-        ? _errorResult('invalid-argument')
-        : _ok(_integerData(read(socket)));
+    if (socket == null) {
+      return _errorResult('invalid-argument');
+    }
+    if (!_supportsUdpSocketOptions) {
+      return _errorResult('not-supported');
+    }
+    return _ok(_integerData(read(socket)));
   }
 
   WasmComponentValueData _udpSetU64Option(
@@ -1365,11 +1622,43 @@ base class WASIPreview2SocketsHost {
     if (socket == null) {
       return _errorResult('invalid-argument');
     }
+    if (!_supportsUdpSocketOptions) {
+      return _errorResult('not-supported');
+    }
     if (value <= BigInt.zero) {
       return _errorResult('invalid-argument');
     }
     write(socket, value);
     return _ok();
+  }
+
+  void _dropTcpSocket(_WASIPreview2TcpSocket socket) {
+    socket.pendingBind?.dispose();
+    socket.pendingConnect?.dispose(disposeValue: _disposeTcpConnection);
+    socket.pendingListen?.dispose(disposeValue: (listener) => listener.close());
+    socket.listener?.close();
+    final connection = socket.connection;
+    if (connection != null) {
+      _disposeTcpConnection(connection);
+    }
+    socket.state = _TcpSocketState.closed;
+  }
+
+  void _dropUdpSocket(_WASIPreview2UdpSocket socket) {
+    socket.pendingBind?.dispose(disposeValue: (binding) => binding.close());
+    socket.streamGeneration?.invalidate();
+    socket.binding?.close();
+  }
+
+  void _disposeTcpConnection(WASIPreview2TcpConnection connection) {
+    final dispose = connection.dispose;
+    if (dispose != null) {
+      dispose();
+    } else {
+      connection.close?.call('both');
+      connection.inputStream.close();
+      connection.outputStream.close();
+    }
   }
 
   _WASIPreview2Network? _network(int handle) {
@@ -1530,17 +1819,72 @@ final class _WASIPreview2Network {
 }
 
 final class _WASIPreview2ResolveAddressStream {
-  _WASIPreview2ResolveAddressStream(Iterable<WASIPreview2IpAddress> addresses)
-    : _addresses = List<WASIPreview2IpAddress>.of(addresses);
+  _WASIPreview2ResolveAddressStream(
+    FutureOr<Iterable<WASIPreview2IpAddress>> addresses,
+  ) {
+    if (addresses is Future<Iterable<WASIPreview2IpAddress>>) {
+      addresses.then(_complete, onError: _fail);
+    } else {
+      _complete(addresses);
+    }
+  }
 
-  final List<WASIPreview2IpAddress> _addresses;
+  _WASIPreview2ResolveAddressStream.failed(String errorCode) {
+    _errorCode = errorCode;
+    _ready.complete();
+  }
+
+  final Completer<void> _ready = Completer<void>();
+  List<WASIPreview2IpAddress> _addresses = const [];
+  String? _errorCode;
   int _offset = 0;
 
-  WASIPreview2IpAddress? next() {
-    if (_offset >= _addresses.length) {
-      return null;
+  bool get isReady => _ready.isCompleted;
+
+  Future<void> waitReady() => isReady ? Future<void>.value() : _ready.future;
+
+  WASIPreview2SocketResult<WASIPreview2IpAddress?> next() {
+    if (!isReady) {
+      return const WASIPreview2SocketResult<WASIPreview2IpAddress?>.error(
+        'would-block',
+      );
     }
-    return _addresses[_offset++];
+    final errorCode = _errorCode;
+    if (errorCode != null) {
+      return WASIPreview2SocketResult<WASIPreview2IpAddress?>.error(errorCode);
+    }
+    if (_offset >= _addresses.length) {
+      return const WASIPreview2SocketResult<WASIPreview2IpAddress?>.ok(null);
+    }
+    return WASIPreview2SocketResult<WASIPreview2IpAddress?>.ok(
+      _addresses[_offset++],
+    );
+  }
+
+  void _complete(Iterable<WASIPreview2IpAddress> addresses) {
+    if (isReady) {
+      return;
+    }
+    try {
+      _addresses = <WASIPreview2IpAddress>[
+        for (final address in addresses)
+          if (!_isIpv4MappedIpv6(address)) address,
+      ];
+      if (_addresses.isEmpty) {
+        _errorCode = 'name-unresolvable';
+      }
+    } on Object catch (error) {
+      _errorCode = _addressResolverErrorCode(error);
+    }
+    _ready.complete();
+  }
+
+  void _fail(Object error, [StackTrace? _]) {
+    if (isReady) {
+      return;
+    }
+    _errorCode = _addressResolverErrorCode(error);
+    _ready.complete();
   }
 }
 
@@ -1552,6 +1896,7 @@ enum _TcpSocketState {
   listeningStarting,
   listening,
   connected,
+  closed,
 }
 
 final class _WASIPreview2TcpSocket {
@@ -1574,6 +1919,8 @@ final class _WASIPreview2TcpSocket {
   WASIPreview2SocketOperation<WASIPreview2TcpListener>? pendingListen;
   WASIPreview2TcpListener? listener;
   WASIPreview2TcpConnection? connection;
+  int? networkId;
+  int? pendingNetworkId;
   BigInt listenBacklog = BigInt.from(128);
   bool keepAlive = false;
   BigInt keepAliveIdle = BigInt.from(7200000000000);
@@ -1596,23 +1943,66 @@ final class _WASIPreview2UdpSocket {
   WasmComponentValueData? remoteAddress;
   WASIPreview2SocketOperation<WASIPreview2UdpBinding>? pendingBind;
   WASIPreview2UdpBinding? binding;
+  int? networkId;
+  int? pendingNetworkId;
+  _WASIPreview2UdpStreamGeneration? streamGeneration;
   int hopLimit = 64;
   BigInt receiveBuffer = BigInt.from(65536);
   BigInt sendBuffer = BigInt.from(65536);
 }
 
 final class _WASIPreview2IncomingDatagramStream {
-  const _WASIPreview2IncomingDatagramStream(this.binding, this.remoteAddress);
+  const _WASIPreview2IncomingDatagramStream(
+    this.binding,
+    this.remoteAddress,
+    this.generation,
+  );
 
   final WASIPreview2UdpBinding binding;
   final WASIPreview2IpSocketAddress? remoteAddress;
+  final _WASIPreview2UdpStreamGeneration generation;
 }
 
 final class _WASIPreview2OutgoingDatagramStream {
-  const _WASIPreview2OutgoingDatagramStream(this.binding, this.remoteAddress);
+  _WASIPreview2OutgoingDatagramStream(
+    this.binding,
+    this.remoteAddress,
+    this.generation,
+  );
 
   final WASIPreview2UdpBinding binding;
   final WASIPreview2IpSocketAddress? remoteAddress;
+  final _WASIPreview2UdpStreamGeneration generation;
+  BigInt? sendPermit;
+}
+
+final class _WASIPreview2UdpStreamGeneration {
+  bool _active = true;
+  int _references = 2;
+  final Completer<void> _inactive = Completer<void>();
+
+  bool get isActive => _active;
+
+  Future<void> waitInactive() =>
+      _active ? _inactive.future : Future<void>.value();
+
+  void invalidate() {
+    if (!_active) {
+      return;
+    }
+    _active = false;
+    _inactive.complete();
+  }
+
+  void release() {
+    if (_references == 0) {
+      return;
+    }
+    _references--;
+    if (_references == 0) {
+      invalidate();
+    }
+  }
 }
 
 Iterable<WASIPreview2IpAddress> _defaultAddressResolver(String name) {
@@ -1636,7 +2026,7 @@ WASIPreview2IpAddress? _parseIpv4Literal(String name) {
   }
   final parsed = <int>[];
   for (final part in parts) {
-    if (part.isEmpty) {
+    if (part.isEmpty || !_decimalDigits.hasMatch(part)) {
       return null;
     }
     final value = int.tryParse(part);
@@ -1649,53 +2039,506 @@ WASIPreview2IpAddress? _parseIpv4Literal(String name) {
 }
 
 WASIPreview2IpAddress? _parseIpv6Literal(String name) {
-  if (name == '::') {
-    return WASIPreview2IpAddress._(
-      WASIPreview2IpAddressFamily.ipv6,
-      List<int>.filled(8, 0),
-    );
-  }
-  if (name == '::1') {
-    return WASIPreview2IpAddress.ipv6(0, 0, 0, 0, 0, 0, 0, 1);
-  }
-  if (!name.contains(':') || name.contains(':::')) {
+  if (!name.contains(':') || name.contains('%') || name.contains(':::')) {
     return null;
   }
   final halves = name.split('::');
   if (halves.length > 2) {
     return null;
   }
-  final head = halves[0].isEmpty ? <String>[] : halves[0].split(':');
-  final tail = halves.length == 1 || halves[1].isEmpty
-      ? <String>[]
-      : halves[1].split(':');
-  if (halves.length == 1 && head.length != 8) {
+  final hasCompression = halves.length == 2;
+  if (hasCompression && halves[0].contains('.')) {
+    return null;
+  }
+  final head = _parseIpv6Half(halves[0]);
+  final tail = halves.length == 1 ? const <int>[] : _parseIpv6Half(halves[1]);
+  if (head == null || tail == null) {
     return null;
   }
   final zeroFill = 8 - head.length - tail.length;
-  if (zeroFill < 0 || (halves.length == 1 && zeroFill != 0)) {
+  if ((!hasCompression && zeroFill != 0) || (hasCompression && zeroFill < 1)) {
     return null;
   }
-  final parts = <int>[];
-  for (final segment in <String>[
-    ...head,
-    for (var i = 0; i < zeroFill; i++) '0',
-    ...tail,
-  ]) {
-    if (segment.isEmpty || segment.length > 4) {
-      return null;
-    }
-    final value = int.tryParse(segment, radix: 16);
-    if (value == null || value < 0 || value > 0xffff) {
-      return null;
-    }
-    parts.add(value);
-  }
+  final parts = <int>[...head, for (var i = 0; i < zeroFill; i++) 0, ...tail];
   if (parts.length != 8) {
     return null;
   }
   return WASIPreview2IpAddress._(WASIPreview2IpAddressFamily.ipv6, parts);
 }
+
+List<int>? _parseIpv6Half(String half) {
+  if (half.isEmpty) {
+    return const <int>[];
+  }
+  final segments = half.split(':');
+  final parts = <int>[];
+  for (var index = 0; index < segments.length; index++) {
+    final segment = segments[index];
+    if (segment.isEmpty) {
+      return null;
+    }
+    if (segment.contains('.')) {
+      if (index != segments.length - 1) {
+        return null;
+      }
+      final ipv4 = _parseIpv4Literal(segment);
+      if (ipv4 == null) {
+        return null;
+      }
+      final octets = ipv4.parts;
+      parts
+        ..add((octets[0] << 8) | octets[1])
+        ..add((octets[2] << 8) | octets[3]);
+      continue;
+    }
+    if (segment.length > 4 || !_hexDigits.hasMatch(segment)) {
+      return null;
+    }
+    parts.add(int.parse(segment, radix: 16));
+  }
+  return parts;
+}
+
+// A dependency-free ToASCII path: normalize IDNA dot variants, case-fold,
+// validate conservatively, then apply RFC 3492 per non-ASCII label. Without
+// Unicode normalization tables, decomposed LTR labels are rejected instead of
+// producing a non-canonical A-label.
+String? _toAsciiDomainName(String name) {
+  if (name.isEmpty || name.contains('\u0000')) {
+    return null;
+  }
+  if (name.contains(':') || name.startsWith('[') || name.endsWith(']')) {
+    return null;
+  }
+  final normalized = name
+      .replaceAll('\u3002', '.')
+      .replaceAll('\uff0e', '.')
+      .replaceAll('\uff61', '.');
+  if (_invalidIpv4Candidate.hasMatch(normalized)) {
+    return null;
+  }
+  final trailingDot = normalized.endsWith('.');
+  final domain = normalized.endsWith('.')
+      ? normalized.substring(0, normalized.length - 1)
+      : normalized;
+  if (domain.isEmpty) {
+    return null;
+  }
+  final asciiLabels = <String>[];
+  for (final label in domain.split('.')) {
+    final asciiLabel = _toAsciiDomainLabel(label);
+    if (asciiLabel == null) {
+      return null;
+    }
+    asciiLabels.add(asciiLabel);
+  }
+  final asciiDomain = asciiLabels.join('.');
+  if (asciiDomain.length > 253) {
+    return null;
+  }
+  return trailingDot ? '$asciiDomain.' : asciiDomain;
+}
+
+String? _toAsciiDomainLabel(String label) {
+  if (label.isEmpty) {
+    return null;
+  }
+  final folded = label.toLowerCase();
+  if (folded.startsWith('-') || folded.endsWith('-')) {
+    return null;
+  }
+  final runes = folded.runes.toList(growable: false);
+  if (folded.startsWith('xn--')) {
+    final decoded = _punycodeDecode(folded.substring(4));
+    if (decoded == null ||
+        !_validConservativeIdnaRunes(decoded, requireNonAscii: true) ||
+        'xn--${_punycodeEncode(decoded)}' != folded) {
+      return null;
+    }
+    return folded.length <= 63 ? folded : null;
+  }
+  if (!_validConservativeIdnaRunes(runes)) {
+    return null;
+  }
+  final hasNonAscii = runes.any((rune) => rune > 0x7f);
+  final ascii = hasNonAscii ? 'xn--${_punycodeEncode(runes)}' : folded;
+  if (ascii.isEmpty || ascii.length > 63) {
+    return null;
+  }
+  if (ascii.length >= 4 &&
+      ascii[2] == '-' &&
+      ascii[3] == '-' &&
+      !ascii.startsWith('xn--')) {
+    return null;
+  }
+  return ascii;
+}
+
+bool _validConservativeIdnaRunes(
+  List<int> runes, {
+  bool requireNonAscii = false,
+}) {
+  if (runes.isEmpty ||
+      runes.first == 0x2d ||
+      runes.last == 0x2d ||
+      _isCombiningMark(runes.first) ||
+      (runes.length >= 4 && runes[2] == 0x2d && runes[3] == 0x2d) ||
+      !_hasSupportedCombiningMarks(runes) ||
+      !_hasValidMinimalBidi(runes)) {
+    return false;
+  }
+  var hasNonAscii = false;
+  for (final rune in runes) {
+    if (rune <= 0x7f) {
+      if (!_asciiDomainRune(rune)) {
+        return false;
+      }
+      continue;
+    }
+    hasNonAscii = true;
+    if (!_isConservativeIdnaRune(rune)) {
+      return false;
+    }
+  }
+  return !requireNonAscii || hasNonAscii;
+}
+
+bool _asciiDomainRune(int rune) {
+  return (rune >= 0x30 && rune <= 0x39) ||
+      (rune >= 0x41 && rune <= 0x5a) ||
+      (rune >= 0x61 && rune <= 0x7a) ||
+      rune == 0x2d;
+}
+
+bool _isConservativeIdnaRune(int rune) {
+  return _isCombiningMark(rune) ||
+      (rune >= 0x00c0 && rune <= 0x00d6) ||
+      (rune >= 0x00d8 && rune <= 0x00f6) ||
+      (rune >= 0x00f8 && rune <= 0x02af) ||
+      (rune >= 0x0370 && rune <= 0x0373) ||
+      (rune >= 0x0376 && rune <= 0x0377) ||
+      (rune >= 0x037b && rune <= 0x037d) ||
+      rune == 0x037f ||
+      rune == 0x0386 ||
+      (rune >= 0x0388 && rune <= 0x038a) ||
+      rune == 0x038c ||
+      (rune >= 0x038e && rune <= 0x03a1) ||
+      (rune >= 0x03a3 && rune <= 0x03f5) ||
+      (rune >= 0x03f7 && rune <= 0x0481) ||
+      (rune >= 0x048a && rune <= 0x052f) ||
+      (rune >= 0x0531 && rune <= 0x0556) ||
+      (rune >= 0x0560 && rune <= 0x0588) ||
+      (rune >= 0x05d0 && rune <= 0x05ea) ||
+      (rune >= 0x05ef && rune <= 0x05f2) ||
+      (rune >= 0x0620 && rune <= 0x063f) ||
+      (rune >= 0x0641 && rune <= 0x064a) ||
+      (rune >= 0x0660 && rune <= 0x0669) ||
+      (rune >= 0x066e && rune <= 0x066f) ||
+      (rune >= 0x0671 && rune <= 0x06d3) ||
+      rune == 0x06d5 ||
+      (rune >= 0x06ee && rune <= 0x06fc) ||
+      rune == 0x06ff ||
+      (rune >= 0x06f0 && rune <= 0x06f9) ||
+      (rune >= 0x3041 && rune <= 0x3096) ||
+      (rune >= 0x30a1 && rune <= 0x30fa) ||
+      (rune >= 0x3400 && rune <= 0x4dbf) ||
+      (rune >= 0x4e00 && rune <= 0x9fff) ||
+      (rune >= 0xac00 && rune <= 0xd7a3);
+}
+
+bool _isCombiningMark(int rune) {
+  return (rune >= 0x0300 && rune <= 0x036f) ||
+      (rune >= 0x0483 && rune <= 0x0489) ||
+      (rune >= 0x0591 && rune <= 0x05bd) ||
+      rune == 0x05bf ||
+      (rune >= 0x05c1 && rune <= 0x05c2) ||
+      (rune >= 0x05c4 && rune <= 0x05c5) ||
+      rune == 0x05c7 ||
+      (rune >= 0x0610 && rune <= 0x061a) ||
+      (rune >= 0x064b && rune <= 0x065f) ||
+      rune == 0x0670 ||
+      (rune >= 0x06d6 && rune <= 0x06ed) ||
+      (rune >= 0x1ab0 && rune <= 0x1aff) ||
+      (rune >= 0x1dc0 && rune <= 0x1dff) ||
+      (rune >= 0x20d0 && rune <= 0x20ff) ||
+      (rune >= 0xfe20 && rune <= 0xfe2f);
+}
+
+bool _hasSupportedCombiningMarks(List<int> runes) {
+  final rtl = runes.any(_isRtlRune);
+  var previousWasMark = false;
+  for (final rune in runes) {
+    final mark = _isCombiningMark(rune);
+    if (mark &&
+        (!rtl || previousWasMark || (rune >= 0x0653 && rune <= 0x0655))) {
+      return false;
+    }
+    previousWasMark = mark;
+  }
+  return true;
+}
+
+bool _hasValidMinimalBidi(List<int> runes) {
+  if (!runes.any(_isRtlRune)) {
+    return true;
+  }
+  if (!_isRtlLetter(runes.first)) {
+    return false;
+  }
+  var last = runes.last;
+  for (
+    var index = runes.length - 1;
+    index >= 0 && _isCombiningMark(last);
+    index--
+  ) {
+    if (index == 0) {
+      return false;
+    }
+    last = runes[index - 1];
+  }
+  if (!_isRtlLetter(last) && !_isIdnaDigit(last)) {
+    return false;
+  }
+  if (runes.any(_isLtrLetter)) {
+    return false;
+  }
+  final hasArabicIndic = runes.any((rune) => rune >= 0x0660 && rune <= 0x0669);
+  final hasExtendedArabicIndic = runes.any(
+    (rune) => rune >= 0x06f0 && rune <= 0x06f9,
+  );
+  return !(hasArabicIndic && hasExtendedArabicIndic);
+}
+
+bool _isRtlRune(int rune) {
+  return (rune >= 0x0590 && rune <= 0x08ff) ||
+      (rune >= 0xfb1d && rune <= 0xfdff) ||
+      (rune >= 0xfe70 && rune <= 0xfeff) ||
+      (rune >= 0x1ee00 && rune <= 0x1eeff);
+}
+
+bool _isRtlLetter(int rune) {
+  return _isRtlRune(rune) &&
+      !_isCombiningMark(rune) &&
+      !_isIdnaDigit(rune) &&
+      rune != 0x060c &&
+      rune != 0x061b &&
+      rune != 0x061f;
+}
+
+bool _isLtrLetter(int rune) {
+  return (rune >= 0x41 && rune <= 0x5a) ||
+      (rune >= 0x61 && rune <= 0x7a) ||
+      (rune >= 0x00c0 && rune <= 0x02af) ||
+      (rune >= 0x0370 && rune <= 0x058f);
+}
+
+bool _isIdnaDigit(int rune) {
+  return (rune >= 0x30 && rune <= 0x39) ||
+      (rune >= 0x0660 && rune <= 0x0669) ||
+      (rune >= 0x06f0 && rune <= 0x06f9);
+}
+
+List<int>? _punycodeDecode(String input) {
+  const base = 36;
+  const tMin = 1;
+  const tMax = 26;
+  const initialBias = 72;
+  const initialCodePoint = 0x80;
+  const maxDelta = 0x7fffffff;
+
+  if (input.isEmpty) {
+    return null;
+  }
+  final output = <int>[];
+  final delimiter = input.lastIndexOf('-');
+  var inputIndex = 0;
+  if (delimiter >= 0) {
+    for (var index = 0; index < delimiter; index++) {
+      final code = input.codeUnitAt(index);
+      if (code > 0x7f) {
+        return null;
+      }
+      output.add(code);
+    }
+    inputIndex = delimiter + 1;
+  }
+
+  var codePoint = initialCodePoint;
+  var delta = 0;
+  var bias = initialBias;
+  while (inputIndex < input.length) {
+    final oldDelta = delta;
+    var weight = 1;
+    for (var k = base; ; k += base) {
+      if (inputIndex >= input.length) {
+        return null;
+      }
+      final digit = _punycodeDigitValue(input.codeUnitAt(inputIndex++));
+      if (digit == null || digit > (maxDelta - delta) ~/ weight) {
+        return null;
+      }
+      delta += digit * weight;
+      final threshold = k <= bias
+          ? tMin
+          : k >= bias + tMax
+          ? tMax
+          : k - bias;
+      if (digit < threshold) {
+        break;
+      }
+      final factor = base - threshold;
+      if (weight > maxDelta ~/ factor) {
+        return null;
+      }
+      weight *= factor;
+    }
+
+    final outputLength = output.length + 1;
+    bias = _adaptPunycodeBias(delta - oldDelta, outputLength, oldDelta == 0);
+    final increment = delta ~/ outputLength;
+    if (increment > 0x10ffff - codePoint) {
+      return null;
+    }
+    codePoint += increment;
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
+      return null;
+    }
+    delta %= outputLength;
+    output.insert(delta, codePoint);
+    delta++;
+  }
+  return output;
+}
+
+int? _punycodeDigitValue(int code) {
+  if (code >= 0x61 && code <= 0x7a) {
+    return code - 0x61;
+  }
+  if (code >= 0x30 && code <= 0x39) {
+    return code - 0x30 + 26;
+  }
+  return null;
+}
+
+String _punycodeEncode(List<int> input) {
+  const base = 36;
+  const tMin = 1;
+  const tMax = 26;
+  const initialBias = 72;
+  const initialCodePoint = 0x80;
+
+  final output = StringBuffer();
+  for (final codePoint in input) {
+    if (codePoint < initialCodePoint) {
+      output.writeCharCode(codePoint);
+    }
+  }
+  final basicCount = output.length;
+  var handled = basicCount;
+  if (basicCount != 0) {
+    output.write('-');
+  }
+
+  var codePoint = initialCodePoint;
+  var delta = 0;
+  var bias = initialBias;
+  while (handled < input.length) {
+    var next = 0x110000;
+    for (final candidate in input) {
+      if (candidate >= codePoint && candidate < next) {
+        next = candidate;
+      }
+    }
+    delta += (next - codePoint) * (handled + 1);
+    codePoint = next;
+    for (final candidate in input) {
+      if (candidate < codePoint) {
+        delta++;
+      }
+      if (candidate != codePoint) {
+        continue;
+      }
+      var quotient = delta;
+      for (var k = base; ; k += base) {
+        final threshold = k <= bias
+            ? tMin
+            : k >= bias + tMax
+            ? tMax
+            : k - bias;
+        if (quotient < threshold) {
+          break;
+        }
+        output.write(
+          _punycodeDigit(
+            threshold + (quotient - threshold) % (base - threshold),
+          ),
+        );
+        quotient = (quotient - threshold) ~/ (base - threshold);
+      }
+      output.write(_punycodeDigit(quotient));
+      bias = _adaptPunycodeBias(delta, handled + 1, handled == basicCount);
+      delta = 0;
+      handled++;
+    }
+    delta++;
+    codePoint++;
+  }
+  return output.toString();
+}
+
+int _adaptPunycodeBias(int delta, int codePointCount, bool firstTime) {
+  const base = 36;
+  const tMin = 1;
+  const tMax = 26;
+  const skew = 38;
+  const damp = 700;
+
+  var adapted = firstTime ? delta ~/ damp : delta ~/ 2;
+  adapted += adapted ~/ codePointCount;
+  var offset = 0;
+  while (adapted > ((base - tMin) * tMax) ~/ 2) {
+    adapted ~/= base - tMin;
+    offset += base;
+  }
+  return offset + ((base - tMin + 1) * adapted) ~/ (adapted + skew);
+}
+
+String _punycodeDigit(int digit) {
+  return String.fromCharCode(digit < 26 ? 0x61 + digit : 0x30 + digit - 26);
+}
+
+bool _isIpv4MappedIpv6(WASIPreview2IpAddress address) {
+  if (address.family != WASIPreview2IpAddressFamily.ipv6) {
+    return false;
+  }
+  final parts = address.parts;
+  return parts[0] == 0 &&
+      parts[1] == 0 &&
+      parts[2] == 0 &&
+      parts[3] == 0 &&
+      parts[4] == 0 &&
+      parts[5] == 0xffff;
+}
+
+String _addressResolverErrorCode(Object error) {
+  if (error is WASIPreview2AddressResolverError &&
+      _resolverErrorCodes.contains(error.errorCode)) {
+    return error.errorCode;
+  }
+  return 'name-unresolvable';
+}
+
+const Set<String> _resolverErrorCodes = <String>{
+  'name-unresolvable',
+  'temporary-resolver-failure',
+  'permanent-resolver-failure',
+};
+
+final RegExp _decimalDigits = RegExp(r'^[0-9]+$');
+final RegExp _hexDigits = RegExp(r'^[0-9a-fA-F]+$');
+final RegExp _invalidIpv4Candidate = RegExp(
+  r'^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$',
+);
 
 WASIPreview2IpAddressFamily? _addressFamilyFromData(Object? value) {
   if (value is! WasmComponentValueData ||
@@ -1842,6 +2685,7 @@ List<int>? _u16Tuple(WasmComponentValueData value, int length) {
 List<WASIPreview2OutgoingDatagram>? _outgoingDatagramsFromData(
   Object? value,
   WASIPreview2IpSocketAddress? streamRemoteAddress,
+  WASIPreview2IpAddressFamily family,
 ) {
   if (value is! WasmComponentValueData ||
       value.kind != WasmComponentValueDataKind.list) {
@@ -1858,10 +2702,28 @@ List<WASIPreview2OutgoingDatagram>? _outgoingDatagramsFromData(
     if (data == null || !remoteResult.valid) {
       return null;
     }
+    final providedRemoteAddress = remoteResult.address;
+    final WASIPreview2IpSocketAddress remoteAddress;
+    if (streamRemoteAddress == null) {
+      if (providedRemoteAddress == null) {
+        return null;
+      }
+      remoteAddress = providedRemoteAddress;
+    } else {
+      if (providedRemoteAddress != null &&
+          !_sameAddress(providedRemoteAddress, streamRemoteAddress)) {
+        return null;
+      }
+      remoteAddress = streamRemoteAddress;
+    }
+    if (remoteAddress.family != family ||
+        !_isValidUdpRemoteAddress(remoteAddress)) {
+      return null;
+    }
     datagrams.add(
       WASIPreview2OutgoingDatagram(
         data: Uint8List.fromList(data),
-        remoteAddress: remoteResult.address ?? streamRemoteAddress,
+        remoteAddress: remoteAddress,
       ),
     );
   }
@@ -1912,6 +2774,28 @@ bool _sameAddress(
     }
   }
   return true;
+}
+
+bool _isValidUdpRemoteAddress(WASIPreview2IpSocketAddress address) {
+  return address.port != 0 && !_isAnyAddress(address.address);
+}
+
+bool _isValidTcpRemoteAddress(WASIPreview2IpSocketAddress address) {
+  if (!_isValidUdpRemoteAddress(address)) {
+    return false;
+  }
+  final parts = address.address.parts;
+  if (address.family == WASIPreview2IpAddressFamily.ipv4) {
+    final multicast = parts[0] >= 224 && parts[0] <= 239;
+    final limitedBroadcast = parts.every((part) => part == 0xff);
+    return !multicast && !limitedBroadcast;
+  }
+  final multicast = parts[0] & 0xff00 == 0xff00;
+  return !multicast && !_isIpv4MappedIpv6(address.address);
+}
+
+bool _isAnyAddress(WASIPreview2IpAddress address) {
+  return address.parts.every((part) => part == 0);
 }
 
 String _caseLabelFromData(Object? value) {

@@ -93,7 +93,7 @@ final class WASIComponentHost {
 
 /// Prepared component host binding report.
 final class WASIComponentHostBindingPlan {
-  const WASIComponentHostBindingPlan._({
+  WASIComponentHostBindingPlan._({
     required WASIComponentHost host,
     required this.canonicalPlan,
     required this.resourceBindings,
@@ -104,6 +104,7 @@ final class WASIComponentHostBindingPlan {
   }) : _host = host;
 
   final WASIComponentHost _host;
+  bool _isBound = false;
 
   /// Prepared canonical binding plan for the same component.
   final WASIComponentCanonicalBindingPlan canonicalPlan;
@@ -182,19 +183,20 @@ final class WASIComponentHostBindingPlan {
     if (bindingErrors.isNotEmpty) {
       throw WASIComponentHostBindingException(bindingErrors);
     }
+    if (_isBound) {
+      throw StateError('WASI component host binding plan was already bound.');
+    }
+    _isBound = true;
     final adapterProgram = _host.canonicalHost.adapterHost.bindAdapterPlans(
       adapterPlans,
       coreFunctions: coreFunctions,
       componentFunctions: componentFunctions,
     );
-    _host.canonicalHost.resourceHost.checkResourceBindingsAvailable(
-      resourceBindings,
-    );
     _host.canonicalHost.asyncHost.checkAsyncValueBindingsAvailable(
       asyncValueBindings,
     );
-    final resourceTypes = _host.canonicalHost.resourceHost
-        .defineResourceBindings<Object>(
+    final resourceBindingSet = _host.canonicalHost.resourceHost
+        .createResourceBindingSet<Object>(
           resourceBindings,
           nameForBinding: resourceName,
           onDrop: onResourceDrop,
@@ -207,10 +209,11 @@ final class WASIComponentHostBindingPlan {
     );
     return WASIComponentHostBinding._(
       host: _host,
-      resourceTypes: resourceTypes,
+      resourceTypes: resourceBindingSet.resourceTypes,
       asyncValueBindings: asyncValueBindings,
       program: canonicalPlan.bindWithAdapterOperations(
         adapterProgram.operations,
+        resourceBindingSet: resourceBindingSet,
       ),
     );
   }

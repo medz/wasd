@@ -333,6 +333,128 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
       (length, field) => length + field.value.flatLength,
     );
   }
+
+  /// Core scalar types produced by Canonical ABI flattening.
+  List<WASIComponentCanonicalAdapterFlatType> get flatTypes {
+    final primitive = this.primitive;
+    if (primitive != null) {
+      return switch (primitive) {
+        WasmComponentPrimitiveValueType.s64 ||
+        WasmComponentPrimitiveValueType.u64 =>
+          const <WASIComponentCanonicalAdapterFlatType>[
+            WASIComponentCanonicalAdapterFlatType.i64,
+          ],
+        WasmComponentPrimitiveValueType.f32 =>
+          const <WASIComponentCanonicalAdapterFlatType>[
+            WASIComponentCanonicalAdapterFlatType.f32,
+          ],
+        WasmComponentPrimitiveValueType.f64 =>
+          const <WASIComponentCanonicalAdapterFlatType>[
+            WASIComponentCanonicalAdapterFlatType.f64,
+          ],
+        WasmComponentPrimitiveValueType.string =>
+          const <WASIComponentCanonicalAdapterFlatType>[
+            WASIComponentCanonicalAdapterFlatType.i32,
+            WASIComponentCanonicalAdapterFlatType.i32,
+          ],
+        _ => const <WASIComponentCanonicalAdapterFlatType>[
+          WASIComponentCanonicalAdapterFlatType.i32,
+        ],
+      };
+    }
+    if (kind == WASIComponentCanonicalAdapterFlatValueKind.flags ||
+        kind == WASIComponentCanonicalAdapterFlatValueKind.enumeration ||
+        kind == WASIComponentCanonicalAdapterFlatValueKind.resource ||
+        kind == WASIComponentCanonicalAdapterFlatValueKind.errorContext) {
+      return const <WASIComponentCanonicalAdapterFlatType>[
+        WASIComponentCanonicalAdapterFlatType.i32,
+      ];
+    }
+    if (kind == WASIComponentCanonicalAdapterFlatValueKind.list) {
+      return const <WASIComponentCanonicalAdapterFlatType>[
+        WASIComponentCanonicalAdapterFlatType.i32,
+        WASIComponentCanonicalAdapterFlatType.i32,
+      ];
+    }
+    if (kind == WASIComponentCanonicalAdapterFlatValueKind.option) {
+      return List<WASIComponentCanonicalAdapterFlatType>.unmodifiable([
+        WASIComponentCanonicalAdapterFlatType.i32,
+        ...element!.flatTypes,
+      ]);
+    }
+    if (kind == WASIComponentCanonicalAdapterFlatValueKind.result) {
+      return List<WASIComponentCanonicalAdapterFlatType>.unmodifiable([
+        WASIComponentCanonicalAdapterFlatType.i32,
+        ..._joinVariantPayloadTypes([ok?.flatTypes, error?.flatTypes]),
+      ]);
+    }
+    if (kind == WASIComponentCanonicalAdapterFlatValueKind.variant) {
+      return List<WASIComponentCanonicalAdapterFlatType>.unmodifiable([
+        WASIComponentCanonicalAdapterFlatType.i32,
+        ..._joinVariantPayloadTypes([
+          for (final case_ in cases) case_.value?.flatTypes,
+        ]),
+      ]);
+    }
+    return List<WASIComponentCanonicalAdapterFlatType>.unmodifiable([
+      for (final field in fields) ...field.value.flatTypes,
+    ]);
+  }
+}
+
+/// Core scalar type in a flattened Canonical ABI signature.
+enum WASIComponentCanonicalAdapterFlatType {
+  /// Core `i32`.
+  i32,
+
+  /// Core `i64`.
+  i64,
+
+  /// Core `f32`.
+  f32,
+
+  /// Core `f64`.
+  f64,
+}
+
+List<WASIComponentCanonicalAdapterFlatType> _joinVariantPayloadTypes(
+  Iterable<List<WASIComponentCanonicalAdapterFlatType>?> payloads,
+) {
+  final joined = <WASIComponentCanonicalAdapterFlatType?>[];
+  for (final payload in payloads) {
+    if (payload == null) {
+      continue;
+    }
+    for (var index = 0; index < payload.length; index++) {
+      if (index == joined.length) {
+        joined.add(payload[index]);
+        continue;
+      }
+      final current = joined[index];
+      joined[index] = current == null
+          ? payload[index]
+          : _joinFlatTypes(current, payload[index]);
+    }
+  }
+  return <WASIComponentCanonicalAdapterFlatType>[
+    for (final type in joined) type!,
+  ];
+}
+
+WASIComponentCanonicalAdapterFlatType _joinFlatTypes(
+  WASIComponentCanonicalAdapterFlatType left,
+  WASIComponentCanonicalAdapterFlatType right,
+) {
+  if (left == right) {
+    return left;
+  }
+  if ((left == WASIComponentCanonicalAdapterFlatType.i32 &&
+          right == WASIComponentCanonicalAdapterFlatType.f32) ||
+      (left == WASIComponentCanonicalAdapterFlatType.f32 &&
+          right == WASIComponentCanonicalAdapterFlatType.i32)) {
+    return WASIComponentCanonicalAdapterFlatType.i32;
+  }
+  return WASIComponentCanonicalAdapterFlatType.i64;
 }
 
 /// Kind of prepared flat Canonical ABI scalar layout.
@@ -409,8 +531,6 @@ List<WASIComponentCanonicalAdapterPlan> componentCanonicalAdapterPlans(
   WasmComponent component, {
   Iterable<WASIComponentResourceUse>? resourceUses,
 }) {
-  final definitions = component.componentTypeIndexDefinitions;
-  final flatLayouts = _FlatLayoutResolver(definitions);
   final resourceUseList = resourceUses is List<WASIComponentResourceUse>
       ? resourceUses
       : resourceUses?.toList(growable: false) ??
@@ -425,10 +545,13 @@ List<WASIComponentCanonicalAdapterPlan> componentCanonicalAdapterPlans(
     canonicalIndex++
   ) {
     final definition = component.canonicalDefinitions[canonicalIndex];
-    final functionType = _canonicalAdapterFunctionType(component, definition);
-    if (functionType == null) {
+    final context = _canonicalAdapterFunctionTypeContext(component, definition);
+    if (context == null) {
       continue;
     }
+    final functionType = context.functionType;
+    final definitions = context.typeDefinitions;
+    final flatLayouts = _FlatLayoutResolver(definitions);
 
     final uses = List<WASIComponentResourceUse>.unmodifiable(
       resourceUseList.where((use) => use.canonicalIndex == canonicalIndex),
@@ -565,7 +688,7 @@ final class _FlatLayoutResolver {
         final definition = definitions[typeIndex];
         final definedValue = definition.definedValue;
         final memoryCodec =
-            WASIComponentCanonicalValueMemoryCodec.fromValueType(
+            WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
               type,
               definitions,
             );
@@ -743,21 +866,32 @@ bool _resourceUseBelongsToPath(String resourcePath, String valuePath) {
   return resourcePath == valuePath || resourcePath.startsWith('$valuePath.');
 }
 
-WasmComponentFunctionType? _canonicalAdapterFunctionType(
+WasmComponentFunctionTypeContext? _canonicalAdapterFunctionTypeContext(
   WasmComponent component,
   WasmComponentCanonicalDefinition definition,
 ) {
   switch (definition.kind) {
     case WasmComponentCanonicalKind.lift:
-      return _componentFunctionType(
-        component.componentTypeIndexDefinitions,
+      final definitions = component.componentTypeIndexDefinitions;
+      final functionType = _componentFunctionType(
+        definitions,
         definition.typeIndex,
       );
+      return functionType == null
+          ? null
+          : WasmComponentFunctionTypeContext(
+              functionType: functionType,
+              typeDefinitions: definitions,
+            );
     case WasmComponentCanonicalKind.lower:
-      return _componentFunctionIndexType(
-        component.componentFunctionIndexTypes,
-        definition.functionIndex,
-      );
+      final functionIndex = definition.functionIndex;
+      if (functionIndex == null ||
+          functionIndex < 0 ||
+          functionIndex >=
+              component.componentFunctionIndexTypeContexts.length) {
+        return null;
+      }
+      return component.componentFunctionIndexTypeContexts[functionIndex];
     default:
       return null;
   }
@@ -775,18 +909,6 @@ WasmComponentFunctionType? _componentFunctionType(
     return null;
   }
   return definition.function;
-}
-
-WasmComponentFunctionType? _componentFunctionIndexType(
-  List<WasmComponentFunctionType?> functionTypes,
-  int? functionIndex,
-) {
-  if (functionIndex == null ||
-      functionIndex < 0 ||
-      functionIndex >= functionTypes.length) {
-    return null;
-  }
-  return functionTypes[functionIndex];
 }
 
 String _canonicalParamPath(int canonicalIndex, int paramIndex, String label) {

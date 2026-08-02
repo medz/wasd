@@ -107,7 +107,7 @@ world random-test {
       expect(bytes.items, hasLength(4));
       expect(
         host.standardImports,
-        contains('wasi:random/insecure-seed@0.2.0.get-insecure-seed'),
+        contains('wasi:random/insecure-seed@0.2.0.insecure-seed'),
       );
     });
 
@@ -273,7 +273,36 @@ world cli-test {
       expect(host.standardImports, contains('wasi:cli/stdin@0.2.0.get-stdin'));
     });
 
-    test('binds standard Preview2 sockets imports from public API', () {
+    test('binds stable WASI 0.2.12 exit-with-code from public API', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world cli-test {
+  import wasi:cli/exit@0.2.12;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final host = WASIPreview2ComponentHost();
+      final program = host.bindWitWorld(document, worldName: 'cli-test');
+
+      expect(
+        host.standardImports,
+        contains('wasi:cli/exit@0.2.12.exit-with-code'),
+      );
+      expect(
+        () => program.invokeImport(
+          'wasi:cli/exit@0.2.12.exit-with-code',
+          const [7],
+        ),
+        throwsA(
+          isA<WASIPreview2Exit>()
+              .having((error) => error.statusCode, 'statusCode', 7)
+              .having((error) => error.isSuccess, 'isSuccess', isFalse),
+        ),
+      );
+    });
+
+    test('binds standard Preview2 sockets imports from public API', () async {
       const source = '''
 package wasi-testsuite:test;
 
@@ -304,18 +333,21 @@ world sockets-test {
               )
               as WasmComponentValueData;
       final stream = _resultHandle(_resultOk(lookupStream));
-      final firstAddress =
-          program.invokeImport(
-                'wasi:sockets/ip-name-lookup@0.2.0.resolve-address-stream.resolve-next-address',
-                [stream],
-              )
-              as WasmComponentValueData;
       final pollable =
           program.invokeImport(
                 'wasi:sockets/ip-name-lookup@0.2.0.resolve-address-stream.subscribe',
                 [stream],
               )
               as int;
+      await program.invokeImportAsync('wasi:io/poll@0.2.0.pollable.block', [
+        pollable,
+      ]);
+      final firstAddress =
+          program.invokeImport(
+                'wasi:sockets/ip-name-lookup@0.2.0.resolve-address-stream.resolve-next-address',
+                [stream],
+              )
+              as WasmComponentValueData;
       final localAddress =
           program.invokeImport(
                 'wasi:sockets/tcp@0.2.0.tcp-socket.local-address',
@@ -369,10 +401,7 @@ world http-test {
               ])
               as WasmComponentValueData;
 
-      expect(
-        _resultErrorLabel(handled),
-        hasDartIoRuntime ? 'HTTP-request-URI-invalid' : 'configuration-error',
-      );
+      expect(_resultErrorLabel(handled), 'HTTP-request-URI-invalid');
       expect(host.httpHost.streamsHost, same(host.streamsHost));
       expect(
         host.standardImports,
@@ -480,9 +509,18 @@ world native-host-test {
       expect(host.streamsHost.errorHost, same(host.errorHost));
       expect(_preopenHandle(directories, '/'), isNonNegative);
       expect(args.items.map((item) => item.string), ['component.wasm']);
-      expect(_optionHandle(terminalStdin), host.cliHost.terminalStdinHandle);
-      expect(_optionHandle(terminalStdout), host.cliHost.terminalStdoutHandle);
-      expect(_optionHandle(terminalStderr), host.cliHost.terminalStderrHandle);
+      expect(
+        _optionHandle(terminalStdin),
+        isNot(host.cliHost.terminalStdinHandle),
+      );
+      expect(
+        _optionHandle(terminalStdout),
+        isNot(host.cliHost.terminalStdoutHandle),
+      );
+      expect(
+        _optionHandle(terminalStderr),
+        isNot(host.cliHost.terminalStderrHandle),
+      );
       expect(
         host.streamsHost.table.contains(_optionHandle(terminalStdin)!),
         isTrue,
@@ -501,14 +539,12 @@ world native-host-test {
       );
     });
 
-    test(
-      'binds Preview2 sockets imports to Dart VM loopback sockets',
-      () async {
-        if (!hasDartIoRuntime) {
-          markTestSkipped('requires dart:io sockets');
-          return;
-        }
-        const source = '''
+    test('reports unsupported Dart VM TCP bind without fake state', () {
+      if (!hasDartIoRuntime) {
+        markTestSkipped('requires dart:io sockets');
+        return;
+      }
+      const source = '''
 package wasi-testsuite:test;
 
 world sockets-test {
@@ -516,119 +552,37 @@ world sockets-test {
   include wasi:io/imports@0.2.0;
 }
 ''';
-        final document = WASIComponentWitDocument.parse(source);
-        final sockets = WASIPreview2NativeSocketsHost();
-        final host = WASIPreview2ComponentHost(socketsHost: sockets);
-        final program = host.bindWitWorld(document, worldName: 'sockets-test');
-        final network =
-            program.invokeImport(
-                  'wasi:sockets/instance-network@0.2.0.instance-network',
-                  const [],
-                )
-                as int;
-        final listener = _resultHandle(
-          _resultOk(
-            program.invokeImport(
-                  'wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket',
-                  [_enumValue('ipv4')],
-                )
-                as WasmComponentValueData,
-          ),
-        );
+      final document = WASIComponentWitDocument.parse(source);
+      final sockets = WASIPreview2NativeSocketsHost();
+      final host = WASIPreview2ComponentHost(socketsHost: sockets);
+      final program = host.bindWitWorld(document, worldName: 'sockets-test');
+      final network =
+          program.invokeImport(
+                'wasi:sockets/instance-network@0.2.0.instance-network',
+                const [],
+              )
+              as int;
+      final socket = _resultHandle(
+        _resultOk(
+          program.invokeImport(
+                'wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket',
+                [_enumValue('ipv4')],
+              )
+              as WasmComponentValueData,
+        ),
+      );
 
-        _expectUnitOk(
+      final bind =
           program.invokeImport('wasi:sockets/tcp@0.2.0.tcp-socket.start-bind', [
-                listener,
+                socket,
                 network,
                 _ipv4SocketAddressValue(port: 0),
               ])
-              as WasmComponentValueData,
-        );
-        _expectUnitOk(
-          program.invokeImport(
-                'wasi:sockets/tcp@0.2.0.tcp-socket.finish-bind',
-                [listener],
-              )
-              as WasmComponentValueData,
-        );
-        _expectUnitOk(
-          program.invokeImport(
-                'wasi:sockets/tcp@0.2.0.tcp-socket.start-listen',
-                [listener],
-              )
-              as WasmComponentValueData,
-        );
-        await _blockTcp(program, listener);
-        _expectUnitOk(
-          program.invokeImport(
-                'wasi:sockets/tcp@0.2.0.tcp-socket.finish-listen',
-                [listener],
-              )
-              as WasmComponentValueData,
-        );
-        final listenerAddress = _resultOk(
-          program.invokeImport(
-                'wasi:sockets/tcp@0.2.0.tcp-socket.local-address',
-                [listener],
-              )
-              as WasmComponentValueData,
-        );
-        final client = _resultHandle(
-          _resultOk(
-            program.invokeImport(
-                  'wasi:sockets/tcp-create-socket@0.2.0.create-tcp-socket',
-                  [_enumValue('ipv4')],
-                )
-                as WasmComponentValueData,
-          ),
-        );
+              as WasmComponentValueData;
 
-        _expectUnitOk(
-          program.invokeImport(
-                'wasi:sockets/tcp@0.2.0.tcp-socket.start-connect',
-                [client, network, listenerAddress],
-              )
-              as WasmComponentValueData,
-        );
-        await _blockTcp(program, client);
-        final connected =
-            program.invokeImport(
-                  'wasi:sockets/tcp@0.2.0.tcp-socket.finish-connect',
-                  [client],
-                )
-                as WasmComponentValueData;
-        await _blockTcp(program, listener);
-        final accepted =
-            program.invokeImport('wasi:sockets/tcp@0.2.0.tcp-socket.accept', [
-                  listener,
-                ])
-                as WasmComponentValueData;
-        final clientStreams = _tcpStreamPair(_resultOk(connected));
-        final acceptedStreams = _tcpAcceptTuple(_resultOk(accepted));
-
-        program.invokeImport(
-          'wasi:io/streams@0.2.0.output-stream.check-write',
-          [clientStreams.output],
-        );
-        _expectUnitOk(
-          program.invokeImport('wasi:io/streams@0.2.0.output-stream.write', [
-                clientStreams.output,
-                _u8ListValue([4, 5, 6]),
-              ])
-              as WasmComponentValueData,
-        );
-        await _blockInput(program, acceptedStreams.input);
-        final received =
-            program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
-                  acceptedStreams.input,
-                  BigInt.from(8),
-                ])
-                as WasmComponentValueData;
-
-        expect(_u8List(_resultOk(received)), [4, 5, 6]);
-        expect(sockets.streamsHost, same(host.streamsHost));
-      },
-    );
+      expect(_resultErrorLabel(bind), 'not-supported');
+      expect(sockets.streamsHost, same(host.streamsHost));
+    });
 
     test('binds Preview2 filesystem imports to real host files on Dart VM', () {
       if (!hasDartIoRuntime) {
@@ -673,11 +627,21 @@ world filesystem-test {
                   _flagsValue(const <String>[]),
                   'note.txt',
                   _flagsValue(const <String>[]),
-                  _flagsValue(const <String>['read', 'write']),
+                  _flagsValue(const <String>[
+                    'read',
+                    'write',
+                    'file-integrity-sync',
+                  ]),
                 ],
               )
               as WasmComponentValueData;
       final file = _resultHandle(_resultOk(opened));
+      final descriptorFlags =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.get-flags',
+                [file],
+              )
+              as WasmComponentValueData;
       final read =
           program.invokeImport(
                 'wasi:filesystem/types@0.2.0.descriptor.read-via-stream',
@@ -709,8 +673,26 @@ world filesystem-test {
             ])
             as WasmComponentValueData,
       );
+      _expectUnitOk(
+        program.invokeImport(
+              'wasi:filesystem/types@0.2.0.descriptor.sync-data',
+              [file],
+            )
+            as WasmComponentValueData,
+      );
+      _expectUnitOk(
+        program.invokeImport('wasi:filesystem/types@0.2.0.descriptor.sync', [
+              file,
+            ])
+            as WasmComponentValueData,
+      );
 
       expect(_u8List(_resultOk(inputBytes)), [101, 108, 108, 111]);
+      expect(_resultOk(descriptorFlags).labels, [
+        'read',
+        'write',
+        'file-integrity-sync',
+      ]);
       expect(temp.readFile('note.txt'), 'hXYlo');
       expect(host.filesystemHost, same(filesystem));
       expect(
@@ -1085,6 +1067,12 @@ world filesystem-test {
       expect(temp.fileExists('hard.txt'), isFalse);
       expect(temp.readFile('renamed.txt'), 'changed');
 
+      // Windows symlink creation may require elevated privileges, and link
+      // sizes do not have the POSIX byte-length contract checked below.
+      if (!temp.path.startsWith('/')) {
+        return;
+      }
+
       _expectUnitOk(
         program.invokeImport(
               'wasi:filesystem/types@0.2.0.descriptor.symlink-at',
@@ -1094,6 +1082,7 @@ world filesystem-test {
       );
       expect(temp.symlinkExists('link.txt'), isTrue);
       expect(temp.readLink('link.txt'), 'source.txt');
+      temp.createSymlink('目标', 'dangling.txt');
 
       final readlink =
           program.invokeImport(
@@ -1102,6 +1091,82 @@ world filesystem-test {
               )
               as WasmComponentValueData;
       expect(_resultOk(readlink).string, 'source.txt');
+      final danglingReadlink =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.readlink-at',
+                [root, 'dangling.txt'],
+              )
+              as WasmComponentValueData;
+      expect(_resultOk(danglingReadlink).string, '目标');
+
+      final linkStat =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.stat-at',
+                [root, _flagsValue(const <String>[]), 'link.txt'],
+              )
+              as WasmComponentValueData;
+      final danglingStat =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.stat-at',
+                [root, _flagsValue(const <String>[]), 'dangling.txt'],
+              )
+              as WasmComponentValueData;
+      expect(_descriptorSize(_resultOk(linkStat)), BigInt.from(10));
+      expect(_descriptorSize(_resultOk(danglingStat)), BigInt.from(6));
+
+      final link = _resultHandle(
+        _resultOk(
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>[]),
+                  'link.txt',
+                  _flagsValue(const <String>[]),
+                  _flagsValue(const <String>['read']),
+                ],
+              )
+              as WasmComponentValueData,
+        ),
+      );
+      final followed = _resultHandle(
+        _resultOk(
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.open-at',
+                [
+                  root,
+                  _flagsValue(const <String>['symlink-follow']),
+                  'link.txt',
+                  _flagsValue(const <String>[]),
+                  _flagsValue(const <String>['read']),
+                ],
+              )
+              as WasmComponentValueData,
+        ),
+      );
+      final linkType =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.get-type',
+                [link],
+              )
+              as WasmComponentValueData;
+      final followedType =
+          program.invokeImport(
+                'wasi:filesystem/types@0.2.0.descriptor.get-type',
+                [followed],
+              )
+              as WasmComponentValueData;
+      final followedRead =
+          program.invokeImport('wasi:filesystem/types@0.2.0.descriptor.read', [
+                followed,
+                BigInt.from(16),
+                BigInt.zero,
+              ])
+              as WasmComponentValueData;
+
+      expect(_caseLabel(_resultOk(linkType)), 'symbolic-link');
+      expect(_caseLabel(_resultOk(followedType)), 'regular-file');
+      expect(_u8List(_resultOk(followedRead).items[0]), 'changed'.codeUnits);
     });
 
     test('binds standard Preview3 clocks imports from public API', () {
@@ -1797,59 +1862,6 @@ void _expectUnitOk(WasmComponentValueData value) {
   }
 }
 
-Future<void> _blockTcp(
-  WASIComponentWitAdapterProgram program,
-  int socket,
-) async {
-  final pollable =
-      program.invokeImport('wasi:sockets/tcp@0.2.0.tcp-socket.subscribe', [
-            socket,
-          ])
-          as int;
-  await program.invokeImportAsync('wasi:io/poll@0.2.0.pollable.block', [
-    pollable,
-  ]);
-}
-
-Future<void> _blockInput(
-  WASIComponentWitAdapterProgram program,
-  int input,
-) async {
-  final pollable =
-      program.invokeImport('wasi:io/streams@0.2.0.input-stream.subscribe', [
-            input,
-          ])
-          as int;
-  await program.invokeImportAsync('wasi:io/poll@0.2.0.pollable.block', [
-    pollable,
-  ]);
-}
-
-({int input, int output}) _tcpStreamPair(WasmComponentValueData value) {
-  if (value.kind != WasmComponentValueDataKind.tuple ||
-      value.items.length != 2) {
-    throw StateError('expected tcp stream pair');
-  }
-  return (
-    input: _resultHandle(value.items[0]),
-    output: _resultHandle(value.items[1]),
-  );
-}
-
-({int socket, int input, int output}) _tcpAcceptTuple(
-  WasmComponentValueData value,
-) {
-  if (value.kind != WasmComponentValueDataKind.tuple ||
-      value.items.length != 3) {
-    throw StateError('expected tcp accept tuple');
-  }
-  return (
-    socket: _resultHandle(value.items[0]),
-    input: _resultHandle(value.items[1]),
-    output: _resultHandle(value.items[2]),
-  );
-}
-
 WasmComponentValueData _ipv4SocketAddressValue({
   required int port,
   int a = 127,
@@ -1910,6 +1922,18 @@ WasmComponentValueData _integerValue(Object value) {
 
 int _descriptorAccessTimeNanos(WasmComponentValueData value) {
   return _descriptorTimestampNanos(value, 3);
+}
+
+BigInt _descriptorSize(WasmComponentValueData value) {
+  if (value.kind != WasmComponentValueDataKind.record ||
+      value.items.length != 6) {
+    throw StateError('expected descriptor-stat');
+  }
+  final size = _integerBigInt(value.items[2].integer);
+  if (size == null) {
+    throw StateError('expected descriptor size');
+  }
+  return size;
 }
 
 int _descriptorModificationTimeNanos(WasmComponentValueData value) {

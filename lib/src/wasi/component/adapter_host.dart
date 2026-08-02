@@ -8,6 +8,9 @@ import 'string_memory.dart';
 import 'unicode_scalar.dart';
 import 'value_memory.dart';
 
+const int _canonicalMaxFlatParams = 16;
+const int _canonicalMaxFlatResults = 1;
+
 /// Function callback used by direct canonical adapter operations.
 typedef WASIComponentCanonicalAdapterCallback =
     FutureOr<Object?> Function(List<Object?> args);
@@ -36,6 +39,8 @@ final class WASIComponentCanonicalAdapterHost {
     return WASIComponentCanonicalAdapterOperation._(
       plan: plan,
       callback: coreFunction,
+      postReturnCallback: null,
+      callState: _WASIComponentCanonicalCallState(),
       directValueSupported: true,
       memoryValueSupported: _supportsMemoryValuePlan(plan),
     );
@@ -51,6 +56,8 @@ final class WASIComponentCanonicalAdapterHost {
     return WASIComponentCanonicalAdapterOperation._(
       plan: plan,
       callback: componentFunction,
+      postReturnCallback: null,
+      callState: _WASIComponentCanonicalCallState(),
       directValueSupported: true,
       memoryValueSupported: _supportsMemoryValuePlan(plan),
     );
@@ -65,6 +72,7 @@ final class WASIComponentCanonicalAdapterHost {
         const <int, WASIComponentCanonicalAdapterCallback>{},
   }) {
     final operations = <WASIComponentCanonicalAdapterOperation>[];
+    final callState = _WASIComponentCanonicalCallState();
     for (final plan in plans) {
       switch (plan.kind) {
         case WasmComponentCanonicalKind.lift:
@@ -80,6 +88,8 @@ final class WASIComponentCanonicalAdapterHost {
             WASIComponentCanonicalAdapterOperation._(
               plan: plan,
               callback: callback,
+              postReturnCallback: _postReturnCallback(plan, coreFunctions),
+              callState: callState,
               directValueSupported: _supportsDirectValuePlan(plan),
               memoryValueSupported: _supportsMemoryValuePlan(plan),
             ),
@@ -97,6 +107,8 @@ final class WASIComponentCanonicalAdapterHost {
             WASIComponentCanonicalAdapterOperation._(
               plan: plan,
               callback: callback,
+              postReturnCallback: null,
+              callState: callState,
               directValueSupported: _supportsDirectValuePlan(plan),
               memoryValueSupported: _supportsMemoryValuePlan(plan),
             ),
@@ -113,6 +125,24 @@ final class WASIComponentCanonicalAdapterHost {
       ),
     );
   }
+}
+
+WASIComponentCanonicalAdapterCallback? _postReturnCallback(
+  WASIComponentCanonicalAdapterPlan plan,
+  Map<int, WASIComponentCanonicalAdapterCallback> coreFunctions,
+) {
+  final index = plan.postReturnIndex;
+  if (index == null) {
+    return null;
+  }
+  final callback = coreFunctions[index];
+  if (callback == null) {
+    throw StateError(
+      'Missing post-return core function callback for canonical adapter index '
+      '${plan.canonicalIndex}: $index.',
+    );
+  }
+  return callback;
 }
 
 /// Canonical-indexed executable direct value adapter program.
@@ -181,6 +211,87 @@ final class WASIComponentCanonicalAdapterProgram {
     }
     return operation.invokeFlatAsync(
       flatArgs,
+      memory: memory,
+      realloc: realloc,
+    );
+  }
+
+  /// Invokes a lowered component function through its canonical core ABI.
+  ///
+  /// Unlike [invokeFlat], this applies the Canonical ABI indirect parameter and
+  /// result rules used by an actual core Wasm caller.
+  List<Object?> invokeLoweredCore(
+    int canonicalIndex,
+    List<Object?> coreArgs, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    final operation = _operationsByCanonicalIndex[canonicalIndex];
+    if (operation == null) {
+      throw StateError(
+        'Unknown WASI component canonical adapter index: $canonicalIndex.',
+      );
+    }
+    return operation.invokeLoweredCore(
+      coreArgs,
+      memory: memory,
+      realloc: realloc,
+    );
+  }
+
+  /// Invokes a lowered component function through its canonical core ABI and
+  /// waits for an asynchronous host callback when necessary.
+  Future<List<Object?>> invokeLoweredCoreAsync(
+    int canonicalIndex,
+    List<Object?> coreArgs, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) async {
+    final operation = _operationsByCanonicalIndex[canonicalIndex];
+    if (operation == null) {
+      throw StateError(
+        'Unknown WASI component canonical adapter index: $canonicalIndex.',
+      );
+    }
+    return operation.invokeLoweredCoreAsync(
+      coreArgs,
+      memory: memory,
+      realloc: realloc,
+    );
+  }
+
+  /// Invokes a lifted core function from direct component values.
+  Object? invokeLiftedCore(
+    int canonicalIndex,
+    List<Object?> args, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    final operation = _operationsByCanonicalIndex[canonicalIndex];
+    if (operation == null) {
+      throw StateError(
+        'Unknown WASI component canonical adapter index: $canonicalIndex.',
+      );
+    }
+    return operation.invokeLiftedCore(args, memory: memory, realloc: realloc);
+  }
+
+  /// Invokes a lifted core function from direct component values and waits for
+  /// an asynchronous core callback when necessary.
+  Future<Object?> invokeLiftedCoreAsync(
+    int canonicalIndex,
+    List<Object?> args, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) async {
+    final operation = _operationsByCanonicalIndex[canonicalIndex];
+    if (operation == null) {
+      throw StateError(
+        'Unknown WASI component canonical adapter index: $canonicalIndex.',
+      );
+    }
+    return operation.invokeLiftedCoreAsync(
+      args,
       memory: memory,
       realloc: realloc,
     );
@@ -255,9 +366,13 @@ final class WASIComponentCanonicalAdapterOperation {
   const WASIComponentCanonicalAdapterOperation._({
     required this.plan,
     required WASIComponentCanonicalAdapterCallback callback,
+    required WASIComponentCanonicalAdapterCallback? postReturnCallback,
+    required _WASIComponentCanonicalCallState callState,
     required bool directValueSupported,
     required bool memoryValueSupported,
   }) : _callback = callback,
+       _postReturnCallback = postReturnCallback,
+       _callState = callState,
        _directValueSupported = directValueSupported,
        _memoryValueSupported = memoryValueSupported;
 
@@ -265,6 +380,8 @@ final class WASIComponentCanonicalAdapterOperation {
   final WASIComponentCanonicalAdapterPlan plan;
 
   final WASIComponentCanonicalAdapterCallback _callback;
+  final WASIComponentCanonicalAdapterCallback? _postReturnCallback;
+  final _WASIComponentCanonicalCallState _callState;
   final bool _directValueSupported;
   final bool _memoryValueSupported;
 
@@ -276,6 +393,7 @@ final class WASIComponentCanonicalAdapterOperation {
 
   /// Invokes the adapter with direct component values.
   Object? invoke(List<Object?> args) {
+    _requireMayLeaveForLower();
     _checkSyncInvokeSupported('direct value invocation', 'invokeAsync');
     _checkDirectInvokeSupported();
     final directArgs = _validateDirectArgs(args);
@@ -286,6 +404,7 @@ final class WASIComponentCanonicalAdapterOperation {
 
   /// Invokes the adapter asynchronously with direct component values.
   Future<Object?> invokeAsync(List<Object?> args) async {
+    _requireMayLeaveForLower();
     _checkDirectInvokeSupported();
     final directArgs = _validateDirectArgs(args);
 
@@ -326,11 +445,12 @@ final class WASIComponentCanonicalAdapterOperation {
     wasm.Memory? memory,
     WASIComponentCanonicalRealloc? realloc,
   }) {
+    _requireMayLeaveForLower();
     _checkSyncInvokeSupported('flat value invocation', 'invokeFlatAsync');
     final args = _loadFlatArgs(flatArgs, memory);
 
     final result = _invokeFlatCallback(args);
-    return _storeFlatResult(result, memory, realloc);
+    return _storeFlatResult(result, memory, _guardRealloc(realloc));
   }
 
   /// Invokes the adapter asynchronously through flat Canonical ABI scalar
@@ -340,10 +460,87 @@ final class WASIComponentCanonicalAdapterOperation {
     wasm.Memory? memory,
     WASIComponentCanonicalRealloc? realloc,
   }) async {
+    _requireMayLeaveForLower();
     final args = _loadFlatArgs(flatArgs, memory);
 
     final result = await _invokeFlatCallbackAsync(args);
-    return _storeFlatResult(result, memory, realloc);
+    return _storeFlatResult(result, memory, _guardRealloc(realloc));
+  }
+
+  /// Invokes this lowered function using the core signature produced by the
+  /// Canonical ABI flattening algorithm.
+  List<Object?> invokeLoweredCore(
+    List<Object?> coreArgs, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    _requireLoweredCoreOperation();
+    _requireMayLeaveForLower();
+    _checkSyncInvokeSupported(
+      'lowered core invocation',
+      'invokeLoweredCoreAsync',
+    );
+    final invocation = _loadLoweredCoreArgs(coreArgs, memory);
+    final result = _invokeFlatCallback(invocation.args);
+    return _storeLoweredCoreResult(
+      result,
+      invocation.resultPointer,
+      memory,
+      _guardRealloc(realloc),
+    );
+  }
+
+  /// Invokes this lowered function using the core signature produced by the
+  /// Canonical ABI flattening algorithm and waits for the host callback.
+  Future<List<Object?>> invokeLoweredCoreAsync(
+    List<Object?> coreArgs, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) async {
+    _requireLoweredCoreOperation();
+    _requireMayLeaveForLower();
+    final invocation = _loadLoweredCoreArgs(coreArgs, memory);
+    final result = await _invokeFlatCallbackAsync(invocation.args);
+    return _storeLoweredCoreResult(
+      result,
+      invocation.resultPointer,
+      memory,
+      _guardRealloc(realloc),
+    );
+  }
+
+  /// Invokes this lifted function through the core signature produced by the
+  /// Canonical ABI flattening algorithm.
+  Object? invokeLiftedCore(
+    List<Object?> args, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) {
+    _requireLiftedCoreOperation();
+    _checkSyncInvokeSupported(
+      'lifted core invocation',
+      'invokeLiftedCoreAsync',
+    );
+    final coreArgs = _storeLiftedCoreArgs(args, memory, _guardRealloc(realloc));
+    final result = _callback(List<Object?>.unmodifiable(coreArgs));
+    final lifted = _loadLiftedCoreResult(result, memory);
+    _invokePostReturn(result);
+    return lifted;
+  }
+
+  /// Invokes this lifted function through its canonical core signature and
+  /// waits for an asynchronous core callback when necessary.
+  Future<Object?> invokeLiftedCoreAsync(
+    List<Object?> args, {
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  }) async {
+    _requireLiftedCoreOperation();
+    final coreArgs = _storeLiftedCoreArgs(args, memory, _guardRealloc(realloc));
+    final result = await _callback(List<Object?>.unmodifiable(coreArgs));
+    final lifted = _loadLiftedCoreResult(result, memory);
+    await _invokePostReturnAsync(result);
+    return lifted;
   }
 
   /// Invokes the adapter with parameter/result values stored in memory.
@@ -353,6 +550,7 @@ final class WASIComponentCanonicalAdapterOperation {
     int? resultPointer,
     WASIComponentCanonicalRealloc? realloc,
   }) {
+    _requireMayLeaveForLower();
     _checkSyncInvokeSupported(
       'memory-backed invocation',
       'invokeWithMemoryAsync',
@@ -364,7 +562,7 @@ final class WASIComponentCanonicalAdapterOperation {
       memory,
       result,
       resultPointer: resultPointer,
-      realloc: realloc,
+      realloc: _guardRealloc(realloc),
     );
   }
 
@@ -376,6 +574,7 @@ final class WASIComponentCanonicalAdapterOperation {
     int? resultPointer,
     WASIComponentCanonicalRealloc? realloc,
   }) async {
+    _requireMayLeaveForLower();
     _checkMemoryInvokeSupported();
     final args = _loadMemoryArgs(memory, paramPointers);
     final result = await _callback(List<Object?>.unmodifiable(args));
@@ -383,7 +582,7 @@ final class WASIComponentCanonicalAdapterOperation {
       memory,
       result,
       resultPointer: resultPointer,
-      realloc: realloc,
+      realloc: _guardRealloc(realloc),
     );
   }
 
@@ -408,6 +607,290 @@ final class WASIComponentCanonicalAdapterOperation {
       );
     }
     return args;
+  }
+
+  List<Object?> _storeLiftedCoreArgs(
+    List<Object?> args,
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  ) {
+    final directArgs = _validateDirectArgs(args);
+    final flatArgs = <Object?>[];
+    for (var index = 0; index < plan.params.length; index++) {
+      flatArgs.addAll(
+        _storeFlatValue(
+          plan.params[index],
+          directArgs[index],
+          memory,
+          realloc,
+          plan.stringEncoding,
+        ),
+      );
+    }
+    if (flatArgs.length > _canonicalMaxFlatParams) {
+      throw UnsupportedError(
+        'WASI component canonical adapter index $canonicalIndex does not yet '
+        'support indirect lifted core parameters.',
+      );
+    }
+    return flatArgs;
+  }
+
+  Object? _loadLiftedCoreResult(Object? coreResult, wasm.Memory? memory) {
+    final resultPlan = plan.result;
+    if (resultPlan == null) {
+      if (coreResult != null) {
+        throw StateError(
+          'WASI component canonical adapter index $canonicalIndex expected no '
+          'core result.',
+        );
+      }
+      return null;
+    }
+    final flatLength = resultPlan.flatLength;
+    if (flatLength == null) {
+      throw UnsupportedError(
+        'WASI component canonical adapter value ${resultPlan.path} does not '
+        'support a flat core result.',
+      );
+    }
+    if (flatLength > _canonicalMaxFlatResults) {
+      throw UnsupportedError(
+        'WASI component canonical adapter index $canonicalIndex does not yet '
+        'support indirect lifted core results.',
+      );
+    }
+    final flatResults = flatLength == 0
+        ? const <Object?>[]
+        : <Object?>[coreResult];
+    final loaded = _loadFlatValue(
+      resultPlan,
+      flatResults,
+      0,
+      memory,
+      plan.stringEncoding,
+    );
+    if (loaded.nextOffset != flatResults.length) {
+      throw StateError(
+        'WASI component canonical adapter index $canonicalIndex consumed '
+        '${loaded.nextOffset} core results, got ${flatResults.length}.',
+      );
+    }
+    return loaded.value;
+  }
+
+  void _invokePostReturn(Object? coreResult) {
+    final callback = _postReturnCallback;
+    if (callback == null) {
+      return;
+    }
+    final result = _callState.withLeavingBlocked(
+      () => callback(
+        List<Object?>.unmodifiable(_liftedCoreResultArgs(coreResult)),
+      ),
+    );
+    if (result is Future) {
+      throw UnsupportedError(
+        'WASI component canonical adapter index $canonicalIndex has an '
+        'async post-return callback; use invokeLiftedCoreAsync.',
+      );
+    }
+    if (result != null) {
+      throw StateError(
+        'WASI component canonical adapter index $canonicalIndex post-return '
+        'returned an unexpected value.',
+      );
+    }
+  }
+
+  Future<void> _invokePostReturnAsync(Object? coreResult) async {
+    final callback = _postReturnCallback;
+    if (callback == null) {
+      return;
+    }
+    final result = await _callState.withLeavingBlockedAsync(
+      () => callback(
+        List<Object?>.unmodifiable(_liftedCoreResultArgs(coreResult)),
+      ),
+    );
+    if (result != null) {
+      throw StateError(
+        'WASI component canonical adapter index $canonicalIndex post-return '
+        'returned an unexpected value.',
+      );
+    }
+  }
+
+  List<Object?> _liftedCoreResultArgs(Object? coreResult) {
+    final flatLength = plan.result?.flatLength ?? 0;
+    return flatLength == 0 ? const <Object?>[] : <Object?>[coreResult];
+  }
+
+  ({List<Object?> args, int? resultPointer}) _loadLoweredCoreArgs(
+    List<Object?> coreArgs,
+    wasm.Memory? memory,
+  ) {
+    final flatParamCount = _flatParamCount();
+    final paramsIndirect = flatParamCount > _canonicalMaxFlatParams;
+    final resultIndirect = _resultIsIndirect();
+    final expectedCoreArgCount =
+        (paramsIndirect ? 1 : flatParamCount) + (resultIndirect ? 1 : 0);
+    if (coreArgs.length != expectedCoreArgCount) {
+      throw StateError(
+        'WASI component canonical adapter index $canonicalIndex expected '
+        '$expectedCoreArgCount lowered core arguments, got ${coreArgs.length}.',
+      );
+    }
+
+    final resultPointer = resultIndirect
+        ? _requireCorePointer(coreArgs.last, 'result')
+        : null;
+    final args = paramsIndirect
+        ? _loadIndirectParams(
+            _requireCorePointer(coreArgs.first, 'parameter'),
+            memory,
+          )
+        : _loadFlatArgs(coreArgs.sublist(0, flatParamCount), memory);
+    return (args: args, resultPointer: resultPointer);
+  }
+
+  List<Object?> _loadIndirectParams(int pointer, wasm.Memory? memory) {
+    if (memory == null) {
+      throw StateError(
+        'WASI component canonical adapter index $canonicalIndex requires memory '
+        'for indirect parameters.',
+      );
+    }
+    var offset = 0;
+    final args = <Object?>[];
+    for (final param in plan.params) {
+      final codec = param.memoryCodec;
+      if (codec == null) {
+        throw UnsupportedError(
+          'WASI component canonical adapter value ${param.path} does not '
+          'support indirect parameters.',
+        );
+      }
+      offset = _alignCanonicalOffset(offset, codec.alignment);
+      args.add(
+        codec.load(
+          memory,
+          pointer + offset,
+          stringEncoding: plan.stringEncoding,
+        ),
+      );
+      offset += codec.byteLength;
+    }
+    return args;
+  }
+
+  List<Object?> _storeLoweredCoreResult(
+    Object? result,
+    int? resultPointer,
+    wasm.Memory? memory,
+    WASIComponentCanonicalRealloc? realloc,
+  ) {
+    if (!_resultIsIndirect()) {
+      return _storeFlatResult(result, memory, realloc);
+    }
+    final resultPlan = plan.result!;
+    final codec = resultPlan.memoryCodec;
+    if (memory == null || resultPointer == null) {
+      throw StateError(
+        'WASI component canonical adapter index $canonicalIndex requires memory '
+        'and a result pointer for its indirect result.',
+      );
+    }
+    if (codec == null) {
+      throw UnsupportedError(
+        'WASI component canonical adapter value ${resultPlan.path} does not '
+        'support an indirect result.',
+      );
+    }
+    codec.store(
+      memory,
+      resultPointer,
+      result,
+      realloc: realloc,
+      stringEncoding: plan.stringEncoding,
+    );
+    return const <Object?>[];
+  }
+
+  int _flatParamCount() {
+    var count = 0;
+    for (final param in plan.params) {
+      final length = param.flatLength;
+      if (length == null) {
+        throw UnsupportedError(
+          'WASI component canonical adapter value ${param.path} does not '
+          'support flat core parameters.',
+        );
+      }
+      count += length;
+    }
+    return count;
+  }
+
+  bool _resultIsIndirect() {
+    final result = plan.result;
+    if (result == null) {
+      return false;
+    }
+    final length = result.flatLength;
+    if (length == null) {
+      throw UnsupportedError(
+        'WASI component canonical adapter value ${result.path} does not '
+        'support a flat core result.',
+      );
+    }
+    return length > _canonicalMaxFlatResults;
+  }
+
+  int _requireCorePointer(Object? value, String role) {
+    if (value is! int) {
+      throw StateError(
+        'WASI component canonical adapter index $canonicalIndex expected a '
+        'canonical u32 $role pointer, got $value.',
+      );
+    }
+    return value.toUnsigned(32);
+  }
+
+  void _requireLoweredCoreOperation() {
+    if (kind != WasmComponentCanonicalKind.lower) {
+      throw StateError(
+        'WASI component canonical adapter index $canonicalIndex is not a '
+        'canonical lower operation.',
+      );
+    }
+  }
+
+  void _requireLiftedCoreOperation() {
+    if (kind != WasmComponentCanonicalKind.lift) {
+      throw StateError(
+        'WASI component canonical adapter index $canonicalIndex is not a '
+        'canonical lift operation.',
+      );
+    }
+  }
+
+  void _requireMayLeaveForLower() {
+    if (kind == WasmComponentCanonicalKind.lower) {
+      _callState.requireMayLeave(canonicalIndex);
+    }
+  }
+
+  WASIComponentCanonicalRealloc? _guardRealloc(
+    WASIComponentCanonicalRealloc? realloc,
+  ) {
+    if (realloc == null) {
+      return null;
+    }
+    return (oldPointer, oldSize, alignment, newSize) =>
+        _callState.withLeavingBlocked(
+          () => realloc(oldPointer, oldSize, alignment, newSize),
+        );
   }
 
   List<Object?> _storeFlatResult(
@@ -544,6 +1027,42 @@ final class WASIComponentCanonicalAdapterOperation {
   }
 }
 
+final class _WASIComponentCanonicalCallState {
+  var _leavingBlockedDepth = 0;
+
+  void requireMayLeave(int canonicalIndex) {
+    if (_leavingBlockedDepth == 0) {
+      return;
+    }
+    throw StateError(
+      'WASI component canonical adapter index $canonicalIndex cannot leave '
+      'the component instance during post-return or realloc.',
+    );
+  }
+
+  T withLeavingBlocked<T>(T Function() callback) {
+    _leavingBlockedDepth++;
+    try {
+      return callback();
+    } finally {
+      _leavingBlockedDepth--;
+    }
+  }
+
+  Future<T> withLeavingBlockedAsync<T>(FutureOr<T> Function() callback) async {
+    _leavingBlockedDepth++;
+    try {
+      return await callback();
+    } finally {
+      _leavingBlockedDepth--;
+    }
+  }
+}
+
+int _alignCanonicalOffset(int value, int alignment) {
+  return ((value + alignment - 1) ~/ alignment) * alignment;
+}
+
 Object? _validateDirectValue(
   WASIComponentCanonicalAdapterValuePlan valuePlan,
   Object? value,
@@ -671,8 +1190,8 @@ Object? _validateDirectValue(
       );
     }
     final memoryRef = _requireMemory(memory, path);
-    final pointer = _expectFlatInt(path, flatArgs[offset]);
-    final length = _expectFlatInt(path, flatArgs[offset + 1]);
+    final pointer = _expectFlatU32(path, flatArgs[offset]);
+    final length = _expectFlatU32(path, flatArgs[offset + 1]);
     return (
       value: readWASIComponentCanonicalString(
         memoryRef,
@@ -707,7 +1226,7 @@ Object? _validateDirectValue(
       'WASI component canonical adapter value $path expected a flat flags argument.',
     );
   }
-  final bits = _expectFlatInt(path, flatArgs[offset]);
+  final bits = _expectFlatU32(path, flatArgs[offset]);
   _checkFlatFlagsBits(path, layout.labels, bits);
   return (
     value: WasmComponentValueData(
@@ -730,7 +1249,7 @@ Object? _validateDirectValue(
       'WASI component canonical adapter value $path expected a flat enum argument.',
     );
   }
-  final index = _expectFlatInt(path, flatArgs[offset]);
+  final index = _expectFlatU32(path, flatArgs[offset]);
   _checkFlatEnumIndex(path, layout.labels, index);
   return (
     value: WasmComponentValueData(
@@ -756,7 +1275,7 @@ Object? _validateDirectValue(
       'WASI component canonical adapter value $path expected ${layout.flatLength} flat option arguments.',
     );
   }
-  final tag = _expectFlatInt(path, flatArgs[offset]);
+  final tag = _expectFlatU32(path, flatArgs[offset]);
   final element = layout.element!;
   if (tag == 0) {
     return (
@@ -814,18 +1333,29 @@ Object? _validateDirectValue(
       'WASI component canonical adapter value $path expected $flatLength flat result arguments.',
     );
   }
-  final tag = _expectFlatInt(path, flatArgs[offset]);
+  final tag = _expectFlatU32(path, flatArgs[offset]);
   if (tag == 0 || tag == 1) {
     final isOk = tag == 0;
     final label = isOk ? 'ok' : 'error';
     final payloadLayout = isOk ? layout.ok : layout.error;
     WasmComponentValueData? associated;
     if (payloadLayout != null) {
+      final payloadTypes = payloadLayout.flatTypes;
+      final joinedTypes = layout.flatTypes.sublist(1);
+      final coerced = <Object?>[
+        for (var index = 0; index < payloadTypes.length; index++)
+          _coerceFlatValue(
+            flatArgs[offset + 1 + index],
+            joinedTypes[index],
+            payloadTypes[index],
+            '$path.$label[$index]',
+          ),
+      ];
       final loaded = _loadFlatLayout(
         payloadLayout,
         '$path.$label',
-        flatArgs,
-        offset + 1,
+        coerced,
+        0,
         memory,
         stringEncoding,
       );
@@ -866,7 +1396,7 @@ Object? _validateDirectValue(
       'WASI component canonical adapter value $path expected $flatLength flat variant arguments.',
     );
   }
-  final tag = _expectFlatInt(path, flatArgs[offset]);
+  final tag = _expectFlatU32(path, flatArgs[offset]);
   if (tag < 0 || tag >= layout.cases.length) {
     throw StateError(
       'WASI component canonical adapter value $path has invalid variant tag $tag.',
@@ -876,11 +1406,22 @@ Object? _validateDirectValue(
   final payloadLayout = case_.value;
   WasmComponentValueData? associated;
   if (payloadLayout != null) {
+    final payloadTypes = payloadLayout.flatTypes;
+    final joinedTypes = layout.flatTypes.sublist(1);
+    final coerced = <Object?>[
+      for (var index = 0; index < payloadTypes.length; index++)
+        _coerceFlatValue(
+          flatArgs[offset + 1 + index],
+          joinedTypes[index],
+          payloadTypes[index],
+          '$path.${case_.label}[$index]',
+        ),
+    ];
     final loaded = _loadFlatLayout(
       payloadLayout,
       '$path.${case_.label}',
-      flatArgs,
-      offset + 1,
+      coerced,
+      0,
       memory,
       stringEncoding,
     );
@@ -949,8 +1490,8 @@ Object? _validateDirectValue(
     );
   }
   final memoryRef = _requireMemory(memory, path);
-  final pointer = _expectFlatInt(path, flatArgs[offset]);
-  final length = _expectFlatInt(path, flatArgs[offset + 1]);
+  final pointer = _expectFlatU32(path, flatArgs[offset]);
+  final length = _expectFlatU32(path, flatArgs[offset + 1]);
   return (
     value: _requireListMemoryCodec(
       layout,
@@ -1600,24 +2141,34 @@ List<Object?> _storeFlatTagPayload(
         'WASI component canonical adapter value $path.$label needs payload.',
       );
     }
-    flat.addAll(
-      _storeFlatLayout(
-        payloadLayout,
-        '$path.$label',
-        associated,
-        memory,
-        realloc,
-        stringEncoding,
-      ),
+    final payload = _storeFlatLayout(
+      payloadLayout,
+      '$path.$label',
+      associated,
+      memory,
+      realloc,
+      stringEncoding,
     );
+    final payloadTypes = payloadLayout.flatTypes;
+    final joinedTypes = layout.flatTypes.sublist(1);
+    flat.addAll([
+      for (var index = 0; index < payload.length; index++)
+        _coerceFlatValue(
+          payload[index],
+          payloadTypes[index],
+          joinedTypes[index],
+          '$path.$label[$index]',
+        ),
+    ]);
   }
   if (flat.length > flatLength) {
     throw StateError(
       'WASI component canonical adapter value $path returned too many flat payload values.',
     );
   }
+  final joinedTypes = layout.flatTypes.sublist(1);
   while (flat.length < flatLength) {
-    flat.add(0);
+    flat.add(_zeroFlatValue(joinedTypes[flat.length - 1]));
   }
   return flat;
 }
@@ -1691,20 +2242,33 @@ Object? _flatPrimitiveToComponentValue(
   Object? value,
 ) {
   return switch (primitive) {
-    WasmComponentPrimitiveValueType.boolean => _expectFlatInt(path, value) != 0,
-    WasmComponentPrimitiveValueType.s8 ||
-    WasmComponentPrimitiveValueType.u8 ||
-    WasmComponentPrimitiveValueType.s16 ||
-    WasmComponentPrimitiveValueType.u16 ||
-    WasmComponentPrimitiveValueType.s32 ||
-    WasmComponentPrimitiveValueType.u32 ||
-    WasmComponentPrimitiveValueType.s64 ||
-    WasmComponentPrimitiveValueType.u64 => _expectFlatInt(path, value),
+    WasmComponentPrimitiveValueType.boolean => _expectFlatU32(path, value) != 0,
+    WasmComponentPrimitiveValueType.s8 => _expectFlatU32(
+      path,
+      value,
+    ).toSigned(8),
+    WasmComponentPrimitiveValueType.u8 => _expectFlatU32(path, value) & 0xff,
+    WasmComponentPrimitiveValueType.s16 => _expectFlatU32(
+      path,
+      value,
+    ).toSigned(16),
+    WasmComponentPrimitiveValueType.u16 => _expectFlatU32(path, value) & 0xffff,
+    WasmComponentPrimitiveValueType.s32 => _expectFlatU32(
+      path,
+      value,
+    ).toSigned(32),
+    WasmComponentPrimitiveValueType.u32 => _expectFlatU32(path, value),
+    WasmComponentPrimitiveValueType.s64 => _canonicalSignedI64(
+      _expectFlatU64Bits(path, value),
+    ),
+    WasmComponentPrimitiveValueType.u64 => _canonicalIntegerValue(
+      _expectFlatU64Bits(path, value),
+    ),
     WasmComponentPrimitiveValueType.f32 ||
     WasmComponentPrimitiveValueType.f64 => _expectFlatNum(path, value),
     WasmComponentPrimitiveValueType.char => _flatCharToString(
       path,
-      _expectFlatInt(path, value),
+      _expectFlatU32(path, value),
     ),
     WasmComponentPrimitiveValueType.string => throw StateError(
       'String flat values are handled separately.',
@@ -1730,9 +2294,9 @@ Object? _componentPrimitiveToFlatValue(
     WasmComponentPrimitiveValueType.s16 ||
     WasmComponentPrimitiveValueType.u16 ||
     WasmComponentPrimitiveValueType.s32 ||
-    WasmComponentPrimitiveValueType.u32 ||
+    WasmComponentPrimitiveValueType.u32 => direct as int,
     WasmComponentPrimitiveValueType.s64 ||
-    WasmComponentPrimitiveValueType.u64 => direct as int,
+    WasmComponentPrimitiveValueType.u64 => _coreI64Value(direct as Object),
     WasmComponentPrimitiveValueType.f32 ||
     WasmComponentPrimitiveValueType.f64 => direct as num,
     WasmComponentPrimitiveValueType.char => _stringToFlatChar(path, direct),
@@ -1765,7 +2329,7 @@ Object? _primitiveValueFromData(
     case WasmComponentPrimitiveValueType.s64:
     case WasmComponentPrimitiveValueType.u64:
       if (value.kind == WasmComponentValueDataKind.integer &&
-          value.integer is int) {
+          (value.integer is int || value.integer is BigInt)) {
         return value.integer;
       }
     case WasmComponentPrimitiveValueType.f32:
@@ -1788,30 +2352,160 @@ Object? _primitiveValueFromData(
   );
 }
 
-int _expectFlatInt(String path, Object? value) {
+int _expectFlatU32(String path, Object? value) {
   if (value is int) {
+    return value.toUnsigned(32);
+  }
+  throw StateError(
+    'WASI component canonical adapter value $path expected a core i32 value.',
+  );
+}
+
+BigInt _expectFlatU64Bits(String path, Object? value) {
+  if (value is int) {
+    return BigInt.from(value) & _u64Mask;
+  }
+  if (value is BigInt) {
+    return value & _u64Mask;
+  }
+  throw StateError(
+    'WASI component canonical adapter value $path expected a core i64 value.',
+  );
+}
+
+Object _canonicalSignedI64(BigInt bits) {
+  final signed = (bits & _i64SignBit) == BigInt.zero
+      ? bits
+      : bits - _u64Modulus;
+  return _canonicalIntegerValue(signed);
+}
+
+Object _canonicalIntegerValue(BigInt value) {
+  return value >= _minSafeInteger && value <= _maxSafeInteger
+      ? value.toInt()
+      : value;
+}
+
+Object _coreI64Value(Object value) {
+  final bits = switch (value) {
+    int() => BigInt.from(value) & _u64Mask,
+    BigInt() => value & _u64Mask,
+    _ => throw StateError('Expected a canonical 64-bit integer value.'),
+  };
+  return _canonicalSignedI64(bits);
+}
+
+Object? _coerceFlatValue(
+  Object? value,
+  WASIComponentCanonicalAdapterFlatType source,
+  WASIComponentCanonicalAdapterFlatType target,
+  String path,
+) {
+  if (source == target) {
     return value;
   }
-  throw StateError(
-    'WASI component canonical adapter value $path expected int.',
-  );
+  return switch ((source, target)) {
+    (
+      WASIComponentCanonicalAdapterFlatType.i32,
+      WASIComponentCanonicalAdapterFlatType.f32,
+    ) =>
+      _f32FromBits(_expectFlatU32(path, value)),
+    (
+      WASIComponentCanonicalAdapterFlatType.f32,
+      WASIComponentCanonicalAdapterFlatType.i32,
+    ) =>
+      _f32Bits(path, value),
+    (
+      WASIComponentCanonicalAdapterFlatType.i32,
+      WASIComponentCanonicalAdapterFlatType.i64,
+    ) =>
+      _coreI64Value(_expectFlatU32(path, value)),
+    (
+      WASIComponentCanonicalAdapterFlatType.f32,
+      WASIComponentCanonicalAdapterFlatType.i64,
+    ) =>
+      _coreI64Value(_f32Bits(path, value)),
+    (
+      WASIComponentCanonicalAdapterFlatType.f64,
+      WASIComponentCanonicalAdapterFlatType.i64,
+    ) =>
+      _coreI64Value(_f64Bits(path, value)),
+    (
+      WASIComponentCanonicalAdapterFlatType.i64,
+      WASIComponentCanonicalAdapterFlatType.i32,
+    ) =>
+      (_expectFlatU64Bits(path, value) & _u32BigIntMask).toInt(),
+    (
+      WASIComponentCanonicalAdapterFlatType.i64,
+      WASIComponentCanonicalAdapterFlatType.f32,
+    ) =>
+      _f32FromBits((_expectFlatU64Bits(path, value) & _u32BigIntMask).toInt()),
+    (
+      WASIComponentCanonicalAdapterFlatType.i64,
+      WASIComponentCanonicalAdapterFlatType.f64,
+    ) =>
+      _f64FromBits(_expectFlatU64Bits(path, value)),
+    _ => throw StateError(
+      'WASI component canonical adapter value $path cannot coerce '
+      '${source.name} to ${target.name}.',
+    ),
+  };
 }
+
+Object _zeroFlatValue(WASIComponentCanonicalAdapterFlatType type) {
+  return switch (type) {
+    WASIComponentCanonicalAdapterFlatType.i32 ||
+    WASIComponentCanonicalAdapterFlatType.i64 => 0,
+    WASIComponentCanonicalAdapterFlatType.f32 ||
+    WASIComponentCanonicalAdapterFlatType.f64 => 0.0,
+  };
+}
+
+int _f32Bits(String path, Object? value) {
+  if (value is! num) {
+    throw StateError(
+      'WASI component canonical adapter value $path expected a core f32 value.',
+    );
+  }
+  final data = ByteData(4)..setFloat32(0, value.toDouble(), Endian.little);
+  return data.getUint32(0, Endian.little);
+}
+
+double _f32FromBits(int bits) {
+  final data = ByteData(4)..setUint32(0, bits, Endian.little);
+  return data.getFloat32(0, Endian.little);
+}
+
+BigInt _f64Bits(String path, Object? value) {
+  if (value is! num) {
+    throw StateError(
+      'WASI component canonical adapter value $path expected a core f64 value.',
+    );
+  }
+  final data = ByteData(8)..setFloat64(0, value.toDouble(), Endian.little);
+  return (BigInt.from(data.getUint32(4, Endian.little)) << 32) |
+      BigInt.from(data.getUint32(0, Endian.little));
+}
+
+double _f64FromBits(BigInt bits) {
+  final data = ByteData(8)
+    ..setUint32(0, (bits & _u32BigIntMask).toInt(), Endian.little)
+    ..setUint32(4, ((bits >> 32) & _u32BigIntMask).toInt(), Endian.little);
+  return data.getFloat64(0, Endian.little);
+}
+
+final BigInt _u64Modulus = BigInt.one << 64;
+final BigInt _u64Mask = _u64Modulus - BigInt.one;
+final BigInt _u32BigIntMask = (BigInt.one << 32) - BigInt.one;
+final BigInt _i64SignBit = BigInt.one << 63;
+final BigInt _maxSafeInteger = BigInt.from(9007199254740991);
+final BigInt _minSafeInteger = -_maxSafeInteger;
 
 int _expectFlatResourceHandle(String path, Object? value) =>
-    _expectFlatU32Handle(path, value, 'resource');
+    _expectFlatU32(path, value);
 
 int _expectFlatErrorContextHandle(String path, Object? value) =>
-    _expectFlatU32Handle(path, value, 'error-context');
-
-int _expectFlatU32Handle(String path, Object? value, String name) {
-  final handle = _expectFlatInt(path, value);
-  if (handle >= 0 && handle <= 0xffffffff) {
-    return handle;
-  }
-  throw StateError(
-    'WASI component canonical adapter value $path expected a canonical u32 $name handle.',
-  );
-}
+    _expectFlatU32(path, value);
 
 num _expectFlatNum(String path, Object? value) {
   if (value is num) {

@@ -129,6 +129,7 @@ final class WASIComponentCanonicalHost {
   WASIComponentCanonicalProgram _bindSupportedCanonicalDefinitions(
     List<WasmComponentCanonicalDefinition> definitions, {
     List<WasmComponentTypeDefinition> typeDefinitions = const [],
+    WASIComponentResourceBindingSet<Object>? resourceBindingSet,
     Map<int, WASIComponentCanonicalAdapterOperation> adapterOperations =
         const <int, WASIComponentCanonicalAdapterOperation>{},
   }) {
@@ -143,6 +144,7 @@ final class WASIComponentCanonicalHost {
           definitions[canonicalIndex],
           canonicalIndex: canonicalIndex,
           typeDefinitions: typeDefinitions,
+          resourceBindingSet: resourceBindingSet,
           adapterOperations: adapterOperations,
         ),
       );
@@ -225,6 +227,7 @@ final class WASIComponentCanonicalHost {
       definition,
       canonicalIndex: 0,
       typeDefinitions: const <WasmComponentTypeDefinition>[],
+      resourceBindingSet: null,
       adapterOperations: const <int, WASIComponentCanonicalAdapterOperation>{},
     );
   }
@@ -233,6 +236,7 @@ final class WASIComponentCanonicalHost {
     WasmComponentCanonicalDefinition definition, {
     required int canonicalIndex,
     required List<WasmComponentTypeDefinition> typeDefinitions,
+    required WASIComponentResourceBindingSet<Object>? resourceBindingSet,
     required Map<int, WASIComponentCanonicalAdapterOperation> adapterOperations,
   }) {
     switch (definition.kind) {
@@ -242,7 +246,7 @@ final class WASIComponentCanonicalHost {
       case WasmComponentCanonicalKind.resourceNew:
       case WasmComponentCanonicalKind.resourceDrop:
       case WasmComponentCanonicalKind.resourceRep:
-        return _bindResource(definition);
+        return _bindResource(definition, resourceBindingSet);
       case WasmComponentCanonicalKind.backpressureSet:
       case WasmComponentCanonicalKind.backpressureInc:
       case WasmComponentCanonicalKind.backpressureDec:
@@ -346,9 +350,13 @@ final class WASIComponentCanonicalHost {
 
   WASIComponentCanonicalOperation _bindResource(
     WasmComponentCanonicalDefinition definition,
+    WASIComponentResourceBindingSet<Object>? resourceBindingSet,
   ) {
     final program = WASIComponentCanonicalResourceProgram(
-      operations: [resourceHost.bindCanonicalDefinition(definition)],
+      operations: [
+        resourceBindingSet?.bindCanonicalDefinition(definition) ??
+            resourceHost.bindCanonicalDefinition(definition),
+      ],
     );
     return WASIComponentCanonicalOperation._(
       kind: definition.kind,
@@ -514,8 +522,9 @@ final class WASIComponentCanonicalBindingPlan {
 
   /// Builds the canonical program with executable `lift`/`lower` adapters.
   WASIComponentCanonicalProgram bindWithAdapterOperations(
-    Iterable<WASIComponentCanonicalAdapterOperation> adapterOperations,
-  ) {
+    Iterable<WASIComponentCanonicalAdapterOperation> adapterOperations, {
+    WASIComponentResourceBindingSet<Object>? resourceBindingSet,
+  }) {
     if (validationErrors.isNotEmpty) {
       throw WASIComponentCanonicalHostValidationException(validationErrors);
     }
@@ -532,6 +541,7 @@ final class WASIComponentCanonicalBindingPlan {
     return _host._bindSupportedCanonicalDefinitions(
       canonicalDefinitions,
       typeDefinitions: typeDefinitions,
+      resourceBindingSet: resourceBindingSet,
       adapterOperations: Map.unmodifiable(adaptersByCanonicalIndex),
     );
   }
