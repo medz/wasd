@@ -2,8 +2,10 @@
 library;
 
 import 'dart:ffi';
+import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:ffi/ffi.dart';
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/preview2/native/stat_layout.dart';
 
@@ -52,6 +54,78 @@ void main() {
         );
       }
     });
+
+    test('selects Darwin x64 64-bit-inode lstat', () {
+      expect(
+        WASIPreview2NativeStatLayout.lstatSymbolForAbi(Abi.macosX64),
+        r'lstat$INODE64',
+      );
+      for (final abi in const <Abi>[
+        Abi.macosArm64,
+        Abi.iosX64,
+        Abi.iosArm64,
+        Abi.linuxX64,
+        Abi.linuxArm64,
+      ]) {
+        expect(
+          WASIPreview2NativeStatLayout.lstatSymbolForAbi(abi),
+          'lstat',
+          reason: '$abi',
+        );
+      }
+    });
+
+    test('decodes metadata returned by Darwin lstat', () {
+      final directory = Directory.systemTemp.createTempSync('wasd-stat-');
+      try {
+        final accessTime = DateTime.utc(2024, 1, 2, 3, 4, 5);
+        final modificationTime = DateTime.utc(2025, 6, 7, 8, 9, 10);
+        final file = File('${directory.path}/fixture.bin')
+          ..writeAsBytesSync(List<int>.filled(321, 0x5a))
+          ..setLastAccessedSync(accessTime)
+          ..setLastModifiedSync(modificationTime);
+        final expected = file.statSync();
+        expect(expected.size, 321);
+        expect(expected.accessed.toUtc(), accessTime);
+        expect(expected.modified.toUtc(), modificationTime);
+        final bytes = calloc<Uint8>(256);
+        final path = file.path.toNativeUtf8();
+        try {
+          final lstat = DynamicLibrary.process()
+              .lookupFunction<
+                Int32 Function(Pointer<Utf8>, Pointer<Void>),
+                int Function(Pointer<Utf8>, Pointer<Void>)
+              >(WASIPreview2NativeStatLayout.lstatSymbolForAbi(Abi.current()));
+          expect(lstat(path, bytes.cast<Void>()), 0);
+
+          final metadata = WASIPreview2NativeStatLayout.forAbi(
+            Abi.current(),
+          )!.read(bytes.asTypedList(256))!;
+          expect(metadata.size, BigInt.from(expected.size));
+          expect(metadata.accessTimeNanos, _dateTimeNanos(expected.accessed));
+          expect(
+            metadata.modificationTimeNanos,
+            _dateTimeNanos(expected.modified),
+          );
+          final statusChangeSubMicroseconds =
+              metadata.statusChangeTimeNanos! -
+              _dateTimeNanos(expected.changed);
+          // FileStat truncates Darwin's nanosecond ctime to milliseconds.
+          expect(
+            statusChangeSubMicroseconds,
+            allOf(
+              greaterThanOrEqualTo(BigInt.zero),
+              lessThan(BigInt.from(1000000)),
+            ),
+          );
+        } finally {
+          malloc.free(path);
+          calloc.free(bytes);
+        }
+      } finally {
+        directory.deleteSync(recursive: true);
+      }
+    }, skip: !Platform.isMacOS);
 
     test('decodes Linux and Android x64 fields', () {
       for (final abi in const <Abi>[Abi.linuxX64, Abi.androidX64]) {
@@ -136,6 +210,9 @@ void main() {
     });
   });
 }
+
+BigInt _dateTimeNanos(DateTime value) =>
+    BigInt.from(value.toUtc().microsecondsSinceEpoch) * BigInt.from(1000);
 
 void _expectDecoded({
   required Abi abi,

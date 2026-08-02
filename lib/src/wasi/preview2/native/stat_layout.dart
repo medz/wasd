@@ -63,6 +63,12 @@ final class WASIPreview2NativeStatLayout {
     return null;
   }
 
+  /// Returns the `lstat` symbol whose output matches [forAbi].
+  ///
+  /// Bare `lstat` writes the legacy 32-bit-inode layout on macOS x64.
+  static String lstatSymbolForAbi(ffi.Abi abi) =>
+      abi == ffi.Abi.macosX64 ? r'lstat$INODE64' : 'lstat';
+
   /// Decodes one native stat snapshot, or null when [bytes] is truncated.
   WASIPreview2FilesystemMetadata? read(Uint8List bytes) {
     if (bytes.lengthInBytes < _minimumByteLength) {

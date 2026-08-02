@@ -200,7 +200,10 @@ WASIPreview2FilesystemMetadata? _hostLstatMetadata(String hostPath) {
   final pathPointer = hostPath.toNativeUtf8();
   final statBuffer = malloc<ffi.Uint8>(_hostStatBufferSize);
   try {
-    if (_posixLstatFunction()(pathPointer, statBuffer.cast<ffi.Void>()) != 0) {
+    final lstat = _posixLstatFunction(
+      WASIPreview2NativeStatLayout.lstatSymbolForAbi(abi),
+    );
+    if (lstat(pathPointer, statBuffer.cast<ffi.Void>()) != 0) {
       return null;
     }
     return layout.read(statBuffer.asTypedList(_hostStatBufferSize));
@@ -908,9 +911,9 @@ _PosixUtimesDart _posixUtimesFunction() =>
     _cachedPosixUtimes ??= _openPosixCLibrary()
         .lookupFunction<_PosixUtimesNative, _PosixUtimesDart>('utimes');
 
-_PosixLstatDart _posixLstatFunction() =>
+_PosixLstatDart _posixLstatFunction(String symbol) =>
     _cachedPosixLstat ??= _openPosixCLibrary()
-        .lookupFunction<_PosixLstatNative, _PosixLstatDart>('lstat');
+        .lookupFunction<_PosixLstatNative, _PosixLstatDart>(symbol);
 
 _WindowsCreateHardLinkDart _windowsCreateHardLinkFunction() =>
     _cachedWindowsCreateHardLink ??= ffi.DynamicLibrary.open('kernel32.dll')
