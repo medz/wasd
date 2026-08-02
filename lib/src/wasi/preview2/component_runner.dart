@@ -605,7 +605,7 @@ final class _Preview2ComponentRuntime {
               ),
             ),
             invokeSync: (args) => _coreHostResult(
-              _adapterProgram.invokeLoweredCore(
+              _synchronousAdapterProgram.invokeLoweredCore(
                 canonicalIndex,
                 args,
                 memory: _canonicalMemory(definition),

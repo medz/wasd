@@ -357,6 +357,34 @@ print(json.dumps(payload))
     },
   );
 
+  test(
+    'Preview2 component runner synchronously composes lift and lower in start',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'wasd_wasip2_sync_lift_lower_start_',
+      );
+      addTearDown(() async {
+        if (await temp.exists()) {
+          await temp.delete(recursive: true);
+        }
+      });
+      final component = await _compileComponentWat(
+        temp,
+        'synchronous_lift_lower_start',
+        _synchronousLiftLowerStartCommandWat,
+      );
+      await _insertEmptyComponentStart(component, functionIndex: 1);
+
+      final result = await Process.run(Platform.resolvedExecutable, <String>[
+        'run',
+        'tool/wasi_testsuite_preview2_component_runner.dart',
+        component.path,
+      ]);
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    },
+  );
+
   test('Preview2 command drops imported stdout resources', () async {
     final temp = await Directory.systemTemp.createTemp(
       'wasd_wasip2_stdout_drop_',
@@ -728,6 +756,34 @@ const String _resourceTypeIdentityComponentWat = r'''
   (import "interface" (instance $interface_import (type $interface)))
   (alias export $interface_import "resource" (type $resource))
   (alias export $interface_import "same-resource" (type $same_resource))
+)
+''';
+
+const String _synchronousLiftLowerStartCommandWat = r'''
+(component
+  (core module $inner_module
+    (func (export "call")))
+  (core instance $inner_i (instantiate $inner_module))
+  (alias core export $inner_i "call" (core func $inner_core))
+  (type $empty_ty (func))
+  (func $inner (type $empty_ty) (canon lift (core func $inner_core)))
+  (core func $inner_lowered (canon lower (func $inner)))
+  (core instance $inner_adapter
+    (export "inner" (func $inner_lowered)))
+
+  (core module $main
+    (import "" "inner" (func $inner))
+    (func (export "start") call $inner)
+    (func (export "run") (result i32) i32.const 0))
+  (core instance $main_i
+    (instantiate $main (with "" (instance $inner_adapter))))
+  (alias core export $main_i "start" (core func $start_core))
+  (alias core export $main_i "run" (core func $run_core))
+  (func $start (type $empty_ty) (canon lift (core func $start_core)))
+  (type $run_ty (func (result (result))))
+  (func $run (type $run_ty) (canon lift (core func $run_core)))
+  (instance $run_instance (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.0" (instance $run_instance))
 )
 ''';
 
