@@ -909,14 +909,12 @@ final class _WasmComponentTypeAliasScope {
   const _WasmComponentTypeAliasScope({
     required this.definitions,
     required this.crossesComponentBoundary,
-    this.visibleCount,
   });
 
   final List<WasmComponentTypeDefinition> definitions;
   final bool crossesComponentBoundary;
-  final int? visibleCount;
 
-  int get length => visibleCount ?? definitions.length;
+  int get length => definitions.length;
 
   WasmComponentTypeDefinition operator [](int index) => definitions[index];
 }
@@ -1165,19 +1163,6 @@ final class WasmComponent {
     );
     for (var i = 0; i < coreTypes.length; i++) {
       context.validateCoreTypeDefinition(coreTypes[i], 'coreType[$i]');
-    }
-    for (var i = 0; i < typeDefinitions.length; i++) {
-      context.validateComponentTypeDefinition(
-        typeDefinitions[i],
-        'type[$i]',
-        outerTypeScopes: <_WasmComponentTypeAliasScope>[
-          _WasmComponentTypeAliasScope(
-            definitions: typeDefinitions,
-            visibleCount: i,
-            crossesComponentBoundary: true,
-          ),
-        ],
-      );
     }
     context.validateDefinitionEvents(
       _definitionEvents,
@@ -1719,25 +1704,6 @@ WasmComponentTypeDefinition? _componentTypeDefinitionIntroducedByTypeExport(
   WasmComponentExternDescriptor descriptor,
   List<WasmComponentTypeDefinition> localTypeDefinitions,
 ) {
-  final expectedKind = switch (descriptor.kind) {
-    WasmComponentExternKind.function => WasmComponentTypeKind.function,
-    WasmComponentExternKind.component => WasmComponentTypeKind.component,
-    WasmComponentExternKind.instance => WasmComponentTypeKind.instance,
-    _ => null,
-  };
-  if (expectedKind != null) {
-    final typeIndex = descriptor.typeIndex;
-    if (typeIndex == null ||
-        typeIndex < 0 ||
-        typeIndex >= localTypeDefinitions.length) {
-      return null;
-    }
-    final typeDefinition = localTypeDefinitions[typeIndex];
-    return _componentTypeDefinitionMatches(typeDefinition, expectedKind)
-        ? typeDefinition
-        : null;
-  }
-
   if (descriptor.kind != WasmComponentExternKind.componentType ||
       (descriptor.boundKind != WasmComponentExternBoundKind.equality &&
           descriptor.boundKind !=
@@ -1754,13 +1720,6 @@ WasmComponentTypeDefinition? _componentTypeDefinitionIntroducedByTypeExport(
     return null;
   }
   return localTypeDefinitions[typeIndex];
-}
-
-bool _componentTypeDefinitionMatches(
-  WasmComponentTypeDefinition type,
-  WasmComponentTypeKind expectedKind,
-) {
-  return type.kind == expectedKind;
 }
 
 WasmComponentTypeDefinition? _componentTypeSortIndexDefinition(
@@ -2544,7 +2503,8 @@ final class _WasmComponentValidationContext {
   ) {
     switch (definition.kind) {
       case WasmComponentTypeKind.resource:
-        return definition.resource != null;
+        final resource = definition.resource;
+        return resource != null && !resource.isAbstract;
       case WasmComponentTypeKind.definedValue:
         final definedValue = definition.definedValue;
         return definedValue != null &&
@@ -2799,50 +2759,16 @@ final class _WasmComponentValidationContext {
     WasmComponentExternDescriptor? descriptor,
     List<WasmComponentTypeDefinition> localTypeDefinitions,
   ) {
-    final expectedKind = switch (descriptor?.kind) {
-      WasmComponentExternKind.function => WasmComponentTypeKind.function,
-      WasmComponentExternKind.component => WasmComponentTypeKind.component,
-      WasmComponentExternKind.instance => WasmComponentTypeKind.instance,
-      _ => null,
-    };
-    if (expectedKind != null) {
-      final typeIndex = descriptor!.typeIndex;
-      if (typeIndex == null ||
-          typeIndex < 0 ||
-          typeIndex >= localTypeDefinitions.length) {
-        return;
-      }
-
-      final typeDefinition = localTypeDefinitions[typeIndex];
-      if (!componentTypeDefinitionMatches(typeDefinition, expectedKind)) {
-        return;
-      }
-
-      localTypeDefinitions.add(typeDefinition);
+    if (descriptor == null) {
       return;
     }
-
-    if (descriptor?.kind != WasmComponentExternKind.componentType ||
-        (descriptor?.boundKind != WasmComponentExternBoundKind.equality &&
-            descriptor?.boundKind !=
-                WasmComponentExternBoundKind.subtypeResource)) {
-      return;
+    final introduced = _componentTypeDefinitionIntroducedByTypeExport(
+      descriptor,
+      localTypeDefinitions,
+    );
+    if (introduced != null) {
+      localTypeDefinitions.add(introduced);
     }
-
-    if (descriptor?.boundKind == WasmComponentExternBoundKind.subtypeResource) {
-      localTypeDefinitions.add(_abstractResourceTypeDefinition);
-      return;
-    }
-
-    final typeIndex = descriptor!.typeIndex;
-    if (typeIndex == null ||
-        typeIndex < 0 ||
-        typeIndex >= localTypeDefinitions.length) {
-      return;
-    }
-
-    final typeDefinition = localTypeDefinitions[typeIndex];
-    localTypeDefinitions.add(typeDefinition);
   }
 
   void introduceComponentTypeImport(
@@ -4325,6 +4251,26 @@ final class _WasmComponentValidationContext {
       );
     }
 
+    void validateDecodedTypeDefinitionsTo(int count) {
+      while (decodedTypeDefinitionCount < count) {
+        final definitionIndex = decodedTypeDefinitionCount;
+        final visibleTypeDefinitions = materializeVisibleTypeDefinitions();
+        validateComponentTypeDefinition(
+          typeDefinitions[definitionIndex],
+          'type[$definitionIndex]',
+          scopedTypeDefinitions: visibleTypeDefinitions,
+          outerTypeScopes: <_WasmComponentTypeAliasScope>[
+            _WasmComponentTypeAliasScope(
+              definitions: visibleTypeDefinitions,
+              crossesComponentBoundary: true,
+            ),
+          ],
+        );
+        visibleTypeDefinitions.add(typeDefinitions[definitionIndex]);
+        decodedTypeDefinitionCount++;
+      }
+    }
+
     final coreCounts = _WasmComponentCoreIndexCounts();
     var componentCount = 0;
     var instanceCount = 0;
@@ -4499,12 +4445,7 @@ final class _WasmComponentValidationContext {
           );
           instanceCount++;
         case _WasmComponentDefinitionEventKind.typeCount:
-          if (event.index > decodedTypeDefinitionCount) {
-            materializedTypeDefinitions?.addAll(
-              typeDefinitions.getRange(decodedTypeDefinitionCount, event.index),
-            );
-            decodedTypeDefinitionCount = event.index;
-          }
+          validateDecodedTypeDefinitionsTo(event.index);
         case _WasmComponentDefinitionEventKind.type:
           validateTypeDefinitionFunctionIndexes(
             typeDefinitions[event.index],
@@ -4603,7 +4544,7 @@ final class _WasmComponentValidationContext {
             'canonical[${event.index}]',
             visibleTypeDefinitions,
           );
-          if (definition.kind == WasmComponentCanonicalKind.lower) {
+          if (canonicalDefinitionIntroducesCoreFunction(definition.kind)) {
             coreCounts.add(WasmComponentCoreSortKind.function);
           }
           if (definition.kind == WasmComponentCanonicalKind.lift) {
@@ -5711,6 +5652,59 @@ final class _WasmComponentValidationContext {
     return kind == WasmComponentCanonicalKind.resourceNew ||
         kind == WasmComponentCanonicalKind.resourceDrop ||
         kind == WasmComponentCanonicalKind.resourceRep;
+  }
+
+  bool canonicalDefinitionIntroducesCoreFunction(
+    WasmComponentCanonicalKind kind,
+  ) {
+    return switch (kind) {
+      WasmComponentCanonicalKind.lift => false,
+      WasmComponentCanonicalKind.lower ||
+      WasmComponentCanonicalKind.resourceNew ||
+      WasmComponentCanonicalKind.resourceDrop ||
+      WasmComponentCanonicalKind.resourceRep ||
+      WasmComponentCanonicalKind.backpressureSet ||
+      WasmComponentCanonicalKind.backpressureInc ||
+      WasmComponentCanonicalKind.backpressureDec ||
+      WasmComponentCanonicalKind.taskReturn ||
+      WasmComponentCanonicalKind.taskCancel ||
+      WasmComponentCanonicalKind.contextGet ||
+      WasmComponentCanonicalKind.contextSet ||
+      WasmComponentCanonicalKind.threadYield ||
+      WasmComponentCanonicalKind.subtaskCancel ||
+      WasmComponentCanonicalKind.subtaskDrop ||
+      WasmComponentCanonicalKind.streamNew ||
+      WasmComponentCanonicalKind.streamRead ||
+      WasmComponentCanonicalKind.streamWrite ||
+      WasmComponentCanonicalKind.streamCancelRead ||
+      WasmComponentCanonicalKind.streamCancelWrite ||
+      WasmComponentCanonicalKind.streamDropReadable ||
+      WasmComponentCanonicalKind.streamDropWritable ||
+      WasmComponentCanonicalKind.futureNew ||
+      WasmComponentCanonicalKind.futureRead ||
+      WasmComponentCanonicalKind.futureWrite ||
+      WasmComponentCanonicalKind.futureCancelRead ||
+      WasmComponentCanonicalKind.futureCancelWrite ||
+      WasmComponentCanonicalKind.futureDropReadable ||
+      WasmComponentCanonicalKind.futureDropWritable ||
+      WasmComponentCanonicalKind.errorContextNew ||
+      WasmComponentCanonicalKind.errorContextDebugMessage ||
+      WasmComponentCanonicalKind.errorContextDrop ||
+      WasmComponentCanonicalKind.waitableSetNew ||
+      WasmComponentCanonicalKind.waitableSetWait ||
+      WasmComponentCanonicalKind.waitableSetPoll ||
+      WasmComponentCanonicalKind.waitableSetDrop ||
+      WasmComponentCanonicalKind.waitableJoin ||
+      WasmComponentCanonicalKind.threadIndex ||
+      WasmComponentCanonicalKind.threadNewIndirect ||
+      WasmComponentCanonicalKind.threadSwitchTo ||
+      WasmComponentCanonicalKind.threadSuspend ||
+      WasmComponentCanonicalKind.threadResumeLater ||
+      WasmComponentCanonicalKind.threadYieldTo ||
+      WasmComponentCanonicalKind.threadSpawnRef ||
+      WasmComponentCanonicalKind.threadSpawnIndirect ||
+      WasmComponentCanonicalKind.threadAvailableParallelism => true,
+    };
   }
 
   bool canonicalDefinitionUsesStreamType(WasmComponentCanonicalKind kind) {

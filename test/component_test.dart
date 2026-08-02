@@ -655,12 +655,14 @@ void main() {
       );
     });
 
-    test('validates function type indexes introduced by exports', () {
+    test('does not introduce function type indexes from exports', () {
+      final errors = WasmComponent.decode(
+        _typeDeclarationFunctionExportDoesNotIntroduceTypeComponentBytes(),
+      ).validate();
+      expect(errors, hasLength(1));
       expect(
-        WasmComponent.decode(
-          _typeDeclarationExportIntroducesFunctionTypeComponentBytes(),
-        ).validate(),
-        isEmpty,
+        errors.single.message,
+        contains('Unknown Wasm component function type index'),
       );
 
       final foldedDuplicate = WasmComponent.decode(
@@ -697,23 +699,25 @@ void main() {
       );
     });
 
-    test(
-      'validates component and instance type indexes introduced by exports',
-      () {
-        expect(
-          WasmComponent.decode(
-            _typeDeclarationExportIntroducesComponentTypeComponentBytes(),
-          ).validate(),
-          isEmpty,
-        );
-        expect(
-          WasmComponent.decode(
-            _typeDeclarationExportIntroducesInstanceTypeComponentBytes(),
-          ).validate(),
-          isEmpty,
-        );
-      },
-    );
+    test('does not introduce component type indexes from exports', () {
+      final component = WasmComponent.decode(
+        _typeDeclarationComponentExportDoesNotIntroduceTypeComponentBytes(),
+      ).validate();
+      expect(component, hasLength(1));
+      expect(
+        component.single.message,
+        contains('Unknown Wasm component component type index'),
+      );
+
+      final instance = WasmComponent.decode(
+        _typeDeclarationInstanceExportDoesNotIntroduceTypeComponentBytes(),
+      ).validate();
+      expect(instance, hasLength(1));
+      expect(
+        instance.single.message,
+        contains('Unknown Wasm component instance type index'),
+      );
+    });
 
     test('validates equality type indexes introduced by exports', () {
       expect(
@@ -1414,6 +1418,31 @@ void main() {
       expect(
         outOfRange.single.message,
         contains('Unknown Wasm component resource type index'),
+      );
+    });
+
+    test('counts canonical builtins in the core function index space', () {
+      expect(
+        WasmComponent.decode(
+          _canonicalResourceCoreFunctionComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
+    });
+
+    test('validates types against the materialized type index space', () {
+      expect(
+        WasmComponent.decode(_materializedTypeAliasComponentBytes()).validate(),
+        isEmpty,
+      );
+    });
+
+    test('materializes nested instance type index spaces', () {
+      expect(
+        WasmComponent.decode(
+          _nestedMaterializedTypeAliasComponentBytes(),
+        ).validate(),
+        isEmpty,
       );
     });
 
@@ -4929,6 +4958,173 @@ Uint8List _canonicalResourceTypeComponentBytes() =>
       0x00,
     ]);
 
+Uint8List _canonicalResourceCoreFunctionComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x3f,
+      0x7f,
+      0x00,
+      0x08,
+      0x03,
+      0x01,
+      0x02,
+      0x00,
+      0x02,
+      0x09,
+      0x01,
+      0x01,
+      0x01,
+      0x03,
+      0x6e,
+      0x65,
+      0x77,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _materializedTypeAliasComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x09,
+      0x01,
+      0x42,
+      0x01,
+      0x04,
+      0x00,
+      0x01,
+      0x72,
+      0x03,
+      0x01,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x69,
+      0x05,
+      0x00,
+      0x06,
+      0x06,
+      0x01,
+      0x03,
+      0x00,
+      0x00,
+      0x01,
+      0x72,
+      0x07,
+      0x08,
+      0x02,
+      0x6a,
+      0x00,
+      0x00,
+      0x40,
+      0x00,
+      0x00,
+      0x02,
+    ]);
+
+Uint8List _nestedMaterializedTypeAliasComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x09,
+      0x01,
+      0x42,
+      0x01,
+      0x04,
+      0x00,
+      0x01,
+      0x72,
+      0x03,
+      0x01,
+      0x0a,
+      0x06,
+      0x01,
+      0x00,
+      0x01,
+      0x69,
+      0x05,
+      0x00,
+      0x06,
+      0x06,
+      0x01,
+      0x03,
+      0x00,
+      0x00,
+      0x01,
+      0x72,
+      0x07,
+      0x2b,
+      0x01,
+      0x42,
+      0x07,
+      0x02,
+      0x03,
+      0x02,
+      0x01,
+      0x01,
+      0x01,
+      0x69,
+      0x00,
+      0x01,
+      0x40,
+      0x01,
+      0x01,
+      0x78,
+      0x01,
+      0x01,
+      0x00,
+      0x04,
+      0x00,
+      0x01,
+      0x66,
+      0x01,
+      0x02,
+      0x01,
+      0x70,
+      0x7d,
+      0x01,
+      0x40,
+      0x01,
+      0x02,
+      0x78,
+      0x73,
+      0x03,
+      0x01,
+      0x00,
+      0x04,
+      0x00,
+      0x01,
+      0x67,
+      0x01,
+      0x04,
+    ]);
+
 Uint8List _importedResourceCanonicalProgramComponentBytes() =>
     Uint8List.fromList(const <int>[
       0x00,
@@ -6599,7 +6795,7 @@ Uint8List _typeDeclarationFunctionAliasComponentBytes() =>
       0x00,
     ]);
 
-Uint8List _typeDeclarationExportIntroducesFunctionTypeComponentBytes() =>
+Uint8List _typeDeclarationFunctionExportDoesNotIntroduceTypeComponentBytes() =>
     Uint8List.fromList(const <int>[
       0x00,
       0x61,
@@ -6676,22 +6872,22 @@ Uint8List _caseFoldedDuplicateTypeDeclarationExportNamesComponentBytes() =>
       0x41,
       0x52,
       0x01,
-      0x01,
+      0x00,
     ]);
 
 Uint8List _versionedDuplicateTypeDeclarationExportNamesComponentBytes() =>
     _componentInstanceTypeWithFunctionExportDeclarations([
       _componentTypeFunctionExportDeclaration('foo', 0, versionSuffix: '1.0.0'),
-      _componentTypeFunctionExportDeclaration('foo', 1, versionSuffix: '2.0.0'),
+      _componentTypeFunctionExportDeclaration('foo', 0, versionSuffix: '2.0.0'),
     ]);
 
 Uint8List _structuredDuplicateTypeDeclarationExportNamesComponentBytes() =>
     _componentInstanceTypeWithFunctionExportDeclarations([
       _componentTypeFunctionExportDeclaration('foo', 0),
-      _componentTypeFunctionExportDeclaration('[method]foo.foo', 1),
+      _componentTypeFunctionExportDeclaration('[method]foo.foo', 0),
     ]);
 
-Uint8List _typeDeclarationExportIntroducesComponentTypeComponentBytes() =>
+Uint8List _typeDeclarationComponentExportDoesNotIntroduceTypeComponentBytes() =>
     Uint8List.fromList(const <int>[
       0x00,
       0x61,
@@ -6723,7 +6919,7 @@ Uint8List _typeDeclarationExportIntroducesComponentTypeComponentBytes() =>
       0x01,
     ]);
 
-Uint8List _typeDeclarationExportIntroducesInstanceTypeComponentBytes() =>
+Uint8List _typeDeclarationInstanceExportDoesNotIntroduceTypeComponentBytes() =>
     Uint8List.fromList(const <int>[
       0x00,
       0x61,
@@ -7808,12 +8004,14 @@ Uint8List _conflictingFunctionParameterNamesTypeComponentBytes() =>
     ]);
 
 Uint8List _functionResultWrongSortTypeIndexComponentBytes() =>
-    _componentWithSingleTypeDefinitionBytes(const <int>[
+    _componentWithTypeDefinitionsBytes(const <int>[
+      0x42,
+      0x00,
       0x40,
       0x00,
       0x00,
       0x00,
-    ]);
+    ], count: 2);
 
 Uint8List _listElementOutOfRangeTypeIndexComponentBytes() =>
     _componentWithSingleTypeDefinitionBytes(const <int>[0x70, 0x01]);
@@ -7919,7 +8117,7 @@ Uint8List _asyncResourceCallbackOutOfRangeFunctionComponentBytes() =>
     ]);
 
 Uint8List _ownedWrongSortTypeIndexComponentBytes() =>
-    _componentWithSingleTypeDefinitionBytes(const <int>[0x69, 0x00]);
+    _componentWithTypeDefinitionsBytes(const <int>[0x7f, 0x69, 0x00], count: 2);
 
 Uint8List _borrowedOutOfRangeTypeIndexComponentBytes() =>
     _componentWithSingleTypeDefinitionBytes(const <int>[0x68, 0x01]);
