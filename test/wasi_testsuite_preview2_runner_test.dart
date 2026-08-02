@@ -385,6 +385,13 @@ print(json.dumps(payload))
     },
   );
 
+  test('component start fixture rejects multi-byte function indexes', () async {
+    await expectLater(
+      _insertEmptyComponentStart(File('unused'), functionIndex: 0x80),
+      throwsRangeError,
+    );
+  });
+
   test('Preview2 command drops imported stdout resources', () async {
     final temp = await Directory.systemTemp.createTemp(
       'wasd_wasip2_stdout_drop_',
@@ -610,6 +617,7 @@ Future<void> _insertEmptyComponentStart(
   File componentFile, {
   required int functionIndex,
 }) async {
+  RangeError.checkValueInInterval(functionIndex, 0, 0x7f, 'functionIndex');
   final sourceBytes = await componentFile.readAsBytes();
   final component = WasmComponent.decode(sourceBytes);
   final bytes = sourceBytes.toList();
