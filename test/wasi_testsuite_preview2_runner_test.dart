@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
+import 'package:wasd/wasi.dart';
+import 'package:wasd/wasm.dart';
 
 void main() {
   test(
@@ -174,6 +176,115 @@ print(json.dumps(payload))
   );
 
   test(
+    'Preview2 component runner executes canonical resource builtins',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'wasd_wasip2_resource_',
+      );
+      addTearDown(() async {
+        if (await temp.exists()) {
+          await temp.delete(recursive: true);
+        }
+      });
+      final component = await _compileComponentWat(
+        temp,
+        'resource_builtin',
+        _resourceBuiltinCommandWat,
+      );
+
+      final result = await Process.run(Platform.resolvedExecutable, <String>[
+        'run',
+        'tool/wasi_testsuite_preview2_component_runner.dart',
+        component.path,
+      ]);
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    },
+  );
+
+  test('Preview2 component runner stores indirect canonical results', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'wasd_wasip2_indirect_result_',
+    );
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+    final component = await _compileComponentWat(
+      temp,
+      'get_arguments',
+      _getArgumentsCommandWat,
+    );
+
+    final result = await Process.run(Platform.resolvedExecutable, <String>[
+      'run',
+      'tool/wasi_testsuite_preview2_component_runner.dart',
+      component.path,
+      'a',
+      'b',
+    ]);
+
+    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+  });
+
+  test(
+    'Preview2 component runner materializes aliased resource types',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'wasd_wasip2_type_alias_',
+      );
+      addTearDown(() async {
+        if (await temp.exists()) {
+          await temp.delete(recursive: true);
+        }
+      });
+      final component = await _compileComponentWat(
+        temp,
+        'type_alias',
+        _typeAliasCommandWat,
+      );
+
+      final result = await Process.run(Platform.resolvedExecutable, <String>[
+        'run',
+        'tool/wasi_testsuite_preview2_component_runner.dart',
+        component.path,
+      ]);
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    },
+  );
+
+  test('Preview2 command drops imported stdout resources', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'wasd_wasip2_stdout_drop_',
+    );
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+    final fixture = await _compileComponentWat(
+      temp,
+      'stdout_drop',
+      _stdoutDropCommandWat,
+    );
+    final component = WasmComponent.decode(await fixture.readAsBytes());
+    final host = WASIPreview2ComponentHost.native();
+
+    final result = await WASIPreview2CommandRunner(host).run(component);
+
+    expect(result.exitCode, 0);
+    expect(host.cliHost.stdoutBytes, isEmpty);
+    final nextHandle =
+        host.standardImports['wasi:cli/stdout@0.2.0.get-stdout']!(
+              const <Object?>[],
+            )
+            as int;
+    expect(host.componentHost.table.contains(nextHandle), isTrue);
+  });
+
+  test(
     'official Preview2 runner fails when upstream has no P2 tests',
     () async {
       final temp = await Directory.systemTemp.createTemp('wasd_wasip2_empty_');
@@ -309,6 +420,17 @@ Future<File> _compileComponentWat(
     wasm.path,
   ]);
   expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+  final validation = await Process.run('.toolchains/bin/wasm-tools', <String>[
+    'validate',
+    '--features',
+    'component-model',
+    wasm.path,
+  ]);
+  expect(
+    validation.exitCode,
+    0,
+    reason: '${validation.stdout}\n${validation.stderr}',
+  );
   return wasm;
 }
 
@@ -337,6 +459,127 @@ const String _loweredRandomCommandWat = r'''
   (func $run (type $run_ty) (canon lift (core func $run_core)))
   (instance $run_instance (export "run" (func $run)))
   (export "wasi:cli/run@0.2.0" (instance $run_instance))
+)
+''';
+
+const String _resourceBuiltinCommandWat = r'''
+(component
+  (type $r (resource (rep i32)))
+  (core func $new (canon resource.new $r))
+  (core module $main
+    (import "" "new" (func $new (param i32) (result i32)))
+    (func (export "run") (result i32)
+      i32.const 42
+      call $new
+      drop
+      i32.const 0))
+  (core instance $builtins
+    (export "new" (func $new)))
+  (core instance $main_i
+    (instantiate $main (with "" (instance $builtins))))
+  (alias core export $main_i "run" (core func $run_core))
+  (type $run_ty (func (result (result))))
+  (func $run (type $run_ty) (canon lift (core func $run_core)))
+  (instance $run_instance (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.0" (instance $run_instance))
+)
+''';
+
+const String _getArgumentsCommandWat = r'''
+(component
+  (core module $libc
+    (memory (export "memory") 1)
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+      i32.const 1024))
+  (core instance $libc_i (instantiate $libc))
+  (alias core export $libc_i "memory" (core memory $memory))
+  (alias core export $libc_i "realloc" (core func $realloc))
+
+  (type $args_ty (func (result (list string))))
+  (type $env_ty (instance
+    (export "get-arguments" (func (type $args_ty)))))
+  (import "wasi:cli/environment@0.2.0"
+    (instance $env (type $env_ty)))
+  (alias export $env "get-arguments" (func $get_arguments))
+  (core func $get_arguments_core
+    (canon lower (func $get_arguments)
+      (memory $memory)
+      (realloc $realloc)))
+  (core instance $env_core
+    (export "get-arguments" (func $get_arguments_core)))
+
+  (core module $main
+    (import "env" "get-arguments" (func $get_arguments (param i32)))
+    (func (export "run") (result i32)
+      i32.const 0
+      call $get_arguments
+      i32.const 0))
+  (core instance $main_i
+    (instantiate $main (with "env" (instance $env_core))))
+  (alias core export $main_i "run" (core func $run_core))
+  (type $run_ty (func (result (result))))
+  (func $run (type $run_ty) (canon lift (core func $run_core)))
+  (instance $run_instance (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.0" (instance $run_instance))
+)
+''';
+
+const String _typeAliasCommandWat = r'''
+(component
+  (type $streams_ty (instance
+    (export "input-stream" (type (sub resource)))))
+  (import "wasi:io/streams@0.2.0"
+    (instance $streams (type $streams_ty)))
+  (alias export $streams "input-stream" (type $input_stream))
+
+  (core module $main
+    (func (export "run") (result i32) i32.const 0))
+  (core instance $main_i (instantiate $main))
+  (alias core export $main_i "run" (core func $run_core))
+  (type $run_ty (func (result (result))))
+  (func $run (type $run_ty) (canon lift (core func $run_core)))
+  (instance $run_instance (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.0" (instance $run_instance))
+)
+''';
+
+const String _stdoutDropCommandWat = r'''
+(component
+  (type $streams_ty (instance
+    (export "output-stream" (type (sub resource)))))
+  (import "wasi:io/streams@0.2.12"
+    (instance $streams (type $streams_ty)))
+  (alias export $streams "output-stream" (type $output_stream))
+
+  (type $stdout_ty (instance
+    (alias outer 1 $output_stream (type $outer_output_stream))
+    (export "output-stream" (type (eq $outer_output_stream)))
+    (type $owned_output_stream (own $outer_output_stream))
+    (type $get_stdout_ty (func (result $owned_output_stream)))
+    (export "get-stdout" (func (type $get_stdout_ty)))))
+  (import "wasi:cli/stdout@0.2.12"
+    (instance $stdout (type $stdout_ty)))
+  (alias export $stdout "get-stdout" (func $get_stdout))
+  (core func $get_stdout_core (canon lower (func $get_stdout)))
+  (core func $drop_stdout (canon resource.drop $output_stream))
+  (core instance $host
+    (export "get-stdout" (func $get_stdout_core))
+    (export "drop-stdout" (func $drop_stdout)))
+
+  (core module $main
+    (import "host" "get-stdout" (func $get_stdout (result i32)))
+    (import "host" "drop-stdout" (func $drop_stdout (param i32)))
+    (func (export "run") (result i32)
+      call $get_stdout
+      call $drop_stdout
+      i32.const 0))
+  (core instance $main_i
+    (instantiate $main (with "host" (instance $host))))
+  (alias core export $main_i "run" (core func $run_core))
+  (type $run_ty (func (result (result))))
+  (func $run (type $run_ty) (canon lift (core func $run_core)))
+  (instance $run_instance (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.12" (instance $run_instance))
 )
 ''';
 

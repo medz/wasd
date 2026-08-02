@@ -187,14 +187,11 @@ final class WASIComponentHostBindingPlan {
       coreFunctions: coreFunctions,
       componentFunctions: componentFunctions,
     );
-    _host.canonicalHost.resourceHost.checkResourceBindingsAvailable(
-      resourceBindings,
-    );
     _host.canonicalHost.asyncHost.checkAsyncValueBindingsAvailable(
       asyncValueBindings,
     );
-    final resourceTypes = _host.canonicalHost.resourceHost
-        .defineResourceBindings<Object>(
+    final resourceBindingSet = _host.canonicalHost.resourceHost
+        .createResourceBindingSet<Object>(
           resourceBindings,
           nameForBinding: resourceName,
           onDrop: onResourceDrop,
@@ -207,10 +204,11 @@ final class WASIComponentHostBindingPlan {
     );
     return WASIComponentHostBinding._(
       host: _host,
-      resourceTypes: resourceTypes,
+      resourceTypes: resourceBindingSet.resourceTypes,
       asyncValueBindings: asyncValueBindings,
       program: canonicalPlan.bindWithAdapterOperations(
         adapterProgram.operations,
+        resourceBindingSet: resourceBindingSet,
       ),
     );
   }

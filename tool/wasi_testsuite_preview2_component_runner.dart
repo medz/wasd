@@ -76,6 +76,9 @@ Future<void> main(List<String> args) async {
     }
 
     final result = await WASIPreview2CommandRunner(host).run(component);
+    io.stdout.add(host.cliHost.stdoutBytes);
+    io.stderr.add(host.cliHost.stderrBytes);
+    await Future.wait(<Future<void>>[io.stdout.flush(), io.stderr.flush()]);
     io.exitCode = result.exitCode;
   } on Object catch (error, stackTrace) {
     io.stderr

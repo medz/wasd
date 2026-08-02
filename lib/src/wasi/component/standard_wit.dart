@@ -210,10 +210,29 @@ world imports {
 }
 ''';
 
-final String _wasiRandom020Source = _wasiRandom030Source.replaceAll(
-  '@0.3.0',
-  '@0.2.0',
-);
+const String _wasiRandom020Source = '''
+package wasi:random@0.2.0;
+
+interface random {
+  get-random-bytes: func(len: u64) -> list<u8>;
+  get-random-u64: func() -> u64;
+}
+
+interface insecure {
+  get-insecure-random-bytes: func(len: u64) -> list<u8>;
+  get-insecure-random-u64: func() -> u64;
+}
+
+interface insecure-seed {
+  insecure-seed: func() -> tuple<u64, u64>;
+}
+
+world imports {
+  import random;
+  import insecure;
+  import insecure-seed;
+}
+''';
 
 const String _wasiClocks020Source = '''
 package wasi:clocks@0.2.0;

@@ -112,6 +112,25 @@ void main() {
       expect(dropped, [55]);
     });
 
+    test('keeps imported abstract resource types nominally distinct', () {
+      final component = WasmComponent.decode(_twoImportedResourceTypesBytes());
+
+      expect(component.validate(), isEmpty);
+      final definitions = component.componentTypeIndexDefinitions;
+      expect(definitions, hasLength(2));
+      expect(
+        definitions.every((definition) => definition.resource!.isAbstract),
+        isTrue,
+      );
+      expect(identical(definitions[0], definitions[1]), isFalse);
+      expect(
+        WASIComponentResourceHost()
+            .componentResourceBindings(component)
+            .map((binding) => binding.componentTypeIndex),
+        [0, 1],
+      );
+    });
+
     test('plans and binds all decoded component resource types', () {
       final component = WasmComponent.decode(_canonicalResourceProgramBytes());
       expect(component.validate(), isEmpty);
@@ -469,6 +488,30 @@ Uint8List _importedResourceCanonicalProgramBytes() =>
       0x03,
       0x00,
     ]);
+
+Uint8List _twoImportedResourceTypesBytes() => Uint8List.fromList(const <int>[
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x0d,
+  0x00,
+  0x01,
+  0x00,
+  0x0a,
+  0x0b,
+  0x02,
+  0x00,
+  0x01,
+  0x61,
+  0x03,
+  0x01,
+  0x00,
+  0x01,
+  0x62,
+  0x03,
+  0x01,
+]);
 
 Uint8List _aliasedInstanceResourceCanonicalProgramBytes() =>
     Uint8List.fromList(const <int>[

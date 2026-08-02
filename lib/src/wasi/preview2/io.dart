@@ -60,15 +60,30 @@ final class WASIPreview2InputStream {
     List<int> bytes = const <int>[],
     bool closed = false,
   }) : _bytes = List<int>.of(bytes),
-       _closed = closed;
+       _closed = closed {
+    if (closed) {
+      _done.complete(null);
+    }
+  }
 
   final List<int> _bytes;
   final List<Completer<void>> _readableWaiters = <Completer<void>>[];
+  final Completer<String?> _done = Completer<String?>();
   bool _closed;
   String? _failed;
+  String? _completionError;
 
   /// Whether this stream is ready for a non-empty read or terminal state.
   bool get isReadable => _bytes.isNotEmpty || _closed || _failed != null;
+
+  /// Completes with null on clean end-of-stream or the terminal error text.
+  Future<String?> get done => _done.future;
+
+  /// Whether the stream source has completed.
+  bool get isDone => _done.isCompleted;
+
+  /// Terminal source error, when [isDone] completed unsuccessfully.
+  String? get completionError => _completionError;
 
   /// Appends bytes and wakes pending blocking readers.
   void append(List<int> bytes) {
@@ -78,19 +93,31 @@ final class WASIPreview2InputStream {
     if (_failed != null) {
       throw StateError('Cannot append to a failed WASI input-stream.');
     }
+    if (bytes.isEmpty) {
+      return;
+    }
     _bytes.addAll(bytes);
     _notifyReadable();
   }
 
   /// Closes this stream.
   void close() {
+    if (_closed || _failed != null) {
+      return;
+    }
     _closed = true;
+    _done.complete(null);
     _notifyReadable();
   }
 
   /// Fails this stream with [debugString].
   void fail(String debugString) {
+    if (_closed || _failed != null) {
+      return;
+    }
     _failed = debugString;
+    _completionError = debugString;
+    _done.complete(debugString);
     _notifyReadable();
   }
 
@@ -104,13 +131,16 @@ final class WASIPreview2InputStream {
   }
 
   _StreamOutcome<List<int>> _read(BigInt maxLength) {
-    final length = _boundedLength(maxLength, _bytes.length);
     if (_failed case final error?) {
+      _failed = null;
+      _closed = true;
+      _bytes.clear();
       return _StreamOutcome<List<int>>.failed(error);
     }
     if (_bytes.isEmpty && _closed) {
       return _StreamOutcome<List<int>>.closed();
     }
+    final length = _boundedLength(maxLength, _bytes.length);
     if (length == 0) {
       return _StreamOutcome<List<int>>.ok(const <int>[]);
     }
@@ -152,7 +182,7 @@ final class WASIPreview2OutputStream {
   final List<int> _bytes = <int>[];
   bool _closed = false;
   String? _failed;
-  int _writePermit = 0;
+  int? _writePermit;
 
   /// Bytes written to this stream.
   List<int> get bytes => List<int>.unmodifiable(_bytes);
@@ -162,12 +192,20 @@ final class WASIPreview2OutputStream {
 
   /// Closes this stream.
   void close() {
+    if (_closed || _failed != null) {
+      return;
+    }
     _closed = true;
+    _writePermit = null;
   }
 
   /// Fails this stream with [debugString].
   void fail(String debugString) {
+    if (_closed || _failed != null) {
+      return;
+    }
     _failed = debugString;
+    _writePermit = null;
   }
 
   _StreamOutcome<BigInt> _checkWrite() {
@@ -176,7 +214,7 @@ final class WASIPreview2OutputStream {
       return _StreamOutcome<BigInt>.error(failure);
     }
     _writePermit = _maxWriteSize;
-    return _StreamOutcome<BigInt>.ok(BigInt.from(_writePermit));
+    return _StreamOutcome<BigInt>.ok(BigInt.from(_maxWriteSize));
   }
 
   _StreamOutcome<void> _write(List<int> bytes) {
@@ -184,22 +222,29 @@ final class WASIPreview2OutputStream {
     if (failure != null) {
       return _StreamOutcome<void>.error(failure);
     }
-    if (bytes.length > _writePermit) {
+    final permit = _writePermit;
+    if (permit == null || bytes.length > permit) {
       throw StateError(
         'WASI output-stream write exceeded the last check-write permit.',
       );
     }
+    _writePermit = null;
     final writeError = _onWrite?.call(Uint8List.fromList(bytes));
     if (writeError != null) {
+      _closed = true;
       return _StreamOutcome<void>.failed(writeError);
     }
     _bytes.addAll(bytes);
-    _writePermit -= bytes.length;
     return _StreamOutcome<void>.ok(null);
   }
 
   _StreamOutcome<void> _writeZeroes(BigInt length) {
-    if (length > BigInt.from(_writePermit)) {
+    final failure = _terminalFailure();
+    if (failure != null) {
+      return _StreamOutcome<void>.error(failure);
+    }
+    final permit = _writePermit;
+    if (permit == null || length > BigInt.from(permit)) {
       throw StateError(
         'WASI output-stream write-zeroes exceeded the last check-write permit.',
       );
@@ -218,6 +263,9 @@ final class WASIPreview2OutputStream {
 
   _StreamFailure? _terminalFailure() {
     if (_failed case final error?) {
+      _failed = null;
+      _closed = true;
+      _writePermit = null;
       return _StreamFailure.lastOperationFailed(error);
     }
     if (_closed) {
@@ -328,12 +376,33 @@ final class WASIPreview2StreamsHost {
     return table.insert<WASIPreview2InputStream>(_inputStreamType, stream);
   }
 
+  /// Inserts a host-owned input stream outside component runtime scopes.
+  int insertPersistentInputStream(WASIPreview2InputStream stream) {
+    return table.insertPersistent<WASIPreview2InputStream>(
+      _inputStreamType,
+      stream,
+    );
+  }
+
   /// Inserts [stream] and returns an owned output-stream handle.
   int insertOutputStream([WASIPreview2OutputStream? stream]) {
     return table.insert<WASIPreview2OutputStream>(
       _outputStreamType,
       stream ?? WASIPreview2OutputStream(),
     );
+  }
+
+  /// Inserts a host-owned output stream outside component runtime scopes.
+  int insertPersistentOutputStream([WASIPreview2OutputStream? stream]) {
+    return table.insertPersistent<WASIPreview2OutputStream>(
+      _outputStreamType,
+      stream ?? WASIPreview2OutputStream(),
+    );
+  }
+
+  /// Returns the input stream for [handle].
+  WASIPreview2InputStream inputStream(int handle) {
+    return table.get<WASIPreview2InputStream>(_inputStreamType, handle);
   }
 
   /// Returns the output stream for [handle].
@@ -369,12 +438,14 @@ final class WASIPreview2StreamsHost {
 
   int _subscribeInput(int handle) {
     final stream = table.get<WASIPreview2InputStream>(_inputStreamType, handle);
-    return pollHost.insert(
+    final pollable = pollHost.insert(
       WASIPreview2Pollable(
         isReady: () => stream.isReadable,
         waitReady: stream._waitReadable,
       ),
     );
+    table.attachChild(handle, pollable);
+    return pollable;
   }
 
   WasmComponentValueData _checkWrite(int handle) {
@@ -429,12 +500,14 @@ final class WASIPreview2StreamsHost {
       _outputStreamType,
       handle,
     );
-    return pollHost.insert(
+    final pollable = pollHost.insert(
       WASIPreview2Pollable(
         isReady: () => stream.isWritable,
         waitReady: stream._waitWritable,
       ),
     );
+    table.attachChild(handle, pollable);
+    return pollable;
   }
 
   WasmComponentValueData _writeZeroes(int handle, BigInt length) {
@@ -489,6 +562,7 @@ final class WASIPreview2StreamsHost {
     final maxRead = permit.value! < len ? permit.value! : len;
     final read = input._read(maxRead);
     if (!read.isOk) {
+      output._writePermit = null;
       return _u64Result(_StreamOutcome<BigInt>.error(read.error!));
     }
     final written = output._write(read.value!);

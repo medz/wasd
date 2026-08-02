@@ -1,0 +1,36 @@
+# Local tool state
+.dart_tool/
+.packages
+.pub/
+.toolchains/
+build/
+coverage/
+**/.dart_tool/
+**/build/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+**/Generated.xcconfig
+**/ephemeral/
+
+# Repository-only development files
+.claude/
+.gitignore
+.gitmodules
+.idea/
+.vscode/
+.DS_Store
+AGENTS.md
+CLAUDE.md
+dart_test.yaml
+doc/
+pubspec.lock
+test/
+third_party/
+tool/
+__pycache__/
+*.pyc
+
+# Heavyweight DOOM fixtures and applications
+example/doom/
+example/doom_cli.dart

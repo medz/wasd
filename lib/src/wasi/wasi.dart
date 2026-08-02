@@ -178,7 +178,8 @@ abstract interface class WASI {
   ///
   /// Preview2 is a component-model host surface rather than a core-module
   /// import object, so it is exposed as a component host instead of through
-  /// [imports].
+  /// [imports]. Command and HTTP proxy runner execution is supported on the
+  /// Dart VM; other runtimes can construct portable host bindings only.
   static WASIPreview2ComponentHost preview2({
     List<String> args = const <String>[],
     Map<String, String> env = const <String, String>{},

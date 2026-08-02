@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/backend/native/interpreter/features.dart';
@@ -11,10 +10,12 @@ import '../../wasm/backend/native/interpreter/runtime_global.dart';
 import '../../wasm/backend/native/interpreter/table.dart' as ir_table;
 import '../../wasm/backend/native/memory.dart' as native_memory;
 import '../component/adapter_host.dart';
+import '../component/adapter_plan.dart';
 import '../component/host.dart';
 import '../component/string_memory.dart';
 import 'cli.dart';
 import 'component_host.dart';
+import 'http.dart';
 
 /// Result returned after executing a WASI Preview2 command component.
 final class WASIPreview2CommandResult {
@@ -38,6 +39,27 @@ final class WASIPreview2CommandRunner {
     final runtime = _Preview2ComponentRuntime(component: component, host: host);
     final exitCode = await runtime.runCommand();
     return WASIPreview2CommandResult(exitCode: exitCode);
+  }
+}
+
+/// Executes WASI Preview2 `wasi:http/proxy` components on the native backend.
+final class WASIPreview2ProxyRunner {
+  /// Creates a proxy runner over [host].
+  const WASIPreview2ProxyRunner(this.host);
+
+  /// Preview2 host used for standard WASI imports and canonical state.
+  final WASIPreview2ComponentHost host;
+
+  /// Instantiates [component] and invokes its exported incoming handler for
+  /// [request].
+  Future<WASIPreview2HttpResponseOutparam> handle(
+    WasmComponent component,
+    WASIPreview2HttpIncomingRequest request,
+  ) {
+    return _Preview2ComponentRuntime(
+      component: component,
+      host: host,
+    ).handleProxy(request);
   }
 }
 
@@ -68,8 +90,10 @@ final class _Preview2ComponentRuntime {
   final List<_CoreInstance> _coreInstances = <_CoreInstance>[];
   final List<_ComponentFunction> _componentFunctions = <_ComponentFunction>[];
   final List<_ComponentInstance> _componentInstances = <_ComponentInstance>[];
+  final List<WasmComponent> _components = <WasmComponent>[];
   final List<WasmComponentTypeDefinition> _visibleTypes =
       <WasmComponentTypeDefinition>[];
+  final List<String?> _visibleResourceTypeNames = <String?>[];
   final Map<String, _ComponentFunction> _exportedFunctions =
       <String, _ComponentFunction>{};
   final Map<String, _ComponentInstance> _exportedInstances =
@@ -82,26 +106,61 @@ final class _Preview2ComponentRuntime {
   _adapterComponentCallbacks = <int, WASIComponentCanonicalAdapterCallback>{};
 
   late final WASIComponentHostBinding _binding;
+  late final WASIComponentCanonicalAdapterProgram _adapterProgram;
   var _decodedTypeDefinitionCount = 0;
 
-  Future<int> runCommand() async {
-    _checkComponent();
-    _processDefinitions();
-    _binding = host.bindComponent(
-      component,
-      coreFunctions: _adapterCoreCallbacks,
-      componentFunctions: _adapterComponentCallbacks,
-    );
-    final run = _findCommandRun();
+  Future<int> runCommand() => host.componentHost.table.runScoped(() async {
     try {
+      _initialize();
+      final run = _findCommandRun();
       final result = await run.invoke(const <Object?>[]);
       return _runResultExitCode(result);
     } on WASIPreview2Exit catch (exit) {
       return exit.statusCode;
     }
+  });
+
+  Future<WASIPreview2HttpResponseOutparam> handleProxy(
+    WASIPreview2HttpIncomingRequest request,
+  ) => host.componentHost.table.runScoped(() async {
+    _initialize();
+    final responseOutparam = WASIPreview2HttpResponseOutparam();
+    final requestHandle = host.httpHost.insertIncomingRequest(request);
+    final responseOutparamHandle = host.httpHost.insertResponseOutparam(
+      responseOutparam,
+    );
+    final result = await _findProxyHandler().invoke(<Object?>[
+      requestHandle,
+      responseOutparamHandle,
+    ]);
+    if (result != null) {
+      throw WASIPreview2ComponentExecutionException(
+        'wasi:http/incoming-handler.handle returned an unexpected value.',
+      );
+    }
+    if (responseOutparam.response == null) {
+      throw const WASIPreview2ComponentExecutionException(
+        'wasi:http/incoming-handler.handle did not set the response outparam.',
+      );
+    }
+    return responseOutparam;
+  });
+
+  void _initialize() {
+    final plan = _checkComponent();
+    _initializeAdapterCallbacks(plan.adapterPlans);
+    _adapterProgram = plan.bindAdapters(
+      coreFunctions: _adapterCoreCallbacks,
+      componentFunctions: _adapterComponentCallbacks,
+    );
+    _binding = plan.bind(
+      coreFunctions: _adapterCoreCallbacks,
+      componentFunctions: _adapterComponentCallbacks,
+    );
+    _processDefinitions();
   }
 
-  void _checkComponent() {
+  WASIComponentHostBindingPlan _checkComponent() {
     final validationErrors = component.validate();
     if (validationErrors.isNotEmpty) {
       throw WASIPreview2ComponentExecutionException(
@@ -113,7 +172,7 @@ final class _Preview2ComponentRuntime {
     }
     final plan = host.prepareComponent(component);
     if (plan.canBindWithAdapters) {
-      return;
+      return plan.componentPlan;
     }
     throw WASIPreview2ComponentExecutionException(
       _formatErrors('wasd-preview2-runner bind preflight failed', [
@@ -123,6 +182,54 @@ final class _Preview2ComponentRuntime {
         ...plan.bindingErrors,
       ]),
     );
+  }
+
+  void _initializeAdapterCallbacks(
+    List<WASIComponentCanonicalAdapterPlan> plans,
+  ) {
+    for (final plan in plans) {
+      switch (plan.kind) {
+        case WasmComponentCanonicalKind.lift:
+          final index = plan.definition.coreFunctionIndex;
+          if (index != null) {
+            _adapterCoreCallbacks[index] = (args) {
+              if (index < 0 || index >= _coreFunctions.length) {
+                throw WASIPreview2ComponentExecutionException(
+                  'Canonical lift references unavailable core function $index.',
+                );
+              }
+              return _coreFunctions[index].invoke(args);
+            };
+          }
+          final postReturnIndex = plan.postReturnIndex;
+          if (postReturnIndex != null) {
+            _adapterCoreCallbacks[postReturnIndex] = (args) {
+              if (postReturnIndex < 0 ||
+                  postReturnIndex >= _coreFunctions.length) {
+                throw WASIPreview2ComponentExecutionException(
+                  'Canonical lift references unavailable post-return core '
+                  'function $postReturnIndex.',
+                );
+              }
+              return _coreFunctions[postReturnIndex].invoke(args);
+            };
+          }
+        case WasmComponentCanonicalKind.lower:
+          final index = plan.definition.functionIndex;
+          if (index != null) {
+            _adapterComponentCallbacks[index] = (args) {
+              if (index < 0 || index >= _componentFunctions.length) {
+                throw WASIPreview2ComponentExecutionException(
+                  'Canonical lower references unavailable component function $index.',
+                );
+              }
+              return _componentFunctions[index].invoke(args);
+            };
+          }
+        default:
+          break;
+      }
+    }
   }
 
   void _processDefinitions() {
@@ -153,8 +260,9 @@ final class _Preview2ComponentRuntime {
           _addExport(component.exports[event.index]);
         case WasmComponentDefinitionKind.start:
           _runStart(component.starts[event.index]);
-        case WasmComponentDefinitionKind.coreType:
         case WasmComponentDefinitionKind.component:
+          _components.add(component.components[event.index]);
+        case WasmComponentDefinitionKind.coreType:
         case WasmComponentDefinitionKind.type:
         case WasmComponentDefinitionKind.value:
           break;
@@ -168,6 +276,9 @@ final class _Preview2ComponentRuntime {
     }
     _visibleTypes.addAll(
       component.typeDefinitions.getRange(_decodedTypeDefinitionCount, count),
+    );
+    _visibleResourceTypeNames.addAll(
+      List<String?>.filled(count - _decodedTypeDefinitionCount, null),
     );
     _decodedTypeDefinitionCount = count;
   }
@@ -209,29 +320,116 @@ final class _Preview2ComponentRuntime {
       );
     }
     final functions = <String, _ComponentFunction>{};
+    final types = <String, WasmComponentTypeDefinition>{};
+    final resourceTypeNames = <String, String>{};
+    final localTypes = <WasmComponentTypeDefinition>[];
+    final localResourceTypeNames = <String?>[];
     for (final declaration in instanceType.declarations) {
       final export = declaration.export;
-      if (declaration.kind != WasmComponentTypeDeclarationKind.export ||
-          export == null ||
-          export.descriptor.kind != WasmComponentExternKind.function) {
-        continue;
+      switch (declaration.kind) {
+        case WasmComponentTypeDeclarationKind.type:
+          final type = declaration.type;
+          if (type != null) {
+            localTypes.add(type);
+            localResourceTypeNames.add(null);
+          }
+        case WasmComponentTypeDeclarationKind.export:
+          if (export == null) {
+            continue;
+          }
+          final name = _externName(export.name, export.versionSuffix);
+          if (export.descriptor.kind == WasmComponentExternKind.function) {
+            functions[name] = _hostComponentFunction(
+              _witCallbackKey(interfaceName, name),
+            );
+            continue;
+          }
+          final type = _typeExportDefinition(export.descriptor, localTypes);
+          if (type != null) {
+            types[name] = type;
+            final resourceTypeName = switch (export.descriptor.boundKind) {
+              WasmComponentExternBoundKind.subtypeResource =>
+                _standardResourceTypeName(interfaceName, name),
+              WasmComponentExternBoundKind.equality =>
+                localResourceTypeNames[export.descriptor.typeIndex!],
+              _ => null,
+            };
+            if (resourceTypeName != null) {
+              resourceTypeNames[name] = resourceTypeName;
+            }
+            localTypes.add(type);
+            localResourceTypeNames.add(resourceTypeName);
+          }
+        case WasmComponentTypeDeclarationKind.import:
+        case WasmComponentTypeDeclarationKind.coreType:
+          break;
+        case WasmComponentTypeDeclarationKind.alias:
+          final alias = declaration.alias;
+          final index = alias?.target.index;
+          if (alias?.sort.kind != WasmComponentSortKind.componentType ||
+              alias?.target.kind != WasmComponentAliasTargetKind.outer ||
+              index == null ||
+              index < 0 ||
+              index >= _visibleTypes.length) {
+            throw WASIPreview2ComponentExecutionException(
+              'Unsupported type alias in component import `$interfaceName`.',
+            );
+          }
+          localTypes.add(_visibleTypes[index]);
+          localResourceTypeNames.add(_visibleResourceTypeNames[index]);
       }
-      final functionName = _externName(export.name, export.versionSuffix);
-      functions[functionName] = _hostComponentFunction(
-        _witCallbackKey(interfaceName, functionName),
+    }
+    return _ComponentInstance(
+      functions: Map.unmodifiable(functions),
+      types: Map.unmodifiable(types),
+      resourceTypeNames: Map.unmodifiable(resourceTypeNames),
+    );
+  }
+
+  WasmComponentTypeDefinition? _typeExportDefinition(
+    WasmComponentExternDescriptor descriptor,
+    List<WasmComponentTypeDefinition> localTypes,
+  ) {
+    if (descriptor.kind != WasmComponentExternKind.componentType) {
+      return null;
+    }
+    if (descriptor.boundKind == WasmComponentExternBoundKind.subtypeResource) {
+      return const WasmComponentTypeDefinition(
+        kind: WasmComponentTypeKind.resource,
+        resource: WasmComponentResourceType.abstract(),
       );
     }
-    return _ComponentInstance(functions: Map.unmodifiable(functions));
+    final index = descriptor.typeIndex;
+    if (descriptor.boundKind != WasmComponentExternBoundKind.equality ||
+        index == null ||
+        index < 0 ||
+        index >= localTypes.length) {
+      return null;
+    }
+    return localTypes[index];
   }
 
   _ComponentFunction _hostComponentFunction(String key) {
-    final callback = host.standardImports[key];
+    var resolvedKey = key;
+    var callback = host.standardImports[resolvedKey];
+    if (callback == null) {
+      final separator = key.lastIndexOf('.');
+      if (separator >= 0) {
+        final escapedKey =
+            '${key.substring(0, separator + 1)}%${key.substring(separator + 1)}';
+        final escapedCallback = host.standardImports[escapedKey];
+        if (escapedCallback != null) {
+          resolvedKey = escapedKey;
+          callback = escapedCallback;
+        }
+      }
+    }
     if (callback == null) {
       throw WASIPreview2ComponentExecutionException(
         'Missing WASI Preview2 import callback `$key`.',
       );
     }
-    return _ComponentFunction(name: key, invoke: callback);
+    return _ComponentFunction(name: resolvedKey, invoke: callback);
   }
 
   WasmComponentTypeDefinition? _typeDefinitionAt(int? index) {
@@ -324,9 +522,18 @@ final class _Preview2ComponentRuntime {
           );
         }
         _componentFunctions.add(function);
+      case WasmComponentSortKind.componentType:
+        final type = instance.types[name];
+        if (type == null) {
+          throw WASIPreview2ComponentExecutionException(
+            'Component type export `$name` not found; available exports: '
+            '${instance.types.keys.join(', ')}.',
+          );
+        }
+        _visibleTypes.add(type);
+        _visibleResourceTypeNames.add(instance.resourceTypeNames[name]);
       case WasmComponentSortKind.instance:
       case WasmComponentSortKind.value:
-      case WasmComponentSortKind.componentType:
       case WasmComponentSortKind.component:
       case WasmComponentSortKind.core:
         throw WASIPreview2ComponentExecutionException(
@@ -349,13 +556,11 @@ final class _Preview2ComponentRuntime {
             'Canonical lower $canonicalIndex references an unknown function.',
           );
         }
-        _adapterComponentCallbacks[functionIndex] =
-            _componentFunctions[functionIndex].invoke;
         _coreFunctions.add(
           _CoreFunction(
             name: 'canonical[$canonicalIndex].lower',
             invoke: (args) async => _coreHostResult(
-              await _binding.program.invokeFlatAsync(
+              await _adapterProgram.invokeLoweredCoreAsync(
                 canonicalIndex,
                 args,
                 memory: _canonicalMemory(definition),
@@ -363,7 +568,7 @@ final class _Preview2ComponentRuntime {
               ),
             ),
             invokeSync: (args) => _coreHostResult(
-              _binding.program.invokeFlat(
+              _adapterProgram.invokeLoweredCore(
                 canonicalIndex,
                 args,
                 memory: _canonicalMemory(definition),
@@ -381,16 +586,65 @@ final class _Preview2ComponentRuntime {
             'Canonical lift $canonicalIndex references an unknown core function.',
           );
         }
-        _adapterCoreCallbacks[coreFunctionIndex] =
-            _coreFunctions[coreFunctionIndex].invoke;
         _componentFunctions.add(
           _ComponentFunction(
             name: 'canonical[$canonicalIndex].lift',
-            invoke: (args) => _invokeLiftedCoreFunction(
-              definition,
-              _coreFunctions[coreFunctionIndex],
+            invoke: (args) => _adapterProgram.invokeLiftedCoreAsync(
+              canonicalIndex,
               args,
+              memory: _canonicalMemory(definition),
+              realloc: _canonicalRealloc(definition),
             ),
+          ),
+        );
+      case WasmComponentCanonicalKind.resourceNew:
+      case WasmComponentCanonicalKind.resourceRep:
+        _coreFunctions.add(
+          _CoreFunction(
+            name: 'canonical[$canonicalIndex].${definition.kind.name}',
+            invoke: (args) =>
+                _binding.program.invokeAsync(canonicalIndex, args),
+            invokeSync: (args) => _binding.program.invoke(canonicalIndex, args),
+          ),
+        );
+      case WasmComponentCanonicalKind.resourceDrop:
+        final typeIndex = definition.typeIndex;
+        final resourceTypeName =
+            typeIndex == null ||
+                typeIndex < 0 ||
+                typeIndex >= _visibleResourceTypeNames.length
+            ? null
+            : _visibleResourceTypeNames[typeIndex];
+        if (resourceTypeName == null) {
+          _coreFunctions.add(
+            _CoreFunction(
+              name: 'canonical[$canonicalIndex].resourceDrop',
+              invoke: (args) =>
+                  _binding.program.invokeAsync(canonicalIndex, args),
+              invokeSync: (args) =>
+                  _binding.program.invoke(canonicalIndex, args),
+            ),
+          );
+          break;
+        }
+        Object? dropImportedResource(List<Object?> args) {
+          if (args.length != 1 || args.single is! int) {
+            throw WASIPreview2ComponentExecutionException(
+              'Canonical resource.drop $canonicalIndex expected one handle.',
+            );
+          }
+          host.componentHost.table.dropNamed(
+            resourceTypeName,
+            args.single as int,
+          );
+          return null;
+        }
+
+        _coreFunctions.add(
+          _CoreFunction(
+            name: 'canonical[$canonicalIndex].resourceDrop',
+            invoke: dropImportedResource,
+            invokeSync: dropImportedResource,
           ),
         );
       default:
@@ -456,68 +710,6 @@ final class _Preview2ComponentRuntime {
       }
     }
     return null;
-  }
-
-  FutureOr<Object?> _invokeLiftedCoreFunction(
-    WasmComponentCanonicalDefinition definition,
-    _CoreFunction function,
-    List<Object?> args,
-  ) async {
-    if (args.isNotEmpty) {
-      throw WASIPreview2ComponentExecutionException(
-        'Preview2 command runner only supports zero-argument lifted exports.',
-      );
-    }
-    final functionType = _componentFunctionType(definition.typeIndex);
-    if (functionType == null) {
-      throw WASIPreview2ComponentExecutionException(
-        'Canonical lift does not reference a component function type.',
-      );
-    }
-    final result = await function.invoke(const <Object?>[]);
-    return _liftFlatResult(functionType.result, result);
-  }
-
-  WasmComponentFunctionType? _componentFunctionType(int? typeIndex) {
-    final type = _typeDefinitionAt(typeIndex);
-    if (type == null || type.kind != WasmComponentTypeKind.function) {
-      return null;
-    }
-    return type.function;
-  }
-
-  Object? _liftFlatResult(WasmComponentValueType? type, Object? flatResult) {
-    if (type == null) {
-      return null;
-    }
-    final definition = _typeDefinitionAt(type.typeIndex);
-    if (type.kind == WasmComponentValueTypeKind.typeIndex &&
-        definition?.definedValue?.kind ==
-            WasmComponentDefinedValueTypeKind.result) {
-      final tag = _expectI32(flatResult, 'canonical result');
-      if (tag == 0) {
-        return WasmComponentValueData(
-          kind: WasmComponentValueDataKind.result,
-          rawBytes: Uint8List(0),
-          index: 0,
-          label: 'ok',
-          isOk: true,
-        );
-      }
-      if (tag == 1) {
-        return WasmComponentValueData(
-          kind: WasmComponentValueDataKind.result,
-          rawBytes: Uint8List(0),
-          index: 1,
-          label: 'error',
-          isOk: false,
-        );
-      }
-      throw WASIPreview2ComponentExecutionException(
-        'Invalid canonical result discriminant $tag.',
-      );
-    }
-    return flatResult;
   }
 
   _CoreInstance _instantiateCoreInstance(WasmComponentCoreInstance instance) {
@@ -650,12 +842,236 @@ final class _Preview2ComponentRuntime {
                 _externName(export.name, export.versionSuffix):
                     _componentFunctions[export.sort.index],
           }),
+          types: Map.unmodifiable({
+            for (final export in instance.exports)
+              if (export.sort.kind == WasmComponentSortKind.componentType)
+                _externName(export.name, export.versionSuffix):
+                    _visibleTypes[export.sort.index],
+          }),
+          resourceTypeNames: Map.unmodifiable({
+            for (final export in instance.exports)
+              if (export.sort.kind == WasmComponentSortKind.componentType &&
+                  _visibleResourceTypeNames[export.sort.index] != null)
+                _externName(export.name, export.versionSuffix):
+                    _visibleResourceTypeNames[export.sort.index]!,
+          }),
         );
       case WasmComponentInstanceKind.instantiate:
-        throw const WASIPreview2ComponentExecutionException(
-          'Nested component instantiation is not executable in the Preview2 runner yet.',
+        final componentIndex = instance.componentIndex;
+        if (componentIndex == null ||
+            componentIndex < 0 ||
+            componentIndex >= _components.length) {
+          throw const WASIPreview2ComponentExecutionException(
+            'Nested component instance references an unknown component.',
+          );
+        }
+        return _instantiateNestedComponent(
+          _components[componentIndex],
+          instance.arguments,
         );
     }
+  }
+
+  _ComponentInstance _instantiateNestedComponent(
+    WasmComponent nested,
+    List<WasmComponentInstantiationArgument> arguments,
+  ) {
+    final suppliedFunctions = <String, _ComponentFunction>{};
+    final suppliedInstances = <String, _ComponentInstance>{};
+    final suppliedTypes = <String, _NestedComponentType>{};
+    for (final argument in arguments) {
+      switch (argument.sort.kind) {
+        case WasmComponentSortKind.function:
+          suppliedFunctions[argument.name] =
+              _componentFunctions[argument.sort.index];
+        case WasmComponentSortKind.instance:
+          suppliedInstances[argument.name] =
+              _componentInstances[argument.sort.index];
+        case WasmComponentSortKind.componentType:
+          suppliedTypes[argument.name] = _NestedComponentType(
+            definition: _visibleTypes[argument.sort.index],
+            resourceTypeName: _visibleResourceTypeNames[argument.sort.index],
+          );
+        case WasmComponentSortKind.core:
+        case WasmComponentSortKind.value:
+        case WasmComponentSortKind.component:
+          throw WASIPreview2ComponentExecutionException(
+            'Unsupported nested component argument sort '
+            '`${argument.sort.kind.name}` for `${argument.name}`.',
+          );
+      }
+    }
+
+    final functions = <_ComponentFunction>[];
+    final instances = <_ComponentInstance>[];
+    final types = <_NestedComponentType>[];
+    final exportedFunctions = <String, _ComponentFunction>{};
+    final exportedInstances = <String, _ComponentInstance>{};
+    final exportedTypes = <String, WasmComponentTypeDefinition>{};
+    final exportedResourceTypeNames = <String, String>{};
+    var decodedTypeDefinitionCount = 0;
+
+    for (final event in nested.definitionEvents) {
+      switch (event.kind) {
+        case WasmComponentDefinitionKind.import:
+          final import = nested.imports[event.index];
+          final name = _externName(import.name, import.versionSuffix);
+          switch (import.descriptor.kind) {
+            case WasmComponentExternKind.function:
+              final function = suppliedFunctions[name];
+              if (function == null) {
+                throw WASIPreview2ComponentExecutionException(
+                  'Missing nested component function argument `$name`.',
+                );
+              }
+              functions.add(function);
+            case WasmComponentExternKind.instance:
+              final instance = suppliedInstances[name];
+              if (instance == null) {
+                throw WASIPreview2ComponentExecutionException(
+                  'Missing nested component instance argument `$name`.',
+                );
+              }
+              instances.add(instance);
+            case WasmComponentExternKind.componentType:
+              final type = suppliedTypes[name];
+              if (type == null) {
+                throw WASIPreview2ComponentExecutionException(
+                  'Missing nested component type argument `$name`.',
+                );
+              }
+              types.add(type);
+            case WasmComponentExternKind.coreModule:
+            case WasmComponentExternKind.value:
+            case WasmComponentExternKind.component:
+              throw WASIPreview2ComponentExecutionException(
+                'Unsupported nested component import `$name` of kind '
+                '`${import.descriptor.kind.name}`.',
+              );
+          }
+        case WasmComponentDefinitionKind.instance:
+          final instance = nested.instances[event.index];
+          if (instance.kind != WasmComponentInstanceKind.inlineExports) {
+            throw const WASIPreview2ComponentExecutionException(
+              'Recursive nested component instantiation is not executable yet.',
+            );
+          }
+          instances.add(
+            _ComponentInstance(
+              functions: Map.unmodifiable({
+                for (final export in instance.exports)
+                  if (export.sort.kind == WasmComponentSortKind.function)
+                    _externName(export.name, export.versionSuffix):
+                        functions[export.sort.index],
+              }),
+              types: const <String, WasmComponentTypeDefinition>{},
+              resourceTypeNames: const <String, String>{},
+            ),
+          );
+        case WasmComponentDefinitionKind.alias:
+          final alias = nested.aliases[event.index];
+          if (alias.target.kind != WasmComponentAliasTargetKind.export ||
+              alias.target.instanceIndex == null ||
+              alias.target.name == null) {
+            throw const WASIPreview2ComponentExecutionException(
+              'Unsupported nested component alias.',
+            );
+          }
+          final instance = instances[alias.target.instanceIndex!];
+          switch (alias.sort.kind) {
+            case WasmComponentSortKind.function:
+              final function = instance.functions[alias.target.name!];
+              if (function == null) {
+                throw WASIPreview2ComponentExecutionException(
+                  'Nested component function export '
+                  '`${alias.target.name}` not found.',
+                );
+              }
+              functions.add(function);
+            case WasmComponentSortKind.componentType:
+              final type = instance.types[alias.target.name!];
+              if (type == null) {
+                throw WASIPreview2ComponentExecutionException(
+                  'Nested component type export '
+                  '`${alias.target.name}` not found.',
+                );
+              }
+              types.add(
+                _NestedComponentType(
+                  definition: type,
+                  resourceTypeName:
+                      instance.resourceTypeNames[alias.target.name!],
+                ),
+              );
+            case WasmComponentSortKind.core:
+            case WasmComponentSortKind.value:
+            case WasmComponentSortKind.component:
+            case WasmComponentSortKind.instance:
+              throw const WASIPreview2ComponentExecutionException(
+                'Unsupported nested component alias sort.',
+              );
+          }
+        case WasmComponentDefinitionKind.export:
+          final export = nested.exports[event.index];
+          final name = _externName(export.name, export.versionSuffix);
+          switch (export.sort.kind) {
+            case WasmComponentSortKind.function:
+              exportedFunctions[name] = functions[export.sort.index];
+            case WasmComponentSortKind.instance:
+              exportedInstances[name] = instances[export.sort.index];
+            case WasmComponentSortKind.componentType:
+              final type = types[export.sort.index];
+              exportedTypes[name] = type.definition;
+              final resourceTypeName = type.resourceTypeName;
+              if (resourceTypeName != null) {
+                exportedResourceTypeNames[name] = resourceTypeName;
+              }
+              types.add(type);
+            case WasmComponentSortKind.core:
+            case WasmComponentSortKind.value:
+            case WasmComponentSortKind.component:
+              break;
+          }
+        case WasmComponentDefinitionKind.coreType:
+        case WasmComponentDefinitionKind.coreModule:
+        case WasmComponentDefinitionKind.coreInstance:
+        case WasmComponentDefinitionKind.component:
+        case WasmComponentDefinitionKind.canonical:
+        case WasmComponentDefinitionKind.start:
+        case WasmComponentDefinitionKind.value:
+          throw WASIPreview2ComponentExecutionException(
+            'Unsupported executable definition `${event.kind.name}` in a '
+            'nested component.',
+          );
+        case WasmComponentDefinitionKind.typeCount:
+          if (event.index > decodedTypeDefinitionCount) {
+            types.addAll(
+              nested.typeDefinitions
+                  .getRange(decodedTypeDefinitionCount, event.index)
+                  .map(
+                    (definition) => _NestedComponentType(
+                      definition: definition,
+                      resourceTypeName: null,
+                    ),
+                  ),
+            );
+            decodedTypeDefinitionCount = event.index;
+          }
+        case WasmComponentDefinitionKind.type:
+          break;
+      }
+    }
+
+    if (exportedInstances.isNotEmpty) {
+      throw const WASIPreview2ComponentExecutionException(
+        'Nested component instance exports are not executable yet.',
+      );
+    }
+    return _ComponentInstance(
+      functions: Map.unmodifiable(exportedFunctions),
+      types: Map.unmodifiable(exportedTypes),
+      resourceTypeNames: Map.unmodifiable(exportedResourceTypeNames),
+    );
   }
 
   void _addExport(WasmComponentExport export) {
@@ -707,8 +1123,31 @@ final class _Preview2ComponentRuntime {
     );
   }
 
+  _ComponentFunction _findProxyHandler() {
+    for (final entry in _exportedInstances.entries) {
+      if (_isPreview2IncomingHandlerExport(entry.key)) {
+        final handle = entry.value.functions['handle'];
+        if (handle != null) {
+          return handle;
+        }
+      }
+    }
+    for (final entry in _exportedFunctions.entries) {
+      if (_isPreview2IncomingHandlerExport(entry.key)) {
+        return entry.value;
+      }
+    }
+    throw const WASIPreview2ComponentExecutionException(
+      'Component does not export wasi:http/incoming-handler@0.2.x.',
+    );
+  }
+
   bool _isPreview2RunExport(String name) {
     return RegExp(r'^wasi:cli/run@0\.2\.\d+$').hasMatch(name);
+  }
+
+  bool _isPreview2IncomingHandlerExport(String name) {
+    return RegExp(r'^wasi:http/incoming-handler@0\.2\.\d+$').hasMatch(name);
   }
 
   native_memory.Memory _wrapMemory(ir_memory.WasmMemory memory) {
@@ -890,9 +1329,25 @@ final class _ComponentFunction {
 }
 
 final class _ComponentInstance {
-  const _ComponentInstance({required this.functions});
+  const _ComponentInstance({
+    required this.functions,
+    required this.types,
+    required this.resourceTypeNames,
+  });
 
   final Map<String, _ComponentFunction> functions;
+  final Map<String, WasmComponentTypeDefinition> types;
+  final Map<String, String> resourceTypeNames;
+}
+
+final class _NestedComponentType {
+  const _NestedComponentType({
+    required this.definition,
+    required this.resourceTypeName,
+  });
+
+  final WasmComponentTypeDefinition definition;
+  final String? resourceTypeName;
 }
 
 Object? _coreHostResult(List<Object?> flatResults) {
@@ -965,8 +1420,21 @@ String _externName(String name, String? versionSuffix) {
 }
 
 String _witCallbackKey(String interfaceName, String functionName) {
+  const constructorPrefix = '[constructor]';
+  if (functionName.startsWith(constructorPrefix)) {
+    final resource = functionName.substring(constructorPrefix.length);
+    return '$interfaceName.$resource.constructor';
+  }
   final normalized = functionName.replaceFirst(RegExp(r'^\[[^\]]+\]'), '');
   return '$interfaceName.$normalized';
+}
+
+String _standardResourceTypeName(String interfaceName, String resourceName) {
+  final versionedInterface = interfaceName.replaceFirst(
+    RegExp(r'@0\.2\.\d+$'),
+    '@0.2.0',
+  );
+  return '$versionedInterface.$resourceName';
 }
 
 String _formatErrors(String header, Iterable<Object> errors) {
@@ -977,13 +1445,4 @@ String _formatErrors(String header, Iterable<Object> errors) {
       ..write(error);
   }
   return buffer.toString();
-}
-
-int _expectI32(Object? value, String context) {
-  if (value is! int) {
-    throw WASIPreview2ComponentExecutionException(
-      'Expected i32 for $context, got `${value.runtimeType}`.',
-    );
-  }
-  return value.toSigned(32);
 }

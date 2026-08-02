@@ -1,7 +1,6 @@
 import 'dart:io';
 
-// SHA-256 stays test-only; package:test already locks crypto.
-// ignore: depend_on_referenced_packages
+// Fixture provenance is verified by SHA-256 before execution.
 import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
 import 'package:wasd/wasi.dart';

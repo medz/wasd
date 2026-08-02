@@ -12,20 +12,29 @@ final class WASIPreview2NativeSocketsHost extends WASIPreview2SocketsHost {
     super.table,
     super.pollHost,
     super.streamsHost,
-    super.resolveAddresses,
-  }) : super(backend: _NativeSocketsBackend());
+    WASIPreview2AddressResolver? resolveAddresses,
+  }) : super(
+         resolveAddresses: resolveAddresses ?? _resolveNativeAddresses,
+         backend: _NativeSocketsBackend(),
+       );
 }
 
-final class _NativeSocketsBackend implements WASIPreview2SocketsBackend {
+final class _NativeSocketsBackend
+    implements WASIPreview2SocketsBackend, WASIPreview2SocketOptionsBackend {
+  @override
+  bool get supportsTcpSocketOptions => false;
+
+  @override
+  bool get supportsUdpSocketOptions => false;
+
   @override
   WASIPreview2SocketOperation<WASIPreview2IpSocketAddress> startTcpBind(
     WASIPreview2IpSocketAddress localAddress,
   ) {
-    // Dart exposes TCP bind through ServerSocket.bind and Socket.connect
-    // source-address options, so the host records bind intent here and applies
-    // it when listen/connect starts.
     return WASIPreview2SocketOperation<WASIPreview2IpSocketAddress>.completed(
-      WASIPreview2SocketResult<WASIPreview2IpSocketAddress>.ok(localAddress),
+      const WASIPreview2SocketResult<WASIPreview2IpSocketAddress>.error(
+        'not-supported',
+      ),
     );
   }
 
@@ -117,14 +126,8 @@ final class _NativeTcpListener implements WASIPreview2TcpListener {
         _queue.add(_tcpConnection(socket));
         _notify();
       },
-      onError: (Object error) {
-        _closed = true;
-        _notify();
-      },
-      onDone: () {
-        _closed = true;
-        _notify();
-      },
+      onError: (Object error) => _terminate(closeServer: true),
+      onDone: _terminate,
       cancelOnError: false,
     );
   }
@@ -164,10 +167,21 @@ final class _NativeTcpListener implements WASIPreview2TcpListener {
   }
 
   @override
-  void close() {
+  void close() => _terminate(closeServer: true);
+
+  void _terminate({bool closeServer = false}) {
+    if (_closed) {
+      return;
+    }
     _closed = true;
-    _subscription.cancel();
-    _server.close();
+    if (closeServer) {
+      unawaited(_subscription.cancel());
+      unawaited(_server.close());
+    }
+    for (final connection in _queue) {
+      connection.dispose?.call();
+    }
+    _queue.clear();
     _notify();
   }
 
@@ -208,6 +222,7 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
   late final StreamSubscription<io.RawSocketEvent> _subscription;
   final List<WASIPreview2IncomingDatagram> _queue = [];
   final List<Completer<void>> _receiveWaiters = [];
+  bool _closed = false;
 
   @override
   final WASIPreview2IpSocketAddress localAddress;
@@ -219,10 +234,10 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
   BigInt get sendCapacity => BigInt.from(64);
 
   @override
-  bool get canReceive => _queue.isNotEmpty;
+  bool get canReceive => _queue.isNotEmpty || _closed;
 
   @override
-  bool get canSend => true;
+  bool get canSend => !_closed;
 
   @override
   Future<void> waitReceive() {
@@ -241,7 +256,12 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
   WASIPreview2SocketResult<List<WASIPreview2IncomingDatagram>> receive(
     BigInt maxResults,
   ) {
-    final count = maxResults.toInt() < _queue.length
+    if (_closed && _queue.isEmpty) {
+      return const WASIPreview2SocketResult<
+        List<WASIPreview2IncomingDatagram>
+      >.error('invalid-state');
+    }
+    final count = maxResults < BigInt.from(_queue.length)
         ? maxResults.toInt()
         : _queue.length;
     final datagrams = _queue.sublist(0, count);
@@ -255,13 +275,16 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
   WASIPreview2SocketResult<BigInt> send(
     List<WASIPreview2OutgoingDatagram> datagrams,
   ) {
+    if (_closed) {
+      return const WASIPreview2SocketResult<BigInt>.error('invalid-state');
+    }
     var sent = 0;
     for (final datagram in datagrams) {
       final remoteAddress = datagram.remoteAddress;
       if (remoteAddress == null) {
-        return const WASIPreview2SocketResult<BigInt>.error(
-          'remote-unreachable',
-        );
+        return sent == 0
+            ? const WASIPreview2SocketResult<BigInt>.error('remote-unreachable')
+            : WASIPreview2SocketResult<BigInt>.ok(BigInt.from(sent));
       }
       final bytes = _socket.send(
         datagram.data,
@@ -269,9 +292,9 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
         remoteAddress.port,
       );
       if (bytes != datagram.data.length) {
-        return const WASIPreview2SocketResult<BigInt>.error(
-          'datagram-too-large',
-        );
+        return sent == 0
+            ? const WASIPreview2SocketResult<BigInt>.error('datagram-too-large')
+            : WASIPreview2SocketResult<BigInt>.ok(BigInt.from(sent));
       }
       sent++;
     }
@@ -280,6 +303,10 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
 
   @override
   void close() {
+    if (_closed) {
+      return;
+    }
+    _closed = true;
     _subscription.cancel();
     _socket.close();
     _notifyReceive();
@@ -298,8 +325,13 @@ final class _NativeUdpBinding implements WASIPreview2UdpBinding {
 
 WASIPreview2TcpConnection _tcpConnection(io.Socket socket) {
   final input = WASIPreview2InputStream();
+  var disposed = false;
+  late final StreamSubscription<Uint8List> subscription;
   final output = WASIPreview2OutputStream(
     onWrite: (bytes) {
+      if (disposed) {
+        return 'socket is closed';
+      }
       try {
         socket.add(bytes);
         return null;
@@ -308,7 +340,18 @@ WASIPreview2TcpConnection _tcpConnection(io.Socket socket) {
       }
     },
   );
-  socket.listen(
+  void dispose() {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    output.close();
+    input.close();
+    subscription.cancel();
+    socket.destroy();
+  }
+
+  subscription = socket.listen(
     input.append,
     onError: (Object error) => input.fail(error.toString()),
     onDone: input.close,
@@ -319,12 +362,73 @@ WASIPreview2TcpConnection _tcpConnection(io.Socket socket) {
     outputStream: output,
     localAddress: _socketAddress(socket.address, socket.port),
     remoteAddress: _socketAddress(socket.remoteAddress, socket.remotePort),
-    close: (_) {
-      output.close();
-      input.close();
-      socket.destroy();
-    },
+    close: (_) => dispose(),
+    dispose: dispose,
   );
+}
+
+Future<Iterable<WASIPreview2IpAddress>> _resolveNativeAddresses(
+  String name,
+) async {
+  try {
+    final addresses = await io.InternetAddress.lookup(name);
+    return <WASIPreview2IpAddress>[
+      for (final address in addresses) _socketAddress(address, 0).address,
+    ];
+  } on Object catch (error, stackTrace) {
+    Error.throwWithStackTrace(
+      WASIPreview2AddressResolverError(_resolverErrorCode(error)),
+      stackTrace,
+    );
+  }
+}
+
+String _resolverErrorCode(Object error) {
+  final message = error.toString().toLowerCase();
+  if (message.contains('temporary failure') ||
+      message.contains('try again') ||
+      message.contains('eai_again')) {
+    return 'temporary-resolver-failure';
+  }
+  if (message.contains('non-recoverable') ||
+      message.contains('nonrecoverable') ||
+      message.contains('permanent failure') ||
+      message.contains('eai_fail')) {
+    return 'permanent-resolver-failure';
+  }
+  if (message.contains('name or service not known') ||
+      message.contains('nodename nor servname') ||
+      message.contains('no address associated') ||
+      message.contains('eai_noname') ||
+      message.contains('eai_nodata') ||
+      message.contains('eai_addrfamily')) {
+    return 'name-unresolvable';
+  }
+
+  final osError = error is io.SocketException ? error.osError : null;
+  final code = osError?.errorCode;
+  if (code != null) {
+    if (code == 11002 ||
+        code == -3 ||
+        ((io.Platform.isMacOS || io.Platform.isIOS) && code == 2)) {
+      return 'temporary-resolver-failure';
+    }
+    if (code == 11003 ||
+        code == -4 ||
+        ((io.Platform.isMacOS || io.Platform.isIOS) && code == 4)) {
+      return 'permanent-resolver-failure';
+    }
+    if (code == 11001 ||
+        code == 11004 ||
+        code == -2 ||
+        code == -5 ||
+        code == -9 ||
+        ((io.Platform.isMacOS || io.Platform.isIOS) &&
+            (code == 1 || code == 7 || code == 8))) {
+      return 'name-unresolvable';
+    }
+  }
+  return 'name-unresolvable';
 }
 
 io.InternetAddress _internetAddress(WASIPreview2IpSocketAddress address) {

@@ -131,12 +131,11 @@ final class WASIComponentResourceHost {
     WasmComponent component, {
     Iterable<WASIComponentResourceBinding>? resourceBindings,
   }) {
-    final bindingsByTypeIndex = <int, WASIComponentResourceBinding>{
+    final componentBindingsByTypeIndex = <int, WASIComponentResourceBinding>{
       for (final binding
           in resourceBindings ?? componentResourceBindings(component))
         binding.componentTypeIndex: binding,
     };
-    final definitions = component.componentTypeIndexDefinitions;
     final uses = <WASIComponentResourceUse>[];
 
     for (
@@ -145,10 +144,20 @@ final class WASIComponentResourceHost {
       canonicalIndex++
     ) {
       final definition = component.canonicalDefinitions[canonicalIndex];
-      final functionType = _canonicalAdapterFunctionType(component, definition);
-      if (functionType == null) {
+      final context = _canonicalAdapterFunctionTypeContext(
+        component,
+        definition,
+      );
+      if (context == null) {
         continue;
       }
+      final functionType = context.functionType;
+      final definitions = context.typeDefinitions;
+      final bindingsByTypeIndex = _resourceBindingsForTypeContext(
+        definitions,
+        component.componentTypeIndexDefinitions,
+        componentBindingsByTypeIndex,
+      );
 
       for (
         var paramIndex = 0;
@@ -223,8 +232,60 @@ final class WASIComponentResourceHost {
     return List<WASIComponentResourceType<T>>.unmodifiable(types);
   }
 
-  /// Throws if [bindings] cannot be defined without mutating this host.
+  /// Creates an instance-local resource binding without mutating index state.
+  WASIComponentResourceBindingSet<T> createResourceBindingSet<T extends Object>(
+    Iterable<WASIComponentResourceBinding> bindings, {
+    String Function(WASIComponentResourceBinding binding)? nameForBinding,
+    void Function(WASIComponentResourceBinding binding, T resource)? onDrop,
+  }) {
+    final bindingList = bindings is List<WASIComponentResourceBinding>
+        ? bindings
+        : bindings.toList(growable: false);
+    _checkResourceBindingDescriptors(bindingList);
+    final types = <WASIComponentResourceType<T>>[];
+    final registered = <int, _RegisteredResourceType>{};
+    for (final binding in bindingList) {
+      final type = table.defineType<T>(
+        nameForBinding?.call(binding) ?? binding.name,
+        onDrop: onDrop == null ? null : (resource) => onDrop(binding, resource),
+      );
+      types.add(type);
+      registered[binding.componentTypeIndex] = _RegisteredResourceType<T>(
+        type,
+        binding.representation,
+      );
+    }
+    return WASIComponentResourceBindingSet<T>._(
+      table: table,
+      resourceTypes: List<WASIComponentResourceType<T>>.unmodifiable(types),
+      registeredTypes: Map<int, _RegisteredResourceType>.unmodifiable(
+        registered,
+      ),
+    );
+  }
+
+  /// Throws if [bindings] cannot be added to this host's legacy index registry.
+  ///
+  /// Instance-local bindings should use [createResourceBindingSet], which does
+  /// not reserve component-local type indexes on the shared host.
   void checkResourceBindingsAvailable(
+    Iterable<WASIComponentResourceBinding> bindings,
+  ) {
+    final bindingList = bindings is List<WASIComponentResourceBinding>
+        ? bindings
+        : bindings.toList(growable: false);
+    _checkResourceBindingDescriptors(bindingList);
+    for (final binding in bindingList) {
+      final componentTypeIndex = binding.componentTypeIndex;
+      if (_resourceTypes.containsKey(componentTypeIndex)) {
+        throw StateError(
+          'WASI component resource type index $componentTypeIndex is already bound.',
+        );
+      }
+    }
+  }
+
+  void _checkResourceBindingDescriptors(
     Iterable<WASIComponentResourceBinding> bindings,
   ) {
     final seen = <int>{};
@@ -238,11 +299,6 @@ final class WASIComponentResourceHost {
       if (!seen.add(componentTypeIndex)) {
         throw StateError(
           'WASI component resource type index $componentTypeIndex is bound more than once.',
-        );
-      }
-      if (_resourceTypes.containsKey(componentTypeIndex)) {
-        throw StateError(
-          'WASI component resource type index $componentTypeIndex is already bound.',
         );
       }
     }
@@ -326,6 +382,47 @@ final class WASIComponentResourceBinding {
   /// Whether this resource was introduced without a concrete core
   /// representation.
   final bool isAbstract;
+}
+
+/// Resource types and canonical bindings owned by one component instance.
+final class WASIComponentResourceBindingSet<T extends Object> {
+  const WASIComponentResourceBindingSet._({
+    required this.table,
+    required this.resourceTypes,
+    required Map<int, _RegisteredResourceType> registeredTypes,
+  }) : _registeredTypes = registeredTypes;
+
+  /// Shared resource table that stores handles created by this binding.
+  final WASIComponentResourceTable table;
+
+  /// Nominal resource types defined for this component instance.
+  final List<WASIComponentResourceType<T>> resourceTypes;
+
+  final Map<int, _RegisteredResourceType> _registeredTypes;
+
+  /// Binds [definition] against this instance's local type index space.
+  WASIComponentCanonicalResourceOperation bindCanonicalDefinition(
+    WasmComponentCanonicalDefinition definition,
+  ) {
+    if (!_isResourceCanonicalKind(definition.kind)) {
+      throw UnsupportedError(
+        'Wasm component canonical ${definition.kind.name} is not a resource operation.',
+      );
+    }
+    final typeIndex = definition.typeIndex;
+    final resourceType = typeIndex == null ? null : _registeredTypes[typeIndex];
+    if (typeIndex == null || resourceType == null) {
+      throw StateError(
+        'Unknown WASI component resource type index: $typeIndex.',
+      );
+    }
+    return WASIComponentCanonicalResourceOperation._(
+      table: table,
+      kind: definition.kind,
+      componentTypeIndex: typeIndex,
+      resourceType: resourceType,
+    );
+  }
 }
 
 /// One resource handle occurrence in a canonical adapter signature.
@@ -455,24 +552,58 @@ bool _isResourceCanonicalKind(WasmComponentCanonicalKind kind) =>
     kind == WasmComponentCanonicalKind.resourceRep ||
     kind == WasmComponentCanonicalKind.resourceDrop;
 
-WasmComponentFunctionType? _canonicalAdapterFunctionType(
+WasmComponentFunctionTypeContext? _canonicalAdapterFunctionTypeContext(
   WasmComponent component,
   WasmComponentCanonicalDefinition definition,
 ) {
   switch (definition.kind) {
     case WasmComponentCanonicalKind.lift:
-      return _componentFunctionType(
-        component.componentTypeIndexDefinitions,
+      final definitions = component.componentTypeIndexDefinitions;
+      final functionType = _componentFunctionType(
+        definitions,
         definition.typeIndex,
       );
+      return functionType == null
+          ? null
+          : WasmComponentFunctionTypeContext(
+              functionType: functionType,
+              typeDefinitions: definitions,
+            );
     case WasmComponentCanonicalKind.lower:
-      return _componentFunctionIndexType(
-        component.componentFunctionIndexTypes,
-        definition.functionIndex,
-      );
+      final functionIndex = definition.functionIndex;
+      if (functionIndex == null ||
+          functionIndex < 0 ||
+          functionIndex >=
+              component.componentFunctionIndexTypeContexts.length) {
+        return null;
+      }
+      return component.componentFunctionIndexTypeContexts[functionIndex];
     default:
       return null;
   }
+}
+
+Map<int, WASIComponentResourceBinding> _resourceBindingsForTypeContext(
+  List<WasmComponentTypeDefinition> definitions,
+  List<WasmComponentTypeDefinition> componentDefinitions,
+  Map<int, WASIComponentResourceBinding> componentBindings,
+) {
+  final bindings = <int, WASIComponentResourceBinding>{};
+  for (var index = 0; index < definitions.length; index++) {
+    final definition = definitions[index];
+    if (definition.kind != WasmComponentTypeKind.resource ||
+        definition.resource == null) {
+      continue;
+    }
+    final componentIndex = componentDefinitions.indexWhere(
+      (candidate) => identical(candidate, definition),
+    );
+    final binding = componentBindings[componentIndex];
+    if (binding != null) {
+      bindings[index] = binding;
+    }
+  }
+  return bindings;
 }
 
 WasmComponentFunctionType? _componentFunctionType(
@@ -487,18 +618,6 @@ WasmComponentFunctionType? _componentFunctionType(
     return null;
   }
   return definition.function;
-}
-
-WasmComponentFunctionType? _componentFunctionIndexType(
-  List<WasmComponentFunctionType?> functionTypes,
-  int? functionIndex,
-) {
-  if (functionIndex == null ||
-      functionIndex < 0 ||
-      functionIndex >= functionTypes.length) {
-    return null;
-  }
-  return functionTypes[functionIndex];
 }
 
 String _canonicalParamPath(int canonicalIndex, int paramIndex, String label) {

@@ -12,7 +12,19 @@ final class WASIPreview2NativeHttpHost extends WASIPreview2HttpHost {
     super.pollHost,
     super.streamsHost,
     io.HttpClient? client,
-  }) : super(backend: _NativeHttpBackend(client ?? io.HttpClient()));
+  }) : super(
+         backend: _NativeHttpBackend(
+           _configureHttpClient(client ?? io.HttpClient()),
+         ),
+         maximumRequestTimeoutNanos:
+             BigInt.from(_maxDurationMicroseconds) * BigInt.from(1000),
+       );
+}
+
+io.HttpClient _configureHttpClient(io.HttpClient client) {
+  client.autoUncompress = false;
+  client.userAgent = null;
+  return client;
 }
 
 final class _NativeHttpBackend implements WASIPreview2HttpBackend {
@@ -25,11 +37,23 @@ final class _NativeHttpBackend implements WASIPreview2HttpBackend {
     WASIPreview2HttpOutgoingRequest request,
     WASIPreview2HttpRequestOptions? options,
   ) {
+    if (!_timeoutsSupported(options)) {
+      return const WASIPreview2HttpResult<
+        WASIPreview2HttpFutureIncomingResponse
+      >.error('configuration-error');
+    }
     final uri = _uriForRequest(request);
     if (uri == null) {
       return const WASIPreview2HttpResult<
         WASIPreview2HttpFutureIncomingResponse
       >.error('HTTP-request-URI-invalid');
+    }
+    final body = request.bodyResource;
+    body?.rejectTrailersWith(_trailersUnsupportedError);
+    if (body != null && body.isFinished && body.trailers != null) {
+      return const WASIPreview2HttpResult<
+        WASIPreview2HttpFutureIncomingResponse
+      >.error(_trailersUnsupportedError);
     }
     return WASIPreview2HttpResult<WASIPreview2HttpFutureIncomingResponse>.ok(
       WASIPreview2HttpFutureIncomingResponse(_send(request, uri, options)),
@@ -41,6 +65,7 @@ final class _NativeHttpBackend implements WASIPreview2HttpBackend {
     Uri uri,
     WASIPreview2HttpRequestOptions? options,
   ) async {
+    io.HttpClientRequest? ioRequest;
     try {
       final method = request.method.wireName;
       var open = _client.openUrl(method, uri);
@@ -48,7 +73,8 @@ final class _NativeHttpBackend implements WASIPreview2HttpBackend {
       if (connectTimeout != null) {
         open = open.timeout(connectTimeout);
       }
-      final ioRequest = await open;
+      ioRequest = await open;
+      ioRequest.followRedirects = false;
       for (final entry in request.headers.entries) {
         ioRequest.headers.add(entry.name, String.fromCharCodes(entry.value));
       }
@@ -57,13 +83,16 @@ final class _NativeHttpBackend implements WASIPreview2HttpBackend {
         request.bodyResource,
       );
       if (!bodyResult.isOk) {
+        _abortRequest(ioRequest, io.HttpException(bodyResult.errorCode!));
         return WASIPreview2HttpResult<WASIPreview2HttpIncomingResponse>.error(
           bodyResult.errorCode!,
         );
       }
       final ioResponse = await ioRequest.close();
+      ioRequest = null;
       final input = WASIPreview2InputStream();
       _pipeResponseBody(ioResponse, input, options);
+      final trailers = _responseTrailers(ioResponse);
       return WASIPreview2HttpResult<WASIPreview2HttpIncomingResponse>.ok(
         WASIPreview2HttpIncomingResponse(
           status: ioResponse.statusCode,
@@ -71,26 +100,45 @@ final class _NativeHttpBackend implements WASIPreview2HttpBackend {
             entries: _responseHeaders(ioResponse.headers),
             mutable: false,
           ),
-          body: WASIPreview2HttpIncomingBody(input),
+          body: WASIPreview2HttpIncomingBody(input, trailers: trailers),
         ),
       );
-    } on TimeoutException {
+    } on TimeoutException catch (error, stackTrace) {
+      _abortRequest(ioRequest, error, stackTrace);
       return const WASIPreview2HttpResult<
         WASIPreview2HttpIncomingResponse
       >.error('connection-timeout');
-    } on io.SocketException catch (error) {
+    } on io.SocketException catch (error, stackTrace) {
+      _abortRequest(ioRequest, error, stackTrace);
       return WASIPreview2HttpResult<WASIPreview2HttpIncomingResponse>.error(
         _socketHttpErrorCode(error),
       );
-    } on io.HttpException {
+    } on io.HttpException catch (error, stackTrace) {
+      _abortRequest(ioRequest, error, stackTrace);
       return const WASIPreview2HttpResult<
         WASIPreview2HttpIncomingResponse
       >.error('HTTP-protocol-error');
-    } on Object {
+    } on Object catch (error, stackTrace) {
+      _abortRequest(ioRequest, error, stackTrace);
       return const WASIPreview2HttpResult<
         WASIPreview2HttpIncomingResponse
       >.error('internal-error');
     }
+  }
+}
+
+void _abortRequest(
+  io.HttpClientRequest? request,
+  Object error, [
+  StackTrace? stackTrace,
+]) {
+  if (request == null) {
+    return;
+  }
+  try {
+    request.abort(error, stackTrace);
+  } on Object {
+    // Preserve the original WASI HTTP error when abort itself fails.
   }
 }
 
@@ -107,7 +155,16 @@ Future<WASIPreview2HttpResult<void>> _writeRequestBody(
         request.add(chunk);
       }
     }
-    return await body.done;
+    final result = await body.done;
+    if (!result.isOk) {
+      return result;
+    }
+    if (body.trailers != null) {
+      return const WASIPreview2HttpResult<void>.error(
+        _trailersUnsupportedError,
+      );
+    }
+    return result;
   } on Object {
     return const WASIPreview2HttpResult<void>.error('internal-error');
   }
@@ -158,7 +215,7 @@ void _pipeResponseBody(
       }
       failed = true;
       cancelTimeout();
-      input.fail(error.toString());
+      input.fail(_responseBodyError(error));
     },
     onDone: () {
       if (failed) {
@@ -173,6 +230,30 @@ void _pipeResponseBody(
   if (firstByteTimeout != null) {
     armTimeout(firstByteTimeout);
   }
+}
+
+WASIPreview2HttpFutureTrailers? _responseTrailers(
+  io.HttpClientResponse response,
+) {
+  final declaration = response.headers[io.HttpHeaders.trailerHeader];
+  if (declaration == null || declaration.isEmpty) {
+    return null;
+  }
+  return WASIPreview2HttpFutureTrailers.completed(
+    const WASIPreview2HttpResult<WASIPreview2HttpFields?>.error(
+      _trailersUnsupportedError,
+    ),
+  );
+}
+
+String _responseBodyError(Object error) {
+  if (error is io.HttpException) {
+    return _trailersUnsupportedError;
+  }
+  if (error is io.SocketException) {
+    return _socketHttpErrorCode(error);
+  }
+  return error.toString();
 }
 
 Uri? _uriForRequest(WASIPreview2HttpOutgoingRequest request) {
@@ -211,10 +292,19 @@ Duration? _durationFromNanos(BigInt? nanos) {
     return Duration.zero;
   }
   final micros = (nanos + BigInt.from(999)) ~/ BigInt.from(1000);
-  if (micros > BigInt.from(_maxDurationMicroseconds)) {
-    return const Duration(days: 1);
-  }
   return Duration(microseconds: micros.toInt());
+}
+
+bool _timeoutsSupported(WASIPreview2HttpRequestOptions? options) {
+  if (options == null) {
+    return true;
+  }
+  final maximum = BigInt.from(_maxDurationMicroseconds) * BigInt.from(1000);
+  return <BigInt?>[
+    options.connectTimeout,
+    options.firstByteTimeout,
+    options.betweenBytesTimeout,
+  ].every((timeout) => timeout == null || timeout <= maximum);
 }
 
 String _socketHttpErrorCode(io.SocketException error) {
@@ -234,3 +324,4 @@ String _socketHttpErrorCode(io.SocketException error) {
 }
 
 const int _maxDurationMicroseconds = 86400000000;
+const String _trailersUnsupportedError = 'HTTP-protocol-error';

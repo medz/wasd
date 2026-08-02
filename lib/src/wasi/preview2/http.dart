@@ -35,7 +35,13 @@ final class WASIPreview2HttpFields {
     List<WASIPreview2HttpFieldEntry> entries =
         const <WASIPreview2HttpFieldEntry>[],
     this.mutable = true,
-  }) : _entries = List<WASIPreview2HttpFieldEntry>.of(entries);
+  }) : _entries = <WASIPreview2HttpFieldEntry>[
+         for (final entry in entries)
+           WASIPreview2HttpFieldEntry(
+             entry.name,
+             List<int>.unmodifiable(entry.value),
+           ),
+       ];
 
   final List<WASIPreview2HttpFieldEntry> _entries;
 
@@ -203,7 +209,9 @@ final class WASIPreview2HttpOutgoingRequest {
     if (_body != null) {
       return null;
     }
-    return _body = WASIPreview2HttpOutgoingBody();
+    return _body = WASIPreview2HttpOutgoingBody(
+      contentLength: _contentLength(headers),
+    );
   }
 }
 
@@ -218,7 +226,9 @@ final class WASIPreview2HttpIncomingRequest {
     this.authority,
     WASIPreview2HttpIncomingBody? body,
   }) : headers = headers.immutableClone(),
-       _body = body ?? WASIPreview2HttpIncomingBody(WASIPreview2InputStream());
+       _body =
+           body ??
+           WASIPreview2HttpIncomingBody(WASIPreview2InputStream(closed: true));
 
   /// Request method.
   final WASIPreview2HttpMethod method;
@@ -348,11 +358,7 @@ final class WASIPreview2HttpIncomingBody {
     WASIPreview2InputStream stream, {
     WASIPreview2HttpFutureTrailers? trailers,
   }) : _stream = stream,
-       _trailers =
-           trailers ??
-           WASIPreview2HttpFutureTrailers.completed(
-             const WASIPreview2HttpResult<WASIPreview2HttpFields?>.ok(null),
-           );
+       _trailers = _futureTrailersForStream(stream, trailers);
 
   WASIPreview2InputStream? _stream;
   final WASIPreview2HttpFutureTrailers _trailers;
@@ -366,6 +372,50 @@ final class WASIPreview2HttpIncomingBody {
 
   /// Future trailers associated with this body.
   WASIPreview2HttpFutureTrailers finish() => _trailers;
+}
+
+WASIPreview2HttpFutureTrailers _futureTrailersForStream(
+  WASIPreview2InputStream stream,
+  WASIPreview2HttpFutureTrailers? trailers,
+) {
+  if (stream.isDone) {
+    final error = stream.completionError;
+    if (error != null) {
+      return WASIPreview2HttpFutureTrailers.completed(
+        _incomingBodyFailure(error),
+      );
+    }
+    return trailers ??
+        WASIPreview2HttpFutureTrailers.completed(
+          const WASIPreview2HttpResult<WASIPreview2HttpFields?>.ok(null),
+        );
+  }
+  return WASIPreview2HttpFutureTrailers(
+    stream.done.then((error) async {
+      if (error != null) {
+        return _incomingBodyFailure(error);
+      }
+      if (trailers == null) {
+        return const WASIPreview2HttpResult<WASIPreview2HttpFields?>.ok(null);
+      }
+      await trailers.waitReady();
+      final read = trailers._take();
+      if (read == null || read.alreadyTaken) {
+        return const WASIPreview2HttpResult<WASIPreview2HttpFields?>.error(
+          'internal-error',
+        );
+      }
+      return read.value!;
+    }),
+  );
+}
+
+WASIPreview2HttpResult<WASIPreview2HttpFields?> _incomingBodyFailure(
+  String error,
+) {
+  return WASIPreview2HttpResult<WASIPreview2HttpFields?>.error(
+    _httpErrorCodeFromDebugString(error) ?? 'internal-error',
+  );
 }
 
 /// Preview2 outgoing response resource.
@@ -390,17 +440,26 @@ final class WASIPreview2HttpOutgoingResponse {
     if (_body != null) {
       return null;
     }
-    return _body = WASIPreview2HttpOutgoingBody();
+    return _body = WASIPreview2HttpOutgoingBody(
+      contentLength: _contentLength(headers),
+    );
   }
 }
 
 /// Preview2 outgoing body resource.
 final class WASIPreview2HttpOutgoingBody {
+  /// Creates an outgoing body with an optional expected [contentLength].
+  WASIPreview2HttpOutgoingBody({BigInt? contentLength})
+    : _expectedContentLength = contentLength;
+
   final StreamController<List<int>> _chunks = StreamController<List<int>>();
   final Completer<WASIPreview2HttpResult<void>> _done =
       Completer<WASIPreview2HttpResult<void>>();
   WASIPreview2OutputStream? _stream;
   WASIPreview2HttpFields? _trailers;
+  final BigInt? _expectedContentLength;
+  String? _unsupportedTrailersErrorCode;
+  BigInt _writtenLength = BigInt.zero;
   bool _finished = false;
 
   /// Bytes written to the body stream so far.
@@ -416,6 +475,11 @@ final class WASIPreview2HttpOutgoingBody {
   /// Whether [finish] has been called.
   bool get isFinished => _finished;
 
+  /// Makes [finish] reject trailers with [errorCode].
+  void rejectTrailersWith(String errorCode) {
+    _unsupportedTrailersErrorCode ??= errorCode;
+  }
+
   /// Returns the output stream on the first call, or null afterwards.
   WASIPreview2OutputStream? takeStream() {
     if (_stream != null || _finished) {
@@ -427,6 +491,7 @@ final class WASIPreview2HttpOutgoingBody {
           return 'stream-closed';
         }
         _chunks.add(chunk);
+        _writtenLength += BigInt.from(chunk.length);
         return null;
       },
     );
@@ -441,10 +506,35 @@ final class WASIPreview2HttpOutgoingBody {
     _trailers = trailers?.immutableClone();
     _stream?.close();
     unawaited(_chunks.close());
+    final contentLengthMatches =
+        _expectedContentLength == null ||
+        _expectedContentLength == _writtenLength;
+    final trailersError = _trailers == null
+        ? null
+        : _unsupportedTrailersErrorCode;
+    final result = !contentLengthMatches
+        ? const WASIPreview2HttpResult<void>.error('HTTP-protocol-error')
+        : trailersError != null
+        ? WASIPreview2HttpResult<void>.error(trailersError)
+        : const WASIPreview2HttpResult<void>.ok(null);
     if (!_done.isCompleted) {
-      _done.complete(const WASIPreview2HttpResult<void>.ok(null));
+      _done.complete(result);
     }
-    return const WASIPreview2HttpResult<void>.ok(null);
+    return result;
+  }
+
+  void _abort() {
+    if (_finished) {
+      return;
+    }
+    _finished = true;
+    _stream?.close();
+    unawaited(_chunks.close());
+    if (!_done.isCompleted) {
+      _done.complete(
+        const WASIPreview2HttpResult<void>.error('HTTP-protocol-error'),
+      );
+    }
   }
 
   /// Optional trailers supplied at finish time.
@@ -625,6 +715,7 @@ base class WASIPreview2HttpHost {
     WASIPreview2PollHost? pollHost,
     WASIPreview2StreamsHost? streamsHost,
     WASIPreview2HttpBackend? backend,
+    BigInt? maximumRequestTimeoutNanos,
   }) : this._fromParts(
          _resolveHttpHostParts(
            table: table,
@@ -632,6 +723,7 @@ base class WASIPreview2HttpHost {
            streamsHost: streamsHost,
          ),
          backend ?? const WASIPreview2UnsupportedHttpBackend(),
+         maximumRequestTimeoutNanos,
        );
 
   WASIPreview2HttpHost._fromParts(
@@ -642,6 +734,7 @@ base class WASIPreview2HttpHost {
     })
     parts,
     this.backend,
+    this.maximumRequestTimeoutNanos,
   ) : table = parts.table,
       pollHost = parts.pollHost,
       streamsHost = parts.streamsHost;
@@ -657,6 +750,9 @@ base class WASIPreview2HttpHost {
 
   /// Outgoing HTTP backend.
   final WASIPreview2HttpBackend backend;
+
+  /// Largest request timeout accepted by this host, or null when unbounded.
+  final BigInt? maximumRequestTimeoutNanos;
 
   late final WASIComponentResourceType<WASIPreview2HttpFields> _fieldsType =
       table.defineType<WASIPreview2HttpFields>('wasi:http/types@0.2.0.fields');
@@ -695,6 +791,7 @@ base class WASIPreview2HttpHost {
   late final WASIComponentResourceType<WASIPreview2HttpOutgoingBody>
   _outgoingBodyType = table.defineType<WASIPreview2HttpOutgoingBody>(
     'wasi:http/types@0.2.0.outgoing-body',
+    onDrop: (body) => body._abort(),
   );
   late final WASIComponentResourceType<WASIPreview2HttpFutureIncomingResponse>
   _futureIncomingResponseType = table
@@ -741,12 +838,15 @@ base class WASIPreview2HttpHost {
     'wasi:http/types@0.2.0.incoming-request.authority': (args) =>
         _optionalString(_incomingRequest(_handle(args.single)).authority),
     'wasi:http/types@0.2.0.incoming-request.headers': (args) =>
-        _insertFields(_incomingRequest(_handle(args.single)).headers),
+        _insertChildFields(
+          _handle(args.single),
+          _incomingRequest(_handle(args.single)).headers,
+        ),
     'wasi:http/types@0.2.0.incoming-request.consume': (args) =>
         _incomingBodyResult(_incomingRequest(_handle(args.single)).consume()),
     'wasi:http/types@0.2.0.outgoing-request.constructor': (args) =>
         _insertOutgoingRequest(
-          WASIPreview2HttpOutgoingRequest(_fields(_handle(args.single))),
+          WASIPreview2HttpOutgoingRequest(_takeFields(_handle(args.single))),
         ),
     'wasi:http/types@0.2.0.outgoing-request.body': (args) =>
         _outgoingBodyResult(_outgoingRequest(_handle(args.single)).takeBody()),
@@ -767,34 +867,40 @@ base class WASIPreview2HttpHost {
     'wasi:http/types@0.2.0.outgoing-request.set-authority': (args) =>
         _setRequestAuthority(_handle(args[0]), args[1]),
     'wasi:http/types@0.2.0.outgoing-request.headers': (args) =>
-        _insertFields(_outgoingRequest(_handle(args.single)).headers),
+        _insertChildFields(
+          _handle(args.single),
+          _outgoingRequest(_handle(args.single)).headers,
+        ),
     'wasi:http/types@0.2.0.request-options.constructor': (_) =>
         _insertRequestOptions(WASIPreview2HttpRequestOptions()),
     'wasi:http/types@0.2.0.request-options.connect-timeout': (args) =>
         _optionalDuration(_requestOptions(_handle(args.single)).connectTimeout),
-    'wasi:http/types@0.2.0.request-options.set-connect-timeout': (args) {
-      _requestOptions(_handle(args[0])).connectTimeout =
-          _optionalDurationFromData(args[1]);
-      return _unitOk();
-    },
+    'wasi:http/types@0.2.0.request-options.set-connect-timeout': (args) =>
+        _setRequestTimeout(
+          _handle(args[0]),
+          args[1],
+          (options, duration) => options.connectTimeout = duration,
+        ),
     'wasi:http/types@0.2.0.request-options.first-byte-timeout': (args) =>
         _optionalDuration(
           _requestOptions(_handle(args.single)).firstByteTimeout,
         ),
-    'wasi:http/types@0.2.0.request-options.set-first-byte-timeout': (args) {
-      _requestOptions(_handle(args[0])).firstByteTimeout =
-          _optionalDurationFromData(args[1]);
-      return _unitOk();
-    },
+    'wasi:http/types@0.2.0.request-options.set-first-byte-timeout': (args) =>
+        _setRequestTimeout(
+          _handle(args[0]),
+          args[1],
+          (options, duration) => options.firstByteTimeout = duration,
+        ),
     'wasi:http/types@0.2.0.request-options.between-bytes-timeout': (args) =>
         _optionalDuration(
           _requestOptions(_handle(args.single)).betweenBytesTimeout,
         ),
-    'wasi:http/types@0.2.0.request-options.set-between-bytes-timeout': (args) {
-      _requestOptions(_handle(args[0])).betweenBytesTimeout =
-          _optionalDurationFromData(args[1]);
-      return _unitOk();
-    },
+    'wasi:http/types@0.2.0.request-options.set-between-bytes-timeout': (args) =>
+        _setRequestTimeout(
+          _handle(args[0]),
+          args[1],
+          (options, duration) => options.betweenBytesTimeout = duration,
+        ),
     'wasi:http/types@0.2.0.response-outparam.send-informational': (args) =>
         _sendInformational(_handle(args[0]), _u16(args[1]), _handle(args[2])),
     'wasi:http/types@0.2.0.response-outparam.set': (args) {
@@ -804,31 +910,41 @@ base class WASIPreview2HttpHost {
     'wasi:http/types@0.2.0.incoming-response.status': (args) =>
         _incomingResponse(_handle(args.single)).status,
     'wasi:http/types@0.2.0.incoming-response.headers': (args) =>
-        _insertFields(_incomingResponse(_handle(args.single)).headers),
+        _insertChildFields(
+          _handle(args.single),
+          _incomingResponse(_handle(args.single)).headers,
+        ),
     'wasi:http/types@0.2.0.incoming-response.consume': (args) =>
         _incomingBodyResult(_incomingResponse(_handle(args.single)).consume()),
-    'wasi:http/types@0.2.0.incoming-body.%stream': (args) =>
-        _inputStreamResult(_incomingBody(_handle(args.single)).takeStream()),
+    'wasi:http/types@0.2.0.incoming-body.%stream': (args) => _inputStreamResult(
+      _handle(args.single),
+      _incomingBody(_handle(args.single)).takeStream(),
+    ),
     'wasi:http/types@0.2.0.incoming-body.finish': (args) =>
-        _insertFutureTrailers(_incomingBody(_handle(args.single)).finish()),
+        _finishIncomingBody(_handle(args.single)),
     'wasi:http/types@0.2.0.future-trailers.subscribe': (args) =>
         _subscribeTrailers(_handle(args.single)),
     'wasi:http/types@0.2.0.future-trailers.get': (args) =>
         _futureTrailersGet(_handle(args.single)),
     'wasi:http/types@0.2.0.outgoing-response.constructor': (args) =>
         _insertOutgoingResponse(
-          WASIPreview2HttpOutgoingResponse(_fields(_handle(args.single))),
+          WASIPreview2HttpOutgoingResponse(_takeFields(_handle(args.single))),
         ),
     'wasi:http/types@0.2.0.outgoing-response.status-code': (args) =>
         _outgoingResponse(_handle(args.single)).statusCode,
     'wasi:http/types@0.2.0.outgoing-response.set-status-code': (args) =>
         _setResponseStatus(_handle(args[0]), _u16(args[1])),
     'wasi:http/types@0.2.0.outgoing-response.headers': (args) =>
-        _insertFields(_outgoingResponse(_handle(args.single)).headers),
+        _insertChildFields(
+          _handle(args.single),
+          _outgoingResponse(_handle(args.single)).headers,
+        ),
     'wasi:http/types@0.2.0.outgoing-response.body': (args) =>
         _outgoingBodyResult(_outgoingResponse(_handle(args.single)).takeBody()),
-    'wasi:http/types@0.2.0.outgoing-body.write': (args) =>
-        _outputStreamResult(_outgoingBody(_handle(args.single)).takeStream()),
+    'wasi:http/types@0.2.0.outgoing-body.write': (args) => _outputStreamResult(
+      _handle(args.single),
+      _outgoingBody(_handle(args.single)).takeStream(),
+    ),
     'wasi:http/types@0.2.0.outgoing-body.finish': (args) =>
         _outgoingBodyFinish(_handle(args[0]), args[1]),
     'wasi:http/types@0.2.0.future-incoming-response.subscribe': (args) =>
@@ -836,7 +952,7 @@ base class WASIPreview2HttpHost {
     'wasi:http/types@0.2.0.future-incoming-response.get': (args) =>
         _futureIncomingResponseGet(_handle(args.single)),
     'wasi:http/outgoing-handler@0.2.0.handle': (args) =>
-        _handleOutgoing(_handle(args[0]), _optionalRequestOptions(args[1])),
+        _handleOutgoing(_handle(args[0]), args[1]),
   });
 
   /// Inserts [fields] and returns a resource handle.
@@ -855,6 +971,12 @@ base class WASIPreview2HttpHost {
 
   int _insertFields(WASIPreview2HttpFields fields) =>
       table.insert<WASIPreview2HttpFields>(_fieldsType, fields);
+
+  int _insertChildFields(int parentHandle, WASIPreview2HttpFields fields) {
+    final handle = _insertFields(fields);
+    table.attachChild(parentHandle, handle);
+    return handle;
+  }
 
   int _insertOutgoingRequest(WASIPreview2HttpOutgoingRequest request) => table
       .insert<WASIPreview2HttpOutgoingRequest>(_outgoingRequestType, request);
@@ -893,17 +1015,29 @@ base class WASIPreview2HttpHost {
   WASIPreview2HttpFields _fields(int handle) =>
       table.get<WASIPreview2HttpFields>(_fieldsType, handle);
 
+  WASIPreview2HttpFields _takeFields(int handle) =>
+      table.take<WASIPreview2HttpFields>(_fieldsType, handle);
+
   WASIPreview2HttpIncomingRequest _incomingRequest(int handle) =>
       table.get<WASIPreview2HttpIncomingRequest>(_incomingRequestType, handle);
 
   WASIPreview2HttpOutgoingRequest _outgoingRequest(int handle) =>
       table.get<WASIPreview2HttpOutgoingRequest>(_outgoingRequestType, handle);
 
+  WASIPreview2HttpOutgoingRequest _takeOutgoingRequest(int handle) =>
+      table.take<WASIPreview2HttpOutgoingRequest>(_outgoingRequestType, handle);
+
   WASIPreview2HttpRequestOptions _requestOptions(int handle) =>
       table.get<WASIPreview2HttpRequestOptions>(_requestOptionsType, handle);
 
+  WASIPreview2HttpRequestOptions _takeRequestOptions(int handle) =>
+      table.take<WASIPreview2HttpRequestOptions>(_requestOptionsType, handle);
+
   WASIPreview2HttpResponseOutparam _responseOutparam(int handle) => table
       .get<WASIPreview2HttpResponseOutparam>(_responseOutparamType, handle);
+
+  WASIPreview2HttpResponseOutparam _takeResponseOutparam(int handle) => table
+      .take<WASIPreview2HttpResponseOutparam>(_responseOutparamType, handle);
 
   WASIPreview2HttpIncomingResponse _incomingResponse(int handle) => table
       .get<WASIPreview2HttpIncomingResponse>(_incomingResponseType, handle);
@@ -911,14 +1045,23 @@ base class WASIPreview2HttpHost {
   WASIPreview2HttpIncomingBody _incomingBody(int handle) =>
       table.get<WASIPreview2HttpIncomingBody>(_incomingBodyType, handle);
 
+  WASIPreview2HttpIncomingBody _takeIncomingBody(int handle) =>
+      table.take<WASIPreview2HttpIncomingBody>(_incomingBodyType, handle);
+
   WASIPreview2HttpFutureTrailers _futureTrailers(int handle) =>
       table.get<WASIPreview2HttpFutureTrailers>(_futureTrailersType, handle);
 
   WASIPreview2HttpOutgoingResponse _outgoingResponse(int handle) => table
       .get<WASIPreview2HttpOutgoingResponse>(_outgoingResponseType, handle);
 
+  WASIPreview2HttpOutgoingResponse _takeOutgoingResponse(int handle) => table
+      .take<WASIPreview2HttpOutgoingResponse>(_outgoingResponseType, handle);
+
   WASIPreview2HttpOutgoingBody _outgoingBody(int handle) =>
       table.get<WASIPreview2HttpOutgoingBody>(_outgoingBodyType, handle);
+
+  WASIPreview2HttpOutgoingBody _takeOutgoingBody(int handle) =>
+      table.take<WASIPreview2HttpOutgoingBody>(_outgoingBodyType, handle);
 
   WASIPreview2HttpFutureIncomingResponse _futureIncomingResponse(int handle) =>
       table.get<WASIPreview2HttpFutureIncomingResponse>(
@@ -962,7 +1105,7 @@ base class WASIPreview2HttpHost {
 
   WasmComponentValueData _setRequestPath(int handle, Object? value) {
     final path = _optionalStringFromData(value);
-    if (path != null && (path.contains('\r') || path.contains('\n'))) {
+    if (path != null && !_validPathWithQuery(path)) {
       return _unitError();
     }
     _outgoingRequest(handle).pathWithQuery = path;
@@ -980,14 +1123,24 @@ base class WASIPreview2HttpHost {
 
   WasmComponentValueData _setRequestAuthority(int handle, Object? value) {
     final authority = _optionalStringFromData(value);
-    if (authority != null &&
-        (authority.isEmpty ||
-            authority.contains('/') ||
-            authority.contains('\r') ||
-            authority.contains('\n'))) {
+    if (authority != null && !_validAuthority(authority)) {
       return _unitError();
     }
     _outgoingRequest(handle).authority = authority;
+    return _unitOk();
+  }
+
+  WasmComponentValueData _setRequestTimeout(
+    int handle,
+    Object? value,
+    void Function(WASIPreview2HttpRequestOptions, BigInt?) setTimeout,
+  ) {
+    final duration = _optionalDurationFromData(value);
+    final maximum = maximumRequestTimeoutNanos;
+    if (duration != null && maximum != null && duration > maximum) {
+      return _unitError();
+    }
+    setTimeout(_requestOptions(handle), duration);
     return _unitOk();
   }
 
@@ -1017,26 +1170,46 @@ base class WASIPreview2HttpHost {
     return _ok(_integerData(_insertOutgoingBody(body)));
   }
 
-  WasmComponentValueData _inputStreamResult(WASIPreview2InputStream? stream) {
+  WasmComponentValueData _inputStreamResult(
+    int bodyHandle,
+    WASIPreview2InputStream? stream,
+  ) {
     if (stream == null) {
       return _unitError();
     }
-    return _ok(_integerData(streamsHost.insertInputStream(stream)));
+    final handle = streamsHost.insertInputStream(stream);
+    table.attachChild(bodyHandle, handle);
+    return _ok(_integerData(handle));
   }
 
-  WasmComponentValueData _outputStreamResult(WASIPreview2OutputStream? stream) {
+  WasmComponentValueData _outputStreamResult(
+    int bodyHandle,
+    WASIPreview2OutputStream? stream,
+  ) {
     if (stream == null) {
       return _unitError();
     }
-    return _ok(_integerData(streamsHost.insertOutputStream(stream)));
+    final handle = streamsHost.insertOutputStream(stream);
+    table.attachChild(bodyHandle, handle);
+    return _ok(_integerData(handle));
+  }
+
+  int _finishIncomingBody(int handle) {
+    final body = _takeIncomingBody(handle);
+    return _insertFutureTrailers(body.finish());
   }
 
   WasmComponentValueData _outgoingBodyFinish(
     int handle,
     Object? trailersValue,
   ) {
+    _outgoingBody(handle);
     final trailers = _optionalFields(trailersValue);
-    final result = _outgoingBody(handle).finish(trailers);
+    final body = _takeOutgoingBody(handle);
+    final ownedTrailers = trailers == null
+        ? null
+        : _takeFields(_handle(_optionData(trailersValue).associatedValue));
+    final result = body.finish(ownedTrailers);
     return result.isOk ? _unitOk() : _errorCodeResult(result.errorCode!);
   }
 
@@ -1045,9 +1218,10 @@ base class WASIPreview2HttpHost {
     int status,
     int headersHandle,
   ) {
-    final result = _responseOutparam(
-      outparamHandle,
-    ).sendInformational(status, _fields(headersHandle));
+    final outparam = _responseOutparam(outparamHandle);
+    final headers = _fields(headersHandle);
+    _takeFields(headersHandle);
+    final result = outparam.sendInformational(status, headers);
     return result.isOk ? _unitOk() : _errorCodeResult(result.errorCode!);
   }
 
@@ -1071,7 +1245,7 @@ base class WASIPreview2HttpHost {
     }
     final result = read.value!;
     final inner = result.isOk
-        ? _ok(_optionalFieldsResourceData(result.value))
+        ? _ok(_optionalFieldsResourceData(result.value, parentHandle: handle))
         : _errorCodeResult(result.errorCode!);
     return _some(_ok(inner));
   }
@@ -1101,11 +1275,19 @@ base class WASIPreview2HttpHost {
     return _some(_ok(inner));
   }
 
-  WasmComponentValueData _handleOutgoing(
-    int requestHandle,
-    WASIPreview2HttpRequestOptions? options,
-  ) {
-    final result = backend.handle(_outgoingRequest(requestHandle), options);
+  WasmComponentValueData _handleOutgoing(int requestHandle, Object? value) {
+    final request = _outgoingRequest(requestHandle);
+    final options = _optionalRequestOptions(value);
+    final validationError = _outgoingRequestValidationError(request);
+    final ownedRequest = _takeOutgoingRequest(requestHandle);
+    final optionData = _optionData(value);
+    final ownedOptions = options == null
+        ? null
+        : _takeRequestOptions(_handle(optionData.associatedValue));
+    if (validationError != null) {
+      return _errorCodeResult(validationError);
+    }
+    final result = backend.handle(ownedRequest, ownedOptions);
     if (!result.isOk) {
       return _errorCodeResult(result.errorCode!);
     }
@@ -1114,29 +1296,35 @@ base class WASIPreview2HttpHost {
 
   void _setResponseOutparam(int handle, Object? value) {
     final outparam = _responseOutparam(handle);
-    final result = _outgoingResponseResultFromData(value);
-    outparam.set(result);
+    final data = _resultData(value);
+    final responseHandle = _resultIsOk(data)
+        ? _handle(data.associatedValue)
+        : null;
+    final response = responseHandle == null
+        ? null
+        : _outgoingResponse(responseHandle);
+    _takeResponseOutparam(handle);
+    final result = response == null
+        ? WASIPreview2HttpResult<WASIPreview2HttpOutgoingResponse>.error(
+            _errorCodeFromData(data.associatedValue),
+          )
+        : WASIPreview2HttpResult<WASIPreview2HttpOutgoingResponse>.ok(
+            _takeOutgoingResponse(responseHandle!),
+          );
+    if (!outparam.set(result)) {
+      throw StateError('WASI HTTP response outparam was already set.');
+    }
   }
 
   WasmComponentValueData _optionalFieldsResourceData(
-    WASIPreview2HttpFields? fields,
-  ) {
+    WASIPreview2HttpFields? fields, {
+    required int parentHandle,
+  }) {
     if (fields == null) {
       return _none();
     }
-    return _some(_integerData(_insertFields(fields.immutableClone())));
-  }
-
-  WASIPreview2HttpResult<WASIPreview2HttpOutgoingResponse>
-  _outgoingResponseResultFromData(Object? value) {
-    final data = _resultData(value);
-    if (!_resultIsOk(data)) {
-      return WASIPreview2HttpResult<WASIPreview2HttpOutgoingResponse>.error(
-        _errorCodeFromData(data.associatedValue),
-      );
-    }
-    return WASIPreview2HttpResult<WASIPreview2HttpOutgoingResponse>.ok(
-      _outgoingResponse(_handle(data.associatedValue)),
+    return _some(
+      _integerData(_insertChildFields(parentHandle, fields.immutableClone())),
     );
   }
 
@@ -1202,6 +1390,14 @@ _resolveHttpHostParts({
       pollHost ??
       streamsHost?.pollHost ??
       WASIPreview2PollHost(table: resolvedTable);
+  if (streamsHost != null &&
+      !identical(resolvedPollHost, streamsHost.pollHost)) {
+    throw ArgumentError.value(
+      streamsHost,
+      'streamsHost',
+      'must use the same Preview2 poll host as HTTP',
+    );
+  }
   final resolvedStreamsHost =
       streamsHost ??
       WASIPreview2StreamsHost(table: resolvedTable, pollHost: resolvedPollHost);
@@ -1337,8 +1533,30 @@ WasmComponentValueData _errorCodeResult(String code) =>
     _result(false, _errorCodeData(code));
 
 WasmComponentValueData _errorCodeData(String code) {
-  final index = _httpErrorCodeCases.indexOf(code);
-  return _variant(code, index < 0 ? _httpErrorCodeCases.length - 1 : index);
+  final knownIndex = _httpErrorCodeCases.indexOf(code);
+  final index = knownIndex < 0 ? _httpErrorCodeCases.length - 1 : knownIndex;
+  final label = _httpErrorCodeCases[index];
+  return _variant(label, index, _httpErrorCodePayload(label));
+}
+
+WasmComponentValueData? _httpErrorCodePayload(String code) {
+  return switch (code) {
+    'DNS-error' || 'TLS-alert-received' => _record([_none(), _none()]),
+    'HTTP-request-trailer-size' ||
+    'HTTP-response-header-size' ||
+    'HTTP-response-trailer-size' => _record([_none(), _none()]),
+    'HTTP-request-body-size' ||
+    'HTTP-request-header-section-size' ||
+    'HTTP-request-header-size' ||
+    'HTTP-request-trailer-section-size' ||
+    'HTTP-response-header-section-size' ||
+    'HTTP-response-body-size' ||
+    'HTTP-response-trailer-section-size' ||
+    'HTTP-response-transfer-coding' ||
+    'HTTP-response-content-coding' ||
+    'internal-error' => _none(),
+    _ => null,
+  };
 }
 
 WasmComponentValueData _headerErrorData(String code) {
@@ -1408,6 +1626,14 @@ WasmComponentValueData _list(List<WasmComponentValueData> items) {
 WasmComponentValueData _tuple(List<WasmComponentValueData> items) {
   return WasmComponentValueData(
     kind: WasmComponentValueDataKind.tuple,
+    rawBytes: Uint8List(0),
+    items: List<WasmComponentValueData>.unmodifiable(items),
+  );
+}
+
+WasmComponentValueData _record(List<WasmComponentValueData> items) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.record,
     rawBytes: Uint8List(0),
     items: List<WasmComponentValueData>.unmodifiable(items),
   );
@@ -1561,7 +1787,119 @@ int _handle(Object? value) {
   };
 }
 
+BigInt? _contentLength(WASIPreview2HttpFields fields) {
+  final values = <BigInt>[];
+  for (final rawValue in fields.values('content-length')) {
+    final parts = String.fromCharCodes(rawValue).split(',');
+    for (final part in parts) {
+      final text = part.trim();
+      if (text.isEmpty || text.codeUnits.any((code) => !_isDigit(code))) {
+        return BigInt.from(-1);
+      }
+      values.add(BigInt.parse(text));
+    }
+  }
+  if (values.isEmpty) {
+    return null;
+  }
+  final expected = values.first;
+  return values.every((value) => value == expected)
+      ? expected
+      : BigInt.from(-1);
+}
+
+String? _outgoingRequestValidationError(
+  WASIPreview2HttpOutgoingRequest request,
+) {
+  final scheme = request.scheme;
+  if (scheme != null &&
+      (scheme.label == 'HTTP' || scheme.label == 'HTTPS') &&
+      request.authority == null) {
+    return 'HTTP-request-URI-invalid';
+  }
+  if (request.headers.has('host')) {
+    return 'HTTP-request-denied';
+  }
+  if (_contentLength(request.headers)?.isNegative ?? false) {
+    return 'HTTP-request-body-size';
+  }
+  return null;
+}
+
 bool _validMethod(String method) => _validFieldName(method);
+
+bool _validPathWithQuery(String value) {
+  for (var index = 0; index < value.length; index++) {
+    final code = value.codeUnitAt(index);
+    if (code == 37) {
+      if (index + 2 >= value.length ||
+          !_isHexDigit(value.codeUnitAt(index + 1)) ||
+          !_isHexDigit(value.codeUnitAt(index + 2))) {
+        return false;
+      }
+      index += 2;
+      continue;
+    }
+    if (!_isUriPchar(code) && code != 47 && code != 63) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool _validAuthority(String value) {
+  if (value.isEmpty) {
+    return false;
+  }
+  for (var index = 0; index < value.length; index++) {
+    final code = value.codeUnitAt(index);
+    if (code == 37) {
+      if (index + 2 >= value.length ||
+          !_isHexDigit(value.codeUnitAt(index + 1)) ||
+          !_isHexDigit(value.codeUnitAt(index + 2))) {
+        return false;
+      }
+      index += 2;
+      continue;
+    }
+    if (!_isUriPchar(code) && code != 91 && code != 93) {
+      return false;
+    }
+  }
+  final uri = Uri.tryParse('http://$value/');
+  return uri != null &&
+      uri.hasAuthority &&
+      uri.host.isNotEmpty &&
+      uri.path == '/' &&
+      !uri.hasQuery &&
+      !uri.hasFragment;
+}
+
+bool _isUriPchar(int code) =>
+    _isAlpha(code) ||
+    _isDigit(code) ||
+    const <int>{
+      33,
+      36,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      58,
+      59,
+      61,
+      64,
+      95,
+      126,
+    }.contains(code);
+
+bool _isHexDigit(int code) =>
+    _isDigit(code) || (code >= 65 && code <= 70) || (code >= 97 && code <= 102);
 
 bool _validScheme(String scheme) {
   if (scheme.isEmpty) {

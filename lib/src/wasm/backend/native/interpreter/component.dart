@@ -532,10 +532,11 @@ final class WasmComponentResourceType {
   final bool isAbstract;
 }
 
-const _abstractResourceTypeDefinition = WasmComponentTypeDefinition(
-  kind: WasmComponentTypeKind.resource,
-  resource: WasmComponentResourceType.abstract(),
-);
+WasmComponentTypeDefinition _newAbstractResourceTypeDefinition() =>
+    WasmComponentTypeDefinition(
+      kind: WasmComponentTypeKind.resource,
+      resource: const WasmComponentResourceType.abstract(),
+    );
 
 enum WasmComponentTypeDeclarationKind { coreType, type, alias, import, export }
 
@@ -802,24 +803,38 @@ final class _WasmComponentMaterializedIndexSpaces {
   const _WasmComponentMaterializedIndexSpaces({
     required this.typeDefinitions,
     required this.functionTypes,
+    required this.functionTypeContexts,
     required this.valueTypes,
   });
 
   final List<WasmComponentTypeDefinition> typeDefinitions;
   final List<WasmComponentFunctionType?> functionTypes;
+  final List<WasmComponentFunctionTypeContext?> functionTypeContexts;
   final List<WasmComponentValueType?> valueTypes;
+}
+
+final class WasmComponentFunctionTypeContext {
+  const WasmComponentFunctionTypeContext({
+    required this.functionType,
+    required this.typeDefinitions,
+  });
+
+  final WasmComponentFunctionType functionType;
+  final List<WasmComponentTypeDefinition> typeDefinitions;
 }
 
 final class _WasmComponentInstanceExportEntry {
   const _WasmComponentInstanceExportEntry({
     required this.sort,
     this.function,
+    this.functionContext,
     this.value,
     this.typeDefinition,
   });
 
   final WasmComponentSortIndex sort;
   final WasmComponentFunctionType? function;
+  final WasmComponentFunctionTypeContext? functionContext;
   final WasmComponentValueType? value;
   final WasmComponentTypeDefinition? typeDefinition;
 }
@@ -988,6 +1003,11 @@ final class WasmComponent {
   List<WasmComponentFunctionType?> get componentFunctionIndexTypes =>
       _indexSpaces.functionTypes;
 
+  /// Component function types paired with the type scope that defines their
+  /// parameter and result indexes.
+  List<WasmComponentFunctionTypeContext?>
+  get componentFunctionIndexTypeContexts => _indexSpaces.functionTypeContexts;
+
   /// Locally materialized component value index types in definition order.
   List<WasmComponentValueType?> get componentValueIndexTypes =>
       _indexSpaces.valueTypes;
@@ -996,6 +1016,7 @@ final class WasmComponent {
     final visibleTypeDefinitions = <WasmComponentTypeDefinition>[];
     final visibleComponentEntries = <WasmComponent?>[];
     final functionTypes = <WasmComponentFunctionType?>[];
+    final functionTypeContexts = <WasmComponentFunctionTypeContext?>[];
     final valueTypes = <WasmComponentValueType?>[];
     final instanceExportMaps = <_WasmComponentInstanceExportMap?>[];
     var decodedTypeDefinitionCount = 0;
@@ -1027,16 +1048,34 @@ final class WasmComponent {
       }
     }
 
+    void addFunctionType(
+      WasmComponentFunctionType? functionType,
+      List<WasmComponentTypeDefinition>? definitions,
+    ) {
+      functionTypes.add(functionType);
+      functionTypeContexts.add(
+        functionType == null || definitions == null
+            ? null
+            : WasmComponentFunctionTypeContext(
+                functionType: functionType,
+                typeDefinitions: List<WasmComponentTypeDefinition>.unmodifiable(
+                  definitions,
+                ),
+              ),
+      );
+    }
+
     for (final event in _definitionEvents) {
       switch (event.kind) {
         case _WasmComponentDefinitionEventKind.import:
           final descriptor = imports[event.index].descriptor;
           if (descriptor.kind == WasmComponentExternKind.function) {
-            functionTypes.add(
+            addFunctionType(
               _componentFunctionTypeFromDefinitions(
                 visibleTypeDefinitions,
                 descriptor.typeIndex,
               ),
+              visibleTypeDefinitions,
             );
           } else if (descriptor.kind == WasmComponentExternKind.value) {
             valueTypes.add(
@@ -1066,8 +1105,12 @@ final class WasmComponent {
         case _WasmComponentDefinitionEventKind.export:
           final export = exports[event.index];
           if (export.sort.kind == WasmComponentSortKind.function) {
-            functionTypes.add(
+            addFunctionType(
               _componentFunctionTypeAt(functionTypes, export.sort.index),
+              _componentFunctionTypeDefinitionsAt(
+                functionTypeContexts,
+                export.sort.index,
+              ),
             );
           } else if (export.sort.kind == WasmComponentSortKind.value) {
             valueTypes.add(
@@ -1095,6 +1138,7 @@ final class WasmComponent {
               visibleTypeDefinitions,
               visibleComponentEntries,
               functionTypes,
+              functionTypeContexts,
               valueTypes,
             ),
           );
@@ -1105,7 +1149,10 @@ final class WasmComponent {
             instanceExportMaps,
           );
           if (alias.sort.kind == WasmComponentSortKind.function) {
-            functionTypes.add(aliasEntry?.function);
+            addFunctionType(
+              aliasEntry?.function,
+              aliasEntry?.functionContext?.typeDefinitions,
+            );
           } else if (alias.sort.kind == WasmComponentSortKind.value) {
             valueTypes.add(aliasEntry?.value);
           } else if (alias.sort.kind == WasmComponentSortKind.componentType) {
@@ -1119,11 +1166,12 @@ final class WasmComponent {
         case _WasmComponentDefinitionEventKind.canonical:
           final definition = canonicalDefinitions[event.index];
           if (definition.kind == WasmComponentCanonicalKind.lift) {
-            functionTypes.add(
+            addFunctionType(
               _componentFunctionTypeFromDefinitions(
                 visibleTypeDefinitions,
                 definition.typeIndex,
               ),
+              visibleTypeDefinitions,
             );
           }
         case _WasmComponentDefinitionEventKind.start:
@@ -1144,6 +1192,10 @@ final class WasmComponent {
       functionTypes: List<WasmComponentFunctionType?>.unmodifiable(
         functionTypes,
       ),
+      functionTypeContexts:
+          List<WasmComponentFunctionTypeContext?>.unmodifiable(
+            functionTypeContexts,
+          ),
       valueTypes: List<WasmComponentValueType?>.unmodifiable(valueTypes),
     );
   }
@@ -1443,7 +1495,7 @@ WasmComponentTypeDefinition? _componentTypeImportDefinitionIntroducedBy(
     return null;
   }
   if (descriptor.boundKind == WasmComponentExternBoundKind.subtypeResource) {
-    return _abstractResourceTypeDefinition;
+    return _newAbstractResourceTypeDefinition();
   }
   if (descriptor.boundKind != WasmComponentExternBoundKind.equality) {
     return null;
@@ -1469,6 +1521,7 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
   List<WasmComponentTypeDefinition> visibleTypeDefinitions,
   List<WasmComponent?> visibleComponentEntries,
   List<WasmComponentFunctionType?> functionTypes,
+  List<WasmComponentFunctionTypeContext?> functionTypeContexts,
   List<WasmComponentValueType?> valueTypes,
 ) {
   switch (instance.kind) {
@@ -1479,6 +1532,12 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
             sort: export.sort,
             function: export.sort.kind == WasmComponentSortKind.function
                 ? _componentFunctionTypeAt(functionTypes, export.sort.index)
+                : null,
+            functionContext: export.sort.kind == WasmComponentSortKind.function
+                ? _componentFunctionTypeContextAt(
+                    functionTypeContexts,
+                    export.sort.index,
+                  )
                 : null,
             value: export.sort.kind == WasmComponentSortKind.value
                 ? _componentValueTypeAt(valueTypes, export.sort.index)
@@ -1526,6 +1585,12 @@ _WasmComponentInstanceExportMap _componentExportTypeMap(
                 export.sort.index,
               )
             : null,
+        functionContext: export.sort.kind == WasmComponentSortKind.function
+            ? _componentFunctionTypeContextAt(
+                component.componentFunctionIndexTypeContexts,
+                export.sort.index,
+              )
+            : null,
         value: export.sort.kind == WasmComponentSortKind.value
             ? _componentValueTypeAt(
                 component.componentValueIndexTypes,
@@ -1566,6 +1631,7 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
   List<WasmComponentTypeDefinition> outerTypeDefinitions,
 ) {
   final localTypeDefinitions = <WasmComponentTypeDefinition>[];
+  final localFunctionTypeContexts = <WasmComponentFunctionTypeContext?>[];
   final exports = <String, _WasmComponentInstanceExportEntry>{};
   final typeScopes = <_WasmComponentTypeAliasScope>[
     _WasmComponentTypeAliasScope(
@@ -1578,20 +1644,40 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
     ),
   ];
 
+  void addLocalType(
+    WasmComponentTypeDefinition type, {
+    WasmComponentFunctionTypeContext? functionContext,
+  }) {
+    localTypeDefinitions.add(type);
+    localFunctionTypeContexts.add(
+      functionContext ??
+          (type.kind == WasmComponentTypeKind.function
+              ? _componentFunctionTypeContextFromDefinitions(
+                  localTypeDefinitions,
+                  localTypeDefinitions.length - 1,
+                )
+              : null),
+    );
+  }
+
   for (final declaration in instance.declarations) {
     switch (declaration.kind) {
       case WasmComponentTypeDeclarationKind.type:
         final type = declaration.type;
         if (type != null) {
-          localTypeDefinitions.add(type);
+          addLocalType(type);
         }
       case WasmComponentTypeDeclarationKind.alias:
+        final functionContext = _componentTypeDeclarationAliasFunctionContext(
+          declaration.alias,
+          typeScopes,
+        );
         final type = _componentTypeDeclarationAliasDefinition(
           declaration.alias,
           typeScopes,
         );
         if (type != null) {
-          localTypeDefinitions.add(type);
+          addLocalType(type, functionContext: functionContext);
         }
       case WasmComponentTypeDeclarationKind.import:
         final descriptor = declaration.import?.descriptor;
@@ -1602,7 +1688,16 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
                 localTypeDefinitions,
               );
         if (introduced != null) {
-          localTypeDefinitions.add(introduced);
+          addLocalType(
+            introduced,
+            functionContext:
+                descriptor?.kind == WasmComponentExternKind.componentType
+                ? _componentFunctionTypeContextAt(
+                    localFunctionTypeContexts,
+                    descriptor?.typeIndex,
+                  )
+                : null,
+          );
         }
       case WasmComponentTypeDeclarationKind.export:
         final export = declaration.export;
@@ -1620,6 +1715,16 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
                     descriptor.typeIndex,
                   )
                 : null,
+            functionContext: descriptor.kind == WasmComponentExternKind.function
+                ? _componentFunctionTypeContextAt(
+                        localFunctionTypeContexts,
+                        descriptor.typeIndex,
+                      ) ??
+                      _componentFunctionTypeContextFromDefinitions(
+                        localTypeDefinitions,
+                        descriptor.typeIndex,
+                      )
+                : null,
             value: descriptor.kind == WasmComponentExternKind.value
                 ? descriptor.valueType
                 : null,
@@ -1633,7 +1738,16 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
             localTypeDefinitions,
           );
           if (introduced != null) {
-            localTypeDefinitions.add(introduced);
+            addLocalType(
+              introduced,
+              functionContext:
+                  descriptor.kind == WasmComponentExternKind.componentType
+                  ? _componentFunctionTypeContextAt(
+                      localFunctionTypeContexts,
+                      descriptor.typeIndex,
+                    )
+                  : null,
+            );
           }
         }
       case WasmComponentTypeDeclarationKind.coreType:
@@ -1642,6 +1756,30 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
   }
 
   return Map<String, _WasmComponentInstanceExportEntry>.unmodifiable(exports);
+}
+
+WasmComponentFunctionTypeContext? _componentTypeDeclarationAliasFunctionContext(
+  WasmComponentAlias? alias,
+  List<_WasmComponentTypeAliasScope> typeScopes,
+) {
+  if (alias == null ||
+      alias.sort.kind != WasmComponentSortKind.componentType ||
+      alias.target.kind != WasmComponentAliasTargetKind.outer) {
+    return null;
+  }
+  final componentDepth = alias.target.componentDepth;
+  final typeIndex = alias.target.index;
+  if (componentDepth == null ||
+      componentDepth < 0 ||
+      componentDepth >= typeScopes.length ||
+      typeIndex == null) {
+    return null;
+  }
+  final scope = typeScopes[componentDepth];
+  return _componentFunctionTypeContextFromDefinitions(
+    scope.definitions,
+    typeIndex,
+  );
 }
 
 WasmComponentTypeDefinition? _componentTypeDeclarationAliasDefinition(
@@ -1711,7 +1849,7 @@ WasmComponentTypeDefinition? _componentTypeDefinitionIntroducedByTypeExport(
     return null;
   }
   if (descriptor.boundKind == WasmComponentExternBoundKind.subtypeResource) {
-    return _abstractResourceTypeDefinition;
+    return _newAbstractResourceTypeDefinition();
   }
   final typeIndex = descriptor.typeIndex;
   if (typeIndex == null ||
@@ -1756,6 +1894,44 @@ WasmComponentFunctionType? _componentFunctionTypeAt(
     return null;
   }
   return functionTypes[functionIndex];
+}
+
+WasmComponentFunctionTypeContext? _componentFunctionTypeContextAt(
+  List<WasmComponentFunctionTypeContext?> functionTypeContexts,
+  int? functionIndex,
+) {
+  if (functionIndex == null ||
+      functionIndex < 0 ||
+      functionIndex >= functionTypeContexts.length) {
+    return null;
+  }
+  return functionTypeContexts[functionIndex];
+}
+
+List<WasmComponentTypeDefinition>? _componentFunctionTypeDefinitionsAt(
+  List<WasmComponentFunctionTypeContext?> functionTypeContexts,
+  int? functionIndex,
+) => _componentFunctionTypeContextAt(
+  functionTypeContexts,
+  functionIndex,
+)?.typeDefinitions;
+
+WasmComponentFunctionTypeContext? _componentFunctionTypeContextFromDefinitions(
+  List<WasmComponentTypeDefinition> definitions,
+  int? typeIndex,
+) {
+  final functionType = _componentFunctionTypeFromDefinitions(
+    definitions,
+    typeIndex,
+  );
+  return functionType == null
+      ? null
+      : WasmComponentFunctionTypeContext(
+          functionType: functionType,
+          typeDefinitions: List<WasmComponentTypeDefinition>.unmodifiable(
+            definitions,
+          ),
+        );
 }
 
 WasmComponentValueType? _componentValueTypeAt(

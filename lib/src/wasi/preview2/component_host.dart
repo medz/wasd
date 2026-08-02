@@ -1,7 +1,9 @@
 import '../component/adapter_host.dart';
 import '../component/async_host.dart';
+import '../component/canonical_host.dart';
 import '../component/host.dart';
 import '../component/resource_host.dart';
+import '../component/resource_table.dart';
 import '../component/versioned_host.dart';
 import '../component/wit_adapter.dart';
 import '../component/wit_document.dart';
@@ -26,10 +28,11 @@ import 'native/default_hosts_stub.dart'
 final class WASIPreview2ComponentHost {
   /// Creates a Dart VM-native Preview2 component host.
   ///
-  /// The default constructor keeps a portable in-memory host for JS/browser
-  /// runtimes. This factory wires filesystem, sockets, HTTP, CLI, streams,
-  /// pollables, and errors through one shared component resource table on
-  /// `dart:io` runtimes.
+  /// The default constructor can still construct portable host bindings on
+  /// JS/browser runtimes, but command/proxy runner execution is supported only
+  /// on the Dart VM. This factory wires filesystem, sockets, HTTP, CLI,
+  /// streams, pollables, and errors through one shared component resource
+  /// table on `dart:io` runtimes.
   factory WASIPreview2ComponentHost.native({
     WASIComponentHost? componentHost,
     List<String> args = const <String>[],
@@ -111,171 +114,19 @@ final class WASIPreview2ComponentHost {
     bool? terminalStdout,
     bool? terminalStderr,
     WASIPreview2AddressResolver? resolveAddresses,
-  }) : assert(
-         pollHost == null ||
-             clocksHost == null ||
-             identical(pollHost, clocksHost.pollHost),
-         'clocksHost and pollHost must share the same Preview2 poll host.',
-       ),
-       assert(
-         pollHost == null ||
-             streamsHost == null ||
-             identical(pollHost, streamsHost.pollHost),
-         'streamsHost and pollHost must share the same Preview2 poll host.',
-       ),
-       assert(
-         clocksHost == null ||
-             streamsHost == null ||
-             identical(clocksHost.pollHost, streamsHost.pollHost),
-         'clocksHost and streamsHost must share the same Preview2 poll host.',
-       ),
-       assert(
-         errorHost == null ||
-             streamsHost == null ||
-             identical(errorHost, streamsHost.errorHost),
-         'streamsHost and errorHost must share the same Preview2 error host.',
-       ),
-       assert(
-         pollHost == null ||
-             socketsHost == null ||
-             identical(pollHost, socketsHost.pollHost),
-         'socketsHost and pollHost must share the same Preview2 poll host.',
-       ),
-       assert(
-         clocksHost == null ||
-             socketsHost == null ||
-             identical(clocksHost.pollHost, socketsHost.pollHost),
-         'socketsHost and clocksHost must share the same Preview2 poll host.',
-       ),
-       assert(
-         streamsHost == null ||
-             socketsHost == null ||
-             identical(streamsHost, socketsHost.streamsHost),
-         'socketsHost and streamsHost must share the same Preview2 streams host.',
-       ),
-       assert(
-         errorHost == null ||
-             socketsHost == null ||
-             identical(errorHost, socketsHost.streamsHost.errorHost),
-         'socketsHost and errorHost must share the same Preview2 error host.',
-       ),
-       assert(
-         streamsHost == null ||
-             cliHost == null ||
-             identical(streamsHost, cliHost.streamsHost),
-         'cliHost and streamsHost must share the same Preview2 streams host.',
-       ),
-       assert(
-         pollHost == null ||
-             cliHost == null ||
-             identical(pollHost, cliHost.streamsHost.pollHost),
-         'cliHost and pollHost must share the same Preview2 poll host.',
-       ),
-       assert(
-         errorHost == null ||
-             cliHost == null ||
-             identical(errorHost, cliHost.streamsHost.errorHost),
-         'cliHost and errorHost must share the same Preview2 error host.',
-       ),
-       assert(
-         clocksHost == null ||
-             cliHost == null ||
-             identical(clocksHost.pollHost, cliHost.streamsHost.pollHost),
-         'cliHost and clocksHost must share the same Preview2 poll host.',
-       ),
-       assert(
-         socketsHost == null ||
-             cliHost == null ||
-             identical(socketsHost.pollHost, cliHost.streamsHost.pollHost),
-         'cliHost and socketsHost must share the same Preview2 poll host.',
-       ),
-       assert(
-         streamsHost == null ||
-             filesystemHost == null ||
-             identical(streamsHost, filesystemHost.streamsHost),
-         'filesystemHost and streamsHost must share the same Preview2 streams host.',
-       ),
-       assert(
-         pollHost == null ||
-             filesystemHost == null ||
-             identical(pollHost, filesystemHost.streamsHost.pollHost),
-         'filesystemHost and pollHost must share the same Preview2 poll host.',
-       ),
-       assert(
-         errorHost == null ||
-             filesystemHost == null ||
-             identical(errorHost, filesystemHost.streamsHost.errorHost),
-         'filesystemHost and errorHost must share the same Preview2 error host.',
-       ),
-       assert(
-         clocksHost == null ||
-             filesystemHost == null ||
-             identical(
-               clocksHost.pollHost,
-               filesystemHost.streamsHost.pollHost,
-             ),
-         'filesystemHost and clocksHost must share the same Preview2 poll host.',
-       ),
-       assert(
-         cliHost == null ||
-             filesystemHost == null ||
-             identical(cliHost.streamsHost, filesystemHost.streamsHost),
-         'filesystemHost and cliHost must share the same Preview2 streams host.',
-       ),
-       assert(
-         socketsHost == null ||
-             filesystemHost == null ||
-             identical(
-               socketsHost.pollHost,
-               filesystemHost.streamsHost.pollHost,
-             ),
-         'filesystemHost and socketsHost must share the same Preview2 poll host.',
-       ),
-       assert(
-         pollHost == null ||
-             httpHost == null ||
-             identical(pollHost, httpHost.pollHost),
-         'httpHost and pollHost must share the same Preview2 poll host.',
-       ),
-       assert(
-         streamsHost == null ||
-             httpHost == null ||
-             identical(streamsHost, httpHost.streamsHost),
-         'httpHost and streamsHost must share the same Preview2 streams host.',
-       ),
-       assert(
-         errorHost == null ||
-             httpHost == null ||
-             identical(errorHost, httpHost.streamsHost.errorHost),
-         'httpHost and errorHost must share the same Preview2 error host.',
-       ),
-       assert(
-         clocksHost == null ||
-             httpHost == null ||
-             identical(clocksHost.pollHost, httpHost.pollHost),
-         'httpHost and clocksHost must share the same Preview2 poll host.',
-       ),
-       assert(
-         cliHost == null ||
-             httpHost == null ||
-             identical(cliHost.streamsHost, httpHost.streamsHost),
-         'httpHost and cliHost must share the same Preview2 streams host.',
-       ),
-       assert(
-         filesystemHost == null ||
-             httpHost == null ||
-             identical(filesystemHost.streamsHost, httpHost.streamsHost),
-         'httpHost and filesystemHost must share the same Preview2 streams host.',
-       ),
-       assert(
-         socketsHost == null ||
-             httpHost == null ||
-             identical(socketsHost.streamsHost, httpHost.streamsHost),
-         'httpHost and socketsHost must share the same Preview2 streams host.',
-       ),
-       versionedHost = WASIComponentVersionedHost(
+  }) : versionedHost = WASIComponentVersionedHost(
          version: WASIVersion.preview2,
-         componentHost: componentHost,
+         componentHost: _resolvePreview2ComponentHost(
+           componentHost: componentHost,
+           cliHost: cliHost,
+           clocksHost: clocksHost,
+           errorHost: errorHost,
+           filesystemHost: filesystemHost,
+           httpHost: httpHost,
+           pollHost: pollHost,
+           socketsHost: socketsHost,
+           streamsHost: streamsHost,
+         ),
        ),
        _cliHostOverride = cliHost,
        _cliArgs = List<String>.unmodifiable(args),
@@ -516,6 +367,92 @@ final class WASIPreview2ComponentHost {
       maxBufferedElementsForStream: maxBufferedElementsForStream,
       onAsyncValueDrop: onAsyncValueDrop,
     );
+  }
+}
+
+WASIComponentHost _resolvePreview2ComponentHost({
+  required WASIComponentHost? componentHost,
+  required WASIPreview2CliHost? cliHost,
+  required WASIPreview2ClocksHost? clocksHost,
+  required WASIPreview2IoErrorHost? errorHost,
+  required WASIPreview2FilesystemHost? filesystemHost,
+  required WASIPreview2HttpHost? httpHost,
+  required WASIPreview2PollHost? pollHost,
+  required WASIPreview2SocketsHost? socketsHost,
+  required WASIPreview2StreamsHost? streamsHost,
+}) {
+  final streamHosts = <_NamedHost<WASIPreview2StreamsHost>>[
+    if (streamsHost != null) (name: 'streamsHost', value: streamsHost),
+    if (cliHost != null) (name: 'cliHost', value: cliHost.streamsHost),
+    if (filesystemHost != null)
+      (name: 'filesystemHost', value: filesystemHost.streamsHost),
+    if (socketsHost != null)
+      (name: 'socketsHost', value: socketsHost.streamsHost),
+    if (httpHost != null) (name: 'httpHost', value: httpHost.streamsHost),
+  ];
+  _requireIdenticalHosts(streamHosts, 'Preview2 streams host');
+
+  final pollHosts = <_NamedHost<WASIPreview2PollHost>>[
+    if (pollHost != null) (name: 'pollHost', value: pollHost),
+    if (clocksHost != null) (name: 'clocksHost', value: clocksHost.pollHost),
+    for (final streamHost in streamHosts)
+      (name: streamHost.name, value: streamHost.value.pollHost),
+    if (socketsHost != null) (name: 'socketsHost', value: socketsHost.pollHost),
+    if (httpHost != null) (name: 'httpHost', value: httpHost.pollHost),
+  ];
+  _requireIdenticalHosts(pollHosts, 'Preview2 poll host');
+
+  final errorHosts = <_NamedHost<WASIPreview2IoErrorHost>>[
+    if (errorHost != null) (name: 'errorHost', value: errorHost),
+    for (final streamHost in streamHosts)
+      (name: streamHost.name, value: streamHost.value.errorHost),
+  ];
+  _requireIdenticalHosts(errorHosts, 'Preview2 error host');
+
+  final tableHosts = <_NamedHost<WASIComponentResourceTable>>[
+    if (componentHost != null)
+      (name: 'componentHost', value: componentHost.table),
+    for (final streamHost in streamHosts)
+      (name: streamHost.name, value: streamHost.value.table),
+    for (final pollHost in pollHosts)
+      (name: pollHost.name, value: pollHost.value.table),
+    for (final errorHost in errorHosts)
+      (name: errorHost.name, value: errorHost.value.table),
+    if (filesystemHost != null)
+      (name: 'filesystemHost', value: filesystemHost.table),
+    if (socketsHost != null) (name: 'socketsHost', value: socketsHost.table),
+    if (httpHost != null) (name: 'httpHost', value: httpHost.table),
+  ];
+  _requireIdenticalHosts(tableHosts, 'component resource table');
+  final table = tableHosts.isEmpty ? null : tableHosts.first.value;
+  if (componentHost != null) {
+    return componentHost;
+  }
+  return table == null
+      ? WASIComponentHost()
+      : WASIComponentHost(
+          canonicalHost: WASIComponentCanonicalHost(table: table),
+        );
+}
+
+typedef _NamedHost<T extends Object> = ({String name, T value});
+
+void _requireIdenticalHosts<T extends Object>(
+  List<_NamedHost<T>> hosts,
+  String description,
+) {
+  if (hosts.isEmpty) {
+    return;
+  }
+  final expected = hosts.first.value;
+  for (final host in hosts.skip(1)) {
+    if (!identical(host.value, expected)) {
+      throw ArgumentError.value(
+        host.value,
+        host.name,
+        'must share the same $description as ${hosts.first.name}',
+      );
+    }
   }
 }
 

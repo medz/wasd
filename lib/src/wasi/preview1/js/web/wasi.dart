@@ -7,6 +7,7 @@ import 'dart:js_interop_unsafe';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import '../../../../wasm/host_control_flow.dart';
 import '../../../../wasm/instance.dart' as wasm;
 import '../../../../wasm/memory.dart' as wasm;
 import '../../../../wasm/module.dart' as wasm;
@@ -4235,7 +4236,7 @@ final class _ResolvedPath {
   final bool hasTrailingSeparator;
 }
 
-final class _WasiExit extends Error {
+final class _WasiExit extends Error implements WasmHostControlFlowException {
   _WasiExit(this.exitCode);
 
   final int exitCode;

@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-// SHA-256 stays test-only; package:test already locks crypto.
-// ignore: depend_on_referenced_packages
+// Fixture provenance is verified by SHA-256 before execution.
 import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
 import 'package:wasd/wasi.dart';
@@ -42,6 +41,46 @@ void main() {
       expect(result.exitCode, 0);
       expect(utf8.decode(host.cliHost.stdoutBytes), 'Hello, world!\n');
       expect(host.cliHost.stderrBytes, isEmpty);
+    });
+
+    test(
+      'executes across hosts sharing one component resource table',
+      () async {
+        final bytes = await File(_fixturePath).readAsBytes();
+        final component = WasmComponent.decode(bytes);
+        final componentHost = WASIComponentHost();
+        final first = WASIPreview2ComponentHost(componentHost: componentHost);
+        final second = WASIPreview2ComponentHost(componentHost: componentHost);
+
+        final firstResult = await WASIPreview2CommandRunner(
+          first,
+        ).run(component);
+        final secondResult = await WASIPreview2CommandRunner(
+          second,
+        ).run(component);
+
+        expect(firstResult.exitCode, 0);
+        expect(secondResult.exitCode, 0);
+        expect(utf8.decode(first.cliHost.stdoutBytes), 'Hello, world!\n');
+        expect(utf8.decode(second.cliHost.stdoutBytes), 'Hello, world!\n');
+      },
+    );
+
+    test('executes concurrently across one shared component host', () async {
+      final bytes = await File(_fixturePath).readAsBytes();
+      final component = WasmComponent.decode(bytes);
+      final componentHost = WASIComponentHost();
+      final first = WASIPreview2ComponentHost(componentHost: componentHost);
+      final second = WASIPreview2ComponentHost(componentHost: componentHost);
+
+      final results = await Future.wait([
+        WASIPreview2CommandRunner(first).run(component),
+        WASIPreview2CommandRunner(second).run(component),
+      ]);
+
+      expect(results.map((result) => result.exitCode), [0, 0]);
+      expect(utf8.decode(first.cliHost.stdoutBytes), 'Hello, world!\n');
+      expect(utf8.decode(second.cliHost.stdoutBytes), 'Hello, world!\n');
     });
   });
 

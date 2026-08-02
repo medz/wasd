@@ -1,7 +1,6 @@
 import 'dart:io';
 
-// SHA-256 stays test-only; package:test already locks crypto.
-// ignore: depend_on_referenced_packages
+// Fixture provenance is verified by SHA-256 before execution.
 import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
 import 'package:wasd/wasi.dart';
@@ -80,7 +79,9 @@ void main() {
     });
 
     test('returns a successful static response', () async {
-      final responseOutparam = await _handle(_successFixture);
+      final host = WASIPreview2ComponentHost();
+      final baseline = host.componentHost.table.activeCount;
+      final responseOutparam = await _handle(_successFixture, host: host);
 
       expect(responseOutparam.informationalResponses, isEmpty);
       final result = responseOutparam.response;
@@ -93,11 +94,14 @@ void main() {
       expect(response!.statusCode, 200);
       expect(response.headers.entries, isEmpty);
       expect(response.bodyResource, isNull);
+      expect(host.componentHost.table.activeCount, baseline);
     });
 
     test('executes the canonical post-return function', () async {
+      final host = WASIPreview2ComponentHost();
+      final baseline = host.componentHost.table.activeCount;
       await expectLater(
-        _handle(_postReturnTrapFixture),
+        _handle(_postReturnTrapFixture, host: host),
         throwsA(
           predicate<Object>(
             (error) => error.toString().contains('unreachable trap'),
@@ -105,20 +109,27 @@ void main() {
           ),
         ),
       );
+      expect(host.componentHost.table.activeCount, baseline);
     });
 
     test('rejects a handler that leaves the response unset', () async {
+      final host = WASIPreview2ComponentHost();
+      final baseline = host.componentHost.table.activeCount;
       await expectLater(
-        _handle(_unsetResponseFixture),
+        _handle(_unsetResponseFixture, host: host),
         throwsA(isA<WASIPreview2ComponentExecutionException>()),
       );
+      expect(host.componentHost.table.activeCount, baseline);
     });
   });
 }
 
-Future<WASIPreview2HttpResponseOutparam> _handle(String fixturePath) async {
+Future<WASIPreview2HttpResponseOutparam> _handle(
+  String fixturePath, {
+  WASIPreview2ComponentHost? host,
+}) async {
   final component = WasmComponent.decode(await File(fixturePath).readAsBytes());
-  return WASIPreview2ProxyRunner(WASIPreview2ComponentHost()).handle(
+  return WASIPreview2ProxyRunner(host ?? WASIPreview2ComponentHost()).handle(
     component,
     WASIPreview2HttpIncomingRequest(
       method: const WASIPreview2HttpMethod.standard('get'),

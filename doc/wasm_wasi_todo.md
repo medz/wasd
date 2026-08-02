@@ -89,10 +89,38 @@ P2/P3 work starts only after these P1 gates are green.
 
 ## Next Blocking TODO
 
-- [ ] `SUPPORT-P2`
-  - Status: in progress. Component host/import coverage exists for standard
-    `wasi:io`, `wasi:cli`, `wasi:filesystem`, and `wasi:sockets`; full runtime
-    coverage and conformance closeout are not complete.
+- [x] `SUPPORT-P2`
+  - Status: complete for the repository's native Dart VM scope: stable WASI
+    0.2.12 `wasi:cli/command` and `wasi:http/proxy` components using the
+    synchronous Canonical ABI required by those worlds.
+  - Host import bindings required by those worlds: `random`, `clocks`, `io`,
+    `cli`, `filesystem`, `sockets`, and `http`, including native filesystem,
+    socket, and outgoing HTTP adapters.
+  - Green evidence:
+    `dart test test/wasi_preview2_conformance_test.dart`
+    `dart test test/wasi_preview2_http_proxy_conformance_test.dart`
+    `dart test test/wasi_preview2_http_proxy_toolchain_test.dart`
+    `dart test test/wasi_testsuite_preview2_runner_test.dart`
+    `dart test test/wasi_preview2_host_semantics_test.dart`
+    `dart test test/wasi_preview2_native_stat_layout_test.dart`
+    `dart test test/wasi_component_native_http_test.dart`
+    `dart test test/wasi_component_adapter_plan_test.dart test/wasi_component_resource_table_test.dart test/wasi_component_versioned_host_test.dart`
+    `dart test test/wasi_component_public_api_test.dart test/readme_snippets_test.dart`
+  - Fixture evidence: the command gate uses a Wasmtime v47.0.3 Preview2
+    component; the proxy gates use `wasm-tools` 1.252.0 components generated
+    from the official WASI 0.2.12 WIT and verify success, required post-return,
+    and unset-response failure paths.
+  - Conformance note: the official `wasi-testsuite` currently has no Preview2
+    test suite, so it is not presented as Preview2 conformance evidence.
+  - Scope boundary: browser/Node Preview2 execution, Component Model 0.3
+    async/future/stream/task features, experimental proposal packages, general
+    lifted indirect signatures, and Preview3 remain incomplete.
+  - Native limitation: Dart `HttpClient` has no trailer API, so outgoing HTTP
+    requests with trailers and incoming responses declaring trailers fail
+    explicitly; proxy response trailers are preserved.
+  - Resolver limitation: dependency-free IDNA ToASCII covers canonical labels;
+    labels requiring Unicode normalization tables or ContextJ/ContextO are
+    rejected explicitly.
 
 - [ ] `SUPPORT-P3`
   - Status: in progress. Component host/filesystem/async-profile scaffolding is
