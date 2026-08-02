@@ -353,6 +353,11 @@ final class WASIPreview2HttpIncomingResponse {
     _body = null;
     return body;
   }
+
+  void _drop() {
+    _body?._drop();
+    _body = null;
+  }
 }
 
 /// Preview2 incoming body resource.
@@ -361,11 +366,14 @@ final class WASIPreview2HttpIncomingBody {
   WASIPreview2HttpIncomingBody(
     WASIPreview2InputStream stream, {
     WASIPreview2HttpFutureTrailers? trailers,
+    void Function()? onDrop,
   }) : _stream = stream,
-       _trailers = _futureTrailersForStream(stream, trailers);
+       _trailers = _futureTrailersForStream(stream, trailers),
+       _onDrop = onDrop;
 
   WASIPreview2InputStream? _stream;
   final WASIPreview2HttpFutureTrailers _trailers;
+  void Function()? _onDrop;
 
   /// Returns the stream on the first call, or null afterwards.
   WASIPreview2InputStream? takeStream() {
@@ -375,7 +383,18 @@ final class WASIPreview2HttpIncomingBody {
   }
 
   /// Future trailers associated with this body.
-  WASIPreview2HttpFutureTrailers finish() => _trailers;
+  WASIPreview2HttpFutureTrailers finish() {
+    final onDrop = _onDrop;
+    _onDrop = null;
+    _trailers._adoptOnDrop(onDrop);
+    return _trailers;
+  }
+
+  void _drop() {
+    final onDrop = _onDrop;
+    _onDrop = null;
+    onDrop?.call();
+  }
 }
 
 WASIPreview2HttpFutureTrailers _futureTrailersForStream(
@@ -553,8 +572,9 @@ final class WASIPreview2HttpOutgoingBody {
 final class WASIPreview2HttpFutureIncomingResponse {
   /// Creates a pending future response.
   WASIPreview2HttpFutureIncomingResponse(
-    Future<WASIPreview2HttpResult<WASIPreview2HttpIncomingResponse>> future,
-  ) {
+    Future<WASIPreview2HttpResult<WASIPreview2HttpIncomingResponse>> future, {
+    void Function()? onDrop,
+  }) : _onDrop = onDrop {
     future.then(
       _complete,
       onError: (Object error, StackTrace stackTrace) {
@@ -574,7 +594,9 @@ final class WASIPreview2HttpFutureIncomingResponse {
 
   WASIPreview2HttpResult<WASIPreview2HttpIncomingResponse>? _result;
   final List<Completer<void>> _waiters = <Completer<void>>[];
+  void Function()? _onDrop;
   bool _taken = false;
+  bool _abandoned = false;
 
   /// Whether the response is ready.
   bool get isReady => _result != null;
@@ -600,6 +622,7 @@ final class WASIPreview2HttpFutureIncomingResponse {
       >.taken();
     }
     _taken = true;
+    _onDrop = null;
     return _WASIPreview2HttpFutureRead<WASIPreview2HttpIncomingResponse>.value(
       result,
     );
@@ -612,12 +635,29 @@ final class WASIPreview2HttpFutureIncomingResponse {
       return;
     }
     _result = result;
+    if (_abandoned && result.isOk) {
+      result.value!._drop();
+    }
     final waiters = List<Completer<void>>.of(_waiters);
     _waiters.clear();
     for (final waiter in waiters) {
       if (!waiter.isCompleted) {
         waiter.complete();
       }
+    }
+  }
+
+  void _drop() {
+    if (_taken || _abandoned) {
+      return;
+    }
+    _abandoned = true;
+    final onDrop = _onDrop;
+    _onDrop = null;
+    onDrop?.call();
+    final result = _result;
+    if (result != null && result.isOk) {
+      result.value!._drop();
     }
   }
 }
@@ -647,6 +687,7 @@ final class WASIPreview2HttpFutureTrailers {
 
   WASIPreview2HttpResult<WASIPreview2HttpFields?>? _result;
   final List<Completer<void>> _waiters = <Completer<void>>[];
+  void Function()? _onDrop;
   bool _taken = false;
 
   /// Whether the trailers are ready.
@@ -673,6 +714,7 @@ final class WASIPreview2HttpFutureTrailers {
       return const _WASIPreview2HttpFutureRead<WASIPreview2HttpFields?>.taken();
     }
     _taken = true;
+    _onDrop = null;
     return _WASIPreview2HttpFutureRead<WASIPreview2HttpFields?>.value(result);
   }
 
@@ -688,6 +730,25 @@ final class WASIPreview2HttpFutureTrailers {
         waiter.complete();
       }
     }
+  }
+
+  void _adoptOnDrop(void Function()? onDrop) {
+    if (onDrop == null) {
+      return;
+    }
+    final previous = _onDrop;
+    _onDrop = previous == null
+        ? onDrop
+        : () {
+            previous();
+            onDrop();
+          };
+  }
+
+  void _drop() {
+    final onDrop = _onDrop;
+    _onDrop = null;
+    onDrop?.call();
   }
 }
 
@@ -785,14 +846,17 @@ base class WASIPreview2HttpHost {
   late final WASIComponentResourceType<WASIPreview2HttpIncomingResponse>
   _incomingResponseType = table.defineType<WASIPreview2HttpIncomingResponse>(
     'wasi:http/types@0.2.0.incoming-response',
+    onDrop: (response) => response._drop(),
   );
   late final WASIComponentResourceType<WASIPreview2HttpIncomingBody>
   _incomingBodyType = table.defineType<WASIPreview2HttpIncomingBody>(
     'wasi:http/types@0.2.0.incoming-body',
+    onDrop: (body) => body._drop(),
   );
   late final WASIComponentResourceType<WASIPreview2HttpFutureTrailers>
   _futureTrailersType = table.defineType<WASIPreview2HttpFutureTrailers>(
     'wasi:http/types@0.2.0.future-trailers',
+    onDrop: (trailers) => trailers._drop(),
   );
   late final WASIComponentResourceType<WASIPreview2HttpOutgoingResponse>
   _outgoingResponseType = table.defineType<WASIPreview2HttpOutgoingResponse>(
@@ -807,6 +871,7 @@ base class WASIPreview2HttpHost {
   _futureIncomingResponseType = table
       .defineType<WASIPreview2HttpFutureIncomingResponse>(
         'wasi:http/types@0.2.0.future-incoming-response',
+        onDrop: (response) => response._drop(),
       );
 
   /// Standard `wasi:http@0.2.0` import callbacks.

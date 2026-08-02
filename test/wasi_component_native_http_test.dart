@@ -81,6 +81,135 @@ void main() {
     expect(nativeRequest.closeCalls, 0);
   });
 
+  test('Preview2 native HTTP cancels an unclaimed response future', () async {
+    final responseBody = StreamController<List<int>>();
+    addTearDown(responseBody.close);
+    final response = _RecordingHttpClientResponse(
+      headers: _RecordingHttpHeaders(null),
+      stream: responseBody.stream,
+    );
+    final (:host, :program) = _httpFixture(
+      _RecordingHttpClientRequest(response: response),
+    );
+
+    await host.componentHost.table.runScoped(() async {
+      await _startReadyHttpRequest(program);
+      expect(responseBody.hasListener, isTrue);
+      expect(response.cancelCalls, 0);
+    });
+
+    expect(host.componentHost.table.activeCount, 0);
+    expect(response.cancelCalls, 1);
+  });
+
+  test('Preview2 native HTTP aborts a request still opening', () async {
+    final pendingRequest = Completer<io.HttpClientRequest>();
+    final nativeRequest = _RecordingHttpClientRequest();
+    final (:host, :program) = _httpFixture(pendingRequest.future);
+
+    await host.componentHost.table.runScoped(() async {
+      _startHttpRequest(program);
+      await Future<void>.delayed(Duration.zero);
+    });
+    pendingRequest.complete(nativeRequest);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(host.componentHost.table.activeCount, 0);
+    expect(nativeRequest.abortCalls, 1);
+    expect(nativeRequest.closeCalls, 0);
+  });
+
+  test(
+    'Preview2 native HTTP transfers response cancellation ownership',
+    () async {
+      for (final finishBody in <bool>[false, true]) {
+        final responseBody = StreamController<List<int>>();
+        addTearDown(responseBody.close);
+        final response = _RecordingHttpClientResponse(
+          headers: _RecordingHttpHeaders(null),
+          stream: responseBody.stream,
+        );
+        final (:host, :program) = _httpFixture(
+          _RecordingHttpClientRequest(response: response),
+        );
+
+        await host.componentHost.table.runScoped(() async {
+          final future = await _startReadyHttpRequest(program);
+          final incomingResponse = _takeHttpResponse(program, future);
+          _dropHttpResource(host, 'future-incoming-response', future);
+          final incomingBody = _consumeHttpResponse(program, incomingResponse);
+          _dropHttpResource(host, 'incoming-response', incomingResponse);
+          final input = _takeHttpInput(program, incomingBody);
+          expect(response.cancelCalls, 0);
+          if (!finishBody) {
+            return;
+          }
+
+          _dropHttpResource(host, 'input-stream', input, ioResource: true);
+          final futureTrailers = _finishHttpBody(program, incomingBody);
+          expect(response.cancelCalls, 0, reason: 'finish transfers ownership');
+          _dropHttpResource(host, 'future-trailers', futureTrailers);
+          expect(response.cancelCalls, 1);
+        });
+
+        expect(host.componentHost.table.activeCount, 0);
+        expect(response.cancelCalls, 1);
+      }
+    },
+  );
+
+  test('Preview2 native HTTP leaves completed responses uncancelled', () async {
+    final response = _RecordingHttpClientResponse(
+      headers: _RecordingHttpHeaders(null),
+      chunks: const <List<int>>[
+        <int>[1, 2],
+      ],
+    );
+    final (:host, :program) = _httpFixture(
+      _RecordingHttpClientRequest(response: response),
+    );
+
+    await host.componentHost.table.runScoped(() async {
+      final future = await _startReadyHttpRequest(program);
+      final incomingResponse = _takeHttpResponse(program, future);
+      final incomingBody = _consumeHttpResponse(program, incomingResponse);
+      final input = _takeHttpInput(program, incomingBody);
+      expect(await _readHttpInput(host, program, input), <int>[1, 2]);
+      expect(await _readHttpInput(host, program, input), isNull);
+      _dropHttpResource(host, 'input-stream', input, ioResource: true);
+      final futureTrailers = _finishHttpBody(program, incomingBody);
+      expect(_takeHttpTrailers(program, futureTrailers).isOk, isTrue);
+      _dropHttpResource(host, 'future-trailers', futureTrailers);
+    });
+
+    expect(host.componentHost.table.activeCount, 0);
+    expect(response.cancelCalls, 0);
+  });
+
+  test('Preview2 native HTTP aborts active abandoned requests', () async {
+    final pendingResponse = Completer<io.HttpClientResponse>();
+    final lateResponse = _RecordingHttpClientResponse(
+      headers: _RecordingHttpHeaders(null),
+    );
+    final nativeRequest = _RecordingHttpClientRequest(
+      closeResult: pendingResponse.future,
+    );
+    final (:host, :program) = _httpFixture(nativeRequest);
+
+    await host.componentHost.table.runScoped(() async {
+      _startHttpRequest(program);
+      await Future<void>.delayed(Duration.zero);
+      expect(nativeRequest.closeCalls, 1);
+    });
+
+    pendingResponse.complete(lateResponse);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(host.componentHost.table.activeCount, 0);
+    expect(nativeRequest.abortCalls, 1);
+    expect(lateResponse.listenCalls, 0);
+  });
+
   test('Preview2 native HTTP hides response stream error details', () async {
     const secret = '/private/host/path:8443';
     for (final (error, expected) in <(Object, String)>[
@@ -1169,6 +1298,171 @@ WASIPreview2HttpOutgoingRequest _outgoingRequest({
   return request;
 }
 
+WASIComponentWitAdapterProgram _httpAbandonProgram(
+  WASIPreview2ComponentHost host,
+) {
+  const source = '''
+package wasi-testsuite:test;
+
+world http-abandon-test {
+  import wasi:http/types@0.2.0;
+  import wasi:http/outgoing-handler@0.2.0;
+  include wasi:io/imports@0.2.0;
+}
+''';
+  return host.bindWitWorld(
+    WASIComponentWitDocument.parse(source),
+    worldName: 'http-abandon-test',
+  );
+}
+
+({WASIPreview2ComponentHost host, WASIComponentWitAdapterProgram program})
+_httpFixture(FutureOr<io.HttpClientRequest> request) {
+  final host = WASIPreview2ComponentHost(
+    httpHost: native_http.WASIPreview2NativeHttpHost(
+      client: _RecordingHttpClient(request),
+    ),
+  );
+  return (host: host, program: _httpAbandonProgram(host));
+}
+
+int _startHttpRequest(WASIComponentWitAdapterProgram program) {
+  final headers =
+      program.invokeImport('wasi:http/types@0.2.0.fields.constructor', const [])
+          as int;
+  final request =
+      program.invokeImport(
+            'wasi:http/types@0.2.0.outgoing-request.constructor',
+            [headers],
+          )
+          as int;
+  _expectUnitOk(
+    program.invokeImport('wasi:http/types@0.2.0.outgoing-request.set-scheme', [
+          request,
+          _someValue(_variantValue('HTTP')),
+        ])
+        as WasmComponentValueData,
+  );
+  _expectUnitOk(
+    program.invokeImport(
+          'wasi:http/types@0.2.0.outgoing-request.set-authority',
+          [request, _someValue(_stringValue('example.test'))],
+        )
+        as WasmComponentValueData,
+  );
+  return _handle(
+    _resultOk(
+      program.invokeImport('wasi:http/outgoing-handler@0.2.0.handle', [
+            request,
+            _noneValue(),
+          ])
+          as WasmComponentValueData,
+    ),
+  );
+}
+
+Future<int> _startReadyHttpRequest(
+  WASIComponentWitAdapterProgram program,
+) async {
+  final future = _startHttpRequest(program);
+  await _block(
+    program,
+    'wasi:http/types@0.2.0.future-incoming-response.subscribe',
+    future,
+  );
+  return future;
+}
+
+int _takeHttpResponse(WASIComponentWitAdapterProgram program, int future) {
+  final ready =
+      program.invokeImport(
+            'wasi:http/types@0.2.0.future-incoming-response.get',
+            [future],
+          )
+          as WasmComponentValueData;
+  return _handle(_resultOk(_resultOk(_optionPayload(ready))));
+}
+
+int _consumeHttpResponse(WASIComponentWitAdapterProgram program, int response) {
+  return _handle(
+    _resultOk(
+      program.invokeImport('wasi:http/types@0.2.0.incoming-response.consume', [
+            response,
+          ])
+          as WasmComponentValueData,
+    ),
+  );
+}
+
+int _takeHttpInput(WASIComponentWitAdapterProgram program, int body) {
+  return _handle(
+    _resultOk(
+      program.invokeImport('wasi:http/types@0.2.0.incoming-body.%stream', [
+            body,
+          ])
+          as WasmComponentValueData,
+    ),
+  );
+}
+
+int _finishHttpBody(WASIComponentWitAdapterProgram program, int body) {
+  return program.invokeImport('wasi:http/types@0.2.0.incoming-body.finish', [
+        body,
+      ])
+      as int;
+}
+
+WasmComponentValueData _takeHttpTrailers(
+  WASIComponentWitAdapterProgram program,
+  int trailers,
+) {
+  final value =
+      program.invokeImport('wasi:http/types@0.2.0.future-trailers.get', [
+            trailers,
+          ])
+          as WasmComponentValueData;
+  return _resultOk(_optionPayload(value));
+}
+
+void _dropHttpResource(
+  WASIPreview2ComponentHost host,
+  String resource,
+  int handle, {
+  bool ioResource = false,
+}) {
+  final interface = ioResource ? 'wasi:io/streams' : 'wasi:http/types';
+  host.componentHost.table.dropNamed('$interface@0.2.0.$resource', handle);
+}
+
+Future<List<int>?> _readHttpInput(
+  WASIPreview2ComponentHost host,
+  WASIComponentWitAdapterProgram program,
+  int input,
+) async {
+  final pollable =
+      program.invokeImport('wasi:io/streams@0.2.0.input-stream.subscribe', [
+            input,
+          ])
+          as int;
+  await program.invokeImportAsync('wasi:io/poll@0.2.0.pollable.block', [
+    pollable,
+  ]);
+  host.componentHost.table.dropNamed('wasi:io/poll@0.2.0.pollable', pollable);
+  final read =
+      program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+            input,
+            BigInt.from(16),
+          ])
+          as WasmComponentValueData;
+  if (read.isOk ?? read.index == 0 || read.label == 'ok') {
+    return _u8List(_resultOk(read));
+  }
+  if (_resultErrorLabel(read) == 'closed') {
+    return null;
+  }
+  throw StateError('unexpected input stream failure');
+}
+
 final class _RecordingHttpClient implements io.HttpClient {
   _RecordingHttpClient(FutureOr<io.HttpClientRequest> request)
     : _request = Future<io.HttpClientRequest>.value(request);
@@ -1193,11 +1487,13 @@ final class _RecordingHttpClientRequest implements io.HttpClientRequest {
     this.headerError,
     this.closeError,
     this.response,
+    this.closeResult,
   });
 
   final Object? headerError;
   final Object? closeError;
   final io.HttpClientResponse? response;
+  final Future<io.HttpClientResponse>? closeResult;
   int abortCalls = 0;
   int closeCalls = 0;
 
@@ -1215,6 +1511,10 @@ final class _RecordingHttpClientRequest implements io.HttpClientRequest {
   @override
   Future<io.HttpClientResponse> close() {
     closeCalls++;
+    final closeResult = this.closeResult;
+    if (closeResult != null) {
+      return closeResult;
+    }
     final response = this.response;
     if (response != null) {
       return Future<io.HttpClientResponse>.value(response);
@@ -1267,11 +1567,16 @@ final class _RecordingHttpClientResponse extends Stream<List<int>>
     required this.headers,
     List<List<int>> chunks = const <List<int>>[],
     Object? streamError,
-  }) : _stream = streamError == null
-           ? Stream<List<int>>.fromIterable(chunks)
-           : Stream<List<int>>.error(streamError);
+    Stream<List<int>>? stream,
+  }) : _stream =
+           stream ??
+           (streamError == null
+               ? Stream<List<int>>.fromIterable(chunks)
+               : Stream<List<int>>.error(streamError));
 
   final Stream<List<int>> _stream;
+  int listenCalls = 0;
+  int cancelCalls = 0;
 
   @override
   final io.HttpHeaders headers;
@@ -1286,12 +1591,38 @@ final class _RecordingHttpClientResponse extends Stream<List<int>>
     void Function()? onDone,
     bool? cancelOnError,
   }) {
-    return _stream.listen(
-      onData,
-      onError: onError,
-      onDone: onDone,
-      cancelOnError: cancelOnError,
+    listenCalls++;
+    return _RecordingStreamSubscription<List<int>>(
+      _stream.listen(
+        onData,
+        onError: onError,
+        onDone: onDone,
+        cancelOnError: cancelOnError,
+      ),
+      () {
+        cancelCalls++;
+      },
     );
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _RecordingStreamSubscription<T> implements StreamSubscription<T> {
+  _RecordingStreamSubscription(this._subscription, this._onCancel);
+
+  final StreamSubscription<T> _subscription;
+  final void Function() _onCancel;
+  bool _cancelled = false;
+
+  @override
+  Future<void> cancel() {
+    if (!_cancelled) {
+      _cancelled = true;
+      _onCancel();
+    }
+    return _subscription.cancel();
   }
 
   @override
