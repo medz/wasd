@@ -19,6 +19,8 @@ class WASI implements wasi_iface.WASI {
     int stdout = 1,
     int stderr = 2,
     Map<int, WASIPreview1Socket> sockets = const <int, WASIPreview1Socket>{},
+    wasi_iface.WASIOutputSink? stdoutSink,
+    wasi_iface.WASIOutputSink? stderrSink,
     wasi_iface.WASIProcRaiseHandler? procRaiseHandler,
     wasi_iface.WASIVersion version = wasi_iface.WASIVersion.preview1,
   }) : _delegate = _createDelegate(
@@ -32,6 +34,8 @@ class WASI implements wasi_iface.WASI {
          stdout: stdout,
          stderr: stderr,
          sockets: sockets,
+         stdoutSink: stdoutSink,
+         stderrSink: stderrSink,
          procRaiseHandler: procRaiseHandler,
          version: version,
        );
@@ -66,6 +70,8 @@ wasi_iface.WASI _createDelegate({
   required int stdout,
   required int stderr,
   required Map<int, WASIPreview1Socket> sockets,
+  required wasi_iface.WASIOutputSink? stdoutSink,
+  required wasi_iface.WASIOutputSink? stderrSink,
   required wasi_iface.WASIProcRaiseHandler? procRaiseHandler,
   required wasi_iface.WASIVersion version,
 }) {
@@ -83,6 +89,8 @@ wasi_iface.WASI _createDelegate({
     stdout: stdout,
     stderr: stderr,
     sockets: sockets,
+    stdoutSink: stdoutSink,
+    stderrSink: stderrSink,
     procRaiseHandler: procRaiseHandler,
     version: version,
   );
