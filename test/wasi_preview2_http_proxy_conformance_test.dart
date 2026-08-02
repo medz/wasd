@@ -13,6 +13,62 @@ const _fixtureSha256 =
     '94bd7c8d6a10cca265f7237868135b37c7e76b9b12967d863fe988ad880f07a8';
 
 void main() {
+  group('WASI HTTP incoming request lifecycle', () {
+    test('dropping an unconsumed request drops its body', () {
+      var bodyDrops = 0;
+      final host = WASIPreview2ComponentHost();
+      final request = host.httpHost.insertIncomingRequest(
+        WASIPreview2HttpIncomingRequest(
+          method: const WASIPreview2HttpMethod.standard('post'),
+          headers: WASIPreview2HttpFields(),
+          body: WASIPreview2HttpIncomingBody(
+            WASIPreview2InputStream(),
+            onDrop: () => bodyDrops++,
+          ),
+        ),
+      );
+
+      host.componentHost.table.dropNamed(
+        'wasi:http/types@0.2.0.incoming-request',
+        request,
+      );
+
+      expect(bodyDrops, 1);
+    });
+
+    test('a consumed body outlives its request', () {
+      var bodyDrops = 0;
+      final host = WASIPreview2ComponentHost();
+      final request = host.httpHost.insertIncomingRequest(
+        WASIPreview2HttpIncomingRequest(
+          method: const WASIPreview2HttpMethod.standard('post'),
+          headers: WASIPreview2HttpFields(),
+          body: WASIPreview2HttpIncomingBody(
+            WASIPreview2InputStream(),
+            onDrop: () => bodyDrops++,
+          ),
+        ),
+      );
+      final consume = host
+          .httpHost
+          .imports['wasi:http/types@0.2.0.incoming-request.consume']!;
+      final result = consume([request]) as WasmComponentValueData;
+      final body = result.associatedValue!.integer! as int;
+
+      host.componentHost.table.dropNamed(
+        'wasi:http/types@0.2.0.incoming-request',
+        request,
+      );
+      expect(bodyDrops, 0);
+
+      host.componentHost.table.dropNamed(
+        'wasi:http/types@0.2.0.incoming-body',
+        body,
+      );
+      expect(bodyDrops, 1);
+    });
+  });
+
   group('WASI HTTP 0.2.12 proxy component', () {
     test('fixture is fixed and valid', () async {
       final bytes = await File(_fixturePath).readAsBytes();

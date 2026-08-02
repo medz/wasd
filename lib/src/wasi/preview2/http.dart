@@ -257,6 +257,11 @@ final class WASIPreview2HttpIncomingRequest {
     _body = null;
     return body;
   }
+
+  void _drop() {
+    _body?._drop();
+    _body = null;
+  }
 }
 
 /// Preview2 HTTP request options.
@@ -830,6 +835,7 @@ base class WASIPreview2HttpHost {
   late final WASIComponentResourceType<WASIPreview2HttpIncomingRequest>
   _incomingRequestType = table.defineType<WASIPreview2HttpIncomingRequest>(
     'wasi:http/types@0.2.0.incoming-request',
+    onDrop: (request) => request._drop(),
   );
   late final WASIComponentResourceType<WASIPreview2HttpOutgoingRequest>
   _outgoingRequestType = table.defineType<WASIPreview2HttpOutgoingRequest>(
