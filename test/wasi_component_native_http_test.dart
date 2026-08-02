@@ -81,6 +81,142 @@ void main() {
     expect(nativeRequest.closeCalls, 0);
   });
 
+  test(
+    'Preview2 native HTTP applies first-byte timeout to response headers',
+    () async {
+      final response = _RecordingHttpClientResponse(
+        headers: _RecordingHttpHeaders(null),
+      );
+      final nativeRequest = _RecordingHttpClientRequest(
+        closeResult: Future<io.HttpClientResponse>.delayed(
+          const Duration(milliseconds: 120),
+          () => response,
+        ),
+      );
+      final (:program, host: _) = _httpFixture(nativeRequest);
+
+      final future = _startHttpRequest(
+        program,
+        firstByteTimeout: const Duration(milliseconds: 40),
+      );
+      await _block(
+        program,
+        'wasi:http/types@0.2.0.future-incoming-response.subscribe',
+        future,
+      );
+      final ready =
+          program.invokeImport(
+                'wasi:http/types@0.2.0.future-incoming-response.get',
+                [future],
+              )
+              as WasmComponentValueData;
+
+      expect(
+        _resultErrorLabel(_resultOk(_optionPayload(ready))),
+        'HTTP-response-timeout',
+      );
+      expect(nativeRequest.abortCalls, 1);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(response.listenCalls, 0);
+    },
+  );
+
+  test('Preview2 native HTTP shares the first-byte timeout budget', () async {
+    final responseBody = StreamController<List<int>>();
+    addTearDown(responseBody.close);
+    final response = _RecordingHttpClientResponse(
+      headers: _RecordingHttpHeaders(null),
+      stream: responseBody.stream,
+    );
+    final nativeRequest = _RecordingHttpClientRequest(
+      closeResult: Future<io.HttpClientResponse>.delayed(
+        const Duration(milliseconds: 120),
+        () => response,
+      ),
+    );
+    final (:program, host: _) = _httpFixture(nativeRequest);
+
+    final future = _startHttpRequest(
+      program,
+      firstByteTimeout: const Duration(milliseconds: 200),
+    );
+    await _block(
+      program,
+      'wasi:http/types@0.2.0.future-incoming-response.subscribe',
+      future,
+    );
+    final incomingResponse = _takeHttpResponse(program, future);
+    final incomingBody = _consumeHttpResponse(program, incomingResponse);
+    final input = _takeHttpInput(program, incomingBody);
+
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    responseBody.add(const <int>[65]);
+    await responseBody.close();
+    final pollable =
+        program.invokeImport('wasi:io/streams@0.2.0.input-stream.subscribe', [
+              input,
+            ])
+            as int;
+    await program.invokeImportAsync('wasi:io/poll@0.2.0.pollable.block', [
+      pollable,
+    ]);
+    final read =
+        program.invokeImport('wasi:io/streams@0.2.0.input-stream.read', [
+              input,
+              BigInt.one,
+            ])
+            as WasmComponentValueData;
+    final error = _streamErrorHandle(read);
+
+    expect(
+      program.invokeImport('wasi:io/error@0.2.0.error.to-debug-string', [
+        error,
+      ]),
+      'HTTP-response-timeout',
+    );
+    expect(response.cancelCalls, 1);
+  });
+
+  test(
+    'Preview2 native HTTP accepts the first byte within the shared budget',
+    () async {
+      final responseBody = StreamController<List<int>>();
+      addTearDown(responseBody.close);
+      final response = _RecordingHttpClientResponse(
+        headers: _RecordingHttpHeaders(null),
+        stream: responseBody.stream,
+      );
+      final nativeRequest = _RecordingHttpClientRequest(
+        closeResult: Future<io.HttpClientResponse>.delayed(
+          const Duration(milliseconds: 40),
+          () => response,
+        ),
+      );
+      final (:host, :program) = _httpFixture(nativeRequest);
+
+      final future = _startHttpRequest(
+        program,
+        firstByteTimeout: const Duration(milliseconds: 200),
+      );
+      await _block(
+        program,
+        'wasi:http/types@0.2.0.future-incoming-response.subscribe',
+        future,
+      );
+      final incomingResponse = _takeHttpResponse(program, future);
+      final incomingBody = _consumeHttpResponse(program, incomingResponse);
+      final input = _takeHttpInput(program, incomingBody);
+
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      responseBody.add(const <int>[65]);
+      await responseBody.close();
+
+      expect(await _readHttpInput(host, program, input), const <int>[65]);
+      expect(await _readHttpInput(host, program, input), isNull);
+      expect(response.cancelCalls, 0);
+    },
+  );
+
   test('Preview2 native HTTP cancels an unclaimed response future', () async {
     final responseBody = StreamController<List<int>>();
     addTearDown(responseBody.close);
@@ -971,7 +1107,7 @@ world http-timeout-test {
     _expectUnitOk(
       program.invokeImport(
             'wasi:http/types@0.2.0.request-options.set-first-byte-timeout',
-            [options, _someValue(_integerValue(BigInt.from(5000000)))],
+            [options, _someValue(_integerValue(BigInt.from(50000000)))],
           )
           as WasmComponentValueData,
     );
@@ -1307,6 +1443,7 @@ package wasi-testsuite:test;
 world http-abandon-test {
   import wasi:http/types@0.2.0;
   import wasi:http/outgoing-handler@0.2.0;
+  import wasi:io/error@0.2.0;
   include wasi:io/imports@0.2.0;
 }
 ''';
@@ -1326,7 +1463,10 @@ _httpFixture(FutureOr<io.HttpClientRequest> request) {
   return (host: host, program: _httpAbandonProgram(host));
 }
 
-int _startHttpRequest(WASIComponentWitAdapterProgram program) {
+int _startHttpRequest(
+  WASIComponentWitAdapterProgram program, {
+  Duration? firstByteTimeout,
+}) {
   final headers =
       program.invokeImport('wasi:http/types@0.2.0.fields.constructor', const [])
           as int;
@@ -1350,11 +1490,35 @@ int _startHttpRequest(WASIComponentWitAdapterProgram program) {
         )
         as WasmComponentValueData,
   );
+  int? options;
+  if (firstByteTimeout != null) {
+    options =
+        program.invokeImport(
+              'wasi:http/types@0.2.0.request-options.constructor',
+              const [],
+            )
+            as int;
+    _expectUnitOk(
+      program.invokeImport(
+            'wasi:http/types@0.2.0.request-options.set-first-byte-timeout',
+            [
+              options,
+              _someValue(
+                _integerValue(
+                  BigInt.from(firstByteTimeout.inMicroseconds) *
+                      BigInt.from(1000),
+                ),
+              ),
+            ],
+          )
+          as WasmComponentValueData,
+    );
+  }
   return _handle(
     _resultOk(
       program.invokeImport('wasi:http/outgoing-handler@0.2.0.handle', [
             request,
-            _noneValue(),
+            options == null ? _noneValue() : _someValue(_integerValue(options)),
           ])
           as WasmComponentValueData,
     ),

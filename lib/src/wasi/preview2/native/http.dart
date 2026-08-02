@@ -120,7 +120,18 @@ final class _NativeHttpBackend implements WASIPreview2HttpBackend {
           bodyResult.errorCode!,
         );
       }
-      final ioResponse = await ioRequest.close();
+      final firstByteTimeout = _durationFromNanos(options?.firstByteTimeout);
+      final firstByteStopwatch = firstByteTimeout == null
+          ? null
+          : (Stopwatch()..start());
+      var pendingResponse = ioRequest.close();
+      if (firstByteTimeout != null) {
+        pendingResponse = pendingResponse.timeout(
+          firstByteTimeout,
+          onTimeout: () => throw const _FirstByteTimeout(),
+        );
+      }
+      final ioResponse = await pendingResponse;
       exchange.detachRequest(ioRequest);
       ioRequest = null;
       if (exchange.isCancelled) {
@@ -129,7 +140,14 @@ final class _NativeHttpBackend implements WASIPreview2HttpBackend {
         >.error('internal-error');
       }
       final input = WASIPreview2InputStream();
-      exchange.pipeResponseBody(ioResponse, input, options);
+      exchange.pipeResponseBody(
+        ioResponse,
+        input,
+        options,
+        firstByteTimeout: firstByteTimeout == null
+            ? null
+            : firstByteTimeout - firstByteStopwatch!.elapsed,
+      );
       final trailers = _responseTrailers(ioResponse);
       return WASIPreview2HttpResult<WASIPreview2HttpIncomingResponse>.ok(
         WASIPreview2HttpIncomingResponse(
@@ -145,6 +163,12 @@ final class _NativeHttpBackend implements WASIPreview2HttpBackend {
           ),
         ),
       );
+    } on _FirstByteTimeout catch (error, stackTrace) {
+      exchange.abortRequest(ioRequest, error, stackTrace);
+      exchange.cancel();
+      return const WASIPreview2HttpResult<
+        WASIPreview2HttpIncomingResponse
+      >.error('HTTP-response-timeout');
     } on TimeoutException catch (error, stackTrace) {
       exchange.abortRequest(ioRequest, error, stackTrace);
       exchange.cancel();
@@ -230,9 +254,9 @@ final class _NativeHttpExchange {
   void pipeResponseBody(
     io.HttpClientResponse response,
     WASIPreview2InputStream input,
-    WASIPreview2HttpRequestOptions? options,
-  ) {
-    final firstByteTimeout = _durationFromNanos(options?.firstByteTimeout);
+    WASIPreview2HttpRequestOptions? options, {
+    required Duration? firstByteTimeout,
+  }) {
     final betweenBytesTimeout = _durationFromNanos(
       options?.betweenBytesTimeout,
     );
@@ -317,6 +341,10 @@ final class _NativeHttpExchange {
       unawaited(subscription.cancel());
     }
   }
+}
+
+final class _FirstByteTimeout implements Exception {
+  const _FirstByteTimeout();
 }
 
 void _abortRequest(
