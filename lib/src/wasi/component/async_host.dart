@@ -2727,6 +2727,7 @@ final class _RegisteredAsyncValueType<T> {
     _requireKind(_WASIComponentAsyncValueKind.stream);
     _requireReallocForReadToMemory(valueValidator, name, realloc, maxElements);
     final stream = _expectReadableStream(readable);
+    _checkReadToMemoryRange(valueValidator, name, memory, pointer, maxElements);
     try {
       final values = stream.readForCopy(maxElements);
       _writeValuesToMemory(
@@ -2764,6 +2765,13 @@ final class _RegisteredAsyncValueType<T> {
               realloc,
               maxElements,
             );
+            _checkReadToMemoryRange(
+              valueValidator,
+              name,
+              memory,
+              pointer,
+              maxElements,
+            );
             try {
               final values = stream.readForCopy(maxElements);
               _writeValuesToMemory(
@@ -2795,31 +2803,42 @@ final class _RegisteredAsyncValueType<T> {
     return table.borrowAsync<
       WASIComponentReadableStream<T>,
       WASIComponentAsyncCopyResult
-    >(readableStreamType!, readable, (stream) async {
+    >(readableStreamType!, readable, (stream) {
       _requireReallocForReadToMemory(
         valueValidator,
         name,
         realloc,
         maxElements,
       );
-      try {
-        final values = await stream.readWhenAvailableForCopy(
-          maxElements,
-          asynchronous: false,
-        );
-        _writeValuesToMemory(
-          valueValidator,
-          name,
-          memory,
-          pointer,
-          values,
-          stringEncoding,
-          realloc,
-        );
-        return _streamReadResult(stream, values);
-      } on WASIComponentAsyncEndpointStateError catch (error) {
-        return _endpointFailureCopyResult(error);
-      }
+      _checkReadToMemoryRange(
+        valueValidator,
+        name,
+        memory,
+        pointer,
+        maxElements,
+      );
+      return stream
+          .readWhenAvailableForCopy(maxElements, asynchronous: false)
+          .then<WASIComponentAsyncCopyResult>(
+            (values) {
+              _writeValuesToMemory(
+                valueValidator,
+                name,
+                memory,
+                pointer,
+                values,
+                stringEncoding,
+                realloc,
+              );
+              return _streamReadResult(stream, values);
+            },
+            onError: (Object error, StackTrace stackTrace) {
+              if (error is WASIComponentAsyncEndpointStateError) {
+                return _endpointFailureCopyResult(error);
+              }
+              Error.throwWithStackTrace(error, stackTrace);
+            },
+          );
     });
   }
 
@@ -2841,6 +2860,13 @@ final class _RegisteredAsyncValueType<T> {
           valueValidator,
           name,
           realloc,
+          maxElements,
+        );
+        _checkReadToMemoryRange(
+          valueValidator,
+          name,
+          memory,
+          pointer,
           maxElements,
         );
         if (maxElements == 0 ||
@@ -3164,7 +3190,9 @@ final class _RegisteredAsyncValueType<T> {
   ]) {
     _requireKind(_WASIComponentAsyncValueKind.future);
     _requireReallocForReadToMemory(valueValidator, name, realloc, 1);
-    final value = _expectReadableFuture(readable).readForCopy();
+    final future = _expectReadableFuture(readable);
+    _checkReadToMemoryRange(valueValidator, name, memory, pointer, 1);
+    final value = future.readForCopy();
     _writeValueToMemory(
       valueValidator,
       name,
@@ -3191,6 +3219,7 @@ final class _RegisteredAsyncValueType<T> {
           readable,
           (future) {
             _requireReallocForReadToMemory(valueValidator, name, realloc, 1);
+            _checkReadToMemoryRange(valueValidator, name, memory, pointer, 1);
             _writeValueToMemory(
               valueValidator,
               name,
@@ -3218,6 +3247,7 @@ final class _RegisteredAsyncValueType<T> {
       WASIComponentAsyncCopyResult
     >(readableFutureType!, readable, (future) {
       _requireReallocForReadToMemory(valueValidator, name, realloc, 1);
+      _checkReadToMemoryRange(valueValidator, name, memory, pointer, 1);
       return future
           .readWhenReadyForCopy(asynchronous: false)
           .then<WASIComponentAsyncCopyResult>((value) {
@@ -3249,6 +3279,7 @@ final class _RegisteredAsyncValueType<T> {
       readable,
       (future) {
         _requireReallocForReadToMemory(valueValidator, name, realloc, 1);
+        _checkReadToMemoryRange(valueValidator, name, memory, pointer, 1);
         if (future.isReady) {
           _writeValueToMemory(
             valueValidator,
@@ -3887,6 +3918,14 @@ final class _RegisteredAsyncValueType<T> {
       });
     }
 
+    void publishFailure(Object error, StackTrace stackTrace) {
+      waitable.setPendingEvent(() {
+        onDelivered(WASIComponentAsyncCopyResult.completed(0));
+        waitable.finishCopy(dropped: false);
+        Error.throwWithStackTrace(error, stackTrace);
+      });
+    }
+
     unawaited(
       result.then<void>(
         publish,
@@ -3895,12 +3934,10 @@ final class _RegisteredAsyncValueType<T> {
             publish(_endpointFailureCopyResult(error));
             return;
           }
-          // Canonical copy results have no host-error status. Release the
-          // waitable with the only safe terminal result, then report the
-          // original failure as an uncaught host error instead of hiding it as
-          // guest-requested cancellation.
-          publish(WASIComponentAsyncCopyResult.cancelled());
-          Zone.current.handleUncaughtError(error, stackTrace);
+          // Canonical copy results have no host-error status. Preserve the
+          // failure as a trap delivered by the waiting component task after
+          // releasing its deferred endpoint and waitable copy state.
+          publishFailure(error, stackTrace);
         },
       ),
     );
@@ -4316,6 +4353,40 @@ void _requireReallocForReadToMemory(
   if (validator.primitive == WasmComponentPrimitiveValueType.string ||
       (validator.memoryCodec?.requiresRealloc ?? false)) {
     _requireRealloc(name, realloc);
+  }
+}
+
+void _checkReadToMemoryRange(
+  _WASIComponentAsyncValueValidator validator,
+  String name,
+  wasm.Memory memory,
+  int pointer,
+  int elementCount,
+) {
+  _checkCopyElementCount(elementCount);
+  if (elementCount == 0 ||
+      validator.kind == _WASIComponentAsyncValueShape.unit) {
+    return;
+  }
+  final codec = validator.memoryCodec;
+  if (codec == null) {
+    throw UnsupportedError(
+      'WASI component async type $name does not have a canonical memory element type.',
+    );
+  }
+  RangeError.checkNotNegative(pointer, 'pointer');
+  if (codec.alignment > 1 && pointer % codec.alignment != 0) {
+    throw StateError('pointer must be ${codec.alignment}-byte aligned.');
+  }
+  final byteLength = elementCount * codec.byteLength;
+  final memoryLength = memory.buffer.lengthInBytes;
+  if (pointer > memoryLength || byteLength > memoryLength - pointer) {
+    throw RangeError.range(
+      pointer + byteLength,
+      0,
+      memoryLength,
+      'pointer + byteLength',
+    );
   }
 }
 

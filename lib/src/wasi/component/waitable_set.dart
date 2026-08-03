@@ -439,11 +439,24 @@ final class WASIComponentWaitableSet {
 
   void _completePendingWaiters() {
     while (_waiters.isNotEmpty) {
-      final event = poll();
-      if (event.isNone) {
+      final waitable = _firstPendingWaitable();
+      if (waitable == null) {
         return;
       }
       final waiter = _waiters.removeFirst();
+      late final WASIComponentWaitableEvent event;
+      try {
+        event = waitable.takePendingEvent();
+      } on Object catch (error, stackTrace) {
+        if (!waiter.isCompleted) {
+          waiter.completeError(error, stackTrace);
+        }
+        continue;
+      }
+      if (event.isNone) {
+        _waiters.addFirst(waiter);
+        return;
+      }
       if (!waiter.isCompleted) {
         waiter.complete(event);
       }

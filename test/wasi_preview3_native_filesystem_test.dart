@@ -32,6 +32,124 @@ void main() {
     );
   });
 
+  test('sets fractional pre-epoch timestamps through POSIX timeval', () async {
+    if (Platform.isWindows) {
+      markTestSkipped('POSIX timeval semantics are not available on Windows.');
+      return;
+    }
+    final directory = Directory.systemTemp.createTempSync(
+      'wasd-p3-pre-epoch-time-',
+    );
+    addTearDown(() => directory.deleteSync(recursive: true));
+    final file = File('${directory.path}/old.txt')..writeAsStringSync('old');
+    final host = WASIPreview3NativeFilesystemHost(
+      preopens: {'/': directory.path},
+      canMutate: true,
+    );
+    final root = await _preopen(host);
+    final handle = _okHandle(
+      await _open(host, root, 'old.txt', flags: _flags(['write'])),
+    );
+    addTearDown(
+      () => host.table.dropNamed(
+        'wasi:filesystem/types@0.3.0.descriptor',
+        handle,
+      ),
+    );
+
+    final result =
+        await _invoke(host, 'descriptor.set-times', [
+              handle,
+              _variant('no-change'),
+              _timestamp(-1, 999999000),
+            ])
+            as WasmComponentValueData;
+
+    expect(result.isOk, isTrue);
+    expect(
+      file.statSync().modified.toUtc().microsecondsSinceEpoch,
+      inInclusiveRange(-1000, -1),
+    );
+  });
+
+  test('sets timestamps through an unlinked writable descriptor', () async {
+    if (Platform.isWindows) {
+      markTestSkipped('POSIX unlink semantics are not available on Windows.');
+      return;
+    }
+    final directory = Directory.systemTemp.createTempSync(
+      'wasd-p3-unlinked-time-',
+    );
+    addTearDown(() => directory.deleteSync(recursive: true));
+    File('${directory.path}/source.txt').writeAsStringSync('source');
+    final alias = File('${directory.path}/alias.txt');
+    final host = WASIPreview3NativeFilesystemHost(
+      preopens: {'/': directory.path},
+      canMutate: true,
+    );
+    final root = await _preopen(host);
+    expect(
+      (await _invoke(host, 'descriptor.link-at', [
+                root,
+                _flags([]),
+                'source.txt',
+                root,
+                'alias.txt',
+              ])
+              as WasmComponentValueData)
+          .isOk,
+      isTrue,
+    );
+    final handle = _okHandle(
+      await _open(host, root, 'source.txt', flags: _flags(['write'])),
+    );
+    addTearDown(
+      () => host.table.dropNamed(
+        'wasi:filesystem/types@0.3.0.descriptor',
+        handle,
+      ),
+    );
+    expect(
+      (await _invoke(host, 'descriptor.unlink-file-at', [root, 'source.txt'])
+              as WasmComponentValueData)
+          .isOk,
+      isTrue,
+    );
+    final before = alias.statSync();
+
+    final modificationResult =
+        await _invoke(host, 'descriptor.set-times', [
+              handle,
+              _variant('no-change'),
+              _timestamp(1234567890, 0),
+            ])
+            as WasmComponentValueData;
+
+    expect(modificationResult.isOk, isTrue);
+    final afterModification = alias.statSync();
+    expect(
+      afterModification.modified.toUtc().microsecondsSinceEpoch,
+      1234567890000000,
+    );
+    expect(afterModification.accessed, before.accessed);
+
+    final accessResult =
+        await _invoke(host, 'descriptor.set-times', [
+              handle,
+              _timestamp(1234567891, 0),
+              _variant('no-change'),
+            ])
+            as WasmComponentValueData;
+
+    expect(accessResult.isOk, isTrue);
+    final afterAccess = alias.statSync();
+    expect(
+      afterAccess.accessed.toUtc().microsecondsSinceEpoch,
+      1234567891000000,
+    );
+    expect(afterAccess.modified, afterModification.modified);
+  });
+
   test(
     'Preview3 native filesystem streams chunks and performs durability',
     () async {
@@ -1040,8 +1158,27 @@ WasmComponentValueData _enum(String label) => WasmComponentValueData(
   label: label,
 );
 
-WasmComponentValueData _variant(String label) => WasmComponentValueData(
+WasmComponentValueData _timestamp(int seconds, int nanoseconds) => _variant(
+  'timestamp',
+  WasmComponentValueData(
+    kind: WasmComponentValueDataKind.record,
+    rawBytes: Uint8List(0),
+    items: [_integer(BigInt.from(seconds)), _integer(nanoseconds)],
+  ),
+);
+
+WasmComponentValueData _variant(
+  String label, [
+  WasmComponentValueData? associatedValue,
+]) => WasmComponentValueData(
   kind: WasmComponentValueDataKind.variant,
   rawBytes: Uint8List(0),
   label: label,
+  associatedValue: associatedValue,
+);
+
+WasmComponentValueData _integer(Object value) => WasmComponentValueData(
+  kind: WasmComponentValueDataKind.integer,
+  rawBytes: Uint8List(0),
+  integer: value,
 );

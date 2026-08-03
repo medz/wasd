@@ -69,7 +69,7 @@ void main() {
       };
       final source = File(
         'lib/src/wasi/component/standard_wit_preview3.dart',
-      ).readAsStringSync();
+      ).readAsStringSync().replaceAll('\r\n', '\n').replaceAll('\r', '\n');
       final matches = RegExp(
         r"const String _wasi([A-Za-z]+)030Source = r'''([\s\S]*?)''';",
       ).allMatches(source).toList();

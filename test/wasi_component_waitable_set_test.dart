@@ -78,6 +78,27 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('propagates pending event failures and removes the waiter', () async {
+      final host = WASIComponentWaitableHost();
+      final set = host.waitableSetNew();
+      final waitable = WASIComponentWaitable('failing-event');
+      final waitableHandle = host.insertWaitable(waitable);
+      host.waitableJoin(waitableHandle, set);
+      final pending = host.waitableSetWait(set);
+      final failure = StateError('pending event failed');
+
+      expect(
+        () => waitable.setPendingEvent(() => throw failure),
+        returnsNormally,
+      );
+      await expectLater(pending, throwsA(same(failure)));
+
+      host.waitableJoin(waitableHandle, 0);
+      host.waitableSetDrop(set);
+      host.dropWaitable(waitableHandle);
+      expect(host.table.activeCount, 0);
+    });
+
     test('transfers waitables between sets and removes them with zero', () {
       final host = WASIComponentWaitableHost();
       final memory = Memory(const MemoryDescriptor(initial: 1));

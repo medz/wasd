@@ -668,7 +668,7 @@ import sys
 child = subprocess.Popen([
     sys.executable,
     '-c',
-    ${json.encode(_stubbornChildProgram)},
+    ${json.encode(_pipeHoldingChildProgram)},
 ])
 with open(${json.encode(childPidPath)}, 'w', encoding='utf-8') as output:
     output.write(str(child.pid))
@@ -886,6 +886,7 @@ with open(args.json_output_location, 'w', encoding='utf-8') as output:
       });
       await _createPreview3Fixture(temp);
       final childPidPath = '${temp.path}/runtime-child.pid';
+      final childReadyPath = '${temp.path}/runtime-child.ready';
       await _writeOfficialRunner(temp, '''
 import subprocess
 import sys
@@ -894,7 +895,7 @@ import time
 child = subprocess.Popen([
     sys.executable,
     '-c',
-    ${json.encode(_stubbornChildProgram)},
+    ${json.encode(_stubbornChildProgram(childReadyPath))},
 ])
 with open(${json.encode(childPidPath)}, 'w', encoding='utf-8') as output:
     output.write(str(child.pid))
@@ -916,6 +917,12 @@ time.sleep(10)
       ]);
       stopwatch.stop();
 
+      final childPid = int.parse(await File(childPidPath).readAsString());
+      addTearDown(() async {
+        if (await _processIsRunning(childPid)) {
+          Process.killPid(childPid, ProcessSignal.sigkill);
+        }
+      });
       expect(result.exitCode, 1, reason: '${result.stdout}\n${result.stderr}');
       expect(stopwatch.elapsed, lessThan(const Duration(seconds: 6)));
       final report =
@@ -924,12 +931,7 @@ time.sleep(10)
       expect(report['status'], 'failed');
       _expectSyntheticFailureTotals(report);
       expect(json.encode(report['failures']), contains('timed out'));
-      final childPid = int.parse(await File(childPidPath).readAsString());
-      addTearDown(() async {
-        if (await _processIsRunning(childPid)) {
-          Process.killPid(childPid, ProcessSignal.sigkill);
-        }
-      });
+      expect(await File(childReadyPath).readAsString(), 'ready');
       expect(await _waitForProcessStop(childPid), isTrue);
     },
   );
@@ -1071,11 +1073,20 @@ Future<bool> _processIsRunning(int pid) async {
   return state.isNotEmpty && !state.startsWith('Z');
 }
 
-const String _stubbornChildProgram = '''
+const String _pipeHoldingChildProgram = '''
+import time
+
+time.sleep(10)
+''';
+
+String _stubbornChildProgram(String readyPath) =>
+    '''
 import signal
 import time
 
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
+with open(${json.encode(readyPath)}, 'w', encoding='utf-8') as output:
+    output.write('ready')
 time.sleep(10)
 ''';
 

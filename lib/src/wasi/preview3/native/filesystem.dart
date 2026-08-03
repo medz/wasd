@@ -772,9 +772,83 @@ void _writePosixTimeval(
   int index,
   DateTime value,
 ) {
-  final microseconds = value.toUtc().microsecondsSinceEpoch;
-  times[index].tvSec = microseconds ~/ 1000000;
-  times[index].tvUsec = microseconds.remainder(1000000);
+  final parts = _posixTimeParts(value);
+  times[index].tvSec = parts.seconds;
+  times[index].tvUsec = parts.microseconds;
+}
+
+({int seconds, int microseconds}) _posixTimeParts(DateTime value) {
+  final totalMicroseconds = value.toUtc().microsecondsSinceEpoch;
+  var seconds = totalMicroseconds ~/ 1000000;
+  var microseconds = totalMicroseconds.remainder(1000000);
+  if (microseconds < 0) {
+    seconds--;
+    microseconds += 1000000;
+  }
+  return (seconds: seconds, microseconds: microseconds);
+}
+
+WASIPreview3FilesystemMutationResult _posixSetNativeDescriptorTimes(
+  int fd,
+  WASIPreview3FilesystemTimestampUpdate update,
+) {
+  if (!update.hasChanges) {
+    return const WASIPreview3FilesystemMutationResult.ok();
+  }
+  final accessTime = _dateTimeFromWasiNanos(update.accessTimeNanos);
+  final modificationTime = _dateTimeFromWasiNanos(update.modificationTimeNanos);
+  if ((update.accessTimeNanos != null && accessTime == null) ||
+      (update.modificationTimeNanos != null && modificationTime == null)) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.invalid,
+    );
+  }
+  late final _PosixFutimensDart futimens;
+  try {
+    futimens = _posixFutimensFunction();
+  } catch (_) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.unsupported,
+    );
+  }
+  final times = calloc<_PosixTimespec>(2);
+  try {
+    _writePosixTimespec(times, 0, accessTime);
+    _writePosixTimespec(times, 1, modificationTime);
+    if (futimens(fd, times) == 0) {
+      return const WASIPreview3FilesystemMutationResult.ok();
+    }
+    int? errorCode;
+    try {
+      errorCode = _posixErrnoLocationFunction()().value;
+    } catch (_) {
+      // Fall back to the stable generic I/O error below.
+    }
+    return WASIPreview3FilesystemMutationResult.error(
+      _nativeMutationError(errorCode) ?? WASIPreview3FilesystemMutationError.io,
+    );
+  } catch (_) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.io,
+    );
+  } finally {
+    calloc.free(times);
+  }
+}
+
+void _writePosixTimespec(
+  ffi.Pointer<_PosixTimespec> times,
+  int index,
+  DateTime? value,
+) {
+  if (value == null) {
+    times[index].tvSec = 0;
+    times[index].tvNsec = _posixUtimeOmit;
+    return;
+  }
+  final parts = _posixTimeParts(value);
+  times[index].tvSec = parts.seconds;
+  times[index].tvNsec = parts.microseconds * 1000;
 }
 
 DateTime? _dateTimeFromWasiNanos(BigInt? nanos) {
@@ -1109,6 +1183,7 @@ _PosixCloseDart? _cachedPosixClose;
 _PosixErrnoLocationDart? _cachedPosixErrnoLocation;
 _PosixLinkDart? _cachedPosixLink;
 _PosixUtimesDart? _cachedPosixUtimes;
+_PosixFutimensDart? _cachedPosixFutimens;
 _PosixLstatDart? _cachedPosixLstat;
 _WindowsCreateHardLinkDart? _cachedWindowsCreateHardLink;
 
@@ -1149,6 +1224,10 @@ _PosixLinkDart _posixLinkFunction() => _cachedPosixLink ??= _openPosixCLibrary()
 _PosixUtimesDart _posixUtimesFunction() =>
     _cachedPosixUtimes ??= _openPosixCLibrary()
         .lookupFunction<_PosixUtimesNative, _PosixUtimesDart>('utimes');
+
+_PosixFutimensDart _posixFutimensFunction() =>
+    _cachedPosixFutimens ??= _openPosixCLibrary()
+        .lookupFunction<_PosixFutimensNative, _PosixFutimensDart>('futimens');
 
 _PosixLstatDart _posixLstatFunction(String symbol) =>
     _cachedPosixLstat ??= _openPosixCLibrary()
@@ -1195,6 +1274,10 @@ typedef _PosixUtimesNative =
 typedef _PosixUtimesDart =
     int Function(ffi.Pointer<Utf8>, ffi.Pointer<_PosixTimeval>);
 
+typedef _PosixFutimensNative =
+    ffi.Int32 Function(ffi.Int32, ffi.Pointer<_PosixTimespec>);
+typedef _PosixFutimensDart = int Function(int, ffi.Pointer<_PosixTimespec>);
+
 typedef _PosixLstatNative =
     ffi.Int32 Function(ffi.Pointer<Utf8>, ffi.Pointer<ffi.Void>);
 typedef _PosixLstatDart =
@@ -1210,6 +1293,9 @@ typedef _WindowsCreateHardLinkDart =
     int Function(ffi.Pointer<Utf16>, ffi.Pointer<Utf16>, ffi.Pointer<ffi.Void>);
 
 const int _posixOpenWriteOnly = 1;
+final int _posixUtimeOmit = io.Platform.isLinux || io.Platform.isAndroid
+    ? (1 << 30) - 2
+    : -2;
 final BigInt _maxI64 = (BigInt.one << 63) - BigInt.one;
 const int _hostStatBufferSize = 256;
 
@@ -1238,6 +1324,14 @@ final class _PosixTimeval extends ffi.Struct {
 
   @ffi.IntPtr()
   external int tvUsec;
+}
+
+final class _PosixTimespec extends ffi.Struct {
+  @ffi.IntPtr()
+  external int tvSec;
+
+  @ffi.IntPtr()
+  external int tvNsec;
 }
 
 final class _NativeDirectoryContext {
@@ -1875,9 +1969,16 @@ final class _NativeFileState {
 
   WASIPreview3FilesystemMutationResult setTimes(
     WASIPreview3FilesystemTimestampUpdate update,
-  ) => _linked
-      ? _setNativePathTimes(_path, update)
-      : const WASIPreview3FilesystemMutationResult.ok();
+  ) {
+    if (_linked) return _setNativePathTimes(_path, update);
+    final fd = _handles.writer;
+    if (fd < 0) {
+      return const WASIPreview3FilesystemMutationResult.error(
+        WASIPreview3FilesystemMutationError.badDescriptor,
+      );
+    }
+    return _posixSetNativeDescriptorTimes(fd, update);
+  }
 
   void rename(String path) {
     _path = path;
