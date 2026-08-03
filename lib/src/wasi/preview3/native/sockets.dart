@@ -10,8 +10,8 @@ import 'socket_options.dart';
 /// Dart VM-backed WASI 0.3 sockets host.
 ///
 /// Synchronous WIT socket calls are exposed as pending Dart callbacks while
-/// `dart:io` obtains the real OS endpoint. TCP bind keeps an opaque
-/// [io.ServerSocket] reservation until listen or a bound connect consumes it.
+/// `dart:io` obtains the real OS endpoint. Explicit TCP bind is unsupported
+/// because [io.ServerSocket.bind] starts listening before WASI `listen`.
 final class WASIPreview3NativeSocketsHost extends WASIPreview3SocketsHost {
   /// Creates a Preview3 sockets host backed by `dart:io`.
   WASIPreview3NativeSocketsHost({
@@ -43,35 +43,11 @@ final class _NativeSocketsBackend
   WASIPreview3SocketOperation<WASIPreview3TcpBinding> startTcpBind(
     WASIPreview3IpSocketAddress localAddress, {
     required BigInt backlog,
-  }) {
-    try {
-      final future =
-          io.ServerSocket.bind(
-            _internetAddress(localAddress),
-            localAddress.port,
-            backlog: _backlog(backlog),
-            v6Only: localAddress.family == WASIPreview3IpAddressFamily.ipv6,
-          ).then<WASIPreview3SocketResult<WASIPreview3TcpBinding>>(
-            (server) => WASIPreview3SocketResult<WASIPreview3TcpBinding>.ok(
-              _NativeTcpBinding(server),
-            ),
-            onError: (Object error) =>
-                WASIPreview3SocketResult<WASIPreview3TcpBinding>.error(
-                  _socketErrorCode(error),
-                ),
-          );
-      return WASIPreview3SocketOperation<WASIPreview3TcpBinding>.pending(
-        future,
-        disposeValue: (binding) => binding.close(),
-      );
-    } on Object catch (error) {
-      return WASIPreview3SocketOperation<WASIPreview3TcpBinding>.completed(
-        WASIPreview3SocketResult<WASIPreview3TcpBinding>.error(
-          _socketErrorCode(error),
-        ),
-      );
-    }
-  }
+  }) => WASIPreview3SocketOperation<WASIPreview3TcpBinding>.completed(
+    const WASIPreview3SocketResult<WASIPreview3TcpBinding>.error(
+      'not-supported',
+    ),
+  );
 
   @override
   WASIPreview3SocketOperation<WASIPreview3TcpConnection> startTcpConnect({
@@ -116,25 +92,10 @@ final class _NativeSocketsBackend
   }) {
     try {
       if (binding != null) {
-        if (binding is! _NativeTcpBinding) {
-          binding.close();
-          return WASIPreview3SocketOperation<WASIPreview3TcpListener>.completed(
-            const WASIPreview3SocketResult<WASIPreview3TcpListener>.error(
-              'invalid-state',
-            ),
-          );
-        }
-        final server = binding.takeServer();
-        if (server == null) {
-          return WASIPreview3SocketOperation<WASIPreview3TcpListener>.completed(
-            const WASIPreview3SocketResult<WASIPreview3TcpListener>.error(
-              'invalid-state',
-            ),
-          );
-        }
+        binding.close();
         return WASIPreview3SocketOperation<WASIPreview3TcpListener>.completed(
-          WASIPreview3SocketResult<WASIPreview3TcpListener>.ok(
-            _createTcpListener(server, backlog),
+          const WASIPreview3SocketResult<WASIPreview3TcpListener>.error(
+            'invalid-state',
           ),
         );
       }
@@ -206,11 +167,7 @@ final class _NativeSocketsBackend
     io.ConnectionTask<io.Socket>? task;
     var cancelled = false;
     final pending = () async {
-      if (binding case final _NativeTcpBinding nativeBinding) {
-        await nativeBinding.release();
-      } else {
-        binding?.close();
-      }
+      binding?.close();
       if (cancelled) throw const io.SocketException('cancelled');
       final started = await io.Socket.startConnect(
         _internetAddress(remoteAddress),
@@ -313,33 +270,6 @@ final class _NativeSocketsBackend
     } on Object catch (error) {
       return _socketErrorCode(error);
     }
-  }
-}
-
-final class _NativeTcpBinding implements WASIPreview3TcpBinding {
-  _NativeTcpBinding(io.ServerSocket server)
-    : _server = server,
-      localAddress = _socketAddress(server.address, server.port);
-
-  io.ServerSocket? _server;
-
-  @override
-  final WASIPreview3IpSocketAddress localAddress;
-
-  io.ServerSocket? takeServer() {
-    final server = _server;
-    _server = null;
-    return server;
-  }
-
-  Future<void> release() async {
-    final server = takeServer();
-    if (server != null) await server.close();
-  }
-
-  @override
-  void close() {
-    unawaited(release());
   }
 }
 

@@ -344,19 +344,18 @@ Preview2 native TCP bind/listen is currently unsupported; Preview2 native TCP
 connect and UDP bind/connect remain available.
 
 Preview3 synchronous socket imports may return pending Dart callbacks; the
-component runner waits for them before returning to the guest. Native TCP bind
-therefore keeps a real OS-assigned `ServerSocket` reservation, including the
-selected port and backlog, until listen takes ownership. A bound TCP connect
-must release that reservation before reconnecting with the selected source
-port because `dart:io` has no bind-only TCP socket; another process can race
-that narrow release/rebind window. Native UDP bind and implicit UDP connect
-likewise wait for a real `RawDatagramSocket` before reporting success. TCP and
-UDP option values are applied through native raw socket options when an active
-endpoint exists. `RawDatagramSocket` has no IPv6-only bind option, so an IPv6
-wildcard UDP socket may also reserve the matching IPv4 port; IPv4 and
-IPv4-mapped datagrams are discarded before they reach that IPv6 guest socket.
-Native addresses with nonzero IPv6 flow info or numeric scope IDs return
-`not-supported` because `dart:io` cannot preserve those fields.
+component runner waits for them before returning to the guest. Explicit native
+TCP bind returns `not-supported` because `dart:io` only exposes
+`ServerSocket.bind`, which starts listening before the separate WASI `listen`
+transition. Unbound TCP listen and connect remain available and wait for real
+OS endpoints before reporting success. Native UDP bind and implicit UDP
+connect likewise wait for a real `RawDatagramSocket`. TCP and UDP option values
+are applied through native raw socket options when an active endpoint exists.
+`RawDatagramSocket` has no IPv6-only bind option, so an IPv6 wildcard UDP socket
+may also reserve the matching IPv4 port; IPv4 and IPv4-mapped datagrams are
+discarded before they reach that IPv6 guest socket. Native addresses with
+nonzero IPv6 flow info or numeric scope IDs return `not-supported` because
+`dart:io` cannot preserve those fields.
 
 Dart `HttpClient` does not expose HTTP trailers. Native outgoing-handler
 requests with trailers and incoming responses that declare trailers therefore

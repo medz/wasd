@@ -11,6 +11,9 @@
 - Add native Preview3 filesystem, socket, outgoing HTTP, command, and HTTP
   service execution while keeping Node.js and browser runner support
   unclaimed.
+- Keep explicit native TCP bind unsupported rather than exposing Dart's
+  already-listening `ServerSocket.bind` as a false WASI bound state; unbound
+  TCP listen and connect remain available.
 - Reject static absolute-path, parent-traversal, and symlink escapes from
   native Preview3 preopens; document that path-based Dart filesystem APIs do
   not prevent races with an external actor replacing path nodes concurrently.

@@ -289,6 +289,92 @@ void main() {
       host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp);
     });
 
+    test('bound TCP listen consumes its binding with the latest backlog', () {
+      final backend = _FakeSocketsBackend();
+      final host = WASIPreview3SocketsHost(backend: backend);
+      final imports = host.imports;
+      final tcp = _createSocket(imports, tcp: true);
+
+      expect(
+        _isOk(
+          imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(<Object?>[
+                tcp,
+                _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
+              ])
+              as WasmComponentValueData,
+        ),
+        isTrue,
+      );
+      final binding = backend.lastBinding!;
+      expect(
+        _isOk(
+          imports['wasi:sockets/types@0.3.0.tcp-socket.set-listen-backlog-size']!(
+                <Object?>[tcp, BigInt.from(7)],
+              )
+              as WasmComponentValueData,
+        ),
+        isTrue,
+      );
+
+      final listened =
+          imports['wasi:sockets/types@0.3.0.tcp-socket.listen']!(<Object?>[tcp])
+              as WasmComponentValueData;
+      final stream = _okValue(listened) as WASIComponentStream<int>;
+
+      expect(backend.listenBinding, same(binding));
+      expect(backend.listenBacklog, BigInt.from(7));
+      expect(binding.closed, isTrue);
+      expect(binding.closeCallCount, 1);
+      expect(
+        imports['wasi:sockets/types@0.3.0.tcp-socket.get-is-listening']!(
+          <Object?>[tcp],
+        ),
+        isTrue,
+      );
+
+      host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp);
+      stream.readable.drop();
+      stream.writable.drop();
+    });
+
+    test('bound TCP connect consumes its binding exactly once', () async {
+      final backend = _FakeSocketsBackend();
+      final host = WASIPreview3SocketsHost(backend: backend);
+      final imports = host.imports;
+      final tcp = _createSocket(imports, tcp: true);
+
+      expect(
+        _isOk(
+          imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(<Object?>[
+                tcp,
+                _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
+              ])
+              as WasmComponentValueData,
+        ),
+        isTrue,
+      );
+      final binding = backend.lastBinding!;
+
+      expect(
+        _isOk(
+          await imports['wasi:sockets/types@0.3.0.tcp-socket.connect']!(
+                <Object?>[
+                  tcp,
+                  _ipv4Socket(port: 8080, a: 127, b: 0, c: 0, d: 1),
+                ],
+              )
+              as WasmComponentValueData,
+        ),
+        isTrue,
+      );
+      expect(backend.connectBinding, same(binding));
+      expect(binding.closed, isTrue);
+      expect(binding.closeCallCount, 1);
+
+      host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp);
+      expect(binding.closeCallCount, 1);
+    });
+
     test(
       'propagates backend errors and closes failed TCP connect state',
       () async {
@@ -1500,72 +1586,57 @@ void main() {
       tags: 'network',
     );
 
-    test(
-      'native TCP bind reserves an OS port and transfers it to listen',
-      () async {
-        final host = WASIPreview3NativeSocketsHost();
-        final imports = host.imports;
-        final tcp = _createSocket(imports, tcp: true);
-        addTearDown(
-          () =>
-              host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp),
-        );
+    test('native TCP bind reports unsupported without fake state', () async {
+      final host = WASIPreview3NativeSocketsHost();
+      final imports = host.imports;
+      final tcp = _createSocket(imports, tcp: true);
+      addTearDown(
+        () => host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp),
+      );
 
-        expect(
-          _isOk(
-            await imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(
-                  <Object?>[
-                    tcp,
-                    _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
-                  ],
-                )
-                as WasmComponentValueData,
-          ),
-          isTrue,
-        );
-        final port = _socketPort(
-          _okValue(
-                imports['wasi:sockets/types@0.3.0.tcp-socket.get-local-address']!(
-                      <Object?>[tcp],
-                    )
-                    as WasmComponentValueData,
+      final bound =
+          await imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(<Object?>[
+                tcp,
+                _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
+              ])
+              as WasmComponentValueData;
+
+      expect(_errorLabel(bound), 'not-supported');
+      expect(
+        _errorLabel(
+          imports['wasi:sockets/types@0.3.0.tcp-socket.get-local-address']!(
+                <Object?>[tcp],
               )
               as WasmComponentValueData,
-        );
-        expect(port, greaterThan(0));
-        await expectLater(
-          io.ServerSocket.bind(io.InternetAddress.loopbackIPv4, port),
-          throwsA(isA<io.SocketException>()),
-        );
-        final accepted =
-            _okValue(
-                  await imports['wasi:sockets/types@0.3.0.tcp-socket.listen']!(
-                        <Object?>[tcp],
-                      )
-                      as WasmComponentValueData,
-                )
-                as WASIComponentStream<int>;
-        expect(
-          _socketPort(
-            _okValue(
-                  imports['wasi:sockets/types@0.3.0.tcp-socket.get-local-address']!(
-                        <Object?>[tcp],
-                      )
-                      as WasmComponentValueData,
-                )
-                as WasmComponentValueData,
-          ),
-          port,
-        );
-        await expectLater(
-          io.ServerSocket.bind(io.InternetAddress.loopbackIPv4, port),
-          throwsA(isA<io.SocketException>()),
-        );
-        accepted.readable.drop();
-        accepted.writable.drop();
-      },
-      tags: 'network',
-    );
+        ),
+        'invalid-state',
+      );
+      expect(
+        imports['wasi:sockets/types@0.3.0.tcp-socket.get-is-listening']!(
+          <Object?>[tcp],
+        ),
+        isFalse,
+      );
+      expect(
+        _errorLabel(
+          await imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(<Object?>[
+                tcp,
+                _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
+              ])
+              as WasmComponentValueData,
+        ),
+        'not-supported',
+      );
+      expect(
+        _isOk(
+          imports['wasi:sockets/types@0.3.0.tcp-socket.set-listen-backlog-size']!(
+                <Object?>[tcp, BigInt.one],
+              )
+              as WasmComponentValueData,
+        ),
+        isTrue,
+      );
+    });
 
     test('native IPv6 TCP listener does not reserve the IPv4 port', () async {
       final host = WASIPreview3NativeSocketsHost();
@@ -1594,68 +1665,6 @@ void main() {
         accepted?.readable.drop();
         accepted?.writable.drop();
       }
-    }, tags: 'network');
-
-    test('native bound TCP connect reuses the reserved source port', () async {
-      final server = await io.ServerSocket.bind(
-        io.InternetAddress.loopbackIPv4,
-        0,
-      );
-      addTearDown(server.close);
-      final accepted = server.first;
-      final host = WASIPreview3NativeSocketsHost();
-      final imports = host.imports;
-      final tcp = _createSocket(imports, tcp: true);
-      addTearDown(
-        () => host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp),
-      );
-
-      expect(
-        _isOk(
-          await imports['wasi:sockets/types@0.3.0.tcp-socket.bind']!(<Object?>[
-                tcp,
-                _ipv4Socket(port: 0, a: 127, b: 0, c: 0, d: 1),
-              ])
-              as WasmComponentValueData,
-        ),
-        isTrue,
-      );
-      final localPort = _socketPort(
-        _okValue(
-              imports['wasi:sockets/types@0.3.0.tcp-socket.get-local-address']!(
-                    <Object?>[tcp],
-                  )
-                  as WasmComponentValueData,
-            )
-            as WasmComponentValueData,
-      );
-      expect(
-        _isOk(
-          await imports['wasi:sockets/types@0.3.0.tcp-socket.connect']!(
-                <Object?>[
-                  tcp,
-                  _ipv4Socket(port: server.port, a: 127, b: 0, c: 0, d: 1),
-                ],
-              )
-              as WasmComponentValueData,
-        ),
-        isTrue,
-      );
-      final peer = await accepted;
-      addTearDown(peer.destroy);
-      expect(peer.remotePort, localPort);
-      expect(
-        _socketPort(
-          _okValue(
-                imports['wasi:sockets/types@0.3.0.tcp-socket.get-local-address']!(
-                      <Object?>[tcp],
-                    )
-                    as WasmComponentValueData,
-              )
-              as WasmComponentValueData,
-        ),
-        localPort,
-      );
     }, tags: 'network');
 
     test('rejects a 65536-byte UDP datagram before binding', () async {
@@ -2220,18 +2229,24 @@ final class _FakeSocketsBackend implements WASIPreview3SocketsBackend {
   final _FakeTcpListener listener;
   final _FakeUdpBinding udp;
   late _FakeTcpConnection connected;
+  _FakeTcpBinding? lastBinding;
+  WASIPreview3TcpBinding? connectBinding;
+  WASIPreview3TcpBinding? listenBinding;
+  BigInt? listenBacklog;
 
   @override
   WASIPreview3SocketOperation<WASIPreview3TcpBinding> startTcpBind(
     WASIPreview3IpSocketAddress localAddress, {
     required BigInt backlog,
-  }) => WASIPreview3SocketOperation<WASIPreview3TcpBinding>.completed(
-    WASIPreview3SocketResult<WASIPreview3TcpBinding>.ok(
-      _FakeTcpBinding(
-        localAddress.port == 0 ? _address(port: 41000) : localAddress,
-      ),
-    ),
-  );
+  }) {
+    final binding = _FakeTcpBinding(
+      localAddress.port == 0 ? _address(port: 41000) : localAddress,
+    );
+    lastBinding = binding;
+    return WASIPreview3SocketOperation<WASIPreview3TcpBinding>.completed(
+      WASIPreview3SocketResult<WASIPreview3TcpBinding>.ok(binding),
+    );
+  }
 
   @override
   WASIPreview3SocketOperation<WASIPreview3TcpConnection> startTcpConnect({
@@ -2239,6 +2254,7 @@ final class _FakeSocketsBackend implements WASIPreview3SocketsBackend {
     WASIPreview3IpSocketAddress? localAddress,
     WASIPreview3TcpBinding? binding,
   }) {
+    connectBinding = binding;
     binding?.close();
     connected = _FakeTcpConnection(
       local: localAddress ?? _address(port: 41001),
@@ -2257,6 +2273,8 @@ final class _FakeSocketsBackend implements WASIPreview3SocketsBackend {
     required BigInt backlog,
     WASIPreview3TcpBinding? binding,
   }) {
+    listenBinding = binding;
+    listenBacklog = backlog;
     binding?.close();
     return WASIPreview3SocketOperation<WASIPreview3TcpListener>.completed(
       WASIPreview3SocketResult<WASIPreview3TcpListener>.ok(listener),

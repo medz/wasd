@@ -175,12 +175,11 @@ P2/P3 work starts only after these P1 gates are green.
     path node; isolation therefore requires preopens that untrusted actors
     cannot mutate.
   - Native sockets boundary: synchronous Preview3 imports may return pending
-    Dart callbacks that the component runner waits for. TCP bind retains a real
-    OS-assigned `ServerSocket` reservation for listen; a bound connect must
-    release it before reconnecting with that source port, leaving a narrow
-    release/rebind race because `dart:io` has no bind-only TCP socket. UDP bind
-    and implicit connect wait for a real `RawDatagramSocket`. Active TCP and UDP
-    endpoints receive the supported raw socket options. Because
+    Dart callbacks that the component runner waits for. Explicit native TCP
+    bind reports `not-supported` because `dart:io` starts listening as part of
+    `ServerSocket.bind`; unbound listen and connect remain available. UDP bind
+    and implicit connect wait for a real `RawDatagramSocket`. Active TCP and
+    UDP endpoints receive the supported raw socket options. Because
     `RawDatagramSocket` has no IPv6-only bind option, an IPv6 wildcard UDP
     socket may also reserve the matching IPv4 port; IPv4 and IPv4-mapped
     datagrams are filtered before they reach that IPv6 guest socket. Native
