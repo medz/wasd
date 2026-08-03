@@ -180,5 +180,17 @@ void main() {
       expect(response.response?.isOk, isTrue);
       expect(response.response?.value?.statusCode, 200);
     });
+
+    test('Preview3 snippets use the public command and service APIs', () {
+      final host = WASI.preview3(args: const ['app.component.wasm']);
+
+      expect(WASIPreview3CommandRunner(host).host, same(host));
+      expect(WASIPreview3ServiceRunner(host).host, same(host));
+      expect(
+        WASIPreview3HttpRequest.noTrailers(headers: WASIPreview3HttpFields())
+          ..pathWithQuery = '/',
+        isA<WASIPreview3HttpRequest>(),
+      );
+    });
   });
 }

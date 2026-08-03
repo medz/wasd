@@ -279,14 +279,25 @@ void main() {
       );
 
       final host = WASIComponentThreadHost();
-      expect(
-        () => host.bindCanonicalDefinition(
-          const WasmComponentCanonicalDefinition(
-            kind: WasmComponentCanonicalKind.threadSuspend,
+      for (final kind in const <WasmComponentCanonicalKind>[
+        WasmComponentCanonicalKind.threadNewIndirect,
+        WasmComponentCanonicalKind.threadResumeLater,
+        WasmComponentCanonicalKind.threadSuspend,
+        WasmComponentCanonicalKind.threadSuspendThenResume,
+        WasmComponentCanonicalKind.threadYieldThenResume,
+        WasmComponentCanonicalKind.threadSuspendThenPromote,
+        WasmComponentCanonicalKind.threadYieldThenPromote,
+        WasmComponentCanonicalKind.threadSpawnRef,
+        WasmComponentCanonicalKind.threadSpawnIndirect,
+      ]) {
+        expect(
+          () => host.bindCanonicalDefinition(
+            WasmComponentCanonicalDefinition(kind: kind),
           ),
-        ),
-        throwsUnsupportedError,
-      );
+          throwsUnsupportedError,
+          reason: kind.name,
+        );
+      }
       expect(
         () => host.bindCanonicalDefinition(
           const WasmComponentCanonicalDefinition(

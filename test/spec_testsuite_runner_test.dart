@@ -5,7 +5,7 @@ import 'package:test/test.dart';
 
 void main() {
   test(
-    'component official runner defaults match pinned wasm-tools features',
+    'component official runner reports wasm-tools validation-only non-execution coverage',
     () async {
       final temp = await Directory.systemTemp.createTemp(
         'wasd_component_official_',
@@ -26,7 +26,7 @@ void main() {
       await fakeWasmTools.writeAsString('''
 #!/bin/sh
 if [ "\$1" = "--version" ]; then
-  echo "wasm-tools 1.252.0"
+  echo "wasm-tools 1.254.0"
   exit 0
 fi
 
@@ -79,6 +79,11 @@ exit 0
           json.decode(await File(jsonPath).readAsString())
               as Map<String, Object?>;
       expect(payload['status'], 'passed');
+      expect(payload['engine'], 'wasm-tools');
+      expect(payload['engine_mode'], 'validation-only');
+      expect(payload['executes_wasm'], isFalse);
+      expect(payload['executes_wasd'], isFalse);
+      expect(payload['engine_version'], contains('1.254.0'));
       expect(
         payload['features'],
         allOf(
@@ -91,10 +96,10 @@ exit 0
   );
 
   test(
-    'component official runner reports pinned async validator xfails',
+    'component official runner can use Wasmtime reference execution',
     () async {
       final temp = await Directory.systemTemp.createTemp(
-        'wasd_component_official_xfail_',
+        'wasd_component_official_reference_',
       );
       addTearDown(() async {
         if (await temp.exists()) {
@@ -108,25 +113,33 @@ exit 0
         '${testsuite.path}/async/cross-abi-calls.wast',
       ).writeAsString('(component)');
 
-      final fakeWasmTools = File('${temp.path}/fake_wasm_tools.sh');
-      await fakeWasmTools.writeAsString('''
+      final fakeWasmtime = File('${temp.path}/fake_wasmtime.sh');
+      await fakeWasmtime.writeAsString('''
 #!/bin/sh
 if [ "\$1" = "--version" ]; then
-  echo "wasm-tools 1.252.0"
+  echo "wasmtime 48.0.0 (e8ac8c27f 2026-08-01)"
   exit 0
 fi
-echo "error: 1 test failures in \$2:" >&2
-echo 'the `async` canonical option requires an async function type' >&2
-exit 1
+test "\$1" = "wast" || exit 2
+args=" \$* "
+case "\$args" in
+  *" -Wcomponent-model-async=y "*) ;;
+  *) echo "missing component async flag" >&2; exit 3 ;;
+esac
+case "\$args" in
+  *" -Wcomponent-model-threading=y "*) ;;
+  *) echo "missing component threading flag" >&2; exit 4 ;;
+esac
+exit 0
 ''');
-      await Process.run('chmod', ['+x', fakeWasmTools.path]);
+      await Process.run('chmod', ['+x', fakeWasmtime.path]);
 
       final jsonPath = '${temp.path}/component.json';
       final result = await Process.run(Platform.resolvedExecutable, [
         'run',
         'tool/component_official_runner.dart',
         '--testsuite-dir=${testsuite.path}',
-        '--wasm-tools-bin=${fakeWasmTools.path}',
+        '--wasmtime-bin=${fakeWasmtime.path}',
         '--include-pattern=^async/cross-abi-calls\\.wast\$',
         '--json=$jsonPath',
         '--markdown=${temp.path}/component.md',
@@ -138,8 +151,13 @@ exit 1
               as Map<String, Object?>;
       final totals = payload['totals'] as Map<String, Object?>;
       expect(payload['status'], 'passed');
+      expect(payload['engine'], 'wasmtime');
+      expect(payload['engine_mode'], 'reference-execution');
+      expect(payload['executes_wasm'], isTrue);
+      expect(payload['executes_wasd'], isFalse);
+      expect(payload['engine_version'], contains('e8ac8c27f'));
       expect(totals['files_failed'], 0);
-      expect(totals['files_xfailed'], 1);
+      expect(totals['files_passed'], 1);
     },
   );
 

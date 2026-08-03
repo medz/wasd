@@ -31,11 +31,13 @@ final class WASIPreview3CliHost {
     Map<String, String> env = const <String, String>{},
     this.initialCwd,
     List<int> stdinData = const <int>[],
+    WASIComponentReadableStream<int>? stdin,
     WASIPreview3CliOutputHandler? stdout,
     WASIPreview3CliOutputHandler? stderr,
   }) : args = List<String>.unmodifiable(args),
        env = Map<String, String>.unmodifiable(env),
        stdinData = Uint8List.fromList(stdinData),
+       _stdin = stdin,
        _stdoutHandler = stdout,
        _stderrHandler = stderr;
 
@@ -51,6 +53,7 @@ final class WASIPreview3CliHost {
   /// Bytes served by `stdin.read-via-stream`.
   final Uint8List stdinData;
 
+  final WASIComponentReadableStream<int>? _stdin;
   final WASIPreview3CliOutputHandler? _stdoutHandler;
   final WASIPreview3CliOutputHandler? _stderrHandler;
   final BytesBuilder _stdoutBytes = BytesBuilder(copy: false);
@@ -146,14 +149,21 @@ final class WASIPreview3CliHost {
   }
 
   List<Object?> _readStdinViaStream() {
-    final stream = WASIComponentStream<int>('stdin');
-    if (stdinData.isNotEmpty) {
-      stream.writable.writeAll(stdinData);
+    final provided = _stdin;
+    late final WASIComponentReadableStream<int> readable;
+    if (provided != null) {
+      readable = provided;
+    } else {
+      final stream = WASIComponentStream<int>('stdin');
+      if (stdinData.isNotEmpty) {
+        stream.writable.writeAll(stdinData);
+      }
+      stream.writable.close();
+      readable = stream.readable;
     }
-    stream.writable.close();
     final result = WASIComponentFuture<WasmComponentValueData>('stdin-result');
     result.writable.complete(_unitOk());
-    return <Object?>[stream, result];
+    return <Object?>[readable, result];
   }
 
   WASIComponentFuture<WasmComponentValueData> _writeViaStream(
@@ -162,27 +172,39 @@ final class WASIPreview3CliHost {
     required BytesBuilder output,
     required WASIPreview3CliOutputHandler? handler,
   }) {
-    final stream = streamValue as WASIComponentStream<int>;
+    final stream = switch (streamValue) {
+      WASIComponentReadableStream<Object?>() => streamValue,
+      WASIComponentStream<Object?>() => streamValue.readable,
+      _ => throw StateError(
+        'Expected a readable WASI component byte stream, got $streamValue.',
+      ),
+    };
     final result = WASIComponentFuture<WasmComponentValueData>('$name-result');
     unawaited(_drainOutput(stream, output, handler, result));
     return result;
   }
 
   Future<void> _drainOutput(
-    WASIComponentStream<int> stream,
+    WASIComponentReadableStream<Object?> stream,
     BytesBuilder output,
     WASIPreview3CliOutputHandler? handler,
     WASIComponentFuture<WasmComponentValueData> result,
   ) async {
     try {
-      while (true) {
-        final chunk = await stream.readable.readWhenAvailable(8192);
-        if (chunk.isEmpty) {
-          break;
+      try {
+        while (true) {
+          final chunk = await stream.readWhenAvailable(8192);
+          if (chunk.isEmpty) {
+            break;
+          }
+          final bytes = Uint8List.fromList(chunk.cast<int>());
+          output.add(bytes);
+          handler?.call(Uint8List.fromList(bytes));
         }
-        final bytes = Uint8List.fromList(chunk);
-        output.add(bytes);
-        handler?.call(Uint8List.fromList(bytes));
+      } on WASIComponentAsyncEndpointStateError catch (error) {
+        if (error.failure != WASIComponentAsyncEndpointFailure.dropped) {
+          rethrow;
+        }
       }
       if (result.writable.canComplete) {
         result.writable.complete(_unitOk());

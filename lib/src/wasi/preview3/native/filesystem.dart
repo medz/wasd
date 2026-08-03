@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:ffi' as ffi;
 import 'dart:io' as io;
 import 'dart:typed_data';
@@ -5,6 +6,7 @@ import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 
 import '../filesystem.dart';
+import 'stat_layout.dart';
 
 /// Dart VM-backed WASI 0.3 filesystem host.
 final class WASIPreview3NativeFilesystemHost
@@ -15,36 +17,59 @@ final class WASIPreview3NativeFilesystemHost
   WASIPreview3NativeFilesystemHost({
     required Map<String, String> preopens,
     bool canMutate = false,
-  }) : super(
-         preopens: <String, WASIPreview3FilesystemDirectory>{
-           for (final entry in preopens.entries)
-             entry.key: _nativeDirectory(entry.value, canMutate: canMutate),
-         },
-       );
+    super.table,
+  }) : super(preopens: _nativePreopens(preopens, canMutate: canMutate));
+}
+
+Map<String, WASIPreview3FilesystemDirectory> _nativePreopens(
+  Map<String, String> preopens, {
+  required bool canMutate,
+}) {
+  final filesystem = _NativeFilesystemState();
+  return <String, WASIPreview3FilesystemDirectory>{
+    for (final entry in preopens.entries)
+      entry.key: _nativeDirectory(
+        entry.value,
+        canMutate: canMutate,
+        filesystem: filesystem,
+      ),
+  };
 }
 
 WASIPreview3FilesystemDirectory _nativeDirectory(
   String hostPath, {
   required bool canMutate,
+  required _NativeFilesystemState filesystem,
 }) {
   final directory = io.Directory(hostPath).absolute;
   return WASIPreview3FilesystemDirectory.dynamic(
     canMutate: canMutate,
-    mutationContext: _NativeDirectoryContext(directory.path),
+    createdFileCanMutate: canMutate,
+    createdFileSupportsSync: true,
+    createdFileSupportsSyncData: true,
+    mutationContext: _NativeDirectoryContext(directory.path, filesystem),
     metadata: () => _nativeMetadata(directory.path),
-    entries: () =>
-        _listNativeDirectoryEntries(directory.path, canMutate: canMutate),
+    entries: () => _listNativeDirectoryEntries(
+      directory.path,
+      canMutate: canMutate,
+      filesystem: filesystem,
+    ),
     resolveEntry: (name) => _resolveNativeDirectoryEntry(
       directory.path,
       name,
       canMutate: canMutate,
+      filesystem: filesystem,
     ),
     createDirectory: canMutate
         ? (name) => _createNativeDirectoryChild(directory.path, name)
         : null,
     createFile: canMutate
-        ? (name) =>
-              _createNativeFileChild(directory.path, name, canMutate: canMutate)
+        ? (name) => _createNativeFileChild(
+            directory.path,
+            name,
+            canMutate: canMutate,
+            filesystem: filesystem,
+          )
         : null,
     link: canMutate
         ? (oldName, targetDirectory, newName) => _linkNativeChild(
@@ -60,6 +85,7 @@ WASIPreview3FilesystemDirectory _nativeDirectory(
             oldName,
             targetDirectory,
             newName,
+            filesystem,
           )
         : null,
     symlink: canMutate
@@ -74,7 +100,7 @@ WASIPreview3FilesystemDirectory _nativeDirectory(
         ? (name) => _removeNativeDirectoryChild(directory.path, name)
         : null,
     unlinkFile: canMutate
-        ? (name) => _unlinkNativeFileChild(directory.path, name)
+        ? (name) => _unlinkNativeFileChild(directory.path, name, filesystem)
         : null,
   );
 }
@@ -82,6 +108,7 @@ WASIPreview3FilesystemDirectory _nativeDirectory(
 Iterable<WASIPreview3FilesystemDirectoryEntry> _listNativeDirectoryEntries(
   String directoryPath, {
   required bool canMutate,
+  required _NativeFilesystemState filesystem,
 }) sync* {
   final directory = io.Directory(directoryPath);
   if (!directory.existsSync()) {
@@ -92,6 +119,7 @@ Iterable<WASIPreview3FilesystemDirectoryEntry> _listNativeDirectoryEntries(
       _basename(entity.path),
       entity.path,
       canMutate: canMutate,
+      filesystem: filesystem,
     );
     if (entry != null) {
       yield entry;
@@ -103,71 +131,123 @@ WASIPreview3FilesystemDirectoryEntry? _resolveNativeDirectoryEntry(
   String directoryPath,
   String name, {
   required bool canMutate,
+  required _NativeFilesystemState filesystem,
 }) {
   if (!_isSafeNativeChildName(name)) {
     return null;
   }
   final path = _joinNative(directoryPath, name);
-  return _nativeEntryForPath(name, path, canMutate: canMutate);
+  return _nativeEntryForPath(
+    name,
+    path,
+    canMutate: canMutate,
+    filesystem: filesystem,
+  );
 }
 
 WASIPreview3FilesystemDirectoryEntry? _nativeEntryForPath(
   String name,
   String path, {
   required bool canMutate,
+  required _NativeFilesystemState filesystem,
 }) {
   switch (io.FileSystemEntity.typeSync(path, followLinks: false)) {
     case io.FileSystemEntityType.directory:
       return WASIPreview3FilesystemDirectoryEntry.directory(
         name,
-        directory: _nativeDirectory(path, canMutate: canMutate),
+        directory: _nativeDirectory(
+          path,
+          canMutate: canMutate,
+          filesystem: filesystem,
+        ),
         metadata: () => _nativeMetadata(path),
       );
     case io.FileSystemEntityType.file:
+      final kind = _nativeFileKind(path);
+      if (kind != WASIPreview3FilesystemDescriptorKind.regularFile) {
+        return WASIPreview3FilesystemDirectoryEntry.special(
+          name,
+          kind: kind,
+          metadata: () => _nativeMetadata(path),
+        );
+      }
+      final file = filesystem.file(path);
       return WASIPreview3FilesystemDirectoryEntry.regularFile(
         name,
         canMutate: canMutate,
-        currentSize: () => BigInt.from(io.File(path).lengthSync()),
-        metadata: () => _nativeMetadata(path),
-        readBytes: (offset) => _readNativeFileFrom(path, offset),
-        writeBytes: canMutate
-            ? (offset, bytes) => _writeNativeFileAt(path, offset, bytes)
-            : null,
-        setSize: canMutate ? (size) => _setNativeFileSize(path, size) : null,
-        setTimes: canMutate
-            ? (update) => _setNativePathTimes(path, update)
-            : null,
+        currentSize: file.currentSize,
+        metadata: file.metadata,
+        readChunk: file.readChunk,
+        writeBytes: canMutate ? file.writeAt : null,
+        advise: (_, _, _) => const WASIPreview3FilesystemMutationResult.ok(),
+        setSize: canMutate ? file.setSize : null,
+        syncData: file.sync,
+        sync: file.sync,
+        setTimes: canMutate ? file.setTimes : null,
       );
     case io.FileSystemEntityType.link:
+      final target = io.Link(path).targetSync();
       return WASIPreview3FilesystemDirectoryEntry.symbolicLink(
         name,
-        target: io.Link(path).targetSync(),
+        target: target,
+        metadata: () => _nativeMetadata(
+          path,
+          symlinkFallbackSize: BigInt.from(utf8.encode(target).length),
+        ),
+      );
+    case io.FileSystemEntityType.pipe:
+      return WASIPreview3FilesystemDirectoryEntry.special(
+        name,
+        kind: WASIPreview3FilesystemDescriptorKind.fifo,
+        metadata: () => _nativeMetadata(path),
+      );
+    case io.FileSystemEntityType.unixDomainSock:
+      return WASIPreview3FilesystemDirectoryEntry.special(
+        name,
+        kind: WASIPreview3FilesystemDescriptorKind.socket,
         metadata: () => _nativeMetadata(path),
       );
     case io.FileSystemEntityType.notFound:
-    case io.FileSystemEntityType.pipe:
-    case io.FileSystemEntityType.unixDomainSock:
       return null;
   }
   return null;
 }
 
-WASIPreview3FilesystemMetadata _nativeMetadata(String path) {
+WASIPreview3FilesystemDescriptorKind _nativeFileKind(String path) {
+  if (io.Platform.isWindows) {
+    return WASIPreview3FilesystemDescriptorKind.regularFile;
+  }
   try {
+    return switch (io.FileStat.statSync(path).mode & 0xf000) {
+      0x1000 => WASIPreview3FilesystemDescriptorKind.fifo,
+      0x2000 => WASIPreview3FilesystemDescriptorKind.characterDevice,
+      0x6000 => WASIPreview3FilesystemDescriptorKind.blockDevice,
+      0x8000 => WASIPreview3FilesystemDescriptorKind.regularFile,
+      0xc000 => WASIPreview3FilesystemDescriptorKind.socket,
+      _ => WASIPreview3FilesystemDescriptorKind.other,
+    };
+  } on io.FileSystemException {
+    return WASIPreview3FilesystemDescriptorKind.other;
+  }
+}
+
+WASIPreview3FilesystemMetadata _nativeMetadata(
+  String path, {
+  BigInt? symlinkFallbackSize,
+}) {
+  try {
+    final metadata = _hostLstatMetadata(path);
+    if (metadata != null) {
+      return metadata;
+    }
+    if (symlinkFallbackSize != null) {
+      return WASIPreview3FilesystemMetadata(size: symlinkFallbackSize);
+    }
     final stat = io.FileStat.statSync(path);
-    final info = _hostLstatInfo(path);
     return WASIPreview3FilesystemMetadata(
-      linkCount: info == null || info.linkCount <= 0
-          ? null
-          : BigInt.from(info.linkCount),
-      size: BigInt.from(stat.size),
-      objectIdentity: info == null ? null : '${info.device}:${info.inode}',
-      accessTimeNanos: info == null
-          ? _dateTimeNanos(stat.accessed)
-          : BigInt.from(info.accessTimeNanos),
-      modificationTimeNanos: info == null
-          ? _dateTimeNanos(stat.modified)
-          : BigInt.from(info.modificationTimeNanos),
+      size: stat.size < 0 ? null : BigInt.from(stat.size),
+      accessTimeNanos: _dateTimeNanos(stat.accessed),
+      modificationTimeNanos: _dateTimeNanos(stat.modified),
       statusChangeTimeNanos: _dateTimeNanos(stat.changed),
     );
   } on io.FileSystemException {
@@ -175,29 +255,22 @@ WASIPreview3FilesystemMetadata _nativeMetadata(String path) {
   }
 }
 
-_HostLstatInfo? _hostLstatInfo(String hostPath) {
-  if (io.Platform.isWindows) {
+WASIPreview3FilesystemMetadata? _hostLstatMetadata(String hostPath) {
+  final abi = ffi.Abi.current();
+  final layout = WASIPreview3NativeStatLayout.forAbi(abi);
+  if (layout == null) {
     return null;
   }
   final pathPointer = hostPath.toNativeUtf8();
   final statBuffer = malloc<ffi.Uint8>(_hostStatBufferSize);
   try {
-    if (_posixLstatFunction()(pathPointer, statBuffer.cast<ffi.Void>()) != 0) {
+    final lstat = _posixLstatFunction(
+      WASIPreview3NativeStatLayout.lstatSymbolForAbi(abi),
+    );
+    if (lstat(pathPointer, statBuffer.cast<ffi.Void>()) != 0) {
       return null;
     }
-    return (
-      device: _readHostStatDevice(statBuffer),
-      inode: _readHostStatInode(statBuffer),
-      linkCount: _readHostStatLinkCount(statBuffer),
-      accessTimeNanos: _readHostStatTimespecNanos(
-        statBuffer,
-        _hostStatAccessTimeOffset,
-      ),
-      modificationTimeNanos: _readHostStatTimespecNanos(
-        statBuffer,
-        _hostStatModificationTimeOffset,
-      ),
-    );
+    return layout.read(statBuffer.asTypedList(_hostStatBufferSize));
   } catch (_) {
     return null;
   } finally {
@@ -206,44 +279,20 @@ _HostLstatInfo? _hostLstatInfo(String hostPath) {
   }
 }
 
-int _readHostStatDevice(ffi.Pointer<ffi.Uint8> statBuffer) {
-  if (io.Platform.isMacOS || io.Platform.isIOS) {
-    return statBuffer.cast<ffi.Uint32>().value;
-  }
-  return statBuffer.cast<ffi.Uint64>().value;
-}
-
-int _readHostStatInode(ffi.Pointer<ffi.Uint8> statBuffer) {
-  return (statBuffer + _hostStatInodeOffset).cast<ffi.Uint64>().value;
-}
-
-int _readHostStatLinkCount(ffi.Pointer<ffi.Uint8> statBuffer) {
-  if (io.Platform.isMacOS || io.Platform.isIOS) {
-    return (statBuffer + _hostStatLinkCountOffset).cast<ffi.Uint16>().value;
-  }
-  return (statBuffer + _hostStatLinkCountOffset).cast<ffi.Uint64>().value;
-}
-
-int _readHostStatTimespecNanos(ffi.Pointer<ffi.Uint8> statBuffer, int offset) {
-  final seconds = (statBuffer + offset).cast<ffi.Int64>().value;
-  final nanos = (statBuffer + offset + 8).cast<ffi.Int64>().value;
-  return seconds * _nanosPerSecond + nanos;
-}
-
 BigInt _dateTimeNanos(DateTime value) =>
     BigInt.from(value.toUtc().microsecondsSinceEpoch) * BigInt.from(1000);
 
-Uint8List _readNativeFileFrom(String path, BigInt offset) {
+Uint8List _readNativeFileChunk(String path, BigInt offset, int maxBytes) {
+  if (offset < BigInt.zero || maxBytes <= 0) {
+    return Uint8List(0);
+  }
   final file = io.File(path).openSync(mode: io.FileMode.read);
   try {
     final length = file.lengthSync();
-    if (offset <= BigInt.zero) {
-      file.setPositionSync(0);
-      return file.readSync(length);
-    }
     final start = offset > BigInt.from(length) ? length : offset.toInt();
     file.setPositionSync(start);
-    return file.readSync(length - start);
+    final remaining = length - start;
+    return file.readSync(remaining < maxBytes ? remaining : maxBytes);
   } finally {
     file.closeSync();
   }
@@ -276,7 +325,7 @@ WASIPreview3FilesystemMutationResult _linkNativeChild(
   }
   if (oldType == io.FileSystemEntityType.directory) {
     return const WASIPreview3FilesystemMutationResult.error(
-      WASIPreview3FilesystemMutationError.isDirectory,
+      WASIPreview3FilesystemMutationError.notPermitted,
     );
   }
   if (io.FileSystemEntity.typeSync(newPath, followLinks: false) !=
@@ -292,8 +341,8 @@ WASIPreview3FilesystemMutationResult _linkNativeChild(
       );
     }
     return const WASIPreview3FilesystemMutationResult.ok();
-  } on io.FileSystemException {
-    return _nativeMutationFailure(newPath);
+  } on io.FileSystemException catch (error) {
+    return _nativeMutationFailure(newPath, error);
   }
 }
 
@@ -302,6 +351,7 @@ WASIPreview3FilesystemMutationResult _renameNativeChild(
   String oldName,
   WASIPreview3FilesystemDirectory targetDirectory,
   String newName,
+  _NativeFilesystemState filesystem,
 ) {
   if (!_isSafeNativeChildName(oldName) || !_isSafeNativeChildName(newName)) {
     return const WASIPreview3FilesystemMutationResult.error(
@@ -322,12 +372,6 @@ WASIPreview3FilesystemMutationResult _renameNativeChild(
       WASIPreview3FilesystemMutationError.noEntry,
     );
   }
-  if (io.FileSystemEntity.typeSync(newPath, followLinks: false) !=
-      io.FileSystemEntityType.notFound) {
-    return const WASIPreview3FilesystemMutationResult.error(
-      WASIPreview3FilesystemMutationError.exist,
-    );
-  }
   try {
     switch (oldType) {
       case io.FileSystemEntityType.directory:
@@ -343,9 +387,10 @@ WASIPreview3FilesystemMutationResult _renameNativeChild(
           WASIPreview3FilesystemMutationError.invalid,
         );
     }
+    filesystem.rename(oldPath, newPath);
     return const WASIPreview3FilesystemMutationResult.ok();
-  } on io.FileSystemException {
-    return _nativeMutationFailure(oldPath);
+  } on io.FileSystemException catch (error) {
+    return _nativeMutationFailure(oldPath, error);
   }
 }
 
@@ -369,8 +414,8 @@ WASIPreview3FilesystemMutationResult _symlinkNativeChild(
   try {
     io.Link(linkPath).createSync(target);
     return const WASIPreview3FilesystemMutationResult.ok();
-  } on io.FileSystemException {
-    return _nativeMutationFailure(linkPath);
+  } on io.FileSystemException catch (error) {
+    return _nativeMutationFailure(linkPath, error);
   }
 }
 
@@ -408,6 +453,7 @@ WASIPreview3FilesystemDirectoryEntry? _createNativeFileChild(
   String directoryPath,
   String name, {
   required bool canMutate,
+  required _NativeFilesystemState filesystem,
 }) {
   if (!_isSafeNativeChildName(name)) {
     return null;
@@ -422,7 +468,12 @@ WASIPreview3FilesystemDirectoryEntry? _createNativeFileChild(
   } on io.FileSystemException {
     return null;
   }
-  return _nativeEntryForPath(name, path, canMutate: canMutate);
+  return _nativeEntryForPath(
+    name,
+    path,
+    canMutate: canMutate,
+    filesystem: filesystem,
+  );
 }
 
 WASIPreview3FilesystemMutationResult _createNativeDirectoryChild(
@@ -444,8 +495,8 @@ WASIPreview3FilesystemMutationResult _createNativeDirectoryChild(
   try {
     io.Directory(path).createSync();
     return const WASIPreview3FilesystemMutationResult.ok();
-  } on io.FileSystemException {
-    return _nativeMutationFailure(path);
+  } on io.FileSystemException catch (error) {
+    return _nativeMutationFailure(path, error);
   }
 }
 
@@ -479,14 +530,15 @@ WASIPreview3FilesystemMutationResult _removeNativeDirectoryChild(
     }
     directory.deleteSync();
     return const WASIPreview3FilesystemMutationResult.ok();
-  } on io.FileSystemException {
-    return _nativeMutationFailure(path);
+  } on io.FileSystemException catch (error) {
+    return _nativeMutationFailure(path, error);
   }
 }
 
 WASIPreview3FilesystemMutationResult _unlinkNativeFileChild(
   String directoryPath,
   String name,
+  _NativeFilesystemState filesystem,
 ) {
   if (!_isSafeNativeChildName(name)) {
     return const WASIPreview3FilesystemMutationResult.error(
@@ -507,9 +559,10 @@ WASIPreview3FilesystemMutationResult _unlinkNativeFileChild(
   }
   try {
     io.File(path).deleteSync();
+    filesystem.unlink(path);
     return const WASIPreview3FilesystemMutationResult.ok();
-  } on io.FileSystemException {
-    return _nativeMutationFailure(path);
+  } on io.FileSystemException catch (error) {
+    return _nativeMutationFailure(path, error);
   }
 }
 
@@ -569,6 +622,36 @@ WASIPreview3FilesystemMutationResult _setNativeFileSize(
   return _rewriteNativeFileSize(path, size.toInt());
 }
 
+WASIPreview3FilesystemMutationResult _syncNativeFile(String path) {
+  final type = io.FileSystemEntity.typeSync(path, followLinks: false);
+  if (type == io.FileSystemEntityType.notFound) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.noEntry,
+    );
+  }
+  if (type != io.FileSystemEntityType.file) {
+    return const WASIPreview3FilesystemMutationResult.error(
+      WASIPreview3FilesystemMutationError.unsupported,
+    );
+  }
+  io.RandomAccessFile? file;
+  try {
+    file = io.File(path).openSync(mode: io.FileMode.append);
+    file.flushSync();
+    file.closeSync();
+    file = null;
+    return const WASIPreview3FilesystemMutationResult.ok();
+  } on io.FileSystemException catch (error) {
+    return _nativeMutationFailure(path, error);
+  } finally {
+    try {
+      file?.closeSync();
+    } on io.FileSystemException {
+      // Preserve the flush/open error result above.
+    }
+  }
+}
+
 WASIPreview3FilesystemMutationResult _setNativePathTimes(
   String path,
   WASIPreview3FilesystemTimestampUpdate update,
@@ -620,8 +703,8 @@ WASIPreview3FilesystemMutationResult _setNativePathTimes(
         );
     }
     return const WASIPreview3FilesystemMutationResult.ok();
-  } on io.FileSystemException {
-    return _nativeMutationFailure(path);
+  } on io.FileSystemException catch (error) {
+    return _nativeMutationFailure(path, error);
   } on ArgumentError {
     return const WASIPreview3FilesystemMutationResult.error(
       WASIPreview3FilesystemMutationError.invalid,
@@ -678,12 +761,15 @@ DateTime? _dateTimeFromWasiNanos(BigInt? nanos) {
   if (nanos == null) {
     return null;
   }
-  if (nanos < BigInt.zero || nanos > _maxI64) {
+  final microseconds = nanos ~/ BigInt.from(1000);
+  if (!microseconds.isValidInt) {
     return null;
   }
   try {
-    final microseconds = (nanos ~/ BigInt.from(1000)).toInt();
-    return DateTime.fromMicrosecondsSinceEpoch(microseconds, isUtc: true);
+    return DateTime.fromMicrosecondsSinceEpoch(
+      microseconds.toInt(),
+      isUtc: true,
+    );
   } on ArgumentError {
     return null;
   } on UnsupportedError {
@@ -779,8 +865,8 @@ WASIPreview3FilesystemMutationResult _rewriteNativeFileAt(
     next.setRange(offset, offset + bytes.length, bytes);
     file.writeAsBytesSync(next, flush: true);
     return const WASIPreview3FilesystemMutationResult.ok();
-  } on io.FileSystemException {
-    return _nativeMutationFailure(path);
+  } on io.FileSystemException catch (error) {
+    return _nativeMutationFailure(path, error);
   }
 }
 
@@ -796,12 +882,19 @@ WASIPreview3FilesystemMutationResult _rewriteNativeFileSize(
     next.setRange(0, preserved, existing);
     file.writeAsBytesSync(next, flush: true);
     return const WASIPreview3FilesystemMutationResult.ok();
-  } on io.FileSystemException {
-    return _nativeMutationFailure(path);
+  } on io.FileSystemException catch (error) {
+    return _nativeMutationFailure(path, error);
   }
 }
 
-WASIPreview3FilesystemMutationResult _nativeMutationFailure(String path) {
+WASIPreview3FilesystemMutationResult _nativeMutationFailure(
+  String path, [
+  io.FileSystemException? exception,
+]) {
+  final mapped = _nativeMutationError(exception?.osError?.errorCode);
+  if (mapped != null) {
+    return WASIPreview3FilesystemMutationResult.error(mapped);
+  }
   final type = io.FileSystemEntity.typeSync(path, followLinks: false);
   return switch (type) {
     io.FileSystemEntityType.notFound =>
@@ -815,6 +908,103 @@ WASIPreview3FilesystemMutationResult _nativeMutationFailure(String path) {
     _ => const WASIPreview3FilesystemMutationResult.error(
       WASIPreview3FilesystemMutationError.io,
     ),
+  };
+}
+
+WASIPreview3FilesystemMutationError? _nativeMutationError(int? errorCode) {
+  if (errorCode == null) {
+    return null;
+  }
+  if (io.Platform.isWindows) {
+    return switch (errorCode) {
+      2 || 3 => WASIPreview3FilesystemMutationError.noEntry,
+      5 => WASIPreview3FilesystemMutationError.access,
+      32 => WASIPreview3FilesystemMutationError.busy,
+      80 || 183 => WASIPreview3FilesystemMutationError.exist,
+      112 => WASIPreview3FilesystemMutationError.insufficientSpace,
+      206 => WASIPreview3FilesystemMutationError.nameTooLong,
+      267 => WASIPreview3FilesystemMutationError.notDirectory,
+      _ => null,
+    };
+  }
+  final darwin = io.Platform.isMacOS || io.Platform.isIOS;
+  if (darwin) {
+    return switch (errorCode) {
+      1 => WASIPreview3FilesystemMutationError.notPermitted,
+      2 => WASIPreview3FilesystemMutationError.noEntry,
+      4 => WASIPreview3FilesystemMutationError.interrupted,
+      5 => WASIPreview3FilesystemMutationError.io,
+      6 => WASIPreview3FilesystemMutationError.noSuchDevice,
+      9 => WASIPreview3FilesystemMutationError.badDescriptor,
+      11 => WASIPreview3FilesystemMutationError.deadlock,
+      12 => WASIPreview3FilesystemMutationError.insufficientMemory,
+      13 => WASIPreview3FilesystemMutationError.access,
+      16 => WASIPreview3FilesystemMutationError.busy,
+      17 => WASIPreview3FilesystemMutationError.exist,
+      18 => WASIPreview3FilesystemMutationError.crossDevice,
+      19 => WASIPreview3FilesystemMutationError.noDevice,
+      20 => WASIPreview3FilesystemMutationError.notDirectory,
+      21 => WASIPreview3FilesystemMutationError.isDirectory,
+      22 => WASIPreview3FilesystemMutationError.invalid,
+      25 => WASIPreview3FilesystemMutationError.noTty,
+      26 => WASIPreview3FilesystemMutationError.textFileBusy,
+      27 => WASIPreview3FilesystemMutationError.fileTooLarge,
+      28 => WASIPreview3FilesystemMutationError.insufficientSpace,
+      29 => WASIPreview3FilesystemMutationError.invalidSeek,
+      30 => WASIPreview3FilesystemMutationError.readOnly,
+      31 => WASIPreview3FilesystemMutationError.tooManyLinks,
+      32 => WASIPreview3FilesystemMutationError.pipe,
+      36 => WASIPreview3FilesystemMutationError.inProgress,
+      37 => WASIPreview3FilesystemMutationError.already,
+      40 => WASIPreview3FilesystemMutationError.messageSize,
+      62 => WASIPreview3FilesystemMutationError.loop,
+      63 => WASIPreview3FilesystemMutationError.nameTooLong,
+      66 => WASIPreview3FilesystemMutationError.notEmpty,
+      69 => WASIPreview3FilesystemMutationError.quota,
+      77 => WASIPreview3FilesystemMutationError.noLock,
+      84 => WASIPreview3FilesystemMutationError.overflow,
+      102 => WASIPreview3FilesystemMutationError.unsupported,
+      104 => WASIPreview3FilesystemMutationError.notRecoverable,
+      _ => null,
+    };
+  }
+  return switch (errorCode) {
+    1 => WASIPreview3FilesystemMutationError.notPermitted,
+    2 => WASIPreview3FilesystemMutationError.noEntry,
+    4 => WASIPreview3FilesystemMutationError.interrupted,
+    5 => WASIPreview3FilesystemMutationError.io,
+    6 => WASIPreview3FilesystemMutationError.noSuchDevice,
+    9 => WASIPreview3FilesystemMutationError.badDescriptor,
+    12 => WASIPreview3FilesystemMutationError.insufficientMemory,
+    13 => WASIPreview3FilesystemMutationError.access,
+    16 => WASIPreview3FilesystemMutationError.busy,
+    17 => WASIPreview3FilesystemMutationError.exist,
+    18 => WASIPreview3FilesystemMutationError.crossDevice,
+    19 => WASIPreview3FilesystemMutationError.noDevice,
+    20 => WASIPreview3FilesystemMutationError.notDirectory,
+    21 => WASIPreview3FilesystemMutationError.isDirectory,
+    22 => WASIPreview3FilesystemMutationError.invalid,
+    25 => WASIPreview3FilesystemMutationError.noTty,
+    26 => WASIPreview3FilesystemMutationError.textFileBusy,
+    27 => WASIPreview3FilesystemMutationError.fileTooLarge,
+    28 => WASIPreview3FilesystemMutationError.insufficientSpace,
+    29 => WASIPreview3FilesystemMutationError.invalidSeek,
+    30 => WASIPreview3FilesystemMutationError.readOnly,
+    31 => WASIPreview3FilesystemMutationError.tooManyLinks,
+    32 => WASIPreview3FilesystemMutationError.pipe,
+    35 => WASIPreview3FilesystemMutationError.deadlock,
+    36 => WASIPreview3FilesystemMutationError.nameTooLong,
+    37 => WASIPreview3FilesystemMutationError.noLock,
+    39 => WASIPreview3FilesystemMutationError.notEmpty,
+    40 => WASIPreview3FilesystemMutationError.loop,
+    75 => WASIPreview3FilesystemMutationError.overflow,
+    90 => WASIPreview3FilesystemMutationError.messageSize,
+    95 => WASIPreview3FilesystemMutationError.unsupported,
+    114 => WASIPreview3FilesystemMutationError.already,
+    115 => WASIPreview3FilesystemMutationError.inProgress,
+    122 => WASIPreview3FilesystemMutationError.quota,
+    131 => WASIPreview3FilesystemMutationError.notRecoverable,
+    _ => null,
   };
 }
 
@@ -924,9 +1114,9 @@ _PosixUtimesDart _posixUtimesFunction() =>
     _cachedPosixUtimes ??= _openPosixCLibrary()
         .lookupFunction<_PosixUtimesNative, _PosixUtimesDart>('utimes');
 
-_PosixLstatDart _posixLstatFunction() =>
+_PosixLstatDart _posixLstatFunction(String symbol) =>
     _cachedPosixLstat ??= _openPosixCLibrary()
-        .lookupFunction<_PosixLstatNative, _PosixLstatDart>('lstat');
+        .lookupFunction<_PosixLstatNative, _PosixLstatDart>(symbol);
 
 _WindowsCreateHardLinkDart _windowsCreateHardLinkFunction() =>
     _cachedWindowsCreateHardLink ??= ffi.DynamicLibrary.open('kernel32.dll')
@@ -979,14 +1169,6 @@ typedef _WindowsCreateHardLinkDart =
 
 const int _posixOpenWriteOnly = 1;
 final BigInt _maxI64 = (BigInt.one << 63) - BigInt.one;
-int get _hostStatAccessTimeOffset =>
-    io.Platform.isMacOS || io.Platform.isIOS ? 32 : 72;
-int get _hostStatModificationTimeOffset =>
-    io.Platform.isMacOS || io.Platform.isIOS ? 48 : 88;
-const int _hostStatInodeOffset = 8;
-int get _hostStatLinkCountOffset =>
-    io.Platform.isMacOS || io.Platform.isIOS ? 6 : 16;
-const int _nanosPerSecond = 1000000000;
 const int _hostStatBufferSize = 256;
 
 final class _PosixTimeval extends ffi.Struct {
@@ -998,15 +1180,123 @@ final class _PosixTimeval extends ffi.Struct {
 }
 
 final class _NativeDirectoryContext {
-  const _NativeDirectoryContext(this.path);
+  const _NativeDirectoryContext(this.path, this.filesystem);
 
   final String path;
+  final _NativeFilesystemState filesystem;
 }
 
-typedef _HostLstatInfo = ({
-  int device,
-  int inode,
-  int linkCount,
-  int accessTimeNanos,
-  int modificationTimeNanos,
-});
+final class _NativeFilesystemState {
+  final Map<String, _NativeFileState> _files = <String, _NativeFileState>{};
+
+  _NativeFileState file(String path) =>
+      _files.putIfAbsent(path, () => _NativeFileState(path));
+
+  void rename(String oldPath, String newPath) {
+    _files.remove(newPath)?.unlink();
+    final file = _files.remove(oldPath);
+    if (file == null) {
+      return;
+    }
+    file.rename(newPath);
+    _files[newPath] = file;
+  }
+
+  void unlink(String path) {
+    _files.remove(path)?.unlink();
+  }
+}
+
+final class _NativeFileState {
+  _NativeFileState(this._path) : _knownSize = _nativeFileSize(_path);
+
+  String _path;
+  BigInt _knownSize;
+  bool _linked = true;
+
+  BigInt currentSize() {
+    if (_linked) {
+      _knownSize = _nativeFileSize(_path, fallback: _knownSize);
+    }
+    return _knownSize;
+  }
+
+  WASIPreview3FilesystemMetadata metadata() {
+    if (!_linked) {
+      return WASIPreview3FilesystemMetadata(size: _knownSize);
+    }
+    final metadata = _nativeMetadata(_path);
+    final size = metadata.size;
+    if (size != null) {
+      _knownSize = size;
+    }
+    return metadata;
+  }
+
+  Uint8List readChunk(BigInt offset, int maxBytes) =>
+      _linked ? _readNativeFileChunk(_path, offset, maxBytes) : Uint8List(0);
+
+  WASIPreview3FilesystemMutationResult writeAt(BigInt offset, Uint8List bytes) {
+    if (!_linked) {
+      final end = offset + BigInt.from(bytes.length);
+      if (end > _maxI64) {
+        return const WASIPreview3FilesystemMutationResult.error(
+          WASIPreview3FilesystemMutationError.fileTooLarge,
+        );
+      }
+      if (end > _knownSize) {
+        _knownSize = end;
+      }
+      return const WASIPreview3FilesystemMutationResult.ok();
+    }
+    final result = _writeNativeFileAt(_path, offset, bytes);
+    if (result.isOk) {
+      currentSize();
+    }
+    return result;
+  }
+
+  WASIPreview3FilesystemMutationResult setSize(BigInt size) {
+    if (!_linked) {
+      if (size < BigInt.zero || size > _maxI64) {
+        return const WASIPreview3FilesystemMutationResult.error(
+          WASIPreview3FilesystemMutationError.invalid,
+        );
+      }
+      _knownSize = size;
+      return const WASIPreview3FilesystemMutationResult.ok();
+    }
+    final result = _setNativeFileSize(_path, size);
+    if (result.isOk) {
+      _knownSize = size;
+    }
+    return result;
+  }
+
+  WASIPreview3FilesystemMutationResult sync() => _linked
+      ? _syncNativeFile(_path)
+      : const WASIPreview3FilesystemMutationResult.ok();
+
+  WASIPreview3FilesystemMutationResult setTimes(
+    WASIPreview3FilesystemTimestampUpdate update,
+  ) => _linked
+      ? _setNativePathTimes(_path, update)
+      : const WASIPreview3FilesystemMutationResult.ok();
+
+  void rename(String path) {
+    _path = path;
+  }
+
+  void unlink() {
+    currentSize();
+    _linked = false;
+  }
+}
+
+BigInt _nativeFileSize(String path, {BigInt? fallback}) {
+  try {
+    return BigInt.from(io.File(path).lengthSync());
+  } on io.FileSystemException {
+    return fallback ?? BigInt.zero;
+  }
+}

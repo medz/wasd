@@ -1,4 +1,5 @@
 import '../../wasm/backend/native/interpreter/component.dart';
+import 'async_host.dart';
 import 'resource_host.dart';
 import 'string_memory.dart';
 import 'value_memory.dart';
@@ -133,6 +134,7 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
       handleKind = null,
       resourceTypeIndex = null,
+      asyncTypeIndex = null,
       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Flags bitset flat layout.
@@ -146,6 +148,7 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
       handleKind = null,
       resourceTypeIndex = null,
+      asyncTypeIndex = null,
       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Enum discriminant flat layout.
@@ -160,6 +163,7 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
        handleKind = null,
        resourceTypeIndex = null,
+       asyncTypeIndex = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Dynamic list `(ptr, len)` flat layout.
@@ -174,6 +178,7 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
        handleKind = null,
        resourceTypeIndex = null,
+       asyncTypeIndex = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Option tag plus payload flat layout.
@@ -188,6 +193,7 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
        handleKind = null,
        resourceTypeIndex = null,
+       asyncTypeIndex = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Result tag plus the maximum ok/error payload flat layout.
@@ -202,6 +208,7 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
        handleKind = null,
        resourceTypeIndex = null,
+       asyncTypeIndex = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Variant tag plus the maximum case payload flat layout.
@@ -216,6 +223,7 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        error = null,
        handleKind = null,
        resourceTypeIndex = null,
+       asyncTypeIndex = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Resource handle represented by a canonical `u32` scalar.
@@ -230,6 +238,7 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        ok = null,
        error = null,
        cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
+       asyncTypeIndex = null,
        fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Error-context handle represented by a canonical `u32` scalar.
@@ -244,7 +253,23 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
       handleKind = null,
       resourceTypeIndex = null,
+      asyncTypeIndex = null,
       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
+
+  /// Stream or future readable endpoint represented by a canonical `u32`.
+  const WASIComponentCanonicalAdapterFlatValuePlan.asyncValue({
+    required this.kind,
+    required this.asyncTypeIndex,
+  }) : primitive = null,
+       memoryCodec = null,
+       labels = const <String>[],
+       element = null,
+       ok = null,
+       error = null,
+       cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
+       handleKind = null,
+       resourceTypeIndex = null,
+       fields = const <WASIComponentCanonicalAdapterFlatFieldPlan>[];
 
   /// Composite scalar flat layout.
   const WASIComponentCanonicalAdapterFlatValuePlan.composite({
@@ -258,7 +283,8 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
        error = null,
        cases = const <WASIComponentCanonicalAdapterFlatCasePlan>[],
        handleKind = null,
-       resourceTypeIndex = null;
+       resourceTypeIndex = null,
+       asyncTypeIndex = null;
 
   /// Flat layout kind.
   final WASIComponentCanonicalAdapterFlatValueKind kind;
@@ -290,6 +316,9 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
   /// Component resource type index used by resource handle layouts.
   final int? resourceTypeIndex;
 
+  /// Component type index used by stream or future endpoint layouts.
+  final int? asyncTypeIndex;
+
   /// Nested flat fields for composite layouts.
   final List<WASIComponentCanonicalAdapterFlatFieldPlan> fields;
 
@@ -307,7 +336,9 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
       return 2;
     }
     if (kind == WASIComponentCanonicalAdapterFlatValueKind.resource ||
-        kind == WASIComponentCanonicalAdapterFlatValueKind.errorContext) {
+        kind == WASIComponentCanonicalAdapterFlatValueKind.errorContext ||
+        kind == WASIComponentCanonicalAdapterFlatValueKind.stream ||
+        kind == WASIComponentCanonicalAdapterFlatValueKind.future) {
       return 1;
     }
     if (kind == WASIComponentCanonicalAdapterFlatValueKind.option) {
@@ -365,7 +396,9 @@ final class WASIComponentCanonicalAdapterFlatValuePlan {
     if (kind == WASIComponentCanonicalAdapterFlatValueKind.flags ||
         kind == WASIComponentCanonicalAdapterFlatValueKind.enumeration ||
         kind == WASIComponentCanonicalAdapterFlatValueKind.resource ||
-        kind == WASIComponentCanonicalAdapterFlatValueKind.errorContext) {
+        kind == WASIComponentCanonicalAdapterFlatValueKind.errorContext ||
+        kind == WASIComponentCanonicalAdapterFlatValueKind.stream ||
+        kind == WASIComponentCanonicalAdapterFlatValueKind.future) {
       return const <WASIComponentCanonicalAdapterFlatType>[
         WASIComponentCanonicalAdapterFlatType.i32,
       ];
@@ -494,6 +527,12 @@ enum WASIComponentCanonicalAdapterFlatValueKind {
 
   /// Error-context handle represented by a canonical `u32` scalar.
   errorContext,
+
+  /// Stream readable endpoint represented by a canonical `u32` scalar.
+  stream,
+
+  /// Future readable endpoint represented by a canonical `u32` scalar.
+  future,
 }
 
 /// Case in a flat Canonical ABI variant layout.
@@ -551,7 +590,17 @@ List<WASIComponentCanonicalAdapterPlan> componentCanonicalAdapterPlans(
     }
     final functionType = context.functionType;
     final definitions = context.typeDefinitions;
-    final flatLayouts = _FlatLayoutResolver(definitions);
+    final flatLayouts = _FlatLayoutResolver(
+      definitions,
+      typeScope: context.typeScope,
+      asyncTypeIndexFor: (typeIndex, typeScope) =>
+          wasiComponentAsyncValueTypeIndex(
+            component,
+            typeIndex,
+            definitions,
+            sourceTypeScope: typeScope,
+          ),
+    );
 
     final uses = List<WASIComponentResourceUse>.unmodifiable(
       resourceUseList.where((use) => use.canonicalIndex == canonicalIndex),
@@ -643,6 +692,7 @@ WASIComponentCanonicalAdapterValuePlan _valuePlan({
     memoryCodec: WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
       type,
       definitions,
+      typeScope: flatLayouts.typeScope,
     ),
     flatLayout: flatLayout,
     resourceUses: List<WASIComponentResourceUse>.unmodifiable(
@@ -652,15 +702,27 @@ WASIComponentCanonicalAdapterValuePlan _valuePlan({
 }
 
 final class _FlatLayoutResolver {
-  _FlatLayoutResolver(this.definitions);
+  _FlatLayoutResolver(
+    this.definitions, {
+    this.typeScope,
+    this.asyncTypeIndexFor,
+  });
 
   final List<WasmComponentTypeDefinition> definitions;
-  final Map<int, WASIComponentCanonicalAdapterFlatValuePlan?> _cache =
-      <int, WASIComponentCanonicalAdapterFlatValuePlan?>{};
-  final Set<int> _visiting = <int>{};
+  final WasmComponentTypeScope? typeScope;
+  final int? Function(int typeIndex, WasmComponentTypeScope? typeScope)?
+  asyncTypeIndexFor;
+  final Map<Object, WASIComponentCanonicalAdapterFlatValuePlan?> _cache =
+      <Object, WASIComponentCanonicalAdapterFlatValuePlan?>{};
+  final Set<Object> _visiting = <Object>{};
 
   WASIComponentCanonicalAdapterFlatValuePlan? resolveValueType(
     WasmComponentValueType type,
+  ) => _resolveValueType(type, typeScope);
+
+  WASIComponentCanonicalAdapterFlatValuePlan? _resolveValueType(
+    WasmComponentValueType type,
+    WasmComponentTypeScope? scope,
   ) {
     switch (type.kind) {
       case WasmComponentValueTypeKind.primitive:
@@ -673,39 +735,50 @@ final class _FlatLayoutResolver {
             : WASIComponentCanonicalAdapterFlatValuePlan.primitive(primitive);
       case WasmComponentValueTypeKind.typeIndex:
         final typeIndex = type.typeIndex;
+        final definitionContext = scope?.definitionContextAt(typeIndex);
         if (typeIndex == null ||
             typeIndex < 0 ||
-            typeIndex >= definitions.length) {
+            (definitionContext == null && typeIndex >= definitions.length)) {
           return null;
         }
-        if (_cache.containsKey(typeIndex)) {
-          return _cache[typeIndex];
+        final cacheKey = definitionContext ?? typeIndex;
+        if (_cache.containsKey(cacheKey)) {
+          return _cache[cacheKey];
         }
-        if (!_visiting.add(typeIndex)) {
+        if (!_visiting.add(cacheKey)) {
           return null;
         }
-        _cache[typeIndex] = null;
-        final definition = definitions[typeIndex];
+        _cache[cacheKey] = null;
+        final definition =
+            definitionContext?.definition ?? definitions[typeIndex];
         final definedValue = definition.definedValue;
         final memoryCodec =
             WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
               type,
               definitions,
+              typeScope: scope,
             );
         final layout =
             definition.kind == WasmComponentTypeKind.definedValue &&
                 definedValue != null
-            ? _resolveDefinedValue(definedValue, memoryCodec)
+            ? _resolveDefinedValue(
+                typeIndex,
+                definedValue,
+                memoryCodec,
+                definitionContext?.typeScope ?? scope,
+              )
             : null;
-        _visiting.remove(typeIndex);
-        _cache[typeIndex] = layout;
+        _visiting.remove(cacheKey);
+        _cache[cacheKey] = layout;
         return layout;
     }
   }
 
   WASIComponentCanonicalAdapterFlatValuePlan? _resolveDefinedValue(
+    int componentTypeIndex,
     WasmComponentDefinedValueType type,
     WASIComponentCanonicalValueMemoryCodec? memoryCodec,
+    WasmComponentTypeScope? scope,
   ) {
     switch (type.kind) {
       case WasmComponentDefinedValueTypeKind.primitive:
@@ -719,7 +792,7 @@ final class _FlatLayoutResolver {
       case WasmComponentDefinedValueTypeKind.record:
         final fields = <WASIComponentCanonicalAdapterFlatFieldPlan>[];
         for (final field in type.fields) {
-          final layout = resolveValueType(field.type);
+          final layout = _resolveValueType(field.type, scope);
           if (layout == null) {
             return null;
           }
@@ -739,7 +812,7 @@ final class _FlatLayoutResolver {
       case WasmComponentDefinedValueTypeKind.tuple:
         final fields = <WASIComponentCanonicalAdapterFlatFieldPlan>[];
         for (var i = 0; i < type.types.length; i++) {
-          final layout = resolveValueType(type.types[i]);
+          final layout = _resolveValueType(type.types[i], scope);
           if (layout == null) {
             return null;
           }
@@ -762,7 +835,7 @@ final class _FlatLayoutResolver {
         if (elementType == null || fixedLength == null) {
           return null;
         }
-        final elementLayout = resolveValueType(elementType);
+        final elementLayout = _resolveValueType(elementType, scope);
         if (elementLayout == null) {
           return null;
         }
@@ -790,7 +863,7 @@ final class _FlatLayoutResolver {
         if (elementType == null || memoryCodec == null) {
           return null;
         }
-        final elementLayout = resolveValueType(elementType);
+        final elementLayout = _resolveValueType(elementType, scope);
         return elementLayout == null
             ? null
             : WASIComponentCanonicalAdapterFlatValuePlan.list(
@@ -802,7 +875,7 @@ final class _FlatLayoutResolver {
         if (elementType == null) {
           return null;
         }
-        final elementLayout = resolveValueType(elementType);
+        final elementLayout = _resolveValueType(elementType, scope);
         return elementLayout == null
             ? null
             : WASIComponentCanonicalAdapterFlatValuePlan.option(
@@ -811,10 +884,12 @@ final class _FlatLayoutResolver {
       case WasmComponentDefinedValueTypeKind.result:
         final okType = type.okType;
         final errorType = type.errorType;
-        final okLayout = okType == null ? null : resolveValueType(okType);
+        final okLayout = okType == null
+            ? null
+            : _resolveValueType(okType, scope);
         final errorLayout = errorType == null
             ? null
-            : resolveValueType(errorType);
+            : _resolveValueType(errorType, scope);
         if ((okType != null && okLayout == null) ||
             (errorType != null && errorLayout == null)) {
           return null;
@@ -827,7 +902,9 @@ final class _FlatLayoutResolver {
         final cases = <WASIComponentCanonicalAdapterFlatCasePlan>[];
         for (final case_ in type.cases) {
           final caseType = case_.type;
-          final layout = caseType == null ? null : resolveValueType(caseType);
+          final layout = caseType == null
+              ? null
+              : _resolveValueType(caseType, scope);
           if (caseType != null && layout == null) {
             return null;
           }
@@ -856,10 +933,43 @@ final class _FlatLayoutResolver {
           resourceTypeIndex: resourceTypeIndex,
         );
       case WasmComponentDefinedValueTypeKind.stream:
+        final asyncTypeIndex = asyncTypeIndexFor?.call(
+          componentTypeIndex,
+          scope,
+        );
+        if (asyncTypeIndexFor != null && asyncTypeIndex == null) {
+          return null;
+        }
+        return WASIComponentCanonicalAdapterFlatValuePlan.asyncValue(
+          kind: WASIComponentCanonicalAdapterFlatValueKind.stream,
+          asyncTypeIndex: asyncTypeIndex ?? componentTypeIndex,
+        );
       case WasmComponentDefinedValueTypeKind.future:
-        return null;
+        final asyncTypeIndex = asyncTypeIndexFor?.call(
+          componentTypeIndex,
+          scope,
+        );
+        if (asyncTypeIndexFor != null && asyncTypeIndex == null) {
+          return null;
+        }
+        return WASIComponentCanonicalAdapterFlatValuePlan.asyncValue(
+          kind: WASIComponentCanonicalAdapterFlatValueKind.future,
+          asyncTypeIndex: asyncTypeIndex ?? componentTypeIndex,
+        );
     }
   }
+}
+
+/// Resolves the Canonical ABI flat layout for a component [type].
+WASIComponentCanonicalAdapterFlatValuePlan? componentCanonicalFlatLayout(
+  WasmComponentValueType type,
+  List<WasmComponentTypeDefinition> definitions, {
+  WasmComponentTypeScope? typeScope,
+}) {
+  return _FlatLayoutResolver(
+    definitions,
+    typeScope: typeScope,
+  ).resolveValueType(type);
 }
 
 bool _resourceUseBelongsToPath(String resourcePath, String valuePath) {
@@ -882,6 +992,7 @@ WasmComponentFunctionTypeContext? _canonicalAdapterFunctionTypeContext(
           : WasmComponentFunctionTypeContext(
               functionType: functionType,
               typeDefinitions: definitions,
+              typeScope: component.componentTypeIndexScope,
             );
     case WasmComponentCanonicalKind.lower:
       final functionIndex = definition.functionIndex;

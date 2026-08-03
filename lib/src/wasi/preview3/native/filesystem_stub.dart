@@ -7,6 +7,7 @@ final class WASIPreview3NativeFilesystemHost
   WASIPreview3NativeFilesystemHost({
     required Map<String, String> preopens,
     bool canMutate = false,
+    super.table,
   }) : super() {
     throw UnsupportedError(
       'WASIPreview3NativeFilesystemHost requires dart:io.',

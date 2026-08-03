@@ -147,14 +147,11 @@ void main() {
       expect(() => program.invoke(1, <Object?>[handle]), throwsStateError);
     });
 
-    test('invokes task.return through canonical memory', () {
+    test('invokes direct task.return through canonical flat scalars', () {
       final host = WASIComponentCanonicalHost();
       final memory = Memory(const MemoryDescriptor(initial: 1));
       final bytes = Uint8List.view(memory.buffer);
-      final data = ByteData.view(memory.buffer);
       bytes.setAll(96, 'task'.codeUnits);
-      data.setUint32(32, 96, Endian.little);
-      data.setUint32(36, 4, Endian.little);
       final task = host.taskHost.createTask(name: 'canonical-task');
       final program = host.bindCanonicalDefinitions(const [
         WasmComponentCanonicalDefinition(
@@ -177,14 +174,11 @@ void main() {
       ]);
 
       host.taskHost.runWithTask(task, () {
-        expect(
-          program.invokeWithMemory(0, memory, const <Object?>[32]),
-          isNull,
-        );
+        expect(program.invoke(0, const <Object?>[96, 4]), isNull);
       });
 
       expect(task.state, WASIComponentTaskState.returned);
-      expect(task.result, 'task');
+      expect(task.result, const <Object?>[96, 4]);
     });
 
     test('shares table and waitable resolvers across component hosts', () {

@@ -1,10 +1,14 @@
+import 'dart:async';
+
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
+import 'adapter_plan.dart';
 import 'current.dart';
 import 'string_memory.dart';
 import 'subtask.dart';
-import 'value_memory.dart';
 import 'waitable_set.dart';
+
+const int _canonicalMaxFlatTaskReturnValues = 16;
 
 /// Callee-side Component Model task state.
 enum WASIComponentTaskState {
@@ -44,6 +48,7 @@ final class WASIComponentTask {
   final void Function(WASIComponentTask task)? _onCancellationRequested;
   WASIComponentTaskState _state = WASIComponentTaskState.created;
   bool _cancellationRequested = false;
+  Completer<void>? _cancellationRequestedCompleter;
   int _borrowCount = 0;
   bool _hasResult = false;
   Object? _result;
@@ -56,6 +61,14 @@ final class WASIComponentTask {
 
   /// Whether the caller requested cancellation.
   bool get cancellationRequested => _cancellationRequested;
+
+  /// Completes when cooperative cancellation is requested for this task.
+  Future<void> get whenCancellationRequested {
+    if (_cancellationRequested) {
+      return Future<void>.value();
+    }
+    return (_cancellationRequestedCompleter ??= Completer<void>()).future;
+  }
 
   /// Number of outstanding borrows lent to this task.
   int get borrowCount => _borrowCount;
@@ -107,6 +120,7 @@ final class WASIComponentTask {
       return;
     }
     _cancellationRequested = true;
+    _cancellationRequestedCompleter?.complete();
     _onCancellationRequested?.call(this);
   }
 
@@ -177,13 +191,27 @@ final class WASIComponentTaskHost {
     return WASIComponentTask(
       name: name,
       subtask: subtask,
-      onCancellationRequested: (_) => _waitableHost?.requestTaskCancellation(),
+      onCancellationRequested: (task) =>
+          _waitableHost?.requestTaskCancellation(task),
     );
   }
 
   /// Runs [callback] with [task] as the current task.
   T runWithTask<T>(WASIComponentTask task, T Function() callback) {
-    return _currentTask.run(task, callback);
+    final waitableHost = _waitableHost;
+    if (waitableHost == null) {
+      return _currentTask.run(task, callback);
+    }
+    try {
+      return waitableHost.runWithTask(
+        task,
+        () => _currentTask.run(task, callback),
+      );
+    } finally {
+      if (task.state.isResolved) {
+        waitableHost.releaseTask(task);
+      }
+    }
   }
 
   /// Runs [callback] with [task] as the current task until it completes.
@@ -191,7 +219,14 @@ final class WASIComponentTaskHost {
     WASIComponentTask task,
     Future<T> Function() callback,
   ) async {
-    return await _currentTask.runAsync(task, callback);
+    final waitableHost = _waitableHost;
+    if (waitableHost == null) {
+      return await _currentTask.runAsync(task, callback);
+    }
+    return await waitableHost.runWithTaskAsync(
+      task,
+      () => _currentTask.runAsync(task, callback),
+    );
   }
 
   /// Executes `task.return` on the current task.
@@ -208,6 +243,7 @@ final class WASIComponentTaskHost {
   WASIComponentCanonicalTaskOperation bindCanonicalDefinition(
     WasmComponentCanonicalDefinition definition, {
     List<WasmComponentTypeDefinition> typeDefinitions = const [],
+    WasmComponentTypeScope? typeScope,
   }) {
     if (!_isTaskCanonicalKind(definition.kind)) {
       throw UnsupportedError(
@@ -218,9 +254,10 @@ final class WASIComponentTaskHost {
       host: this,
       kind: definition.kind,
       result: definition.result,
-      resultMemoryCodec: _taskReturnResultMemoryCodec(
+      resultFlatLength: _taskReturnResultFlatLength(
         definition,
         typeDefinitions,
+        typeScope,
       ),
       stringEncoding: WASIComponentCanonicalStringEncoding.fromCanonicalOptions(
         definition.options,
@@ -237,7 +274,8 @@ final class WASIComponentTaskHost {
         for (final definition in component.canonicalDefinitions)
           bindCanonicalDefinition(
             definition,
-            typeDefinitions: component.typeDefinitions,
+            typeDefinitions: component.componentTypeIndexDefinitions,
+            typeScope: component.componentTypeIndexScope,
           ),
       ]),
     );
@@ -266,8 +304,21 @@ final class WASIComponentCanonicalTaskProgram {
     switch (operation.kind) {
       case WasmComponentCanonicalKind.taskReturn:
         final hasResult = operation.hasResult;
-        _expectArity(canonicalIndex, args, hasResult ? 1 : 0);
-        operation.taskReturn(result: hasResult ? args.single : null);
+        if (operation.isResultIndirect) {
+          throw StateError(
+            'WASI component canonical task index $canonicalIndex requires '
+            'memory-backed invocation for its indirect result.',
+          );
+        }
+        final expected = operation.resultFlatLength ?? 0;
+        _expectArity(canonicalIndex, args, hasResult ? expected : 0);
+        operation.taskReturn(
+          result: hasResult
+              ? (args.length == 1
+                    ? args.single
+                    : List<Object?>.unmodifiable(args))
+              : null,
+        );
         return null;
       case WasmComponentCanonicalKind.taskCancel:
         _expectArity(canonicalIndex, args, 0);
@@ -294,12 +345,15 @@ final class WASIComponentCanonicalTaskProgram {
           operation.taskReturn();
           return null;
         }
+        if (!operation.isResultIndirect) {
+          throw StateError(
+            'WASI component canonical task index $canonicalIndex has a direct '
+            'result; invoke it with canonical flat arguments.',
+          );
+        }
         _expectArity(canonicalIndex, args, 1);
         operation.taskReturn(
-          result: operation.loadResultFromMemory(
-            memory,
-            _expectPointer(canonicalIndex, args.single),
-          ),
+          result: _expectPointer(canonicalIndex, args.single),
         );
         return null;
       case WasmComponentCanonicalKind.taskCancel:
@@ -329,10 +383,9 @@ final class WASIComponentCanonicalTaskOperation {
     required WASIComponentTaskHost host,
     required this.kind,
     required this.result,
-    required WASIComponentCanonicalValueMemoryCodec? resultMemoryCodec,
+    required this.resultFlatLength,
     required this.stringEncoding,
-  }) : _host = host,
-       _resultMemoryCodec = resultMemoryCodec;
+  }) : _host = host;
 
   final WASIComponentTaskHost _host;
 
@@ -342,7 +395,8 @@ final class WASIComponentCanonicalTaskOperation {
   /// Decoded `task.return` result metadata, if any.
   final WasmComponentCanonicalResult? result;
 
-  final WASIComponentCanonicalValueMemoryCodec? _resultMemoryCodec;
+  /// Number of direct core scalar parameters consumed by `task.return`.
+  final int? resultFlatLength;
 
   /// Canonical string encoding used by memory-backed return values.
   final WASIComponentCanonicalStringEncoding stringEncoding;
@@ -350,22 +404,14 @@ final class WASIComponentCanonicalTaskOperation {
   /// Whether `task.return` expects a result value.
   bool get hasResult => result?.valueType != null;
 
+  /// Whether `task.return` receives one pointer to an indirect result value.
+  bool get isResultIndirect =>
+      (resultFlatLength ?? 0) > _canonicalMaxFlatTaskReturnValues;
+
   /// Executes `task.return`.
   void taskReturn({Object? result}) {
     _requireKind(WasmComponentCanonicalKind.taskReturn);
     _host.taskReturn(result: result, hasResult: hasResult);
-  }
-
-  /// Loads a `task.return` result value from canonical memory.
-  Object? loadResultFromMemory(wasm.Memory memory, int pointer) {
-    _requireKind(WasmComponentCanonicalKind.taskReturn);
-    final codec = _resultMemoryCodec;
-    if (codec == null) {
-      throw UnsupportedError(
-        'WASI component canonical task.return result does not support memory-backed invocation.',
-      );
-    }
-    return codec.load(memory, pointer, stringEncoding: stringEncoding);
   }
 
   /// Executes `task.cancel`.
@@ -387,21 +433,29 @@ bool _isTaskCanonicalKind(WasmComponentCanonicalKind kind) =>
     kind == WasmComponentCanonicalKind.taskReturn ||
     kind == WasmComponentCanonicalKind.taskCancel;
 
-WASIComponentCanonicalValueMemoryCodec? _taskReturnResultMemoryCodec(
+int? _taskReturnResultFlatLength(
   WasmComponentCanonicalDefinition definition,
   List<WasmComponentTypeDefinition> typeDefinitions,
+  WasmComponentTypeScope? typeScope,
 ) {
   if (definition.kind != WasmComponentCanonicalKind.taskReturn) {
     return null;
   }
   final resultType = definition.result?.valueType;
   if (resultType == null) {
-    return null;
+    return 0;
   }
-  return WASIComponentCanonicalValueMemoryCodec.fromValueType(
+  final flatLayout = componentCanonicalFlatLayout(
     resultType,
     typeDefinitions,
+    typeScope: typeScope,
   );
+  if (flatLayout == null) {
+    throw UnsupportedError(
+      'WASI component canonical task.return result has no supported flat layout.',
+    );
+  }
+  return flatLayout.flatLength;
 }
 
 void _expectArity(int canonicalIndex, List<Object?> args, int expected) {
@@ -414,8 +468,8 @@ void _expectArity(int canonicalIndex, List<Object?> args, int expected) {
 }
 
 int _expectPointer(int canonicalIndex, Object? value) {
-  if (value is int && value >= 0) {
-    return value;
+  if (value is int) {
+    return value.toUnsigned(32);
   }
   throw StateError(
     'WASI component canonical task index $canonicalIndex expected a memory pointer.',

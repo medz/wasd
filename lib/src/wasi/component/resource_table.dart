@@ -171,6 +171,42 @@ final class WASIComponentResourceTable {
     return entry.resource;
   }
 
+  /// Transfers an owned [handle] while keeping its direct children alive.
+  ///
+  /// This is reserved for component operations that move a parent resource
+  /// while the contract explicitly keeps previously returned child handles
+  /// valid. Ordinary [take] and [drop] continue to reject live children.
+  /// Direct children become roots in the same resource scope; their own child
+  /// relationships are unchanged.
+  T takeDetachingChildren<T extends Object>(
+    WASIComponentResourceType<T> type,
+    int handle,
+  ) {
+    final entry = _typedEntry<T>(type, handle);
+    if (entry.borrowCount != 0) {
+      throw StateError(
+        'Cannot release borrowed WASI component resource: $handle.',
+      );
+    }
+    final children = <(int, _WASIComponentResourceEntry)>[];
+    for (final childHandle in entry.childHandles) {
+      final child = _entryForHandle(childHandle);
+      if (child == null || child.parentHandle != handle) {
+        throw StateError(
+          'Invalid WASI component child resource: $childHandle.',
+        );
+      }
+      _validateScopeAccess(childHandle, child);
+      children.add((childHandle, child));
+    }
+    for (final (_, child) in children) {
+      child.parentHandle = null;
+    }
+    entry.childHandles.clear();
+    _removeEntry(handle, entry);
+    return entry.resource;
+  }
+
   /// Records that [childHandle] must be released before [parentHandle].
   void attachChild(int parentHandle, int childHandle) {
     if (parentHandle == childHandle) {

@@ -13,9 +13,15 @@ import '../component/adapter_host.dart';
 import '../component/adapter_plan.dart';
 import '../component/host.dart';
 import '../component/string_memory.dart';
+import '../component/subtask.dart';
+import '../component/waitable_set.dart';
+import '../component/wit_adapter.dart';
 import 'cli.dart';
 import 'component_host.dart';
 import 'http.dart';
+import '../preview3/cli.dart';
+import '../preview3/component_host.dart';
+import '../preview3/http.dart';
 
 /// Result returned after executing a WASI Preview2 command component.
 final class WASIPreview2CommandResult {
@@ -36,7 +42,10 @@ final class WASIPreview2CommandRunner {
 
   /// Instantiates [component] and invokes its exported `wasi:cli/run`.
   Future<WASIPreview2CommandResult> run(WasmComponent component) async {
-    final runtime = _Preview2ComponentRuntime(component: component, host: host);
+    final runtime = WASIComponentNativeRuntime.preview2(
+      component: component,
+      host: host,
+    );
     final exitCode = await runtime.runCommand();
     return WASIPreview2CommandResult(exitCode: exitCode);
   }
@@ -56,7 +65,7 @@ final class WASIPreview2ProxyRunner {
     WasmComponent component,
     WASIPreview2HttpIncomingRequest request,
   ) {
-    return _Preview2ComponentRuntime(
+    return WASIComponentNativeRuntime.preview2(
       component: component,
       host: host,
     ).handleProxy(request);
@@ -75,11 +84,32 @@ final class WASIPreview2ComponentExecutionException implements Exception {
   String toString() => message;
 }
 
-final class _Preview2ComponentRuntime {
-  _Preview2ComponentRuntime({required this.component, required this.host});
+/// Native Component Model executor shared by fixed-version WASI runners.
+final class WASIComponentNativeRuntime {
+  /// Creates a native executor for a Preview2 [host].
+  WASIComponentNativeRuntime.preview2({
+    required this.component,
+    required WASIPreview2ComponentHost host,
+  }) : _preview2Host = host,
+       _preview3Host = null;
 
+  /// Creates a native executor for a Preview3 [host].
+  WASIComponentNativeRuntime.preview3({
+    required this.component,
+    required WASIPreview3ComponentHost host,
+  }) : _preview2Host = null,
+       _preview3Host = host;
+
+  /// Component decoded for this execution.
   final WasmComponent component;
-  final WASIPreview2ComponentHost host;
+  final WASIPreview2ComponentHost? _preview2Host;
+  final WASIPreview3ComponentHost? _preview3Host;
+
+  WASIComponentHost get _componentHost =>
+      _preview2Host?.componentHost ?? _preview3Host!.componentHost;
+
+  Map<String, WASIComponentWitAdapterCallback> get _standardImports =>
+      _preview2Host?.standardImports ?? _preview3Host!.standardImports;
 
   final List<ir_module.WasmModule> _coreModules = <ir_module.WasmModule>[];
   final List<_CoreFunction> _coreFunctions = <_CoreFunction>[];
@@ -115,8 +145,10 @@ final class _Preview2ComponentRuntime {
   late final WASIComponentCanonicalAdapterProgram _adapterProgram;
   late final WASIComponentCanonicalAdapterProgram _synchronousAdapterProgram;
   var _decodedTypeDefinitionCount = 0;
+  var _initialized = false;
 
-  Future<int> runCommand() => host.componentHost.table.runScoped(() async {
+  /// Executes the Preview2 command export.
+  Future<int> runCommand() => _componentHost.table.runScoped(() async {
     try {
       _initialize();
       final run = _findCommandRun();
@@ -127,9 +159,30 @@ final class _Preview2ComponentRuntime {
     }
   });
 
+  /// Executes the Preview3 async command export.
+  Future<int> runPreview3Command() => _componentHost.table.runScoped(() async {
+    try {
+      _initialize();
+      final run = _findPreview3CommandRun();
+      final result = await run.invoke(const <Object?>[]);
+      return _runResultExitCode(result);
+    } on WASIPreview3Exit catch (exit) {
+      return exit.statusCode;
+    } on WASIPreview2Exit catch (exit) {
+      return exit.statusCode;
+    }
+  });
+
+  /// Executes a Preview2 HTTP proxy handler export.
   Future<WASIPreview2HttpResponseOutparam> handleProxy(
     WASIPreview2HttpIncomingRequest request,
-  ) => host.componentHost.table.runScoped(() async {
+  ) => _componentHost.table.runScoped(() async {
+    final host = _preview2Host;
+    if (host == null) {
+      throw const WASIPreview2ComponentExecutionException(
+        'Preview2 HTTP proxy execution requires a Preview2 host.',
+      );
+    }
     _initialize();
     final responseOutparam = WASIPreview2HttpResponseOutparam();
     final requestHandle = host.httpHost.insertIncomingRequest(request);
@@ -153,7 +206,41 @@ final class _Preview2ComponentRuntime {
     return responseOutparam;
   });
 
+  /// Executes a Preview3 HTTP service handler export.
+  Future<WASIPreview3HttpResult<WASIPreview3HttpResponse>>
+  handlePreview3Service(WASIPreview3HttpRequest request) =>
+      _componentHost.table.runScoped(() async {
+        final host = _preview3Host;
+        if (host == null) {
+          throw const WASIPreview2ComponentExecutionException(
+            'Preview3 HTTP service execution requires a Preview3 host.',
+          );
+        }
+        _initialize();
+        final requestHandle = host.httpHost.insertRequest(request);
+        final result = await _findPreview3HttpHandler().invoke(<Object?>[
+          requestHandle,
+        ]);
+        if (result is! WasmComponentValueData ||
+            result.kind != WasmComponentValueDataKind.result) {
+          throw WASIPreview2ComponentExecutionException(
+            'wasi:http/handler.handle returned an invalid result.',
+          );
+        }
+        if (!_componentResultIsOk(result)) {
+          return WASIPreview3HttpResult<WASIPreview3HttpResponse>.error(
+            _preview3HttpErrorCode(result.payload),
+          );
+        }
+        return WASIPreview3HttpResult<WASIPreview3HttpResponse>.ok(
+          host.httpHost.takeResponse(_componentResourceHandle(result.payload)),
+        );
+      });
+
   void _initialize() {
+    if (_initialized) {
+      return;
+    }
     final plan = _checkComponent();
     _initializeAdapterCallbacks(plan.adapterPlans);
     _adapterProgram = plan.bindAdapters(
@@ -167,8 +254,10 @@ final class _Preview2ComponentRuntime {
     _binding = plan.bind(
       coreFunctions: _adapterCoreCallbacks,
       componentFunctions: _adapterComponentCallbacks,
+      maxBufferedElementsForStream: _preview3Host == null ? null : (_) => 0,
     );
     _processDefinitions();
+    _initialized = true;
   }
 
   WASIComponentHostBindingPlan _checkComponent() {
@@ -181,7 +270,9 @@ final class _Preview2ComponentRuntime {
         ),
       );
     }
-    final plan = host.prepareComponent(component);
+    final plan =
+        _preview2Host?.prepareComponent(component) ??
+        _preview3Host!.prepareComponent(component);
     if (plan.canBindWithAdapters) {
       return plan.componentPlan;
     }
@@ -217,7 +308,7 @@ final class _Preview2ComponentRuntime {
                   'Canonical lift references unavailable core function $index.',
                 );
               }
-              return _coreFunctions[index].invokeSync(args);
+              return _coreFunctions[index].invokeSynchronously(args);
             };
           }
           final postReturnIndex = plan.postReturnIndex;
@@ -240,7 +331,7 @@ final class _Preview2ComponentRuntime {
                   'function $postReturnIndex.',
                 );
               }
-              return _coreFunctions[postReturnIndex].invokeSync(args);
+              return _coreFunctions[postReturnIndex].invokeSynchronously(args);
             };
           }
         case WasmComponentCanonicalKind.lower:
@@ -448,13 +539,13 @@ final class _Preview2ComponentRuntime {
 
   _ComponentFunction _hostComponentFunction(String key) {
     var resolvedKey = key;
-    var callback = host.standardImports[resolvedKey];
+    var callback = _standardImports[resolvedKey];
     if (callback == null) {
       final separator = key.lastIndexOf('.');
       if (separator >= 0) {
         final escapedKey =
             '${key.substring(0, separator + 1)}%${key.substring(separator + 1)}';
-        final escapedCallback = host.standardImports[escapedKey];
+        final escapedCallback = _standardImports[escapedKey];
         if (escapedCallback != null) {
           resolvedKey = escapedKey;
           callback = escapedCallback;
@@ -583,6 +674,7 @@ final class _Preview2ComponentRuntime {
     int canonicalIndex,
     WasmComponentCanonicalDefinition definition,
   ) {
+    final isAsync = _canonicalFunctionIsAsync(definition);
     switch (definition.kind) {
       case WasmComponentCanonicalKind.lower:
         final functionIndex = definition.functionIndex;
@@ -596,22 +688,26 @@ final class _Preview2ComponentRuntime {
         _coreFunctions.add(
           _CoreFunction(
             name: 'canonical[$canonicalIndex].lower',
-            invoke: (args) async => _coreHostResult(
-              await _adapterProgram.invokeLoweredCoreAsync(
-                canonicalIndex,
-                args,
-                memory: _canonicalMemory(definition),
-                realloc: _canonicalRealloc(definition),
-              ),
-            ),
-            invokeSync: (args) => _coreHostResult(
-              _synchronousAdapterProgram.invokeLoweredCore(
-                canonicalIndex,
-                args,
-                memory: _canonicalMemory(definition),
-                realloc: _canonicalRealloc(definition),
-              ),
-            ),
+            invoke: isAsync
+                ? (args) => _invokeAsyncLower(canonicalIndex, definition, args)
+                : (args) async => _coreHostResult(
+                    await _adapterProgram.invokeLoweredCoreAsync(
+                      canonicalIndex,
+                      args,
+                      memory: _canonicalMemory(definition),
+                      realloc: _canonicalRealloc(definition),
+                    ),
+                  ),
+            invokeSync: isAsync
+                ? (args) => _invokeAsyncLower(canonicalIndex, definition, args)
+                : (args) => _coreHostResult(
+                    _synchronousAdapterProgram.invokeLoweredCore(
+                      canonicalIndex,
+                      args,
+                      memory: _canonicalMemory(definition),
+                      realloc: _canonicalRealloc(definition),
+                    ),
+                  ),
           ),
         );
       case WasmComponentCanonicalKind.lift:
@@ -626,18 +722,24 @@ final class _Preview2ComponentRuntime {
         _componentFunctions.add(
           _ComponentFunction(
             name: 'canonical[$canonicalIndex].lift',
-            invoke: (args) => _adapterProgram.invokeLiftedCoreAsync(
-              canonicalIndex,
-              args,
-              memory: _canonicalMemory(definition),
-              realloc: _canonicalRealloc(definition),
-            ),
-            invokeSync: (args) => _synchronousAdapterProgram.invokeLiftedCore(
-              canonicalIndex,
-              args,
-              memory: _canonicalMemory(definition),
-              realloc: _canonicalRealloc(definition),
-            ),
+            invoke: isAsync
+                ? (args) => _invokeAsyncLift(canonicalIndex, definition, args)
+                : (args) => _adapterProgram.invokeLiftedCoreAsync(
+                    canonicalIndex,
+                    args,
+                    memory: _canonicalMemory(definition),
+                    realloc: _canonicalRealloc(definition),
+                  ),
+            invokeSync: isAsync
+                ? (_) => throw WASIPreview2ComponentExecutionException(
+                    'Canonical async lift $canonicalIndex cannot be invoked synchronously.',
+                  )
+                : (args) => _synchronousAdapterProgram.invokeLiftedCore(
+                    canonicalIndex,
+                    args,
+                    memory: _canonicalMemory(definition),
+                    realloc: _canonicalRealloc(definition),
+                  ),
           ),
         );
       case WasmComponentCanonicalKind.resourceNew:
@@ -676,10 +778,7 @@ final class _Preview2ComponentRuntime {
               'Canonical resource.drop $canonicalIndex expected one handle.',
             );
           }
-          host.componentHost.table.dropNamed(
-            resourceTypeName,
-            args.single as int,
-          );
+          _componentHost.table.dropNamed(resourceTypeName, args.single as int);
           return null;
         }
 
@@ -690,18 +789,290 @@ final class _Preview2ComponentRuntime {
             invokeSync: dropImportedResource,
           ),
         );
-      default:
-        break;
+      case WasmComponentCanonicalKind.backpressureInc:
+      case WasmComponentCanonicalKind.backpressureDec:
+      case WasmComponentCanonicalKind.taskReturn:
+      case WasmComponentCanonicalKind.taskCancel:
+      case WasmComponentCanonicalKind.contextGet:
+      case WasmComponentCanonicalKind.contextSet:
+      case WasmComponentCanonicalKind.threadYield:
+      case WasmComponentCanonicalKind.subtaskCancel:
+      case WasmComponentCanonicalKind.subtaskDrop:
+      case WasmComponentCanonicalKind.streamNew:
+      case WasmComponentCanonicalKind.streamRead:
+      case WasmComponentCanonicalKind.streamWrite:
+      case WasmComponentCanonicalKind.streamCancelRead:
+      case WasmComponentCanonicalKind.streamCancelWrite:
+      case WasmComponentCanonicalKind.streamDropReadable:
+      case WasmComponentCanonicalKind.streamDropWritable:
+      case WasmComponentCanonicalKind.futureNew:
+      case WasmComponentCanonicalKind.futureRead:
+      case WasmComponentCanonicalKind.futureWrite:
+      case WasmComponentCanonicalKind.futureCancelRead:
+      case WasmComponentCanonicalKind.futureCancelWrite:
+      case WasmComponentCanonicalKind.futureDropReadable:
+      case WasmComponentCanonicalKind.futureDropWritable:
+      case WasmComponentCanonicalKind.errorContextNew:
+      case WasmComponentCanonicalKind.errorContextDebugMessage:
+      case WasmComponentCanonicalKind.errorContextDrop:
+      case WasmComponentCanonicalKind.waitableSetNew:
+      case WasmComponentCanonicalKind.waitableSetWait:
+      case WasmComponentCanonicalKind.waitableSetPoll:
+      case WasmComponentCanonicalKind.waitableSetDrop:
+      case WasmComponentCanonicalKind.waitableJoin:
+      case WasmComponentCanonicalKind.threadIndex:
+      case WasmComponentCanonicalKind.threadAvailableParallelism:
+        final canonicalMemory = _canonicalMemory(definition);
+        final memory = definition.kind == WasmComponentCanonicalKind.taskReturn
+            ? _taskReturnUsesResultPointer(definition)
+                  ? canonicalMemory
+                  : null
+            : canonicalMemory;
+        final realloc = _canonicalRealloc(definition);
+        FutureOr<Object?> invoke(List<Object?> args) {
+          if (memory == null) {
+            return isAsync
+                ? _binding.program.invoke(canonicalIndex, args)
+                : _binding.program.invokeAsync(canonicalIndex, args);
+          }
+          return isAsync
+              ? _binding.program.invokeWithMemoryEvent(
+                  canonicalIndex,
+                  memory,
+                  args,
+                  realloc: realloc,
+                )
+              : _binding.program.invokeWithMemoryAsync(
+                  canonicalIndex,
+                  memory,
+                  args,
+                  realloc: realloc,
+                );
+        }
+
+        Object? invokeSync(List<Object?> args) {
+          if (memory == null) {
+            return _binding.program.invoke(canonicalIndex, args);
+          }
+          return _binding.program.invokeWithMemoryEvent(
+            canonicalIndex,
+            memory,
+            args,
+            realloc: realloc,
+          );
+        }
+
+        _coreFunctions.add(
+          _CoreFunction(
+            name: 'canonical[$canonicalIndex].${definition.kind.name}',
+            invoke: invoke,
+            invokeSync: isAsync ? invokeSync : null,
+          ),
+        );
+      case WasmComponentCanonicalKind.threadNewIndirect:
+      case WasmComponentCanonicalKind.threadResumeLater:
+      case WasmComponentCanonicalKind.threadSuspend:
+      case WasmComponentCanonicalKind.threadSuspendThenResume:
+      case WasmComponentCanonicalKind.threadYieldThenResume:
+      case WasmComponentCanonicalKind.threadSuspendThenPromote:
+      case WasmComponentCanonicalKind.threadYieldThenPromote:
+      case WasmComponentCanonicalKind.threadSpawnRef:
+      case WasmComponentCanonicalKind.threadSpawnIndirect:
+        throw WASIPreview2ComponentExecutionException(
+          'Canonical $canonicalIndex uses unsupported '
+          '${definition.kind.name}.',
+        );
     }
+  }
+
+  Future<Object?> _invokeAsyncLift(
+    int canonicalIndex,
+    WasmComponentCanonicalDefinition definition,
+    List<Object?> args,
+  ) async {
+    final callbackIndex = _canonicalOptionIndex(
+      definition,
+      WasmComponentCanonicalOptionKind.callback,
+    );
+    if (callbackIndex == null) {
+      throw WASIPreview2ComponentExecutionException(
+        'Canonical async lift $canonicalIndex requires the Preview3 callback ABI.',
+      );
+    }
+    if (callbackIndex < 0 || callbackIndex >= _coreFunctions.length) {
+      throw WASIPreview2ComponentExecutionException(
+        'Canonical async lift $canonicalIndex references unknown callback $callbackIndex.',
+      );
+    }
+    final coreFunctionIndex = definition.coreFunctionIndex!;
+    final coreFunction = _coreFunctions[coreFunctionIndex];
+    final callback = _coreFunctions[callbackIndex];
+    final canonicalHost = _componentHost.canonicalHost;
+    final task = canonicalHost.taskHost.createTask(
+      name: 'canonical[$canonicalIndex].lift',
+    );
+    final thread = canonicalHost.threadHost.currentThread;
+
+    return canonicalHost.threadHost.runWithThreadAsync(thread, () {
+      return canonicalHost.taskHost.runWithTaskAsync(task, () async {
+        await canonicalHost.asyncHost.backpressure.waitUntilReleased();
+        task.markStarted();
+        final coreArgs = _adapterProgram.prepareAsyncLiftCoreArgs(
+          canonicalIndex,
+          args,
+          memory: _canonicalMemory(definition),
+          realloc: _canonicalRealloc(definition),
+        );
+        var packed = _asyncCallbackResult(
+          await coreFunction.invoke(List<Object?>.unmodifiable(coreArgs)),
+          canonicalIndex,
+        );
+        while ((packed & 0xf) != 0) {
+          final code = packed & 0xf;
+          WASIComponentWaitableEvent event;
+          switch (code) {
+            case 1:
+              await canonicalHost.threadHost.threadYield();
+              event = WASIComponentWaitableEvent.none;
+            case 2:
+              event = await canonicalHost.waitableHost.waitableSetWait(
+                packed >>> 4,
+                cancellable: true,
+              );
+            default:
+              throw WASIPreview2ComponentExecutionException(
+                'Canonical async lift $canonicalIndex returned unsupported callback code $code.',
+              );
+          }
+          packed = _asyncCallbackResult(
+            await callback.invoke(<Object?>[
+              event.code.value,
+              event.payload1,
+              event.payload2,
+            ]),
+            canonicalIndex,
+          );
+        }
+        if (!task.state.isResolved) {
+          throw WASIPreview2ComponentExecutionException(
+            'Canonical async lift $canonicalIndex exited before task.return.',
+          );
+        }
+        if (!task.hasResult) {
+          return _adapterProgram.finishAsyncLiftResult(
+            canonicalIndex,
+            null,
+            memory: _canonicalMemory(definition),
+          );
+        }
+        return _adapterProgram.finishAsyncLiftResult(
+          canonicalIndex,
+          task.result,
+          memory: _canonicalMemory(definition),
+        );
+      });
+    });
+  }
+
+  int _invokeAsyncLower(
+    int canonicalIndex,
+    WasmComponentCanonicalDefinition definition,
+    List<Object?> coreArgs,
+  ) {
+    final canonicalHost = _componentHost.canonicalHost;
+    final subtask = WASIComponentSubtask(
+      name: 'canonical[$canonicalIndex].lower',
+    );
+    final task = canonicalHost.taskHost.createTask(
+      name: 'canonical[$canonicalIndex].lower',
+      subtask: subtask,
+    );
+    Object? synchronousError;
+    StackTrace? synchronousStackTrace;
+    var waitingForResult = false;
+    final execution = canonicalHost.taskHost.runWithTaskAsync(task, () async {
+      try {
+        task.markStarted();
+        final call = _adapterProgram.startAsyncLowerCore(
+          canonicalIndex,
+          coreArgs,
+          memory: _canonicalMemory(definition),
+          realloc: _canonicalRealloc(definition),
+        );
+        final pendingResult = call.result;
+        final Object? result;
+        if (pendingResult is Future) {
+          waitingForResult = true;
+          final outcome = await Future.any<({bool cancelled, Object? value})>([
+            pendingResult.then((value) => (cancelled: false, value: value)),
+            task.whenCancellationRequested.then(
+              (_) => (cancelled: true, value: null),
+            ),
+          ]);
+          if (outcome.cancelled) {
+            task.cancel();
+            return;
+          }
+          result = outcome.value;
+        } else {
+          result = pendingResult;
+        }
+        call.complete(result);
+        task.returnResult(result: result, hasResult: definition.result != null);
+      } catch (error, stackTrace) {
+        if (!waitingForResult) {
+          synchronousError = error;
+          synchronousStackTrace = stackTrace;
+          return;
+        }
+        if (!subtask.resolved) {
+          subtask.markFailed(error, stackTrace);
+        }
+      }
+    });
+
+    final immediateError = synchronousError;
+    if (immediateError != null) {
+      unawaited(execution);
+      Error.throwWithStackTrace(
+        immediateError,
+        synchronousStackTrace ?? StackTrace.empty,
+      );
+    }
+    if (subtask.resolved) {
+      unawaited(execution);
+      return subtask.state.code;
+    }
+
+    final handle = canonicalHost.subtaskHost.insertSubtask(subtask);
+    unawaited(execution);
+    return subtask.state.code | (handle << 4);
+  }
+
+  int _asyncCallbackResult(Object? value, int canonicalIndex) {
+    final scalar = switch (value) {
+      int() => value,
+      List<Object?>() when value.length == 1 && value.single is int =>
+        value.single as int,
+      _ => null,
+    };
+    if (scalar == null) {
+      throw WASIPreview2ComponentExecutionException(
+        'Canonical async lift $canonicalIndex callback did not return one i32.',
+      );
+    }
+    return scalar.toUnsigned(32);
   }
 
   native_memory.Memory? _canonicalMemory(
     WasmComponentCanonicalDefinition definition,
   ) {
-    final memoryIndex = _canonicalOptionIndex(
-      definition,
-      WasmComponentCanonicalOptionKind.memory,
-    );
+    final memoryIndex =
+        definition.memoryIndex ??
+        _canonicalOptionIndex(
+          definition,
+          WasmComponentCanonicalOptionKind.memory,
+        );
     if (memoryIndex == null) {
       return null;
     }
@@ -711,6 +1082,26 @@ final class _Preview2ComponentRuntime {
       );
     }
     return _coreMemories[memoryIndex].memory;
+  }
+
+  bool _taskReturnUsesResultPointer(
+    WasmComponentCanonicalDefinition definition,
+  ) {
+    final resultType = definition.result?.valueType;
+    if (resultType == null) {
+      return false;
+    }
+    final layout = componentCanonicalFlatLayout(
+      resultType,
+      component.componentTypeIndexDefinitions,
+      typeScope: component.componentTypeIndexScope,
+    );
+    if (layout == null) {
+      throw WASIPreview2ComponentExecutionException(
+        'Canonical task.return result has an unsupported flat layout.',
+      );
+    }
+    return layout.flatLength > 16;
   }
 
   WASIComponentCanonicalRealloc? _canonicalRealloc(
@@ -730,7 +1121,7 @@ final class _Preview2ComponentRuntime {
     }
     final function = _coreFunctions[reallocIndex];
     return (oldPointer, oldSize, alignment, newSize) {
-      final result = function.invokeSync(<Object?>[
+      final result = function.invokeSynchronously(<Object?>[
         oldPointer,
         oldSize,
         alignment,
@@ -755,6 +1146,12 @@ final class _Preview2ComponentRuntime {
     return null;
   }
 
+  bool _canonicalFunctionIsAsync(WasmComponentCanonicalDefinition definition) =>
+      definition.isAsync ||
+      definition.options.any(
+        (option) => option.kind == WasmComponentCanonicalOptionKind.async,
+      );
+
   _CoreInstance _instantiateCoreInstance(WasmComponentCoreInstance instance) {
     switch (instance.kind) {
       case WasmComponentCoreInstanceKind.instantiate:
@@ -776,7 +1173,11 @@ final class _Preview2ComponentRuntime {
             profile: WasmFeatureProfile.full,
           ),
         );
-        return _CoreInstance.fromRuntime(runtime, wrapMemory: _wrapMemory);
+        return _CoreInstance.fromRuntime(
+          runtime,
+          wrapMemory: _wrapMemory,
+          allowSynchronousImports: _preview3Host == null,
+        );
       case WasmComponentCoreInstanceKind.inlineExports:
         return _CoreInstance(
           exports: Map.unmodifiable({
@@ -823,7 +1224,10 @@ final class _Preview2ComponentRuntime {
         case ir_module.WasmImportKind.function:
         case ir_module.WasmImportKind.exactFunction:
           final function = export.requireFunction(import.name);
-          functions[key] = function.invokeSync;
+          final synchronous = function.invokeSync;
+          if (function.supportsSyncImport && synchronous != null) {
+            functions[key] = synchronous;
+          }
           asyncFunctions[key] = function.invoke;
         case ir_module.WasmImportKind.memory:
           memories[key] = export.requireMemory(import.name).runtime;
@@ -1121,14 +1525,53 @@ final class _Preview2ComponentRuntime {
     final name = _externName(export.name, export.versionSuffix);
     switch (export.sort.kind) {
       case WasmComponentSortKind.function:
-        _exportedFunctions[name] = _componentFunctions[export.sort.index];
+        final function = _componentFunctions[export.sort.index];
+        _exportedFunctions[name] = function;
+        _componentFunctions.add(function);
       case WasmComponentSortKind.instance:
-        _exportedInstances[name] = _componentInstances[export.sort.index];
-      case WasmComponentSortKind.core:
-      case WasmComponentSortKind.value:
+        final instance = _componentInstances[export.sort.index];
+        _exportedInstances[name] = instance;
+        _componentInstances.add(instance);
       case WasmComponentSortKind.componentType:
+        _visibleTypes.add(_visibleTypes[export.sort.index]);
+        _visibleResourceTypeNames.add(
+          _visibleResourceTypeNames[export.sort.index],
+        );
       case WasmComponentSortKind.component:
-        break;
+        _components.add(_components[export.sort.index]);
+      case WasmComponentSortKind.core:
+        _addCoreExportIndex(export.sort);
+      case WasmComponentSortKind.value:
+        throw WASIPreview2ComponentExecutionException(
+          'Component value export `$name` is not executable yet.',
+        );
+    }
+  }
+
+  void _addCoreExportIndex(WasmComponentSortIndex sort) {
+    switch (sort.coreKind) {
+      case WasmComponentCoreSortKind.function:
+        _coreFunctions.add(_coreFunctions[sort.index]);
+      case WasmComponentCoreSortKind.table:
+        _coreTables.add(_coreTables[sort.index]);
+      case WasmComponentCoreSortKind.memory:
+        _coreMemories.add(_coreMemories[sort.index]);
+      case WasmComponentCoreSortKind.global:
+        _coreGlobals.add(_coreGlobals[sort.index]);
+      case WasmComponentCoreSortKind.tag:
+        _coreTags.add(_coreTags[sort.index]);
+      case WasmComponentCoreSortKind.module:
+        _coreModules.add(_coreModules[sort.index]);
+      case WasmComponentCoreSortKind.instance:
+        _coreInstances.add(_coreInstances[sort.index]);
+      case WasmComponentCoreSortKind.type:
+        throw const WASIPreview2ComponentExecutionException(
+          'Core type exports are not executable yet.',
+        );
+      case null:
+        throw const WASIPreview2ComponentExecutionException(
+          'Core export is missing its core sort.',
+        );
     }
   }
 
@@ -1166,6 +1609,25 @@ final class _Preview2ComponentRuntime {
     );
   }
 
+  _ComponentFunction _findPreview3CommandRun() {
+    for (final entry in _exportedInstances.entries) {
+      if (_isPreview3RunExport(entry.key)) {
+        final run = entry.value.functions['run'];
+        if (run != null) {
+          return run;
+        }
+      }
+    }
+    for (final entry in _exportedFunctions.entries) {
+      if (_isPreview3RunExport(entry.key)) {
+        return entry.value;
+      }
+    }
+    throw const WASIPreview2ComponentExecutionException(
+      'Component does not export wasi:cli/run@0.3.0.',
+    );
+  }
+
   _ComponentFunction _findProxyHandler() {
     for (final entry in _exportedInstances.entries) {
       if (_isPreview2IncomingHandlerExport(entry.key)) {
@@ -1185,9 +1647,30 @@ final class _Preview2ComponentRuntime {
     );
   }
 
+  _ComponentFunction _findPreview3HttpHandler() {
+    for (final entry in _exportedInstances.entries) {
+      if (entry.key == 'wasi:http/handler@0.3.0') {
+        final handle = entry.value.functions['handle'];
+        if (handle != null) {
+          return handle;
+        }
+      }
+    }
+    for (final entry in _exportedFunctions.entries) {
+      if (entry.key == 'wasi:http/handler@0.3.0') {
+        return entry.value;
+      }
+    }
+    throw const WASIPreview2ComponentExecutionException(
+      'Component does not export wasi:http/handler@0.3.0.',
+    );
+  }
+
   bool _isPreview2RunExport(String name) {
     return RegExp(r'^wasi:cli/run@0\.2\.\d+$').hasMatch(name);
   }
+
+  bool _isPreview3RunExport(String name) => name == 'wasi:cli/run@0.3.0';
 
   bool _isPreview2IncomingHandlerExport(String name) {
     return RegExp(r'^wasi:http/incoming-handler@0\.2\.\d+$').hasMatch(name);
@@ -1205,12 +1688,24 @@ final class _CoreFunction {
   const _CoreFunction({
     required this.name,
     required this.invoke,
-    required this.invokeSync,
+    this.invokeSync,
+    this.supportsSyncImport = true,
   });
 
   final String name;
   final FutureOr<Object?> Function(List<Object?> args) invoke;
-  final Object? Function(List<Object?> args) invokeSync;
+  final Object? Function(List<Object?> args)? invokeSync;
+  final bool supportsSyncImport;
+
+  Object? invokeSynchronously(List<Object?> args) {
+    final synchronous = invokeSync;
+    if (synchronous != null) {
+      return synchronous(args);
+    }
+    throw WASIPreview2ComponentExecutionException(
+      'Core function `$name` is async-only.',
+    );
+  }
 }
 
 final class _CoreMemory {
@@ -1227,6 +1722,7 @@ final class _CoreInstance {
     ir_instance.WasmInstance runtime, {
     required native_memory.Memory Function(ir_memory.WasmMemory memory)
     wrapMemory,
+    required bool allowSynchronousImports,
   }) {
     return _CoreInstance(
       exports: Map.unmodifiable({
@@ -1234,8 +1730,15 @@ final class _CoreInstance {
           name: _CoreExport.function(
             _CoreFunction(
               name: name,
-              invoke: (args) => runtime.invokeAsync(name, args),
-              invokeSync: (args) => runtime.invoke(name, args),
+              invoke: allowSynchronousImports
+                  ? (args) => runtime.invokeAsync(name, args)
+                  : (args) => runtime.invokeAsyncForced(name, args),
+              invokeSync: runtime.exportedFunctionSupportsSync(name)
+                  ? (args) => runtime.invoke(name, args)
+                  : null,
+              supportsSyncImport:
+                  allowSynchronousImports &&
+                  runtime.exportedFunctionSupportsSync(name),
             ),
           ),
         for (final name in runtime.exportedMemories)
@@ -1462,6 +1965,29 @@ bool _componentResultIsOk(WasmComponentValueData value) {
     }
   }
   return selected ?? false;
+}
+
+int _componentResourceHandle(Object? value) {
+  return switch (value) {
+    int() when value >= 0 && value <= 0xffffffff => value,
+    BigInt() when value >= BigInt.zero && value <= BigInt.from(0xffffffff) =>
+      value.toInt(),
+    WasmComponentValueData(kind: WasmComponentValueDataKind.integer) =>
+      _componentResourceHandle(value.integer),
+    _ => throw WASIPreview2ComponentExecutionException(
+      'wasi:http/handler.handle returned an invalid response resource.',
+    ),
+  };
+}
+
+String _preview3HttpErrorCode(Object? value) {
+  if (value is WasmComponentValueData &&
+      value.kind == WasmComponentValueDataKind.variant) {
+    return value.label ?? 'internal-error';
+  }
+  throw const WASIPreview2ComponentExecutionException(
+    'wasi:http/handler.handle returned an invalid error-code.',
+  );
 }
 
 String _externName(String name, String? versionSuffix) {

@@ -38,6 +38,23 @@ final class WASIComponentWitResolvedTarget {
   }
 }
 
+/// Thrown when a qualified WIT world target cannot be resolved completely.
+final class WASIComponentWitTargetResolutionException implements Exception {
+  /// Creates an unresolved-target error for [target].
+  const WASIComponentWitTargetResolutionException(this.target, this.reason);
+
+  /// Qualified WIT target that could not be expanded.
+  final String target;
+
+  /// Resolution failure detail.
+  final String reason;
+
+  @override
+  String toString() {
+    return 'Unable to resolve qualified WIT target $target: $reason';
+  }
+}
+
 /// Expands local and resolved WIT import/export interface functions from [world].
 List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
   WASIComponentWitDocument document,
@@ -57,18 +74,28 @@ List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
     if (item.direction == WASIComponentWitWorldItemDirection.include) {
       if (target.isQualified) {
         final resolved = resolveTarget?.call(target.text);
-        final included = resolved?.document.worldNamed(resolved.memberName);
-        if (resolved != null && included != null) {
-          functions.addAll(
-            wasiComponentWitWorldFunctions(
-              resolved.document,
-              included,
-              resolveTarget: resolveTarget,
-              visiting: active,
-              qualifyInterfaceName: resolved.qualifiedInterfaceName,
-            ),
+        if (resolved == null) {
+          throw WASIComponentWitTargetResolutionException(
+            target.text,
+            'no resolver result',
           );
         }
+        final included = resolved.document.worldNamed(resolved.memberName);
+        if (included == null) {
+          throw WASIComponentWitTargetResolutionException(
+            target.text,
+            "world '${resolved.memberName}' does not exist in the resolved document",
+          );
+        }
+        functions.addAll(
+          wasiComponentWitWorldFunctions(
+            resolved.document,
+            included,
+            resolveTarget: resolveTarget,
+            visiting: active,
+            qualifyInterfaceName: resolved.qualifiedInterfaceName,
+          ),
+        );
         continue;
       }
       final included = document.worldNamed(target.text);
@@ -88,10 +115,22 @@ List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
     final resolved = target.isQualified
         ? resolveTarget?.call(target.text)
         : null;
+    if (target.isQualified && resolved == null) {
+      throw WASIComponentWitTargetResolutionException(
+        target.text,
+        'no resolver result',
+      );
+    }
     final interfaceDocument = resolved?.document ?? document;
     final interfaceName = resolved?.memberName ?? target.text;
     final interface = interfaceDocument.interfaceNamed(interfaceName);
     if (interface == null) {
+      if (target.isQualified) {
+        throw WASIComponentWitTargetResolutionException(
+          target.text,
+          "interface '$interfaceName' does not exist in the resolved document",
+        );
+      }
       continue;
     }
     final callbackInterfaceName =
@@ -1549,7 +1588,7 @@ Object? _validateWitAdapterStreamValue(
   Object? value,
   String path,
 ) {
-  if (value is WASIComponentStream) {
+  if (value is WASIComponentStream || value is WASIComponentReadableStream) {
     return value;
   }
   throw StateError('WIT adapter value $path does not match ${type.text}.');
@@ -1560,7 +1599,7 @@ Object? _validateWitAdapterFutureValue(
   Object? value,
   String path,
 ) {
-  if (value is WASIComponentFuture) {
+  if (value is WASIComponentFuture || value is WASIComponentReadableFuture) {
     return value;
   }
   throw StateError('WIT adapter value $path does not match ${type.text}.');
@@ -1689,7 +1728,7 @@ Object? _validateWitAdapterOptionValue(
     throw StateError('WIT adapter value $path does not match ${type.text}.');
   }
   final isSome = _witOptionIsSome(value, path);
-  final associated = value.associatedValue;
+  final associated = value.payload;
   if (!isSome) {
     if (associated != null) {
       throw StateError('WIT adapter value $path.none does not take payload.');
@@ -1713,7 +1752,7 @@ Object? _validateWitAdapterListValue(
     throw StateError('WIT adapter value $path does not match ${type.text}.');
   }
   final elementType = type.element!;
-  final items = value.items;
+  final items = value.itemValues;
   for (var i = 0; i < items.length; i++) {
     _validateWitAdapterValue(elementType, items[i], '$path[$i]');
   }
@@ -1727,7 +1766,7 @@ Object? _validateWitAdapterTupleValue(
 ) {
   final items = switch (value) {
     WasmComponentValueData(kind: WasmComponentValueDataKind.tuple) =>
-      value.items,
+      value.itemValues,
     List<Object?>() => value,
     _ => null,
   };
@@ -1757,15 +1796,16 @@ Object? _validateWitAdapterRecordValue(
     throw StateError('WIT adapter value $path does not match ${type.text}.');
   }
   final fields = type.fields;
-  if (value.items.length != fields.length) {
+  final items = value.itemValues;
+  if (items.length != fields.length) {
     throw StateError(
       'WIT adapter value $path expected ${fields.length} record fields, '
-      'got ${value.items.length}.',
+      'got ${items.length}.',
     );
   }
   for (var i = 0; i < fields.length; i++) {
     final field = fields[i];
-    _validateWitAdapterValue(field.type, value.items[i], '$path.${field.name}');
+    _validateWitAdapterValue(field.type, items[i], '$path.${field.name}');
   }
   return value;
 }
@@ -1816,7 +1856,7 @@ Object? _validateWitAdapterVariantValue(
   final labels = [for (final case_ in type.cases) case_.name];
   final index = _witCaseIndex(labels, value, path, 'variant');
   final case_ = type.cases[index];
-  final associated = value.associatedValue;
+  final associated = value.payload;
   final payloadType = case_.type;
   if (payloadType == null) {
     if (associated != null) {
@@ -1845,7 +1885,7 @@ Object? _validateWitAdapterResultValue(
   final isOk = _witResultIsOk(value, path);
   final payloadType = isOk ? type.ok : type.error;
   final label = isOk ? 'ok' : 'error';
-  final associated = value.associatedValue;
+  final associated = value.payload;
   if (payloadType == null) {
     if (associated != null) {
       throw StateError('WIT adapter value $path.$label does not take payload.');

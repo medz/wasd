@@ -13,6 +13,7 @@ const String _defaultPortableFeatures =
 const String _testsuiteSubmoduleHint =
     'Initialize testsuite submodule: '
     'git submodule update --init --recursive third_party/component-model-tests';
+const String _defaultWasmToolsBin = '.toolchains/bin/wasm-tools';
 const List<String> _defaultPortableGroups = <String>[
   'async',
   'names',
@@ -20,22 +21,6 @@ const List<String> _defaultPortableGroups = <String>[
   'values',
   'wasm-tools',
 ];
-const Map<String, String> _defaultExpectedFailureReasonPatterns =
-    <String, String>{
-      // wasm-tools currently rejects `stream<char>` payload typing.
-      'async/same-component-stream-future.wast':
-          '`stream<char>` is not valid at this time',
-      // Current wasm-tools validation disagrees with these upstream async
-      // tests on whether `canon ... async` targets an async function type.
-      'async/cross-abi-calls.wast':
-          'the `async` canonical option requires an async function type',
-      'async/drop-cross-task-borrow.wast':
-          'the `async` canonical option requires an async function type',
-      'async/trap-on-reenter.wast':
-          'the `async` canonical option requires an async function type',
-      // Parser token coverage gap in current wasm-tools release.
-      'async/trap-if-block-and-sync.wast': 'unexpected token, expected one of:',
-    };
 const Map<String, String>
 _allFeaturesAdditionalExpectedFailureReasonPatterns = <String, String>{
   // Known wasm-tools/parser drift for package-name parsing assertions.
@@ -67,31 +52,40 @@ Future<void> main(List<String> args) async {
   final features =
       _argValue(args, '--features') ??
       (allGroups ? 'all' : _defaultPortableFeatures);
-  final wasmToolsBin =
-      _argValue(args, '--wasm-tools-bin') ?? '.toolchains/bin/wasm-tools';
+  final explicitWasmToolsBin = _argValue(args, '--wasm-tools-bin');
+  final wasmtimeBin = _argValue(args, '--wasmtime-bin');
+  if (explicitWasmToolsBin != null && wasmtimeBin != null) {
+    throw ArgumentError(
+      'Use only one of `--wasm-tools-bin` or `--wasmtime-bin`.',
+    );
+  }
+  final engine = wasmtimeBin == null
+      ? _GateEngine.wasmToolsValidation
+      : _GateEngine.wasmtimeReference;
+  final allowPathFallback = explicitWasmToolsBin == null && wasmtimeBin == null;
+  final requestedEngineBinary =
+      wasmtimeBin ?? explicitWasmToolsBin ?? _defaultWasmToolsBin;
   final includePattern = _argValue(args, '--include-pattern');
   final requireTestsuiteDir = args.contains('--require-testsuite-dir');
+  final requireEngine = args.contains('--require-engine');
   final ignoreErrorMessages = !args.contains('--no-ignore-error-messages');
   final disableDefaultExpectedFailures = args.contains(
     '--no-default-expected-failures',
   );
   final expectedFailuresArg = _argValue(args, '--expected-failures');
   final expectedFailureRules = <String, _ExpectedFailureRule>{
-    if (!disableDefaultExpectedFailures)
-      ..._defaultExpectedFailureReasonPatterns.map(
-        (path, reasonContains) => MapEntry(
-          path,
-          _ExpectedFailureRule(path: path, reasonContains: reasonContains),
-        ),
-      ),
-    if (!disableDefaultExpectedFailures && _featuresIncludeAll(features))
+    if (!disableDefaultExpectedFailures &&
+        engine == _GateEngine.wasmToolsValidation &&
+        _featuresIncludeAll(features))
       ..._allFeaturesAdditionalExpectedFailureReasonPatterns.map(
         (path, reasonContains) => MapEntry(
           path,
           _ExpectedFailureRule(path: path, reasonContains: reasonContains),
         ),
       ),
-    if (!disableDefaultExpectedFailures && allGroups)
+    if (!disableDefaultExpectedFailures &&
+        engine == _GateEngine.wasmToolsValidation &&
+        allGroups)
       ..._allGroupsAdditionalExpectedFailureReasonPatterns.map(
         (path, reasonContains) => MapEntry(
           path,
@@ -135,6 +129,7 @@ Future<void> main(List<String> args) async {
       selectedGroups: effectiveGroups,
       features: features,
       expectedFailureRules: expectedFailureRules,
+      engine: engine,
       reason:
           'component-model testsuite directory does not exist: $testsuiteDir',
     );
@@ -182,6 +177,7 @@ Future<void> main(List<String> args) async {
       selectedGroups: effectiveGroups,
       features: features,
       expectedFailureRules: expectedFailureRules,
+      engine: engine,
       reason: 'No .wast files matched current group/filter selection.',
     );
     stdout.writeln('component-official status: skipped');
@@ -190,8 +186,12 @@ Future<void> main(List<String> args) async {
     return;
   }
 
-  final resolvedWasmTools = await _resolveWasmToolsBinary(wasmToolsBin);
-  if (resolvedWasmTools == null) {
+  final resolvedEngine = await _resolveEngineBinary(
+    engine: engine,
+    candidate: requestedEngineBinary,
+    allowPathFallback: allowPathFallback,
+  );
+  if (resolvedEngine == null) {
     await _writeSkippedReport(
       outputJsonPath: outputJsonPath,
       outputMarkdownPath: outputMarkdownPath,
@@ -200,11 +200,18 @@ Future<void> main(List<String> args) async {
       selectedGroups: effectiveGroups,
       features: features,
       expectedFailureRules: expectedFailureRules,
-      reason: 'Unable to locate usable wasm-tools binary.',
+      engine: engine,
+      reason: 'Unable to locate usable ${engine.displayName} binary.',
     );
     stdout.writeln('component-official status: skipped');
     stdout.writeln('json report: $outputJsonPath');
     stdout.writeln('markdown report: $outputMarkdownPath');
+    if (requireEngine) {
+      stderr.writeln(
+        'component-official required ${engine.displayName} binary is missing.',
+      );
+      exitCode = 1;
+    }
     return;
   }
 
@@ -212,15 +219,14 @@ Future<void> main(List<String> args) async {
   final stopwatch = Stopwatch()..start();
   for (final file in files) {
     final started = DateTime.now();
-    final command = <String>[
-      'wast',
-      file.path,
-      '--features',
-      features,
-      if (ignoreErrorMessages) '--ignore-error-messages',
-    ];
+    final command = _engineCommand(
+      engine: engine,
+      filePath: file.path,
+      features: features,
+      ignoreErrorMessages: ignoreErrorMessages,
+    );
     final result = await Process.run(
-      resolvedWasmTools,
+      resolvedEngine.binary,
       command,
       runInShell: false,
     );
@@ -290,7 +296,16 @@ Future<void> main(List<String> args) async {
     'testsuite_dir': testsuiteDir,
     'groups': effectiveGroups,
     'features': features,
-    'wasm_tools_binary': resolvedWasmTools,
+    'engine': engine.id,
+    'engine_mode': engine.mode,
+    'engine_binary': resolvedEngine.binary,
+    'engine_version': resolvedEngine.version,
+    'executes_wasm': engine.executesWasm,
+    'executes_wasd': false,
+    if (engine == _GateEngine.wasmToolsValidation)
+      'wasm_tools_binary': resolvedEngine.binary,
+    if (engine == _GateEngine.wasmtimeReference)
+      'wasmtime_binary': resolvedEngine.binary,
     'ignore_error_messages': ignoreErrorMessages,
     'expected_failures': expectedFailures.toList()..sort(),
     'expected_failure_rules': expectedFailureRules.map(
@@ -324,22 +339,91 @@ Future<void> main(List<String> args) async {
   }
 }
 
-Future<String?> _resolveWasmToolsBinary(String candidate) async {
+Future<_ResolvedEngine?> _resolveEngineBinary({
+  required _GateEngine engine,
+  required String candidate,
+  required bool allowPathFallback,
+}) async {
+  final fallback = engine == _GateEngine.wasmToolsValidation
+      ? 'wasm-tools'
+      : 'wasmtime';
   final attempts = <String>{candidate};
-  if (candidate != 'wasm-tools') {
-    attempts.add('wasm-tools');
+  if (allowPathFallback && candidate != fallback) {
+    attempts.add(fallback);
   }
   for (final binary in attempts) {
     try {
       final result = await Process.run(binary, const <String>['--version']);
       if (result.exitCode == 0) {
-        return binary;
+        return _ResolvedEngine(
+          binary: binary,
+          version:
+              _firstNonEmptyLine(_asText(result.stdout)) ??
+              _firstNonEmptyLine(_asText(result.stderr)) ??
+              'unknown',
+        );
       }
     } on ProcessException {
       // Try the next candidate.
     }
   }
   return null;
+}
+
+List<String> _engineCommand({
+  required _GateEngine engine,
+  required String filePath,
+  required String features,
+  required bool ignoreErrorMessages,
+}) {
+  switch (engine) {
+    case _GateEngine.wasmToolsValidation:
+      return <String>[
+        'wast',
+        filePath,
+        '--features',
+        features,
+        if (ignoreErrorMessages) '--ignore-error-messages',
+      ];
+    case _GateEngine.wasmtimeReference:
+      return <String>[
+        'wast',
+        ..._wasmtimeFeatureArgs(features),
+        if (ignoreErrorMessages) '--ignore-error-messages',
+        filePath,
+      ];
+  }
+}
+
+List<String> _wasmtimeFeatureArgs(String features) {
+  final tokens = features
+      .split(',')
+      .map((value) => value.trim())
+      .where((value) => value.isNotEmpty)
+      .toSet();
+  final all = tokens.contains('all');
+  final flags = <String>{'-Wcomponent-model=y'};
+
+  void enable(String feature, String flag) {
+    if (all || tokens.contains(feature)) {
+      flags.add('-W$flag=y');
+    }
+  }
+
+  enable('cm-async', 'component-model-async');
+  enable('cm-more-async-builtins', 'component-model-more-async-builtins');
+  enable('cm-async-stackful', 'component-model-async-stackful');
+  enable('cm-threading', 'component-model-threading');
+  enable('cm-error-context', 'component-model-error-context');
+  enable('cm-gc', 'component-model-gc');
+  enable('cm-map', 'component-model-map');
+  enable('cm-fixed-length-lists', 'component-model-fixed-length-lists');
+  if (all) {
+    flags
+      ..add('-Wcomponent-model-memory64=y')
+      ..add('-Wcomponent-model-implements=y');
+  }
+  return flags.toList(growable: false);
 }
 
 Future<void> _writeSkippedReport({
@@ -350,6 +434,7 @@ Future<void> _writeSkippedReport({
   required List<String> selectedGroups,
   required String features,
   required Map<String, _ExpectedFailureRule> expectedFailureRules,
+  required _GateEngine engine,
   required String reason,
 }) async {
   final expectedFailures = expectedFailureRules.keys.toList()..sort();
@@ -362,6 +447,10 @@ Future<void> _writeSkippedReport({
     'testsuite_dir': testsuiteDir,
     'groups': selectedGroups,
     'features': features,
+    'engine': engine.id,
+    'engine_mode': engine.mode,
+    'executes_wasm': engine.executesWasm,
+    'executes_wasd': false,
     'expected_failures': expectedFailures,
     'expected_failure_rules': expectedFailureRules.map(
       (path, rule) => MapEntry(path, rule.reasonContains),
@@ -487,6 +576,11 @@ String _renderMarkdown(Map<String, Object?> payload) {
       .map((value) => value.toString())
       .toList(growable: false);
   final features = payload['features'] as String? ?? 'all';
+  final engine = payload['engine'] as String? ?? 'unknown';
+  final engineMode = payload['engine_mode'] as String? ?? 'unknown';
+  final engineBinary = payload['engine_binary'] as String?;
+  final engineVersion = payload['engine_version'] as String?;
+  final executesWasm = payload['executes_wasm'] == true;
   final totals =
       (payload['totals'] as Map<Object?, Object?>? ??
       const <Object?, Object?>{});
@@ -521,6 +615,20 @@ String _renderMarkdown(Map<String, Object?> payload) {
     ..writeln('- Testsuite dir: `$testsuiteDir`')
     ..writeln('- Groups: `${groups.isEmpty ? 'all' : groups.join(', ')}`')
     ..writeln('- Features: `$features`')
+    ..writeln('- Engine: `$engine` (`$engineMode`)')
+    ..writeln(
+      '- Executes WebAssembly: `${executesWasm ? 'yes' : 'no'}`; executes wasd: `no`',
+    )
+    ..writeln(
+      engineBinary == null
+          ? '- Engine binary: `unresolved`'
+          : '- Engine binary: `$engineBinary`',
+    )
+    ..writeln(
+      engineVersion == null
+          ? '- Engine version: `unresolved`'
+          : '- Engine version: `$engineVersion`',
+    )
     ..writeln(
       '- Totals: `total=$filesTotal passed=$filesPassed failed=$filesFailed xfailed=$filesXfailed xpassed=$filesXpassed`',
     );
@@ -588,6 +696,40 @@ final class _WastFile {
   final String path;
   final String relativePath;
   final String group;
+}
+
+enum _GateEngine {
+  wasmToolsValidation(
+    id: 'wasm-tools',
+    mode: 'validation-only',
+    displayName: 'wasm-tools',
+    executesWasm: false,
+  ),
+  wasmtimeReference(
+    id: 'wasmtime',
+    mode: 'reference-execution',
+    displayName: 'Wasmtime',
+    executesWasm: true,
+  );
+
+  const _GateEngine({
+    required this.id,
+    required this.mode,
+    required this.displayName,
+    required this.executesWasm,
+  });
+
+  final String id;
+  final String mode;
+  final String displayName;
+  final bool executesWasm;
+}
+
+final class _ResolvedEngine {
+  const _ResolvedEngine({required this.binary, required this.version});
+
+  final String binary;
+  final String version;
 }
 
 final class _FileResult {

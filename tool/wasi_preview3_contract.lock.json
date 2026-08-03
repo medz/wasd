@@ -1,0 +1,41 @@
+{
+  "wasi": {
+    "version": "0.3.0",
+    "repository": "https://github.com/WebAssembly/WASI",
+    "commit": "3ee2a590c766594ae44a54730fc74fc27da5c609",
+    "packages": [
+      "wasi:random@0.3.0",
+      "wasi:clocks@0.3.0",
+      "wasi:filesystem@0.3.0",
+      "wasi:sockets@0.3.0",
+      "wasi:cli@0.3.0",
+      "wasi:http@0.3.0"
+    ],
+    "worlds": [
+      "wasi:random/imports@0.3.0",
+      "wasi:clocks/imports@0.3.0",
+      "wasi:filesystem/imports@0.3.0",
+      "wasi:sockets/imports@0.3.0",
+      "wasi:cli/imports@0.3.0",
+      "wasi:cli/command@0.3.0",
+      "wasi:http/service@0.3.0",
+      "wasi:http/middleware@0.3.0"
+    ],
+    "excluded": [
+      "wasi:clocks/timezone@0.3.0"
+    ]
+  },
+  "component_model": {
+    "repository": "https://github.com/WebAssembly/component-model",
+    "commit": "73b7ad51d3b5d6f1ef53c923d8c585e28b242bcc",
+    "gate": "async"
+  },
+  "wasi_testsuite": {
+    "repository": "https://github.com/WebAssembly/wasi-testsuite",
+    "source_commit": "6600796756adce3632409d7e207a9834c9d99ff8",
+    "fixture_repository": "https://github.com/WebAssembly/wasi-testsuite/tree/prod/testsuite-base",
+    "fixture_commit": "c63d52e69316d1aa2c9e7db6251892775204e7e0",
+    "target": "wasm32-wasip3",
+    "fixture_count": 45
+  }
+}

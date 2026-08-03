@@ -4381,9 +4381,6 @@ world clocks-test {
         'wasi:clocks/monotonic-clock@0.3.0.wait-for',
         'wasi:clocks/system-clock@0.3.0.now',
         'wasi:clocks/system-clock@0.3.0.get-resolution',
-        'wasi:clocks/timezone@0.3.0.iana-id',
-        'wasi:clocks/timezone@0.3.0.utc-offset',
-        'wasi:clocks/timezone@0.3.0.to-debug-string',
       ]);
 
       final program = preview3.bindWitWorld(document, worldName: 'clocks-test');
@@ -4422,28 +4419,66 @@ world clocks-test {
                 const [],
               )
               as BigInt;
-      final timezone =
-          program.invokeImport('wasi:clocks/timezone@0.3.0.iana-id', const [])
-              as WasmComponentValueData;
-      final utcOffset =
-          program.invokeImport('wasi:clocks/timezone@0.3.0.utc-offset', [
-                instant,
-              ])
-              as WasmComponentValueData;
-      final debug = program.invokeImport(
-        'wasi:clocks/timezone@0.3.0.to-debug-string',
-        const [],
-      );
 
       expect(resolution, greaterThan(BigInt.zero));
       expect(after, greaterThanOrEqualTo(before));
       expect(_instantNanoseconds(instant), lessThan(1000000000));
       expect(systemResolution, greaterThan(BigInt.zero));
-      expect(timezone.kind, WasmComponentValueDataKind.option);
-      expect(timezone.isSome, isFalse);
-      expect(utcOffset.kind, WasmComponentValueDataKind.option);
-      expect(utcOffset.isSome, isFalse);
-      expect(debug, isA<String>());
+    });
+
+    test('Preview3 forwards Preview2 compatibility output immediately', () async {
+      final stdout = <int>[];
+      final stderr = <int>[];
+      final preview3 = WASIPreview3ComponentHost(
+        stdout: stdout.addAll,
+        stderr: stderr.addAll,
+      );
+      final compatibility = preview3.preview2CompatibilityHost;
+
+      await compatibility.componentHost.table.runScoped<void>(() async {
+        final stdoutHandle =
+            compatibility.standardImports['wasi:cli/stdout@0.2.0.get-stdout']!(
+                  const <Object?>[],
+                )
+                as int;
+        compatibility
+            .standardImports['wasi:io/streams@0.2.0.output-stream.check-write']!(
+          <Object?>[stdoutHandle],
+        );
+        final stdoutWrite =
+            compatibility
+                    .standardImports['wasi:io/streams@0.2.0.output-stream.write']!(
+                  <Object?>[
+                    stdoutHandle,
+                    _u8ListValue(const <int>[111, 107]),
+                  ],
+                )
+                as WasmComponentValueData;
+
+        final stderrHandle =
+            compatibility.standardImports['wasi:cli/stderr@0.2.0.get-stderr']!(
+                  const <Object?>[],
+                )
+                as int;
+        compatibility
+            .standardImports['wasi:io/streams@0.2.0.output-stream.check-write']!(
+          <Object?>[stderrHandle],
+        );
+        final stderrWrite =
+            compatibility
+                    .standardImports['wasi:io/streams@0.2.0.output-stream.write']!(
+                  <Object?>[
+                    stderrHandle,
+                    _u8ListValue(const <int>[33]),
+                  ],
+                )
+                as WasmComponentValueData;
+
+        expect(stdoutWrite.isOk, isTrue);
+        expect(stderrWrite.isOk, isTrue);
+        expect(stdout, const <int>[111, 107]);
+        expect(stderr, const <int>[33]);
+      });
     });
 
     test('Preview3 expands and binds standard WASI CLI imports', () async {
@@ -4531,20 +4566,27 @@ world cli-test {
       final stdinTuple =
           program.invokeImport('wasi:cli/stdin@0.3.0.read-via-stream', const [])
               as List<Object?>;
-      final stdinStream = stdinTuple[0] as WASIComponentStream<int>;
+      final stdinStream = stdinTuple[0] as WASIComponentReadableStream<int>;
       final stdinResult =
           stdinTuple[1] as WASIComponentFuture<WasmComponentValueData>;
-      expect(stdinStream.readable.read(8), [120, 121]);
+      expect(stdinStream.read(8), [120, 121]);
       expect(stdinResult.readable.read().isOk, isTrue);
 
-      final stdoutStream = WASIComponentStream<int>('stdout-test');
-      stdoutStream.writable.writeAll(<int>[111, 107]);
-      stdoutStream.writable.close();
+      final stdoutStream = WASIComponentStream<int>(
+        'stdout-test',
+        maxBufferedElements: 0,
+      );
       final stdoutResult =
           program.invokeImport('wasi:cli/stdout@0.3.0.write-via-stream', [
-                stdoutStream,
+                stdoutStream.readable,
               ])
               as WASIComponentFuture<WasmComponentValueData>;
+      expect(
+        await stdoutStream.writable.writeWhenAvailable(<int>[111, 107]),
+        2,
+      );
+      await Future<void>.delayed(Duration.zero);
+      stdoutStream.writable.drop();
       expect((await stdoutResult.readable.readWhenReady()).isOk, isTrue);
       expect(cli.stdoutBytes, [111, 107]);
 
@@ -4586,6 +4628,21 @@ world cli-test {
               .having((error) => error.isSuccess, 'isSuccess', isFalse),
         ),
       );
+    });
+
+    test('Preview3 CLI accepts live stdin after command start', () async {
+      final input = WASIComponentStream<int>('live-stdin');
+      final cli = WASIPreview3CliHost(stdin: input.readable);
+      final callback = cli.imports['wasi:cli/stdin@0.3.0.read-via-stream']!;
+      final result = callback(const <Object?>[]) as List<Object?>;
+      final readable = result[0] as WASIComponentReadableStream<int>;
+      final pending = readable.readWhenAvailable(64);
+
+      input.writable.writeAll(const <int>[108, 105, 118, 101]);
+      input.writable.close();
+
+      expect(await pending, const <int>[108, 105, 118, 101]);
+      expect(await readable.readWhenAvailable(64), isEmpty);
     });
 
     test(

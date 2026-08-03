@@ -183,6 +183,26 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('validates the complete aligned event output before writing', () {
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      const event = WASIComponentWaitableEvent(
+        code: WASIComponentWaitableEventCode.subtask,
+        payload1: 7,
+        payload2: 9,
+      );
+      final lastWord = memory.buffer.lengthInBytes - 4;
+      data.setUint32(lastWord, 0xdecafbad, Endian.little);
+
+      expect(
+        () => event.writePayloadToMemory(memory, lastWord),
+        throwsRangeError,
+      );
+      expect(data.getUint32(lastWord, Endian.little), 0xdecafbad);
+      expect(() => event.writePayloadToMemory(memory, 1), throwsStateError);
+      expect(() => event.writePayloadToMemory(memory, -4), throwsRangeError);
+    });
+
     test(
       'completes cancellable waits when task cancellation is requested',
       () async {

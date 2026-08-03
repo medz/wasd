@@ -297,6 +297,72 @@ void main() {
       expect(table.activeCount, 0);
     });
 
+    test('transfers a parent while detaching direct children', () {
+      final table = WASIComponentResourceTable();
+      final parentType = table.defineType<String>('parent');
+      final childType = table.defineType<String>('child');
+      final grandchildType = table.defineType<String>('grandchild');
+      final parent = table.insert<String>(parentType, 'parent');
+      final child = table.insert<String>(childType, 'child');
+      final grandchild = table.insert<String>(grandchildType, 'grandchild');
+      table.attachChild(parent, child);
+      table.attachChild(child, grandchild);
+
+      expect(table.takeDetachingChildren<String>(parentType, parent), 'parent');
+      expect(table.get<String>(childType, child), 'child');
+      expect(table.get<String>(grandchildType, grandchild), 'grandchild');
+      expect(() => table.drop<String>(childType, child), throwsStateError);
+
+      table.drop<String>(grandchildType, grandchild);
+      table.drop<String>(childType, child);
+      expect(table.activeCount, 0);
+    });
+
+    test(
+      'takeDetachingChildren preserves borrow and scope protection',
+      () async {
+        final table = WASIComponentResourceTable();
+        final parentType = table.defineType<String>('parent');
+        final childType = table.defineType<String>('child');
+        final parent = table.insert<String>(parentType, 'parent');
+        final child = table.insert<String>(childType, 'child');
+        table.attachChild(parent, child);
+
+        table.borrow<String, void>(parentType, parent, (_) {
+          expect(
+            () => table.takeDetachingChildren<String>(parentType, parent),
+            throwsStateError,
+          );
+        });
+        expect(table.contains(parent), isTrue);
+        expect(table.contains(child), isTrue);
+        table.drop<String>(childType, child);
+        table.drop<String>(parentType, parent);
+
+        final ready = Completer<void>();
+        final release = Completer<void>();
+        late int scopedParent;
+        late int scopedChild;
+        final scoped = table.runScoped<void>(() async {
+          scopedParent = table.insert<String>(parentType, 'scoped-parent');
+          scopedChild = table.insert<String>(childType, 'scoped-child');
+          table.attachChild(scopedParent, scopedChild);
+          ready.complete();
+          await release.future;
+        });
+        await ready.future;
+        await table.runScoped<void>(() async {
+          expect(
+            () => table.takeDetachingChildren<String>(parentType, scopedParent),
+            throwsStateError,
+          );
+        });
+        release.complete();
+        await scoped;
+        expect(table.activeCount, 0);
+      },
+    );
+
     test('rejects ambiguous named resource drops', () {
       final table = WASIComponentResourceTable();
       final firstType = table.defineType<String>('resource');

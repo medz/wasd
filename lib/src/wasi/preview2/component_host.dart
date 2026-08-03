@@ -39,6 +39,8 @@ final class WASIPreview2ComponentHost {
     Map<String, String> env = const <String, String>{},
     String? initialCwd,
     List<int> stdinData = const <int>[],
+    WASIPreview2OutputStream? stdout,
+    WASIPreview2OutputStream? stderr,
     Map<String, String> preopens = const <String, String>{},
     bool canMutatePreopens = false,
     bool? terminalStdin,
@@ -60,6 +62,8 @@ final class WASIPreview2ComponentHost {
       env: env,
       initialCwd: initialCwd,
       stdinData: stdinData,
+      stdout: stdout,
+      stderr: stderr,
       terminalStdin: terminalStdin ?? native_defaults.isNativeStdinTerminal(),
       terminalStdout:
           terminalStdout ?? native_defaults.isNativeStdoutTerminal(),
@@ -108,6 +112,8 @@ final class WASIPreview2ComponentHost {
     Map<String, String> env = const <String, String>{},
     String? initialCwd,
     List<int> stdinData = const <int>[],
+    WASIPreview2OutputStream? stdout,
+    WASIPreview2OutputStream? stderr,
     Map<String, String> preopens = const <String, String>{},
     bool canMutatePreopens = false,
     bool? terminalStdin,
@@ -133,6 +139,8 @@ final class WASIPreview2ComponentHost {
        _cliEnv = Map<String, String>.unmodifiable(env),
        _cliInitialCwd = initialCwd,
        _cliStdinData = List<int>.unmodifiable(stdinData),
+       _cliStdout = stdout,
+       _cliStderr = stderr,
        _cliTerminalStdin = terminalStdin,
        _cliTerminalStdout = terminalStdout,
        _cliTerminalStderr = terminalStderr,
@@ -161,6 +169,8 @@ final class WASIPreview2ComponentHost {
   final Map<String, String> _cliEnv;
   final String? _cliInitialCwd;
   final List<int> _cliStdinData;
+  final WASIPreview2OutputStream? _cliStdout;
+  final WASIPreview2OutputStream? _cliStderr;
   final bool? _cliTerminalStdin;
   final bool? _cliTerminalStdout;
   final bool? _cliTerminalStderr;
@@ -205,6 +215,8 @@ final class WASIPreview2ComponentHost {
         env: _cliEnv,
         initialCwd: _cliInitialCwd,
         stdinData: _cliStdinData,
+        stdout: _cliStdout,
+        stderr: _cliStderr,
         terminalStdin:
             _cliTerminalStdin ?? native_defaults.isNativeStdinTerminal(),
         terminalStdout:

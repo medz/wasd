@@ -726,6 +726,16 @@ final class WasmInstance {
       ),
     );
 
+    instance._vm.registerAsyncFunctionRefInvoker(
+      (functionIndex, args, depth, force) =>
+          instance._invokeFunctionAsyncSubset(
+            functionIndex,
+            args,
+            depth: depth,
+            force: force,
+          ),
+    );
+
     phase('initialize_active_elements', instance._initializeActiveElements);
     phase('initialize_active_data', instance._initializeActiveDataSegments);
     phase('run_start_function', instance._runStartFunction);
@@ -782,6 +792,19 @@ final class WasmInstance {
       );
     }
     return functions[functionIndex].declaredTypeIndex;
+  }
+
+  /// Whether [exportName] can run through the synchronous VM pipeline.
+  bool exportedFunctionSupportsSync(String exportName) {
+    final functionIndex = _functionExports[exportName];
+    if (functionIndex == null) {
+      throw ArgumentError.value(
+        exportName,
+        'exportName',
+        'Function export not found',
+      );
+    }
+    return !_requiresAsyncSubset(functionIndex);
   }
 
   WasmGlobalType exportedGlobalType(String exportName) {
@@ -900,6 +923,22 @@ final class WasmInstance {
     }
   }
 
+  /// Invokes [exportName] through the async interpreter even when static call
+  /// analysis cannot see async functions reachable through imported tables.
+  Future<Object?> invokeAsyncForced(
+    String exportName, [
+    List<Object?> args = const [],
+  ]) async {
+    final prepared = _prepareInvoke(exportName, args);
+    final results = await _invokeFunctionAsyncSubset(
+      prepared.functionIndex,
+      prepared.typedArgs,
+      depth: 0,
+      force: true,
+    );
+    return _externalizeResults(results);
+  }
+
   ({int functionIndex, List<WasmValue> typedArgs}) _prepareInvoke(
     String exportName,
     List<Object?> args,
@@ -932,6 +971,7 @@ final class WasmInstance {
     int functionIndex,
     List<WasmValue> args, {
     required int depth,
+    bool force = false,
   }) async {
     if (depth > _vm.maxCallDepth) {
       throw StateError('Call stack overflow (depth > ${_vm.maxCallDepth}).');
@@ -942,7 +982,7 @@ final class WasmInstance {
 
     final function = functions[functionIndex];
     final normalizedArgs = _normalizeArgsForType(args, function.type.params);
-    if (!_requiresAsyncSubset(functionIndex)) {
+    if (!force && !_requiresAsyncSubset(functionIndex)) {
       return _vm.invokeFunction(functionIndex, normalizedArgs);
     }
 
@@ -5095,11 +5135,12 @@ final class WasmInstance {
               target.type.params,
               context: 'call',
             );
-            final callResults = _requiresAsyncSubset(targetIndex)
+            final callResults = force || _requiresAsyncSubset(targetIndex)
                 ? await _invokeFunctionAsyncSubset(
                     targetIndex,
                     callArgs,
                     depth: depth + 1,
+                    force: force,
                   )
                 : _vm.invokeFunction(targetIndex, callArgs);
             stack.addAll(callResults);
@@ -5124,11 +5165,11 @@ final class WasmInstance {
               throw StateError('call_ref to null function reference.');
             }
             final targetIndex = _functionRefIdToIndex[functionReference];
-            if (targetIndex == null) {
-              throw StateError('call_ref to non-function reference.');
-            }
-            final target = functions[targetIndex];
-            if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
+            final target = targetIndex == null ? null : functions[targetIndex];
+            final matches = target == null
+                ? _vm.functionRefMatchesType(functionReference, typeIndex)
+                : _asyncSubsetFunctionMatchesType(target, typeIndex);
+            if (!matches) {
               throw StateError('call_ref signature mismatch trap');
             }
             final callArgs = _popArgsForTypes(
@@ -5136,11 +5177,19 @@ final class WasmInstance {
               expectedType.params,
               context: 'call_ref',
             );
-            final callResults = _requiresAsyncSubset(targetIndex)
+            final callResults = targetIndex == null
+                ? await _vm.invokeFunctionRefAsync(
+                    functionReference,
+                    callArgs,
+                    depth: depth + 1,
+                    force: force,
+                  )
+                : force || _requiresAsyncSubset(targetIndex)
                 ? await _invokeFunctionAsyncSubset(
                     targetIndex,
                     callArgs,
                     depth: depth + 1,
+                    force: force,
                   )
                 : _vm.invokeFunction(targetIndex, callArgs);
             stack.addAll(callResults);
@@ -5165,17 +5214,17 @@ final class WasmInstance {
               throw StateError('call_indirect to null table element.');
             }
             final targetIndex = _functionRefIdToIndex[targetFunctionRef];
-            if (targetIndex == null) {
-              throw StateError('call_indirect to non-function table element.');
-            }
             final expectedType = module.types[typeIndex];
             if (!expectedType.isFunctionType) {
               throw StateError(
                 'call_indirect expected non-function type $typeIndex.',
               );
             }
-            final target = functions[targetIndex];
-            if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
+            final target = targetIndex == null ? null : functions[targetIndex];
+            final matches = target == null
+                ? _vm.functionRefMatchesType(targetFunctionRef, typeIndex)
+                : _asyncSubsetFunctionMatchesType(target, typeIndex);
+            if (!matches) {
               throw StateError('call_indirect signature mismatch trap');
             }
             final callArgs = _popArgsForTypes(
@@ -5183,11 +5232,19 @@ final class WasmInstance {
               expectedType.params,
               context: 'call_indirect',
             );
-            final callResults = _requiresAsyncSubset(targetIndex)
+            final callResults = targetIndex == null
+                ? await _vm.invokeFunctionRefAsync(
+                    targetFunctionRef,
+                    callArgs,
+                    depth: depth + 1,
+                    force: force,
+                  )
+                : force || _requiresAsyncSubset(targetIndex)
                 ? await _invokeFunctionAsyncSubset(
                     targetIndex,
                     callArgs,
                     depth: depth + 1,
+                    force: force,
                   )
                 : _vm.invokeFunction(targetIndex, callArgs);
             stack.addAll(callResults);
@@ -5204,11 +5261,12 @@ final class WasmInstance {
               target.type.params,
               context: 'return_call',
             );
-            if (_requiresAsyncSubset(targetIndex)) {
+            if (force || _requiresAsyncSubset(targetIndex)) {
               return _invokeFunctionAsyncSubset(
                 targetIndex,
                 callArgs,
                 depth: depth + 1,
+                force: force,
               );
             }
             return _vm.invokeFunction(targetIndex, callArgs);
@@ -5234,11 +5292,11 @@ final class WasmInstance {
               throw StateError('call_ref to null function reference.');
             }
             final targetIndex = _functionRefIdToIndex[functionReference];
-            if (targetIndex == null) {
-              throw StateError('call_ref to non-function reference.');
-            }
-            final target = functions[targetIndex];
-            if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
+            final target = targetIndex == null ? null : functions[targetIndex];
+            final matches = target == null
+                ? _vm.functionRefMatchesType(functionReference, typeIndex)
+                : _asyncSubsetFunctionMatchesType(target, typeIndex);
+            if (!matches) {
               throw StateError('call_ref signature mismatch trap');
             }
             final callArgs = _popArgsForTypes(
@@ -5246,11 +5304,20 @@ final class WasmInstance {
               expectedType.params,
               context: 'return_call_ref',
             );
-            if (_requiresAsyncSubset(targetIndex)) {
+            if (targetIndex == null) {
+              return _vm.invokeFunctionRefAsync(
+                functionReference,
+                callArgs,
+                depth: depth + 1,
+                force: force,
+              );
+            }
+            if (force || _requiresAsyncSubset(targetIndex)) {
               return _invokeFunctionAsyncSubset(
                 targetIndex,
                 callArgs,
                 depth: depth + 1,
+                force: force,
               );
             }
             return _vm.invokeFunction(targetIndex, callArgs);
@@ -5274,17 +5341,17 @@ final class WasmInstance {
               throw StateError('call_indirect to null table element.');
             }
             final targetIndex = _functionRefIdToIndex[targetFunctionRef];
-            if (targetIndex == null) {
-              throw StateError('call_indirect to non-function table element.');
-            }
             final expectedType = module.types[typeIndex];
             if (!expectedType.isFunctionType) {
               throw StateError(
                 'call_indirect expected non-function type $typeIndex.',
               );
             }
-            final target = functions[targetIndex];
-            if (!_asyncSubsetFunctionMatchesType(target, typeIndex)) {
+            final target = targetIndex == null ? null : functions[targetIndex];
+            final matches = target == null
+                ? _vm.functionRefMatchesType(targetFunctionRef, typeIndex)
+                : _asyncSubsetFunctionMatchesType(target, typeIndex);
+            if (!matches) {
               throw StateError('call_indirect signature mismatch trap');
             }
             final callArgs = _popArgsForTypes(
@@ -5292,11 +5359,20 @@ final class WasmInstance {
               expectedType.params,
               context: 'return_call_indirect',
             );
-            if (_requiresAsyncSubset(targetIndex)) {
+            if (targetIndex == null) {
+              return _vm.invokeFunctionRefAsync(
+                targetFunctionRef,
+                callArgs,
+                depth: depth + 1,
+                force: force,
+              );
+            }
+            if (force || _requiresAsyncSubset(targetIndex)) {
               return _invokeFunctionAsyncSubset(
                 targetIndex,
                 callArgs,
                 depth: depth + 1,
+                force: force,
               );
             }
             return _vm.invokeFunction(targetIndex, callArgs);

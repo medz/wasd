@@ -5,10 +5,15 @@ import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
 
 import 'support/host_fs.dart';
+import 'support/public_api_sentinels.dart';
 import 'support/runtime_environment.dart';
 
 void main() {
   group('public WASI component API', () {
+    test('keeps the shared native executor internal', () {
+      expect(const WASIComponentNativeRuntime(), isNotNull);
+    });
+
     test('decodes components and prepares fixed Preview2/Preview3 hosts', () {
       final component = WasmComponent.decode(_emptyComponentBytes());
       final preview2 = WASIPreview2ComponentHost();
@@ -35,6 +40,93 @@ void main() {
       expect(
         host.standardImports,
         contains('wasi:cli/stdout@0.2.0.get-stdout'),
+      );
+    });
+
+    test('creates a complete Preview3 host through the WASI facade', () {
+      final host = WASI.preview3(
+        args: const <String>['command.wasm', 'arg'],
+        env: const <String, String>{'mode': 'test'},
+      );
+
+      expect(host.profile, same(WASIComponentVersionProfile.preview3));
+      expect(host.cliHost.args, ['command.wasm', 'arg']);
+      expect(host.cliHost.env, {'mode': 'test'});
+      expect(host.filesystemHost.table, same(host.componentHost.table));
+      expect(host.socketsHost.table, same(host.componentHost.table));
+      expect(host.httpHost.table, same(host.componentHost.table));
+      expect(
+        host.preview2CompatibilityHost.componentHost,
+        same(host.componentHost),
+      );
+      expect(
+        host.standardImports,
+        contains('wasi:filesystem/preopens@0.3.0.get-directories'),
+      );
+      expect(
+        host.standardImports,
+        contains('wasi:sockets/types@0.3.0.tcp-socket.create'),
+      );
+      expect(host.standardImports, contains('wasi:http/client@0.3.0.send'));
+      expect(
+        host.standardImports,
+        contains('wasi:io/streams@0.2.0.input-stream.read'),
+      );
+    });
+
+    test('exports every stable Preview3 package host', () {
+      expect(WASIPreview3RandomHost(), isA<WASIPreview3RandomHost>());
+      expect(WASIPreview3ClocksHost(), isA<WASIPreview3ClocksHost>());
+      expect(WASIPreview3FilesystemHost(), isA<WASIPreview3FilesystemHost>());
+      expect(WASIPreview3SocketsHost(), isA<WASIPreview3SocketsHost>());
+      expect(WASIPreview3CliHost(), isA<WASIPreview3CliHost>());
+      expect(WASIPreview3HttpHost(), isA<WASIPreview3HttpHost>());
+    });
+
+    test('keeps the native Preview3 filesystem constructor portable', () {
+      final table = WASIComponentResourceTable();
+      if (hasDartIoRuntime) {
+        final host = WASIPreview3NativeFilesystemHost(
+          preopens: const <String, String>{},
+          table: table,
+        );
+
+        expect(host.table, same(table));
+        return;
+      }
+
+      expect(
+        () => WASIPreview3NativeFilesystemHost(
+          preopens: const <String, String>{},
+          table: table,
+        ),
+        throwsUnsupportedError,
+      );
+    });
+
+    test('rejects Preview3 hosts backed by different resource tables', () {
+      final componentHost = WASIComponentHost();
+
+      expect(
+        () => WASIPreview3ComponentHost(
+          componentHost: componentHost,
+          filesystemHost: WASIPreview3FilesystemHost(),
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => WASIPreview3ComponentHost(
+          componentHost: componentHost,
+          socketsHost: WASIPreview3SocketsHost(),
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => WASIPreview3ComponentHost(
+          componentHost: componentHost,
+          httpHost: WASIPreview3HttpHost(),
+        ),
+        throwsArgumentError,
       );
     });
 

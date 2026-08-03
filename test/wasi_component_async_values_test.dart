@@ -44,6 +44,15 @@ void main() {
       expect(() => stream.readable.read(1), throwsStateError);
     });
 
+    test('reports writable closed after the readable endpoint drops', () {
+      final stream = WASIComponentStream<int>('events');
+
+      stream.readable.drop();
+
+      expect(stream.writable.isClosed, isTrue);
+      expect(() => stream.writable.write(1), throwsStateError);
+    });
+
     test(
       'completes pending readable stream waits when values arrive',
       () async {
@@ -92,6 +101,34 @@ void main() {
       await expectLater(droppedRead, throwsStateError);
     });
 
+    test('reports writer cancellation to pending and later readers', () async {
+      final stream = WASIComponentStream<int>('cancelled-writer');
+      final pending = stream.readable.readWhenAvailable(1);
+
+      stream.writable.cancel();
+
+      await expectLater(
+        pending,
+        throwsA(
+          isA<WASIComponentAsyncEndpointStateError>().having(
+            (error) => error.failure,
+            'failure',
+            WASIComponentAsyncEndpointFailure.cancelled,
+          ),
+        ),
+      );
+      await expectLater(
+        stream.readable.readWhenAvailable(1),
+        throwsA(
+          isA<WASIComponentAsyncEndpointStateError>().having(
+            (error) => error.failure,
+            'failure',
+            WASIComponentAsyncEndpointFailure.cancelled,
+          ),
+        ),
+      );
+    });
+
     test(
       'completes pending bounded stream writes when capacity opens',
       () async {
@@ -115,6 +152,34 @@ void main() {
         await expectLater(pending, completion(1));
         expect(completed, isTrue);
         expect(stream.readable.read(4), <int>[2, 3]);
+      },
+    );
+
+    test(
+      'rendezvous streams copy directly between pending endpoints',
+      () async {
+        final stream = WASIComponentStream<int>(
+          'numbers',
+          maxBufferedElements: 0,
+        );
+        var completed = false;
+
+        final pendingWrite = stream.writable.writeWhenAvailable(<int>[1, 2, 3])
+          ..then((_) {
+            completed = true;
+          });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(completed, isFalse);
+        expect(stream.queuedLength, 0);
+
+        await expectLater(
+          stream.readable.readWhenAvailable(2),
+          completion(<int>[1, 2]),
+        );
+        await expectLater(pendingWrite, completion(2));
+        expect(completed, isTrue);
+        expect(stream.queuedLength, 0);
       },
     );
 

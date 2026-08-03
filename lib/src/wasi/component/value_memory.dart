@@ -43,16 +43,20 @@ final class WASIComponentCanonicalValueMemoryCodec {
   /// Builds a Canonical ABI memory codec for adapter value boundaries.
   ///
   /// Unlike [fromValueType], this treats `own` and `borrow` resource handles as
-  /// canonical `u32` memory values. It does not validate resource ownership,
-  /// drop, or borrow lifetime semantics; adapter hosts must keep those tied to
-  /// the component resource table.
+  /// canonical `u32` memory values and reserves the same representation for
+  /// stream/future endpoints. It does not validate handle ownership, transfer,
+  /// drop, or borrow lifetime semantics; adapter hosts must apply those while
+  /// converting the raw handles.
   static WASIComponentCanonicalValueMemoryCodec? fromAdapterValueType(
     WasmComponentValueType type,
-    List<WasmComponentTypeDefinition> definitions,
-  ) {
+    List<WasmComponentTypeDefinition> definitions, {
+    WasmComponentTypeScope? typeScope,
+  }) {
     final layout = _LayoutResolver(
       definitions,
       handleMode: _ResourceHandleMemoryMode.ownAndBorrow,
+      allowAsyncHandles: true,
+      typeScope: typeScope,
     ).resolveValueType(type);
     return layout == null
         ? null
@@ -316,48 +320,65 @@ final class _LayoutResolver {
   _LayoutResolver(
     this.definitions, {
     this.handleMode = _ResourceHandleMemoryMode.none,
+    this.allowAsyncHandles = false,
+    this.typeScope,
   });
 
   final List<WasmComponentTypeDefinition> definitions;
   final _ResourceHandleMemoryMode handleMode;
-  final Map<int, _CanonicalValueLayout?> _cache =
-      <int, _CanonicalValueLayout?>{};
-  final Set<int> _visiting = <int>{};
+  final bool allowAsyncHandles;
+  final WasmComponentTypeScope? typeScope;
+  final Map<Object, _CanonicalValueLayout?> _cache =
+      <Object, _CanonicalValueLayout?>{};
+  final Set<Object> _visiting = <Object>{};
 
-  _CanonicalValueLayout? resolveValueType(WasmComponentValueType type) {
+  _CanonicalValueLayout? resolveValueType(WasmComponentValueType type) =>
+      _resolveValueType(type, typeScope);
+
+  _CanonicalValueLayout? _resolveValueType(
+    WasmComponentValueType type,
+    WasmComponentTypeScope? scope,
+  ) {
     switch (type.kind) {
       case WasmComponentValueTypeKind.primitive:
         final primitive = type.primitive;
         return primitive == null ? null : _primitiveLayout(primitive);
       case WasmComponentValueTypeKind.typeIndex:
         final typeIndex = type.typeIndex;
+        final definitionContext = scope?.definitionContextAt(typeIndex);
         if (typeIndex == null ||
             typeIndex < 0 ||
-            typeIndex >= definitions.length) {
+            (definitionContext == null && typeIndex >= definitions.length)) {
           return null;
         }
-        if (_cache.containsKey(typeIndex)) {
-          return _cache[typeIndex];
+        final cacheKey = definitionContext ?? typeIndex;
+        if (_cache.containsKey(cacheKey)) {
+          return _cache[cacheKey];
         }
-        if (!_visiting.add(typeIndex)) {
+        if (!_visiting.add(cacheKey)) {
           return null;
         }
-        _cache[typeIndex] = null;
-        final definition = definitions[typeIndex];
+        _cache[cacheKey] = null;
+        final definition =
+            definitionContext?.definition ?? definitions[typeIndex];
         final definedValue = definition.definedValue;
         final layout =
             definition.kind == WasmComponentTypeKind.definedValue &&
                 definedValue != null
-            ? _resolveDefinedValue(definedValue)
+            ? _resolveDefinedValue(
+                definedValue,
+                definitionContext?.typeScope ?? scope,
+              )
             : null;
-        _visiting.remove(typeIndex);
-        _cache[typeIndex] = layout;
+        _visiting.remove(cacheKey);
+        _cache[cacheKey] = layout;
         return layout;
     }
   }
 
   _CanonicalValueLayout? _resolveDefinedValue(
     WasmComponentDefinedValueType type,
+    WasmComponentTypeScope? scope,
   ) {
     switch (type.kind) {
       case WasmComponentDefinedValueTypeKind.primitive:
@@ -366,7 +387,7 @@ final class _LayoutResolver {
       case WasmComponentDefinedValueTypeKind.record:
         final fields = <_FieldLayout>[];
         for (final field in type.fields) {
-          final layout = resolveValueType(field.type);
+          final layout = _resolveValueType(field.type, scope);
           if (layout == null) {
             return null;
           }
@@ -376,7 +397,7 @@ final class _LayoutResolver {
       case WasmComponentDefinedValueTypeKind.tuple:
         final fields = <_FieldLayout>[];
         for (var i = 0; i < type.types.length; i++) {
-          final layout = resolveValueType(type.types[i]);
+          final layout = _resolveValueType(type.types[i], scope);
           if (layout == null) {
             return null;
           }
@@ -389,7 +410,7 @@ final class _LayoutResolver {
         if (elementType == null || fixedLength == null) {
           return null;
         }
-        final elementLayout = resolveValueType(elementType);
+        final elementLayout = _resolveValueType(elementType, scope);
         return elementLayout == null
             ? null
             : _FixedListLayout(elementLayout, fixedLength);
@@ -398,43 +419,55 @@ final class _LayoutResolver {
         if (elementType == null) {
           return null;
         }
-        final elementLayout = resolveValueType(elementType);
+        final elementLayout = _resolveValueType(elementType, scope);
         return elementLayout == null ? null : _ListLayout(elementLayout);
       case WasmComponentDefinedValueTypeKind.flags:
         return _FlagsLayout(type.labels);
       case WasmComponentDefinedValueTypeKind.variant:
-        return _variantLayout(type.cases, WasmComponentValueDataKind.variant);
+        return _variantLayout(
+          type.cases,
+          WasmComponentValueDataKind.variant,
+          scope,
+        );
       case WasmComponentDefinedValueTypeKind.enumeration:
-        return _variantLayout([
-          for (final label in type.labels)
-            WasmComponentVariantCase(label: label),
-        ], WasmComponentValueDataKind.enumeration);
+        return _variantLayout(
+          [
+            for (final label in type.labels)
+              WasmComponentVariantCase(label: label),
+          ],
+          WasmComponentValueDataKind.enumeration,
+          scope,
+        );
       case WasmComponentDefinedValueTypeKind.option:
         final cases = <WasmComponentVariantCase>[
           const WasmComponentVariantCase(label: 'none'),
           WasmComponentVariantCase(label: 'some', type: type.elementType),
         ];
-        return _variantLayout(cases, WasmComponentValueDataKind.option);
+        return _variantLayout(cases, WasmComponentValueDataKind.option, scope);
       case WasmComponentDefinedValueTypeKind.result:
         final cases = <WasmComponentVariantCase>[
           WasmComponentVariantCase(label: 'ok', type: type.okType),
           WasmComponentVariantCase(label: 'error', type: type.errorType),
         ];
-        return _variantLayout(cases, WasmComponentValueDataKind.result);
+        return _variantLayout(cases, WasmComponentValueDataKind.result, scope);
       case WasmComponentDefinedValueTypeKind.own:
       case WasmComponentDefinedValueTypeKind.borrow:
         final typeIndex = type.typeIndex;
+        final resourceDefinition =
+            scope?.definitionAt(typeIndex) ??
+            (typeIndex != null &&
+                    typeIndex >= 0 &&
+                    typeIndex < definitions.length
+                ? definitions[typeIndex]
+                : null);
         if (!_allowsResourceHandle(type.kind) ||
-            typeIndex == null ||
-            typeIndex < 0 ||
-            typeIndex >= definitions.length ||
-            definitions[typeIndex].kind != WasmComponentTypeKind.resource) {
+            resourceDefinition?.kind != WasmComponentTypeKind.resource) {
           return null;
         }
         return _canonicalU32HandleLayout;
       case WasmComponentDefinedValueTypeKind.stream:
       case WasmComponentDefinedValueTypeKind.future:
-        return null;
+        return allowAsyncHandles ? _canonicalU32HandleLayout : null;
     }
   }
 
@@ -452,11 +485,14 @@ final class _LayoutResolver {
   _CanonicalValueLayout? _variantLayout(
     List<WasmComponentVariantCase> cases,
     WasmComponentValueDataKind kind,
+    WasmComponentTypeScope? scope,
   ) {
     final caseLayouts = <_CaseLayout>[];
     for (final case_ in cases) {
       final caseType = case_.type;
-      final layout = caseType == null ? null : resolveValueType(caseType);
+      final layout = caseType == null
+          ? null
+          : _resolveValueType(caseType, scope);
       if (caseType != null && layout == null) {
         return null;
       }
@@ -1112,9 +1148,6 @@ final class _ListLayout extends _CanonicalValueLayout {
     WASIComponentCanonicalStringEncoding stringEncoding,
   ) {
     _checkU32(value.items.length, 'list length');
-    if (value.items.isEmpty) {
-      return 0;
-    }
     final canonicalRealloc = _requireRealloc(realloc, 'list');
     final payloadByteLength = _listPayloadByteLength(
       elementLayout,

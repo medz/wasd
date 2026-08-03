@@ -1,4 +1,5 @@
 import 'package:test/test.dart';
+import 'package:wasd/src/wasi/component/wit_adapter.dart';
 import 'package:wasd/src/wasi/component/wit_document.dart';
 
 void main() {
@@ -380,6 +381,36 @@ world demo {
                   ),
                 ),
               ),
+        ),
+      );
+    });
+
+    test('rejects unresolved qualified world targets during expansion', () {
+      const source = '''
+package wasi:demo@0.3.0;
+
+world demo {
+  include wasi:missing/imports@0.3.0;
+}
+''';
+
+      final document = WASIComponentWitDocument.parse(
+        source,
+        sourceName: 'unresolved-qualified.wit',
+      );
+
+      expect(
+        () => wasiComponentWitWorldFunctions(
+          document,
+          document.worldNamed('demo')!,
+          resolveTarget: (_) => null,
+        ),
+        throwsA(
+          isA<Exception>().having(
+            (error) => error.toString(),
+            'message',
+            contains('wasi:missing/imports@0.3.0'),
+          ),
         ),
       );
     });

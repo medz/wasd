@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
+import 'current.dart';
 import 'resource_table.dart';
 
 /// Resolves an externally owned component handle to a waitable, when possible.
@@ -75,12 +76,27 @@ final class WASIComponentWaitableEvent {
 
   /// Writes the two canonical `u32` payload fields to [memory].
   void writePayloadToMemory(wasm.Memory memory, int pointer) {
-    RangeError.checkNotNegative(pointer, 'pointer');
+    final normalizedPointer = pointer.toUnsigned(32);
+    if (normalizedPointer % 4 != 0) {
+      throw StateError(
+        'WASI component waitable event pointer must be aligned.',
+      );
+    }
+    final memoryLength = memory.buffer.lengthInBytes;
+    if (normalizedPointer > memoryLength ||
+        8 > memoryLength - normalizedPointer) {
+      throw RangeError.range(
+        normalizedPointer + 8,
+        0,
+        memoryLength,
+        'pointer + byte length',
+      );
+    }
     RangeError.checkValueInInterval(payload1, 0, _maxU32, 'payload1');
     RangeError.checkValueInInterval(payload2, 0, _maxU32, 'payload2');
     final data = ByteData.view(memory.buffer);
-    data.setUint32(pointer, payload1, Endian.little);
-    data.setUint32(pointer + 4, payload2, Endian.little);
+    data.setUint32(normalizedPointer, payload1, Endian.little);
+    data.setUint32(normalizedPointer + 4, payload2, Endian.little);
   }
 }
 
@@ -419,19 +435,48 @@ final class WASIComponentWaitableHost {
   late final WASIComponentResourceType<WASIComponentWaitableSet>
   _waitableSetType;
   final List<WASIComponentWaitableResolver> _waitableResolvers;
-  bool _taskCancellationPending = false;
-  Completer<void>? _taskCancellationWaiter;
+  final WASIComponentCurrent<Object> _currentTask =
+      WASIComponentCurrent<Object>();
+  final Map<Object, _WASIComponentTaskCancellationState>
+  _taskCancellationStates =
+      Map<Object, _WASIComponentTaskCancellationState>.identity();
+  final _WASIComponentTaskCancellationState _unscopedTaskCancellation =
+      _WASIComponentTaskCancellationState();
 
   /// Whether a cancellable wait or poll can observe task cancellation.
-  bool get hasPendingTaskCancellation => _taskCancellationPending;
+  bool get hasPendingTaskCancellation => _taskCancellationState.pending;
+
+  /// Runs [callback] with task-local cancellation delivery for [task].
+  T runWithTask<T>(Object task, T Function() callback) {
+    return _currentTask.run(task, callback);
+  }
+
+  /// Runs [callback] with task-local cancellation delivery for [task] until it
+  /// completes, then releases the task's cancellation state.
+  Future<T> runWithTaskAsync<T>(
+    Object task,
+    Future<T> Function() callback,
+  ) async {
+    try {
+      return await _currentTask.runAsync(task, callback);
+    } finally {
+      _taskCancellationStates.remove(task);
+    }
+  }
 
   /// Requests cancellation of the current component task.
-  void requestTaskCancellation() {
-    _taskCancellationPending = true;
-    final waiter = _taskCancellationWaiter;
+  void requestTaskCancellation([Object? task]) {
+    final state = _taskCancellationStateFor(task ?? _currentTask.current);
+    state.pending = true;
+    final waiter = state.waiter;
     if (waiter != null && !waiter.isCompleted) {
       waiter.complete();
     }
+  }
+
+  /// Releases cancellation state retained for a resolved [task].
+  void releaseTask(Object task) {
+    _taskCancellationStates.remove(task);
   }
 
   /// Adds a resolver for waitables owned by another component host layer.
@@ -527,18 +572,26 @@ final class WASIComponentWaitableHost {
   }
 
   /// Executes `waitable-set.wait`.
+  Future<WASIComponentWaitableEvent> waitableSetWait(
+    int waitableSet, {
+    bool cancellable = false,
+  }) {
+    return table
+        .borrowAsync<WASIComponentWaitableSet, WASIComponentWaitableEvent>(
+          _waitableSetType,
+          waitableSet,
+          (set) => _waitForWaitableSet(set, cancellable: cancellable),
+        );
+  }
+
+  /// Executes `waitable-set.wait` and writes its payload to memory.
   Future<int> waitableSetWaitToMemory(
     int waitableSet,
     wasm.Memory memory,
     int pointer, {
     bool cancellable = false,
   }) async {
-    final event = await table
-        .borrowAsync<WASIComponentWaitableSet, WASIComponentWaitableEvent>(
-          _waitableSetType,
-          waitableSet,
-          (set) => _waitForWaitableSet(set, cancellable: cancellable),
-        );
+    final event = await waitableSetWait(waitableSet, cancellable: cancellable);
     return _writeEventToMemory(event, memory, pointer);
   }
 
@@ -589,14 +642,15 @@ final class WASIComponentWaitableHost {
     if (!cancellable) {
       return set.wait();
     }
-    if (_taskCancellationWaiter != null) {
+    final cancellationState = _taskCancellationState;
+    if (cancellationState.waiter != null) {
       throw StateError(
         'WASI component task cancellation already has a cancellable waiter.',
       );
     }
 
     final waiter = Completer<void>();
-    _taskCancellationWaiter = waiter;
+    cancellationState.waiter = waiter;
     return set
         .waitUntil(
           waiter.future.then<WASIComponentWaitableEvent>(
@@ -610,18 +664,32 @@ final class WASIComponentWaitableHost {
           return event;
         })
         .whenComplete(() {
-          if (identical(_taskCancellationWaiter, waiter)) {
-            _taskCancellationWaiter = null;
+          if (identical(cancellationState.waiter, waiter)) {
+            cancellationState.waiter = null;
           }
         });
   }
 
   bool _consumeTaskCancellation() {
-    if (!_taskCancellationPending) {
+    final state = _taskCancellationState;
+    if (!state.pending) {
       return false;
     }
-    _taskCancellationPending = false;
+    state.pending = false;
     return true;
+  }
+
+  _WASIComponentTaskCancellationState get _taskCancellationState =>
+      _taskCancellationStateFor(_currentTask.current);
+
+  _WASIComponentTaskCancellationState _taskCancellationStateFor(Object? task) {
+    if (task == null) {
+      return _unscopedTaskCancellation;
+    }
+    return _taskCancellationStates.putIfAbsent(
+      task,
+      _WASIComponentTaskCancellationState.new,
+    );
   }
 
   WASIComponentWaitable? _waitableForHandle(int handle) {
@@ -636,6 +704,11 @@ final class WASIComponentWaitableHost {
     }
     return null;
   }
+}
+
+final class _WASIComponentTaskCancellationState {
+  bool pending = false;
+  Completer<void>? waiter;
 }
 
 /// Executable waitable-set canonical program for a decoded component.
@@ -684,7 +757,7 @@ final class WASIComponentCanonicalWaitableProgram {
         return operation.waitableSetPollToMemory(
           _expectHandle(canonicalIndex, args[0]),
           memory,
-          _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
+          _expectPointer(canonicalIndex, args[1]),
         );
       default:
         return invoke(canonicalIndex, args);
@@ -704,7 +777,7 @@ final class WASIComponentCanonicalWaitableProgram {
         return operation.waitableSetWaitToMemory(
           _expectHandle(canonicalIndex, args[0]),
           memory,
-          _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
+          _expectPointer(canonicalIndex, args[1]),
         );
       default:
         return invokeWithMemory(canonicalIndex, memory, args);
@@ -823,6 +896,15 @@ int _expectNonNegativeInt(int canonicalIndex, Object? value, String name) {
     );
   }
   return value;
+}
+
+int _expectPointer(int canonicalIndex, Object? value) {
+  if (value is int) {
+    return value.toUnsigned(32);
+  }
+  throw StateError(
+    'WASI component canonical waitable index $canonicalIndex expected pointer.',
+  );
 }
 
 const int _maxU32 = 0xffffffff;

@@ -143,6 +143,14 @@ final class _WasmThrownException implements Exception {
   final int exceptionRef;
 }
 
+typedef WasmAsyncFunctionRefInvoker =
+    Future<List<WasmValue>> Function(
+      int functionIndex,
+      List<WasmValue> args,
+      int depth,
+      bool force,
+    );
+
 final class WasmVm {
   WasmVm({
     required List<RuntimeFunction> functions,
@@ -219,6 +227,7 @@ final class WasmVm {
   final List<List<int?>?> _elementSegments;
   final List<int> _elementSegmentRefTypeCodes;
   final int maxCallDepth;
+  WasmAsyncFunctionRefInvoker? _asyncFunctionRefInvoker;
 
   static const int _nullRef = -1;
   static const int _heapAny = -18;
@@ -278,6 +287,43 @@ final class WasmVm {
     final allocated = _nextFunctionRefId++;
     _functionRefIdsByKey[key] = allocated;
     return allocated;
+  }
+
+  void registerAsyncFunctionRefInvoker(WasmAsyncFunctionRefInvoker invoker) {
+    if (_asyncFunctionRefInvoker != null) {
+      throw StateError('Async function reference invoker is already bound.');
+    }
+    _asyncFunctionRefInvoker = invoker;
+  }
+
+  bool functionRefMatchesType(int reference, int typeIndex) {
+    final target = _functionRefTargets[reference];
+    return target != null &&
+        _functionTargetMatchesType(target, typeIndex, exact: false);
+  }
+
+  Future<List<WasmValue>> invokeFunctionRefAsync(
+    int reference,
+    List<WasmValue> args, {
+    required int depth,
+    required bool force,
+  }) {
+    final target = _functionRefTargets[reference];
+    if (target == null) {
+      throw StateError('Function reference does not target a function.');
+    }
+    final invoker = target.vm._asyncFunctionRefInvoker;
+    if (invoker != null) {
+      return invoker(target.functionIndex, args, depth, force);
+    }
+    return Future<List<WasmValue>>.value(
+      target.vm._execute(
+        target.functionIndex,
+        args,
+        depth: depth,
+        argsNormalized: true,
+      ),
+    );
   }
 
   static int encodeConstGcRef({

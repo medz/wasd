@@ -51,6 +51,8 @@ final class WASIComponentSubtask {
   bool _resolveDelivered = false;
   bool _hasResult = false;
   Object? _result;
+  Object? _failure;
+  StackTrace? _failureStackTrace;
 
   /// Waitable used for `waitable.join` and `SUBTASK` events.
   final WASIComponentWaitable waitable;
@@ -130,6 +132,18 @@ final class WASIComponentSubtask {
     _publishProgress();
   }
 
+  /// Resolves this subtask with a trapped host or component failure.
+  void markFailed(Object error, StackTrace stackTrace) {
+    _requireNotDelivered();
+    if (resolved) {
+      throw StateError('WASI component subtask $name is already resolved.');
+    }
+    _failure = error;
+    _failureStackTrace = stackTrace;
+    _state = WASIComponentSubtaskState.returned;
+    _publishProgress();
+  }
+
   /// Confirms cancellation before the subtask started.
   void cancelBeforeStarted() {
     if (!_cancellationRequested) {
@@ -184,6 +198,13 @@ final class WASIComponentSubtask {
       );
     }
     _resolveDelivered = true;
+    final failure = _failure;
+    if (failure != null) {
+      Error.throwWithStackTrace(
+        failure,
+        _failureStackTrace ?? StackTrace.empty,
+      );
+    }
     return _state.code;
   }
 

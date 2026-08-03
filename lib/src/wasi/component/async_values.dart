@@ -32,9 +32,11 @@ final class WASIComponentStream<T> {
     String name, {
     int? maxBufferedElements,
     void Function()? onDrop,
+    void Function()? onReadableDrop,
   }) : _state = _WASIComponentStreamState<T>(
          name,
          onDrop,
+         onReadableDrop,
          maxBufferedElements: maxBufferedElements,
        ) {
     readable = WASIComponentReadableStream<T>._(_state);
@@ -77,6 +79,10 @@ final class WASIComponentReadableStream<T> {
   /// Whether at least one value is currently queued for reading.
   bool get hasQueuedValues => _state.queue.isNotEmpty;
 
+  /// Whether the writable end is closed and no buffered values remain.
+  bool get isEndOfStream =>
+      _state.writeClosed && !_state.writeCancelled && _state.queue.isEmpty;
+
   /// Reads up to [maxElements] queued values.
   ///
   /// This is non-blocking: an empty list means no values are currently queued.
@@ -91,6 +97,11 @@ final class WASIComponentReadableStream<T> {
   /// operations.
   Future<List<T>> readWhenAvailable(int maxElements) {
     return _state.readWhenAvailable(maxElements);
+  }
+
+  /// Cancels the currently pending read copy without closing this endpoint.
+  void cancelPendingCopy() {
+    _state.cancelPendingReadCopy();
   }
 
   /// Forwards up to [maxElements] values into [writable].
@@ -126,7 +137,12 @@ final class WASIComponentWritableStream<T> {
   final _WASIComponentStreamState<T> _state;
 
   /// Whether no more writes are accepted.
-  bool get isClosed => _state.writeClosed || _state.writeDropped;
+  bool get isClosed =>
+      _state.writeClosed ||
+      _state.writeDropped ||
+      _state.writeCancelled ||
+      _state.readDropped ||
+      _state.readCancelled;
 
   /// Whether writes have been cancelled.
   bool get isCancelled => _state.writeCancelled;
@@ -156,6 +172,11 @@ final class WASIComponentWritableStream<T> {
   /// completes after writing every value.
   Future<int> writeWhenAvailable(Iterable<T> values) {
     return _state.writeWhenAvailable(values);
+  }
+
+  /// Cancels the currently pending write copy without closing this endpoint.
+  void cancelPendingCopy() {
+    _state.cancelPendingWriteCopy();
   }
 
   /// Closes the writable endpoint without dropping it.
@@ -245,6 +266,11 @@ final class WASIComponentReadableFuture<T> {
     return _state.readWhenReadyForCopy();
   }
 
+  /// Cancels the currently pending read copy without closing this endpoint.
+  void cancelPendingCopy() {
+    _state.cancelPendingReadCopy();
+  }
+
   /// Cancels the future while it is still pending.
   void cancel() {
     _state.cancel();
@@ -300,6 +326,11 @@ final class WASIComponentWritableFuture<T> {
     return _state.completeWhenReadForCopy(value);
   }
 
+  /// Cancels the currently pending write copy without closing this endpoint.
+  void cancelPendingCopy() {
+    _state.cancelPendingWriteCopy();
+  }
+
   /// Cancels the future while it is still pending.
   void cancel() {
     _state.cancel();
@@ -317,11 +348,16 @@ final class WASIComponentWritableFuture<T> {
 }
 
 final class _WASIComponentStreamState<T> {
-  _WASIComponentStreamState(this.name, this.onDrop, {int? maxBufferedElements})
-    : maxBufferedElements = _validateMaxBufferedElements(maxBufferedElements);
+  _WASIComponentStreamState(
+    this.name,
+    this.onDrop,
+    this.onReadableDrop, {
+    int? maxBufferedElements,
+  }) : maxBufferedElements = _validateMaxBufferedElements(maxBufferedElements);
 
   final String name;
   final void Function()? onDrop;
+  final void Function()? onReadableDrop;
   final int? maxBufferedElements;
   final Queue<T> queue = ListQueue<T>();
   Queue<_WASIComponentStreamReadWaiter<T>>? readWaiters;
@@ -334,6 +370,7 @@ final class _WASIComponentStreamState<T> {
   bool writeDropped = false;
   bool writeClosed = false;
   bool _dropCalled = false;
+  bool _readableDropCalled = false;
   bool _pumpingWaiters = false;
 
   bool get isDropped => readDropped && writeDropped;
@@ -341,7 +378,16 @@ final class _WASIComponentStreamState<T> {
   List<T> readQueued(int maxElements) {
     requireReadable();
     RangeError.checkNotNegative(maxElements, 'maxElements');
-    if (maxElements == 0 || queue.isEmpty) {
+    if (maxElements == 0) {
+      return <T>[];
+    }
+    if (queue.isEmpty) {
+      if (writeCancelled) {
+        throw WASIComponentAsyncEndpointStateError(
+          WASIComponentAsyncEndpointFailure.cancelled,
+          'WASI component stream $name writes were cancelled.',
+        );
+      }
       return <T>[];
     }
 
@@ -365,6 +411,14 @@ final class _WASIComponentStreamState<T> {
       }
       return Future<List<T>>.value(values);
     }
+    if (writeCancelled) {
+      return Future<List<T>>.error(
+        WASIComponentAsyncEndpointStateError(
+          WASIComponentAsyncEndpointFailure.cancelled,
+          'WASI component stream $name writes were cancelled.',
+        ),
+      );
+    }
     if (writeClosed) {
       return Future<List<T>>.value(<T>[]);
     }
@@ -373,6 +427,9 @@ final class _WASIComponentStreamState<T> {
     (readWaiters ??= ListQueue<_WASIComponentStreamReadWaiter<T>>()).addLast(
       _WASIComponentStreamReadWaiter<T>(maxElements, completer),
     );
+    if (writeWaiters != null) {
+      _pumpWaiters();
+    }
     return completer.future;
   }
 
@@ -435,6 +492,9 @@ final class _WASIComponentStreamState<T> {
     (writeWaiters ??= ListQueue<_WASIComponentStreamWriteWaiter<T>>()).addLast(
       _WASIComponentStreamWriteWaiter<T>(bufferedValues, completer),
     );
+    if (readWaiters != null) {
+      _pumpWaiters();
+    }
     return completer.future;
   }
 
@@ -505,8 +565,17 @@ final class _WASIComponentStreamState<T> {
     if (writeCancelled) {
       throw StateError('WASI component stream $name writes were cancelled.');
     }
-    if (readDropped || readCancelled) {
-      throw StateError('WASI component stream $name readable is closed.');
+    if (readDropped) {
+      throw WASIComponentAsyncEndpointStateError(
+        WASIComponentAsyncEndpointFailure.dropped,
+        'WASI component stream $name readable is closed.',
+      );
+    }
+    if (readCancelled) {
+      throw WASIComponentAsyncEndpointStateError(
+        WASIComponentAsyncEndpointFailure.cancelled,
+        'WASI component stream $name reads were cancelled.',
+      );
     }
   }
 
@@ -563,6 +632,24 @@ final class _WASIComponentStreamState<T> {
     }
   }
 
+  void cancelPendingReadCopy() {
+    requireReadable();
+    final waiters = readWaiters;
+    if (waiters == null || waiters.isEmpty) {
+      throw StateError('WASI component stream $name has no pending read copy.');
+    }
+    final waiter = waiters.removeFirst();
+    if (waiters.isEmpty) {
+      readWaiters = null;
+    }
+    waiter.fail(
+      WASIComponentAsyncEndpointStateError(
+        WASIComponentAsyncEndpointFailure.cancelled,
+        'WASI component stream $name read copy was cancelled.',
+      ),
+    );
+  }
+
   void cancelWrite() {
     if (writeDropped) {
       throw StateError('WASI component stream $name writable was dropped.');
@@ -588,6 +675,26 @@ final class _WASIComponentStreamState<T> {
     if (readWaiters != null) {
       _pumpWaiters();
     }
+  }
+
+  void cancelPendingWriteCopy() {
+    requireWritable();
+    final waiters = writeWaiters;
+    if (waiters == null || waiters.isEmpty) {
+      throw StateError(
+        'WASI component stream $name has no pending write copy.',
+      );
+    }
+    final waiter = waiters.removeFirst();
+    if (waiters.isEmpty) {
+      writeWaiters = null;
+    }
+    waiter.fail(
+      WASIComponentAsyncEndpointStateError(
+        WASIComponentAsyncEndpointFailure.cancelled,
+        'WASI component stream $name write copy was cancelled.',
+      ),
+    );
   }
 
   void dropReadable() {
@@ -619,6 +726,10 @@ final class _WASIComponentStreamState<T> {
           'WASI component stream $name readable is closed.',
         ),
       );
+    }
+    if (!_readableDropCalled) {
+      _readableDropCalled = true;
+      onReadableDrop?.call();
     }
     _maybeDrop();
   }
@@ -760,13 +871,45 @@ final class _WASIComponentStreamState<T> {
     try {
       var progressed = true;
       while (progressed) {
-        progressed = _completeReadyReadWaiters();
+        progressed = _completeRendezvousWaiters();
+        progressed = _completeReadyReadWaiters() || progressed;
         progressed = _completeReadyWriteWaiters() || progressed;
         progressed = _completeReadyWriteCapacityWaiters() || progressed;
       }
     } finally {
       _pumpingWaiters = false;
     }
+  }
+
+  bool _completeRendezvousWaiters() {
+    if (maxBufferedElements != 0) {
+      return false;
+    }
+    final readers = readWaiters;
+    final writers = writeWaiters;
+    if (readers == null ||
+        readers.isEmpty ||
+        writers == null ||
+        writers.isEmpty) {
+      return false;
+    }
+
+    var progressed = false;
+    while (readers.isNotEmpty && writers.isNotEmpty) {
+      final reader = readers.removeFirst();
+      final writer = writers.removeFirst();
+      final count = _minInt(reader.maxElements, writer.values.length);
+      reader.complete(List<T>.of(writer.values.take(count), growable: false));
+      writer.complete(count);
+      progressed = true;
+    }
+    if (readers.isEmpty) {
+      readWaiters = null;
+    }
+    if (writers.isEmpty) {
+      writeWaiters = null;
+    }
+    return progressed;
   }
 
   bool _completeReadyReadWaiters() {
@@ -788,6 +931,15 @@ final class _WASIComponentStreamState<T> {
           WASIComponentAsyncEndpointStateError(
             WASIComponentAsyncEndpointFailure.dropped,
             'WASI component stream $name writable was dropped.',
+          ),
+        );
+        progressed = true;
+      } else if (writeCancelled) {
+        waiters.removeFirst();
+        waiter.fail(
+          WASIComponentAsyncEndpointStateError(
+            WASIComponentAsyncEndpointFailure.cancelled,
+            'WASI component stream $name writes were cancelled.',
           ),
         );
         progressed = true;
@@ -889,10 +1041,10 @@ final class _WASIComponentStreamState<T> {
 }
 
 int? _validateMaxBufferedElements(int? maxBufferedElements) {
-  if (maxBufferedElements == null || maxBufferedElements > 0) {
+  if (maxBufferedElements == null || maxBufferedElements >= 0) {
     return maxBufferedElements;
   }
-  throw RangeError.range(maxBufferedElements, 1, null, 'maxBufferedElements');
+  throw RangeError.range(maxBufferedElements, 0, null, 'maxBufferedElements');
 }
 
 int _minInt(int left, int right) {
@@ -1135,6 +1287,24 @@ final class _WASIComponentFutureState<T> {
     }
   }
 
+  void cancelPendingReadCopy() {
+    requireReadable();
+    final waiters = readWaiters;
+    if (waiters == null || waiters.isEmpty) {
+      throw StateError('WASI component future $name has no pending read copy.');
+    }
+    final waiter = waiters.removeAt(0);
+    if (waiters.isEmpty) {
+      readWaiters = null;
+    }
+    waiter.completeError(
+      WASIComponentAsyncEndpointStateError(
+        WASIComponentAsyncEndpointFailure.cancelled,
+        'WASI component future $name read copy was cancelled.',
+      ),
+    );
+  }
+
   void cancelWriteDelivery() {
     if (!hasPendingWriteDelivery) {
       cancel();
@@ -1146,6 +1316,28 @@ final class _WASIComponentFutureState<T> {
       WASIComponentAsyncEndpointStateError(
         WASIComponentAsyncEndpointFailure.cancelled,
         'WASI component future $name write was cancelled.',
+      ),
+    );
+  }
+
+  void cancelPendingWriteCopy() {
+    final waiters = writeDeliveryWaiters;
+    if (waiters == null || waiters.isEmpty) {
+      throw StateError(
+        'WASI component future $name has no pending write copy.',
+      );
+    }
+    final waiter = waiters.removeAt(0);
+    if (waiters.isEmpty) {
+      writeDeliveryWaiters = null;
+    }
+    status = _WASIComponentFutureStatus.pending;
+    value = null;
+    _valueObserved = false;
+    waiter.completeError(
+      WASIComponentAsyncEndpointStateError(
+        WASIComponentAsyncEndpointFailure.cancelled,
+        'WASI component future $name write copy was cancelled.',
       ),
     );
   }

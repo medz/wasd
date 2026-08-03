@@ -499,6 +499,48 @@ void main() {
       expect(data.getUint32(132, Endian.little), 8);
     });
 
+    test('allocates an aligned non-null pointer for an empty list', () {
+      final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
+        const WasmComponentValueType.typeIndex(0),
+        [
+          const WasmComponentTypeDefinition(
+            kind: WasmComponentTypeKind.definedValue,
+            definedValue: WasmComponentDefinedValueType(
+              kind: WasmComponentDefinedValueTypeKind.list,
+              elementType: WasmComponentValueType.primitive(
+                WasmComponentPrimitiveValueType.u32,
+              ),
+            ),
+          ),
+        ],
+      )!;
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      final empty = WasmComponentValueData(
+        kind: WasmComponentValueDataKind.list,
+        rawBytes: Uint8List(0),
+      );
+      var allocations = 0;
+
+      codec.store(
+        memory,
+        64,
+        empty,
+        realloc: (oldPointer, oldSize, alignment, newSize) {
+          allocations++;
+          expect(oldPointer, 0);
+          expect(oldSize, 0);
+          expect(alignment, 4);
+          expect(newSize, 0);
+          return 4;
+        },
+      );
+
+      expect(allocations, 1);
+      expect(data.getUint32(64, Endian.little), 4);
+      expect(data.getUint32(68, Endian.little), 0);
+    });
+
     test('loads and stores strings through canonical records', () {
       final codec = WASIComponentCanonicalValueMemoryCodec.fromValueType(
         const WasmComponentValueType.primitive(

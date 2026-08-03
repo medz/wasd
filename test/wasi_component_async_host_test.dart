@@ -20,18 +20,22 @@ void main() {
       final program = host.bindCanonicalDefinitions(component);
 
       expect(program.operations.map((operation) => operation.kind), [
-        WasmComponentCanonicalKind.backpressureSet,
         WasmComponentCanonicalKind.backpressureInc,
         WasmComponentCanonicalKind.backpressureDec,
       ]);
 
-      expect(program.invoke(0, <Object?>[true]), 1);
+      expect(program.invoke(0, const <Object?>[]), 1);
       expect(host.backpressure.isActive, isTrue);
-      expect(program.invoke(1, const <Object?>[]), 2);
-      expect(program.invoke(2, const <Object?>[]), 1);
-      expect(program.invoke(0, <Object?>[false]), 0);
+      expect(program.invoke(1, const <Object?>[]), 0);
       expect(host.backpressure.isActive, isFalse);
-      expect(() => program.invoke(2, const <Object?>[]), throwsStateError);
+      expect(() => program.invoke(1, const <Object?>[]), throwsStateError);
+    });
+
+    test('rejects the removed canonical backpressure.set opcode', () {
+      expect(
+        () => WasmComponent.decode(_deprecatedCanonicalBackpressureSetBytes()),
+        throwsFormatException,
+      );
     });
 
     test(
@@ -1080,6 +1084,69 @@ void main() {
       },
     );
 
+    test('keeps stream reads reusable after cancelling a copy', () async {
+      final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 377, Endian.little);
+      final host = WASIComponentAsyncHost();
+      final waitableHost = WASIComponentWaitableHost(
+        table: host.table,
+        waitableResolvers: [host.waitableForHandle],
+      );
+      host.defineStreamTypeFromComponent<int>(component, 0, 'u32-stream');
+      final program = _streamU32MemoryCancelHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final waitableSet = waitableHost.waitableSetNew();
+      waitableHost.waitableJoin(handles.readable, waitableSet);
+
+      expect(
+        program.invokeWithMemoryEvent(2, memory, <Object?>[
+          handles.readable,
+          96,
+          1,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invoke(3, <Object?>[handles.readable]),
+        wasiComponentAsyncBlocked,
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(2),
+      );
+
+      expect(
+        program.invokeWithMemoryEvent(2, memory, <Object?>[
+          handles.readable,
+          96,
+          1,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32, 1]),
+        1 << 4,
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(2),
+      );
+      expect(data.getUint32(96, Endian.little), 377);
+      expect(
+        data.getUint32(132, Endian.little),
+        WASIComponentAsyncCopyResult.completed(1).packedResult,
+      );
+
+      waitableHost.waitableJoin(handles.readable, 0);
+      waitableHost.waitableSetDrop(waitableSet);
+      expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test(
       'waits for synchronous handle-backed stream read cancel memory events',
       () async {
@@ -1158,6 +1225,51 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('returns dropped when a stream read starts after EOF', () async {
+      final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<int>(component, 0, 'u32-stream');
+      final program = _streamU32MemoryHandleProgram(host);
+
+      WASIComponentAsyncEndpointHandles newClosedStream() {
+        final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+        expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+        return handles;
+      }
+
+      final direct = newClosedStream();
+      expect(
+        program.invokeWithMemory(2, memory, <Object?>[direct.readable, 96, 1]),
+        WASIComponentAsyncCopyResult.dropped().packedResult,
+      );
+      expect(program.invoke(3, <Object?>[direct.readable]), isNull);
+
+      final event = newClosedStream();
+      expect(
+        program.invokeWithMemoryEvent(2, memory, <Object?>[
+          event.readable,
+          96,
+          1,
+        ]),
+        WASIComponentAsyncCopyResult.dropped().packedResult,
+      );
+      expect(program.invoke(3, <Object?>[event.readable]), isNull);
+
+      final awaited = newClosedStream();
+      await expectLater(
+        program.invokeWithMemoryAsync(2, memory, <Object?>[
+          awaited.readable,
+          96,
+          1,
+        ]),
+        completion(WASIComponentAsyncCopyResult.dropped().packedResult),
+      );
+      expect(program.invoke(3, <Object?>[awaited.readable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test('cancels bounded handle-backed stream write memory events', () async {
       final component = WasmComponent.decode(_streamU32TypeComponentBytes());
       expect(component.validate(), isEmpty);
@@ -1207,6 +1319,78 @@ void main() {
         data.getUint32(132, Endian.little),
         WASIComponentAsyncCopyResult.cancelled().packedResult,
       );
+      waitableHost.waitableJoin(handles.writable, 0);
+      waitableHost.waitableSetDrop(waitableSet);
+      expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
+    test('keeps stream writes reusable after cancelling a copy', () async {
+      final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 610, Endian.little);
+      final host = WASIComponentAsyncHost();
+      final waitableHost = WASIComponentWaitableHost(
+        table: host.table,
+        waitableResolvers: [host.waitableForHandle],
+      );
+      host.defineStreamTypeFromComponent<int>(
+        component,
+        0,
+        'u32-stream',
+        maxBufferedElements: 0,
+      );
+      final program = _streamU32MemoryCancelHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final waitableSet = waitableHost.waitableSetNew();
+      waitableHost.waitableJoin(handles.writable, waitableSet);
+
+      expect(
+        program.invokeWithMemoryEvent(1, memory, <Object?>[
+          handles.writable,
+          32,
+          1,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invoke(4, <Object?>[handles.writable]),
+        wasiComponentAsyncBlocked,
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(3),
+      );
+
+      expect(
+        program.invokeWithMemoryEvent(1, memory, <Object?>[
+          handles.writable,
+          32,
+          1,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      await expectLater(
+        program.invokeWithMemoryAsync(2, memory, <Object?>[
+          handles.readable,
+          96,
+          1,
+        ]),
+        completion(WASIComponentAsyncCopyResult.completed(1).packedResult),
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(3),
+      );
+      expect(data.getUint32(96, Endian.little), 610);
+      expect(
+        data.getUint32(132, Endian.little),
+        WASIComponentAsyncCopyResult.completed(1).packedResult,
+      );
+
       waitableHost.waitableJoin(handles.writable, 0);
       waitableHost.waitableSetDrop(waitableSet);
       expect(program.invoke(5, <Object?>[handles.readable]), isNull);
@@ -1315,6 +1499,56 @@ void main() {
           data.getUint32(132, Endian.little),
           WASIComponentAsyncCopyStatus.dropped.code,
         );
+        waitableHost.waitableJoin(handles.writable, 0);
+        waitableHost.waitableSetDrop(waitableSet);
+        expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+        expect(host.table.activeCount, 0);
+      },
+    );
+
+    test(
+      'publishes dropped when a stream write starts after reader drop',
+      () async {
+        final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+        expect(component.validate(), isEmpty);
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final data = ByteData.view(memory.buffer);
+        data.setUint32(32, 3, Endian.little);
+        final host = WASIComponentAsyncHost();
+        final waitableHost = WASIComponentWaitableHost(
+          table: host.table,
+          waitableResolvers: [host.waitableForHandle],
+        );
+        host.defineStreamTypeFromComponent<int>(
+          component,
+          0,
+          'u32-stream',
+          maxBufferedElements: 0,
+        );
+        final program = _streamU32MemoryHandleProgram(host);
+        final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+        final waitableSet = waitableHost.waitableSetNew();
+        waitableHost.waitableJoin(handles.writable, waitableSet);
+
+        expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+        expect(
+          program.invokeWithMemoryEvent(1, memory, <Object?>[
+            handles.writable,
+            32,
+            1,
+          ]),
+          wasiComponentAsyncBlocked,
+        );
+        await expectLater(
+          waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+          completion(3),
+        );
+        expect(data.getUint32(128, Endian.little), handles.writable);
+        expect(
+          data.getUint32(132, Endian.little),
+          WASIComponentAsyncCopyStatus.dropped.code,
+        );
+
         waitableHost.waitableJoin(handles.writable, 0);
         waitableHost.waitableSetDrop(waitableSet);
         expect(program.invoke(4, <Object?>[handles.writable]), isNull);
@@ -2417,6 +2651,67 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('keeps future reads reusable after cancelling a copy', () async {
+      final component = WasmComponent.decode(_futureU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 610, Endian.little);
+      final host = WASIComponentAsyncHost();
+      final waitableHost = WASIComponentWaitableHost(
+        table: host.table,
+        waitableResolvers: [host.waitableForHandle],
+      );
+      host.defineFutureTypeFromComponent<int>(component, 0, 'u32-future');
+      final program = _futureU32MemoryCancelHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final waitableSet = waitableHost.waitableSetNew();
+      waitableHost.waitableJoin(handles.readable, waitableSet);
+
+      expect(
+        program.invokeWithMemoryEvent(2, memory, <Object?>[
+          handles.readable,
+          96,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invoke(3, <Object?>[handles.readable]),
+        wasiComponentAsyncBlocked,
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(4),
+      );
+
+      expect(
+        program.invokeWithMemoryEvent(2, memory, <Object?>[
+          handles.readable,
+          96,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32]),
+        WASIComponentAsyncCopyResult.completed(0).packedResult,
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(4),
+      );
+      expect(data.getUint32(96, Endian.little), 610);
+      expect(
+        data.getUint32(132, Endian.little),
+        WASIComponentAsyncCopyResult.completed(0).packedResult,
+      );
+
+      waitableHost.waitableJoin(handles.readable, 0);
+      waitableHost.waitableSetDrop(waitableSet);
+      expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test('waits for synchronous future read cancel memory events', () async {
       final component = WasmComponent.decode(_futureU32TypeComponentBytes());
       expect(component.validate(), isEmpty);
@@ -2484,6 +2779,67 @@ void main() {
         data.getUint32(132, Endian.little),
         WASIComponentAsyncCopyResult.cancelled().packedResult,
       );
+      waitableHost.waitableJoin(handles.writable, 0);
+      waitableHost.waitableSetDrop(waitableSet);
+      expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
+    test('keeps future writes reusable after cancelling a copy', () async {
+      final component = WasmComponent.decode(_futureU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 610, Endian.little);
+      final host = WASIComponentAsyncHost();
+      final waitableHost = WASIComponentWaitableHost(
+        table: host.table,
+        waitableResolvers: [host.waitableForHandle],
+      );
+      host.defineFutureTypeFromComponent<int>(component, 0, 'u32-future');
+      final program = _futureU32MemoryCancelHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final waitableSet = waitableHost.waitableSetNew();
+      waitableHost.waitableJoin(handles.writable, waitableSet);
+
+      expect(
+        program.invokeWithMemoryEvent(1, memory, <Object?>[
+          handles.writable,
+          32,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invoke(4, <Object?>[handles.writable]),
+        wasiComponentAsyncBlocked,
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(5),
+      );
+
+      expect(
+        program.invokeWithMemoryEvent(1, memory, <Object?>[
+          handles.writable,
+          32,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invokeWithMemory(2, memory, <Object?>[handles.readable, 96]),
+        WASIComponentAsyncCopyResult.completed(0).packedResult,
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(5),
+      );
+      expect(data.getUint32(96, Endian.little), 610);
+      expect(
+        data.getUint32(132, Endian.little),
+        WASIComponentAsyncCopyResult.completed(0).packedResult,
+      );
+
       waitableHost.waitableJoin(handles.writable, 0);
       waitableHost.waitableSetDrop(waitableSet);
       expect(program.invoke(5, <Object?>[handles.readable]), isNull);
@@ -2924,12 +3280,27 @@ Uint8List _canonicalBackpressureBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x00,
   0x08,
-  0x04,
   0x03,
-  0x08,
+  0x02,
   0x24,
   0x25,
 ]);
+
+Uint8List _deprecatedCanonicalBackpressureSetBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x02,
+      0x01,
+      0x08,
+    ]);
 
 Uint8List _canonicalStreamProgramBytes() => Uint8List.fromList(const <int>[
   0x00,

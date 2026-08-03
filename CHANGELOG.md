@@ -1,3 +1,28 @@
+## 0.5.0
+
+- Execute stable WASI 0.3.0 `wasi:cli/command` and `wasi:http/service`
+  components on the native Dart VM backend.
+- Bind the frozen six-package, eight-world WASI 0.3.0 contract across `random`,
+  `clocks`, `filesystem`, `sockets`, `cli`, and `http`; keep
+  `wasi:clocks/timezone` explicitly outside the release contract.
+- Complete the async Canonical ABI paths required by those worlds, including
+  task/subtask scheduling, waitables, futures, streams, cancellation,
+  backpressure, resource ownership, and scoped component types.
+- Add native Preview3 filesystem, socket, outgoing HTTP, command, and HTTP
+  service execution while keeping Node.js and browser runner support
+  unclaimed.
+- Reject static absolute-path, parent-traversal, and symlink escapes from
+  native Preview3 preopens; document that path-based Dart filesystem APIs do
+  not prevent races with an external actor replacing path nodes concurrently.
+- Record the frozen Component Model async gates separately: WASD strict decode
+  `37/37`, `wasm-tools` validation `31/31`, and Wasmtime reference execution
+  `31/31`. The latter two are upstream validation/reference evidence, not WASD
+  WAST execution.
+- Pass all `45/45` frozen official `wasm32-wasip3` wasi-testsuite fixtures with
+  no skips, expected failures, or unexpected passes.
+- Pin the official WASI, Component Model, wasi-testsuite source, and precompiled
+  fixture revisions used by the Preview3 release gate.
+
 ## 0.4.0
 
 - Execute stable WASI 0.2.12 `wasi:cli/command` and `wasi:http/proxy`

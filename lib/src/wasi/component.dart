@@ -23,7 +23,7 @@ export 'component/wit_document.dart';
 export 'preview2/cli.dart';
 export 'preview2/clocks.dart';
 export 'preview2/component_host.dart';
-export 'preview2/component_runner.dart';
+export 'preview2/component_runner.dart' hide WASIComponentNativeRuntime;
 export 'preview2/filesystem.dart';
 export 'preview2/http.dart';
 export 'preview2/io.dart';
@@ -37,7 +37,16 @@ export 'preview2/poll.dart';
 export 'preview2/random.dart';
 export 'preview2/sockets.dart';
 export 'preview3/cli.dart';
+export 'preview3/clocks.dart';
 export 'preview3/component_host.dart';
+export 'preview3/component_runner.dart';
 export 'preview3/filesystem.dart';
+export 'preview3/http.dart';
 export 'preview3/native/filesystem_stub.dart'
     if (dart.library.io) 'preview3/native/filesystem.dart';
+export 'preview3/native/http_stub.dart'
+    if (dart.library.io) 'preview3/native/http.dart';
+export 'preview3/native/sockets_stub.dart'
+    if (dart.library.io) 'preview3/native/sockets.dart';
+export 'preview3/random.dart';
+export 'preview3/sockets.dart';
