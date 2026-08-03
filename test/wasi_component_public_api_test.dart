@@ -14,6 +14,10 @@ void main() {
       expect(const WASIComponentNativeRuntime(), isNotNull);
     });
 
+    test('keeps the Preview3 HTTP error-code table internal', () {
+      expect(wasiPreview3HttpErrorCodeCases, isEmpty);
+    });
+
     test('decodes components and prepares fixed Preview2/Preview3 hosts', () {
       final component = WasmComponent.decode(_emptyComponentBytes());
       final preview2 = WASIPreview2ComponentHost();
@@ -55,6 +59,18 @@ void main() {
       expect(host.filesystemHost.table, same(host.componentHost.table));
       expect(host.socketsHost.table, same(host.componentHost.table));
       expect(host.httpHost.table, same(host.componentHost.table));
+      if (hasDartIoRuntime) {
+        expect(host.filesystemHost, isA<WASIPreview3NativeFilesystemHost>());
+        expect(host.socketsHost, isA<WASIPreview3NativeSocketsHost>());
+        expect(host.httpHost, isA<WASIPreview3NativeHttpHost>());
+      } else {
+        expect(
+          host.filesystemHost,
+          isNot(isA<WASIPreview3NativeFilesystemHost>()),
+        );
+        expect(host.socketsHost, isNot(isA<WASIPreview3NativeSocketsHost>()));
+        expect(host.httpHost, isNot(isA<WASIPreview3NativeHttpHost>()));
+      }
       expect(
         host.preview2CompatibilityHost.componentHost,
         same(host.componentHost),
@@ -72,6 +88,20 @@ void main() {
         host.standardImports,
         contains('wasi:io/streams@0.2.0.input-stream.read'),
       );
+    });
+
+    test('closes only resources owned by a Preview3 component host', () {
+      final owned = WASIPreview3ComponentHost();
+      owned.close(force: true);
+      owned.close(force: true);
+
+      final injectedHttp = _CloseTrackingPreview3HttpHost();
+      final injected = WASIPreview3ComponentHost(httpHost: injectedHttp);
+      injected.close(force: true);
+
+      expect(injectedHttp.closeCalls, 0);
+      injectedHttp.close(force: true);
+      expect(injectedHttp.closeCalls, 1);
     });
 
     test('exports every stable Preview3 package host', () {
@@ -2099,6 +2129,15 @@ WasmComponentValueData _timestampValue(int seconds, int nanoseconds) {
 
 int _timestampNanos(int seconds, int nanoseconds) =>
     seconds * 1000000000 + nanoseconds;
+
+final class _CloseTrackingPreview3HttpHost extends WASIPreview3HttpHost {
+  int closeCalls = 0;
+
+  @override
+  void close({bool force = false}) {
+    closeCalls++;
+  }
+}
 
 BigInt? _integerBigInt(Object? integer) {
   return switch (integer) {

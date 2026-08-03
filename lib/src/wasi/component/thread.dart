@@ -1,6 +1,7 @@
 import '../../wasm/backend/native/interpreter/component.dart';
 import 'context.dart';
 import 'current.dart';
+import 'waitable_set.dart';
 
 const int _maxU32 = 0xffffffff;
 
@@ -29,8 +30,10 @@ final class WASIComponentThreadHost {
   /// Creates a thread host with one implicit current thread.
   WASIComponentThreadHost({
     WASIComponentContextHost? contextHost,
+    WASIComponentWaitableHost? waitableHost,
     int availableParallelism = 1,
-  }) : contextHost = contextHost ?? WASIComponentContextHost() {
+  }) : contextHost = contextHost ?? WASIComponentContextHost(),
+       _waitableHost = waitableHost {
     RangeError.checkValueInInterval(
       availableParallelism,
       1,
@@ -47,6 +50,7 @@ final class WASIComponentThreadHost {
 
   /// Context host used by current-thread execution.
   final WASIComponentContextHost contextHost;
+  final WASIComponentWaitableHost? _waitableHost;
 
   final Map<int, WASIComponentThread> _threads = <int, WASIComponentThread>{};
   late final WASIComponentCurrent<WASIComponentThread> _currentThread;
@@ -103,9 +107,15 @@ final class WASIComponentThreadHost {
 
   /// Executes `thread.yield`.
   ///
-  /// Returns the Canonical ABI event code for a normal yield completion.
-  Future<int> threadYield() async {
+  /// Returns the Canonical ABI `Cancelled` value for the yield.
+  Future<int> threadYield({bool cancellable = false}) async {
+    if (cancellable && (_waitableHost?.deliverTaskCancellation() ?? false)) {
+      return 1;
+    }
     await Future<void>.delayed(Duration.zero);
+    if (cancellable && (_waitableHost?.deliverTaskCancellation() ?? false)) {
+      return 1;
+    }
     return 0;
   }
 
@@ -122,6 +132,7 @@ final class WASIComponentThreadHost {
       host: this,
       kind: definition.kind,
       shared: definition.isShared,
+      cancellable: definition.isCancellable,
     );
   }
 
@@ -218,6 +229,7 @@ final class WASIComponentCanonicalThreadOperation {
     required WASIComponentThreadHost host,
     required this.kind,
     required this.shared,
+    required this.cancellable,
   }) : _host = host;
 
   final WASIComponentThreadHost _host;
@@ -227,6 +239,9 @@ final class WASIComponentCanonicalThreadOperation {
 
   /// Whether the decoded definition used the shared flag.
   final bool shared;
+
+  /// Whether the operation may deliver cooperative task cancellation.
+  final bool cancellable;
 
   /// Executes `thread.index`.
   int threadIndex() {
@@ -243,7 +258,7 @@ final class WASIComponentCanonicalThreadOperation {
   /// Executes `thread.yield`.
   Future<int> threadYield() {
     _requireKind(WasmComponentCanonicalKind.threadYield);
-    return _host.threadYield();
+    return _host.threadYield(cancellable: cancellable);
   }
 
   void _requireKind(WasmComponentCanonicalKind expected) {

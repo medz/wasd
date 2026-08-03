@@ -3,7 +3,9 @@ import 'dart:async';
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
 import 'adapter_plan.dart';
+import 'backpressure.dart';
 import 'current.dart';
+import 'resource_table.dart';
 import 'string_memory.dart';
 import 'subtask.dart';
 import 'waitable_set.dart';
@@ -30,8 +32,23 @@ enum WASIComponentTaskState {
       this == WASIComponentTaskState.cancelled;
 }
 
+/// Delivery state for cooperative Component Model task cancellation.
+enum WASIComponentTaskCancellationState {
+  /// Cancellation has not been requested.
+  none,
+
+  /// Cancellation was requested but has not reached a cancellable point.
+  pending,
+
+  /// A cancellable operation delivered cancellation to the task.
+  delivered,
+}
+
 /// Callee-side state for Component Model `task.*` canonical operations.
-final class WASIComponentTask {
+final class WASIComponentTask
+    implements
+        WASIComponentCancellationDelivery,
+        WASIComponentCanonicalBorrowScope {
   /// Creates a task optionally linked to its caller-side [subtask].
   WASIComponentTask({
     String name = 'task',
@@ -47,7 +64,8 @@ final class WASIComponentTask {
   final WASIComponentSubtask? _subtask;
   final void Function(WASIComponentTask task)? _onCancellationRequested;
   WASIComponentTaskState _state = WASIComponentTaskState.created;
-  bool _cancellationRequested = false;
+  WASIComponentTaskCancellationState _cancellationState =
+      WASIComponentTaskCancellationState.none;
   Completer<void>? _cancellationRequestedCompleter;
   int _borrowCount = 0;
   bool _hasResult = false;
@@ -59,12 +77,17 @@ final class WASIComponentTask {
   /// Current task state.
   WASIComponentTaskState get state => _state;
 
+  /// Current cooperative cancellation delivery state.
+  WASIComponentTaskCancellationState get cancellationState =>
+      _cancellationState;
+
   /// Whether the caller requested cancellation.
-  bool get cancellationRequested => _cancellationRequested;
+  bool get cancellationRequested =>
+      _cancellationState != WASIComponentTaskCancellationState.none;
 
   /// Completes when cooperative cancellation is requested for this task.
   Future<void> get whenCancellationRequested {
-    if (_cancellationRequested) {
+    if (cancellationRequested) {
       return Future<void>.value();
     }
     return (_cancellationRequestedCompleter ??= Completer<void>()).future;
@@ -90,7 +113,7 @@ final class WASIComponentTask {
     if (_state != WASIComponentTaskState.created) {
       throw StateError('WASI component task $name already started.');
     }
-    if (_cancellationRequested) {
+    if (cancellationRequested) {
       throw StateError(
         'WASI component task $name was cancelled before it started.',
       );
@@ -99,13 +122,37 @@ final class WASIComponentTask {
     _subtask?.markStarted();
   }
 
+  /// Waits for backpressure and enters guest code unless cancellation wins.
+  Future<bool> enter(WASIComponentBackpressure backpressure) async {
+    _requireNotResolved();
+    if (_state != WASIComponentTaskState.created) {
+      throw StateError('WASI component task $name already started.');
+    }
+    if (cancellationRequested) {
+      _cancelBeforeStart();
+      return false;
+    }
+
+    final admitted = await backpressure.enter(
+      cancellation: whenCancellationRequested,
+    );
+    if (!admitted || cancellationRequested) {
+      _cancelBeforeStart();
+      return false;
+    }
+    markStarted();
+    return true;
+  }
+
   /// Records a borrow lent to this task.
+  @override
   void addBorrow() {
     _requireNotResolved();
     _borrowCount++;
   }
 
   /// Releases a borrow lent to this task.
+  @override
   void releaseBorrow() {
     if (_borrowCount == 0) {
       throw StateError('WASI component task $name has no active borrows.');
@@ -116,12 +163,24 @@ final class WASIComponentTask {
   /// Requests cooperative cancellation of this task.
   void requestCancellation() {
     _requireNotResolved();
-    if (_cancellationRequested) {
+    if (cancellationRequested) {
       return;
     }
-    _cancellationRequested = true;
+    _cancellationState = WASIComponentTaskCancellationState.pending;
     _cancellationRequestedCompleter?.complete();
     _onCancellationRequested?.call(this);
+  }
+
+  /// Delivers a pending cancellation at a cancellable operation boundary.
+  @override
+  void deliverCancellation() {
+    _requireNotResolved();
+    if (_cancellationState != WASIComponentTaskCancellationState.pending) {
+      throw StateError(
+        'WASI component task $name has no pending cancellation to deliver.',
+      );
+    }
+    _cancellationState = WASIComponentTaskCancellationState.delivered;
   }
 
   /// Executes `task.return`.
@@ -137,9 +196,9 @@ final class WASIComponentTask {
   /// Executes `task.cancel`.
   void cancel() {
     _requireNotResolved();
-    if (!_cancellationRequested) {
+    if (_cancellationState != WASIComponentTaskCancellationState.delivered) {
       throw StateError(
-        'WASI component task $name cannot cancel before cancellation was requested.',
+        'WASI component task $name cannot cancel before cancellation was delivered.',
       );
     }
     _requireNoBorrows('cancel');
@@ -161,6 +220,13 @@ final class WASIComponentTask {
         'WASI component task $name cannot $operation with $_borrowCount active borrows.',
       );
     }
+  }
+
+  void _cancelBeforeStart() {
+    if (_cancellationState == WASIComponentTaskCancellationState.pending) {
+      deliverCancellation();
+    }
+    cancel();
   }
 
   void _requireNotResolved() {

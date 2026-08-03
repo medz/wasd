@@ -5,13 +5,13 @@ import 'dart:typed_data';
 
 import '../../component/async_values.dart';
 import '../sockets.dart';
+import 'socket_options.dart';
 
 /// Dart VM-backed WASI 0.3 sockets host.
 ///
-/// `dart:io` creates listeners and datagram sockets asynchronously. The stable
-/// synchronous WIT `bind` and `listen` calls therefore start those operations;
-/// a late bind failure closes the listener stream or is returned by the next
-/// dependent asynchronous socket operation.
+/// Synchronous WIT socket calls are exposed as pending Dart callbacks while
+/// `dart:io` obtains the real OS endpoint. TCP bind keeps an opaque
+/// [io.ServerSocket] reservation until listen or a bound connect consumes it.
 final class WASIPreview3NativeSocketsHost extends WASIPreview3SocketsHost {
   /// Creates a Preview3 sockets host backed by `dart:io`.
   WASIPreview3NativeSocketsHost({
@@ -25,40 +25,69 @@ final class WASIPreview3NativeSocketsHost extends WASIPreview3SocketsHost {
 
 final class _NativeSocketsBackend
     implements WASIPreview3SocketsBackend, WASIPreview3SocketOptionsBackend {
-  static var _nextPort = 49152 + (io.pid % 16384);
+  _NativeSocketsBackend()
+    : _optionAbi = NativeSocketOptionAbi.forOperatingSystem(
+        io.Platform.operatingSystem,
+      );
+
+  final Expando<io.Socket> _tcpSockets = Expando<io.Socket>();
+  final NativeSocketOptionAbi? _optionAbi;
 
   @override
-  bool get supportsTcpSocketOptions => true;
+  bool get supportsTcpSocketOptions => _optionAbi != null;
 
   @override
-  bool get supportsUdpSocketOptions => true;
+  bool get supportsUdpSocketOptions => _optionAbi != null;
 
   @override
-  WASIPreview3SocketOperation<WASIPreview3IpSocketAddress> startTcpBind(
-    WASIPreview3IpSocketAddress localAddress,
-  ) {
-    if (!_isBindableAddress(localAddress.address)) {
-      return WASIPreview3SocketOperation<WASIPreview3IpSocketAddress>.completed(
-        const WASIPreview3SocketResult<WASIPreview3IpSocketAddress>.error(
-          'address-not-bindable',
+  WASIPreview3SocketOperation<WASIPreview3TcpBinding> startTcpBind(
+    WASIPreview3IpSocketAddress localAddress, {
+    required BigInt backlog,
+  }) {
+    try {
+      final future =
+          io.ServerSocket.bind(
+            _internetAddress(localAddress),
+            localAddress.port,
+            backlog: _backlog(backlog),
+            v6Only: localAddress.family == WASIPreview3IpAddressFamily.ipv6,
+          ).then<WASIPreview3SocketResult<WASIPreview3TcpBinding>>(
+            (server) => WASIPreview3SocketResult<WASIPreview3TcpBinding>.ok(
+              _NativeTcpBinding(server),
+            ),
+            onError: (Object error) =>
+                WASIPreview3SocketResult<WASIPreview3TcpBinding>.error(
+                  _socketErrorCode(error),
+                ),
+          );
+      return WASIPreview3SocketOperation<WASIPreview3TcpBinding>.pending(
+        future,
+        disposeValue: (binding) => binding.close(),
+      );
+    } on Object catch (error) {
+      return WASIPreview3SocketOperation<WASIPreview3TcpBinding>.completed(
+        WASIPreview3SocketResult<WASIPreview3TcpBinding>.error(
+          _socketErrorCode(error),
         ),
       );
     }
-    final effective = _ephemeralAddress(localAddress);
-    return WASIPreview3SocketOperation<WASIPreview3IpSocketAddress>.completed(
-      WASIPreview3SocketResult<WASIPreview3IpSocketAddress>.ok(effective),
-    );
   }
 
   @override
   WASIPreview3SocketOperation<WASIPreview3TcpConnection> startTcpConnect({
     required WASIPreview3IpSocketAddress remoteAddress,
     WASIPreview3IpSocketAddress? localAddress,
+    WASIPreview3TcpBinding? binding,
   }) {
     try {
-      final future = _connect(remoteAddress, localAddress).then(
+      final pending = _startConnect(
+        remoteAddress,
+        localAddress,
+        binding: binding,
+      );
+      final future = pending.socket.then(
         (socket) => WASIPreview3SocketResult<WASIPreview3TcpConnection>.ok(
-          _tcpConnection(socket),
+          _createTcpConnection(socket),
         ),
         onError: (Object error) =>
             WASIPreview3SocketResult<WASIPreview3TcpConnection>.error(
@@ -68,6 +97,7 @@ final class _NativeSocketsBackend
       return WASIPreview3SocketOperation<WASIPreview3TcpConnection>.pending(
         future,
         disposeValue: (connection) => connection.close(),
+        cancel: pending.cancel,
       );
     } on Object catch (error) {
       return WASIPreview3SocketOperation<WASIPreview3TcpConnection>.completed(
@@ -82,28 +112,53 @@ final class _NativeSocketsBackend
   WASIPreview3SocketOperation<WASIPreview3TcpListener> startTcpListen({
     required WASIPreview3IpSocketAddress localAddress,
     required BigInt backlog,
+    WASIPreview3TcpBinding? binding,
   }) {
     try {
-      if (!_isBindableAddress(localAddress.address)) {
+      if (binding != null) {
+        if (binding is! _NativeTcpBinding) {
+          binding.close();
+          return WASIPreview3SocketOperation<WASIPreview3TcpListener>.completed(
+            const WASIPreview3SocketResult<WASIPreview3TcpListener>.error(
+              'invalid-state',
+            ),
+          );
+        }
+        final server = binding.takeServer();
+        if (server == null) {
+          return WASIPreview3SocketOperation<WASIPreview3TcpListener>.completed(
+            const WASIPreview3SocketResult<WASIPreview3TcpListener>.error(
+              'invalid-state',
+            ),
+          );
+        }
         return WASIPreview3SocketOperation<WASIPreview3TcpListener>.completed(
-          const WASIPreview3SocketResult<WASIPreview3TcpListener>.error(
-            'address-not-bindable',
+          WASIPreview3SocketResult<WASIPreview3TcpListener>.ok(
+            _createTcpListener(server, backlog),
           ),
         );
       }
-      final effective = _ephemeralAddress(localAddress);
-      final listener = _DeferredNativeTcpListener(
-        effective,
-        io.ServerSocket.bind(
-          _internetAddress(effective),
-          effective.port,
-          backlog: _backlog(backlog),
-        ),
-      );
-      return WASIPreview3SocketOperation<WASIPreview3TcpListener>.completed(
-        WASIPreview3SocketResult<WASIPreview3TcpListener>.ok(listener),
+      final future =
+          io.ServerSocket.bind(
+            _internetAddress(localAddress),
+            localAddress.port,
+            backlog: _backlog(backlog),
+            v6Only: localAddress.family == WASIPreview3IpAddressFamily.ipv6,
+          ).then<WASIPreview3SocketResult<WASIPreview3TcpListener>>(
+            (server) => WASIPreview3SocketResult<WASIPreview3TcpListener>.ok(
+              _createTcpListener(server, backlog),
+            ),
+            onError: (Object error) =>
+                WASIPreview3SocketResult<WASIPreview3TcpListener>.error(
+                  _socketErrorCode(error),
+                ),
+          );
+      return WASIPreview3SocketOperation<WASIPreview3TcpListener>.pending(
+        future,
+        disposeValue: (listener) => listener.close(),
       );
     } on Object catch (error) {
+      binding?.close();
       return WASIPreview3SocketOperation<WASIPreview3TcpListener>.completed(
         WASIPreview3SocketResult<WASIPreview3TcpListener>.error(
           _socketErrorCode(error),
@@ -117,20 +172,22 @@ final class _NativeSocketsBackend
     WASIPreview3IpSocketAddress localAddress,
   ) {
     try {
-      if (!_isBindableAddress(localAddress.address)) {
-        return WASIPreview3SocketOperation<WASIPreview3UdpBinding>.completed(
-          const WASIPreview3SocketResult<WASIPreview3UdpBinding>.error(
-            'address-not-bindable',
-          ),
-        );
-      }
-      final effective = _ephemeralAddress(localAddress);
-      final binding = _DeferredNativeUdpBinding(
-        effective,
-        io.RawDatagramSocket.bind(_internetAddress(effective), effective.port),
-      );
-      return WASIPreview3SocketOperation<WASIPreview3UdpBinding>.completed(
-        WASIPreview3SocketResult<WASIPreview3UdpBinding>.ok(binding),
+      final future =
+          io.RawDatagramSocket.bind(
+            _internetAddress(localAddress),
+            localAddress.port,
+          ).then<WASIPreview3SocketResult<WASIPreview3UdpBinding>>(
+            (socket) => WASIPreview3SocketResult<WASIPreview3UdpBinding>.ok(
+              _NativeUdpBinding(socket),
+            ),
+            onError: (Object error) =>
+                WASIPreview3SocketResult<WASIPreview3UdpBinding>.error(
+                  _socketErrorCode(error),
+                ),
+          );
+      return WASIPreview3SocketOperation<WASIPreview3UdpBinding>.pending(
+        future,
+        disposeValue: (binding) => binding.close(),
       );
     } on Object catch (error) {
       return WASIPreview3SocketOperation<WASIPreview3UdpBinding>.completed(
@@ -141,107 +198,189 @@ final class _NativeSocketsBackend
     }
   }
 
-  Future<io.Socket> _connect(
+  ({Future<io.Socket> socket, void Function() cancel}) _startConnect(
     WASIPreview3IpSocketAddress remoteAddress,
-    WASIPreview3IpSocketAddress? localAddress,
-  ) {
-    if (localAddress == null) {
-      return io.Socket.connect(
+    WASIPreview3IpSocketAddress? localAddress, {
+    WASIPreview3TcpBinding? binding,
+  }) {
+    io.ConnectionTask<io.Socket>? task;
+    var cancelled = false;
+    final pending = () async {
+      if (binding case final _NativeTcpBinding nativeBinding) {
+        await nativeBinding.release();
+      } else {
+        binding?.close();
+      }
+      if (cancelled) throw const io.SocketException('cancelled');
+      final started = await io.Socket.startConnect(
         _internetAddress(remoteAddress),
         remoteAddress.port,
+        sourceAddress: localAddress == null
+            ? null
+            : _internetAddress(localAddress),
+        sourcePort: localAddress?.port ?? 0,
       );
-    }
-    return io.Socket.connect(
-      _internetAddress(remoteAddress),
-      remoteAddress.port,
-      sourceAddress: _internetAddress(localAddress),
-      sourcePort: localAddress.port,
+      task = started;
+      if (cancelled) started.cancel();
+      return started.socket;
+    }();
+    return (
+      socket: pending,
+      cancel: () {
+        if (cancelled) return;
+        cancelled = true;
+        task?.cancel();
+      },
     );
   }
 
-  WASIPreview3IpSocketAddress _ephemeralAddress(
-    WASIPreview3IpSocketAddress address,
+  WASIPreview3TcpListener _createTcpListener(
+    io.ServerSocket server,
+    BigInt backlog,
   ) {
-    if (address.port != 0) return address;
-    final port = _nextPort;
-    _nextPort = _nextPort == 65535 ? 49152 : _nextPort + 1;
-    return _withPort(address, port);
+    try {
+      return _NativeTcpListener(
+        server,
+        maxQueuedConnections: _backlog(backlog),
+        createConnection: _createTcpConnection,
+        applyOptions: _applyTcpOptionsToConnection,
+      );
+    } on Object {
+      unawaited(server.close());
+      rethrow;
+    }
+  }
+
+  WASIPreview3TcpConnection _createTcpConnection(io.Socket socket) {
+    try {
+      final connection = _tcpConnection(socket);
+      _tcpSockets[connection] = socket;
+      return connection;
+    } on Object {
+      socket.destroy();
+      rethrow;
+    }
+  }
+
+  void _applyTcpOptionsToConnection(
+    WASIPreview3TcpConnection connection,
+    WASIPreview3TcpSocketOptions options,
+  ) {
+    final socket = _tcpSockets[connection];
+    if (socket == null) throw StateError('Unknown native TCP connection.');
+    final abi = _optionAbi;
+    if (abi == null) throw UnsupportedError('Unsupported socket option ABI.');
+    applyNativeTcpSocketOptions(
+      socket,
+      connection.localAddress.family,
+      options,
+      abi,
+    );
+  }
+
+  @override
+  String? applyTcpSocketOptions({
+    required WASIPreview3TcpSocketOptions options,
+    WASIPreview3TcpConnection? connection,
+    WASIPreview3TcpListener? listener,
+  }) {
+    if (_optionAbi == null) return 'not-supported';
+    try {
+      if (connection != null) {
+        _applyTcpOptionsToConnection(connection, options);
+      }
+      if (listener case final _NativeTcpListener nativeListener) {
+        nativeListener.applyOptions(options);
+      }
+      return null;
+    } on Object catch (error) {
+      return _socketErrorCode(error);
+    }
+  }
+
+  @override
+  String? applyUdpSocketOptions({
+    required WASIPreview3UdpSocketOptions options,
+    WASIPreview3UdpBinding? binding,
+  }) {
+    final abi = _optionAbi;
+    if (abi == null) return 'not-supported';
+    try {
+      if (binding case final _NativeUdpBinding nativeBinding) {
+        nativeBinding.applyOptions(options, abi);
+      }
+      return null;
+    } on Object catch (error) {
+      return _socketErrorCode(error);
+    }
   }
 }
 
-final class _DeferredNativeTcpListener implements WASIPreview3TcpListener {
-  _DeferredNativeTcpListener(this.localAddress, Future<io.ServerSocket> server)
-    : _ready = server.then<WASIPreview3SocketResult<_NativeTcpListener>>(
-        (value) => WASIPreview3SocketResult<_NativeTcpListener>.ok(
-          _NativeTcpListener(value),
-        ),
-        onError: (Object error) =>
-            WASIPreview3SocketResult<_NativeTcpListener>.error(
-              _socketErrorCode(error),
-            ),
-      ) {
-    _ready.then((result) {
-      if (_closed) {
-        result.value?.close();
-        return;
-      }
-      _listener = result.value;
-      _errorCode = result.errorCode;
-    });
-  }
+final class _NativeTcpBinding implements WASIPreview3TcpBinding {
+  _NativeTcpBinding(io.ServerSocket server)
+    : _server = server,
+      localAddress = _socketAddress(server.address, server.port);
+
+  io.ServerSocket? _server;
 
   @override
   final WASIPreview3IpSocketAddress localAddress;
 
-  final Future<WASIPreview3SocketResult<_NativeTcpListener>> _ready;
-  _NativeTcpListener? _listener;
-  String? _errorCode;
-  bool _closed = false;
-
-  @override
-  bool get canAccept =>
-      _closed || _errorCode != null || (_listener?.canAccept ?? false);
-
-  @override
-  Future<void> waitAccept() async {
-    if (_closed) return;
-    final result = await _ready;
-    if (_closed || !result.isOk) return;
-    await result.value!.waitAccept();
+  io.ServerSocket? takeServer() {
+    final server = _server;
+    _server = null;
+    return server;
   }
 
-  @override
-  WASIPreview3SocketResult<WASIPreview3TcpConnection> accept() {
-    if (_closed) {
-      return const WASIPreview3SocketResult<WASIPreview3TcpConnection>.error(
-        'connection-aborted',
-      );
-    }
-    final listener = _listener;
-    if (listener != null) return listener.accept();
-    return WASIPreview3SocketResult<WASIPreview3TcpConnection>.error(
-      _errorCode ?? 'would-block',
-    );
+  Future<void> release() async {
+    final server = takeServer();
+    if (server != null) await server.close();
   }
 
   @override
   void close() {
-    if (_closed) return;
-    _closed = true;
-    _listener?.close();
+    unawaited(release());
   }
 }
 
 final class _NativeTcpListener implements WASIPreview3TcpListener {
-  _NativeTcpListener(this._server)
-    : localAddress = _socketAddress(_server.address, _server.port) {
+  _NativeTcpListener(
+    this._server, {
+    required int maxQueuedConnections,
+    required WASIPreview3TcpConnection Function(io.Socket socket)
+    createConnection,
+    required void Function(
+      WASIPreview3TcpConnection connection,
+      WASIPreview3TcpSocketOptions options,
+    )
+    applyOptions,
+  }) : _createConnection = createConnection,
+       _applyOptions = applyOptions,
+       _maxQueuedConnections = maxQueuedConnections < 1
+           ? 1
+           : maxQueuedConnections,
+       localAddress = _socketAddress(_server.address, _server.port) {
     _subscription = _server.listen(
       (socket) {
         if (_closed) {
           socket.destroy();
           return;
         }
-        _connections.add(_tcpConnection(socket));
+        final connection = _createConnection(socket);
+        final options = _options;
+        if (options != null) {
+          try {
+            _applyOptions(connection, options);
+          } on Object {
+            connection.close();
+            return;
+          }
+        }
+        _connections.add(connection);
+        if (_connections.length >= _maxQueuedConnections &&
+            !_subscription.isPaused) {
+          _subscription.pause();
+        }
         _notify();
       },
       onError: (Object _) => _terminate(closeServer: true),
@@ -251,14 +390,29 @@ final class _NativeTcpListener implements WASIPreview3TcpListener {
   }
 
   final io.ServerSocket _server;
+  final WASIPreview3TcpConnection Function(io.Socket socket) _createConnection;
+  final void Function(
+    WASIPreview3TcpConnection connection,
+    WASIPreview3TcpSocketOptions options,
+  )
+  _applyOptions;
+  final int _maxQueuedConnections;
   late final StreamSubscription<io.Socket> _subscription;
   final List<WASIPreview3TcpConnection> _connections =
       <WASIPreview3TcpConnection>[];
   final List<Completer<void>> _waiters = <Completer<void>>[];
+  WASIPreview3TcpSocketOptions? _options;
   bool _closed = false;
 
   @override
   final WASIPreview3IpSocketAddress localAddress;
+
+  void applyOptions(WASIPreview3TcpSocketOptions options) {
+    for (final connection in _connections) {
+      _applyOptions(connection, options);
+    }
+    _options = options;
+  }
 
   @override
   bool get canAccept => _connections.isNotEmpty || _closed;
@@ -274,9 +428,11 @@ final class _NativeTcpListener implements WASIPreview3TcpListener {
   @override
   WASIPreview3SocketResult<WASIPreview3TcpConnection> accept() {
     if (_connections.isNotEmpty) {
-      return WASIPreview3SocketResult<WASIPreview3TcpConnection>.ok(
-        _connections.removeAt(0),
-      );
+      final connection = _connections.removeAt(0);
+      if (_subscription.isPaused && !_closed) {
+        _subscription.resume();
+      }
+      return WASIPreview3SocketResult<WASIPreview3TcpConnection>.ok(connection);
     }
     return WASIPreview3SocketResult<WASIPreview3TcpConnection>.error(
       _closed ? 'connection-aborted' : 'would-block',
@@ -402,12 +558,13 @@ WASIPreview3TcpConnection _tcpConnection(io.Socket socket) {
   return WASIPreview3TcpConnection(
     incoming: incoming,
     incomingDone: incomingDone.future,
-    write: (bytes) {
+    write: (bytes) async {
       if (closed || sendClosed) {
         return const WASIPreview3SocketResult<void>.error('connection-broken');
       }
       try {
         socket.add(bytes);
+        await socket.flush();
         return const WASIPreview3SocketResult<void>.ok();
       } on Object catch (error) {
         return WASIPreview3SocketResult<void>.error(_socketErrorCode(error));
@@ -421,84 +578,8 @@ WASIPreview3TcpConnection _tcpConnection(io.Socket socket) {
   );
 }
 
-final class _DeferredNativeUdpBinding implements WASIPreview3UdpBinding {
-  _DeferredNativeUdpBinding(
-    this.localAddress,
-    Future<io.RawDatagramSocket> socket,
-  ) : _ready = socket.then<WASIPreview3SocketResult<_NativeUdpBinding>>(
-        (value) => WASIPreview3SocketResult<_NativeUdpBinding>.ok(
-          _NativeUdpBinding(value),
-        ),
-        onError: (Object error) =>
-            WASIPreview3SocketResult<_NativeUdpBinding>.error(
-              _socketErrorCode(error),
-            ),
-      ) {
-    _ready.then((result) {
-      if (_closed) {
-        result.value?.close();
-        return;
-      }
-      _binding = result.value;
-    });
-  }
-
-  @override
-  final WASIPreview3IpSocketAddress localAddress;
-
-  final Future<WASIPreview3SocketResult<_NativeUdpBinding>> _ready;
-  _NativeUdpBinding? _binding;
-  bool _closed = false;
-
-  @override
-  Future<WASIPreview3SocketResult<void>> send(
-    Uint8List data,
-    WASIPreview3IpSocketAddress remoteAddress,
-  ) async {
-    if (_closed) {
-      return const WASIPreview3SocketResult<void>.error('invalid-state');
-    }
-    final result = await _ready;
-    if (_closed) {
-      return const WASIPreview3SocketResult<void>.error('invalid-state');
-    }
-    if (!result.isOk) {
-      return WASIPreview3SocketResult<void>.error(result.errorCode!);
-    }
-    return result.value!.send(data, remoteAddress);
-  }
-
-  @override
-  Future<WASIPreview3SocketResult<WASIPreview3IncomingDatagram>>
-  receive() async {
-    if (_closed) {
-      return const WASIPreview3SocketResult<WASIPreview3IncomingDatagram>.error(
-        'invalid-state',
-      );
-    }
-    final result = await _ready;
-    if (_closed) {
-      return const WASIPreview3SocketResult<WASIPreview3IncomingDatagram>.error(
-        'invalid-state',
-      );
-    }
-    if (!result.isOk) {
-      return WASIPreview3SocketResult<WASIPreview3IncomingDatagram>.error(
-        result.errorCode!,
-      );
-    }
-    return result.value!.receive();
-  }
-
-  @override
-  void close() {
-    if (_closed) return;
-    _closed = true;
-    _binding?.close();
-  }
-}
-
-final class _NativeUdpBinding implements WASIPreview3UdpBinding {
+final class _NativeUdpBinding
+    implements WASIPreview3UdpBinding, WASIPreview3UdpBindingLifecycle {
   _NativeUdpBinding(this._socket)
     : localAddress = _socketAddress(_socket.address, _socket.port) {
     _subscription = _socket.listen(
@@ -507,6 +588,9 @@ final class _NativeUdpBinding implements WASIPreview3UdpBinding {
           while (_datagrams.length < _maxQueuedDatagrams) {
             final datagram = _socket.receive();
             if (datagram == null) break;
+            if (!_matchesAddressFamily(datagram.address, localAddress.family)) {
+              continue;
+            }
             _datagrams.addLast(
               WASIPreview3IncomingDatagram(
                 data: Uint8List.fromList(datagram.data),
@@ -543,7 +627,17 @@ final class _NativeUdpBinding implements WASIPreview3UdpBinding {
   static const int _maxQueuedDatagrams = 256;
 
   @override
+  bool get isClosed => _closed;
+
+  @override
   final WASIPreview3IpSocketAddress localAddress;
+
+  void applyOptions(
+    WASIPreview3UdpSocketOptions options,
+    NativeSocketOptionAbi abi,
+  ) {
+    applyNativeUdpSocketOptions(_socket, localAddress.family, options, abi);
+  }
 
   @override
   Future<WASIPreview3SocketResult<void>> send(
@@ -673,48 +767,12 @@ Future<Iterable<WASIPreview3IpAddress>> _resolveNativeAddresses(
 
 io.InternetAddress _internetAddress(WASIPreview3IpSocketAddress address) {
   if (address.family == WASIPreview3IpAddressFamily.ipv6 &&
-      address.scopeId != 0) {
-    throw UnsupportedError('dart:io cannot preserve a numeric IPv6 scope id');
+      (address.flowInfo != 0 || address.scopeId != 0)) {
+    throw UnsupportedError(
+      'dart:io cannot preserve IPv6 flow info or a numeric scope id',
+    );
   }
   return io.InternetAddress(address.host);
-}
-
-bool _isBindableAddress(WASIPreview3IpAddress address) {
-  final parts = address.parts;
-  if (parts.every((part) => part == 0)) return true;
-  if (address.family == WASIPreview3IpAddressFamily.ipv4) {
-    return parts[0] == 127;
-  }
-  return parts.take(parts.length - 1).every((part) => part == 0) &&
-      parts.last == 1;
-}
-
-WASIPreview3IpSocketAddress _withPort(
-  WASIPreview3IpSocketAddress address,
-  int port,
-) {
-  final parts = address.address.parts;
-  return address.family == WASIPreview3IpAddressFamily.ipv4
-      ? WASIPreview3IpSocketAddress.ipv4(
-          port: port,
-          a: parts[0],
-          b: parts[1],
-          c: parts[2],
-          d: parts[3],
-        )
-      : WASIPreview3IpSocketAddress.ipv6(
-          port: port,
-          a: parts[0],
-          b: parts[1],
-          c: parts[2],
-          d: parts[3],
-          e: parts[4],
-          f: parts[5],
-          g: parts[6],
-          h: parts[7],
-          flowInfo: address.flowInfo,
-          scopeId: address.scopeId,
-        );
 }
 
 WASIPreview3IpSocketAddress _socketAddress(
@@ -744,43 +802,120 @@ WASIPreview3IpSocketAddress _socketAddress(
   );
 }
 
+bool _matchesAddressFamily(
+  io.InternetAddress address,
+  WASIPreview3IpAddressFamily family,
+) {
+  final bytes = address.rawAddress;
+  if (family == WASIPreview3IpAddressFamily.ipv4) return bytes.length == 4;
+  if (bytes.length != 16) return false;
+  for (var index = 0; index < 10; index++) {
+    if (bytes[index] != 0) return true;
+  }
+  return bytes[10] != 0xff || bytes[11] != 0xff;
+}
+
 int _u16(List<int> bytes, int offset) =>
     (bytes[offset] << 8) | bytes[offset + 1];
 
 int _backlog(BigInt value) {
-  const max = 0x7fffffff;
-  return value > BigInt.from(max) ? max : value.toInt();
+  return value > BigInt.from(_maxTcpBacklog) ? _maxTcpBacklog : value.toInt();
 }
+
+const int _maxTcpBacklog = 4096;
 
 String _socketErrorCode(Object error) {
   if (error is UnsupportedError) return 'not-supported';
-  final message = error.toString().toLowerCase();
-  if (message.contains('refused')) return 'connection-refused';
-  if (message.contains('address already in use')) return 'address-in-use';
-  if (message.contains('permission') || message.contains('denied')) {
-    return 'access-denied';
+  if (error is ArgumentError) return 'invalid-argument';
+  if (error is io.SocketException) {
+    return _socketErrnoCode(error.osError?.errorCode) ?? 'other';
   }
-  if (message.contains('timed out') || message.contains('timeout')) {
-    return 'timeout';
+  if (error is io.OSError) {
+    return _socketErrnoCode(error.errorCode) ?? 'other';
   }
-  if (message.contains('unreachable')) return 'remote-unreachable';
-  if (message.contains('reset')) return 'connection-reset';
-  if (message.contains('broken pipe')) return 'connection-broken';
-  if (message.contains('aborted')) return 'connection-aborted';
   return 'other';
 }
 
 String _resolverErrorCode(Object error) {
-  final message = error.toString().toLowerCase();
-  if (message.contains('temporary failure') ||
-      message.contains('try again') ||
-      message.contains('eai_again')) {
-    return 'temporary-resolver-failure';
-  }
-  if (message.contains('non-recoverable') ||
-      message.contains('permanent failure') ||
-      message.contains('eai_fail')) {
-    return 'permanent-resolver-failure';
+  if (error is io.SocketException) {
+    final code = error.osError?.errorCode;
+    if (io.Platform.isWindows) {
+      return switch (code) {
+        11002 => 'temporary-resolver-failure',
+        11003 => 'permanent-resolver-failure',
+        11001 || 11004 => 'name-unresolvable',
+        10013 => 'access-denied',
+        _ => 'name-unresolvable',
+      };
+    }
+    if (io.Platform.isMacOS || io.Platform.isIOS) {
+      return switch (code) {
+        2 => 'temporary-resolver-failure',
+        4 => 'permanent-resolver-failure',
+        8 => 'name-unresolvable',
+        _ => 'name-unresolvable',
+      };
+    }
+    return switch (code) {
+      -3 => 'temporary-resolver-failure',
+      -4 => 'permanent-resolver-failure',
+      -2 || -5 => 'name-unresolvable',
+      13 => 'access-denied',
+      _ => 'name-unresolvable',
+    };
   }
   return 'name-unresolvable';
+}
+
+String? _socketErrnoCode(int? code) {
+  if (code == null) return null;
+  if (io.Platform.isWindows) {
+    return switch (code) {
+      10013 => 'access-denied',
+      10022 => 'invalid-argument',
+      10045 => 'not-supported',
+      10048 => 'address-in-use',
+      10049 => 'address-not-bindable',
+      10050 || 10051 || 10065 => 'remote-unreachable',
+      10053 => 'connection-aborted',
+      10054 => 'connection-reset',
+      10055 => 'out-of-memory',
+      10060 => 'timeout',
+      10061 => 'connection-refused',
+      _ => null,
+    };
+  }
+  final darwin = io.Platform.isMacOS || io.Platform.isIOS;
+  if (darwin) {
+    return switch (code) {
+      12 => 'out-of-memory',
+      1 || 13 => 'access-denied',
+      22 => 'invalid-argument',
+      32 => 'connection-broken',
+      45 => 'not-supported',
+      48 => 'address-in-use',
+      49 => 'address-not-bindable',
+      51 || 65 => 'remote-unreachable',
+      53 => 'connection-aborted',
+      54 => 'connection-reset',
+      60 => 'timeout',
+      61 => 'connection-refused',
+      _ => null,
+    };
+  }
+  return switch (code) {
+    12 => 'out-of-memory',
+    1 || 13 => 'access-denied',
+    22 => 'invalid-argument',
+    32 => 'connection-broken',
+    95 => 'not-supported',
+    98 => 'address-in-use',
+    99 => 'address-not-bindable',
+    101 || 113 => 'remote-unreachable',
+    103 => 'connection-aborted',
+    104 => 'connection-reset',
+    110 => 'timeout',
+    111 => 'connection-refused',
+    _ => null,
+  };
 }

@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:wasd/wasi.dart';
@@ -33,6 +35,24 @@ void main() {
       expect(droppedRequests, 2);
     });
 
+    test('turns guest exit into an internal HTTP error', () async {
+      final component = await _compileComponentWat(
+        'http_service_exit',
+        _serviceWat(returnsError: false, exitCode: 7),
+      );
+      final host = WASIPreview3ComponentHost();
+      final baselineResources = host.componentHost.table.activeCount;
+
+      final result = await WASIPreview3ServiceRunner(host).handle(
+        component,
+        WASIPreview3HttpRequest.noTrailers(headers: WASIPreview3HttpFields()),
+      );
+
+      expect(result.isOk, isFalse);
+      expect(result.errorCode, 'internal-error');
+      expect(host.componentHost.table.activeCount, baselineResources);
+    });
+
     test('takes successful response ownership before scope cleanup', () async {
       final component = await _compileComponentWat(
         'http_service_response',
@@ -57,6 +77,130 @@ void main() {
       expect(result.value!.statusCode, 204);
       expect(componentHost.table.activeCount, baselineResources);
     });
+
+    test('materializes owned response trailers before scope cleanup', () async {
+      final component = await _compileComponentWat(
+        'http_service_response_trailers',
+        _serviceWat(returnsError: false),
+      );
+      final componentHost = WASIComponentHost();
+      final httpHost = _TrailerResponseRequestHost(componentHost.table);
+      final host = WASIPreview3ComponentHost(
+        componentHost: componentHost,
+        httpHost: httpHost,
+      );
+      final baselineResources = componentHost.table.activeCount;
+
+      final result = await WASIPreview3ServiceRunner(host).handle(
+        component,
+        WASIPreview3HttpRequest.noTrailers(headers: WASIPreview3HttpFields()),
+      );
+
+      expect(result.isOk, isTrue);
+      expect(componentHost.table.activeCount, baselineResources);
+      final trailers = await result.value!.readTrailers();
+      expect(trailers.isOk, isTrue);
+      expect(trailers.value!.values('x-scope'), <List<int>>[
+        <int>[111, 107],
+      ]);
+      final transmissionRead = httpHost.transmission.readable.readWhenReady();
+      result.value!.completeTransmission(
+        const WASIPreview3HttpResult<void>.ok(null),
+      );
+      expect((await transmissionRead).isOk, isTrue);
+      httpHost.transmission.readable.drop();
+      await Future<void>.delayed(Duration.zero);
+      expect(componentHost.table.activeCount, baselineResources);
+    });
+
+    test(
+      'keeps pending response trailers scoped until transmission observation',
+      () async {
+        final component = await _compileComponentWat(
+          'http_service_pending_trailers',
+          _serviceWat(returnsError: false),
+        );
+        final componentHost = WASIComponentHost();
+        final httpHost = _PendingTrailerResponseRequestHost(
+          componentHost.table,
+        );
+        final host = WASIPreview3ComponentHost(
+          componentHost: componentHost,
+          httpHost: httpHost,
+        );
+        final baselineResources = componentHost.table.activeCount;
+
+        final result = await WASIPreview3ServiceRunner(host).handle(
+          component,
+          WASIPreview3HttpRequest.noTrailers(headers: WASIPreview3HttpFields()),
+        );
+
+        expect(result.isOk, isTrue);
+        expect(httpHost.scopeDropCount, 0);
+        httpHost.completeTrailers();
+        final trailers = await result.value!.readTrailers();
+        expect(trailers.isOk, isTrue);
+        expect(trailers.value!.values('x-pending'), <List<int>>[
+          <int>[111, 107],
+        ]);
+
+        result.value!.completeTransmission(
+          const WASIPreview3HttpResult<void>.ok(null),
+        );
+        await Future<void>.delayed(Duration.zero);
+        httpHost.probeScope();
+
+        expect(
+          (await httpHost.transmission.readable.readWhenReady()).isOk,
+          isTrue,
+        );
+        httpHost.transmission.readable.drop();
+        await Future<void>.delayed(Duration.zero);
+
+        expect(httpHost.scopeDropCount, 1);
+        expect(componentHost.table.activeCount, baselineResources);
+        expect(httpHost.probeScope, throwsStateError);
+      },
+    );
+
+    test(
+      'releases a pending response scope after guest drop and cancel',
+      () async {
+        final component = await _compileComponentWat(
+          'http_service_cancelled_response',
+          _serviceWat(returnsError: false),
+        );
+        final componentHost = WASIComponentHost();
+        final httpHost = _PendingTrailerResponseRequestHost(
+          componentHost.table,
+        );
+        final host = WASIPreview3ComponentHost(
+          componentHost: componentHost,
+          httpHost: httpHost,
+        );
+        final baselineResources = componentHost.table.activeCount;
+
+        final result = await WASIPreview3ServiceRunner(host).handle(
+          component,
+          WASIPreview3HttpRequest.noTrailers(headers: WASIPreview3HttpFields()),
+        );
+
+        expect(result.isOk, isTrue);
+        expect(httpHost.scopeDropCount, 0);
+        httpHost.transmission.readable.drop();
+        await result.value!.cancel();
+        httpHost.cancelPendingTrailers();
+        await Future<void>.delayed(Duration.zero);
+
+        expect(httpHost.scopeDropCount, 1);
+        expect(componentHost.table.activeCount, baselineResources);
+        expect(httpHost.probeScope, throwsStateError);
+
+        await result.value!.cancel();
+        expect(httpHost.scopeDropCount, 1);
+        expect(componentHost.table.activeCount, baselineResources);
+      },
+    );
 
     final testsuiteRoot = Platform.environment['WASD_WASI_TESTSUITE_DIR'];
     test(
@@ -87,6 +231,9 @@ void main() {
           'text/plain'.codeUnits,
         );
         expect(await _readBody(response), 'hey\n'.codeUnits);
+        await response.completeTransmission(
+          const WASIPreview3HttpResult<void>.ok(null),
+        );
         expect(host.componentHost.table.activeCount, baselineResources);
       },
       skip: testsuiteRoot == null
@@ -109,6 +256,95 @@ final class _ResponseRequestHost extends WASIPreview3HttpHost {
   }
 }
 
+final class _TrailerResponseRequestHost extends WASIPreview3HttpHost {
+  _TrailerResponseRequestHost(WASIComponentResourceTable table)
+    : super(table: table);
+
+  late final WASIComponentFuture<WasmComponentValueData> transmission;
+
+  @override
+  int insertRequest(WASIPreview3HttpRequest request) {
+    request.cancel();
+    final fields = insertFields(
+      WASIPreview3HttpFields(
+        entries: const <WASIPreview3HttpFieldEntry>[
+          WASIPreview3HttpFieldEntry('x-scope', <int>[111, 107]),
+        ],
+      ),
+    );
+    final trailers = WASIComponentFuture<WasmComponentValueData>(
+      'scoped-response-trailers',
+    )..writable.complete(_okSomeHandle(fields));
+    final created =
+        imports['wasi:http/types@0.3.0.response.new']!(<Object?>[
+              insertFields(WASIPreview3HttpFields()),
+              _noneValue(),
+              trailers,
+            ])!
+            as List<Object?>;
+    transmission = created[1]! as WASIComponentFuture<WasmComponentValueData>;
+    return created.first! as int;
+  }
+}
+
+final class _PendingTrailerResponseRequestHost extends WASIPreview3HttpHost {
+  _PendingTrailerResponseRequestHost(WASIComponentResourceTable table)
+    : super(table: table);
+
+  late final WASIComponentResourceType<_ScopeSentinel> _scopeSentinelType =
+      table.defineType<_ScopeSentinel>(
+        'pending-response-scope',
+        onDrop: (_) => scopeDropCount++,
+      );
+  late final WASIComponentFuture<WasmComponentValueData> transmission;
+  late final WASIComponentFuture<WasmComponentValueData> _trailers;
+  late final void Function() completeTrailers;
+  late final void Function() cancelPendingTrailers;
+  late final void Function() probeScope;
+  var scopeDropCount = 0;
+
+  @override
+  int insertRequest(WASIPreview3HttpRequest request) {
+    request.cancel();
+    table.insert<_ScopeSentinel>(_scopeSentinelType, const _ScopeSentinel());
+    _trailers = WASIComponentFuture<WasmComponentValueData>(
+      'pending-response-trailers',
+    );
+    completeTrailers = Zone.current.bindCallback(() {
+      final fields = insertFields(
+        WASIPreview3HttpFields(
+          entries: const <WASIPreview3HttpFieldEntry>[
+            WASIPreview3HttpFieldEntry('x-pending', <int>[111, 107]),
+          ],
+        ),
+      );
+      _trailers.writable.complete(_okSomeHandle(fields));
+    });
+    cancelPendingTrailers = Zone.current.bindCallback(() {
+      if (_trailers.writable.canComplete) {
+        _trailers.writable.cancel();
+      }
+    });
+    probeScope = Zone.current.bindCallback(() {
+      final handle = insertFields(WASIPreview3HttpFields());
+      table.dropNamed('wasi:http/types@0.3.0.fields', handle);
+    });
+    final created =
+        imports['wasi:http/types@0.3.0.response.new']!(<Object?>[
+              insertFields(WASIPreview3HttpFields()),
+              _noneValue(),
+              _trailers,
+            ])!
+            as List<Object?>;
+    transmission = created[1]! as WASIComponentFuture<WasmComponentValueData>;
+    return created.first! as int;
+  }
+}
+
+final class _ScopeSentinel {
+  const _ScopeSentinel();
+}
+
 Future<List<int>> _readBody(WASIPreview3HttpResponse response) async {
   final body = response.contents;
   if (body == null) {
@@ -122,6 +358,38 @@ Future<List<int>> _readBody(WASIPreview3HttpResponse response) async {
       return bytes;
     }
   }
+}
+
+WasmComponentValueData _okSomeHandle(int handle) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.result,
+    rawBytes: Uint8List(0),
+    index: 0,
+    label: 'ok',
+    isOk: true,
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.option,
+      rawBytes: Uint8List(0),
+      index: 1,
+      label: 'some',
+      isSome: true,
+      associatedValue: WasmComponentValueData(
+        kind: WasmComponentValueDataKind.integer,
+        rawBytes: Uint8List(0),
+        integer: handle,
+      ),
+    ),
+  );
+}
+
+WasmComponentValueData _noneValue() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    index: 0,
+    label: 'none',
+    isSome: false,
+  );
 }
 
 Future<WasmComponent> _compileComponentWat(String name, String source) async {
@@ -152,17 +420,40 @@ Future<WasmComponent> _compileComponentWat(String name, String source) async {
   return WasmComponent.decode(await wasm.readAsBytes());
 }
 
-String _serviceWat({required bool returnsError}) {
-  return _serviceWatTemplate.replaceFirst(
-    ';; TASK_RETURN',
-    returnsError
-        ? 'i32.const 1\n      i32.const 0'
-        : 'i32.const 0\n      local.get 0',
-  );
+String _serviceWat({required bool returnsError, int? exitCode}) {
+  final exitComponent = exitCode == null
+      ? ''
+      : r'''
+  (type $exit-interface (instance
+    (type $exit-with-code-type (func (param "status-code" u8)))
+    (export "exit-with-code" (func (type $exit-with-code-type)))))
+  (import "wasi:cli/exit@0.3.0"
+    (instance $exit (type $exit-interface)))
+  (alias export $exit "exit-with-code" (func $exit-with-code))
+  (core func $exit-with-code-core
+    (canon lower (func $exit-with-code)))
+''';
+  final exitImport = exitCode == null
+      ? ''
+      : r'''(import "" "exit-with-code" (func $exit-with-code (param i32)))''';
+  final exitExport = exitCode == null
+      ? ''
+      : r'''(export "exit-with-code" (func $exit-with-code-core))''';
+  final taskReturn = exitCode == null
+      ? returnsError
+            ? 'i32.const 1\n      i32.const 0'
+            : 'i32.const 0\n      local.get 0'
+      : 'i32.const $exitCode\n      call \$exit-with-code\n      unreachable';
+  return _serviceWatTemplate
+      .replaceFirst(';; EXIT_COMPONENT', exitComponent)
+      .replaceFirst(';; EXIT_IMPORT', exitImport)
+      .replaceFirst(';; EXIT_EXPORT', exitExport)
+      .replaceFirst(';; TASK_RETURN', taskReturn);
 }
 
 const String _serviceWatTemplate = r'''
 (component
+  ;; EXIT_COMPONENT
   (type $http-types (instance
     (export "request" (type (sub resource)))
     (export "response" (type (sub resource)))
@@ -180,6 +471,7 @@ const String _serviceWatTemplate = r'''
 
   (core module $main
     (import "" "task.return" (func $task-return (param i32 i32)))
+    ;; EXIT_IMPORT
     (func (export "handle") (param i32) (result i32)
       ;; TASK_RETURN
       call $task-return
@@ -189,7 +481,9 @@ const String _serviceWatTemplate = r'''
 
   (canon task.return (result $handle-result) (core func $task-return))
   (core instance $builtins
-    (export "task.return" (func $task-return)))
+    (export "task.return" (func $task-return))
+    ;; EXIT_EXPORT
+  )
   (core instance $main-instance
     (instantiate $main (with "" (instance $builtins))))
   (alias core export $main-instance "handle" (core func $handle-core))

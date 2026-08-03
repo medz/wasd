@@ -199,6 +199,36 @@ void main() {
       },
     );
 
+    test('retains a resource scope until its lease is released', () async {
+      final table = WASIComponentResourceTable();
+      final dropped = <String>[];
+      final resourceType = table.defineType<String>(
+        'leased-resource',
+        onDrop: dropped.add,
+      );
+      late WASIComponentResourceScopeLease lease;
+      late int Function(String value) allocate;
+
+      await table.runScoped<void>(() {
+        lease = table.retainCurrentScope();
+        allocate = Zone.current.bindUnaryCallback(
+          (value) => table.insert<String>(resourceType, value),
+        );
+      });
+
+      expect(dropped, isEmpty);
+      expect(table.activeCount, 0);
+      expect(allocate('late'), isPositive);
+      expect(table.activeCount, 1);
+
+      lease.release();
+      lease.release();
+
+      expect(dropped, <String>['late']);
+      expect(table.activeCount, 0);
+      expect(() => allocate('closed'), throwsStateError);
+    });
+
     test('isolates resource access across nested scopes', () async {
       final table = WASIComponentResourceTable();
       final parentType = table.defineType<String>('parent');
@@ -451,6 +481,63 @@ void main() {
       expect(table.activeCount, 0);
     });
 
+    test('keeps canonical borrow aliases non-owning and exact-once', () async {
+      final table = WASIComponentResourceTable();
+      final dropped = <String>[];
+      final resourceType = table.defineType<String>(
+        'resource',
+        onDrop: dropped.add,
+      );
+      final scope = _BorrowScope();
+      final owned = table.insert<String>(resourceType, 'owned');
+      final borrowed = table.insertBorrowHandle(owned, scope);
+
+      expect(scope.active, 1);
+      expect(table.get<String>(resourceType, borrowed), 'owned');
+      expect(table.resourceRep<String>(resourceType, borrowed), 'owned');
+      expect(() => table.drop<String>(resourceType, owned), throwsStateError);
+      expect(() => table.take<String>(resourceType, owned), throwsStateError);
+      expect(
+        () => table.take<String>(resourceType, borrowed),
+        throwsStateError,
+      );
+      expect(
+        () => table.takeDetachingChildren<String>(resourceType, borrowed),
+        throwsStateError,
+      );
+
+      table.borrow<String, void>(resourceType, borrowed, (resource) {
+        expect(resource, 'owned');
+        expect(
+          () => table.drop<String>(resourceType, borrowed),
+          throwsStateError,
+        );
+      });
+
+      table.drop<String>(resourceType, borrowed);
+      expect(scope.active, 0);
+      expect(scope.released, 1);
+      expect(dropped, isEmpty);
+      expect(
+        () => table.drop<String>(resourceType, borrowed),
+        throwsStateError,
+      );
+      expect(scope.released, 1);
+
+      table.drop<String>(resourceType, owned);
+      expect(dropped, ['owned']);
+
+      final cleanupScope = _BorrowScope();
+      await table.runScoped<void>(() async {
+        final scoped = table.insert<String>(resourceType, 'scoped');
+        table.insertBorrowHandle(scoped, cleanupScope);
+      });
+      expect(cleanupScope.active, 0);
+      expect(cleanupScope.released, 1);
+      expect(dropped, ['owned', 'scoped']);
+      expect(table.activeCount, 0);
+    });
+
     test('releases borrows when callbacks throw', () {
       final table = WASIComponentResourceTable();
       final fileType = table.defineType<String>('file');
@@ -490,4 +577,23 @@ void main() {
       expect(table.activeCount, 0);
     });
   });
+}
+
+final class _BorrowScope implements WASIComponentCanonicalBorrowScope {
+  int active = 0;
+  int released = 0;
+
+  @override
+  void addBorrow() {
+    active++;
+  }
+
+  @override
+  void releaseBorrow() {
+    if (active == 0) {
+      throw StateError('No canonical borrow to release.');
+    }
+    active--;
+    released++;
+  }
 }

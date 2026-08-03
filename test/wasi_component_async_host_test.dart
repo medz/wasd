@@ -398,9 +398,17 @@ void main() {
 
       expect(
         program.invoke(2, <Object?>[typedFuture.writable, 'ready']),
-        isNull,
+        isA<WASIComponentAsyncCopyResult>().having(
+          (result) => result.status,
+          'status',
+          WASIComponentAsyncCopyStatus.completed,
+        ),
       );
       expect(program.invoke(1, <Object?>[typedFuture.readable]), 'ready');
+      expect(
+        () => program.invoke(1, <Object?>[typedFuture.readable]),
+        throwsStateError,
+      );
       expect(program.invoke(5, <Object?>[typedFuture.readable]), isNull);
       expect(dropped, isEmpty);
       expect(program.invoke(6, <Object?>[typedFuture.writable]), isNull);
@@ -428,7 +436,14 @@ void main() {
 
         expect(completed, isFalse);
 
-        expect(program.invoke(2, <Object?>[future.writable, 'ready']), isNull);
+        expect(
+          program.invoke(2, <Object?>[future.writable, 'ready']),
+          isA<WASIComponentAsyncCopyResult>().having(
+            (result) => result.status,
+            'status',
+            WASIComponentAsyncCopyStatus.completed,
+          ),
+        );
 
         await expectLater(pending, completion('ready'));
         expect(completed, isTrue);
@@ -454,9 +469,17 @@ void main() {
       expect(host.table.activeCount, 2);
       expect(
         program.invoke(2, <Object?>[futureHandles.writable, 'ready']),
-        isNull,
+        isA<WASIComponentAsyncCopyResult>().having(
+          (result) => result.status,
+          'status',
+          WASIComponentAsyncCopyStatus.completed,
+        ),
       );
       expect(program.invoke(1, <Object?>[futureHandles.readable]), 'ready');
+      expect(
+        () => program.invoke(1, <Object?>[futureHandles.readable]),
+        throwsStateError,
+      );
       expect(
         () => program.invoke(1, <Object?>[futureHandles.writable]),
         throwsStateError,
@@ -488,18 +511,217 @@ void main() {
         await Future<void>.delayed(Duration.zero);
 
         expect(completed, isFalse);
+        await expectLater(
+          program.invokeAsync(1, <Object?>[handles.readable]),
+          throwsStateError,
+        );
         expect(
           () => program.invoke(5, <Object?>[handles.readable]),
           throwsStateError,
         );
 
-        expect(program.invoke(2, <Object?>[handles.writable, 'ready']), isNull);
+        expect(
+          program.invoke(2, <Object?>[handles.writable, 'ready']),
+          isA<WASIComponentAsyncCopyResult>().having(
+            (result) => result.status,
+            'status',
+            WASIComponentAsyncCopyStatus.completed,
+          ),
+        );
 
         await expectLater(pending, completion('ready'));
         expect(completed, isTrue);
         expect(program.invoke(5, <Object?>[handles.readable]), isNull);
         expect(program.invoke(6, <Object?>[handles.writable]), isNull);
         expect(host.table.activeCount, 0);
+      },
+    );
+
+    test('requires a handle-backed future write before dropping', () {
+      final component = WasmComponent.decode(_canonicalFutureProgramBytes());
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentAsyncHost();
+      host.defineFutureType<String>(0, 'message');
+      final program = host.bindCanonicalDefinitionsToHandles(component);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+
+      expect(
+        () => program.invoke(6, <Object?>[handles.writable]),
+        throwsStateError,
+      );
+      expect(host.table.contains(handles.writable), isTrue);
+
+      expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(
+        program.invoke(2, <Object?>[handles.writable, 'returned']),
+        isA<WASIComponentAsyncCopyResult>().having(
+          (result) => result.status,
+          'status',
+          WASIComponentAsyncCopyStatus.dropped,
+        ),
+      );
+      expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
+    test(
+      'resource scopes force-release fresh future writers after a drop trap',
+      () async {
+        final component = WasmComponent.decode(_canonicalFutureProgramBytes());
+        expect(component.validate(), isEmpty);
+        var dropCount = 0;
+        final host = WASIComponentAsyncHost();
+        host.defineFutureType<String>(
+          0,
+          'scoped-message',
+          onDrop: () => dropCount++,
+        );
+        final program = host.bindCanonicalDefinitionsToHandles(component);
+
+        await host.table.runScoped(() {
+          final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+
+          expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+          expect(
+            () => program.invoke(6, <Object?>[handles.writable]),
+            throwsStateError,
+          );
+          expect(host.table.activeCount, 1);
+        });
+
+        expect(host.table.activeCount, 0);
+        expect(dropCount, 1);
+      },
+    );
+
+    test(
+      'resource scopes detach leaked endpoint waitables after failures',
+      () async {
+        final component = WasmComponent.decode(_canonicalStreamProgramBytes());
+        final host = WASIComponentAsyncHost();
+        final waitableHost = WASIComponentWaitableHost(
+          table: host.table,
+          waitableResolvers: <WASIComponentWaitableResolver>[
+            host.waitableForHandle,
+          ],
+        );
+        host.defineStreamType<int>(0, 'scoped-stream');
+        final program = host.bindCanonicalDefinitionsToHandles(component);
+        late WASIComponentWaitable waitable;
+
+        await expectLater(
+          host.table.runScoped<void>(() {
+            final set = waitableHost.waitableSetNew();
+            final handles = _unpackHandles(
+              program.invoke(0, const <Object?>[]),
+            );
+            waitableHost.waitableJoin(handles.readable, set);
+            waitable = host.waitableForHandle(handles.readable)!;
+
+            expect(waitable.inWaitableSet, isTrue);
+            throw StateError('component failed');
+          }),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              'component failed',
+            ),
+          ),
+        );
+
+        expect(waitable.inWaitableSet, isFalse);
+        expect(host.table.activeCount, 0);
+      },
+    );
+
+    test(
+      'resource scopes finish async value cleanup after discard errors',
+      () async {
+        final streamComponent = WasmComponent.decode(
+          _canonicalStreamProgramBytes(),
+        );
+        final streamDiscarded = <int>[];
+        var streamDrops = 0;
+        final streamHost = WASIComponentAsyncHost();
+        streamHost.defineStreamType<int>(
+          0,
+          'throwing-stream',
+          onDrop: () => streamDrops++,
+          onDiscard: (value) {
+            streamDiscarded.add(value);
+            throw StateError('stream discard failed');
+          },
+        );
+        final streamProgram = streamHost.bindCanonicalDefinitionsToHandles(
+          streamComponent,
+        );
+
+        await expectLater(
+          streamHost.table.runScoped(() {
+            final handles = _unpackHandles(
+              streamProgram.invoke(0, const <Object?>[]),
+            );
+            expect(
+              streamProgram.invoke(2, <Object?>[
+                handles.writable,
+                <int>[1, 2],
+              ]),
+              2,
+            );
+          }),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              'stream discard failed',
+            ),
+          ),
+        );
+        expect(streamDiscarded, <int>[1, 2]);
+        expect(streamDrops, 1);
+        expect(streamHost.table.activeCount, 0);
+
+        final futureComponent = WasmComponent.decode(
+          _canonicalFutureProgramBytes(),
+        );
+        final futureDiscarded = <String>[];
+        var futureDrops = 0;
+        final futureHost = WASIComponentAsyncHost();
+        futureHost.defineFutureType<String>(
+          0,
+          'throwing-future',
+          onDrop: () => futureDrops++,
+          onDiscard: (value) {
+            futureDiscarded.add(value);
+            throw StateError('future discard failed');
+          },
+        );
+        final futureProgram = futureHost.bindCanonicalDefinitionsToHandles(
+          futureComponent,
+        );
+
+        await expectLater(
+          futureHost.table.runScoped(() {
+            final handles = _unpackHandles(
+              futureProgram.invoke(0, const <Object?>[]),
+            );
+            expect(
+              futureProgram.invoke(2, <Object?>[handles.writable, 'owned']),
+              isA<WASIComponentAsyncCopyResult>(),
+            );
+          }),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              'future discard failed',
+            ),
+          ),
+        );
+        expect(futureDiscarded, <String>['owned']);
+        expect(futureDrops, 1);
+        expect(futureHost.table.activeCount, 0);
       },
     );
 
@@ -512,7 +734,14 @@ void main() {
       final future =
           program.invoke(0, const <Object?>[])! as WASIComponentFuture<Object?>;
 
-      expect(program.invoke(2, <Object?>[future.writable, null]), isNull);
+      expect(
+        program.invoke(2, <Object?>[future.writable, null]),
+        isA<WASIComponentAsyncCopyResult>().having(
+          (result) => result.status,
+          'status',
+          WASIComponentAsyncCopyStatus.completed,
+        ),
+      );
       expect(program.invoke(1, <Object?>[future.readable]), isNull);
 
       final rejected =
@@ -1020,6 +1249,19 @@ void main() {
       expect(
         program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32, 1]),
         1 << 4,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        () => program.invokeWithMemoryEvent(2, memory, <Object?>[
+          handles.readable,
+          100,
+          1,
+        ]),
+        throwsStateError,
+      );
+      expect(
+        () => program.invoke(3, <Object?>[handles.readable]),
+        throwsStateError,
       );
       await expectLater(
         waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
@@ -2592,6 +2834,18 @@ void main() {
         program.invokeWithMemory(2, memory, <Object?>[handles.readable, 96]),
         0,
       );
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        () => program.invokeWithMemoryEvent(1, memory, <Object?>[
+          handles.writable,
+          32,
+        ]),
+        throwsStateError,
+      );
+      expect(
+        () => program.invoke(4, <Object?>[handles.writable]),
+        throwsStateError,
+      );
 
       await expectLater(
         waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
@@ -2634,6 +2888,14 @@ void main() {
         program.invoke(3, <Object?>[handles.readable]),
         wasiComponentAsyncBlocked,
       );
+      expect(
+        () => program.invoke(3, <Object?>[handles.readable]),
+        throwsStateError,
+      );
+      expect(
+        () => program.invoke(5, <Object?>[handles.readable]),
+        throwsStateError,
+      );
 
       await expectLater(
         waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
@@ -2647,6 +2909,10 @@ void main() {
       waitableHost.waitableJoin(handles.readable, 0);
       waitableHost.waitableSetDrop(waitableSet);
       expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 0]),
+        WASIComponentAsyncCopyResult.dropped().packedResult,
+      );
       expect(program.invoke(6, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
@@ -2737,6 +3003,10 @@ void main() {
       );
 
       expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 0]),
+        WASIComponentAsyncCopyResult.dropped().packedResult,
+      );
       expect(program.invoke(6, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
@@ -2782,6 +3052,10 @@ void main() {
       waitableHost.waitableJoin(handles.writable, 0);
       waitableHost.waitableSetDrop(waitableSet);
       expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32]),
+        WASIComponentAsyncCopyResult.dropped().packedResult,
+      );
       expect(program.invoke(6, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
@@ -2874,6 +3148,10 @@ void main() {
       );
 
       expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32]),
+        WASIComponentAsyncCopyResult.dropped().packedResult,
+      );
       expect(program.invoke(6, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
@@ -3059,7 +3337,14 @@ void main() {
         throwsStateError,
       );
 
-      expect(program.invoke(1, <Object?>[handles.writable, 'A']), isNull);
+      expect(
+        program.invoke(1, <Object?>[handles.writable, 'A']),
+        isA<WASIComponentAsyncCopyResult>().having(
+          (result) => result.status,
+          'status',
+          WASIComponentAsyncCopyStatus.completed,
+        ),
+      );
       expect(
         program.invokeWithMemory(2, memory, <Object?>[handles.readable, 64]),
         0,

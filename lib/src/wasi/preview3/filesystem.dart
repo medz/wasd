@@ -53,6 +53,14 @@ typedef WASIPreview3FilesystemFileAdviseCallback =
 typedef WASIPreview3FilesystemFileSyncCallback =
     WASIPreview3FilesystemMutationResult Function();
 
+/// Acquires host resources for one opened regular-file descriptor.
+typedef WASIPreview3FilesystemFileOpenCallback =
+    WASIPreview3FilesystemMutationResult Function(Set<String> flags);
+
+/// Releases host resources owned by one regular-file descriptor.
+typedef WASIPreview3FilesystemFileCloseCallback =
+    void Function(Set<String> flags);
+
 /// Updates access and modification timestamps for one filesystem object.
 typedef WASIPreview3FilesystemSetTimesCallback =
     WASIPreview3FilesystemMutationResult Function(
@@ -822,6 +830,8 @@ final class WASIPreview3FilesystemDirectoryEntry {
        _syncData = null,
        _sync = null,
        _setTimes = null,
+       _openDescriptor = null,
+       _closeDescriptor = null,
        _linkTarget = null;
 
   /// Creates a directory entry.
@@ -829,6 +839,8 @@ final class WASIPreview3FilesystemDirectoryEntry {
     this.name, {
     WASIPreview3FilesystemDirectory? directory,
     WASIPreview3FilesystemMetadataProvider? metadata,
+    WASIPreview3FilesystemFileOpenCallback? openDescriptor,
+    WASIPreview3FilesystemFileCloseCallback? closeDescriptor,
   }) : kind = WASIPreview3FilesystemDescriptorKind.directory,
        size = BigInt.zero,
        directory = directory ?? WASIPreview3FilesystemDirectory(),
@@ -844,6 +856,8 @@ final class WASIPreview3FilesystemDirectoryEntry {
        _syncData = null,
        _sync = null,
        _setTimes = null,
+       _openDescriptor = openDescriptor,
+       _closeDescriptor = closeDescriptor,
        otherTypeName = null,
        _linkTarget = null;
 
@@ -867,6 +881,8 @@ final class WASIPreview3FilesystemDirectoryEntry {
        _syncData = null,
        _sync = null,
        _setTimes = null,
+       _openDescriptor = null,
+       _closeDescriptor = null,
        otherTypeName = null,
        _linkTarget = target;
 
@@ -886,6 +902,8 @@ final class WASIPreview3FilesystemDirectoryEntry {
     WASIPreview3FilesystemFileSyncCallback? syncData,
     WASIPreview3FilesystemFileSyncCallback? sync,
     WASIPreview3FilesystemSetTimesCallback? setTimes,
+    WASIPreview3FilesystemFileOpenCallback? openDescriptor,
+    WASIPreview3FilesystemFileCloseCallback? closeDescriptor,
   }) : _bytes = Uint8List.fromList(bytes),
        _readBytes = readBytes,
        _readChunk = readChunk,
@@ -897,6 +915,8 @@ final class WASIPreview3FilesystemDirectoryEntry {
        _syncData = syncData,
        _sync = sync,
        _setTimes = setTimes,
+       _openDescriptor = openDescriptor,
+       _closeDescriptor = closeDescriptor,
        otherTypeName = null,
        _linkTarget = null,
        kind = WASIPreview3FilesystemDescriptorKind.regularFile,
@@ -935,6 +955,8 @@ final class WASIPreview3FilesystemDirectoryEntry {
   final WASIPreview3FilesystemFileSyncCallback? _syncData;
   final WASIPreview3FilesystemFileSyncCallback? _sync;
   final WASIPreview3FilesystemSetTimesCallback? _setTimes;
+  final WASIPreview3FilesystemFileOpenCallback? _openDescriptor;
+  final WASIPreview3FilesystemFileCloseCallback? _closeDescriptor;
   final String? _linkTarget;
 
   BigInt get _size {
@@ -1152,6 +1174,12 @@ final class WASIPreview3FilesystemDirectoryEntry {
       (_sync != null ||
           _readBytes == null && _readChunk == null && _currentSize == null);
 
+  WASIPreview3FilesystemMutationResult _openWithFlags(Set<String> flags) =>
+      _openDescriptor?.call(flags) ??
+      const WASIPreview3FilesystemMutationResult.ok();
+
+  void _closeWithFlags(Set<String> flags) => _closeDescriptor?.call(flags);
+
   WASIPreview3FilesystemDirectoryEntry _renamed(String name) {
     return switch (kind) {
       WASIPreview3FilesystemDescriptorKind.directory =>
@@ -1159,6 +1187,8 @@ final class WASIPreview3FilesystemDirectoryEntry {
           name,
           directory: directory,
           metadata: _metadata,
+          openDescriptor: _openDescriptor,
+          closeDescriptor: _closeDescriptor,
         ),
       WASIPreview3FilesystemDescriptorKind.symbolicLink =>
         WASIPreview3FilesystemDirectoryEntry.symbolicLink(
@@ -1182,6 +1212,8 @@ final class WASIPreview3FilesystemDirectoryEntry {
           syncData: _syncData,
           sync: _sync,
           setTimes: _setTimes,
+          openDescriptor: _openDescriptor,
+          closeDescriptor: _closeDescriptor,
         ),
       _ => WASIPreview3FilesystemDirectoryEntry.special(
         name,
@@ -1219,6 +1251,7 @@ base class WASIPreview3FilesystemHost {
   late final WASIComponentResourceType<_WASIPreview3FilesystemDescriptor>
   _descriptorType = table.defineType<_WASIPreview3FilesystemDescriptor>(
     'wasi:filesystem/types@0.3.0.descriptor',
+    onDrop: (descriptor) => descriptor.close(),
   );
 
   int _nextObjectId = 1;
@@ -1318,6 +1351,19 @@ base class WASIPreview3FilesystemHost {
       _descriptorType,
       descriptor,
     );
+  }
+
+  WasmComponentValueData _openDescriptor(
+    _WASIPreview3FilesystemDescriptor descriptor,
+  ) {
+    final opened = descriptor.open();
+    if (!opened.isOk) return _mutationResult(opened);
+    try {
+      return _ok(_integerData(_insertDescriptor(descriptor)));
+    } catch (_) {
+      descriptor.close();
+      rethrow;
+    }
   }
 
   _WASIPreview3FilesystemDescriptor? _descriptor(int handle) {
@@ -2097,16 +2143,25 @@ base class WASIPreview3FilesystemHost {
       return _errorResult('unsupported');
     }
     final openedDescriptor = descriptor.withFlags(effectiveFlags);
+    final opened = openedDescriptor.open();
+    if (!opened.isOk) return _mutationResult(opened);
     if (openFlags.labels.contains('truncate')) {
       if (!descriptor.canMutate) {
+        openedDescriptor.close();
         return _errorResult('read-only');
       }
       final mutation = openedDescriptor.setSize(BigInt.zero);
       if (!mutation.isOk) {
+        openedDescriptor.close();
         return _mutationResult(mutation);
       }
     }
-    return _ok(_integerData(_insertDescriptor(openedDescriptor)));
+    try {
+      return _ok(_integerData(_insertDescriptor(openedDescriptor)));
+    } catch (_) {
+      openedDescriptor.close();
+      rethrow;
+    }
   }
 
   WasmComponentValueData _createFileAt(
@@ -2153,7 +2208,7 @@ base class WASIPreview3FilesystemHost {
       guestPath: guestPath,
       entry: created.entry!,
     );
-    return _ok(_integerData(_insertDescriptor(descriptor.withFlags(flags))));
+    return _openDescriptor(descriptor.withFlags(flags));
   }
 
   bool _isSameObject(int left, int right) {
@@ -2466,6 +2521,12 @@ final class _WASIPreview3FilesystemDescriptor {
   bool get supportsSyncData => entry?._supportsSyncData ?? false;
 
   bool get supportsSync => entry?._supportsSync ?? false;
+
+  WASIPreview3FilesystemMutationResult open() =>
+      entry?._openWithFlags(flags) ??
+      const WASIPreview3FilesystemMutationResult.ok();
+
+  void close() => entry?._closeWithFlags(flags);
 
   _WASIPreview3FilesystemDescriptor withFlags(Iterable<String> flags) {
     return _WASIPreview3FilesystemDescriptor._(

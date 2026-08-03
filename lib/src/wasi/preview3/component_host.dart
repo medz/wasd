@@ -144,13 +144,15 @@ final class WASIPreview3ComponentHost {
     required WASIPreview3FilesystemHost filesystemHost,
     required WASIPreview3SocketsHost socketsHost,
     required WASIPreview3HttpHost httpHost,
+    required bool ownsHttpHost,
   }) : _preview2CompatibilityHost = preview2CompatibilityHost,
        _randomHost = randomHost,
        _clocksHost = clocksHost,
        _cliHost = cliHost,
        _filesystemHost = filesystemHost,
        _socketsHost = socketsHost,
-       _httpHost = httpHost;
+       _httpHost = httpHost,
+       _ownsHttpHost = ownsHttpHost;
 
   /// Underlying versioned component-host facade.
   final WASIComponentVersionedHost versionedHost;
@@ -162,6 +164,7 @@ final class WASIPreview3ComponentHost {
   final WASIPreview3FilesystemHost _filesystemHost;
   final WASIPreview3SocketsHost _socketsHost;
   final WASIPreview3HttpHost _httpHost;
+  final bool _ownsHttpHost;
 
   /// Preview3 version profile.
   WASIComponentVersionProfile get profile => versionedHost.profile;
@@ -190,6 +193,15 @@ final class WASIPreview3ComponentHost {
 
   /// HTTP host state for standard `wasi:http` imports.
   WASIPreview3HttpHost get httpHost => _httpHost;
+
+  /// Releases resources created and owned by this component host.
+  ///
+  /// Hosts supplied through constructor parameters remain caller-owned.
+  void close({bool force = false}) {
+    if (_ownsHttpHost) {
+      _httpHost.close(force: force);
+    }
+  }
 
   /// Standard Preview3 WIT import callbacks implemented by this host.
   late final Map<String, WASIComponentWitAdapterCallback> standardImports =
@@ -412,6 +424,7 @@ WASIPreview3ComponentHost _createPreview3ComponentHost({
     filesystemHost: resolvedFilesystemHost,
     socketsHost: resolvedSocketsHost,
     httpHost: resolvedHttpHost,
+    ownsHttpHost: httpHost == null,
   );
 }
 

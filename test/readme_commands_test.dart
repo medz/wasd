@@ -74,4 +74,13 @@ void main() {
       );
     }
   });
+
+  test('README Preview3 examples close owned hosts', () {
+    final readme = File('README.md').readAsStringSync();
+
+    expect(readme, contains('host.close(force: true);'));
+    expect(readme, contains('serviceHost.close(force: true);'));
+    expect(readme, contains('await response.completeTransmission('));
+    expect(readme, contains('await response.cancel();'));
+  });
 }

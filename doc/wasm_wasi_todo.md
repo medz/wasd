@@ -107,7 +107,7 @@ P2/P3 work starts only after these P1 gates are green.
     `dart test test/wasi_component_adapter_plan_test.dart test/wasi_component_resource_table_test.dart test/wasi_component_versioned_host_test.dart`
     `dart test test/wasi_component_public_api_test.dart test/readme_snippets_test.dart`
   - Fixture evidence: the command gate uses a Wasmtime v47.0.3 Preview2
-    component; the proxy gates use `wasm-tools` 1.252.0 components generated
+    component; the proxy gates use `wasm-tools` 1.254.0 components generated
     from the official WASI 0.2.12 WIT and verify success, required post-return,
     and unset-response failure paths.
   - Conformance note: the official `wasi-testsuite` currently has no Preview2
@@ -174,3 +174,15 @@ P2/P3 work starts only after these P1 gates are green.
     cannot prevent an external actor from concurrently replacing a preopen
     path node; isolation therefore requires preopens that untrusted actors
     cannot mutate.
+  - Native sockets boundary: synchronous Preview3 imports may return pending
+    Dart callbacks that the component runner waits for. TCP bind retains a real
+    OS-assigned `ServerSocket` reservation for listen; a bound connect must
+    release it before reconnecting with that source port, leaving a narrow
+    release/rebind race because `dart:io` has no bind-only TCP socket. UDP bind
+    and implicit connect wait for a real `RawDatagramSocket`. Active TCP and UDP
+    endpoints receive the supported raw socket options. Because
+    `RawDatagramSocket` has no IPv6-only bind option, an IPv6 wildcard UDP
+    socket may also reserve the matching IPv4 port; IPv4 and IPv4-mapped
+    datagrams are filtered before they reach that IPv6 guest socket. Native
+    addresses with nonzero IPv6 flow info or numeric scope IDs report
+    `not-supported` because `dart:io` cannot preserve those fields.

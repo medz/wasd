@@ -34,6 +34,7 @@ void main() {
       });
 
       final host = WASIPreview3NativeHttpHost();
+      addTearDown(host.close);
       final body = WASIComponentStream<int>('request-body');
       body.writable.writeAll(<int>[1, 2, 3, 4]);
       body.writable.close();
@@ -117,6 +118,7 @@ void main() {
       });
 
       final host = WASIPreview3NativeHttpHost();
+      addTearDown(host.close);
       final trailerFields = host.insertFields(
         WASIPreview3HttpFields(
           entries: <WASIPreview3HttpFieldEntry>[
@@ -164,6 +166,7 @@ void main() {
       });
 
       final host = WASIPreview3NativeHttpHost();
+      addTearDown(host.close);
       final body = WASIComponentStream<int>('short-request-body');
       body.writable
         ..write(1)
@@ -217,6 +220,7 @@ void main() {
     });
 
     final host = WASIPreview3NativeHttpHost();
+    addTearDown(host.close);
     final body = WASIComponentStream<int>(
       'dropped-request-body',
       maxBufferedElements: 0,
@@ -249,21 +253,13 @@ void main() {
   test(
     'native Preview3 HTTP rejects malformed request body elements',
     () async {
-      final server = await io.HttpServer.bind(
-        io.InternetAddress.loopbackIPv4,
-        0,
+      final ioRequest = _TestHttpClientRequest(
+        _TestHttpClientResponse(const Stream<List<int>>.empty()),
       );
-      addTearDown(() => server.close(force: true));
-      server.listen((request) async {
-        try {
-          await request.drain<void>();
-          await request.response.close();
-        } on Object {
-          // The client aborts the malformed request body.
-        }
-      });
-
-      final host = WASIPreview3NativeHttpHost();
+      final host = WASIPreview3NativeHttpHost(
+        client: _TestHttpClient(ioRequest),
+      );
+      addTearDown(host.close);
       final body = WASIComponentStream<Object?>('malformed-request-body');
       body.writable
         ..write('not-a-byte')
@@ -279,7 +275,7 @@ void main() {
       final request = created.first! as int;
       final transmission =
           created[1]! as WASIComponentFuture<WasmComponentValueData>;
-      _setTarget(host, request, server.port);
+      _setTarget(host, request, 80);
 
       final sent = _result(
         await host.imports['wasi:http/client@0.3.0.send']!(<Object?>[request]),
@@ -288,6 +284,8 @@ void main() {
       expect(sent.isOk, isFalse);
       expect(_variantData(sent.payload).label, 'internal-error');
       expect((await transmission.readable.readWhenReady()).isOk, isFalse);
+      expect(ioRequest.aborted, isTrue);
+      expect(ioRequest.abortError, isA<io.HttpException>());
     },
   );
 
@@ -303,6 +301,7 @@ void main() {
       final host = WASIPreview3NativeHttpHost(
         client: _TestHttpClient(_TestHttpClientRequest(response)),
       );
+      addTearDown(host.close);
       final request =
           WASIPreview3HttpRequest.noTrailers(headers: WASIPreview3HttpFields())
             ..scheme = const WASIPreview3HttpScheme.standard('HTTP')
@@ -339,6 +338,7 @@ void main() {
       });
 
       final host = WASIPreview3NativeHttpHost();
+      addTearDown(host.close);
       final request =
           WASIPreview3HttpRequest.noTrailers(
               headers: WASIPreview3HttpFields(),
@@ -376,6 +376,7 @@ void main() {
       });
 
       final host = WASIPreview3NativeHttpHost();
+      addTearDown(host.close);
       final request =
           WASIPreview3HttpRequest.noTrailers(headers: WASIPreview3HttpFields())
             ..scheme = const WASIPreview3HttpScheme.standard('HTTP')
@@ -418,6 +419,7 @@ void main() {
       });
 
       final host = WASIPreview3NativeHttpHost();
+      addTearDown(host.close);
       final request =
           WASIPreview3HttpRequest.noTrailers(
               headers: WASIPreview3HttpFields(),
@@ -443,6 +445,138 @@ void main() {
       expect(_variantData(trailers.payload).label, 'HTTP-response-timeout');
     },
   );
+
+  test('native Preview3 HTTP closes only internally owned clients', () {
+    final client = _TestHttpClient(
+      _TestHttpClientRequest(
+        _TestHttpClientResponse(const Stream<List<int>>.empty()),
+      ),
+    );
+    final host = WASIPreview3NativeHttpHost(client: client);
+
+    host.close(force: true);
+
+    expect(client.closeCalls, 0);
+  });
+
+  test('native Preview3 HTTP classifies socket errors from OS data', () async {
+    final refusedErrorCode = io.Platform.isWindows
+        ? 10061
+        : io.Platform.isMacOS || io.Platform.isIOS
+        ? 61
+        : 111;
+    expect(
+      await _sendFailureCode(
+        io.SocketException(
+          'opaque socket failure',
+          osError: io.OSError('opaque', refusedErrorCode),
+          address: io.InternetAddress.loopbackIPv4,
+        ),
+      ),
+      'connection-refused',
+    );
+    for (final foreignRefusedErrorCode in <int>{
+      61,
+      111,
+      10061,
+    }.difference(<int>{refusedErrorCode})) {
+      expect(
+        await _sendFailureCode(
+          io.SocketException(
+            'opaque socket failure',
+            osError: io.OSError('opaque', foreignRefusedErrorCode),
+            address: io.InternetAddress.loopbackIPv4,
+          ),
+        ),
+        'destination-unavailable',
+      );
+    }
+    final timeoutErrorCode = io.Platform.isWindows
+        ? 10060
+        : io.Platform.isMacOS || io.Platform.isIOS
+        ? 60
+        : 110;
+    expect(
+      await _sendFailureCode(
+        io.SocketException(
+          'opaque socket failure',
+          osError: io.OSError('opaque', timeoutErrorCode),
+          address: io.InternetAddress.loopbackIPv4,
+        ),
+      ),
+      'connection-timeout',
+    );
+    for (final foreignTimeoutErrorCode in <int>{
+      60,
+      110,
+      10060,
+    }.difference(<int>{timeoutErrorCode})) {
+      expect(
+        await _sendFailureCode(
+          io.SocketException(
+            'opaque socket failure',
+            osError: io.OSError('opaque', foreignTimeoutErrorCode),
+            address: io.InternetAddress.loopbackIPv4,
+          ),
+        ),
+        'destination-unavailable',
+      );
+    }
+    final dnsErrorCode = io.Platform.isWindows
+        ? 11001
+        : io.Platform.isMacOS || io.Platform.isIOS
+        ? 8
+        : -2;
+    expect(
+      await _sendFailureCode(
+        io.SocketException(
+          'opaque socket failure',
+          osError: io.OSError('opaque', dnsErrorCode),
+        ),
+      ),
+      'DNS-error',
+    );
+    for (final foreignDnsErrorCode in <int>{
+      -2,
+      8,
+      11001,
+    }.difference(<int>{dnsErrorCode})) {
+      expect(
+        await _sendFailureCode(
+          io.SocketException(
+            'opaque socket failure',
+            osError: io.OSError('opaque', foreignDnsErrorCode),
+          ),
+        ),
+        'destination-unavailable',
+      );
+    }
+    expect(
+      await _sendFailureCode(
+        io.SocketException(
+          'connection name reset',
+          osError: const io.OSError('opaque', 54),
+          address: io.InternetAddress.loopbackIPv4,
+        ),
+      ),
+      'destination-unavailable',
+    );
+  });
+}
+
+Future<String?> _sendFailureCode(io.SocketException error) async {
+  final host = WASIPreview3NativeHttpHost(client: _ErrorHttpClient(error));
+  final request =
+      WASIPreview3HttpRequest.noTrailers(headers: WASIPreview3HttpFields())
+        ..scheme = const WASIPreview3HttpScheme.standard('HTTP')
+        ..authority = 'example.test';
+  final sent = _result(
+    await host.imports['wasi:http/client@0.3.0.send']!(<Object?>[
+      host.insertRequest(request),
+    ]),
+  );
+  host.close();
+  return _variantData(sent.payload).label;
 }
 
 void _setTarget(WASIPreview3HttpHost host, int request, int port) {
@@ -577,6 +711,8 @@ final class _TestHttpClient implements io.HttpClient {
 
   final io.HttpClientRequest request;
 
+  int closeCalls = 0;
+
   @override
   bool autoUncompress = true;
 
@@ -587,6 +723,31 @@ final class _TestHttpClient implements io.HttpClient {
   Future<io.HttpClientRequest> openUrl(String method, Uri url) async => request;
 
   @override
+  void close({bool force = false}) {
+    closeCalls++;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _ErrorHttpClient implements io.HttpClient {
+  _ErrorHttpClient(this.error);
+
+  final Object error;
+
+  @override
+  bool autoUncompress = true;
+
+  @override
+  String? userAgent = 'Dart/test';
+
+  @override
+  Future<io.HttpClientRequest> openUrl(String method, Uri url) {
+    return Future<io.HttpClientRequest>.error(error);
+  }
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
@@ -594,6 +755,9 @@ final class _TestHttpClientRequest implements io.HttpClientRequest {
   _TestHttpClientRequest(this.response);
 
   final io.HttpClientResponse response;
+
+  bool aborted = false;
+  Object? abortError;
 
   @override
   bool followRedirects = true;
@@ -603,6 +767,12 @@ final class _TestHttpClientRequest implements io.HttpClientRequest {
 
   @override
   Future<io.HttpClientResponse> close() async => response;
+
+  @override
+  void abort([Object? exception, StackTrace? stackTrace]) {
+    aborted = true;
+    abortError = exception;
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);

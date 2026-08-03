@@ -37,5 +37,30 @@
     "fixture_commit": "c63d52e69316d1aa2c9e7db6251892775204e7e0",
     "target": "wasm32-wasip3",
     "fixture_count": 45
+  },
+  "gate_results": {
+    "wasd_strict_decode": {
+      "passed": 37,
+      "total": 37
+    },
+    "wasm_tools_validation": {
+      "version": "1.254.0",
+      "passed": 31,
+      "total": 31
+    },
+    "wasmtime_reference": {
+      "version": "48.0.0",
+      "revision": "e8ac8c27f",
+      "passed": 31,
+      "total": 31
+    },
+    "wasi_testsuite": {
+      "passed": 45,
+      "total": 45,
+      "failed": 0,
+      "skipped": 0,
+      "xfailed": 0,
+      "xpassed": 0
+    }
   }
 }

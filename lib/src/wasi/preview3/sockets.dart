@@ -184,27 +184,39 @@ final class WASIPreview3SocketOperation<T> {
   WASIPreview3SocketOperation.completed(WASIPreview3SocketResult<T> result)
     : _future = Future<WASIPreview3SocketResult<T>>.value(result),
       _result = result,
-      _disposeValue = null;
+      _disposeValue = null,
+      _cancel = null;
 
   /// Creates a pending operation.
   WASIPreview3SocketOperation.pending(
     Future<WASIPreview3SocketResult<T>> future, {
     void Function(T value)? disposeValue,
-  }) : _future = future,
-       _disposeValue = disposeValue {
-    future.then((result) {
-      if (_disposed) {
-        _dispose(result);
-      } else {
+    void Function()? cancel,
+  }) : _future = future.then<WASIPreview3SocketResult<T>>(
+         (result) => result,
+         onError: (Object _, StackTrace _) =>
+             WASIPreview3SocketResult<T>.error('other'),
+       ),
+       _disposeValue = disposeValue,
+       _cancel = cancel {
+    unawaited(
+      _future.then<void>((result) {
         _result = result;
-      }
-    });
+        if (_disposed) {
+          _dispose(result);
+        }
+      }),
+    );
   }
 
   final Future<WASIPreview3SocketResult<T>> _future;
   WASIPreview3SocketResult<T>? _result;
   final void Function(T value)? _disposeValue;
+  final void Function()? _cancel;
+  void Function(T value)? _fallbackDisposeValue;
   bool _disposed = false;
+  bool _cancelled = false;
+  bool _valueDisposed = false;
 
   /// Completed result, or null while pending.
   WASIPreview3SocketResult<T>? get resultOrNull => _result;
@@ -213,18 +225,92 @@ final class WASIPreview3SocketOperation<T> {
   Future<WASIPreview3SocketResult<T>> wait() => _future;
 
   /// Releases a late success value after the owning socket was dropped.
-  void dispose() {
-    if (_disposed) return;
+  void dispose({void Function(T value)? disposeValue}) {
+    _fallbackDisposeValue ??= disposeValue;
+    if (!_disposed && _result == null && !_cancelled) {
+      _cancelled = true;
+      _cancel?.call();
+    }
     _disposed = true;
     final result = _result;
-    _result = null;
     if (result != null) _dispose(result);
   }
 
   void _dispose(WASIPreview3SocketResult<T> result) {
+    if (_valueDisposed) return;
     final value = result.value;
-    if (value != null) _disposeValue?.call(value);
+    final disposeValue = _disposeValue ?? _fallbackDisposeValue;
+    if (value == null || disposeValue == null) return;
+    _valueDisposed = true;
+    _result = null;
+    disposeValue(value);
   }
+}
+
+/// OS-backed reservation created by `tcp-socket.bind`.
+///
+/// A backend consumes this reservation when starting `listen` or a bound
+/// `connect`. Dropping the owning socket closes an unconsumed reservation.
+abstract interface class WASIPreview3TcpBinding {
+  /// Address selected by the operating system, including an ephemeral port.
+  WASIPreview3IpSocketAddress get localAddress;
+
+  /// Releases the reserved endpoint.
+  void close();
+}
+
+/// Effective TCP socket options supplied to a native endpoint.
+final class WASIPreview3TcpSocketOptions {
+  /// Creates an immutable TCP option snapshot.
+  const WASIPreview3TcpSocketOptions({
+    required this.keepAliveEnabled,
+    required this.keepAliveIdle,
+    required this.keepAliveInterval,
+    required this.keepAliveCount,
+    required this.hopLimit,
+    required this.receiveBufferSize,
+    required this.sendBufferSize,
+  });
+
+  /// Whether TCP keepalive is enabled.
+  final bool keepAliveEnabled;
+
+  /// Keepalive idle duration in nanoseconds.
+  final BigInt keepAliveIdle;
+
+  /// Keepalive interval in nanoseconds.
+  final BigInt keepAliveInterval;
+
+  /// Number of failed probes before termination.
+  final int keepAliveCount;
+
+  /// IPv4 TTL or IPv6 unicast hop limit.
+  final int hopLimit;
+
+  /// Requested receive buffer size.
+  final BigInt receiveBufferSize;
+
+  /// Requested send buffer size.
+  final BigInt sendBufferSize;
+}
+
+/// Effective UDP socket options supplied to a native endpoint.
+final class WASIPreview3UdpSocketOptions {
+  /// Creates an immutable UDP option snapshot.
+  const WASIPreview3UdpSocketOptions({
+    required this.hopLimit,
+    required this.receiveBufferSize,
+    required this.sendBufferSize,
+  });
+
+  /// IPv4 TTL or IPv6 unicast hop limit.
+  final int hopLimit;
+
+  /// Requested receive buffer size.
+  final BigInt receiveBufferSize;
+
+  /// Requested send buffer size.
+  final BigInt sendBufferSize;
 }
 
 /// Writes one TCP chunk to a connected peer.
@@ -325,24 +411,34 @@ abstract interface class WASIPreview3UdpBinding {
   void close();
 }
 
+/// Optional lifecycle state exposed by UDP bindings that can terminate without
+/// a guest-initiated I/O operation.
+abstract interface class WASIPreview3UdpBindingLifecycle
+    implements WASIPreview3UdpBinding {
+  /// Whether the underlying endpoint has terminated permanently.
+  bool get isClosed;
+}
+
 /// Backend used by [WASIPreview3SocketsHost] for network I/O.
 abstract interface class WASIPreview3SocketsBackend {
-  /// Binds a TCP endpoint. Native backends may defer OS reservation until
-  /// connect/listen when the platform API does not expose synchronous bind.
-  WASIPreview3SocketOperation<WASIPreview3IpSocketAddress> startTcpBind(
-    WASIPreview3IpSocketAddress localAddress,
-  );
+  /// Reserves a TCP endpoint.
+  WASIPreview3SocketOperation<WASIPreview3TcpBinding> startTcpBind(
+    WASIPreview3IpSocketAddress localAddress, {
+    required BigInt backlog,
+  });
 
-  /// Connects a TCP endpoint.
+  /// Connects a TCP endpoint, consuming [binding] when one is supplied.
   WASIPreview3SocketOperation<WASIPreview3TcpConnection> startTcpConnect({
     required WASIPreview3IpSocketAddress remoteAddress,
     WASIPreview3IpSocketAddress? localAddress,
+    WASIPreview3TcpBinding? binding,
   });
 
-  /// Starts a TCP listener.
+  /// Starts a TCP listener, consuming [binding] when one is supplied.
   WASIPreview3SocketOperation<WASIPreview3TcpListener> startTcpListen({
     required WASIPreview3IpSocketAddress localAddress,
     required BigInt backlog,
+    WASIPreview3TcpBinding? binding,
   });
 
   /// Binds a UDP endpoint.
@@ -361,6 +457,19 @@ abstract interface class WASIPreview3SocketOptionsBackend {
 
   /// Whether UDP option getters and setters are faithfully implemented.
   bool get supportsUdpSocketOptions;
+
+  /// Applies TCP options to an active connection or listener.
+  String? applyTcpSocketOptions({
+    required WASIPreview3TcpSocketOptions options,
+    WASIPreview3TcpConnection? connection,
+    WASIPreview3TcpListener? listener,
+  });
+
+  /// Applies UDP options to an active binding.
+  String? applyUdpSocketOptions({
+    required WASIPreview3UdpSocketOptions options,
+    WASIPreview3UdpBinding? binding,
+  });
 }
 
 /// Backend that explicitly rejects network access.
@@ -370,10 +479,11 @@ final class WASIPreview3UnsupportedSocketsBackend
   const WASIPreview3UnsupportedSocketsBackend();
 
   @override
-  WASIPreview3SocketOperation<WASIPreview3IpSocketAddress> startTcpBind(
-    WASIPreview3IpSocketAddress localAddress,
-  ) => WASIPreview3SocketOperation<WASIPreview3IpSocketAddress>.completed(
-    const WASIPreview3SocketResult<WASIPreview3IpSocketAddress>.error(
+  WASIPreview3SocketOperation<WASIPreview3TcpBinding> startTcpBind(
+    WASIPreview3IpSocketAddress localAddress, {
+    required BigInt backlog,
+  }) => WASIPreview3SocketOperation<WASIPreview3TcpBinding>.completed(
+    const WASIPreview3SocketResult<WASIPreview3TcpBinding>.error(
       'not-supported',
     ),
   );
@@ -382,6 +492,7 @@ final class WASIPreview3UnsupportedSocketsBackend
   WASIPreview3SocketOperation<WASIPreview3TcpConnection> startTcpConnect({
     required WASIPreview3IpSocketAddress remoteAddress,
     WASIPreview3IpSocketAddress? localAddress,
+    WASIPreview3TcpBinding? binding,
   }) => WASIPreview3SocketOperation<WASIPreview3TcpConnection>.completed(
     const WASIPreview3SocketResult<WASIPreview3TcpConnection>.error(
       'not-supported',
@@ -392,6 +503,7 @@ final class WASIPreview3UnsupportedSocketsBackend
   WASIPreview3SocketOperation<WASIPreview3TcpListener> startTcpListen({
     required WASIPreview3IpSocketAddress localAddress,
     required BigInt backlog,
+    WASIPreview3TcpBinding? binding,
   }) => WASIPreview3SocketOperation<WASIPreview3TcpListener>.completed(
     const WASIPreview3SocketResult<WASIPreview3TcpListener>.error(
       'not-supported',
@@ -484,9 +596,8 @@ base class WASIPreview3SocketsHost {
           (socket) => _ok(_bool(socket.keepAliveEnabled)),
         ),
     'wasi:sockets/types@0.3.0.tcp-socket.set-keep-alive-enabled': (args) =>
-        _tcpOption(_handle(args[0]), (socket) {
+        _tcpSetOption(_handle(args[0]), (socket) {
           socket.keepAliveEnabled = args[1] as bool;
-          return _ok();
         }),
     'wasi:sockets/types@0.3.0.tcp-socket.get-keep-alive-idle-time': (args) =>
         _tcpOption(
@@ -622,9 +733,12 @@ base class WASIPreview3SocketsHost {
     return _ok(_integer(handle));
   }
 
-  WasmComponentValueData _tcpBind(int handle, Object? addressValue) {
+  FutureOr<WasmComponentValueData> _tcpBind(int handle, Object? addressValue) {
     final socket = _tcp(handle);
-    if (socket == null || socket.state == _TcpState.closed) {
+    if (socket == null ||
+        socket.state == _TcpState.closed ||
+        socket.pendingBind != null ||
+        socket.pendingListen != null) {
       return _error('invalid-state');
     }
     if (socket.state != _TcpState.unbound) return _error('invalid-state');
@@ -640,46 +754,50 @@ base class WASIPreview3SocketsHost {
       return _error('address-in-use');
     }
 
-    final operation = _backend.startTcpBind(address);
+    final operation = _backend.startTcpBind(
+      address,
+      backlog: socket.listenBacklog,
+    );
     final immediate = operation.resultOrNull;
-    if (immediate != null && !immediate.isOk) {
-      operation.dispose();
-      return _error(immediate.errorCode!);
+    if (immediate != null) {
+      return _completeTcpBind(socket, operation, immediate);
     }
-    final localAddress = immediate?.value ?? address;
-    if (!_reserveTcp(socket, localAddress)) {
+    socket.pendingBind = operation;
+    return _finishTcpBind(socket, operation);
+  }
+
+  Future<WasmComponentValueData> _finishTcpBind(
+    _TcpSocket socket,
+    WASIPreview3SocketOperation<WASIPreview3TcpBinding> operation,
+  ) async {
+    final result = await operation.wait();
+    if (socket.state == _TcpState.closed || socket.pendingBind != operation) {
+      operation.dispose(disposeValue: (binding) => binding.close());
+      return _error('invalid-state');
+    }
+    socket.pendingBind = null;
+    return _completeTcpBind(socket, operation, result);
+  }
+
+  WasmComponentValueData _completeTcpBind(
+    _TcpSocket socket,
+    WASIPreview3SocketOperation<WASIPreview3TcpBinding> operation,
+    WASIPreview3SocketResult<WASIPreview3TcpBinding> result,
+  ) {
+    if (!result.isOk) {
       operation.dispose();
+      return _error(result.errorCode!);
+    }
+    final binding = result.value!;
+    if (!_reserveTcp(socket, binding.localAddress)) {
+      operation.dispose(disposeValue: (value) => value.close());
       return _error('address-in-use');
     }
     socket
       ..state = _TcpState.bound
-      ..localAddress = localAddress
-      ..pendingBind = immediate == null ? operation : null;
-    if (immediate == null) {
-      unawaited(_finishTcpBind(socket, operation));
-    }
+      ..binding = binding
+      ..localAddress = binding.localAddress;
     return _ok();
-  }
-
-  Future<void> _finishTcpBind(
-    _TcpSocket socket,
-    WASIPreview3SocketOperation<WASIPreview3IpSocketAddress> operation,
-  ) async {
-    final result = await operation.wait();
-    if (socket.pendingBind != operation || socket.state == _TcpState.closed) {
-      operation.dispose();
-      return;
-    }
-    socket.pendingBind = null;
-    if (result.isOk && _reserveTcp(socket, result.value!)) {
-      socket.localAddress = result.value;
-    } else {
-      _releaseTcpReservation(socket);
-      socket
-        ..state = _TcpState.closed
-        ..localAddress = null
-        ..terminalError = result.errorCode ?? 'address-in-use';
-    }
   }
 
   Future<WasmComponentValueData> _tcpConnect(
@@ -689,7 +807,9 @@ base class WASIPreview3SocketsHost {
     final socket = _tcp(handle);
     if (socket == null ||
         (socket.state != _TcpState.unbound &&
-            socket.state != _TcpState.bound)) {
+            socket.state != _TcpState.bound) ||
+        socket.pendingBind != null ||
+        socket.pendingListen != null) {
       return _error('invalid-state');
     }
     final remote = _socketAddress(addressValue);
@@ -702,29 +822,17 @@ base class WASIPreview3SocketsHost {
     if (addressError != null) return _error(addressError);
     socket.state = _TcpState.connecting;
 
-    final pendingBind = socket.pendingBind;
-    if (pendingBind != null) {
-      final bound = await pendingBind.wait();
-      if (socket.state == _TcpState.closed) return _error('invalid-state');
-      socket.pendingBind = null;
-      if (!bound.isOk) {
-        socket
-          ..state = _TcpState.closed
-          ..terminalError = bound.errorCode;
-        return _error(bound.errorCode!);
-      }
-      socket.localAddress = bound.value;
-    }
-
     final operation = _backend.startTcpConnect(
       remoteAddress: remote!,
       localAddress: socket.localAddress,
+      binding: socket.binding,
     );
+    socket.binding = null;
     socket.pendingConnect = operation;
     final result = await operation.wait();
     if (socket.state == _TcpState.closed ||
         socket.pendingConnect != operation) {
-      operation.dispose();
+      operation.dispose(disposeValue: (connection) => connection.close());
       return _error('invalid-state');
     }
     socket.pendingConnect = null;
@@ -736,6 +844,16 @@ base class WASIPreview3SocketsHost {
       return _error(result.errorCode!);
     }
     final connection = result.value!;
+    final optionError = _applyTcpSocketOptions(socket, connection: connection);
+    if (optionError != null) {
+      connection.close();
+      _releaseTcpReservation(socket);
+      socket
+        ..state = _TcpState.closed
+        ..localAddress = null
+        ..terminalError = optionError;
+      return _error(optionError);
+    }
     socket
       ..state = _TcpState.connected
       ..connection = connection
@@ -745,81 +863,90 @@ base class WASIPreview3SocketsHost {
     return _ok();
   }
 
-  WasmComponentValueData _tcpListen(int handle) {
+  FutureOr<WasmComponentValueData> _tcpListen(int handle) {
     final socket = _tcp(handle);
     if (socket == null ||
         (socket.state != _TcpState.unbound &&
-            socket.state != _TcpState.bound)) {
+            socket.state != _TcpState.bound) ||
+        socket.pendingBind != null ||
+        socket.pendingListen != null) {
       return _error('invalid-state');
-    }
-    if (socket.pendingBind != null) {
-      return _error('not-supported');
     }
     final requested = socket.localAddress ?? _wildcard(socket.family);
     final operation = _backend.startTcpListen(
       localAddress: requested,
       backlog: socket.listenBacklog,
+      binding: socket.binding,
     );
+    socket.binding = null;
     final immediate = operation.resultOrNull;
-    if (immediate != null && !immediate.isOk) {
-      operation.dispose();
-      return _error(immediate.errorCode!);
+    if (immediate != null) {
+      return _completeTcpListen(handle, socket, operation, immediate);
     }
-    final listener = immediate?.value;
-    if (listener != null && !_reserveTcp(socket, listener.localAddress)) {
+    socket.pendingListen = operation;
+    return _finishTcpListen(handle, socket, operation);
+  }
+
+  Future<WasmComponentValueData> _finishTcpListen(
+    int handle,
+    _TcpSocket socket,
+    WASIPreview3SocketOperation<WASIPreview3TcpListener> operation,
+  ) async {
+    final result = await operation.wait();
+    if (socket.state == _TcpState.closed || socket.pendingListen != operation) {
+      operation.dispose(disposeValue: (listener) => listener.close());
+      return _error('invalid-state');
+    }
+    socket.pendingListen = null;
+    return _completeTcpListen(handle, socket, operation, result);
+  }
+
+  WasmComponentValueData _completeTcpListen(
+    int handle,
+    _TcpSocket socket,
+    WASIPreview3SocketOperation<WASIPreview3TcpListener> operation,
+    WASIPreview3SocketResult<WASIPreview3TcpListener> result,
+  ) {
+    if (!result.isOk) {
+      _releaseTcpReservation(socket);
+      socket
+        ..state = _TcpState.closed
+        ..localAddress = null
+        ..terminalError = result.errorCode;
       operation.dispose();
+      return _error(result.errorCode!);
+    }
+    final listener = result.value!;
+    if (!_reserveTcp(socket, listener.localAddress)) {
+      operation.dispose(disposeValue: (value) => value.close());
       return _error('address-in-use');
+    }
+
+    final optionError = _applyTcpSocketOptions(socket, listener: listener);
+    if (optionError != null) {
+      _releaseTcpReservation(socket);
+      operation.dispose(disposeValue: (value) => value.close());
+      socket
+        ..state = _TcpState.closed
+        ..localAddress = null
+        ..terminalError = optionError;
+      return _error(optionError);
     }
 
     final accepted = WASIComponentStream<int>(
       'wasi-sockets-tcp-listen-$handle',
       maxBufferedElements: _boundedBacklog(socket.listenBacklog),
       onReadableDrop: () => _releaseListener(socket),
+      onDiscard: _dropAcceptedTcp,
     );
     socket
       ..state = _TcpState.listening
       ..listenStream = accepted
       ..listenerReferences = 2
-      ..pendingListen = immediate == null ? operation : null;
-    if (immediate == null) {
-      unawaited(_startListener(socket, operation, accepted));
-    } else {
-      socket
-        ..listener = listener
-        ..localAddress = listener!.localAddress;
-      unawaited(_pumpListener(socket, listener, accepted));
-    }
-    return _okPayload(accepted);
-  }
-
-  Future<void> _startListener(
-    _TcpSocket socket,
-    WASIPreview3SocketOperation<WASIPreview3TcpListener> operation,
-    WASIComponentStream<int> accepted,
-  ) async {
-    final result = await operation.wait();
-    if (socket.pendingListen != operation || socket.listenerReferences == 0) {
-      operation.dispose();
-      accepted.writable.close();
-      return;
-    }
-    socket.pendingListen = null;
-    if (!result.isOk) {
-      socket.terminalError = result.errorCode;
-      accepted.writable.close();
-      return;
-    }
-    final listener = result.value!;
-    if (!_reserveTcp(socket, listener.localAddress)) {
-      socket.terminalError = 'address-in-use';
-      listener.close();
-      accepted.writable.close();
-      return;
-    }
-    socket
       ..listener = listener
       ..localAddress = listener.localAddress;
-    await _pumpListener(socket, listener, accepted);
+    unawaited(_pumpListener(socket, listener, accepted));
+    return _okPayload(accepted);
   }
 
   Future<void> _pumpListener(
@@ -827,12 +954,14 @@ base class WASIPreview3SocketsHost {
     WASIPreview3TcpListener listener,
     WASIComponentStream<int> accepted,
   ) async {
+    String? terminalError;
     try {
       while (!accepted.writable.isClosed) {
         if (!listener.canAccept) await listener.waitAccept();
         final result = listener.accept();
         if (!result.isOk) {
           if (result.errorCode == 'would-block') continue;
+          terminalError = result.errorCode;
           break;
         }
         final connection = result.value!;
@@ -842,6 +971,7 @@ base class WASIPreview3SocketsHost {
           handle = table.insert<_TcpSocket>(_tcpType, socket);
         } on Object {
           connection.close();
+          terminalError = 'other';
           break;
         }
         try {
@@ -855,8 +985,21 @@ base class WASIPreview3SocketsHost {
           break;
         }
       }
+    } on Object {
+      terminalError = 'other';
     } finally {
       if (!accepted.writable.isClosed) accepted.writable.close();
+      if (terminalError != null &&
+          owner.state == _TcpState.listening &&
+          owner.listener == listener) {
+        _releaseTcpReservation(owner);
+        owner
+          ..state = _TcpState.closed
+          ..terminalError = terminalError
+          ..localAddress = null
+          ..listener = null;
+        listener.close();
+      }
     }
   }
 
@@ -1051,27 +1194,60 @@ base class WASIPreview3SocketsHost {
     return callback(socket);
   }
 
+  WasmComponentValueData _tcpSetOption(
+    int handle,
+    void Function(_TcpSocket socket) write,
+  ) => _tcpOption(handle, (socket) {
+    write(socket);
+    final error = _applyTcpSocketOptions(socket);
+    return error == null ? _ok() : _error(error);
+  });
+
+  String? _applyTcpSocketOptions(
+    _TcpSocket socket, {
+    WASIPreview3TcpConnection? connection,
+    WASIPreview3TcpListener? listener,
+  }) {
+    final backend = _backend;
+    if (backend is! WASIPreview3SocketOptionsBackend) return null;
+    return (backend as WASIPreview3SocketOptionsBackend).applyTcpSocketOptions(
+      options: WASIPreview3TcpSocketOptions(
+        keepAliveEnabled: socket.keepAliveEnabled,
+        keepAliveIdle: socket.keepAliveIdle,
+        keepAliveInterval: socket.keepAliveInterval,
+        keepAliveCount: socket.keepAliveCount,
+        hopLimit: socket.hopLimit,
+        receiveBufferSize: socket.receiveBufferSize,
+        sendBufferSize: socket.sendBufferSize,
+      ),
+      connection: connection ?? socket.connection,
+      listener: listener ?? socket.listener,
+    );
+  }
+
   WasmComponentValueData _tcpSetPositiveInt(
     int handle,
     int value,
     void Function(_TcpSocket socket, int value) write,
-  ) => _tcpOption(handle, (socket) {
-    if (value == 0) return _error('invalid-argument');
-    write(socket, value);
-    return _ok();
-  });
+  ) {
+    if (value == 0) {
+      return _tcpOption(handle, (_) => _error('invalid-argument'));
+    }
+    return _tcpSetOption(handle, (socket) => write(socket, value));
+  }
 
   WasmComponentValueData _tcpSetPositiveU64(
     int handle,
     BigInt value,
     void Function(_TcpSocket socket, BigInt value) write,
-  ) => _tcpOption(handle, (socket) {
-    if (value <= BigInt.zero) return _error('invalid-argument');
-    write(socket, value);
-    return _ok();
-  });
+  ) {
+    if (value <= BigInt.zero) {
+      return _tcpOption(handle, (_) => _error('invalid-argument'));
+    }
+    return _tcpSetOption(handle, (socket) => write(socket, value));
+  }
 
-  WasmComponentValueData _udpBind(int handle, Object? addressValue) {
+  FutureOr<WasmComponentValueData> _udpBind(int handle, Object? addressValue) {
     final socket = _udp(handle);
     if (socket == null ||
         socket.closed ||
@@ -1079,6 +1255,8 @@ base class WASIPreview3SocketsHost {
         socket.pendingBind != null) {
       return _error('invalid-state');
     }
+    final terminalError = socket.terminalError;
+    if (terminalError != null) return _error(terminalError);
     final address = _socketAddress(addressValue);
     final addressError = _addressError(
       address,
@@ -1092,57 +1270,109 @@ base class WASIPreview3SocketsHost {
     }
     final operation = _backend.startUdpBind(address);
     final immediate = operation.resultOrNull;
-    if (immediate != null && !immediate.isOk) {
-      operation.dispose();
-      return _error(immediate.errorCode!);
+    if (immediate != null) {
+      final error = _completeUdpBind(socket, operation, immediate);
+      return error == null ? _ok() : _error(error);
     }
-    final binding = immediate?.value;
-    final localAddress = binding?.localAddress ?? address;
-    if (!_reserveUdp(socket, localAddress)) {
-      operation.dispose();
-      return _error('address-in-use');
-    }
-    socket
-      ..localAddress = localAddress
-      ..binding = binding
-      ..pendingBind = immediate == null ? operation : null;
-    if (immediate == null) unawaited(_finishUdpBind(socket, operation));
-    return _ok();
+    socket.pendingBind = operation;
+    final pending = _finishUdpBind(socket, operation);
+    socket.pendingBinding = pending;
+    return _finishExplicitUdpBind(socket, pending);
   }
 
-  Future<void> _finishUdpBind(
+  Future<WasmComponentValueData> _finishExplicitUdpBind(
+    _UdpSocket socket,
+    Future<WASIPreview3UdpBinding?> pending,
+  ) async {
+    final binding = await pending;
+    if (binding != null) return _ok();
+    return _error(socket.terminalError ?? 'invalid-state');
+  }
+
+  Future<WASIPreview3UdpBinding?> _finishUdpBind(
     _UdpSocket socket,
     WASIPreview3SocketOperation<WASIPreview3UdpBinding> operation,
   ) async {
     final result = await operation.wait();
     if (socket.pendingBind != operation || socket.closed) {
-      operation.dispose();
-      return;
+      operation.dispose(disposeValue: (binding) => binding.close());
+      return null;
     }
     socket.pendingBind = null;
-    if (result.isOk && _reserveUdp(socket, result.value!.localAddress)) {
-      socket
-        ..binding = result.value
-        ..localAddress = result.value!.localAddress;
-    } else {
+    final error = _completeUdpBind(socket, operation, result);
+    return error == null ? socket.binding : null;
+  }
+
+  String? _completeUdpBind(
+    _UdpSocket socket,
+    WASIPreview3SocketOperation<WASIPreview3UdpBinding> operation,
+    WASIPreview3SocketResult<WASIPreview3UdpBinding> result,
+  ) {
+    if (!result.isOk) {
+      operation.dispose();
       _releaseUdpReservation(socket);
       socket
         ..localAddress = null
-        ..terminalError = result.errorCode ?? 'address-in-use';
+        ..terminalError = result.errorCode;
+      return result.errorCode;
     }
+    final binding = result.value!;
+    if (!_reserveUdp(socket, binding.localAddress)) {
+      operation.dispose(disposeValue: (value) => value.close());
+      socket
+        ..localAddress = null
+        ..terminalError = 'address-in-use';
+      return 'address-in-use';
+    }
+    final optionError = _applyUdpSocketOptions(socket, binding: binding);
+    if (optionError != null) {
+      _releaseUdpReservation(socket);
+      operation.dispose(disposeValue: (value) => value.close());
+      socket
+        ..localAddress = null
+        ..terminalError = optionError;
+      return optionError;
+    }
+    socket
+      ..binding = binding
+      ..localAddress = binding.localAddress;
+    return null;
   }
 
-  WasmComponentValueData _udpConnect(int handle, Object? addressValue) {
+  FutureOr<WasmComponentValueData> _udpConnect(
+    int handle,
+    Object? addressValue,
+  ) {
     final socket = _udp(handle);
     if (socket == null || socket.closed) return _error('invalid-state');
+    final terminalError = socket.terminalError;
+    if (terminalError != null) return _error(terminalError);
     final address = _socketAddress(addressValue);
     final addressError = _addressError(address, socket.family, local: false);
     if (addressError != null) return _error(addressError);
-    if (socket.binding == null && socket.pendingBind == null) {
+    if (socket.binding == null) {
+      if (socket.pendingBind != null) return _error('invalid-state');
       final started = _startImplicitUdpBind(socket, remote: address);
       if (started != null) return _error(started);
+      final binding = socket.binding;
+      if (binding == null) {
+        return _finishUdpConnect(socket, address!, socket.pendingBinding!);
+      }
     }
     socket.remoteAddress = address;
+    return _ok();
+  }
+
+  Future<WasmComponentValueData> _finishUdpConnect(
+    _UdpSocket socket,
+    WASIPreview3IpSocketAddress remote,
+    Future<WASIPreview3UdpBinding?> pending,
+  ) async {
+    final binding = await pending;
+    if (binding == null) {
+      return _error(socket.terminalError ?? 'invalid-state');
+    }
+    socket.remoteAddress = remote;
     return _ok();
   }
 
@@ -1184,17 +1414,34 @@ base class WASIPreview3SocketsHost {
     final binding = await _udpBinding(socket);
     if (binding == null) return _error(socket.terminalError ?? 'invalid-state');
     final sent = await binding.send(Uint8List.fromList(bytes), remote);
+    if (!sent.isOk && sent.errorCode == 'invalid-state') {
+      _terminateUdpBinding(socket, binding, sent.errorCode!);
+    }
     return sent.isOk ? _ok() : _error(sent.errorCode!);
   }
 
   Future<WasmComponentValueData> _udpReceive(int handle) async {
     final socket = _udp(handle);
     if (socket == null || socket.closed) return _error('invalid-state');
+    if (socket.binding == null &&
+        socket.pendingBind == null &&
+        socket.remoteAddress != null) {
+      final started = _startImplicitUdpBind(
+        socket,
+        remote: socket.remoteAddress,
+      );
+      if (started != null) return _error(started);
+    }
     final binding = await _udpBinding(socket);
     if (binding == null) return _error(socket.terminalError ?? 'invalid-state');
     while (true) {
       final received = await binding.receive();
-      if (!received.isOk) return _error(received.errorCode!);
+      if (!received.isOk) {
+        if (received.errorCode == 'invalid-state') {
+          _terminateUdpBinding(socket, binding, received.errorCode!);
+        }
+        return _error(received.errorCode!);
+      }
       final datagram = received.value!;
       final remote = socket.remoteAddress;
       if (remote != null && datagram.remoteAddress != remote) continue;
@@ -1211,62 +1458,57 @@ base class WASIPreview3SocketsHost {
     _UdpSocket socket, {
     WASIPreview3IpSocketAddress? remote,
   }) {
+    final terminalError = socket.terminalError;
+    if (terminalError != null) return terminalError;
     final requested = remote != null && _isLoopback(remote.address)
         ? _withPort(remote, 0)
         : _wildcard(socket.family);
     final operation = _backend.startUdpBind(requested);
     final immediate = operation.resultOrNull;
     if (immediate != null) {
-      if (!immediate.isOk) {
-        operation.dispose();
-        return immediate.errorCode;
-      }
-      final binding = immediate.value!;
-      if (!_reserveUdp(socket, binding.localAddress)) {
-        operation.dispose();
-        return 'address-in-use';
-      }
-      socket
-        ..binding = binding
-        ..localAddress = binding.localAddress;
-      return null;
+      return _completeUdpBind(socket, operation, immediate);
     }
     socket.pendingBind = operation;
-    unawaited(_finishUdpBind(socket, operation));
+    socket.pendingBinding = _finishUdpBind(socket, operation);
     return null;
   }
 
   Future<WASIPreview3UdpBinding?> _udpBinding(_UdpSocket socket) async {
     final existing = socket.binding;
-    if (existing != null) return existing;
-    final operation = socket.pendingBind;
-    if (operation == null) return null;
-    final result = await operation.wait();
-    if (socket.closed) {
-      operation.dispose();
-      return null;
+    if (existing != null) {
+      if (existing is WASIPreview3UdpBindingLifecycle && existing.isClosed) {
+        _terminateUdpBinding(socket, existing, 'invalid-state');
+        return null;
+      }
+      return existing;
     }
-    socket.pendingBind = null;
-    if (!result.isOk) {
-      socket
-        ..localAddress = null
-        ..terminalError = result.errorCode;
-      return null;
-    }
-    final binding = result.value!;
-    if (!_reserveUdp(socket, binding.localAddress)) {
-      binding.close();
-      socket.terminalError = 'address-in-use';
-      return null;
-    }
+    final pending = socket.pendingBinding;
+    return pending == null ? null : await pending;
+  }
+
+  void _terminateUdpBinding(
+    _UdpSocket socket,
+    WASIPreview3UdpBinding binding,
+    String error,
+  ) {
+    if (socket.binding != binding) return;
+    _releaseUdpReservation(socket);
     socket
-      ..binding = binding
-      ..localAddress = binding.localAddress;
-    return result.value;
+      ..binding = null
+      ..localAddress = null
+      ..terminalError = error;
+    binding.close();
   }
 
   WasmComponentValueData _udpLocalAddress(int handle) {
-    final address = _udp(handle)?.localAddress;
+    final socket = _udp(handle);
+    final binding = socket?.binding;
+    if (socket != null &&
+        binding is WASIPreview3UdpBindingLifecycle &&
+        binding.isClosed) {
+      _terminateUdpBinding(socket, binding, 'invalid-state');
+    }
+    final address = socket?.localAddress;
     return address == null
         ? _error('invalid-state')
         : _ok(_addressData(address));
@@ -1294,25 +1536,52 @@ base class WASIPreview3SocketsHost {
     return callback(socket);
   }
 
+  WasmComponentValueData _udpSetOption(
+    int handle,
+    void Function(_UdpSocket socket) write,
+  ) => _udpOption(handle, (socket) {
+    write(socket);
+    final error = _applyUdpSocketOptions(socket);
+    return error == null ? _ok() : _error(error);
+  });
+
+  String? _applyUdpSocketOptions(
+    _UdpSocket socket, {
+    WASIPreview3UdpBinding? binding,
+  }) {
+    final backend = _backend;
+    if (backend is! WASIPreview3SocketOptionsBackend) return null;
+    return (backend as WASIPreview3SocketOptionsBackend).applyUdpSocketOptions(
+      options: WASIPreview3UdpSocketOptions(
+        hopLimit: socket.hopLimit,
+        receiveBufferSize: socket.receiveBufferSize,
+        sendBufferSize: socket.sendBufferSize,
+      ),
+      binding: binding ?? socket.binding,
+    );
+  }
+
   WasmComponentValueData _udpSetPositiveInt(
     int handle,
     int value,
     void Function(_UdpSocket socket, int value) write,
-  ) => _udpOption(handle, (socket) {
-    if (value == 0) return _error('invalid-argument');
-    write(socket, value);
-    return _ok();
-  });
+  ) {
+    if (value == 0) {
+      return _udpOption(handle, (_) => _error('invalid-argument'));
+    }
+    return _udpSetOption(handle, (socket) => write(socket, value));
+  }
 
   WasmComponentValueData _udpSetPositiveU64(
     int handle,
     BigInt value,
     void Function(_UdpSocket socket, BigInt value) write,
-  ) => _udpOption(handle, (socket) {
-    if (value <= BigInt.zero) return _error('invalid-argument');
-    write(socket, value);
-    return _ok();
-  });
+  ) {
+    if (value <= BigInt.zero) {
+      return _udpOption(handle, (_) => _error('invalid-argument'));
+    }
+    return _udpSetOption(handle, (socket) => write(socket, value));
+  }
 
   Future<WasmComponentValueData> _resolve(String name) async {
     final literal = WASIPreview3IpAddress.parse(name);
@@ -1342,9 +1611,12 @@ base class WASIPreview3SocketsHost {
   void _dropTcp(_TcpSocket socket) {
     socket.state = _TcpState.closed;
     _releaseTcpReservation(socket);
-    socket.pendingBind?.dispose();
-    socket.pendingConnect?.dispose();
-    if (socket.listenerReferences == 0) socket.pendingListen?.dispose();
+    socket.pendingBind?.dispose(disposeValue: (binding) => binding.close());
+    socket.pendingListen?.dispose(disposeValue: (listener) => listener.close());
+    socket.pendingConnect?.dispose(
+      disposeValue: (connection) => connection.close(),
+    );
+    socket.binding?.close();
     _releaseListener(socket);
     _releaseConnection(socket);
   }
@@ -1353,7 +1625,6 @@ base class WASIPreview3SocketsHost {
     if (socket.listenerReferences == 0) return;
     socket.listenerReferences--;
     if (socket.listenerReferences == 0) {
-      socket.pendingListen?.dispose();
       socket.listener?.close();
     }
   }
@@ -1364,11 +1635,19 @@ base class WASIPreview3SocketsHost {
     if (socket.connectionReferences == 0) socket.connection?.close();
   }
 
+  void _dropAcceptedTcp(int handle) {
+    try {
+      table.drop<_TcpSocket>(_tcpType, handle);
+    } on StateError {
+      // A closed runtime scope already released the accepted socket.
+    }
+  }
+
   void _dropUdp(_UdpSocket socket) {
     if (socket.closed) return;
     socket.closed = true;
     _releaseUdpReservation(socket);
-    socket.pendingBind?.dispose();
+    socket.pendingBind?.dispose(disposeValue: (binding) => binding.close());
     socket.binding?.close();
   }
 
@@ -1453,9 +1732,10 @@ final class _TcpSocket {
   WASIPreview3IpSocketAddress? localAddress;
   WASIPreview3IpSocketAddress? reservedLocalAddress;
   WASIPreview3IpSocketAddress? remoteAddress;
-  WASIPreview3SocketOperation<WASIPreview3IpSocketAddress>? pendingBind;
-  WASIPreview3SocketOperation<WASIPreview3TcpConnection>? pendingConnect;
+  WASIPreview3SocketOperation<WASIPreview3TcpBinding>? pendingBind;
   WASIPreview3SocketOperation<WASIPreview3TcpListener>? pendingListen;
+  WASIPreview3SocketOperation<WASIPreview3TcpConnection>? pendingConnect;
+  WASIPreview3TcpBinding? binding;
   WASIPreview3TcpListener? listener;
   WASIComponentStream<int>? listenStream;
   WASIPreview3TcpConnection? connection;
@@ -1482,6 +1762,7 @@ final class _UdpSocket {
   WASIPreview3IpSocketAddress? reservedLocalAddress;
   WASIPreview3IpSocketAddress? remoteAddress;
   WASIPreview3SocketOperation<WASIPreview3UdpBinding>? pendingBind;
+  Future<WASIPreview3UdpBinding?>? pendingBinding;
   WASIPreview3UdpBinding? binding;
   String? terminalError;
   bool closed = false;

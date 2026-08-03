@@ -20,6 +20,7 @@ void main() {
       final componentModel =
           manifest['component_model']! as Map<String, Object?>;
       final testsuite = manifest['wasi_testsuite']! as Map<String, Object?>;
+      final gateResults = manifest['gate_results']! as Map<String, Object?>;
 
       expect(wasi['version'], '0.3.0');
       expect(wasi['commit'], '3ee2a590c766594ae44a54730fc74fc27da5c609');
@@ -41,6 +42,67 @@ void main() {
       );
       expect(testsuite['target'], 'wasm32-wasip3');
       expect(testsuite['fixture_count'], 45);
+      final official = gateResults['wasi_testsuite']! as Map<String, Object?>;
+      expect(official['total'], testsuite['fixture_count']);
+      expect(official['passed'], testsuite['fixture_count']);
+      expect(official['failed'], 0);
+      expect(official['skipped'], 0);
+      expect(official['xfailed'], 0);
+      expect(official['xpassed'], 0);
+    });
+
+    test('keeps release claims aligned with recorded gate results', () {
+      final manifest =
+          jsonDecode(
+                File(
+                  'tool/wasi_preview3_contract.lock.json',
+                ).readAsStringSync(),
+              )
+              as Map<String, Object?>;
+      final gateResults = manifest['gate_results']! as Map<String, Object?>;
+      final strictDecode =
+          gateResults['wasd_strict_decode']! as Map<String, Object?>;
+      final wasmTools =
+          gateResults['wasm_tools_validation']! as Map<String, Object?>;
+      final wasmtime =
+          gateResults['wasmtime_reference']! as Map<String, Object?>;
+      final official = gateResults['wasi_testsuite']! as Map<String, Object?>;
+      final toolchains =
+          jsonDecode(File('tool/toolchain.lock.json').readAsStringSync())
+              as Map<String, Object?>;
+      final lockedWasmTools = toolchains['wasm_tools']! as Map<String, Object?>;
+      expect(wasmTools['version'], lockedWasmTools['version']);
+
+      final pubspec = File('pubspec.yaml').readAsStringSync();
+      final version = RegExp(
+        r'^version:\s*(\S+)',
+        multiLine: true,
+      ).firstMatch(pubspec)!.group(1)!;
+      final changelog = File('CHANGELOG.md').readAsStringSync();
+      final readme = File('README.md').readAsStringSync();
+      final support = File('doc/wasm_wasi_todo.md').readAsStringSync();
+      expect(changelog, startsWith('## $version\n'));
+      expect(readme, contains('wasd: ^$version'));
+
+      final strictClaim = '${strictDecode['passed']}/${strictDecode['total']}';
+      final wasmToolsClaim = '${wasmTools['passed']}/${wasmTools['total']}';
+      final wasmtimeClaim = '${wasmtime['passed']}/${wasmtime['total']}';
+      final officialClaim = '${official['passed']}/${official['total']}';
+      for (final document in <String>[changelog, readme, support]) {
+        expect(document, contains(strictClaim));
+        expect(
+          RegExp(RegExp.escape(wasmToolsClaim)).allMatches(document).length,
+          greaterThanOrEqualTo(2),
+          reason: 'wasm-tools and Wasmtime must remain separate claims',
+        );
+        expect(document, contains(officialClaim));
+      }
+      expect(wasmToolsClaim, wasmtimeClaim);
+      expect(support, contains('`wasm-tools` ${wasmTools['version']}'));
+      final wasmtimeToolchain =
+          '${wasmtime['version']} (${wasmtime['revision']})';
+      expect(readme, contains(wasmtimeToolchain));
+      expect(support, contains(wasmtimeToolchain));
     });
 
     test('resolves all six packages and eight stable worlds', () {

@@ -12,10 +12,15 @@ import '../tool/wasi_testsuite_preview3_component_runner.dart'
 
 void main() {
   test('wasd official adapter advertises Preview3 worlds and runner', () async {
+    final python = await _pythonExecutable();
+    if (python == null) {
+      markTestSkipped('requires Python 3');
+      return;
+    }
     final adapterPath = File(
       'tool/wasi_testsuite_wasd_adapter.py',
     ).absolute.path;
-    final result = await Process.run('python3', <String>[
+    final result = await Process.run(python, <String>[
       '-c',
       '''
 import importlib.util
@@ -43,7 +48,7 @@ print(json.dumps(payload))
     expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
     final payload =
         json.decode(result.stdout as String) as Map<String, Object?>;
-    expect(payload['version'], 'local');
+    expect(payload['version'], '0.5.0');
     final versions = (payload['versions'] as List<Object?>).cast<String>();
     final worlds = (payload['worlds'] as List<Object?>).cast<String>();
     final p3 = (payload['p3'] as List<Object?>).cast<String>();
@@ -300,8 +305,250 @@ print(json.dumps(payload))
   });
 
   test(
+    'Preview3 service reports response write failures to the guest',
+    () async {
+      final body = WASIComponentStream<int>('runner-failing-response');
+      body.writable
+        ..write(1)
+        ..close();
+      final transmission = WASIComponentFuture<WasmComponentValueData>(
+        'runner-failing-transmission',
+      );
+      final response = WASIPreview3HttpResponse(
+        headers: WASIPreview3HttpFields(),
+        contents: body,
+        trailers: WASIComponentFuture<WasmComponentValueData>(
+          'unused-trailers',
+        ),
+        transmissionResult: transmission,
+      );
+      final transmissionError = _transmissionErrorLabel(transmission);
+
+      await expectLater(
+        component_runner.writePreview3HttpResponse(
+          _FailingHttpResponse(),
+          response,
+        ),
+        throwsStateError,
+      );
+
+      expect(await transmissionError, 'internal-error');
+    },
+  );
+
+  test('Preview3 service times out a stalled response body', () async {
+    final transmission = WASIComponentFuture<WasmComponentValueData>(
+      'runner-timeout-transmission',
+    );
+    final response = WASIPreview3HttpResponse(
+      headers: WASIPreview3HttpFields(),
+      contents: WASIComponentStream<int>('runner-stalled-response'),
+      trailers: WASIComponentFuture<WasmComponentValueData>('unused-trailers'),
+      transmissionResult: transmission,
+    );
+    final transmissionError = _transmissionErrorLabel(transmission);
+
+    await expectLater(
+      component_runner.writePreview3HttpResponse(
+        _CollectingHttpResponse(),
+        response,
+        bodyReadTimeout: const Duration(milliseconds: 10),
+      ),
+      throwsA(isA<TimeoutException>()),
+    );
+
+    expect(await transmissionError, 'HTTP-response-timeout');
+  });
+
+  test('Preview3 service does not start an expired response read', () async {
+    final discarded = <int>[];
+    final body = WASIComponentStream<int>(
+      'runner-expired-response',
+      onDiscard: discarded.add,
+    );
+    body.writable.write(7);
+    final response = WASIPreview3HttpResponse.noTrailers(
+      headers: WASIPreview3HttpFields(),
+      contents: body,
+    );
+
+    await expectLater(
+      component_runner.writePreview3HttpResponse(
+        _CollectingHttpResponse(),
+        response,
+        bodyReadTimeout: Duration.zero,
+      ),
+      throwsA(isA<TimeoutException>()),
+    );
+
+    expect(discarded, <int>[7]);
+  });
+
+  test('Preview3 service bounds a continuously streaming response', () async {
+    final body = WASIComponentStream<int>('runner-endless-response');
+    final timer = Timer.periodic(const Duration(milliseconds: 2), (_) {
+      if (body.writable.isClosed) {
+        return;
+      }
+      body.writable.write(1);
+    });
+    addTearDown(timer.cancel);
+    final response = WASIPreview3HttpResponse(
+      headers: WASIPreview3HttpFields(),
+      contents: body,
+      trailers: WASIComponentFuture<WasmComponentValueData>('unused-trailers'),
+    );
+
+    await expectLater(
+      component_runner
+          .writePreview3HttpResponse(
+            _CollectingHttpResponse(),
+            response,
+            bodyReadTimeout: const Duration(milliseconds: 20),
+          )
+          .timeout(
+            const Duration(milliseconds: 100),
+            onTimeout: () => throw StateError(
+              'response transmission did not enforce its total timeout',
+            ),
+          ),
+      throwsA(isA<TimeoutException>()),
+    );
+  });
+
+  test('Preview3 service bounds response output close', () async {
+    final transmission = WASIComponentFuture<WasmComponentValueData>(
+      'runner-close-timeout-transmission',
+    );
+    final response = WASIPreview3HttpResponse(
+      headers: WASIPreview3HttpFields(),
+      trailers: _completedNoTrailers(),
+      transmissionResult: transmission,
+    );
+    final transmissionError = _transmissionErrorLabel(transmission);
+
+    await expectLater(
+      component_runner
+          .writePreview3HttpResponse(
+            _StallingCloseHttpResponse(),
+            response,
+            bodyReadTimeout: const Duration(milliseconds: 10),
+          )
+          .timeout(
+            const Duration(milliseconds: 100),
+            onTimeout: () => throw StateError(
+              'response output close was not covered by the total timeout',
+            ),
+          ),
+      throwsA(isA<TimeoutException>()),
+    );
+    expect(await transmissionError, 'HTTP-response-timeout');
+  });
+
+  test('Preview3 service waits for response trailers', () async {
+    final transmission = WASIComponentFuture<WasmComponentValueData>(
+      'runner-trailers-timeout-transmission',
+    );
+    final response = WASIPreview3HttpResponse(
+      headers: WASIPreview3HttpFields(),
+      trailers: WASIComponentFuture<WasmComponentValueData>(
+        'runner-pending-trailers',
+      ),
+      transmissionResult: transmission,
+    );
+    final transmissionError = _transmissionErrorLabel(transmission);
+
+    await expectLater(
+      component_runner.writePreview3HttpResponse(
+        _CollectingHttpResponse(),
+        response,
+        bodyReadTimeout: const Duration(milliseconds: 10),
+      ),
+      throwsA(isA<TimeoutException>()),
+    );
+    expect(await transmissionError, 'HTTP-response-timeout');
+  });
+
+  test('Preview3 service rejects unsupported response trailers', () async {
+    final transmission = WASIComponentFuture<WasmComponentValueData>(
+      'runner-trailers-rejected-transmission',
+    );
+    final trailers = WASIComponentFuture<WasmComponentValueData>(
+      'runner-present-trailers',
+    );
+    trailers.writable.complete(_ok(_some(_integerValue(1))));
+    var trailersTaken = 0;
+    final response = WASIPreview3HttpResponse(
+      headers: WASIPreview3HttpFields(),
+      trailers: trailers,
+      transmissionResult: transmission,
+      takeTrailers: (handle) {
+        expect(handle, 1);
+        trailersTaken++;
+        return WASIPreview3HttpFields();
+      },
+    );
+    final transmissionError = _transmissionErrorLabel(transmission);
+
+    await expectLater(
+      component_runner.writePreview3HttpResponse(
+        _CollectingHttpResponse(),
+        response,
+      ),
+      throwsStateError,
+    );
+    expect(await transmissionError, 'HTTP-protocol-error');
+    expect(trailersTaken, 1);
+    expect(trailers.writable.isDropped, isTrue);
+  });
+
+  test('Preview3 service shutdown accepts SIGTERM', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final signals = StreamController<ProcessSignal>();
+    addTearDown(signals.close);
+
+    final stopped = component_runner.servePreview3HttpUntilInterrupted(
+      server,
+      signalStreams: <Stream<ProcessSignal>>[signals.stream],
+    );
+    signals.add(ProcessSignal.sigterm);
+
+    await stopped.timeout(const Duration(seconds: 1));
+  });
+
+  test('Preview3 service reports an unexpected listener shutdown', () async {
+    final server = await component_runner.startPreview3HttpServiceServer((_) {
+      throw StateError('request handler must not run');
+    });
+    final signals = StreamController<ProcessSignal>();
+    addTearDown(signals.close);
+    await server.close(force: true);
+
+    await expectLater(
+      component_runner
+          .servePreview3HttpUntilInterrupted(
+            server,
+            signalStreams: <Stream<ProcessSignal>>[signals.stream],
+          )
+          .timeout(const Duration(seconds: 1)),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          'Preview3 HTTP listener stopped unexpectedly.',
+        ),
+      ),
+    );
+  });
+
+  test(
     'Preview3 testsuite runner requires every discovered fixture to pass',
     () async {
+      final python = await _pythonExecutable();
+      if (python == null) {
+        markTestSkipped('requires Python 3');
+        return;
+      }
       final temp = await Directory.systemTemp.createTemp('wasd_wasip3_suite_');
       addTearDown(() async {
         if (await temp.exists()) {
@@ -349,11 +596,13 @@ with open(args.json_output_location, 'w', encoding='utf-8') as output:
     }, output)
 ''');
 
-      final jsonPath = '${temp.path}/report.json';
-      final markdownPath = '${temp.path}/report.md';
+      final jsonPath = '${temp.path}/reports/report.json';
+      final markdownPath = '${temp.path}/reports/report.md';
+      await File(jsonPath).parent.create(recursive: true);
       await File('$jsonPath.raw-official.json').writeAsString(
         '{"results":[{"tests":[{"name":"stale","outcome":"pass"}]}]}',
       );
+      await File(jsonPath).parent.delete(recursive: true);
       final result = await Process.run(Platform.resolvedExecutable, <String>[
         'run',
         'tool/wasi_testsuite_preview3_runner.dart',
@@ -362,7 +611,7 @@ with open(args.json_output_location, 'w', encoding='utf-8') as output:
         '--runner-dir',
         '${temp.path}/test-runner',
         '--python',
-        'python3',
+        python,
         '--json',
         jsonPath,
         '--markdown',
@@ -387,6 +636,487 @@ with open(args.json_output_location, 'w', encoding='utf-8') as output:
       expect(await File(markdownPath).readAsString(), contains('100%'));
     },
   );
+
+  test(
+    'Preview3 testsuite runner bounds pipes held after normal exit',
+    () async {
+      if (Platform.isWindows) {
+        markTestSkipped('requires POSIX process groups');
+        return;
+      }
+      final python = await _pythonExecutable();
+      if (python == null) {
+        markTestSkipped('requires Python 3');
+        return;
+      }
+      final temp = await Directory.systemTemp.createTemp(
+        'wasd_wasip3_runner_pipe_',
+      );
+      addTearDown(() async {
+        if (await temp.exists()) {
+          await temp.delete(recursive: true);
+        }
+      });
+      await _createPreview3Fixture(temp);
+      final childPidPath = '${temp.path}/runtime-child.pid';
+      await _writeOfficialRunner(temp, '''
+import json
+import subprocess
+import sys
+
+subprocess.Popen([
+    sys.executable,
+    '-c',
+    ${json.encode(_stubbornChildProgram(childPidPath))},
+])
+with open(args.json_output_location, 'w', encoding='utf-8') as output:
+    json.dump({
+        'results': [{
+            'tests': [{
+                'name': 'fixture.wasm',
+                'outcome': 'pass',
+                'failures': [],
+            }],
+        }],
+    }, output)
+''');
+      final jsonPath = '${temp.path}/reports/report.json';
+      final markdownPath = '${temp.path}/reports/report.md';
+      final stopwatch = Stopwatch()..start();
+
+      final result = await Process.run(Platform.resolvedExecutable, <String>[
+        'run',
+        'tool/wasi_testsuite_preview3_runner.dart',
+        '--testsuite-dir=${temp.path}',
+        '--runner-dir=${temp.path}/test-runner',
+        '--python=$python',
+        '--runner-timeout-seconds=5',
+        '--json=$jsonPath',
+        '--markdown=$markdownPath',
+      ]);
+      stopwatch.stop();
+
+      final childPid = int.parse(await File(childPidPath).readAsString());
+      addTearDown(() async {
+        if (await _processIsRunning(childPid)) {
+          Process.killPid(childPid, ProcessSignal.sigkill);
+        }
+      });
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      expect(stopwatch.elapsed, lessThan(const Duration(seconds: 6)));
+      expect(await _waitForProcessStop(childPid), isTrue);
+    },
+  );
+
+  test('Preview3 testsuite runner reports a missing official runner', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'wasd_wasip3_missing_runner_',
+    );
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+    await _createPreview3Fixture(temp);
+    final jsonPath = '${temp.path}/reports/report.json';
+    final markdownPath = '${temp.path}/reports/report.md';
+
+    final result = await Process.run(Platform.resolvedExecutable, <String>[
+      'run',
+      'tool/wasi_testsuite_preview3_runner.dart',
+      '--testsuite-dir=${temp.path}',
+      '--runner-dir=${temp.path}/missing-runner',
+      '--json=$jsonPath',
+      '--markdown=$markdownPath',
+    ]);
+
+    expect(result.exitCode, 1, reason: '${result.stdout}\n${result.stderr}');
+    final report =
+        json.decode(await File(jsonPath).readAsString())
+            as Map<String, Object?>;
+    expect(report['status'], 'failed');
+    _expectSyntheticFailureTotals(report);
+    expect(
+      json.encode(report['failures']),
+      contains('official wasi-testsuite runner not found'),
+    );
+  });
+
+  test('Preview3 testsuite runner reports when git is unavailable', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'wasd_wasip3_missing_git_',
+    );
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+    final jsonPath = '${temp.path}/reports/report.json';
+    final markdownPath = '${temp.path}/reports/report.md';
+
+    final result = await Process.run(
+      Platform.resolvedExecutable,
+      <String>[
+        'run',
+        'tool/wasi_testsuite_preview3_runner.dart',
+        '--testsuite-dir=${temp.path}',
+        '--json=$jsonPath',
+        '--markdown=$markdownPath',
+      ],
+      environment: const <String, String>{'PATH': '/no/such/bin'},
+    );
+
+    expect(result.exitCode, 1, reason: '${result.stdout}\n${result.stderr}');
+    final report =
+        json.decode(await File(jsonPath).readAsString())
+            as Map<String, Object?>;
+    expect(report['status'], 'missing-tests');
+    expect(report['testsuite_head'], isNull);
+  });
+
+  test('Preview3 testsuite runner reports suite scan failures', () async {
+    if (Platform.isWindows) {
+      markTestSkipped('requires POSIX directory permissions');
+      return;
+    }
+    final temp = await Directory.systemTemp.createTemp(
+      'wasd_wasip3_scan_failure_',
+    );
+    final suiteRoot = Directory('${temp.path}/restricted');
+    await suiteRoot.create();
+    addTearDown(() async {
+      await Process.run('/bin/chmod', <String>['700', suiteRoot.path]);
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+    final chmod = await Process.run('/bin/chmod', <String>[
+      '000',
+      suiteRoot.path,
+    ]);
+    expect(chmod.exitCode, 0);
+    final jsonPath = '${temp.path}/reports/report.json';
+    final markdownPath = '${temp.path}/reports/report.md';
+
+    final result = await Process.run(Platform.resolvedExecutable, <String>[
+      'run',
+      'tool/wasi_testsuite_preview3_runner.dart',
+      '--testsuite-dir=${suiteRoot.path}',
+      '--json=$jsonPath',
+      '--markdown=$markdownPath',
+    ]);
+
+    expect(result.exitCode, 1, reason: '${result.stdout}\n${result.stderr}');
+    final report =
+        json.decode(await File(jsonPath).readAsString())
+            as Map<String, Object?>;
+    expect(report['status'], 'failed');
+    _expectSyntheticFailureTotals(report);
+    expect(
+      await File(markdownPath).readAsString(),
+      contains('Permission denied'),
+    );
+  });
+
+  test('Preview3 testsuite runner reports invalid official JSON', () async {
+    final python = await _pythonExecutable();
+    if (python == null) {
+      markTestSkipped('requires Python 3');
+      return;
+    }
+    final temp = await Directory.systemTemp.createTemp(
+      'wasd_wasip3_invalid_json_',
+    );
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+    await _createPreview3Fixture(temp);
+
+    for (final (index, payload) in <String>['{', '[]', '{}'].indexed) {
+      await _writeOfficialRunner(
+        temp,
+        'with open(args.json_output_location, "w", encoding="utf-8") as output:\n'
+        '    output.write(${json.encode(payload)})\n',
+      );
+      final jsonPath = '${temp.path}/reports/report-$index.json';
+      final markdownPath = '${temp.path}/reports/report-$index.md';
+      final result = await Process.run(Platform.resolvedExecutable, <String>[
+        'run',
+        'tool/wasi_testsuite_preview3_runner.dart',
+        '--testsuite-dir=${temp.path}',
+        '--runner-dir=${temp.path}/test-runner',
+        '--python=$python',
+        '--json=$jsonPath',
+        '--markdown=$markdownPath',
+      ]);
+
+      expect(result.exitCode, 1, reason: '${result.stdout}\n${result.stderr}');
+      final report =
+          json.decode(await File(jsonPath).readAsString())
+              as Map<String, Object?>;
+      expect(report['status'], 'failed');
+      _expectSyntheticFailureTotals(report);
+      expect(
+        json.encode(report['failures']),
+        contains('Official runner report is not valid JSON'),
+      );
+    }
+  });
+
+  test(
+    'Preview3 testsuite runner times out and reports a hung runner',
+    () async {
+      final python = await _pythonExecutable();
+      if (python == null) {
+        markTestSkipped('requires Python 3');
+        return;
+      }
+      final temp = await Directory.systemTemp.createTemp(
+        'wasd_wasip3_runner_timeout_',
+      );
+      addTearDown(() async {
+        if (await temp.exists()) {
+          await temp.delete(recursive: true);
+        }
+      });
+      await _createPreview3Fixture(temp);
+      final childPidPath = '${temp.path}/runtime-child.pid';
+      await _writeOfficialRunner(temp, '''
+import subprocess
+import sys
+import time
+
+subprocess.Popen([
+    sys.executable,
+    '-c',
+    ${json.encode(_stubbornChildProgram(childPidPath))},
+])
+time.sleep(10)
+''');
+      final jsonPath = '${temp.path}/reports/report.json';
+      final markdownPath = '${temp.path}/reports/report.md';
+      final stopwatch = Stopwatch()..start();
+
+      final result = await Process.run(Platform.resolvedExecutable, <String>[
+        'run',
+        'tool/wasi_testsuite_preview3_runner.dart',
+        '--testsuite-dir=${temp.path}',
+        '--runner-dir=${temp.path}/test-runner',
+        '--python=$python',
+        '--runner-timeout-seconds=1',
+        '--json=$jsonPath',
+        '--markdown=$markdownPath',
+      ]);
+      stopwatch.stop();
+
+      expect(result.exitCode, 1, reason: '${result.stdout}\n${result.stderr}');
+      expect(stopwatch.elapsed, lessThan(const Duration(seconds: 6)));
+      final report =
+          json.decode(await File(jsonPath).readAsString())
+              as Map<String, Object?>;
+      expect(report['status'], 'failed');
+      _expectSyntheticFailureTotals(report);
+      expect(json.encode(report['failures']), contains('timed out'));
+      final childPid = int.parse(await File(childPidPath).readAsString());
+      addTearDown(() async {
+        if (await _processIsRunning(childPid)) {
+          Process.killPid(childPid, ProcessSignal.sigkill);
+        }
+      });
+      expect(await _waitForProcessStop(childPid), isTrue);
+    },
+  );
+}
+
+Future<String?> _pythonExecutable() async {
+  for (final executable in const <String>['python3', 'python']) {
+    try {
+      final result = await Process.run(executable, const <String>[
+        '-c',
+        'import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)',
+      ]);
+      if (result.exitCode == 0) {
+        return executable;
+      }
+    } on ProcessException {
+      // Try the next common Python executable name.
+    }
+  }
+  return null;
+}
+
+Future<void> _createPreview3Fixture(Directory root) async {
+  final suite = Directory('${root.path}/tests/rust/testsuite/wasm32-wasip3');
+  await suite.create(recursive: true);
+  await File('${suite.path}/fixture.wasm').writeAsBytes(const <int>[0]);
+}
+
+Future<void> _writeOfficialRunner(Directory root, String body) async {
+  final package = Directory('${root.path}/test-runner/wasi_test_runner');
+  await package.create(recursive: true);
+  final bytecode = Directory('${package.path}/__pycache__');
+  if (await bytecode.exists()) {
+    await bytecode.delete(recursive: true);
+  }
+  await File('${package.path}/__init__.py').writeAsString('');
+  await File('${package.path}/__main__.py').writeAsString('''
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--test-suite', action='append')
+parser.add_argument('--runtime-adapter')
+parser.add_argument('--json-output-location')
+parser.add_argument('--disable-colors', action='store_true')
+args = parser.parse_args()
+$body''');
+}
+
+Future<String?> _transmissionErrorLabel(
+  WASIComponentFuture<WasmComponentValueData> transmission,
+) async {
+  final result = await transmission.readable.readWhenReady();
+  return result.associatedValue?.label;
+}
+
+WASIComponentFuture<WasmComponentValueData> _completedNoTrailers() {
+  final trailers = WASIComponentFuture<WasmComponentValueData>('no-trailers');
+  trailers.writable.complete(_ok(_none()));
+  return trailers;
+}
+
+WasmComponentValueData _ok(WasmComponentValueData value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.result,
+    rawBytes: Uint8List(0),
+    index: 0,
+    label: 'ok',
+    isOk: true,
+    associatedValue: value,
+  );
+}
+
+WasmComponentValueData _none() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    index: 0,
+    label: 'none',
+    isSome: false,
+  );
+}
+
+WasmComponentValueData _some(WasmComponentValueData value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    index: 1,
+    label: 'some',
+    isSome: true,
+    associatedValue: value,
+  );
+}
+
+WasmComponentValueData _integerValue(int value) {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.integer,
+    rawBytes: Uint8List(0),
+    integer: value,
+  );
+}
+
+void _expectSyntheticFailureTotals(Map<String, Object?> report) {
+  expect(report['totals'], <String, Object?>{
+    'total': 1,
+    'passed': 0,
+    'failed': 1,
+    'skipped': 0,
+    'xfailed': 0,
+    'xpassed': 0,
+  });
+}
+
+Future<bool> _waitForProcessStop(int pid) async {
+  for (var attempt = 0; attempt < 50; attempt++) {
+    if (!await _processIsRunning(pid)) {
+      return true;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+  }
+  return !await _processIsRunning(pid);
+}
+
+Future<bool> _processIsRunning(int pid) async {
+  if (Platform.isWindows) {
+    final result = await Process.run('tasklist', <String>[
+      '/FI',
+      'PID eq $pid',
+      '/FO',
+      'CSV',
+      '/NH',
+    ]);
+    return result.exitCode == 0 && (result.stdout as String).contains('"$pid"');
+  }
+  final result = await Process.run('ps', <String>['-p', '$pid', '-o', 'stat=']);
+  if (result.exitCode != 0) {
+    return false;
+  }
+  final state = (result.stdout as String).trim();
+  return state.isNotEmpty && !state.startsWith('Z');
+}
+
+String _stubbornChildProgram(String pidPath) =>
+    '''
+import os
+import signal
+import time
+
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+with open(${json.encode(pidPath)}, 'w', encoding='utf-8') as output:
+    output.write(str(os.getpid()))
+time.sleep(10)
+''';
+
+final class _FailingHttpResponse implements HttpResponse {
+  @override
+  int statusCode = HttpStatus.ok;
+
+  @override
+  void add(List<int> data) {
+    throw StateError('response write failed');
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _CollectingHttpResponse implements HttpResponse {
+  @override
+  int statusCode = HttpStatus.ok;
+
+  @override
+  void add(List<int> data) {}
+
+  @override
+  Future<void> close() async {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _StallingCloseHttpResponse implements HttpResponse {
+  @override
+  int statusCode = HttpStatus.ok;
+
+  @override
+  void add(List<int> data) {}
+
+  @override
+  Future<void> close() => Completer<void>().future;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 String _basename(String path) => path

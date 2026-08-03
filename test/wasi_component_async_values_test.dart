@@ -24,12 +24,32 @@ void main() {
       expect(stream.readable.read(1), isEmpty);
 
       stream.readable.drop();
-      expect(dropped, isEmpty);
+      expect(dropped, <String>['numbers']);
       stream.writable.drop();
 
       expect(stream.isDropped, isTrue);
       expect(dropped, <String>['numbers']);
       expect(() => stream.readable.read(1), throwsStateError);
+    });
+
+    test('host stream termination consumes both endpoints exactly once', () {
+      var dropCount = 0;
+      final stream = WASIComponentStream<int>(
+        'terminated-stream',
+        onDrop: () => dropCount++,
+      );
+
+      stream.readable.cancel();
+      expect(stream.readable.isDropped, isTrue);
+      expect(dropCount, 0);
+
+      stream.writable.close();
+      expect(stream.writable.isDropped, isTrue);
+      expect(dropCount, 1);
+
+      stream.readable.drop();
+      stream.writable.drop();
+      expect(dropCount, 1);
     });
 
     test('cancels streams without retaining queued values', () {
@@ -361,10 +381,37 @@ void main() {
       expect(stream.readable.read(2), <Object?>[null, null]);
       expect(stream.readable.read(2), <Object?>[null]);
     });
+
+    test('discards only values accepted by an unread stream', () async {
+      final discarded = <int>[];
+      final buffered = WASIComponentStream<int>(
+        'buffered-owned-values',
+        onDiscard: discarded.add,
+      );
+      buffered.writable.writeAll(<int>[1, 2, 3]);
+
+      expect(buffered.readable.read(1), <int>[1]);
+      buffered.readable.drop();
+      expect(discarded, <int>[2, 3]);
+
+      final rendezvous = WASIComponentStream<int>(
+        'pending-owned-values',
+        maxBufferedElements: 0,
+        onDiscard: discarded.add,
+      );
+      final pending = rendezvous.writable.writeWhenAvailable(<int>[4]);
+      rendezvous.readable.drop();
+
+      await expectLater(
+        pending,
+        throwsA(isA<WASIComponentAsyncEndpointStateError>()),
+      );
+      expect(discarded, <int>[2, 3]);
+    });
   });
 
   group('WASIComponentFuture', () {
-    test('completes readable and writable future endpoints exactly once', () {
+    test('host completion consumes the producer endpoint exactly once', () {
       final dropped = <String>[];
       final future = WASIComponentFuture<int>(
         'answer',
@@ -377,16 +424,41 @@ void main() {
       future.writable.complete(42);
 
       expect(future.readable.isReady, isTrue);
+      expect(future.writable.isDropped, isTrue);
       expect(future.readable.read(), 42);
+      expect(() => future.readable.read(), throwsStateError);
       expect(() => future.writable.complete(43), throwsStateError);
 
       future.readable.drop();
-      expect(dropped, isEmpty);
+      expect(dropped, <String>['answer']);
       future.writable.drop();
 
       expect(future.isDropped, isTrue);
       expect(dropped, <String>['answer']);
     });
+
+    test(
+      'host completion waiting for delivery releases its producer',
+      () async {
+        var dropCount = 0;
+        final future = WASIComponentFuture<int>(
+          'delivered-answer',
+          onDrop: () => dropCount++,
+        );
+
+        final delivered = future.writable.completeWhenRead(42);
+
+        expect(future.writable.isDropped, isTrue);
+        expect(future.isDropped, isFalse);
+        expect(await future.readable.readWhenReady(), 42);
+        await expectLater(delivered, completes);
+
+        future.readable.drop();
+        future.writable.drop();
+        expect(future.isDropped, isTrue);
+        expect(dropCount, 1);
+      },
+    );
 
     test('completes pending readable future waits', () async {
       final future = WASIComponentFuture<int>('answer');
@@ -404,7 +476,7 @@ void main() {
 
       await expectLater(pending, completion(42));
       expect(completed, isTrue);
-      expect(future.readable.read(), 42);
+      expect(() => future.readable.read(), throwsStateError);
     });
 
     test('cancels pending futures', () {
@@ -418,6 +490,69 @@ void main() {
       expect(() => future.readable.read(), throwsStateError);
     });
 
+    test('host future cancellation consumes both endpoints exactly once', () {
+      var dropCount = 0;
+      final future = WASIComponentFuture<String>(
+        'cancelled-host-future',
+        onDrop: () => dropCount++,
+      );
+
+      future.readable.cancel();
+      expect(future.readable.isDropped, isTrue);
+      expect(dropCount, 0);
+
+      future.writable.cancel();
+      expect(future.writable.isDropped, isTrue);
+      expect(dropCount, 1);
+
+      future.readable.drop();
+      future.writable.drop();
+      expect(dropCount, 1);
+    });
+
+    test('discards rejected and raced host values exactly once', () async {
+      final discarded = <String>[];
+      var rejectedDrops = 0;
+      final rejected = WASIComponentFuture<String>(
+        'rejected-host-value',
+        onDrop: () => rejectedDrops++,
+        onDiscard: discarded.add,
+      );
+
+      rejected.readable.drop();
+      expect(
+        () => rejected.writable.complete('rejected'),
+        throwsA(isA<WASIComponentAsyncEndpointStateError>()),
+      );
+      expect(discarded, <String>['rejected']);
+      expect(rejected.isDropped, isTrue);
+      expect(rejectedDrops, 1);
+
+      var racedDrops = 0;
+      final raced = WASIComponentFuture<String>(
+        'raced-host-value',
+        onDrop: () => racedDrops++,
+        onDiscard: discarded.add,
+      );
+      final delivery = raced.writable.completeWhenRead('raced');
+
+      raced.readable.drop();
+
+      await expectLater(
+        delivery,
+        throwsA(
+          isA<WASIComponentAsyncEndpointStateError>().having(
+            (error) => error.failure,
+            'failure',
+            WASIComponentAsyncEndpointFailure.dropped,
+          ),
+        ),
+      );
+      expect(discarded, <String>['rejected', 'raced']);
+      expect(raced.isDropped, isTrue);
+      expect(racedDrops, 1);
+    });
+
     test('fails pending readable future waits on cancel or drop', () async {
       final cancelled = WASIComponentFuture<String>('cancelled');
       final cancelledRead = cancelled.readable.readWhenReady();
@@ -427,12 +562,13 @@ void main() {
       await expectLater(cancelledRead, throwsStateError);
 
       final dropped = WASIComponentFuture<String>('dropped');
-      final droppedRead = dropped.readable.readWhenReady();
-
+      expect(() => dropped.writable.drop(), throwsStateError);
+      dropped.readable.drop();
+      expect(
+        () => dropped.writable.complete('returned'),
+        throwsA(isA<WASIComponentAsyncEndpointStateError>()),
+      );
       dropped.writable.drop();
-
-      expect(dropped.isCancelled, isTrue);
-      await expectLater(droppedRead, throwsStateError);
     });
 
     test('completes unit futures with null', () async {
@@ -442,7 +578,59 @@ void main() {
       future.writable.complete(null);
 
       await expectLater(pending, completion(isNull));
-      expect(future.readable.read(), isNull);
+      expect(() => future.readable.read(), throwsStateError);
     });
+
+    test('allows only one pending read copy', () async {
+      final future = WASIComponentFuture<int>('single-reader');
+      final pending = future.readable.readWhenReady();
+
+      expect(() => future.readable.readWhenReady(), throwsStateError);
+      future.writable.complete(42);
+
+      await expectLater(pending, completion(42));
+      expect(() => future.readable.readWhenReady(), throwsStateError);
+    });
+
+    test(
+      'discards accepted unread values without taking cancelled writes',
+      () async {
+        final discarded = <String>[];
+        final unread = WASIComponentFuture<String>(
+          'unread-owned-value',
+          onDiscard: discarded.add,
+        );
+        unread.writable.complete('accepted');
+
+        unread.readable.drop();
+        unread.writable.drop();
+        expect(discarded, <String>['accepted']);
+
+        final cancelled = WASIComponentFuture<String>(
+          'cancelled-owned-value',
+          onDiscard: discarded.add,
+        );
+        final pendingWrite = cancelled.writable.completeWhenReadForCopy(
+          'returned',
+        );
+        cancelled.writable.cancelPendingCopy();
+
+        await expectLater(
+          pendingWrite,
+          throwsA(isA<WASIComponentAsyncEndpointStateError>()),
+        );
+        expect(discarded, <String>['accepted']);
+
+        final pendingRead = cancelled.readable.readWhenReady();
+        final delivered = cancelled.writable.completeWhenReadForCopy(
+          'delivered',
+        );
+        await expectLater(pendingRead, completion('delivered'));
+        await expectLater(delivered, completes);
+        cancelled.readable.drop();
+        cancelled.writable.drop();
+        expect(discarded, <String>['accepted']);
+      },
+    );
   });
 }

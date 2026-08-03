@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 const String _defaultJsonPath =
     '.dart_tool/spec_runner/component_official_latest.json';
@@ -14,6 +16,8 @@ const String _testsuiteSubmoduleHint =
     'Initialize testsuite submodule: '
     'git submodule update --init --recursive third_party/component-model-tests';
 const String _defaultWasmToolsBin = '.toolchains/bin/wasm-tools';
+const Duration _defaultFileTimeout = Duration(minutes: 2);
+const Duration _processTerminationGrace = Duration(seconds: 2);
 const List<String> _defaultPortableGroups = <String>[
   'async',
   'names',
@@ -49,26 +53,55 @@ Future<void> main(List<String> args) async {
   final outputMarkdownPath =
       _argValue(args, '--markdown') ?? _defaultMarkdownPath;
   final allGroups = args.contains('--all-groups');
+  final groupsArg = _argValue(args, '--groups');
   final features =
       _argValue(args, '--features') ??
       (allGroups ? 'all' : _defaultPortableFeatures);
   final explicitWasmToolsBin = _argValue(args, '--wasm-tools-bin');
   final wasmtimeBin = _argValue(args, '--wasmtime-bin');
-  if (explicitWasmToolsBin != null && wasmtimeBin != null) {
-    throw ArgumentError(
-      'Use only one of `--wasm-tools-bin` or `--wasmtime-bin`.',
+  late final Duration fileTimeout;
+  try {
+    if (_hasOption(args, '--wasm-tools-bin') &&
+        _hasOption(args, '--wasmtime-bin')) {
+      throw ArgumentError(
+        'Use only one of `--wasm-tools-bin` or `--wasmtime-bin`.',
+      );
+    }
+    if (allGroups && _hasOption(args, '--groups')) {
+      throw ArgumentError('Use only one of `--all-groups` or `--groups`.');
+    }
+    fileTimeout = _parsePositiveSeconds(
+      _argValue(args, '--file-timeout-seconds'),
+      '--file-timeout-seconds',
+      _defaultFileTimeout,
     );
+  } on Object catch (error) {
+    stderr
+      ..writeln('component-official: $error')
+      ..writeln(_usage);
+    exitCode = 2;
+    return;
   }
   final engine = wasmtimeBin == null
       ? _GateEngine.wasmToolsValidation
       : _GateEngine.wasmtimeReference;
+  if (engine == _GateEngine.wasmtimeReference) {
+    for (final feature in _unknownWasmtimeFeatureTokens(features)) {
+      stderr.writeln(
+        'component-official: warning: ignoring unknown Wasmtime feature '
+        '`$feature`.',
+      );
+    }
+  }
   final allowPathFallback = explicitWasmToolsBin == null && wasmtimeBin == null;
   final requestedEngineBinary =
       wasmtimeBin ?? explicitWasmToolsBin ?? _defaultWasmToolsBin;
   final includePattern = _argValue(args, '--include-pattern');
   final requireTestsuiteDir = args.contains('--require-testsuite-dir');
   final requireEngine = args.contains('--require-engine');
-  final ignoreErrorMessages = !args.contains('--no-ignore-error-messages');
+  final ignoreErrorMessages =
+      engine == _GateEngine.wasmToolsValidation &&
+      !args.contains('--no-ignore-error-messages');
   final disableDefaultExpectedFailures = args.contains(
     '--no-default-expected-failures',
   );
@@ -103,7 +136,6 @@ Future<void> main(List<String> args) async {
     }
   }
   final expectedFailures = expectedFailureRules.keys.toSet();
-  final groupsArg = _argValue(args, '--groups');
   final selectedGroups = allGroups
       ? const <String>[]
       : (groupsArg == null
@@ -225,22 +257,30 @@ Future<void> main(List<String> args) async {
       features: features,
       ignoreErrorMessages: ignoreErrorMessages,
     );
-    final result = await Process.run(
-      resolvedEngine.binary,
-      command,
-      runInShell: false,
-    );
+    late final _EngineProcessResult result;
+    try {
+      result = await _runEngineProcess(
+        resolvedEngine.binary,
+        command,
+        timeout: fileTimeout,
+      );
+    } on Object catch (error) {
+      result = _EngineProcessResult.failedToStart(error);
+    }
     final ended = DateTime.now();
-    final stdoutText = _asText(result.stdout);
-    final stderrText = _asText(result.stderr);
+    final stdoutText = result.stdout;
+    final stderrText = result.stderr;
     final expectedFailureRule = expectedFailureRules[file.relativePath];
     final expectedFailure = expectedFailureRule != null;
     final failureSummary = result.exitCode == 0
         ? null
+        : result.timedOut
+        ? 'timed out after ${fileTimeout.inSeconds} seconds'
         : _firstNonEmptyLine(stderrText) ?? 'unknown failure';
     final failureText = '$failureSummary\n$stderrText';
     final expectedFailureReasonMatched =
         expectedFailure &&
+        !result.timedOut &&
         result.exitCode != 0 &&
         _matchesExpectedFailureRule(
           expectedFailureRule,
@@ -259,6 +299,7 @@ Future<void> main(List<String> args) async {
             expectedFailureReasonMatched,
         xpassed: expectedFailure && result.exitCode == 0,
         exitCode: result.exitCode,
+        timedOut: result.timedOut,
         durationMs: ended.difference(started).inMilliseconds,
         failureSummary: failureSummary,
         stdoutTail: _tailLines(stdoutText, 60),
@@ -307,6 +348,7 @@ Future<void> main(List<String> args) async {
     if (engine == _GateEngine.wasmtimeReference)
       'wasmtime_binary': resolvedEngine.binary,
     'ignore_error_messages': ignoreErrorMessages,
+    'file_timeout_seconds': fileTimeout.inSeconds,
     'expected_failures': expectedFailures.toList()..sort(),
     'expected_failure_rules': expectedFailureRules.map(
       (path, rule) => MapEntry(path, rule.reasonContains),
@@ -336,6 +378,50 @@ Future<void> main(List<String> args) async {
 
   if (status != 'passed') {
     exitCode = 1;
+  }
+}
+
+Future<_EngineProcessResult> _runEngineProcess(
+  String binary,
+  List<String> arguments, {
+  required Duration timeout,
+}) async {
+  final process = await Process.start(binary, arguments, runInShell: false);
+  final stdoutCollector = _ProcessOutputCollector(process.stdout);
+  final stderrCollector = _ProcessOutputCollector(process.stderr);
+  var timedOut = false;
+  var processExitCode = 0;
+  try {
+    processExitCode = await process.exitCode.timeout(timeout);
+  } on TimeoutException {
+    timedOut = true;
+    await _terminateProcess(process);
+    processExitCode = 124;
+  }
+  final outputs = await Future.wait<String>(<Future<String>>[
+    stdoutCollector.read(),
+    stderrCollector.read(),
+  ]);
+  return _EngineProcessResult(
+    exitCode: processExitCode,
+    stdout: outputs[0],
+    stderr: outputs[1],
+    timedOut: timedOut,
+  );
+}
+
+Future<void> _terminateProcess(Process process) async {
+  process.kill();
+  try {
+    await process.exitCode.timeout(_processTerminationGrace);
+    return;
+  } on TimeoutException {
+    process.kill(ProcessSignal.sigkill);
+  }
+  try {
+    await process.exitCode.timeout(_processTerminationGrace);
+  } on TimeoutException {
+    // Output draining is bounded below even if the engine ignores both signals.
   }
 }
 
@@ -386,12 +472,7 @@ List<String> _engineCommand({
         if (ignoreErrorMessages) '--ignore-error-messages',
       ];
     case _GateEngine.wasmtimeReference:
-      return <String>[
-        'wast',
-        ..._wasmtimeFeatureArgs(features),
-        if (ignoreErrorMessages) '--ignore-error-messages',
-        filePath,
-      ];
+      return <String>['wast', ..._wasmtimeFeatureArgs(features), filePath];
   }
 }
 
@@ -424,6 +505,29 @@ List<String> _wasmtimeFeatureArgs(String features) {
       ..add('-Wcomponent-model-implements=y');
   }
   return flags.toList(growable: false);
+}
+
+Iterable<String> _unknownWasmtimeFeatureTokens(String features) sync* {
+  const known = <String>{
+    'all',
+    'component-model',
+    'cm-values',
+    'cm-async',
+    'cm-more-async-builtins',
+    'cm-async-stackful',
+    'cm-threading',
+    'cm-error-context',
+    'cm-gc',
+    'cm-map',
+    'cm-fixed-length-lists',
+  };
+  final seen = <String>{};
+  for (final rawToken in features.split(',')) {
+    final token = rawToken.trim();
+    if (token.isNotEmpty && !known.contains(token) && seen.add(token)) {
+      yield token;
+    }
+  }
 }
 
 Future<void> _writeSkippedReport({
@@ -507,6 +611,27 @@ String? _argValue(List<String> args, String key) {
     }
   }
   return null;
+}
+
+bool _hasOption(List<String> args, String key) {
+  return args.any(
+    (argument) => argument == key || argument.startsWith('$key='),
+  );
+}
+
+Duration _parsePositiveSeconds(
+  String? value,
+  String option,
+  Duration fallback,
+) {
+  if (value == null) {
+    return fallback;
+  }
+  final seconds = int.tryParse(value);
+  if (seconds == null || seconds <= 0) {
+    throw ArgumentError.value(value, option, 'must be a positive integer');
+  }
+  return Duration(seconds: seconds);
 }
 
 String _relativePath(String fullPath, {required String from}) {
@@ -732,6 +857,63 @@ final class _ResolvedEngine {
   final String version;
 }
 
+final class _EngineProcessResult {
+  const _EngineProcessResult({
+    required this.exitCode,
+    required this.stdout,
+    required this.stderr,
+    required this.timedOut,
+  });
+
+  factory _EngineProcessResult.failedToStart(Object error) =>
+      _EngineProcessResult(
+        exitCode: 127,
+        stdout: '',
+        stderr: 'Unable to start official component engine: $error',
+        timedOut: false,
+      );
+
+  final int exitCode;
+  final String stdout;
+  final String stderr;
+  final bool timedOut;
+}
+
+final class _ProcessOutputCollector {
+  _ProcessOutputCollector(Stream<List<int>> stream) {
+    _subscription = stream.listen(
+      _bytes.add,
+      onError: (Object _, StackTrace _) => _complete(),
+      onDone: _complete,
+      cancelOnError: true,
+    );
+  }
+
+  final BytesBuilder _bytes = BytesBuilder(copy: false);
+  final Completer<void> _done = Completer<void>();
+  late final StreamSubscription<List<int>> _subscription;
+
+  Future<String> read() async {
+    try {
+      await _done.future.timeout(_processTerminationGrace);
+    } on TimeoutException {
+      try {
+        await _subscription.cancel().timeout(_processTerminationGrace);
+      } on Object {
+        // Return the bounded output captured before the pipe stalled.
+      }
+      _complete();
+    }
+    return utf8.decode(_bytes.takeBytes(), allowMalformed: true);
+  }
+
+  void _complete() {
+    if (!_done.isCompleted) {
+      _done.complete();
+    }
+  }
+}
+
 final class _FileResult {
   const _FileResult({
     required this.path,
@@ -742,6 +924,7 @@ final class _FileResult {
     required this.xfailed,
     required this.xpassed,
     required this.exitCode,
+    required this.timedOut,
     required this.durationMs,
     required this.failureSummary,
     required this.stdoutTail,
@@ -756,6 +939,7 @@ final class _FileResult {
   final bool xfailed;
   final bool xpassed;
   final int exitCode;
+  final bool timedOut;
   final int durationMs;
   final String? failureSummary;
   final List<String> stdoutTail;
@@ -770,6 +954,7 @@ final class _FileResult {
     'xfailed': xfailed,
     'xpassed': xpassed,
     'exit_code': exitCode,
+    'timed_out': timedOut,
     'duration_ms': durationMs,
     'failure_summary': failureSummary,
     'stdout_tail': stdoutTail,
@@ -783,3 +968,15 @@ final class _ExpectedFailureRule {
   final String path;
   final String? reasonContains;
 }
+
+const String _usage = '''
+Usage: dart run tool/component_official_runner.dart [options]
+
+  --testsuite-dir DIR
+  --groups LIST | --all-groups
+  --features LIST
+  --wasm-tools-bin FILE | --wasmtime-bin FILE
+  --file-timeout-seconds N
+  --json FILE
+  --markdown FILE
+''';

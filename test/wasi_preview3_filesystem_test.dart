@@ -34,6 +34,7 @@ void main() {
       final readResult = read[1] as WASIComponentFuture<WasmComponentValueData>;
       expect(await readStream.readable.readWhenAvailable(3), [1, 2, 3]);
       expect((await readResult.readable.readWhenReady()).isOk, isTrue);
+      expect(readResult.writable.isDropped, isTrue);
 
       final noFollow =
           await _invoke(host, 'descriptor.stat-at', [
@@ -245,6 +246,44 @@ void main() {
         expect(host.table.activeCount, 1);
       },
     );
+
+    test('releases descriptor-backed host resources on drop', () async {
+      final opened = <Set<String>>[];
+      final closed = <Set<String>>[];
+      final host = WASIPreview3FilesystemHost(
+        preopens: {
+          '/': WASIPreview3FilesystemDirectory(
+            canMutate: true,
+            entries: [
+              WASIPreview3FilesystemDirectoryEntry.regularFile(
+                'owned.bin',
+                canMutate: true,
+                openDescriptor: (flags) {
+                  opened.add(Set<String>.of(flags));
+                  return const WASIPreview3FilesystemMutationResult.ok();
+                },
+                closeDescriptor: (flags) {
+                  closed.add(Set<String>.of(flags));
+                },
+              ),
+            ],
+          ),
+        },
+      );
+      final root = await _preopen(host);
+      final file = _okHandle(
+        await _open(host, root, 'owned.bin', flags: _flags('read', 'write')),
+      );
+
+      expect(opened, [
+        <String>{'read', 'write'},
+      ]);
+      expect(closed, isEmpty);
+      host.table.dropNamed('wasi:filesystem/types@0.3.0.descriptor', file);
+      expect(closed, [
+        <String>{'read', 'write'},
+      ]);
+    });
 
     test('serializes concurrent append streams at the current end', () async {
       final entry = WASIPreview3FilesystemDirectoryEntry.regularFile(

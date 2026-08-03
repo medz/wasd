@@ -43,8 +43,30 @@ void main() {
         final component = WasmComponent.decode(
           importedScopedOptionStreamComponentBytes(),
         );
+        final scopedContexts = component.componentFunctionIndexTypeContexts
+            .whereType<WasmComponentFunctionTypeContext>()
+            .where((context) => context.typeScope != null)
+            .toList(growable: false);
 
         expect(component.validate(), isEmpty);
+        expect(scopedContexts, isNotEmpty);
+        expect(
+          <int?>[
+            for (final context in scopedContexts)
+              for (
+                var index = 0;
+                index < context.typeDefinitions.length;
+                index++
+              )
+                wasiComponentAsyncValueTypeIndex(
+                  component,
+                  index,
+                  context.typeDefinitions,
+                  sourceTypeScope: context.typeScope,
+                ),
+          ].whereType<int>(),
+          containsAll(<int>[2, 3]),
+        );
         final plans = componentCanonicalAdapterPlans(component);
         final contents = <WASIComponentCanonicalAdapterFlatValuePlan?>[
           for (final plan in plans) plan.params[1].flatLayout,
@@ -1664,7 +1686,7 @@ void main() {
       for (final testCase in <({bool asyncMode, int count, bool indirect})>[
         (asyncMode: false, count: 17, indirect: true),
         (asyncMode: true, count: 17, indirect: true),
-        (asyncMode: true, count: 5, indirect: false),
+        (asyncMode: true, count: 5, indirect: true),
       ]) {
         final params = List<WASIComponentCanonicalAdapterValuePlan>.generate(
           testCase.count,
@@ -3057,11 +3079,11 @@ void main() {
         adapter.result!.resourceUses.single.resourceTypeIndex,
       );
 
-      final operation = host.componentHost.canonicalHost.adapterHost
-          .bindLiftCoreFunction(adapter, (args) {
-            expect(args, [101, 202]);
-            return 303;
-          });
+      const adapterHost = WASIComponentCanonicalAdapterHost();
+      final operation = adapterHost.bindLiftCoreFunction(adapter, (args) {
+        expect(args, [101, 202]);
+        return 303;
+      });
 
       expect(operation.invoke(const <Object?>[101, 202]), 303);
       final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
@@ -3085,17 +3107,16 @@ void main() {
         throwsStateError,
       );
 
-      final program = host.componentHost.canonicalHost.adapterHost
-          .bindAdapterPlans(
-            plan.adapterPlans,
-            coreFunctions: {
-              adapter.definition.coreFunctionIndex!: (args) {
-                expect(args[0], anyOf(101, 0xffffffff, 0));
-                expect(args[1], 202);
-                return 303;
-              },
-            },
-          );
+      final program = adapterHost.bindAdapterPlans(
+        plan.adapterPlans,
+        coreFunctions: {
+          adapter.definition.coreFunctionIndex!: (args) {
+            expect(args[0], anyOf(101, 0xffffffff, 0));
+            expect(args[1], 202);
+            return 303;
+          },
+        },
+      );
 
       expect(program.invokeFlat(0, const <Object?>[101, 202]), [303]);
       expect(program.invokeLiftedCore(0, const <Object?>[101, 202]), 303);
@@ -3111,19 +3132,499 @@ void main() {
       expect(program.invokeFlat(0, const <Object?>[-1, 202]), [303]);
       expect(program.invokeFlat(0, const <Object?>[0x100000000, 202]), [303]);
       expect(
-        () => host.componentHost.canonicalHost.adapterHost
+        () => adapterHost
             .bindLiftCoreFunction(adapter, (_) => -1)
             .invokeWithMemory(memory, const <int>[32, 36], resultPointer: 48),
         throwsStateError,
       );
       expect(
-        () => host.componentHost.canonicalHost.adapterHost
+        () => adapterHost
             .bindLiftCoreFunction(adapter, (_) => 0x100000000)
             .invokeWithMemory(memory, const <int>[32, 36], resultPointer: 48),
         throwsStateError,
       );
     });
+
+    test(
+      'lowers async borrowed handles into the current callee task',
+      () async {
+        final component = WasmComponent.decode(
+          canonicalResourceLiftComponentBytes(),
+        );
+        final host = WASIPreview3ComponentHost();
+        final plan = host.prepareComponent(component);
+        final canonicalHost = host.componentHost.canonicalHost;
+        final table = canonicalHost.table;
+        final resourceType = table.defineType<int>('borrowed-resource');
+        final owned = table.insert<int>(resourceType, 10);
+        final source = table.insert<int>(resourceType, 20);
+        late int loweredBorrow;
+        final adapter = plan.adapterPlans.single;
+        final asyncAdapter = WASIComponentCanonicalAdapterPlan(
+          canonicalIndex: adapter.canonicalIndex,
+          definition: adapter.definition,
+          functionType: adapter.functionType,
+          params: adapter.params,
+          result: adapter.result,
+          resourceUses: adapter.resourceUses,
+          stringEncoding: adapter.stringEncoding,
+          memoryIndex: adapter.memoryIndex,
+          reallocIndex: adapter.reallocIndex,
+          postReturnIndex: adapter.postReturnIndex,
+          callbackIndex: adapter.callbackIndex,
+          isAsync: true,
+        );
+        final program = canonicalHost.adapterHost.bindAdapterPlans(
+          [asyncAdapter],
+          coreFunctions: {
+            0: (args) {
+              expect(args.first, owned);
+              loweredBorrow = args[1] as int;
+              return owned;
+            },
+          },
+        );
+        final task = canonicalHost.taskHost.createTask(name: 'callee');
+        task.markStarted();
+
+        final result = await canonicalHost.taskHost.runWithTaskAsync(
+          task,
+          () => program.invokeLiftedCoreAsync(0, <Object?>[owned, source]),
+        );
+
+        expect(result, owned);
+        expect(loweredBorrow, isNot(source));
+        expect(table.get<int>(resourceType, loweredBorrow), 20);
+        expect(task.borrowCount, 1);
+        expect(() => table.drop<int>(resourceType, source), throwsStateError);
+
+        final otherTask = canonicalHost.taskHost.createTask(name: 'other');
+        otherTask.markStarted();
+        canonicalHost.taskHost.runWithTask(
+          otherTask,
+          () => table.drop<int>(resourceType, loweredBorrow),
+        );
+        expect(task.borrowCount, 0);
+        expect(otherTask.borrowCount, 0);
+        task.returnResult();
+        otherTask.returnResult();
+
+        table.drop<int>(resourceType, source);
+        table.drop<int>(resourceType, owned);
+        expect(table.activeCount, 0);
+      },
+    );
+
+    test('rejects stackless async borrow preparation without a task', () {
+      const borrowed = WASIComponentCanonicalAdapterFlatValuePlan.resource(
+        handleKind: WASIComponentResourceHandleKind.borrow,
+        resourceTypeIndex: 0,
+      );
+      final canonicalHost = WASIComponentCanonicalHost();
+      final table = canonicalHost.table;
+      final resourceType = table.defineType<int>('async-borrow-source');
+      final source = table.insert<int>(resourceType, 21);
+      final program = canonicalHost.adapterHost.bindAdapterPlans(
+        [_borrowLiftPlan(borrowed, isAsync: true)],
+        coreFunctions: {0: (_) => null},
+      );
+
+      expect(
+        () => program.prepareAsyncLiftCoreArgs(0, <Object?>[source]),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('requires an active task'),
+          ),
+        ),
+      );
+
+      expect(table.activeCount, 1);
+      expect(table.containsType(resourceType, source), isTrue);
+      table.drop<int>(resourceType, source);
+      expect(table.activeCount, 0);
+    });
+
+    test(
+      'keeps sync borrow aliases through post-return then releases them',
+      () {
+        const borrowed = WASIComponentCanonicalAdapterFlatValuePlan.resource(
+          handleKind: WASIComponentResourceHandleKind.borrow,
+          resourceTypeIndex: 0,
+        );
+        final canonicalHost = WASIComponentCanonicalHost();
+        final table = canonicalHost.table;
+        final dropped = <int>[];
+        final resourceType = table.defineType<int>(
+          'sync-call-borrow',
+          onDrop: dropped.add,
+        );
+        final source = table.insert<int>(resourceType, 42);
+        final outerTask = canonicalHost.taskHost.createTask(name: 'outer');
+        outerTask.markStarted();
+        late int alias;
+        var postReturnSawAlias = false;
+        final program = canonicalHost.adapterHost.bindAdapterPlans(
+          [_borrowLiftPlan(borrowed, postReturnIndex: 1)],
+          coreFunctions: {
+            0: (args) {
+              alias = args.single as int;
+              expect(alias, isNot(source));
+              expect(table.get<int>(resourceType, alias), 42);
+              expect(outerTask.borrowCount, 0);
+              expect(
+                () => table.drop<int>(resourceType, source),
+                throwsStateError,
+              );
+              return null;
+            },
+            1: (args) {
+              expect(args, isEmpty);
+              postReturnSawAlias = table.containsType(resourceType, alias);
+              return null;
+            },
+          },
+        );
+
+        canonicalHost.taskHost.runWithTask(
+          outerTask,
+          () => expect(program.invokeLiftedCore(0, <Object?>[source]), isNull),
+        );
+
+        expect(postReturnSawAlias, isTrue);
+        expect(table.contains(alias), isFalse);
+        expect(table.containsType(resourceType, source), isTrue);
+        expect(outerTask.borrowCount, 0);
+        expect(dropped, isEmpty);
+        outerTask.returnResult();
+        table.drop<int>(resourceType, source);
+        expect(dropped, [42]);
+      },
+    );
+
+    test('does not double-release a sync borrow dropped by core Wasm', () {
+      const borrowed = WASIComponentCanonicalAdapterFlatValuePlan.resource(
+        handleKind: WASIComponentResourceHandleKind.borrow,
+        resourceTypeIndex: 0,
+      );
+      final canonicalHost = WASIComponentCanonicalHost();
+      final table = canonicalHost.table;
+      final dropped = <int>[];
+      final resourceType = table.defineType<int>(
+        'manual-sync-call-borrow',
+        onDrop: dropped.add,
+      );
+      final source = table.insert<int>(resourceType, 43);
+      late int alias;
+      final program = canonicalHost.adapterHost.bindAdapterPlans(
+        [_borrowLiftPlan(borrowed)],
+        coreFunctions: {
+          0: (args) {
+            alias = args.single as int;
+            table.drop<int>(resourceType, alias);
+            return null;
+          },
+        },
+      );
+
+      expect(program.invokeLiftedCore(0, <Object?>[source]), isNull);
+
+      expect(table.contains(alias), isFalse);
+      expect(table.containsType(resourceType, source), isTrue);
+      expect(table.activeCount, 1);
+      expect(dropped, isEmpty);
+      table.drop<int>(resourceType, source);
+      expect(dropped, [43]);
+    });
+
+    test('releases sync borrow aliases when the core callback throws', () {
+      const borrowed = WASIComponentCanonicalAdapterFlatValuePlan.resource(
+        handleKind: WASIComponentResourceHandleKind.borrow,
+        resourceTypeIndex: 0,
+      );
+      final canonicalHost = WASIComponentCanonicalHost();
+      final table = canonicalHost.table;
+      final dropped = <int>[];
+      final resourceType = table.defineType<int>(
+        'throwing-sync-call-borrow',
+        onDrop: dropped.add,
+      );
+      final source = table.insert<int>(resourceType, 44);
+      final failure = StateError('core callback failed');
+      late int alias;
+      final program = canonicalHost.adapterHost.bindAdapterPlans(
+        [_borrowLiftPlan(borrowed)],
+        coreFunctions: {
+          0: (args) {
+            alias = args.single as int;
+            throw failure;
+          },
+        },
+      );
+
+      expect(
+        () => program.invokeLiftedCore(0, <Object?>[source]),
+        throwsA(same(failure)),
+      );
+
+      expect(table.contains(alias), isFalse);
+      expect(table.containsType(resourceType, source), isTrue);
+      expect(table.activeCount, 1);
+      expect(dropped, isEmpty);
+      table.drop<int>(resourceType, source);
+      expect(dropped, [44]);
+    });
+
+    test('lowers borrowed leaves across supported nested flat layouts', () {
+      const borrowed = WASIComponentCanonicalAdapterFlatValuePlan.resource(
+        handleKind: WASIComponentResourceHandleKind.borrow,
+        resourceTypeIndex: 0,
+      );
+      const u32 = WASIComponentCanonicalAdapterFlatValuePlan.primitive(
+        WasmComponentPrimitiveValueType.u32,
+      );
+      final cases =
+          <
+            ({
+              WASIComponentCanonicalAdapterFlatValuePlan layout,
+              Object value,
+              List<Object?> expected,
+            })
+          >[
+            (
+              layout:
+                  const WASIComponentCanonicalAdapterFlatValuePlan.composite(
+                    kind: WASIComponentCanonicalAdapterFlatValueKind.record,
+                    fields: [
+                      WASIComponentCanonicalAdapterFlatFieldPlan(
+                        label: 'borrowed',
+                        value: borrowed,
+                      ),
+                      WASIComponentCanonicalAdapterFlatFieldPlan(
+                        label: 'code',
+                        value: u32,
+                      ),
+                    ],
+                  ),
+              value: _u32CompositeValue(
+                WasmComponentValueDataKind.record,
+                const [1, 7],
+              ),
+              expected: const <Object?>[1001, 7],
+            ),
+            (
+              layout:
+                  const WASIComponentCanonicalAdapterFlatValuePlan.composite(
+                    kind: WASIComponentCanonicalAdapterFlatValueKind.tuple,
+                    fields: [
+                      WASIComponentCanonicalAdapterFlatFieldPlan(
+                        label: '0',
+                        value: borrowed,
+                      ),
+                    ],
+                  ),
+              value: _u32CompositeValue(
+                WasmComponentValueDataKind.tuple,
+                const [2],
+              ),
+              expected: const <Object?>[1002],
+            ),
+            (
+              layout:
+                  const WASIComponentCanonicalAdapterFlatValuePlan.composite(
+                    kind: WASIComponentCanonicalAdapterFlatValueKind.fixedList,
+                    fields: [
+                      WASIComponentCanonicalAdapterFlatFieldPlan(
+                        label: '0',
+                        value: borrowed,
+                      ),
+                      WASIComponentCanonicalAdapterFlatFieldPlan(
+                        label: '1',
+                        value: borrowed,
+                      ),
+                    ],
+                  ),
+              value: _u32CompositeValue(
+                WasmComponentValueDataKind.fixedList,
+                const [3, 4],
+              ),
+              expected: const <Object?>[1003, 1004],
+            ),
+            (
+              layout: const WASIComponentCanonicalAdapterFlatValuePlan.option(
+                element: borrowed,
+              ),
+              value: _u32SomeValue(5),
+              expected: const <Object?>[1, 1005],
+            ),
+            (
+              layout: const WASIComponentCanonicalAdapterFlatValuePlan.result(
+                ok: borrowed,
+                error: null,
+              ),
+              value: _u32OkValue(6),
+              expected: const <Object?>[0, 1006],
+            ),
+            (
+              layout: const WASIComponentCanonicalAdapterFlatValuePlan.variant(
+                cases: [
+                  WASIComponentCanonicalAdapterFlatCasePlan(
+                    label: 'borrowed',
+                    value: borrowed,
+                  ),
+                ],
+              ),
+              value: _u32VariantValue(index: 0, label: 'borrowed', value: 7),
+              expected: const <Object?>[0, 1007],
+            ),
+          ];
+
+      for (final testCase in cases) {
+        List<Object?>? seen;
+        final program =
+            WASIComponentCanonicalAdapterHost(
+              borrowLowering: (_) => WASIComponentCanonicalBorrowLowering(
+                lower: (handle) => handle + 1000,
+                close: () {},
+                isCallScoped: false,
+              ),
+            ).bindAdapterPlans(
+              [_borrowLiftPlan(testCase.layout)],
+              coreFunctions: {
+                0: (args) {
+                  seen = args;
+                  return null;
+                },
+              },
+            );
+
+        expect(program.invokeLiftedCore(0, <Object?>[testCase.value]), isNull);
+        expect(seen, testCase.expected);
+      }
+
+      final memory = wasm.Memory(const wasm.MemoryDescriptor(initial: 1));
+      const listType = WasmComponentValueType.typeIndex(2);
+      final listCodec =
+          WASIComponentCanonicalValueMemoryCodec.fromAdapterValueType(
+            listType,
+            const <WasmComponentTypeDefinition>[
+              WasmComponentTypeDefinition(
+                kind: WasmComponentTypeKind.resource,
+                resource: WasmComponentResourceType.abstract(),
+              ),
+              WasmComponentTypeDefinition(
+                kind: WasmComponentTypeKind.definedValue,
+                definedValue: WasmComponentDefinedValueType(
+                  kind: WasmComponentDefinedValueTypeKind.borrow,
+                  typeIndex: 0,
+                ),
+              ),
+              WasmComponentTypeDefinition(
+                kind: WasmComponentTypeKind.definedValue,
+                definedValue: WasmComponentDefinedValueType(
+                  kind: WasmComponentDefinedValueTypeKind.list,
+                  elementType: WasmComponentValueType.typeIndex(1),
+                ),
+              ),
+            ],
+          )!;
+      List<Object?>? listArgs;
+      final listProgram =
+          WASIComponentCanonicalAdapterHost(
+            borrowLowering: (_) => WASIComponentCanonicalBorrowLowering(
+              lower: (handle) => handle + 1000,
+              close: () {},
+              isCallScoped: false,
+            ),
+          ).bindAdapterPlans(
+            [
+              _borrowLiftPlan(
+                WASIComponentCanonicalAdapterFlatValuePlan.list(
+                  element: borrowed,
+                  memoryCodec: listCodec,
+                ),
+              ),
+            ],
+            coreFunctions: {
+              0: (args) {
+                listArgs = args;
+                return null;
+              },
+            },
+          );
+      expect(
+        listProgram.invokeLiftedCore(
+          0,
+          <Object?>[
+            _u32ListValue(const [8, 9]),
+          ],
+          memory: memory,
+          realloc: (_, _, _, _) => 64,
+        ),
+        isNull,
+      );
+      expect(listArgs, const <Object?>[64, 2]);
+      expect(_readU32List(memory, 64, 2), const [1008, 1009]);
+
+      final unsupported = _borrowLiftPlan(null);
+      final unsupportedProgram = WASIComponentCanonicalAdapterHost(
+        borrowLowering: (_) => WASIComponentCanonicalBorrowLowering(
+          lower: (handle) => handle,
+          close: () {},
+          isCallScoped: false,
+        ),
+      ).bindAdapterPlans([unsupported], coreFunctions: {0: (_) => null});
+      expect(
+        () => unsupportedProgram.invokeLiftedCore(0, const <Object?>[1]),
+        throwsUnsupportedError,
+      );
+    });
   });
+}
+
+WASIComponentCanonicalAdapterPlan _borrowLiftPlan(
+  WASIComponentCanonicalAdapterFlatValuePlan? layout, {
+  int? postReturnIndex,
+  bool isAsync = false,
+}) {
+  const use = WASIComponentResourceUse(
+    canonicalIndex: 0,
+    canonicalKind: WasmComponentCanonicalKind.lift,
+    path: 'canonical[0].param[0].borrowed',
+    handleKind: WASIComponentResourceHandleKind.borrow,
+    resourceTypeIndex: 0,
+    binding: null,
+  );
+  const type = WasmComponentValueType.typeIndex(0);
+  return WASIComponentCanonicalAdapterPlan(
+    canonicalIndex: 0,
+    definition: const WasmComponentCanonicalDefinition(
+      kind: WasmComponentCanonicalKind.lift,
+      coreFunctionIndex: 0,
+    ),
+    functionType: const WasmComponentFunctionType(
+      params: [WasmComponentLabeledValueType(label: 'value', type: type)],
+    ),
+    params: [
+      WASIComponentCanonicalAdapterValuePlan(
+        path: 'canonical[0].param[0].value',
+        label: 'value',
+        type: type,
+        memoryCodec: null,
+        flatLayout: layout,
+        resourceUses: const [use],
+      ),
+    ],
+    result: null,
+    resourceUses: const [use],
+    stringEncoding: WASIComponentCanonicalStringEncoding.utf8,
+    memoryIndex: null,
+    reallocIndex: null,
+    postReturnIndex: postReturnIndex,
+    callbackIndex: null,
+    isAsync: isAsync,
+  );
 }
 
 WASIComponentCanonicalAdapterPlan _primitiveLowerPlan(

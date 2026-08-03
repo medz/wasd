@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../../wasm/backend/native/interpreter/component.dart';
+import '../../wasm/host_control_flow.dart';
 import '../component/async_values.dart';
 import '../component/wit_adapter.dart';
 
@@ -9,7 +10,7 @@ import '../component/wit_adapter.dart';
 typedef WASIPreview3CliOutputHandler = void Function(Uint8List bytes);
 
 /// Exception used to terminate a WASI 0.3 command instance.
-final class WASIPreview3Exit implements Exception {
+final class WASIPreview3Exit implements WasmHostControlFlowException {
   /// Creates a Preview3 command exit marker.
   const WASIPreview3Exit(this.statusCode);
 
@@ -56,6 +57,7 @@ final class WASIPreview3CliHost {
   final WASIComponentReadableStream<int>? _stdin;
   final WASIPreview3CliOutputHandler? _stdoutHandler;
   final WASIPreview3CliOutputHandler? _stderrHandler;
+  var _stdinTaken = false;
   final BytesBuilder _stdoutBytes = BytesBuilder(copy: false);
   final BytesBuilder _stderrBytes = BytesBuilder(copy: false);
 
@@ -149,9 +151,10 @@ final class WASIPreview3CliHost {
   }
 
   List<Object?> _readStdinViaStream() {
-    final provided = _stdin;
+    final provided = _stdinTaken ? null : _stdin;
     late final WASIComponentReadableStream<int> readable;
     if (provided != null) {
+      _stdinTaken = true;
       readable = provided;
     } else {
       final stream = WASIComponentStream<int>('stdin');
@@ -199,7 +202,7 @@ final class WASIPreview3CliHost {
           }
           final bytes = Uint8List.fromList(chunk.cast<int>());
           output.add(bytes);
-          handler?.call(Uint8List.fromList(bytes));
+          handler?.call(bytes);
         }
       } on WASIComponentAsyncEndpointStateError catch (error) {
         if (error.failure != WASIComponentAsyncEndpointFailure.dropped) {

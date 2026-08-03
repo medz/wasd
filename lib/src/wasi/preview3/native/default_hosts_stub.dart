@@ -33,7 +33,14 @@ WASIPreview3FilesystemHost createDefaultPreview3FilesystemHost({
   required Map<String, String> preopens,
   required bool canMutate,
   required WASIComponentResourceTable table,
-}) => WASIPreview3FilesystemHost(table: table);
+}) {
+  if (preopens.isNotEmpty || canMutate) {
+    throw UnsupportedError(
+      'Default Preview3 filesystem preopens require dart:io.',
+    );
+  }
+  return WASIPreview3FilesystemHost(table: table);
+}
 
 /// Creates the default portable Preview3 sockets host.
 WASIPreview3SocketsHost createDefaultPreview3SocketsHost({

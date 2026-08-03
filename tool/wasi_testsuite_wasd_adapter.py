@@ -1,4 +1,5 @@
 import os
+import re
 import shlex
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -16,7 +17,12 @@ def get_name() -> str:
 
 
 def get_version() -> str:
-    return "local"
+    try:
+        manifest = (_REPO_ROOT / "pubspec.yaml").read_text(encoding="utf-8")
+    except OSError:
+        return "unknown"
+    match = re.search(r"^version:\s*(\S+)", manifest, re.MULTILINE)
+    return match.group(1) if match else "unknown"
 
 
 def get_wasi_versions() -> List[str]:

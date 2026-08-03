@@ -72,42 +72,46 @@ Future<void> main(List<String> args) async {
             unawaited(io.stderr.flush());
           },
         );
-        final plan = host.prepareComponent(component);
-        if (!plan.canBindWithAdapters) {
-          io.stderr.writeln('wasd-preview3-runner bind preflight failed:');
-          for (final error in plan.versionErrors) {
-            io.stderr.writeln('- $error');
+        try {
+          final plan = host.prepareComponent(component);
+          if (!plan.canBindWithAdapters) {
+            io.stderr.writeln('wasd-preview3-runner bind preflight failed:');
+            for (final error in plan.versionErrors) {
+              io.stderr.writeln('- $error');
+            }
+            for (final error in plan.validationErrors) {
+              io.stderr.writeln('- $error');
+            }
+            for (final error in plan.unsupportedDefinitions) {
+              io.stderr.writeln('- $error');
+            }
+            for (final error in plan.bindingErrors) {
+              io.stderr.writeln('- $error');
+            }
+            io.exitCode = 1;
+            return;
           }
-          for (final error in plan.validationErrors) {
-            io.stderr.writeln('- $error');
-          }
-          for (final error in plan.unsupportedDefinitions) {
-            io.stderr.writeln('- $error');
-          }
-          for (final error in plan.bindingErrors) {
-            io.stderr.writeln('- $error');
-          }
-          io.exitCode = 1;
-          return;
-        }
 
-        switch (options.world) {
-          case 'wasi:cli/command':
-            final result = await runPreview3CommandWithBufferedOutput(
-              host,
-              component,
-              flushCompatibilityOutput: false,
-            );
-            io.exitCode = result.exitCode;
-          case 'wasi:http/service':
-            final runner = WASIPreview3ServiceRunner(host);
-            final server = await startPreview3HttpServiceServer(
-              (request) => runner.handle(component, request),
-            );
-            io.stderr.writeln('http://127.0.0.1:${server.port}');
-            await io.stderr.flush();
-            await _serveUntilInterrupted(server);
-            io.exitCode = 0;
+          switch (options.world) {
+            case 'wasi:cli/command':
+              final result = await runPreview3CommandWithBufferedOutput(
+                host,
+                component,
+                flushCompatibilityOutput: false,
+              );
+              io.exitCode = result.exitCode;
+            case 'wasi:http/service':
+              final runner = WASIPreview3ServiceRunner(host);
+              final server = await startPreview3HttpServiceServer(
+                (request) => runner.handle(component, request),
+              );
+              io.stderr.writeln('http://127.0.0.1:${server.port}');
+              await io.stderr.flush();
+              await servePreview3HttpUntilInterrupted(server);
+              io.exitCode = 0;
+          }
+        } finally {
+          host.close(force: true);
         }
       },
     );
@@ -130,6 +134,9 @@ typedef Preview3HttpServiceHandler =
       WASIPreview3HttpRequest request,
     );
 
+final Expando<_Preview3HttpServerState> _preview3HttpServerStates =
+    Expando<_Preview3HttpServerState>();
+
 /// Starts the loopback HTTP bridge expected by the official WASI testsuite.
 Future<io.HttpServer> startPreview3HttpServiceServer(
   Preview3HttpServiceHandler handler, {
@@ -140,24 +147,73 @@ Future<io.HttpServer> startPreview3HttpServiceServer(
     address ?? io.InternetAddress.loopbackIPv4,
     port,
   );
-  server.listen((request) {
-    unawaited(_handlePreview3HttpRequest(request, handler));
-  });
+  final state = _Preview3HttpServerState();
+  _preview3HttpServerStates[server] = state;
+  server.listen(
+    (request) {
+      unawaited(_handlePreview3HttpRequest(request, handler));
+    },
+    onError: (Object error, StackTrace stackTrace) {
+      state.fail(error, stackTrace);
+      unawaited(_closePreview3HttpServerAfterFailure(server));
+    },
+    onDone: state.markStopped,
+    cancelOnError: true,
+  );
   return server;
 }
 
-Future<void> _serveUntilInterrupted(io.HttpServer server) async {
+/// Serves until an interrupt signal requests shutdown.
+Future<void> servePreview3HttpUntilInterrupted(
+  io.HttpServer server, {
+  Iterable<Stream<io.ProcessSignal>>? signalStreams,
+}) async {
   final interrupted = Completer<void>();
-  final signals = io.ProcessSignal.sigint.watch().listen((_) {
+  void requestShutdown(io.ProcessSignal _) {
     if (!interrupted.isCompleted) {
       interrupted.complete();
     }
-  });
+  }
+
+  final streams =
+      signalStreams ??
+      <Stream<io.ProcessSignal>>[
+        io.ProcessSignal.sigint.watch(),
+        if (!io.Platform.isWindows) io.ProcessSignal.sigterm.watch(),
+      ];
+  final signals = <StreamSubscription<io.ProcessSignal>>[
+    for (final stream in streams) stream.listen(requestShutdown),
+  ];
+  final serverState = _preview3HttpServerStates[server];
   try {
-    await interrupted.future;
+    final failure = serverState == null
+        ? await interrupted.future.then<_Preview3HttpServerFailure?>(
+            (_) => null,
+          )
+        : await Future.any<_Preview3HttpServerFailure?>(
+            <Future<_Preview3HttpServerFailure?>>[
+              interrupted.future.then((_) => null),
+              serverState.whenStopped,
+            ],
+          );
+    if (failure != null) {
+      Error.throwWithStackTrace(failure.error, failure.stackTrace);
+    }
   } finally {
-    await signals.cancel();
+    serverState?.beginShutdown();
+    for (final signal in signals) {
+      await signal.cancel();
+    }
     await server.close(force: true);
+    _preview3HttpServerStates[server] = null;
+  }
+}
+
+Future<void> _closePreview3HttpServerAfterFailure(io.HttpServer server) async {
+  try {
+    await server.close(force: true);
+  } on Object {
+    // The listener failure is reported through its server state.
   }
 }
 
@@ -203,7 +259,7 @@ Future<void> _handlePreview3HttpRequest(
       await request.response.close();
       return;
     }
-    await _writePreview3HttpResponse(request.response, result.value!);
+    await writePreview3HttpResponse(request.response, result.value!);
   } on Object catch (error, stackTrace) {
     io.stderr
       ..writeln('wasd-preview3-runner request failed: $error')
@@ -222,26 +278,143 @@ Future<void> _handlePreview3HttpRequest(
   }
 }
 
-Future<void> _writePreview3HttpResponse(
+/// Writes one Preview3 response and completes its transmission result.
+///
+/// [bodyReadTimeout] bounds the entire body, trailers, and output-close phase.
+Future<void> writePreview3HttpResponse(
   io.HttpResponse output,
-  WASIPreview3HttpResponse response,
-) async {
-  output.statusCode = response.statusCode;
-  for (final entry in response.headers.entries) {
-    output.headers.add(entry.name, latin1.decode(entry.value));
-  }
-  final contents = response.contents;
-  if (contents != null) {
-    while (true) {
-      final bytes = await contents.readable.readWhenAvailable(64 * 1024);
-      if (bytes.isEmpty) {
-        break;
+  WASIPreview3HttpResponse response, {
+  Duration bodyReadTimeout = const Duration(seconds: 30),
+}) async {
+  final transmissionTimer = Stopwatch()..start();
+  String? failureCode = 'internal-error';
+  try {
+    output.statusCode = response.statusCode;
+    for (final entry in response.headers.entries) {
+      output.headers.add(entry.name, latin1.decode(entry.value));
+    }
+    final contents = response.contents;
+    if (contents != null) {
+      while (true) {
+        final bytes = await _beforeResponseDeadline(
+          () => contents.readable.readWhenAvailable(64 * 1024),
+          transmissionTimer,
+          bodyReadTimeout,
+        );
+        if (bytes.isEmpty) {
+          break;
+        }
+        output.add(bytes);
       }
-      output.add(bytes);
+    }
+    final trailerError = _responseTrailerError(
+      await _beforeResponseDeadline(
+        response.readTrailers,
+        transmissionTimer,
+        bodyReadTimeout,
+      ),
+    );
+    if (trailerError != null) {
+      failureCode = trailerError;
+      throw StateError(
+        'Preview3 response trailers are not supported by dart:io.',
+      );
+    }
+    await _beforeResponseDeadline(
+      output.close,
+      transmissionTimer,
+      bodyReadTimeout,
+    );
+    failureCode = null;
+  } on TimeoutException {
+    failureCode = 'HTTP-response-timeout';
+    rethrow;
+  } finally {
+    try {
+      await response.completeTransmission(
+        failureCode == null
+            ? const WASIPreview3HttpResult<void>.ok(null)
+            : WASIPreview3HttpResult<void>.error(failureCode),
+      );
+    } finally {
+      if (failureCode != null) {
+        await response.cancel();
+      }
     }
   }
-  await output.close();
-  response.completeTransmission(const WASIPreview3HttpResult<void>.ok(null));
+}
+
+Future<T> _beforeResponseDeadline<T>(
+  Future<T> Function() operation,
+  Stopwatch timer,
+  Duration timeout,
+) {
+  final remaining = timeout - timer.elapsed;
+  if (remaining <= Duration.zero) {
+    return Future<T>.error(
+      TimeoutException('Preview3 response transmission timed out.', timeout),
+    );
+  }
+  return Future<T>.sync(operation).timeout(
+    remaining,
+    onTimeout: () => throw TimeoutException(
+      'Preview3 response transmission timed out.',
+      timeout,
+    ),
+  );
+}
+
+final class _Preview3HttpServerState {
+  final Completer<_Preview3HttpServerFailure?> _stopped =
+      Completer<_Preview3HttpServerFailure?>();
+  bool _shuttingDown = false;
+
+  Future<_Preview3HttpServerFailure?> get whenStopped => _stopped.future;
+
+  void beginShutdown() {
+    _shuttingDown = true;
+  }
+
+  void fail(Object error, StackTrace stackTrace) {
+    if (!_stopped.isCompleted) {
+      _stopped.complete(
+        _Preview3HttpServerFailure(error: error, stackTrace: stackTrace),
+      );
+    }
+  }
+
+  void markStopped() {
+    if (_stopped.isCompleted) {
+      return;
+    }
+    if (_shuttingDown) {
+      _stopped.complete(null);
+      return;
+    }
+    fail(
+      StateError('Preview3 HTTP listener stopped unexpectedly.'),
+      StackTrace.current,
+    );
+  }
+}
+
+final class _Preview3HttpServerFailure {
+  const _Preview3HttpServerFailure({
+    required this.error,
+    required this.stackTrace,
+  });
+
+  final Object error;
+  final StackTrace stackTrace;
+}
+
+String? _responseTrailerError(
+  WASIPreview3HttpResult<WASIPreview3HttpFields?> result,
+) {
+  if (!result.isOk) {
+    return result.errorCode ?? 'internal-error';
+  }
+  return result.value == null ? null : 'HTTP-protocol-error';
 }
 
 List<WASIPreview3HttpFieldEntry> _requestHeaders(io.HttpRequest request) {

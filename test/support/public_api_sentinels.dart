@@ -6,3 +6,6 @@
 final class WASIComponentNativeRuntime {
   const WASIComponentNativeRuntime();
 }
+
+/// Compile-time sentinel for the internal Preview3 HTTP error-code table.
+const List<String> wasiPreview3HttpErrorCodeCases = <String>[];

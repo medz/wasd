@@ -31,7 +31,6 @@ final class WASIComponentCanonicalHost {
       table: this.table,
       backpressure: backpressure,
     );
-    adapterHost = WASIComponentCanonicalAdapterHost(asyncHost: asyncHost);
     subtaskHost = WASIComponentSubtaskHost(table: this.table);
     waitableHost = WASIComponentWaitableHost(
       table: this.table,
@@ -41,9 +40,31 @@ final class WASIComponentCanonicalHost {
       ],
     );
     taskHost = WASIComponentTaskHost(waitableHost: waitableHost);
+    adapterHost = WASIComponentCanonicalAdapterHost(
+      asyncHost: asyncHost,
+      borrowLowering: (taskScoped) {
+        if (taskScoped) {
+          final task = taskHost.currentTask;
+          if (task != null) {
+            return WASIComponentCanonicalBorrowLowering(
+              lower: (handle) => this.table.insertBorrowHandle(handle, task),
+              close: () {},
+              isCallScoped: false,
+            );
+          }
+        }
+        final callScope = this.table.createBorrowCallScope();
+        return WASIComponentCanonicalBorrowLowering(
+          lower: callScope.lowerHandle,
+          close: callScope.close,
+          isCallScoped: true,
+        );
+      },
+    );
     contextHost = WASIComponentContextHost(context: context);
     threadHost = WASIComponentThreadHost(
       contextHost: contextHost,
+      waitableHost: waitableHost,
       availableParallelism: availableParallelism,
     );
     errorContextHost = WASIComponentErrorContextHost(table: this.table);
@@ -378,8 +399,8 @@ final class WASIComponentCanonicalHost {
     );
     return WASIComponentCanonicalOperation._(
       kind: definition.kind,
-      invoke: (args) => program.invoke(0, args),
-      invokeAsync: (args) => program.invokeAsync(0, args),
+      invoke: (args) => program.invokeWithoutMemoryEvent(0, args),
+      invokeAsync: (args) => program.invokeWithoutMemoryAsync(0, args),
       invokeWithMemory: (memory, args, realloc, _) =>
           program.invokeWithMemory(0, memory, args, realloc: realloc),
       invokeWithMemoryEvent: (memory, args, realloc, _) =>

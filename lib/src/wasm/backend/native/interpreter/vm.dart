@@ -307,7 +307,7 @@ final class WasmVm {
     List<WasmValue> args, {
     required int depth,
     required bool force,
-  }) {
+  }) async {
     final target = _functionRefTargets[reference];
     if (target == null) {
       throw StateError('Function reference does not target a function.');
@@ -316,13 +316,11 @@ final class WasmVm {
     if (invoker != null) {
       return invoker(target.functionIndex, args, depth, force);
     }
-    return Future<List<WasmValue>>.value(
-      target.vm._execute(
-        target.functionIndex,
-        args,
-        depth: depth,
-        argsNormalized: true,
-      ),
+    return target.vm._execute(
+      target.functionIndex,
+      args,
+      depth: depth,
+      argsNormalized: true,
     );
   }
 

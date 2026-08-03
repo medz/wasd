@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
+import 'dart:typed_data';
 
 Future<void> main(List<String> args) async {
   late final _Options options;
@@ -19,41 +21,38 @@ Future<void> main(List<String> args) async {
   }
 
   final startedAt = DateTime.now().toUtc();
-  final suiteDirs = await _findPreview3SuiteDirs(options.testsuiteDir);
-  final fixtureCount = await _countFixtures(suiteDirs);
-  if (fixtureCount == 0) {
-    final report = _Report(
-      status: 'missing-tests',
-      startedAt: startedAt,
-      endedAt: DateTime.now().toUtc(),
-      testsuiteDir: options.testsuiteDir,
-      testsuiteHead: await _gitHead(options.testsuiteDir),
-      suiteDirs: suiteDirs,
-      fixtureCount: 0,
-      official: const _OfficialResult(
+  var suiteDirs = const <String>[];
+  var fixtureCount = 0;
+  String? testsuiteHead;
+  _RunnerResult? result;
+  late final _OfficialResult official;
+  try {
+    suiteDirs = await _findPreview3SuiteDirs(options.testsuiteDir);
+    fixtureCount = await _countFixtures(suiteDirs);
+    testsuiteHead = await _gitHead(options.testsuiteDir);
+    if (fixtureCount == 0) {
+      official = const _OfficialResult(
         totals: _Totals(),
         failures: <_Failure>[],
-      ),
-      runnerExitCode: null,
-      message: 'Official wasi-testsuite contains no wasm32-wasip3 fixtures.',
-    );
-    await _writeReport(report, options);
-    io.stdout.writeln('wasi-testsuite-preview3 status: missing-tests');
-    io.stdout.writeln(report.message);
-    io.exitCode = 1;
-    return;
+      );
+    } else {
+      final rawJsonPath = '${options.jsonPath}.raw-official.json';
+      await io.File(rawJsonPath).parent.create(recursive: true);
+      result = await _runOfficialRunner(
+        options: options,
+        suiteDirs: suiteDirs,
+        rawJsonPath: rawJsonPath,
+      );
+      official = await _readOfficialResult(rawJsonPath);
+    }
+  } on Object catch (error) {
+    official = _officialRunnerFailure('$error');
   }
-
-  final rawJsonPath = '${options.jsonPath}.raw-official.json';
-  final result = await _runOfficialRunner(
-    options: options,
-    suiteDirs: suiteDirs,
-    rawJsonPath: rawJsonPath,
-  );
-  final official = await _readOfficialResult(rawJsonPath);
   final totals = official.totals;
+  final missingTests = fixtureCount == 0 && official.failures.isEmpty;
   final passed =
-      result.exitCode == 0 &&
+      !missingTests &&
+      result?.exitCode == 0 &&
       totals.total == fixtureCount &&
       totals.failed == 0 &&
       totals.skipped == 0 &&
@@ -61,23 +60,36 @@ Future<void> main(List<String> args) async {
       totals.xpassed == 0 &&
       totals.passed == fixtureCount;
   final report = _Report(
-    status: passed ? 'passed' : 'failed',
+    status: missingTests
+        ? 'missing-tests'
+        : passed
+        ? 'passed'
+        : 'failed',
     startedAt: startedAt,
     endedAt: DateTime.now().toUtc(),
     testsuiteDir: options.testsuiteDir,
-    testsuiteHead: await _gitHead(options.testsuiteDir),
+    testsuiteHead: testsuiteHead,
     suiteDirs: suiteDirs,
     fixtureCount: fixtureCount,
     official: official,
-    runnerExitCode: result.exitCode,
-    message: passed
+    runnerExitCode: result?.exitCode,
+    message: missingTests
+        ? 'Official wasi-testsuite contains no wasm32-wasip3 fixtures.'
+        : passed
         ? 'Official wasi-testsuite Preview3 passed 100%.'
         : 'Official wasi-testsuite Preview3 did not pass 100%.',
   );
   await _writeReport(report, options);
-  io.stdout.write(result.stdout);
-  io.stderr.write(result.stderr);
+  if (result != null) {
+    io.stdout.write(result.stdout);
+    io.stderr.write(result.stderr);
+  }
   io.stdout.writeln('wasi-testsuite-preview3 status: ${report.status}');
+  if (missingTests) {
+    io.stdout.writeln(report.message);
+    io.exitCode = 1;
+    return;
+  }
   io.stdout.writeln(
     'fixtures=$fixtureCount total=${totals.total} passed=${totals.passed} '
     'failed=${totals.failed} skipped=${totals.skipped} '
@@ -127,7 +139,7 @@ Future<int> _countFixtures(List<String> suiteDirs) async {
   return count;
 }
 
-Future<io.ProcessResult> _runOfficialRunner({
+Future<_RunnerResult> _runOfficialRunner({
   required _Options options,
   required List<String> suiteDirs,
   required String rawJsonPath,
@@ -140,27 +152,140 @@ Future<io.ProcessResult> _runOfficialRunner({
   if (await rawJson.exists()) {
     await rawJson.delete();
   }
-  return io.Process.run(
+  final runnerArgs = <String>[
+    for (final suiteDir in suiteDirs) ...<String>['--test-suite', suiteDir],
+    '--runtime-adapter',
+    options.runtimeAdapter,
+    '--json-output-location',
+    rawJsonPath,
+    '--disable-colors',
+  ];
+  final process = await io.Process.start(
     options.python,
-    <String>[
-      '-m',
-      'wasi_test_runner',
-      for (final suiteDir in suiteDirs) ...<String>['--test-suite', suiteDir],
-      '--runtime-adapter',
-      options.runtimeAdapter,
-      '--json-output-location',
-      rawJsonPath,
-      '--disable-colors',
-    ],
+    io.Platform.isWindows
+        ? <String>['-m', 'wasi_test_runner', ...runnerArgs]
+        : <String>['-c', _posixRunnerBootstrap, ...runnerArgs],
     environment: <String, String>{'PYTHONPATH': options.runnerDir},
   );
+  final stdout = _ProcessOutputCollector(process.stdout);
+  final stderr = _ProcessOutputCollector(process.stderr);
+  late final int exitCode;
+  try {
+    exitCode = await process.exitCode.timeout(options.runnerTimeout);
+  } on TimeoutException {
+    try {
+      await _terminateRunnerTree(process);
+      await _readRunnerOutput(stdout, stderr);
+    } on Object catch (cleanupError) {
+      await Future.wait(<Future<void>>[stdout.cancel(), stderr.cancel()]);
+      throw TimeoutException(
+        'Official wasi-testsuite runner timed out after '
+        '${options.runnerTimeout.inSeconds} seconds; cleanup failed: '
+        '$cleanupError',
+        options.runnerTimeout,
+      );
+    }
+    throw TimeoutException(
+      'Official wasi-testsuite runner timed out after '
+      '${options.runnerTimeout.inSeconds} seconds.',
+      options.runnerTimeout,
+    );
+  }
+  try {
+    final output = await _readRunnerOutput(stdout, stderr);
+    return _RunnerResult(
+      exitCode: exitCode,
+      stdout: output.stdout,
+      stderr: output.stderr,
+    );
+  } on TimeoutException {
+    final killed = await _signalRunnerTree(process, io.ProcessSignal.sigkill);
+    if (!killed) {
+      await Future.wait(<Future<void>>[stdout.cancel(), stderr.cancel()]);
+      throw StateError(
+        'Official runner exited but its output process tree could not be killed.',
+      );
+    }
+    try {
+      final output = await _readRunnerOutput(stdout, stderr);
+      return _RunnerResult(
+        exitCode: exitCode,
+        stdout: output.stdout,
+        stderr: output.stderr,
+      );
+    } on Object {
+      await Future.wait(<Future<void>>[stdout.cancel(), stderr.cancel()]);
+      rethrow;
+    }
+  } on Object {
+    await Future.wait(<Future<void>>[stdout.cancel(), stderr.cancel()]);
+    rethrow;
+  }
+}
+
+Future<void> _terminateRunnerTree(io.Process process) async {
+  final termSent = await _signalRunnerTree(process, io.ProcessSignal.sigterm);
+  if (!termSent && !process.kill()) {
+    try {
+      await process.exitCode.timeout(Duration.zero);
+    } on TimeoutException {
+      throw StateError('Unable to terminate official runner process tree.');
+    }
+  }
+  var exited = false;
+  try {
+    await process.exitCode.timeout(_runnerTerminationGrace);
+    exited = true;
+  } on TimeoutException {
+    // Escalate below.
+  }
+  final killSent = await _signalRunnerTree(process, io.ProcessSignal.sigkill);
+  if (!exited && !killSent && !process.kill(io.ProcessSignal.sigkill)) {
+    throw StateError('Unable to kill official runner process tree.');
+  }
+  if (!exited) {
+    await process.exitCode.timeout(_runnerTerminationGrace);
+  }
+}
+
+Future<bool> _signalRunnerTree(
+  io.Process process,
+  io.ProcessSignal signal,
+) async {
+  if (!io.Platform.isWindows) {
+    return io.Process.killPid(-process.pid, signal);
+  }
+  // `taskkill /T` can walk a live runner tree. If the runner already exited,
+  // the caller bounds pipe draining and reports cleanup failure instead.
+  try {
+    final result = await io.Process.run('taskkill', <String>[
+      '/PID',
+      '${process.pid}',
+      '/T',
+      if (signal == io.ProcessSignal.sigkill) '/F',
+    ]);
+    return result.exitCode == 0;
+  } on io.ProcessException {
+    return false;
+  }
+}
+
+Future<({String stdout, String stderr})> _readRunnerOutput(
+  _ProcessOutputCollector stdout,
+  _ProcessOutputCollector stderr,
+) async {
+  final values = await Future.wait<String>(<Future<String>>[
+    stdout.done,
+    stderr.done,
+  ]).timeout(_runnerOutputDrainTimeout);
+  return (stdout: values[0], stderr: values[1]);
 }
 
 Future<_OfficialResult> _readOfficialResult(String rawJsonPath) async {
   final file = io.File(rawJsonPath);
   if (!await file.exists()) {
     return const _OfficialResult(
-      totals: _Totals(failed: 1),
+      totals: _Totals(total: 1, failed: 1),
       failures: <_Failure>[
         _Failure(
           name: '<official-runner>',
@@ -170,69 +295,103 @@ Future<_OfficialResult> _readOfficialResult(String rawJsonPath) async {
       ],
     );
   }
-  final json = jsonDecode(await file.readAsString()) as Map<String, Object?>;
-  final results = (json['results'] as List<Object?>? ?? const <Object?>[])
-      .cast<Map<String, Object?>>();
-  var total = 0;
-  var passed = 0;
-  var failed = 0;
-  var skipped = 0;
-  var xfailed = 0;
-  var xpassed = 0;
-  final failures = <_Failure>[];
-  for (final suite in results) {
-    final tests = (suite['tests'] as List<Object?>? ?? const <Object?>[])
-        .cast<Map<String, Object?>>();
-    for (final test in tests) {
-      total++;
-      final outcome = test['outcome'] as String? ?? 'unknown';
-      switch (outcome) {
-        case 'pass':
-          passed++;
-        case 'fail':
-          failed++;
-        case 'skip':
-          skipped++;
-        case 'xfail':
-          xfailed++;
-        case 'xpass':
-          xpassed++;
-        default:
-          failed++;
+  try {
+    final decoded = jsonDecode(await file.readAsString());
+    if (decoded is! Map<String, Object?>) {
+      throw const FormatException('report root must be a JSON object');
+    }
+    final resultValues = decoded['results'];
+    if (resultValues is! List<Object?>) {
+      throw const FormatException('report results must be a JSON array');
+    }
+    final results = resultValues.cast<Map<String, Object?>>();
+    var total = 0;
+    var passed = 0;
+    var failed = 0;
+    var skipped = 0;
+    var xfailed = 0;
+    var xpassed = 0;
+    final failures = <_Failure>[];
+    for (final suite in results) {
+      final testValues = suite['tests'];
+      if (testValues is! List<Object?>) {
+        throw const FormatException('suite tests must be a JSON array');
       }
-      if (outcome != 'pass') {
-        failures.add(
-          _Failure(
-            name: test['name'] as String? ?? '<unnamed>',
-            outcome: outcome,
-            messages: (test['failures'] as List<Object?>? ?? const <Object?>[])
-                .map((message) => message.toString())
-                .toList(growable: false),
-          ),
-        );
+      final tests = testValues.cast<Map<String, Object?>>();
+      for (final test in tests) {
+        total++;
+        final outcome = test['outcome'] as String? ?? 'unknown';
+        switch (outcome) {
+          case 'pass':
+            passed++;
+          case 'fail':
+            failed++;
+          case 'skip':
+            skipped++;
+          case 'xfail':
+            xfailed++;
+          case 'xpass':
+            xpassed++;
+          default:
+            failed++;
+        }
+        if (outcome != 'pass') {
+          failures.add(
+            _Failure(
+              name: test['name'] as String? ?? '<unnamed>',
+              outcome: outcome,
+              messages:
+                  (test['failures'] as List<Object?>? ?? const <Object?>[])
+                      .map((message) => message.toString())
+                      .toList(growable: false),
+            ),
+          );
+        }
       }
     }
+    return _OfficialResult(
+      totals: _Totals(
+        total: total,
+        passed: passed,
+        failed: failed,
+        skipped: skipped,
+        xfailed: xfailed,
+        xpassed: xpassed,
+      ),
+      failures: List<_Failure>.unmodifiable(failures),
+    );
+  } on Object catch (error) {
+    return _officialRunnerFailure(
+      'Official runner report is not valid JSON: $error',
+    );
   }
+}
+
+_OfficialResult _officialRunnerFailure(String message) {
   return _OfficialResult(
-    totals: _Totals(
-      total: total,
-      passed: passed,
-      failed: failed,
-      skipped: skipped,
-      xfailed: xfailed,
-      xpassed: xpassed,
-    ),
-    failures: List<_Failure>.unmodifiable(failures),
+    totals: const _Totals(total: 1, failed: 1),
+    failures: <_Failure>[
+      _Failure(
+        name: '<official-runner>',
+        outcome: 'fail',
+        messages: <String>[message],
+      ),
+    ],
   );
 }
 
 Future<String?> _gitHead(String path) async {
-  final result = await io.Process.run('git', <String>[
-    '-C',
-    path,
-    'rev-parse',
-    'HEAD',
-  ]);
+  late final io.ProcessResult result;
+  try {
+    result = await io.Process.run('git', <String>[
+      '-C',
+      path,
+      'rev-parse',
+      'HEAD',
+    ]);
+  } on io.ProcessException {
+    return null;
+  }
   if (result.exitCode != 0) {
     return null;
   }
@@ -261,6 +420,7 @@ final class _Options {
     required this.runnerDir,
     required this.python,
     required this.runtimeAdapter,
+    required this.runnerTimeout,
     required this.jsonPath,
     required this.markdownPath,
   });
@@ -270,6 +430,7 @@ final class _Options {
   final String runnerDir;
   final String python;
   final String runtimeAdapter;
+  final Duration runnerTimeout;
   final String jsonPath;
   final String markdownPath;
 
@@ -279,6 +440,7 @@ final class _Options {
     String? runnerDir;
     var python = io.Platform.environment['PYTHON'] ?? 'python3';
     var runtimeAdapter = 'tool/wasi_testsuite_wasd_adapter.py';
+    var runnerTimeout = const Duration(minutes: 10);
     var jsonPath = '.dart_tool/spec_runner/wasi_testsuite_preview3_latest.json';
     var markdownPath =
         '.dart_tool/spec_runner/wasi_testsuite_preview3_failures.md';
@@ -297,6 +459,8 @@ final class _Options {
           runtimeAdapter = _readValue(args, ++index, arg);
         case '--python':
           python = _readValue(args, ++index, arg);
+        case '--runner-timeout-seconds':
+          runnerTimeout = _parseTimeout(_readValue(args, ++index, arg), arg);
         case '--json':
           jsonPath = _readValue(args, ++index, arg);
         case '--markdown':
@@ -310,6 +474,11 @@ final class _Options {
             runtimeAdapter = arg.substring('--runtime-adapter='.length);
           } else if (arg.startsWith('--python=')) {
             python = arg.substring('--python='.length);
+          } else if (arg.startsWith('--runner-timeout-seconds=')) {
+            runnerTimeout = _parseTimeout(
+              arg.substring('--runner-timeout-seconds='.length),
+              '--runner-timeout-seconds',
+            );
           } else if (arg.startsWith('--json=')) {
             jsonPath = arg.substring('--json='.length);
           } else if (arg.startsWith('--markdown=')) {
@@ -326,6 +495,7 @@ final class _Options {
       runnerDir: runnerDir ?? '$testsuiteDir/test-runner',
       python: python,
       runtimeAdapter: runtimeAdapter,
+      runnerTimeout: runnerTimeout,
       jsonPath: jsonPath,
       markdownPath: markdownPath,
     );
@@ -336,6 +506,62 @@ final class _Options {
       throw ArgumentError('$option requires a value');
     }
     return args[index];
+  }
+
+  static Duration _parseTimeout(String value, String option) {
+    final seconds = int.tryParse(value);
+    if (seconds == null || seconds <= 0) {
+      throw ArgumentError.value(value, option, 'must be a positive integer');
+    }
+    return Duration(seconds: seconds);
+  }
+}
+
+final class _RunnerResult {
+  const _RunnerResult({
+    required this.exitCode,
+    required this.stdout,
+    required this.stderr,
+  });
+
+  final int exitCode;
+  final String stdout;
+  final String stderr;
+}
+
+final class _ProcessOutputCollector {
+  _ProcessOutputCollector(Stream<List<int>> stream) {
+    _subscription = stream.listen(
+      _bytes.add,
+      onError: _completeError,
+      onDone: _complete,
+      cancelOnError: true,
+    );
+  }
+
+  final _bytes = BytesBuilder(copy: false);
+  final _completer = Completer<String>();
+  late final StreamSubscription<List<int>> _subscription;
+
+  Future<String> get done => _completer.future;
+
+  Future<void> cancel() async {
+    await _subscription.cancel();
+    _complete();
+  }
+
+  void _complete() {
+    if (!_completer.isCompleted) {
+      _completer.complete(
+        utf8.decode(_bytes.takeBytes(), allowMalformed: true),
+      );
+    }
+  }
+
+  void _completeError(Object error, StackTrace stackTrace) {
+    if (!_completer.isCompleted) {
+      _completer.completeError(error, stackTrace);
+    }
   }
 }
 
@@ -451,11 +677,7 @@ final class _Report {
       ..writeln();
     if (status == 'passed') {
       b.writeln('All discovered Preview3 fixtures passed (100%).');
-    } else if (suiteDirs.isEmpty) {
-      b.writeln('No official `wasm32-wasip3` test directories were found.');
-    } else if (official.failures.isEmpty) {
-      b.writeln('The official runner failed without per-fixture details.');
-    } else {
+    } else if (official.failures.isNotEmpty) {
       b
         ..writeln('## Non-passing fixtures')
         ..writeln();
@@ -473,10 +695,27 @@ final class _Report {
         }
         b.writeln();
       }
+    } else if (suiteDirs.isEmpty) {
+      b.writeln('No official `wasm32-wasip3` test directories were found.');
+    } else {
+      b.writeln('The official runner failed without per-fixture details.');
     }
     return b.toString();
   }
 }
+
+const Duration _runnerTerminationGrace = Duration(seconds: 2);
+const Duration _runnerOutputDrainTimeout = Duration(seconds: 2);
+
+const String _posixRunnerBootstrap = r'''
+import os
+import runpy
+import sys
+
+os.setsid()
+sys.argv = ["wasi_test_runner", *sys.argv[1:]]
+runpy.run_module("wasi_test_runner", run_name="__main__")
+''';
 
 const String _usage = '''
 Usage: dart run tool/wasi_testsuite_preview3_runner.dart [options]
@@ -486,6 +725,8 @@ Options:
   --runner-dir DIR        Directory containing the wasi_test_runner package.
   --runtime-adapter FILE  Runtime adapter passed to official runner.
   --python FILE           Python 3.10+ executable for the official runner.
+  --runner-timeout-seconds N
+                          Stop a hung official runner after N seconds.
   --json FILE             Write machine-readable report.
   --markdown FILE         Write markdown failure report.
   -h, --help              Show this help.

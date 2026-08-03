@@ -4,22 +4,48 @@ import 'dart:typed_data';
 
 import '../../../wasm/backend/native/interpreter/component.dart';
 import '../../component/async_values.dart';
+import '../../component/resource_table.dart';
 import '../http.dart';
+import '../http_error_codes.dart';
 
 /// Dart VM-backed WASI 0.3 HTTP host.
 final class WASIPreview3NativeHttpHost extends WASIPreview3HttpHost {
   /// Creates a native HTTP client host.
-  WASIPreview3NativeHttpHost({
+  factory WASIPreview3NativeHttpHost({
+    WASIComponentResourceTable? table,
+    WASIPreview3HttpBackend? handlerBackend,
+    io.HttpClient? client,
+  }) {
+    final resolvedClient = client ?? io.HttpClient();
+    return WASIPreview3NativeHttpHost._(
+      table: table,
+      handlerBackend: handlerBackend,
+      client: resolvedClient,
+      ownedClient: client == null ? resolvedClient : null,
+    );
+  }
+
+  WASIPreview3NativeHttpHost._({
     super.table,
     super.handlerBackend,
-    io.HttpClient? client,
-  }) : super(
-         clientBackend: WASIPreview3NativeHttpBackend(
-           _configureHttpClient(client ?? io.HttpClient()),
-         ),
+    required io.HttpClient client,
+    required io.HttpClient? ownedClient,
+  }) : _ownedClient = ownedClient,
+       super(
+         clientBackend: WASIPreview3NativeHttpBackend(client),
          maximumRequestTimeoutNanos:
              BigInt.from(_maxDurationMicroseconds) * BigInt.from(1000),
        );
+
+  io.HttpClient? _ownedClient;
+
+  /// Closes the HTTP client created by this host, if any.
+  @override
+  void close({bool force = false}) {
+    final client = _ownedClient;
+    _ownedClient = null;
+    client?.close(force: force);
+  }
 }
 
 /// Preview3 HTTP client backend implemented with `dart:io`.
@@ -337,11 +363,11 @@ WasmComponentValueData _httpErrorResult(String code) {
 }
 
 WasmComponentValueData _httpErrorCode(String code) {
-  var index = _httpErrorCodeCases.indexOf(code);
+  var index = wasiPreview3HttpErrorCodeCases.indexOf(code);
   if (index < 0) {
-    index = _httpErrorCodeCases.indexOf('internal-error');
+    index = wasiPreview3HttpErrorCodeCases.indexOf('internal-error');
   }
-  final label = _httpErrorCodeCases[index];
+  final label = wasiPreview3HttpErrorCodeCases[index];
   return WasmComponentValueData(
     kind: WasmComponentValueDataKind.variant,
     rawBytes: Uint8List(0),
@@ -513,13 +539,28 @@ bool _timeoutsSupported(WASIPreview3HttpRequestOptions? options) {
 }
 
 String _socketHttpErrorCode(io.SocketException error) {
+  final errorCode = error.osError?.errorCode;
+  if (errorCode != null) {
+    if (errorCode == _platformConnectionRefusedErrorCode) {
+      return 'connection-refused';
+    }
+    if (errorCode == _platformConnectionTimeoutErrorCode) {
+      return 'connection-timeout';
+    }
+    if (error.address == null && _isDnsErrorCode(errorCode)) {
+      return 'DNS-error';
+    }
+  }
+
   final message = error.message.toLowerCase();
   if (message.contains('refused')) {
     return 'connection-refused';
   }
   if (message.contains('lookup') ||
       message.contains('nodename') ||
-      message.contains('name')) {
+      message.contains('name resolution') ||
+      message.contains('host not found') ||
+      message.contains('no address associated')) {
     return 'DNS-error';
   }
   if (message.contains('timed out')) {
@@ -530,45 +571,38 @@ String _socketHttpErrorCode(io.SocketException error) {
 
 const int _maxDurationMicroseconds = 86400000000;
 const int _responseBodyBufferSize = 64 * 1024;
+const Set<int> _linuxDnsErrorCodes = <int>{
+  -11,
+  -10,
+  -8,
+  -7,
+  -6,
+  -5,
+  -4,
+  -3,
+  -2,
+};
+const Set<int> _darwinDnsErrorCodes = <int>{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+const Set<int> _windowsDnsErrorCodes = <int>{11001, 11002, 11003, 11004};
 
-const List<String> _httpErrorCodeCases = <String>[
-  'DNS-timeout',
-  'DNS-error',
-  'destination-not-found',
-  'destination-unavailable',
-  'destination-IP-prohibited',
-  'destination-IP-unroutable',
-  'connection-refused',
-  'connection-terminated',
-  'connection-timeout',
-  'connection-read-timeout',
-  'connection-write-timeout',
-  'connection-limit-reached',
-  'TLS-protocol-error',
-  'TLS-certificate-error',
-  'TLS-alert-received',
-  'HTTP-request-denied',
-  'HTTP-request-length-required',
-  'HTTP-request-body-size',
-  'HTTP-request-method-invalid',
-  'HTTP-request-URI-invalid',
-  'HTTP-request-URI-too-long',
-  'HTTP-request-header-section-size',
-  'HTTP-request-header-size',
-  'HTTP-request-trailer-section-size',
-  'HTTP-request-trailer-size',
-  'HTTP-response-incomplete',
-  'HTTP-response-header-section-size',
-  'HTTP-response-header-size',
-  'HTTP-response-body-size',
-  'HTTP-response-trailer-section-size',
-  'HTTP-response-trailer-size',
-  'HTTP-response-transfer-coding',
-  'HTTP-response-content-coding',
-  'HTTP-response-timeout',
-  'HTTP-upgrade-failed',
-  'HTTP-protocol-error',
-  'loop-detected',
-  'configuration-error',
-  'internal-error',
-];
+int get _platformConnectionRefusedErrorCode => io.Platform.isWindows
+    ? 10061
+    : io.Platform.isMacOS || io.Platform.isIOS
+    ? 61
+    : 111;
+
+int get _platformConnectionTimeoutErrorCode => io.Platform.isWindows
+    ? 10060
+    : io.Platform.isMacOS || io.Platform.isIOS
+    ? 60
+    : 110;
+
+bool _isDnsErrorCode(int errorCode) {
+  if (io.Platform.isWindows) {
+    return _windowsDnsErrorCodes.contains(errorCode);
+  }
+  if (io.Platform.isMacOS || io.Platform.isIOS) {
+    return _darwinDnsErrorCodes.contains(errorCode);
+  }
+  return _linuxDnsErrorCodes.contains(errorCode);
+}

@@ -200,9 +200,12 @@ Future<void> main() async {
   final bytes = await File('app.component.wasm').readAsBytes();
   final component = WasmComponent.decode(bytes);
   final host = WASI.preview3(args: const ['app.component.wasm']);
-  final result = await WASIPreview3CommandRunner(host).run(component);
-
-  print('exitCode=${result.exitCode}');
+  try {
+    final result = await WASIPreview3CommandRunner(host).run(component);
+    print('exitCode=${result.exitCode}');
+  } finally {
+    host.close(force: true);
+  }
 }
 ```
 
@@ -215,18 +218,39 @@ final serviceComponent = WasmComponent.decode(
   await File('service.component.wasm').readAsBytes(),
 );
 final serviceHost = WASI.preview3();
-final request = WASIPreview3HttpRequest.noTrailers(
-  headers: WASIPreview3HttpFields(),
-)
-  ..method = const WASIPreview3HttpMethod.standard('get')
-  ..pathWithQuery = '/';
-final response = await WASIPreview3ServiceRunner(serviceHost).handle(
-  serviceComponent,
-  request,
-);
-
-print('status=${response.value?.statusCode}');
+try {
+  final request = WASIPreview3HttpRequest.noTrailers(
+    headers: WASIPreview3HttpFields(),
+  )
+    ..method = const WASIPreview3HttpMethod.standard('get')
+    ..pathWithQuery = '/';
+  final result = await WASIPreview3ServiceRunner(serviceHost).handle(
+    serviceComponent,
+    request,
+  );
+  if (!result.isOk) {
+    throw StateError('service failed: ${result.errorCode}');
+  }
+  final response = result.value!;
+  try {
+    print('status=${response.statusCode}');
+    // Forward response.contents and response trailers to the client here.
+  } catch (_) {
+    await response.cancel();
+    rethrow;
+  }
+  await response.completeTransmission(
+    const WASIPreview3HttpResult<void>.ok(null),
+  );
+} finally {
+  serviceHost.close(force: true);
+}
 ```
+
+Each successful service response retains its component resource scope while
+its body and trailers are in flight. Call `completeTransmission` after the
+client observes the response, or `cancel` when abandoning it, so that scope is
+released deterministically.
 
 The frozen Preview3 contract covers the six stable `random`, `clocks`,
 `filesystem`, `sockets`, `cli`, and `http` packages and eight import/execution
@@ -318,6 +342,21 @@ When `dart:io` cannot faithfully implement a Preview2 socket operation, the
 native adapter returns `not-supported` instead of reporting simulated success.
 Preview2 native TCP bind/listen is currently unsupported; Preview2 native TCP
 connect and UDP bind/connect remain available.
+
+Preview3 synchronous socket imports may return pending Dart callbacks; the
+component runner waits for them before returning to the guest. Native TCP bind
+therefore keeps a real OS-assigned `ServerSocket` reservation, including the
+selected port and backlog, until listen takes ownership. A bound TCP connect
+must release that reservation before reconnecting with the selected source
+port because `dart:io` has no bind-only TCP socket; another process can race
+that narrow release/rebind window. Native UDP bind and implicit UDP connect
+likewise wait for a real `RawDatagramSocket` before reporting success. TCP and
+UDP option values are applied through native raw socket options when an active
+endpoint exists. `RawDatagramSocket` has no IPv6-only bind option, so an IPv6
+wildcard UDP socket may also reserve the matching IPv4 port; IPv4 and
+IPv4-mapped datagrams are discarded before they reach that IPv6 guest socket.
+Native addresses with nonzero IPv6 flow info or numeric scope IDs return
+`not-supported` because `dart:io` cannot preserve those fields.
 
 Dart `HttpClient` does not expose HTTP trailers. Native outgoing-handler
 requests with trailers and incoming responses that declare trailers therefore

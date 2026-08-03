@@ -201,6 +201,129 @@ void main() {
       host.table.dropNamed('wasi:http/types@0.3.0.request', request);
     });
 
+    test('drops unread owned request and response trailers', () async {
+      final host = WASIPreview3HttpHost();
+
+      final requestTrailers = host.insertFields(WASIPreview3HttpFields());
+      final requestTrailerFuture = WASIComponentFuture<WasmComponentValueData>(
+        'request-trailers',
+      )..writable.complete(_ok(_some(_integer(requestTrailers))));
+      final requestCreated =
+          host.imports['wasi:http/types@0.3.0.request.new']!(<Object?>[
+                host.insertFields(WASIPreview3HttpFields()),
+                _none(),
+                requestTrailerFuture,
+                _none(),
+              ])!
+              as List<Object?>;
+      await Future<void>.delayed(Duration.zero);
+
+      host.table.dropNamed(
+        'wasi:http/types@0.3.0.request',
+        requestCreated.first! as int,
+      );
+      expect(host.table.contains(requestTrailers), isFalse);
+
+      final responseTrailers = host.insertFields(WASIPreview3HttpFields());
+      final responseTrailerFuture = WASIComponentFuture<WasmComponentValueData>(
+        'response-trailers',
+      )..writable.complete(_ok(_some(_integer(responseTrailers))));
+      final responseCreated =
+          host.imports['wasi:http/types@0.3.0.response.new']!(<Object?>[
+                host.insertFields(WASIPreview3HttpFields()),
+                _none(),
+                responseTrailerFuture,
+              ])!
+              as List<Object?>;
+      await Future<void>.delayed(Duration.zero);
+
+      host.table.dropNamed(
+        'wasi:http/types@0.3.0.response',
+        responseCreated.first! as int,
+      );
+      expect(host.table.contains(responseTrailers), isFalse);
+      expect(host.table.activeCount, 0);
+    });
+
+    test(
+      'takes ready response trailers before returning the response',
+      () async {
+        final host = WASIPreview3HttpHost();
+        final trailersHandle = host.insertFields(
+          WASIPreview3HttpFields(
+            entries: const <WASIPreview3HttpFieldEntry>[
+              WASIPreview3HttpFieldEntry('x-trailer', <int>[111, 107]),
+            ],
+          ),
+        );
+        final trailers = WASIComponentFuture<WasmComponentValueData>(
+          'owned-response-trailers',
+        )..writable.complete(_ok(_some(_integer(trailersHandle))));
+        final created =
+            host.imports['wasi:http/types@0.3.0.response.new']!(<Object?>[
+                  host.insertFields(WASIPreview3HttpFields()),
+                  _none(),
+                  trailers,
+                ])!
+                as List<Object?>;
+        final transmission =
+            created[1] as WASIComponentFuture<WasmComponentValueData>;
+
+        final response = host.takeResponse(created.first! as int);
+
+        expect(host.table.activeCount, 0);
+        final result = await response.readTrailers();
+        expect(result.isOk, isTrue);
+        expect(result.value!.values('x-trailer'), <List<int>>[
+          <int>[111, 107],
+        ]);
+        await expectLater(response.readTrailers(), throwsStateError);
+
+        transmission.readable.drop();
+        await response.cancel();
+        expect(transmission.writable.isDropped, isTrue);
+      },
+    );
+
+    test(
+      'keeps malformed ready responses scoped until trailer materialization',
+      () async {
+        final host = WASIPreview3HttpHost();
+        var responseDrops = 0;
+        var bodyDrops = 0;
+        final body = WASIComponentStream<int>(
+          'malformed-response-body',
+          onDrop: () => bodyDrops++,
+        );
+        body.writable.close();
+        final trailers = WASIComponentFuture<WasmComponentValueData>(
+          'malformed-response-trailers',
+        )..writable.complete(_ok(_some(_integer(999))));
+
+        await expectLater(
+          host.table.runScoped(() {
+            final handle = host.insertResponse(
+              WASIPreview3HttpResponse(
+                headers: WASIPreview3HttpFields(),
+                contents: body,
+                trailers: trailers,
+                onDrop: () => responseDrops++,
+                takeTrailers: (_) =>
+                    throw StateError('Malformed response trailer handle.'),
+              ),
+            );
+
+            host.takeResponse(handle);
+          }),
+          throwsStateError,
+        );
+
+        expect(host.table.activeCount, 0);
+        expect(responseDrops, 1);
+        expect(bodyDrops, 1);
+      },
+    );
+
     test('validates request target fields and moves body on consume', () async {
       final host = WASIPreview3HttpHost();
       final body = WASIComponentStream<int>('request-body');
@@ -383,7 +506,7 @@ void main() {
 
       host.imports['wasi:http/types@0.3.0.request.consume-body']!(<Object?>[
         request,
-        handled,
+        handled.readable,
       ]);
 
       expect(host.table.contains(request), isFalse);
@@ -498,10 +621,7 @@ void main() {
       }
 
       expect(bytes, const <int>[1, 2, 3, 4]);
-      expect(
-        _result(await response.trailers.readable.readWhenReady()).isOk,
-        isTrue,
-      );
+      expect((await response.readTrailers()).isOk, isTrue);
     });
   });
 
@@ -620,7 +740,11 @@ world test {
     final program = component.bindWitWorld(
       resolved.document,
       worldName: 'middleware',
-      imports: http.imports,
+      imports: <String, FutureOr<Object?> Function(List<Object?>)>{
+        ...http.imports,
+        'client.send': http.imports['wasi:http/client@0.3.0.send']!,
+        'handler.handle': http.imports['wasi:http/handler@0.3.0.handle']!,
+      },
       exports: <String, FutureOr<Object?> Function(List<Object?>)>{
         'handler.handle': (_) =>
             throw StateError('not invoked by this binding test'),
@@ -637,6 +761,8 @@ world test {
           .map((operation) => operation.qualifiedName),
       containsAll(<String>['client.send', 'handler.handle']),
     );
+    expect(http.imports, isNot(contains('client.send')));
+    expect(http.imports, isNot(contains('handler.handle')));
   });
 }
 

@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:wasd/src/wasi/component/backpressure.dart';
+import 'package:wasd/src/wasi/component/resource_table.dart';
 import 'package:wasd/src/wasi/component/subtask.dart';
 import 'package:wasd/src/wasi/component/task.dart';
 import 'package:wasd/src/wasi/component/waitable_set.dart';
@@ -136,12 +138,20 @@ void main() {
           wasiComponentSubtaskBlocked,
         );
         expect(task.cancellationRequested, isTrue);
+        expect(
+          task.cancellationState,
+          WASIComponentTaskCancellationState.pending,
+        );
 
         await expectLater(
           pendingCancellation,
           completion(WASIComponentWaitableEventCode.taskCancelled.value),
         );
         expect(cancellationDelivered, isTrue);
+        expect(
+          task.cancellationState,
+          WASIComponentTaskCancellationState.delivered,
+        );
         expect(data.getUint32(88, Endian.little), 0);
         expect(data.getUint32(92, Endian.little), 0);
 
@@ -201,6 +211,10 @@ void main() {
           ),
         ),
         WASIComponentWaitableEventCode.taskCancelled.value,
+      );
+      expect(
+        left.cancellationState,
+        WASIComponentTaskCancellationState.delivered,
       );
 
       waitableHost.waitableSetDrop(set);
@@ -293,7 +307,17 @@ void main() {
       );
       expect(schedulerObservedCancellation, isTrue);
       expect(task.cancellationRequested, isTrue);
+      expect(
+        task.cancellationState,
+        WASIComponentTaskCancellationState.pending,
+      );
 
+      expect(
+        () => taskHost.runWithTask(task, taskHost.taskCancel),
+        throwsStateError,
+      );
+
+      task.deliverCancellation();
       taskHost.runWithTask(task, taskHost.taskCancel);
       expect(task.state, WASIComponentTaskState.cancelled);
       expect(subtask.state, WASIComponentSubtaskState.cancelledBeforeStarted);
@@ -352,6 +376,7 @@ void main() {
 
       rightTask.markStarted();
       rightTask.requestCancellation();
+      rightTask.deliverCancellation();
 
       final leftResult = host.runWithTaskAsync(leftTask, () async {
         expect(host.currentTask, same(leftTask));
@@ -386,6 +411,24 @@ void main() {
       expect(leftTask.state, WASIComponentTaskState.returned);
       expect(leftTask.result, 7);
       expect(rightTask.state, WASIComponentTaskState.cancelled);
+    });
+
+    test('cancels before entering guest code under backpressure', () async {
+      final backpressure = WASIComponentBackpressure()..increment();
+      final task = WASIComponentTask(name: 'blocked-entry');
+      final entry = task.enter(backpressure);
+
+      await Future<void>.delayed(Duration.zero);
+      task.requestCancellation();
+
+      await expectLater(entry, completion(isFalse));
+      expect(task.state, WASIComponentTaskState.cancelled);
+      expect(
+        task.cancellationState,
+        WASIComponentTaskCancellationState.delivered,
+      );
+
+      backpressure.decrement();
     });
 
     test('lets synchronous task scopes override async current tasks', () async {
@@ -679,6 +722,7 @@ void main() {
             throwsStateError,
           );
           borrowed.requestCancellation();
+          borrowed.deliverCancellation();
           expect(
             () => cancelProgram.invoke(0, const <Object?>[]),
             throwsStateError,
@@ -693,6 +737,78 @@ void main() {
         expect(() => borrowed.result, throwsStateError);
       },
     );
+
+    test('tracks canonical borrow handles by their original task', () {
+      final table = WASIComponentResourceTable();
+      final taskHost = WASIComponentTaskHost();
+      final dropped = <int>[];
+      final resourceType = table.defineType<int>(
+        'resource',
+        onDrop: dropped.add,
+      );
+      final owned = table.insert<int>(resourceType, 42);
+
+      final waiting = WASIComponentTask(name: 'waiting');
+      waiting.markStarted();
+      final waitingBorrow = table.insertBorrowHandle(owned, waiting);
+      final other = WASIComponentTask(name: 'other');
+      other.markStarted();
+      taskHost.runWithTask(
+        other,
+        () => table.dropNamed('resource', waitingBorrow),
+      );
+      expect(waiting.borrowCount, 0);
+      expect(other.borrowCount, 0);
+      waiting.returnResult();
+      other.returnResult();
+
+      final waitingAgain = WASIComponentTask(name: 'waiting-again');
+      waitingAgain.markStarted();
+      final otherBorrow = table.insertBorrowHandle(owned, waitingAgain);
+      final self = WASIComponentTask(name: 'self');
+      self.markStarted();
+      final selfBorrow = table.insertBorrowHandle(owned, self);
+      taskHost.runWithTask(self, () {
+        table.drop<int>(resourceType, otherBorrow);
+        table.dropNamed('resource', selfBorrow);
+        self.returnResult();
+      });
+      expect(waitingAgain.borrowCount, 0);
+      expect(self.borrowCount, 0);
+      waitingAgain.returnResult();
+
+      final finalWaiting = WASIComponentTask(name: 'final-waiting');
+      finalWaiting.markStarted();
+      final finalOtherBorrow = table.insertBorrowHandle(owned, finalWaiting);
+      final wrong = WASIComponentTask(name: 'wrong');
+      wrong.markStarted();
+      final wrongBorrow = table.insertBorrowHandle(owned, wrong);
+      taskHost.runWithTask(wrong, () {
+        table.drop<int>(resourceType, finalOtherBorrow);
+        expect(() => wrong.returnResult(), throwsStateError);
+      });
+      expect(finalWaiting.borrowCount, 0);
+      expect(wrong.borrowCount, 1);
+      finalWaiting.returnResult();
+      table.drop<int>(resourceType, wrongBorrow);
+      wrong.returnResult();
+
+      final cancelled = WASIComponentTask(name: 'cancelled');
+      cancelled.markStarted();
+      final cancelledBorrow = table.insertBorrowHandle(owned, cancelled);
+      cancelled.requestCancellation();
+      cancelled.deliverCancellation();
+      expect(() => cancelled.cancel(), throwsStateError);
+      table.drop<int>(resourceType, cancelledBorrow);
+      cancelled.cancel();
+      expect(cancelled.state, WASIComponentTaskState.cancelled);
+
+      expect(table.contains(owned), isTrue);
+      expect(table.get<int>(resourceType, owned), 42);
+      expect(dropped, isEmpty);
+      table.drop<int>(resourceType, owned);
+      expect(dropped, [42]);
+    });
 
     test('rejects non-task canonical definitions', () {
       final host = WASIComponentTaskHost();

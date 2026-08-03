@@ -11,6 +11,7 @@ import '../preview2/http.dart'
         WASIPreview2HttpFields,
         WASIPreview2HttpMethod,
         WASIPreview2HttpScheme;
+import 'http_error_codes.dart';
 
 /// Preview3 name for the shared HTTP fields representation.
 typedef WASIPreview3HttpFields = WASIPreview2HttpFields;
@@ -114,7 +115,7 @@ final class WASIPreview3HttpRequest {
     return WASIPreview3HttpRequest(
       headers: headers,
       contents: contents,
-      trailers: _completedTrailersFuture(null),
+      trailers: _completedTrailersFuture(),
       options: options,
       onDrop: onDrop,
     );
@@ -170,25 +171,14 @@ final class WASIPreview3HttpRequest {
       throw StateError('WASI HTTP request trailers were already read.');
     }
     _trailersRead = true;
-    final result = _resultData(await trailers.readable.readWhenReady());
-    if (!_resultIsOk(result)) {
-      return WASIPreview3HttpResult<WASIPreview3HttpFields?>.error(
-        _errorCodeFromData(result.payload),
+    try {
+      return _takeTrailersResult(
+        await trailers.readable.readWhenReady(),
+        _takeTrailers,
       );
+    } finally {
+      trailers.readable.drop();
     }
-    final option = _optionData(result.payload);
-    if (!_optionIsSome(option)) {
-      return const WASIPreview3HttpResult<WASIPreview3HttpFields?>.ok(null);
-    }
-    final take = _takeTrailers;
-    if (take == null) {
-      return const WASIPreview3HttpResult<WASIPreview3HttpFields?>.error(
-        'internal-error',
-      );
-    }
-    return WASIPreview3HttpResult<WASIPreview3HttpFields?>.ok(
-      take(_handle(option.payload)),
-    );
   }
 
   List<Object?> _consumeBody(
@@ -206,6 +196,9 @@ final class WASIPreview3HttpRequest {
   void _watchHandlingResult(
     WASIComponentReadableFuture<Object?> handlingResult,
   ) {
+    if (_onDrop == null) {
+      return;
+    }
     unawaited(() async {
       try {
         final result = await handlingResult.readWhenReady();
@@ -225,15 +218,16 @@ final class WASIPreview3HttpRequest {
     if (!_bodyConsumed) {
       final body = contents;
       if (body != null &&
-          !body.writable.isClosed &&
           !body.readable.isCancelled &&
           !body.readable.isDropped) {
         body.readable.cancel();
       }
-      if (!trailers.readable.isReady &&
-          !trailers.readable.isCancelled &&
-          !trailers.readable.isDropped) {
-        trailers.readable.cancel();
+      if (!trailers.readable.isCancelled && !trailers.readable.isDropped) {
+        if (trailers.readable.isReady) {
+          trailers.readable.drop();
+        } else {
+          trailers.readable.cancel();
+        }
       }
     }
     completeTransmission(
@@ -251,9 +245,11 @@ final class WASIPreview3HttpResponse {
     required this.trailers,
     WASIComponentFuture<WasmComponentValueData>? transmissionResult,
     void Function()? onDrop,
+    WASIPreview3HttpFields Function(int handle)? takeTrailers,
   }) : headers = headers.immutableClone(),
        _transmissionResult = transmissionResult,
-       _onDrop = onDrop;
+       _onDrop = onDrop,
+       _takeTrailers = takeTrailers;
 
   /// Creates a response whose body has no trailers.
   factory WASIPreview3HttpResponse.noTrailers({
@@ -264,7 +260,7 @@ final class WASIPreview3HttpResponse {
     return WASIPreview3HttpResponse(
       headers: headers,
       contents: contents,
-      trailers: _completedTrailersFuture(null),
+      trailers: _completedTrailersFuture(),
       onDrop: onDrop,
     );
   }
@@ -282,22 +278,110 @@ final class WASIPreview3HttpResponse {
   final WASIComponentFuture<WasmComponentValueData> trailers;
 
   final WASIComponentFuture<WasmComponentValueData>? _transmissionResult;
+  final WASIPreview3HttpFields Function(int handle)? _takeTrailers;
+  WASIComponentResourceScopeLease? _resourceScopeLease;
+  Future<void>? _transmissionCompletion;
   void Function()? _onDrop;
   bool _bodyConsumed = false;
+  bool _trailersRead = false;
+  bool _transmissionFinished = false;
+  WASIPreview3HttpResult<WASIPreview3HttpFields?>? _materializedTrailers;
 
-  /// Completes the future returned by `response.new`.
-  void completeTransmission(WASIPreview3HttpResult<void> result) {
+  /// Completes the future returned by `response.new` after guest observation.
+  Future<void> completeTransmission(WASIPreview3HttpResult<void> result) {
+    return _transmissionCompletion ??= _completeTransmission(result);
+  }
+
+  Future<void> _completeTransmission(
+    WASIPreview3HttpResult<void> result,
+  ) async {
     final future = _transmissionResult;
-    if (future == null || !future.writable.canComplete) {
-      return;
+    try {
+      if (future == null || future.writable.isDropped) {
+        return;
+      }
+      if (future.isCancelled) {
+        future.writable.dispose();
+        return;
+      }
+      try {
+        await future.writable.completeWhenRead(
+          result.isOk ? _unitOk() : _errorCodeResult(result.errorCode!),
+        );
+      } on WASIComponentAsyncEndpointStateError catch (error) {
+        if (error.failure != WASIComponentAsyncEndpointFailure.dropped &&
+            error.failure != WASIComponentAsyncEndpointFailure.cancelled) {
+          rethrow;
+        }
+      }
+    } finally {
+      _transmissionFinished = true;
+      _releaseResourceScopeLease();
     }
-    future.writable.complete(
-      result.isOk ? _unitOk() : _errorCodeResult(result.errorCode!),
-    );
   }
 
   /// Cancels transport work and releases unconsumed async endpoints.
-  void cancel() => _drop();
+  Future<void> cancel() => _drop();
+
+  /// Resolves and takes the trailers supplied with this response.
+  Future<WASIPreview3HttpResult<WASIPreview3HttpFields?>> readTrailers() async {
+    if (_trailersRead) {
+      throw StateError('WASI HTTP response trailers were already read.');
+    }
+    _trailersRead = true;
+    final materialized = _materializedTrailers;
+    if (materialized != null) {
+      _materializedTrailers = null;
+      return materialized;
+    }
+    try {
+      return _takeTrailersResult(
+        await trailers.readable.readWhenReady(),
+        _takeTrailers,
+      );
+    } finally {
+      trailers.readable.drop();
+    }
+  }
+
+  void _materializeReadyTrailers() {
+    if (_trailersRead ||
+        _materializedTrailers != null ||
+        !trailers.readable.isReady) {
+      return;
+    }
+    try {
+      _materializedTrailers = _takeTrailersResult(
+        trailers.readable.read(),
+        _takeTrailers,
+      );
+    } finally {
+      trailers.readable.drop();
+    }
+  }
+
+  void _attachResourceScopeLease(WASIComponentResourceScopeLease lease) {
+    if (_resourceScopeLease != null) {
+      lease.release();
+      throw StateError('WASI HTTP response already retains a resource scope.');
+    }
+    _resourceScopeLease = lease;
+    final future = _transmissionResult;
+    if (_transmissionFinished ||
+        future == null ||
+        !future.writable.canComplete) {
+      if (future != null && !future.writable.isDropped) {
+        future.writable.dispose();
+      }
+      _releaseResourceScopeLease();
+    }
+  }
+
+  void _releaseResourceScopeLease() {
+    final lease = _resourceScopeLease;
+    _resourceScopeLease = null;
+    lease?.release();
+  }
 
   List<Object?> _consumeBody(
     WASIComponentReadableFuture<Object?> handlingResult,
@@ -322,33 +406,34 @@ final class WASIPreview3HttpResponse {
       try {
         final result = await handlingResult.readWhenReady();
         if (!_resultIsOk(_resultData(result))) {
-          _drop();
+          await _drop();
         }
       } on Object {
-        _drop();
+        await _drop();
       }
     }());
   }
 
-  void _drop() {
+  Future<void> _drop() async {
     final onDrop = _onDrop;
     _onDrop = null;
     onDrop?.call();
     if (!_bodyConsumed) {
       final body = contents;
       if (body != null &&
-          !body.writable.isClosed &&
           !body.readable.isCancelled &&
           !body.readable.isDropped) {
         body.readable.cancel();
       }
-      if (!trailers.readable.isReady &&
-          !trailers.readable.isCancelled &&
-          !trailers.readable.isDropped) {
-        trailers.readable.cancel();
+      if (!trailers.readable.isCancelled && !trailers.readable.isDropped) {
+        if (trailers.readable.isReady) {
+          trailers.readable.drop();
+        } else {
+          trailers.readable.cancel();
+        }
       }
     }
-    completeTransmission(
+    await completeTransmission(
       const WASIPreview3HttpResult<void>.error('internal-error'),
     );
   }
@@ -408,6 +493,11 @@ base class WASIPreview3HttpHost {
   /// Largest supported request timeout in nanoseconds.
   final BigInt? maximumRequestTimeoutNanos;
 
+  /// Releases resources created and owned by this host.
+  ///
+  /// Backends supplied by callers remain owned by their callers.
+  void close({bool force = false}) {}
+
   late final WASIComponentResourceType<WASIPreview3HttpFields> _fieldsType =
       table.defineType<WASIPreview3HttpFields>('wasi:http/types@0.3.0.fields');
   late final WASIComponentResourceType<WASIPreview3HttpRequest> _requestType =
@@ -422,7 +512,7 @@ base class WASIPreview3HttpHost {
   late final WASIComponentResourceType<WASIPreview3HttpResponse> _responseType =
       table.defineType<WASIPreview3HttpResponse>(
         'wasi:http/types@0.3.0.response',
-        onDrop: (response) => response._drop(),
+        onDrop: (response) => unawaited(response._drop()),
       );
 
   /// Stable Preview3 HTTP import callbacks.
@@ -531,8 +621,6 @@ base class WASIPreview3HttpHost {
         _dispatch(_handle(args.single), clientBackend),
     'wasi:http/handler@0.3.0.handle': (args) =>
         _dispatch(_handle(args.single), handlerBackend),
-    'client.send': (args) => _dispatch(_handle(args.single), clientBackend),
-    'handler.handle': (args) => _dispatch(_handle(args.single), handlerBackend),
   });
 
   /// Inserts an owned fields resource.
@@ -551,11 +639,29 @@ base class WASIPreview3HttpHost {
   }
 
   /// Takes an owned response returned by a component handler.
-  WASIPreview3HttpResponse takeResponse(int handle) {
-    return table.takeDetachingChildren<WASIPreview3HttpResponse>(
-      _responseType,
-      handle,
-    );
+  ///
+  /// When [retainResourceScope] is true, the current runtime scope remains
+  /// alive until the response transmission result is observed or dropped.
+  WASIPreview3HttpResponse takeResponse(
+    int handle, {
+    bool retainResourceScope = false,
+  }) {
+    final lease = retainResourceScope ? table.retainCurrentScope() : null;
+    final response = table.get<WASIPreview3HttpResponse>(_responseType, handle);
+    try {
+      response._materializeReadyTrailers();
+      final owned = table.takeDetachingChildren<WASIPreview3HttpResponse>(
+        _responseType,
+        handle,
+      );
+      if (lease != null) {
+        owned._attachResourceScopeLease(lease);
+      }
+      return owned;
+    } catch (_) {
+      lease?.release();
+      rethrow;
+    }
   }
 
   int _insertChildFields(int parentHandle, WASIPreview3HttpFields fields) {
@@ -631,13 +737,19 @@ base class WASIPreview3HttpHost {
   List<Object?> _newRequest(List<Object?> args) {
     final headersHandle = _handle(args[0]);
     final contents = _optionalStreamFromData(args[1], 'http-request-body');
-    final trailers = _futureFromData(args[2], 'http-request-trailers');
+    final trailers = _futureFromData(
+      args[2],
+      'http-request-trailers',
+      onDiscard: _dropTrailersValue,
+    );
     final optionsHandle = _optionalHandleFromData(args[3]);
-    final headers = _fields(headersHandle);
+    final headers = table.take<WASIPreview3HttpFields>(
+      _fieldsType,
+      headersHandle,
+    );
     final options = optionsHandle == null
         ? null
         : _requestOptions(optionsHandle);
-    table.take<WASIPreview3HttpFields>(_fieldsType, headersHandle);
     if (optionsHandle != null) {
       table.take<WASIPreview3HttpRequestOptions>(
         _requestOptionsType,
@@ -662,7 +774,11 @@ base class WASIPreview3HttpHost {
   List<Object?> _newResponse(List<Object?> args) {
     final headersHandle = _handle(args[0]);
     final contents = _optionalStreamFromData(args[1], 'http-response-body');
-    final trailers = _futureFromData(args[2], 'http-response-trailers');
+    final trailers = _futureFromData(
+      args[2],
+      'http-response-trailers',
+      onDiscard: _dropTrailersValue,
+    );
     final headers = table.take<WASIPreview3HttpFields>(
       _fieldsType,
       headersHandle,
@@ -675,6 +791,8 @@ base class WASIPreview3HttpHost {
       contents: contents,
       trailers: trailers,
       transmissionResult: transmission,
+      takeTrailers: (handle) =>
+          table.take<WASIPreview3HttpFields>(_fieldsType, handle),
     );
     return <Object?>[insertResponse(response), transmission];
   }
@@ -822,6 +940,17 @@ base class WASIPreview3HttpHost {
     }
   }
 
+  void _dropTrailersValue(WasmComponentValueData value) {
+    final result = _resultData(value);
+    if (!_resultIsOk(result)) {
+      return;
+    }
+    final option = _optionData(result.payload);
+    if (_optionIsSome(option)) {
+      table.drop<WASIPreview3HttpFields>(_fieldsType, _handle(option.payload));
+    }
+  }
+
   WasmComponentValueData _headerMutationResult(String? error) {
     return error == null ? _unitOk() : _result(false, _headerErrorData(error));
   }
@@ -880,9 +1009,15 @@ WASIComponentStream<int> _bufferReadableStream(
         }
         var offset = 0;
         while (offset < bytes.length) {
-          offset += await buffered.writable.writeWhenAvailable(
+          final written = await buffered.writable.writeWhenAvailable(
             bytes.getRange(offset, bytes.length),
           );
+          if (written <= 0) {
+            throw StateError(
+              'WASI HTTP buffered stream made no write progress.',
+            );
+          }
+          offset += written;
         }
       }
     } on WASIComponentAsyncEndpointStateError catch (error) {
@@ -905,30 +1040,74 @@ WASIComponentStream<int> _bufferReadableStream(
 
 WASIComponentFuture<WasmComponentValueData> _futureFromData(
   Object? value,
-  String name,
-) {
+  String name, {
+  void Function(WasmComponentValueData value)? onDiscard,
+}) {
   final source = switch (value) {
     WASIComponentReadableFuture<Object?>() => value,
     WASIComponentFuture<Object?>() => value.readable,
     _ => throw StateError('Expected $name future readable endpoint.'),
   };
-  final buffered = WASIComponentFuture<WasmComponentValueData>(name);
+  final buffered = WASIComponentFuture<WasmComponentValueData>(
+    name,
+    onDiscard: onDiscard,
+  );
+  if (source.isReady) {
+    try {
+      final result = source.read();
+      if (result is! WasmComponentValueData) {
+        throw StateError('Expected $name component value.');
+      }
+      buffered.writable.complete(result);
+    } on Object {
+      if (buffered.writable.canComplete) {
+        buffered.writable.cancel();
+      }
+    } finally {
+      source.drop();
+    }
+    return buffered;
+  }
   unawaited(() async {
     try {
       final result = await source.readWhenReady();
       if (result is! WasmComponentValueData) {
         throw StateError('Expected $name component value.');
       }
-      if (buffered.writable.canComplete) {
-        buffered.writable.complete(result);
-      }
+      buffered.writable.complete(result);
     } on Object {
       if (buffered.writable.canComplete) {
         buffered.writable.cancel();
       }
+    } finally {
+      source.drop();
     }
   }());
   return buffered;
+}
+
+WASIPreview3HttpResult<WASIPreview3HttpFields?> _takeTrailersResult(
+  Object? value,
+  WASIPreview3HttpFields Function(int handle)? take,
+) {
+  final result = _resultData(value);
+  if (!_resultIsOk(result)) {
+    return WASIPreview3HttpResult<WASIPreview3HttpFields?>.error(
+      _errorCodeFromData(result.payload),
+    );
+  }
+  final option = _optionData(result.payload);
+  if (!_optionIsSome(option)) {
+    return const WASIPreview3HttpResult<WASIPreview3HttpFields?>.ok(null);
+  }
+  if (take == null) {
+    return const WASIPreview3HttpResult<WASIPreview3HttpFields?>.error(
+      'internal-error',
+    );
+  }
+  return WASIPreview3HttpResult<WASIPreview3HttpFields?>.ok(
+    take(_handle(option.payload)),
+  );
 }
 
 int? _optionalHandleFromData(Object? value) {
@@ -936,14 +1115,7 @@ int? _optionalHandleFromData(Object? value) {
   return _optionIsSome(data) ? _handle(data.associatedValue) : null;
 }
 
-WASIComponentFuture<WasmComponentValueData> _completedTrailersFuture(
-  WASIPreview3HttpFields? fields,
-) {
-  if (fields != null) {
-    throw UnsupportedError(
-      'Owned fields trailers require a WASIPreview3HttpHost resource table.',
-    );
-  }
+WASIComponentFuture<WasmComponentValueData> _completedTrailersFuture() {
   final future = WASIComponentFuture<WasmComponentValueData>('http-trailers');
   future.writable.complete(_ok(_none()));
   return future;
@@ -1097,15 +1269,15 @@ WasmComponentValueData _errorCodeResult(String code) {
 
 String _errorCodeFromData(Object? value) {
   final data = _variantData(value);
-  return data.label ?? _caseLabel(_httpErrorCodeCases, data.index);
+  return data.label ?? _caseLabel(wasiPreview3HttpErrorCodeCases, data.index);
 }
 
 WasmComponentValueData _errorCodeData(String code) {
-  var index = _httpErrorCodeCases.indexOf(code);
+  var index = wasiPreview3HttpErrorCodeCases.indexOf(code);
   if (index < 0) {
-    index = _httpErrorCodeCases.indexOf('internal-error');
+    index = wasiPreview3HttpErrorCodeCases.indexOf('internal-error');
   }
-  final label = _httpErrorCodeCases[index];
+  final label = wasiPreview3HttpErrorCodeCases[index];
   return _variant(label, index, _httpErrorCodePayload(label));
 }
 
@@ -1534,48 +1706,6 @@ const List<String> _requestOptionsErrorCases = <String>[
   'not-supported',
   'immutable',
   'other',
-];
-
-const List<String> _httpErrorCodeCases = <String>[
-  'DNS-timeout',
-  'DNS-error',
-  'destination-not-found',
-  'destination-unavailable',
-  'destination-IP-prohibited',
-  'destination-IP-unroutable',
-  'connection-refused',
-  'connection-terminated',
-  'connection-timeout',
-  'connection-read-timeout',
-  'connection-write-timeout',
-  'connection-limit-reached',
-  'TLS-protocol-error',
-  'TLS-certificate-error',
-  'TLS-alert-received',
-  'HTTP-request-denied',
-  'HTTP-request-length-required',
-  'HTTP-request-body-size',
-  'HTTP-request-method-invalid',
-  'HTTP-request-URI-invalid',
-  'HTTP-request-URI-too-long',
-  'HTTP-request-header-section-size',
-  'HTTP-request-header-size',
-  'HTTP-request-trailer-section-size',
-  'HTTP-request-trailer-size',
-  'HTTP-response-incomplete',
-  'HTTP-response-header-section-size',
-  'HTTP-response-header-size',
-  'HTTP-response-body-size',
-  'HTTP-response-trailer-section-size',
-  'HTTP-response-trailer-size',
-  'HTTP-response-transfer-coding',
-  'HTTP-response-content-coding',
-  'HTTP-response-timeout',
-  'HTTP-upgrade-failed',
-  'HTTP-protocol-error',
-  'loop-detected',
-  'configuration-error',
-  'internal-error',
 ];
 
 const int _maxU32 = 0xffffffff;

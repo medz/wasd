@@ -109,7 +109,7 @@ void main() {
       expect(stringPlan.asyncValueBindings.single.memoryLayout!.alignment, 4);
     });
 
-    test('binds decoded stream async values before canonical builtins', () {
+    test('binds decoded unit streams through the no-memory Core ABI', () {
       final component = WasmComponent.decode(_canonicalStreamProgramBytes());
       final host = WASIComponentHost();
       final dropped = <String>[];
@@ -139,19 +139,16 @@ void main() {
       final handles = WASIComponentAsyncEndpointHandles.unpack(packed);
 
       expect(
-        binding.program.invoke(2, <Object?>[
-          handles.writable,
-          <Object?>[null, null],
-        ]),
-        2,
+        binding.program.invoke(2, <Object?>[handles.writable, 0x1234, 2]),
+        2 << 4,
       );
       expect(
-        binding.program.invoke(1, <Object?>[handles.readable, 1]),
-        <Object?>[null],
+        binding.program.invoke(1, <Object?>[handles.readable, 0x5678, 1]),
+        1 << 4,
       );
       expect(
-        binding.program.invoke(1, <Object?>[handles.readable, 2]),
-        <Object?>[null],
+        binding.program.invoke(1, <Object?>[handles.readable, 0x9abc, 2]),
+        1 << 4,
       );
 
       expect(binding.program.invoke(5, <Object?>[handles.readable]), isNull);
@@ -512,7 +509,7 @@ void main() {
       },
     );
 
-    test('binds decoded future async values before canonical builtins', () {
+    test('binds decoded unit futures through the no-memory Core ABI', () async {
       final component = WasmComponent.decode(_canonicalFutureProgramBytes());
       final host = WASIComponentHost();
 
@@ -531,11 +528,14 @@ void main() {
       final packed = binding.program.invoke(0, const <Object?>[])! as int;
       final handles = WASIComponentAsyncEndpointHandles.unpack(packed);
 
-      expect(
-        binding.program.invoke(2, <Object?>[handles.writable, null]),
-        isNull,
-      );
-      expect(binding.program.invoke(1, <Object?>[handles.readable]), isNull);
+      final pendingRead = binding.program.invokeAsync(1, <Object?>[
+        handles.readable,
+        0x1234,
+      ]);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(binding.program.invoke(2, <Object?>[handles.writable, 0x5678]), 0);
+      await expectLater(pendingRead, completion(0));
       expect(binding.program.invoke(5, <Object?>[handles.readable]), isNull);
       expect(binding.program.invoke(6, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);

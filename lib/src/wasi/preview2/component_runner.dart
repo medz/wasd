@@ -210,31 +210,44 @@ final class WASIComponentNativeRuntime {
   Future<WASIPreview3HttpResult<WASIPreview3HttpResponse>>
   handlePreview3Service(WASIPreview3HttpRequest request) =>
       _componentHost.table.runScoped(() async {
-        final host = _preview3Host;
-        if (host == null) {
-          throw const WASIPreview2ComponentExecutionException(
-            'Preview3 HTTP service execution requires a Preview3 host.',
+        try {
+          final host = _preview3Host;
+          if (host == null) {
+            throw const WASIPreview2ComponentExecutionException(
+              'Preview3 HTTP service execution requires a Preview3 host.',
+            );
+          }
+          _initialize();
+          final requestHandle = host.httpHost.insertRequest(request);
+          final result = await _findPreview3HttpHandler().invoke(<Object?>[
+            requestHandle,
+          ]);
+          if (result is! WasmComponentValueData ||
+              result.kind != WasmComponentValueDataKind.result) {
+            throw WASIPreview2ComponentExecutionException(
+              'wasi:http/handler.handle returned an invalid result.',
+            );
+          }
+          if (!_componentResultIsOk(result)) {
+            return WASIPreview3HttpResult<WASIPreview3HttpResponse>.error(
+              _preview3HttpErrorCode(result.payload),
+            );
+          }
+          return WASIPreview3HttpResult<WASIPreview3HttpResponse>.ok(
+            host.httpHost.takeResponse(
+              _componentResourceHandle(result.payload),
+              retainResourceScope: true,
+            ),
+          );
+        } on WASIPreview3Exit {
+          return const WASIPreview3HttpResult<WASIPreview3HttpResponse>.error(
+            'internal-error',
+          );
+        } on WASIPreview2Exit {
+          return const WASIPreview3HttpResult<WASIPreview3HttpResponse>.error(
+            'internal-error',
           );
         }
-        _initialize();
-        final requestHandle = host.httpHost.insertRequest(request);
-        final result = await _findPreview3HttpHandler().invoke(<Object?>[
-          requestHandle,
-        ]);
-        if (result is! WasmComponentValueData ||
-            result.kind != WasmComponentValueDataKind.result) {
-          throw WASIPreview2ComponentExecutionException(
-            'wasi:http/handler.handle returned an invalid result.',
-          );
-        }
-        if (!_componentResultIsOk(result)) {
-          return WASIPreview3HttpResult<WASIPreview3HttpResponse>.error(
-            _preview3HttpErrorCode(result.payload),
-          );
-        }
-        return WASIPreview3HttpResult<WASIPreview3HttpResponse>.ok(
-          host.httpHost.takeResponse(_componentResourceHandle(result.payload)),
-        );
       });
 
   void _initialize() {
@@ -829,6 +842,8 @@ final class WASIComponentNativeRuntime {
                   : null
             : canonicalMemory;
         final realloc = _canonicalRealloc(definition);
+        // Async lifts drive their callback loop through the immediate/event
+        // paths. Synchronous callers use the Future-returning paths instead.
         FutureOr<Object?> invoke(List<Object?> args) {
           if (memory == null) {
             return isAsync
@@ -915,8 +930,10 @@ final class WASIComponentNativeRuntime {
 
     return canonicalHost.threadHost.runWithThreadAsync(thread, () {
       return canonicalHost.taskHost.runWithTaskAsync(task, () async {
-        await canonicalHost.asyncHost.backpressure.waitUntilReleased();
-        task.markStarted();
+        final entered = await task.enter(canonicalHost.asyncHost.backpressure);
+        if (!entered) {
+          return null;
+        }
         final coreArgs = _adapterProgram.prepareAsyncLiftCoreArgs(
           canonicalIndex,
           args,
@@ -932,8 +949,12 @@ final class WASIComponentNativeRuntime {
           WASIComponentWaitableEvent event;
           switch (code) {
             case 1:
-              await canonicalHost.threadHost.threadYield();
-              event = WASIComponentWaitableEvent.none;
+              final cancelled = await canonicalHost.threadHost.threadYield(
+                cancellable: true,
+              );
+              event = cancelled == 0
+                  ? WASIComponentWaitableEvent.none
+                  : WASIComponentWaitableEvent.taskCancelled;
             case 2:
               event = await canonicalHost.waitableHost.waitableSetWait(
                 packed >>> 4,
@@ -1010,6 +1031,7 @@ final class WASIComponentNativeRuntime {
             ),
           ]);
           if (outcome.cancelled) {
+            task.deliverCancellation();
             task.cancel();
             return;
           }

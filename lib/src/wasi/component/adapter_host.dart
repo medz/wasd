@@ -6,6 +6,7 @@ import '../../wasm/memory.dart' as wasm;
 import 'adapter_plan.dart';
 import 'async_host.dart';
 import 'async_values.dart';
+import 'resource_host.dart';
 import 'string_memory.dart';
 import 'unicode_scalar.dart';
 import 'value_memory.dart';
@@ -18,6 +19,32 @@ const int _canonicalMaxFlatResults = 1;
 typedef WASIComponentCanonicalAdapterCallback =
     FutureOr<Object?> Function(List<Object?> args);
 
+/// Lowers one source resource handle into a canonical borrowed handle.
+typedef WASIComponentCanonicalBorrowHandleLowerer = int Function(int handle);
+
+/// Borrow lowering state for one canonical adapter invocation.
+final class WASIComponentCanonicalBorrowLowering {
+  /// Creates one invocation's borrow lowering state.
+  const WASIComponentCanonicalBorrowLowering({
+    required this.lower,
+    required this.close,
+    required this.isCallScoped,
+  });
+
+  /// Lowers one source handle into a borrowed alias.
+  final WASIComponentCanonicalBorrowHandleLowerer lower;
+
+  /// Releases invocation-scoped aliases after the call boundary.
+  final void Function() close;
+
+  /// Whether aliases are valid only until this adapter invocation completes.
+  final bool isCallScoped;
+}
+
+/// Opens borrow lowering state for an adapter invocation.
+typedef WASIComponentCanonicalBorrowLoweringFactory =
+    WASIComponentCanonicalBorrowLowering? Function(bool taskScoped);
+
 /// Host for executable canonical `lift`/`lower` adapter operations.
 ///
 /// This is the first executable adapter boundary. It intentionally supports
@@ -26,14 +53,21 @@ typedef WASIComponentCanonicalAdapterCallback =
 /// `own`/`borrow` resource handles and `error-context` handles as canonical
 /// `u32` scalars; memory-backed invocations use the same canonical `u32`
 /// handle representation. Async adapters reuse the same codecs through the
-/// explicit asynchronous invocation entrypoints. Resource table ownership,
-/// borrow, and drop behavior remains a higher-level host concern.
+/// explicit asynchronous invocation entrypoints. Resource ownership and drops
+/// remain a higher-level host concern; an injected borrow lowerer can register
+/// borrowed handles against the active callee task.
 final class WASIComponentCanonicalAdapterHost {
   /// Creates a canonical adapter host.
-  const WASIComponentCanonicalAdapterHost({this.asyncHost});
+  const WASIComponentCanonicalAdapterHost({
+    this.asyncHost,
+    this.borrowLowering,
+  });
 
   /// Async endpoint registry used by flat stream and future values.
   final WASIComponentAsyncHost? asyncHost;
+
+  /// Active callee-scope canonical borrow lowerer, when execution provides one.
+  final WASIComponentCanonicalBorrowLoweringFactory? borrowLowering;
 
   /// Binds a canonical `lift` plan to the core function it wraps.
   WASIComponentCanonicalAdapterOperation bindLiftCoreFunction(
@@ -48,6 +82,7 @@ final class WASIComponentCanonicalAdapterHost {
       postReturnCallback: null,
       callState: _WASIComponentCanonicalCallState(),
       asyncHost: asyncHost,
+      borrowLowering: borrowLowering,
       directValueSupported: true,
       memoryValueSupported: _supportsMemoryValuePlan(plan),
     );
@@ -66,6 +101,7 @@ final class WASIComponentCanonicalAdapterHost {
       postReturnCallback: null,
       callState: _WASIComponentCanonicalCallState(),
       asyncHost: asyncHost,
+      borrowLowering: borrowLowering,
       directValueSupported: true,
       memoryValueSupported: _supportsMemoryValuePlan(plan),
     );
@@ -99,6 +135,7 @@ final class WASIComponentCanonicalAdapterHost {
               postReturnCallback: _postReturnCallback(plan, coreFunctions),
               callState: callState,
               asyncHost: asyncHost,
+              borrowLowering: borrowLowering,
               directValueSupported: _supportsDirectValuePlan(plan),
               memoryValueSupported: _supportsMemoryValuePlan(plan),
             ),
@@ -119,6 +156,7 @@ final class WASIComponentCanonicalAdapterHost {
               postReturnCallback: null,
               callState: callState,
               asyncHost: asyncHost,
+              borrowLowering: borrowLowering,
               directValueSupported: _supportsDirectValuePlan(plan),
               memoryValueSupported: _supportsMemoryValuePlan(plan),
             ),
@@ -472,12 +510,14 @@ final class WASIComponentCanonicalAdapterOperation {
     required WASIComponentCanonicalAdapterCallback? postReturnCallback,
     required _WASIComponentCanonicalCallState callState,
     required WASIComponentAsyncHost? asyncHost,
+    required WASIComponentCanonicalBorrowLoweringFactory? borrowLowering,
     required bool directValueSupported,
     required bool memoryValueSupported,
   }) : _callback = callback,
        _postReturnCallback = postReturnCallback,
        _callState = callState,
        _asyncHost = asyncHost,
+       _borrowLowering = borrowLowering,
        _directValueSupported = directValueSupported,
        _memoryValueSupported = memoryValueSupported;
 
@@ -488,6 +528,7 @@ final class WASIComponentCanonicalAdapterOperation {
   final WASIComponentCanonicalAdapterCallback? _postReturnCallback;
   final _WASIComponentCanonicalCallState _callState;
   final WASIComponentAsyncHost? _asyncHost;
+  final WASIComponentCanonicalBorrowLoweringFactory? _borrowLowering;
   final bool _directValueSupported;
   final bool _memoryValueSupported;
 
@@ -502,20 +543,30 @@ final class WASIComponentCanonicalAdapterOperation {
     _requireMayLeaveForLower();
     _checkSyncInvokeSupported('direct value invocation', 'invokeAsync');
     _checkDirectInvokeSupported();
-    final directArgs = _validateDirectArgs(args);
-
-    final result = _callback(List<Object?>.unmodifiable(directArgs));
-    return _validateDirectResult(result);
+    final validatedArgs = _validateDirectArgs(args);
+    final lowering = _openBorrowLowering();
+    try {
+      final directArgs = _lowerBorrowArguments(validatedArgs, lowering);
+      final result = _callback(List<Object?>.unmodifiable(directArgs));
+      return _validateDirectResult(result);
+    } finally {
+      lowering?.close();
+    }
   }
 
   /// Invokes the adapter asynchronously with direct component values.
   Future<Object?> invokeAsync(List<Object?> args) async {
     _requireMayLeaveForLower();
     _checkDirectInvokeSupported();
-    final directArgs = _validateDirectArgs(args);
-
-    final result = await _callback(List<Object?>.unmodifiable(directArgs));
-    return _validateDirectResult(result);
+    final validatedArgs = _validateDirectArgs(args);
+    final lowering = _openBorrowLowering();
+    try {
+      final directArgs = _lowerBorrowArguments(validatedArgs, lowering);
+      final result = await _callback(List<Object?>.unmodifiable(directArgs));
+      return _validateDirectResult(result);
+    } finally {
+      lowering?.close();
+    }
   }
 
   List<Object?> _validateDirectArgs(List<Object?> args) {
@@ -554,9 +605,14 @@ final class WASIComponentCanonicalAdapterOperation {
     _requireMayLeaveForLower();
     _checkSyncInvokeSupported('flat value invocation', 'invokeFlatAsync');
     final args = _loadFlatArgs(flatArgs, memory);
-
-    final result = _invokeFlatCallback(args);
-    return _storeFlatResult(result, memory, _guardRealloc(realloc));
+    final lowering = _openBorrowLowering();
+    try {
+      final callbackArgs = _lowerBorrowArguments(args, lowering);
+      final result = _invokeFlatCallback(callbackArgs);
+      return _storeFlatResult(result, memory, _guardRealloc(realloc));
+    } finally {
+      lowering?.close();
+    }
   }
 
   /// Invokes the adapter asynchronously through flat Canonical ABI scalar
@@ -568,9 +624,14 @@ final class WASIComponentCanonicalAdapterOperation {
   }) async {
     _requireMayLeaveForLower();
     final args = _loadFlatArgs(flatArgs, memory);
-
-    final result = await _invokeFlatCallbackAsync(args);
-    return _storeFlatResult(result, memory, _guardRealloc(realloc));
+    final lowering = _openBorrowLowering();
+    try {
+      final callbackArgs = _lowerBorrowArguments(args, lowering);
+      final result = await _invokeFlatCallbackAsync(callbackArgs);
+      return _storeFlatResult(result, memory, _guardRealloc(realloc));
+    } finally {
+      lowering?.close();
+    }
   }
 
   /// Invokes this lowered function using the core signature produced by the
@@ -652,11 +713,21 @@ final class WASIComponentCanonicalAdapterOperation {
       'lifted core invocation',
       'invokeLiftedCoreAsync',
     );
-    final coreArgs = _storeLiftedCoreArgs(args, memory, _guardRealloc(realloc));
-    final result = _callback(List<Object?>.unmodifiable(coreArgs));
-    final lifted = _loadLiftedCoreResult(result, memory);
-    _invokePostReturn(result);
-    return lifted;
+    final lowering = _openBorrowLowering();
+    try {
+      final coreArgs = _storeLiftedCoreArgs(
+        args,
+        memory,
+        _guardRealloc(realloc),
+        lowering,
+      );
+      final result = _callback(List<Object?>.unmodifiable(coreArgs));
+      final lifted = _loadLiftedCoreResult(result, memory);
+      _invokePostReturn(result);
+      return lifted;
+    } finally {
+      lowering?.close();
+    }
   }
 
   /// Invokes this lifted function through its canonical core signature and
@@ -667,11 +738,21 @@ final class WASIComponentCanonicalAdapterOperation {
     WASIComponentCanonicalRealloc? realloc,
   }) async {
     _requireLiftedCoreOperation();
-    final coreArgs = _storeLiftedCoreArgs(args, memory, _guardRealloc(realloc));
-    final result = await _callback(List<Object?>.unmodifiable(coreArgs));
-    final lifted = _loadLiftedCoreResult(result, memory);
-    await _invokePostReturnAsync(result);
-    return lifted;
+    final lowering = _openBorrowLowering();
+    try {
+      final coreArgs = _storeLiftedCoreArgs(
+        args,
+        memory,
+        _guardRealloc(realloc),
+        lowering,
+      );
+      final result = await _callback(List<Object?>.unmodifiable(coreArgs));
+      final lifted = _loadLiftedCoreResult(result, memory);
+      await _invokePostReturnAsync(result);
+      return lifted;
+    } finally {
+      lowering?.close();
+    }
   }
 
   /// Lowers component arguments for a stackless async canonical lift.
@@ -686,7 +767,23 @@ final class WASIComponentCanonicalAdapterOperation {
         'WASI component canonical adapter index $canonicalIndex is not async.',
       );
     }
-    return _storeLiftedCoreArgs(args, memory, _guardRealloc(realloc));
+    final lowering = _openBorrowLowering();
+    try {
+      if (lowering?.isCallScoped ?? false) {
+        throw StateError(
+          'WASI component canonical adapter index $canonicalIndex requires '
+          'an active task to lower borrows for a stackless async lift.',
+        );
+      }
+      return _storeLiftedCoreArgs(
+        args,
+        memory,
+        _guardRealloc(realloc),
+        lowering,
+      );
+    } finally {
+      lowering?.close();
+    }
   }
 
   /// Lifts an async canonical lift result captured by `task.return`.
@@ -761,14 +858,20 @@ final class WASIComponentCanonicalAdapterOperation {
       'invokeWithMemoryAsync',
     );
     _checkMemoryInvokeSupported();
-    final args = _loadMemoryArgs(memory, paramPointers);
-    final result = _callback(List<Object?>.unmodifiable(args));
-    return _storeMemoryResult(
-      memory,
-      result,
-      resultPointer: resultPointer,
-      realloc: _guardRealloc(realloc),
-    );
+    final loadedArgs = _loadMemoryArgs(memory, paramPointers);
+    final lowering = _openBorrowLowering();
+    try {
+      final args = _lowerBorrowArguments(loadedArgs, lowering);
+      final result = _callback(List<Object?>.unmodifiable(args));
+      return _storeMemoryResult(
+        memory,
+        result,
+        resultPointer: resultPointer,
+        realloc: _guardRealloc(realloc),
+      );
+    } finally {
+      lowering?.close();
+    }
   }
 
   /// Invokes the adapter asynchronously with parameter/result values stored in
@@ -781,14 +884,20 @@ final class WASIComponentCanonicalAdapterOperation {
   }) async {
     _requireMayLeaveForLower();
     _checkMemoryInvokeSupported();
-    final args = _loadMemoryArgs(memory, paramPointers);
-    final result = await _callback(List<Object?>.unmodifiable(args));
-    return _storeMemoryResult(
-      memory,
-      result,
-      resultPointer: resultPointer,
-      realloc: _guardRealloc(realloc),
-    );
+    final loadedArgs = _loadMemoryArgs(memory, paramPointers);
+    final lowering = _openBorrowLowering();
+    try {
+      final args = _lowerBorrowArguments(loadedArgs, lowering);
+      final result = await _callback(List<Object?>.unmodifiable(args));
+      return _storeMemoryResult(
+        memory,
+        result,
+        resultPointer: resultPointer,
+        realloc: _guardRealloc(realloc),
+      );
+    } finally {
+      lowering?.close();
+    }
   }
 
   List<Object?> _loadFlatArgs(List<Object?> flatArgs, wasm.Memory? memory) {
@@ -819,9 +928,16 @@ final class WASIComponentCanonicalAdapterOperation {
     List<Object?> args,
     wasm.Memory? memory,
     WASIComponentCanonicalRealloc? realloc,
+    WASIComponentCanonicalBorrowLowering? lowering,
   ) {
-    final directArgs = _validateDirectArgs(args);
-    if (_flatParamCount() > _canonicalMaxFlatParams) {
+    final directArgs = _lowerBorrowArguments(
+      _validateDirectArgs(args),
+      lowering,
+    );
+    final maxFlatParams = plan.isAsync
+        ? _canonicalMaxFlatAsyncParams
+        : _canonicalMaxFlatParams;
+    if (_flatParamCount() > maxFlatParams) {
       final memoryRef = memory;
       final reallocRef = realloc;
       if (memoryRef == null || reallocRef == null) {
@@ -1253,6 +1369,46 @@ final class WASIComponentCanonicalAdapterOperation {
         _callState.withLeavingBlocked(
           () => realloc(oldPointer, oldSize, alignment, newSize),
         );
+  }
+
+  WASIComponentCanonicalBorrowLowering? _openBorrowLowering() {
+    if (kind != WasmComponentCanonicalKind.lift ||
+        !plan.resourceUses.any(
+          (use) => use.handleKind == WASIComponentResourceHandleKind.borrow,
+        )) {
+      return null;
+    }
+    return _borrowLowering?.call(plan.isAsync);
+  }
+
+  List<Object?> _lowerBorrowArguments(
+    List<Object?> args,
+    WASIComponentCanonicalBorrowLowering? lowering,
+  ) {
+    if (lowering == null) {
+      return args;
+    }
+    return List<Object?>.generate(plan.params.length, (index) {
+      final valuePlan = plan.params[index];
+      if (!valuePlan.resourceUses.any(
+        (use) => use.handleKind == WASIComponentResourceHandleKind.borrow,
+      )) {
+        return args[index];
+      }
+      final layout = valuePlan.flatLayout;
+      if (layout == null) {
+        throw UnsupportedError(
+          'WASI component canonical adapter value ${valuePlan.path} cannot '
+          'lower canonical borrows without a flat layout.',
+        );
+      }
+      return _lowerCanonicalBorrowHandles(
+        layout,
+        valuePlan.path,
+        args[index],
+        lowering.lower,
+      );
+    }, growable: false);
   }
 
   List<Object?> _storeFlatResult(
@@ -2229,6 +2385,142 @@ bool _flatLayoutContainsAsyncHandle(
     case WASIComponentCanonicalAdapterFlatValueKind.errorContext:
       return false;
   }
+}
+
+Object? _lowerCanonicalBorrowHandles(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  Object? value,
+  WASIComponentCanonicalBorrowHandleLowerer lowerBorrow,
+) {
+  switch (layout.kind) {
+    case WASIComponentCanonicalAdapterFlatValueKind.resource:
+      if (layout.handleKind != WASIComponentResourceHandleKind.borrow) {
+        return value;
+      }
+      final lowered = lowerBorrow(
+        _flatResourceHandleToInt(layout, path, value),
+      );
+      return value is WasmComponentValueData
+          ? _resourceHandleDataFromFlatValue(path, lowered)
+          : lowered;
+    case WASIComponentCanonicalAdapterFlatValueKind.record:
+    case WASIComponentCanonicalAdapterFlatValueKind.tuple:
+    case WASIComponentCanonicalAdapterFlatValueKind.fixedList:
+    case WASIComponentCanonicalAdapterFlatValueKind.list:
+      return _lowerCanonicalBorrowComposite(layout, path, value, lowerBorrow);
+    case WASIComponentCanonicalAdapterFlatValueKind.option:
+    case WASIComponentCanonicalAdapterFlatValueKind.result:
+    case WASIComponentCanonicalAdapterFlatValueKind.variant:
+      return _lowerCanonicalBorrowVariant(layout, path, value, lowerBorrow);
+    case WASIComponentCanonicalAdapterFlatValueKind.primitive:
+    case WASIComponentCanonicalAdapterFlatValueKind.flags:
+    case WASIComponentCanonicalAdapterFlatValueKind.enumeration:
+    case WASIComponentCanonicalAdapterFlatValueKind.errorContext:
+    case WASIComponentCanonicalAdapterFlatValueKind.stream:
+    case WASIComponentCanonicalAdapterFlatValueKind.future:
+      return value;
+  }
+}
+
+Object? _lowerCanonicalBorrowComposite(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  Object? value,
+  WASIComponentCanonicalBorrowHandleLowerer lowerBorrow,
+) {
+  final expectedKind = _flatValueDataKind(layout.kind);
+  final sourceItems = switch (value) {
+    WasmComponentValueData() when value.kind == expectedKind =>
+      value.itemValues,
+    List<Object?>()
+        when layout.kind == WASIComponentCanonicalAdapterFlatValueKind.tuple =>
+      value,
+    _ => null,
+  };
+  if (sourceItems == null) {
+    throw StateError(
+      'WASI component canonical adapter value $path expected '
+      '${layout.kind.name} data.',
+    );
+  }
+  final fieldLayouts =
+      layout.kind == WASIComponentCanonicalAdapterFlatValueKind.list
+      ? List<WASIComponentCanonicalAdapterFlatValuePlan>.filled(
+          sourceItems.length,
+          layout.element!,
+        )
+      : <WASIComponentCanonicalAdapterFlatValuePlan>[
+          for (final field in layout.fields) field.value,
+        ];
+  if (sourceItems.length != fieldLayouts.length) {
+    throw StateError(
+      'WASI component canonical adapter value $path has '
+      '${sourceItems.length} items; expected ${fieldLayouts.length}.',
+    );
+  }
+  final items = <Object?>[
+    for (var index = 0; index < sourceItems.length; index++)
+      _lowerCanonicalBorrowHandles(
+        fieldLayouts[index],
+        layout.kind == WASIComponentCanonicalAdapterFlatValueKind.list
+            ? '$path[$index]'
+            : '$path.${layout.fields[index].label}',
+        sourceItems[index],
+        lowerBorrow,
+      ),
+  ];
+  if (value is List<Object?>) {
+    return List<Object?>.unmodifiable(items);
+  }
+  if (items.every((item) => item is WasmComponentValueData)) {
+    return WasmComponentValueData(
+      kind: expectedKind,
+      rawBytes: (value as WasmComponentValueData).rawBytes,
+      items: List<WasmComponentValueData>.unmodifiable(
+        items.cast<WasmComponentValueData>(),
+      ),
+    );
+  }
+  return WasmComponentValueData(
+    kind: expectedKind,
+    rawBytes: (value as WasmComponentValueData).rawBytes,
+    runtimeItems: List<Object?>.unmodifiable(items),
+  );
+}
+
+WasmComponentValueData _lowerCanonicalBorrowVariant(
+  WASIComponentCanonicalAdapterFlatValuePlan layout,
+  String path,
+  Object? value,
+  WASIComponentCanonicalBorrowHandleLowerer lowerBorrow,
+) {
+  if (value is! WasmComponentValueData ||
+      value.kind != _flatValueDataKind(layout.kind)) {
+    throw StateError(
+      'WASI component canonical adapter value $path expected '
+      '${layout.kind.name} data.',
+    );
+  }
+  final payloadLayout = _selectedVariantPayloadLayout(layout, path, value);
+  final payload = value.payload;
+  if (payloadLayout == null) {
+    return value;
+  }
+  if (payload == null) {
+    throw StateError(
+      'WASI component canonical adapter value $path needs payload.',
+    );
+  }
+  return _copyVariantValue(
+    value,
+    _lowerCanonicalBorrowHandles(
+      payloadLayout,
+      '$path.${value.label ?? value.index}',
+      payload,
+      lowerBorrow,
+    ),
+  );
 }
 
 Object? _liftAsyncHandlesFromMemory(

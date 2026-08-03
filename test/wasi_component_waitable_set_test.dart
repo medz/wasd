@@ -134,6 +134,24 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('resource scopes force-detach leaked waitable set members', () async {
+      final host = WASIComponentWaitableHost();
+      late WASIComponentWaitable waitable;
+
+      await host.table.runScoped(() {
+        waitable = WASIComponentWaitable('scoped-waitable');
+        final waitableHandle = host.insertWaitable(waitable);
+        final set = host.waitableSetNew();
+        host.waitableJoin(waitableHandle, set);
+
+        expect(waitable.inWaitableSet, isTrue);
+        expect(() => host.waitableSetDrop(set), throwsStateError);
+      });
+
+      expect(waitable.inWaitableSet, isFalse);
+      expect(host.table.activeCount, 0);
+    });
+
     test('rejects joining a synchronously waited waitable', () async {
       final host = WASIComponentWaitableHost();
       final set = host.waitableSetNew();
