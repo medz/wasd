@@ -1970,14 +1970,11 @@ final class _NativeFileState {
   WASIPreview3FilesystemMutationResult setTimes(
     WASIPreview3FilesystemTimestampUpdate update,
   ) {
-    if (_linked) return _setNativePathTimes(_path, update);
     final fd = _handles.writer;
-    if (fd < 0) {
-      return const WASIPreview3FilesystemMutationResult.error(
-        WASIPreview3FilesystemMutationError.badDescriptor,
-      );
+    if (!io.Platform.isWindows && fd >= 0) {
+      return _posixSetNativeDescriptorTimes(fd, update);
     }
-    return _posixSetNativeDescriptorTimes(fd, update);
+    return _setNativePathTimes(_path, update);
   }
 
   void rename(String path) {

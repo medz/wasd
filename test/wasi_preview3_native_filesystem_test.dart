@@ -151,6 +151,71 @@ void main() {
   });
 
   test(
+    'sets timestamps on the opened inode after external path replacement',
+    () async {
+      if (Platform.isWindows) {
+        markTestSkipped(
+          'POSIX descriptor semantics are not available on Windows.',
+        );
+        return;
+      }
+      final directory = Directory.systemTemp.createTempSync(
+        'wasd-p3-replaced-time-',
+      );
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final source = File('${directory.path}/source.txt')
+        ..writeAsStringSync('source');
+      final alias = File('${directory.path}/alias.txt');
+      final replacement = File('${directory.path}/replacement.txt');
+      final host = WASIPreview3NativeFilesystemHost(
+        preopens: {'/': directory.path},
+        canMutate: true,
+      );
+      final root = await _preopen(host);
+      expect(
+        (await _invoke(host, 'descriptor.link-at', [
+                  root,
+                  _flags([]),
+                  'source.txt',
+                  root,
+                  'alias.txt',
+                ])
+                as WasmComponentValueData)
+            .isOk,
+        isTrue,
+      );
+      final handle = _okHandle(
+        await _open(host, root, 'source.txt', flags: _flags(['write'])),
+      );
+      addTearDown(
+        () => host.table.dropNamed(
+          'wasi:filesystem/types@0.3.0.descriptor',
+          handle,
+        ),
+      );
+      source.renameSync(replacement.path);
+      source.writeAsStringSync('replacement');
+      final replacementModified = source.statSync().modified;
+
+      final result =
+          await _invoke(host, 'descriptor.set-times', [
+                handle,
+                _variant('no-change'),
+                _timestamp(1234567892, 0),
+              ])
+              as WasmComponentValueData;
+
+      expect(result.isOk, isTrue);
+      expect(
+        alias.statSync().modified.toUtc().microsecondsSinceEpoch,
+        1234567892000000,
+      );
+      expect(replacement.statSync().modified, alias.statSync().modified);
+      expect(source.statSync().modified, replacementModified);
+    },
+  );
+
+  test(
     'Preview3 native filesystem streams chunks and performs durability',
     () async {
       final directory = Directory.systemTemp.createTempSync('wasd-p3-fs-');
