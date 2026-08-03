@@ -479,6 +479,55 @@ void main() {
     },
   );
 
+  test('unlink preserves a metadata-only descriptor identity', () async {
+    if (Platform.isWindows) {
+      markTestSkipped('POSIX unlink semantics are not available on Windows.');
+      return;
+    }
+    final directory = Directory.systemTemp.createTempSync(
+      'wasd-p3-unlink-metadata-',
+    );
+    addTearDown(() => directory.deleteSync(recursive: true));
+    File('${directory.path}/metadata.cleanup').writeAsStringSync('metadata');
+
+    final host = WASIPreview3NativeFilesystemHost(
+      preopens: {'/': directory.path},
+      canMutate: true,
+    );
+    final root = await _preopen(host);
+    final handle = _okHandle(
+      await _open(
+        host,
+        root,
+        'metadata.cleanup',
+        flags: _flags(['file-integrity-sync']),
+      ),
+    );
+    addTearDown(
+      () => host.table.dropNamed(
+        'wasi:filesystem/types@0.3.0.descriptor',
+        handle,
+      ),
+    );
+
+    expect(
+      (await _invoke(host, 'descriptor.unlink-file-at', [
+                root,
+                'metadata.cleanup',
+              ])
+              as WasmComponentValueData)
+          .isOk,
+      isTrue,
+    );
+    expect(
+      _stat(
+        await _invoke(host, 'descriptor.stat', [handle])
+            as WasmComponentValueData,
+      ).items[1].integer,
+      BigInt.zero,
+    );
+  });
+
   test('open descriptor survives an external path replacement', () async {
     if (Platform.isWindows) {
       markTestSkipped(
@@ -515,6 +564,49 @@ void main() {
 
     File(path).renameSync(detachedPath);
     File(path).writeAsStringSync('replacement');
+    expect(
+      _stat(
+        await _invoke(host, 'descriptor.stat', [opened])
+            as WasmComponentValueData,
+      ).items[2].integer,
+      BigInt.from('abcdef'.length),
+    );
+    final replacementHandle = _okHandle(
+      await _open(host, root, 'opened.cleanup', flags: _flags(['read'])),
+    );
+    addTearDown(
+      () => host.table.dropNamed(
+        'wasi:filesystem/types@0.3.0.descriptor',
+        replacementHandle,
+      ),
+    );
+    expect(
+      await _readDescriptor(host, replacementHandle),
+      'replacement'.codeUnits,
+    );
+    expect(
+      await _invoke(host, 'descriptor.is-same-object', [
+        opened,
+        replacementHandle,
+      ]),
+      isFalse,
+    );
+    final detachedHandle = _okHandle(
+      await _open(host, root, 'detached.cleanup', flags: _flags(['read'])),
+    );
+    addTearDown(
+      () => host.table.dropNamed(
+        'wasi:filesystem/types@0.3.0.descriptor',
+        detachedHandle,
+      ),
+    );
+    expect(
+      await _invoke(host, 'descriptor.is-same-object', [
+        opened,
+        detachedHandle,
+      ]),
+      isTrue,
+    );
     final read = await _readDescriptor(host, opened);
     final update = WASIComponentStream<int>('externally-replaced-write');
     update.writable
@@ -528,11 +620,34 @@ void main() {
             ])
             as WASIComponentFuture<WasmComponentValueData>;
     expect((await writeResult.readable.readWhenReady()).isOk, isTrue);
+    final append = WASIComponentStream<int>('externally-replaced-append');
+    append.writable
+      ..writeAll('!'.codeUnits)
+      ..close();
+    final appendResult =
+        await _invoke(host, 'descriptor.append-via-stream', [opened, append])
+            as WASIComponentFuture<WasmComponentValueData>;
+    expect((await appendResult.readable.readWhenReady()).isOk, isTrue);
+    expect(File(detachedPath).readAsStringSync(), 'aXYdef!');
     expect(
       (await _invoke(host, 'descriptor.set-size', [opened, BigInt.from(4)])
               as WasmComponentValueData)
           .isOk,
       isTrue,
+    );
+    expect(
+      _stat(
+        await _invoke(host, 'descriptor.stat', [opened])
+            as WasmComponentValueData,
+      ).items[2].integer,
+      BigInt.from(4),
+    );
+    expect(
+      _stat(
+        await _invoke(host, 'descriptor.stat', [replacementHandle])
+            as WasmComponentValueData,
+      ).items[2].integer,
+      BigInt.from('replacement'.length),
     );
     final detachedContents = File(detachedPath).readAsStringSync();
     final replacementContents = File(path).readAsStringSync();
@@ -588,6 +703,13 @@ void main() {
               as WasmComponentValueData)
           .isOk,
       isTrue,
+    );
+    expect(
+      _stat(
+        await _invoke(host, 'descriptor.stat', [original])
+            as WasmComponentValueData,
+      ).items[1].integer,
+      BigInt.zero,
     );
     final replacement = _okHandle(
       await _open(

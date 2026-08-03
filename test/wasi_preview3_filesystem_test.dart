@@ -125,6 +125,13 @@ void main() {
         await _open(host, root, 'renamed.txt', flags: _flags('read', 'write')),
       );
       expect(
+        await _invoke(host, 'descriptor.is-same-object', [
+          openedBeforeRename,
+          openedAfterRename,
+        ]),
+        isTrue,
+      );
+      expect(
         (await _invoke(host, 'descriptor.set-size', [
                   openedAfterRename,
                   BigInt.from(2),
@@ -162,6 +169,49 @@ void main() {
       expect(
         renamed.bytes,
         anyOf(equals(<int>[1, 8, 4, 5]), equals(<int>[1, 8, 5, 4])),
+      );
+    });
+
+    test('unlink and recreate gives the path a new object identity', () async {
+      final directory = WASIPreview3FilesystemDirectory(
+        canMutate: true,
+        entries: [
+          WASIPreview3FilesystemDirectoryEntry.regularFile(
+            'recreated.txt',
+            bytes: const <int>[1],
+            canMutate: true,
+          ),
+        ],
+      );
+      final host = WASIPreview3FilesystemHost(preopens: {'/': directory});
+      final root = await _preopen(host);
+      final original = _okHandle(
+        await _open(host, root, 'recreated.txt', flags: _flags('read')),
+      );
+
+      final unlink =
+          await _invoke(host, 'descriptor.unlink-file-at', [
+                root,
+                'recreated.txt',
+              ])
+              as WasmComponentValueData;
+      expect(unlink.isOk, isTrue);
+      final replacement = _okHandle(
+        await _open(
+          host,
+          root,
+          'recreated.txt',
+          openFlags: _flags('create', 'exclusive'),
+          flags: _flags('read', 'write'),
+        ),
+      );
+
+      expect(
+        await _invoke(host, 'descriptor.is-same-object', [
+          original,
+          replacement,
+        ]),
+        isFalse,
       );
     });
 

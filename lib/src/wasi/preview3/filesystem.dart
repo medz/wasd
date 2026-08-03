@@ -472,6 +472,9 @@ final class WASIPreview3FilesystemDirectory {
     return null;
   }
 
+  Object? _localObjectIdentityFor(WASIPreview3FilesystemDirectoryEntry entry) =>
+      _entriesProvider == null ? entry._byteBacking : null;
+
   WASIPreview3FilesystemMutationResult _createDirectoryAt(String name) {
     if (!canMutate) {
       return const WASIPreview3FilesystemMutationResult.error(
@@ -2198,6 +2201,7 @@ base class WASIPreview3FilesystemHost {
       objectId: _objectIdForPath(guestPath),
       guestPath: guestPath,
       entry: created.entry!,
+      localObjectIdentity: directory._localObjectIdentityFor(created.entry!),
     );
     return _openDescriptor(descriptor.withFlags(flags));
   }
@@ -2212,6 +2216,11 @@ base class WASIPreview3FilesystemHost {
     final rightIdentity = rightDescriptor.metadata.objectIdentity;
     if (leftIdentity != null || rightIdentity != null) {
       return leftIdentity == rightIdentity;
+    }
+    final leftLocalIdentity = leftDescriptor.localObjectIdentity;
+    final rightLocalIdentity = rightDescriptor.localObjectIdentity;
+    if (leftLocalIdentity != null || rightLocalIdentity != null) {
+      return identical(leftLocalIdentity, rightLocalIdentity);
     }
     return leftDescriptor.objectId == rightDescriptor.objectId;
   }
@@ -2308,6 +2317,7 @@ base class WASIPreview3FilesystemHost {
         objectId: _objectIdForPath(guestPath),
         guestPath: guestPath,
         entry: entry,
+        localObjectIdentity: directory._localObjectIdentityFor(entry),
       );
       final isFinal = index == pending.length;
       if (entry.kind == WASIPreview3FilesystemDescriptorKind.symbolicLink &&
@@ -2442,6 +2452,7 @@ final class _WASIPreview3FilesystemDescriptor {
     required this.bytes,
     required this.otherTypeName,
     required this.entry,
+    required this.localObjectIdentity,
   });
 
   factory _WASIPreview3FilesystemDescriptor.directory({
@@ -2463,6 +2474,9 @@ final class _WASIPreview3FilesystemDescriptor {
       bytes: Uint8List(0),
       otherTypeName: null,
       entry: null,
+      localObjectIdentity: directory._entriesProvider == null
+          ? directory
+          : null,
     );
   }
 
@@ -2470,6 +2484,7 @@ final class _WASIPreview3FilesystemDescriptor {
     required int objectId,
     required String guestPath,
     required WASIPreview3FilesystemDirectoryEntry entry,
+    Object? localObjectIdentity,
   }) {
     return _WASIPreview3FilesystemDescriptor._(
       objectId: objectId,
@@ -2490,6 +2505,7 @@ final class _WASIPreview3FilesystemDescriptor {
       bytes: Uint8List(0),
       otherTypeName: entry.otherTypeName,
       entry: entry,
+      localObjectIdentity: localObjectIdentity,
     );
   }
 
@@ -2503,6 +2519,7 @@ final class _WASIPreview3FilesystemDescriptor {
   final Uint8List bytes;
   final String? otherTypeName;
   final WASIPreview3FilesystemDirectoryEntry? entry;
+  final Object? localObjectIdentity;
 
   Object get appendSerializationKey =>
       metadata.objectIdentity ??
@@ -2534,6 +2551,7 @@ final class _WASIPreview3FilesystemDescriptor {
       bytes: bytes,
       otherTypeName: otherTypeName,
       entry: entry,
+      localObjectIdentity: localObjectIdentity,
     );
   }
 

@@ -289,6 +289,28 @@ WASIPreview3FilesystemMetadata? _hostLstatMetadata(String hostPath) {
   }
 }
 
+WASIPreview3FilesystemMetadata? _hostDescriptorMetadata(int descriptor) {
+  final abi = ffi.Abi.current();
+  final layout = WASIPreview3NativeStatLayout.forAbi(abi);
+  if (layout == null || descriptor < 0) {
+    return null;
+  }
+  final statBuffer = malloc<ffi.Uint8>(_hostStatBufferSize);
+  try {
+    final fstat = _posixFstatFunction(
+      WASIPreview3NativeStatLayout.fstatSymbolForAbi(abi),
+    );
+    if (fstat(descriptor, statBuffer.cast<ffi.Void>()) != 0) {
+      return null;
+    }
+    return layout.read(statBuffer.asTypedList(_hostStatBufferSize));
+  } catch (_) {
+    return null;
+  } finally {
+    malloc.free(statBuffer);
+  }
+}
+
 BigInt _dateTimeNanos(DateTime value) =>
     BigInt.from(value.toUtc().microsecondsSinceEpoch) * BigInt.from(1000);
 
@@ -305,6 +327,32 @@ Uint8List _readNativeFileChunk(String path, BigInt offset, int maxBytes) {
     return file.readSync(remaining < maxBytes ? remaining : maxBytes);
   } finally {
     file.closeSync();
+  }
+}
+
+Uint8List _readNativeFileDescriptorChunk(
+  int descriptor,
+  int offset,
+  int maxBytes,
+) {
+  final dataPointer = malloc<ffi.Uint8>(maxBytes);
+  try {
+    while (true) {
+      final bytesRead = _posixPreadFunction()(
+        descriptor,
+        dataPointer.cast<ffi.Void>(),
+        maxBytes,
+        offset,
+      );
+      if (bytesRead > 0) {
+        return Uint8List.fromList(dataPointer.asTypedList(bytesRead));
+      }
+      if (bytesRead == 0) return Uint8List(0);
+      if (_posixErrnoCode() == _posixInterruptedError) continue;
+      throw StateError('Unable to read native file descriptor.');
+    }
+  } finally {
+    malloc.free(dataPointer);
   }
 }
 
@@ -610,10 +658,10 @@ WASIPreview3FilesystemMutationResult _writeNativeFileAt(
   if (bytes.isEmpty) {
     return const WASIPreview3FilesystemMutationResult.ok();
   }
-  if (!io.Platform.isWindows) {
+  if (_supportsPosixDescriptorIo) {
     return _posixWriteNativeFileAt(path, offset.toInt(), bytes);
   }
-  return _rewriteNativeFileAt(path, offset.toInt(), bytes);
+  return _dartWriteNativeFileAt(path, offset.toInt(), bytes);
 }
 
 WASIPreview3FilesystemMutationResult _setNativeFileSize(
@@ -636,10 +684,10 @@ WASIPreview3FilesystemMutationResult _setNativeFileSize(
       WASIPreview3FilesystemMutationError.isDirectory,
     );
   }
-  if (!io.Platform.isWindows) {
+  if (_supportsPosixDescriptorIo) {
     return _posixSetNativeFileSize(path, size.toInt());
   }
-  return _rewriteNativeFileSize(path, size.toInt());
+  return _dartSetNativeFileSize(path, size.toInt());
 }
 
 WASIPreview3FilesystemMutationResult _syncNativeFile(String path) {
@@ -880,7 +928,11 @@ WASIPreview3FilesystemMutationResult _posixWriteNativeFileAt(
   final dataPointer = malloc<ffi.Uint8>(bytes.length);
   try {
     dataPointer.asTypedList(bytes.length).setAll(0, bytes);
-    final fd = _posixOpenFunction()(pathPointer, _posixOpenWriteOnly, 0);
+    final fd = _posixOpenFunction()(
+      pathPointer,
+      _posixOpenWriteOnly | _posixOpenCloseOnExec,
+      0,
+    );
     if (fd < 0) {
       return _nativeMutationFailure(path);
     }
@@ -893,6 +945,9 @@ WASIPreview3FilesystemMutationResult _posixWriteNativeFileAt(
           bytes.length - writtenTotal,
           offset + writtenTotal,
         );
+        if (written < 0 && _posixErrnoCode() == _posixInterruptedError) {
+          continue;
+        }
         if (written <= 0) {
           return const WASIPreview3FilesystemMutationResult.error(
             WASIPreview3FilesystemMutationError.io,
@@ -920,12 +975,16 @@ WASIPreview3FilesystemMutationResult _posixSetNativeFileSize(
 ) {
   final pathPointer = path.toNativeUtf8();
   try {
-    final fd = _posixOpenFunction()(pathPointer, _posixOpenWriteOnly, 0);
+    final fd = _posixOpenFunction()(
+      pathPointer,
+      _posixOpenWriteOnly | _posixOpenCloseOnExec,
+      0,
+    );
     if (fd < 0) {
       return _nativeMutationFailure(path);
     }
     try {
-      if (_posixFtruncateFunction()(fd, size) != 0) {
+      if (_posixFtruncateRetry(fd, size) != 0) {
         return const WASIPreview3FilesystemMutationResult.error(
           WASIPreview3FilesystemMutationError.io,
         );
@@ -943,41 +1002,49 @@ WASIPreview3FilesystemMutationResult _posixSetNativeFileSize(
   }
 }
 
-WASIPreview3FilesystemMutationResult _rewriteNativeFileAt(
+WASIPreview3FilesystemMutationResult _dartWriteNativeFileAt(
   String path,
   int offset,
   Uint8List bytes,
 ) {
+  io.RandomAccessFile? file;
   try {
-    final file = io.File(path);
-    final existing = file.existsSync() ? file.readAsBytesSync() : Uint8List(0);
-    final nextLength = offset + bytes.length > existing.length
-        ? offset + bytes.length
-        : existing.length;
-    final next = Uint8List(nextLength);
-    next.setAll(0, existing);
-    next.setRange(offset, offset + bytes.length, bytes);
-    file.writeAsBytesSync(next, flush: true);
+    file = io.File(path).openSync(mode: io.FileMode.writeOnlyAppend);
+    file.setPositionSync(offset);
+    file.writeFromSync(bytes);
+    file.closeSync();
+    file = null;
     return const WASIPreview3FilesystemMutationResult.ok();
   } on io.FileSystemException catch (error) {
     return _nativeMutationFailure(path, error);
+  } finally {
+    try {
+      file?.closeSync();
+    } on io.FileSystemException {
+      // Preserve the open, seek, or write result above.
+    }
   }
 }
 
-WASIPreview3FilesystemMutationResult _rewriteNativeFileSize(
+WASIPreview3FilesystemMutationResult _dartSetNativeFileSize(
   String path,
   int size,
 ) {
+  io.RandomAccessFile? file;
   try {
-    final file = io.File(path);
-    final existing = file.existsSync() ? file.readAsBytesSync() : Uint8List(0);
-    final next = Uint8List(size);
-    final preserved = size < existing.length ? size : existing.length;
-    next.setRange(0, preserved, existing);
-    file.writeAsBytesSync(next, flush: true);
+    file = io.File(path).openSync(mode: io.FileMode.writeOnlyAppend);
+    file.truncateSync(size);
+    file.closeSync();
+    file = null;
     return const WASIPreview3FilesystemMutationResult.ok();
   } on io.FileSystemException catch (error) {
     return _nativeMutationFailure(path, error);
+  } finally {
+    try {
+      file?.closeSync();
+    } on io.FileSystemException {
+      // Preserve the open or truncate result above.
+    }
   }
 }
 
@@ -1176,6 +1243,7 @@ ffi.DynamicLibrary _openPosixCLibrary() {
 }
 
 _PosixOpenDart? _cachedPosixOpen;
+_PosixPreadDart? _cachedPosixPread;
 _PosixPwriteDart? _cachedPosixPwrite;
 _PosixFtruncateDart? _cachedPosixFtruncate;
 _PosixFsyncDart? _cachedPosixFsync;
@@ -1185,10 +1253,15 @@ _PosixLinkDart? _cachedPosixLink;
 _PosixUtimesDart? _cachedPosixUtimes;
 _PosixFutimensDart? _cachedPosixFutimens;
 _PosixLstatDart? _cachedPosixLstat;
+_PosixFstatDart? _cachedPosixFstat;
 _WindowsCreateHardLinkDart? _cachedWindowsCreateHardLink;
 
 _PosixOpenDart _posixOpenFunction() => _cachedPosixOpen ??= _openPosixCLibrary()
     .lookupFunction<_PosixOpenNative, _PosixOpenDart>('open');
+
+_PosixPreadDart _posixPreadFunction() =>
+    _cachedPosixPread ??= _openPosixCLibrary()
+        .lookupFunction<_PosixPreadNative, _PosixPreadDart>('pread');
 
 _PosixPwriteDart _posixPwriteFunction() =>
     _cachedPosixPwrite ??= _openPosixCLibrary()
@@ -1233,6 +1306,10 @@ _PosixLstatDart _posixLstatFunction(String symbol) =>
     _cachedPosixLstat ??= _openPosixCLibrary()
         .lookupFunction<_PosixLstatNative, _PosixLstatDart>(symbol);
 
+_PosixFstatDart _posixFstatFunction(String symbol) =>
+    _cachedPosixFstat ??= _openPosixCLibrary()
+        .lookupFunction<_PosixFstatNative, _PosixFstatDart>(symbol);
+
 _WindowsCreateHardLinkDart _windowsCreateHardLinkFunction() =>
     _cachedWindowsCreateHardLink ??= ffi.DynamicLibrary.open('kernel32.dll')
         .lookupFunction<
@@ -1243,6 +1320,15 @@ _WindowsCreateHardLinkDart _windowsCreateHardLinkFunction() =>
 typedef _PosixOpenNative =
     ffi.Int32 Function(ffi.Pointer<Utf8>, ffi.Int32, ffi.Uint32);
 typedef _PosixOpenDart = int Function(ffi.Pointer<Utf8>, int, int);
+
+typedef _PosixPreadNative =
+    ffi.IntPtr Function(
+      ffi.Int32,
+      ffi.Pointer<ffi.Void>,
+      ffi.Uint64,
+      ffi.Int64,
+    );
+typedef _PosixPreadDart = int Function(int, ffi.Pointer<ffi.Void>, int, int);
 
 typedef _PosixPwriteNative =
     ffi.IntPtr Function(
@@ -1283,6 +1369,10 @@ typedef _PosixLstatNative =
 typedef _PosixLstatDart =
     int Function(ffi.Pointer<Utf8>, ffi.Pointer<ffi.Void>);
 
+typedef _PosixFstatNative =
+    ffi.Int32 Function(ffi.Int32, ffi.Pointer<ffi.Void>);
+typedef _PosixFstatDart = int Function(int, ffi.Pointer<ffi.Void>);
+
 typedef _WindowsCreateHardLinkNative =
     ffi.Int32 Function(
       ffi.Pointer<Utf16>,
@@ -1292,12 +1382,44 @@ typedef _WindowsCreateHardLinkNative =
 typedef _WindowsCreateHardLinkDart =
     int Function(ffi.Pointer<Utf16>, ffi.Pointer<Utf16>, ffi.Pointer<ffi.Void>);
 
+const int _posixOpenReadOnly = 0;
 const int _posixOpenWriteOnly = 1;
+const int _posixInterruptedError = 4;
+final bool _supportsPosixDescriptorIo =
+    !io.Platform.isWindows &&
+    WASIPreview3NativeStatLayout.forAbi(ffi.Abi.current()) != null;
+final int _posixOpenCloseOnExec = io.Platform.isLinux || io.Platform.isAndroid
+    ? 0x00080000
+    : io.Platform.isMacOS || io.Platform.isIOS
+    ? 0x01000000
+    : 0;
+final int _posixOpenMetadata = io.Platform.isLinux || io.Platform.isAndroid
+    ? 0x00200000
+    : io.Platform.isMacOS || io.Platform.isIOS
+    ? 0x00008000
+    : _posixOpenReadOnly;
 final int _posixUtimeOmit = io.Platform.isLinux || io.Platform.isAndroid
     ? (1 << 30) - 2
     : -2;
 final BigInt _maxI64 = (BigInt.one << 63) - BigInt.one;
 const int _hostStatBufferSize = 256;
+
+int? _posixErrnoCode() {
+  try {
+    return _posixErrnoLocationFunction()().value;
+  } catch (_) {
+    return null;
+  }
+}
+
+int _posixFtruncateRetry(int descriptor, int size) {
+  while (true) {
+    final result = _posixFtruncateFunction()(descriptor, size);
+    if (result == 0 || _posixErrnoCode() != _posixInterruptedError) {
+      return result;
+    }
+  }
+}
 
 final Finalizer<_NativeFileRegistration> _nativeFileStateFinalizer =
     Finalizer<_NativeFileRegistration>((registration) {
@@ -1374,8 +1496,13 @@ final class _NativeFilesystemState {
   _NativeFileState file(String path) {
     final key = _key(path);
     final existing = _files[key]?.file.target;
-    if (existing != null) return existing;
-    _files.remove(key);
+    if (existing != null) {
+      if (existing.matchesPath(path)) return existing;
+      _remove(path);
+      existing.unlink();
+    } else {
+      _files.remove(key);
+    }
     final file = _NativeFileState(path);
     _track(path, file);
     return file;
@@ -1701,15 +1828,27 @@ final class _NativeFileRegistration {
 }
 
 final class _NativeFileHandles {
-  io.RandomAccessFile? reader;
+  int metadata = -1;
+  int reader = -1;
   int writer = -1;
 
-  void closeReader() {
-    final file = reader;
-    reader = null;
-    if (file == null) return;
+  void closeMetadata() {
+    final fd = metadata;
+    metadata = -1;
+    if (fd < 0) return;
     try {
-      file.closeSync();
+      _posixCloseFunction()(fd);
+    } catch (_) {
+      // The descriptor was already closed by the host platform.
+    }
+  }
+
+  void closeReader() {
+    final fd = reader;
+    reader = -1;
+    if (fd < 0) return;
+    try {
+      _posixCloseFunction()(fd);
     } catch (_) {
       // The descriptor was already closed by the host platform.
     }
@@ -1727,13 +1866,17 @@ final class _NativeFileHandles {
   }
 
   void close() {
+    closeMetadata();
     closeReader();
     closeWriter();
   }
 }
 
 final class _NativeFileState {
-  _NativeFileState(this._path) : _knownSize = _nativeFileSize(_path) {
+  _NativeFileState(this._path)
+    : _knownMetadata = _nativeMetadata(_path),
+      _knownSize = _nativeFileSize(_path) {
+    _knownSize = _knownMetadata.size ?? _knownSize;
     _nativeFileHandleFinalizer.attach(
       this,
       _handles,
@@ -1745,57 +1888,127 @@ final class _NativeFileState {
   final Object _handleDetachToken = Object();
   final _NativeFileHandles _handles = _NativeFileHandles();
   String _path;
+  WASIPreview3FilesystemMetadata _knownMetadata;
   BigInt _knownSize;
   bool _linked = true;
   int _liveDescriptors = 0;
+  int _metadataDescriptors = 0;
   int _readers = 0;
   int _writers = 0;
 
+  bool matchesPath(String path) {
+    if (!_supportsPosixDescriptorIo) return true;
+    final knownIdentity = _knownMetadata.objectIdentity;
+    final currentIdentity = _hostLstatMetadata(path)?.objectIdentity;
+    return knownIdentity == null || knownIdentity == currentIdentity;
+  }
+
   WASIPreview3FilesystemMutationResult openDescriptor(Set<String> flags) {
-    if (io.Platform.isWindows) {
+    if (!_supportsPosixDescriptorIo) {
       _liveDescriptors++;
       return const WASIPreview3FilesystemMutationResult.ok();
     }
-    io.RandomAccessFile? openedReader;
+    final metadataOnly = !flags.contains('read') && !flags.contains('write');
+    var openedMetadata = -1;
+    var openedReader = -1;
     var openedWriter = -1;
+    WASIPreview3FilesystemMetadata? openedMetadataSnapshot;
+    WASIPreview3FilesystemMetadata? openedReaderMetadata;
+    WASIPreview3FilesystemMetadata? openedWriterMetadata;
     try {
-      if (flags.contains('read') && _readers == 0) {
-        openedReader = io.File(_path).openSync(mode: io.FileMode.read);
-      }
-      if (flags.contains('write') && _writers == 0) {
-        final opened = _openNativeFileForWriting(_path);
-        openedWriter = opened.descriptor;
-        if (openedWriter < 0) {
-          openedReader?.closeSync();
+      if (metadataOnly && _metadataDescriptors == 0) {
+        final opened = _openNativeFileForMetadata(_path);
+        openedMetadata = opened.descriptor;
+        if (openedMetadata < 0) {
           return WASIPreview3FilesystemMutationResult.error(
             _nativeMutationError(opened.errorCode) ??
                 WASIPreview3FilesystemMutationError.io,
           );
         }
+        openedMetadataSnapshot = _hostDescriptorMetadata(openedMetadata);
+        if (!_matchesKnownObject(openedMetadataSnapshot)) {
+          _posixCloseFunction()(openedMetadata);
+          return const WASIPreview3FilesystemMutationResult.error(
+            WASIPreview3FilesystemMutationError.io,
+          );
+        }
       }
-      if (openedReader != null) {
+      if (flags.contains('read') && _readers == 0) {
+        final opened = _openNativeFileForReading(_path);
+        openedReader = opened.descriptor;
+        if (openedReader < 0) {
+          if (openedMetadata >= 0) _posixCloseFunction()(openedMetadata);
+          return WASIPreview3FilesystemMutationResult.error(
+            _nativeMutationError(opened.errorCode) ??
+                WASIPreview3FilesystemMutationError.io,
+          );
+        }
+        openedReaderMetadata = _hostDescriptorMetadata(openedReader);
+        if (!_matchesKnownObject(openedReaderMetadata)) {
+          if (openedMetadata >= 0) _posixCloseFunction()(openedMetadata);
+          _posixCloseFunction()(openedReader);
+          return const WASIPreview3FilesystemMutationResult.error(
+            WASIPreview3FilesystemMutationError.io,
+          );
+        }
+      }
+      if (flags.contains('write') && _writers == 0) {
+        final opened = _openNativeFileForWriting(_path);
+        openedWriter = opened.descriptor;
+        if (openedWriter < 0) {
+          if (openedMetadata >= 0) _posixCloseFunction()(openedMetadata);
+          if (openedReader >= 0) _posixCloseFunction()(openedReader);
+          return WASIPreview3FilesystemMutationResult.error(
+            _nativeMutationError(opened.errorCode) ??
+                WASIPreview3FilesystemMutationError.io,
+          );
+        }
+        openedWriterMetadata = _hostDescriptorMetadata(openedWriter);
+        if (!_matchesKnownObject(openedWriterMetadata) ||
+            (openedReader >= 0 &&
+                !_metadataIdentitiesMatch(
+                  openedReaderMetadata,
+                  openedWriterMetadata,
+                ))) {
+          if (openedMetadata >= 0) _posixCloseFunction()(openedMetadata);
+          if (openedReader >= 0) _posixCloseFunction()(openedReader);
+          _posixCloseFunction()(openedWriter);
+          return const WASIPreview3FilesystemMutationResult.error(
+            WASIPreview3FilesystemMutationError.io,
+          );
+        }
+      }
+      if (openedMetadata >= 0) {
+        _handles.metadata = openedMetadata;
+        if (openedMetadataSnapshot != null) {
+          _refreshKnownMetadata(openedMetadataSnapshot);
+        }
+      }
+      if (openedReader >= 0) {
         _handles.reader = openedReader;
-        _knownSize = BigInt.from(openedReader.lengthSync());
+        if (openedReaderMetadata != null) {
+          _refreshKnownMetadata(openedReaderMetadata);
+        }
       }
-      if (openedWriter >= 0) _handles.writer = openedWriter;
+      if (openedWriter >= 0) {
+        _handles.writer = openedWriter;
+        if (openedWriterMetadata != null) {
+          _refreshKnownMetadata(openedWriterMetadata);
+        }
+      }
       if (flags.contains('read')) _readers++;
       if (flags.contains('write')) _writers++;
+      if (metadataOnly) _metadataDescriptors++;
       _liveDescriptors++;
       return const WASIPreview3FilesystemMutationResult.ok();
     } on io.FileSystemException catch (error) {
-      try {
-        openedReader?.closeSync();
-      } on io.FileSystemException {
-        // Preserve the original open failure.
-      }
+      if (openedMetadata >= 0) _posixCloseFunction()(openedMetadata);
+      if (openedReader >= 0) _posixCloseFunction()(openedReader);
       if (openedWriter >= 0) _posixCloseFunction()(openedWriter);
       return _nativeMutationFailure(_path, error);
     } catch (_) {
-      try {
-        openedReader?.closeSync();
-      } on io.FileSystemException {
-        // Preserve the original host failure.
-      }
+      if (openedMetadata >= 0) _posixCloseFunction()(openedMetadata);
+      if (openedReader >= 0) _posixCloseFunction()(openedReader);
       if (openedWriter >= 0) _posixCloseFunction()(openedWriter);
       return const WASIPreview3FilesystemMutationResult.error(
         WASIPreview3FilesystemMutationError.io,
@@ -1806,7 +2019,13 @@ final class _NativeFileState {
   void closeDescriptor(Set<String> flags) {
     if (_liveDescriptors == 0) return;
     _liveDescriptors--;
-    if (io.Platform.isWindows) return;
+    if (!_supportsPosixDescriptorIo) return;
+    if (!flags.contains('read') &&
+        !flags.contains('write') &&
+        _metadataDescriptors > 0 &&
+        --_metadataDescriptors == 0) {
+      _handles.closeMetadata();
+    }
     if (flags.contains('read') && _readers > 0 && --_readers == 0) {
       _handles.closeReader();
     }
@@ -1816,14 +2035,15 @@ final class _NativeFileState {
   }
 
   WASIPreview3FilesystemMutationResult prepareUnlink() {
-    if (io.Platform.isWindows && _liveDescriptors != 0) {
+    if (!_supportsPosixDescriptorIo && _liveDescriptors != 0) {
       return const WASIPreview3FilesystemMutationResult.error(
         WASIPreview3FilesystemMutationError.unsupported,
       );
     }
-    final missingReader = _readers != 0 && _handles.reader == null;
+    final missingMetadata = _metadataDescriptors != 0 && _handles.metadata < 0;
+    final missingReader = _readers != 0 && _handles.reader < 0;
     final missingWriter = _writers != 0 && _handles.writer < 0;
-    if (missingReader || missingWriter) {
+    if (missingMetadata || missingReader || missingWriter) {
       return const WASIPreview3FilesystemMutationResult.error(
         WASIPreview3FilesystemMutationError.io,
       );
@@ -1832,52 +2052,112 @@ final class _NativeFileState {
   }
 
   BigInt currentSize() {
-    if (_linked) {
-      _knownSize = _nativeFileSize(_path, fallback: _knownSize);
-    } else {
-      try {
-        final handle = _handles.reader;
-        if (handle != null) _knownSize = BigInt.from(handle.lengthSync());
-      } on io.FileSystemException {
-        // Preserve the last size observed through this descriptor.
+    if (_supportsPosixDescriptorIo) {
+      final metadata = _openDescriptorMetadata();
+      if (metadata != null) {
+        _refreshKnownMetadata(metadata);
+        return _knownSize;
       }
+    }
+    if (_linked) {
+      final metadata = _matchingPathMetadata();
+      if (metadata != null) _refreshKnownMetadata(metadata);
     }
     return _knownSize;
   }
 
   WASIPreview3FilesystemMetadata metadata() {
-    if (!_linked) {
-      return WASIPreview3FilesystemMetadata(size: _knownSize);
+    if (_supportsPosixDescriptorIo) {
+      final metadata = _openDescriptorMetadata();
+      if (metadata != null) {
+        _refreshKnownMetadata(metadata);
+        return metadata;
+      }
     }
+    if (_linked) {
+      final metadata = _matchingPathMetadata();
+      if (metadata != null) {
+        _refreshKnownMetadata(metadata);
+        return metadata;
+      }
+    }
+    return _knownMetadataWithCurrentSize();
+  }
+
+  Uint8List readChunk(BigInt offset, int maxBytes) {
+    final fd = _handles.reader;
+    if (_linked && fd < 0) {
+      return _readNativeFileChunk(_path, offset, maxBytes);
+    }
+    if (fd < 0 || offset < BigInt.zero || offset > _maxI64 || maxBytes <= 0) {
+      return Uint8List(0);
+    }
+    return _readNativeFileDescriptorChunk(fd, offset.toInt(), maxBytes);
+  }
+
+  WASIPreview3FilesystemMetadata? _openDescriptorMetadata() {
+    final descriptor = _handles.reader >= 0
+        ? _handles.reader
+        : _handles.writer >= 0
+        ? _handles.writer
+        : _handles.metadata;
+    return _hostDescriptorMetadata(descriptor);
+  }
+
+  bool _matchesKnownObject(WASIPreview3FilesystemMetadata? metadata) {
+    final knownIdentity = _knownMetadata.objectIdentity;
+    final currentIdentity = metadata?.objectIdentity;
+    return currentIdentity != null &&
+        (knownIdentity == null || knownIdentity == currentIdentity);
+  }
+
+  bool _metadataIdentitiesMatch(
+    WASIPreview3FilesystemMetadata? left,
+    WASIPreview3FilesystemMetadata? right,
+  ) {
+    final leftIdentity = left?.objectIdentity;
+    final rightIdentity = right?.objectIdentity;
+    return leftIdentity != null && leftIdentity == rightIdentity;
+  }
+
+  WASIPreview3FilesystemMetadata? _matchingPathMetadata() {
     final metadata = _nativeMetadata(_path);
-    final size = metadata.size;
-    if (size != null) {
-      _knownSize = size;
+    final knownIdentity = _knownMetadata.objectIdentity;
+    final currentIdentity = metadata.objectIdentity;
+    if (knownIdentity != null && currentIdentity != knownIdentity) {
+      _linked = false;
+      return null;
     }
     return metadata;
   }
 
-  Uint8List readChunk(BigInt offset, int maxBytes) {
-    final handle = _handles.reader;
-    if (_linked && handle == null) {
-      return _readNativeFileChunk(_path, offset, maxBytes);
-    }
-    if (handle == null ||
-        offset < BigInt.zero ||
-        offset > _maxI64 ||
-        maxBytes <= 0) {
-      return Uint8List(0);
-    }
-    try {
-      final length = handle.lengthSync();
-      final start = offset > BigInt.from(length) ? length : offset.toInt();
-      handle.setPositionSync(start);
-      final remaining = length - start;
-      return handle.readSync(remaining < maxBytes ? remaining : maxBytes);
-    } on io.FileSystemException {
-      return Uint8List(0);
-    }
+  void _refreshKnownMetadata(WASIPreview3FilesystemMetadata metadata) {
+    final size = metadata.size;
+    if (size != null) _knownSize = size;
+    _knownMetadata = WASIPreview3FilesystemMetadata(
+      linkCount: metadata.linkCount ?? _knownMetadata.linkCount,
+      size: size ?? _knownSize,
+      objectIdentity: metadata.objectIdentity ?? _knownMetadata.objectIdentity,
+      accessTimeNanos:
+          metadata.accessTimeNanos ?? _knownMetadata.accessTimeNanos,
+      modificationTimeNanos:
+          metadata.modificationTimeNanos ??
+          _knownMetadata.modificationTimeNanos,
+      statusChangeTimeNanos:
+          metadata.statusChangeTimeNanos ??
+          _knownMetadata.statusChangeTimeNanos,
+    );
   }
+
+  WASIPreview3FilesystemMetadata _knownMetadataWithCurrentSize() =>
+      WASIPreview3FilesystemMetadata(
+        linkCount: _knownMetadata.linkCount,
+        size: _knownSize,
+        objectIdentity: _knownMetadata.objectIdentity,
+        accessTimeNanos: _knownMetadata.accessTimeNanos,
+        modificationTimeNanos: _knownMetadata.modificationTimeNanos,
+        statusChangeTimeNanos: _knownMetadata.statusChangeTimeNanos,
+      );
 
   WASIPreview3FilesystemMutationResult writeAt(BigInt offset, Uint8List bytes) {
     final fd = _handles.writer;
@@ -1925,7 +2205,7 @@ final class _NativeFileState {
         );
       }
       try {
-        if (_posixFtruncateFunction()(fd, size.toInt()) != 0) {
+        if (_posixFtruncateRetry(fd, size.toInt()) != 0) {
           return const WASIPreview3FilesystemMutationResult.error(
             WASIPreview3FilesystemMutationError.io,
           );
@@ -1948,10 +2228,10 @@ final class _NativeFileState {
   WASIPreview3FilesystemMutationResult sync() {
     final fd = _handles.writer;
     if (fd < 0) {
-      if (_linked) return _syncNativeFile(_path);
-      if (_handles.reader != null) {
+      if (_handles.reader >= 0) {
         return const WASIPreview3FilesystemMutationResult.ok();
       }
+      if (_linked) return _syncNativeFile(_path);
       return const WASIPreview3FilesystemMutationResult.error(
         WASIPreview3FilesystemMutationError.noEntry,
       );
@@ -1989,12 +2269,21 @@ final class _NativeFileState {
   }
 }
 
-({int descriptor, int? errorCode}) _openNativeFileForWriting(String path) {
+({int descriptor, int? errorCode}) _openNativeFileForReading(String path) =>
+    _openNativeFile(path, _posixOpenReadOnly);
+
+({int descriptor, int? errorCode}) _openNativeFileForWriting(String path) =>
+    _openNativeFile(path, _posixOpenWriteOnly);
+
+({int descriptor, int? errorCode}) _openNativeFileForMetadata(String path) =>
+    _openNativeFile(path, _posixOpenMetadata);
+
+({int descriptor, int? errorCode}) _openNativeFile(String path, int flags) {
   final pathPointer = path.toNativeUtf8();
   try {
     final descriptor = _posixOpenFunction()(
       pathPointer,
-      _posixOpenWriteOnly,
+      flags | _posixOpenCloseOnExec,
       0,
     );
     int? errorCode;
@@ -2030,6 +2319,9 @@ WASIPreview3FilesystemMutationResult _writeNativeFileDescriptorAt(
         bytes.length - writtenTotal,
         offset + writtenTotal,
       );
+      if (written < 0 && _posixErrnoCode() == _posixInterruptedError) {
+        continue;
+      }
       if (written <= 0) {
         return const WASIPreview3FilesystemMutationResult.error(
           WASIPreview3FilesystemMutationError.io,

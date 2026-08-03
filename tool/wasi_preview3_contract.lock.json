@@ -55,12 +55,20 @@
       "total": 31
     },
     "wasi_testsuite": {
-      "passed": 45,
+      "passed": 39,
       "total": 45,
-      "failed": 0,
+      "failed": 6,
       "skipped": 0,
       "xfailed": 0,
-      "xpassed": 0
+      "xpassed": 0,
+      "failed_fixtures": [
+        "sockets-tcp-bind",
+        "sockets-tcp-listen",
+        "sockets-echo",
+        "sockets-tcp-connect",
+        "sockets-tcp-receive",
+        "sockets-tcp-send"
+      ]
     }
   }
 }

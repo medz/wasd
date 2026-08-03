@@ -197,13 +197,21 @@ final class WASIPreview3HttpRequest {
     WASIComponentReadableFuture<Object?> handlingResult,
   ) {
     unawaited(() async {
+      var failed = false;
       try {
         final result = await handlingResult.readWhenReady();
-        if (!_resultIsOk(_resultData(result))) {
-          _drop();
-        }
+        failed = !_resultIsOk(_resultData(result));
       } on Object {
-        _drop();
+        failed = true;
+      } finally {
+        _releaseHttpHandlingResult(handlingResult);
+      }
+      if (failed) {
+        try {
+          _drop();
+        } on Object {
+          // Background cleanup must not surface host callback failures.
+        }
       }
     }());
   }
@@ -211,7 +219,7 @@ final class WASIPreview3HttpRequest {
   void _drop() {
     final onDrop = _onDrop;
     _onDrop = null;
-    onDrop?.call();
+    _invokeHttpDropCallback(onDrop);
     if (!_bodyConsumed) {
       final body = contents;
       if (body != null &&
@@ -395,18 +403,22 @@ final class WASIPreview3HttpResponse {
   void _watchHandlingResult(
     WASIComponentReadableFuture<Object?> handlingResult,
   ) {
-    final onDrop = _onDrop;
-    if (onDrop == null) {
-      return;
-    }
     unawaited(() async {
+      var failed = false;
       try {
         final result = await handlingResult.readWhenReady();
-        if (!_resultIsOk(_resultData(result))) {
-          await _drop();
-        }
+        failed = !_resultIsOk(_resultData(result));
       } on Object {
-        await _drop();
+        failed = true;
+      } finally {
+        _releaseHttpHandlingResult(handlingResult);
+      }
+      if (failed) {
+        try {
+          await _drop();
+        } on Object {
+          // Background cleanup must not surface host callback failures.
+        }
       }
     }());
   }
@@ -414,7 +426,7 @@ final class WASIPreview3HttpResponse {
   Future<void> _drop() async {
     final onDrop = _onDrop;
     _onDrop = null;
-    onDrop?.call();
+    _invokeHttpDropCallback(onDrop);
     if (!_bodyConsumed) {
       final body = contents;
       if (body != null &&
@@ -1466,6 +1478,29 @@ bool _optionIsSome(WasmComponentValueData value) {
 
 bool _resultIsOk(WasmComponentValueData value) {
   return value.isOk ?? value.label == 'ok' || value.index == 0;
+}
+
+void _releaseHttpHandlingResult(
+  WASIComponentReadableFuture<Object?> handlingResult,
+) {
+  try {
+    handlingResult.drop();
+  } on Object {
+    if (handlingResult.isDropped) return;
+    try {
+      handlingResult.dispose();
+    } on Object {
+      // Host callback failures cannot prevent transferred endpoint cleanup.
+    }
+  }
+}
+
+void _invokeHttpDropCallback(void Function()? onDrop) {
+  try {
+    onDrop?.call();
+  } on Object {
+    // Resource and transmission cleanup must continue after host callbacks.
+  }
 }
 
 String _caseLabel(List<String> cases, int? index) {

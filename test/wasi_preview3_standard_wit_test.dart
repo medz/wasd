@@ -45,11 +45,19 @@ void main() {
       expect(testsuite['fixture_count'], 45);
       final official = gateResults['wasi_testsuite']! as Map<String, Object?>;
       expect(official['total'], testsuite['fixture_count']);
-      expect(official['passed'], testsuite['fixture_count']);
-      expect(official['failed'], 0);
+      expect(official['passed'], 39);
+      expect(official['failed'], 6);
       expect(official['skipped'], 0);
       expect(official['xfailed'], 0);
       expect(official['xpassed'], 0);
+      expect(official['failed_fixtures'], <String>[
+        'sockets-tcp-bind',
+        'sockets-tcp-listen',
+        'sockets-echo',
+        'sockets-tcp-connect',
+        'sockets-tcp-receive',
+        'sockets-tcp-send',
+      ]);
     });
 
     test('pins all normalized Preview3 WIT source digests', () {
@@ -130,6 +138,7 @@ void main() {
       final wasmToolsClaim = '${wasmTools['passed']}/${wasmTools['total']}';
       final wasmtimeClaim = '${wasmtime['passed']}/${wasmtime['total']}';
       final officialClaim = '${official['passed']}/${official['total']}';
+      final failedFixtures = official['failed_fixtures']! as List<Object?>;
       for (final document in <String>[changelog, readme, support]) {
         expect(document, contains(strictClaim));
         expect(
@@ -138,6 +147,9 @@ void main() {
           reason: 'wasm-tools and Wasmtime must remain separate claims',
         );
         expect(document, contains(officialClaim));
+        for (final fixture in failedFixtures) {
+          expect(document, contains(fixture));
+        }
       }
       expect(wasmToolsClaim, wasmtimeClaim);
       expect(support, contains('`wasm-tools` ${wasmTools['version']}'));

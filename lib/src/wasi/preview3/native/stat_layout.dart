@@ -62,6 +62,10 @@ final class WASIPreview3NativeStatLayout {
   static String lstatSymbolForAbi(ffi.Abi abi) =>
       abi == ffi.Abi.macosX64 ? r'lstat$INODE64' : 'lstat';
 
+  /// Returns the `fstat` symbol whose output matches [forAbi].
+  static String fstatSymbolForAbi(ffi.Abi abi) =>
+      abi == ffi.Abi.macosX64 ? r'fstat$INODE64' : 'fstat';
+
   /// Decodes one native stat snapshot, or null when [bytes] is truncated.
   WASIPreview3FilesystemMetadata? read(Uint8List bytes) {
     if (bytes.lengthInBytes < _minimumByteLength) {
@@ -73,7 +77,7 @@ final class WASIPreview3NativeStatLayout {
     final linkCount = _readUnsigned(data, _linkCountOffset, _linkCountWidth);
     final size = data.getInt64(_sizeOffset, Endian.little);
     return WASIPreview3FilesystemMetadata(
-      linkCount: linkCount == BigInt.zero ? null : linkCount,
+      linkCount: linkCount,
       size: size < 0 ? null : BigInt.from(size),
       objectIdentity: '$device:$inode',
       accessTimeNanos: _readTimespecNanos(data, _accessTimeOffset),

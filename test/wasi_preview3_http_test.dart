@@ -467,15 +467,16 @@ void main() {
       expect(host.table.contains(request), isFalse);
     });
 
-    test(
-      'observes a request handling result without a drop callback',
-      () async {
+    for (final outcome in <String>['success', 'error', 'cancelled']) {
+      test('observes and drops a $outcome request handling result', () async {
         final host = WASIPreview3HttpHost();
         final request = host.insertRequest(
           WASIPreview3HttpRequest.noTrailers(headers: WASIPreview3HttpFields()),
         );
+        var drops = 0;
         final handled = WASIComponentFuture<WasmComponentValueData>(
-          'handled-without-drop-callback',
+          'request-handled-$outcome',
+          onDrop: () => drops++,
         );
 
         host.imports['wasi:http/types@0.3.0.request.consume-body']!(<Object?>[
@@ -483,13 +484,136 @@ void main() {
           handled.readable,
         ]);
 
-        await handled.writable
-            .completeWhenRead(_unitOk())
-            .timeout(const Duration(milliseconds: 100));
+        await _finishHandlingResult(handled, outcome);
+        await Future<void>.delayed(Duration.zero);
+
+        expect(handled.readable.isDropped, isTrue);
+        expect(handled.writable.isDropped, isTrue);
+        expect(drops, 1);
         handled.readable.drop();
+        handled.writable.dispose();
+        expect(drops, 1);
         expect(host.table.contains(request), isFalse);
-      },
-    );
+      });
+
+      test('observes and drops a $outcome response handling result', () async {
+        final host = WASIPreview3HttpHost();
+        final response = host.insertResponse(
+          WASIPreview3HttpResponse.noTrailers(
+            headers: WASIPreview3HttpFields(),
+          ),
+        );
+        var drops = 0;
+        final handled = WASIComponentFuture<WasmComponentValueData>(
+          'response-handled-$outcome',
+          onDrop: () => drops++,
+        );
+
+        host.imports['wasi:http/types@0.3.0.response.consume-body']!(<Object?>[
+          response,
+          handled.readable,
+        ]);
+
+        await _finishHandlingResult(handled, outcome);
+        await Future<void>.delayed(Duration.zero);
+
+        expect(handled.readable.isDropped, isTrue);
+        expect(handled.writable.isDropped, isTrue);
+        expect(drops, 1);
+        handled.readable.drop();
+        handled.writable.dispose();
+        expect(drops, 1);
+        expect(host.table.contains(response), isFalse);
+      });
+    }
+
+    for (final outcome in <String>['error', 'cancelled']) {
+      test(
+        'drops a $outcome response handling result before transmission read',
+        () async {
+          final host = WASIPreview3HttpHost();
+          final transmission = WASIComponentFuture<WasmComponentValueData>(
+            'response-transmission-$outcome',
+          );
+          final response = host.insertResponse(
+            WASIPreview3HttpResponse(
+              headers: WASIPreview3HttpFields(),
+              trailers: _trailersFuture(),
+              transmissionResult: transmission,
+              onDrop: () => throw StateError('response drop callback failed'),
+            ),
+          );
+          var handlingDrops = 0;
+          final handled = WASIComponentFuture<WasmComponentValueData>(
+            'response-handled-before-transmission-$outcome',
+            onDrop: () => handlingDrops++,
+          );
+
+          final moved =
+              host.imports['wasi:http/types@0.3.0.response.consume-body']!(
+                    <Object?>[response, handled.readable],
+                  )!
+                  as List<Object?>;
+          await _finishHandlingResult(handled, outcome);
+          await Future<void>.delayed(Duration.zero);
+
+          expect(handled.readable.isDropped, isTrue);
+          expect(handled.writable.isDropped, isTrue);
+          expect(handlingDrops, 1);
+          expect(transmission.writable.hasPendingWriteDelivery, isTrue);
+
+          await transmission.readable.readWhenReady();
+          transmission.readable.drop();
+          (moved[0]! as WASIComponentStream<int>).readable.drop();
+          (moved[1]! as WASIComponentFuture<WasmComponentValueData>).readable
+              .drop();
+          await Future<void>.delayed(Duration.zero);
+          expect(transmission.writable.isDropped, isTrue);
+        },
+      );
+    }
+
+    test('contains handling-result drop callback failures', () async {
+      final uncaught = <Object>[];
+
+      await runZonedGuarded<Future<void>>(() async {
+        final host = WASIPreview3HttpHost();
+        final request = host.insertRequest(
+          WASIPreview3HttpRequest.noTrailers(headers: WASIPreview3HttpFields()),
+        );
+        final requestHandled = WASIComponentFuture<WasmComponentValueData>(
+          'throwing-request-handling-result',
+          onDrop: () => throw StateError('request handling drop failed'),
+        );
+        host.imports['wasi:http/types@0.3.0.request.consume-body']!(<Object?>[
+          request,
+          requestHandled.readable,
+        ]);
+        await requestHandled.writable.completeWhenRead(_unitOk());
+
+        final response = host.insertResponse(
+          WASIPreview3HttpResponse.noTrailers(
+            headers: WASIPreview3HttpFields(),
+          ),
+        );
+        final responseHandled = WASIComponentFuture<WasmComponentValueData>(
+          'throwing-response-handling-result',
+          onDrop: () => throw StateError('response handling drop failed'),
+        );
+        host.imports['wasi:http/types@0.3.0.response.consume-body']!(<Object?>[
+          response,
+          responseHandled.readable,
+        ]);
+        await responseHandled.writable.completeWhenRead(_unitOk());
+        await Future<void>.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
+
+        expect(requestHandled.readable.isDropped, isTrue);
+        expect(responseHandled.readable.isDropped, isTrue);
+      }, (error, _) => uncaught.add(error));
+
+      expect(uncaught, isEmpty);
+    });
 
     test('moving a request detaches live header and options children', () {
       final host = WASIPreview3HttpHost();
@@ -833,6 +957,37 @@ WasmComponentValueData _fieldList(List<(String, List<int>)> entries) {
 }
 
 WasmComponentValueData _unitOk() => _ok(null);
+
+Future<void> _finishHandlingResult(
+  WASIComponentFuture<WasmComponentValueData> future,
+  String outcome,
+) async {
+  switch (outcome) {
+    case 'success':
+      await future.writable
+          .completeWhenRead(_unitOk())
+          .timeout(const Duration(milliseconds: 100));
+      return;
+    case 'error':
+      await future.writable
+          .completeWhenRead(_unitError())
+          .timeout(const Duration(milliseconds: 100));
+      return;
+    case 'cancelled':
+      future.writable.cancel();
+      return;
+  }
+}
+
+WasmComponentValueData _unitError() {
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.result,
+    rawBytes: Uint8List(0),
+    index: 1,
+    label: 'error',
+    isOk: false,
+  );
+}
 
 WasmComponentValueData _ok(WasmComponentValueData? payload) {
   return WasmComponentValueData(

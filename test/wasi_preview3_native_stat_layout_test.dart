@@ -32,7 +32,7 @@ void main() {
       }
     });
 
-    test('selects Darwin x64 64-bit-inode lstat', () {
+    test('selects Darwin x64 64-bit-inode stat symbols', () {
       expect(
         WASIPreview3NativeStatLayout.lstatSymbolForAbi(Abi.macosX64),
         r'lstat$INODE64',
@@ -40,6 +40,14 @@ void main() {
       expect(
         WASIPreview3NativeStatLayout.lstatSymbolForAbi(Abi.linuxX64),
         'lstat',
+      );
+      expect(
+        WASIPreview3NativeStatLayout.fstatSymbolForAbi(Abi.macosX64),
+        r'fstat$INODE64',
+      );
+      expect(
+        WASIPreview3NativeStatLayout.fstatSymbolForAbi(Abi.linuxX64),
+        'fstat',
       );
     });
 
@@ -110,6 +118,14 @@ void main() {
         )!.read(Uint8List(119)),
         isNull,
       );
+    });
+
+    test('preserves an unlinked descriptor link count of zero', () {
+      final metadata = WASIPreview3NativeStatLayout.forAbi(
+        Abi.linuxArm64,
+      )!.read(Uint8List(120))!;
+
+      expect(metadata.linkCount, BigInt.zero);
     });
   });
 }
