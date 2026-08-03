@@ -51,6 +51,9 @@ void main() {
       final host = WASI.preview3(
         args: const <String>['command.wasm', 'arg'],
         env: const <String, String>{'mode': 'test'},
+        terminalStdin: true,
+        terminalStdout: true,
+        terminalStderr: true,
       );
 
       expect(host.profile, same(WASIComponentVersionProfile.preview3));
@@ -88,6 +91,22 @@ void main() {
         host.standardImports,
         contains('wasi:io/streams@0.2.0.input-stream.read'),
       );
+      for (final importName in const <String>[
+        'wasi:cli/terminal-stdin@0.3.0.get-terminal-stdin',
+        'wasi:cli/terminal-stdout@0.3.0.get-terminal-stdout',
+        'wasi:cli/terminal-stderr@0.3.0.get-terminal-stderr',
+      ]) {
+        final terminal =
+            host.standardImports[importName]!(const <Object?>[])
+                as WasmComponentValueData;
+        final handle = _optionHandle(terminal);
+        expect(handle, isNotNull, reason: importName);
+        expect(
+          host.componentHost.table.contains(handle!),
+          isTrue,
+          reason: importName,
+        );
+      }
     });
 
     test('closes only resources owned by a Preview3 component host', () {
@@ -137,6 +156,13 @@ void main() {
     test('rejects Preview3 hosts backed by different resource tables', () {
       final componentHost = WASIComponentHost();
 
+      expect(
+        () => WASIPreview3ComponentHost(
+          componentHost: componentHost,
+          cliHost: WASIPreview3CliHost(),
+        ),
+        throwsArgumentError,
+      );
       expect(
         () => WASIPreview3ComponentHost(
           componentHost: componentHost,

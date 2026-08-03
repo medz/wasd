@@ -4565,6 +4565,9 @@ world cli-test {
         env: const <String, String>{'foo': 'bar', 'baz': '42'},
         initialCwd: '/workspace',
         stdinData: const <int>[120, 121],
+        terminalStdin: true,
+        terminalStdout: true,
+        terminalStderr: true,
       );
       final preview3 = WASIPreview3ComponentHost(cliHost: cli);
       final preview3Plan = preview3.prepareWitWorld(
@@ -4615,19 +4618,23 @@ world cli-test {
                 const [],
               )
               as WasmComponentValueData;
-      final terminal =
-          program.invokeImport(
-                'wasi:cli/terminal-stdout@0.3.0.get-terminal-stdout',
-                const [],
-              )
-              as WasmComponentValueData;
 
       expect(_stringPairs(environment), contains(('foo', 'bar')));
       expect(_stringPairs(environment), contains(('baz', '42')));
       expect(_stringList(arguments), ['cli-env.wasm', 'a', 'b', '42']);
       expect(_optionString(cwd), '/workspace');
-      expect(terminal.kind, WasmComponentValueDataKind.option);
-      expect(terminal.isSome, isFalse);
+      for (final importName in const <String>[
+        'wasi:cli/terminal-stdin@0.3.0.get-terminal-stdin',
+        'wasi:cli/terminal-stdout@0.3.0.get-terminal-stdout',
+        'wasi:cli/terminal-stderr@0.3.0.get-terminal-stderr',
+      ]) {
+        final terminal =
+            program.invokeImport(importName, const [])
+                as WasmComponentValueData;
+        final handle = _optionHandle(terminal);
+        expect(handle, isNotNull, reason: importName);
+        expect(cli.table.contains(handle!), isTrue, reason: importName);
+      }
 
       final stdinTuple =
           program.invokeImport('wasi:cli/stdin@0.3.0.read-via-stream', const [])

@@ -329,6 +329,7 @@ WASIPreview3ComponentHost _createPreview3ComponentHost({
   final host = _resolvePreview3ComponentHost(
     componentHost: componentHost,
     preview2CompatibilityHost: preview2CompatibilityHost,
+    cliHost: cliHost,
     filesystemHost: filesystemHost,
     httpHost: httpHost,
     socketsHost: socketsHost,
@@ -413,6 +414,7 @@ WASIPreview3ComponentHost _createPreview3ComponentHost({
     cliHost:
         cliHost ??
         WASIPreview3CliHost(
+          table: host.table,
           args: args,
           env: env,
           initialCwd: initialCwd,
@@ -420,6 +422,12 @@ WASIPreview3ComponentHost _createPreview3ComponentHost({
           stdin: stdin,
           stdout: stdout,
           stderr: stderr,
+          terminalStdin:
+              terminalStdin ?? compatibilityHost.cliHost.isStdinTerminal,
+          terminalStdout:
+              terminalStdout ?? compatibilityHost.cliHost.isStdoutTerminal,
+          terminalStderr:
+              terminalStderr ?? compatibilityHost.cliHost.isStderrTerminal,
         ),
     filesystemHost: resolvedFilesystemHost,
     socketsHost: resolvedSocketsHost,
@@ -445,6 +453,7 @@ WASIPreview2OutputStream? _preview2OutputStream(
 WASIComponentHost _resolvePreview3ComponentHost({
   required WASIComponentHost? componentHost,
   required WASIPreview2ComponentHost? preview2CompatibilityHost,
+  required WASIPreview3CliHost? cliHost,
   required WASIPreview3FilesystemHost? filesystemHost,
   required WASIPreview3HttpHost? httpHost,
   required WASIPreview3SocketsHost? socketsHost,
@@ -463,6 +472,7 @@ WASIComponentHost _resolvePreview3ComponentHost({
   final tables = <({String name, WASIComponentResourceTable table})>[
     if (resolvedComponentHost != null)
       (name: 'componentHost', table: resolvedComponentHost.table),
+    if (cliHost != null) (name: 'cliHost', table: cliHost.table),
     if (filesystemHost != null)
       (name: 'filesystemHost', table: filesystemHost.table),
     if (socketsHost != null) (name: 'socketsHost', table: socketsHost.table),

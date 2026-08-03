@@ -4,10 +4,23 @@ import 'dart:typed_data';
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/host_control_flow.dart';
 import '../component/async_values.dart';
+import '../component/resource_table.dart';
 import '../component/wit_adapter.dart';
 
 /// Receives bytes written by WASI 0.3 CLI stdout or stderr streams.
 typedef WASIPreview3CliOutputHandler = void Function(Uint8List bytes);
+
+/// Host-owned WASI 0.3 terminal input marker.
+final class WASIPreview3TerminalInput {
+  /// Creates a terminal input marker.
+  const WASIPreview3TerminalInput();
+}
+
+/// Host-owned WASI 0.3 terminal output marker.
+final class WASIPreview3TerminalOutput {
+  /// Creates a terminal output marker.
+  const WASIPreview3TerminalOutput();
+}
 
 /// Exception used to terminate a WASI 0.3 command instance.
 final class WASIPreview3Exit implements WasmHostControlFlowException {
@@ -28,6 +41,7 @@ final class WASIPreview3Exit implements WasmHostControlFlowException {
 final class WASIPreview3CliHost {
   /// Creates a CLI host import provider.
   WASIPreview3CliHost({
+    WASIComponentResourceTable? table,
     List<String> args = const <String>[],
     Map<String, String> env = const <String, String>{},
     this.initialCwd,
@@ -35,12 +49,22 @@ final class WASIPreview3CliHost {
     WASIComponentReadableStream<int>? stdin,
     WASIPreview3CliOutputHandler? stdout,
     WASIPreview3CliOutputHandler? stderr,
-  }) : args = List<String>.unmodifiable(args),
+    bool terminalStdin = false,
+    bool terminalStdout = false,
+    bool terminalStderr = false,
+  }) : table = table ?? WASIComponentResourceTable(),
+       args = List<String>.unmodifiable(args),
        env = Map<String, String>.unmodifiable(env),
        stdinData = Uint8List.fromList(stdinData),
        _stdin = stdin,
        _stdoutHandler = stdout,
-       _stderrHandler = stderr;
+       _stderrHandler = stderr,
+       _terminalStdin = terminalStdin,
+       _terminalStdout = terminalStdout,
+       _terminalStderr = terminalStderr;
+
+  /// Shared component resource table backing terminal handles.
+  final WASIComponentResourceTable table;
 
   /// Program arguments returned by `get-arguments`.
   final List<String> args;
@@ -57,9 +81,19 @@ final class WASIPreview3CliHost {
   final WASIComponentReadableStream<int>? _stdin;
   final WASIPreview3CliOutputHandler? _stdoutHandler;
   final WASIPreview3CliOutputHandler? _stderrHandler;
+  final bool _terminalStdin;
+  final bool _terminalStdout;
+  final bool _terminalStderr;
   var _stdinTaken = false;
   final BytesBuilder _stdoutBytes = BytesBuilder(copy: false);
   final BytesBuilder _stderrBytes = BytesBuilder(copy: false);
+
+  late final _terminalInputType = table.defineType<WASIPreview3TerminalInput>(
+    'wasi:cli/terminal-input@0.3.0.terminal-input',
+  );
+  late final _terminalOutputType = table.defineType<WASIPreview3TerminalOutput>(
+    'wasi:cli/terminal-output@0.3.0.terminal-output',
+  );
 
   /// Bytes written to stdout when no custom sink consumes them first.
   Uint8List get stdoutBytes => _stdoutBytes.toBytes();
@@ -89,10 +123,31 @@ final class WASIPreview3CliHost {
           output: _stderrBytes,
           handler: _stderrHandler,
         ),
-        'wasi:cli/terminal-stdin@0.3.0.get-terminal-stdin': (_) => _none(),
-        'wasi:cli/terminal-stdout@0.3.0.get-terminal-stdout': (_) => _none(),
-        'wasi:cli/terminal-stderr@0.3.0.get-terminal-stderr': (_) => _none(),
+        'wasi:cli/terminal-stdin@0.3.0.get-terminal-stdin': (_) =>
+            _optionalHandle(_newTerminalInputHandle()),
+        'wasi:cli/terminal-stdout@0.3.0.get-terminal-stdout': (_) =>
+            _optionalHandle(_newTerminalOutputHandle(_terminalStdout)),
+        'wasi:cli/terminal-stderr@0.3.0.get-terminal-stderr': (_) =>
+            _optionalHandle(_newTerminalOutputHandle(_terminalStderr)),
       });
+
+  int? _newTerminalInputHandle() {
+    return !_terminalStdin
+        ? null
+        : table.insert<WASIPreview3TerminalInput>(
+            _terminalInputType,
+            const WASIPreview3TerminalInput(),
+          );
+  }
+
+  int? _newTerminalOutputHandle(bool enabled) {
+    return !enabled
+        ? null
+        : table.insert<WASIPreview3TerminalOutput>(
+            _terminalOutputType,
+            const WASIPreview3TerminalOutput(),
+          );
+  }
 
   WasmComponentValueData _environmentData() {
     return WasmComponentValueData(
@@ -271,6 +326,24 @@ WasmComponentValueData _none() {
     index: 0,
     label: 'none',
     isSome: false,
+  );
+}
+
+WasmComponentValueData _optionalHandle(int? handle) {
+  if (handle == null) {
+    return _none();
+  }
+  return WasmComponentValueData(
+    kind: WasmComponentValueDataKind.option,
+    rawBytes: Uint8List(0),
+    index: 1,
+    label: 'some',
+    isSome: true,
+    associatedValue: WasmComponentValueData(
+      kind: WasmComponentValueDataKind.integer,
+      rawBytes: Uint8List(0),
+      integer: handle,
+    ),
   );
 }
 
