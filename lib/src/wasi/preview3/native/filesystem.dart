@@ -1858,8 +1858,10 @@ final class _NativeFileState {
   }
 
   Uint8List readChunk(BigInt offset, int maxBytes) {
-    if (_linked) return _readNativeFileChunk(_path, offset, maxBytes);
     final handle = _handles.reader;
+    if (_linked && handle == null) {
+      return _readNativeFileChunk(_path, offset, maxBytes);
+    }
     if (handle == null ||
         offset < BigInt.zero ||
         offset > _maxI64 ||
@@ -1878,7 +1880,8 @@ final class _NativeFileState {
   }
 
   WASIPreview3FilesystemMutationResult writeAt(BigInt offset, Uint8List bytes) {
-    if (!_linked) {
+    final fd = _handles.writer;
+    if (!_linked || fd >= 0) {
       if (offset < BigInt.zero || offset > _maxI64) {
         return const WASIPreview3FilesystemMutationResult.error(
           WASIPreview3FilesystemMutationError.invalid,
@@ -1890,7 +1893,6 @@ final class _NativeFileState {
           WASIPreview3FilesystemMutationError.fileTooLarge,
         );
       }
-      final fd = _handles.writer;
       if (fd < 0) {
         return const WASIPreview3FilesystemMutationResult.error(
           WASIPreview3FilesystemMutationError.noEntry,
@@ -1910,13 +1912,13 @@ final class _NativeFileState {
   }
 
   WASIPreview3FilesystemMutationResult setSize(BigInt size) {
-    if (!_linked) {
+    final fd = _handles.writer;
+    if (!_linked || fd >= 0) {
       if (size < BigInt.zero || size > _maxI64) {
         return const WASIPreview3FilesystemMutationResult.error(
           WASIPreview3FilesystemMutationError.invalid,
         );
       }
-      final fd = _handles.writer;
       if (fd < 0) {
         return const WASIPreview3FilesystemMutationResult.error(
           WASIPreview3FilesystemMutationError.noEntry,
@@ -1944,9 +1946,9 @@ final class _NativeFileState {
   }
 
   WASIPreview3FilesystemMutationResult sync() {
-    if (_linked) return _syncNativeFile(_path);
     final fd = _handles.writer;
     if (fd < 0) {
+      if (_linked) return _syncNativeFile(_path);
       if (_handles.reader != null) {
         return const WASIPreview3FilesystemMutationResult.ok();
       }

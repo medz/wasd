@@ -479,6 +479,140 @@ void main() {
     },
   );
 
+  test('open descriptor survives an external path replacement', () async {
+    if (Platform.isWindows) {
+      markTestSkipped(
+        'POSIX open-file semantics are not available on Windows.',
+      );
+      return;
+    }
+    final directory = Directory.systemTemp.createTempSync(
+      'wasd-p3-external-replace-',
+    );
+    addTearDown(() => directory.deleteSync(recursive: true));
+    final path = '${directory.path}/opened.cleanup';
+    final detachedPath = '${directory.path}/detached.cleanup';
+    File(path).writeAsStringSync('abcdef');
+    final host = WASIPreview3NativeFilesystemHost(
+      preopens: {'/': directory.path},
+      canMutate: true,
+    );
+    final root = await _preopen(host);
+    final opened = _okHandle(
+      await _open(
+        host,
+        root,
+        'opened.cleanup',
+        flags: _flags(['read', 'write']),
+      ),
+    );
+    addTearDown(
+      () => host.table.dropNamed(
+        'wasi:filesystem/types@0.3.0.descriptor',
+        opened,
+      ),
+    );
+
+    File(path).renameSync(detachedPath);
+    File(path).writeAsStringSync('replacement');
+    final read = await _readDescriptor(host, opened);
+    final update = WASIComponentStream<int>('externally-replaced-write');
+    update.writable
+      ..writeAll('XY'.codeUnits)
+      ..close();
+    final writeResult =
+        await _invoke(host, 'descriptor.write-via-stream', [
+              opened,
+              update,
+              BigInt.one,
+            ])
+            as WASIComponentFuture<WasmComponentValueData>;
+    expect((await writeResult.readable.readWhenReady()).isOk, isTrue);
+    expect(
+      (await _invoke(host, 'descriptor.set-size', [opened, BigInt.from(4)])
+              as WasmComponentValueData)
+          .isOk,
+      isTrue,
+    );
+    final detachedContents = File(detachedPath).readAsStringSync();
+    final replacementContents = File(path).readAsStringSync();
+    File(path).deleteSync();
+    expect(
+      (await _invoke(host, 'descriptor.sync', [opened])
+              as WasmComponentValueData)
+          .isOk,
+      isTrue,
+    );
+    expect(
+      (await _invoke(host, 'descriptor.sync-data', [opened])
+              as WasmComponentValueData)
+          .isOk,
+      isTrue,
+    );
+
+    expect(detachedContents, 'aXYd');
+    expect(replacementContents, 'replacement');
+    expect(read, 'abcdef'.codeUnits);
+  });
+
+  test('unlink and recreate does not reuse descriptor identity', () async {
+    if (Platform.isWindows) {
+      markTestSkipped('POSIX unlink semantics are not available on Windows.');
+      return;
+    }
+    final directory = Directory.systemTemp.createTempSync(
+      'wasd-p3-recreated-identity-',
+    );
+    addTearDown(() => directory.deleteSync(recursive: true));
+    File('${directory.path}/reused.cleanup').writeAsStringSync('original');
+    final host = WASIPreview3NativeFilesystemHost(
+      preopens: {'/': directory.path},
+      canMutate: true,
+    );
+    final root = await _preopen(host);
+    final original = _okHandle(
+      await _open(host, root, 'reused.cleanup', flags: _flags(['read'])),
+    );
+    addTearDown(
+      () => host.table.dropNamed(
+        'wasi:filesystem/types@0.3.0.descriptor',
+        original,
+      ),
+    );
+
+    expect(
+      (await _invoke(host, 'descriptor.unlink-file-at', [
+                root,
+                'reused.cleanup',
+              ])
+              as WasmComponentValueData)
+          .isOk,
+      isTrue,
+    );
+    final replacement = _okHandle(
+      await _open(
+        host,
+        root,
+        'reused.cleanup',
+        openFlags: _flags(['create', 'exclusive']),
+        flags: _flags(['read']),
+      ),
+    );
+    addTearDown(
+      () => host.table.dropNamed(
+        'wasi:filesystem/types@0.3.0.descriptor',
+        replacement,
+      ),
+    );
+
+    expect(
+      await _invoke(host, 'descriptor.is-same-object', [original, replacement]),
+      isFalse,
+    );
+    expect(await _readDescriptor(host, original), 'original'.codeUnits);
+    expect(await _readDescriptor(host, replacement), isEmpty);
+  });
+
   test('rename preserves overwritten and descendant descriptors', () async {
     final directory = Directory.systemTemp.createTempSync('wasd-p3-rename-');
     addTearDown(() => directory.deleteSync(recursive: true));

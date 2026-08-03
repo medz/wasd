@@ -303,8 +303,14 @@ final class WASIComponentFuture<T> {
   WASIComponentFuture(
     String name, {
     void Function()? onDrop,
+    void Function()? onReadableDrop,
     void Function(T value)? onDiscard,
-  }) : _state = _WASIComponentFutureState<T>(name, onDrop, onDiscard) {
+  }) : _state = _WASIComponentFutureState<T>(
+         name,
+         onDrop,
+         onReadableDrop,
+         onDiscard,
+       ) {
     readable = WASIComponentReadableFuture<T>._(_state);
     writable = WASIComponentWritableFuture<T>._(_state);
   }
@@ -1661,10 +1667,16 @@ enum _WASIComponentFutureStatus { pending, ready, cancelled }
 enum _WASIComponentAsyncCopyStatus { idle, copying, cancellingCopy, done }
 
 final class _WASIComponentFutureState<T> {
-  _WASIComponentFutureState(this.name, this.onDrop, this.onDiscard);
+  _WASIComponentFutureState(
+    this.name,
+    this.onDrop,
+    this.onReadableDrop,
+    this.onDiscard,
+  );
 
   final String name;
   final void Function()? onDrop;
+  final void Function()? onReadableDrop;
   final void Function(T value)? onDiscard;
 
   _WASIComponentFutureStatus status = _WASIComponentFutureStatus.pending;
@@ -2056,6 +2068,7 @@ final class _WASIComponentFutureState<T> {
         );
       }
     });
+    cleanUp(() => onReadableDrop?.call());
     cleanUp(_maybeDrop);
     if (firstError != null) {
       Error.throwWithStackTrace(firstError!, firstStackTrace!);

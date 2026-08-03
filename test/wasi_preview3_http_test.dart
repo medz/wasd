@@ -467,6 +467,30 @@ void main() {
       expect(host.table.contains(request), isFalse);
     });
 
+    test(
+      'observes a request handling result without a drop callback',
+      () async {
+        final host = WASIPreview3HttpHost();
+        final request = host.insertRequest(
+          WASIPreview3HttpRequest.noTrailers(headers: WASIPreview3HttpFields()),
+        );
+        final handled = WASIComponentFuture<WasmComponentValueData>(
+          'handled-without-drop-callback',
+        );
+
+        host.imports['wasi:http/types@0.3.0.request.consume-body']!(<Object?>[
+          request,
+          handled.readable,
+        ]);
+
+        await handled.writable
+            .completeWhenRead(_unitOk())
+            .timeout(const Duration(milliseconds: 100));
+        handled.readable.drop();
+        expect(host.table.contains(request), isFalse);
+      },
+    );
+
     test('moving a request detaches live header and options children', () {
       final host = WASIPreview3HttpHost();
       final options =

@@ -196,9 +196,6 @@ final class WASIPreview3HttpRequest {
   void _watchHandlingResult(
     WASIComponentReadableFuture<Object?> handlingResult,
   ) {
-    if (_onDrop == null) {
-      return;
-    }
     unawaited(() async {
       try {
         final result = await handlingResult.readWhenReady();

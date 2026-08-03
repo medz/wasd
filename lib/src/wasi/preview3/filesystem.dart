@@ -802,6 +802,13 @@ final class WASIPreview3FilesystemDirectory {
   }
 }
 
+final class _WASIPreview3FilesystemByteBacking {
+  _WASIPreview3FilesystemByteBacking(List<int> bytes)
+    : bytes = Uint8List.fromList(bytes);
+
+  Uint8List bytes;
+}
+
 /// One directory entry exposed by [WASIPreview3FilesystemDirectory].
 final class WASIPreview3FilesystemDirectoryEntry {
   /// Creates a non-file, non-directory filesystem entry.
@@ -819,7 +826,7 @@ final class WASIPreview3FilesystemDirectoryEntry {
        size = size ?? BigInt.zero,
        directory = null,
        canMutate = false,
-       _bytes = Uint8List(0),
+       _byteBacking = _WASIPreview3FilesystemByteBacking(const <int>[]),
        _readBytes = null,
        _readChunk = null,
        _currentSize = null,
@@ -845,7 +852,7 @@ final class WASIPreview3FilesystemDirectoryEntry {
        size = BigInt.zero,
        directory = directory ?? WASIPreview3FilesystemDirectory(),
        canMutate = directory?.canMutate ?? false,
-       _bytes = Uint8List(0),
+       _byteBacking = _WASIPreview3FilesystemByteBacking(const <int>[]),
        _readBytes = null,
        _readChunk = null,
        _currentSize = null,
@@ -870,7 +877,7 @@ final class WASIPreview3FilesystemDirectoryEntry {
        size = BigInt.from(utf8.encode(target).length),
        directory = null,
        canMutate = false,
-       _bytes = Uint8List(0),
+       _byteBacking = _WASIPreview3FilesystemByteBacking(const <int>[]),
        _readBytes = null,
        _readChunk = null,
        _currentSize = null,
@@ -904,7 +911,7 @@ final class WASIPreview3FilesystemDirectoryEntry {
     WASIPreview3FilesystemSetTimesCallback? setTimes,
     WASIPreview3FilesystemFileOpenCallback? openDescriptor,
     WASIPreview3FilesystemFileCloseCallback? closeDescriptor,
-  }) : _bytes = Uint8List.fromList(bytes),
+  }) : _byteBacking = _WASIPreview3FilesystemByteBacking(bytes),
        _readBytes = readBytes,
        _readChunk = readChunk,
        _currentSize = currentSize,
@@ -922,6 +929,29 @@ final class WASIPreview3FilesystemDirectoryEntry {
        kind = WASIPreview3FilesystemDescriptorKind.regularFile,
        size = size ?? currentSize?.call() ?? BigInt.from(bytes.length),
        directory = null;
+
+  WASIPreview3FilesystemDirectoryEntry._withName(
+    this.name,
+    WASIPreview3FilesystemDirectoryEntry source,
+  ) : kind = source.kind,
+      size = source.size,
+      directory = source.directory,
+      canMutate = source.canMutate,
+      otherTypeName = source.otherTypeName,
+      _byteBacking = source._byteBacking,
+      _readBytes = source._readBytes,
+      _readChunk = source._readChunk,
+      _currentSize = source._currentSize,
+      _metadata = source._metadata,
+      _writeBytes = source._writeBytes,
+      _setSize = source._setSize,
+      _advise = source._advise,
+      _syncData = source._syncData,
+      _sync = source._sync,
+      _setTimes = source._setTimes,
+      _openDescriptor = source._openDescriptor,
+      _closeDescriptor = source._closeDescriptor,
+      _linkTarget = source._linkTarget;
 
   /// Entry name relative to the containing directory.
   final String name;
@@ -944,7 +974,9 @@ final class WASIPreview3FilesystemDirectoryEntry {
   /// Immutable file contents for regular-file entries.
   Uint8List get bytes => Uint8List.fromList(_bytes);
 
-  Uint8List _bytes;
+  final _WASIPreview3FilesystemByteBacking _byteBacking;
+  Uint8List get _bytes => _byteBacking.bytes;
+  set _bytes(Uint8List value) => _byteBacking.bytes = value;
   final WASIPreview3FilesystemFileBytesProvider? _readBytes;
   final WASIPreview3FilesystemFileChunkProvider? _readChunk;
   final WASIPreview3FilesystemFileSizeProvider? _currentSize;
@@ -1181,48 +1213,7 @@ final class WASIPreview3FilesystemDirectoryEntry {
   void _closeWithFlags(Set<String> flags) => _closeDescriptor?.call(flags);
 
   WASIPreview3FilesystemDirectoryEntry _renamed(String name) {
-    return switch (kind) {
-      WASIPreview3FilesystemDescriptorKind.directory =>
-        WASIPreview3FilesystemDirectoryEntry.directory(
-          name,
-          directory: directory,
-          metadata: _metadata,
-          openDescriptor: _openDescriptor,
-          closeDescriptor: _closeDescriptor,
-        ),
-      WASIPreview3FilesystemDescriptorKind.symbolicLink =>
-        WASIPreview3FilesystemDirectoryEntry.symbolicLink(
-          name,
-          target: _linkTarget ?? '',
-          metadata: _metadata,
-        ),
-      WASIPreview3FilesystemDescriptorKind.regularFile =>
-        WASIPreview3FilesystemDirectoryEntry.regularFile(
-          name,
-          size: size,
-          bytes: _bytes,
-          canMutate: canMutate,
-          readBytes: _readBytes,
-          readChunk: _readChunk,
-          currentSize: _currentSize,
-          metadata: _metadata,
-          writeBytes: _writeBytes,
-          setSize: _setSize,
-          advise: _advise,
-          syncData: _syncData,
-          sync: _sync,
-          setTimes: _setTimes,
-          openDescriptor: _openDescriptor,
-          closeDescriptor: _closeDescriptor,
-        ),
-      _ => WASIPreview3FilesystemDirectoryEntry.special(
-        name,
-        kind: kind,
-        size: size,
-        otherTypeName: otherTypeName,
-        metadata: _metadata,
-      ),
-    };
+    return WASIPreview3FilesystemDirectoryEntry._withName(name, this);
   }
 }
 
@@ -2219,7 +2210,7 @@ base class WASIPreview3FilesystemHost {
     }
     final leftIdentity = leftDescriptor.metadata.objectIdentity;
     final rightIdentity = rightDescriptor.metadata.objectIdentity;
-    if (leftIdentity != null && rightIdentity != null) {
+    if (leftIdentity != null || rightIdentity != null) {
       return leftIdentity == rightIdentity;
     }
     return leftDescriptor.objectId == rightDescriptor.objectId;
@@ -2514,7 +2505,10 @@ final class _WASIPreview3FilesystemDescriptor {
   final WASIPreview3FilesystemDirectoryEntry? entry;
 
   Object get appendSerializationKey =>
-      metadata.objectIdentity ?? entry ?? (objectId, guestPath);
+      metadata.objectIdentity ??
+      entry?._byteBacking ??
+      entry ??
+      (objectId, guestPath);
 
   BigInt get currentSize => entry?._size ?? size;
 

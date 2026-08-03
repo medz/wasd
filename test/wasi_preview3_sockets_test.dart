@@ -518,6 +518,59 @@ void main() {
       },
     );
 
+    test('drops abandoned TCP sends in either resource order', () async {
+      for (final resultFirst in <bool>[true, false]) {
+        final backend = _FakeSocketsBackend();
+        final host = WASIPreview3SocketsHost(backend: backend);
+        final imports = host.imports;
+        final tcp = _createSocket(imports, tcp: true);
+
+        expect(
+          _isOk(
+            await imports['wasi:sockets/types@0.3.0.tcp-socket.connect']!(
+                  <Object?>[
+                    tcp,
+                    _ipv4Socket(port: 8080, a: 127, b: 0, c: 0, d: 1),
+                  ],
+                )
+                as WasmComponentValueData,
+          ),
+          isTrue,
+        );
+        final outgoing = WASIComponentStream<int>(
+          'tcp-abandoned-send',
+          maxBufferedElements: 0,
+        );
+        final sendResult =
+            imports['wasi:sockets/types@0.3.0.tcp-socket.send']!(<Object?>[
+                  tcp,
+                  outgoing.readable,
+                ])
+                as WASIComponentFuture<WasmComponentValueData>;
+
+        await Future<void>.delayed(Duration.zero);
+        if (resultFirst) {
+          sendResult.readable.drop();
+          host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp);
+        } else {
+          host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp);
+          sendResult.readable.drop();
+        }
+        for (
+          var attempt = 0;
+          attempt < 10 && !backend.connected.closed;
+          attempt++
+        ) {
+          await Future<void>.delayed(Duration.zero);
+        }
+
+        expect(outgoing.readable.isDropped, isTrue);
+        expect(sendResult.writable.isDropped, isTrue);
+        expect(backend.connected.closed, isTrue);
+        expect(backend.connected.closeCallCount, 1);
+      }
+    });
+
     test('forwards TCP receive data larger than stream capacity', () async {
       final bytes = List<int>.generate(100000, (index) => index & 0xff);
       final backend = _FakeSocketsBackend(tcpIncoming: bytes);

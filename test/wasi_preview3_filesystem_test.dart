@@ -91,6 +91,80 @@ void main() {
       expect(_errorLabel(absoluteSymlink), 'not-permitted');
     });
 
+    test('rename preserves one mutable regular-file backing', () async {
+      final source = WASIPreview3FilesystemDirectoryEntry.regularFile(
+        'source.txt',
+        bytes: const <int>[1, 2, 3],
+        canMutate: true,
+      );
+      final directory = WASIPreview3FilesystemDirectory(
+        canMutate: true,
+        entries: [source],
+      );
+      final host = WASIPreview3FilesystemHost(preopens: {'/': directory});
+      final root = await _preopen(host);
+      final openedBeforeRename = _okHandle(
+        await _open(host, root, 'source.txt', flags: _flags('read', 'write')),
+      );
+
+      final rename =
+          await _invoke(host, 'descriptor.rename-at', [
+                root,
+                'source.txt',
+                root,
+                'renamed.txt',
+              ])
+              as WasmComponentValueData;
+      expect(rename.isOk, isTrue);
+      final renamed = directory.entries.single;
+
+      await _writeDescriptor(host, openedBeforeRename, const <int>[9], 3);
+      expect(renamed.bytes, <int>[1, 2, 3, 9]);
+
+      final openedAfterRename = _okHandle(
+        await _open(host, root, 'renamed.txt', flags: _flags('read', 'write')),
+      );
+      expect(
+        (await _invoke(host, 'descriptor.set-size', [
+                  openedAfterRename,
+                  BigInt.from(2),
+                ])
+                as WasmComponentValueData)
+            .isOk,
+        isTrue,
+      );
+      await _writeDescriptor(host, openedAfterRename, const <int>[8], 1);
+      expect(source.bytes, <int>[1, 8]);
+
+      final first = WASIComponentStream<int>('before-rename-append');
+      final second = WASIComponentStream<int>('after-rename-append');
+      final firstResult =
+          await _invoke(host, 'descriptor.append-via-stream', [
+                openedBeforeRename,
+                first,
+              ])
+              as WASIComponentFuture<WasmComponentValueData>;
+      final secondResult =
+          await _invoke(host, 'descriptor.append-via-stream', [
+                openedAfterRename,
+                second,
+              ])
+              as WASIComponentFuture<WasmComponentValueData>;
+      await Future<void>.delayed(Duration.zero);
+      first.writable
+        ..write(4)
+        ..close();
+      second.writable
+        ..write(5)
+        ..close();
+      expect((await firstResult.readable.readWhenReady()).isOk, isTrue);
+      expect((await secondResult.readable.readWhenReady()).isOk, isTrue);
+      expect(
+        renamed.bytes,
+        anyOf(equals(<int>[1, 8, 4, 5]), equals(<int>[1, 8, 5, 4])),
+      );
+    });
+
     test(
       'bounds file producers and completes after stream consumption',
       () async {
@@ -480,6 +554,26 @@ Future<Object?> _invoke(
   List<Object?> args,
 ) async {
   return await host.imports['wasi:filesystem/types@0.3.0.$function']!(args);
+}
+
+Future<void> _writeDescriptor(
+  WASIPreview3FilesystemHost host,
+  int descriptor,
+  List<int> bytes,
+  int offset,
+) async {
+  final source = WASIComponentStream<int>('filesystem-test-write');
+  source.writable
+    ..writeAll(bytes)
+    ..close();
+  final result =
+      await _invoke(host, 'descriptor.write-via-stream', [
+            descriptor,
+            source,
+            BigInt.from(offset),
+          ])
+          as WASIComponentFuture<WasmComponentValueData>;
+  expect((await result.readable.readWhenReady()).isOk, isTrue);
 }
 
 Future<int> _preopen(WASIPreview3FilesystemHost host) async {

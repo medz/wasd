@@ -304,6 +304,28 @@ print(json.dumps(payload))
     );
   });
 
+  test('Preview3 service does not wait for transmission observation', () async {
+    final transmission = WASIComponentFuture<WasmComponentValueData>(
+      'runner-unobserved-transmission',
+    );
+    final response = WASIPreview3HttpResponse(
+      headers: WASIPreview3HttpFields(),
+      trailers: _completedNoTrailers(),
+      transmissionResult: transmission,
+    );
+
+    await component_runner
+        .writePreview3HttpResponse(_CollectingHttpResponse(), response)
+        .timeout(const Duration(milliseconds: 100));
+
+    expect(transmission.readable.isReady, isTrue);
+    expect(
+      (await transmission.readable.readWhenReady()).associatedValue?.label,
+      isNull,
+    );
+    transmission.readable.drop();
+  });
+
   test(
     'Preview3 service reports response write failures to the guest',
     () async {

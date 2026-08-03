@@ -1007,9 +1007,6 @@ base class WASIPreview3SocketsHost {
     int handle,
     Object? streamValue,
   ) {
-    final result = WASIComponentFuture<WasmComponentValueData>(
-      'wasi-sockets-tcp-send-$handle',
-    );
     final socket = _tcp(handle);
     final stream = switch (streamValue) {
       WASIComponentReadableStream<Object?>() => streamValue,
@@ -1021,13 +1018,32 @@ base class WASIPreview3SocketsHost {
         socket.connection == null ||
         socket.sendStarted ||
         stream == null) {
+      final result = WASIComponentFuture<WasmComponentValueData>(
+        'wasi-sockets-tcp-send-$handle',
+      );
       stream?.drop();
       result.writable.complete(_error('invalid-state'));
       return result;
     }
+    late final WASIComponentFuture<WasmComponentValueData> result;
+    void cancelIfAbandoned() {
+      if (socket.state != _TcpState.closed ||
+          !result.readable.isDropped ||
+          stream.isDropped) {
+        return;
+      }
+      result.writable.dispose();
+      stream.cancel();
+    }
+
+    result = WASIComponentFuture<WasmComponentValueData>(
+      'wasi-sockets-tcp-send-$handle',
+      onReadableDrop: cancelIfAbandoned,
+    );
     socket.sendStarted = true;
     socket.connectionReferences++;
-    unawaited(_drainTcpSend(socket, stream, result));
+    socket.cancelAbandonedSend = cancelIfAbandoned;
+    unawaited(_drainTcpSend(socket, stream, result, cancelIfAbandoned));
     return result;
   }
 
@@ -1035,6 +1051,7 @@ base class WASIPreview3SocketsHost {
     _TcpSocket socket,
     WASIComponentReadableStream<Object?> stream,
     WASIComponentFuture<WasmComponentValueData> result,
+    void Function() cancelIfAbandoned,
   ) async {
     final connection = socket.connection!;
     try {
@@ -1064,6 +1081,9 @@ base class WASIPreview3SocketsHost {
         result.writable.complete(_error('connection-broken'));
       }
     } finally {
+      if (identical(socket.cancelAbandonedSend, cancelIfAbandoned)) {
+        socket.cancelAbandonedSend = null;
+      }
       _releaseConnection(socket);
     }
   }
@@ -1610,6 +1630,7 @@ base class WASIPreview3SocketsHost {
 
   void _dropTcp(_TcpSocket socket) {
     socket.state = _TcpState.closed;
+    socket.cancelAbandonedSend?.call();
     _releaseTcpReservation(socket);
     socket.pendingBind?.dispose(disposeValue: (binding) => binding.close());
     socket.pendingListen?.dispose(disposeValue: (listener) => listener.close());
@@ -1742,6 +1763,7 @@ final class _TcpSocket {
   String? terminalError;
   int listenerReferences = 0;
   int connectionReferences = 0;
+  void Function()? cancelAbandonedSend;
   bool sendStarted = false;
   bool receiveStarted = false;
   BigInt listenBacklog = BigInt.from(128);

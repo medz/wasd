@@ -278,7 +278,7 @@ Future<void> _handlePreview3HttpRequest(
   }
 }
 
-/// Writes one Preview3 response and completes its transmission result.
+/// Writes one Preview3 response and publishes its transmission result.
 ///
 /// [bodyReadTimeout] bounds the entire body, trailers, and output-close phase.
 Future<void> writePreview3HttpResponse(
@@ -330,16 +330,15 @@ Future<void> writePreview3HttpResponse(
     failureCode = 'HTTP-response-timeout';
     rethrow;
   } finally {
-    try {
-      await response.completeTransmission(
+    unawaited(
+      response.completeTransmission(
         failureCode == null
             ? const WASIPreview3HttpResult<void>.ok(null)
             : WASIPreview3HttpResult<void>.error(failureCode),
-      );
-    } finally {
-      if (failureCode != null) {
-        await response.cancel();
-      }
+      ),
+    );
+    if (failureCode != null) {
+      unawaited(response.cancel());
     }
   }
 }
