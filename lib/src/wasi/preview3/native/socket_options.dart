@@ -31,7 +31,7 @@ final class NativeSocketOptionAbi {
     socketReceiveBuffer: 8,
     socketSendBuffer: 7,
     ipv4Ttl: 2,
-    ipv6UnicastHops: 4,
+    ipv6UnicastHops: 16,
     tcpKeepIdle: 4,
     tcpKeepInterval: 5,
     tcpKeepCount: 6,

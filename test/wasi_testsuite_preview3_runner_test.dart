@@ -504,6 +504,7 @@ print(json.dumps(payload))
 
   test('Preview3 service shutdown accepts SIGTERM', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
     final signals = StreamController<ProcessSignal>();
     addTearDown(signals.close);
 
@@ -664,11 +665,13 @@ import json
 import subprocess
 import sys
 
-subprocess.Popen([
+child = subprocess.Popen([
     sys.executable,
     '-c',
-    ${json.encode(_stubbornChildProgram(childPidPath))},
+    ${json.encode(_stubbornChildProgram)},
 ])
+with open(${json.encode(childPidPath)}, 'w', encoding='utf-8') as output:
+    output.write(str(child.pid))
 with open(args.json_output_location, 'w', encoding='utf-8') as output:
     json.dump({
         'results': [{
@@ -888,11 +891,13 @@ import subprocess
 import sys
 import time
 
-subprocess.Popen([
+child = subprocess.Popen([
     sys.executable,
     '-c',
-    ${json.encode(_stubbornChildProgram(childPidPath))},
+    ${json.encode(_stubbornChildProgram)},
 ])
+with open(${json.encode(childPidPath)}, 'w', encoding='utf-8') as output:
+    output.write(str(child.pid))
 time.sleep(10)
 ''');
       final jsonPath = '${temp.path}/reports/report.json';
@@ -1066,15 +1071,11 @@ Future<bool> _processIsRunning(int pid) async {
   return state.isNotEmpty && !state.startsWith('Z');
 }
 
-String _stubbornChildProgram(String pidPath) =>
-    '''
-import os
+const String _stubbornChildProgram = '''
 import signal
 import time
 
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
-with open(${json.encode(pidPath)}, 'w', encoding='utf-8') as output:
-    output.write(str(os.getpid()))
 time.sleep(10)
 ''';
 

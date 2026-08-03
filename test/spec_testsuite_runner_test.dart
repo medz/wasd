@@ -205,7 +205,7 @@ if [ "\$1" = "--version" ]; then
   exit 0
 fi
 case "\$2" in
-  *a-hang.wast) while :; do :; done ;;
+  *a-hang.wast) sleep 30 ;;
 esac
 exit 0
 ''');

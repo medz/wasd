@@ -107,7 +107,8 @@ final class WASIComponentThreadHost {
 
   /// Executes `thread.yield`.
   ///
-  /// Returns the Canonical ABI `Cancelled` value for the yield.
+  /// Returns `0` after yielding normally, or `1` when a cancellable yield
+  /// delivers pending task cancellation.
   Future<int> threadYield({bool cancellable = false}) async {
     if (cancellable && (_waitableHost?.deliverTaskCancellation() ?? false)) {
       return 1;
@@ -255,7 +256,8 @@ final class WASIComponentCanonicalThreadOperation {
     return _host.threadAvailableParallelism();
   }
 
-  /// Executes `thread.yield`.
+  /// Executes `thread.yield`, returning `0` normally or `1` when cancellation
+  /// is delivered.
   Future<int> threadYield() {
     _requireKind(WasmComponentCanonicalKind.threadYield);
     return _host.threadYield(cancellable: cancellable);

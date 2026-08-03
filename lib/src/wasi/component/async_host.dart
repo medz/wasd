@@ -3891,12 +3891,16 @@ final class _RegisteredAsyncValueType<T> {
       result.then<void>(
         publish,
         onError: (Object error, StackTrace stackTrace) {
-          final copyResult = switch (error) {
-            WASIComponentAsyncEndpointStateError() =>
-              _endpointFailureCopyResult(error),
-            _ => WASIComponentAsyncCopyResult.cancelled(),
-          };
-          publish(copyResult);
+          if (error is WASIComponentAsyncEndpointStateError) {
+            publish(_endpointFailureCopyResult(error));
+            return;
+          }
+          // Canonical copy results have no host-error status. Release the
+          // waitable with the only safe terminal result, then report the
+          // original failure as an uncaught host error instead of hiding it as
+          // guest-requested cancellation.
+          publish(WASIComponentAsyncCopyResult.cancelled());
+          Zone.current.handleUncaughtError(error, stackTrace);
         },
       ),
     );

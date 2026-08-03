@@ -1067,7 +1067,10 @@ void main() {
     });
 
     test('native POSIX EPERM maps to access-denied', () async {
-      if (io.Platform.isWindows) return;
+      if (io.Platform.isWindows) {
+        markTestSkipped('POSIX EPERM mapping does not apply on Windows');
+        return;
+      }
       await io.IOOverrides.runWithIOOverrides(() async {
         final host = WASIPreview3NativeSocketsHost();
         final imports = host.imports;
@@ -1391,7 +1394,7 @@ void main() {
         expect(abi.socketReceiveBuffer, 8, reason: operatingSystem);
         expect(abi.socketSendBuffer, 7, reason: operatingSystem);
         expect(abi.ipv4Ttl, 2, reason: operatingSystem);
-        expect(abi.ipv6UnicastHops, 4, reason: operatingSystem);
+        expect(abi.ipv6UnicastHops, 16, reason: operatingSystem);
         expect(abi.tcpKeepIdle, 4, reason: operatingSystem);
         expect(abi.tcpKeepInterval, 5, reason: operatingSystem);
         expect(abi.tcpKeepCount, 6, reason: operatingSystem);

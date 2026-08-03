@@ -36,7 +36,8 @@ WASIPreview3FilesystemHost createDefaultPreview3FilesystemHost({
 }) {
   if (preopens.isNotEmpty || canMutate) {
     throw UnsupportedError(
-      'Default Preview3 filesystem preopens require dart:io.',
+      'Default Preview3 filesystem preopens and mutation support require '
+      'dart:io.',
     );
   }
   return WASIPreview3FilesystemHost(table: table);

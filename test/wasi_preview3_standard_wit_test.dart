@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/standard_wit.dart';
 import 'package:wasd/src/wasi/component/wit_adapter.dart';
@@ -49,6 +50,47 @@ void main() {
       expect(official['skipped'], 0);
       expect(official['xfailed'], 0);
       expect(official['xpassed'], 0);
+    });
+
+    test('pins all normalized Preview3 WIT source digests', () {
+      const expected = <String, String>{
+        'Random':
+            'b09b09818eec54f15dff7c1954ae99ee775fa60e14dfd50df33482de773379a0',
+        'Clocks':
+            '6f439837cf69feb5013e958e662e37dbf5a25ed59af7f0496292d19dae808ab5',
+        'Filesystem':
+            'a0b860ab1712cb0efbe85349447437d0f17db9095c99d62bf10bd3238c2b4421',
+        'Sockets':
+            'b40e61db61ad0055fc2e75f0ba3c73e1979645a12a5014df28d5250b9236c350',
+        'Cli':
+            '4c88aa3c1abb19864150a35c0d0d4742fc281099eaf3bf46cc939927dc2dc74d',
+        'Http':
+            '245048008576712e5af4d7b09d91e16c4f7cf6736e2458c4f9f9b4598f3c4400',
+      };
+      final source = File(
+        'lib/src/wasi/component/standard_wit_preview3.dart',
+      ).readAsStringSync();
+      final matches = RegExp(
+        r"const String _wasi([A-Za-z]+)030Source = r'''([\s\S]*?)''';",
+      ).allMatches(source).toList();
+      final documented = <String, String>{
+        for (final match in RegExp(
+          r'^//   wasi:([a-z]+): ([0-9a-f]{64})$',
+          multiLine: true,
+        ).allMatches(source))
+          match.group(1)!: match.group(2)!,
+      };
+
+      expect(matches.map((match) => match.group(1)), expected.keys);
+      expect(documented, {
+        for (final entry in expected.entries)
+          entry.key.toLowerCase(): entry.value,
+      });
+      for (final match in matches) {
+        final name = match.group(1)!;
+        final digest = sha256.convert(utf8.encode(match.group(2)!)).toString();
+        expect(digest, expected[name], reason: '_wasi${name}030Source');
+      }
     });
 
     test('keeps release claims aligned with recorded gate results', () {

@@ -949,10 +949,10 @@ final class WASIComponentNativeRuntime {
           WASIComponentWaitableEvent event;
           switch (code) {
             case 1:
-              final cancelled = await canonicalHost.threadHost.threadYield(
+              final yieldStatus = await canonicalHost.threadHost.threadYield(
                 cancellable: true,
               );
-              event = cancelled == 0
+              event = yieldStatus == 0
                   ? WASIComponentWaitableEvent.none
                   : WASIComponentWaitableEvent.taskCancelled;
             case 2:

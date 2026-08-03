@@ -4706,9 +4706,12 @@ world cli-test {
       );
     });
 
-    test('Preview3 CLI accepts live stdin after command start', () async {
+    test('Preview3 CLI consumes injected live stdin only once', () async {
       final input = WASIComponentStream<int>('live-stdin');
-      final cli = WASIPreview3CliHost(stdin: input.readable);
+      final cli = WASIPreview3CliHost(
+        stdin: input.readable,
+        stdinData: const <int>[102, 97, 108, 108, 98, 97, 99, 107],
+      );
       final callback = cli.imports['wasi:cli/stdin@0.3.0.read-via-stream']!;
       final result = callback(const <Object?>[]) as List<Object?>;
       final readable = result[0] as WASIComponentReadableStream<int>;
@@ -4721,7 +4724,9 @@ world cli-test {
       expect(await readable.readWhenAvailable(64), isEmpty);
 
       final next = callback(const <Object?>[]) as List<Object?>;
-      expect(next[0], isNot(same(readable)));
+      final nextReadable = next[0] as WASIComponentReadableStream<int>;
+      expect(nextReadable, isNot(same(readable)));
+      expect(await nextReadable.readWhenAvailable(64), isEmpty);
     });
 
     test(

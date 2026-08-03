@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
@@ -1207,6 +1208,82 @@ void main() {
       expect(program.invoke(4, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
+
+    test(
+      'reports unexpected async copy errors without blocking waitables',
+      () async {
+        final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+        expect(component.validate(), isEmpty);
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final data = ByteData.view(memory.buffer);
+        data.setUint32(32, 144, Endian.little);
+        final host = WASIComponentAsyncHost();
+        final waitableHost = WASIComponentWaitableHost(
+          table: host.table,
+          waitableResolvers: [host.waitableForHandle],
+        );
+        host.defineStreamTypeFromComponent<int>(component, 0, 'u32-stream');
+        final program = _streamU32MemoryHandleProgram(host);
+        final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+        final waitable = host.waitableForHandle(handles.readable)!;
+        final waitableSet = waitableHost.waitableSetNew();
+        waitableHost.waitableJoin(handles.readable, waitableSet);
+        final reported = Completer<(Object, StackTrace)>();
+        final delivered = Completer<int>();
+        late int blocked;
+        late int written;
+
+        runZonedGuarded(
+          () {
+            blocked =
+                program.invokeWithMemoryEvent(2, memory, <Object?>[
+                      handles.readable,
+                      memory.buffer.lengthInBytes,
+                      1,
+                    ])
+                    as int;
+            unawaited(
+              waitableHost
+                  .waitableSetWaitToMemory(waitableSet, memory, 128)
+                  .then<void>(
+                    delivered.complete,
+                    onError: (Object error, StackTrace stackTrace) {
+                      delivered.completeError(error, stackTrace);
+                    },
+                  ),
+            );
+            written =
+                program.invokeWithMemory(1, memory, <Object?>[
+                      handles.writable,
+                      32,
+                      1,
+                    ])
+                    as int;
+          },
+          (error, stackTrace) {
+            if (!reported.isCompleted) reported.complete((error, stackTrace));
+          },
+        );
+
+        expect(blocked, wasiComponentAsyncBlocked);
+        expect(written, 1 << 4);
+        expect(
+          (await reported.future.timeout(const Duration(seconds: 1))).$1,
+          isA<RangeError>(),
+        );
+        expect(
+          await delivered.future.timeout(const Duration(seconds: 1)),
+          WASIComponentWaitableEventCode.streamRead.value,
+        );
+        expect(waitable.hasActiveCopy, isFalse);
+
+        waitableHost.waitableJoin(handles.readable, 0);
+        waitableHost.waitableSetDrop(waitableSet);
+        expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+        expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+        expect(host.table.activeCount, 0);
+      },
+    );
 
     test('rejects duplicate handle-backed stream read memory events', () async {
       final component = WasmComponent.decode(_streamU32TypeComponentBytes());

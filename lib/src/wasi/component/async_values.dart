@@ -593,7 +593,7 @@ final class _WASIComponentStreamState<T> {
     _beginReadCopy(asynchronous: false);
     try {
       final values = readQueued(maxElements);
-      finishReadCopy(dropped: values.isEmpty && _readReachedDroppedEnd);
+      finishReadCopy(dropped: values.isEmpty && _readReachedEndOfStream);
       return values;
     } catch (error) {
       _finishReadCopyError(error);
@@ -646,7 +646,7 @@ final class _WASIComponentStreamState<T> {
       return readWhenAvailable(maxElements).then(
         (values) {
           if (!deferCompletion) {
-            finishReadCopy(dropped: values.isEmpty && _readReachedDroppedEnd);
+            finishReadCopy(dropped: values.isEmpty && _readReachedEndOfStream);
           }
           return values;
         },
@@ -1167,7 +1167,7 @@ final class _WASIComponentStreamState<T> {
     }
   }
 
-  bool get _readReachedDroppedEnd =>
+  bool get _readReachedEndOfStream =>
       writeClosed && !writeCancelled && queue.isEmpty;
 
   void _beginReadCopy({required bool asynchronous}) {

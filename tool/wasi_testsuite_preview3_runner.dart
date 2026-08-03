@@ -239,6 +239,9 @@ Future<void> _terminateRunnerTree(io.Process process) async {
   } on TimeoutException {
     // Escalate below.
   }
+  // A reaped group leader does not imply its descendants exited. POSIX keeps
+  // the process-group id allocated while any member survives, so the group
+  // escalation remains necessary for children that ignored SIGTERM.
   final killSent = await _signalRunnerTree(process, io.ProcessSignal.sigkill);
   if (!exited && !killSent && !process.kill(io.ProcessSignal.sigkill)) {
     throw StateError('Unable to kill official runner process tree.');

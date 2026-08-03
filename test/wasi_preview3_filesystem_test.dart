@@ -2,11 +2,31 @@ import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/async_values.dart';
+import 'package:wasd/src/wasi/component/resource_table.dart';
 import 'package:wasd/src/wasi/preview3/filesystem.dart';
+import 'package:wasd/src/wasi/preview3/native/default_hosts_stub.dart'
+    as portable;
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 
 void main() {
   group('WASIPreview3FilesystemHost', () {
+    test('reports portable preopen and mutation requirements', () {
+      expect(
+        () => portable.createDefaultPreview3FilesystemHost(
+          preopens: const <String, String>{},
+          canMutate: true,
+          table: WASIComponentResourceTable(),
+        ),
+        throwsA(
+          isA<UnsupportedError>().having(
+            (error) => error.toString(),
+            'message',
+            contains('preopens and mutation support require dart:io'),
+          ),
+        ),
+      );
+    });
+
     test('enforces descriptor flags and official symlink resolution', () async {
       final directory = WASIPreview3FilesystemDirectory(
         canMutate: true,

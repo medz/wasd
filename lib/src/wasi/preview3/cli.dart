@@ -213,7 +213,7 @@ final class WASIPreview3CliHost {
       readable = provided;
     } else {
       final stream = WASIComponentStream<int>('stdin');
-      if (stdinData.isNotEmpty) {
+      if (_stdin == null && stdinData.isNotEmpty) {
         stream.writable.writeAll(stdinData);
       }
       stream.writable.close();
