@@ -21,8 +21,12 @@
   `37/37`, `wasm-tools` validation `31/31`, and Wasmtime reference execution
   `31/31`. The latter two are upstream validation/reference evidence, not WASD
   WAST execution.
-- Pass all `45/45` frozen official `wasm32-wasip3` wasi-testsuite fixtures with
-  no skips, expected failures, or unexpected passes.
+- Pass `39/45` frozen official `wasm32-wasip3` wasi-testsuite fixtures. The six
+  native TCP bind-dependent fixtures (`sockets-tcp-bind`,
+  `sockets-tcp-listen`, `sockets-echo`, `sockets-tcp-connect`,
+  `sockets-tcp-receive`, and `sockets-tcp-send`) fail with the documented
+  `not-supported` capability boundary; there are no skips, expected failures,
+  or unexpected passes.
 - Pin the official WASI, Component Model, wasi-testsuite source, and precompiled
   fixture revisions used by the Preview3 release gate.
 

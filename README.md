@@ -287,8 +287,12 @@ dart run tool/wasi_testsuite_preview3_runner.dart \
   --python=/path/to/venv/bin/python
 ```
 
-The frozen official `wasm32-wasip3` gate passes all `45/45` fixtures with no
-skips, expected failures, or unexpected passes.
+The frozen official `wasm32-wasip3` gate passes `39/45` fixtures. The remaining
+six (`sockets-tcp-bind`, `sockets-tcp-listen`, `sockets-echo`,
+`sockets-tcp-connect`, `sockets-tcp-receive`, and `sockets-tcp-send`) require
+the explicit native TCP bind/listen split that `dart:io` cannot represent; they
+fail with `not-supported`. There are no skips, expected failures, or unexpected
+passes.
 
 The frozen Component Model async gate currently records three distinct kinds
 of evidence:

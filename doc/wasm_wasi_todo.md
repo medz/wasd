@@ -163,8 +163,11 @@ P2/P3 work starts only after these P1 gates are green.
     `dart test test/wasi_testsuite_preview3_runner_test.dart`
   - Official closeout evidence:
     `dart run tool/wasi_testsuite_preview3_runner.dart --testsuite-dir=/path/to/wasi-testsuite --runner-dir=/path/to/wasi-testsuite/test-runner --python=/path/to/venv/bin/python`
-    reports `45/45` `wasm32-wasip3` fixtures passed with `0` failed, skipped,
-    xfailed, or xpassed.
+    reports `39/45` `wasm32-wasip3` fixtures passed with `0` skipped, xfailed,
+    or xpassed. The six failures (`sockets-tcp-bind`, `sockets-tcp-listen`,
+    `sockets-echo`, `sockets-tcp-connect`, `sockets-tcp-receive`, and
+    `sockets-tcp-send`) require the explicitly unsupported native TCP
+    bind/listen split.
   - Scope boundary: Node.js and browser Preview3 runners, timezone, error
     context, explicit cooperative thread creation, more-async builtins,
     fixed-length lists, maps, memory64, and general Component Model WAST
