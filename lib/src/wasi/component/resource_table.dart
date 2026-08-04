@@ -1,5 +1,102 @@
 import 'dart:async';
 
+/// Keeps one component resource allocation scope alive after its owner returns.
+final class WASIComponentResourceScopeLease {
+  WASIComponentResourceScopeLease._(this._scope);
+
+  final _WASIComponentResourceScope _scope;
+  bool _released = false;
+
+  /// Releases this lease exactly once.
+  void release() {
+    if (_released) {
+      return;
+    }
+    _released = true;
+    _scope.releaseLease();
+  }
+}
+
+/// A task-like scope that owns canonical borrowed resource handles.
+abstract interface class WASIComponentCanonicalBorrowScope {
+  /// Records one canonical borrow lowered into this scope.
+  void addBorrow();
+
+  /// Releases one canonical borrow previously lowered into this scope.
+  void releaseBorrow();
+}
+
+/// One synchronous canonical call's borrowed resource handles.
+final class WASIComponentCanonicalBorrowCallScope
+    implements WASIComponentCanonicalBorrowScope {
+  WASIComponentCanonicalBorrowCallScope._(this._table);
+
+  final WASIComponentResourceTable _table;
+  final List<int> _handles = <int>[];
+  int _activeBorrows = 0;
+  bool _closed = false;
+
+  /// Lowers [sourceHandle] into this call and returns its borrowed alias.
+  int lowerHandle(int sourceHandle) {
+    if (_closed) {
+      throw StateError('WASI component canonical borrow call scope is closed.');
+    }
+    final handle = _table.insertBorrowHandle(sourceHandle, this);
+    _handles.add(handle);
+    return handle;
+  }
+
+  /// Releases every alias not already dropped by core Wasm.
+  void close() {
+    if (_closed) {
+      return;
+    }
+    _closed = true;
+    Object? firstError;
+    StackTrace? firstStackTrace;
+    for (final handle in _handles.reversed) {
+      final entry = _table._entryForHandle(handle);
+      if (entry == null || !identical(entry._canonicalBorrow?.scope, this)) {
+        continue;
+      }
+      try {
+        _table._dropEntry(handle, entry);
+      } catch (error, stackTrace) {
+        firstError ??= error;
+        firstStackTrace ??= stackTrace;
+      }
+    }
+    if (firstError == null && _activeBorrows != 0) {
+      firstError = StateError(
+        'WASI component canonical borrow call scope closed with '
+        '$_activeBorrows active borrows.',
+      );
+      firstStackTrace = StackTrace.current;
+    }
+    if (firstError != null) {
+      Error.throwWithStackTrace(firstError, firstStackTrace!);
+    }
+  }
+
+  @override
+  void addBorrow() {
+    if (_closed) {
+      throw StateError('WASI component canonical borrow call scope is closed.');
+    }
+    _activeBorrows++;
+  }
+
+  @override
+  void releaseBorrow() {
+    if (_activeBorrows == 0) {
+      throw StateError(
+        'WASI component canonical borrow call scope has no active borrows.',
+      );
+    }
+    _activeBorrows--;
+  }
+}
+
 /// A nominal resource type for WASI component hosts.
 ///
 /// Component Model resources are nominal, so two resource definitions with the
@@ -51,6 +148,19 @@ final class WASIComponentResourceTable {
 
   /// Number of live resources in the table.
   int get activeCount => _activeCount;
+
+  /// Retains the current allocation scope until the returned lease is released.
+  WASIComponentResourceScopeLease retainCurrentScope() {
+    final scope = _currentScope;
+    if (scope == null) {
+      throw StateError('No current WASI component resource scope to retain.');
+    }
+    return scope.retain();
+  }
+
+  /// Creates an auto-cleaned canonical borrow scope for one sync call.
+  WASIComponentCanonicalBorrowCallScope createBorrowCallScope() =>
+      WASIComponentCanonicalBorrowCallScope._(this);
 
   /// Defines a nominal component resource type backed by Dart values of [T].
   ///
@@ -167,8 +277,93 @@ final class WASIComponentResourceTable {
   /// destructor registered through [defineType].
   T take<T extends Object>(WASIComponentResourceType<T> type, int handle) {
     final entry = _typedEntry<T>(type, handle);
+    _requireOwnedHandle(handle, entry);
     _removeEntry(handle, entry);
     return entry.resource;
+  }
+
+  /// Transfers an owned [handle] while keeping its direct children alive.
+  ///
+  /// This is reserved for component operations that move a parent resource
+  /// while the contract explicitly keeps previously returned child handles
+  /// valid. Ordinary [take] and [drop] continue to reject live children.
+  /// Direct children become roots in the same resource scope; their own child
+  /// relationships are unchanged.
+  T takeDetachingChildren<T extends Object>(
+    WASIComponentResourceType<T> type,
+    int handle,
+  ) {
+    final entry = _typedEntry<T>(type, handle);
+    _requireOwnedHandle(handle, entry);
+    if (entry.borrowCount != 0) {
+      throw StateError(
+        'Cannot release borrowed WASI component resource: $handle.',
+      );
+    }
+    final children = <(int, _WASIComponentResourceEntry)>[];
+    for (final childHandle in entry.childHandles) {
+      final child = _entryForHandle(childHandle);
+      if (child == null || child.parentHandle != handle) {
+        throw StateError(
+          'Invalid WASI component child resource: $childHandle.',
+        );
+      }
+      _validateScopeAccess(childHandle, child);
+      children.add((childHandle, child));
+    }
+    for (final (_, child) in children) {
+      child.parentHandle = null;
+    }
+    entry.childHandles.clear();
+    _removeEntry(handle, entry);
+    return entry.resource;
+  }
+
+  /// Creates a canonical borrowed handle owned by [scope].
+  ///
+  /// The alias keeps [sourceHandle] live, exposes the same nominal resource and
+  /// representation, and never runs the resource destructor. Dropping the
+  /// alias releases both the source handle and the original borrow scope even
+  /// when another task performs the drop.
+  int insertBorrowHandle(
+    int sourceHandle,
+    WASIComponentCanonicalBorrowScope scope,
+  ) {
+    final source = _entryForHandle(sourceHandle);
+    if (source == null) {
+      throw StateError(
+        'Unknown WASI component resource handle: $sourceHandle.',
+      );
+    }
+    _validateScopeAccess(sourceHandle, source);
+    final ambientScope = _currentScope;
+    if (ambientScope?.isClosed ?? false) {
+      throw StateError(
+        'Cannot allocate a WASI component resource after its scope closed.',
+      );
+    }
+    final aliasScope = ambientScope ?? source.scope;
+
+    scope.addBorrow();
+    source.borrowCount++;
+    try {
+      final slotIndex = _allocateSlot();
+      final handle = _allocateHandle();
+      final slot = _slots[slotIndex];
+      slot.entry = source.borrowedAlias(
+        _WASIComponentCanonicalBorrow(source, scope),
+        aliasScope,
+      );
+      _handleToSlot[handle] = slotIndex;
+      _activeCount++;
+      aliasScope?._handles.add(handle);
+      _recordResourceType(source.type, aliasScope);
+      return handle;
+    } catch (_) {
+      source.borrowCount--;
+      scope.releaseBorrow();
+      rethrow;
+    }
   }
 
   /// Records that [childHandle] must be released before [parentHandle].
@@ -331,6 +526,14 @@ final class WASIComponentResourceTable {
     }
   }
 
+  void _requireOwnedHandle(int handle, _WASIComponentResourceEntry entry) {
+    if (entry.isCanonicalBorrow) {
+      throw StateError(
+        'Cannot transfer borrowed WASI component resource: $handle.',
+      );
+    }
+  }
+
   /// Implements the canonical ABI `resource.drop` operation.
   void resourceDrop<T extends Object>(
     WASIComponentResourceType<T> type,
@@ -453,17 +656,57 @@ final class _WASIComponentResourceSlot {
 }
 
 final class _WASIComponentResourceEntry<T extends Object> {
-  _WASIComponentResourceEntry(this.type, this.resource, this.scope);
+  _WASIComponentResourceEntry(
+    this.type,
+    this.resource,
+    this.scope, {
+    _WASIComponentCanonicalBorrow? canonicalBorrow,
+  }) : _canonicalBorrow = canonicalBorrow;
 
   final WASIComponentResourceType<T> type;
   final T resource;
   final _WASIComponentResourceScope? scope;
+  final _WASIComponentCanonicalBorrow? _canonicalBorrow;
   final Set<int> childHandles = <int>{};
   int? parentHandle;
   int borrowCount = 0;
 
+  bool get isCanonicalBorrow => _canonicalBorrow != null;
+
+  _WASIComponentResourceEntry<T> borrowedAlias(
+    _WASIComponentCanonicalBorrow borrow,
+    _WASIComponentResourceScope? aliasScope,
+  ) => _WASIComponentResourceEntry<T>(
+    type,
+    resource,
+    aliasScope,
+    canonicalBorrow: borrow,
+  );
+
   void drop() {
+    final canonicalBorrow = _canonicalBorrow;
+    if (canonicalBorrow != null) {
+      canonicalBorrow.release();
+      return;
+    }
     type._drop(resource);
+  }
+}
+
+final class _WASIComponentCanonicalBorrow {
+  _WASIComponentCanonicalBorrow(this.source, this.scope);
+
+  final _WASIComponentResourceEntry source;
+  final WASIComponentCanonicalBorrowScope scope;
+  bool _released = false;
+
+  void release() {
+    if (_released) {
+      throw StateError('WASI component canonical borrow was already released.');
+    }
+    _released = true;
+    source.borrowCount--;
+    scope.releaseBorrow();
   }
 }
 
@@ -474,12 +717,43 @@ final class _WASIComponentResourceScope {
   final Set<int> _handles = <int>{};
   final _WASIComponentResourceTypeCounts _resourceTypeCounts =
       <String, Map<WASIComponentResourceType<Object>, int>>{};
+  var _leaseCount = 0;
+  bool _closeRequested = false;
   bool _closing = false;
   bool _closed = false;
 
   bool get isClosed => _closed;
 
+  WASIComponentResourceScopeLease retain() {
+    if (_closed || _closing) {
+      throw StateError('Cannot retain a closed WASI component resource scope.');
+    }
+    _leaseCount++;
+    return WASIComponentResourceScopeLease._(this);
+  }
+
+  void releaseLease() {
+    if (_leaseCount == 0) {
+      throw StateError('WASI component resource scope has no active lease.');
+    }
+    _leaseCount--;
+    if (_leaseCount == 0 && _closeRequested) {
+      _closeNow();
+    }
+  }
+
   void close() {
+    if (_closed || _closeRequested) {
+      return;
+    }
+    _closeRequested = true;
+    if (_leaseCount != 0) {
+      return;
+    }
+    _closeNow();
+  }
+
+  void _closeNow() {
     if (_closed || _closing) {
       return;
     }

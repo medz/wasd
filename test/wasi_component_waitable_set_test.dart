@@ -78,6 +78,27 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('propagates pending event failures and removes the waiter', () async {
+      final host = WASIComponentWaitableHost();
+      final set = host.waitableSetNew();
+      final waitable = WASIComponentWaitable('failing-event');
+      final waitableHandle = host.insertWaitable(waitable);
+      host.waitableJoin(waitableHandle, set);
+      final pending = host.waitableSetWait(set);
+      final failure = StateError('pending event failed');
+
+      expect(
+        () => waitable.setPendingEvent(() => throw failure),
+        returnsNormally,
+      );
+      await expectLater(pending, throwsA(same(failure)));
+
+      host.waitableJoin(waitableHandle, 0);
+      host.waitableSetDrop(set);
+      host.dropWaitable(waitableHandle);
+      expect(host.table.activeCount, 0);
+    });
+
     test('transfers waitables between sets and removes them with zero', () {
       final host = WASIComponentWaitableHost();
       final memory = Memory(const MemoryDescriptor(initial: 1));
@@ -134,6 +155,24 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('resource scopes force-detach leaked waitable set members', () async {
+      final host = WASIComponentWaitableHost();
+      late WASIComponentWaitable waitable;
+
+      await host.table.runScoped(() {
+        waitable = WASIComponentWaitable('scoped-waitable');
+        final waitableHandle = host.insertWaitable(waitable);
+        final set = host.waitableSetNew();
+        host.waitableJoin(waitableHandle, set);
+
+        expect(waitable.inWaitableSet, isTrue);
+        expect(() => host.waitableSetDrop(set), throwsStateError);
+      });
+
+      expect(waitable.inWaitableSet, isFalse);
+      expect(host.table.activeCount, 0);
+    });
+
     test('rejects joining a synchronously waited waitable', () async {
       final host = WASIComponentWaitableHost();
       final set = host.waitableSetNew();
@@ -181,6 +220,26 @@ void main() {
 
       host.waitableSetDrop(set);
       expect(host.table.activeCount, 0);
+    });
+
+    test('validates the complete aligned event output before writing', () {
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      const event = WASIComponentWaitableEvent(
+        code: WASIComponentWaitableEventCode.subtask,
+        payload1: 7,
+        payload2: 9,
+      );
+      final lastWord = memory.buffer.lengthInBytes - 4;
+      data.setUint32(lastWord, 0xdecafbad, Endian.little);
+
+      expect(
+        () => event.writePayloadToMemory(memory, lastWord),
+        throwsRangeError,
+      );
+      expect(data.getUint32(lastWord, Endian.little), 0xdecafbad);
+      expect(() => event.writePayloadToMemory(memory, 1), throwsStateError);
+      expect(() => event.writePayloadToMemory(memory, -4), throwsRangeError);
     });
 
     test(

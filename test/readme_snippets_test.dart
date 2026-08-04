@@ -180,5 +180,19 @@ void main() {
       expect(response.response?.isOk, isTrue);
       expect(response.response?.value?.statusCode, 200);
     });
+
+    test('Preview3 snippets use and close the public hosts', () {
+      final host = WASI.preview3(args: const ['app.component.wasm']);
+      try {
+        expect(WASIPreview3CommandRunner(host).host, same(host));
+        expect(WASIPreview3ServiceRunner(host).host, same(host));
+        final request = WASIPreview3HttpRequest.noTrailers(
+          headers: WASIPreview3HttpFields(),
+        )..pathWithQuery = '/';
+        expect(request.pathWithQuery, '/');
+      } finally {
+        host.close(force: true);
+      }
+    });
   });
 }

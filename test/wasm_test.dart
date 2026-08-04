@@ -1,6 +1,13 @@
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:wasd/src/wasm/backend/native/interpreter/module.dart'
+    as native_module;
+import 'package:wasd/src/wasm/backend/native/interpreter/runtime_function.dart'
+    as native_runtime;
+import 'package:wasd/src/wasm/backend/native/interpreter/value.dart'
+    as native_value;
+import 'package:wasd/src/wasm/backend/native/interpreter/vm.dart' as native_vm;
 import 'package:wasd/src/wasm/host_control_flow.dart';
 import 'package:wasd/wasm.dart';
 import 'support/wasm_fixtures.dart';
@@ -420,6 +427,84 @@ void main() {
     });
   });
 
+  group('Interpreter function references', () {
+    test('binds one async invoker and invokes matching references', () async {
+      final target = _hostFunctionVm((_) => 0);
+      var invocationCount = 0;
+      target.vm.registerAsyncFunctionRefInvoker((
+        functionIndex,
+        args,
+        depth,
+        force,
+      ) async {
+        invocationCount++;
+        expect(functionIndex, 0);
+        expect(args.single.asI32(), 41);
+        expect(depth, 3);
+        expect(force, isTrue);
+        return <native_value.WasmValue>[native_value.WasmValue.i32(42)];
+      });
+
+      expect(target.vm.functionRefMatchesType(target.reference, 0), isTrue);
+      expect(target.vm.functionRefMatchesType(-1, 0), isFalse);
+      expect(
+        () => target.vm.registerAsyncFunctionRefInvoker(
+          (_, _, _, _) async => const <native_value.WasmValue>[],
+        ),
+        throwsStateError,
+      );
+
+      final result = await target.vm.invokeFunctionRefAsync(
+        target.reference,
+        <native_value.WasmValue>[native_value.WasmValue.i32(41)],
+        depth: 3,
+        force: true,
+      );
+
+      expect(result.single.asI32(), 42);
+      expect(invocationCount, 1);
+    });
+
+    test('delivers function-reference failures through futures', () async {
+      final target = _hostFunctionVm(
+        (_) => throw StateError('synchronous host failure'),
+      );
+      late Future<List<native_value.WasmValue>> invalidReference;
+      late Future<List<native_value.WasmValue>> executionFailure;
+
+      expect(
+        () => invalidReference = target.vm.invokeFunctionRefAsync(
+          -1,
+          const <native_value.WasmValue>[],
+          depth: 0,
+          force: false,
+        ),
+        returnsNormally,
+      );
+      expect(
+        () => executionFailure = target.vm.invokeFunctionRefAsync(
+          target.reference,
+          const <native_value.WasmValue>[],
+          depth: 0,
+          force: false,
+        ),
+        returnsNormally,
+      );
+
+      await expectLater(invalidReference, throwsStateError);
+      await expectLater(
+        executionFailure,
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'synchronous host failure',
+          ),
+        ),
+      );
+    });
+  });
+
   group('WebAssembly.compileStreaming', () {
     test('compiles from a stream', () async {
       final stream = Stream.value(_wasmBytes.toList());
@@ -449,3 +534,43 @@ void main() {
 
 final class _TestHostControlFlowException
     implements WasmHostControlFlowException {}
+
+({native_vm.WasmVm vm, int reference}) _hostFunctionVm(
+  Object? Function(List<Object?> args) callback,
+) {
+  const type = native_module.WasmFunctionType(
+    params: <native_module.WasmValueType>[],
+    results: <native_module.WasmValueType>[],
+    kind: native_module.WasmCompositeTypeKind.function,
+  );
+  final namespace = native_vm.WasmVm.allocateFunctionRefNamespace();
+  final vm = native_vm.WasmVm(
+    functions: <native_runtime.RuntimeFunction>[
+      native_runtime.HostRuntimeFunction(
+        type: type,
+        declaredTypeIndex: 0,
+        runtimeTypeDepth: 0,
+        callback: callback,
+      ),
+    ],
+    types: const <native_module.WasmFunctionType>[type],
+    tagTypes: const <native_module.WasmFunctionType>[],
+    tagNominalTypeKeys: const <String>[],
+    tables: const [],
+    memories: const [],
+    globals: const [],
+    functionRefNamespace: namespace,
+    memory64ByIndex: const <bool>[],
+    table64ByIndex: const <bool>[],
+    dataSegments: const <Uint8List?>[],
+    elementSegments: const <List<int?>?>[],
+    elementSegmentRefTypeCodes: const <int>[],
+  );
+  return (
+    vm: vm,
+    reference: native_vm.WasmVm.functionRefIdFor(
+      namespace: namespace,
+      functionIndex: 0,
+    ),
+  );
+}

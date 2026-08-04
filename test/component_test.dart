@@ -422,6 +422,29 @@ void main() {
       expect(lower.options, isEmpty);
     });
 
+    test('decodes current canonical thread scheduling opcodes', () {
+      final definitions = WasmComponent.decode(
+        _canonicalThreadSchedulingComponentBytes(),
+      ).canonicalDefinitions;
+
+      expect(definitions.map((definition) => definition.kind), [
+        WasmComponentCanonicalKind.threadResumeLater,
+        WasmComponentCanonicalKind.threadSuspend,
+        WasmComponentCanonicalKind.threadSuspendThenResume,
+        WasmComponentCanonicalKind.threadYieldThenResume,
+        WasmComponentCanonicalKind.threadSuspendThenPromote,
+        WasmComponentCanonicalKind.threadYieldThenPromote,
+      ]);
+      expect(definitions.map((definition) => definition.isCancellable), [
+        false,
+        false,
+        true,
+        false,
+        true,
+        false,
+      ]);
+    });
+
     test('decodes component type definitions', () {
       final component = WasmComponent.decode(_typeDefinitionsComponentBytes());
 
@@ -628,20 +651,70 @@ void main() {
       },
     );
 
-    test(
-      'rejects type declaration resource aliases across component boundaries',
-      () {
-        final errors = WasmComponent.decode(
+    test('allows resource aliases across type declaration boundaries', () {
+      expect(
+        WasmComponent.decode(
           _typeDeclarationOuterResourceAliasComponentBytes(),
-        ).validate();
+        ).validate(),
+        isEmpty,
+      );
+    });
+
+    test('rejects resource aliases across nested component boundaries', () {
+      for (final bytes in [
+        _nestedComponentOuterResourceAliasComponentBytes(),
+        _nestedComponentScopedResourceAliasComponentBytes(),
+        _grandchildComponentOuterResourceAliasComponentBytes(),
+        _nestedComponentTypeOuterResourceAliasComponentBytes(),
+      ]) {
+        final errors = WasmComponent.decode(bytes).validate();
 
         expect(errors, hasLength(1));
         expect(
           errors.single.message,
           contains('cannot alias resource-containing types'),
         );
-      },
-    );
+      }
+    });
+
+    test('resolves actual component scopes through nested type aliases', () {
+      expect(
+        WasmComponent.decode(
+          _nestedComponentTypeOuterPureAliasComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
+    });
+
+    test('reports out-of-range nested component type aliases', () {
+      final errors = WasmComponent.decode(
+        _nestedComponentOuterTypeAliasOutOfRangeComponentBytes(),
+      ).validate();
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single.message,
+        contains('Unknown Wasm component outer alias type index'),
+      );
+    });
+
+    test('resolves outer alias resources in the defining type scope', () {
+      expect(
+        WasmComponent.decode(
+          _typeDeclarationOuterAliasScopedReferencesComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
+    });
+
+    test('preserves defining scopes through nested component aliases', () {
+      expect(
+        WasmComponent.decode(
+          _nestedComponentOuterAliasScopedReferencesComponentBytes(),
+        ).validate(),
+        isEmpty,
+      );
+    });
 
     test('rejects unsupported type declaration alias sorts', () {
       final errors = WasmComponent.decode(
@@ -1497,7 +1570,7 @@ void main() {
       );
     });
 
-    test('reports invalid canonical option placements', () {
+    test('validates canonical option placements', () {
       final lower = WasmComponent.decode(
         _canonicalLowerWithPostReturnComponentBytes(),
       ).validate();
@@ -1513,16 +1586,41 @@ void main() {
 
       final streamRead = WasmComponent.decode(
         _canonicalStreamReadWithAsyncComponentBytes(),
-      ).validate();
-
-      expect(
-        streamRead.any(
-          (error) => error.message.contains(
-            'stream or future copy cannot use async option',
-          ),
-        ),
-        isTrue,
       );
+
+      expect(streamRead.validate(), isEmpty);
+      expect(streamRead.canonicalDefinitions.single.isAsync, isTrue);
+
+      final asyncPostReturn = WasmComponent.decode(
+        _canonicalAsyncLiftWithPostReturnComponentBytes(),
+      ).validate();
+      expect(
+        asyncPostReturn.map((error) => error.message),
+        contains(contains('cannot use async with postReturn option')),
+      );
+    });
+
+    test('decodes async stream and future copy options', () {
+      final cases = <(String, int, int, WasmComponentCanonicalKind)>[
+        ('stream.read', 0x66, 0x0f, WasmComponentCanonicalKind.streamRead),
+        ('stream.write', 0x66, 0x10, WasmComponentCanonicalKind.streamWrite),
+        ('future.read', 0x65, 0x16, WasmComponentCanonicalKind.futureRead),
+        ('future.write', 0x65, 0x17, WasmComponentCanonicalKind.futureWrite),
+      ];
+
+      for (final (name, typeLead, opcode, kind) in cases) {
+        final component = WasmComponent.decode(
+          _canonicalAsyncCopyComponentBytes(typeLead, opcode),
+        );
+
+        expect(component.validate(), isEmpty, reason: name);
+        expect(component.canonicalDefinitions.single.kind, kind, reason: name);
+        expect(
+          component.canonicalDefinitions.single.isAsync,
+          isTrue,
+          reason: name,
+        );
+      }
     });
 
     test('validates stream and future dynamic copy options by direction', () {
@@ -1582,12 +1680,11 @@ void main() {
     });
 
     test('reports missing canonical option requirements', () {
-      final errors = WasmComponent.decode(
+      final asyncLower = WasmComponent.decode(
         _canonicalLowerAsyncWithoutMemoryComponentBytes(),
       ).validate();
 
-      expect(errors, hasLength(1));
-      expect(errors.single.message, contains('requires a memory option'));
+      expect(asyncLower, isEmpty);
 
       final stream = WasmComponent.decode(
         _canonicalStreamReadWithoutMemoryComponentBytes(),
@@ -4916,6 +5013,38 @@ Uint8List _canonicalLiftLowerComponentBytes() => Uint8List.fromList(const <int>[
   0x66,
 ]);
 
+Uint8List _canonicalThreadSchedulingComponentBytes() => _componentBytes([
+  _componentSection(0x08, [
+    0x06,
+    0x28,
+    0x29,
+    0x00,
+    0x2a,
+    0x01,
+    0x2b,
+    0x00,
+    0x2c,
+    0x01,
+    0x2d,
+    0x00,
+  ]),
+]);
+
+Uint8List _canonicalAsyncLiftWithPostReturnComponentBytes() => _componentBytes([
+  _componentSection(0x07, [0x01, 0x43, 0x00, 0x01, 0x00]),
+  _componentSection(0x08, [
+    0x01,
+    0x00,
+    0x00,
+    0x00,
+    0x02,
+    0x06,
+    0x05,
+    0x00,
+    0x00,
+  ]),
+]);
+
 Uint8List _canonicalResultOutOfRangeTypeIndexComponentBytes() =>
     Uint8List.fromList(const <int>[
       0x00,
@@ -5452,7 +5581,10 @@ Uint8List _canonicalLowerWithPostReturnComponentBytes() =>
     ]);
 
 Uint8List _canonicalStreamReadWithAsyncComponentBytes() =>
-    Uint8List.fromList(const <int>[
+    _canonicalAsyncCopyComponentBytes(0x66, 0x0f);
+
+Uint8List _canonicalAsyncCopyComponentBytes(int typeLead, int opcode) =>
+    Uint8List.fromList(<int>[
       0x00,
       0x61,
       0x73,
@@ -5464,12 +5596,12 @@ Uint8List _canonicalStreamReadWithAsyncComponentBytes() =>
       0x07,
       0x03,
       0x01,
-      0x66,
+      typeLead,
       0x00,
       0x08,
       0x05,
       0x01,
-      0x0f,
+      opcode,
       0x00,
       0x01,
       0x06,
@@ -6772,6 +6904,522 @@ Uint8List _typeDeclarationOuterResourceAliasComponentBytes() =>
       0x01,
       0x00,
     ], count: 2);
+
+Uint8List _nestedComponentOuterResourceAliasComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x3f,
+      0x7f,
+      0x00,
+      0x04,
+      0x0f,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x06,
+      0x05,
+      0x01,
+      0x03,
+      0x02,
+      0x01,
+      0x00,
+    ]);
+
+Uint8List _nestedComponentScopedResourceAliasComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x25,
+      0x02,
+      0x42,
+      0x04,
+      0x04,
+      0x00,
+      0x01,
+      0x72,
+      0x03,
+      0x01,
+      0x01,
+      0x69,
+      0x00,
+      0x01,
+      0x71,
+      0x01,
+      0x06,
+      0x66,
+      0x61,
+      0x69,
+      0x6c,
+      0x65,
+      0x64,
+      0x01,
+      0x01,
+      0x00,
+      0x04,
+      0x00,
+      0x05,
+      0x65,
+      0x72,
+      0x72,
+      0x6f,
+      0x72,
+      0x03,
+      0x00,
+      0x02,
+      0x73,
+      0x0a,
+      0x0a,
+      0x01,
+      0x00,
+      0x05,
+      0x74,
+      0x79,
+      0x70,
+      0x65,
+      0x73,
+      0x05,
+      0x00,
+      0x06,
+      0x0a,
+      0x01,
+      0x03,
+      0x00,
+      0x00,
+      0x05,
+      0x65,
+      0x72,
+      0x72,
+      0x6f,
+      0x72,
+      0x04,
+      0x0f,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x06,
+      0x05,
+      0x01,
+      0x03,
+      0x02,
+      0x01,
+      0x02,
+    ]);
+
+Uint8List _grandchildComponentOuterResourceAliasComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x3f,
+      0x7f,
+      0x00,
+      0x04,
+      0x19,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x04,
+      0x0f,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x06,
+      0x05,
+      0x01,
+      0x03,
+      0x02,
+      0x02,
+      0x00,
+    ]);
+
+Uint8List _nestedComponentTypeOuterPureAliasComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x02,
+      0x01,
+      0x73,
+      0x04,
+      0x12,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x08,
+      0x01,
+      0x41,
+      0x01,
+      0x02,
+      0x03,
+      0x02,
+      0x02,
+      0x00,
+    ]);
+
+Uint8List _nestedComponentTypeOuterResourceAliasComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x04,
+      0x01,
+      0x3f,
+      0x7f,
+      0x00,
+      0x04,
+      0x12,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x08,
+      0x01,
+      0x41,
+      0x01,
+      0x02,
+      0x03,
+      0x02,
+      0x02,
+      0x00,
+    ]);
+
+Uint8List _nestedComponentOuterTypeAliasOutOfRangeComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x02,
+      0x01,
+      0x73,
+      0x04,
+      0x0f,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x06,
+      0x05,
+      0x01,
+      0x03,
+      0x02,
+      0x01,
+      0x01,
+    ]);
+
+Uint8List _typeDeclarationOuterAliasScopedReferencesComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x2b,
+      0x01,
+      0x42,
+      0x04,
+      0x01,
+      0x6b,
+      0x73,
+      0x04,
+      0x00,
+      0x08,
+      0x72,
+      0x65,
+      0x73,
+      0x6f,
+      0x75,
+      0x72,
+      0x63,
+      0x65,
+      0x03,
+      0x01,
+      0x01,
+      0x71,
+      0x01,
+      0x06,
+      0x66,
+      0x61,
+      0x69,
+      0x6c,
+      0x65,
+      0x64,
+      0x01,
+      0x00,
+      0x00,
+      0x04,
+      0x00,
+      0x05,
+      0x65,
+      0x72,
+      0x72,
+      0x6f,
+      0x72,
+      0x03,
+      0x00,
+      0x02,
+      0x0a,
+      0x0a,
+      0x01,
+      0x00,
+      0x05,
+      0x74,
+      0x79,
+      0x70,
+      0x65,
+      0x73,
+      0x05,
+      0x00,
+      0x06,
+      0x16,
+      0x02,
+      0x03,
+      0x00,
+      0x00,
+      0x08,
+      0x72,
+      0x65,
+      0x73,
+      0x6f,
+      0x75,
+      0x72,
+      0x63,
+      0x65,
+      0x03,
+      0x00,
+      0x00,
+      0x05,
+      0x65,
+      0x72,
+      0x72,
+      0x6f,
+      0x72,
+      0x07,
+      0x13,
+      0x01,
+      0x42,
+      0x02,
+      0x02,
+      0x03,
+      0x02,
+      0x01,
+      0x02,
+      0x04,
+      0x00,
+      0x05,
+      0x65,
+      0x72,
+      0x72,
+      0x6f,
+      0x72,
+      0x03,
+      0x00,
+      0x00,
+    ]);
+
+Uint8List _nestedComponentOuterAliasScopedReferencesComponentBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x2b,
+      0x01,
+      0x42,
+      0x04,
+      0x01,
+      0x6b,
+      0x73,
+      0x04,
+      0x00,
+      0x08,
+      0x72,
+      0x65,
+      0x73,
+      0x6f,
+      0x75,
+      0x72,
+      0x63,
+      0x65,
+      0x03,
+      0x01,
+      0x01,
+      0x71,
+      0x01,
+      0x06,
+      0x66,
+      0x61,
+      0x69,
+      0x6c,
+      0x65,
+      0x64,
+      0x01,
+      0x00,
+      0x00,
+      0x04,
+      0x00,
+      0x05,
+      0x65,
+      0x72,
+      0x72,
+      0x6f,
+      0x72,
+      0x03,
+      0x00,
+      0x02,
+      0x0a,
+      0x0a,
+      0x01,
+      0x00,
+      0x05,
+      0x74,
+      0x79,
+      0x70,
+      0x65,
+      0x73,
+      0x05,
+      0x00,
+      0x06,
+      0x0a,
+      0x01,
+      0x03,
+      0x00,
+      0x00,
+      0x05,
+      0x65,
+      0x72,
+      0x72,
+      0x6f,
+      0x72,
+      0x04,
+      0x28,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x07,
+      0x06,
+      0x02,
+      0x3f,
+      0x7f,
+      0x00,
+      0x69,
+      0x00,
+      0x06,
+      0x05,
+      0x01,
+      0x03,
+      0x02,
+      0x01,
+      0x01,
+      0x04,
+      0x0f,
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x06,
+      0x05,
+      0x01,
+      0x03,
+      0x02,
+      0x01,
+      0x02,
+    ]);
 
 Uint8List _typeDeclarationFunctionAliasComponentBytes() =>
     Uint8List.fromList(const <int>[

@@ -101,12 +101,29 @@ final class WASIComponentVersionedHost {
     String? worldName,
   }) {
     final world = _selectWitWorld(document, worldName);
-    final errors = _witWorldVersionErrors(profile, document, world);
-    final functions = wasiComponentWitWorldFunctions(
-      document,
-      world,
-      resolveTarget: resolveWASIComponentStandardWitTarget,
-    );
+    final errors = _witWorldVersionErrors(profile, document, world).toList();
+    List<WASIComponentWitFunctionBinding> functions;
+    try {
+      functions = wasiComponentWitWorldFunctions(
+        document,
+        world,
+        resolveTarget: resolveWASIComponentStandardWitTarget,
+      );
+    } on WASIComponentWitTargetResolutionException catch (error) {
+      final item = _witWorldItemForTarget(document, world, error.target);
+      if (item == null) {
+        rethrow;
+      }
+      errors.add(
+        WASIComponentVersionedWitWorldError(
+          profile: profile,
+          item: item,
+          targetName: error.target,
+          reason: 'Unable to resolve qualified WIT target: ${error.reason}.',
+        ),
+      );
+      functions = const <WASIComponentWitFunctionBinding>[];
+    }
     return WASIComponentVersionedWitWorldPlan._(
       profile: profile,
       document: document,
@@ -130,6 +147,37 @@ final class WASIComponentVersionedHost {
       worldName: worldName,
     ).bindAdapters(imports: imports, exports: exports);
   }
+}
+
+WASIComponentWitWorldItem? _witWorldItemForTarget(
+  WASIComponentWitDocument document,
+  WASIComponentWitWorld world,
+  String target, [
+  Set<String>? visiting,
+]) {
+  final active = visiting ?? <String>{};
+  final visitKey = '${document.package?.text ?? '<local>'}#${world.name}';
+  if (!active.add(visitKey)) {
+    return null;
+  }
+  for (final item in world.items) {
+    if (item.target.text == target) {
+      return item;
+    }
+    if (item.direction != WASIComponentWitWorldItemDirection.include ||
+        item.target.isQualified) {
+      continue;
+    }
+    final included = document.worldNamed(item.target.text);
+    if (included == null) {
+      continue;
+    }
+    final nested = _witWorldItemForTarget(document, included, target, active);
+    if (nested != null) {
+      return nested;
+    }
+  }
+  return null;
 }
 
 /// Component canonical operation profile for one WASI version.

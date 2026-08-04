@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
@@ -20,18 +21,22 @@ void main() {
       final program = host.bindCanonicalDefinitions(component);
 
       expect(program.operations.map((operation) => operation.kind), [
-        WasmComponentCanonicalKind.backpressureSet,
         WasmComponentCanonicalKind.backpressureInc,
         WasmComponentCanonicalKind.backpressureDec,
       ]);
 
-      expect(program.invoke(0, <Object?>[true]), 1);
+      expect(program.invoke(0, const <Object?>[]), 1);
       expect(host.backpressure.isActive, isTrue);
-      expect(program.invoke(1, const <Object?>[]), 2);
-      expect(program.invoke(2, const <Object?>[]), 1);
-      expect(program.invoke(0, <Object?>[false]), 0);
+      expect(program.invoke(1, const <Object?>[]), 0);
       expect(host.backpressure.isActive, isFalse);
-      expect(() => program.invoke(2, const <Object?>[]), throwsStateError);
+      expect(() => program.invoke(1, const <Object?>[]), throwsStateError);
+    });
+
+    test('rejects the removed canonical backpressure.set opcode', () {
+      expect(
+        () => WasmComponent.decode(_deprecatedCanonicalBackpressureSetBytes()),
+        throwsFormatException,
+      );
     });
 
     test(
@@ -394,9 +399,17 @@ void main() {
 
       expect(
         program.invoke(2, <Object?>[typedFuture.writable, 'ready']),
-        isNull,
+        isA<WASIComponentAsyncCopyResult>().having(
+          (result) => result.status,
+          'status',
+          WASIComponentAsyncCopyStatus.completed,
+        ),
       );
       expect(program.invoke(1, <Object?>[typedFuture.readable]), 'ready');
+      expect(
+        () => program.invoke(1, <Object?>[typedFuture.readable]),
+        throwsStateError,
+      );
       expect(program.invoke(5, <Object?>[typedFuture.readable]), isNull);
       expect(dropped, isEmpty);
       expect(program.invoke(6, <Object?>[typedFuture.writable]), isNull);
@@ -424,7 +437,14 @@ void main() {
 
         expect(completed, isFalse);
 
-        expect(program.invoke(2, <Object?>[future.writable, 'ready']), isNull);
+        expect(
+          program.invoke(2, <Object?>[future.writable, 'ready']),
+          isA<WASIComponentAsyncCopyResult>().having(
+            (result) => result.status,
+            'status',
+            WASIComponentAsyncCopyStatus.completed,
+          ),
+        );
 
         await expectLater(pending, completion('ready'));
         expect(completed, isTrue);
@@ -450,9 +470,17 @@ void main() {
       expect(host.table.activeCount, 2);
       expect(
         program.invoke(2, <Object?>[futureHandles.writable, 'ready']),
-        isNull,
+        isA<WASIComponentAsyncCopyResult>().having(
+          (result) => result.status,
+          'status',
+          WASIComponentAsyncCopyStatus.completed,
+        ),
       );
       expect(program.invoke(1, <Object?>[futureHandles.readable]), 'ready');
+      expect(
+        () => program.invoke(1, <Object?>[futureHandles.readable]),
+        throwsStateError,
+      );
       expect(
         () => program.invoke(1, <Object?>[futureHandles.writable]),
         throwsStateError,
@@ -484,18 +512,217 @@ void main() {
         await Future<void>.delayed(Duration.zero);
 
         expect(completed, isFalse);
+        await expectLater(
+          program.invokeAsync(1, <Object?>[handles.readable]),
+          throwsStateError,
+        );
         expect(
           () => program.invoke(5, <Object?>[handles.readable]),
           throwsStateError,
         );
 
-        expect(program.invoke(2, <Object?>[handles.writable, 'ready']), isNull);
+        expect(
+          program.invoke(2, <Object?>[handles.writable, 'ready']),
+          isA<WASIComponentAsyncCopyResult>().having(
+            (result) => result.status,
+            'status',
+            WASIComponentAsyncCopyStatus.completed,
+          ),
+        );
 
         await expectLater(pending, completion('ready'));
         expect(completed, isTrue);
         expect(program.invoke(5, <Object?>[handles.readable]), isNull);
         expect(program.invoke(6, <Object?>[handles.writable]), isNull);
         expect(host.table.activeCount, 0);
+      },
+    );
+
+    test('requires a handle-backed future write before dropping', () {
+      final component = WasmComponent.decode(_canonicalFutureProgramBytes());
+      expect(component.validate(), isEmpty);
+      final host = WASIComponentAsyncHost();
+      host.defineFutureType<String>(0, 'message');
+      final program = host.bindCanonicalDefinitionsToHandles(component);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+
+      expect(
+        () => program.invoke(6, <Object?>[handles.writable]),
+        throwsStateError,
+      );
+      expect(host.table.contains(handles.writable), isTrue);
+
+      expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(
+        program.invoke(2, <Object?>[handles.writable, 'returned']),
+        isA<WASIComponentAsyncCopyResult>().having(
+          (result) => result.status,
+          'status',
+          WASIComponentAsyncCopyStatus.dropped,
+        ),
+      );
+      expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
+    test(
+      'resource scopes force-release fresh future writers after a drop trap',
+      () async {
+        final component = WasmComponent.decode(_canonicalFutureProgramBytes());
+        expect(component.validate(), isEmpty);
+        var dropCount = 0;
+        final host = WASIComponentAsyncHost();
+        host.defineFutureType<String>(
+          0,
+          'scoped-message',
+          onDrop: () => dropCount++,
+        );
+        final program = host.bindCanonicalDefinitionsToHandles(component);
+
+        await host.table.runScoped(() {
+          final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+
+          expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+          expect(
+            () => program.invoke(6, <Object?>[handles.writable]),
+            throwsStateError,
+          );
+          expect(host.table.activeCount, 1);
+        });
+
+        expect(host.table.activeCount, 0);
+        expect(dropCount, 1);
+      },
+    );
+
+    test(
+      'resource scopes detach leaked endpoint waitables after failures',
+      () async {
+        final component = WasmComponent.decode(_canonicalStreamProgramBytes());
+        final host = WASIComponentAsyncHost();
+        final waitableHost = WASIComponentWaitableHost(
+          table: host.table,
+          waitableResolvers: <WASIComponentWaitableResolver>[
+            host.waitableForHandle,
+          ],
+        );
+        host.defineStreamType<int>(0, 'scoped-stream');
+        final program = host.bindCanonicalDefinitionsToHandles(component);
+        late WASIComponentWaitable waitable;
+
+        await expectLater(
+          host.table.runScoped<void>(() {
+            final set = waitableHost.waitableSetNew();
+            final handles = _unpackHandles(
+              program.invoke(0, const <Object?>[]),
+            );
+            waitableHost.waitableJoin(handles.readable, set);
+            waitable = host.waitableForHandle(handles.readable)!;
+
+            expect(waitable.inWaitableSet, isTrue);
+            throw StateError('component failed');
+          }),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              'component failed',
+            ),
+          ),
+        );
+
+        expect(waitable.inWaitableSet, isFalse);
+        expect(host.table.activeCount, 0);
+      },
+    );
+
+    test(
+      'resource scopes finish async value cleanup after discard errors',
+      () async {
+        final streamComponent = WasmComponent.decode(
+          _canonicalStreamProgramBytes(),
+        );
+        final streamDiscarded = <int>[];
+        var streamDrops = 0;
+        final streamHost = WASIComponentAsyncHost();
+        streamHost.defineStreamType<int>(
+          0,
+          'throwing-stream',
+          onDrop: () => streamDrops++,
+          onDiscard: (value) {
+            streamDiscarded.add(value);
+            throw StateError('stream discard failed');
+          },
+        );
+        final streamProgram = streamHost.bindCanonicalDefinitionsToHandles(
+          streamComponent,
+        );
+
+        await expectLater(
+          streamHost.table.runScoped(() {
+            final handles = _unpackHandles(
+              streamProgram.invoke(0, const <Object?>[]),
+            );
+            expect(
+              streamProgram.invoke(2, <Object?>[
+                handles.writable,
+                <int>[1, 2],
+              ]),
+              2,
+            );
+          }),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              'stream discard failed',
+            ),
+          ),
+        );
+        expect(streamDiscarded, <int>[1, 2]);
+        expect(streamDrops, 1);
+        expect(streamHost.table.activeCount, 0);
+
+        final futureComponent = WasmComponent.decode(
+          _canonicalFutureProgramBytes(),
+        );
+        final futureDiscarded = <String>[];
+        var futureDrops = 0;
+        final futureHost = WASIComponentAsyncHost();
+        futureHost.defineFutureType<String>(
+          0,
+          'throwing-future',
+          onDrop: () => futureDrops++,
+          onDiscard: (value) {
+            futureDiscarded.add(value);
+            throw StateError('future discard failed');
+          },
+        );
+        final futureProgram = futureHost.bindCanonicalDefinitionsToHandles(
+          futureComponent,
+        );
+
+        await expectLater(
+          futureHost.table.runScoped(() {
+            final handles = _unpackHandles(
+              futureProgram.invoke(0, const <Object?>[]),
+            );
+            expect(
+              futureProgram.invoke(2, <Object?>[handles.writable, 'owned']),
+              isA<WASIComponentAsyncCopyResult>(),
+            );
+          }),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              'future discard failed',
+            ),
+          ),
+        );
+        expect(futureDiscarded, <String>['owned']);
+        expect(futureDrops, 1);
+        expect(futureHost.table.activeCount, 0);
       },
     );
 
@@ -508,7 +735,14 @@ void main() {
       final future =
           program.invoke(0, const <Object?>[])! as WASIComponentFuture<Object?>;
 
-      expect(program.invoke(2, <Object?>[future.writable, null]), isNull);
+      expect(
+        program.invoke(2, <Object?>[future.writable, null]),
+        isA<WASIComponentAsyncCopyResult>().having(
+          (result) => result.status,
+          'status',
+          WASIComponentAsyncCopyStatus.completed,
+        ),
+      );
       expect(program.invoke(1, <Object?>[future.readable]), isNull);
 
       final rejected =
@@ -975,6 +1209,179 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('rejects invalid stream read buffers before starting copies', () {
+      final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final invalidPointer = memory.buffer.lengthInBytes;
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<int>(component, 0, 'u32-stream');
+      final program = _streamU32MemoryHandleProgram(host);
+      final newOperation = program.operations[0];
+      final readOperation = program.operations[2];
+      final stream = newOperation.streamNew() as WASIComponentStream<int>;
+
+      expect(
+        () => readOperation.streamReadToMemory(
+          stream.readable,
+          memory,
+          invalidPointer,
+          1,
+        ),
+        throwsRangeError,
+      );
+      stream.readable.drop();
+      stream.writable.drop();
+
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final waitable = host.waitableForHandle(handles.readable)!;
+      expect(
+        () => readOperation.streamReadHandleToMemory(
+          handles.readable,
+          memory,
+          invalidPointer,
+          1,
+        ),
+        throwsRangeError,
+      );
+      expect(
+        () => readOperation.streamReadHandleToMemoryWhenAvailable(
+          handles.readable,
+          memory,
+          invalidPointer,
+          1,
+        ),
+        throwsRangeError,
+      );
+      expect(
+        () => program.invokeWithMemoryEvent(2, memory, <Object?>[
+          handles.readable,
+          invalidPointer,
+          1,
+        ]),
+        throwsRangeError,
+      );
+      expect(waitable.hasActiveCopy, isFalse);
+      expect(waitable.hasPendingEvent, isFalse);
+
+      expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
+    test('rejects invalid future read buffers before starting copies', () {
+      final component = WasmComponent.decode(_futureU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final invalidPointer = memory.buffer.lengthInBytes;
+      final host = WASIComponentAsyncHost();
+      host.defineFutureTypeFromComponent<int>(component, 0, 'u32-future');
+      final program = _futureU32MemoryHandleProgram(host);
+      final newOperation = program.operations[0];
+      final readOperation = program.operations[2];
+      final future = newOperation.futureNew() as WASIComponentFuture<int>;
+
+      expect(
+        () => readOperation.futureReadToMemory(
+          future.readable,
+          memory,
+          invalidPointer,
+        ),
+        throwsRangeError,
+      );
+      future.readable.dispose();
+      future.writable.dispose();
+
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final waitable = host.waitableForHandle(handles.readable)!;
+      expect(
+        () => readOperation.futureReadHandleToMemory(
+          handles.readable,
+          memory,
+          invalidPointer,
+        ),
+        throwsRangeError,
+      );
+      expect(
+        () => readOperation.futureReadHandleToMemoryWhenReady(
+          handles.readable,
+          memory,
+          invalidPointer,
+        ),
+        throwsRangeError,
+      );
+      expect(
+        () => program.invokeWithMemoryEvent(2, memory, <Object?>[
+          handles.readable,
+          invalidPointer,
+        ]),
+        throwsRangeError,
+      );
+      expect(waitable.hasActiveCopy, isFalse);
+      expect(waitable.hasPendingEvent, isFalse);
+
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 0]),
+        0,
+      );
+      expect(
+        program.invokeWithMemory(2, memory, <Object?>[handles.readable, 4]),
+        0,
+      );
+      expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
+    test('delivers unexpected async copy failures as wait traps', () async {
+      final component = WasmComponent.decode(_streamStringTypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final host = WASIComponentAsyncHost();
+      final waitableHost = WASIComponentWaitableHost(
+        table: host.table,
+        waitableResolvers: [host.waitableForHandle],
+      );
+      host.defineStreamTypeFromComponent<Object>(component, 0, 'strings');
+      final program = _streamStringMemoryHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final waitable = host.waitableForHandle(handles.readable)!;
+      final waitableSet = waitableHost.waitableSetNew();
+      waitableHost.waitableJoin(handles.readable, waitableSet);
+      final failure = StateError('realloc failed');
+
+      expect(
+        program.invokeWithMemoryEvent(2, memory, <Object?>[
+          handles.readable,
+          32,
+          1,
+        ], realloc: (_, _, _, _) => throw failure),
+        wasiComponentAsyncBlocked,
+      );
+      final pending = waitableHost.waitableSetWaitToMemory(
+        waitableSet,
+        memory,
+        128,
+      );
+      expect(
+        program.invoke(1, <Object?>[
+          handles.writable,
+          ['go'],
+        ]),
+        1,
+      );
+
+      await expectLater(pending, throwsA(same(failure)));
+      expect(waitable.hasActiveCopy, isFalse);
+      expect(waitable.hasPendingEvent, isFalse);
+
+      waitableHost.waitableJoin(handles.readable, 0);
+      waitableHost.waitableSetDrop(waitableSet);
+      expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test('rejects duplicate handle-backed stream read memory events', () async {
       final component = WasmComponent.decode(_streamU32TypeComponentBytes());
       expect(component.validate(), isEmpty);
@@ -1016,6 +1423,19 @@ void main() {
       expect(
         program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32, 1]),
         1 << 4,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        () => program.invokeWithMemoryEvent(2, memory, <Object?>[
+          handles.readable,
+          100,
+          1,
+        ]),
+        throwsStateError,
+      );
+      expect(
+        () => program.invoke(3, <Object?>[handles.readable]),
+        throwsStateError,
       );
       await expectLater(
         waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
@@ -1079,6 +1499,69 @@ void main() {
         expect(host.table.activeCount, 0);
       },
     );
+
+    test('keeps stream reads reusable after cancelling a copy', () async {
+      final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 377, Endian.little);
+      final host = WASIComponentAsyncHost();
+      final waitableHost = WASIComponentWaitableHost(
+        table: host.table,
+        waitableResolvers: [host.waitableForHandle],
+      );
+      host.defineStreamTypeFromComponent<int>(component, 0, 'u32-stream');
+      final program = _streamU32MemoryCancelHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final waitableSet = waitableHost.waitableSetNew();
+      waitableHost.waitableJoin(handles.readable, waitableSet);
+
+      expect(
+        program.invokeWithMemoryEvent(2, memory, <Object?>[
+          handles.readable,
+          96,
+          1,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invoke(3, <Object?>[handles.readable]),
+        wasiComponentAsyncBlocked,
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(2),
+      );
+
+      expect(
+        program.invokeWithMemoryEvent(2, memory, <Object?>[
+          handles.readable,
+          96,
+          1,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32, 1]),
+        1 << 4,
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(2),
+      );
+      expect(data.getUint32(96, Endian.little), 377);
+      expect(
+        data.getUint32(132, Endian.little),
+        WASIComponentAsyncCopyResult.completed(1).packedResult,
+      );
+
+      waitableHost.waitableJoin(handles.readable, 0);
+      waitableHost.waitableSetDrop(waitableSet);
+      expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
 
     test(
       'waits for synchronous handle-backed stream read cancel memory events',
@@ -1158,6 +1641,51 @@ void main() {
       expect(host.table.activeCount, 0);
     });
 
+    test('returns dropped when a stream read starts after EOF', () async {
+      final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final host = WASIComponentAsyncHost();
+      host.defineStreamTypeFromComponent<int>(component, 0, 'u32-stream');
+      final program = _streamU32MemoryHandleProgram(host);
+
+      WASIComponentAsyncEndpointHandles newClosedStream() {
+        final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+        expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+        return handles;
+      }
+
+      final direct = newClosedStream();
+      expect(
+        program.invokeWithMemory(2, memory, <Object?>[direct.readable, 96, 1]),
+        WASIComponentAsyncCopyResult.dropped().packedResult,
+      );
+      expect(program.invoke(3, <Object?>[direct.readable]), isNull);
+
+      final event = newClosedStream();
+      expect(
+        program.invokeWithMemoryEvent(2, memory, <Object?>[
+          event.readable,
+          96,
+          1,
+        ]),
+        WASIComponentAsyncCopyResult.dropped().packedResult,
+      );
+      expect(program.invoke(3, <Object?>[event.readable]), isNull);
+
+      final awaited = newClosedStream();
+      await expectLater(
+        program.invokeWithMemoryAsync(2, memory, <Object?>[
+          awaited.readable,
+          96,
+          1,
+        ]),
+        completion(WASIComponentAsyncCopyResult.dropped().packedResult),
+      );
+      expect(program.invoke(3, <Object?>[awaited.readable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
     test('cancels bounded handle-backed stream write memory events', () async {
       final component = WasmComponent.decode(_streamU32TypeComponentBytes());
       expect(component.validate(), isEmpty);
@@ -1207,6 +1735,78 @@ void main() {
         data.getUint32(132, Endian.little),
         WASIComponentAsyncCopyResult.cancelled().packedResult,
       );
+      waitableHost.waitableJoin(handles.writable, 0);
+      waitableHost.waitableSetDrop(waitableSet);
+      expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
+    test('keeps stream writes reusable after cancelling a copy', () async {
+      final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 610, Endian.little);
+      final host = WASIComponentAsyncHost();
+      final waitableHost = WASIComponentWaitableHost(
+        table: host.table,
+        waitableResolvers: [host.waitableForHandle],
+      );
+      host.defineStreamTypeFromComponent<int>(
+        component,
+        0,
+        'u32-stream',
+        maxBufferedElements: 0,
+      );
+      final program = _streamU32MemoryCancelHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final waitableSet = waitableHost.waitableSetNew();
+      waitableHost.waitableJoin(handles.writable, waitableSet);
+
+      expect(
+        program.invokeWithMemoryEvent(1, memory, <Object?>[
+          handles.writable,
+          32,
+          1,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invoke(4, <Object?>[handles.writable]),
+        wasiComponentAsyncBlocked,
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(3),
+      );
+
+      expect(
+        program.invokeWithMemoryEvent(1, memory, <Object?>[
+          handles.writable,
+          32,
+          1,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      await expectLater(
+        program.invokeWithMemoryAsync(2, memory, <Object?>[
+          handles.readable,
+          96,
+          1,
+        ]),
+        completion(WASIComponentAsyncCopyResult.completed(1).packedResult),
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(3),
+      );
+      expect(data.getUint32(96, Endian.little), 610);
+      expect(
+        data.getUint32(132, Endian.little),
+        WASIComponentAsyncCopyResult.completed(1).packedResult,
+      );
+
       waitableHost.waitableJoin(handles.writable, 0);
       waitableHost.waitableSetDrop(waitableSet);
       expect(program.invoke(5, <Object?>[handles.readable]), isNull);
@@ -1315,6 +1915,56 @@ void main() {
           data.getUint32(132, Endian.little),
           WASIComponentAsyncCopyStatus.dropped.code,
         );
+        waitableHost.waitableJoin(handles.writable, 0);
+        waitableHost.waitableSetDrop(waitableSet);
+        expect(program.invoke(4, <Object?>[handles.writable]), isNull);
+        expect(host.table.activeCount, 0);
+      },
+    );
+
+    test(
+      'publishes dropped when a stream write starts after reader drop',
+      () async {
+        final component = WasmComponent.decode(_streamU32TypeComponentBytes());
+        expect(component.validate(), isEmpty);
+        final memory = Memory(const MemoryDescriptor(initial: 1));
+        final data = ByteData.view(memory.buffer);
+        data.setUint32(32, 3, Endian.little);
+        final host = WASIComponentAsyncHost();
+        final waitableHost = WASIComponentWaitableHost(
+          table: host.table,
+          waitableResolvers: [host.waitableForHandle],
+        );
+        host.defineStreamTypeFromComponent<int>(
+          component,
+          0,
+          'u32-stream',
+          maxBufferedElements: 0,
+        );
+        final program = _streamU32MemoryHandleProgram(host);
+        final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+        final waitableSet = waitableHost.waitableSetNew();
+        waitableHost.waitableJoin(handles.writable, waitableSet);
+
+        expect(program.invoke(3, <Object?>[handles.readable]), isNull);
+        expect(
+          program.invokeWithMemoryEvent(1, memory, <Object?>[
+            handles.writable,
+            32,
+            1,
+          ]),
+          wasiComponentAsyncBlocked,
+        );
+        await expectLater(
+          waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+          completion(3),
+        );
+        expect(data.getUint32(128, Endian.little), handles.writable);
+        expect(
+          data.getUint32(132, Endian.little),
+          WASIComponentAsyncCopyStatus.dropped.code,
+        );
+
         waitableHost.waitableJoin(handles.writable, 0);
         waitableHost.waitableSetDrop(waitableSet);
         expect(program.invoke(4, <Object?>[handles.writable]), isNull);
@@ -2358,6 +3008,18 @@ void main() {
         program.invokeWithMemory(2, memory, <Object?>[handles.readable, 96]),
         0,
       );
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        () => program.invokeWithMemoryEvent(1, memory, <Object?>[
+          handles.writable,
+          32,
+        ]),
+        throwsStateError,
+      );
+      expect(
+        () => program.invoke(4, <Object?>[handles.writable]),
+        throwsStateError,
+      );
 
       await expectLater(
         waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
@@ -2400,6 +3062,14 @@ void main() {
         program.invoke(3, <Object?>[handles.readable]),
         wasiComponentAsyncBlocked,
       );
+      expect(
+        () => program.invoke(3, <Object?>[handles.readable]),
+        throwsStateError,
+      );
+      expect(
+        () => program.invoke(5, <Object?>[handles.readable]),
+        throwsStateError,
+      );
 
       await expectLater(
         waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
@@ -2410,6 +3080,71 @@ void main() {
         data.getUint32(132, Endian.little),
         WASIComponentAsyncCopyResult.cancelled().packedResult,
       );
+      waitableHost.waitableJoin(handles.readable, 0);
+      waitableHost.waitableSetDrop(waitableSet);
+      expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 0]),
+        WASIComponentAsyncCopyResult.dropped().packedResult,
+      );
+      expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
+    test('keeps future reads reusable after cancelling a copy', () async {
+      final component = WasmComponent.decode(_futureU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 610, Endian.little);
+      final host = WASIComponentAsyncHost();
+      final waitableHost = WASIComponentWaitableHost(
+        table: host.table,
+        waitableResolvers: [host.waitableForHandle],
+      );
+      host.defineFutureTypeFromComponent<int>(component, 0, 'u32-future');
+      final program = _futureU32MemoryCancelHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final waitableSet = waitableHost.waitableSetNew();
+      waitableHost.waitableJoin(handles.readable, waitableSet);
+
+      expect(
+        program.invokeWithMemoryEvent(2, memory, <Object?>[
+          handles.readable,
+          96,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invoke(3, <Object?>[handles.readable]),
+        wasiComponentAsyncBlocked,
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(4),
+      );
+
+      expect(
+        program.invokeWithMemoryEvent(2, memory, <Object?>[
+          handles.readable,
+          96,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32]),
+        WASIComponentAsyncCopyResult.completed(0).packedResult,
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(4),
+      );
+      expect(data.getUint32(96, Endian.little), 610);
+      expect(
+        data.getUint32(132, Endian.little),
+        WASIComponentAsyncCopyResult.completed(0).packedResult,
+      );
+
       waitableHost.waitableJoin(handles.readable, 0);
       waitableHost.waitableSetDrop(waitableSet);
       expect(program.invoke(5, <Object?>[handles.readable]), isNull);
@@ -2442,6 +3177,10 @@ void main() {
       );
 
       expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 0]),
+        WASIComponentAsyncCopyResult.dropped().packedResult,
+      );
       expect(program.invoke(6, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
@@ -2487,6 +3226,71 @@ void main() {
       waitableHost.waitableJoin(handles.writable, 0);
       waitableHost.waitableSetDrop(waitableSet);
       expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32]),
+        WASIComponentAsyncCopyResult.dropped().packedResult,
+      );
+      expect(program.invoke(6, <Object?>[handles.writable]), isNull);
+      expect(host.table.activeCount, 0);
+    });
+
+    test('keeps future writes reusable after cancelling a copy', () async {
+      final component = WasmComponent.decode(_futureU32TypeComponentBytes());
+      expect(component.validate(), isEmpty);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final data = ByteData.view(memory.buffer);
+      data.setUint32(32, 610, Endian.little);
+      final host = WASIComponentAsyncHost();
+      final waitableHost = WASIComponentWaitableHost(
+        table: host.table,
+        waitableResolvers: [host.waitableForHandle],
+      );
+      host.defineFutureTypeFromComponent<int>(component, 0, 'u32-future');
+      final program = _futureU32MemoryCancelHandleProgram(host);
+      final handles = _unpackHandles(program.invoke(0, const <Object?>[]));
+      final waitableSet = waitableHost.waitableSetNew();
+      waitableHost.waitableJoin(handles.writable, waitableSet);
+
+      expect(
+        program.invokeWithMemoryEvent(1, memory, <Object?>[
+          handles.writable,
+          32,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invoke(4, <Object?>[handles.writable]),
+        wasiComponentAsyncBlocked,
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(5),
+      );
+
+      expect(
+        program.invokeWithMemoryEvent(1, memory, <Object?>[
+          handles.writable,
+          32,
+        ]),
+        wasiComponentAsyncBlocked,
+      );
+      expect(
+        program.invokeWithMemory(2, memory, <Object?>[handles.readable, 96]),
+        WASIComponentAsyncCopyResult.completed(0).packedResult,
+      );
+      await expectLater(
+        waitableHost.waitableSetWaitToMemory(waitableSet, memory, 128),
+        completion(5),
+      );
+      expect(data.getUint32(96, Endian.little), 610);
+      expect(
+        data.getUint32(132, Endian.little),
+        WASIComponentAsyncCopyResult.completed(0).packedResult,
+      );
+
+      waitableHost.waitableJoin(handles.writable, 0);
+      waitableHost.waitableSetDrop(waitableSet);
+      expect(program.invoke(5, <Object?>[handles.readable]), isNull);
       expect(program.invoke(6, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
@@ -2518,6 +3322,10 @@ void main() {
       );
 
       expect(program.invoke(5, <Object?>[handles.readable]), isNull);
+      expect(
+        program.invokeWithMemory(1, memory, <Object?>[handles.writable, 32]),
+        WASIComponentAsyncCopyResult.dropped().packedResult,
+      );
       expect(program.invoke(6, <Object?>[handles.writable]), isNull);
       expect(host.table.activeCount, 0);
     });
@@ -2703,7 +3511,14 @@ void main() {
         throwsStateError,
       );
 
-      expect(program.invoke(1, <Object?>[handles.writable, 'A']), isNull);
+      expect(
+        program.invoke(1, <Object?>[handles.writable, 'A']),
+        isA<WASIComponentAsyncCopyResult>().having(
+          (result) => result.status,
+          'status',
+          WASIComponentAsyncCopyStatus.completed,
+        ),
+      );
       expect(
         program.invokeWithMemory(2, memory, <Object?>[handles.readable, 64]),
         0,
@@ -2924,12 +3739,27 @@ Uint8List _canonicalBackpressureBytes() => Uint8List.fromList(const <int>[
   0x01,
   0x00,
   0x08,
-  0x04,
   0x03,
-  0x08,
+  0x02,
   0x24,
   0x25,
 ]);
+
+Uint8List _deprecatedCanonicalBackpressureSetBytes() =>
+    Uint8List.fromList(const <int>[
+      0x00,
+      0x61,
+      0x73,
+      0x6d,
+      0x0d,
+      0x00,
+      0x01,
+      0x00,
+      0x08,
+      0x02,
+      0x01,
+      0x08,
+    ]);
 
 Uint8List _canonicalStreamProgramBytes() => Uint8List.fromList(const <int>[
   0x00,

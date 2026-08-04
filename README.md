@@ -19,6 +19,7 @@ WASD is a Dart package for:
 - Executing exported functions from Dart
 - Running WASI Preview1 command modules
 - Running stable WASI 0.2.12 command and HTTP proxy components on Dart VM
+- Running stable WASI 0.3.0 command and HTTP service components on Dart VM
 - Inspecting module imports/exports/custom sections
 
 ## Why WASD
@@ -26,7 +27,7 @@ WASD is a Dart package for:
 - Pure Dart core runtime, aligned with Dart/Flutter embedding workflows
 - Public API that mirrors WebAssembly-style operations (`compile`, `instantiate`, `validate`)
 - Explicit host integration via import maps and typed wrappers
-- Built-in WASI Preview1 host plus Preview2 command/proxy runners through `WASI`
+- Built-in WASI Preview1 host plus Preview2 and Preview3 runners through `WASI`
 - Regression-oriented tests and conformance tooling in-repo
 
 ## Installation
@@ -39,7 +40,7 @@ Or add manually in `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  wasd: ^0.4.0
+  wasd: ^0.5.0
 ```
 
 ## Quick Start
@@ -185,6 +186,76 @@ final response = await WASIPreview2ProxyRunner(proxyHost).handle(
 );
 ```
 
+## WASI Preview3 (Dart VM)
+
+Decode a stable [WASI 0.3.0](https://github.com/WebAssembly/WASI/tree/3ee2a590c766594ae44a54730fc74fc27da5c609)
+`wasi:cli/command` component and run its async entrypoint with the native
+Preview3 host:
+
+```dart
+import 'dart:io';
+import 'package:wasd/wasd.dart';
+
+Future<void> main() async {
+  final bytes = await File('app.component.wasm').readAsBytes();
+  final component = WasmComponent.decode(bytes);
+  final host = WASI.preview3(args: const ['app.component.wasm']);
+  try {
+    final result = await WASIPreview3CommandRunner(host).run(component);
+    print('exitCode=${result.exitCode}');
+  } finally {
+    host.close(force: true);
+  }
+}
+```
+
+`WASIPreview3ServiceRunner` executes stable `wasi:http/service` components.
+Each request is passed directly to the component handler; integrating it with
+an HTTP server remains an application concern.
+
+```dart
+final serviceComponent = WasmComponent.decode(
+  await File('service.component.wasm').readAsBytes(),
+);
+final serviceHost = WASI.preview3();
+try {
+  final request = WASIPreview3HttpRequest.noTrailers(
+    headers: WASIPreview3HttpFields(),
+  )
+    ..method = const WASIPreview3HttpMethod.standard('get')
+    ..pathWithQuery = '/';
+  final result = await WASIPreview3ServiceRunner(serviceHost).handle(
+    serviceComponent,
+    request,
+  );
+  if (!result.isOk) {
+    throw StateError('service failed: ${result.errorCode}');
+  }
+  final response = result.value!;
+  try {
+    print('status=${response.statusCode}');
+    // Forward response.contents and response trailers to the client here.
+  } catch (_) {
+    await response.cancel();
+    rethrow;
+  }
+  await response.completeTransmission(
+    const WASIPreview3HttpResult<void>.ok(null),
+  );
+} finally {
+  serviceHost.close(force: true);
+}
+```
+
+Each successful service response retains its component resource scope while
+its body and trailers are in flight. Call `completeTransmission` after the
+client observes the response, or `cancel` when abandoning it, so that scope is
+released deterministically.
+
+The frozen Preview3 contract covers the six stable `random`, `clocks`,
+`filesystem`, `sockets`, `cli`, and `http` packages and eight import/execution
+worlds. `wasi:clocks/timezone` is not part of that contract.
+
 ## Module Metadata
 
 ```dart
@@ -209,7 +280,31 @@ Uint8List loadYourModuleBytes() => throw UnimplementedError();
 dart analyze
 dart test test/wasi_test.dart test/wasm_test.dart
 dart test test/wasi_preview2_conformance_test.dart test/wasi_preview2_http_proxy_toolchain_test.dart
+dart test test/wasi_preview3_async_runtime_test.dart test/wasi_preview3_service_runner_test.dart test/wasi_preview3_standard_wit_test.dart
+dart run tool/wasi_testsuite_preview3_runner.dart \
+  --testsuite-dir=/path/to/wasi-testsuite \
+  --runner-dir=/path/to/wasi-testsuite/test-runner \
+  --python=/path/to/venv/bin/python
 ```
+
+The frozen official `wasm32-wasip3` gate passes `39/45` fixtures. The remaining
+six (`sockets-tcp-bind`, `sockets-tcp-listen`, `sockets-echo`,
+`sockets-tcp-connect`, `sockets-tcp-receive`, and `sockets-tcp-send`) require
+the explicit native TCP bind/listen split that `dart:io` cannot represent; they
+fail with `not-supported`. There are no skips, expected failures, or unexpected
+passes.
+
+The frozen Component Model async gate currently records three distinct kinds
+of evidence:
+
+- WASD strict decoding: `37/37` component files decoded.
+- `wasm-tools` validation: `31/31` async WAST files validated.
+- Wasmtime `48.0.0 (e8ac8c27f)` reference execution: `31/31` async WAST
+  files passed.
+
+The `wasm-tools` and Wasmtime results validate the frozen upstream inputs and
+reference behavior. They do not execute those WAST assertions through WASD;
+WASD's result in this gate is the strict decoder result above.
 
 ## Compatibility Snapshot
 
@@ -225,29 +320,53 @@ dart test test/wasi_preview2_conformance_test.dart test/wasi_preview2_http_proxy
 | --- | --- |
 | Preview 1 | Supported for `wasi_snapshot_preview1` command modules |
 | Preview 2 | Native Dart VM execution for stable WASI 0.2.12 `wasi:cli/command` and `wasi:http/proxy` components, with the required `random`, `clocks`, `io`, `cli`, `filesystem`, `sockets`, and `http` host import bindings |
-| Preview 3 | Not supported for execution; experimental host/filesystem/async scaffolding remains available |
+| Preview 3 | Native Dart VM execution for stable WASI 0.3.0 `wasi:cli/command` and `wasi:http/service` components across the frozen six-package, eight-world contract |
 
 ### Runtime Support
 
-| Runtime | Preview1 host | Preview2 runner | Filesystem model |
-| --- | --- | --- | --- |
-| Dart VM | In-repo `wasi_snapshot_preview1`; passes official `wasm32-wasip1` wasi-testsuite command modules | Stable WASI 0.2.12 command and HTTP proxy components | Real host preopens plus portable in-memory VFS |
-| Node.js | In-repo `wasi_snapshot_preview1`, not `node:wasi` | Not yet supported | Real host preopens plus portable in-memory VFS |
-| Browser JS | In-repo `wasi_snapshot_preview1` | Not yet supported | Portable in-memory VFS |
+| Runtime | Preview1 host | Preview2 runner | Preview3 runner | Filesystem model |
+| --- | --- | --- | --- | --- |
+| Dart VM | In-repo `wasi_snapshot_preview1`; passes official `wasm32-wasip1` wasi-testsuite command modules | Stable WASI 0.2.12 command and HTTP proxy components | Stable WASI 0.3.0 command and HTTP service components | Real host preopens plus portable in-memory VFS |
+| Node.js | In-repo `wasi_snapshot_preview1`, not `node:wasi` | Not supported | Not supported | Real host preopens plus portable in-memory VFS |
+| Browser JS | In-repo `wasi_snapshot_preview1` | Not supported | Not supported | Portable in-memory VFS |
 
-The Preview2 runner deliberately does not claim general Component Model
-coverage. Component Model 0.3 async/future/stream/task features, experimental
-proposal packages, and full Preview3 execution remain out of scope.
+The Preview2 and Preview3 runners deliberately do not claim general Component
+Model execution. Preview3 support is limited to the frozen stable WASI 0.3.0
+contract; experimental proposal packages and features outside that contract
+remain out of scope.
+
+Native Preview3 filesystem preopens reject guest absolute paths, `..`
+traversal, and symlink escapes at resolution time. Dart exposes path-based
+filesystem APIs rather than descriptor-relative traversal, so WASD cannot
+close a time-of-check/time-of-use race if another process can concurrently
+replace a preopen path component. Use preopen directories that untrusted
+actors cannot modify when filesystem isolation is required.
 
 When `dart:io` cannot faithfully implement a Preview2 socket operation, the
 native adapter returns `not-supported` instead of reporting simulated success.
-Native TCP bind/listen is currently unsupported; native TCP connect and UDP
-bind/connect remain available.
+Preview2 native TCP bind/listen is currently unsupported; Preview2 native TCP
+connect and UDP bind/connect remain available.
+
+Preview3 synchronous socket imports may return pending Dart callbacks; the
+component runner waits for them before returning to the guest. Explicit native
+TCP bind returns `not-supported` because `dart:io` only exposes
+`ServerSocket.bind`, which starts listening before the separate WASI `listen`
+transition. Unbound TCP listen and connect remain available and wait for real
+OS endpoints before reporting success. Native UDP bind and implicit UDP
+connect likewise wait for a real `RawDatagramSocket`. TCP and UDP option values
+are applied through native raw socket options when an active endpoint exists.
+`RawDatagramSocket` has no IPv6-only bind option, so an IPv6 wildcard UDP socket
+may also reserve the matching IPv4 port; IPv4 and IPv4-mapped datagrams are
+discarded before they reach that IPv6 guest socket. Native addresses with
+nonzero IPv6 flow info or numeric scope IDs return `not-supported` because
+`dart:io` cannot preserve those fields.
 
 Dart `HttpClient` does not expose HTTP trailers. Native outgoing-handler
 requests with trailers and incoming responses that declare trailers therefore
 report `HTTP-protocol-error`; proxy response trailers remain available to the
-host caller.
+host caller. The Preview3 native client likewise reports
+`HTTP-protocol-error` for outgoing request trailers and declared incoming
+response trailers.
 
 Native outgoing HTTP preserves encoded response bodies and redirect responses;
 it does not transparently decompress content or follow redirects.

@@ -79,6 +79,16 @@ final class WASIPreview2CliHost {
   final bool _terminalStdin;
   final bool _terminalStdout;
   final bool _terminalStderr;
+
+  /// Whether stdin is configured as a terminal.
+  bool get isStdinTerminal => _terminalStdin;
+
+  /// Whether stdout is configured as a terminal.
+  bool get isStdoutTerminal => _terminalStdout;
+
+  /// Whether stderr is configured as a terminal.
+  bool get isStderrTerminal => _terminalStderr;
+
   late final WASIPreview2InputStream _stdinStream =
       _stdin ?? WASIPreview2InputStream(bytes: stdinData, closed: true);
   late final WASIPreview2OutputStream _stdoutStream =

@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:wasd/src/wasi/component/backpressure.dart';
+import 'package:wasd/src/wasi/component/resource_table.dart';
 import 'package:wasd/src/wasi/component/subtask.dart';
 import 'package:wasd/src/wasi/component/task.dart';
 import 'package:wasd/src/wasi/component/waitable_set.dart';
@@ -117,11 +119,14 @@ void main() {
         );
 
         final pendingCancellation =
-            waitableHost.waitableSetWaitToMemory(
-              cancellationSet,
-              memory,
-              88,
-              cancellable: true,
+            taskHost.runWithTaskAsync(
+              task,
+              () => waitableHost.waitableSetWaitToMemory(
+                cancellationSet,
+                memory,
+                88,
+                cancellable: true,
+              ),
             )..then((_) {
               cancellationDelivered = true;
             });
@@ -133,12 +138,20 @@ void main() {
           wasiComponentSubtaskBlocked,
         );
         expect(task.cancellationRequested, isTrue);
+        expect(
+          task.cancellationState,
+          WASIComponentTaskCancellationState.pending,
+        );
 
         await expectLater(
           pendingCancellation,
           completion(WASIComponentWaitableEventCode.taskCancelled.value),
         );
         expect(cancellationDelivered, isTrue);
+        expect(
+          task.cancellationState,
+          WASIComponentTaskCancellationState.delivered,
+        );
         expect(data.getUint32(88, Endian.little), 0);
         expect(data.getUint32(92, Endian.little), 0);
 
@@ -164,6 +177,98 @@ void main() {
         expect(subtaskHost.table.activeCount, 0);
       },
     );
+
+    test('isolates cancellable polls between task scopes', () {
+      final waitableHost = WASIComponentWaitableHost();
+      final taskHost = WASIComponentTaskHost(waitableHost: waitableHost);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final set = waitableHost.waitableSetNew();
+      final left = taskHost.createTask(name: 'left');
+      final right = taskHost.createTask(name: 'right');
+
+      left.requestCancellation();
+
+      expect(
+        taskHost.runWithTask(
+          right,
+          () => waitableHost.waitableSetPollToMemory(
+            set,
+            memory,
+            104,
+            cancellable: true,
+          ),
+        ),
+        WASIComponentWaitableEventCode.none.value,
+      );
+      expect(
+        taskHost.runWithTask(
+          left,
+          () => waitableHost.waitableSetPollToMemory(
+            set,
+            memory,
+            104,
+            cancellable: true,
+          ),
+        ),
+        WASIComponentWaitableEventCode.taskCancelled.value,
+      );
+      expect(
+        left.cancellationState,
+        WASIComponentTaskCancellationState.delivered,
+      );
+
+      waitableHost.waitableSetDrop(set);
+    });
+
+    test('isolates concurrent cancellable waits between task zones', () async {
+      final waitableHost = WASIComponentWaitableHost();
+      final taskHost = WASIComponentTaskHost(waitableHost: waitableHost);
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final leftSet = waitableHost.waitableSetNew();
+      final rightSet = waitableHost.waitableSetNew();
+      final left = taskHost.createTask(name: 'left');
+      final right = taskHost.createTask(name: 'right');
+      var rightCompleted = false;
+
+      final leftWait = taskHost.runWithTaskAsync(
+        left,
+        () => waitableHost.waitableSetWaitToMemory(
+          leftSet,
+          memory,
+          112,
+          cancellable: true,
+        ),
+      );
+      final rightWait =
+          taskHost.runWithTaskAsync(
+            right,
+            () => waitableHost.waitableSetWaitToMemory(
+              rightSet,
+              memory,
+              120,
+              cancellable: true,
+            ),
+          )..then((_) {
+            rightCompleted = true;
+          });
+      await Future<void>.delayed(Duration.zero);
+
+      left.requestCancellation();
+
+      await expectLater(
+        leftWait,
+        completion(WASIComponentWaitableEventCode.taskCancelled.value),
+      );
+      expect(rightCompleted, isFalse);
+
+      right.requestCancellation();
+      await expectLater(
+        rightWait,
+        completion(WASIComponentWaitableEventCode.taskCancelled.value),
+      );
+      waitableHost.waitableSetDrop(leftSet);
+      waitableHost.waitableSetDrop(rightSet);
+    });
 
     test('preserves existing subtask cancellation listeners', () {
       final subtaskHost = WASIComponentSubtaskHost();
@@ -202,7 +307,17 @@ void main() {
       );
       expect(schedulerObservedCancellation, isTrue);
       expect(task.cancellationRequested, isTrue);
+      expect(
+        task.cancellationState,
+        WASIComponentTaskCancellationState.pending,
+      );
 
+      expect(
+        () => taskHost.runWithTask(task, taskHost.taskCancel),
+        throwsStateError,
+      );
+
+      task.deliverCancellation();
       taskHost.runWithTask(task, taskHost.taskCancel);
       expect(task.state, WASIComponentTaskState.cancelled);
       expect(subtask.state, WASIComponentSubtaskState.cancelledBeforeStarted);
@@ -261,6 +376,7 @@ void main() {
 
       rightTask.markStarted();
       rightTask.requestCancellation();
+      rightTask.deliverCancellation();
 
       final leftResult = host.runWithTaskAsync(leftTask, () async {
         expect(host.currentTask, same(leftTask));
@@ -297,6 +413,24 @@ void main() {
       expect(rightTask.state, WASIComponentTaskState.cancelled);
     });
 
+    test('cancels before entering guest code under backpressure', () async {
+      final backpressure = WASIComponentBackpressure()..increment();
+      final task = WASIComponentTask(name: 'blocked-entry');
+      final entry = task.enter(backpressure);
+
+      await Future<void>.delayed(Duration.zero);
+      task.requestCancellation();
+
+      await expectLater(entry, completion(isFalse));
+      expect(task.state, WASIComponentTaskState.cancelled);
+      expect(
+        task.cancellationState,
+        WASIComponentTaskCancellationState.delivered,
+      );
+
+      backpressure.decrement();
+    });
+
     test('lets synchronous task scopes override async current tasks', () async {
       final host = WASIComponentTaskHost();
       final outer = host.createTask(name: 'outer-task');
@@ -316,14 +450,11 @@ void main() {
       expect(host.currentTask, isNull);
     });
 
-    test('returns canonical memory-backed values', () {
+    test('returns direct canonical string scalars without pre-lifting', () {
       final host = WASIComponentTaskHost();
       final memory = Memory(const MemoryDescriptor(initial: 1));
       final bytes = Uint8List.view(memory.buffer);
-      final data = ByteData.view(memory.buffer);
       bytes.setAll(96, 'done'.codeUnits);
-      data.setUint32(32, 96, Endian.little);
-      data.setUint32(36, 4, Endian.little);
       final program = WASIComponentCanonicalTaskProgram(
         operations: [
           host.bindCanonicalDefinition(
@@ -347,29 +478,28 @@ void main() {
           ),
         ],
       );
-      final task = host.createTask(name: 'memory-result-task');
+      final indirectTask = host.createTask(name: 'invalid-indirect-task');
+
+      host.runWithTask(indirectTask, () {
+        expect(
+          () => program.invokeWithMemory(0, memory, const <Object?>[32]),
+          throwsStateError,
+        );
+      });
+      expect(indirectTask.state, WASIComponentTaskState.created);
+
+      final task = host.createTask(name: 'direct-result-task');
 
       host.runWithTask(task, () {
-        expect(
-          program.invokeWithMemory(0, memory, const <Object?>[32]),
-          isNull,
-        );
+        expect(program.invoke(0, const <Object?>[96, 4]), isNull);
       });
 
       expect(task.state, WASIComponentTaskState.returned);
-      expect(task.result, 'done');
-      expect(
-        () => program.invokeWithMemory(0, memory, const <Object?>[]),
-        throwsStateError,
-      );
+      expect(task.result, const <Object?>[96, 4]);
     });
 
-    test('returns type-indexed canonical memory values', () {
+    test('returns direct type-indexed scalars without pre-lifting', () {
       final host = WASIComponentTaskHost();
-      final memory = Memory(const MemoryDescriptor(initial: 1));
-      final data = ByteData.view(memory.buffer);
-      data.setUint32(32, 7, Endian.little);
-      data.setUint32(36, 9, Endian.little);
       final recordType = WasmComponentTypeDefinition(
         kind: WasmComponentTypeKind.definedValue,
         definedValue: WasmComponentDefinedValueType(
@@ -412,15 +542,120 @@ void main() {
       final task = host.createTask(name: 'record-result-task');
 
       host.runWithTask(task, () {
+        expect(program.invoke(0, const <Object?>[7, 9]), isNull);
+      });
+
+      expect(task.result, const <Object?>[7, 9]);
+    });
+
+    test('returns one pointer for canonical results wider than 16 scalars', () {
+      final host = WASIComponentTaskHost();
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final tupleType = WasmComponentTypeDefinition(
+        kind: WasmComponentTypeKind.definedValue,
+        definedValue: WasmComponentDefinedValueType(
+          kind: WasmComponentDefinedValueTypeKind.tuple,
+          types: List<WasmComponentValueType>.filled(
+            17,
+            const WasmComponentValueType.primitive(
+              WasmComponentPrimitiveValueType.u32,
+            ),
+          ),
+        ),
+      );
+      final operation = host.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.taskReturn,
+          result: WasmComponentCanonicalResult.value(
+            WasmComponentValueType.typeIndex(0),
+          ),
+          options: [
+            WasmComponentCanonicalOption(
+              kind: WasmComponentCanonicalOptionKind.memory,
+              index: 0,
+            ),
+          ],
+        ),
+        typeDefinitions: [tupleType],
+      );
+      final program = WASIComponentCanonicalTaskProgram(
+        operations: [operation],
+      );
+      final task = host.createTask(name: 'indirect-result-task');
+
+      expect(operation.resultFlatLength, 17);
+      host.runWithTask(task, () {
         expect(
           program.invokeWithMemory(0, memory, const <Object?>[32]),
           isNull,
         );
       });
 
-      final result = task.result as WasmComponentValueData;
-      expect(result.kind, WasmComponentValueDataKind.record);
-      expect(result.items.map((item) => item.integer), [7, 9]);
+      expect(task.result, 32);
+    });
+
+    test('normalizes indirect task return pointers to canonical u32', () {
+      final host = WASIComponentTaskHost();
+      final memory = Memory(const MemoryDescriptor(initial: 1));
+      final tupleType = WasmComponentTypeDefinition(
+        kind: WasmComponentTypeKind.definedValue,
+        definedValue: WasmComponentDefinedValueType(
+          kind: WasmComponentDefinedValueTypeKind.tuple,
+          types: List<WasmComponentValueType>.filled(
+            17,
+            const WasmComponentValueType.primitive(
+              WasmComponentPrimitiveValueType.u32,
+            ),
+          ),
+        ),
+      );
+      final program = WASIComponentCanonicalTaskProgram(
+        operations: [
+          host.bindCanonicalDefinition(
+            const WasmComponentCanonicalDefinition(
+              kind: WasmComponentCanonicalKind.taskReturn,
+              result: WasmComponentCanonicalResult.value(
+                WasmComponentValueType.typeIndex(0),
+              ),
+              options: [
+                WasmComponentCanonicalOption(
+                  kind: WasmComponentCanonicalOptionKind.memory,
+                  index: 0,
+                ),
+              ],
+            ),
+            typeDefinitions: [tupleType],
+          ),
+        ],
+      );
+      final signedTask = host.createTask(name: 'signed-pointer-task');
+      final wideTask = host.createTask(name: 'wide-pointer-task');
+
+      host.runWithTask(signedTask, () {
+        program.invokeWithMemory(0, memory, const <Object?>[-2147483648]);
+      });
+      host.runWithTask(wideTask, () {
+        program.invokeWithMemory(0, memory, const <Object?>[0x100000020]);
+      });
+
+      expect(signedTask.result, 0x80000000);
+      expect(wideTask.result, 32);
+    });
+
+    test('rejects a task return result without a canonical flat layout', () {
+      final host = WASIComponentTaskHost();
+
+      expect(
+        () => host.bindCanonicalDefinition(
+          const WasmComponentCanonicalDefinition(
+            kind: WasmComponentCanonicalKind.taskReturn,
+            result: WasmComponentCanonicalResult.value(
+              WasmComponentValueType.typeIndex(0),
+            ),
+          ),
+        ),
+        throwsUnsupportedError,
+      );
     });
 
     test(
@@ -487,6 +722,7 @@ void main() {
             throwsStateError,
           );
           borrowed.requestCancellation();
+          borrowed.deliverCancellation();
           expect(
             () => cancelProgram.invoke(0, const <Object?>[]),
             throwsStateError,
@@ -501,6 +737,78 @@ void main() {
         expect(() => borrowed.result, throwsStateError);
       },
     );
+
+    test('tracks canonical borrow handles by their original task', () {
+      final table = WASIComponentResourceTable();
+      final taskHost = WASIComponentTaskHost();
+      final dropped = <int>[];
+      final resourceType = table.defineType<int>(
+        'resource',
+        onDrop: dropped.add,
+      );
+      final owned = table.insert<int>(resourceType, 42);
+
+      final waiting = WASIComponentTask(name: 'waiting');
+      waiting.markStarted();
+      final waitingBorrow = table.insertBorrowHandle(owned, waiting);
+      final other = WASIComponentTask(name: 'other');
+      other.markStarted();
+      taskHost.runWithTask(
+        other,
+        () => table.dropNamed('resource', waitingBorrow),
+      );
+      expect(waiting.borrowCount, 0);
+      expect(other.borrowCount, 0);
+      waiting.returnResult();
+      other.returnResult();
+
+      final waitingAgain = WASIComponentTask(name: 'waiting-again');
+      waitingAgain.markStarted();
+      final otherBorrow = table.insertBorrowHandle(owned, waitingAgain);
+      final self = WASIComponentTask(name: 'self');
+      self.markStarted();
+      final selfBorrow = table.insertBorrowHandle(owned, self);
+      taskHost.runWithTask(self, () {
+        table.drop<int>(resourceType, otherBorrow);
+        table.dropNamed('resource', selfBorrow);
+        self.returnResult();
+      });
+      expect(waitingAgain.borrowCount, 0);
+      expect(self.borrowCount, 0);
+      waitingAgain.returnResult();
+
+      final finalWaiting = WASIComponentTask(name: 'final-waiting');
+      finalWaiting.markStarted();
+      final finalOtherBorrow = table.insertBorrowHandle(owned, finalWaiting);
+      final wrong = WASIComponentTask(name: 'wrong');
+      wrong.markStarted();
+      final wrongBorrow = table.insertBorrowHandle(owned, wrong);
+      taskHost.runWithTask(wrong, () {
+        table.drop<int>(resourceType, finalOtherBorrow);
+        expect(() => wrong.returnResult(), throwsStateError);
+      });
+      expect(finalWaiting.borrowCount, 0);
+      expect(wrong.borrowCount, 1);
+      finalWaiting.returnResult();
+      table.drop<int>(resourceType, wrongBorrow);
+      wrong.returnResult();
+
+      final cancelled = WASIComponentTask(name: 'cancelled');
+      cancelled.markStarted();
+      final cancelledBorrow = table.insertBorrowHandle(owned, cancelled);
+      cancelled.requestCancellation();
+      cancelled.deliverCancellation();
+      expect(() => cancelled.cancel(), throwsStateError);
+      table.drop<int>(resourceType, cancelledBorrow);
+      cancelled.cancel();
+      expect(cancelled.state, WASIComponentTaskState.cancelled);
+
+      expect(table.contains(owned), isTrue);
+      expect(table.get<int>(resourceType, owned), 42);
+      expect(dropped, isEmpty);
+      table.drop<int>(resourceType, owned);
+      expect(dropped, [42]);
+    });
 
     test('rejects non-task canonical definitions', () {
       final host = WASIComponentTaskHost();

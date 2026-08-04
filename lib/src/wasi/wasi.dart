@@ -6,6 +6,11 @@ import '../wasm/module.dart';
 import 'preview1/socket.dart';
 import 'preview2/component_host.dart';
 import 'preview2/sockets.dart';
+import 'component/async_values.dart';
+import 'preview3/cli.dart';
+import 'preview3/component_host.dart';
+import 'preview3/http.dart';
+import 'preview3/sockets.dart';
 import 'version.dart';
 import 'preview1/native/wasi.dart'
     if (dart.library.js_interop) 'preview1/js/wasi.dart'
@@ -203,6 +208,45 @@ abstract interface class WASI {
       terminalStdout: terminalStdout,
       terminalStderr: terminalStderr,
       resolveAddresses: resolveAddresses,
+    );
+  }
+
+  /// Creates a WASI 0.3 / Preview3 component host.
+  ///
+  /// Preview3 components use the async Component Model execution boundary.
+  /// Standard Preview3 packages and the Preview2 adapter imports embedded by
+  /// current toolchains share one component resource table.
+  static WASIPreview3ComponentHost preview3({
+    List<String> args = const <String>[],
+    Map<String, String> env = const <String, String>{},
+    String? initialCwd,
+    List<int> stdinData = const <int>[],
+    WASIComponentReadableStream<int>? stdin,
+    WASIPreview3CliOutputHandler? stdout,
+    WASIPreview3CliOutputHandler? stderr,
+    Map<String, String> preopens = const <String, String>{},
+    bool canMutatePreopens = false,
+    bool? terminalStdin,
+    bool? terminalStdout,
+    bool? terminalStderr,
+    WASIPreview3AddressResolver? resolveAddresses,
+    WASIPreview3HttpBackend? handlerBackend,
+  }) {
+    return WASIPreview3ComponentHost(
+      args: args,
+      env: env,
+      initialCwd: initialCwd,
+      stdinData: stdinData,
+      stdin: stdin,
+      stdout: stdout,
+      stderr: stderr,
+      preopens: preopens,
+      canMutatePreopens: canMutatePreopens,
+      terminalStdin: terminalStdin,
+      terminalStdout: terminalStdout,
+      terminalStderr: terminalStderr,
+      resolveAddresses: resolveAddresses,
+      handlerBackend: handlerBackend,
     );
   }
 

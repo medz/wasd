@@ -324,7 +324,6 @@ enum WasmComponentCanonicalKind {
   resourceNew,
   resourceDrop,
   resourceRep,
-  backpressureSet,
   backpressureInc,
   backpressureDec,
   taskReturn,
@@ -358,10 +357,12 @@ enum WasmComponentCanonicalKind {
   waitableJoin,
   threadIndex,
   threadNewIndirect,
-  threadSwitchTo,
-  threadSuspend,
   threadResumeLater,
-  threadYieldTo,
+  threadSuspend,
+  threadSuspendThenResume,
+  threadYieldThenResume,
+  threadSuspendThenPromote,
+  threadYieldThenPromote,
   threadSpawnRef,
   threadSpawnIndirect,
   threadAvailableParallelism,
@@ -653,13 +654,28 @@ final class WasmComponentValueData {
     this.floatingPoint,
     this.string,
     this.items = const <WasmComponentValueData>[],
+    this.runtimeItems,
     this.index,
     this.label,
     this.labels = const <String>[],
     this.associatedValue,
+    this.associatedPayload,
     this.isSome,
     this.isOk,
-  });
+  }) {
+    if (associatedValue != null && associatedPayload != null) {
+      throw ArgumentError(
+        'A Wasm component value cannot have both associatedValue and '
+        'associatedPayload.',
+      );
+    }
+    if (runtimeItems != null && items.isNotEmpty) {
+      throw ArgumentError(
+        'A Wasm component value cannot have both static items and runtime '
+        'items.',
+      );
+    }
+  }
 
   final WasmComponentValueDataKind kind;
   final Uint8List rawBytes;
@@ -668,10 +684,31 @@ final class WasmComponentValueData {
   final double? floatingPoint;
   final String? string;
   final List<WasmComponentValueData> items;
+
+  /// Composite items containing runtime-only values such as stream or future
+  /// endpoints. Static composites continue to use [items].
+  final List<Object?>? runtimeItems;
+
+  /// Composite items regardless of whether they contain runtime-only values.
+  List<Object?> get itemValues => runtimeItems ?? items;
+
   final int? index;
   final String? label;
   final List<String> labels;
+
+  /// Nested statically representable component value data.
+  ///
+  /// Runtime-only payloads such as Component Model stream and future
+  /// endpoints use [associatedPayload] instead.
   final WasmComponentValueData? associatedValue;
+
+  /// Nested runtime payload that cannot be represented by
+  /// [WasmComponentValueData], such as a stream or future endpoint.
+  final Object? associatedPayload;
+
+  /// The nested payload regardless of whether it is static or runtime-only.
+  Object? get payload => associatedPayload ?? associatedValue;
+
   final bool? isSome;
   final bool? isOk;
 }
@@ -802,25 +839,62 @@ final class _WasmComponentValueIndexEntry {
 final class _WasmComponentMaterializedIndexSpaces {
   const _WasmComponentMaterializedIndexSpaces({
     required this.typeDefinitions,
+    required this.typeScope,
     required this.functionTypes,
     required this.functionTypeContexts,
     required this.valueTypes,
   });
 
   final List<WasmComponentTypeDefinition> typeDefinitions;
+  final WasmComponentTypeScope typeScope;
   final List<WasmComponentFunctionType?> functionTypes;
   final List<WasmComponentFunctionTypeContext?> functionTypeContexts;
   final List<WasmComponentValueType?> valueTypes;
+}
+
+final class WasmComponentTypeScope {
+  WasmComponentTypeScope._(this._definitions);
+
+  final List<WasmComponentTypeDefinitionContext> _definitions;
+
+  int get length => _definitions.length;
+
+  WasmComponentTypeDefinitionContext? definitionContextAt(int? index) {
+    if (index == null || index < 0 || index >= _definitions.length) {
+      return null;
+    }
+    return _definitions[index];
+  }
+
+  WasmComponentTypeDefinition? definitionAt(int? index) =>
+      definitionContextAt(index)?.definition;
+
+  List<WasmComponentTypeDefinition> get definitions =>
+      List<WasmComponentTypeDefinition>.unmodifiable(
+        _definitions.map((context) => context.definition),
+      );
+}
+
+final class WasmComponentTypeDefinitionContext {
+  const WasmComponentTypeDefinitionContext({
+    required this.definition,
+    required this.typeScope,
+  });
+
+  final WasmComponentTypeDefinition definition;
+  final WasmComponentTypeScope typeScope;
 }
 
 final class WasmComponentFunctionTypeContext {
   const WasmComponentFunctionTypeContext({
     required this.functionType,
     required this.typeDefinitions,
+    this.typeScope,
   });
 
   final WasmComponentFunctionType functionType;
   final List<WasmComponentTypeDefinition> typeDefinitions;
+  final WasmComponentTypeScope? typeScope;
 }
 
 final class _WasmComponentInstanceExportEntry {
@@ -830,6 +904,7 @@ final class _WasmComponentInstanceExportEntry {
     this.functionContext,
     this.value,
     this.typeDefinition,
+    this.typeDefinitionContext,
   });
 
   final WasmComponentSortIndex sort;
@@ -837,6 +912,7 @@ final class _WasmComponentInstanceExportEntry {
   final WasmComponentFunctionTypeContext? functionContext;
   final WasmComponentValueType? value;
   final WasmComponentTypeDefinition? typeDefinition;
+  final WasmComponentTypeDefinitionContext? typeDefinitionContext;
 }
 
 typedef _WasmComponentInstanceExportMap =
@@ -890,11 +966,13 @@ final class _WasmComponentCoreIndexCounts {
 final class _WasmComponentOuterAliasScope {
   const _WasmComponentOuterAliasScope({
     required this.typeDefinitions,
+    required this.typeScope,
     required this.coreModuleCount,
     required this.componentCount,
   });
 
   final List<WasmComponentTypeDefinition> typeDefinitions;
+  final WasmComponentTypeScope typeScope;
   final int coreModuleCount;
   final int componentCount;
 
@@ -924,10 +1002,12 @@ final class _WasmComponentTypeAliasScope {
   const _WasmComponentTypeAliasScope({
     required this.definitions,
     required this.crossesComponentBoundary,
+    this.typeScope,
   });
 
   final List<WasmComponentTypeDefinition> definitions;
   final bool crossesComponentBoundary;
+  final WasmComponentTypeScope? typeScope;
 
   int get length => definitions.length;
 
@@ -999,6 +1079,10 @@ final class WasmComponent {
   List<WasmComponentTypeDefinition> get componentTypeIndexDefinitions =>
       _indexSpaces.typeDefinitions;
 
+  /// Component type index entries paired with the scope used by their nested
+  /// type references.
+  WasmComponentTypeScope get componentTypeIndexScope => _indexSpaces.typeScope;
+
   /// Locally materialized component function index types in definition order.
   List<WasmComponentFunctionType?> get componentFunctionIndexTypes =>
       _indexSpaces.functionTypes;
@@ -1014,6 +1098,11 @@ final class WasmComponent {
 
   _WasmComponentMaterializedIndexSpaces _buildComponentIndexSpaces() {
     final visibleTypeDefinitions = <WasmComponentTypeDefinition>[];
+    final visibleTypeDefinitionContexts =
+        <WasmComponentTypeDefinitionContext>[];
+    final visibleTypeScope = WasmComponentTypeScope._(
+      visibleTypeDefinitionContexts,
+    );
     final visibleComponentEntries = <WasmComponent?>[];
     final functionTypes = <WasmComponentFunctionType?>[];
     final functionTypeContexts = <WasmComponentFunctionTypeContext?>[];
@@ -1021,13 +1110,30 @@ final class WasmComponent {
     final instanceExportMaps = <_WasmComponentInstanceExportMap?>[];
     var decodedTypeDefinitionCount = 0;
 
+    void addVisibleType(
+      WasmComponentTypeDefinition definition, {
+      WasmComponentTypeDefinitionContext? context,
+    }) {
+      visibleTypeDefinitions.add(definition);
+      visibleTypeDefinitionContexts.add(
+        context ??
+            WasmComponentTypeDefinitionContext(
+              definition: definition,
+              typeScope: visibleTypeScope,
+            ),
+      );
+    }
+
     void includeDecodedTypeDefinitionsTo(int count) {
       if (count <= decodedTypeDefinitionCount) {
         return;
       }
-      visibleTypeDefinitions.addAll(
-        typeDefinitions.getRange(decodedTypeDefinitionCount, count),
-      );
+      for (final definition in typeDefinitions.getRange(
+        decodedTypeDefinitionCount,
+        count,
+      )) {
+        addVisibleType(definition);
+      }
       decodedTypeDefinitionCount = count;
     }
 
@@ -1051,6 +1157,7 @@ final class WasmComponent {
     void addFunctionType(
       WasmComponentFunctionType? functionType,
       List<WasmComponentTypeDefinition>? definitions,
+      WasmComponentTypeScope? typeScope,
     ) {
       functionTypes.add(functionType);
       functionTypeContexts.add(
@@ -1061,6 +1168,7 @@ final class WasmComponent {
                 typeDefinitions: List<WasmComponentTypeDefinition>.unmodifiable(
                   definitions,
                 ),
+                typeScope: typeScope,
               ),
       );
     }
@@ -1076,6 +1184,7 @@ final class WasmComponent {
                 descriptor.typeIndex,
               ),
               visibleTypeDefinitions,
+              visibleTypeScope,
             );
           } else if (descriptor.kind == WasmComponentExternKind.value) {
             valueTypes.add(
@@ -1090,6 +1199,7 @@ final class WasmComponent {
               _componentImportInstanceExportTypeMap(
                 descriptor,
                 visibleTypeDefinitions,
+                visibleTypeScope: visibleTypeScope,
               ),
             );
           } else if (descriptor.kind == WasmComponentExternKind.componentType) {
@@ -1099,7 +1209,14 @@ final class WasmComponent {
                   visibleTypeDefinitions,
                 );
             if (introducedTypeDefinition != null) {
-              visibleTypeDefinitions.add(introducedTypeDefinition);
+              addVisibleType(
+                introducedTypeDefinition,
+                context:
+                    descriptor.boundKind ==
+                        WasmComponentExternBoundKind.equality
+                    ? visibleTypeScope.definitionContextAt(descriptor.typeIndex)
+                    : null,
+              );
             }
           }
         case _WasmComponentDefinitionEventKind.export:
@@ -1108,6 +1225,10 @@ final class WasmComponent {
             addFunctionType(
               _componentFunctionTypeAt(functionTypes, export.sort.index),
               _componentFunctionTypeDefinitionsAt(
+                functionTypeContexts,
+                export.sort.index,
+              ),
+              _componentFunctionTypeScopeAt(
                 functionTypeContexts,
                 export.sort.index,
               ),
@@ -1126,7 +1247,12 @@ final class WasmComponent {
               export.sort.index,
             );
             if (exportedTypeDefinition != null) {
-              visibleTypeDefinitions.add(exportedTypeDefinition);
+              addVisibleType(
+                exportedTypeDefinition,
+                context: visibleTypeScope.definitionContextAt(
+                  export.sort.index,
+                ),
+              );
             }
           }
         case _WasmComponentDefinitionEventKind.component:
@@ -1140,6 +1266,7 @@ final class WasmComponent {
               functionTypes,
               functionTypeContexts,
               valueTypes,
+              visibleTypeScope,
             ),
           );
         case _WasmComponentDefinitionEventKind.alias:
@@ -1152,13 +1279,16 @@ final class WasmComponent {
             addFunctionType(
               aliasEntry?.function,
               aliasEntry?.functionContext?.typeDefinitions,
+              aliasEntry?.functionContext?.typeScope,
             );
           } else if (alias.sort.kind == WasmComponentSortKind.value) {
             valueTypes.add(aliasEntry?.value);
           } else if (alias.sort.kind == WasmComponentSortKind.componentType) {
-            final typeDefinition = aliasEntry?.typeDefinition;
+            final typeDefinitionContext = aliasEntry?.typeDefinitionContext;
+            final typeDefinition =
+                typeDefinitionContext?.definition ?? aliasEntry?.typeDefinition;
             if (typeDefinition != null) {
-              visibleTypeDefinitions.add(typeDefinition);
+              addVisibleType(typeDefinition, context: typeDefinitionContext);
             }
           } else if (alias.sort.kind == WasmComponentSortKind.component) {
             visibleComponentEntries.add(null);
@@ -1172,6 +1302,7 @@ final class WasmComponent {
                 definition.typeIndex,
               ),
               visibleTypeDefinitions,
+              visibleTypeScope,
             );
           }
         case _WasmComponentDefinitionEventKind.start:
@@ -1189,6 +1320,7 @@ final class WasmComponent {
       typeDefinitions: List<WasmComponentTypeDefinition>.unmodifiable(
         visibleTypeDefinitions,
       ),
+      typeScope: visibleTypeScope,
       functionTypes: List<WasmComponentFunctionType?>.unmodifiable(
         functionTypes,
       ),
@@ -1523,6 +1655,7 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
   List<WasmComponentFunctionType?> functionTypes,
   List<WasmComponentFunctionTypeContext?> functionTypeContexts,
   List<WasmComponentValueType?> valueTypes,
+  WasmComponentTypeScope? visibleTypeScope,
 ) {
   switch (instance.kind) {
     case WasmComponentInstanceKind.inlineExports:
@@ -1545,6 +1678,11 @@ _WasmComponentInstanceExportMap? _componentInstanceExportTypeMap(
             typeDefinition: _componentTypeSortIndexDefinition(
               export.sort,
               visibleTypeDefinitions,
+            ),
+            typeDefinitionContext: visibleTypeScope?.definitionContextAt(
+              export.sort.kind == WasmComponentSortKind.componentType
+                  ? export.sort.index
+                  : null,
             ),
           ),
       };
@@ -1601,14 +1739,21 @@ _WasmComponentInstanceExportMap _componentExportTypeMap(
           export.sort,
           component.componentTypeIndexDefinitions,
         ),
+        typeDefinitionContext: component.componentTypeIndexScope
+            .definitionContextAt(
+              export.sort.kind == WasmComponentSortKind.componentType
+                  ? export.sort.index
+                  : null,
+            ),
       ),
   };
 }
 
 _WasmComponentInstanceExportMap? _componentImportInstanceExportTypeMap(
   WasmComponentExternDescriptor descriptor,
-  List<WasmComponentTypeDefinition> visibleTypeDefinitions,
-) {
+  List<WasmComponentTypeDefinition> visibleTypeDefinitions, {
+  WasmComponentTypeScope? visibleTypeScope,
+}) {
   if (descriptor.kind != WasmComponentExternKind.instance) {
     return null;
   }
@@ -1618,19 +1763,42 @@ _WasmComponentInstanceExportMap? _componentImportInstanceExportTypeMap(
       typeIndex >= visibleTypeDefinitions.length) {
     return null;
   }
-  final type = visibleTypeDefinitions[typeIndex];
+  final definitionContext = visibleTypeScope?.definitionContextAt(typeIndex);
+  final type =
+      definitionContext?.definition ?? visibleTypeDefinitions[typeIndex];
   final instance = type.instance;
   if (type.kind != WasmComponentTypeKind.instance || instance == null) {
     return null;
   }
-  return _componentInstanceTypeExportTypeMap(instance, visibleTypeDefinitions);
+  final outerTypeScope = definitionContext?.typeScope ?? visibleTypeScope;
+  return _componentInstanceTypeExportTypeMap(
+    instance,
+    outerTypeScope?.definitions ?? visibleTypeDefinitions,
+    outerTypeScope: outerTypeScope,
+  );
 }
 
 _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
   WasmComponentInstanceType instance,
-  List<WasmComponentTypeDefinition> outerTypeDefinitions,
-) {
+  List<WasmComponentTypeDefinition> outerTypeDefinitions, {
+  WasmComponentTypeScope? outerTypeScope,
+}) {
   final localTypeDefinitions = <WasmComponentTypeDefinition>[];
+  final localTypeDefinitionContexts = <WasmComponentTypeDefinitionContext>[];
+  final localTypeScope = WasmComponentTypeScope._(localTypeDefinitionContexts);
+  final outerTypeDefinitionContexts = <WasmComponentTypeDefinitionContext>[];
+  final effectiveOuterTypeScope =
+      outerTypeScope ?? WasmComponentTypeScope._(outerTypeDefinitionContexts);
+  if (outerTypeScope == null) {
+    for (final definition in outerTypeDefinitions) {
+      outerTypeDefinitionContexts.add(
+        WasmComponentTypeDefinitionContext(
+          definition: definition,
+          typeScope: effectiveOuterTypeScope,
+        ),
+      );
+    }
+  }
   final localFunctionTypeContexts = <WasmComponentFunctionTypeContext?>[];
   final exports = <String, _WasmComponentInstanceExportEntry>{};
   final typeScopes = <_WasmComponentTypeAliasScope>[
@@ -1639,22 +1807,35 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
       crossesComponentBoundary: false,
     ),
     _WasmComponentTypeAliasScope(
-      definitions: outerTypeDefinitions,
+      definitions: effectiveOuterTypeScope.definitions,
       crossesComponentBoundary: true,
     ),
+  ];
+  final contextScopes = <WasmComponentTypeScope>[
+    localTypeScope,
+    effectiveOuterTypeScope,
   ];
 
   void addLocalType(
     WasmComponentTypeDefinition type, {
     WasmComponentFunctionTypeContext? functionContext,
+    WasmComponentTypeDefinitionContext? definitionContext,
   }) {
     localTypeDefinitions.add(type);
+    localTypeDefinitionContexts.add(
+      definitionContext ??
+          WasmComponentTypeDefinitionContext(
+            definition: type,
+            typeScope: localTypeScope,
+          ),
+    );
     localFunctionTypeContexts.add(
       functionContext ??
           (type.kind == WasmComponentTypeKind.function
               ? _componentFunctionTypeContextFromDefinitions(
                   localTypeDefinitions,
                   localTypeDefinitions.length - 1,
+                  typeScope: localTypeScope,
                 )
               : null),
     );
@@ -1671,13 +1852,21 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
         final functionContext = _componentTypeDeclarationAliasFunctionContext(
           declaration.alias,
           typeScopes,
+          contextScopes,
         );
         final type = _componentTypeDeclarationAliasDefinition(
           declaration.alias,
           typeScopes,
         );
         if (type != null) {
-          addLocalType(type, functionContext: functionContext);
+          addLocalType(
+            type,
+            functionContext: functionContext,
+            definitionContext: _componentTypeDeclarationAliasContext(
+              declaration.alias,
+              contextScopes,
+            ),
+          );
         }
       case WasmComponentTypeDeclarationKind.import:
         final descriptor = declaration.import?.descriptor;
@@ -1697,6 +1886,12 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
                     descriptor?.typeIndex,
                   )
                 : null,
+            definitionContext:
+                descriptor?.kind == WasmComponentExternKind.componentType &&
+                    descriptor?.boundKind ==
+                        WasmComponentExternBoundKind.equality
+                ? localTypeScope.definitionContextAt(descriptor?.typeIndex)
+                : null,
           );
         }
       case WasmComponentTypeDeclarationKind.export:
@@ -1708,6 +1903,16 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
             descriptor,
             localTypeDefinitions,
           );
+          final introducedContext =
+              descriptor.kind == WasmComponentExternKind.componentType &&
+                  descriptor.boundKind == WasmComponentExternBoundKind.equality
+              ? localTypeScope.definitionContextAt(descriptor.typeIndex)
+              : introduced == null
+              ? null
+              : WasmComponentTypeDefinitionContext(
+                  definition: introduced,
+                  typeScope: localTypeScope,
+                );
           exports[_componentExternName(
             export.name,
             export.versionSuffix,
@@ -1733,6 +1938,7 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
                 ? descriptor.valueType
                 : null,
             typeDefinition: introduced,
+            typeDefinitionContext: introducedContext,
           );
           if (introduced != null) {
             addLocalType(
@@ -1744,6 +1950,7 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
                       descriptor.typeIndex,
                     )
                   : null,
+              definitionContext: introducedContext,
             );
           }
         }
@@ -1758,6 +1965,7 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
 WasmComponentFunctionTypeContext? _componentTypeDeclarationAliasFunctionContext(
   WasmComponentAlias? alias,
   List<_WasmComponentTypeAliasScope> typeScopes,
+  List<WasmComponentTypeScope> contextScopes,
 ) {
   if (alias == null ||
       alias.sort.kind != WasmComponentSortKind.componentType ||
@@ -1773,10 +1981,30 @@ WasmComponentFunctionTypeContext? _componentTypeDeclarationAliasFunctionContext(
     return null;
   }
   final scope = typeScopes[componentDepth];
+  final typeScope = contextScopes[componentDepth];
   return _componentFunctionTypeContextFromDefinitions(
     scope.definitions,
     typeIndex,
+    typeScope: typeScope.definitionContextAt(typeIndex)?.typeScope ?? typeScope,
   );
+}
+
+WasmComponentTypeDefinitionContext? _componentTypeDeclarationAliasContext(
+  WasmComponentAlias? alias,
+  List<WasmComponentTypeScope> typeScopes,
+) {
+  if (alias == null ||
+      alias.sort.kind != WasmComponentSortKind.componentType ||
+      alias.target.kind != WasmComponentAliasTargetKind.outer) {
+    return null;
+  }
+  final componentDepth = alias.target.componentDepth;
+  if (componentDepth == null ||
+      componentDepth < 0 ||
+      componentDepth >= typeScopes.length) {
+    return null;
+  }
+  return typeScopes[componentDepth].definitionContextAt(alias.target.index);
 }
 
 WasmComponentTypeDefinition? _componentTypeDeclarationAliasDefinition(
@@ -1913,10 +2141,19 @@ List<WasmComponentTypeDefinition>? _componentFunctionTypeDefinitionsAt(
   functionIndex,
 )?.typeDefinitions;
 
+WasmComponentTypeScope? _componentFunctionTypeScopeAt(
+  List<WasmComponentFunctionTypeContext?> functionTypeContexts,
+  int? functionIndex,
+) => _componentFunctionTypeContextAt(
+  functionTypeContexts,
+  functionIndex,
+)?.typeScope;
+
 WasmComponentFunctionTypeContext? _componentFunctionTypeContextFromDefinitions(
   List<WasmComponentTypeDefinition> definitions,
-  int? typeIndex,
-) {
+  int? typeIndex, {
+  WasmComponentTypeScope? typeScope,
+}) {
   final functionType = _componentFunctionTypeFromDefinitions(
     definitions,
     typeIndex,
@@ -1928,6 +2165,7 @@ WasmComponentFunctionTypeContext? _componentFunctionTypeContextFromDefinitions(
           typeDefinitions: List<WasmComponentTypeDefinition>.unmodifiable(
             definitions,
           ),
+          typeScope: typeScope,
         );
 }
 
@@ -2639,40 +2877,59 @@ final class _WasmComponentValidationContext {
   bool componentTypeAliasScopeDefinitionContainsResource(
     _WasmComponentTypeAliasScope scope,
     int typeIndex, {
-    Map<int, bool>? memo,
-    Set<int>? visiting,
+    Map<(Object, int), bool>? memo,
+    Set<(Object, int)>? visiting,
   }) {
     if (typeIndex < 0 || typeIndex >= scope.length) {
       return false;
     }
 
-    final resolvedMemo = memo ?? <int, bool>{};
-    final cached = resolvedMemo[typeIndex];
+    final scopeKey = scope.typeScope ?? scope;
+    final key = (scopeKey, typeIndex);
+    final resolvedMemo = memo ?? <(Object, int), bool>{};
+    final cached = resolvedMemo[key];
     if (cached != null) {
       return cached;
     }
 
-    final resolvedVisiting = visiting ?? <int>{};
-    if (!resolvedVisiting.add(typeIndex)) {
+    final resolvedVisiting = visiting ?? <(Object, int)>{};
+    if (!resolvedVisiting.add(key)) {
       return false;
     }
 
+    final definition = scope[typeIndex];
+    final candidateContext = scope.typeScope?.definitionContextAt(typeIndex);
+    final definitionContext =
+        candidateContext != null &&
+            identical(candidateContext.definition, definition)
+        ? candidateContext
+        : null;
+    final definingTypeScope = definitionContext?.typeScope;
+    final referenceScope =
+        definingTypeScope == null ||
+            identical(definingTypeScope, scope.typeScope)
+        ? scope
+        : _WasmComponentTypeAliasScope(
+            definitions: definingTypeScope.definitions,
+            crossesComponentBoundary: scope.crossesComponentBoundary,
+            typeScope: definingTypeScope,
+          );
     final contains = componentTypeDefinitionContainsResource(
-      scope[typeIndex],
-      scope,
+      definition,
+      referenceScope,
       resolvedMemo,
       resolvedVisiting,
     );
-    resolvedVisiting.remove(typeIndex);
-    resolvedMemo[typeIndex] = contains;
+    resolvedVisiting.remove(key);
+    resolvedMemo[key] = contains;
     return contains;
   }
 
   bool componentTypeDefinitionContainsResource(
     WasmComponentTypeDefinition definition,
     _WasmComponentTypeAliasScope scope,
-    Map<int, bool> memo,
-    Set<int> visiting,
+    Map<(Object, int), bool> memo,
+    Set<(Object, int)> visiting,
   ) {
     switch (definition.kind) {
       case WasmComponentTypeKind.resource:
@@ -2724,8 +2981,8 @@ final class _WasmComponentValidationContext {
   bool componentDefinedValueTypeContainsResource(
     WasmComponentDefinedValueType definedValue,
     _WasmComponentTypeAliasScope scope,
-    Map<int, bool> memo,
-    Set<int> visiting,
+    Map<(Object, int), bool> memo,
+    Set<(Object, int)> visiting,
   ) {
     switch (definedValue.kind) {
       case WasmComponentDefinedValueTypeKind.own:
@@ -2788,8 +3045,8 @@ final class _WasmComponentValidationContext {
   bool componentValueTypeContainsResource(
     WasmComponentValueType? valueType,
     _WasmComponentTypeAliasScope scope,
-    Map<int, bool> memo,
-    Set<int> visiting,
+    Map<(Object, int), bool> memo,
+    Set<(Object, int)> visiting,
   ) {
     if (valueType == null ||
         valueType.kind == WasmComponentValueTypeKind.primitive) {
@@ -2824,8 +3081,8 @@ final class _WasmComponentValidationContext {
         if (componentTypeDefinitionContainsResource(
           nestedType,
           localScope,
-          <int, bool>{},
-          <int>{},
+          <(Object, int), bool>{},
+          <(Object, int)>{},
         )) {
           return true;
         }
@@ -2904,8 +3161,8 @@ final class _WasmComponentValidationContext {
       return componentValueTypeContainsResource(
         descriptor.valueType,
         localScope,
-        <int, bool>{},
-        <int>{},
+        <(Object, int), bool>{},
+        <(Object, int)>{},
       );
     }
 
@@ -4028,7 +4285,8 @@ final class _WasmComponentValidationContext {
   ) {
     return canonicalOptionIsStringEncoding(kind) ||
         kind == WasmComponentCanonicalOptionKind.memory ||
-        kind == WasmComponentCanonicalOptionKind.realloc;
+        kind == WasmComponentCanonicalOptionKind.realloc ||
+        kind == WasmComponentCanonicalOptionKind.async;
   }
 
   bool canonicalLowerParametersRequireMemory(
@@ -4160,21 +4418,14 @@ final class _WasmComponentValidationContext {
       definition.options,
       WasmComponentCanonicalOptionKind.async,
     );
+    final hasPostReturn = canonicalOptionsContain(
+      definition.options,
+      WasmComponentCanonicalOptionKind.postReturn,
+    );
     final hasRealloc = canonicalOptionsContain(
       definition.options,
       WasmComponentCanonicalOptionKind.realloc,
     );
-    if (definition.kind == WasmComponentCanonicalKind.lower &&
-        hasAsync &&
-        !hasMemory) {
-      errors.add(
-        WasmComponentValidationError(
-          path: '$path.options',
-          message:
-              'Wasm component canon lower with async option requires a memory option.',
-        ),
-      );
-    }
 
     if (!hasMemory &&
         canonicalDefinitionRequiresMemoryOption(definition.kind)) {
@@ -4306,6 +4557,16 @@ final class _WasmComponentValidationContext {
       );
     }
 
+    if (hasAsync && hasPostReturn) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.options',
+          message:
+              'Wasm component ${canonicalDefinitionDescription(definition.kind)} cannot use async with postReturn option.',
+        ),
+      );
+    }
+
     if (!hasMemory &&
         visibleTypeDefinitions != null &&
         canonicalDefinitionUsesStreamOrFutureCopy(definition.kind) &&
@@ -4404,30 +4665,31 @@ final class _WasmComponentValidationContext {
     final componentIndexEntries = <WasmComponent?>[];
     _WasmComponentExternNameSet? importNames;
     _WasmComponentExternNameSet? exportNames;
-    List<WasmComponentTypeDefinition>? materializedTypeDefinitions;
+    final visibleTypeDefinitions = <WasmComponentTypeDefinition>[];
+    final visibleTypeDefinitionContexts =
+        <WasmComponentTypeDefinitionContext>[];
+    final visibleTypeScope = WasmComponentTypeScope._(
+      visibleTypeDefinitionContexts,
+    );
     var decodedTypeDefinitionCount = 0;
-    List<WasmComponentTypeDefinition> visibleTypeDefinitionsForRead() {
-      final materialized = materializedTypeDefinitions;
-      if (materialized != null) {
-        return materialized;
-      }
-      if (decodedTypeDefinitionCount == typeDefinitions.length) {
-        return typeDefinitions;
-      }
-      return typeDefinitions.sublist(0, decodedTypeDefinitionCount);
-    }
 
-    List<WasmComponentTypeDefinition> materializeVisibleTypeDefinitions() {
-      return materializedTypeDefinitions ??= typeDefinitions.sublist(
-        0,
-        decodedTypeDefinitionCount,
+    void addVisibleType(
+      WasmComponentTypeDefinition definition, {
+      WasmComponentTypeDefinitionContext? context,
+    }) {
+      visibleTypeDefinitions.add(definition);
+      visibleTypeDefinitionContexts.add(
+        context ??
+            WasmComponentTypeDefinitionContext(
+              definition: definition,
+              typeScope: visibleTypeScope,
+            ),
       );
     }
 
     void validateDecodedTypeDefinitionsTo(int count) {
       while (decodedTypeDefinitionCount < count) {
         final definitionIndex = decodedTypeDefinitionCount;
-        final visibleTypeDefinitions = materializeVisibleTypeDefinitions();
         validateComponentTypeDefinition(
           typeDefinitions[definitionIndex],
           'type[$definitionIndex]',
@@ -4435,11 +4697,18 @@ final class _WasmComponentValidationContext {
           outerTypeScopes: <_WasmComponentTypeAliasScope>[
             _WasmComponentTypeAliasScope(
               definitions: visibleTypeDefinitions,
-              crossesComponentBoundary: true,
+              crossesComponentBoundary: false,
+              typeScope: visibleTypeScope,
             ),
+            for (final outerScope in outerAliasScopes)
+              _WasmComponentTypeAliasScope(
+                definitions: outerScope.typeDefinitions,
+                crossesComponentBoundary: true,
+                typeScope: outerScope.typeScope,
+              ),
           ],
         );
-        visibleTypeDefinitions.add(typeDefinitions[definitionIndex]);
+        addVisibleType(typeDefinitions[definitionIndex]);
         decodedTypeDefinitionCount++;
       }
     }
@@ -4457,7 +4726,6 @@ final class _WasmComponentValidationContext {
             importNames ??= _WasmComponentExternNameSet(),
           );
           final descriptor = import.descriptor;
-          final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
           validateExternDescriptor(
             descriptor,
             'import[${event.index}].descriptor',
@@ -4504,14 +4772,25 @@ final class _WasmComponentValidationContext {
               _componentImportInstanceExportTypeMap(
                 descriptor,
                 visibleTypeDefinitions,
+                visibleTypeScope: visibleTypeScope,
               ),
             );
             instanceCount++;
           } else if (descriptor.kind == WasmComponentExternKind.componentType) {
-            introduceComponentTypeImport(
+            final introduced = _componentTypeImportDefinitionIntroducedBy(
               descriptor,
-              materializeVisibleTypeDefinitions(),
+              visibleTypeDefinitions,
             );
+            if (introduced != null) {
+              addVisibleType(
+                introduced,
+                context:
+                    descriptor.boundKind ==
+                        WasmComponentExternBoundKind.equality
+                    ? visibleTypeScope.definitionContextAt(descriptor.typeIndex)
+                    : null,
+              );
+            }
           }
         case _WasmComponentDefinitionEventKind.export:
           final export = exports[event.index];
@@ -4520,7 +4799,6 @@ final class _WasmComponentValidationContext {
             'export[${event.index}].name',
             exportNames ??= _WasmComponentExternNameSet(),
           );
-          final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
           validateExternDescriptor(
             export.descriptor,
             'export[${event.index}].descriptor',
@@ -4553,7 +4831,12 @@ final class _WasmComponentValidationContext {
               export.sort.index,
             );
             if (exportedTypeDefinition != null) {
-              materializeVisibleTypeDefinitions().add(exportedTypeDefinition);
+              addVisibleType(
+                exportedTypeDefinition,
+                context: visibleTypeScope.definitionContextAt(
+                  export.sort.index,
+                ),
+              );
             }
           }
         case _WasmComponentDefinitionEventKind.coreType:
@@ -4568,12 +4851,17 @@ final class _WasmComponentValidationContext {
           );
           coreCounts.add(WasmComponentCoreSortKind.instance);
         case _WasmComponentDefinitionEventKind.component:
-          final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
+          final childTypeScope = WasmComponentTypeScope._(
+            List<WasmComponentTypeDefinitionContext>.unmodifiable(
+              visibleTypeDefinitionContexts,
+            ),
+          );
           final childOuterAliasScopes = <_WasmComponentOuterAliasScope>[
             _WasmComponentOuterAliasScope(
               typeDefinitions: List<WasmComponentTypeDefinition>.unmodifiable(
                 visibleTypeDefinitions,
               ),
+              typeScope: childTypeScope,
               coreModuleCount: coreCounts.count(
                 WasmComponentCoreSortKind.module,
               ),
@@ -4595,7 +4883,6 @@ final class _WasmComponentValidationContext {
           componentCount++;
         case _WasmComponentDefinitionEventKind.instance:
           final instance = instances[event.index];
-          final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
           validateInstanceDefinition(
             instance,
             'instance[${event.index}]',
@@ -4614,6 +4901,7 @@ final class _WasmComponentValidationContext {
               functionTypes: functionTypes,
               valueEntries: valueEntries,
               visibleTypeDefinitions: visibleTypeDefinitions,
+              visibleTypeScope: visibleTypeScope,
             ),
           );
           instanceCount++;
@@ -4627,9 +4915,9 @@ final class _WasmComponentValidationContext {
           );
         case _WasmComponentDefinitionEventKind.alias:
           final alias = aliases[event.index];
-          final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
           final currentOuterAliasScope = _WasmComponentOuterAliasScope(
             typeDefinitions: visibleTypeDefinitions,
+            typeScope: visibleTypeScope,
             coreModuleCount: coreCounts.count(WasmComponentCoreSortKind.module),
             componentCount: componentCount,
           );
@@ -4669,18 +4957,25 @@ final class _WasmComponentValidationContext {
             instanceExportMaps.add(null);
             instanceCount++;
           }
+          final outerAliasContext = outerAliasTypeDefinitionContext(
+            alias,
+            currentOuterAliasScope,
+          );
+          final aliasedTypeContext =
+              knownAliasEntry?.typeDefinitionContext ?? outerAliasContext;
           final aliasedTypeDefinition =
+              aliasedTypeContext?.definition ??
+              knownAliasEntry?.typeDefinition ??
               _componentInstanceExportAliasDefinition(
                 alias,
                 instanceExportMaps,
               ) ??
               outerAliasTypeDefinition(alias, currentOuterAliasScope);
           if (aliasedTypeDefinition != null) {
-            materializeVisibleTypeDefinitions().add(aliasedTypeDefinition);
+            addVisibleType(aliasedTypeDefinition, context: aliasedTypeContext);
           }
         case _WasmComponentDefinitionEventKind.canonical:
           final definition = canonicalDefinitions[event.index];
-          final visibleTypeDefinitions = visibleTypeDefinitionsForRead();
           validateCanonicalDefinition(
             definition,
             'canonical[${event.index}]',
@@ -4748,7 +5043,7 @@ final class _WasmComponentValidationContext {
           validateComponentValueType(
             valueDefinition.type,
             'value[${event.index}].type',
-            scopedTypeDefinitions: visibleTypeDefinitionsForRead(),
+            scopedTypeDefinitions: visibleTypeDefinitions,
           );
           valueEntries.add(
             _WasmComponentValueIndexEntry(
@@ -5097,6 +5392,7 @@ final class _WasmComponentValidationContext {
     required List<WasmComponentFunctionType?> functionTypes,
     required List<_WasmComponentValueIndexEntry> valueEntries,
     required List<WasmComponentTypeDefinition> visibleTypeDefinitions,
+    required WasmComponentTypeScope visibleTypeScope,
   }) {
     switch (instance.kind) {
       case WasmComponentInstanceKind.instantiate:
@@ -5122,6 +5418,11 @@ final class _WasmComponentValidationContext {
               typeDefinition: _componentTypeSortIndexDefinition(
                 export.sort,
                 visibleTypeDefinitions,
+              ),
+              typeDefinitionContext: visibleTypeScope.definitionContextAt(
+                export.sort.kind == WasmComponentSortKind.componentType
+                    ? export.sort.index
+                    : null,
               ),
             ),
         };
@@ -5394,10 +5695,41 @@ final class _WasmComponentValidationContext {
       return false;
     }
 
+    if (componentDepth > 0 &&
+        alias.sort.kind == WasmComponentSortKind.componentType &&
+        componentTypeAliasScopeDefinitionContainsResource(
+          _WasmComponentTypeAliasScope(
+            definitions: targetScope.typeDefinitions,
+            crossesComponentBoundary: true,
+            typeScope: targetScope.typeScope,
+          ),
+          index,
+        )) {
+      errors.add(
+        WasmComponentValidationError(
+          path: '$path.target',
+          message:
+              'Wasm component outer aliases cannot alias '
+              'resource-containing types across component boundaries.',
+        ),
+      );
+      return false;
+    }
+
     return true;
   }
 
   WasmComponentTypeDefinition? outerAliasTypeDefinition(
+    WasmComponentAlias alias,
+    _WasmComponentOuterAliasScope currentOuterAliasScope,
+  ) {
+    return outerAliasTypeDefinitionContext(
+      alias,
+      currentOuterAliasScope,
+    )?.definition;
+  }
+
+  WasmComponentTypeDefinitionContext? outerAliasTypeDefinitionContext(
     WasmComponentAlias alias,
     _WasmComponentOuterAliasScope currentOuterAliasScope,
   ) {
@@ -5415,7 +5747,20 @@ final class _WasmComponentValidationContext {
       componentDepth,
       currentOuterAliasScope,
     );
-    return targetScope?.typeDefinitionAt(alias.target.index);
+    final definition = targetScope?.typeDefinitionAt(alias.target.index);
+    final context = targetScope?.typeScope.definitionContextAt(
+      alias.target.index,
+    );
+    if (definition == null || targetScope == null) {
+      return null;
+    }
+    if (context != null && identical(context.definition, definition)) {
+      return context;
+    }
+    return WasmComponentTypeDefinitionContext(
+      definition: definition,
+      typeScope: targetScope.typeScope,
+    );
   }
 
   _WasmComponentOuterAliasScope? outerAliasScopeAt(
@@ -5836,7 +6181,6 @@ final class _WasmComponentValidationContext {
       WasmComponentCanonicalKind.resourceNew ||
       WasmComponentCanonicalKind.resourceDrop ||
       WasmComponentCanonicalKind.resourceRep ||
-      WasmComponentCanonicalKind.backpressureSet ||
       WasmComponentCanonicalKind.backpressureInc ||
       WasmComponentCanonicalKind.backpressureDec ||
       WasmComponentCanonicalKind.taskReturn ||
@@ -5870,10 +6214,12 @@ final class _WasmComponentValidationContext {
       WasmComponentCanonicalKind.waitableJoin ||
       WasmComponentCanonicalKind.threadIndex ||
       WasmComponentCanonicalKind.threadNewIndirect ||
-      WasmComponentCanonicalKind.threadSwitchTo ||
-      WasmComponentCanonicalKind.threadSuspend ||
       WasmComponentCanonicalKind.threadResumeLater ||
-      WasmComponentCanonicalKind.threadYieldTo ||
+      WasmComponentCanonicalKind.threadSuspend ||
+      WasmComponentCanonicalKind.threadSuspendThenResume ||
+      WasmComponentCanonicalKind.threadYieldThenResume ||
+      WasmComponentCanonicalKind.threadSuspendThenPromote ||
+      WasmComponentCanonicalKind.threadYieldThenPromote ||
       WasmComponentCanonicalKind.threadSpawnRef ||
       WasmComponentCanonicalKind.threadSpawnIndirect ||
       WasmComponentCanonicalKind.threadAvailableParallelism => true,
@@ -7648,13 +7994,17 @@ WasmComponentCanonicalDefinition _readCanonicalDefinition(ByteReader reader) {
         coreFunctionIndex: coreFunctionIndex,
         options: options,
         typeIndex: reader.readVarUint32(),
+        isAsync: _canonicalOptionsUseAsync(options),
       );
     case 0x01:
       _expectCanonicalFunctionSort(reader);
+      final functionIndex = reader.readVarUint32();
+      final options = _readCanonicalOptions(reader);
       return WasmComponentCanonicalDefinition(
         kind: WasmComponentCanonicalKind.lower,
-        functionIndex: reader.readVarUint32(),
-        options: _readCanonicalOptions(reader),
+        functionIndex: functionIndex,
+        options: options,
+        isAsync: _canonicalOptionsUseAsync(options),
       );
     case 0x02:
       return _readCanonicalTypeIndex(
@@ -7670,10 +8020,6 @@ WasmComponentCanonicalDefinition _readCanonicalDefinition(ByteReader reader) {
       return _readCanonicalTypeIndex(
         reader,
         WasmComponentCanonicalKind.resourceRep,
-      );
-    case 0x08:
-      return const WasmComponentCanonicalDefinition(
-        kind: WasmComponentCanonicalKind.backpressureSet,
       );
     case 0x24:
       return const WasmComponentCanonicalDefinition(
@@ -7834,9 +8180,8 @@ WasmComponentCanonicalDefinition _readCanonicalDefinition(ByteReader reader) {
         tableIndex: reader.readVarUint32(),
       );
     case 0x28:
-      return _readCancellableCanonical(
-        reader,
-        WasmComponentCanonicalKind.threadSwitchTo,
+      return const WasmComponentCanonicalDefinition(
+        kind: WasmComponentCanonicalKind.threadResumeLater,
       );
     case 0x29:
       return _readCancellableCanonical(
@@ -7844,13 +8189,24 @@ WasmComponentCanonicalDefinition _readCanonicalDefinition(ByteReader reader) {
         WasmComponentCanonicalKind.threadSuspend,
       );
     case 0x2a:
-      return const WasmComponentCanonicalDefinition(
-        kind: WasmComponentCanonicalKind.threadResumeLater,
+      return _readCancellableCanonical(
+        reader,
+        WasmComponentCanonicalKind.threadSuspendThenResume,
       );
     case 0x2b:
       return _readCancellableCanonical(
         reader,
-        WasmComponentCanonicalKind.threadYieldTo,
+        WasmComponentCanonicalKind.threadYieldThenResume,
+      );
+    case 0x2c:
+      return _readCancellableCanonical(
+        reader,
+        WasmComponentCanonicalKind.threadSuspendThenPromote,
+      );
+    case 0x2d:
+      return _readCancellableCanonical(
+        reader,
+        WasmComponentCanonicalKind.threadYieldThenPromote,
       );
     case 0x40:
       return WasmComponentCanonicalDefinition(
@@ -7891,12 +8247,20 @@ WasmComponentCanonicalDefinition _readTypedOptionsCanonical(
   ByteReader reader,
   WasmComponentCanonicalKind kind,
 ) {
+  final typeIndex = reader.readVarUint32();
+  final options = _readCanonicalOptions(reader);
   return WasmComponentCanonicalDefinition(
     kind: kind,
-    typeIndex: reader.readVarUint32(),
-    options: _readCanonicalOptions(reader),
+    typeIndex: typeIndex,
+    options: options,
+    isAsync: _canonicalOptionsUseAsync(options),
   );
 }
+
+bool _canonicalOptionsUseAsync(List<WasmComponentCanonicalOption> options) =>
+    options.any(
+      (option) => option.kind == WasmComponentCanonicalOptionKind.async,
+    );
 
 WasmComponentCanonicalDefinition _readTypedAsyncCanonical(
   ByteReader reader,

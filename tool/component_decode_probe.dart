@@ -18,10 +18,7 @@ const String _testsuiteSubmoduleHint =
     'Initialize testsuite submodule: '
     'git submodule update --init --recursive third_party/component-model-tests';
 const Map<String, String> _defaultExpectedFailureReasonPatterns =
-    <String, String>{
-      // Parser token coverage gap in current wasm-tools release.
-      'async/trap-if-block-and-sync.wast': 'unexpected token, expected one of:',
-    };
+    <String, String>{};
 
 Future<void> main(List<String> args) async {
   final testsuiteDir =

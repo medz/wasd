@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 const String _defaultJsonPath =
     '.dart_tool/spec_runner/component_official_latest.json';
@@ -13,6 +15,9 @@ const String _defaultPortableFeatures =
 const String _testsuiteSubmoduleHint =
     'Initialize testsuite submodule: '
     'git submodule update --init --recursive third_party/component-model-tests';
+const String _defaultWasmToolsBin = '.toolchains/bin/wasm-tools';
+const Duration _defaultFileTimeout = Duration(minutes: 2);
+const Duration _processTerminationGrace = Duration(seconds: 2);
 const List<String> _defaultPortableGroups = <String>[
   'async',
   'names',
@@ -20,22 +25,6 @@ const List<String> _defaultPortableGroups = <String>[
   'values',
   'wasm-tools',
 ];
-const Map<String, String> _defaultExpectedFailureReasonPatterns =
-    <String, String>{
-      // wasm-tools currently rejects `stream<char>` payload typing.
-      'async/same-component-stream-future.wast':
-          '`stream<char>` is not valid at this time',
-      // Current wasm-tools validation disagrees with these upstream async
-      // tests on whether `canon ... async` targets an async function type.
-      'async/cross-abi-calls.wast':
-          'the `async` canonical option requires an async function type',
-      'async/drop-cross-task-borrow.wast':
-          'the `async` canonical option requires an async function type',
-      'async/trap-on-reenter.wast':
-          'the `async` canonical option requires an async function type',
-      // Parser token coverage gap in current wasm-tools release.
-      'async/trap-if-block-and-sync.wast': 'unexpected token, expected one of:',
-    };
 const Map<String, String>
 _allFeaturesAdditionalExpectedFailureReasonPatterns = <String, String>{
   // Known wasm-tools/parser drift for package-name parsing assertions.
@@ -64,34 +53,72 @@ Future<void> main(List<String> args) async {
   final outputMarkdownPath =
       _argValue(args, '--markdown') ?? _defaultMarkdownPath;
   final allGroups = args.contains('--all-groups');
+  final groupsArg = _argValue(args, '--groups');
   final features =
       _argValue(args, '--features') ??
       (allGroups ? 'all' : _defaultPortableFeatures);
-  final wasmToolsBin =
-      _argValue(args, '--wasm-tools-bin') ?? '.toolchains/bin/wasm-tools';
+  final explicitWasmToolsBin = _argValue(args, '--wasm-tools-bin');
+  final wasmtimeBin = _argValue(args, '--wasmtime-bin');
+  late final Duration fileTimeout;
+  try {
+    if (_hasOption(args, '--wasm-tools-bin') &&
+        _hasOption(args, '--wasmtime-bin')) {
+      throw ArgumentError(
+        'Use only one of `--wasm-tools-bin` or `--wasmtime-bin`.',
+      );
+    }
+    if (allGroups && _hasOption(args, '--groups')) {
+      throw ArgumentError('Use only one of `--all-groups` or `--groups`.');
+    }
+    fileTimeout = _parsePositiveSeconds(
+      _argValue(args, '--file-timeout-seconds'),
+      '--file-timeout-seconds',
+      _defaultFileTimeout,
+    );
+  } on Object catch (error) {
+    stderr
+      ..writeln('component-official: $error')
+      ..writeln(_usage);
+    exitCode = 2;
+    return;
+  }
+  final engine = wasmtimeBin == null
+      ? _GateEngine.wasmToolsValidation
+      : _GateEngine.wasmtimeReference;
+  if (engine == _GateEngine.wasmtimeReference) {
+    for (final feature in _unknownWasmtimeFeatureTokens(features)) {
+      stderr.writeln(
+        'component-official: warning: ignoring unknown Wasmtime feature '
+        '`$feature`.',
+      );
+    }
+  }
+  final allowPathFallback = explicitWasmToolsBin == null && wasmtimeBin == null;
+  final requestedEngineBinary =
+      wasmtimeBin ?? explicitWasmToolsBin ?? _defaultWasmToolsBin;
   final includePattern = _argValue(args, '--include-pattern');
   final requireTestsuiteDir = args.contains('--require-testsuite-dir');
-  final ignoreErrorMessages = !args.contains('--no-ignore-error-messages');
+  final requireEngine = args.contains('--require-engine');
+  final ignoreErrorMessages =
+      engine == _GateEngine.wasmToolsValidation &&
+      !args.contains('--no-ignore-error-messages');
   final disableDefaultExpectedFailures = args.contains(
     '--no-default-expected-failures',
   );
   final expectedFailuresArg = _argValue(args, '--expected-failures');
   final expectedFailureRules = <String, _ExpectedFailureRule>{
-    if (!disableDefaultExpectedFailures)
-      ..._defaultExpectedFailureReasonPatterns.map(
-        (path, reasonContains) => MapEntry(
-          path,
-          _ExpectedFailureRule(path: path, reasonContains: reasonContains),
-        ),
-      ),
-    if (!disableDefaultExpectedFailures && _featuresIncludeAll(features))
+    if (!disableDefaultExpectedFailures &&
+        engine == _GateEngine.wasmToolsValidation &&
+        _featuresIncludeAll(features))
       ..._allFeaturesAdditionalExpectedFailureReasonPatterns.map(
         (path, reasonContains) => MapEntry(
           path,
           _ExpectedFailureRule(path: path, reasonContains: reasonContains),
         ),
       ),
-    if (!disableDefaultExpectedFailures && allGroups)
+    if (!disableDefaultExpectedFailures &&
+        engine == _GateEngine.wasmToolsValidation &&
+        allGroups)
       ..._allGroupsAdditionalExpectedFailureReasonPatterns.map(
         (path, reasonContains) => MapEntry(
           path,
@@ -109,7 +136,6 @@ Future<void> main(List<String> args) async {
     }
   }
   final expectedFailures = expectedFailureRules.keys.toSet();
-  final groupsArg = _argValue(args, '--groups');
   final selectedGroups = allGroups
       ? const <String>[]
       : (groupsArg == null
@@ -135,6 +161,7 @@ Future<void> main(List<String> args) async {
       selectedGroups: effectiveGroups,
       features: features,
       expectedFailureRules: expectedFailureRules,
+      engine: engine,
       reason:
           'component-model testsuite directory does not exist: $testsuiteDir',
     );
@@ -182,6 +209,7 @@ Future<void> main(List<String> args) async {
       selectedGroups: effectiveGroups,
       features: features,
       expectedFailureRules: expectedFailureRules,
+      engine: engine,
       reason: 'No .wast files matched current group/filter selection.',
     );
     stdout.writeln('component-official status: skipped');
@@ -190,8 +218,12 @@ Future<void> main(List<String> args) async {
     return;
   }
 
-  final resolvedWasmTools = await _resolveWasmToolsBinary(wasmToolsBin);
-  if (resolvedWasmTools == null) {
+  final resolvedEngine = await _resolveEngineBinary(
+    engine: engine,
+    candidate: requestedEngineBinary,
+    allowPathFallback: allowPathFallback,
+  );
+  if (resolvedEngine == null) {
     await _writeSkippedReport(
       outputJsonPath: outputJsonPath,
       outputMarkdownPath: outputMarkdownPath,
@@ -200,11 +232,18 @@ Future<void> main(List<String> args) async {
       selectedGroups: effectiveGroups,
       features: features,
       expectedFailureRules: expectedFailureRules,
-      reason: 'Unable to locate usable wasm-tools binary.',
+      engine: engine,
+      reason: 'Unable to locate usable ${engine.displayName} binary.',
     );
     stdout.writeln('component-official status: skipped');
     stdout.writeln('json report: $outputJsonPath');
     stdout.writeln('markdown report: $outputMarkdownPath');
+    if (requireEngine) {
+      stderr.writeln(
+        'component-official required ${engine.displayName} binary is missing.',
+      );
+      exitCode = 1;
+    }
     return;
   }
 
@@ -212,29 +251,36 @@ Future<void> main(List<String> args) async {
   final stopwatch = Stopwatch()..start();
   for (final file in files) {
     final started = DateTime.now();
-    final command = <String>[
-      'wast',
-      file.path,
-      '--features',
-      features,
-      if (ignoreErrorMessages) '--ignore-error-messages',
-    ];
-    final result = await Process.run(
-      resolvedWasmTools,
-      command,
-      runInShell: false,
+    final command = _engineCommand(
+      engine: engine,
+      filePath: file.path,
+      features: features,
+      ignoreErrorMessages: ignoreErrorMessages,
     );
+    late final _EngineProcessResult result;
+    try {
+      result = await _runEngineProcess(
+        resolvedEngine.binary,
+        command,
+        timeout: fileTimeout,
+      );
+    } on Object catch (error) {
+      result = _EngineProcessResult.failedToStart(error);
+    }
     final ended = DateTime.now();
-    final stdoutText = _asText(result.stdout);
-    final stderrText = _asText(result.stderr);
+    final stdoutText = result.stdout;
+    final stderrText = result.stderr;
     final expectedFailureRule = expectedFailureRules[file.relativePath];
     final expectedFailure = expectedFailureRule != null;
     final failureSummary = result.exitCode == 0
         ? null
+        : result.timedOut
+        ? 'timed out after ${fileTimeout.inSeconds} seconds'
         : _firstNonEmptyLine(stderrText) ?? 'unknown failure';
     final failureText = '$failureSummary\n$stderrText';
     final expectedFailureReasonMatched =
         expectedFailure &&
+        !result.timedOut &&
         result.exitCode != 0 &&
         _matchesExpectedFailureRule(
           expectedFailureRule,
@@ -253,6 +299,7 @@ Future<void> main(List<String> args) async {
             expectedFailureReasonMatched,
         xpassed: expectedFailure && result.exitCode == 0,
         exitCode: result.exitCode,
+        timedOut: result.timedOut,
         durationMs: ended.difference(started).inMilliseconds,
         failureSummary: failureSummary,
         stdoutTail: _tailLines(stdoutText, 60),
@@ -290,8 +337,18 @@ Future<void> main(List<String> args) async {
     'testsuite_dir': testsuiteDir,
     'groups': effectiveGroups,
     'features': features,
-    'wasm_tools_binary': resolvedWasmTools,
+    'engine': engine.id,
+    'engine_mode': engine.mode,
+    'engine_binary': resolvedEngine.binary,
+    'engine_version': resolvedEngine.version,
+    'executes_wasm': engine.executesWasm,
+    'executes_wasd': false,
+    if (engine == _GateEngine.wasmToolsValidation)
+      'wasm_tools_binary': resolvedEngine.binary,
+    if (engine == _GateEngine.wasmtimeReference)
+      'wasmtime_binary': resolvedEngine.binary,
     'ignore_error_messages': ignoreErrorMessages,
+    'file_timeout_seconds': fileTimeout.inSeconds,
     'expected_failures': expectedFailures.toList()..sort(),
     'expected_failure_rules': expectedFailureRules.map(
       (path, rule) => MapEntry(path, rule.reasonContains),
@@ -324,22 +381,153 @@ Future<void> main(List<String> args) async {
   }
 }
 
-Future<String?> _resolveWasmToolsBinary(String candidate) async {
+Future<_EngineProcessResult> _runEngineProcess(
+  String binary,
+  List<String> arguments, {
+  required Duration timeout,
+}) async {
+  final process = await Process.start(binary, arguments, runInShell: false);
+  final stdoutCollector = _ProcessOutputCollector(process.stdout);
+  final stderrCollector = _ProcessOutputCollector(process.stderr);
+  var timedOut = false;
+  var processExitCode = 0;
+  try {
+    processExitCode = await process.exitCode.timeout(timeout);
+  } on TimeoutException {
+    timedOut = true;
+    await _terminateProcess(process);
+    processExitCode = 124;
+  }
+  final outputs = await Future.wait<String>(<Future<String>>[
+    stdoutCollector.read(),
+    stderrCollector.read(),
+  ]);
+  return _EngineProcessResult(
+    exitCode: processExitCode,
+    stdout: outputs[0],
+    stderr: outputs[1],
+    timedOut: timedOut,
+  );
+}
+
+Future<void> _terminateProcess(Process process) async {
+  process.kill();
+  try {
+    await process.exitCode.timeout(_processTerminationGrace);
+    return;
+  } on TimeoutException {
+    process.kill(ProcessSignal.sigkill);
+  }
+  try {
+    await process.exitCode.timeout(_processTerminationGrace);
+  } on TimeoutException {
+    // Output draining is bounded below even if the engine ignores both signals.
+  }
+}
+
+Future<_ResolvedEngine?> _resolveEngineBinary({
+  required _GateEngine engine,
+  required String candidate,
+  required bool allowPathFallback,
+}) async {
+  final fallback = engine == _GateEngine.wasmToolsValidation
+      ? 'wasm-tools'
+      : 'wasmtime';
   final attempts = <String>{candidate};
-  if (candidate != 'wasm-tools') {
-    attempts.add('wasm-tools');
+  if (allowPathFallback && candidate != fallback) {
+    attempts.add(fallback);
   }
   for (final binary in attempts) {
     try {
       final result = await Process.run(binary, const <String>['--version']);
       if (result.exitCode == 0) {
-        return binary;
+        return _ResolvedEngine(
+          binary: binary,
+          version:
+              _firstNonEmptyLine(_asText(result.stdout)) ??
+              _firstNonEmptyLine(_asText(result.stderr)) ??
+              'unknown',
+        );
       }
     } on ProcessException {
       // Try the next candidate.
     }
   }
   return null;
+}
+
+List<String> _engineCommand({
+  required _GateEngine engine,
+  required String filePath,
+  required String features,
+  required bool ignoreErrorMessages,
+}) {
+  switch (engine) {
+    case _GateEngine.wasmToolsValidation:
+      return <String>[
+        'wast',
+        filePath,
+        '--features',
+        features,
+        if (ignoreErrorMessages) '--ignore-error-messages',
+      ];
+    case _GateEngine.wasmtimeReference:
+      return <String>['wast', ..._wasmtimeFeatureArgs(features), filePath];
+  }
+}
+
+List<String> _wasmtimeFeatureArgs(String features) {
+  final tokens = features
+      .split(',')
+      .map((value) => value.trim())
+      .where((value) => value.isNotEmpty)
+      .toSet();
+  final all = tokens.contains('all');
+  final flags = <String>{'-Wcomponent-model=y'};
+
+  void enable(String feature, String flag) {
+    if (all || tokens.contains(feature)) {
+      flags.add('-W$flag=y');
+    }
+  }
+
+  enable('cm-async', 'component-model-async');
+  enable('cm-more-async-builtins', 'component-model-more-async-builtins');
+  enable('cm-async-stackful', 'component-model-async-stackful');
+  enable('cm-threading', 'component-model-threading');
+  enable('cm-error-context', 'component-model-error-context');
+  enable('cm-gc', 'component-model-gc');
+  enable('cm-map', 'component-model-map');
+  enable('cm-fixed-length-lists', 'component-model-fixed-length-lists');
+  if (all) {
+    flags
+      ..add('-Wcomponent-model-memory64=y')
+      ..add('-Wcomponent-model-implements=y');
+  }
+  return flags.toList(growable: false);
+}
+
+Iterable<String> _unknownWasmtimeFeatureTokens(String features) sync* {
+  const known = <String>{
+    'all',
+    'component-model',
+    'cm-values',
+    'cm-async',
+    'cm-more-async-builtins',
+    'cm-async-stackful',
+    'cm-threading',
+    'cm-error-context',
+    'cm-gc',
+    'cm-map',
+    'cm-fixed-length-lists',
+  };
+  final seen = <String>{};
+  for (final rawToken in features.split(',')) {
+    final token = rawToken.trim();
+    if (token.isNotEmpty && !known.contains(token) && seen.add(token)) {
+      yield token;
+    }
+  }
 }
 
 Future<void> _writeSkippedReport({
@@ -350,6 +538,7 @@ Future<void> _writeSkippedReport({
   required List<String> selectedGroups,
   required String features,
   required Map<String, _ExpectedFailureRule> expectedFailureRules,
+  required _GateEngine engine,
   required String reason,
 }) async {
   final expectedFailures = expectedFailureRules.keys.toList()..sort();
@@ -362,6 +551,10 @@ Future<void> _writeSkippedReport({
     'testsuite_dir': testsuiteDir,
     'groups': selectedGroups,
     'features': features,
+    'engine': engine.id,
+    'engine_mode': engine.mode,
+    'executes_wasm': engine.executesWasm,
+    'executes_wasd': false,
     'expected_failures': expectedFailures,
     'expected_failure_rules': expectedFailureRules.map(
       (path, rule) => MapEntry(path, rule.reasonContains),
@@ -418,6 +611,27 @@ String? _argValue(List<String> args, String key) {
     }
   }
   return null;
+}
+
+bool _hasOption(List<String> args, String key) {
+  return args.any(
+    (argument) => argument == key || argument.startsWith('$key='),
+  );
+}
+
+Duration _parsePositiveSeconds(
+  String? value,
+  String option,
+  Duration fallback,
+) {
+  if (value == null) {
+    return fallback;
+  }
+  final seconds = int.tryParse(value);
+  if (seconds == null || seconds <= 0) {
+    throw ArgumentError.value(value, option, 'must be a positive integer');
+  }
+  return Duration(seconds: seconds);
 }
 
 String _relativePath(String fullPath, {required String from}) {
@@ -487,6 +701,11 @@ String _renderMarkdown(Map<String, Object?> payload) {
       .map((value) => value.toString())
       .toList(growable: false);
   final features = payload['features'] as String? ?? 'all';
+  final engine = payload['engine'] as String? ?? 'unknown';
+  final engineMode = payload['engine_mode'] as String? ?? 'unknown';
+  final engineBinary = payload['engine_binary'] as String?;
+  final engineVersion = payload['engine_version'] as String?;
+  final executesWasm = payload['executes_wasm'] == true;
   final totals =
       (payload['totals'] as Map<Object?, Object?>? ??
       const <Object?, Object?>{});
@@ -521,6 +740,20 @@ String _renderMarkdown(Map<String, Object?> payload) {
     ..writeln('- Testsuite dir: `$testsuiteDir`')
     ..writeln('- Groups: `${groups.isEmpty ? 'all' : groups.join(', ')}`')
     ..writeln('- Features: `$features`')
+    ..writeln('- Engine: `$engine` (`$engineMode`)')
+    ..writeln(
+      '- Executes WebAssembly: `${executesWasm ? 'yes' : 'no'}`; executes wasd: `no`',
+    )
+    ..writeln(
+      engineBinary == null
+          ? '- Engine binary: `unresolved`'
+          : '- Engine binary: `$engineBinary`',
+    )
+    ..writeln(
+      engineVersion == null
+          ? '- Engine version: `unresolved`'
+          : '- Engine version: `$engineVersion`',
+    )
     ..writeln(
       '- Totals: `total=$filesTotal passed=$filesPassed failed=$filesFailed xfailed=$filesXfailed xpassed=$filesXpassed`',
     );
@@ -590,6 +823,97 @@ final class _WastFile {
   final String group;
 }
 
+enum _GateEngine {
+  wasmToolsValidation(
+    id: 'wasm-tools',
+    mode: 'validation-only',
+    displayName: 'wasm-tools',
+    executesWasm: false,
+  ),
+  wasmtimeReference(
+    id: 'wasmtime',
+    mode: 'reference-execution',
+    displayName: 'Wasmtime',
+    executesWasm: true,
+  );
+
+  const _GateEngine({
+    required this.id,
+    required this.mode,
+    required this.displayName,
+    required this.executesWasm,
+  });
+
+  final String id;
+  final String mode;
+  final String displayName;
+  final bool executesWasm;
+}
+
+final class _ResolvedEngine {
+  const _ResolvedEngine({required this.binary, required this.version});
+
+  final String binary;
+  final String version;
+}
+
+final class _EngineProcessResult {
+  const _EngineProcessResult({
+    required this.exitCode,
+    required this.stdout,
+    required this.stderr,
+    required this.timedOut,
+  });
+
+  factory _EngineProcessResult.failedToStart(Object error) =>
+      _EngineProcessResult(
+        exitCode: 127,
+        stdout: '',
+        stderr: 'Unable to start official component engine: $error',
+        timedOut: false,
+      );
+
+  final int exitCode;
+  final String stdout;
+  final String stderr;
+  final bool timedOut;
+}
+
+final class _ProcessOutputCollector {
+  _ProcessOutputCollector(Stream<List<int>> stream) {
+    _subscription = stream.listen(
+      _bytes.add,
+      onError: (Object _, StackTrace _) => _complete(),
+      onDone: _complete,
+      cancelOnError: true,
+    );
+  }
+
+  final BytesBuilder _bytes = BytesBuilder(copy: false);
+  final Completer<void> _done = Completer<void>();
+  late final StreamSubscription<List<int>> _subscription;
+
+  Future<String> read() async {
+    try {
+      await _done.future.timeout(_processTerminationGrace);
+    } on TimeoutException {
+      try {
+        await _subscription.cancel().timeout(_processTerminationGrace);
+      } on Object {
+        // Return the bounded output captured before the pipe stalled.
+      }
+      _complete();
+    }
+    return utf8.decode(_bytes.takeBytes(), allowMalformed: true);
+  }
+
+  void _complete() {
+    if (!_done.isCompleted) {
+      _done.complete();
+    }
+  }
+}
+
 final class _FileResult {
   const _FileResult({
     required this.path,
@@ -600,6 +924,7 @@ final class _FileResult {
     required this.xfailed,
     required this.xpassed,
     required this.exitCode,
+    required this.timedOut,
     required this.durationMs,
     required this.failureSummary,
     required this.stdoutTail,
@@ -614,6 +939,7 @@ final class _FileResult {
   final bool xfailed;
   final bool xpassed;
   final int exitCode;
+  final bool timedOut;
   final int durationMs;
   final String? failureSummary;
   final List<String> stdoutTail;
@@ -628,6 +954,7 @@ final class _FileResult {
     'xfailed': xfailed,
     'xpassed': xpassed,
     'exit_code': exitCode,
+    'timed_out': timedOut,
     'duration_ms': durationMs,
     'failure_summary': failureSummary,
     'stdout_tail': stdoutTail,
@@ -641,3 +968,15 @@ final class _ExpectedFailureRule {
   final String path;
   final String? reasonContains;
 }
+
+const String _usage = '''
+Usage: dart run tool/component_official_runner.dart [options]
+
+  --testsuite-dir DIR
+  --groups LIST | --all-groups
+  --features LIST
+  --wasm-tools-bin FILE | --wasmtime-bin FILE
+  --file-timeout-seconds N
+  --json FILE
+  --markdown FILE
+''';

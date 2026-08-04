@@ -303,6 +303,7 @@ Future<void> main(List<String> args) async {
           componentOfficialFeatures: componentOfficialFeatures,
           componentOfficialAllGroups: componentOfficialAllGroups,
           requireTestsuiteDir: strictComponentOfficial,
+          requireEngine: strictComponentOfficial,
         ),
         optional: !strictComponentOfficial,
       ),
@@ -1267,12 +1268,14 @@ List<String> _componentOfficialRunnerCommand({
   required String? componentOfficialFeatures,
   required bool componentOfficialAllGroups,
   required bool requireTestsuiteDir,
+  required bool requireEngine,
 }) {
   return <String>[
     'dart',
     'run',
     'tool/component_official_runner.dart',
     if (requireTestsuiteDir) '--require-testsuite-dir',
+    if (requireEngine) '--require-engine',
     if (componentOfficialAllGroups) '--all-groups',
     if (componentOfficialTestsuiteDir != null &&
         componentOfficialTestsuiteDir.trim().isNotEmpty)

@@ -26,7 +26,6 @@ final class WASIComponentCanonicalHost {
     WASIComponentContext? context,
     int availableParallelism = 1,
   }) : table = table ?? WASIComponentResourceTable() {
-    adapterHost = const WASIComponentCanonicalAdapterHost();
     resourceHost = WASIComponentResourceHost(table: this.table);
     asyncHost = WASIComponentAsyncHost(
       table: this.table,
@@ -41,9 +40,31 @@ final class WASIComponentCanonicalHost {
       ],
     );
     taskHost = WASIComponentTaskHost(waitableHost: waitableHost);
+    adapterHost = WASIComponentCanonicalAdapterHost(
+      asyncHost: asyncHost,
+      borrowLowering: (taskScoped) {
+        if (taskScoped) {
+          final task = taskHost.currentTask;
+          if (task != null) {
+            return WASIComponentCanonicalBorrowLowering(
+              lower: (handle) => this.table.insertBorrowHandle(handle, task),
+              close: () {},
+              isCallScoped: false,
+            );
+          }
+        }
+        final callScope = this.table.createBorrowCallScope();
+        return WASIComponentCanonicalBorrowLowering(
+          lower: callScope.lowerHandle,
+          close: callScope.close,
+          isCallScoped: true,
+        );
+      },
+    );
     contextHost = WASIComponentContextHost(context: context);
     threadHost = WASIComponentThreadHost(
       contextHost: contextHost,
+      waitableHost: waitableHost,
       availableParallelism: availableParallelism,
     );
     errorContextHost = WASIComponentErrorContextHost(table: this.table);
@@ -103,8 +124,9 @@ final class WASIComponentCanonicalHost {
       host: this,
       canonicalDefinitions: definitions,
       typeDefinitions: List<WasmComponentTypeDefinition>.unmodifiable(
-        component.typeDefinitions,
+        component.componentTypeIndexDefinitions,
       ),
+      typeScope: component.componentTypeIndexScope,
       validationErrors: List<WasmComponentValidationError>.unmodifiable(
         validationErrors,
       ),
@@ -129,6 +151,7 @@ final class WASIComponentCanonicalHost {
   WASIComponentCanonicalProgram _bindSupportedCanonicalDefinitions(
     List<WasmComponentCanonicalDefinition> definitions, {
     List<WasmComponentTypeDefinition> typeDefinitions = const [],
+    WasmComponentTypeScope? typeScope,
     WASIComponentResourceBindingSet<Object>? resourceBindingSet,
     Map<int, WASIComponentCanonicalAdapterOperation> adapterOperations =
         const <int, WASIComponentCanonicalAdapterOperation>{},
@@ -144,6 +167,7 @@ final class WASIComponentCanonicalHost {
           definitions[canonicalIndex],
           canonicalIndex: canonicalIndex,
           typeDefinitions: typeDefinitions,
+          typeScope: typeScope,
           resourceBindingSet: resourceBindingSet,
           adapterOperations: adapterOperations,
         ),
@@ -227,6 +251,7 @@ final class WASIComponentCanonicalHost {
       definition,
       canonicalIndex: 0,
       typeDefinitions: const <WasmComponentTypeDefinition>[],
+      typeScope: null,
       resourceBindingSet: null,
       adapterOperations: const <int, WASIComponentCanonicalAdapterOperation>{},
     );
@@ -236,6 +261,7 @@ final class WASIComponentCanonicalHost {
     WasmComponentCanonicalDefinition definition, {
     required int canonicalIndex,
     required List<WasmComponentTypeDefinition> typeDefinitions,
+    required WasmComponentTypeScope? typeScope,
     required WASIComponentResourceBindingSet<Object>? resourceBindingSet,
     required Map<int, WASIComponentCanonicalAdapterOperation> adapterOperations,
   }) {
@@ -247,7 +273,6 @@ final class WASIComponentCanonicalHost {
       case WasmComponentCanonicalKind.resourceDrop:
       case WasmComponentCanonicalKind.resourceRep:
         return _bindResource(definition, resourceBindingSet);
-      case WasmComponentCanonicalKind.backpressureSet:
       case WasmComponentCanonicalKind.backpressureInc:
       case WasmComponentCanonicalKind.backpressureDec:
       case WasmComponentCanonicalKind.streamNew:
@@ -276,7 +301,7 @@ final class WASIComponentCanonicalHost {
         return _bindSubtask(definition);
       case WasmComponentCanonicalKind.taskReturn:
       case WasmComponentCanonicalKind.taskCancel:
-        return _bindTask(definition, typeDefinitions);
+        return _bindTask(definition, typeDefinitions, typeScope);
       case WasmComponentCanonicalKind.contextGet:
       case WasmComponentCanonicalKind.contextSet:
         return _bindContext(definition);
@@ -289,10 +314,12 @@ final class WASIComponentCanonicalHost {
       case WasmComponentCanonicalKind.errorContextDrop:
         return _bindErrorContext(definition);
       case WasmComponentCanonicalKind.threadNewIndirect:
-      case WasmComponentCanonicalKind.threadSwitchTo:
-      case WasmComponentCanonicalKind.threadSuspend:
       case WasmComponentCanonicalKind.threadResumeLater:
-      case WasmComponentCanonicalKind.threadYieldTo:
+      case WasmComponentCanonicalKind.threadSuspend:
+      case WasmComponentCanonicalKind.threadSuspendThenResume:
+      case WasmComponentCanonicalKind.threadYieldThenResume:
+      case WasmComponentCanonicalKind.threadSuspendThenPromote:
+      case WasmComponentCanonicalKind.threadYieldThenPromote:
       case WasmComponentCanonicalKind.threadSpawnRef:
       case WasmComponentCanonicalKind.threadSpawnIndirect:
         throw StateError(
@@ -372,8 +399,8 @@ final class WASIComponentCanonicalHost {
     );
     return WASIComponentCanonicalOperation._(
       kind: definition.kind,
-      invoke: (args) => program.invoke(0, args),
-      invokeAsync: (args) => program.invokeAsync(0, args),
+      invoke: (args) => program.invokeWithoutMemoryEvent(0, args),
+      invokeAsync: (args) => program.invokeWithoutMemoryAsync(0, args),
       invokeWithMemory: (memory, args, realloc, _) =>
           program.invokeWithMemory(0, memory, args, realloc: realloc),
       invokeWithMemoryEvent: (memory, args, realloc, _) =>
@@ -415,12 +442,14 @@ final class WASIComponentCanonicalHost {
   WASIComponentCanonicalOperation _bindTask(
     WasmComponentCanonicalDefinition definition,
     List<WasmComponentTypeDefinition> typeDefinitions,
+    WasmComponentTypeScope? typeScope,
   ) {
     final program = WASIComponentCanonicalTaskProgram(
       operations: [
         taskHost.bindCanonicalDefinition(
           definition,
           typeDefinitions: typeDefinitions,
+          typeScope: typeScope,
         ),
       ],
     );
@@ -484,6 +513,7 @@ final class WASIComponentCanonicalBindingPlan {
     required WASIComponentCanonicalHost host,
     required this.canonicalDefinitions,
     required this.typeDefinitions,
+    required this.typeScope,
     required this.validationErrors,
     required this.unsupportedDefinitions,
   }) : _host = host;
@@ -495,6 +525,9 @@ final class WASIComponentCanonicalBindingPlan {
 
   /// Component type definitions captured for memory-backed canonical values.
   final List<WasmComponentTypeDefinition> typeDefinitions;
+
+  /// Definition-local type scopes retained for imported aliases.
+  final WasmComponentTypeScope? typeScope;
 
   /// Component validation errors that must be fixed before binding.
   final List<WasmComponentValidationError> validationErrors;
@@ -541,6 +574,7 @@ final class WASIComponentCanonicalBindingPlan {
     return _host._bindSupportedCanonicalDefinitions(
       canonicalDefinitions,
       typeDefinitions: typeDefinitions,
+      typeScope: typeScope,
       resourceBindingSet: resourceBindingSet,
       adapterOperations: Map.unmodifiable(adaptersByCanonicalIndex),
     );
@@ -714,7 +748,6 @@ String? _unsupportedCanonicalKindReason(WasmComponentCanonicalKind kind) {
     case WasmComponentCanonicalKind.resourceNew:
     case WasmComponentCanonicalKind.resourceDrop:
     case WasmComponentCanonicalKind.resourceRep:
-    case WasmComponentCanonicalKind.backpressureSet:
     case WasmComponentCanonicalKind.backpressureInc:
     case WasmComponentCanonicalKind.backpressureDec:
     case WasmComponentCanonicalKind.streamNew:
@@ -752,10 +785,12 @@ String? _unsupportedCanonicalKindReason(WasmComponentCanonicalKind kind) {
     case WasmComponentCanonicalKind.errorContextDrop:
       return null;
     case WasmComponentCanonicalKind.threadNewIndirect:
-    case WasmComponentCanonicalKind.threadSwitchTo:
-    case WasmComponentCanonicalKind.threadSuspend:
     case WasmComponentCanonicalKind.threadResumeLater:
-    case WasmComponentCanonicalKind.threadYieldTo:
+    case WasmComponentCanonicalKind.threadSuspend:
+    case WasmComponentCanonicalKind.threadSuspendThenResume:
+    case WasmComponentCanonicalKind.threadYieldThenResume:
+    case WasmComponentCanonicalKind.threadSuspendThenPromote:
+    case WasmComponentCanonicalKind.threadYieldThenPromote:
     case WasmComponentCanonicalKind.threadSpawnRef:
     case WasmComponentCanonicalKind.threadSpawnIndirect:
       return 'scheduler-dependent canonical thread operations require component task scheduling';
@@ -773,7 +808,6 @@ WASIComponentCanonicalCapabilityArea _canonicalCapabilityArea(
     case WasmComponentCanonicalKind.resourceDrop:
     case WasmComponentCanonicalKind.resourceRep:
       return WASIComponentCanonicalCapabilityArea.resource;
-    case WasmComponentCanonicalKind.backpressureSet:
     case WasmComponentCanonicalKind.backpressureInc:
     case WasmComponentCanonicalKind.backpressureDec:
     case WasmComponentCanonicalKind.streamNew:
@@ -811,10 +845,12 @@ WASIComponentCanonicalCapabilityArea _canonicalCapabilityArea(
       return WASIComponentCanonicalCapabilityArea.threadIdentity;
     case WasmComponentCanonicalKind.threadYield:
     case WasmComponentCanonicalKind.threadNewIndirect:
-    case WasmComponentCanonicalKind.threadSwitchTo:
-    case WasmComponentCanonicalKind.threadSuspend:
     case WasmComponentCanonicalKind.threadResumeLater:
-    case WasmComponentCanonicalKind.threadYieldTo:
+    case WasmComponentCanonicalKind.threadSuspend:
+    case WasmComponentCanonicalKind.threadSuspendThenResume:
+    case WasmComponentCanonicalKind.threadYieldThenResume:
+    case WasmComponentCanonicalKind.threadSuspendThenPromote:
+    case WasmComponentCanonicalKind.threadYieldThenPromote:
     case WasmComponentCanonicalKind.threadSpawnRef:
     case WasmComponentCanonicalKind.threadSpawnIndirect:
       return WASIComponentCanonicalCapabilityArea.threadScheduling;

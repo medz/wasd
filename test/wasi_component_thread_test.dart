@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:test/test.dart';
 import 'package:wasd/src/wasi/component/context.dart';
+import 'package:wasd/src/wasi/component/task.dart';
 import 'package:wasd/src/wasi/component/thread.dart';
+import 'package:wasd/src/wasi/component/waitable_set.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 
 void main() {
@@ -25,6 +27,41 @@ void main() {
       expect(availableParallelism.shared, isTrue);
       expect(availableParallelism.threadAvailableParallelism(), 4);
       expect(host.threadCount, 1);
+    });
+
+    test('delivers pending cancellation only from cancellable yield', () async {
+      final waitableHost = WASIComponentWaitableHost();
+      final taskHost = WASIComponentTaskHost(waitableHost: waitableHost);
+      final threadHost = WASIComponentThreadHost(waitableHost: waitableHost);
+      final nonCancellable = threadHost.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.threadYield,
+        ),
+      );
+      final cancellable = threadHost.bindCanonicalDefinition(
+        const WasmComponentCanonicalDefinition(
+          kind: WasmComponentCanonicalKind.threadYield,
+          isCancellable: true,
+        ),
+      );
+      final task = taskHost.createTask(name: 'yield-cancellation')
+        ..markStarted();
+
+      await taskHost.runWithTaskAsync(task, () async {
+        task.requestCancellation();
+
+        expect(await nonCancellable.threadYield(), 0);
+        expect(
+          task.cancellationState,
+          WASIComponentTaskCancellationState.pending,
+        );
+        expect(await cancellable.threadYield(), 1);
+        expect(
+          task.cancellationState,
+          WASIComponentTaskCancellationState.delivered,
+        );
+        expect(await cancellable.threadYield(), 0);
+      });
     });
 
     test('runs with registered threads and their contexts', () {
@@ -279,14 +316,25 @@ void main() {
       );
 
       final host = WASIComponentThreadHost();
-      expect(
-        () => host.bindCanonicalDefinition(
-          const WasmComponentCanonicalDefinition(
-            kind: WasmComponentCanonicalKind.threadSuspend,
+      for (final kind in const <WasmComponentCanonicalKind>[
+        WasmComponentCanonicalKind.threadNewIndirect,
+        WasmComponentCanonicalKind.threadResumeLater,
+        WasmComponentCanonicalKind.threadSuspend,
+        WasmComponentCanonicalKind.threadSuspendThenResume,
+        WasmComponentCanonicalKind.threadYieldThenResume,
+        WasmComponentCanonicalKind.threadSuspendThenPromote,
+        WasmComponentCanonicalKind.threadYieldThenPromote,
+        WasmComponentCanonicalKind.threadSpawnRef,
+        WasmComponentCanonicalKind.threadSpawnIndirect,
+      ]) {
+        expect(
+          () => host.bindCanonicalDefinition(
+            WasmComponentCanonicalDefinition(kind: kind),
           ),
-        ),
-        throwsUnsupportedError,
-      );
+          throwsUnsupportedError,
+          reason: kind.name,
+        );
+      }
       expect(
         () => host.bindCanonicalDefinition(
           const WasmComponentCanonicalDefinition(

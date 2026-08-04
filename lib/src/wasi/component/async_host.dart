@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import '../../wasm/backend/native/interpreter/component.dart';
 import '../../wasm/memory.dart' as wasm;
@@ -29,8 +30,8 @@ final class WASIComponentAsyncHost {
 
   /// Shared Component Model async backpressure state.
   final WASIComponentBackpressure backpressure;
-  final Map<int, WASIComponentWaitable> _endpointWaitables =
-      <int, WASIComponentWaitable>{};
+  final _WASIComponentEndpointWaitables _endpointWaitables =
+      _WASIComponentEndpointWaitables();
 
   final Map<int, _RegisteredAsyncValueType> _valueTypes =
       <int, _RegisteredAsyncValueType>{};
@@ -41,6 +42,7 @@ final class WASIComponentAsyncHost {
     String name, {
     int? maxBufferedElements,
     void Function()? onDrop,
+    void Function(T value)? onDiscard,
   }) {
     _defineType<T>(
       componentTypeIndex,
@@ -49,6 +51,7 @@ final class WASIComponentAsyncHost {
       valueValidator: _WASIComponentAsyncValueValidator.unconstrained,
       maxBufferedElements: maxBufferedElements,
       onDrop: onDrop,
+      onDiscard: onDiscard,
     );
   }
 
@@ -59,6 +62,7 @@ final class WASIComponentAsyncHost {
     String name, {
     int? maxBufferedElements,
     void Function()? onDrop,
+    void Function(T value)? onDiscard,
   }) {
     final valueValidator = _expectDecodedAsyncType(
       component,
@@ -72,6 +76,7 @@ final class WASIComponentAsyncHost {
       valueValidator: valueValidator,
       maxBufferedElements: maxBufferedElements,
       onDrop: onDrop,
+      onDiscard: onDiscard,
     );
   }
 
@@ -86,11 +91,35 @@ final class WASIComponentAsyncHost {
     return null;
   }
 
+  /// Lowers a host stream or future readable endpoint to a canonical handle.
+  int lowerReadableEndpoint(int componentTypeIndex, Object value) {
+    final valueType = _valueTypes[componentTypeIndex];
+    if (valueType == null) {
+      throw StateError(
+        'Unknown WASI component async type index: $componentTypeIndex.',
+      );
+    }
+    return valueType.lowerReadableEndpoint(value);
+  }
+
+  /// Lifts a canonical stream or future handle by transferring its endpoint
+  /// out of the component resource table.
+  Object liftReadableEndpoint(int componentTypeIndex, int handle) {
+    final valueType = _valueTypes[componentTypeIndex];
+    if (valueType == null) {
+      throw StateError(
+        'Unknown WASI component async type index: $componentTypeIndex.',
+      );
+    }
+    return valueType.liftReadableEndpoint(handle);
+  }
+
   /// Defines a component `future<T>` type for [componentTypeIndex].
   void defineFutureType<T>(
     int componentTypeIndex,
     String name, {
     void Function()? onDrop,
+    void Function(T value)? onDiscard,
   }) {
     _defineType<T>(
       componentTypeIndex,
@@ -99,6 +128,7 @@ final class WASIComponentAsyncHost {
       valueValidator: _WASIComponentAsyncValueValidator.unconstrained,
       maxBufferedElements: null,
       onDrop: onDrop,
+      onDiscard: onDiscard,
     );
   }
 
@@ -108,6 +138,7 @@ final class WASIComponentAsyncHost {
     int componentTypeIndex,
     String name, {
     void Function()? onDrop,
+    void Function(T value)? onDiscard,
   }) {
     final valueValidator = _expectDecodedAsyncType(
       component,
@@ -121,6 +152,7 @@ final class WASIComponentAsyncHost {
       valueValidator: valueValidator,
       maxBufferedElements: null,
       onDrop: onDrop,
+      onDiscard: onDiscard,
     );
   }
 
@@ -151,10 +183,15 @@ final class WASIComponentAsyncHost {
       if (kind == null) {
         continue;
       }
-      final validator = _supportedAsyncValueValidatorForElementType(
-        definedValue.elementType,
-        definitions,
-      );
+      final validator =
+          _supportedAsyncValueValidatorForElementType(
+            definedValue.elementType,
+            definitions,
+          ) ??
+          _supportedAsyncValueValidatorFromFunctionContexts(
+            component,
+            componentTypeIndex,
+          );
       if (validator == null) {
         continue;
       }
@@ -163,6 +200,23 @@ final class WASIComponentAsyncHost {
           componentTypeIndex: componentTypeIndex,
           name: '${kind.name}[$componentTypeIndex]',
           kind: kind,
+          valueValidator: validator,
+        ),
+      );
+    }
+    for (final scopedType in _componentScopedAsyncValueTypes(component)) {
+      final validator = _supportedAsyncValueValidatorForElementType(
+        scopedType.definedValue.elementType,
+        scopedType.referenceDefinitions,
+      );
+      if (validator == null) {
+        continue;
+      }
+      bindings.add(
+        WASIComponentAsyncValueBinding._(
+          componentTypeIndex: scopedType.componentTypeIndex,
+          name: '${scopedType.kind.name}[${scopedType.componentTypeIndex}]',
+          kind: scopedType.kind,
           valueValidator: validator,
         ),
       );
@@ -177,6 +231,7 @@ final class WASIComponentAsyncHost {
     int? Function(WASIComponentAsyncValueBinding binding)?
     maxBufferedElementsForStream,
     void Function(WASIComponentAsyncValueBinding binding)? onDrop,
+    void Function(WASIComponentAsyncValueBinding binding, T value)? onDiscard,
   }) {
     final bindingList = bindings is List<WASIComponentAsyncValueBinding>
         ? bindings
@@ -198,6 +253,9 @@ final class WASIComponentAsyncHost {
             ? maxBufferedElementsForStream?.call(binding)
             : null,
         onDrop: onDrop == null ? null : () => onDrop(binding),
+        onDiscard: onDiscard == null
+            ? null
+            : (value) => onDiscard(binding, value),
       );
     }
   }
@@ -234,6 +292,7 @@ final class WASIComponentAsyncHost {
     required _WASIComponentAsyncValueValidator valueValidator,
     int? maxBufferedElements,
     void Function()? onDrop,
+    void Function(T value)? onDiscard,
   }) {
     if (_valueTypes.containsKey(componentTypeIndex)) {
       throw StateError(
@@ -247,6 +306,7 @@ final class WASIComponentAsyncHost {
       valueValidator: valueValidator,
       maxBufferedElements: maxBufferedElements,
       onDrop: onDrop,
+      onDiscard: onDiscard,
       endpointWaitables: _endpointWaitables,
     );
   }
@@ -320,6 +380,378 @@ final class WASIComponentAsyncHost {
       ]),
     );
   }
+}
+
+/// Resolves a stream/future type from a function-local type scope to the
+/// matching component type index used by canonical async builtins.
+int? wasiComponentAsyncValueTypeIndex(
+  WasmComponent component,
+  int sourceTypeIndex,
+  List<WasmComponentTypeDefinition> sourceDefinitions, {
+  WasmComponentTypeScope? sourceTypeScope,
+}) {
+  if (sourceTypeIndex < 0 || sourceTypeIndex >= sourceDefinitions.length) {
+    return null;
+  }
+  final sourceContext = sourceTypeScope?.definitionContextAt(sourceTypeIndex);
+  final source =
+      sourceContext?.definition ?? sourceDefinitions[sourceTypeIndex];
+  final sourceValue = source.definedValue;
+  if (source.kind != WasmComponentTypeKind.definedValue ||
+      sourceValue == null ||
+      (sourceValue.kind != WasmComponentDefinedValueTypeKind.stream &&
+          sourceValue.kind != WasmComponentDefinedValueTypeKind.future)) {
+    return null;
+  }
+  final referenceDefinitions =
+      sourceContext?.typeScope.definitions ?? sourceDefinitions;
+  final topLevelIndex = _topLevelAsyncValueTypeIndex(
+    component,
+    source,
+    sourceValue,
+    referenceDefinitions,
+  );
+  if (topLevelIndex != null) {
+    return topLevelIndex;
+  }
+  for (final scopedType in _componentScopedAsyncValueTypes(component)) {
+    if (identical(scopedType.definition, source)) {
+      return scopedType.componentTypeIndex;
+    }
+  }
+  return null;
+}
+
+int? _topLevelAsyncValueTypeIndex(
+  WasmComponent component,
+  WasmComponentTypeDefinition source,
+  WasmComponentDefinedValueType sourceValue,
+  List<WasmComponentTypeDefinition> sourceDefinitions,
+) {
+  final componentDefinitions = component.componentTypeIndexDefinitions;
+  final identityMatches = <int>[];
+  for (var index = 0; index < componentDefinitions.length; index++) {
+    if (identical(source, componentDefinitions[index])) {
+      identityMatches.add(index);
+    }
+  }
+  if (identityMatches.length == 1) {
+    return identityMatches.single;
+  }
+  final matches = <int>[];
+  for (var index = 0; index < componentDefinitions.length; index++) {
+    final candidate = componentDefinitions[index];
+    final candidateValue = candidate.definedValue;
+    if (candidate.kind == WasmComponentTypeKind.definedValue &&
+        candidateValue != null &&
+        candidateValue.kind == sourceValue.kind &&
+        _asyncBindingValueTypesEquivalent(
+          sourceValue.elementType,
+          sourceDefinitions,
+          candidateValue.elementType,
+          componentDefinitions,
+          <(WasmComponentTypeDefinition, WasmComponentTypeDefinition)>{},
+        )) {
+      matches.add(index);
+    }
+  }
+  return matches.length == 1 ? matches.single : null;
+}
+
+final Expando<List<_WASIComponentScopedAsyncValueType>>
+_scopedAsyncValueTypesByComponent =
+    Expando<List<_WASIComponentScopedAsyncValueType>>();
+
+List<_WASIComponentScopedAsyncValueType> _componentScopedAsyncValueTypes(
+  WasmComponent component,
+) {
+  final cached = _scopedAsyncValueTypesByComponent[component];
+  if (cached != null) {
+    return cached;
+  }
+  final componentDefinitions = component.componentTypeIndexDefinitions;
+  final knownDefinitions = HashSet<WasmComponentTypeDefinition>.identity()
+    ..addAll(componentDefinitions);
+  final scopedTypes = <_WASIComponentScopedAsyncValueType>[];
+  for (final context in component.componentFunctionIndexTypeContexts) {
+    if (context == null) {
+      continue;
+    }
+    final definitions = context.typeDefinitions;
+    final typeScope = context.typeScope;
+    for (var index = 0; index < definitions.length; index++) {
+      final definitionContext = typeScope?.definitionContextAt(index);
+      final definition = definitionContext?.definition ?? definitions[index];
+      if (!knownDefinitions.add(definition)) {
+        continue;
+      }
+      final value = definition.definedValue;
+      final kind = switch (value?.kind) {
+        WasmComponentDefinedValueTypeKind.stream =>
+          WASIComponentAsyncValueBindingKind.stream,
+        WasmComponentDefinedValueTypeKind.future =>
+          WASIComponentAsyncValueBindingKind.future,
+        _ => null,
+      };
+      if (value == null || kind == null) {
+        continue;
+      }
+      final referenceDefinitions =
+          definitionContext?.typeScope.definitions ?? definitions;
+      if (_topLevelAsyncValueTypeIndex(
+            component,
+            definition,
+            value,
+            referenceDefinitions,
+          ) !=
+          null) {
+        continue;
+      }
+      scopedTypes.add(
+        _WASIComponentScopedAsyncValueType(
+          componentTypeIndex: componentDefinitions.length + scopedTypes.length,
+          definition: definition,
+          definedValue: value,
+          referenceDefinitions: referenceDefinitions,
+          kind: kind,
+        ),
+      );
+    }
+  }
+  final result = List<_WASIComponentScopedAsyncValueType>.unmodifiable(
+    scopedTypes,
+  );
+  _scopedAsyncValueTypesByComponent[component] = result;
+  return result;
+}
+
+final class _WASIComponentScopedAsyncValueType {
+  const _WASIComponentScopedAsyncValueType({
+    required this.componentTypeIndex,
+    required this.definition,
+    required this.definedValue,
+    required this.referenceDefinitions,
+    required this.kind,
+  });
+
+  final int componentTypeIndex;
+  final WasmComponentTypeDefinition definition;
+  final WasmComponentDefinedValueType definedValue;
+  final List<WasmComponentTypeDefinition> referenceDefinitions;
+  final WASIComponentAsyncValueBindingKind kind;
+}
+
+_WASIComponentAsyncValueValidator?
+_supportedAsyncValueValidatorFromFunctionContexts(
+  WasmComponent component,
+  int componentTypeIndex,
+) {
+  final visitedContexts =
+      <(List<WasmComponentTypeDefinition>, WasmComponentTypeScope?)>{};
+  for (final context in component.componentFunctionIndexTypeContexts) {
+    final definitions = context?.typeDefinitions;
+    final typeScope = context?.typeScope;
+    if (definitions == null || !visitedContexts.add((definitions, typeScope))) {
+      continue;
+    }
+    for (var index = 0; index < definitions.length; index++) {
+      if (wasiComponentAsyncValueTypeIndex(
+            component,
+            index,
+            definitions,
+            sourceTypeScope: typeScope,
+          ) !=
+          componentTypeIndex) {
+        continue;
+      }
+      final definitionContext = typeScope?.definitionContextAt(index);
+      final value =
+          (definitionContext?.definition ?? definitions[index]).definedValue;
+      if (value == null) {
+        continue;
+      }
+      final validator = _supportedAsyncValueValidatorForElementType(
+        value.elementType,
+        definitionContext?.typeScope.definitions ?? definitions,
+      );
+      if (validator != null) {
+        return validator;
+      }
+    }
+  }
+  return null;
+}
+
+bool _asyncBindingValueTypesEquivalent(
+  WasmComponentValueType? left,
+  List<WasmComponentTypeDefinition> leftDefinitions,
+  WasmComponentValueType? right,
+  List<WasmComponentTypeDefinition> rightDefinitions,
+  Set<(WasmComponentTypeDefinition, WasmComponentTypeDefinition)> visiting,
+) {
+  if (left == null || right == null) {
+    return left == null && right == null;
+  }
+  if (left.kind != right.kind) {
+    return false;
+  }
+  if (left.kind == WasmComponentValueTypeKind.primitive) {
+    return left.primitive == right.primitive;
+  }
+  final leftIndex = left.typeIndex;
+  final rightIndex = right.typeIndex;
+  if (leftIndex == null ||
+      leftIndex < 0 ||
+      leftIndex >= leftDefinitions.length ||
+      rightIndex == null ||
+      rightIndex < 0 ||
+      rightIndex >= rightDefinitions.length) {
+    return false;
+  }
+  return _asyncBindingTypeDefinitionsEquivalent(
+    leftDefinitions[leftIndex],
+    leftDefinitions,
+    rightDefinitions[rightIndex],
+    rightDefinitions,
+    visiting,
+  );
+}
+
+bool _asyncBindingTypeDefinitionsEquivalent(
+  WasmComponentTypeDefinition left,
+  List<WasmComponentTypeDefinition> leftDefinitions,
+  WasmComponentTypeDefinition right,
+  List<WasmComponentTypeDefinition> rightDefinitions,
+  Set<(WasmComponentTypeDefinition, WasmComponentTypeDefinition)> visiting,
+) {
+  if (identical(left, right)) {
+    return true;
+  }
+  if (left.kind != right.kind ||
+      left.kind != WasmComponentTypeKind.definedValue) {
+    return false;
+  }
+  final pair = (left, right);
+  if (!visiting.add(pair)) {
+    return true;
+  }
+  final leftValue = left.definedValue;
+  final rightValue = right.definedValue;
+  final equivalent =
+      leftValue != null &&
+      rightValue != null &&
+      _asyncBindingDefinedValuesEquivalent(
+        leftValue,
+        leftDefinitions,
+        rightValue,
+        rightDefinitions,
+        visiting,
+      );
+  visiting.remove(pair);
+  return equivalent;
+}
+
+bool _asyncBindingDefinedValuesEquivalent(
+  WasmComponentDefinedValueType left,
+  List<WasmComponentTypeDefinition> leftDefinitions,
+  WasmComponentDefinedValueType right,
+  List<WasmComponentTypeDefinition> rightDefinitions,
+  Set<(WasmComponentTypeDefinition, WasmComponentTypeDefinition)> visiting,
+) {
+  if (left.kind != right.kind ||
+      left.primitive != right.primitive ||
+      left.fixedLength != right.fixedLength ||
+      !_asyncBindingStringsEqual(left.labels, right.labels)) {
+    return false;
+  }
+  bool valueTypesEquivalent(
+    WasmComponentValueType? leftType,
+    WasmComponentValueType? rightType,
+  ) => _asyncBindingValueTypesEquivalent(
+    leftType,
+    leftDefinitions,
+    rightType,
+    rightDefinitions,
+    visiting,
+  );
+  if (!valueTypesEquivalent(left.elementType, right.elementType) ||
+      !valueTypesEquivalent(left.okType, right.okType) ||
+      !valueTypesEquivalent(left.errorType, right.errorType)) {
+    return false;
+  }
+  if (left.kind == WasmComponentDefinedValueTypeKind.own ||
+      left.kind == WasmComponentDefinedValueTypeKind.borrow) {
+    return _asyncBindingTypeIndexesEquivalent(
+      left.typeIndex,
+      leftDefinitions,
+      right.typeIndex,
+      rightDefinitions,
+      visiting,
+    );
+  }
+  if (left.types.length != right.types.length ||
+      left.fields.length != right.fields.length ||
+      left.cases.length != right.cases.length) {
+    return false;
+  }
+  for (var index = 0; index < left.types.length; index++) {
+    if (!valueTypesEquivalent(left.types[index], right.types[index])) {
+      return false;
+    }
+  }
+  for (var index = 0; index < left.fields.length; index++) {
+    final leftField = left.fields[index];
+    final rightField = right.fields[index];
+    if (leftField.label != rightField.label ||
+        !valueTypesEquivalent(leftField.type, rightField.type)) {
+      return false;
+    }
+  }
+  for (var index = 0; index < left.cases.length; index++) {
+    final leftCase = left.cases[index];
+    final rightCase = right.cases[index];
+    if (leftCase.label != rightCase.label ||
+        !valueTypesEquivalent(leftCase.type, rightCase.type)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool _asyncBindingTypeIndexesEquivalent(
+  int? leftIndex,
+  List<WasmComponentTypeDefinition> leftDefinitions,
+  int? rightIndex,
+  List<WasmComponentTypeDefinition> rightDefinitions,
+  Set<(WasmComponentTypeDefinition, WasmComponentTypeDefinition)> visiting,
+) {
+  if (leftIndex == null ||
+      leftIndex < 0 ||
+      leftIndex >= leftDefinitions.length ||
+      rightIndex == null ||
+      rightIndex < 0 ||
+      rightIndex >= rightDefinitions.length) {
+    return false;
+  }
+  return _asyncBindingTypeDefinitionsEquivalent(
+    leftDefinitions[leftIndex],
+    leftDefinitions,
+    rightDefinitions[rightIndex],
+    rightDefinitions,
+    visiting,
+  );
+}
+
+bool _asyncBindingStringsEqual(List<String> left, List<String> right) {
+  if (left.length != right.length) {
+    return false;
+  }
+  for (var index = 0; index < left.length; index++) {
+    if (left[index] != right[index]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /// Supported async value binding kind.
@@ -434,8 +866,7 @@ final class WASIComponentCanonicalAsyncProgram {
         return operation.futureRead(args.single);
       case WasmComponentCanonicalKind.futureWrite:
         _expectArity(canonicalIndex, args, 2);
-        operation.futureWrite(args[0], args[1]);
-        return null;
+        return operation.futureWrite(args[0], args[1]);
       case WasmComponentCanonicalKind.futureCancelRead:
         _expectArity(canonicalIndex, args, 1);
         operation.futureCancelRead(args.single);
@@ -452,11 +883,6 @@ final class WASIComponentCanonicalAsyncProgram {
         _expectArity(canonicalIndex, args, 1);
         operation.futureDropWritable(args.single);
         return null;
-      case WasmComponentCanonicalKind.backpressureSet:
-        _expectArity(canonicalIndex, args, 1);
-        return operation.backpressureSet(
-          _expectBoolean(canonicalIndex, args.single, 'active'),
-        );
       case WasmComponentCanonicalKind.backpressureInc:
         _expectArity(canonicalIndex, args, 0);
         return operation.backpressureIncrement();
@@ -603,6 +1029,15 @@ final class WASIComponentAsyncCopyResult {
   int get packedResult => (copiedElements << 4) | status.code;
 }
 
+WASIComponentAsyncCopyResult _endpointFailureCopyResult(
+  WASIComponentAsyncEndpointStateError error,
+) => switch (error.failure) {
+  WASIComponentAsyncEndpointFailure.dropped =>
+    WASIComponentAsyncCopyResult.dropped(),
+  WASIComponentAsyncEndpointFailure.cancelled =>
+    WASIComponentAsyncCopyResult.cancelled(),
+};
+
 /// Handle-backed stream/future-only canonical program for a decoded component.
 final class WASIComponentCanonicalAsyncHandleProgram {
   /// Creates a canonical async handle program from ordered [operations].
@@ -668,11 +1103,10 @@ final class WASIComponentCanonicalAsyncHandleProgram {
         );
       case WasmComponentCanonicalKind.futureWrite:
         _expectArity(canonicalIndex, args, 2);
-        operation.futureWriteHandle(
+        return operation.futureWriteHandle(
           _expectHandle(canonicalIndex, args[0], 'writable'),
           args[1],
         );
-        return null;
       case WasmComponentCanonicalKind.futureCancelRead:
         _expectArity(canonicalIndex, args, 1);
         return operation.futureCancelReadHandle(
@@ -695,11 +1129,6 @@ final class WASIComponentCanonicalAsyncHandleProgram {
           _expectHandle(canonicalIndex, args.single, 'writable'),
         );
         return null;
-      case WasmComponentCanonicalKind.backpressureSet:
-        _expectArity(canonicalIndex, args, 1);
-        return operation.backpressureSet(
-          _expectBoolean(canonicalIndex, args.single, 'active'),
-        );
       case WasmComponentCanonicalKind.backpressureInc:
         _expectArity(canonicalIndex, args, 0);
         return operation.backpressureIncrement();
@@ -763,6 +1192,99 @@ final class WASIComponentCanonicalAsyncHandleProgram {
         );
       default:
         return invoke(canonicalIndex, args);
+    }
+  }
+
+  /// Starts a no-memory core Canonical ABI operation.
+  ///
+  /// Unit stream copies keep the ignored pointer in their three-argument core
+  /// signature, and unit future copies keep it in their two-argument signature.
+  /// Copy results are returned as packed core integers.
+  Object? invokeWithoutMemoryEvent(int canonicalIndex, List<Object?> args) {
+    if (canonicalIndex < 0 || canonicalIndex >= operations.length) {
+      throw StateError(
+        'Unknown WASI component canonical async index: $canonicalIndex.',
+      );
+    }
+    final operation = operations[canonicalIndex];
+    switch (operation.kind) {
+      case WasmComponentCanonicalKind.streamRead:
+        _expectArity(canonicalIndex, args, 3);
+        _expectNonNegativeInt(canonicalIndex, args[1], 'pointer');
+        return operation.streamReadHandleWithoutMemoryEvent(
+          _expectHandle(canonicalIndex, args[0], 'readable'),
+          _expectNonNegativeInt(canonicalIndex, args[2], 'maxElements'),
+        );
+      case WasmComponentCanonicalKind.streamWrite:
+        _expectArity(canonicalIndex, args, 3);
+        _expectNonNegativeInt(canonicalIndex, args[1], 'pointer');
+        return operation.streamWriteHandleWithoutMemoryEvent(
+          _expectHandle(canonicalIndex, args[0], 'writable'),
+          _expectNonNegativeInt(canonicalIndex, args[2], 'elementCount'),
+        );
+      case WasmComponentCanonicalKind.futureRead:
+        _expectArity(canonicalIndex, args, 2);
+        _expectNonNegativeInt(canonicalIndex, args[1], 'pointer');
+        return operation.futureReadHandleWithoutMemoryEvent(
+          _expectHandle(canonicalIndex, args[0], 'readable'),
+        );
+      case WasmComponentCanonicalKind.futureWrite:
+        _expectArity(canonicalIndex, args, 2);
+        _expectNonNegativeInt(canonicalIndex, args[1], 'pointer');
+        return operation.futureWriteHandleWithoutMemoryEvent(
+          _expectHandle(canonicalIndex, args[0], 'writable'),
+        );
+      default:
+        return invoke(canonicalIndex, args);
+    }
+  }
+
+  /// Executes a synchronous no-memory core Canonical ABI operation.
+  Future<Object?> invokeWithoutMemoryAsync(
+    int canonicalIndex,
+    List<Object?> args,
+  ) async {
+    if (canonicalIndex < 0 || canonicalIndex >= operations.length) {
+      throw StateError(
+        'Unknown WASI component canonical async index: $canonicalIndex.',
+      );
+    }
+    final operation = operations[canonicalIndex];
+    switch (operation.kind) {
+      case WasmComponentCanonicalKind.streamRead:
+        _expectArity(canonicalIndex, args, 3);
+        _expectNonNegativeInt(canonicalIndex, args[1], 'pointer');
+        final result = await operation
+            .streamReadHandleWithoutMemoryWhenAvailable(
+              _expectHandle(canonicalIndex, args[0], 'readable'),
+              _expectNonNegativeInt(canonicalIndex, args[2], 'maxElements'),
+            );
+        return result.packedResult;
+      case WasmComponentCanonicalKind.streamWrite:
+        _expectArity(canonicalIndex, args, 3);
+        _expectNonNegativeInt(canonicalIndex, args[1], 'pointer');
+        final result = await operation
+            .streamWriteHandleWithoutMemoryWhenAvailable(
+              _expectHandle(canonicalIndex, args[0], 'writable'),
+              _expectNonNegativeInt(canonicalIndex, args[2], 'elementCount'),
+            );
+        return result.packedResult;
+      case WasmComponentCanonicalKind.futureRead:
+        _expectArity(canonicalIndex, args, 2);
+        _expectNonNegativeInt(canonicalIndex, args[1], 'pointer');
+        final result = await operation.futureReadHandleWithoutMemoryWhenReady(
+          _expectHandle(canonicalIndex, args[0], 'readable'),
+        );
+        return result.packedResult;
+      case WasmComponentCanonicalKind.futureWrite:
+        _expectArity(canonicalIndex, args, 2);
+        _expectNonNegativeInt(canonicalIndex, args[1], 'pointer');
+        final result = await operation.futureWriteHandleWithoutMemoryWhenRead(
+          _expectHandle(canonicalIndex, args[0], 'writable'),
+        );
+        return result.packedResult;
+      default:
+        return invokeAsync(canonicalIndex, args);
     }
   }
 
@@ -931,6 +1453,14 @@ final class WASIComponentCanonicalAsyncHandleProgram {
           memory,
           _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
           realloc,
+        );
+        return result.packedResult;
+      case WasmComponentCanonicalKind.futureWrite:
+        _expectArity(canonicalIndex, args, 2);
+        final result = await operation.futureWriteHandleFromMemoryWhenRead(
+          _expectHandle(canonicalIndex, args[0], 'writable'),
+          memory,
+          _expectNonNegativeInt(canonicalIndex, args[1], 'pointer'),
         );
         return result.packedResult;
       default:
@@ -1118,6 +1648,25 @@ final class WASIComponentCanonicalAsyncOperation {
     );
   }
 
+  /// Starts handle-backed unit `stream.write` without canonical memory.
+  int streamWriteHandleWithoutMemoryEvent(int writable, int elementCount) {
+    _requireKind(WasmComponentCanonicalKind.streamWrite);
+    return _requireValueType().streamWriteHandleWithoutMemoryEvent(
+      writable,
+      elementCount,
+    );
+  }
+
+  /// Executes handle-backed unit `stream.write` without canonical memory.
+  Future<WASIComponentAsyncCopyResult>
+  streamWriteHandleWithoutMemoryWhenAvailable(int writable, int elementCount) {
+    _requireKind(WasmComponentCanonicalKind.streamWrite);
+    return _requireValueType().streamWriteHandleWithoutMemoryWhenAvailable(
+      writable,
+      elementCount,
+    );
+  }
+
   /// Executes `stream.read` and writes elements to [memory].
   WASIComponentAsyncCopyResult streamReadToMemory(
     Object? readable,
@@ -1191,6 +1740,25 @@ final class WASIComponentCanonicalAsyncOperation {
       maxElements,
       stringEncoding,
       realloc,
+    );
+  }
+
+  /// Starts handle-backed unit `stream.read` without canonical memory.
+  int streamReadHandleWithoutMemoryEvent(int readable, int maxElements) {
+    _requireKind(WasmComponentCanonicalKind.streamRead);
+    return _requireValueType().streamReadHandleWithoutMemoryEvent(
+      readable,
+      maxElements,
+    );
+  }
+
+  /// Executes handle-backed unit `stream.read` without canonical memory.
+  Future<WASIComponentAsyncCopyResult>
+  streamReadHandleWithoutMemoryWhenAvailable(int readable, int maxElements) {
+    _requireKind(WasmComponentCanonicalKind.streamRead);
+    return _requireValueType().streamReadHandleWithoutMemoryWhenAvailable(
+      readable,
+      maxElements,
     );
   }
 
@@ -1378,10 +1946,24 @@ final class WASIComponentCanonicalAsyncOperation {
     );
   }
 
+  /// Starts handle-backed unit `future.read` without canonical memory.
+  int futureReadHandleWithoutMemoryEvent(int readable) {
+    _requireKind(WasmComponentCanonicalKind.futureRead);
+    return _requireValueType().futureReadHandleWithoutMemoryEvent(readable);
+  }
+
+  /// Executes handle-backed unit `future.read` without canonical memory.
+  Future<WASIComponentAsyncCopyResult> futureReadHandleWithoutMemoryWhenReady(
+    int readable,
+  ) {
+    _requireKind(WasmComponentCanonicalKind.futureRead);
+    return _requireValueType().futureReadHandleWithoutMemoryWhenReady(readable);
+  }
+
   /// Executes `future.write`.
-  void futureWrite(Object? writable, Object? value) {
+  WASIComponentAsyncCopyResult futureWrite(Object? writable, Object? value) {
     _requireKind(WasmComponentCanonicalKind.futureWrite);
-    _requireValueType().futureWrite(writable, value);
+    return _requireValueType().futureWrite(writable, value);
   }
 
   /// Executes `future.write` by reading a value from [memory].
@@ -1400,9 +1982,9 @@ final class WASIComponentCanonicalAsyncOperation {
   }
 
   /// Executes `future.write` with a writable endpoint handle.
-  void futureWriteHandle(int writable, Object? value) {
+  WASIComponentAsyncCopyResult futureWriteHandle(int writable, Object? value) {
     _requireKind(WasmComponentCanonicalKind.futureWrite);
-    _requireValueType().futureWriteHandle(writable, value);
+    return _requireValueType().futureWriteHandle(writable, value);
   }
 
   /// Executes handle-backed `future.write` from memory.
@@ -1413,6 +1995,21 @@ final class WASIComponentCanonicalAsyncOperation {
   ) {
     _requireKind(WasmComponentCanonicalKind.futureWrite);
     return _requireValueType().futureWriteHandleFromMemory(
+      writable,
+      memory,
+      pointer,
+      stringEncoding,
+    );
+  }
+
+  /// Executes handle-backed `future.write` and waits for value delivery.
+  Future<WASIComponentAsyncCopyResult> futureWriteHandleFromMemoryWhenRead(
+    int writable,
+    wasm.Memory memory,
+    int pointer,
+  ) {
+    _requireKind(WasmComponentCanonicalKind.futureWrite);
+    return _requireValueType().futureWriteHandleFromMemoryWhenRead(
       writable,
       memory,
       pointer,
@@ -1433,6 +2030,20 @@ final class WASIComponentCanonicalAsyncOperation {
       pointer,
       stringEncoding,
     );
+  }
+
+  /// Starts handle-backed unit `future.write` without canonical memory.
+  int futureWriteHandleWithoutMemoryEvent(int writable) {
+    _requireKind(WasmComponentCanonicalKind.futureWrite);
+    return _requireValueType().futureWriteHandleWithoutMemoryEvent(writable);
+  }
+
+  /// Executes handle-backed unit `future.write` without canonical memory.
+  Future<WASIComponentAsyncCopyResult> futureWriteHandleWithoutMemoryWhenRead(
+    int writable,
+  ) {
+    _requireKind(WasmComponentCanonicalKind.futureWrite);
+    return _requireValueType().futureWriteHandleWithoutMemoryWhenRead(writable);
   }
 
   /// Executes `future.cancel-read`.
@@ -1507,12 +2118,6 @@ final class WASIComponentCanonicalAsyncOperation {
   void futureDropWritableHandle(int writable) {
     _requireKind(WasmComponentCanonicalKind.futureDropWritable);
     _requireValueType().futureDropWritableHandle(writable);
-  }
-
-  /// Executes `backpressure.set`.
-  int backpressureSet(bool active) {
-    _requireKind(WasmComponentCanonicalKind.backpressureSet);
-    return _requireBackpressure().setActive(active);
   }
 
   /// Executes `backpressure.inc`.
@@ -1627,6 +2232,57 @@ enum _WASIComponentAsyncValueShape {
   canonicalValue,
 }
 
+final class _WASIComponentEndpointWaitables {
+  final Map<int, WASIComponentWaitable> _waitables =
+      <int, WASIComponentWaitable>{};
+  final Map<int, Object> _endpoints = <int, Object>{};
+  final Map<Object, Set<int>> _handlesByEndpoint =
+      HashMap<Object, Set<int>>.identity();
+
+  WASIComponentWaitable? operator [](int handle) => _waitables[handle];
+
+  WASIComponentWaitable forEndpoint(int handle, Object endpoint, String name) {
+    final existingEndpoint = _endpoints[handle];
+    if (existingEndpoint != null && !identical(existingEndpoint, endpoint)) {
+      throw StateError(
+        'WASI component async endpoint handle $handle changed identity.',
+      );
+    }
+    _endpoints[handle] = endpoint;
+    (_handlesByEndpoint[endpoint] ??= <int>{}).add(handle);
+    return _waitables.putIfAbsent(handle, () => WASIComponentWaitable(name));
+  }
+
+  void dropHandle(int handle) {
+    _waitables[handle]?.drop();
+    _removeHandle(handle);
+  }
+
+  void disposeEndpoint(Object endpoint) {
+    final handles = _handlesByEndpoint.remove(endpoint);
+    if (handles == null) {
+      return;
+    }
+    for (final handle in handles) {
+      _endpoints.remove(handle);
+      _waitables.remove(handle)?.dispose();
+    }
+  }
+
+  void _removeHandle(int handle) {
+    _waitables.remove(handle);
+    final endpoint = _endpoints.remove(handle);
+    if (endpoint == null) {
+      return;
+    }
+    final handles = _handlesByEndpoint[endpoint];
+    handles?.remove(handle);
+    if (handles?.isEmpty ?? false) {
+      _handlesByEndpoint.remove(endpoint);
+    }
+  }
+}
+
 final class _RegisteredAsyncValueType<T> {
   _RegisteredAsyncValueType({
     required this.table,
@@ -1636,11 +2292,13 @@ final class _RegisteredAsyncValueType<T> {
     required this.endpointWaitables,
     this.maxBufferedElements,
     this.onDrop,
+    this.onDiscard,
   }) : readableStreamType = kind == _WASIComponentAsyncValueKind.stream
            ? table.defineType<WASIComponentReadableStream<T>>(
                '$name.readable',
                onDrop: (endpoint) {
-                 endpoint.drop();
+                 endpointWaitables.disposeEndpoint(endpoint);
+                 endpoint.dispose();
                },
              )
            : null,
@@ -1648,7 +2306,8 @@ final class _RegisteredAsyncValueType<T> {
            ? table.defineType<WASIComponentWritableStream<T>>(
                '$name.writable',
                onDrop: (endpoint) {
-                 endpoint.drop();
+                 endpointWaitables.disposeEndpoint(endpoint);
+                 endpoint.dispose();
                },
              )
            : null,
@@ -1656,7 +2315,8 @@ final class _RegisteredAsyncValueType<T> {
            ? table.defineType<WASIComponentReadableFuture<T>>(
                '$name.readable',
                onDrop: (endpoint) {
-                 endpoint.drop();
+                 endpointWaitables.disposeEndpoint(endpoint);
+                 endpoint.dispose();
                },
              )
            : null,
@@ -1664,7 +2324,8 @@ final class _RegisteredAsyncValueType<T> {
            ? table.defineType<WASIComponentWritableFuture<T>>(
                '$name.writable',
                onDrop: (endpoint) {
-                 endpoint.drop();
+                 endpointWaitables.disposeEndpoint(endpoint);
+                 endpoint.dispose();
                },
              )
            : null;
@@ -1673,9 +2334,10 @@ final class _RegisteredAsyncValueType<T> {
   final String name;
   final _WASIComponentAsyncValueKind kind;
   final _WASIComponentAsyncValueValidator valueValidator;
-  final Map<int, WASIComponentWaitable> endpointWaitables;
+  final _WASIComponentEndpointWaitables endpointWaitables;
   final int? maxBufferedElements;
   final void Function()? onDrop;
+  final void Function(T value)? onDiscard;
   final WASIComponentResourceType<WASIComponentReadableStream<T>>?
   readableStreamType;
   final WASIComponentResourceType<WASIComponentWritableStream<T>>?
@@ -1691,6 +2353,7 @@ final class _RegisteredAsyncValueType<T> {
       name,
       maxBufferedElements: maxBufferedElements,
       onDrop: onDrop,
+      onDiscard: onDiscard,
     );
   }
 
@@ -1710,10 +2373,65 @@ final class _RegisteredAsyncValueType<T> {
     );
   }
 
+  int lowerReadableEndpoint(Object value) {
+    switch (kind) {
+      case _WASIComponentAsyncValueKind.stream:
+        final endpoint = switch (value) {
+          WASIComponentStream<T>() => value.readable,
+          WASIComponentReadableStream<T>() => value,
+          _ => throw StateError(
+            'WASI component async type $name expected a readable stream.',
+          ),
+        };
+        return table.insert<WASIComponentReadableStream<T>>(
+          readableStreamType!,
+          endpoint,
+        );
+      case _WASIComponentAsyncValueKind.future:
+        final endpoint = switch (value) {
+          WASIComponentFuture<T>() => value.readable,
+          WASIComponentReadableFuture<T>() => value,
+          _ => throw StateError(
+            'WASI component async type $name expected a readable future.',
+          ),
+        };
+        return table.insert<WASIComponentReadableFuture<T>>(
+          readableFutureType!,
+          endpoint,
+        );
+    }
+  }
+
+  Object liftReadableEndpoint(int handle) {
+    _requireEndpointTransferable(handle);
+    switch (kind) {
+      case _WASIComponentAsyncValueKind.stream:
+        table.borrow<WASIComponentReadableStream<T>, void>(
+          readableStreamType!,
+          handle,
+          (endpoint) => endpoint.requireCopyIdle(),
+        );
+      case _WASIComponentAsyncValueKind.future:
+        table.borrow<WASIComponentReadableFuture<T>, void>(
+          readableFutureType!,
+          handle,
+          (endpoint) => endpoint.requireCopyIdle(),
+        );
+    }
+    final endpoint = switch (kind) {
+      _WASIComponentAsyncValueKind.stream =>
+        table.take<WASIComponentReadableStream<T>>(readableStreamType!, handle),
+      _WASIComponentAsyncValueKind.future =>
+        table.take<WASIComponentReadableFuture<T>>(readableFutureType!, handle),
+    };
+    endpointWaitables.dropHandle(handle);
+    return endpoint;
+  }
+
   List<Object?> streamRead(Object? readable, int maxElements) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
     final stream = _expectReadableStream(readable);
-    return stream.read(maxElements);
+    return stream.readForCopy(maxElements);
   }
 
   Future<List<Object?>> streamReadWhenAvailable(
@@ -1721,16 +2439,16 @@ final class _RegisteredAsyncValueType<T> {
     int maxElements,
   ) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
-    return _expectReadableStream(
-      readable,
-    ).readWhenAvailable(maxElements).then<List<Object?>>((values) => values);
+    return _expectReadableStream(readable)
+        .readWhenAvailableForCopy(maxElements)
+        .then<List<Object?>>((values) => values);
   }
 
   List<Object?> streamReadHandle(int readable, int maxElements) {
     return table.borrow<WASIComponentReadableStream<T>, List<Object?>>(
       readableStreamType!,
       readable,
-      (stream) => stream.read(maxElements),
+      (stream) => stream.readForCopy(maxElements),
     );
   }
 
@@ -1742,7 +2460,7 @@ final class _RegisteredAsyncValueType<T> {
       readableStreamType!,
       readable,
       (stream) => stream
-          .readWhenAvailable(maxElements)
+          .readWhenAvailableForCopy(maxElements)
           .then<List<Object?>>((values) => values),
     );
   }
@@ -1751,15 +2469,14 @@ final class _RegisteredAsyncValueType<T> {
     _requireKind(_WASIComponentAsyncValueKind.stream);
     final stream = _expectWritableStream(writable);
     final typedValues = _expectIterableValues(values);
-    stream.writeAll(typedValues);
-    return typedValues.length;
+    return stream.writeAllForCopy(typedValues);
   }
 
   Future<int> streamWriteWhenAvailable(Object? writable, Object? values) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
     final stream = _expectWritableStream(writable);
     final typedValues = _expectIterableValues(values);
-    return stream.writeWhenAvailable(typedValues);
+    return stream.writeWhenAvailableForCopy(typedValues);
   }
 
   WASIComponentAsyncCopyResult streamWriteFromMemory(
@@ -1780,8 +2497,12 @@ final class _RegisteredAsyncValueType<T> {
       elementCount,
       stringEncoding,
     );
-    stream.writeAll(values);
-    return WASIComponentAsyncCopyResult.completed(values.length);
+    try {
+      final written = stream.writeAllForCopy(values);
+      return WASIComponentAsyncCopyResult.completed(written);
+    } on WASIComponentAsyncEndpointStateError catch (error) {
+      return _endpointFailureCopyResult(error);
+    }
   }
 
   int streamWriteHandle(int writable, Object? values) {
@@ -1790,8 +2511,7 @@ final class _RegisteredAsyncValueType<T> {
       writable,
       (stream) {
         final typedValues = _expectIterableValues(values);
-        stream.writeAll(typedValues);
-        return typedValues.length;
+        return stream.writeAllForCopy(typedValues);
       },
     );
   }
@@ -1817,8 +2537,12 @@ final class _RegisteredAsyncValueType<T> {
               elementCount,
               stringEncoding,
             );
-            stream.writeAll(values);
-            return WASIComponentAsyncCopyResult.completed(values.length);
+            try {
+              final written = stream.writeAllForCopy(values);
+              return WASIComponentAsyncCopyResult.completed(written);
+            } on WASIComponentAsyncEndpointStateError catch (error) {
+              return _endpointFailureCopyResult(error);
+            }
           },
         );
   }
@@ -1834,7 +2558,7 @@ final class _RegisteredAsyncValueType<T> {
     return table.borrowAsync<
       WASIComponentWritableStream<T>,
       WASIComponentAsyncCopyResult
-    >(writableStreamType!, writable, (stream) {
+    >(writableStreamType!, writable, (stream) async {
       final values = _readValuesFromMemory<T>(
         valueValidator,
         name,
@@ -1843,11 +2567,15 @@ final class _RegisteredAsyncValueType<T> {
         elementCount,
         stringEncoding,
       );
-      return stream
-          .writeWhenAvailable(values)
-          .then<WASIComponentAsyncCopyResult>(
-            WASIComponentAsyncCopyResult.completed,
-          );
+      try {
+        final written = await stream.writeWhenAvailableForCopy(
+          values,
+          asynchronous: false,
+        );
+        return WASIComponentAsyncCopyResult.completed(written);
+      } on WASIComponentAsyncEndpointStateError catch (error) {
+        return _endpointFailureCopyResult(error);
+      }
     });
   }
 
@@ -1873,29 +2601,105 @@ final class _RegisteredAsyncValueType<T> {
           stringEncoding,
         );
         if (stream.canWriteImmediately(values.length)) {
-          stream.writeAll(values);
-          return WASIComponentAsyncCopyResult.completed(
-            values.length,
-          ).packedResult;
+          try {
+            final written = stream.writeAllForCopy(values);
+            return WASIComponentAsyncCopyResult.completed(written).packedResult;
+          } on WASIComponentAsyncEndpointStateError catch (error) {
+            return _endpointFailureCopyResult(error).packedResult;
+          }
         }
 
+        stream.requireCopyIdle();
         waitable.beginCopy();
         final pending = table
             .borrowAsync<
               WASIComponentWritableStream<T>,
               WASIComponentAsyncCopyResult
-            >(writableStreamType!, writable, (stream) {
-              return stream
-                  .writeWhenAvailable(values)
-                  .then<WASIComponentAsyncCopyResult>(
-                    WASIComponentAsyncCopyResult.completed,
-                  );
+            >(writableStreamType!, writable, (stream) async {
+              try {
+                final written = await stream.writeWhenAvailableForCopy(
+                  values,
+                  deferCompletion: true,
+                );
+                return WASIComponentAsyncCopyResult.completed(written);
+              } on WASIComponentAsyncEndpointStateError catch (error) {
+                return _endpointFailureCopyResult(error);
+              }
             });
         _publishCopyEvent(
           waitable,
           WASIComponentWaitableEventCode.streamWrite,
           writable,
           pending,
+          onDelivered: (result) => stream.finishDeferredCopy(
+            dropped: result.status == WASIComponentAsyncCopyStatus.dropped,
+          ),
+        );
+        return wasiComponentAsyncBlocked;
+      },
+    );
+  }
+
+  Future<WASIComponentAsyncCopyResult>
+  streamWriteHandleWithoutMemoryWhenAvailable(int writable, int elementCount) {
+    final values = _unitValues(elementCount);
+    return table.borrowAsync<
+      WASIComponentWritableStream<T>,
+      WASIComponentAsyncCopyResult
+    >(writableStreamType!, writable, (stream) async {
+      try {
+        final written = await stream.writeWhenAvailableForCopy(
+          values,
+          asynchronous: false,
+        );
+        return WASIComponentAsyncCopyResult.completed(written);
+      } on WASIComponentAsyncEndpointStateError catch (error) {
+        return _endpointFailureCopyResult(error);
+      }
+    });
+  }
+
+  int streamWriteHandleWithoutMemoryEvent(int writable, int elementCount) {
+    final values = _unitValues(elementCount);
+    final waitable = _existingEndpointWaitable(writable);
+    return table.borrow<WASIComponentWritableStream<T>, int>(
+      writableStreamType!,
+      writable,
+      (stream) {
+        if (stream.canWriteImmediately(values.length)) {
+          try {
+            final written = stream.writeAllForCopy(values);
+            return WASIComponentAsyncCopyResult.completed(written).packedResult;
+          } on WASIComponentAsyncEndpointStateError catch (error) {
+            return _endpointFailureCopyResult(error).packedResult;
+          }
+        }
+
+        stream.requireCopyIdle();
+        waitable.beginCopy();
+        final pending = table
+            .borrowAsync<
+              WASIComponentWritableStream<T>,
+              WASIComponentAsyncCopyResult
+            >(writableStreamType!, writable, (stream) async {
+              try {
+                final written = await stream.writeWhenAvailableForCopy(
+                  values,
+                  deferCompletion: true,
+                );
+                return WASIComponentAsyncCopyResult.completed(written);
+              } on WASIComponentAsyncEndpointStateError catch (error) {
+                return _endpointFailureCopyResult(error);
+              }
+            });
+        _publishCopyEvent(
+          waitable,
+          WASIComponentWaitableEventCode.streamWrite,
+          writable,
+          pending,
+          onDelivered: (result) => stream.finishDeferredCopy(
+            dropped: result.status == WASIComponentAsyncCopyStatus.dropped,
+          ),
         );
         return wasiComponentAsyncBlocked;
       },
@@ -1907,7 +2711,7 @@ final class _RegisteredAsyncValueType<T> {
     return table.borrowAsync<WASIComponentWritableStream<T>, int>(
       writableStreamType!,
       writable,
-      (stream) => stream.writeWhenAvailable(typedValues),
+      (stream) => stream.writeWhenAvailableForCopy(typedValues),
     );
   }
 
@@ -1922,17 +2726,23 @@ final class _RegisteredAsyncValueType<T> {
   ]) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
     _requireReallocForReadToMemory(valueValidator, name, realloc, maxElements);
-    final values = _expectReadableStream(readable).read(maxElements);
-    _writeValuesToMemory(
-      valueValidator,
-      name,
-      memory,
-      pointer,
-      values,
-      stringEncoding,
-      realloc,
-    );
-    return WASIComponentAsyncCopyResult.completed(values.length);
+    final stream = _expectReadableStream(readable);
+    _checkReadToMemoryRange(valueValidator, name, memory, pointer, maxElements);
+    try {
+      final values = stream.readForCopy(maxElements);
+      _writeValuesToMemory(
+        valueValidator,
+        name,
+        memory,
+        pointer,
+        values,
+        stringEncoding,
+        realloc,
+      );
+      return _streamReadResult(stream, values);
+    } on WASIComponentAsyncEndpointStateError catch (error) {
+      return _endpointFailureCopyResult(error);
+    }
   }
 
   WASIComponentAsyncCopyResult streamReadHandleToMemory(
@@ -1955,17 +2765,28 @@ final class _RegisteredAsyncValueType<T> {
               realloc,
               maxElements,
             );
-            final values = stream.read(maxElements);
-            _writeValuesToMemory(
+            _checkReadToMemoryRange(
               valueValidator,
               name,
               memory,
               pointer,
-              values,
-              stringEncoding,
-              realloc,
+              maxElements,
             );
-            return WASIComponentAsyncCopyResult.completed(values.length);
+            try {
+              final values = stream.readForCopy(maxElements);
+              _writeValuesToMemory(
+                valueValidator,
+                name,
+                memory,
+                pointer,
+                values,
+                stringEncoding,
+                realloc,
+              );
+              return _streamReadResult(stream, values);
+            } on WASIComponentAsyncEndpointStateError catch (error) {
+              return _endpointFailureCopyResult(error);
+            }
           },
         );
   }
@@ -1989,20 +2810,35 @@ final class _RegisteredAsyncValueType<T> {
         realloc,
         maxElements,
       );
+      _checkReadToMemoryRange(
+        valueValidator,
+        name,
+        memory,
+        pointer,
+        maxElements,
+      );
       return stream
-          .readWhenAvailable(maxElements)
-          .then<WASIComponentAsyncCopyResult>((values) {
-            _writeValuesToMemory(
-              valueValidator,
-              name,
-              memory,
-              pointer,
-              values,
-              stringEncoding,
-              realloc,
-            );
-            return WASIComponentAsyncCopyResult.completed(values.length);
-          });
+          .readWhenAvailableForCopy(maxElements, asynchronous: false)
+          .then<WASIComponentAsyncCopyResult>(
+            (values) {
+              _writeValuesToMemory(
+                valueValidator,
+                name,
+                memory,
+                pointer,
+                values,
+                stringEncoding,
+                realloc,
+              );
+              return _streamReadResult(stream, values);
+            },
+            onError: (Object error, StackTrace stackTrace) {
+              if (error is WASIComponentAsyncEndpointStateError) {
+                return _endpointFailureCopyResult(error);
+              }
+              Error.throwWithStackTrace(error, stackTrace);
+            },
+          );
     });
   }
 
@@ -2026,8 +2862,17 @@ final class _RegisteredAsyncValueType<T> {
           realloc,
           maxElements,
         );
-        if (maxElements == 0 || stream.hasQueuedValues) {
-          final values = stream.read(maxElements);
+        _checkReadToMemoryRange(
+          valueValidator,
+          name,
+          memory,
+          pointer,
+          maxElements,
+        );
+        if (maxElements == 0 ||
+            stream.hasQueuedValues ||
+            stream.isEndOfStream) {
+          final values = stream.readForCopy(maxElements);
           _writeValuesToMemory(
             valueValidator,
             name,
@@ -2037,11 +2882,10 @@ final class _RegisteredAsyncValueType<T> {
             stringEncoding,
             realloc,
           );
-          return WASIComponentAsyncCopyResult.completed(
-            values.length,
-          ).packedResult;
+          return _streamReadResult(stream, values).packedResult;
         }
 
+        stream.requireCopyIdle();
         waitable.beginCopy();
         final pending = table
             .borrowAsync<
@@ -2049,7 +2893,7 @@ final class _RegisteredAsyncValueType<T> {
               WASIComponentAsyncCopyResult
             >(readableStreamType!, readable, (stream) {
               return stream
-                  .readWhenAvailable(maxElements)
+                  .readWhenAvailableForCopy(maxElements, deferCompletion: true)
                   .then<WASIComponentAsyncCopyResult>((values) {
                     _writeValuesToMemory(
                       valueValidator,
@@ -2060,9 +2904,7 @@ final class _RegisteredAsyncValueType<T> {
                       stringEncoding,
                       realloc,
                     );
-                    return WASIComponentAsyncCopyResult.completed(
-                      values.length,
-                    );
+                    return _streamReadResult(stream, values);
                   });
             });
         _publishCopyEvent(
@@ -2070,15 +2912,88 @@ final class _RegisteredAsyncValueType<T> {
           WASIComponentWaitableEventCode.streamRead,
           readable,
           pending,
+          onDelivered: (result) => stream.finishDeferredCopy(
+            dropped: result.status == WASIComponentAsyncCopyStatus.dropped,
+          ),
         );
         return wasiComponentAsyncBlocked;
       },
     );
   }
 
+  Future<WASIComponentAsyncCopyResult>
+  streamReadHandleWithoutMemoryWhenAvailable(int readable, int maxElements) {
+    _unitValue();
+    return table.borrowAsync<
+      WASIComponentReadableStream<T>,
+      WASIComponentAsyncCopyResult
+    >(readableStreamType!, readable, (stream) async {
+      try {
+        final values = await stream.readWhenAvailableForCopy(
+          maxElements,
+          asynchronous: false,
+        );
+        return _streamReadResult(stream, values);
+      } on WASIComponentAsyncEndpointStateError catch (error) {
+        return _endpointFailureCopyResult(error);
+      }
+    });
+  }
+
+  int streamReadHandleWithoutMemoryEvent(int readable, int maxElements) {
+    _unitValue();
+    final waitable = _existingEndpointWaitable(readable);
+    return table.borrow<WASIComponentReadableStream<T>, int>(
+      readableStreamType!,
+      readable,
+      (stream) {
+        if (maxElements == 0 ||
+            stream.hasQueuedValues ||
+            stream.isEndOfStream) {
+          final values = stream.readForCopy(maxElements);
+          return _streamReadResult(stream, values).packedResult;
+        }
+
+        stream.requireCopyIdle();
+        waitable.beginCopy();
+        final pending = table
+            .borrowAsync<
+              WASIComponentReadableStream<T>,
+              WASIComponentAsyncCopyResult
+            >(readableStreamType!, readable, (stream) {
+              return stream
+                  .readWhenAvailableForCopy(maxElements, deferCompletion: true)
+                  .then<WASIComponentAsyncCopyResult>(
+                    (values) => _streamReadResult(stream, values),
+                  );
+            });
+        _publishCopyEvent(
+          waitable,
+          WASIComponentWaitableEventCode.streamRead,
+          readable,
+          pending,
+          onDelivered: (result) => stream.finishDeferredCopy(
+            dropped: result.status == WASIComponentAsyncCopyStatus.dropped,
+          ),
+        );
+        return wasiComponentAsyncBlocked;
+      },
+    );
+  }
+
+  WASIComponentAsyncCopyResult _streamReadResult(
+    WASIComponentReadableStream<T> stream,
+    List<T> values,
+  ) {
+    if (values.isEmpty && stream.isEndOfStream) {
+      return WASIComponentAsyncCopyResult.dropped();
+    }
+    return WASIComponentAsyncCopyResult.completed(values.length);
+  }
+
   void streamCancelRead(Object? readable) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
-    _expectReadableStream(readable).cancel();
+    _expectReadableStream(readable).cancelPendingCopy();
   }
 
   int streamCancelReadHandle(int readable, {required bool isAsync}) {
@@ -2086,12 +3001,19 @@ final class _RegisteredAsyncValueType<T> {
       handle: readable,
       eventCode: WASIComponentWaitableEventCode.streamRead,
       isAsync: isAsync,
+      requestCancel: () {
+        table.borrow<WASIComponentReadableStream<T>, void>(
+          readableStreamType!,
+          readable,
+          (stream) => stream.requestCopyCancellation(),
+        );
+      },
       cancel: () {
         table.borrow<WASIComponentReadableStream<T>, void>(
           readableStreamType!,
           readable,
           (stream) {
-            stream.cancel();
+            stream.cancelRequestedCopy();
           },
         );
       },
@@ -2106,12 +3028,19 @@ final class _RegisteredAsyncValueType<T> {
       handle: readable,
       eventCode: WASIComponentWaitableEventCode.streamRead,
       isAsync: isAsync,
+      requestCancel: () {
+        table.borrow<WASIComponentReadableStream<T>, void>(
+          readableStreamType!,
+          readable,
+          (stream) => stream.requestCopyCancellation(),
+        );
+      },
       cancel: () {
         table.borrow<WASIComponentReadableStream<T>, void>(
           readableStreamType!,
           readable,
           (stream) {
-            stream.cancel();
+            stream.cancelRequestedCopy();
           },
         );
       },
@@ -2120,7 +3049,7 @@ final class _RegisteredAsyncValueType<T> {
 
   void streamCancelWrite(Object? writable) {
     _requireKind(_WASIComponentAsyncValueKind.stream);
-    _expectWritableStream(writable).cancel();
+    _expectWritableStream(writable).cancelPendingCopy();
   }
 
   int streamCancelWriteHandle(int writable, {required bool isAsync}) {
@@ -2128,12 +3057,19 @@ final class _RegisteredAsyncValueType<T> {
       handle: writable,
       eventCode: WASIComponentWaitableEventCode.streamWrite,
       isAsync: isAsync,
+      requestCancel: () {
+        table.borrow<WASIComponentWritableStream<T>, void>(
+          writableStreamType!,
+          writable,
+          (stream) => stream.requestCopyCancellation(),
+        );
+      },
       cancel: () {
         table.borrow<WASIComponentWritableStream<T>, void>(
           writableStreamType!,
           writable,
           (stream) {
-            stream.cancel();
+            stream.cancelRequestedCopy();
           },
         );
       },
@@ -2148,12 +3084,19 @@ final class _RegisteredAsyncValueType<T> {
       handle: writable,
       eventCode: WASIComponentWaitableEventCode.streamWrite,
       isAsync: isAsync,
+      requestCancel: () {
+        table.borrow<WASIComponentWritableStream<T>, void>(
+          writableStreamType!,
+          writable,
+          (stream) => stream.requestCopyCancellation(),
+        );
+      },
       cancel: () {
         table.borrow<WASIComponentWritableStream<T>, void>(
           writableStreamType!,
           writable,
           (stream) {
-            stream.cancel();
+            stream.cancelRequestedCopy();
           },
         );
       },
@@ -2167,8 +3110,12 @@ final class _RegisteredAsyncValueType<T> {
 
   void streamDropReadableHandle(int readable) {
     _requireEndpointWaitableDroppable(readable);
+    table.borrow<WASIComponentReadableStream<T>, void>(
+      readableStreamType!,
+      readable,
+      (stream) => stream.requireDroppable(),
+    );
     table.drop<WASIComponentReadableStream<T>>(readableStreamType!, readable);
-    endpointWaitables.remove(readable)?.drop();
   }
 
   void streamDropWritable(Object? writable) {
@@ -2178,13 +3125,17 @@ final class _RegisteredAsyncValueType<T> {
 
   void streamDropWritableHandle(int writable) {
     _requireEndpointWaitableDroppable(writable);
+    table.borrow<WASIComponentWritableStream<T>, void>(
+      writableStreamType!,
+      writable,
+      (stream) => stream.requireDroppable(),
+    );
     table.drop<WASIComponentWritableStream<T>>(writableStreamType!, writable);
-    endpointWaitables.remove(writable)?.drop();
   }
 
   Object futureNew() {
     _requireKind(_WASIComponentAsyncValueKind.future);
-    return WASIComponentFuture<T>(name, onDrop: onDrop);
+    return WASIComponentFuture<T>(name, onDrop: onDrop, onDiscard: onDiscard);
   }
 
   WASIComponentAsyncEndpointHandles futureNewHandles() {
@@ -2205,19 +3156,19 @@ final class _RegisteredAsyncValueType<T> {
 
   Object? futureRead(Object? readable) {
     _requireKind(_WASIComponentAsyncValueKind.future);
-    return _expectReadableFuture(readable).read();
+    return _expectReadableFuture(readable).readForCopy();
   }
 
   Future<Object?> futureReadWhenReady(Object? readable) {
     _requireKind(_WASIComponentAsyncValueKind.future);
-    return _expectReadableFuture(readable).readWhenReady();
+    return _expectReadableFuture(readable).readWhenReadyForCopy();
   }
 
   Object? futureReadHandle(int readable) {
     return table.borrow<WASIComponentReadableFuture<T>, Object?>(
       readableFutureType!,
       readable,
-      (future) => future.read(),
+      (future) => future.readForCopy(),
     );
   }
 
@@ -2225,7 +3176,7 @@ final class _RegisteredAsyncValueType<T> {
     return table.borrowAsync<WASIComponentReadableFuture<T>, Object?>(
       readableFutureType!,
       readable,
-      (future) => future.readWhenReady(),
+      (future) => future.readWhenReadyForCopy(),
     );
   }
 
@@ -2239,7 +3190,9 @@ final class _RegisteredAsyncValueType<T> {
   ]) {
     _requireKind(_WASIComponentAsyncValueKind.future);
     _requireReallocForReadToMemory(valueValidator, name, realloc, 1);
-    final value = _expectReadableFuture(readable).readForCopy();
+    final future = _expectReadableFuture(readable);
+    _checkReadToMemoryRange(valueValidator, name, memory, pointer, 1);
+    final value = future.readForCopy();
     _writeValueToMemory(
       valueValidator,
       name,
@@ -2266,6 +3219,7 @@ final class _RegisteredAsyncValueType<T> {
           readable,
           (future) {
             _requireReallocForReadToMemory(valueValidator, name, realloc, 1);
+            _checkReadToMemoryRange(valueValidator, name, memory, pointer, 1);
             _writeValueToMemory(
               valueValidator,
               name,
@@ -2293,20 +3247,21 @@ final class _RegisteredAsyncValueType<T> {
       WASIComponentAsyncCopyResult
     >(readableFutureType!, readable, (future) {
       _requireReallocForReadToMemory(valueValidator, name, realloc, 1);
-      return future.readWhenReadyForCopy().then<WASIComponentAsyncCopyResult>((
-        value,
-      ) {
-        _writeValueToMemory(
-          valueValidator,
-          name,
-          memory,
-          pointer,
-          value,
-          stringEncoding,
-          realloc,
-        );
-        return WASIComponentAsyncCopyResult.completed(0);
-      });
+      _checkReadToMemoryRange(valueValidator, name, memory, pointer, 1);
+      return future
+          .readWhenReadyForCopy(asynchronous: false)
+          .then<WASIComponentAsyncCopyResult>((value) {
+            _writeValueToMemory(
+              valueValidator,
+              name,
+              memory,
+              pointer,
+              value,
+              stringEncoding,
+              realloc,
+            );
+            return WASIComponentAsyncCopyResult.completed(0);
+          });
     });
   }
 
@@ -2324,6 +3279,7 @@ final class _RegisteredAsyncValueType<T> {
       readable,
       (future) {
         _requireReallocForReadToMemory(valueValidator, name, realloc, 1);
+        _checkReadToMemoryRange(valueValidator, name, memory, pointer, 1);
         if (future.isReady) {
           _writeValueToMemory(
             valueValidator,
@@ -2337,6 +3293,7 @@ final class _RegisteredAsyncValueType<T> {
           return WASIComponentAsyncCopyResult.completed(0).packedResult;
         }
 
+        future.requireCopyIdle();
         waitable.beginCopy();
         final pending = table
             .borrowAsync<
@@ -2344,7 +3301,7 @@ final class _RegisteredAsyncValueType<T> {
               WASIComponentAsyncCopyResult
             >(readableFutureType!, readable, (future) {
               return future
-                  .readWhenReadyForCopy()
+                  .readWhenReadyForCopy(deferCompletion: true)
                   .then<WASIComponentAsyncCopyResult>((value) {
                     _writeValueToMemory(
                       valueValidator,
@@ -2363,19 +3320,80 @@ final class _RegisteredAsyncValueType<T> {
           WASIComponentWaitableEventCode.futureRead,
           readable,
           pending,
+          onDelivered: (result) => future.finishDeferredCopy(
+            cancelled: result.status == WASIComponentAsyncCopyStatus.cancelled,
+          ),
         );
         return wasiComponentAsyncBlocked;
       },
     );
   }
 
-  void futureWrite(Object? writable, Object? value) {
+  Future<WASIComponentAsyncCopyResult> futureReadHandleWithoutMemoryWhenReady(
+    int readable,
+  ) {
+    _unitValue();
+    return table.borrowAsync<
+      WASIComponentReadableFuture<T>,
+      WASIComponentAsyncCopyResult
+    >(readableFutureType!, readable, (future) async {
+      try {
+        await future.readWhenReadyForCopy(asynchronous: false);
+        return WASIComponentAsyncCopyResult.completed(0);
+      } on WASIComponentAsyncEndpointStateError catch (error) {
+        return _endpointFailureCopyResult(error);
+      }
+    });
+  }
+
+  int futureReadHandleWithoutMemoryEvent(int readable) {
+    _unitValue();
+    final waitable = _existingEndpointWaitable(readable);
+    return table.borrow<WASIComponentReadableFuture<T>, int>(
+      readableFutureType!,
+      readable,
+      (future) {
+        if (future.isReady) {
+          future.readForCopy();
+          return WASIComponentAsyncCopyResult.completed(0).packedResult;
+        }
+
+        future.requireCopyIdle();
+        waitable.beginCopy();
+        final pending = table
+            .borrowAsync<
+              WASIComponentReadableFuture<T>,
+              WASIComponentAsyncCopyResult
+            >(readableFutureType!, readable, (future) async {
+              await future.readWhenReadyForCopy(deferCompletion: true);
+              return WASIComponentAsyncCopyResult.completed(0);
+            });
+        _publishCopyEvent(
+          waitable,
+          WASIComponentWaitableEventCode.futureRead,
+          readable,
+          pending,
+          onDelivered: (result) => future.finishDeferredCopy(
+            cancelled: result.status == WASIComponentAsyncCopyStatus.cancelled,
+          ),
+        );
+        return wasiComponentAsyncBlocked;
+      },
+    );
+  }
+
+  WASIComponentAsyncCopyResult futureWrite(Object? writable, Object? value) {
     _requireKind(_WASIComponentAsyncValueKind.future);
     if (value is! T) {
       throw StateError('WASI component async type $name expected $T value.');
     }
     valueValidator.validate(name, value);
-    _expectWritableFuture(writable).complete(value);
+    try {
+      _expectWritableFuture(writable).completeForCopy(value);
+      return WASIComponentAsyncCopyResult.completed(0);
+    } on WASIComponentAsyncEndpointStateError catch (error) {
+      return _endpointFailureCopyResult(error);
+    }
   }
 
   WASIComponentAsyncCopyResult futureWriteFromMemory(
@@ -2393,24 +3411,30 @@ final class _RegisteredAsyncValueType<T> {
       pointer,
       stringEncoding,
     );
-    _expectWritableFuture(writable).completeForCopy(value);
-    return WASIComponentAsyncCopyResult.completed(0);
+    try {
+      _expectWritableFuture(writable).completeForCopy(value);
+      return WASIComponentAsyncCopyResult.completed(0);
+    } on WASIComponentAsyncEndpointStateError catch (error) {
+      return _endpointFailureCopyResult(error);
+    }
   }
 
-  void futureWriteHandle(int writable, Object? value) {
-    table.borrow<WASIComponentWritableFuture<T>, void>(
-      writableFutureType!,
-      writable,
-      (future) {
-        if (value is! T) {
-          throw StateError(
-            'WASI component async type $name expected $T value.',
-          );
-        }
-        valueValidator.validate(name, value);
-        future.complete(value);
-      },
-    );
+  WASIComponentAsyncCopyResult futureWriteHandle(int writable, Object? value) {
+    return table.borrow<
+      WASIComponentWritableFuture<T>,
+      WASIComponentAsyncCopyResult
+    >(writableFutureType!, writable, (future) {
+      if (value is! T) {
+        throw StateError('WASI component async type $name expected $T value.');
+      }
+      valueValidator.validate(name, value);
+      try {
+        future.completeForCopy(value);
+        return WASIComponentAsyncCopyResult.completed(0);
+      } on WASIComponentAsyncEndpointStateError catch (error) {
+        return _endpointFailureCopyResult(error);
+      }
+    });
   }
 
   WASIComponentAsyncCopyResult futureWriteHandleFromMemory(
@@ -2432,10 +3456,41 @@ final class _RegisteredAsyncValueType<T> {
               pointer,
               stringEncoding,
             );
-            future.completeForCopy(value);
-            return WASIComponentAsyncCopyResult.completed(0);
+            try {
+              future.completeForCopy(value);
+              return WASIComponentAsyncCopyResult.completed(0);
+            } on WASIComponentAsyncEndpointStateError catch (error) {
+              return _endpointFailureCopyResult(error);
+            }
           },
         );
+  }
+
+  Future<WASIComponentAsyncCopyResult> futureWriteHandleFromMemoryWhenRead(
+    int writable,
+    wasm.Memory memory,
+    int pointer, [
+    WASIComponentCanonicalStringEncoding stringEncoding =
+        WASIComponentCanonicalStringEncoding.utf8,
+  ]) {
+    return table.borrowAsync<
+      WASIComponentWritableFuture<T>,
+      WASIComponentAsyncCopyResult
+    >(writableFutureType!, writable, (future) async {
+      final value = _readValueFromMemory<T>(
+        valueValidator,
+        name,
+        memory,
+        pointer,
+        stringEncoding,
+      );
+      try {
+        await future.completeWhenReadForCopy(value, asynchronous: false);
+        return WASIComponentAsyncCopyResult.completed(0);
+      } on WASIComponentAsyncEndpointStateError catch (error) {
+        return _endpointFailureCopyResult(error);
+      }
+    });
   }
 
   int futureWriteHandleFromMemoryEvent(
@@ -2457,30 +3512,96 @@ final class _RegisteredAsyncValueType<T> {
           pointer,
           stringEncoding,
         );
-        if (!future.canComplete) {
-          future.completeForCopy(value);
-          return WASIComponentAsyncCopyResult.completed(0).packedResult;
-        }
-        if (future.hasPendingReader) {
-          future.completeForCopy(value);
-          return WASIComponentAsyncCopyResult.completed(0).packedResult;
+        if (!future.canComplete || future.hasPendingReader) {
+          try {
+            future.completeForCopy(value);
+            return WASIComponentAsyncCopyResult.completed(0).packedResult;
+          } on WASIComponentAsyncEndpointStateError catch (error) {
+            return _endpointFailureCopyResult(error).packedResult;
+          }
         }
 
+        future.requireCopyIdle();
         waitable.beginCopy();
         final pending = table
             .borrowAsync<
               WASIComponentWritableFuture<T>,
               WASIComponentAsyncCopyResult
             >(writableFutureType!, writable, (future) {
-              return future.completeWhenReadForCopy(value).then((_) {
-                return WASIComponentAsyncCopyResult.completed(0);
-              });
+              return future
+                  .completeWhenReadForCopy(value, deferCompletion: true)
+                  .then((_) {
+                    return WASIComponentAsyncCopyResult.completed(0);
+                  });
             });
         _publishCopyEvent(
           waitable,
           WASIComponentWaitableEventCode.futureWrite,
           writable,
           pending,
+          onDelivered: (result) => future.finishDeferredCopy(
+            cancelled: result.status == WASIComponentAsyncCopyStatus.cancelled,
+          ),
+        );
+        return wasiComponentAsyncBlocked;
+      },
+    );
+  }
+
+  Future<WASIComponentAsyncCopyResult> futureWriteHandleWithoutMemoryWhenRead(
+    int writable,
+  ) {
+    final value = _unitValue();
+    return table.borrowAsync<
+      WASIComponentWritableFuture<T>,
+      WASIComponentAsyncCopyResult
+    >(writableFutureType!, writable, (future) async {
+      try {
+        await future.completeWhenReadForCopy(value, asynchronous: false);
+        return WASIComponentAsyncCopyResult.completed(0);
+      } on WASIComponentAsyncEndpointStateError catch (error) {
+        return _endpointFailureCopyResult(error);
+      }
+    });
+  }
+
+  int futureWriteHandleWithoutMemoryEvent(int writable) {
+    final value = _unitValue();
+    final waitable = _existingEndpointWaitable(writable);
+    return table.borrow<WASIComponentWritableFuture<T>, int>(
+      writableFutureType!,
+      writable,
+      (future) {
+        if (!future.canComplete || future.hasPendingReader) {
+          try {
+            future.completeForCopy(value);
+            return WASIComponentAsyncCopyResult.completed(0).packedResult;
+          } on WASIComponentAsyncEndpointStateError catch (error) {
+            return _endpointFailureCopyResult(error).packedResult;
+          }
+        }
+
+        future.requireCopyIdle();
+        waitable.beginCopy();
+        final pending = table
+            .borrowAsync<
+              WASIComponentWritableFuture<T>,
+              WASIComponentAsyncCopyResult
+            >(writableFutureType!, writable, (future) async {
+              await future.completeWhenReadForCopy(
+                value,
+                deferCompletion: true,
+              );
+              return WASIComponentAsyncCopyResult.completed(0);
+            });
+        _publishCopyEvent(
+          waitable,
+          WASIComponentWaitableEventCode.futureWrite,
+          writable,
+          pending,
+          onDelivered: (result) => future.finishDeferredCopy(
+            cancelled: result.status == WASIComponentAsyncCopyStatus.cancelled,
+          ),
         );
         return wasiComponentAsyncBlocked;
       },
@@ -2489,7 +3610,7 @@ final class _RegisteredAsyncValueType<T> {
 
   void futureCancelRead(Object? readable) {
     _requireKind(_WASIComponentAsyncValueKind.future);
-    _expectReadableFuture(readable).cancel();
+    _expectReadableFuture(readable).cancelPendingCopy();
   }
 
   int futureCancelReadHandle(int readable, {required bool isAsync}) {
@@ -2497,14 +3618,19 @@ final class _RegisteredAsyncValueType<T> {
       handle: readable,
       eventCode: WASIComponentWaitableEventCode.futureRead,
       isAsync: isAsync,
+      requestCancel: () {
+        table.borrow<WASIComponentReadableFuture<T>, void>(
+          readableFutureType!,
+          readable,
+          (future) => future.requestCopyCancellation(),
+        );
+      },
       cancel: () {
         table.borrow<WASIComponentReadableFuture<T>, void>(
           readableFutureType!,
           readable,
           (future) {
-            if (!future.isReady) {
-              future.cancel();
-            }
+            future.cancelRequestedCopy();
           },
         );
       },
@@ -2519,14 +3645,19 @@ final class _RegisteredAsyncValueType<T> {
       handle: readable,
       eventCode: WASIComponentWaitableEventCode.futureRead,
       isAsync: isAsync,
+      requestCancel: () {
+        table.borrow<WASIComponentReadableFuture<T>, void>(
+          readableFutureType!,
+          readable,
+          (future) => future.requestCopyCancellation(),
+        );
+      },
       cancel: () {
         table.borrow<WASIComponentReadableFuture<T>, void>(
           readableFutureType!,
           readable,
           (future) {
-            if (!future.isReady) {
-              future.cancel();
-            }
+            future.cancelRequestedCopy();
           },
         );
       },
@@ -2535,7 +3666,7 @@ final class _RegisteredAsyncValueType<T> {
 
   void futureCancelWrite(Object? writable) {
     _requireKind(_WASIComponentAsyncValueKind.future);
-    _expectWritableFuture(writable).cancel();
+    _expectWritableFuture(writable).cancelPendingCopy();
   }
 
   int futureCancelWriteHandle(int writable, {required bool isAsync}) {
@@ -2543,12 +3674,19 @@ final class _RegisteredAsyncValueType<T> {
       handle: writable,
       eventCode: WASIComponentWaitableEventCode.futureWrite,
       isAsync: isAsync,
+      requestCancel: () {
+        table.borrow<WASIComponentWritableFuture<T>, void>(
+          writableFutureType!,
+          writable,
+          (future) => future.requestCopyCancellation(),
+        );
+      },
       cancel: () {
         table.borrow<WASIComponentWritableFuture<T>, void>(
           writableFutureType!,
           writable,
           (future) {
-            future.cancelWriteDelivery();
+            future.cancelRequestedCopy();
           },
         );
       },
@@ -2563,12 +3701,19 @@ final class _RegisteredAsyncValueType<T> {
       handle: writable,
       eventCode: WASIComponentWaitableEventCode.futureWrite,
       isAsync: isAsync,
+      requestCancel: () {
+        table.borrow<WASIComponentWritableFuture<T>, void>(
+          writableFutureType!,
+          writable,
+          (future) => future.requestCopyCancellation(),
+        );
+      },
       cancel: () {
         table.borrow<WASIComponentWritableFuture<T>, void>(
           writableFutureType!,
           writable,
           (future) {
-            future.cancelWriteDelivery();
+            future.cancelRequestedCopy();
           },
         );
       },
@@ -2582,8 +3727,12 @@ final class _RegisteredAsyncValueType<T> {
 
   void futureDropReadableHandle(int readable) {
     _requireEndpointWaitableDroppable(readable);
+    table.borrow<WASIComponentReadableFuture<T>, void>(
+      readableFutureType!,
+      readable,
+      (future) => future.requireDroppable(),
+    );
     table.drop<WASIComponentReadableFuture<T>>(readableFutureType!, readable);
-    endpointWaitables.remove(readable)?.drop();
   }
 
   void futureDropWritable(Object? writable) {
@@ -2593,8 +3742,12 @@ final class _RegisteredAsyncValueType<T> {
 
   void futureDropWritableHandle(int writable) {
     _requireEndpointWaitableDroppable(writable);
+    table.borrow<WASIComponentWritableFuture<T>, void>(
+      writableFutureType!,
+      writable,
+      (future) => future.requireDroppable(),
+    );
     table.drop<WASIComponentWritableFuture<T>>(writableFutureType!, writable);
-    endpointWaitables.remove(writable)?.drop();
   }
 
   WASIComponentWaitable? waitableForHandle(int handle) {
@@ -2603,37 +3756,54 @@ final class _RegisteredAsyncValueType<T> {
           readableStreamType!,
           handle,
         )) {
-      return _endpointWaitable(handle, '$name.readable');
+      return _endpointWaitable(
+        handle,
+        table.get<WASIComponentReadableStream<T>>(readableStreamType!, handle),
+        '$name.readable',
+      );
     }
     if (writableStreamType != null &&
         table.containsType<WASIComponentWritableStream<T>>(
           writableStreamType!,
           handle,
         )) {
-      return _endpointWaitable(handle, '$name.writable');
+      return _endpointWaitable(
+        handle,
+        table.get<WASIComponentWritableStream<T>>(writableStreamType!, handle),
+        '$name.writable',
+      );
     }
     if (readableFutureType != null &&
         table.containsType<WASIComponentReadableFuture<T>>(
           readableFutureType!,
           handle,
         )) {
-      return _endpointWaitable(handle, '$name.readable');
+      return _endpointWaitable(
+        handle,
+        table.get<WASIComponentReadableFuture<T>>(readableFutureType!, handle),
+        '$name.readable',
+      );
     }
     if (writableFutureType != null &&
         table.containsType<WASIComponentWritableFuture<T>>(
           writableFutureType!,
           handle,
         )) {
-      return _endpointWaitable(handle, '$name.writable');
+      return _endpointWaitable(
+        handle,
+        table.get<WASIComponentWritableFuture<T>>(writableFutureType!, handle),
+        '$name.writable',
+      );
     }
     return null;
   }
 
-  WASIComponentWaitable _endpointWaitable(int handle, String name) {
-    return endpointWaitables.putIfAbsent(
-      handle,
-      () => WASIComponentWaitable('$name#$handle'),
-    );
+  WASIComponentWaitable _endpointWaitable(
+    int handle,
+    Object endpoint,
+    String name,
+  ) {
+    return endpointWaitables.forEndpoint(handle, endpoint, '$name#$handle');
   }
 
   WASIComponentWaitable _existingEndpointWaitable(int handle) {
@@ -2648,14 +3818,29 @@ final class _RegisteredAsyncValueType<T> {
     endpointWaitables[handle]?.requireDroppable();
   }
 
+  void _requireEndpointTransferable(int handle) {
+    final waitable = endpointWaitables[handle];
+    if (waitable?.inWaitableSet ?? false) {
+      throw StateError(
+        'WASI component async endpoint $handle is joined to a waitable set.',
+      );
+    }
+    waitable?.requireDroppable();
+  }
+
   int _cancelCopy({
     required int handle,
     required WASIComponentWaitableEventCode eventCode,
     required bool isAsync,
+    required void Function() requestCancel,
     required void Function() cancel,
   }) {
     final waitable = _existingEndpointWaitable(handle);
-    final event = waitable.cancelCopy(asynchronous: isAsync, cancel: cancel);
+    final event = waitable.cancelCopy(
+      asynchronous: isAsync,
+      requestCancel: requestCancel,
+      cancel: cancel,
+    );
     if (event == null) {
       return wasiComponentAsyncBlocked;
     }
@@ -2671,6 +3856,7 @@ final class _RegisteredAsyncValueType<T> {
     required int handle,
     required WASIComponentWaitableEventCode eventCode,
     required bool isAsync,
+    required void Function() requestCancel,
     required void Function() cancel,
   }) async {
     if (isAsync) {
@@ -2678,11 +3864,15 @@ final class _RegisteredAsyncValueType<T> {
         handle: handle,
         eventCode: eventCode,
         isAsync: isAsync,
+        requestCancel: requestCancel,
         cancel: cancel,
       );
     }
     final waitable = _existingEndpointWaitable(handle);
-    final event = await waitable.cancelCopyWhenReady(cancel: cancel);
+    final event = await waitable.cancelCopyWhenReady(
+      requestCancel: requestCancel,
+      cancel: cancel,
+    );
     return _expectCopyEventPayload(
       waitable: waitable,
       event: event,
@@ -2711,38 +3901,43 @@ final class _RegisteredAsyncValueType<T> {
     WASIComponentWaitable waitable,
     WASIComponentWaitableEventCode code,
     int handle,
-    Future<WASIComponentAsyncCopyResult> result,
-  ) {
+    Future<WASIComponentAsyncCopyResult> result, {
+    required void Function(WASIComponentAsyncCopyResult result) onDelivered,
+  }) {
+    void publish(WASIComponentAsyncCopyResult copyResult) {
+      waitable.setPendingEvent(() {
+        onDelivered(copyResult);
+        waitable.finishCopy(
+          dropped: copyResult.status == WASIComponentAsyncCopyStatus.dropped,
+        );
+        return WASIComponentWaitableEvent(
+          code: code,
+          payload1: handle,
+          payload2: copyResult.packedResult,
+        );
+      });
+    }
+
+    void publishFailure(Object error, StackTrace stackTrace) {
+      waitable.setPendingEvent(() {
+        onDelivered(WASIComponentAsyncCopyResult.completed(0));
+        waitable.finishCopy(dropped: false);
+        Error.throwWithStackTrace(error, stackTrace);
+      });
+    }
+
     unawaited(
       result.then<void>(
-        (copyResult) {
-          waitable.setPendingEvent(
-            () => WASIComponentWaitableEvent(
-              code: code,
-              payload1: handle,
-              payload2: copyResult.packedResult,
-            ),
-          );
-        },
+        publish,
         onError: (Object error, StackTrace stackTrace) {
-          final copyResult = switch (error) {
-            WASIComponentAsyncEndpointStateError(
-              failure: WASIComponentAsyncEndpointFailure.dropped,
-            ) =>
-              WASIComponentAsyncCopyResult.dropped(),
-            WASIComponentAsyncEndpointStateError(
-              failure: WASIComponentAsyncEndpointFailure.cancelled,
-            ) =>
-              WASIComponentAsyncCopyResult.cancelled(),
-            _ => WASIComponentAsyncCopyResult.cancelled(),
-          };
-          waitable.setPendingEvent(
-            () => WASIComponentWaitableEvent(
-              code: code,
-              payload1: handle,
-              payload2: copyResult.packedResult,
-            ),
-          );
+          if (error is WASIComponentAsyncEndpointStateError) {
+            publish(_endpointFailureCopyResult(error));
+            return;
+          }
+          // Canonical copy results have no host-error status. Preserve the
+          // failure as a trap delivered by the waiting component task after
+          // releasing its deferred endpoint and waitable copy state.
+          publishFailure(error, stackTrace);
         },
       ),
     );
@@ -2806,6 +4001,22 @@ final class _RegisteredAsyncValueType<T> {
     return typedValues;
   }
 
+  T _unitValue() {
+    if (valueValidator.kind != _WASIComponentAsyncValueShape.unit ||
+        null is! T) {
+      throw StateError(
+        'WASI component async type $name requires canonical memory for its payload.',
+      );
+    }
+    return null as T;
+  }
+
+  List<T> _unitValues(int elementCount) {
+    _checkCopyElementCount(elementCount);
+    final value = _unitValue();
+    return List<T>.filled(elementCount, value, growable: false);
+  }
+
   void _requireKind(_WASIComponentAsyncValueKind expected) {
     if (kind != expected) {
       throw StateError(
@@ -2840,8 +4051,7 @@ _WASIComponentAsyncValueKind? _asyncValueKindForCanonicalKind(
 }
 
 bool _canonicalDefinitionUsesBackpressure(WasmComponentCanonicalKind kind) {
-  return kind == WasmComponentCanonicalKind.backpressureSet ||
-      kind == WasmComponentCanonicalKind.backpressureInc ||
+  return kind == WasmComponentCanonicalKind.backpressureInc ||
       kind == WasmComponentCanonicalKind.backpressureDec;
 }
 
@@ -3146,6 +4356,40 @@ void _requireReallocForReadToMemory(
   }
 }
 
+void _checkReadToMemoryRange(
+  _WASIComponentAsyncValueValidator validator,
+  String name,
+  wasm.Memory memory,
+  int pointer,
+  int elementCount,
+) {
+  _checkCopyElementCount(elementCount);
+  if (elementCount == 0 ||
+      validator.kind == _WASIComponentAsyncValueShape.unit) {
+    return;
+  }
+  final codec = validator.memoryCodec;
+  if (codec == null) {
+    throw UnsupportedError(
+      'WASI component async type $name does not have a canonical memory element type.',
+    );
+  }
+  RangeError.checkNotNegative(pointer, 'pointer');
+  if (codec.alignment > 1 && pointer % codec.alignment != 0) {
+    throw StateError('pointer must be ${codec.alignment}-byte aligned.');
+  }
+  final byteLength = elementCount * codec.byteLength;
+  final memoryLength = memory.buffer.lengthInBytes;
+  if (pointer > memoryLength || byteLength > memoryLength - pointer) {
+    throw RangeError.range(
+      pointer + byteLength,
+      0,
+      memoryLength,
+      'pointer + byteLength',
+    );
+  }
+}
+
 List<T> _readCanonicalValuesFromMemory<T>(
   _WASIComponentAsyncValueValidator validator,
   String name,
@@ -3332,14 +4576,5 @@ int _expectHandle(int canonicalIndex, Object? value, String name) {
   }
   throw StateError(
     'WASI component canonical async index $canonicalIndex expected $name handle.',
-  );
-}
-
-bool _expectBoolean(int canonicalIndex, Object? value, String name) {
-  if (value is bool) {
-    return value;
-  }
-  throw StateError(
-    'WASI component canonical async index $canonicalIndex expected boolean $name.',
   );
 }

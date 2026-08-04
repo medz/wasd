@@ -5,10 +5,19 @@ import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
 
 import 'support/host_fs.dart';
+import 'support/public_api_sentinels.dart';
 import 'support/runtime_environment.dart';
 
 void main() {
   group('public WASI component API', () {
+    test('keeps the shared native executor internal', () {
+      expect(const WASIComponentNativeRuntime(), isNotNull);
+    });
+
+    test('keeps the Preview3 HTTP error-code table internal', () {
+      expect(wasiPreview3HttpErrorCodeCases, isEmpty);
+    });
+
     test('decodes components and prepares fixed Preview2/Preview3 hosts', () {
       final component = WasmComponent.decode(_emptyComponentBytes());
       final preview2 = WASIPreview2ComponentHost();
@@ -35,6 +44,145 @@ void main() {
       expect(
         host.standardImports,
         contains('wasi:cli/stdout@0.2.0.get-stdout'),
+      );
+    });
+
+    test('creates a complete Preview3 host through the WASI facade', () {
+      final host = WASI.preview3(
+        args: const <String>['command.wasm', 'arg'],
+        env: const <String, String>{'mode': 'test'},
+        terminalStdin: true,
+        terminalStdout: true,
+        terminalStderr: true,
+      );
+
+      expect(host.profile, same(WASIComponentVersionProfile.preview3));
+      expect(host.cliHost.args, ['command.wasm', 'arg']);
+      expect(host.cliHost.env, {'mode': 'test'});
+      expect(host.filesystemHost.table, same(host.componentHost.table));
+      expect(host.socketsHost.table, same(host.componentHost.table));
+      expect(host.httpHost.table, same(host.componentHost.table));
+      if (hasDartIoRuntime) {
+        expect(host.filesystemHost, isA<WASIPreview3NativeFilesystemHost>());
+        expect(host.socketsHost, isA<WASIPreview3NativeSocketsHost>());
+        expect(host.httpHost, isA<WASIPreview3NativeHttpHost>());
+      } else {
+        expect(
+          host.filesystemHost,
+          isNot(isA<WASIPreview3NativeFilesystemHost>()),
+        );
+        expect(host.socketsHost, isNot(isA<WASIPreview3NativeSocketsHost>()));
+        expect(host.httpHost, isNot(isA<WASIPreview3NativeHttpHost>()));
+      }
+      expect(
+        host.preview2CompatibilityHost.componentHost,
+        same(host.componentHost),
+      );
+      expect(
+        host.standardImports,
+        contains('wasi:filesystem/preopens@0.3.0.get-directories'),
+      );
+      expect(
+        host.standardImports,
+        contains('wasi:sockets/types@0.3.0.tcp-socket.create'),
+      );
+      expect(host.standardImports, contains('wasi:http/client@0.3.0.send'));
+      expect(
+        host.standardImports,
+        contains('wasi:io/streams@0.2.0.input-stream.read'),
+      );
+      for (final importName in const <String>[
+        'wasi:cli/terminal-stdin@0.3.0.get-terminal-stdin',
+        'wasi:cli/terminal-stdout@0.3.0.get-terminal-stdout',
+        'wasi:cli/terminal-stderr@0.3.0.get-terminal-stderr',
+      ]) {
+        final terminal =
+            host.standardImports[importName]!(const <Object?>[])
+                as WasmComponentValueData;
+        final handle = _optionHandle(terminal);
+        expect(handle, isNotNull, reason: importName);
+        expect(
+          host.componentHost.table.contains(handle!),
+          isTrue,
+          reason: importName,
+        );
+      }
+    });
+
+    test('closes only resources owned by a Preview3 component host', () {
+      final owned = WASIPreview3ComponentHost();
+      owned.close(force: true);
+      owned.close(force: true);
+
+      final injectedHttp = _CloseTrackingPreview3HttpHost();
+      final injected = WASIPreview3ComponentHost(httpHost: injectedHttp);
+      injected.close(force: true);
+
+      expect(injectedHttp.closeCalls, 0);
+      injectedHttp.close(force: true);
+      expect(injectedHttp.closeCalls, 1);
+    });
+
+    test('exports every stable Preview3 package host', () {
+      expect(WASIPreview3RandomHost(), isA<WASIPreview3RandomHost>());
+      expect(WASIPreview3ClocksHost(), isA<WASIPreview3ClocksHost>());
+      expect(WASIPreview3FilesystemHost(), isA<WASIPreview3FilesystemHost>());
+      expect(WASIPreview3SocketsHost(), isA<WASIPreview3SocketsHost>());
+      expect(WASIPreview3CliHost(), isA<WASIPreview3CliHost>());
+      expect(WASIPreview3HttpHost(), isA<WASIPreview3HttpHost>());
+    });
+
+    test('keeps the native Preview3 filesystem constructor portable', () {
+      final table = WASIComponentResourceTable();
+      if (hasDartIoRuntime) {
+        final host = WASIPreview3NativeFilesystemHost(
+          preopens: const <String, String>{},
+          table: table,
+        );
+
+        expect(host.table, same(table));
+        return;
+      }
+
+      expect(
+        () => WASIPreview3NativeFilesystemHost(
+          preopens: const <String, String>{},
+          table: table,
+        ),
+        throwsUnsupportedError,
+      );
+    });
+
+    test('rejects Preview3 hosts backed by different resource tables', () {
+      final componentHost = WASIComponentHost();
+
+      expect(
+        () => WASIPreview3ComponentHost(
+          componentHost: componentHost,
+          cliHost: WASIPreview3CliHost(),
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => WASIPreview3ComponentHost(
+          componentHost: componentHost,
+          filesystemHost: WASIPreview3FilesystemHost(),
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => WASIPreview3ComponentHost(
+          componentHost: componentHost,
+          socketsHost: WASIPreview3SocketsHost(),
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => WASIPreview3ComponentHost(
+          componentHost: componentHost,
+          httpHost: WASIPreview3HttpHost(),
+        ),
+        throwsArgumentError,
       );
     });
 
@@ -2007,6 +2155,15 @@ WasmComponentValueData _timestampValue(int seconds, int nanoseconds) {
 
 int _timestampNanos(int seconds, int nanoseconds) =>
     seconds * 1000000000 + nanoseconds;
+
+final class _CloseTrackingPreview3HttpHost extends WASIPreview3HttpHost {
+  int closeCalls = 0;
+
+  @override
+  void close({bool force = false}) {
+    closeCalls++;
+  }
+}
 
 BigInt? _integerBigInt(Object? integer) {
   return switch (integer) {

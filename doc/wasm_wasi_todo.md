@@ -107,14 +107,14 @@ P2/P3 work starts only after these P1 gates are green.
     `dart test test/wasi_component_adapter_plan_test.dart test/wasi_component_resource_table_test.dart test/wasi_component_versioned_host_test.dart`
     `dart test test/wasi_component_public_api_test.dart test/readme_snippets_test.dart`
   - Fixture evidence: the command gate uses a Wasmtime v47.0.3 Preview2
-    component; the proxy gates use `wasm-tools` 1.252.0 components generated
+    component; the proxy gates use `wasm-tools` 1.254.0 components generated
     from the official WASI 0.2.12 WIT and verify success, required post-return,
     and unset-response failure paths.
   - Conformance note: the official `wasi-testsuite` currently has no Preview2
     test suite, so it is not presented as Preview2 conformance evidence.
-  - Scope boundary: browser/Node Preview2 execution, Component Model 0.3
-    async/future/stream/task features, experimental proposal packages, general
-    lifted indirect signatures, and Preview3 remain incomplete.
+  - Scope boundary: browser/Node Preview2 execution, experimental proposal
+    packages, and general lifted indirect signatures remain outside the P2
+    contract. Preview3 is tracked separately below.
   - Native limitation: Dart `HttpClient` has no trailer API, so outgoing HTTP
     requests with trailers and incoming responses declaring trailers fail
     explicitly; proxy response trailers are preserved.
@@ -123,6 +123,68 @@ P2/P3 work starts only after these P1 gates are green.
     malformed A-labels, and labels requiring Unicode normalization tables or
     ContextJ/ContextO are rejected explicitly.
 
-- [ ] `SUPPORT-P3`
-  - Status: in progress. Component host/filesystem/async-profile scaffolding is
-    present; full runtime coverage and conformance closeout are not complete.
+- [x] `SUPPORT-P3`
+  - Status: complete for the frozen native Dart VM scope: stable WASI 0.3.0
+    `wasi:cli/command` and `wasi:http/service` components.
+  - Frozen WASI contract: stable WASI 0.3.0 commit
+    `3ee2a590c766594ae44a54730fc74fc27da5c609`; six packages (`random`,
+    `clocks`, `filesystem`, `sockets`, `cli`, `http`) and eight worlds
+    (`random/imports`, `clocks/imports`, `filesystem/imports`,
+    `sockets/imports`, `cli/imports`, `cli/command`, `http/service`,
+    `http/middleware`). `wasi:clocks/timezone` is excluded.
+  - Frozen Component Model contract: commit
+    `73b7ad51d3b5d6f1ef53c923d8c585e28b242bcc`, async gate.
+  - Frozen wasi-testsuite contract: source commit
+    `6600796756adce3632409d7e207a9834c9d99ff8`, precompiled fixture commit
+    `c63d52e69316d1aa2c9e7db6251892775204e7e0`, `45` `wasm32-wasip3`
+    fixtures. The machine-readable source of truth is
+    `tool/wasi_preview3_contract.lock.json`.
+  - Implemented runtime scope: native Dart VM command and HTTP service runners,
+    standard imports for all six packages, async task/subtask/waitable/future/
+    stream/cancellation/backpressure semantics, scoped resources and component
+    types, and Preview2 compatibility imports used by official adapters.
+  - Component Model evidence:
+    `dart run tool/component_decode_probe.dart --testsuite-dir=/path/to/component-model/test --groups=async --strict --require-testsuite-dir`
+    reports `37/37` strict WASD decodes;
+    `dart run tool/component_official_runner.dart --testsuite-dir=/path/to/component-model/test --groups=async --wasm-tools-bin=.toolchains/bin/wasm-tools --require-testsuite-dir --require-engine --no-default-expected-failures`
+    reports `31/31` `wasm-tools` validations;
+    the same runner with Wasmtime `48.0.0 (e8ac8c27f)` reports `31/31`
+    reference executions. The validation and reference runs do not execute the
+    WAST assertions through WASD.
+  - Local green evidence:
+    `dart test test/component_test.dart`
+    `dart test test/wasi_preview3_standard_wit_test.dart`
+    `dart test test/wasi_preview3_async_runtime_test.dart`
+    `dart test test/wasi_preview3_service_runner_test.dart`
+    `dart test test/wasi_preview3_native_filesystem_test.dart`
+    `dart test test/wasi_preview3_native_http_test.dart`
+    `dart test test/wasi_preview3_sockets_test.dart`
+    `dart test test/wasi_preview3_task_return_runner_test.dart`
+    `dart test test/wasi_testsuite_preview3_runner_test.dart`
+  - Official closeout evidence:
+    `dart run tool/wasi_testsuite_preview3_runner.dart --testsuite-dir=/path/to/wasi-testsuite --runner-dir=/path/to/wasi-testsuite/test-runner --python=/path/to/venv/bin/python`
+    reports `39/45` `wasm32-wasip3` fixtures passed with `0` skipped, xfailed,
+    or xpassed. The six failures (`sockets-tcp-bind`, `sockets-tcp-listen`,
+    `sockets-echo`, `sockets-tcp-connect`, `sockets-tcp-receive`, and
+    `sockets-tcp-send`) require the explicitly unsupported native TCP
+    bind/listen split.
+  - Scope boundary: Node.js and browser Preview3 runners, timezone, error
+    context, explicit cooperative thread creation, more-async builtins,
+    fixed-length lists, maps, memory64, and general Component Model WAST
+    execution are not claimed.
+  - Native filesystem boundary: preopens reject static absolute-path,
+    parent-traversal, and symlink escapes. Dart's path-based filesystem APIs
+    cannot prevent an external actor from concurrently replacing a preopen
+    path node; isolation therefore requires preopens that untrusted actors
+    cannot mutate.
+  - Native sockets boundary: synchronous Preview3 imports may return pending
+    Dart callbacks that the component runner waits for. Explicit native TCP
+    bind reports `not-supported` because `dart:io` starts listening as part of
+    `ServerSocket.bind`; unbound listen and connect remain available. UDP bind
+    and implicit connect wait for a real `RawDatagramSocket`. Active TCP and
+    UDP endpoints receive the supported raw socket options. Because
+    `RawDatagramSocket` has no IPv6-only bind option, an IPv6 wildcard UDP
+    socket may also reserve the matching IPv4 port; IPv4 and IPv4-mapped
+    datagrams are filtered before they reach that IPv6 guest socket. Native
+    addresses with nonzero IPv6 flow info or numeric scope IDs report
+    `not-supported` because `dart:io` cannot preserve those fields.

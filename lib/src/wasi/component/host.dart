@@ -394,7 +394,6 @@ bool _componentHostNeedsAsyncValueBinding(WasmComponentCanonicalKind kind) {
     case WasmComponentCanonicalKind.resourceNew:
     case WasmComponentCanonicalKind.resourceDrop:
     case WasmComponentCanonicalKind.resourceRep:
-    case WasmComponentCanonicalKind.backpressureSet:
     case WasmComponentCanonicalKind.backpressureInc:
     case WasmComponentCanonicalKind.backpressureDec:
     case WasmComponentCanonicalKind.taskReturn:
@@ -414,10 +413,12 @@ bool _componentHostNeedsAsyncValueBinding(WasmComponentCanonicalKind kind) {
     case WasmComponentCanonicalKind.waitableJoin:
     case WasmComponentCanonicalKind.threadIndex:
     case WasmComponentCanonicalKind.threadNewIndirect:
-    case WasmComponentCanonicalKind.threadSwitchTo:
-    case WasmComponentCanonicalKind.threadSuspend:
     case WasmComponentCanonicalKind.threadResumeLater:
-    case WasmComponentCanonicalKind.threadYieldTo:
+    case WasmComponentCanonicalKind.threadSuspend:
+    case WasmComponentCanonicalKind.threadSuspendThenResume:
+    case WasmComponentCanonicalKind.threadYieldThenResume:
+    case WasmComponentCanonicalKind.threadSuspendThenPromote:
+    case WasmComponentCanonicalKind.threadYieldThenPromote:
     case WasmComponentCanonicalKind.threadSpawnRef:
     case WasmComponentCanonicalKind.threadSpawnIndirect:
     case WasmComponentCanonicalKind.threadAvailableParallelism:
@@ -437,7 +438,6 @@ bool _componentHostNeedsAsyncMemoryLayout(WasmComponentCanonicalKind kind) {
     case WasmComponentCanonicalKind.resourceNew:
     case WasmComponentCanonicalKind.resourceDrop:
     case WasmComponentCanonicalKind.resourceRep:
-    case WasmComponentCanonicalKind.backpressureSet:
     case WasmComponentCanonicalKind.backpressureInc:
     case WasmComponentCanonicalKind.backpressureDec:
     case WasmComponentCanonicalKind.taskReturn:
@@ -467,10 +467,12 @@ bool _componentHostNeedsAsyncMemoryLayout(WasmComponentCanonicalKind kind) {
     case WasmComponentCanonicalKind.waitableJoin:
     case WasmComponentCanonicalKind.threadIndex:
     case WasmComponentCanonicalKind.threadNewIndirect:
-    case WasmComponentCanonicalKind.threadSwitchTo:
-    case WasmComponentCanonicalKind.threadSuspend:
     case WasmComponentCanonicalKind.threadResumeLater:
-    case WasmComponentCanonicalKind.threadYieldTo:
+    case WasmComponentCanonicalKind.threadSuspend:
+    case WasmComponentCanonicalKind.threadSuspendThenResume:
+    case WasmComponentCanonicalKind.threadYieldThenResume:
+    case WasmComponentCanonicalKind.threadSuspendThenPromote:
+    case WasmComponentCanonicalKind.threadYieldThenPromote:
     case WasmComponentCanonicalKind.threadSpawnRef:
     case WasmComponentCanonicalKind.threadSpawnIndirect:
     case WasmComponentCanonicalKind.threadAvailableParallelism:

@@ -44,13 +44,13 @@ final class WASIPreview3ClocksHost {
     await _delayNanoseconds(_u64(durationValue));
   }
 
-  Future<void> _waitUntil(Object? markValue) async {
+  FutureOr<void> _waitUntil(Object? markValue) {
     final mark = _u64(markValue);
     final now = _monotonicNow();
     if (mark <= now) {
-      return;
+      return null;
     }
-    await _delayNanoseconds(mark - now);
+    return _delayNanoseconds(mark - now);
   }
 
   Future<void> _delayNanoseconds(BigInt duration) async {

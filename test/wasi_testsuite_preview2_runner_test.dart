@@ -56,7 +56,10 @@ print(json.dumps(payload))
       final p2 = (payload['p2'] as List<Object?>).cast<String>();
 
       expect(versions, containsAll(<String>['wasm32-wasip1', 'wasm32-wasip2']));
-      expect(worlds, ['wasi:cli/command']);
+      expect(
+        worlds,
+        containsAll(<String>['wasi:cli/command', 'wasi:http/service']),
+      );
       expect(p1, contains(endsWith('wasi_testsuite_preview1_runner.dart')));
       expect(
         p2,
@@ -196,6 +199,32 @@ print(json.dumps(payload))
       ]);
 
       expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    },
+  );
+
+  test(
+    'component exports extend the executable instance index space',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'wasd_component_export_index_',
+      );
+      addTearDown(() async {
+        if (await temp.exists()) {
+          await temp.delete(recursive: true);
+        }
+      });
+      final fixture = await _compileComponentWat(
+        temp,
+        'export_index',
+        _sequentialInstanceExportCommandWat,
+      );
+      final component = WasmComponent.decode(await fixture.readAsBytes());
+
+      final result = await WASIPreview2CommandRunner(
+        WASIPreview2ComponentHost.native(),
+      ).run(component);
+
+      expect(result.exitCode, 0);
     },
   );
 
@@ -655,6 +684,21 @@ const String _loweredRandomCommandWat = r'''
   (func $run (type $run_ty) (canon lift (core func $run_core)))
   (instance $run_instance (export "run" (func $run)))
   (export "wasi:cli/run@0.2.0" (instance $run_instance))
+)
+''';
+
+const String _sequentialInstanceExportCommandWat = r'''
+(component
+  (core module $main
+    (func (export "run") (result i32) i32.const 0))
+  (core instance $main_i (instantiate $main))
+  (alias core export $main_i "run" (core func $run_core))
+  (type $run_ty (func (result (result))))
+  (func $run (type $run_ty) (canon lift (core func $run_core)))
+  (instance $first (export "run" (func $run)))
+  (export "ignored" (instance $first))
+  (instance $command (export "run" (func $run)))
+  (export "wasi:cli/run@0.2.0" (instance $command))
 )
 ''';
 

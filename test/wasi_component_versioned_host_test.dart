@@ -320,6 +320,72 @@ world command {
       },
     );
 
+    test('reports unresolved qualified WIT targets in the prepared plan', () {
+      const source = '''
+package wasi-testsuite:test;
+
+world command {
+  include wasi:missing/imports@0.3.0;
+}
+''';
+      final document = WASIComponentWitDocument.parse(source);
+      final plan = WASIPreview3ComponentHost().prepareWitWorld(
+        document,
+        worldName: 'command',
+      );
+
+      expect(plan.canIngest, isFalse);
+      expect(plan.functions, isEmpty);
+      expect(plan.versionErrors, hasLength(1));
+      expect(
+        plan.versionErrors.single,
+        isA<WASIComponentVersionedWitWorldError>()
+            .having(
+              (error) => error.targetName,
+              'targetName',
+              'wasi:missing/imports@0.3.0',
+            )
+            .having(
+              (error) => error.reason,
+              'reason',
+              contains('no resolver result'),
+            ),
+      );
+      expect(
+        () => plan.bindAdapters(),
+        throwsA(isA<WASIComponentVersionedWitWorldUnsupportedException>()),
+      );
+    });
+
+    test('reports missing resolved WIT worlds and interfaces in plans', () {
+      for (final entry in const <(String, String)>[
+        ('include wasi:random/missing@0.3.0;', "world 'missing'"),
+        ('import wasi:random/missing@0.3.0;', "interface 'missing'"),
+      ]) {
+        final document = WASIComponentWitDocument.parse('''
+package wasi-testsuite:test;
+
+world command {
+  ${entry.$1}
+}
+''');
+
+        final plan = WASIPreview3ComponentHost().prepareWitWorld(
+          document,
+          worldName: 'command',
+        );
+
+        expect(plan.canIngest, isFalse);
+        expect(plan.functions, isEmpty);
+        expect(plan.versionErrors, hasLength(1));
+        expect(
+          plan.versionErrors.single.targetName,
+          'wasi:random/missing@0.3.0',
+        );
+        expect(plan.versionErrors.single.reason, contains(entry.$2));
+      }
+    });
+
     test('Preview2 expands and binds standard WASI random imports', () {
       const source = '''
 package wasi-testsuite:test;
@@ -4381,9 +4447,6 @@ world clocks-test {
         'wasi:clocks/monotonic-clock@0.3.0.wait-for',
         'wasi:clocks/system-clock@0.3.0.now',
         'wasi:clocks/system-clock@0.3.0.get-resolution',
-        'wasi:clocks/timezone@0.3.0.iana-id',
-        'wasi:clocks/timezone@0.3.0.utc-offset',
-        'wasi:clocks/timezone@0.3.0.to-debug-string',
       ]);
 
       final program = preview3.bindWitWorld(document, worldName: 'clocks-test');
@@ -4422,28 +4485,66 @@ world clocks-test {
                 const [],
               )
               as BigInt;
-      final timezone =
-          program.invokeImport('wasi:clocks/timezone@0.3.0.iana-id', const [])
-              as WasmComponentValueData;
-      final utcOffset =
-          program.invokeImport('wasi:clocks/timezone@0.3.0.utc-offset', [
-                instant,
-              ])
-              as WasmComponentValueData;
-      final debug = program.invokeImport(
-        'wasi:clocks/timezone@0.3.0.to-debug-string',
-        const [],
-      );
 
       expect(resolution, greaterThan(BigInt.zero));
       expect(after, greaterThanOrEqualTo(before));
       expect(_instantNanoseconds(instant), lessThan(1000000000));
       expect(systemResolution, greaterThan(BigInt.zero));
-      expect(timezone.kind, WasmComponentValueDataKind.option);
-      expect(timezone.isSome, isFalse);
-      expect(utcOffset.kind, WasmComponentValueDataKind.option);
-      expect(utcOffset.isSome, isFalse);
-      expect(debug, isA<String>());
+    });
+
+    test('Preview3 forwards Preview2 compatibility output immediately', () async {
+      final stdout = <int>[];
+      final stderr = <int>[];
+      final preview3 = WASIPreview3ComponentHost(
+        stdout: stdout.addAll,
+        stderr: stderr.addAll,
+      );
+      final compatibility = preview3.preview2CompatibilityHost;
+
+      await compatibility.componentHost.table.runScoped<void>(() async {
+        final stdoutHandle =
+            compatibility.standardImports['wasi:cli/stdout@0.2.0.get-stdout']!(
+                  const <Object?>[],
+                )
+                as int;
+        compatibility
+            .standardImports['wasi:io/streams@0.2.0.output-stream.check-write']!(
+          <Object?>[stdoutHandle],
+        );
+        final stdoutWrite =
+            compatibility
+                    .standardImports['wasi:io/streams@0.2.0.output-stream.write']!(
+                  <Object?>[
+                    stdoutHandle,
+                    _u8ListValue(const <int>[111, 107]),
+                  ],
+                )
+                as WasmComponentValueData;
+
+        final stderrHandle =
+            compatibility.standardImports['wasi:cli/stderr@0.2.0.get-stderr']!(
+                  const <Object?>[],
+                )
+                as int;
+        compatibility
+            .standardImports['wasi:io/streams@0.2.0.output-stream.check-write']!(
+          <Object?>[stderrHandle],
+        );
+        final stderrWrite =
+            compatibility
+                    .standardImports['wasi:io/streams@0.2.0.output-stream.write']!(
+                  <Object?>[
+                    stderrHandle,
+                    _u8ListValue(const <int>[33]),
+                  ],
+                )
+                as WasmComponentValueData;
+
+        expect(stdoutWrite.isOk, isTrue);
+        expect(stderrWrite.isOk, isTrue);
+        expect(stdout, const <int>[111, 107]);
+        expect(stderr, const <int>[33]);
+      });
     });
 
     test('Preview3 expands and binds standard WASI CLI imports', () async {
@@ -4464,6 +4565,9 @@ world cli-test {
         env: const <String, String>{'foo': 'bar', 'baz': '42'},
         initialCwd: '/workspace',
         stdinData: const <int>[120, 121],
+        terminalStdin: true,
+        terminalStdout: true,
+        terminalStderr: true,
       );
       final preview3 = WASIPreview3ComponentHost(cliHost: cli);
       final preview3Plan = preview3.prepareWitWorld(
@@ -4514,38 +4618,51 @@ world cli-test {
                 const [],
               )
               as WasmComponentValueData;
-      final terminal =
-          program.invokeImport(
-                'wasi:cli/terminal-stdout@0.3.0.get-terminal-stdout',
-                const [],
-              )
-              as WasmComponentValueData;
 
       expect(_stringPairs(environment), contains(('foo', 'bar')));
       expect(_stringPairs(environment), contains(('baz', '42')));
       expect(_stringList(arguments), ['cli-env.wasm', 'a', 'b', '42']);
       expect(_optionString(cwd), '/workspace');
-      expect(terminal.kind, WasmComponentValueDataKind.option);
-      expect(terminal.isSome, isFalse);
+      for (final importName in const <String>[
+        'wasi:cli/terminal-stdin@0.3.0.get-terminal-stdin',
+        'wasi:cli/terminal-stdout@0.3.0.get-terminal-stdout',
+        'wasi:cli/terminal-stderr@0.3.0.get-terminal-stderr',
+      ]) {
+        final terminal =
+            program.invokeImport(importName, const [])
+                as WasmComponentValueData;
+        final handle = _optionHandle(terminal);
+        expect(handle, isNotNull, reason: importName);
+        expect(cli.table.contains(handle!), isTrue, reason: importName);
+      }
 
       final stdinTuple =
           program.invokeImport('wasi:cli/stdin@0.3.0.read-via-stream', const [])
               as List<Object?>;
-      final stdinStream = stdinTuple[0] as WASIComponentStream<int>;
+      final stdinStream = stdinTuple[0] as WASIComponentReadableStream<int>;
       final stdinResult =
           stdinTuple[1] as WASIComponentFuture<WasmComponentValueData>;
-      expect(stdinStream.readable.read(8), [120, 121]);
+      expect(stdinStream.read(8), [120, 121]);
       expect(stdinResult.readable.read().isOk, isTrue);
+      expect(stdinResult.writable.isDropped, isTrue);
 
-      final stdoutStream = WASIComponentStream<int>('stdout-test');
-      stdoutStream.writable.writeAll(<int>[111, 107]);
-      stdoutStream.writable.close();
+      final stdoutStream = WASIComponentStream<int>(
+        'stdout-test',
+        maxBufferedElements: 0,
+      );
       final stdoutResult =
           program.invokeImport('wasi:cli/stdout@0.3.0.write-via-stream', [
-                stdoutStream,
+                stdoutStream.readable,
               ])
               as WASIComponentFuture<WasmComponentValueData>;
+      expect(
+        await stdoutStream.writable.writeWhenAvailable(<int>[111, 107]),
+        2,
+      );
+      await Future<void>.delayed(Duration.zero);
+      stdoutStream.writable.drop();
       expect((await stdoutResult.readable.readWhenReady()).isOk, isTrue);
+      expect(stdoutResult.writable.isDropped, isTrue);
       expect(cli.stdoutBytes, [111, 107]);
 
       final stderrStream = WASIComponentStream<int>('stderr-test');
@@ -4557,6 +4674,7 @@ world cli-test {
               ])
               as WASIComponentFuture<WasmComponentValueData>;
       expect((await stderrResult.readable.readWhenReady()).isOk, isTrue);
+      expect(stderrResult.writable.isDropped, isTrue);
       expect(cli.stderrBytes, [33]);
 
       expect(
@@ -4586,6 +4704,29 @@ world cli-test {
               .having((error) => error.isSuccess, 'isSuccess', isFalse),
         ),
       );
+    });
+
+    test('Preview3 CLI consumes injected live stdin only once', () async {
+      final input = WASIComponentStream<int>('live-stdin');
+      final cli = WASIPreview3CliHost(
+        stdin: input.readable,
+        stdinData: const <int>[102, 97, 108, 108, 98, 97, 99, 107],
+      );
+      final callback = cli.imports['wasi:cli/stdin@0.3.0.read-via-stream']!;
+      final result = callback(const <Object?>[]) as List<Object?>;
+      final readable = result[0] as WASIComponentReadableStream<int>;
+      final pending = readable.readWhenAvailable(64);
+
+      input.writable.writeAll(const <int>[108, 105, 118, 101]);
+      input.writable.close();
+
+      expect(await pending, const <int>[108, 105, 118, 101]);
+      expect(await readable.readWhenAvailable(64), isEmpty);
+
+      final next = callback(const <Object?>[]) as List<Object?>;
+      final nextReadable = next[0] as WASIComponentReadableStream<int>;
+      expect(nextReadable, isNot(same(readable)));
+      expect(await nextReadable.readWhenAvailable(64), isEmpty);
     });
 
     test(
@@ -5491,7 +5632,7 @@ world command {
       expect(host.componentHost.table.activeCount, 0);
     });
 
-    test('Preview3 wrapper executes owned-resource async lifecycles', () {
+    test('Preview3 wrapper executes owned-resource async lifecycles', () async {
       final streamComponent = WasmComponent.decode(
         ownedResourceStreamNewDropComponentBytes(),
       );
@@ -5576,19 +5717,24 @@ world command {
       );
       expect(streamHost.componentHost.table.activeCount, 0);
 
-      final futureBinding = futurePlan.bind();
-      final futureHandles = WASIComponentAsyncEndpointHandles.unpack(
-        futureBinding.program.invoke(0, const <Object?>[])! as int,
-      );
-      expect(futureHost.componentHost.table.activeCount, 2);
-      expect(
-        futureBinding.program.invoke(1, <Object?>[futureHandles.readable]),
-        isNull,
-      );
-      expect(
-        futureBinding.program.invoke(2, <Object?>[futureHandles.writable]),
-        isNull,
-      );
+      await futureHost.componentHost.table.runScoped(() {
+        final futureBinding = futurePlan.bind();
+        final futureHandles = WASIComponentAsyncEndpointHandles.unpack(
+          futureBinding.program.invoke(0, const <Object?>[])! as int,
+        );
+        expect(futureHost.componentHost.table.activeCount, 2);
+        expect(
+          futureBinding.program.invoke(1, <Object?>[futureHandles.readable]),
+          isNull,
+        );
+        expect(
+          () => futureBinding.program.invoke(2, <Object?>[
+            futureHandles.writable,
+          ]),
+          throwsStateError,
+        );
+        expect(futureHost.componentHost.table.activeCount, 1);
+      });
       expect(futureHost.componentHost.table.activeCount, 0);
     });
 
@@ -6003,54 +6149,63 @@ world command {
       );
       expect(streamHost.componentHost.table.activeCount, 0);
 
-      final futureBinding = futureHost.bindComponent(futureComponent);
-      final futureHandles = WASIComponentAsyncEndpointHandles.unpack(
-        futureBinding.program.invoke(0, const <Object?>[])! as int,
-      );
-      final futureWaitableHost =
-          futureHost.componentHost.canonicalHost.waitableHost;
-      final futureWaitableSet = futureWaitableHost.waitableSetNew();
-      futureWaitableHost.waitableJoin(
-        futureHandles.readable,
-        futureWaitableSet,
-      );
-
-      expect(futureComponent.validate(), isEmpty);
-      expect(
-        futureBinding.program.invokeWithMemoryEvent(1, futureMemory, <Object?>[
+      await futureHost.componentHost.table.runScoped(() async {
+        final futureBinding = futureHost.bindComponent(futureComponent);
+        final futureHandles = WASIComponentAsyncEndpointHandles.unpack(
+          futureBinding.program.invoke(0, const <Object?>[])! as int,
+        );
+        final futureWaitableHost =
+            futureHost.componentHost.canonicalHost.waitableHost;
+        final futureWaitableSet = futureWaitableHost.waitableSetNew();
+        futureWaitableHost.waitableJoin(
           futureHandles.readable,
-          96,
-        ]),
-        wasiComponentAsyncBlocked,
-      );
-      expect(
-        futureBinding.program.invoke(3, <Object?>[futureHandles.readable]),
-        wasiComponentAsyncBlocked,
-      );
-
-      await expectLater(
-        futureWaitableHost.waitableSetWaitToMemory(
           futureWaitableSet,
-          futureMemory,
-          128,
-        ),
-        completion(WASIComponentWaitableEventCode.futureRead.value),
-      );
-      expect(futureData.getUint32(128, Endian.little), futureHandles.readable);
-      expect(
-        futureData.getUint32(132, Endian.little),
-        WASIComponentAsyncCopyResult.cancelled().packedResult,
-      );
-      futureWaitableHost.waitableJoin(futureHandles.readable, 0);
-      futureWaitableHost.waitableSetDrop(futureWaitableSet);
-      expect(
-        futureBinding.program.invoke(5, <Object?>[futureHandles.readable]),
-        isNull,
-      );
-      expect(
-        futureBinding.program.invoke(6, <Object?>[futureHandles.writable]),
-        isNull,
-      );
+        );
+
+        expect(futureComponent.validate(), isEmpty);
+        expect(
+          futureBinding.program.invokeWithMemoryEvent(
+            1,
+            futureMemory,
+            <Object?>[futureHandles.readable, 96],
+          ),
+          wasiComponentAsyncBlocked,
+        );
+        expect(
+          futureBinding.program.invoke(3, <Object?>[futureHandles.readable]),
+          wasiComponentAsyncBlocked,
+        );
+
+        await expectLater(
+          futureWaitableHost.waitableSetWaitToMemory(
+            futureWaitableSet,
+            futureMemory,
+            128,
+          ),
+          completion(WASIComponentWaitableEventCode.futureRead.value),
+        );
+        expect(
+          futureData.getUint32(128, Endian.little),
+          futureHandles.readable,
+        );
+        expect(
+          futureData.getUint32(132, Endian.little),
+          WASIComponentAsyncCopyResult.cancelled().packedResult,
+        );
+        futureWaitableHost.waitableJoin(futureHandles.readable, 0);
+        futureWaitableHost.waitableSetDrop(futureWaitableSet);
+        expect(
+          futureBinding.program.invoke(5, <Object?>[futureHandles.readable]),
+          isNull,
+        );
+        expect(
+          () => futureBinding.program.invoke(6, <Object?>[
+            futureHandles.writable,
+          ]),
+          throwsStateError,
+        );
+        expect(futureHost.componentHost.table.activeCount, 1);
+      });
       expect(futureHost.componentHost.table.activeCount, 0);
     });
 
