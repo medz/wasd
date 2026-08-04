@@ -358,6 +358,45 @@ print(json.dumps(payload))
     },
   );
 
+  test(
+    'Preview3 service publishes failure before cancelling the response',
+    () async {
+      final body = WASIComponentStream<int>('runner-ordered-failure-body');
+      body.writable
+        ..write(1)
+        ..close();
+      final transmission = WASIComponentFuture<WasmComponentValueData>(
+        'runner-ordered-failure-transmission',
+      );
+      final response = WASIPreview3HttpResponse(
+        headers: WASIPreview3HttpFields(),
+        contents: body,
+        trailers: WASIComponentFuture<WasmComponentValueData>(
+          'runner-ordered-failure-trailers',
+        ),
+        transmissionResult: transmission,
+      );
+
+      await expectLater(
+        component_runner.writePreview3HttpResponse(
+          _FailingHttpResponse(),
+          response,
+        ),
+        throwsStateError,
+      );
+
+      expect(transmission.readable.isReady, isTrue);
+      expect(body.readable.isCancelled, isFalse);
+      expect(
+        (await transmission.readable.readWhenReady()).associatedValue?.label,
+        'internal-error',
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(body.readable.isCancelled, isTrue);
+      transmission.readable.drop();
+    },
+  );
+
   test('Preview3 service times out a stalled response body', () async {
     final transmission = WASIComponentFuture<WasmComponentValueData>(
       'runner-timeout-transmission',
@@ -403,6 +442,7 @@ print(json.dumps(payload))
       throwsA(isA<TimeoutException>()),
     );
 
+    await Future<void>.delayed(Duration.zero);
     expect(discarded, <int>[7]);
   });
 

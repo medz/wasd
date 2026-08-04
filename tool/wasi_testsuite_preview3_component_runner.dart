@@ -331,15 +331,23 @@ Future<void> writePreview3HttpResponse(
     rethrow;
   } finally {
     unawaited(
-      response.completeTransmission(
-        failureCode == null
-            ? const WASIPreview3HttpResult<void>.ok(null)
-            : WASIPreview3HttpResult<void>.error(failureCode),
-      ),
+      (() async {
+        try {
+          await response.completeTransmission(
+            failureCode == null
+                ? const WASIPreview3HttpResult<void>.ok(null)
+                : WASIPreview3HttpResult<void>.error(failureCode),
+          );
+          if (failureCode != null) {
+            await response.cancel();
+          }
+        } on Object catch (error, stackTrace) {
+          io.stderr
+            ..writeln('wasd-preview3-runner transmission failed: $error')
+            ..writeln(stackTrace);
+        }
+      })(),
     );
-    if (failureCode != null) {
-      unawaited(response.cancel());
-    }
   }
 }
 

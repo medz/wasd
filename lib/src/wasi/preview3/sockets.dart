@@ -1218,8 +1218,12 @@ base class WASIPreview3SocketsHost {
     int handle,
     void Function(_TcpSocket socket) write,
   ) => _tcpOption(handle, (socket) {
+    final previous = _tcpSocketOptions(socket);
     write(socket);
     final error = _applyTcpSocketOptions(socket);
+    if (error != null) {
+      _restoreTcpSocketOptions(socket, previous);
+    }
     return error == null ? _ok() : _error(error);
   });
 
@@ -1231,15 +1235,7 @@ base class WASIPreview3SocketsHost {
     final backend = _backend;
     if (backend is! WASIPreview3SocketOptionsBackend) return null;
     return (backend as WASIPreview3SocketOptionsBackend).applyTcpSocketOptions(
-      options: WASIPreview3TcpSocketOptions(
-        keepAliveEnabled: socket.keepAliveEnabled,
-        keepAliveIdle: socket.keepAliveIdle,
-        keepAliveInterval: socket.keepAliveInterval,
-        keepAliveCount: socket.keepAliveCount,
-        hopLimit: socket.hopLimit,
-        receiveBufferSize: socket.receiveBufferSize,
-        sendBufferSize: socket.sendBufferSize,
-      ),
+      options: _tcpSocketOptions(socket),
       connection: connection ?? socket.connection,
       listener: listener ?? socket.listener,
     );
@@ -1560,8 +1556,12 @@ base class WASIPreview3SocketsHost {
     int handle,
     void Function(_UdpSocket socket) write,
   ) => _udpOption(handle, (socket) {
+    final previous = _udpSocketOptions(socket);
     write(socket);
     final error = _applyUdpSocketOptions(socket);
+    if (error != null) {
+      _restoreUdpSocketOptions(socket, previous);
+    }
     return error == null ? _ok() : _error(error);
   });
 
@@ -1572,11 +1572,7 @@ base class WASIPreview3SocketsHost {
     final backend = _backend;
     if (backend is! WASIPreview3SocketOptionsBackend) return null;
     return (backend as WASIPreview3SocketOptionsBackend).applyUdpSocketOptions(
-      options: WASIPreview3UdpSocketOptions(
-        hopLimit: socket.hopLimit,
-        receiveBufferSize: socket.receiveBufferSize,
-        sendBufferSize: socket.sendBufferSize,
-      ),
+      options: _udpSocketOptions(socket),
       binding: binding ?? socket.binding,
     );
   }
@@ -1723,6 +1719,48 @@ base class WASIPreview3SocketsHost {
     _udpReservations.remove(address);
     socket.reservedLocalAddress = null;
   }
+}
+
+WASIPreview3TcpSocketOptions _tcpSocketOptions(_TcpSocket socket) =>
+    WASIPreview3TcpSocketOptions(
+      keepAliveEnabled: socket.keepAliveEnabled,
+      keepAliveIdle: socket.keepAliveIdle,
+      keepAliveInterval: socket.keepAliveInterval,
+      keepAliveCount: socket.keepAliveCount,
+      hopLimit: socket.hopLimit,
+      receiveBufferSize: socket.receiveBufferSize,
+      sendBufferSize: socket.sendBufferSize,
+    );
+
+void _restoreTcpSocketOptions(
+  _TcpSocket socket,
+  WASIPreview3TcpSocketOptions options,
+) {
+  socket
+    ..keepAliveEnabled = options.keepAliveEnabled
+    ..keepAliveIdle = options.keepAliveIdle
+    ..keepAliveInterval = options.keepAliveInterval
+    ..keepAliveCount = options.keepAliveCount
+    ..hopLimit = options.hopLimit
+    ..receiveBufferSize = options.receiveBufferSize
+    ..sendBufferSize = options.sendBufferSize;
+}
+
+WASIPreview3UdpSocketOptions _udpSocketOptions(_UdpSocket socket) =>
+    WASIPreview3UdpSocketOptions(
+      hopLimit: socket.hopLimit,
+      receiveBufferSize: socket.receiveBufferSize,
+      sendBufferSize: socket.sendBufferSize,
+    );
+
+void _restoreUdpSocketOptions(
+  _UdpSocket socket,
+  WASIPreview3UdpSocketOptions options,
+) {
+  socket
+    ..hopLimit = options.hopLimit
+    ..receiveBufferSize = options.receiveBufferSize
+    ..sendBufferSize = options.sendBufferSize;
 }
 
 enum _TcpState { unbound, bound, connecting, connected, listening, closed }

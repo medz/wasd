@@ -254,6 +254,57 @@ void main() {
       host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp);
     });
 
+    test('rejected socket option updates preserve the prior state', () {
+      final backend = _FakeSocketsBackend(
+        rejectedTcpHopLimit: 99,
+        rejectedUdpHopLimit: 98,
+      );
+      final host = WASIPreview3SocketsHost(backend: backend);
+      final imports = host.imports;
+      final tcp = _createSocket(imports, tcp: true);
+      final udp = _createSocket(imports, tcp: false);
+
+      expect(
+        _errorLabel(
+          imports['wasi:sockets/types@0.3.0.tcp-socket.set-hop-limit']!(
+                <Object?>[tcp, 99],
+              )
+              as WasmComponentValueData,
+        ),
+        'invalid-argument',
+      );
+      expect(
+        _integerResult(
+          imports['wasi:sockets/types@0.3.0.tcp-socket.get-hop-limit']!(
+                <Object?>[tcp],
+              )
+              as WasmComponentValueData,
+        ),
+        64,
+      );
+      expect(
+        _errorLabel(
+          imports['wasi:sockets/types@0.3.0.udp-socket.set-unicast-hop-limit']!(
+                <Object?>[udp, 98],
+              )
+              as WasmComponentValueData,
+        ),
+        'invalid-argument',
+      );
+      expect(
+        _integerResult(
+          imports['wasi:sockets/types@0.3.0.udp-socket.get-unicast-hop-limit']!(
+                <Object?>[udp],
+              )
+              as WasmComponentValueData,
+        ),
+        64,
+      );
+
+      host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp);
+      host.table.dropNamed('wasi:sockets/types@0.3.0.udp-socket', udp);
+    });
+
     test('preserves IPv6 flow info and scope id in address properties', () {
       final host = WASIPreview3SocketsHost(backend: _FakeSocketsBackend());
       final imports = host.imports;
@@ -2271,10 +2322,13 @@ final class _PendingUdpSocketsBackend implements WASIPreview3SocketsBackend {
   }
 }
 
-final class _FakeSocketsBackend implements WASIPreview3SocketsBackend {
+final class _FakeSocketsBackend
+    implements WASIPreview3SocketsBackend, WASIPreview3SocketOptionsBackend {
   _FakeSocketsBackend({
     List<int> tcpIncoming = const <int>[9, 8, 7],
     bool tcpIncomingClosed = true,
+    this.rejectedTcpHopLimit,
+    this.rejectedUdpHopLimit,
   }) : _tcpIncomingClosed = tcpIncomingClosed,
        _tcpIncoming = tcpIncoming,
        listener = _FakeTcpListener(_address(port: 41000)),
@@ -2282,6 +2336,8 @@ final class _FakeSocketsBackend implements WASIPreview3SocketsBackend {
 
   final List<int> _tcpIncoming;
   final bool _tcpIncomingClosed;
+  final int? rejectedTcpHopLimit;
+  final int? rejectedUdpHopLimit;
   final _FakeTcpListener listener;
   final _FakeUdpBinding udp;
   late _FakeTcpConnection connected;
@@ -2343,6 +2399,25 @@ final class _FakeSocketsBackend implements WASIPreview3SocketsBackend {
   ) => WASIPreview3SocketOperation<WASIPreview3UdpBinding>.completed(
     WASIPreview3SocketResult<WASIPreview3UdpBinding>.ok(udp),
   );
+
+  @override
+  bool get supportsTcpSocketOptions => true;
+
+  @override
+  bool get supportsUdpSocketOptions => true;
+
+  @override
+  String? applyTcpSocketOptions({
+    required WASIPreview3TcpSocketOptions options,
+    WASIPreview3TcpConnection? connection,
+    WASIPreview3TcpListener? listener,
+  }) => options.hopLimit == rejectedTcpHopLimit ? 'invalid-argument' : null;
+
+  @override
+  String? applyUdpSocketOptions({
+    required WASIPreview3UdpSocketOptions options,
+    WASIPreview3UdpBinding? binding,
+  }) => options.hopLimit == rejectedUdpHopLimit ? 'invalid-argument' : null;
 }
 
 final class _FakeTcpBinding implements WASIPreview3TcpBinding {
