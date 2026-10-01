@@ -5250,6 +5250,8 @@ final class WasmInstance {
             stack.addAll(callResults);
             pc++;
 
+          // Tail calls leave this frame and its exception handlers. Return the
+          // callee Future directly so its exceptions bypass this try/catch.
           case Opcodes.returnCall:
             final targetIndex = instruction.immediate!;
             if (targetIndex < 0 || targetIndex >= functions.length) {
@@ -5262,6 +5264,7 @@ final class WasmInstance {
               context: 'return_call',
             );
             if (force || _requiresAsyncSubset(targetIndex)) {
+              // ignore: unawaited_return_in_try_block
               return _invokeFunctionAsyncSubset(
                 targetIndex,
                 callArgs,
@@ -5305,6 +5308,7 @@ final class WasmInstance {
               context: 'return_call_ref',
             );
             if (targetIndex == null) {
+              // ignore: unawaited_return_in_try_block
               return _vm.invokeFunctionRefAsync(
                 functionReference,
                 callArgs,
@@ -5313,6 +5317,7 @@ final class WasmInstance {
               );
             }
             if (force || _requiresAsyncSubset(targetIndex)) {
+              // ignore: unawaited_return_in_try_block
               return _invokeFunctionAsyncSubset(
                 targetIndex,
                 callArgs,
@@ -5360,6 +5365,7 @@ final class WasmInstance {
               context: 'return_call_indirect',
             );
             if (targetIndex == null) {
+              // ignore: unawaited_return_in_try_block
               return _vm.invokeFunctionRefAsync(
                 targetFunctionRef,
                 callArgs,
@@ -5368,6 +5374,7 @@ final class WasmInstance {
               );
             }
             if (force || _requiresAsyncSubset(targetIndex)) {
+              // ignore: unawaited_return_in_try_block
               return _invokeFunctionAsyncSubset(
                 targetIndex,
                 callArgs,

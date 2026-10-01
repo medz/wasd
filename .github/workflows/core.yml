@@ -24,13 +24,27 @@ jobs:
           sdk: ${{ matrix.sdk }}
       - run: dart pub get
       - run: tool/ensure_toolchains.sh
-      # Dart 3.13 reports five pre-existing unawaited_return_in_try_block warnings.
-      # Keep them visible; errors remain fatal. Remove this exception after repair.
-      - run: dart analyze --no-fatal-warnings
-      - run: dart test test/wasm_gc_array_test.dart test/wasm_test.dart test/wasm_memory_test.dart test/wasm_table_test.dart test/wasm_predecode_test.dart test/wasi_preview3_async_runtime_test.dart test/wasi_preview3_task_return_runner_test.dart
+      - run: dart analyze
+      - run: dart test test/wasm_gc_array_test.dart test/wasm_async_tail_call_test.dart test/wasm_test.dart test/wasm_memory_test.dart test/wasm_table_test.dart test/wasm_predecode_test.dart test/wasi_preview3_async_runtime_test.dart test/wasi_preview3_task_return_runner_test.dart
       - run: dart run tool/spec_testsuite_runner.dart --suite=core --output-json=build/core.json --output-md=build/core.md
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: core-${{ matrix.sdk }}
           path: build/core.*
+
+  native:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1
+        with:
+          sdk: '3.13.4'
+      - run: dart pub get
+      - run: tool/ensure_toolchains.sh
+      # The separate DOOM gate requires downloaded game assets.
+      - run: dart test --exclude-tags=doom --reporter=expanded
