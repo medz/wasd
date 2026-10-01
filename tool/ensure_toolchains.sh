@@ -108,7 +108,16 @@ fetch_release_json() {
   local repo="$1"
   local tag="$2"
   local output="$3"
-  curl -fsSL "https://api.github.com/repos/${repo}/releases/tags/${tag}" -o "$output"
+  local url="https://api.github.com/repos/${repo}/releases/tags/${tag}"
+  local headers="${output}.headers"
+  local status
+  status="$(curl -sSL -D "$headers" -w '%{http_code}' "$url" -o "$output")"
+  if [[ "$status" != "200" ]]; then
+    echo "Official release metadata request failed: $url (HTTP $status)" >&2
+    awk 'tolower($0) ~ /^x-ratelimit-(limit|remaining|reset):|^retry-after:/ {print}' "$headers" >&2
+    jq -r '.message // "No JSON error message"' "$output" >&2 || true
+    return 1
+  fi
 }
 
 pick_asset() {
