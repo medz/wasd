@@ -6751,8 +6751,10 @@ final class WasmInstance {
         ),
       ),
       0x7c => WasmValue.f64(view.getFloat64(byteOffset, Endian.little)),
-      0x7b => throw UnsupportedError(
-        'array data initialization for v128 is not supported yet.',
+      0x7b => WasmValue.i32(
+        WasmVm.internV128Bytes(
+          Uint8List.sublistView(view, byteOffset, byteOffset + 16),
+        ),
       ),
       _ => throw StateError('array type is not numeric or vector'),
     };
