@@ -5972,6 +5972,8 @@ final class WasmVm {
         return WasmValue.f32(0);
       case 0x7c:
         return WasmValue.f64(0);
+      case 0x7b:
+        return WasmValue.i32(_internV128(Uint8List(16)));
       default:
         return WasmValue.i32(0);
     }
