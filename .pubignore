@@ -1,10 +1,21 @@
-# Local tool state
+# Dart / Flutter tool state
 .dart_tool/
 .packages
 .pub/
-.toolchains/
 build/
 coverage/
+.toolchains/
+
+# Python tool state
+__pycache__/
+*.pyc
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Flutter generated
 **/.dart_tool/
 **/build/
 **/.flutter-plugins
@@ -13,25 +24,17 @@ coverage/
 **/Generated.xcconfig
 **/ephemeral/
 
-# Repository-only development files
-.claude/
-.gitattributes
-.gitignore
-.gitmodules
-.idea/
-.vscode/
-.DS_Store
-AGENTS.md
-CLAUDE.md
-dart_test.yaml
-doc/
-pubspec.lock
-test/
-third_party/
-tool/
-__pycache__/
-*.pyc
+# Test/runtime fixture binaries
+test/fixtures/doom/doom.wasm
+test/fixtures/doom/doom1.wad
+test/fixtures/doom/freedoom1.wad
+test/fixtures/doom/freedoom-0.13.0.zip
+test/fixtures/community/*.wasm
+test/fixtures/src/tinygo_org_wasm_main/
+example/doom/assets/doom/freedoom1.wad
+example/doom/assets/doom/freedoom-0.13.0.zip
 
-# Heavyweight DOOM fixtures and applications
-example/doom/
-example/doom_cli.dart
+# Local caches, evidence, and upstream conformance sources are not package assets.
+.pub-cache
+evidence/
+third_party/

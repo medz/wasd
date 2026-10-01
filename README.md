@@ -308,6 +308,9 @@ WASD's result in this gate is the strict decoder result above.
 
 ## Compatibility Snapshot
 
+See [Standards coverage and the road to 1.0](doc/standards.md) for the fixed
+specification targets, implementation evidence, and remaining acceptance gates.
+
 ### WebAssembly Implementation Version
 
 | Item | Version | Status |
