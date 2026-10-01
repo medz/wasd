@@ -1773,7 +1773,9 @@ class WASI implements wasi_iface.WASI {
           neventsPtr: neventsPtr,
           pollStartMonotonic: pollStartMonotonic,
         );
-        if (waitNanos > 0) {
+        // A host sleep may return before the monotonic deadline. Keep waiting
+        // until a subscription produces an event rather than returning none.
+        while (waitNanos > 0) {
           io.sleep(_durationFromNanos(waitNanos));
           waitNanos = _writePollEvents(
             bytes: bytes,

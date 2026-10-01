@@ -5,6 +5,39 @@ import 'package:test/test.dart';
 
 void main() {
   test(
+    'core runner rejects an empty testsuite in execution and prepare modes',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('wasd_empty_spec_');
+      addTearDown(() => temp.delete(recursive: true));
+      final converter = File('${temp.path}/converter.sh');
+      await converter.writeAsString('#!/bin/sh\nexit 0\n');
+      await Process.run('chmod', ['+x', converter.path]);
+
+      for (final prepare in [false, true]) {
+        final report = '${temp.path}/${prepare ? 'manifest' : 'result'}.json';
+        final result = await Process.run(Platform.resolvedExecutable, [
+          'run',
+          'tool/spec_testsuite_runner.dart',
+          '--suite=core',
+          '--testsuite-dir=${temp.path}',
+          '--wast2json=${converter.path}',
+          if (prepare) '--prepare-manifest=$report',
+          if (prepare) '--prepare-root=${temp.path}/bundle',
+          if (!prepare) '--output-json=$report',
+          if (!prepare) '--output-md=${temp.path}/result.md',
+        ]);
+        expect(
+          result.exitCode,
+          2,
+          reason: '${result.stdout}\n${result.stderr}',
+        );
+        expect(result.stderr, contains('No WAST files selected'));
+        expect(File(report).existsSync(), isFalse);
+      }
+    },
+  );
+
+  test(
     'component official runner reports wasm-tools validation-only non-execution coverage',
     () async {
       final temp = await Directory.systemTemp.createTemp(

@@ -35,3 +35,8 @@ __pycache__/
 # Heavyweight DOOM fixtures and applications
 example/doom/
 example/doom_cli.dart
+
+# Task-local state and CI configuration are not package assets.
+.pub-cache
+evidence/
+.github/

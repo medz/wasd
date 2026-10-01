@@ -40,7 +40,7 @@ Or add manually in `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  wasd: ^0.5.0
+  wasd: ^0.5.1
 ```
 
 ## Quick Start
@@ -307,6 +307,9 @@ reference behavior. They do not execute those WAST assertions through WASD;
 WASD's result in this gate is the strict decoder result above.
 
 ## Compatibility Snapshot
+
+See [Standards coverage and the road to 1.0](https://github.com/medz/wasd/blob/main/doc/standards.md) for the fixed
+specification targets, implementation evidence, and remaining acceptance gates.
 
 ### WebAssembly Implementation Version
 
