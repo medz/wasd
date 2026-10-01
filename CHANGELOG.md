@@ -1,5 +1,8 @@
 ## 0.5.3
 
+- Accept `f64.const` in supported active/passive GC array element expressions
+  using exact low/high bit decoding, with synchronous and forced async
+  regressions for NaN payloads/signs and adjacent global/data/storage controls.
 - Preserve raw `f32` constants during ordinary global and GC global/element
   initialization, including signaling NaN payloads and signs. Accept `f32.const`
   in supported active/passive GC array element expressions without converting

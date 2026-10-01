@@ -1,0 +1,27 @@
+;; Regenerate with pinned wasm-tools 1.254.0.
+;; wasm-tools parse test/fixtures/gc_array_f64.wat -o test/fixtures/gc_array_f64.wasm
+(module
+  (type $a (array (mut f64)))
+  (data $bits "\ff\01\00\00\00\00\00\f0\7f\bc\9a\78\56\34\12\f0\ff\bc\9a\78\56\34\12\f8\7f\54\76\98\ba\dc\fe\f8\ff\00\00\00\00\00\00\00\80\01\00\00\00\00\00\00\00\01\00\00\00\00\00\f0\3f\00\00\00\00\00\00\f0\7f\00\00\00\00\00\00\f0\ff")
+  (global $target (ref $a)
+    (array.new $a (f64.const 1) (i32.const 3)))
+  (func $source (param $offset i32) (result (ref $a))
+    (array.new_data $a $bits (local.get $offset) (i32.const 1)))
+  (func (export "new-f64") (param $offset i32) (result i64)
+    (i64.reinterpret_f64
+      (array.get $a (call $source (local.get $offset)) (i32.const 0))))
+  (func (export "init-f64") (param $offset i32) (result i64)
+    (array.init_data $a $bits (global.get $target)
+      (i32.const 1) (local.get $offset) (i32.const 1))
+    (i64.reinterpret_f64 (array.get $a (global.get $target) (i32.const 1))))
+  (func (export "copy-f64") (param $offset i32) (result i64)
+    (array.copy $a $a (global.get $target) (i32.const 1)
+      (call $source (local.get $offset)) (i32.const 0) (i32.const 1))
+    (i64.reinterpret_f64 (array.get $a (global.get $target) (i32.const 1))))
+  (func (export "set-f64") (param $offset i32) (result i64)
+    (array.set $a (global.get $target) (i32.const 1)
+      (array.get $a (call $source (local.get $offset)) (i32.const 0)))
+    (i64.reinterpret_f64 (array.get $a (global.get $target) (i32.const 1))))
+  (func (export "get-f64") (param $index i32) (result i64)
+    (i64.reinterpret_f64 (array.get $a (global.get $target) (local.get $index))))
+)

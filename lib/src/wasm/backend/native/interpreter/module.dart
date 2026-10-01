@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'byte_reader.dart';
 import 'features.dart';
+import 'int64.dart';
 import 'opcode.dart';
 import 'value.dart';
 import 'vm.dart';
@@ -1860,6 +1861,17 @@ final class WasmModule {
             reader.readBytes(4),
           ).getUint32(0, Endian.little);
           stack.add(WasmValue.f32Bits(bits));
+
+        case Opcodes.f64Const:
+          final data = ByteData.sublistView(reader.readBytes(8));
+          stack.add(
+            WasmValue.f64Bits(
+              WasmI64.fromU32PairUnsigned(
+                low: data.getUint32(0, Endian.little),
+                high: data.getUint32(4, Endian.little),
+              ),
+            ),
+          );
 
         case Opcodes.refNull:
           final heapTypeCode = _readHeapTypeCode(reader);
