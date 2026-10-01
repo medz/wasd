@@ -26,7 +26,7 @@ jobs:
       - run: dart pub get
       - run: tool/ensure_toolchains.sh
       - run: dart analyze
-      - run: dart test test/wasm_gc_array_test.dart test/wasm_async_tail_call_test.dart test/wasm_test.dart test/wasm_memory_test.dart test/wasm_table_test.dart test/wasm_predecode_test.dart test/wasi_preview3_async_runtime_test.dart test/wasi_preview3_task_return_runner_test.dart
+      - run: dart test test/wasm_gc_v128_defaults_test.dart test/wasm_gc_array_test.dart test/wasm_async_tail_call_test.dart test/wasm_test.dart test/wasm_memory_test.dart test/wasm_table_test.dart test/wasm_predecode_test.dart test/wasi_preview3_async_runtime_test.dart test/wasi_preview3_task_return_runner_test.dart
       - run: dart run tool/spec_testsuite_runner.dart --suite=core --output-json=build/core.json --output-md=build/core.md
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
