@@ -1,0 +1,23 @@
+;; Build with the pinned toolchain:
+;; wasm-tools parse test/fixtures/gc_v128_defaults.wat -o test/fixtures/gc_v128_defaults.wasm
+(module
+  (type $s (struct (field i32) (field v128)))
+  (type $a (array (mut v128)))
+  (global $s-default (ref $s) (struct.new_default $s))
+  (global $a-default (ref $a) (array.new_default $a (i32.const 2)))
+  (func (export "struct") (result v128)
+    (struct.get $s 1 (struct.new_default $s)))
+  (func (export "array") (param $index i32) (result v128)
+    (array.get $a (array.new_default $a (i32.const 2)) (local.get $index)))
+  (func (export "global-struct") (result v128)
+    (struct.get $s 1 (global.get $s-default)))
+  (func (export "global-array") (param $index i32) (result v128)
+    (array.get $a (global.get $a-default) (local.get $index)))
+  (func (export "default-after-write") (param $index i32) (result v128)
+    (local $values (ref $a))
+    (local.set $values (array.new_default $a (i32.const 2)))
+    (array.set $a (local.get $values) (i32.const 0) (v128.const i32x4 1 2 3 4))
+    (array.get $a (local.get $values) (local.get $index)))
+  (func (export "array-any-true") (result i32)
+    (v128.any_true (array.get $a (array.new_default $a (i32.const 1)) (i32.const 0))))
+)

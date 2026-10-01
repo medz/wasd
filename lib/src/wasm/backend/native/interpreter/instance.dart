@@ -6854,6 +6854,8 @@ final class WasmInstance {
         return WasmValue.f32(0);
       case 0x7c:
         return WasmValue.f64(0);
+      case 0x7b:
+        return WasmValue.i32(WasmVm.internV128Bytes(Uint8List(16)));
       default:
         return WasmValue.i32(0);
     }
@@ -11516,6 +11518,7 @@ final class WasmInstance {
         0x7e => WasmValue.i64(0),
         0x7d => WasmValue.f32(0),
         0x7c => WasmValue.f64(0),
+        0x7b => WasmValue.i32(WasmVm.internV128Bytes(Uint8List(16))),
         0x63 ||
         0x64 ||
         0x70 ||
