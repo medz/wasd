@@ -610,6 +610,26 @@ final class WasmInstance {
       ),
     );
     final elementConstRefClones = <int, int>{};
+    final deferredFloatReferences = phase('evaluate_float_element_globals', () {
+      final result = <WasmElementSegment, Map<int, int?>>{};
+      for (final segment in module.elements) {
+        if (segment.deferredFloatExpressions.isEmpty) {
+          continue;
+        }
+        final references = <int, int?>{};
+        for (final entry in segment.deferredFloatExpressions.entries) {
+          final reference = _evaluateConstExpr(
+            entry.value,
+            globals,
+            module.types,
+            functionRefNamespace: functionRefNamespace,
+          ).castTo(WasmValueType.i32).asI32();
+          references[entry.key] = reference == -1 ? null : reference;
+        }
+        result[segment] = references;
+      }
+      return result;
+    });
     final elementSegments = phase(
       'retain_element_segments',
       () => List<List<int?>?>.generate(module.elements.length, (index) {
@@ -621,9 +641,14 @@ final class WasmInstance {
           module,
           segment,
         );
-        return segment.functionIndices
-            .map(
-              (functionIndex) => functionIndex == null
+        return segment.functionIndices.indexed
+            .map((entry) {
+              final (index, functionIndex) = entry;
+              final deferred = deferredFloatReferences[segment];
+              if (deferred != null && deferred.containsKey(index)) {
+                return deferred[index];
+              }
+              return functionIndex == null
                   ? null
                   : _resolveElementReference(
                       WasmVm.cloneConstArrayRefForInstance(
@@ -635,8 +660,8 @@ final class WasmInstance {
                       globals: globals,
                       functionCount: functions.length,
                       functionRefNamespace: functionRefNamespace,
-                    ),
-            )
+                    );
+            })
             .toList(growable: false);
       }, growable: false),
     );
@@ -743,7 +768,10 @@ final class WasmInstance {
 
     phase(
       'initialize_active_elements',
-      () => instance._initializeActiveElements(elementConstRefClones),
+      () => instance._initializeActiveElements(
+        elementConstRefClones,
+        deferredFloatReferences,
+      ),
     );
     phase('initialize_active_data', instance._initializeActiveDataSegments);
     phase('run_start_function', instance._runStartFunction);
@@ -11382,7 +11410,10 @@ final class WasmInstance {
     );
   }
 
-  void _initializeActiveElements(Map<int, int> elementConstRefClones) {
+  void _initializeActiveElements(
+    Map<int, int> elementConstRefClones,
+    Map<WasmElementSegment, Map<int, int?>> deferredFloatReferences,
+  ) {
     if (module.elements.isEmpty) {
       return;
     }
@@ -11428,9 +11459,14 @@ final class WasmInstance {
         }
       }
 
-      final initializedRefs = element.functionIndices
-          .map(
-            (functionIndex) => functionIndex == null
+      final initializedRefs = element.functionIndices.indexed
+          .map((entry) {
+            final (index, functionIndex) = entry;
+            final deferred = deferredFloatReferences[element];
+            if (deferred != null && deferred.containsKey(index)) {
+              return deferred[index];
+            }
+            return functionIndex == null
                 ? null
                 : _resolveElementReference(
                     WasmVm.cloneConstArrayRefForInstance(
@@ -11442,8 +11478,8 @@ final class WasmInstance {
                     globals: globals,
                     functionCount: functions.length,
                     functionRefNamespace: _functionRefNamespace,
-                  ),
-          )
+                  );
+          })
           .toList(growable: false);
       table.initialize(offset, initializedRefs);
     }

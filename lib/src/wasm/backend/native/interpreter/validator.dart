@@ -722,6 +722,15 @@ abstract final class WasmValidator {
     ];
 
     for (final element in module.elements) {
+      for (final expr in element.deferredFloatExpressions.values) {
+        _validateFloatGlobalElementExpr(
+          module,
+          expr,
+          availableGlobals,
+          element.refTypeSignature ??
+              element.refTypeCode.toRadixString(16).padLeft(2, '0'),
+        );
+      }
       if (element.isActive) {
         _checkIndex(element.tableIndex, tableCount, 'element table');
         final tableSignature = _tableValueSignature(
@@ -791,6 +800,140 @@ abstract final class WasmValidator {
         }
       }
     }
+  }
+
+  // This typed pass only validates the newly deferred float-global array path.
+  // Existing decoded element references retain their original validation.
+  static Set<int> _validateFloatGlobalElementExpr(
+    WasmModule module,
+    Uint8List expr,
+    List<WasmGlobalType> globals,
+    String expectedResult,
+  ) {
+    final reader = ByteReader(expr);
+    final stack = <String>[];
+    final functionRefs = <int>{};
+
+    Never mismatch() => throw const FormatException(
+      'Validation failed: element type mismatch.',
+    );
+
+    void pop(String expected) {
+      if (stack.isEmpty ||
+          !_isValueSignatureSubtype(module, stack.removeLast(), expected)) {
+        mismatch();
+      }
+    }
+
+    while (!reader.isEOF) {
+      switch (reader.readByte()) {
+        case Opcodes.i32Const:
+          reader.readVarInt32();
+          stack.add('7f');
+        case Opcodes.f32Const:
+          reader.readBytes(4);
+          stack.add('7d');
+        case Opcodes.f64Const:
+          reader.readBytes(8);
+          stack.add('7c');
+        case Opcodes.globalGet:
+          final index = reader.readVarUint32();
+          _checkIndex(index, globals.length, 'element global');
+          final global = globals[index];
+          if (global.mutable) {
+            throw const FormatException(
+              'Validation failed: element global.get must be immutable.',
+            );
+          }
+          stack.add(
+            global.valueTypeSignature ??
+                _signatureForValueType(global.valueType),
+          );
+        case Opcodes.refNull:
+          final heapType = _readHeapTypeForValidation(reader);
+          if (heapType == null) mismatch();
+          if (heapType >= 0) {
+            _checkIndex(heapType, module.types.length, 'element heap type');
+          } else if (!_isKnownAbstractHeapType(heapType)) {
+            mismatch();
+          }
+          stack.add(
+            _encodeRefSignature(
+              nullable: true,
+              exact: false,
+              heapType: heapType,
+            ),
+          );
+        case Opcodes.refFunc:
+          final index = reader.readVarUint32();
+          _checkIndex(
+            index,
+            module.importedFunctionCount + module.functionTypeIndices.length,
+            'element function',
+          );
+          functionRefs.add(index);
+          stack.add(
+            _encodeRefSignature(
+              nullable: false,
+              exact: true,
+              heapType: _functionTypeIndexForFunction(module, index),
+            ),
+          );
+        case 0xfb:
+          final opcode = 0xfb00 | reader.readVarUint32();
+          if (opcode == Opcodes.refI31) {
+            pop('7f');
+            stack.add(
+              _encodeRefSignature(
+                nullable: false,
+                exact: false,
+                heapType: _heapI31,
+              ),
+            );
+            continue;
+          }
+          if (opcode != Opcodes.arrayNew &&
+              opcode != Opcodes.arrayNewDefault &&
+              opcode != Opcodes.arrayNewFixed) {
+            mismatch();
+          }
+          final index = reader.readVarUint32();
+          _checkIndex(index, module.types.length, 'element array type');
+          final type = module.types[index];
+          if (type.kind != WasmCompositeTypeKind.array) mismatch();
+          final field = _parseFieldSignature(type.fieldSignatures.single);
+          if (field == null) mismatch();
+          final valueSignature = field.valueSignature;
+          final stackSignature =
+              valueSignature == '77' || valueSignature == '78'
+              ? '7f'
+              : valueSignature;
+          if (opcode == Opcodes.arrayNew) {
+            pop('7f');
+            pop(stackSignature);
+          } else if (opcode == Opcodes.arrayNewDefault) {
+            pop('7f');
+            final reference = _parseRefSignature(valueSignature);
+            if (reference != null && !reference.nullable) mismatch();
+          } else {
+            final count = reader.readVarUint32();
+            if (count > stack.length) mismatch();
+            for (var i = 0; i < count; i++) {
+              pop(stackSignature);
+            }
+          }
+          stack.add(
+            _encodeRefSignature(nullable: false, exact: false, heapType: index),
+          );
+        case Opcodes.end:
+          if (!reader.isEOF || stack.length != 1) mismatch();
+          pop(expectedResult);
+          return functionRefs;
+        default:
+          mismatch();
+      }
+    }
+    mismatch();
   }
 
   static void _validateDataSegments(WasmModule module) {
@@ -5625,6 +5768,25 @@ abstract final class WasmValidator {
       for (final functionIndex in element.functionIndices) {
         if (functionIndex != null && functionIndex >= 0) {
           declared.add(functionIndex);
+        }
+      }
+      if (element.deferredFloatExpressions.isNotEmpty) {
+        final globals = <WasmGlobalType>[
+          ...module.imports
+              .where((i) => i.kind == WasmImportKind.global)
+              .map((i) => i.globalType!),
+          ...module.globals.map((global) => global.type),
+        ];
+        for (final expr in element.deferredFloatExpressions.values) {
+          declared.addAll(
+            _validateFloatGlobalElementExpr(
+              module,
+              expr,
+              globals,
+              element.refTypeSignature ??
+                  element.refTypeCode.toRadixString(16).padLeft(2, '0'),
+            ),
+          );
         }
       }
     }
