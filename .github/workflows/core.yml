@@ -24,6 +24,12 @@ jobs:
         with:
           sdk: ${{ matrix.sdk }}
       - run: dart pub get
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          # Only archives are reused; the installer checks their pinned hashes
+          # before extracting fresh binaries on this runner.
+          path: .toolchains/.downloads/*.tar.gz
+          key: toolchain-archives-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tool/toolchain.lock.json') }}
       - run: tool/ensure_toolchains.sh
       - run: dart analyze
       - run: dart test test/wasm_f64_const_test.dart test/wasm_f32_const_test.dart test/wasm_gc_v128_defaults_test.dart test/wasm_gc_array_test.dart test/wasm_async_tail_call_test.dart test/wasm_test.dart test/wasm_memory_test.dart test/wasm_table_test.dart test/wasm_predecode_test.dart test/wasi_preview3_async_runtime_test.dart test/wasi_preview3_task_return_runner_test.dart
@@ -47,6 +53,13 @@ jobs:
         with:
           sdk: '3.13.4'
       - run: dart pub get
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          # Only archives are reused; the installer checks their pinned hashes
+          # before extracting fresh binaries on this runner.
+          path: .toolchains/.downloads/*.tar.gz
+          key: toolchain-archives-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tool/toolchain.lock.json') }}
       - run: tool/ensure_toolchains.sh
       # DOOM tests require downloaded game assets and run separately.
+      - run: python3 tool/test_toolchain_installer.py
       - run: dart test --exclude-tags=doom --reporter=expanded

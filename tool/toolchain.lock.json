@@ -1,10 +1,42 @@
 {
   "wabt": {
     "version": "1.0.41",
-    "source": "https://github.com/WebAssembly/wabt/releases/tag/1.0.41"
+    "source": "https://github.com/WebAssembly/wabt/releases/tag/1.0.41",
+    "assets": {
+      "linux-x86_64": {
+        "name": "wabt-1.0.41-linux-x64.tar.gz",
+        "sha256": "83f8122e924745fcd70636e3594bc01c4c47f2d4c8f3c63b5d70d3f83a482677"
+      },
+      "linux-aarch64": {
+        "name": "wabt-1.0.41-linux-arm64.tar.gz",
+        "sha256": "5e35416ee8725dc7cc0572e4392a8117cbf008b0e34c0db65c75506b0299cdbf"
+      },
+      "macos-aarch64": {
+        "name": "wabt-1.0.41-macos-arm64.tar.gz",
+        "sha256": "e5269d6bbe05dfeb179e4f21111b3a641d6ccaa38b0b21d472ae5c65f8c4ff5d"
+      }
+    }
   },
   "wasm_tools": {
     "version": "1.254.0",
-    "source": "https://github.com/bytecodealliance/wasm-tools/releases/tag/v1.254.0"
+    "source": "https://github.com/bytecodealliance/wasm-tools/releases/tag/v1.254.0",
+    "assets": {
+      "linux-x86_64": {
+        "name": "wasm-tools-1.254.0-x86_64-linux.tar.gz",
+        "sha256": "d0efb16c9c859137b7ab3e99151c299cd47caee106ed4594561002f7a04945bd"
+      },
+      "linux-aarch64": {
+        "name": "wasm-tools-1.254.0-aarch64-linux.tar.gz",
+        "sha256": "5aca4093aa11d840c1c960eaaf6a6f6936c2b4ee2575847c88a3b9d971e39e06"
+      },
+      "macos-x86_64": {
+        "name": "wasm-tools-1.254.0-x86_64-macos.tar.gz",
+        "sha256": "85cb62e378febd3a0941b4776cb0d7b862b1c9edae3b74e53aac3b02f6e91242"
+      },
+      "macos-aarch64": {
+        "name": "wasm-tools-1.254.0-aarch64-macos.tar.gz",
+        "sha256": "66538c0bb527c68b12824cb6997834e121b4026b83432d77a0278e5f3ee4117a"
+      }
+    }
   }
 }

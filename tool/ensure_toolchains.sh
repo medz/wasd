@@ -77,9 +77,9 @@ verify_digest() {
   local file="$1"
   local digest="$2"
 
-  if [[ -z "$digest" || "$digest" == "null" ]]; then
-    echo "warning: no digest provided for $(basename "$file"), skipping checksum verification" >&2
-    return 0
+  if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+    echo "Missing or invalid pinned SHA-256 digest for $(basename "$file")" >&2
+    return 1
   fi
 
   local algo expected actual
@@ -100,38 +100,28 @@ verify_digest() {
     echo "Checksum verification failed for $file" >&2
     echo "expected=$expected" >&2
     echo "actual=$actual" >&2
-    exit 1
-  fi
-}
-
-fetch_release_json() {
-  local repo="$1"
-  local tag="$2"
-  local output="$3"
-  local url="https://api.github.com/repos/${repo}/releases/tags/${tag}"
-  local headers="${output}.headers"
-  local status
-  status="$(curl -sSL -D "$headers" -w '%{http_code}' "$url" -o "$output")"
-  if [[ "$status" != "200" ]]; then
-    echo "Official release metadata request failed: $url (HTTP $status)" >&2
-    awk 'tolower($0) ~ /^x-ratelimit-(limit|remaining|reset):|^retry-after:/ {print}' "$headers" >&2
-    jq -r '.message // "No JSON error message"' "$output" >&2 || true
     return 1
   fi
 }
 
-pick_asset() {
-  local release_json="$1"
-  shift
-  local candidate line
-  for candidate in "$@"; do
-    line="$(jq -r --arg name "$candidate" '.assets[] | select(.name == $name) | [.name, .browser_download_url, (.digest // "")] | @tsv' "$release_json" | head -n1)"
-    if [[ -n "$line" ]]; then
-      echo "$line"
-      return 0
-    fi
-  done
-  return 1
+read_locked_asset() {
+  local tool="$1"
+  local asset name digest
+  asset="$(jq -er --arg tool "$tool" --arg platform "$PLATFORM" \
+    '.[$tool].assets[$platform] | [.name, .sha256] | @tsv' "$LOCK_FILE")" || {
+    echo "Missing pinned official $tool archive for platform: $PLATFORM" >&2
+    return 1
+  }
+  IFS=$'\t' read -r name digest <<<"$asset"
+  if [[ ! "$name" =~ ^[a-zA-Z0-9._-]+\.tar\.gz$ ]]; then
+    echo "Invalid pinned archive name for $tool: $name" >&2
+    return 1
+  fi
+  if [[ ! "$digest" =~ ^[a-f0-9]{64}$ ]]; then
+    echo "Missing or invalid pinned SHA-256 digest for $tool ($PLATFORM)" >&2
+    return 1
+  fi
+  printf '%s\t%s\n' "$name" "$digest"
 }
 
 download_asset() {
@@ -139,9 +129,24 @@ download_asset() {
   local url="$2"
   local digest="$3"
   local output="$4"
-  curl -fsSL "$url" -o "$output"
-  verify_digest "$output" "$digest"
-  echo "downloaded: $name"
+  if [[ -f "$output" ]]; then
+    verify_digest "$output" "$digest"
+    echo "verified cached archive: $name"
+    return 0
+  fi
+  local temporary status
+  temporary="$(mktemp "${output}.part.XXXXXX")"
+  if ! status="$(curl -fsSL -w '%{http_code}' "$url" -o "$temporary")"; then
+    echo "Official archive request failed: $url (HTTP ${status:-000})" >&2
+    rm -f "$temporary"
+    return 1
+  fi
+  if ! verify_digest "$temporary" "$digest"; then
+    rm -f "$temporary"
+    return 1
+  fi
+  mv "$temporary" "$output"
+  echo "downloaded and verified: $name"
 }
 
 platform_key() {
@@ -175,30 +180,30 @@ is_ready() {
 
 load_locked_versions
 
-if [[ "$MODE" == "check" ]]; then
-  if is_ready; then
-    wabt_installed="$("$BIN_DIR/wasm-interp" --version 2>/dev/null | head -n1 || true)"
-    wasm_tools_installed="$("$BIN_DIR/wasm-tools" --version 2>/dev/null | head -n1 || true)"
-    if [[ "$wabt_installed" != *"$WABT_VERSION"* ]]; then
-      echo "toolchains: version mismatch" >&2
-      echo "expected wabt version: $WABT_VERSION" >&2
-      echo "actual wasm-interp --version: ${wabt_installed:-<empty>}" >&2
-      exit 1
-    fi
-    if [[ "$wasm_tools_installed" != *"$WASM_TOOLS_VERSION"* ]]; then
-      echo "toolchains: version mismatch" >&2
-      echo "expected wasm-tools version: $WASM_TOOLS_VERSION" >&2
-      echo "actual wasm-tools --version: ${wasm_tools_installed:-<empty>}" >&2
-      exit 1
-    fi
-    echo "toolchains: ok"
-    "$BIN_DIR/wasm-interp" --version || true
-    "$BIN_DIR/wast2json" --version || true
-    "$BIN_DIR/wasm-tools" --version || true
-    exit 0
+check_installed_versions() {
+  if ! is_ready; then
+    echo "toolchains: missing" >&2
+    return 1
   fi
-  echo "toolchains: missing"
-  exit 1
+  local wabt_installed wasm_tools_installed
+  wabt_installed="$("$BIN_DIR/wasm-interp" --version 2>/dev/null | head -n1)"
+  wasm_tools_installed="$("$BIN_DIR/wasm-tools" --version 2>/dev/null | head -n1)"
+  if [[ "$wabt_installed" != "$WABT_VERSION" ||
+        "$wasm_tools_installed" != "wasm-tools $WASM_TOOLS_VERSION "* ]]; then
+    echo "toolchains: version mismatch" >&2
+    echo "expected wabt=$WABT_VERSION wasm-tools=$WASM_TOOLS_VERSION" >&2
+    echo "actual wabt=$wabt_installed wasm-tools=$wasm_tools_installed" >&2
+    return 1
+  fi
+  echo "toolchains: ok"
+  "$BIN_DIR/wasm-interp" --version
+  "$BIN_DIR/wast2json" --version
+  "$BIN_DIR/wasm-tools" --version
+}
+
+if [[ "$MODE" == "check" ]]; then
+  check_installed_versions
+  exit 0
 fi
 
 need_cmd curl
@@ -212,70 +217,23 @@ if [[ "$PLATFORM" == "unsupported" ]]; then
   exit 1
 fi
 
-WABT_CANDIDATES=()
-WASM_TOOLS_CANDIDATES=()
-
-case "$PLATFORM" in
-  macos-aarch64)
-    WABT_CANDIDATES=(
-      "wabt-${WABT_VERSION}-macos-arm64.tar.gz"
-      "wabt-${WABT_VERSION}-macos-14.tar.gz"
-    )
-    WASM_TOOLS_CANDIDATES=("wasm-tools-${WASM_TOOLS_VERSION}-aarch64-macos.tar.gz")
-    ;;
-  macos-x86_64)
-    WABT_CANDIDATES=(
-      "wabt-${WABT_VERSION}-macos-x64.tar.gz"
-      "wabt-${WABT_VERSION}-macos-x86_64.tar.gz"
-      "wabt-${WABT_VERSION}-macos-14.tar.gz"
-    )
-    WASM_TOOLS_CANDIDATES=("wasm-tools-${WASM_TOOLS_VERSION}-x86_64-macos.tar.gz")
-    ;;
-  linux-x86_64)
-    WABT_CANDIDATES=(
-      "wabt-${WABT_VERSION}-linux-x64.tar.gz"
-      "wabt-${WABT_VERSION}-linux-x86_64.tar.gz"
-      "wabt-${WABT_VERSION}-ubuntu-20.04.tar.gz"
-    )
-    WASM_TOOLS_CANDIDATES=("wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz")
-    ;;
-  linux-aarch64)
-    WABT_CANDIDATES=(
-      "wabt-${WABT_VERSION}-linux-arm64.tar.gz"
-      "wabt-${WABT_VERSION}-linux-aarch64.tar.gz"
-    )
-    WASM_TOOLS_CANDIDATES=("wasm-tools-${WASM_TOOLS_VERSION}-aarch64-linux.tar.gz")
-    ;;
-  *)
-    echo "Unsupported platform: $PLATFORM" >&2
-    exit 1
-    ;;
-esac
-
+# Fixed official release names and SHA-256 digests come from the reviewed lock.
+# Installing does not need the GitHub REST API or an access token.
+WABT_ASSET_LINE="$(read_locked_asset wabt)"
+WASM_TOOLS_ASSET_LINE="$(read_locked_asset wasm_tools)"
+IFS=$'\t' read -r WABT_ASSET_NAME WABT_SHA256 <<<"$WABT_ASSET_LINE"
+IFS=$'\t' read -r WASM_TOOLS_ASSET_NAME WASM_TOOLS_SHA256 <<<"$WASM_TOOLS_ASSET_LINE"
+WABT_URL="https://github.com/WebAssembly/wabt/releases/download/${WABT_VERSION}/${WABT_ASSET_NAME}"
+WASM_TOOLS_URL="https://github.com/bytecodealliance/wasm-tools/releases/download/v${WASM_TOOLS_VERSION}/${WASM_TOOLS_ASSET_NAME}"
+WABT_DIGEST="sha256:$WABT_SHA256"
+WASM_TOOLS_DIGEST="sha256:$WASM_TOOLS_SHA256"
 WORK_DIR="$TOOLCHAIN_DIR/.downloads"
 mkdir -p "$WORK_DIR"
 
-WABT_RELEASE_JSON="$WORK_DIR/wabt-${WABT_VERSION}.release.json"
-WASM_TOOLS_RELEASE_JSON="$WORK_DIR/wasm-tools-${WASM_TOOLS_VERSION}.release.json"
-fetch_release_json "WebAssembly/wabt" "${WABT_VERSION}" "$WABT_RELEASE_JSON"
-fetch_release_json "bytecodealliance/wasm-tools" "v${WASM_TOOLS_VERSION}" "$WASM_TOOLS_RELEASE_JSON"
-
-WABT_ASSET_LINE="$(pick_asset "$WABT_RELEASE_JSON" "${WABT_CANDIDATES[@]}")" || {
-  echo "Unable to find a matching wabt asset for platform: $PLATFORM" >&2
-  exit 1
-}
-IFS=$'\t' read -r WABT_ASSET_NAME WABT_URL WABT_DIGEST <<<"$WABT_ASSET_LINE"
-
-WASM_TOOLS_ASSET_LINE="$(pick_asset "$WASM_TOOLS_RELEASE_JSON" "${WASM_TOOLS_CANDIDATES[@]}")" || {
-  echo "Unable to find a matching wasm-tools asset for platform: $PLATFORM" >&2
-  exit 1
-}
-IFS=$'\t' read -r WASM_TOOLS_ASSET_NAME WASM_TOOLS_URL WASM_TOOLS_DIGEST <<<"$WASM_TOOLS_ASSET_LINE"
-
 WABT_ARCHIVE="$WORK_DIR/$WABT_ASSET_NAME"
 WABT_EXTRACT_DIR="$TOOLCHAIN_DIR/wabt-${WABT_VERSION}"
-rm -rf "$WABT_EXTRACT_DIR"
 download_asset "$WABT_ASSET_NAME" "$WABT_URL" "$WABT_DIGEST" "$WABT_ARCHIVE"
+rm -rf "$WABT_EXTRACT_DIR"
 mkdir -p "$WABT_EXTRACT_DIR"
 tar -xzf "$WABT_ARCHIVE" -C "$WABT_EXTRACT_DIR" --strip-components=1
 ln -sf "$WABT_EXTRACT_DIR/bin/wasm-interp" "$BIN_DIR/wasm-interp"
@@ -285,8 +243,8 @@ ln -sf "$WABT_EXTRACT_DIR/bin/wast2json" "$BIN_DIR/wast2json"
 
 WASM_TOOLS_ARCHIVE="$WORK_DIR/$WASM_TOOLS_ASSET_NAME"
 WASM_TOOLS_EXTRACT_DIR="$TOOLCHAIN_DIR/wasm-tools-${WASM_TOOLS_VERSION}"
-rm -rf "$WASM_TOOLS_EXTRACT_DIR"
 download_asset "$WASM_TOOLS_ASSET_NAME" "$WASM_TOOLS_URL" "$WASM_TOOLS_DIGEST" "$WASM_TOOLS_ARCHIVE"
+rm -rf "$WASM_TOOLS_EXTRACT_DIR"
 mkdir -p "$WASM_TOOLS_EXTRACT_DIR"
 tar -xzf "$WASM_TOOLS_ARCHIVE" -C "$WASM_TOOLS_EXTRACT_DIR"
 WASM_TOOLS_BIN_PATH="$(find "$WASM_TOOLS_EXTRACT_DIR" -type f -name wasm-tools -print -quit)"
@@ -294,13 +252,4 @@ if [[ -n "${WASM_TOOLS_BIN_PATH:-}" ]]; then
   ln -sf "$WASM_TOOLS_BIN_PATH" "$BIN_DIR/wasm-tools"
 fi
 
-if is_ready; then
-  echo "toolchains: installed"
-  "$BIN_DIR/wasm-interp" --version || true
-  "$BIN_DIR/wast2json" --version || true
-  "$BIN_DIR/wasm-tools" --version || true
-  exit 0
-fi
-
-echo "toolchains: partially installed" >&2
-exit 1
+check_installed_versions
