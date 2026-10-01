@@ -42,4 +42,12 @@
     (array.set $a (global.get $target) (i32.const 0)
       (array.get $a (ref.as_non_null (table.get $table (local.get $index))) (i32.const 0)))
     (i64.reinterpret_f64 (array.get $a (global.get $target) (i32.const 0))))
+  (func (export "mutate-active") (param $index i32) (param $bits i64)
+    (array.set $a (ref.as_non_null (table.get $table (local.get $index)))
+      (i32.const 0) (f64.reinterpret_i64 (local.get $bits))))
+  (func (export "mutate-passive") (param $index i32) (param $bits i64)
+    (array.set $a
+      (array.get $refs (array.new_elem $refs $passive (local.get $index) (i32.const 1)) (i32.const 0))
+      (i32.const 0) (f64.reinterpret_i64 (local.get $bits))))
+
 )

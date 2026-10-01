@@ -374,6 +374,47 @@ final class WasmVm {
     );
   }
 
+  // Element-expression arrays are decoded as module-owned templates. Clone
+  // their reference-valued children once per instance, retaining aliases within
+  // the graph. Numeric fields must never be interpreted as reference handles.
+  static int cloneConstArrayRefForInstance(
+    int reference, {
+    required List<WasmFunctionType> types,
+    required Map<int, int> clones,
+  }) {
+    final original = _sharedGcObjects[reference];
+    if (original == null || original.kind != _GcRefKind.array) {
+      return reference;
+    }
+    final existing = clones[reference];
+    if (existing != null) {
+      return existing;
+    }
+    final elements = List<WasmValue>.from(original.elements!);
+    final cloned = allocateConstArrayRef(
+      typeIndex: original.typeIndex!,
+      elements: elements,
+    );
+    clones[reference] = cloned;
+    final signature = types[original.typeIndex!].fieldSignatures.single;
+    final typeCode = int.parse(signature.substring(0, 2), radix: 16);
+    if (typeCode == 0x63 ||
+        typeCode == 0x64 ||
+        (typeCode >= 0x65 && typeCode <= 0x73)) {
+      final clonedElements = _sharedGcObjects[cloned]!.elements!;
+      for (var i = 0; i < elements.length; i++) {
+        clonedElements[i] = WasmValue.i32(
+          cloneConstArrayRefForInstance(
+            elements[i].asI32(),
+            types: types,
+            clones: clones,
+          ),
+        );
+      }
+    }
+    return cloned;
+  }
+
   static int allocateConstI31Ref(int value) {
     return _canonicalI31Ref(value);
   }

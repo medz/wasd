@@ -609,6 +609,7 @@ final class WasmInstance {
         growable: false,
       ),
     );
+    final elementConstRefClones = <int, int>{};
     final elementSegments = phase(
       'retain_element_segments',
       () => List<List<int?>?>.generate(module.elements.length, (index) {
@@ -625,7 +626,11 @@ final class WasmInstance {
               (functionIndex) => functionIndex == null
                   ? null
                   : _resolveElementReference(
-                      functionIndex,
+                      WasmVm.cloneConstArrayRefForInstance(
+                        functionIndex,
+                        types: module.types,
+                        clones: elementConstRefClones,
+                      ),
                       carriesFunctionRefs: carriesFunctionRefs,
                       globals: globals,
                       functionCount: functions.length,
@@ -736,7 +741,10 @@ final class WasmInstance {
           ),
     );
 
-    phase('initialize_active_elements', instance._initializeActiveElements);
+    phase(
+      'initialize_active_elements',
+      () => instance._initializeActiveElements(elementConstRefClones),
+    );
     phase('initialize_active_data', instance._initializeActiveDataSegments);
     phase('run_start_function', instance._runStartFunction);
 
@@ -11374,7 +11382,7 @@ final class WasmInstance {
     );
   }
 
-  void _initializeActiveElements() {
+  void _initializeActiveElements(Map<int, int> elementConstRefClones) {
     if (module.elements.isEmpty) {
       return;
     }
@@ -11425,7 +11433,11 @@ final class WasmInstance {
             (functionIndex) => functionIndex == null
                 ? null
                 : _resolveElementReference(
-                    functionIndex,
+                    WasmVm.cloneConstArrayRefForInstance(
+                      functionIndex,
+                      types: module.types,
+                      clones: elementConstRefClones,
+                    ),
                     carriesFunctionRefs: carriesFunctionRefs,
                     globals: globals,
                     functionCount: functions.length,

@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/features.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/instance.dart';
+import 'package:wasd/src/wasm/backend/native/interpreter/module.dart';
 
 void main() {
   const patterns = [
@@ -102,6 +103,91 @@ void main() {
             }
           });
         }
+      },
+    );
+    group(
+      forceAsync
+          ? 'forced async element instance isolation'
+          : 'element instance isolation',
+      () {
+        const features = WasmFeatureSet(
+          gc: true,
+          additionalEnabled: {'multi-table'},
+        );
+        WasmModule compiled(String fixture) => WasmModule.decode(
+          File('test/fixtures/$fixture.wasm').readAsBytesSync(),
+          features: features,
+        );
+        WasmInstance instantiate(WasmModule module) =>
+            WasmInstance.fromModule(module, features: features);
+        final changed = BigInt.parse('3ff0000000000000', radix: 16);
+
+        for (final path in ['active', 'passive']) {
+          test(
+            '$path array literals allocate independently for each instance',
+            () async {
+              final module = compiled('gc_f64_element_bits');
+              final first = instantiate(module);
+              final second = instantiate(module);
+              await invoke(first, 'mutate-$path', [0, changed]);
+              expect(
+                unsignedBits(await invoke(first, '$path-array', [0])),
+                changed,
+              );
+              expect(
+                unsignedBits(await invoke(second, '$path-array', [0])),
+                expected.first,
+              );
+              final third = instantiate(module);
+              expect(
+                unsignedBits(await invoke(third, '$path-array', [0])),
+                expected.first,
+              );
+            },
+          );
+
+          test(
+            '$path nested arrays isolate instances and retain internal aliases',
+            () async {
+              final module = compiled('gc_element_instance_isolation');
+              final first = instantiate(module);
+              final second = instantiate(module);
+              await invoke(first, 'write-$path', [0, changed]);
+              expect(
+                unsignedBits(await invoke(first, 'read-$path', [1])),
+                changed,
+              );
+              expect(
+                unsignedBits(await invoke(second, 'read-$path', [0])),
+                expected.first,
+              );
+              expect(
+                unsignedBits(await invoke(second, 'read-$path', [1])),
+                expected.first,
+              );
+              final third = instantiate(module);
+              expect(
+                unsignedBits(await invoke(third, 'read-$path', [0])),
+                expected.first,
+              );
+            },
+          );
+        }
+
+        test(
+          'global references keep the original instance-owned array identity',
+          () async {
+            final module = compiled('gc_element_instance_isolation');
+            final first = instantiate(module);
+            final second = instantiate(module);
+            await invoke(first, 'write-global-element', [changed]);
+            expect(unsignedBits(await invoke(first, 'read-global')), changed);
+            expect(
+              unsignedBits(await invoke(second, 'read-global')),
+              expected.first,
+            );
+          },
+        );
       },
     );
   }
