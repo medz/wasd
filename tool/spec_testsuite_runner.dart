@@ -1988,6 +1988,13 @@ Future<void> _runVmMode(List<String> args) async {
     suite: suite,
     maxFiles: maxFiles,
   );
+  if (selectedFiles.isEmpty) {
+    stderr.writeln(
+      'No WAST files selected; initialize the testsuite submodule or check the selection.',
+    );
+    exitCode = 2;
+    return;
+  }
 
   final results = <_FileResult>[];
   final reasonCounts = <String, int>{};
@@ -2104,6 +2111,13 @@ Future<void> _runPrepareManifestMode(
     suite: suite,
     maxFiles: maxFiles,
   );
+  if (selectedFiles.isEmpty) {
+    stderr.writeln(
+      'No WAST files selected; initialize the testsuite submodule or check the selection.',
+    );
+    exitCode = 2;
+    return;
+  }
 
   final rootDir = Directory(prepareRoot);
   if (rootDir.existsSync()) {

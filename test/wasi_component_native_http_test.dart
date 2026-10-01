@@ -87,11 +87,9 @@ void main() {
       final response = _RecordingHttpClientResponse(
         headers: _RecordingHttpHeaders(null),
       );
+      final pendingResponse = Completer<io.HttpClientResponse>();
       final nativeRequest = _RecordingHttpClientRequest(
-        closeResult: Future<io.HttpClientResponse>.delayed(
-          const Duration(milliseconds: 120),
-          () => response,
-        ),
+        closeResult: pendingResponse.future,
       );
       final (:program, host: _) = _httpFixture(nativeRequest);
 
@@ -116,7 +114,8 @@ void main() {
         'HTTP-response-timeout',
       );
       expect(nativeRequest.abortCalls, 1);
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      pendingResponse.complete(response);
+      await Future<void>.delayed(Duration.zero);
       expect(response.listenCalls, 0);
     },
   );

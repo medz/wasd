@@ -1686,7 +1686,11 @@ void main() {
           reason: 'the connected native UDP binding must send successfully',
         );
         await expectLater(
-          io.RawDatagramSocket.bind(io.InternetAddress.loopbackIPv4, port),
+          io.RawDatagramSocket.bind(
+            io.InternetAddress.loopbackIPv4,
+            port,
+            reuseAddress: false,
+          ),
           throwsA(isA<io.SocketException>()),
         );
       },

@@ -9,6 +9,10 @@
   for the entire package.
 - Add pinned Core conformance CI on Dart 3.11.0 and 3.13.4, native regression
   gates on Linux and macOS, and a fixed standards coverage/1.0 acceptance plan.
+- Reject empty Core testsuite selections instead of reporting conformance success.
+- Recheck native Preview1 clock subscriptions after early host wakeups; make
+  HTTP timeout and UDP reservation regressions independent of setup timing and
+  platform address reuse defaults.
 
 ## 0.5.0
 
