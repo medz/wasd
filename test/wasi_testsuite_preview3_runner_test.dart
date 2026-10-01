@@ -48,7 +48,7 @@ print(json.dumps(payload))
     expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
     final payload =
         json.decode(result.stdout as String) as Map<String, Object?>;
-    expect(payload['version'], '0.5.1');
+    expect(payload['version'], '0.5.2');
     final versions = (payload['versions'] as List<Object?>).cast<String>();
     final worlds = (payload['worlds'] as List<Object?>).cast<String>();
     final p3 = (payload['p3'] as List<Object?>).cast<String>();
