@@ -1,3 +1,12 @@
+## 0.5.3
+
+- Preserve raw `f32` bits when GC arrays read data segments and store values in
+  the synchronous and forced async pure Dart interpreters. Signaling NaNs no
+  longer acquire a quiet bit during `array.new_data`, `array.init_data`,
+  `array.copy` or `array.set` without floating-point arithmetic.
+- Add exact-bit regressions for NaN payloads/signs, negative zero, subnormals,
+  finite values, infinities and unaligned offsets, plus f64 and bounds controls.
+
 ## 0.5.2
 
 - Initialize GC `v128` struct and array defaults with the interned all-zero

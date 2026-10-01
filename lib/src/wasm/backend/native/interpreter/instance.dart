@@ -6750,7 +6750,7 @@ final class WasmInstance {
       0x78 => WasmValue.i32(view.getUint8(byteOffset)),
       0x77 => WasmValue.i32(view.getUint16(byteOffset, Endian.little)),
       0x7f => WasmValue.i32(view.getInt32(byteOffset, Endian.little)),
-      0x7d => WasmValue.f32(view.getFloat32(byteOffset, Endian.little)),
+      0x7d => WasmValue.f32Bits(view.getUint32(byteOffset, Endian.little)),
       0x7e => WasmValue.i64(
         WasmI64.fromU32PairSigned(
           low: view.getUint32(byteOffset, Endian.little),
@@ -6796,7 +6796,7 @@ final class WasmInstance {
       case 0x7e:
         return WasmValue.i64(input.castTo(WasmValueType.i64).asI64());
       case 0x7d:
-        return WasmValue.f32(input.castTo(WasmValueType.f32).asF32());
+        return input.castTo(WasmValueType.f32);
       case 0x7c:
         return WasmValue.f64(input.castTo(WasmValueType.f64).asF64());
       default:
