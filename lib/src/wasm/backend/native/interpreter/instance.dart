@@ -11553,7 +11553,7 @@ final class WasmInstance {
           final bits = ByteData.sublistView(
             reader.readBytes(4),
           ).getUint32(0, Endian.little);
-          stack.add(WasmValue.f32(WasmValue.fromF32Bits(bits)));
+          stack.add(WasmValue.f32Bits(bits));
 
         case Opcodes.f64Const:
           final bytes = reader.readBytes(8);

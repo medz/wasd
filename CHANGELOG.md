@@ -1,5 +1,9 @@
 ## 0.5.3
 
+- Preserve raw `f32` constants during ordinary global and GC global/element
+  initialization, including signaling NaN payloads and signs. Accept `f32.const`
+  in supported active/passive GC array element expressions without converting
+  through a Dart floating-point value.
 - Preserve raw `f32` bits when GC arrays read data segments and store values in
   the synchronous and forced async pure Dart interpreters. Signaling NaNs no
   longer acquire a quiet bit during `array.new_data`, `array.init_data`,
