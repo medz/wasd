@@ -1855,6 +1855,12 @@ final class WasmModule {
         case Opcodes.i32Const:
           stack.add(WasmValue.i32(reader.readVarInt32()));
 
+        case Opcodes.f32Const:
+          final bits = ByteData.sublistView(
+            reader.readBytes(4),
+          ).getUint32(0, Endian.little);
+          stack.add(WasmValue.f32Bits(bits));
+
         case Opcodes.refNull:
           final heapTypeCode = _readHeapTypeCode(reader);
           if (!_isHeapTypeCompatibleWithElementRef(
@@ -2037,7 +2043,7 @@ final class WasmModule {
       case 0x7e:
         return WasmValue.i64(input.castTo(WasmValueType.i64).asI64());
       case 0x7d:
-        return WasmValue.f32(input.castTo(WasmValueType.f32).asF32());
+        return input.castTo(WasmValueType.f32);
       case 0x7c:
         return WasmValue.f64(input.castTo(WasmValueType.f64).asF64());
       default:
