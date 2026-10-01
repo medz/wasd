@@ -30,23 +30,8 @@ class ToolchainInstallerTest(unittest.TestCase):
         self.requests = self.root / 'requests.jsonl'
         self.lock = json.loads((ROOT / 'tool/toolchain.lock.json').read_text())
         self.platform = 'linux-x86_64'
-        for key in ['wabt', 'wasm_tools']:
-            asset = self.lock[key]['assets'][self.platform]
-            payload = io.BytesIO()
-            with tarfile.open(fileobj=payload, mode='w:gz') as archive:
-                names = ['wasm-interp', 'wasm-validate', 'wat2wasm', 'wast2json'] if key == 'wabt' else ['wasm-tools']
-                for name in names:
-                    version = self.lock[key]['version']
-                    output = version if key == 'wabt' else 'wasm-tools ' + version + ' (fixture)'
-                    data = ('#!/bin/sh\necho "' + output + '"\n').encode()
-                    entry = tarfile.TarInfo('release/bin/' + name)
-                    entry.size, entry.mode = len(data), 0o755
-                    archive.addfile(entry, io.BytesIO(data))
-            data = payload.getvalue()
-            (self.origins / asset['name']).write_bytes(data)
-            asset['sha256'] = hashlib.sha256(data).hexdigest()
-        self.save_lock()
-        self.write_mock('uname', '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n')
+        self.prepare_archives()
+        self.write_mock('uname', '#!/bin/sh\ncase "$1" in -s) echo "${MOCK_OS:-Linux}";; -m) echo "${MOCK_ARCH:-x86_64}";; esac\n')
         self.write_mock('curl', '''#!/usr/bin/env python3
 import json, os, pathlib, shutil, sys
 args = sys.argv[1:]
@@ -85,6 +70,24 @@ shutil.copyfile(pathlib.Path(os.environ['OFFICIAL_ARCHIVES']) / url.rsplit('/', 
         self.env['MOCK_LOCK'] = str(self.root / 'tool/toolchain.lock.json')
         self.env.pop('WABT_VERSION', None)
         self.env.pop('WASM_TOOLS_VERSION', None)
+
+    def prepare_archives(self):
+        for key in ['wabt', 'wasm_tools']:
+            asset = self.lock[key]['assets'][self.platform]
+            payload = io.BytesIO()
+            with tarfile.open(fileobj=payload, mode='w:gz') as archive:
+                names = ['wasm-interp', 'wasm-validate', 'wat2wasm', 'wast2json'] if key == 'wabt' else ['wasm-tools']
+                for name in names:
+                    version = self.lock[key]['version']
+                    output = version if key == 'wabt' else 'wasm-tools ' + version + ' (fixture)'
+                    data = ('#!/bin/sh\necho "' + output + '"\n').encode()
+                    entry = tarfile.TarInfo('release/bin/' + name)
+                    entry.size, entry.mode = len(data), 0o755
+                    archive.addfile(entry, io.BytesIO(data))
+            data = payload.getvalue()
+            (self.origins / asset['name']).write_bytes(data)
+            asset['sha256'] = hashlib.sha256(data).hexdigest()
+        self.save_lock()
 
     def write_mock(self, name, text):
         path = self.mock / name
@@ -154,6 +157,31 @@ shutil.copyfile(pathlib.Path(os.environ['OFFICIAL_ARCHIVES']) / url.rsplit('/', 
         result = self.run_installer()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('version drift', result.stderr.lower())
+        self.assertFalse(self.requests.exists())
+
+    def test_other_available_platforms_reuse_verified_archives(self):
+        for platform, system, arch in [
+            ('linux-aarch64', 'Linux', 'aarch64'),
+            ('macos-aarch64', 'Darwin', 'arm64'),
+        ]:
+            with self.subTest(platform=platform):
+                self.platform = platform
+                self.env['MOCK_OS'], self.env['MOCK_ARCH'] = system, arch
+                self.prepare_archives()
+                self.cache_archives()
+                self.env['FAIL_DOWNLOAD'] = '1'
+                result = self.run_installer()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self.run_installer('--check').returncode, 0)
+                self.assertFalse(self.requests.exists())
+
+    def test_intel_macos_reports_missing_official_wabt_archive(self):
+        # WABT 1.0.41 publishes macOS ARM64 only. Never substitute an ARM
+        # archive or invent an Intel asset/digest for this platform.
+        self.env['MOCK_OS'], self.env['MOCK_ARCH'] = 'Darwin', 'x86_64'
+        result = self.run_installer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Missing pinned official wabt archive for platform: macos-x86_64', result.stderr)
         self.assertFalse(self.requests.exists())
 
     def test_cached_binaries_are_not_trusted_over_verified_archives(self):

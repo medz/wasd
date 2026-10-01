@@ -108,7 +108,7 @@ read_locked_asset() {
   local tool="$1"
   local asset name digest
   asset="$(jq -er --arg tool "$tool" --arg platform "$PLATFORM" \
-    '.[$tool].assets[$platform] | [.name, .sha256] | @tsv' "$LOCK_FILE")" || {
+    '.[$tool].assets[$platform] | select(. != null) | [.name, .sha256] | @tsv' "$LOCK_FILE")" || {
     echo "Missing pinned official $tool archive for platform: $PLATFORM" >&2
     return 1
   }
