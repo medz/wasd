@@ -1918,27 +1918,44 @@ void main() {
                 )
                 as WASIComponentStream<int>;
         final port = await _waitForPort(imports, server, tcp: true);
-        final clientFutures = <Future<io.Socket>>[
-          for (var index = 0; index < 3; index++)
-            io.Socket.connect(io.InternetAddress.loopbackIPv4, port),
-        ];
+        final clients = <io.Socket>[];
         final accepted = <int>[];
-        for (var index = 0; index < clientFutures.length; index++) {
+        addTearDown(() {
+          for (final client in clients) {
+            client.destroy();
+          }
+          for (final socket in accepted) {
+            host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', socket);
+          }
+          acceptedStream.readable.drop();
+          acceptedStream.writable.drop();
+          host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', server);
+        });
+        // A backlog of one does not guarantee that the OS accepts three
+        // simultaneous handshakes. Fill the guest queue first, then let the
+        // pump block on its next write before queuing a native connection.
+        for (var index = 0; index < 3; index++) {
+          clients.add(
+            await io.Socket.connect(io.InternetAddress.loopbackIPv4, port),
+          );
+          if (index < 2) {
+            for (
+              var attempt = 0;
+              attempt < 100 && host.table.activeCount < index + 2;
+              attempt++
+            ) {
+              await Future<void>.delayed(const Duration(milliseconds: 10));
+            }
+            expect(host.table.activeCount, index + 2);
+            expect(acceptedStream.queuedLength, 1);
+          }
+        }
+        await Future<void>.delayed(Duration.zero);
+        for (var index = 0; index < clients.length; index++) {
           accepted.add(
             (await acceptedStream.readable.readWhenAvailable(1)).single,
           );
         }
-        final clients = await Future.wait(clientFutures);
-
-        for (final client in clients) {
-          client.destroy();
-        }
-        for (final socket in accepted) {
-          host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', socket);
-        }
-        host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', server);
-        acceptedStream.readable.drop();
-        acceptedStream.writable.drop();
       },
       tags: 'network',
       timeout: const Timeout(Duration(seconds: 10)),
