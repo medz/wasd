@@ -46,5 +46,5 @@ jobs:
           sdk: '3.13.4'
       - run: dart pub get
       - run: tool/ensure_toolchains.sh
-      # The separate DOOM gate requires downloaded game assets.
+      # DOOM tests require downloaded game assets and run separately.
       - run: dart test --exclude-tags=doom --reporter=expanded

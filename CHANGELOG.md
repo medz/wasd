@@ -1,3 +1,15 @@
+## 0.5.1
+
+- Initialize GC arrays with `v128` elements from data segments in both the
+  synchronous and forced async Dart interpreters, including unaligned offsets.
+- Make the native TCP listener resume regression deterministic across OS listen
+  queues while retaining detection of a missing `resume()` transition.
+- Preserve async tail-call exception semantics and document intentional direct
+  Future returns; restore strict analyzer checks instead of ignoring warnings
+  for the entire package.
+- Add pinned Core conformance CI on Dart 3.11.0 and 3.13.4, native regression
+  gates on Linux and macOS, and a fixed standards coverage/1.0 acceptance plan.
+
 ## 0.5.0
 
 - Execute stable WASI 0.3.0 `wasi:cli/command` and `wasi:http/service`
