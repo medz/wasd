@@ -2077,6 +2077,8 @@ final class WasmModule {
         return WasmValue.f32(0);
       case 0x7c:
         return WasmValue.f64(0);
+      case 0x7b:
+        return WasmValue.i32(WasmVm.internV128Bytes(Uint8List(16)));
       default:
         return WasmValue.i32(0);
     }

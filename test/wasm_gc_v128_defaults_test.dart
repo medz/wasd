@@ -34,6 +34,8 @@ void main() {
           'global-struct',
           'global-array',
           'default-after-write',
+          'element-array',
+          'passive-element-array',
         ]) {
           test('$name contains sixteen zero bytes', () async {
             final arguments =
@@ -66,9 +68,15 @@ void main() {
           });
         }
 
-        test('default vector is a valid SIMD operand', () async {
-          expect(await invoke('array-any-true'), 0);
-        });
+        for (final name in [
+          'array-any-true',
+          'element-any-true',
+          'passive-element-any-true',
+        ]) {
+          test('$name default vector is a valid SIMD operand', () async {
+            expect(await invoke(name), 0);
+          });
+        }
       },
     );
   }

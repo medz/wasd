@@ -1,9 +1,9 @@
 ## 0.5.2
 
 - Initialize GC `v128` struct and array defaults with the interned all-zero
-  vector in synchronous, forced async and global initialization paths.
-- Cover default constructors, untouched array elements after writes and valid
-  SIMD operands with twelve focused regressions.
+  vector in synchronous, forced async, global and element initialization paths.
+- Cover default constructors, active/passive element segments, untouched array
+  elements after writes and valid SIMD operands with twenty regressions.
 - Run the new GC default regressions in both supported Dart SDK CI jobs.
 
 ## 0.5.1
