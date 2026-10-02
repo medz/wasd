@@ -197,6 +197,51 @@ void main() {
 
   if (!hasDartIoRuntime) return;
 
+  test('VM rejects ambiguous runtime global keys before binding values', () {
+    final raw = Global<Int32, int>(
+      const GlobalDescriptor<Int32, int>(value: ValueKind.i32),
+      0x100000001,
+    );
+    expect(
+      () => Instance(Module(hostGlobalFixture('name_collision').buffer), {
+        'a': {'b::c': ImportExportKind.global(raw)},
+        'a::b': {
+          'c': ImportExportKind.global(_global(ValueKind.i32, false, 21)),
+        },
+      }),
+      throwsA(
+        isA<LinkError>().having(
+          (e) => e.message,
+          'message',
+          contains('colliding global import names'),
+        ),
+      ),
+    );
+    expect(raw.value, 0x100000001);
+  });
+
+  test('VM global selection preserves module and field name boundaries', () {
+    final raw = Global<Int32, int>(
+      const GlobalDescriptor<Int32, int>(value: ValueKind.i32),
+      0x100000001,
+    );
+    final module = Module(hostGlobalFixture('name_boundary').buffer);
+    expect(
+      () => Instance(module, {
+        'a::b': {'c': ImportExportKind.global(raw)},
+      }),
+      throwsA(isA<LinkError>()),
+    );
+    expect(raw.value, 0x100000001);
+    final declared = _global(ValueKind.i32, false, 21);
+    final instance = Instance(module, {
+      'a': {'b::c': ImportExportKind.global(declared)},
+      'a::b': {'c': ImportExportKind.global(raw)},
+    });
+    expect((instance.exports['get']! as FunctionImportExportValue).ref([]), 21);
+    expect(raw.value, 0x100000001);
+  });
+
   test('VM unused numeric globals stay standalone in superset imports', () {
     final wide = (BigInt.one << 65) + BigInt.one;
     final fraction = 1.0 + 1.0 / 16777216;

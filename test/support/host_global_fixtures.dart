@@ -5,6 +5,10 @@ import 'dart:typed_data';
 Uint8List hostGlobalFixture(String name) => base64Decode(_fixtures[name]!);
 
 const _fixtures = <String, String>{
+  'name_collision':
+      'AGFzbQEAAAABBQFgAAF/AhUCAWEEYjo6YwN/AARhOjpiAWMDfwADAwIAAAcSAgVmaXJzdAAABnNlY29uZAABCgsCBAAjAAsEACMBCw==',
+  'name_boundary':
+      'AGFzbQEAAAABBQFgAAF/AgsBAWEEYjo6YwN/AAMCAQAHBwEDZ2V0AAAKBgEEACMACw==',
   'alias':
       'AGFzbQEAAAABDANgAABgAAF/YAF/AAIqAwRob3N0BHRpY2sAAARob3N0BWZpcnN0A38BBGhvc3QGc2Vjb25kA38BAwQDAQICBgYBfwFBCQsHMQYFZmlyc3QDAAZzZWNvbmQDAQVvd25lZAMCA2dldAABA3NldAACCHNldE93bmVkAAMKGgMGABAAIwELCAAQACAAJAALCAAQACAAJAILACcEbmFtZQEHAQAEdGljawcXAwAFZmlyc3QBBnNlY29uZAIFb3duZWQ=',
   'f32_export_bits':

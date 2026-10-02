@@ -53,8 +53,18 @@ class Instance implements wasm.Instance {
     final declaredGlobals = {
       for (final descriptor in wasm.Module.imports(module))
         if (descriptor.kind == wasm.ImportExportKind.global)
-          ir_imports.WasmImports.key(descriptor.module, descriptor.name),
+          (descriptor.module, descriptor.name),
     };
+    final runtimeGlobalKeys = <String>{};
+    for (final (moduleName, fieldName) in declaredGlobals) {
+      if (!runtimeGlobalKeys.add(
+        ir_imports.WasmImports.key(moduleName, fieldName),
+      )) {
+        throw LinkError(
+          'Native backend does not support colliding global import names.',
+        );
+      }
+    }
 
     for (final moduleEntry in imports.entries) {
       for (final importEntry in moduleEntry.value.entries) {
@@ -89,7 +99,9 @@ class Instance implements wasm.Instance {
             }
             memories[key] = ref.host;
           case wasm.GlobalImportExportValue(:final ref):
-            if (!declaredGlobals.contains(key)) continue;
+            if (!declaredGlobals.contains((moduleEntry.key, importEntry.key))) {
+              continue;
+            }
             if (ref is! native_global.Global) {
               throw LinkError(
                 'Global import `$key` must be created by native backend.',
