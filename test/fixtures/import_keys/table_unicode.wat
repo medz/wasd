@@ -1,0 +1,1 @@
+(module (import "😀" "中::x" (table $first 1 3 funcref)) (import "😀::中" "x" (table $second 2 3 funcref)) (export "first" (table $first)) (export "second" (table $second)) (func (export "getFirst") (result i32) table.size $first) (func (export "getSecond") (result i32) table.size $second))

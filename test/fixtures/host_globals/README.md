@@ -20,6 +20,5 @@ bigint ABI. Float export/import fixtures ensure a host getter and re-import do
 not rewrite the underlying signaling NaN bits in the Dart VM.
 
 The name-boundary fixtures use valid `::`-containing names. One verifies unused
-colliding host pairs cannot satisfy an import. The other checks the native
-adapter explicitly rejects distinct declared pairs that collide in the existing
-internal key format before normalizing host values.
+colliding host pairs cannot satisfy an import. The other checks distinct declared
+pairs retain independent bindings under the shared unambiguous import encoding.

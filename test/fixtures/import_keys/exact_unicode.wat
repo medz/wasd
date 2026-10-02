@@ -1,0 +1,1 @@
+(module (type $i32 (func (result i32))) (type $i64 (func (result i64))) (import "😀" "中::x" (func $first (exact (type $i32)))) (import "😀::中" "x" (func $second (exact (type $i64)))) (export "first" (func $first)) (export "second" (func $second)))

@@ -56,12 +56,12 @@ void main() {
     features: features,
     imports: WasmImports(
       globalBindings: {
-        'env::seed32': RuntimeGlobal(
+        WasmImports.key('env', 'seed32'): RuntimeGlobal(
           valueType: WasmValueType.f32,
           mutable: false,
           value: WasmValue.f32Bits(seed32),
         ),
-        'env::seed64': RuntimeGlobal(
+        WasmImports.key('env', 'seed64'): RuntimeGlobal(
           valueType: WasmValueType.f64,
           mutable: false,
           value: WasmValue.f64Bits(seed64 ?? patterns['f64']!.first),

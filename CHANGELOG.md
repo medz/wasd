@@ -1,5 +1,9 @@
 ## 0.6.0-dev.1
 
+- Use one unambiguous internal import-name encoding for functions, memories,
+  tables, globals and tags, including metadata, spec registrations and Component
+  Core connections. Accept legal colliding names through existing public imports;
+  internal callers must use the key factory, with no legacy concatenation fallback.
 - Add optional `Module(..., features: {CoreFeature.multiMemory})` and immutable
   `Module.supportedFeatures` for the Dart VM's pure Dart multi-memory engine.
   Preserve empty/default compilation behavior; reject explicit options on the

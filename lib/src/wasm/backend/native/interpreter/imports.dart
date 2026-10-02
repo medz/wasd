@@ -2,6 +2,7 @@
 
 import 'dart:async';
 
+import 'import_key.dart';
 import 'memory.dart';
 import 'module.dart';
 import 'runtime_global.dart';
@@ -47,5 +48,6 @@ final class WasmImports {
   final Map<String, RuntimeGlobal> globalBindings;
   final Map<String, WasmTagImport> tags;
 
-  static String key(String module, String name) => '$module::$name';
+  static String key(String module, String name) =>
+      encodeImportKey(module, name);
 }
