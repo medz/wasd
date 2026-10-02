@@ -1,6 +1,6 @@
 ## 0.6.0-dev.1
 
-Unpublished prerelease candidate. The floating-point fixes previously prepared
+Preview release. The floating-point fixes previously prepared
 for an unpublished `0.5.3` candidate are included in this batch; no separate
 `0.5.3` release is planned.
 
