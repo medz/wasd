@@ -140,15 +140,14 @@ void main() {
       ).firstMatch(readme)!.group(1)!;
       expect(installation, contains('wasd: ^$publishedVersion'));
       // A source candidate may be ahead of the published installation version.
-      if (version != publishedVersion) {
-        expect(
-          RegExp(
-            'Version `${RegExp.escape(version)}` on `main` is an\\s+'
-            'unpublished candidate\\.',
-          ).hasMatch(readme),
-          isTrue,
-        );
-      }
+      expect(
+        RegExp(
+          'Version `${RegExp.escape(version)}` on `main` is an\\s+'
+          'unpublished candidate\\.',
+        ).hasMatch(readme),
+        version != publishedVersion,
+        reason: 'Published source versions must not be labelled unpublished.',
+      );
 
       final strictClaim = '${strictDecode['passed']}/${strictDecode['total']}';
       final wasmToolsClaim = '${wasmTools['passed']}/${wasmTools['total']}';
