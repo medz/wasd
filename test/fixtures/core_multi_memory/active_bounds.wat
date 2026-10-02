@@ -1,0 +1,1 @@
+(module (memory 1) (memory 1) (data (memory 1) (i32.const 65536) "x"))

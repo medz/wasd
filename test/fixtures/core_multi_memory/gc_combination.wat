@@ -1,0 +1,1 @@
+(module (memory 1) (memory 1) (type (array (mut i32))) (func (drop (array.new_default 0 (i32.const 1)))))

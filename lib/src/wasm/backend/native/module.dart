@@ -2,18 +2,33 @@ import 'dart:typed_data';
 
 import '../../errors.dart';
 import '../../module.dart' as wasm;
+import 'interpreter/features.dart' as native_features;
 import 'interpreter/module.dart' as native_ir;
 import 'interpreter/predecode.dart' as native_predecode;
 import 'interpreter/validator.dart' as native_validator;
 
 class Module implements wasm.Module {
-  Module(ByteBuffer bytes) : _bytes = bytes {
-    final compiled = _decode(bytes);
+  Module(ByteBuffer bytes, {Set<wasm.CoreFeature> features = const {}})
+    : _bytes = bytes,
+      features = native_features.WasmFeatureSet(
+        additionalEnabled: Set.unmodifiable(
+          features.map(
+            (feature) => switch (feature) {
+              wasm.CoreFeature.multiMemory => 'multi-memory',
+            },
+          ),
+        ),
+      ) {
+    final compiled = _decode(bytes, this.features);
     decoded = compiled.module;
     predecodedFunctions = compiled.predecodedFunctions;
   }
 
   final ByteBuffer _bytes;
+  final native_features.WasmFeatureSet features;
+  static const supportedFeatures = <wasm.CoreFeature>{
+    wasm.CoreFeature.multiMemory,
+  };
   late final native_ir.WasmModule decoded;
   late final List<native_predecode.PredecodedFunction> predecodedFunctions;
 
@@ -21,12 +36,16 @@ class Module implements wasm.Module {
     native_ir.WasmModule module,
     List<native_predecode.PredecodedFunction> predecodedFunctions,
   })
-  _decode(ByteBuffer bytes) {
+  _decode(ByteBuffer bytes, native_features.WasmFeatureSet features) {
     try {
-      final module = native_ir.WasmModule.decode(bytes.asUint8List());
+      final module = native_ir.WasmModule.decode(
+        bytes.asUint8List(),
+        features: features,
+      );
       final predecodedFunctions = <native_predecode.PredecodedFunction>[];
       native_validator.WasmValidator.validateModule(
         module,
+        features: features,
         predecodedFunctions: predecodedFunctions,
       );
       return (

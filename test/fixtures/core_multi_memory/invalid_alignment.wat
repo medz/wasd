@@ -1,0 +1,1 @@
+(module (memory 1) (memory 1) (func (result i32) (i32.load 1 align=8 (i32.const 0))))

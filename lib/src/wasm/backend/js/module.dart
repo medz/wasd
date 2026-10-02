@@ -4,18 +4,31 @@ library;
 import 'dart:js_interop';
 import 'dart:typed_data';
 
+import '../../errors.dart';
 import '../../module.dart' as wasm;
 import 'branch_hint_validator.dart' as branch_hints;
 import 'errors.dart' as js_errors;
 
 class Module implements wasm.Module {
-  Module(ByteBuffer bytes) : host = _compile(bytes);
+  Module(ByteBuffer bytes, {Set<wasm.CoreFeature> features = const {}})
+    : host = _compile(bytes, features);
 
   Module.fromHost(this.host);
 
   final JSImportModule host;
 
-  static JSImportModule _compile(ByteBuffer bytes) {
+  static const supportedFeatures = <wasm.CoreFeature>{};
+
+  static JSImportModule _compile(
+    ByteBuffer bytes,
+    Set<wasm.CoreFeature> features,
+  ) {
+    if (features.isNotEmpty) {
+      throw CompileError(
+        'Explicit Core options are unsupported by the JavaScript '
+        'adapter: ${features.map((feature) => feature.name).join(', ')}.',
+      );
+    }
     try {
       branch_hints.validateBranchHintCustomSections(bytes);
       return JSImportModule(bytes.toJS);

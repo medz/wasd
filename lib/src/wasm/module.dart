@@ -165,10 +165,33 @@ class ModuleExportDescriptor {
   final String name;
 }
 
+/// Optional Core extensions selectable through [Module].
+///
+/// This list is not a complete inventory of default instructions or a claim of
+/// conformance to a whole Core specification release.
+enum CoreFeature {
+  /// Multiple linear memories, including indexed memory instructions and data.
+  multiMemory,
+}
+
 /// Minimal module interface.
 abstract interface class Module {
   /// Creates a module from raw [bytes].
-  factory Module(ByteBuffer bytes) = backend.Module;
+  ///
+  /// [features] adds explicitly supported extensions to the existing backend
+  /// defaults. An empty set preserves default compilation behavior. Unsupported
+  /// options and invalid modules throw `CompileError`; options are never ignored.
+  factory Module(ByteBuffer bytes, {Set<CoreFeature> features}) =
+      backend.Module;
+
+  /// Immutable set of explicit options supported by the selected backend.
+  ///
+  /// The Dart VM supports [CoreFeature.multiMemory]. The JavaScript adapter
+  /// currently supports no explicit options; its default compilation still
+  /// follows the platform WebAssembly engine. This query does not enumerate
+  /// features that a backend may accept by default.
+  static Set<CoreFeature> get supportedFeatures =>
+      backend.Module.supportedFeatures;
 
   /// Returns all import descriptors from [module].
   static List<ModuleImportDescriptor> imports(Module module) =>

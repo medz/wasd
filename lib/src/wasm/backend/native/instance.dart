@@ -19,6 +19,7 @@ class Instance implements wasm.Instance {
       final nativeModule = module as native_module.Module;
       _runtime = ir_instance.WasmInstance.fromModule(
         nativeModule.decoded,
+        features: nativeModule.features,
         imports: _buildImports(imports),
         validate: false,
         profile: profile,

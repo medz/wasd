@@ -1,0 +1,1 @@
+(module (memory 1) (memory 1) (func (drop (v128.const i32x4 0 0 0 0))))
