@@ -1,5 +1,9 @@
 ## 0.5.3
 
+- Accept immutable `f32`/`f64` `global.get` seeds in supported GC array element
+  expressions. Evaluate these expressions per instance after its globals are
+  initialized, preserving raw float bits and nested aliases while rejecting
+  mutable globals, incompatible seeds and incompatible element result types.
 - Give each instance its own active/passive GC element array literals, including
   nested arrays, while preserving internal aliases and instance global identity.
 

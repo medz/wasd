@@ -310,6 +310,7 @@ final class WasmElementSegment {
     required this.tableIndex,
     required this.offsetExpr,
     required this.functionIndices,
+    this.deferredFloatExpressions = const {},
     this.refTypeCode = 0x70,
     this.refTypeSignature = '70',
     this.usesLegacyFunctionIndices = false,
@@ -317,6 +318,7 @@ final class WasmElementSegment {
 
   const WasmElementSegment.passive({
     required this.functionIndices,
+    this.deferredFloatExpressions = const {},
     this.refTypeCode = 0x70,
     this.refTypeSignature = '70',
     this.usesLegacyFunctionIndices = false,
@@ -326,6 +328,7 @@ final class WasmElementSegment {
 
   const WasmElementSegment.declarative({
     required this.functionIndices,
+    this.deferredFloatExpressions = const {},
     this.refTypeCode = 0x70,
     this.refTypeSignature = '70',
     this.usesLegacyFunctionIndices = false,
@@ -337,6 +340,9 @@ final class WasmElementSegment {
   final int tableIndex;
   final Uint8List? offsetExpr;
   final List<int?> functionIndices;
+  // Only previously rejected GC array expressions with numeric float globals
+  // use this path. Existing element expressions keep their decoded references.
+  final Map<int, Uint8List> deferredFloatExpressions;
   final int refTypeCode;
   final String? refTypeSignature;
   final bool usesLegacyFunctionIndices;
@@ -508,7 +514,12 @@ final class WasmModule {
           }
           startFunctionIndex = sectionReader.readVarUint32();
         case 9:
-          _parseElementSection(sectionReader, elements, types);
+          _parseElementSection(sectionReader, elements, types, [
+            ...imports
+                .where((i) => i.kind == WasmImportKind.global)
+                .map((i) => i.globalType!),
+            ...globals.map((g) => g.type),
+          ]);
         case 10:
           _parseCodeSection(sectionReader, codes);
         case 11:
@@ -1409,6 +1420,7 @@ final class WasmModule {
     ByteReader reader,
     List<WasmElementSegment> sink,
     List<WasmFunctionType> types,
+    List<WasmGlobalType> globalTypes,
   ) {
     final count = reader.readVarUint32();
     for (var i = 0; i < count; i++) {
@@ -1464,6 +1476,7 @@ final class WasmModule {
 
         case 4:
           final offsetExpr = _readInitExpression(reader);
+          final deferred = <int, Uint8List>{};
           sink.add(
             WasmElementSegment.active(
               tableIndex: 0,
@@ -1472,7 +1485,10 @@ final class WasmModule {
                 reader,
                 types,
                 0x70,
+                globalTypes: globalTypes,
+                deferred: deferred,
               ),
+              deferredFloatExpressions: deferred,
               refTypeCode: 0x70,
             ),
           );
@@ -1483,13 +1499,17 @@ final class WasmModule {
           final refTypeSignature = _typeEncodingSignature(
             reader.bytes.sublist(refTypeStart, reader.offset),
           );
+          final deferred = <int, Uint8List>{};
           sink.add(
             WasmElementSegment.passive(
               functionIndices: _readElementExprFunctionIndices(
                 reader,
                 types,
                 refTypeCode,
+                globalTypes: globalTypes,
+                deferred: deferred,
               ),
+              deferredFloatExpressions: deferred,
               refTypeCode: refTypeCode,
               refTypeSignature: refTypeSignature,
             ),
@@ -1503,6 +1523,7 @@ final class WasmModule {
           final refTypeSignature = _typeEncodingSignature(
             reader.bytes.sublist(refTypeStart, reader.offset),
           );
+          final deferred = <int, Uint8List>{};
           sink.add(
             WasmElementSegment.active(
               tableIndex: tableIndex,
@@ -1511,7 +1532,10 @@ final class WasmModule {
                 reader,
                 types,
                 refTypeCode,
+                globalTypes: globalTypes,
+                deferred: deferred,
               ),
+              deferredFloatExpressions: deferred,
               refTypeCode: refTypeCode,
               refTypeSignature: refTypeSignature,
             ),
@@ -1523,13 +1547,17 @@ final class WasmModule {
           final refTypeSignature = _typeEncodingSignature(
             reader.bytes.sublist(refTypeStart, reader.offset),
           );
+          final deferred = <int, Uint8List>{};
           sink.add(
             WasmElementSegment.declarative(
               functionIndices: _readElementExprFunctionIndices(
                 reader,
                 types,
                 refTypeCode,
+                globalTypes: globalTypes,
+                deferred: deferred,
               ),
+              deferredFloatExpressions: deferred,
               refTypeCode: refTypeCode,
               refTypeSignature: refTypeSignature,
             ),
@@ -1828,11 +1856,25 @@ final class WasmModule {
   static List<int?> _readElementExprFunctionIndices(
     ByteReader reader,
     List<WasmFunctionType> types,
-    int expectedRefTypeCode,
-  ) {
+    int expectedRefTypeCode, {
+    required List<WasmGlobalType> globalTypes,
+    required Map<int, Uint8List> deferred,
+  }) {
     final count = reader.readVarUint32();
     final result = <int?>[];
     for (var i = 0; i < count; i++) {
+      if (expectedRefTypeCode != 0x70 && expectedRefTypeCode != 0x6f) {
+        final probe = ByteReader(
+          Uint8List.sublistView(reader.bytes, reader.offset),
+        );
+        final expr = _readInitExpression(probe);
+        if (_hasFloatGlobalArraySeed(expr, types, globalTypes)) {
+          reader.readBytesView(probe.offset);
+          deferred[i] = expr;
+          result.add(null);
+          continue;
+        }
+      }
       result.add(
         _readElementExprFunctionIndex(
           reader,
@@ -1842,6 +1884,60 @@ final class WasmModule {
       );
     }
     return result;
+  }
+
+  static bool _hasFloatGlobalArraySeed(
+    Uint8List expr,
+    List<WasmFunctionType> types,
+    List<WasmGlobalType> globals,
+  ) {
+    final reader = ByteReader(expr);
+    var hasFloatGlobal = false;
+    var hasFloatArray = false;
+    while (!reader.isEOF) {
+      switch (reader.readByte()) {
+        case Opcodes.i32Const:
+          reader.readVarInt32();
+        case Opcodes.f32Const:
+          reader.readBytes(4);
+        case Opcodes.f64Const:
+          reader.readBytes(8);
+        case Opcodes.refNull:
+          _consumeHeapType(reader);
+        case Opcodes.refFunc:
+          reader.readVarUint32();
+        case Opcodes.globalGet:
+          final index = reader.readVarUint32();
+          hasFloatGlobal |=
+              index >= globals.length ||
+              globals[index].valueType == WasmValueType.f32 ||
+              globals[index].valueType == WasmValueType.f64;
+        case 0xfb:
+          final opcode = 0xfb00 | reader.readVarUint32();
+          if (opcode == Opcodes.refI31) {
+            continue;
+          }
+          if (opcode != Opcodes.arrayNew &&
+              opcode != Opcodes.arrayNewDefault &&
+              opcode != Opcodes.arrayNewFixed) {
+            return false;
+          }
+          final index = reader.readVarUint32();
+          if (index < types.length &&
+              types[index].kind == WasmCompositeTypeKind.array) {
+            final field = types[index].fieldSignatures.single;
+            hasFloatArray |= field.startsWith('7d') || field.startsWith('7c');
+          }
+          if (opcode == Opcodes.arrayNewFixed) {
+            reader.readVarUint32();
+          }
+        case Opcodes.end:
+          return hasFloatGlobal && hasFloatArray;
+        default:
+          return false;
+      }
+    }
+    return false;
   }
 
   static int? _readElementExprFunctionIndex(
