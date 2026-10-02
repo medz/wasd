@@ -40,8 +40,11 @@ Or add manually in `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  wasd: ^0.5.3
+  wasd: ^0.5.2
 ```
+
+The current published release is `0.5.2`. Version `0.5.3` on `main` is an
+unpublished candidate.
 
 ## Quick Start
 
