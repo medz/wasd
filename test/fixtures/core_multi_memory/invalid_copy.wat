@@ -1,0 +1,1 @@
+(module (memory 1) (memory 1) (func (memory.copy 0 2 (i32.const 0) (i32.const 0) (i32.const 0))))

@@ -1,3 +1,13 @@
+## 0.6.0-dev.1
+
+- Add optional `Module(..., features: {CoreFeature.multiMemory})` and immutable
+  `Module.supportedFeatures` for the Dart VM's pure Dart multi-memory engine.
+  Preserve empty/default compilation behavior; reject explicit options on the
+  JavaScript adapter. Other interpreter feature gates remain unchanged.
+- Execute a pinned 14-file, 375-command official memory subset through the
+  public API, with public sync/async-host import/export and negative regressions.
+  Document the existing global host-import limitation separately.
+
 ## 0.5.3
 
 - Accept immutable `f32`/`f64` `global.get` seeds in supported GC array element

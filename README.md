@@ -43,8 +43,13 @@ dependencies:
   wasd: ^0.5.2
 ```
 
-The current published release is `0.5.2`. Version `0.5.3` on `main` is an
+The current published release is `0.5.2`. Version `0.6.0-dev.1` on `main` is an
 unpublished candidate.
+
+The development branch also contains an unreleased next-minor
+[explicit Core options candidate](doc/core_features.md), starting with
+`CoreFeature.multiMemory` on the Dart VM. It is separate from the held `0.5.3`
+package artifacts and is not available in the published installation above.
 
 ## Quick Start
 

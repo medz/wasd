@@ -1,0 +1,1 @@
+(module (memory 1) (memory 1) (table 1 funcref) (table 1 funcref))

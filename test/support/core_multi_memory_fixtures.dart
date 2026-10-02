@@ -1,0 +1,19 @@
+// Generated from test/fixtures/core_multi_memory/*.wat with wasm-tools 1.254.0.
+import 'dart:convert';
+import 'dart:typed_data';
+
+Uint8List multiMemoryFixture(String name) => base64Decode(_fixtures[name]!);
+
+const _fixtures = <String, String>{
+  'gc_combination': 'AGFzbQEAAAABBwJefwFgAAADAgEBBQUCAAEAAQoKAQgAQQH7BwAaCw==',
+  'active_bounds': 'AGFzbQEAAAAFBQIAAQABCwoBAgFBgIAECwF4',
+  'invalid_alignment': 'AGFzbQEAAAABBQFgAAF/AwIBAAUFAgABAAEKCgEIAEEAKEMBAAs=',
+  'invalid_copy': 'AGFzbQEAAAABBAFgAAADAgEABQUCAAEAAQoOAQwAQQBBAEEA/AoAAgs=',
+  'invalid_index': 'AGFzbQEAAAABBQFgAAF/AwIBAAUFAgABAAEKCgEIAEEAKEICAAs=',
+  'invalid_type': 'AGFzbQEAAAABBQFgAAF/AwIBAAUFAgABAAEKCgEIAEIAKEIBAAs=',
+  'operations':
+      'AGFzbQEAAAABGAVgAABgAX8Bf2ACf38AYAN/f38AYAABfwIqAwRob3N0BHRpY2sAAARob3N0BGxlZnQCAQECBGhvc3QFcmlnaHQCAQEDAwkIAQIDAwMABAEFBAEBAQIHXgwEbGVmdAIABXJpZ2h0AgEKcmlnaHRBbGlhcwIBBWxvY2FsAgIEbG9hZAABBXN0b3JlAAIEY29weQADBGZpbGwABARpbml0AAUEZHJvcAAGBHNpemUABwRncm93AAgMAQIKXQgKABAAIAAoQgEACwwAEAAgACABNkIBAAsOABAAIAAgASAC/AoCAQsNABAAIAAgASAC/AsBCw4AEAAgACABIAL8CAECCwcAEAD8CQELBgAQAD8BCwgAEAAgAEABCwsPAgIBQQILBBEiM0QBAqvNADEEbmFtZQEHAQAEdGljawYVAwAEbGVmdAEFcmlnaHQCBWxvY2FsCQoBAQdwYXNzaXZl',
+  'simd_combination':
+      'AGFzbQEAAAABBAFgAAADAgEABQUCAAEAAQoXARUA/QwAAAAAAAAAAAAAAAAAAAAAGgs=',
+  'table_combination': 'AGFzbQEAAAAEBwJwAAFwAAEFBQIAAQAB',
+};
