@@ -132,7 +132,23 @@ void main() {
       final readme = File('README.md').readAsStringSync();
       final support = File('doc/wasm_wasi_todo.md').readAsStringSync();
       expect(changelog, startsWith('## $version\n'));
-      expect(readme, contains('wasd: ^$version'));
+      final publishedVersion = RegExp(
+        r'The current published release is `([^`]+)`\.',
+      ).firstMatch(readme)!.group(1)!;
+      final installation = RegExp(
+        r'## Installation\s+([\s\S]*?)\n## Quick Start',
+      ).firstMatch(readme)!.group(1)!;
+      expect(installation, contains('wasd: ^$publishedVersion'));
+      // A source candidate may be ahead of the published installation version.
+      final candidateVersions = RegExp(
+        r'Version `([^`]+)` on `main` is an\s+unpublished candidate\.',
+      ).allMatches(readme).map((match) => match.group(1)!).toList();
+      expect(
+        candidateVersions,
+        version == publishedVersion ? <String>[] : <String>[version],
+        reason:
+            'Only the current unpublished source may have a candidate claim.',
+      );
 
       final strictClaim = '${strictDecode['passed']}/${strictDecode['total']}';
       final wasmToolsClaim = '${wasmTools['passed']}/${wasmTools['total']}';
