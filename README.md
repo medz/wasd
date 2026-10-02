@@ -43,17 +43,29 @@ dependencies:
   wasd: ^0.5.2
 ```
 
-The current published release is `0.5.2`. Version `0.6.0-dev.1` on `main` is an
-unpublished candidate.
+The current published release is `0.6.0-dev.1`. It is a preview; the latest
+stable release is `0.5.2`, selected by the default installation above.
 
-The candidate combines Dart VM [multi-memory opt-in](doc/core_features.md),
+To opt into the preview explicitly:
+
+```bash
+dart pub add wasd:^0.6.0-dev.1
+```
+
+Or use:
+
+```yaml
+dependencies:
+  wasd: ^0.6.0-dev.1
+```
+
+The preview combines Dart VM [multi-memory opt-in](doc/core_features.md),
 [typed numeric host globals](doc/host_globals.md), and
 [unambiguous Core import names](doc/import_identity.md), together with the
 previously unpublished floating-point and GC initialization fixes. Those fixes
 were prepared as `0.5.3` and are now included in this batch; a separate `0.5.3`
-release is not planned. These additions are unavailable in the published
-installation above and do not establish full Core, Component Model or WASI
-conformance. See the [fixed standards and acceptance plan](doc/standards.md).
+release is not planned. These additions require the preview installation and
+do not establish full Core, Component Model or WASI conformance. See the [fixed standards and acceptance plan](doc/standards.md).
 
 ## Quick Start
 

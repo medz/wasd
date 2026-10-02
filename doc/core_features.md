@@ -1,6 +1,6 @@
 # Explicit Core options
 
-This API is part of the unreleased `0.6.0-dev.1` batch. Published `0.5.2` does not
+This API is part of the `0.6.0-dev.1` preview. Stable `0.5.2` does not
 provide it. The previously unpublished `0.5.3` floating-point fixes are included
 in this batch; their frozen artifacts remain archived for restoration, with no
 separate `0.5.3` release planned.
@@ -44,7 +44,7 @@ their existing defaults; use `Module` when explicit options are needed.
 ## Executable acceptance matrix
 
 The frozen [Core specification source](https://github.com/WebAssembly/spec/tree/957c932e7158c5a6891be68ca424aaa0aa505f97)
-incorporates multiple memories in Release 3.0. This candidate uses a subset of
+incorporates multiple memories in Release 3.0. This preview uses a subset of
 the [official testsuite](https://github.com/WebAssembly/testsuite/tree/193e551ff22663995b1ac95dc62344133669e14b)
 at `193e551ff22663995b1ac95dc62344133669e14b`. That June suite predates the frozen
 October target; this is feature acceptance evidence, not full October conformance.
