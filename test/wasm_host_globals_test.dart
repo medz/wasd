@@ -197,6 +197,71 @@ void main() {
 
   if (!hasDartIoRuntime) return;
 
+  test('VM unused numeric globals stay standalone in superset imports', () {
+    final wide = (BigInt.one << 65) + BigInt.one;
+    final fraction = 1.0 + 1.0 / 16777216;
+    final values = <String, Global>{
+      'i32': Global<Int32, int>(
+        const GlobalDescriptor<Int32, int>(value: ValueKind.i32),
+        0x100000001,
+      ),
+      'i64': Global<Int64, BigInt>(
+        const GlobalDescriptor<Int64, BigInt>(value: ValueKind.i64),
+        wide,
+      ),
+      'f32': Global<Float32, double>(
+        const GlobalDescriptor<Float32, double>(value: ValueKind.f32),
+        fraction,
+      ),
+    };
+    Instance(Module(hostGlobalFixture('f32_export_bits').buffer), {
+      'unused': {
+        for (final entry in values.entries)
+          entry.key: ImportExportKind.global(entry.value),
+      },
+    });
+    expect(values['i32']!.value, 0x100000001);
+    expect(values['i64']!.value, wide);
+    expect(values['f32']!.value, fraction);
+  });
+
+  test('VM unused reference and foreign globals do not prevent linking', () {
+    final value = _global(ValueKind.i32, true, 21);
+    final instance = Instance(Module(hostGlobalFixture('i32_mutable').buffer), {
+      'host': {
+        'tick': ImportExportKind.function((_) => null),
+        'value': ImportExportKind.global(value),
+        'extra': ImportExportKind.global(
+          Global<ExternRef, Object?>(
+            const GlobalDescriptor<ExternRef, Object?>(
+              value: ValueKind.externref,
+            ),
+            null,
+          ),
+        ),
+      },
+      'unused': {'value': ImportExportKind.global(_ForeignGlobal())},
+    });
+    expect((instance.exports['get']! as FunctionImportExportValue).ref([]), 21);
+  });
+
+  test('VM a global supplied for a function import remains standalone', () {
+    final value = Global<Int32, int>(
+      const GlobalDescriptor<Int32, int>(value: ValueKind.i32),
+      0x100000001,
+    );
+    expect(
+      () => Instance(Module(hostGlobalFixture('i32_mutable').buffer), {
+        'host': {
+          'tick': ImportExportKind.global(value),
+          'value': ImportExportKind.global(_global(ValueKind.i32, true, 21)),
+        },
+      }),
+      throwsA(isA<LinkError>()),
+    );
+    expect(value.value, 0x100000001);
+  });
+
   for (final kind in ['f32', 'f64']) {
     for (final asyncHost in [false, true]) {
       test(

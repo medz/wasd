@@ -34,6 +34,8 @@ descriptor, and unsupported reference/vector host kinds also fail explicitly.
 Existing standalone VM globals retain their value-box behavior. On first use
 as a Wasm import, the numeric value is converted into one typed runtime binding;
 subsequent host reads/writes use that binding. Immutable setters still fail.
+Unused global entries in a superset imports map remain standalone and are not
+checked or converted, including entries whose name declares another import kind.
 This is an embedder conversion boundary, not a guarantee of transactional host
 state rollback after a later linking or initialization failure.
 

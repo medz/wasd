@@ -22,7 +22,7 @@ class Instance implements wasm.Instance {
       _runtime = ir_instance.WasmInstance.fromModule(
         nativeModule.decoded,
         features: nativeModule.features,
-        imports: _buildImports(imports),
+        imports: _buildImports(module, imports),
         validate: false,
         profile: profile,
         predecodedFunctions: nativeModule.predecodedFunctions,
@@ -42,11 +42,19 @@ class Instance implements wasm.Instance {
   @override
   wasm.Exports get exports => _exports;
 
-  static ir_imports.WasmImports _buildImports(wasm.Imports imports) {
+  static ir_imports.WasmImports _buildImports(
+    wasm.Module module,
+    wasm.Imports imports,
+  ) {
     final functions = <String, ir_imports.WasmHostFunction>{};
     final asyncFunctions = <String, ir_imports.WasmAsyncHostFunction>{};
     final memories = <String, ir_memory.WasmMemory>{};
     final globalBindings = <String, ir_global.RuntimeGlobal>{};
+    final declaredGlobals = {
+      for (final descriptor in wasm.Module.imports(module))
+        if (descriptor.kind == wasm.ImportExportKind.global)
+          ir_imports.WasmImports.key(descriptor.module, descriptor.name),
+    };
 
     for (final moduleEntry in imports.entries) {
       for (final importEntry in moduleEntry.value.entries) {
@@ -81,6 +89,7 @@ class Instance implements wasm.Instance {
             }
             memories[key] = ref.host;
           case wasm.GlobalImportExportValue(:final ref):
+            if (!declaredGlobals.contains(key)) continue;
             if (ref is! native_global.Global) {
               throw LinkError(
                 'Global import `$key` must be created by native backend.',
