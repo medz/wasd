@@ -1,7 +1,9 @@
 # Explicit Core options
 
-This API is the unreleased `0.6.0-dev.1` next-minor candidate. Published `0.5.2` does not
-provide it. The held `0.5.3` package artifacts remain separate from this work.
+This API is part of the unreleased `0.6.0-dev.1` batch. Published `0.5.2` does not
+provide it. The previously unpublished `0.5.3` floating-point fixes are included
+in this batch; their frozen artifacts remain archived for restoration, with no
+separate `0.5.3` release planned.
 
 `Module` accepts an optional set of Core extensions. Omitting the set, or passing
 an empty set, preserves the existing backend defaults. `supportedFeatures` is
