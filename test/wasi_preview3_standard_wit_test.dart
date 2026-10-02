@@ -140,13 +140,14 @@ void main() {
       ).firstMatch(readme)!.group(1)!;
       expect(installation, contains('wasd: ^$publishedVersion'));
       // A source candidate may be ahead of the published installation version.
+      final candidateVersions = RegExp(
+        r'Version `([^`]+)` on `main` is an\s+unpublished candidate\.',
+      ).allMatches(readme).map((match) => match.group(1)!).toList();
       expect(
-        RegExp(
-          'Version `${RegExp.escape(version)}` on `main` is an\\s+'
-          'unpublished candidate\\.',
-        ).hasMatch(readme),
-        version != publishedVersion,
-        reason: 'Published source versions must not be labelled unpublished.',
+        candidateVersions,
+        version == publishedVersion ? <String>[] : <String>[version],
+        reason:
+            'Only the current unpublished source may have a candidate claim.',
       );
 
       final strictClaim = '${strictDecode['passed']}/${strictDecode['total']}';
