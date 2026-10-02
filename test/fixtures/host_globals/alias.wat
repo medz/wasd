@@ -1,0 +1,11 @@
+(module
+ (import "host" "tick" (func $tick))
+ (import "host" "first" (global $first (mut i32)))
+ (import "host" "second" (global $second (mut i32)))
+ (global $owned (mut i32) (i32.const 9))
+ (export "first" (global $first)) (export "second" (global $second))
+ (export "owned" (global $owned))
+ (func (export "get") (result i32) call $tick global.get $second)
+ (func (export "set") (param i32) call $tick local.get 0 global.set $first)
+ (func (export "setOwned") (param i32) call $tick local.get 0 global.set $owned)
+)

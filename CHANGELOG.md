@@ -4,9 +4,14 @@
   `Module.supportedFeatures` for the Dart VM's pure Dart multi-memory engine.
   Preserve empty/default compilation behavior; reject explicit options on the
   JavaScript adapter. Other interpreter feature gates remain unchanged.
-- Execute a pinned 14-file, 375-command official memory subset through the
+- Accept existing typed numeric host global wrappers on the Dart VM, preserving
+  live host/Wasm aliases and numeric re-exports while checking type and mutability.
+  Keep standalone value-box behavior until first binding; reject unsupported
+  reference/vector host kinds explicitly.
+- Execute a pinned 16-file, 396-command official memory subset through the
   public API, with public sync/async-host import/export and negative regressions.
-  Document the existing global host-import limitation separately.
+  Include `data0`/`data1` through public immutable global imports and report
+  unexpected link failures and dependent commands not run separately.
 
 ## 0.5.3
 

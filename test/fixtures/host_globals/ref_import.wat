@@ -1,0 +1,1 @@
+(module (import "host" "value" (global externref)))
