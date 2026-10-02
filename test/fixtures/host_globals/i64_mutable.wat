@@ -1,0 +1,10 @@
+(module
+  (import "host" "tick" (func $tick))
+  (import "host" "value" (global $value (mut i64)))
+  (export "value" (global $value))
+  (func (export "get") (result i64) call $tick global.get $value)
+  (func (export "set") (param i64) call $tick local.get 0 global.set $value)
+(func (export "getLo") (result i32) call $tick (i32.wrap_i64 (global.get $value)))
+(func (export "getHi") (result i32) call $tick (i32.wrap_i64 (i64.shr_u (global.get $value) (i64.const 32))))
+(func (export "setFromI32") (param i32) call $tick (global.set $value (i64.extend_i32_s (local.get 0))))
+)

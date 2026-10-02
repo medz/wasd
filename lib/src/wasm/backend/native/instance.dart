@@ -6,6 +6,8 @@ import '../../module.dart' as wasm;
 import 'interpreter/imports.dart' as ir_imports;
 import 'interpreter/instance.dart' as ir_instance;
 import 'interpreter/memory.dart' as ir_memory;
+import 'interpreter/runtime_global.dart' as ir_global;
+import 'global.dart' as native_global;
 import 'memory.dart' as native_memory;
 import 'module.dart' as native_module;
 
@@ -44,6 +46,7 @@ class Instance implements wasm.Instance {
     final functions = <String, ir_imports.WasmHostFunction>{};
     final asyncFunctions = <String, ir_imports.WasmAsyncHostFunction>{};
     final memories = <String, ir_memory.WasmMemory>{};
+    final globalBindings = <String, ir_global.RuntimeGlobal>{};
 
     for (final moduleEntry in imports.entries) {
       for (final importEntry in moduleEntry.value.entries) {
@@ -77,6 +80,13 @@ class Instance implements wasm.Instance {
               );
             }
             memories[key] = ref.host;
+          case wasm.GlobalImportExportValue(:final ref):
+            if (ref is! native_global.Global) {
+              throw LinkError(
+                'Global import `$key` must be created by native backend.',
+              );
+            }
+            globalBindings[key] = ref.host;
           default:
             throw LinkError(
               'Unsupported native import value `${importValue.runtimeType}` for `$key`.',
@@ -89,6 +99,7 @@ class Instance implements wasm.Instance {
       functions: functions,
       asyncFunctions: asyncFunctions,
       memories: memories,
+      globalBindings: globalBindings,
     );
   }
 
@@ -118,6 +129,12 @@ class Instance implements wasm.Instance {
             native_memory.Memory.fromRuntime(memory),
           );
         case wasm.ImportExportKind.global:
+          final binding = _runtime.exportedGlobalBinding(name);
+          if (native_global.isNumericBinding(binding)) {
+            result[name] = wasm.ImportExportKind.global(
+              native_global.fromRuntime(binding),
+            );
+          }
         case wasm.ImportExportKind.table:
         case wasm.ImportExportKind.tag:
           break;

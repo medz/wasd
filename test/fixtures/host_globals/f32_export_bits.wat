@@ -1,0 +1,1 @@
+(module (global $value (mut f32) (f32.const nan:0x212345)) (export "value" (global $value)) (func (export "bits") (result i32) (i32.reinterpret_f32 (global.get $value))))
