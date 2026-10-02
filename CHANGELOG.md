@@ -1,5 +1,9 @@
 ## 0.6.0-dev.1
 
+Unpublished prerelease candidate. The floating-point fixes previously prepared
+for an unpublished `0.5.3` candidate are included in this batch; no separate
+`0.5.3` release is planned.
+
 - Use one unambiguous internal import-name encoding for functions, memories,
   tables, globals and tags, including metadata, spec registrations and Component
   Core connections. Accept legal colliding names through existing public imports;
@@ -16,8 +20,6 @@
   public API, with public sync/async-host import/export and negative regressions.
   Include `data0`/`data1` through public immutable global imports and report
   unexpected link failures and dependent commands not run separately.
-
-## 0.5.3
 
 - Accept immutable `f32`/`f64` `global.get` seeds in supported GC array element
   expressions. Evaluate these expressions per instance after its globals are

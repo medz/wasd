@@ -46,10 +46,14 @@ dependencies:
 The current published release is `0.5.2`. Version `0.6.0-dev.1` on `main` is an
 unpublished candidate.
 
-The development branch also contains an unreleased next-minor
-[explicit Core options candidate](doc/core_features.md), starting with
-`CoreFeature.multiMemory` on the Dart VM. It is separate from the held `0.5.3`
-package artifacts and is not available in the published installation above.
+The candidate combines Dart VM [multi-memory opt-in](doc/core_features.md),
+[typed numeric host globals](doc/host_globals.md), and
+[unambiguous Core import names](doc/import_identity.md), together with the
+previously unpublished floating-point and GC initialization fixes. Those fixes
+were prepared as `0.5.3` and are now included in this batch; a separate `0.5.3`
+release is not planned. These additions are unavailable in the published
+installation above and do not establish full Core, Component Model or WASI
+conformance. See the [fixed standards and acceptance plan](doc/standards.md).
 
 ## Quick Start
 
