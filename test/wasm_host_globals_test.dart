@@ -197,27 +197,29 @@ void main() {
 
   if (!hasDartIoRuntime) return;
 
-  test('VM rejects ambiguous runtime global keys before binding values', () {
+  test('VM binds distinct globals whose old runtime keys collided', () {
     final raw = Global<Int32, int>(
       const GlobalDescriptor<Int32, int>(value: ValueKind.i32),
       0x100000001,
     );
-    expect(
-      () => Instance(Module(hostGlobalFixture('name_collision').buffer), {
+    final instance = Instance(
+      Module(hostGlobalFixture('name_collision').buffer),
+      {
         'a': {'b::c': ImportExportKind.global(raw)},
         'a::b': {
           'c': ImportExportKind.global(_global(ValueKind.i32, false, 21)),
         },
-      }),
-      throwsA(
-        isA<LinkError>().having(
-          (e) => e.message,
-          'message',
-          contains('colliding global import names'),
-        ),
-      ),
+      },
     );
-    expect(raw.value, 0x100000001);
+    expect(
+      (instance.exports['first']! as FunctionImportExportValue).ref([]),
+      1,
+    );
+    expect(
+      (instance.exports['second']! as FunctionImportExportValue).ref([]),
+      21,
+    );
+    expect(raw.value, 1);
   });
 
   test('VM global selection preserves module and field name boundaries', () {

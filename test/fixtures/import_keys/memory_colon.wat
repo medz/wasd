@@ -1,0 +1,1 @@
+(module (import "a" "b::c" (memory $first 1 3)) (import "a::b" "c" (memory $second 2 3)) (export "first" (memory $first)) (export "second" (memory $second)) (func (export "getFirst") (result i32) memory.size $first) (func (export "getSecond") (result i32) memory.size $second))

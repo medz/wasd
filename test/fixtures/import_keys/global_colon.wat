@@ -1,0 +1,1 @@
+(module (import "a" "b::c" (global $first (mut i32))) (import "a::b" "c" (global $second (mut i32))) (export "first" (global $first)) (export "second" (global $second)) (func (export "getFirst") (result i32) global.get $first) (func (export "getSecond") (result i32) global.get $second))

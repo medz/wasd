@@ -55,16 +55,6 @@ class Instance implements wasm.Instance {
         if (descriptor.kind == wasm.ImportExportKind.global)
           (descriptor.module, descriptor.name),
     };
-    final runtimeGlobalKeys = <String>{};
-    for (final (moduleName, fieldName) in declaredGlobals) {
-      if (!runtimeGlobalKeys.add(
-        ir_imports.WasmImports.key(moduleName, fieldName),
-      )) {
-        throw LinkError(
-          'Native backend does not support colliding global import names.',
-        );
-      }
-    }
 
     for (final moduleEntry in imports.entries) {
       for (final importEntry in moduleEntry.value.entries) {

@@ -37,10 +37,9 @@ subsequent host reads/writes use that binding. Immutable setters still fail.
 Unused global entries in a superset imports map remain standalone and are not
 checked or converted, including entries whose name declares another import kind.
 Selection compares the original module/name pair, including names containing
-`::`. The VM's existing internal import key still joins names with `::`; if two
-distinct declared global pairs would collide, this adapter throws `LinkError`
-before binding either value. Supporting both declarations requires a separate
-change to the shared internal import-key format.
+`::`. Shared internal import keys now use unambiguous length prefixes, so
+distinct declared pairs remain distinct instead of being rejected or silently
+aliased. See [import identity](import_identity.md) for the internal migration.
 This is an embedder conversion boundary, not a guarantee of transactional host
 state rollback after a later linking or initialization failure.
 

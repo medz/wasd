@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'byte_reader.dart';
 import 'features.dart';
 import 'int64.dart';
+import 'import_key.dart';
 import 'opcode.dart';
 import 'value.dart';
 import 'vm.dart';
@@ -241,7 +242,7 @@ final class WasmImport {
   final WasmGlobalType? globalType;
   final WasmTagType? tagType;
 
-  String get key => '$module::$name';
+  String get key => encodeImportKey(module, name);
 }
 
 final class WasmLocalDecl {

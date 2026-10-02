@@ -34,6 +34,11 @@ jobs:
       - run: dart analyze
       - run: dart test test/wasm_core_features_test.dart
       - run: dart test test/wasm_host_globals_test.dart
+      - run: dart test test/wasm_import_keys_test.dart
+      - run: dart run tool/spec_testsuite_runner.dart --suite=core --testsuite-dir=test/fixtures/import_keys --file=registry.wast --output-json=build/import-key-runner.json --output-md=build/import-key-runner.md
+      - run: dart run tool/spec_testsuite_runner.dart --suite=core --testsuite-dir=test/fixtures/import_keys --file=registry.wast --prepare-manifest=build/import-key-manifest.json --prepare-root=build/import-key-input
+      - run: dart compile js tool/spec_testsuite_player.dart -o build/import-key-player.js
+      - run: node --import 'data:text/javascript,globalThis.WebAssembly=undefined' tool/run_spec_player_js.mjs build/import-key-player.js build/import-key-manifest.json build/import-key-player.json
       - run: dart run tool/core_multi_memory_public_runner.dart --output=build/core-multi-memory-public.json
       - run: dart test test/wasm_gc_element_globals_test.dart test/wasm_f64_const_test.dart test/wasm_f32_const_test.dart test/wasm_gc_v128_defaults_test.dart test/wasm_gc_array_test.dart test/wasm_async_tail_call_test.dart test/wasm_test.dart test/wasm_memory_test.dart test/wasm_table_test.dart test/wasm_predecode_test.dart test/wasi_preview3_async_runtime_test.dart test/wasi_preview3_task_return_runner_test.dart
       - run: dart run tool/spec_testsuite_runner.dart --suite=core --output-json=build/core.json --output-md=build/core.md
@@ -44,6 +49,8 @@ jobs:
           path: |
             build/core.*
             build/core-multi-memory-public.json
+            build/import-key-runner.*
+            build/import-key-player.json
 
   explicit-core-js:
     runs-on: ubuntu-latest
