@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import '../../errors.dart';
 import '../../module.dart' as wasm;
+import 'interpreter/byte_reader.dart';
 import 'interpreter/features.dart' as native_features;
 import 'interpreter/module.dart' as native_ir;
 import 'interpreter/predecode.dart' as native_predecode;
@@ -103,39 +104,15 @@ wasm.ImportExportKind _toExportKind(int kind) => switch (kind) {
 /// Parses the binary and returns payloads of all custom sections named [name].
 List<ByteBuffer> _parseCustomSections(Uint8List bytes, String name) {
   final result = <ByteBuffer>[];
-  var i = 8; // skip magic + version
-  while (i < bytes.length) {
-    final sectionId = bytes[i++];
-    var size = 0;
-    var shift = 0;
-    while (i < bytes.length) {
-      final b = bytes[i++];
-      size |= (b & 0x7f) << shift;
-      if (b & 0x80 == 0) break;
-      shift += 7;
+  final reader = ByteReader(bytes)..offset = 8; // skip magic + version
+  while (!reader.isEOF) {
+    final sectionId = reader.readByte();
+    final size = reader.readVarUint32();
+    final sectionEnd = reader.offset + size;
+    if (sectionId == 0 && reader.readName() == name) {
+      result.add(reader.readBytes(sectionEnd - reader.offset).buffer);
     }
-    final sectionEnd = i + size;
-    if (sectionId == 0 && sectionEnd <= bytes.length) {
-      var nameLen = 0;
-      var nameShift = 0;
-      var j = i;
-      while (j < sectionEnd) {
-        final b = bytes[j++];
-        nameLen |= (b & 0x7f) << nameShift;
-        if (b & 0x80 == 0) break;
-        nameShift += 7;
-      }
-      final nameEnd = j + nameLen;
-      if (nameEnd <= sectionEnd) {
-        final sectionName = String.fromCharCodes(bytes, j, nameEnd);
-        if (sectionName == name) {
-          result.add(
-            Uint8List.fromList(bytes.sublist(nameEnd, sectionEnd)).buffer,
-          );
-        }
-      }
-    }
-    i = sectionEnd;
+    reader.offset = sectionEnd;
   }
   return result;
 }

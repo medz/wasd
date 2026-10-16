@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
@@ -201,6 +202,91 @@ void main() {
 
     test('customSections() returns empty for unknown name', () {
       expect(Module.customSections(module, 'name'), isEmpty);
+    });
+
+    group('customSections()', () {
+      late Module customModule;
+
+      setUp(() async {
+        final sections = <(String, List<int>)>[
+          ('ascii', [1]),
+          ('中文/🦋', [0x00, 0xff, 0x80, 0xef, 0xbb, 0xbf]),
+          ('', [2]),
+          ('\uFEFFascii', [3]),
+          ('\uFEFF\uFEFF', [4]),
+          ('nul\u0000name', [5]),
+          ('é', [6]),
+          ('e\u0301', [7]),
+          ('\uFFFD', [8]),
+          ('中文/🦋', []),
+        ];
+        final bytes = <int>[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        for (final (name, payload) in sections) {
+          final nameBytes = utf8.encode(name);
+          final section = [nameBytes.length, ...nameBytes, ...payload];
+          bytes.addAll([0x00, section.length, ...section]);
+        }
+        customModule = await WebAssembly.compile(
+          Uint8List.fromList(bytes).buffer,
+        );
+      });
+
+      test('returns UTF-8 named payloads in section order', () {
+        expect(
+          Module.customSections(
+            customModule,
+            '中文/🦋',
+          ).map((b) => b.asUint8List()),
+          [
+            [0x00, 0xff, 0x80, 0xef, 0xbb, 0xbf],
+            <int>[],
+          ],
+        );
+      });
+
+      test('preserves ASCII, empty, BOM, and NUL names', () {
+        for (final (name, payload) in <(String, int)>[
+          ('ascii', 1),
+          ('', 2),
+          ('\uFEFFascii', 3),
+          ('\uFEFF\uFEFF', 4),
+          ('nul\u0000name', 5),
+        ]) {
+          expect(
+            Module.customSections(customModule, name).single.asUint8List(),
+            [payload],
+            reason: 'Custom section name: ${name.codeUnits}',
+          );
+        }
+        expect(Module.customSections(customModule, 'nul'), isEmpty);
+        expect(Module.customSections(customModule, 'missing'), isEmpty);
+      });
+
+      test('compares exact Unicode strings without aliases', () {
+        for (final (name, payload) in <(String, int)>[
+          ('é', 6),
+          ('e\u0301', 7),
+          ('\uFFFD', 8),
+        ]) {
+          expect(
+            Module.customSections(customModule, name).single.asUint8List(),
+            [payload],
+          );
+        }
+        expect(Module.customSections(customModule, 'Ã©'), isEmpty);
+        expect(Module.customSections(customModule, '\uD800'), isEmpty);
+        expect(Module.customSections(customModule, '\uDC00'), isEmpty);
+      });
+
+      test('returns an independent copy of each matching payload', () {
+        final first = Module.customSections(customModule, '中文/🦋');
+        first.first.asUint8List().fillRange(0, first.first.lengthInBytes, 0);
+
+        expect(
+          Module.customSections(customModule, '中文/🦋').first.asUint8List(),
+          [0x00, 0xff, 0x80, 0xef, 0xbb, 0xbf],
+        );
+      });
     });
   });
 
