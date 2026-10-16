@@ -1,0 +1,63 @@
+{
+  "kind": "wasd-component-execution-inputs",
+  "repository": "https://github.com/WebAssembly/component-model",
+  "revision": "0220da84209397d9067c19cac83dae969aa85a7b",
+  "converter": {
+    "name": "wasm-tools",
+    "version": "1.262.0",
+    "command": "json-from-wast",
+    "executable_sha256": "4a5b127f48340fbd453708283d190f9b1dbbe5820571eae5cbae0a205a095a00",
+    "platform": "macos-arm64"
+  },
+  "files": [
+    {
+      "path": "test/values/strings.wast",
+      "source": "strings/strings.wast",
+      "blob": "e96f54e97689a32ba70b05e12226e01b8dea024b",
+      "sha256": "a70c90a0ede0e2364040da75f4c2c0e56c2d34fdac746a11b6347fdbac60283c",
+      "prepared": "strings/script.json",
+      "commands": 17,
+      "instantiations": 8,
+      "returns": 5,
+      "traps": 4,
+      "inputs": [
+        {
+          "path": "strings/script.0.wasm",
+          "sha256": "43260f717d7a7bfa11f6a5e4ec895d96246928f11f99d875b8481d3538bff892"
+        },
+        {
+          "path": "strings/script.1.wasm",
+          "sha256": "de3941a7ec9dabaafc7e2cdb16fe51983e7087d19964f4e81117a3d99d5d885c"
+        },
+        {
+          "path": "strings/script.2.wasm",
+          "sha256": "ecd7cc42fa07c72c479ed2cc84ed016c03d704cfaaa32c8321f10a29c10b8913"
+        },
+        {
+          "path": "strings/script.3.wasm",
+          "sha256": "0685e740ccd11de90aa1ccd7dbd899014be4b90cad4432c7b8b0833f8e9c2c4c"
+        },
+        {
+          "path": "strings/script.4.wasm",
+          "sha256": "d734c869f9bcea2165e58a68335587155a92c509cd97b03aedd9569ad07c86bf"
+        },
+        {
+          "path": "strings/script.5.wasm",
+          "sha256": "1f8a3c6734d5099fdcc558bba58788dcb00e90c0dcbc450546881a4dcfc21131"
+        },
+        {
+          "path": "strings/script.6.wasm",
+          "sha256": "ef10f53296515c338b324ad29c2b116fca850cc2dab6779e00e43c7c6ccecdef"
+        },
+        {
+          "path": "strings/script.7.wasm",
+          "sha256": "6256f6c7abbb090edb15062069cd8149fa77fcaff5ab0e9a0fbbef20a3f53869"
+        },
+        {
+          "path": "strings/script.json",
+          "sha256": "4fdddcf6149baa10f9ee53dc623f4005b68f04818d50328d62c3417e65f7d763"
+        }
+      ]
+    }
+  ]
+}
