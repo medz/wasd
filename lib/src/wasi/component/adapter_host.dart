@@ -1918,7 +1918,6 @@ void _validateFlatDirectValue(
     );
   }
   final bits = _expectFlatU32(path, flatArgs[offset]);
-  _checkFlatFlagsBits(path, layout.labels, bits);
   return (
     value: WasmComponentValueData(
       kind: WasmComponentValueDataKind.flags,
@@ -3437,20 +3436,6 @@ List<String> _activeFlatFlagLabels(
     }
   }
   return List<String>.unmodifiable(active);
-}
-
-void _checkFlatFlagsBits(String path, List<String> labels, int bits) {
-  if (bits < 0) {
-    throw StateError(
-      'WASI component canonical adapter value $path expected unsigned flags.',
-    );
-  }
-  final mask = (1 << labels.length) - 1;
-  if ((bits & ~mask) != 0) {
-    throw StateError(
-      'WASI component canonical adapter value $path has unknown flag bits.',
-    );
-  }
 }
 
 void _checkFlatEnumIndex(String path, List<String> labels, int index) {
