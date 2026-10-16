@@ -67,9 +67,10 @@ were prepared as `0.5.3` and are now included in this batch; a separate `0.5.3`
 release is not planned. These additions require the preview installation and
 do not establish full Core, Component Model or WASI conformance. See the [fixed standards and acceptance plan](doc/standards.md).
 
-The development checkout additionally provides [native exception tags](doc/host_tags.md)
-through `CoreFeature.exceptionHandling`. This addition is unreleased and is not
-included in the published `0.6.0-dev.1` preview.
+The development checkout additionally provides [public tags and exceptions](doc/host_tags.md),
+including host/guest propagation on Dart VM, Node and browsers. Native modules
+require `CoreFeature.exceptionHandling`. These additions are unreleased and are
+not included in the published `0.6.0-dev.1` preview.
 
 ## Quick Start
 

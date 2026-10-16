@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:wasd/wasd.dart';
+import 'package:wasd/wasm.dart' as wasm;
 
 import 'support/wasm_fixtures.dart';
 
@@ -77,6 +78,16 @@ final _wasiStartModuleBytes = wasiStartModuleBytes();
 
 void main() {
   group('README snippets', () {
+    test('linked public exception guide creates and inspects a payload', () {
+      final tag = wasm.Tag(
+        wasm.TagDescriptor(parameters: [wasm.ValueKind.i32]),
+      );
+      final error = wasm.Exception(tag, [42]);
+
+      expect(error.isTag(tag), isTrue);
+      expect(error.getArg(tag, 0), 42);
+    });
+
     test('quick start style instantiate and call export', () async {
       final runtime = await WebAssembly.instantiate(
         _quickStartModuleBytes.buffer,

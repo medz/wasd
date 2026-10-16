@@ -13,6 +13,7 @@ import 'branch_hint_validator.dart' as branch_hints;
 import 'errors.dart' as js_errors;
 import 'instance.dart' as js_instance;
 import 'module.dart' as js_module;
+import 'tag_metadata.dart';
 
 class WebAssembly implements wasm.WebAssembly {
   WebAssembly(this.module, this.instance);
@@ -27,7 +28,11 @@ class WebAssembly implements wasm.WebAssembly {
 Future<wasm.Module> compile(ByteBuffer bytes) async {
   try {
     branch_hints.validateBranchHintCustomSections(bytes);
-    return js_module.Module.fromHost(await _jsCompile(bytes.toJS).toDart);
+    final metadata = js_module.snapshotTagMetadata(bytes);
+    return js_module.Module.fromHost(
+      await _jsCompile(bytes.toJS).toDart,
+      metadata,
+    );
   } catch (e, st) {
     js_errors.translateJsError(e, st);
   }
@@ -35,8 +40,10 @@ Future<wasm.Module> compile(ByteBuffer bytes) async {
 
 Future<wasm.Module> compileStreaming(Stream<List<int>> source) async {
   try {
+    final metadata = TagMetadataCollector();
     return js_module.Module.fromHost(
-      await _jsCompileStreaming(_streamToResponse(source)).toDart,
+      await _jsCompileStreaming(_streamToResponse(source, metadata)).toDart,
+      metadata.finish(),
     );
   } catch (e, st) {
     js_errors.translateJsError(e, st);
@@ -49,11 +56,12 @@ Future<wasm.WebAssembly> instantiate(
 ]) async {
   try {
     branch_hints.validateBranchHintCustomSections(bytes);
+    final metadata = js_module.snapshotTagMetadata(bytes);
     final result = await _jsInstantiateBytes(
       bytes.toJS,
       js_instance.createImportObject(imports),
     ).toDart;
-    final module = js_module.Module.fromHost(result.module);
+    final module = js_module.Module.fromHost(result.module, metadata);
     return WebAssembly(
       module,
       js_instance.Instance.fromHost(module, result.instance),
@@ -68,11 +76,12 @@ Future<wasm.WebAssembly> instantiateStreaming(
   wasm.Imports imports = const {},
 ]) async {
   try {
+    final metadata = TagMetadataCollector();
     final result = await _jsInstantiateStreaming(
-      _streamToResponse(source),
+      _streamToResponse(source, metadata),
       js_instance.createImportObject(imports),
     ).toDart;
-    final module = js_module.Module.fromHost(result.module);
+    final module = js_module.Module.fromHost(result.module, metadata.finish());
     return WebAssembly(
       module,
       js_instance.Instance.fromHost(module, result.instance),
@@ -106,7 +115,10 @@ bool validate(ByteBuffer bytes) =>
 /// This allows [WebAssembly.compileStreaming] / [instantiateStreaming] to
 /// start processing bytes as they arrive rather than waiting for the full
 /// payload.
-JSResponse _streamToResponse(Stream<List<int>> source) {
+JSResponse _streamToResponse(
+  Stream<List<int>> source,
+  TagMetadataCollector metadata,
+) {
   StreamSubscription<List<int>>? subscription;
   _JSReadableStreamController? controller;
 
@@ -115,6 +127,7 @@ JSResponse _streamToResponse(Stream<List<int>> source) {
     subscription = source.listen(
       (chunk) {
         final bytes = chunk is Uint8List ? chunk : Uint8List.fromList(chunk);
+        metadata.add(bytes);
         controller!.enqueue(bytes.toJS);
       },
       onError: (e) => controller?.error(e.toString().toJS),

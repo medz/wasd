@@ -6,16 +6,57 @@ import 'dart:typed_data';
 
 import '../../errors.dart';
 import '../../module.dart' as wasm;
+import '../../tag.dart' as wasm;
+import '../../value.dart';
+import '../native/interpreter/module.dart' as ir;
 import 'branch_hint_validator.dart' as branch_hints;
 import 'errors.dart' as js_errors;
+import 'tag_metadata.dart';
 
 class Module implements wasm.Module {
   Module(ByteBuffer bytes, {Set<wasm.CoreFeature> features = const {}})
-    : host = _compile(bytes, features);
+    : _tagMetadata = snapshotTagMetadata(bytes),
+      host = _compile(bytes, features);
 
-  Module.fromHost(this.host);
+  Module.fromHost(this.host, this._tagMetadata);
 
   final JSImportModule host;
+  Uint8List? _tagMetadata;
+  late final _tagTypes = _readTagTypes();
+
+  wasm.TagDescriptor exportedTagType(String name) {
+    final type = _tagTypes[name];
+    if (type == null) {
+      throw UnsupportedError(
+        'The exported tag payload signature is unavailable.',
+      );
+    }
+    return wasm.TagDescriptor(
+      parameters: List<ValueKind>.generate(type.length, (index) {
+        final signature = type[index];
+        return switch (signature) {
+          '7f' => ValueKind.i32,
+          '7e' => ValueKind.i64,
+          '7d' => ValueKind.f32,
+          '7c' => ValueKind.f64,
+          '7b' => ValueKind.v128,
+          '70' => ValueKind.funcref,
+          '6f' => ValueKind.externref,
+          _ => throw UnsupportedError(
+            'Unsupported exported tag parameter type: $signature',
+          ),
+        };
+      }),
+    );
+  }
+
+  Map<String, List<String>> _readTagTypes() {
+    final bytes = _tagMetadata;
+    if (bytes == null) return const {};
+    final result = ir.WasmModule.decodeExportedTagTypes(bytes);
+    _tagMetadata = null;
+    return result;
+  }
 
   static const supportedFeatures = <wasm.CoreFeature>{};
 
@@ -37,6 +78,9 @@ class Module implements wasm.Module {
     }
   }
 }
+
+Uint8List? snapshotTagMetadata(ByteBuffer bytes) =>
+    (TagMetadataCollector(copy: false)..add(bytes.asUint8List())).finish();
 
 List<wasm.ModuleImportDescriptor> imports(wasm.Module module) =>
     JSImportModule.imports((module as Module).host).toDart

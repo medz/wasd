@@ -8,6 +8,8 @@ import 'interpreter/instance.dart' as ir_instance;
 import 'interpreter/memory.dart' as ir_memory;
 import 'interpreter/runtime_global.dart' as ir_global;
 import 'interpreter/module.dart' as ir_module;
+import 'interpreter/vm.dart' as ir_vm;
+import 'exception.dart' as native_exception;
 import 'global.dart' as native_global;
 import 'memory.dart' as native_memory;
 import 'module.dart' as native_module;
@@ -28,6 +30,11 @@ class Instance implements wasm.Instance {
         validate: false,
         profile: profile,
         predecodedFunctions: nativeModule.predecodedFunctions,
+      );
+    } on ir_vm.WasmGuestException catch (error, stackTrace) {
+      Error.throwWithStackTrace(
+        native_exception.Exception.fromRuntime(error),
+        stackTrace,
       );
     } on WasmError {
       rethrow;
@@ -103,19 +110,28 @@ class Instance implements wasm.Instance {
             final isAsyncTyped = ref.runtimeType.toString().contains('Future');
             if (!isAsyncTyped) {
               functions[key] = (List<Object?> args) {
-                final result = ref(args);
-                if (result is Future) {
-                  throw UnsupportedError(
-                    'Async-only host import `$key` is not available in '
-                    'the synchronous VM pipeline. Use invokeAsync on direct '
-                    'exported host functions.',
-                  );
+                try {
+                  final result = ref(args);
+                  if (result is Future) {
+                    throw UnsupportedError(
+                      'Async-only host import `$key` is not available in '
+                      'the synchronous VM pipeline. Use invokeAsync on direct '
+                      'exported host functions.',
+                    );
+                  }
+                  return result;
+                } on native_exception.Exception catch (error, stackTrace) {
+                  Error.throwWithStackTrace(error.host, stackTrace);
                 }
-                return result;
               };
             }
-            asyncFunctions[key] = (List<Object?> args) =>
-                Future<Object?>.sync(() => ref(args));
+            asyncFunctions[key] = (List<Object?> args) async {
+              try {
+                return await Future<Object?>.sync(() => ref(args));
+              } on native_exception.Exception catch (error, stackTrace) {
+                Error.throwWithStackTrace(error.host, stackTrace);
+              }
+            };
           case wasm.MemoryImportExportValue(:final ref):
             if (ref is! native_memory.Memory) {
               throw LinkError(
@@ -162,6 +178,17 @@ class Instance implements wasm.Instance {
     );
   }
 
+  Future<Object?> _invokeAsync(String name, List<Object?> args) async {
+    try {
+      return await _runtime.invokeAsync(name, args);
+    } on ir_vm.WasmGuestException catch (error, stackTrace) {
+      Error.throwWithStackTrace(
+        native_exception.Exception.fromRuntime(error),
+        stackTrace,
+      );
+    }
+  }
+
   wasm.Exports _buildExports() {
     final result = <String, wasm.ExportValue>{};
     for (final descriptor in wasm.Module.exports(_module)) {
@@ -170,17 +197,22 @@ class Instance implements wasm.Instance {
         case wasm.ImportExportKind.function:
           if (_runtime.hasAsyncOnlyHostImports) {
             result[name] = wasm.ImportExportKind.function(
-              (List<Object?> args) => _runtime.invokeAsync(name, args),
+              (List<Object?> args) => _invokeAsync(name, args),
             );
             continue;
           }
           result[name] = wasm.ImportExportKind.function((List<Object?> args) {
             try {
               return _runtime.invoke(name, args);
+            } on ir_vm.WasmGuestException catch (error, stackTrace) {
+              Error.throwWithStackTrace(
+                native_exception.Exception.fromRuntime(error),
+                stackTrace,
+              );
             } catch (error) {
               final message = '$error';
               if (message.contains('Async-only host import')) {
-                return _runtime.invokeAsync(name, args);
+                return _invokeAsync(name, args);
               }
               rethrow;
             }

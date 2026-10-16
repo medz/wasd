@@ -12,11 +12,13 @@ import '../../module.dart' as wasm;
 import '../../table.dart' as wasm;
 import '../../value.dart';
 import 'errors.dart' as js_errors;
+import 'exception.dart' as js_exception;
 import 'global.dart' as js_global;
 import 'memory.dart' as js_memory;
 import 'module.dart' as js_module;
 import 'table.dart' as js_table;
 import 'tag.dart' as js_tag;
+import 'value_codec.dart' as codec;
 
 class Instance implements wasm.Instance {
   Instance(wasm.Module module, [wasm.Imports imports = const {}])
@@ -66,7 +68,10 @@ wasm.Exports _createExports(wasm.Module module, JSObject exportObject) {
         _ExportTable(raw as js_table.JSTable),
       ),
       wasm.ImportExportKind.tag => wasm.ImportExportKind.tag(
-        js_tag.Tag.fromHost(raw as js_tag.JSTag),
+        js_tag.Tag.fromHost(
+          raw as js_tag.JSTag,
+          () => (module as js_module.Module).exportedTagType(name),
+        ),
       ),
     };
   }
@@ -95,10 +100,17 @@ JSAny? _encodeImport(wasm.ImportValue value) => switch (value) {
 };
 
 wasm.WasmFunction _wrapFunction(JSFunction jsFunc) => (List<Object?> args) {
-  final jsArgs = <JSAny?>[null, for (final arg in args) arg.jsify()];
-  return (jsFunc as JSObject)
-      .callMethodVarArgs<JSAny?>('call'.toJS, jsArgs)
-      ?.dartify();
+  try {
+    final jsArgs = <JSAny?>[for (final arg in args) _encodeHostValue(arg)];
+    return _decodeHostArg(
+      (jsFunc as JSObject).callMethodVarArgs<JSAny?>('call'.toJS, [
+        null,
+        ...jsArgs,
+      ]),
+    );
+  } catch (e, st) {
+    js_errors.translateJsError(e, st);
+  }
 };
 
 /// Converts a [wasm.WasmFunction] host function to a [JSFunction] for use as
@@ -137,11 +149,21 @@ JSFunction _hostFuncToJS(wasm.WasmFunction hostFn) {
         .sublist(0, last + 1)
         .map(_decodeHostArg)
         .toList(growable: false);
-    return hostFn(args)?.jsify();
+    try {
+      return _encodeHostValue(hostFn(args));
+    } on js_exception.Exception catch (error) {
+      js_exception.throwToHost(error);
+    }
   }
 
   return bridge.toJS;
 }
+
+JSAny? _encodeHostValue(Object? value) => switch (value) {
+  BigInt() => codec.jsBigInt(value.toString().toJS),
+  List() => value.map(_encodeHostValue).toList(growable: false).toJS,
+  _ => value.jsify(),
+};
 
 Object? _decodeHostArg(JSAny? value) {
   if (value == null) {
@@ -149,6 +171,11 @@ Object? _decodeHostArg(JSAny? value) {
   }
   if (value.typeofEquals('bigint')) {
     return BigInt.parse(_jsString(value).toDart);
+  }
+  if (value.isA<JSArray<JSAny?>>()) {
+    return (value as JSArray<JSAny?>).toDart
+        .map(_decodeHostArg)
+        .toList(growable: false);
   }
   return value.dartify();
 }

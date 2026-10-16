@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../../errors.dart';
+import '../../exception.dart' as wasm;
 import '../../instance.dart' as wasm;
 import '../../module.dart' as wasm;
 import '../../webassembly.dart' as wasm;
@@ -56,6 +57,8 @@ Future<wasm.Instance> instantiateModule(
 ]) async {
   try {
     return native_instance.Instance(module, imports);
+  } on wasm.Exception {
+    rethrow;
   } on WasmError {
     rethrow;
   } catch (e) {

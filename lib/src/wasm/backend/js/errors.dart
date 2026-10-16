@@ -4,6 +4,7 @@ library;
 import 'dart:js_interop';
 
 import '../../errors.dart';
+import 'exception.dart' as js_exception;
 
 /// Translates a caught JS [e] into the matching Dart [WasmError] subtype.
 ///
@@ -15,6 +16,13 @@ import '../../errors.dart';
 Never translateJsError(Object e, StackTrace st) {
   // ignore: invalid_runtime_check_with_js_interop_types
   if (e is JSObject) {
+    final exceptionConstructor = _exceptionConstructor;
+    if (exceptionConstructor != null && e.instanceof(exceptionConstructor)) {
+      Error.throwWithStackTrace(
+        js_exception.Exception.fromHost(e as js_exception.JSImportException),
+        st,
+      );
+    }
     final err = e as _JSError;
     throw switch (err.name) {
       'CompileError' => CompileError(err.message, cause: e),
@@ -24,6 +32,9 @@ Never translateJsError(Object e, StackTrace st) {
   }
   Error.throwWithStackTrace(e, st);
 }
+
+@JS('WebAssembly.Exception')
+external JSFunction? get _exceptionConstructor;
 
 extension type _JSError._(JSObject _) implements JSObject {
   external String get name;
