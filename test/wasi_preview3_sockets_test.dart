@@ -1699,13 +1699,16 @@ void main() {
     );
 
     test(
-      'native TCP bind reserves without listening and releases on drop',
+      'native TCP bind waits for listen and releases the listener on drop',
       () async {
         final host = WASIPreview3NativeSocketsHost();
         final imports = host.imports;
         final tcp = _createSocket(imports, tcp: true);
+        WASIComponentStream<int>? accepted;
         var dropped = false;
         addTearDown(() {
+          accepted?.readable.drop();
+          accepted?.writable.drop();
           if (!dropped) {
             host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp);
           }
@@ -1727,11 +1730,11 @@ void main() {
         expect(_isOk(bound), isTrue);
         final port = await _waitForPort(imports, tcp, tcp: true);
         await expectLater(
-          io.ServerSocket.bind(io.InternetAddress.loopbackIPv4, port),
-          throwsA(isA<io.SocketException>()),
-        );
-        await expectLater(
-          io.Socket.connect(io.InternetAddress.loopbackIPv4, port),
+          io.Socket.connect(
+            io.InternetAddress.loopbackIPv4,
+            port,
+            timeout: const Duration(seconds: 1),
+          ),
           throwsA(isA<io.SocketException>()),
         );
         expect(
@@ -1761,8 +1764,23 @@ void main() {
           ),
           isTrue,
         );
+        accepted =
+            _okValue(
+                  await imports['wasi:sockets/types@0.3.0.tcp-socket.listen']!(
+                        <Object?>[tcp],
+                      )
+                      as WasmComponentValueData,
+                )
+                as WASIComponentStream<int>;
+        expect(await _waitForPort(imports, tcp, tcp: true), port);
+        await expectLater(
+          io.ServerSocket.bind(io.InternetAddress.loopbackIPv4, port),
+          throwsA(isA<io.SocketException>()),
+        );
         host.table.dropNamed('wasi:sockets/types@0.3.0.tcp-socket', tcp);
         dropped = true;
+        accepted.readable.drop();
+        accepted.writable.drop();
         final replacement = await io.ServerSocket.bind(
           io.InternetAddress.loopbackIPv4,
           port,
