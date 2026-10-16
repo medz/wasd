@@ -111,7 +111,7 @@ jobs:
           sparse-checkout: tests/rust/testsuite/wasm32-wasip3
           persist-credentials: false
       - run: python3 -m venv build/wasi-testsuite-venv
-      - run: build/wasi-testsuite-venv/bin/python -m pip install --only-binary=:all: -r third_party/wasi-testsuite-source/test-runner/requirements.txt
+      - run: 'build/wasi-testsuite-venv/bin/python -m pip install --only-binary=:all: -r third_party/wasi-testsuite-source/test-runner/requirements.txt'
       - run: env DART=dart dart run tool/wasi_testsuite_preview3_runner.dart --testsuite-dir third_party/wasi-testsuite-fixtures --runner-dir third_party/wasi-testsuite-source/test-runner --python build/wasi-testsuite-venv/bin/python --json build/wasi-preview3.json --markdown build/wasi-preview3.md
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
