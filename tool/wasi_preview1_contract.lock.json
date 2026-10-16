@@ -1,0 +1,950 @@
+{
+  "kind": "wasd-preview1-contract",
+  "abi": {
+    "repository": "https://github.com/WebAssembly/WASI",
+    "commit": "fae981bae14809d91f9bc2d63852d461f331d161",
+    "module": "wasi_snapshot_preview1",
+    "files": [
+      {
+        "path": "preview1/witx/wasi_snapshot_preview1.witx",
+        "git_blob": "0c2067dba199f183ed37c74155240f9486f82b61",
+        "sha256": "30e31a9b830d3fad998701fc9439a5506af4dbb8f01202854c8af46d436de679"
+      },
+      {
+        "path": "preview1/witx/typenames.witx",
+        "git_blob": "6545c98b5362e3b12d6ad2bc958cfe4c5e2b290a",
+        "sha256": "980ef8a0f8d345f65d0c7ce07f01981174712ae0c6c44b3c250cbb2b0c752dc5"
+      }
+    ],
+    "functions": [
+      "args_get",
+      "args_sizes_get",
+      "environ_get",
+      "environ_sizes_get",
+      "clock_res_get",
+      "clock_time_get",
+      "fd_advise",
+      "fd_allocate",
+      "fd_close",
+      "fd_datasync",
+      "fd_fdstat_get",
+      "fd_fdstat_set_flags",
+      "fd_fdstat_set_rights",
+      "fd_filestat_get",
+      "fd_filestat_set_size",
+      "fd_filestat_set_times",
+      "fd_pread",
+      "fd_prestat_get",
+      "fd_prestat_dir_name",
+      "fd_pwrite",
+      "fd_read",
+      "fd_readdir",
+      "fd_renumber",
+      "fd_seek",
+      "fd_sync",
+      "fd_tell",
+      "fd_write",
+      "path_create_directory",
+      "path_filestat_get",
+      "path_filestat_set_times",
+      "path_link",
+      "path_open",
+      "path_readlink",
+      "path_remove_directory",
+      "path_rename",
+      "path_symlink",
+      "path_unlink_file",
+      "poll_oneoff",
+      "proc_exit",
+      "proc_raise",
+      "sched_yield",
+      "random_get",
+      "sock_accept",
+      "sock_recv",
+      "sock_send",
+      "sock_shutdown"
+    ]
+  },
+  "testsuite": {
+    "repository": "https://github.com/WebAssembly/wasi-testsuite",
+    "source_commit": "6600796756adce3632409d7e207a9834c9d99ff8",
+    "fixture_commit": "c63d52e69316d1aa2c9e7db6251892775204e7e0",
+    "target": "wasm32-wasip1",
+    "fixture_count": 72,
+    "suites": [
+      {
+        "name": "WASI AssemblyScript tests [wasm32-wasip1]",
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1",
+        "cases": [
+          "args_get-multiple-arguments",
+          "args_sizes_get-multiple-arguments",
+          "args_sizes_get-no-arguments",
+          "environ_get-multiple-variables",
+          "environ_sizes_get-multiple-variables",
+          "environ_sizes_get-no-variables",
+          "fd_write-to-invalid-fd",
+          "fd_write-to-stdout",
+          "proc_exit-failure",
+          "proc_exit-success",
+          "random_get-non-zero-length",
+          "random_get-zero-length"
+        ]
+      },
+      {
+        "name": "WASI C tests [wasm32-wasip1]",
+        "path": "tests/c/testsuite/wasm32-wasip1",
+        "cases": [
+          "clock_getres-monotonic",
+          "clock_getres-realtime",
+          "clock_gettime-monotonic",
+          "clock_gettime-realtime",
+          "fdopendir-with-access",
+          "fopen-with-access",
+          "fopen-with-no-access",
+          "lseek",
+          "pread-with-access",
+          "pwrite-with-access",
+          "pwrite-with-append",
+          "sock_shutdown-invalid_fd",
+          "sock_shutdown-not_sock",
+          "stat-dev-ino"
+        ]
+      },
+      {
+        "name": "WASI Rust tests [wasm32-wasip1]",
+        "path": "tests/rust/testsuite/wasm32-wasip1",
+        "cases": [
+          "big_random_buf",
+          "clock_time_get",
+          "close_preopen",
+          "dangling_fd",
+          "dangling_symlink",
+          "dir_fd_op_failures",
+          "directory_seek",
+          "fd_advise",
+          "fd_fdstat_set_rights",
+          "fd_filestat_set",
+          "fd_flags_set",
+          "fd_readdir",
+          "file_allocate",
+          "file_pread_pwrite",
+          "file_seek_tell",
+          "file_truncation",
+          "file_unbuffered_write",
+          "fstflags_validate",
+          "interesting_paths",
+          "isatty",
+          "nofollow_errors",
+          "overwrite_preopen",
+          "path_exists",
+          "path_filestat",
+          "path_link",
+          "path_open_create_existing",
+          "path_open_dirfd_not_dir",
+          "path_open_missing",
+          "path_open_nonblock",
+          "path_open_preopen",
+          "path_open_read_write",
+          "path_rename",
+          "path_rename_dir_trailing_slashes",
+          "path_symlink_trailing_slashes",
+          "poll_oneoff_stdio",
+          "readlink",
+          "remove_directory_trailing_slashes",
+          "remove_nonempty_directory",
+          "renumber",
+          "sched_yield",
+          "stdio",
+          "symlink_create",
+          "symlink_filestat",
+          "symlink_loop",
+          "truncation_rights",
+          "unlink_file_trailing_slashes"
+        ]
+      }
+    ],
+    "inputs": [
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/args_get-multiple-arguments.json",
+        "git_blob": "c6e4b5f7a869a3f9c3381a4c224c3649385d2063",
+        "sha256": "b696924892fb4656d56d966f495883407f1160632982b822a6566eeb33cbc24e"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/args_get-multiple-arguments.wasm",
+        "git_blob": "cce0ef4579e17d11455f3373d474ddd03a6a0686",
+        "sha256": "a9dddcf03d69d8301dc68b361d634f3d03bd59c9acfcb904bf85c3259db9364c"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/args_sizes_get-multiple-arguments.json",
+        "git_blob": "c6e4b5f7a869a3f9c3381a4c224c3649385d2063",
+        "sha256": "b696924892fb4656d56d966f495883407f1160632982b822a6566eeb33cbc24e"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/args_sizes_get-multiple-arguments.wasm",
+        "git_blob": "4588fa5b7c4c9fbfed29f9a89c9e0bb7c10fa065",
+        "sha256": "cde355e98428825d1c524ac60a6424f68e9fd870fd2483aae5c6db8336e99af0"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/args_sizes_get-no-arguments.wasm",
+        "git_blob": "f0f974300dd53ead619c0e0bde2971177e1877e1",
+        "sha256": "d859ca8aa56d4707a27ab84e6aef97f4b1d0e2300c28f05fe9dd892e07ddccac"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/environ_get-multiple-variables.json",
+        "git_blob": "64ef42def4780d4a2874ff6b86f70ca44b70f105",
+        "sha256": "2a775cc527cd483a613c8fde975adbf3d618019ae2c0a5ddfef7050635ed99ad"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/environ_get-multiple-variables.wasm",
+        "git_blob": "66f6d2a280e9c9600ddfbf41b7471d3fb128afe5",
+        "sha256": "4cca97a17fabb785bbbb823f65256ab2903a123566e193eb3ffcd4882510bf43"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/environ_sizes_get-multiple-variables.json",
+        "git_blob": "e56f4c5ff1f314e4a6cddb4e8e95a8be7776046a",
+        "sha256": "4901634e709b64bb93df9d5124f998fcaa9f018c531a5764008bab2bc1556efd"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/environ_sizes_get-multiple-variables.wasm",
+        "git_blob": "4dcee938753dd440d2aa5cd3c2d23fd06a19e4df",
+        "sha256": "87dad26d7c4378bbfdd113a1d2105bb950a1a5bce90e24a33c8585b55ffe2e73"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/environ_sizes_get-no-variables.wasm",
+        "git_blob": "55515df5b7a0fed72288e37ae65b272182b28c02",
+        "sha256": "927756fd4a52ef1c9f7554dc516870fcfba47dbcc104bd4d8ac9e189a83d5067"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/fd_write-to-invalid-fd.wasm",
+        "git_blob": "973740010f9595d9de74286c1dce842f221f73bb",
+        "sha256": "654a1a568bfcdb96d27f6980e66f4606e373629b489ef74561980360da6cc1e4"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/fd_write-to-stdout.json",
+        "git_blob": "baa87f9f5c0483ba1667e169184afd9f611115ea",
+        "sha256": "ff10809a08143886ca7382293be505b0a2241ea698818234ff251f9b48b511c9"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/fd_write-to-stdout.wasm",
+        "git_blob": "d634769c9c3d155ca8cc93c32104543a3cd8e902",
+        "sha256": "32bae77483ebca08afd4235857fe137466b9dfc6424884395c0a3cc8dd67480a"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/manifest.json",
+        "git_blob": "2a5cb8e3370ad85026b1e7a08d2bf7e1b89ba601",
+        "sha256": "411fac22d4292bb64ef62e601535b1e7861181329848afeda40a9becb2f109a8"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/proc_exit-failure.json",
+        "git_blob": "f781a01d0b53ded80628a1d428cab3549c39904e",
+        "sha256": "4cfb7267e375ac9e5cab2dc34f6584abd9768dac102d66d900337c6fcb2c522c"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/proc_exit-failure.wasm",
+        "git_blob": "93c9d861705fb5c436079cbdd11e84f931396c6b",
+        "sha256": "922778bf601d35ce3f400d72e10646a8a86612f23a76e4e88079b8af680bf9de"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/proc_exit-success.wasm",
+        "git_blob": "a6dd74ac8b2149cc9ea940b981d3d616d6c8ee8c",
+        "sha256": "083e6cbca1bf4c89a14d08954c75078774a3aed70c55a9cc79291f9da75284f9"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/random_get-non-zero-length.wasm",
+        "git_blob": "78ee4cc979ea7beae3b7149d02f31e8b45e59feb",
+        "sha256": "41b3de91da5c5b5b14604285805525cd2a3aac468e4d83c326edfd70b8f6bcd4"
+      },
+      {
+        "path": "tests/assemblyscript/testsuite/wasm32-wasip1/random_get-zero-length.wasm",
+        "git_blob": "6c32be408035e01e8fe659e42a593b42b95bbe12",
+        "sha256": "250fb9671184e5df73d4663f36be043f11c9149ee6d5721deef3e890c085746d"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/clock_getres-monotonic.wasm",
+        "git_blob": "f5c3c42bbc7795c9d42693318cc1ee19bf67451e",
+        "sha256": "19fddf55e95d85c1d9f8ef5c62f3e92731b1da2a5f811880d1c33f0f40c386e6"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/clock_getres-realtime.wasm",
+        "git_blob": "374c5ba8f7fdb95ffa748033348adbb4deae0273",
+        "sha256": "d66317c26f550c607efd0dccf95ad5e9164570d5cd96a1ef461d4e60c2cc9a6e"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/clock_gettime-monotonic.wasm",
+        "git_blob": "f568c6b2bc09782fce40006e720d7625ab240903",
+        "sha256": "63f3d923c18bbf87e78b7b01796b61bdb720504240af63991a02cfd898b83414"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/clock_gettime-realtime.wasm",
+        "git_blob": "154836f9cb35b268bcb62d3077108d38dd6213bf",
+        "sha256": "4d9d322b48712835d53d53e939ff2096ff70069ebf7d530d6c610887a5f729d8"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/fdopendir-with-access.json",
+        "git_blob": "e1707e64e939180eb395ccdadbdf5e0224bc44ea",
+        "sha256": "ee3eb5f323581c2fec24aa18bbd06c318ad0009cb428e955111cb01412c82d8d"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/fdopendir-with-access.wasm",
+        "git_blob": "eb2ac993c8a34b5b9bb0ded3a84c8ca73f429899",
+        "sha256": "451225e1caad46df46f6188d4ac3557171f00f68c175dcb7819faf6e915a73fd"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/fopen-with-access.json",
+        "git_blob": "e1707e64e939180eb395ccdadbdf5e0224bc44ea",
+        "sha256": "ee3eb5f323581c2fec24aa18bbd06c318ad0009cb428e955111cb01412c82d8d"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/fopen-with-access.wasm",
+        "git_blob": "df642ff81094b6a05399ee2bbe084ea0dcb8d594",
+        "sha256": "d8b7cf271fa7c2e5bd004689726f0f92b360bf4851c810fc9371622dc7a27ac4"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/fopen-with-no-access.wasm",
+        "git_blob": "c19935f0b190d6339e90d339cfb3fc92742dbfb7",
+        "sha256": "fe5aac30181ef00f1aa34e4780d48782f2ee16abaedc6b92581275e53882a62b"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/fs-tests.dir/file",
+        "git_blob": "c57eff55ebc0c54973903af5f72bac72762cf4f4",
+        "sha256": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/fs-tests.dir/fopendir.dir/file-0",
+        "git_blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/fs-tests.dir/fopendir.dir/file-1",
+        "git_blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/fs-tests.dir/lseek.txt",
+        "git_blob": "6f06f4081534f2c247b3c09781f9179e946b61dc",
+        "sha256": "924592b9b103f14f833faafb67f480691f01988aa457c0061769f58cd47311bc"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/fs-tests.dir/pread.txt",
+        "git_blob": "f64fe53f6b25fdb5d25e11ed3363b1572ebff9b5",
+        "sha256": "f29a78e2b8fd00d8a58cf6ad12636eacd28bdc44cb6353ee31987eaeac60af66"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/fs-tests.dir/writeable/.gitignore",
+        "git_blob": "d6b7ef32c8478a48c3994dcadc86837f4371184d",
+        "sha256": "240a3e0d37d2e86b614063f5347eb02d4f99ca6c254de6b82871ff8d95532a7d"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/lseek.json",
+        "git_blob": "e1707e64e939180eb395ccdadbdf5e0224bc44ea",
+        "sha256": "ee3eb5f323581c2fec24aa18bbd06c318ad0009cb428e955111cb01412c82d8d"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/lseek.wasm",
+        "git_blob": "c46d1be8c0963ed8265864f7821a013758ac1ce0",
+        "sha256": "da3b5a6ed580c5f14ae8fa488189905c7d4bed48bf6197c98a2d53c8fa4e1303"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/manifest.json",
+        "git_blob": "4ce8be88b4401f531ccc89b8d4464f9344cc3043",
+        "sha256": "ce36b8594b9b67c6ec68061eaad5208acfd824f569d13850acfd78e09176b170"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/pread-with-access.json",
+        "git_blob": "e1707e64e939180eb395ccdadbdf5e0224bc44ea",
+        "sha256": "ee3eb5f323581c2fec24aa18bbd06c318ad0009cb428e955111cb01412c82d8d"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/pread-with-access.wasm",
+        "git_blob": "374f4f43d703ac36d0f5b13caf8953ec3b71a779",
+        "sha256": "85d70815d96012a63067438ac72913b2d3c2d93522b2f826c2f7fedb2722830e"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/pwrite-with-access.json",
+        "git_blob": "e1707e64e939180eb395ccdadbdf5e0224bc44ea",
+        "sha256": "ee3eb5f323581c2fec24aa18bbd06c318ad0009cb428e955111cb01412c82d8d"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/pwrite-with-access.wasm",
+        "git_blob": "8d0a0b615688e128eeeda5e2da6e2868b8a30f92",
+        "sha256": "30c11f194068491f08cd0a6070290d78bc78d2b0dde7ab40137c8344e8709820"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/pwrite-with-append.json",
+        "git_blob": "e1707e64e939180eb395ccdadbdf5e0224bc44ea",
+        "sha256": "ee3eb5f323581c2fec24aa18bbd06c318ad0009cb428e955111cb01412c82d8d"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/pwrite-with-append.wasm",
+        "git_blob": "e05c1c22c7e4378f7811eb5ab9fd28a1190d508c",
+        "sha256": "a1e6d963552558d1af9cc6b92fbe4472bf1cccd136a226d3a075fa0948e368f4"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/sock_shutdown-invalid_fd.wasm",
+        "git_blob": "20cdbe005ec9af78a40848db6ee9617d1c57ffa9",
+        "sha256": "83388dd94bf783b413ea9b34b647c0c19e415c2df4a72bc5c06f7d838c1596f4"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/sock_shutdown-not_sock.wasm",
+        "git_blob": "4bdccda2605527ef37f1a1f8056f1485aea138aa",
+        "sha256": "50d9e4b05cdfd3a1310fdce65e64b1a5f3dc6db2421b9343d4afb4fc25da75fb"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/stat-dev-ino.json",
+        "git_blob": "e1707e64e939180eb395ccdadbdf5e0224bc44ea",
+        "sha256": "ee3eb5f323581c2fec24aa18bbd06c318ad0009cb428e955111cb01412c82d8d"
+      },
+      {
+        "path": "tests/c/testsuite/wasm32-wasip1/stat-dev-ino.wasm",
+        "git_blob": "7cc3bf2f1caf5242a809c9da57a0c900d0e4facd",
+        "sha256": "95f0dce4eae74563d83ceecb37fbc68026acd612cf21dd7bd7a92b6f66af343b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/big_random_buf.wasm",
+        "git_blob": "2a76d1a1167a6e2ee47b478108178da4934c2fa4",
+        "sha256": "6bd7569434d0e7da622dca7f857afb193219e33e039cfb1b0225b5a0127cff15"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/clock_time_get.wasm",
+        "git_blob": "317c109c7033dc8944d3d500c62903bbdb4322d3",
+        "sha256": "c627fecdd0c295b872dbc9c4d9e26f004bbb3aa3ab0dd3716144f81b7b17b4be"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/close_preopen.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/close_preopen.wasm",
+        "git_blob": "0be956cb5e90b0fadd441d171de715db8a237a0e",
+        "sha256": "3bc2aba11fd3bb06a4ad5e0e1bc60edd74faaf935001a1245b797ec1a78dd56b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/dangling_fd.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/dangling_fd.wasm",
+        "git_blob": "b45cc4744bf0cc94b57d2b941f3512be740e82ea",
+        "sha256": "ee18876b5d57627f7f018135d72c6f11cdaf076ec077856cf86a6702fd9a736b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/dangling_symlink.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/dangling_symlink.wasm",
+        "git_blob": "c44c68ca3e5b034ffd9c8094a861ca8e557b4f44",
+        "sha256": "b4f45cf603c474d349b26d8b7cb00bc19384df773a725db28116bdcf7b70ff2e"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/dir_fd_op_failures.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/dir_fd_op_failures.wasm",
+        "git_blob": "1abfb18fb67f73112e455f211fb3fe1c5db377c3",
+        "sha256": "cd9666ead27b157ba05b7184d87b196a38b713d2d4d20152c463a60f2afd2637"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/directory_seek.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/directory_seek.wasm",
+        "git_blob": "9833983275bde14fd9d103f5180ea4e1e1557802",
+        "sha256": "b35e61a72d061e3b9b50e683df27e7141350198b434d8bbaceb104a60bafb42e"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/fd_advise.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/fd_advise.wasm",
+        "git_blob": "30bc4ca6c8dfab09e3fc1a55101bf9b50defd41e",
+        "sha256": "7e141a745c25ce25a7da101ef32de57a801ba1aa869ec4dfccb32552812f5a57"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/fd_fdstat_set_rights.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/fd_fdstat_set_rights.wasm",
+        "git_blob": "22bac3629152ea9c69cb45d78384e9fe9dcde05f",
+        "sha256": "3df825479e84f601e7ea28e0b65d968d46fef94db522c19f81e20d1344109641"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/fd_filestat_set.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/fd_filestat_set.wasm",
+        "git_blob": "e02728970bdfc5ceab649182c635d74f56fce3a0",
+        "sha256": "fde8bd9179042282d3417d4a9a65697e647a57f63f795d7684dd89af07746fa6"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/fd_flags_set.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/fd_flags_set.wasm",
+        "git_blob": "199cc27b54c7d8c2c1adf0aea8670794e194a421",
+        "sha256": "f7a03322fad6e2f1c49f9c09297a0d3563af1b00e4e6a28db7224df8608512a7"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/fd_readdir.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/fd_readdir.wasm",
+        "git_blob": "55eb8d18db0cabdd5b92a4fae9bb13cf94f32d19",
+        "sha256": "5dc9e84b6d2fcd0367eb03c72eb152b1b1b75d75e4bf6e2761e58ec7f8c945bc"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/file_allocate.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/file_allocate.wasm",
+        "git_blob": "ef077480cda130fcc3b84a4fa03d57c8656b47c0",
+        "sha256": "c085ba3730fbca1ac6b4fd3f8ec38ac7d126fd5e20dc1fc3f12ebf81dc25a8be"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/file_pread_pwrite.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/file_pread_pwrite.wasm",
+        "git_blob": "8168952e1a16d7ee27f263dc0f091bd4d421e8ce",
+        "sha256": "ef3a9bd0585573e1b21740d7ffe4e64a2535a61f37b0b69c8375a150351252f8"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/file_seek_tell.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/file_seek_tell.wasm",
+        "git_blob": "635d0a007780cad9bb365a025558eb9671743f51",
+        "sha256": "c9e03fe0f4c83ccbf3a60c6e87bbf627e775ca46a033ce33815a7f207550d3ea"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/file_truncation.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/file_truncation.wasm",
+        "git_blob": "91bd210cb9a3734a19e63f0fb212f79cce5017cf",
+        "sha256": "a4f1dea62575ba4d8ec5cb9fd845b5c3bfce08eedb957a7c1e2846ac6fd857f5"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/file_unbuffered_write.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/file_unbuffered_write.wasm",
+        "git_blob": "167bc6465437fb6ae1fad15f689197b063a28fa2",
+        "sha256": "9bb24e59e1b5b67d8ef961b9146a6c24d7ee79ebc4ff4d958b3177103950b2fe"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/fs-tests.dir/.keep",
+        "git_blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/fstflags_validate.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/fstflags_validate.wasm",
+        "git_blob": "12eeefd29f59586757128ba16ade8eb5093f9d4c",
+        "sha256": "c0f5a62d09a57cf55968f899c01c8852742d93cf9014473d0ed041457badf2dd"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/interesting_paths.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/interesting_paths.wasm",
+        "git_blob": "70105b61bf21d4303e0d2453b20c5ee86daf4a02",
+        "sha256": "9c9c92082d600b9295f6c58756c10db24202342dd035a6933f263bef25867c8d"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/isatty.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/isatty.wasm",
+        "git_blob": "5781b29a47b89a5a2389718867db733f55e80527",
+        "sha256": "f295b740b80d2b28546438e01bc1ca814d10fc548f2c66e28796eab3abdbbb64"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/manifest.json",
+        "git_blob": "f33787ae60e86676a1ddb70695bc67af8bb107e7",
+        "sha256": "39d7f5f260e0a84f9a1bdd5df9c309000d2dc114fd71626c68d2479a0aafd608"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/nofollow_errors.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/nofollow_errors.wasm",
+        "git_blob": "ad492601d2aa0bb8ef9d7a7a558ee25dc13529f6",
+        "sha256": "701647cbbafc1df3bfe1dc65178a96d91dbfa773290f0aa31e8b69acf6a8ff8e"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/overwrite_preopen.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/overwrite_preopen.wasm",
+        "git_blob": "3185fee33b33dcb0132e66017db111a8b7653802",
+        "sha256": "14a4ccdbe9f3bfa75170df39c7bb334299eef84d1fe43683b5988c4b34dca5c4"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_exists.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_exists.wasm",
+        "git_blob": "e0fe751ec889e6e1639405ad2e6d91b4c9101fcf",
+        "sha256": "2949c4450524b72e70654a88ebffb5130f78c87af9c75307006bbdbf772f6b80"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_filestat.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_filestat.wasm",
+        "git_blob": "d60c1f22415a45294d300fbf1f675ffc5b916cd7",
+        "sha256": "6dfa8093a0c8ca26ba2fb0fa7a44c83a8e88a7b4e009b08f52b46c54579fe272"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_link.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_link.wasm",
+        "git_blob": "7f7fc13ee39e3e332e7c58c974cc7a0ced6677c3",
+        "sha256": "019ba41a5794e0708a876d7ab5177fae4b30e1aab160053f5d1d6abd2dd63750"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_open_create_existing.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_open_create_existing.wasm",
+        "git_blob": "cf2acb280fd387cda6a7fade17124755dccb0d37",
+        "sha256": "d561fe31fa2cbc1adf81c1c9e2b5009ae24267732f60c1a8a58ae40c10e84c1a"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_open_dirfd_not_dir.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_open_dirfd_not_dir.wasm",
+        "git_blob": "0efa4a7220e935db28852f19e23baf4fc1143a5f",
+        "sha256": "a87f8e3581b13f2c2138070817218af16f1ed1b57c0d5e9fc5db8dbadf6aa537"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_open_missing.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_open_missing.wasm",
+        "git_blob": "3a0105c8824c1efce5b32dff8afe86d18fbba82a",
+        "sha256": "cb55aba319ed3cf0a358f03e4b1c2b46dcd99258b084a3c18fb97386ad0c55ce"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_open_nonblock.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_open_nonblock.wasm",
+        "git_blob": "712152a9356b5c233e403cac4a816c64605cf1c8",
+        "sha256": "35e63b32598830a518e46a48da8179acc4a9ca80b1a2be653f6d5ea224917f22"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_open_preopen.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_open_preopen.wasm",
+        "git_blob": "7fa7742ca02ccca4b8b8858303b1aa6d806473cf",
+        "sha256": "fc8c5d8021fd3f403a3dbbd09cc75f1f7009026f67af21905d14a5a798cb3d32"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_open_read_write.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_open_read_write.wasm",
+        "git_blob": "635e336b2b40d093b345884ce33e0759990ba61c",
+        "sha256": "2dd4ed307cae4790f9527eeb6acb5f1e5f29fc0d214ca59b5d53f2433e8086e0"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_rename.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_rename.wasm",
+        "git_blob": "eb4c7f2473c9d978df280a7789a152d1ac80c65b",
+        "sha256": "baadda7183ff4e14f17b092ec2ed3bd152b89f7c9457969034efa22fc6f731af"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_rename_dir_trailing_slashes.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_rename_dir_trailing_slashes.wasm",
+        "git_blob": "649b647d866c166616ec1d012c87cba93e68cdc9",
+        "sha256": "103439ae3fd591fbce0f678634e7d94323bb0edad921ff837132369346cdef83"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_symlink_trailing_slashes.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/path_symlink_trailing_slashes.wasm",
+        "git_blob": "a5b0cdf8bf0305392a25fa84d60e52e61fc838ce",
+        "sha256": "be7a6f5a82811489641fefcf90e7ef5085c0eae61853fa7035a8304b0adb623b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/poll_oneoff_stdio.wasm",
+        "git_blob": "d924dae0f6fdecb72d556d2d9acfb075788ea8be",
+        "sha256": "9f20098f08959683b519cd86f8a3278697f1a503291bdfb800f1d7eed76bc655"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/readlink.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/readlink.wasm",
+        "git_blob": "fa45401c64e52ae715393bc0fc14822232b2332c",
+        "sha256": "642ddc2349d21b04f74f68cdeb9377d38d6e629c49fc0a15558b427f640d225e"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/remove_directory_trailing_slashes.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/remove_directory_trailing_slashes.wasm",
+        "git_blob": "f4df3579279c2bcacd8f515325547beee1ceac97",
+        "sha256": "bc58b5a4dcf3c4290651c79faef3b70cfb94766535ff7ea61db02d2af792bc87"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/remove_nonempty_directory.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/remove_nonempty_directory.wasm",
+        "git_blob": "a9354e0cb3853964e674588eb5bee18e06daa87f",
+        "sha256": "2eb65477ba60f131560126d7c364636f296093d25ca2d1c8f1253756598ecb46"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/renumber.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/renumber.wasm",
+        "git_blob": "8ca29e2f8dcfb35c7eb46df15924954faff9122e",
+        "sha256": "c009de0369027d13a88aa5d79b7ba861d2e05c7a0e14fb84923557180bced073"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/sched_yield.wasm",
+        "git_blob": "17f758353d3d36d1cdc950677032a31bbed34705",
+        "sha256": "ffcff636a545dfe8fd5b944ee3fa08878d0d95193f6054d4291a5c2f0c23d9f7"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/stdio.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/stdio.wasm",
+        "git_blob": "bc91bffed8dca3f63c23df764eb0fb093e27644e",
+        "sha256": "e506c254d5ddb73cf467db460686204699a10e425227a66beb9bc01c756c8ffc"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/symlink_create.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/symlink_create.wasm",
+        "git_blob": "7cde7f2af638d3a1a5c1c2f859af3d89df9a6337",
+        "sha256": "79d856c443e9925f7cf4a88bae5965ffb26f2ffd23d2fdb69235e44fc4be28e3"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/symlink_filestat.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/symlink_filestat.wasm",
+        "git_blob": "94d6cd6912506bc1c523228fb6b682c4ad7f8b6e",
+        "sha256": "65a779aa12847977ec23df179719f38ed3c05665a811f71d418fe6a56bac4b63"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/symlink_loop.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/symlink_loop.wasm",
+        "git_blob": "3c5bb22f8c189ca663d3a66e52e487158a9d4fa1",
+        "sha256": "a94da19dc114024f5cb34b387ca1d002d35a80012b26d08642973b689974e479"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/truncation_rights.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/truncation_rights.wasm",
+        "git_blob": "52c5e88738b8a42511d3583cf01335146d1e474a",
+        "sha256": "6d603ea4592ab28be6af56f7f9c5500bf111d310f7e793decb275bfccf044e44"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/unlink_file_trailing_slashes.json",
+        "git_blob": "8cbddcb06abeb91e6b974f620c91915b7d98530c",
+        "sha256": "edde1b667229a18e8ed6cf5d1b6fe8f6a02a30094dc05dd47f3167894758b84b"
+      },
+      {
+        "path": "tests/rust/testsuite/wasm32-wasip1/unlink_file_trailing_slashes.wasm",
+        "git_blob": "2742ff2d67b1c6b145b39bdfc14eb51ad7b4cd44",
+        "sha256": "9bf3a2aee6ce637a2b4c11ed01e575bd3c66ea8a48df15f20a05639b0abd85d1"
+      }
+    ],
+    "runner_inputs": [
+      {
+        "path": "requirements.txt",
+        "git_blob": "3e2d68e90c78e1b080e7f561d44faf79630a6eaf",
+        "sha256": "089360d7eb4a15a5cde216914179d2bf467560819b4364f10998312ad2ed07be"
+      },
+      {
+        "path": "requirements/common.txt",
+        "git_blob": "86690f90bb7a329302f0cfbe262c1829335aaf98",
+        "sha256": "b6aa1ac33c275385250bafe8483676cc988beab6c3ff0a7aea33c55d42326fa5"
+      },
+      {
+        "path": "requirements/dev.txt",
+        "git_blob": "ceab763279c110d8e57b0e97ee3f0b7bfc4603e0",
+        "sha256": "3b740adb8ac561e01d2176c698bcc03798db2875a6d702c600358dde727ea656"
+      },
+      {
+        "path": "requirements/prod.txt",
+        "git_blob": "c3899b0c47654465e0b6f503128b8932aaaf63cf",
+        "sha256": "2fd41afcedb2dfdcd3506914a73b44649378f75cd4b35c935d70b0ea596a1720"
+      },
+      {
+        "path": "wasi_test_runner/__init__.py",
+        "git_blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "wasi_test_runner/__main__.py",
+        "git_blob": "c3579d4b09a75a425fb17dba88c1773fee385a62",
+        "sha256": "ed5bed70e29c038c5081a363a9b1b483017c61d24d162b1fdc0970832e263acc"
+      },
+      {
+        "path": "wasi_test_runner/filters.py",
+        "git_blob": "06e4f67eb0b2a85bab4524d4be7447abdc0d4dcc",
+        "sha256": "0ecb73f205d3fd2bbefe01aed7ab19e9d9664065cbd7e078181c2e103465bda2"
+      },
+      {
+        "path": "wasi_test_runner/harness.py",
+        "git_blob": "20013f8575ff0e382223a3f1093c65063d367062",
+        "sha256": "e91dc344a63be6b63a2575cb7d21f6f479572270bacc3509e3226d99a86f06a8"
+      },
+      {
+        "path": "wasi_test_runner/reporters/__init__.py",
+        "git_blob": "444cdc44a8cda59b09af520f41645d960d6cc7b2",
+        "sha256": "ae4c159259cd18bfeb29dc495d00d3cbdb7a89cf503e1c5b41256649e87ecd84"
+      },
+      {
+        "path": "wasi_test_runner/reporters/console.py",
+        "git_blob": "e347d739bdfe05fd17259893012535dcd2f5924e",
+        "sha256": "8704d25d595bed402124951447ab3030905686ec9815ef3e8a883af08e068517"
+      },
+      {
+        "path": "wasi_test_runner/reporters/json.py",
+        "git_blob": "b2151cfff412a948ae1eebf9cff586e792269e54",
+        "sha256": "f3663a1fabad681cc22a031e22a1ad0973ef2046994c65a360ac90a70cb78f5c"
+      },
+      {
+        "path": "wasi_test_runner/runtime_adapter.py",
+        "git_blob": "51ec623ed53f98969b75b29389dbde97372a1f6d",
+        "sha256": "19fc8e7b62090f957ed5fd97e224b466046596b2543083f075973dfa2b794f6c"
+      },
+      {
+        "path": "wasi_test_runner/test_case.py",
+        "git_blob": "0d5d1408a14563cc4d49cbfec54f4d023e434d9b",
+        "sha256": "ae77d14ac81870502d410e7c993c591cc54d902b54f8b1edf17738b5c26035cf"
+      },
+      {
+        "path": "wasi_test_runner/test_suite.py",
+        "git_blob": "1d4ad47495c8c59fb2b724fe519fc367a07bd3e6",
+        "sha256": "b5779550072eae60212e9c2eac7e565b12d823381d76fe4ffd387fce58894329"
+      },
+      {
+        "path": "wasi_test_runner/test_suite_runner.py",
+        "git_blob": "6199d565a736992d5d5eb9b215e5bfa630faad78",
+        "sha256": "476d3f3088433ccf3bc6f9751a42cecfefad7f6b1955b4a71710184857c8308f"
+      }
+    ]
+  },
+  "coverage_limits": {
+    "not_imported_by_official_guests": [
+      "fd_datasync",
+      "fd_sync",
+      "proc_raise",
+      "sock_accept",
+      "sock_recv",
+      "sock_send"
+    ],
+    "sock_shutdown": "invalid-fd and non-socket cases only",
+    "platform": "native Dart VM; Node/browser official execution not qualified"
+  },
+  "upstream_observation": {
+    "observed_at": "2026-10-17",
+    "source_commit": "761c6f5eaeccdea16f64a95d8d3a63693f2e90b2",
+    "fixture_commit": "d552798a246242c3efe6931314cdfa93d6eefa52",
+    "adopted": false,
+    "reason": "Preview1 source tests and 72-case inventory unchanged; 63 fixture binaries rebuilt. Retain cached qualified inputs."
+  }
+}

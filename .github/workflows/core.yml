@@ -34,6 +34,7 @@ jobs:
       - run: dart analyze
       - run: dart analyze tool/core_spec_runner.dart
       - run: dart analyze tool/component_spec_runner.dart
+      - run: dart analyze tool/wasi_testsuite_preview1_gate.dart
       - run: dart test test/wasm_core_features_test.dart
       - run: dart test test/wasm_host_globals_test.dart
       - run: dart test test/wasm_host_tags_test.dart
@@ -80,6 +81,8 @@ jobs:
       - run: dart test -p chrome test/component_test.dart
       - run: dart test -p node test/wasi_component_wit_test.dart test/wasi_component_wit_adapter_runtime_test.dart
       - run: dart test -p chrome test/wasi_component_wit_test.dart test/wasi_component_wit_adapter_runtime_test.dart
+      - run: dart test -p node test/wasi_test.dart
+      - run: dart test -p chrome test/wasi_test.dart
       - run: >-
           dart test -p node -p chrome
           test/wasi_component_versioned_host_test.dart
@@ -123,7 +126,11 @@ jobs:
           repository: WebAssembly/wasi-testsuite
           ref: c63d52e69316d1aa2c9e7db6251892775204e7e0
           path: third_party/wasi-testsuite-fixtures
-          sparse-checkout: tests/rust/testsuite/wasm32-wasip3
+          sparse-checkout: |
+            tests/rust/testsuite/wasm32-wasip3
+            tests/assemblyscript/testsuite/wasm32-wasip1
+            tests/c/testsuite/wasm32-wasip1
+            tests/rust/testsuite/wasm32-wasip1
           persist-credentials: false
       - run: python3 -m venv build/wasi-testsuite-venv
       - run: 'build/wasi-testsuite-venv/bin/python -m pip install --only-binary=:all: -r third_party/wasi-testsuite-source/test-runner/requirements.txt'
@@ -136,6 +143,13 @@ jobs:
           DART: dart
           WASD_PREVIEW3_RUNNER: "${{ github.workspace }}/build/wasi-preview3-runner"
         run: dart run tool/wasi_testsuite_preview3_runner.dart --testsuite-dir third_party/wasi-testsuite-fixtures --runner-dir third_party/wasi-testsuite-source/test-runner --python build/wasi-testsuite-venv/bin/python --json build/wasi-preview3.json --markdown build/wasi-preview3.md
+      - name: Run official Preview1 tests (Dart VM)
+        run: dart run tool/wasi_testsuite_preview1_gate.dart --testsuite-dir third_party/wasi-testsuite-fixtures --runner-dir third_party/wasi-testsuite-source/test-runner --python build/wasi-testsuite-venv/bin/python --json build/wasi-preview1.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: wasi-preview1-native-${{ matrix.os }}
+          path: build/wasi-preview1.json*
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
