@@ -9,6 +9,158 @@ import 'package:wasd/src/wasi/component/wit_document.dart';
 
 void main() {
   group('official WASI Preview3 WIT', () {
+    test('resolves and caches both supported Preview3 contract versions', () {
+      var worldCount = 0;
+      for (final package in const [
+        'random',
+        'clocks',
+        'filesystem',
+        'sockets',
+        'cli',
+        'http',
+      ]) {
+        final world = package == 'http' ? 'service' : 'imports';
+        final old = resolveWASIComponentStandardWitTarget(
+          'wasi:$package/$world@0.3.0',
+        )!.document;
+        final current = resolveWASIComponentStandardWitTarget(
+          'wasi:$package/$world@0.3.1',
+        );
+        expect(current, isNotNull, reason: package);
+        final document = current!.document;
+        expect(document.package!.text, 'wasi:$package@0.3.1');
+        expect(document, isNot(same(old)));
+        expect(
+          resolveWASIComponentStandardWitTarget(
+            'wasi:$package/${document.interfaces.first.name}@0.3.1',
+          )!.document,
+          same(document),
+        );
+        expect(
+          document.interfaces.map((item) => item.name),
+          old.interfaces.map((item) => item.name),
+        );
+        expect(
+          document.worlds.map((item) => item.name),
+          old.worlds.map((item) => item.name),
+        );
+        worldCount += document.worlds.length;
+        for (var index = 0; index < document.interfaces.length; index++) {
+          final interface = document.interfaces[index];
+          expect(
+            interface.functions.map(
+              (function) => (function.name, function.signature),
+            ),
+            old.interfaces[index].functions.map(
+              (function) => (function.name, function.signature),
+            ),
+          );
+        }
+        for (final target in <WASIComponentWitTarget>[
+          for (final interface in document.interfaces)
+            for (final use in interface.uses) use.target,
+          for (final world in document.worlds)
+            for (final item in world.items) item.target,
+        ]) {
+          if (!target.isQualified) continue;
+          expect(target.text, endsWith('@0.3.1'));
+          final resolved = resolveWASIComponentStandardWitTarget(target.text);
+          expect(resolved, isNotNull);
+          expect(
+            resolved!.document.interfaceNamed(resolved.memberName) != null ||
+                resolved.document.worldNamed(resolved.memberName) != null,
+            isTrue,
+            reason: target.text,
+          );
+        }
+      }
+      expect(worldCount, 8);
+      expect(
+        _document('wasi:clocks/types@0.3.1').interfaceNamed('timezone'),
+        isNull,
+      );
+    });
+
+    test('keeps unsupported Preview3 version keys unresolved', () {
+      for (final suffix in const [
+        '',
+        '@0.3',
+        '@0.3.2',
+        '@0.3.10',
+        '@0.3.01',
+        '@0.3.1-rc.1',
+        '@0.3.1+build',
+      ]) {
+        for (final package in const [
+          'random',
+          'clocks',
+          'filesystem',
+          'sockets',
+          'cli',
+          'http',
+        ]) {
+          expect(
+            resolveWASIComponentStandardWitTarget(
+              'wasi:$package/imports$suffix',
+            ),
+            isNull,
+            reason: '$package$suffix',
+          );
+        }
+      }
+      expect(
+        resolveWASIComponentStandardWitTarget('acme:random/imports@0.3.1'),
+        isNull,
+      );
+    });
+
+    test('pins the separate 0.3.1 input and normalized contract digests', () {
+      final manifest =
+          jsonDecode(
+                File(
+                  'tool/wasi_preview3_contract.lock.json',
+                ).readAsStringSync(),
+              )
+              as Map<String, Object?>;
+      final adoption = manifest['wasi_0_3_1'] as Map<String, Object?>;
+      expect(adoption['commit'], '59e48bfe3fae9bf2480eb15abd8f55999eb3b395');
+      expect(adoption['version'], '0.3.1');
+      expect(adoption['scope'], 'versioned-contract-and-linking');
+      expect(adoption['compatible_versions'], ['0.3.0', '0.3.1']);
+      expect(adoption['adopted_features'], [
+        'map',
+        'implements',
+        'external-id',
+      ]);
+      expect(adoption['excluded'], ['wasi:clocks/timezone@0.3.1']);
+      final delta = adoption['source_delta'] as Map<String, Object?>;
+      expect(delta['base_commit'], '3ee2a590c766594ae44a54730fc74fc27da5c609');
+      expect((delta['changed_wit'] as List<Object?>), hasLength(18));
+      expect(delta['signature_changes'], 0);
+      final gates = adoption['gate_results'] as Map<String, Object?>;
+      expect(gates['contract_packages'], {'passed': 6, 'total': 6});
+      expect(gates['contract_worlds'], {'passed': 8, 'total': 8});
+      expect(gates['wit_host_packages'], {'passed': 6, 'total': 6});
+      final digests = adoption['normalized_sha256'] as Map<String, Object?>;
+      final source = File(
+        'lib/src/wasi/component/standard_wit_preview3.dart',
+      ).readAsStringSync().replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+      final matches = RegExp(
+        r"const String _wasi([A-Za-z]+)030Source = r'''([\s\S]*?)''';",
+      ).allMatches(source).toList();
+      expect(matches, hasLength(6));
+      for (final match in matches) {
+        final normalized = match.group(2)!.replaceAll('@0.3.0', '@0.3.1');
+        expect(
+          sha256.convert(utf8.encode(normalized)).toString(),
+          digests['wasi:${match.group(1)!.toLowerCase()}'],
+        );
+        expect(normalized, isNot(contains('@0.3.0')));
+        expect(normalized, contains('@since(version = 0.3.0)'));
+        expect(normalized, isNot(contains('@since(version = 0.3.1)')));
+      }
+    });
+
     test('pins the frozen Preview3 contract inputs', () {
       final manifest =
           jsonDecode(

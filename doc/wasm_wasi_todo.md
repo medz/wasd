@@ -130,6 +130,13 @@ P2/P3 work starts only after these P1 gates are green.
     ContextJ/ContextO are rejected explicitly.
 
 - [x] `SUPPORT-P3`
+  - Unreleased after `0.6.0-dev.2`: an explicit `0.3.1` contract/linking slice
+    retains `0.3.0`. It covers six-package/eight-world WIT resolution, exact
+    built-in callback aliases, and custom command/service execution inputs
+    with actual host calls, async results and resource cleanup. Source and
+    digest metadata are under `wasi_0_3_1` in the lock below. Full `0.3.1`
+    acceptance remains in the [standards plan](standards.md); the official
+    `45/45` result below continues to identify `0.3.0` guest inputs.
   - Status: acceptance for `0.6.0-dev.2` covers the frozen
     Linux/macOS native Dart VM AOT profile for stable WASI 0.3.0
     `wasi:cli/command` and `wasi:http/service` components.

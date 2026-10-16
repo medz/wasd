@@ -23,6 +23,8 @@ import 'package:wasd/src/wasi/preview2/sockets.dart';
 import 'package:wasd/src/wasi/preview3/cli.dart';
 import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasi/preview3/filesystem.dart';
+import 'package:wasd/src/wasi/preview3/http.dart';
+import 'package:wasd/src/wasi/preview3/sockets.dart';
 import 'package:wasd/src/wasi/version.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/memory.dart';
@@ -213,6 +215,294 @@ void main() {
   });
 
   group('fixed WASI component host versions', () {
+    test(
+      'Preview3 0.3.1 executes random clocks CLI and filesystem WIT calls',
+      () async {
+        final filesystem = WASIPreview3FilesystemHost(
+          preopens: {
+            '/': WASIPreview3FilesystemDirectory(
+              entries: [
+                WASIPreview3FilesystemDirectoryEntry.regularFile(
+                  'hello.txt',
+                  bytes: [104, 105],
+                ),
+              ],
+            ),
+          },
+        );
+        final host = WASIPreview3ComponentHost(
+          filesystemHost: filesystem,
+          args: ['command', '031'],
+          stdinData: [111, 107],
+        );
+        addTearDown(host.close);
+        WASIComponentWitAdapterProgram bind(String package) {
+          final document = WASIComponentWitDocument.parse(
+            'world test { include wasi:$package/imports@0.3.1; }',
+          );
+          expect(
+            WASIPreview2ComponentHost().prepareWitWorld(document).canIngest,
+            isFalse,
+          );
+          return host.bindWitWorld(document);
+        }
+
+        final baseline = host.componentHost.table.activeCount;
+        await host.componentHost.table.runScoped(() async {
+          final random = bind('random');
+          expect(
+            _u8List(
+              random.invokeImport('wasi:random/random@0.3.1.get-random-bytes', [
+                    BigInt.from(8),
+                  ])
+                  as WasmComponentValueData,
+            ),
+            hasLength(8),
+          );
+          expect(
+            random.invokeImport('wasi:random/random@0.3.1.get-random-u64', []),
+            isA<BigInt>(),
+          );
+          final clocks = bind('clocks');
+          final before =
+              clocks.invokeImport('wasi:clocks/monotonic-clock@0.3.1.now', [])
+                  as BigInt;
+          await clocks.invokeImportAsync(
+            'wasi:clocks/monotonic-clock@0.3.1.wait-for',
+            [BigInt.from(1000)],
+          );
+          final after =
+              clocks.invokeImport('wasi:clocks/monotonic-clock@0.3.1.now', [])
+                  as BigInt;
+          expect(after, greaterThanOrEqualTo(before + BigInt.from(1000)));
+          final cli = bind('cli');
+          expect(
+            _stringList(
+              cli.invokeImport('wasi:cli/environment@0.3.1.get-arguments', [])
+                  as WasmComponentValueData,
+            ),
+            ['command', '031'],
+          );
+          final input =
+              cli.invokeImport('wasi:cli/stdin@0.3.1.read-via-stream', [])
+                  as List<Object?>;
+          expect((input[0] as WASIComponentReadableStream<int>).read(8), [
+            111,
+            107,
+          ]);
+          expect(
+            (await (input[1] as WASIComponentFuture<WasmComponentValueData>)
+                    .readable
+                    .readWhenReady())
+                .isOk,
+            isTrue,
+          );
+          final files = bind('filesystem');
+          final directories = _filesystemPreopens(
+            files.invokeImport(
+                  'wasi:filesystem/preopens@0.3.1.get-directories',
+                  [],
+                )
+                as WasmComponentValueData,
+          );
+          expect(directories.single.$2, '/');
+          final opened =
+              await files.invokeImportAsync(
+                    'wasi:filesystem/types@0.3.1.descriptor.open-at',
+                    [
+                      directories.single.$1,
+                      _flagsValue([]),
+                      'hello.txt',
+                      _flagsValue([]),
+                      _flagsValue(['read']),
+                    ],
+                  )
+                  as WasmComponentValueData;
+          final file = _resourceHandle(_resultOk(opened));
+          final contents =
+              files.invokeImport(
+                    'wasi:filesystem/types@0.3.1.descriptor.read-via-stream',
+                    [file, BigInt.zero],
+                  )
+                  as List<Object?>;
+          expect((contents[0] as WASIComponentStream<int>).readable.read(8), [
+            104,
+            105,
+          ]);
+          expect(
+            (await (contents[1] as WASIComponentFuture<WasmComponentValueData>)
+                    .readable
+                    .readWhenReady())
+                .isOk,
+            isTrue,
+          );
+        });
+        expect(host.componentHost.table.activeCount, baseline);
+      },
+    );
+
+    test('Preview3 callback aliases preserve exact version overrides', () {
+      final document = WASIComponentWitDocument.parse('''
+world clocks {
+  import wasi:clocks/monotonic-clock@0.3.0;
+  import wasi:clocks/monotonic-clock@0.3.1;
+}
+''');
+      final host = WASIPreview3ComponentHost();
+      addTearDown(host.close);
+      const oldKey = 'wasi:clocks/monotonic-clock@0.3.0.get-resolution';
+      const newKey = 'wasi:clocks/monotonic-clock@0.3.1.get-resolution';
+      expect(host.standardImports[newKey], isNotNull);
+      expect(host.standardImports[newKey], same(host.standardImports[oldKey]));
+      for (final entry in host.standardImports.entries) {
+        if (!entry.key.contains('@0.3.0.') ||
+            entry.key.startsWith('wasi:clocks/timezone@')) {
+          continue;
+        }
+        expect(
+          host.standardImports[entry.key.replaceFirst('@0.3.0.', '@0.3.1.')],
+          same(entry.value),
+        );
+      }
+      expect(
+        host.standardImports,
+        isNot(contains('wasi:clocks/timezone@0.3.1.iana-id')),
+      );
+      final oldOverride = host.bindWitWorld(
+        document,
+        imports: {oldKey: (_) => BigInt.from(7)},
+      );
+      expect(oldOverride.invokeImport(oldKey, []), BigInt.from(7));
+      expect(oldOverride.invokeImport(newKey, []), BigInt.from(1000));
+      final newOverride = host.bindWitWorld(
+        document,
+        imports: {newKey: (_) => BigInt.from(9)},
+      );
+      expect(newOverride.invokeImport(newKey, []), BigInt.from(9));
+      expect(newOverride.invokeImport(oldKey, []), BigInt.from(1000));
+      expect(
+        () => host.standardImports[newKey] = (_) => BigInt.zero,
+        throwsUnsupportedError,
+      );
+    });
+
+    test('Preview3 WIT plans reject unsupported patch and prerelease keys', () {
+      final host = WASIPreview3ComponentHost();
+      addTearDown(host.close);
+      for (final version in ['0.3.2', '0.3.10', '0.3.1-rc.1']) {
+        final target = 'wasi:random/imports@$version';
+        final document = WASIComponentWitDocument.parse(
+          'world test { include $target; }',
+        );
+        final plan = host.prepareWitWorld(document);
+        expect(plan.canIngest, isFalse);
+        expect(plan.versionErrors.single.targetName, target);
+        expect(
+          plan.versionErrors.single.reason,
+          contains('no resolver result'),
+        );
+      }
+    });
+
+    for (final version in const ['0.3.0', '0.3.1']) {
+      test('Preview3 $version binds socket resources and async DNS', () async {
+        final queries = <String>[];
+        final host = WASIPreview3ComponentHost(
+          resolveAddresses: (name) async {
+            queries.add(name);
+            return [WASIPreview3IpAddress.ipv4(192, 0, 2, 1)];
+          },
+        );
+        addTearDown(host.close);
+        final document = WASIComponentWitDocument.parse('''
+world sockets { include wasi:sockets/imports@$version; }
+''');
+        final program = host.bindWitWorld(document);
+        final baseline = host.componentHost.table.activeCount;
+        final created =
+            program.invokeImport(
+                  'wasi:sockets/types@$version.tcp-socket.create',
+                  [_enumValue('ipv4')],
+                )
+                as WasmComponentValueData;
+        final handle = _resourceHandle(_resultOk(created));
+        final family =
+            program.invokeImport(
+                  'wasi:sockets/types@$version.tcp-socket.get-address-family',
+                  [handle],
+                )
+                as WasmComponentValueData;
+        expect(family.kind, WasmComponentValueDataKind.enumeration);
+        expect(family.label, 'ipv4');
+        final addresses =
+            await program.invokeImportAsync(
+                  'wasi:sockets/ip-name-lookup@$version.resolve-addresses',
+                  ['example.test'],
+                )
+                as WasmComponentValueData;
+        expect(queries, ['example.test']);
+        expect(_resultOk(addresses).items.single.label, 'ipv4');
+        host.componentHost.table.dropNamed(
+          'wasi:sockets/types@0.3.0.tcp-socket',
+          handle,
+        );
+        expect(host.componentHost.table.activeCount, baseline);
+      });
+
+      test(
+        'Preview3 $version binds HTTP fields and client resource calls',
+        () async {
+          final backend = _Preview3HttpBackend();
+          final http = WASIPreview3HttpHost(clientBackend: backend);
+          final host = WASIPreview3ComponentHost(httpHost: http);
+          addTearDown(host.close);
+          final document = WASIComponentWitDocument.parse('''
+world http {
+  import wasi:http/types@$version;
+  import wasi:http/client@$version;
+}
+''');
+          final program = host.bindWitWorld(document);
+          final baseline = host.componentHost.table.activeCount;
+          final created =
+              program.invokeImport(
+                    'wasi:http/types@$version.fields.from-list',
+                    [
+                      _httpFieldListValue([
+                        ('X-Request', [49]),
+                      ]),
+                    ],
+                  )
+                  as WasmComponentValueData;
+          final fields = _resourceHandle(_resultOk(created));
+          final copied =
+              program.invokeImport('wasi:http/types@$version.fields.copy-all', [
+                    fields,
+                  ])
+                  as WasmComponentValueData;
+          final entries = _httpFieldEntries(copied);
+          expect(entries.single.$1, 'X-Request');
+          expect(entries.single.$2, [49]);
+          http.table.dropNamed('wasi:http/types@0.3.0.fields', fields);
+          final request = WASIPreview3HttpRequest.noTrailers(
+            headers: WASIPreview3HttpFields(),
+          )..authority = 'example.test';
+          final sent =
+              await program.invokeImportAsync(
+                    'wasi:http/client@$version.send',
+                    [http.insertRequest(request)],
+                  )
+                  as WasmComponentValueData;
+          expect(backend.request, same(request));
+          expect(
+            http.takeResponse(_resourceHandle(_resultOk(sent))).statusCode,
+            201,
+          );
+          expect(http.table.activeCount, baseline);
+        },
+      );
+    }
+
     test('rejects Preview2 overrides backed by different resource tables', () {
       final firstTable = WASIComponentResourceTable();
       final secondTable = WASIComponentResourceTable();
@@ -7709,3 +7999,19 @@ Uint8List _canonicalStreamProgramBytes() => Uint8List.fromList(const <int>[
   0x14,
   0x00,
 ]);
+
+final class _Preview3HttpBackend implements WASIPreview3HttpBackend {
+  WASIPreview3HttpRequest? request;
+
+  @override
+  WASIPreview3HttpResult<WASIPreview3HttpResponse> handle(
+    WASIPreview3HttpRequest request,
+  ) {
+    this.request = request;
+    request.completeTransmission(const WASIPreview3HttpResult<void>.ok(null));
+    return WASIPreview3HttpResult<WASIPreview3HttpResponse>.ok(
+      WASIPreview3HttpResponse.noTrailers(headers: WASIPreview3HttpFields())
+        ..statusCode = 201,
+    );
+  }
+}

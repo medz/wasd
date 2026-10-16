@@ -13,6 +13,13 @@
 //   wasi:cli: 4c88aa3c1abb19864150a35c0d0d4742fc281099eaf3bf46cc939927dc2dc74d
 //   wasi:http: 245048008576712e5af4d7b09d91e16c4f7cf6736e2458c4f9f9b4598f3c4400
 
+// WASI 0.3.1 source: 59e48bfe3fae9bf2480eb15abd8f55999eb3b395.
+// All 18 changed WIT files retain the same syntax after version references
+// change; the HTTP fields comment additionally permits transmission recasing.
+// The source-delta hashes and 0.3.1 normalized digests are recorded separately
+// in tool/wasi_preview3_contract.lock.json. Only @0.3.0 references are derived;
+// @since(version = 0.3.0) gates and the 0.3.0 compatibility input stay intact.
+
 part of 'standard_wit.dart';
 
 const String _wasiRandom030Source = r'''package wasi:random@0.3.0;
@@ -1017,38 +1024,19 @@ interface client {
 }
 ''';
 
-final WASIComponentWitDocument _wasiRandom030Document =
-    WASIComponentWitDocument.parse(
-      _wasiRandom030Source,
-      sourceName: 'wasi:random@0.3.0',
-    );
+final Map<String, WASIComponentWitDocument> _preview3Documents = {};
 
-final WASIComponentWitDocument _wasiClocks030Document =
-    WASIComponentWitDocument.parse(
-      _wasiClocks030Source,
-      sourceName: 'wasi:clocks@0.3.0',
-    );
-
-final WASIComponentWitDocument _wasiFilesystem030Document =
-    WASIComponentWitDocument.parse(
-      _wasiFilesystem030Source,
-      sourceName: 'wasi:filesystem@0.3.0',
-    );
-
-final WASIComponentWitDocument _wasiSockets030Document =
-    WASIComponentWitDocument.parse(
-      _wasiSockets030Source,
-      sourceName: 'wasi:sockets@0.3.0',
-    );
-
-final WASIComponentWitDocument _wasiCli030Document =
-    WASIComponentWitDocument.parse(
-      _wasiCli030Source,
-      sourceName: 'wasi:cli@0.3.0',
-    );
-
-final WASIComponentWitDocument _wasiHttp030Document =
-    WASIComponentWitDocument.parse(
-      _wasiHttp030Source,
-      sourceName: 'wasi:http@0.3.0',
-    );
+WASIComponentWitDocument _preview3Document(
+  String source,
+  String packageName,
+  String version,
+) {
+  final key = '$packageName@$version';
+  return _preview3Documents.putIfAbsent(
+    key,
+    () => WASIComponentWitDocument.parse(
+      version == '0.3.0' ? source : source.replaceAll('@0.3.0', '@$version'),
+      sourceName: key,
+    ),
+  );
+}

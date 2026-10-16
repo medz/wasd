@@ -63,5 +63,143 @@
       "xpassed": 0,
       "failed_fixtures": []
     }
+  },
+  "wasi_0_3_1": {
+    "version": "0.3.1",
+    "repository": "https://github.com/WebAssembly/WASI",
+    "commit": "59e48bfe3fae9bf2480eb15abd8f55999eb3b395",
+    "scope": "versioned-contract-and-linking",
+    "compatible_versions": [
+      "0.3.0",
+      "0.3.1"
+    ],
+    "adopted_features": [
+      "map",
+      "implements",
+      "external-id"
+    ],
+    "component_model_commit": "0220da84209397d9067c19cac83dae969aa85a7b",
+    "excluded": [
+      "wasi:clocks/timezone@0.3.1"
+    ],
+    "normalized_sha256": {
+      "wasi:random": "853f1ce3c296d48576152b03de95aea7d2f17f8ec547818086364f26624e2757",
+      "wasi:clocks": "5363336f366db4199c33d613458eba9639207826cf6285eac8eb76d7e1e898bb",
+      "wasi:filesystem": "70ec82f622e22dab31e72e6a85a58e55a755f2030da89c2c288ed8b9896a27e9",
+      "wasi:sockets": "74ac1b50aecf5e893160518e3112ac573066088e7ca9990aefcd1526ab3f17c1",
+      "wasi:cli": "5d3d4bb4e739297f000625702b1dbc2092722e73115b3d17bfbabf074f4e3065",
+      "wasi:http": "d427f14d4241167d4e2d69d98077a4d1ad03a060c5fb3b12add1f82a777e5794"
+    },
+    "source_delta": {
+      "base_commit": "3ee2a590c766594ae44a54730fc74fc27da5c609",
+      "signature_changes": 0,
+      "non_version_change": "HTTP fields may change casing for transmission; method results retain original casing.",
+      "changed_wit": [
+        {
+          "path": "proposals/cli/wit/command.wit",
+          "base_sha256": "06618a05dad083e82418593bc19295ded69f0638f16c25efe530fd04098e5881",
+          "target_sha256": "862dcdbc93d43f8f661eb53130880617b9e86f05f90fadb8e9cd12c921cdbfe6"
+        },
+        {
+          "path": "proposals/cli/wit/imports.wit",
+          "base_sha256": "4efda5fea1917122b56b92e9efbed799db4edd59f17abe3d9d87e6cec5d31cdb",
+          "target_sha256": "ffcbbc929f930b9968c463c09c1789fd3b271cd04f759c284baf2e56674ca89d"
+        },
+        {
+          "path": "proposals/clocks/wit/monotonic-clock.wit",
+          "base_sha256": "a628772baf84217c94d579f12e4fcd35c5d7a80ddd07e1a61f856c2cdbf132d7",
+          "target_sha256": "f4bf2ad338a39d774db96eadc0d9a99aab293ce60b4c8810487f1b2fa03ca096"
+        },
+        {
+          "path": "proposals/clocks/wit/system-clock.wit",
+          "base_sha256": "8e419232fbed500a49e0c9fe291e6fb4893d4044d92bf92527abd3749e5e5fd0",
+          "target_sha256": "fcf2a3ec93b21a73cf1e6d6cbdae57d3ee7be26773bc72db2e212dbe351988e7"
+        },
+        {
+          "path": "proposals/clocks/wit/timezone.wit",
+          "base_sha256": "ee25f333aa7fa88712a3be08d871f482362206ab07ca8f18ac3d164aec0f25c3",
+          "target_sha256": "3424c7ca91ba079c5c7d4db43d7589f1d3e298a30ce0002620158b181258a49f"
+        },
+        {
+          "path": "proposals/clocks/wit/types.wit",
+          "base_sha256": "4792323904c2e4a6abfd6d94badcc78e4c07198cac58157ec50887a551a9b294",
+          "target_sha256": "5711667e02e467cce7107fcb96efe4f4bc6ca17f7743017a093d530f8fff4499"
+        },
+        {
+          "path": "proposals/clocks/wit/world.wit",
+          "base_sha256": "6465cc8f50baab31adf24b0cdec8698ed2e8d5bc9e97fe217287a649dbb43254",
+          "target_sha256": "6ef314661117f8751de29da4454d39e0b5a132901a2a34fef31802c40368c1b2"
+        },
+        {
+          "path": "proposals/filesystem/wit/preopens.wit",
+          "base_sha256": "b958c9645bf7c529fe0a62a37acbf566c564ca5e48ffe3e0a5cc9d37f7d7c684",
+          "target_sha256": "f5ad1bf4225076283e3290b4eeae008f5e32254225db96d3860636e0ea3b5c94"
+        },
+        {
+          "path": "proposals/filesystem/wit/types.wit",
+          "base_sha256": "8cb2fe31a3b09b3788aa6005ea2a9deaf742bf580f7eef13c26a2bd59ab30257",
+          "target_sha256": "2def82afe748924cee6da75d6a987007c5620410120dd8dcbab685f7d42437b4"
+        },
+        {
+          "path": "proposals/filesystem/wit/world.wit",
+          "base_sha256": "be3907488eb161a3bcd28ffb7473c11f3b3cbe25b30f3fd141687486754cca69",
+          "target_sha256": "49e7674a413c69153783c98a51a1033c00ccf4f70d5e7aba788a3b842880cde9"
+        },
+        {
+          "path": "proposals/http/wit/types.wit",
+          "base_sha256": "caa9dd68708615a774d2551c147d0d6790bedb28ea595eb1ec07790832a154eb",
+          "target_sha256": "b662a64647eb3c657a18b777bdd8dbaf933f0a0c9e12295f53de0715b2b216c8"
+        },
+        {
+          "path": "proposals/http/wit/worlds.wit",
+          "base_sha256": "e0a1ab5b5baa3102bccdc486615141086efbb29687de9f84e7c331f418daaf63",
+          "target_sha256": "2160547a39ff441cc3879ea8459ec75bdfede8d046189b545249c9e92247e5f5"
+        },
+        {
+          "path": "proposals/random/wit/insecure-seed.wit",
+          "base_sha256": "4822ff40f6d8fee4f5eb500684bd83c9bd2a736cea5bb72ebc203ddaf5927b99",
+          "target_sha256": "286994f57108c10ce53cd7b08dd5ed36c38aad2c94cb4c6871166f542716f43c"
+        },
+        {
+          "path": "proposals/random/wit/insecure.wit",
+          "base_sha256": "a387af41c53eae84d3d2ae1163f16b894da900901b639a4df8f33e1f691d8c06",
+          "target_sha256": "4cb13295ab1a597c12317f95df8d6a2fd5153d660f5834c68e7502c57cf459f3"
+        },
+        {
+          "path": "proposals/random/wit/random.wit",
+          "base_sha256": "0a21c683db86c5cc8de9aad2ceacdc0f8b9bf43222bd5deb0863455a5e9839bc",
+          "target_sha256": "f9e53110acf75f7b5f892051eaf1fa0f594684fec75a82a5b900b9ad0a03edda"
+        },
+        {
+          "path": "proposals/random/wit/world.wit",
+          "base_sha256": "1630ce167115bcded4bc15d4247a814eaaa10a924d50ed92f9a4064e02d83659",
+          "target_sha256": "8de984409978d590775f2b13c36f5dd954d801ac0f15002d4f664653750b60f2"
+        },
+        {
+          "path": "proposals/sockets/wit/types.wit",
+          "base_sha256": "85c15087c54c08c0980ffaf0b59ce44d96b8f6dc4b21d53f9153c376b6f1c502",
+          "target_sha256": "cbde227a2dfa39577a0f34b712e472abafc4206f0c4a0eb977ef914c8493fa50"
+        },
+        {
+          "path": "proposals/sockets/wit/world.wit",
+          "base_sha256": "d26d3d8bb8823ddcb99a5303523590229df455ece716d0263504d1bdef65fca3",
+          "target_sha256": "5a40de417a69ee4e7dc0e49745bf8d09866d21c4eb87c106e7e1607c601ab07b"
+        }
+      ]
+    },
+    "gate_results": {
+      "contract_packages": {
+        "passed": 6,
+        "total": 6
+      },
+      "contract_worlds": {
+        "passed": 8,
+        "total": 8
+      },
+      "wit_host_packages": {
+        "passed": 6,
+        "total": 6
+      }
+    }
   }
 }

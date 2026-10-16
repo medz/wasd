@@ -81,6 +81,9 @@ result and its execution and public API coverage boundaries.
 The development checkout adds unreleased [synchronous Component map adapters](doc/component_maps.md).
 It also supports Component name attributes and named WIT interface bindings;
 see the [standards plan](doc/standards.md) for their scope.
+Unreleased WASI `0.3.1` contract and linking support retains `0.3.0` and adds
+versioned WIT calls plus command/service execution tests. The official 45-case
+suite remains a separate `0.3.0` compatibility gate.
 
 ## Quick Start
 

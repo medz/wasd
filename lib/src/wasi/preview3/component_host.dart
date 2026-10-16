@@ -203,17 +203,28 @@ final class WASIPreview3ComponentHost {
     }
   }
 
-  /// Standard Preview3 WIT import callbacks implemented by this host.
+  /// Standard Preview3 0.3.0/0.3.1 callbacks and Preview2 compatibility imports.
   late final Map<String, WASIComponentWitAdapterCallback> standardImports =
-      Map<String, WASIComponentWitAdapterCallback>.unmodifiable({
-        ..._preview2CompatibilityHost.standardImports,
-        ..._randomHost.imports,
-        ..._clocksHost.imports,
-        ..._cliHost.imports,
-        ..._filesystemHost.imports,
-        ..._socketsHost.imports,
-        ..._httpHost.imports,
-      });
+      _buildStandardImports();
+
+  Map<String, WASIComponentWitAdapterCallback> _buildStandardImports() {
+    final preview3 = <String, WASIComponentWitAdapterCallback>{
+      ..._randomHost.imports,
+      ..._clocksHost.imports,
+      ..._cliHost.imports,
+      ..._filesystemHost.imports,
+      ..._socketsHost.imports,
+      ..._httpHost.imports,
+    };
+    return Map<String, WASIComponentWitAdapterCallback>.unmodifiable({
+      ..._preview2CompatibilityHost.standardImports,
+      ...preview3,
+      for (final entry in preview3.entries)
+        if (!entry.key.startsWith('wasi:clocks/timezone@') &&
+            entry.key.contains('@0.3.0.'))
+          entry.key.replaceFirst('@0.3.0.', '@0.3.1.'): entry.value,
+    });
+  }
 
   /// Prepares [component] for Preview3 component-host binding.
   WASIComponentVersionedBindingPlan prepareComponent(
@@ -234,7 +245,8 @@ final class WASIPreview3ComponentHost {
   /// Prepares and binds a Preview3 WIT world.
   ///
   /// Built-in standard WASI imports are supplied by default and can be
-  /// overridden by passing the same key in [imports].
+  /// overridden by passing the same key in [imports]. Overrides affect only
+  /// that exact versioned key; aliases are built before overrides are applied.
   WASIComponentWitAdapterProgram bindWitWorld(
     WASIComponentWitDocument document, {
     String? worldName,

@@ -1,0 +1,29 @@
+{
+  "kind": "wasd-authored-runtime-regressions",
+  "official_fixtures": false,
+  "wasi_target": {
+    "version": "0.3.1",
+    "commit": "59e48bfe3fae9bf2480eb15abd8f55999eb3b395"
+  },
+  "component_model_commit": "0220da84209397d9067c19cac83dae969aa85a7b",
+  "encoder": "wasm-tools 1.262.0 (precompiled)",
+  "reference_validation": "wasm-tools validate --features all; distinct from WASD execution",
+  "fixtures": [
+    {
+      "source": "test/fixtures/wasi_preview3/wasi_cli_0_3_1_scalar_command.wat",
+      "source_bytes": 2326,
+      "source_sha256": "03e4db25244fa74af87fcb3301db8c5905e76ce1c6a43a98d750ac623c5b3a15",
+      "encoded_bytes": 901,
+      "encoded_sha256": "51559c637f6f8ec6d1df4b817f924f059eaedde2eefed638c9c8a0802ed32a4b",
+      "reference_validation_exit_code": 0
+    },
+    {
+      "source": "test/fixtures/wasi_preview3/wasi_http_0_3_1_resource_service.wat",
+      "source_bytes": 6360,
+      "source_sha256": "fa7ac6f4e1c97a51889e3a727911f47a2910691aaf7c60f67006cd1eab9fb2b5",
+      "encoded_bytes": 2085,
+      "encoded_sha256": "d6ad9148db80cc26bcc7512141069c8f4b2c1217bfd3f746c123c1303f094402",
+      "reference_validation_exit_code": 0
+    }
+  ]
+}
