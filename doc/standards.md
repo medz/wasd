@@ -22,10 +22,39 @@ describe the current standardization status of GC, SIMD, or exceptions.
 Features incorporated into the frozen Core 3.0 target belong in its acceptance
 gate even if the code still calls them proposals.
 
-The June 2026 Core testsuite below predates the October specification snapshot.
-Passing that suite is a useful baseline, not proof of all October changes or
-complete coverage. Refresh and pin the suite, then account for every delta
-before claiming conformance to the frozen specification.
+The June 2026 Core testsuite in the historical `0.5.0` matrix below predates the
+October specification snapshot. That baseline is retained separately from the
+current frozen Core gate.
+
+`tool/core_spec_inventory.json` records all `261` official WAST source paths
+and Git blob hashes at spec revision
+`957c932e7158c5a6891be68ca424aaa0aa505f97`: `258` under `test/core/` and `3`
+under `test/custom/`. The older flattened testsuite mirror at
+`193e551ff22663995b1ac95dc62344133669e14b` omitted
+`test/core/memory_grow.wast` through a basename collision with
+`test/core/multi-memory/memory_grow.wast` and predates updates to eight other
+inputs. The inventory reuses the `252` unchanged mirror files and restores the
+nine remaining official files under `test/fixtures/core_spec/`, preserving the
+original paths and bytes.
+
+Run the frozen gate with the pinned precompiled toolchain:
+
+```sh
+dart run tool/core_spec_runner.dart --output-json=build/core.json --output-md=build/core.md
+```
+
+The current Dart VM result with `wasm-tools` `1.262.0` is `261/261` files and
+`65,336/65,336` commands passed, zero failures and zero skips. The runner checks
+the complete inventory before execution and rejects empty conversions or any
+skipped command. Core CI runs this gate for each Dart SDK in its matrix.
+
+The command count includes module setup and validation assertions.
+`assert_malformed` assertions containing text modules are judged by external
+text parsers; binary decoding, validation and execution use WASD's internal
+interpreter. This gate does not establish equivalent coverage through the
+public API, its feature selection, or other runtimes. The historical Component
+Model async gate retains its recorded `wasm-tools` `1.254.0` validator; the
+newer Core converter rejects the frozen draft's removed `cancellable` option.
 
 ## Implementation and evidence matrix
 

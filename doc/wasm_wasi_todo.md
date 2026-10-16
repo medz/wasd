@@ -14,7 +14,7 @@ Rules:
 
 Ship real, verifiable support for:
 
-- WebAssembly Core 1.0/current standardized core suite.
+- WebAssembly Core 3.0 at the revision frozen in `doc/standards.md`.
 - WASI 0.1 / Preview1 across native VM, browser JS, and Node JS for the supported
   runtime model.
 
@@ -23,11 +23,17 @@ P2/P3 work starts only after these P1 gates are green.
 ## Current Evidence
 
 - [x] `WASM-CORE-SPEC`
-  - Status: upstream standardized core spec revision `193e551` passes on VM, JS,
-    and wasm-compiled runner targets.
+  - Status: the complete frozen Core source inventory at
+    `957c932e7158c5a6891be68ca424aaa0aa505f97` passes the Dart VM gate.
   - Evidence:
+    `dart run tool/core_spec_runner.dart --output-json=build/core.json --output-md=build/core.md`
+  - Result: `261/261` files, `65,336/65,336` commands passed, `0` failed,
+    `0` skipped. Original paths retain both `memory_grow.wast` inputs. Empty
+    conversion output and skipped commands fail the gate. Text-form malformed
+    assertions use an external parser; this is not full public API coverage.
+  - Historical cross-target evidence at older testsuite `193e551`:
     `dart run tool/spec_runner.dart --target=all --suite=core --json=.dart_tool/spec_runner/spec_runner_all_core_upstream_193e551_20260629.json --report=.dart_tool/spec_runner/spec_runner_all_core_upstream_193e551_20260629.md`
-  - Result: `260/260` files, `65192/65212` commands passed, `0` failed, with
+    recorded `260/260` files, `65192/65212` commands passed, `0` failed, with
     `20` harness-level custom-section unsupported-command skips.
 
 - [x] `WASI-P1-OFFICIAL-WASIP1`
@@ -146,11 +152,13 @@ P2/P3 work starts only after these P1 gates are green.
   - Component Model evidence:
     `dart run tool/component_decode_probe.dart --testsuite-dir=/path/to/component-model/test --groups=async --strict --require-testsuite-dir`
     reports `37/37` strict WASD decodes;
-    `dart run tool/component_official_runner.dart --testsuite-dir=/path/to/component-model/test --groups=async --wasm-tools-bin=.toolchains/bin/wasm-tools --require-testsuite-dir --require-engine --no-default-expected-failures`
-    reports `31/31` `wasm-tools` validations;
+    `dart run tool/component_official_runner.dart --testsuite-dir=/path/to/component-model/test --groups=async --wasm-tools-bin=/path/to/wasm-tools-1.254.0 --require-testsuite-dir --require-engine --no-default-expected-failures`
+    reports `31/31` `wasm-tools` `1.254.0` validations;
     the same runner with Wasmtime `48.0.0 (e8ac8c27f)` reports `31/31`
     reference executions. The validation and reference runs do not execute the
-    WAST assertions through WASD.
+    WAST assertions through WASD. Use the recorded legacy validator for this
+    frozen draft: the newer Core converter rejects its removed `cancellable`
+    option. The global Core toolchain can advance independently.
   - Local green evidence:
     `dart test test/component_test.dart`
     `dart test test/wasi_preview3_standard_wit_test.dart`
