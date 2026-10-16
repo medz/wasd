@@ -1,15 +1,3 @@
-## Unreleased
-
-- Preserve UTF-8 custom-section names on the native adapter, including leading
-  BOMs, embedded NULs and exact Unicode matching.
-- Add native `CoreFeature.exceptionHandling` selection and public imports/exports
-  for empty and numeric exception tags with simple final function types.
-  Preserve tag identity and descriptor snapshots; reject unsupported bindings
-  before guest initialization.
-- Preserve guest exceptions and captured exception references across instances
-  and synchronous/asynchronous interpreter paths. Keep async-only exports async
-  when re-imported, avoiding a repeated synchronous attempt.
-
 ## 0.6.0-dev.1
 
 Preview release. The floating-point fixes previously prepared
