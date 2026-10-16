@@ -69,3 +69,20 @@ void Function() overrideNodeCpuClockApi(
     process[method] = original;
   };
 }
+
+void Function() hideNodeRequireForCpuClockTest() {
+  final key = 'require'.toJS;
+  final existed = globalContext.hasProperty(key).toDart;
+  final original = globalContext.getProperty<JSAny?>(key);
+  if (!globalContext.delete(key).toDart ||
+      globalContext.getProperty<JSAny?>(key) != null) {
+    throw StateError('Cannot hide global require.');
+  }
+  return () {
+    if (existed) {
+      globalContext['require'] = original;
+    } else {
+      globalContext.delete(key);
+    }
+  };
+}

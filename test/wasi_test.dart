@@ -2095,6 +2095,37 @@ void main() {
           }, skip: _skipUnlessNode('requires Node CPU API overrides'));
         }
 
+        test('Node CPU clock $clockId works without global require', () {
+          final available = cpuClockAvailable(clockId);
+          final restore = hideNodeRequireForCpuClockTest();
+          try {
+            expect(cpuClockAvailable(clockId), available);
+            final memory =
+                (instance.exports['memory'] as MemoryImportExportValue).ref;
+            wasi.finalizeBindings(instance, memory: memory);
+            final data = ByteData.view(memory.buffer);
+            final imports = wasi.imports['wasi_snapshot_preview1']!;
+            final gettime =
+                imports['clock_time_get'] as FunctionImportExportValue;
+            final getres =
+                imports['clock_res_get'] as FunctionImportExportValue;
+            _setUint64Le(data, 1700, 123);
+            expect(getres.ref([clockId, 1700]), available ? 0 : _errnoInval);
+            expect(_getUint64Le(data, 1700), available ? 1000 : 123);
+            _setUint64Le(data, 1700, 123);
+            expect(
+              gettime.ref([clockId, 0, 1700]),
+              available ? 0 : _errnoInval,
+            );
+            expect(
+              _getUint64Le(data, 1700),
+              available ? greaterThanOrEqualTo(0) : 123,
+            );
+          } finally {
+            restore();
+          }
+        }, skip: _skipUnlessNode('requires Node CPU APIs'));
+
         test('Node CPU clock $clockId time_get reads the API exactly once', () {
           var calls = 0;
           final restore = overrideNodeCpuClockApi(

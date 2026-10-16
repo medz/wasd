@@ -3542,7 +3542,8 @@ JSObject? _requireNodeBuiltin(String name) {
 
 BigInt? _nodeCpuClockNanos(int clockId) {
   try {
-    final process = _requireNodeBuiltin('node:process');
+    if (!_isNodeJs()) return null;
+    final process = globalContext.getProperty<JSObject?>('process'.toJS);
     if (process == null) return null;
     final name = clockId == _clockProcessCpuTimeId
         ? 'cpuUsage'

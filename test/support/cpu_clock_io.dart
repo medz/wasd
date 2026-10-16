@@ -53,3 +53,6 @@ final class _Timespec extends ffi.Struct {
   @ffi.Int64()
   external int nanoseconds;
 }
+
+void Function() hideNodeRequireForCpuClockTest() =>
+    throw UnsupportedError('Requires Node.js.');
