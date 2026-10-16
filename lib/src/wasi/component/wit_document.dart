@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// WIT document boundary model for Preview2/Preview3 adapters.
 ///
 /// This parser intentionally stops at package/interface/world boundaries. It
@@ -212,6 +214,7 @@ final class WASIComponentWitRecord {
     required this.name,
     required List<WASIComponentWitRecordField> fields,
     required this.span,
+    this.externalId,
   }) : fields = List<WASIComponentWitRecordField>.unmodifiable(fields);
 
   /// Record name.
@@ -222,6 +225,9 @@ final class WASIComponentWitRecord {
 
   /// Source span for the record name.
   final WASIComponentWitSpan span;
+
+  /// Optional platform identifier; the WIT name remains the linking key.
+  final String? externalId;
 }
 
 /// Field declared directly in a WIT record.
@@ -250,6 +256,7 @@ final class WASIComponentWitVariant {
     required this.name,
     required List<WASIComponentWitVariantCase> cases,
     required this.span,
+    this.externalId,
   }) : cases = List<WASIComponentWitVariantCase>.unmodifiable(cases);
 
   /// Variant name.
@@ -260,6 +267,9 @@ final class WASIComponentWitVariant {
 
   /// Source span for the variant name.
   final WASIComponentWitSpan span;
+
+  /// Optional platform identifier; the WIT name remains the linking key.
+  final String? externalId;
 }
 
 /// Case declared directly in a WIT variant.
@@ -288,6 +298,7 @@ final class WASIComponentWitFlags {
     required this.name,
     required List<WASIComponentWitLabel> labels,
     required this.span,
+    this.externalId,
   }) : labels = List<WASIComponentWitLabel>.unmodifiable(labels);
 
   /// Flags type name.
@@ -298,6 +309,9 @@ final class WASIComponentWitFlags {
 
   /// Source span for the flags name.
   final WASIComponentWitSpan span;
+
+  /// Optional platform identifier; the WIT name remains the linking key.
+  final String? externalId;
 }
 
 /// Enum type declared directly in a WIT interface.
@@ -307,6 +321,7 @@ final class WASIComponentWitEnum {
     required this.name,
     required List<WASIComponentWitLabel> cases,
     required this.span,
+    this.externalId,
   }) : cases = List<WASIComponentWitLabel>.unmodifiable(cases);
 
   /// Enum name.
@@ -317,6 +332,9 @@ final class WASIComponentWitEnum {
 
   /// Source span for the enum name.
   final WASIComponentWitSpan span;
+
+  /// Optional platform identifier; the WIT name remains the linking key.
+  final String? externalId;
 }
 
 /// Label declared in a WIT flags or enum type.
@@ -334,13 +352,20 @@ final class WASIComponentWitLabel {
 /// Resource type declared directly in a WIT interface.
 final class WASIComponentWitResource {
   /// Creates a WIT resource declaration boundary.
-  const WASIComponentWitResource({required this.name, required this.span});
+  const WASIComponentWitResource({
+    required this.name,
+    required this.span,
+    this.externalId,
+  });
 
   /// Resource name.
   final String name;
 
   /// Source span for the resource name.
   final WASIComponentWitSpan span;
+
+  /// Optional platform identifier; the WIT name remains the linking key.
+  final String? externalId;
 }
 
 /// Type alias declared directly in a WIT interface.
@@ -350,6 +375,7 @@ final class WASIComponentWitTypeAlias {
     required this.name,
     required this.target,
     required this.span,
+    this.externalId,
   });
 
   /// Alias name.
@@ -360,6 +386,9 @@ final class WASIComponentWitTypeAlias {
 
   /// Source span for the alias name.
   final WASIComponentWitSpan span;
+
+  /// Optional platform identifier; the WIT name remains the linking key.
+  final String? externalId;
 }
 
 /// WIT `use target.{items}` declaration captured in an interface.
@@ -411,6 +440,7 @@ final class WASIComponentWitFunction {
     required this.name,
     required this.signature,
     required this.span,
+    this.externalId,
   });
 
   /// Function name before `:`.
@@ -421,6 +451,9 @@ final class WASIComponentWitFunction {
 
   /// Source span for the function name.
   final WASIComponentWitSpan span;
+
+  /// Optional platform identifier; the WIT name remains the linking key.
+  final String? externalId;
 
   /// Whether the signature is an `async func`.
   bool get isAsync => signature.contains('asyncfunc');
@@ -483,10 +516,22 @@ final class WASIComponentWitWorldItem {
     required this.direction,
     required this.target,
     required this.span,
+    this.name,
+    this.externalId,
+    this.renames = const <String, String>{},
   });
 
   /// Whether this item is an import or export.
   final WASIComponentWitWorldItemDirection direction;
+
+  /// Plain binding label for an explicitly named import or export.
+  final String? name;
+
+  /// Optional platform identifier; it does not replace [name].
+  final String? externalId;
+
+  /// Plain-name substitutions on an `include ... with` item.
+  final Map<String, String> renames;
 
   /// Parsed item target.
   final WASIComponentWitTarget target;
@@ -738,9 +783,9 @@ final class _WitParser {
     required String? receiverResource,
   }) {
     while (!_checkSymbol('}') && !_checkKind(_WitTokenKind.eof)) {
-      if (_checkSymbol('@')) {
-        _skipAnnotation();
-        continue;
+      final externalId = _parseAnnotations(allowExternalId: true);
+      if (externalId != null && _checkWord('use')) {
+        _fail(_current.span, 'external-id is not valid on a use declaration');
       }
       if (_matchWord('use')) {
         final use = _parseUse();
@@ -758,7 +803,7 @@ final class _WitParser {
         continue;
       }
       if (_matchWord('type')) {
-        final alias = _parseTypeAlias();
+        final alias = _parseTypeAlias(externalId: externalId);
         _failDuplicateInterfaceType(
           alias.name,
           alias.span,
@@ -774,7 +819,7 @@ final class _WitParser {
         continue;
       }
       if (_matchWord('record')) {
-        final record = _parseRecord();
+        final record = _parseRecord(externalId: externalId);
         _failDuplicateInterfaceType(
           record.name,
           record.span,
@@ -790,7 +835,7 @@ final class _WitParser {
         continue;
       }
       if (_matchWord('variant')) {
-        final variant = _parseVariant();
+        final variant = _parseVariant(externalId: externalId);
         _failDuplicateInterfaceType(
           variant.name,
           variant.span,
@@ -806,7 +851,7 @@ final class _WitParser {
         continue;
       }
       if (_matchWord('flags')) {
-        final flags = _parseFlags();
+        final flags = _parseFlags(externalId: externalId);
         _failDuplicateInterfaceType(
           flags.name,
           flags.span,
@@ -822,7 +867,7 @@ final class _WitParser {
         continue;
       }
       if (_matchWord('enum')) {
-        final enum_ = _parseEnum();
+        final enum_ = _parseEnum(externalId: externalId);
         _failDuplicateInterfaceType(
           enum_.name,
           enum_.span,
@@ -848,6 +893,7 @@ final class _WitParser {
           typeAliases: typeAliases,
           uses: uses,
           prefix: prefix,
+          externalId: externalId,
         );
         continue;
       }
@@ -863,6 +909,7 @@ final class _WitParser {
               name: '$prefix${item.lexeme}',
               signature: 'func($params)->$receiverResource',
               span: item.span,
+              externalId: externalId,
             ),
           );
           continue;
@@ -879,6 +926,7 @@ final class _WitParser {
                 name: '$prefix${item.lexeme}',
                 signature: signature,
                 span: item.span,
+                externalId: externalId,
               ),
             );
           }
@@ -1009,7 +1057,7 @@ final class _WitParser {
     return WASIComponentWitUse(target: target, items: items, span: targetStart);
   }
 
-  WASIComponentWitTypeAlias _parseTypeAlias() {
+  WASIComponentWitTypeAlias _parseTypeAlias({String? externalId}) {
     final name = _expectWord('type alias name');
     _expectSymbol('=');
     final target = _parseInterfaceItemSignature(name.span);
@@ -1020,6 +1068,7 @@ final class _WitParser {
       name: name.lexeme,
       target: target,
       span: name.span,
+      externalId: externalId,
     );
   }
 
@@ -1033,6 +1082,7 @@ final class _WitParser {
     required List<WASIComponentWitTypeAlias> typeAliases,
     required List<WASIComponentWitUse> uses,
     required String prefix,
+    String? externalId,
   }) {
     final name = _expectWord('resource name');
     _failDuplicateInterfaceType(
@@ -1047,7 +1097,11 @@ final class _WitParser {
       uses,
     );
     resourceTypes.add(
-      WASIComponentWitResource(name: name.lexeme, span: name.span),
+      WASIComponentWitResource(
+        name: name.lexeme,
+        span: name.span,
+        externalId: externalId,
+      ),
     );
     if (_matchSymbol(';')) {
       return;
@@ -1067,7 +1121,7 @@ final class _WitParser {
     );
   }
 
-  WASIComponentWitRecord _parseRecord() {
+  WASIComponentWitRecord _parseRecord({String? externalId}) {
     final name = _expectWord('record name');
     _expectSymbol('{');
     final fields = <WASIComponentWitRecordField>[];
@@ -1095,10 +1149,11 @@ final class _WitParser {
       name: name.lexeme,
       fields: fields,
       span: name.span,
+      externalId: externalId,
     );
   }
 
-  WASIComponentWitVariant _parseVariant() {
+  WASIComponentWitVariant _parseVariant({String? externalId}) {
     final name = _expectWord('variant name');
     _expectSymbol('{');
     final cases = <WASIComponentWitVariantCase>[];
@@ -1133,6 +1188,7 @@ final class _WitParser {
       name: name.lexeme,
       cases: cases,
       span: name.span,
+      externalId: externalId,
     );
   }
 
@@ -1164,7 +1220,7 @@ final class _WitParser {
     _fail(start, 'unterminated variant case payload type');
   }
 
-  WASIComponentWitFlags _parseFlags() {
+  WASIComponentWitFlags _parseFlags({String? externalId}) {
     final name = _expectWord('flags name');
     _expectSymbol('{');
     final labels = _parseLabels('flag');
@@ -1172,10 +1228,11 @@ final class _WitParser {
       name: name.lexeme,
       labels: labels,
       span: name.span,
+      externalId: externalId,
     );
   }
 
-  WASIComponentWitEnum _parseEnum() {
+  WASIComponentWitEnum _parseEnum({String? externalId}) {
     final name = _expectWord('enum name');
     _expectSymbol('{');
     final cases = _parseLabels('enum case');
@@ -1183,6 +1240,7 @@ final class _WitParser {
       name: name.lexeme,
       cases: cases,
       span: name.span,
+      externalId: externalId,
     );
   }
 
@@ -1367,17 +1425,27 @@ final class _WitParser {
     _expectSymbol('{');
     final items = <WASIComponentWitWorldItem>[];
     while (!_checkSymbol('}') && !_checkKind(_WitTokenKind.eof)) {
-      if (_checkSymbol('@')) {
-        _skipAnnotation();
-        continue;
-      }
+      final externalId = _parseAnnotations(allowExternalId: true);
       if (_matchWord('import')) {
-        items.add(_parseWorldItem(WASIComponentWitWorldItemDirection.import));
+        items.add(
+          _parseWorldItem(
+            WASIComponentWitWorldItemDirection.import,
+            externalId: externalId,
+          ),
+        );
         continue;
       }
       if (_matchWord('export')) {
-        items.add(_parseWorldItem(WASIComponentWitWorldItemDirection.export));
+        items.add(
+          _parseWorldItem(
+            WASIComponentWitWorldItemDirection.export,
+            externalId: externalId,
+          ),
+        );
         continue;
+      }
+      if (externalId != null) {
+        _fail(_current.span, 'external-id requires a named import or export');
       }
       if (_matchWord('include')) {
         items.add(_parseWorldItem(WASIComponentWitWorldItemDirection.include));
@@ -1394,13 +1462,31 @@ final class _WitParser {
   }
 
   WASIComponentWitWorldItem _parseWorldItem(
-    WASIComponentWitWorldItemDirection direction,
-  ) {
+    WASIComponentWitWorldItemDirection direction, {
+    String? externalId,
+  }) {
+    final tokens = <_WitToken>[];
     final targetStart = _current.span;
-    final targetText = StringBuffer();
+    final renames = <String, String>{};
     var terminated = false;
     while (!_checkSymbol(';') && !_checkKind(_WitTokenKind.eof)) {
-      if (_checkSymbol('}')) {
+      if (_checkSymbol('}')) break;
+      if (direction == WASIComponentWitWorldItemDirection.include &&
+          _matchWord('with')) {
+        _expectSymbol('{');
+        while (!_checkSymbol('}') && !_checkKind(_WitTokenKind.eof)) {
+          final from = _expectWord('included plain name');
+          if (!_matchWord('as')) _fail(_current.span, "expected 'as'");
+          final to = _expectWord('included plain name replacement');
+          if (renames.containsKey(from.lexeme)) {
+            _fail(from.span, "duplicate include rename '${from.lexeme}'");
+          }
+          renames[from.lexeme] = to.lexeme;
+          if (!_matchSymbol(',')) break;
+        }
+        _expectSymbol('}');
+        _matchSymbol(';');
+        terminated = true;
         break;
       }
       if (_checkSymbol('{')) {
@@ -1410,27 +1496,54 @@ final class _WitParser {
         terminated = true;
         break;
       }
-      targetText.write(_current.lexeme);
+      tokens.add(_current);
       _advance();
     }
-    if (_checkSymbol(';')) {
-      _advance();
-      terminated = true;
-    }
-    if (targetText.isEmpty) {
+    if (_matchSymbol(';')) terminated = true;
+    if (tokens.isEmpty) {
       _fail(targetStart, 'expected world ${direction.name} target');
     }
     if (!terminated) {
       _fail(targetStart, 'unterminated world ${direction.name} target');
     }
+    String? name;
+    var targetTokens = tokens;
+    if (direction != WASIComponentWitWorldItemDirection.include &&
+        tokens.length >= 3 &&
+        tokens[0].kind == _WitTokenKind.word &&
+        tokens[1].lexeme == ':' &&
+        (tokens[0].span.offset + tokens[0].span.length <
+                tokens[1].span.offset ||
+            tokens[1].span.offset + tokens[1].span.length <
+                tokens[2].span.offset)) {
+      name = tokens[0].lexeme;
+      // Function and inline-interface boundaries keep their existing compact
+      // target spelling; only named interface references are expanded here.
+      if (tokens[2].lexeme != 'interface' &&
+          tokens[2].lexeme != 'func' &&
+          tokens[2].lexeme != 'async') {
+        targetTokens = tokens.sublist(2);
+      }
+    }
+    if (externalId != null && name == null) {
+      _fail(targetStart, 'external-id requires a plain binding name');
+    }
     final target = WASIComponentWitTarget(
-      text: targetText.toString(),
-      span: targetStart,
+      text: targetTokens.map((token) => token.lexeme).join(),
+      span: targetTokens.first.span,
     );
+    if (name == null &&
+        target.text.contains(':') &&
+        !target.text.contains('/')) {
+      _fail(target.span, 'expected an interface path or a spaced plain label');
+    }
     return WASIComponentWitWorldItem(
       direction: direction,
+      name: name,
       target: target,
       span: targetStart,
+      externalId: externalId,
+      renames: Map<String, String>.unmodifiable(renames),
     );
   }
 
@@ -1550,25 +1663,43 @@ final class _WitParser {
         signature.contains('asyncfunc(');
   }
 
-  void _skipAnnotation() {
-    _expectSymbol('@');
-    if (_checkKind(_WitTokenKind.word)) {
+  String? _parseAnnotations({required bool allowExternalId}) {
+    String? externalId;
+    while (_checkSymbol('@')) {
+      final start = _current.span;
       _advance();
-    }
-    if (_matchSymbol('(')) {
-      var depth = 1;
-      while (depth > 0) {
-        if (_checkKind(_WitTokenKind.eof)) {
-          _fail(_current.span, 'unterminated WIT annotation');
+      final name = _expectWord('annotation name');
+      if (name.lexeme == 'external-id') {
+        if (!allowExternalId) {
+          _fail(start, 'external-id is not valid on this declaration');
         }
-        if (_checkSymbol('(')) {
-          depth++;
-        } else if (_checkSymbol(')')) {
-          depth--;
+        if (externalId != null) {
+          _fail(start, 'duplicate external-id annotation');
         }
+        _expectSymbol('(');
+        if (!_checkKind(_WitTokenKind.string)) {
+          _fail(_current.span, 'expected external-id string literal');
+        }
+        externalId = _current.lexeme;
         _advance();
+        _expectSymbol(')');
+      } else if (_matchSymbol('(')) {
+        var depth = 1;
+        while (depth > 0) {
+          if (_checkKind(_WitTokenKind.eof)) {
+            _fail(_current.span, 'unterminated WIT annotation');
+          }
+          if (_checkSymbol('(')) depth++;
+          if (_checkSymbol(')')) depth--;
+          _advance();
+        }
       }
     }
+    return externalId;
+  }
+
+  void _skipAnnotation() {
+    _parseAnnotations(allowExternalId: false);
   }
 
   void _skipBalancedBlock() {
@@ -1660,7 +1791,7 @@ final class _WitParser {
   }
 }
 
-enum _WitTokenKind { word, symbol, eof }
+enum _WitTokenKind { word, string, symbol, eof }
 
 final class _WitToken {
   const _WitToken({
@@ -1697,6 +1828,9 @@ final class _WitLexer {
     final startLine = _line;
     final startColumn = _column;
     final code = _source.codeUnitAt(_offset);
+    if (code == 34) {
+      return _stringToken(startOffset, startLine, startColumn);
+    }
     if (_isWordStart(code)) {
       final text = StringBuffer();
       while (!_isAtEnd && _isWordPart(_source.codeUnitAt(_offset))) {
@@ -1717,6 +1851,114 @@ final class _WitLexer {
       lexeme: lexeme,
       span: _span(startOffset, startLine, startColumn),
     );
+  }
+
+  _WitToken _stringToken(int startOffset, int startLine, int startColumn) {
+    final start = _spanAtCurrent(1);
+    Never fail(String message) {
+      throw WASIComponentWitParseException(
+        WASIComponentWitDiagnostic(
+          sourceName: start.sourceName,
+          line: start.line,
+          column: start.column,
+          message: message,
+        ),
+      );
+    }
+
+    final bytes = <int>[];
+    _advanceChar();
+    while (!_isAtEnd) {
+      final code = _source.codeUnitAt(_offset);
+      if (code == 34) {
+        _advanceChar();
+        String value;
+        try {
+          value = utf8.decode(bytes);
+        } on FormatException {
+          fail('WIT string literal is not valid UTF-8');
+        }
+        return _WitToken(
+          kind: _WitTokenKind.string,
+          lexeme: value,
+          span: _span(startOffset, startLine, startColumn),
+        );
+      }
+      if (code == 92) {
+        _advanceChar();
+        if (_isAtEnd) fail('unterminated WIT string literal');
+        final escaped = _source.codeUnitAt(_offset);
+        _advanceChar();
+        const simple = <int, int>{
+          110: 10,
+          114: 13,
+          116: 9,
+          34: 34,
+          39: 39,
+          92: 92,
+        };
+        if (simple.containsKey(escaped)) {
+          bytes.add(simple[escaped]!);
+          continue;
+        }
+        if (escaped == 117 && _startsWith('{')) {
+          _advanceChar();
+          final digits = StringBuffer();
+          var previousWasDigit = false;
+          while (!_isAtEnd && !_startsWith('}')) {
+            final digit = _source[_offset];
+            if (digit == '_') {
+              if (!previousWasDigit) fail('invalid Unicode escape separator');
+              previousWasDigit = false;
+            } else {
+              if (int.tryParse(digit, radix: 16) == null) {
+                fail('invalid Unicode escape in WIT string literal');
+              }
+              digits.write(digit);
+              previousWasDigit = true;
+            }
+            _advanceChar();
+          }
+          if (_isAtEnd) {
+            fail('unterminated Unicode escape in WIT string literal');
+          }
+          if (!previousWasDigit) fail('invalid Unicode escape separator');
+          _advanceChar();
+          final scalar = int.tryParse(digits.toString(), radix: 16);
+          if (scalar == null ||
+              scalar > 0x10ffff ||
+              (scalar >= 0xd800 && scalar <= 0xdfff)) {
+            fail('invalid Unicode scalar in WIT string literal');
+          }
+          bytes.addAll(utf8.encode(String.fromCharCode(scalar)));
+          continue;
+        }
+        final high = int.tryParse(String.fromCharCode(escaped), radix: 16);
+        final low = _isAtEnd ? null : int.tryParse(_source[_offset], radix: 16);
+        if (high == null || low == null) fail('invalid WIT string escape');
+        bytes.add(high * 16 + low);
+        _advanceChar();
+        continue;
+      }
+      if (code < 0x20 || code == 0x7f) {
+        fail('unescaped control in WIT string literal');
+      }
+      var text = String.fromCharCode(code);
+      _advanceChar();
+      if (code >= 0xd800 && code <= 0xdbff) {
+        if (_isAtEnd ||
+            _source.codeUnitAt(_offset) < 0xdc00 ||
+            _source.codeUnitAt(_offset) > 0xdfff) {
+          fail('invalid Unicode scalar in WIT string literal');
+        }
+        text += _source[_offset];
+        _advanceChar();
+      } else if (code >= 0xdc00 && code <= 0xdfff) {
+        fail('invalid Unicode scalar in WIT string literal');
+      }
+      bytes.addAll(utf8.encode(text));
+    }
+    fail('unterminated WIT string literal');
   }
 
   void _skipTrivia() {
@@ -1791,6 +2033,25 @@ final class _WitLexer {
       return;
     }
     final code = _source.codeUnitAt(_offset);
+    // Check source characters while consuming them. Escaped string values are
+    // decoded separately and may contain any Unicode scalar.
+    if ((code < 0x20 && code != 9 && code != 10 && code != 13) ||
+        (code >= 0x7f && code <= 0x9f) ||
+        (code >= 0x202a && code <= 0x202e) ||
+        (code >= 0x2066 && code <= 0x2069) ||
+        code == 0x061c ||
+        code == 0x200e ||
+        code == 0x200f) {
+      throw WASIComponentWitParseException(
+        WASIComponentWitDiagnostic(
+          sourceName: _sourceName,
+          line: _line,
+          column: _column,
+          message:
+              'forbidden raw WIT source character U+${code.toRadixString(16)}',
+        ),
+      );
+    }
     _offset++;
     if (code == 10) {
       _line++;

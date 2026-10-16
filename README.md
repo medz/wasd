@@ -79,6 +79,8 @@ supertypes. See the [standards plan](doc/standards.md) for the `65,336` command
 result and its execution and public API coverage boundaries.
 
 The development checkout adds unreleased [synchronous Component map adapters](doc/component_maps.md).
+It also supports Component name attributes and named WIT interface bindings;
+see the [standards plan](doc/standards.md) for their scope.
 
 ## Quick Start
 

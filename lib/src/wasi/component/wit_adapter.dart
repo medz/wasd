@@ -63,55 +63,75 @@ List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
   Set<String>? visiting,
   String Function(String interfaceName)? qualifyInterfaceName,
 }) {
+  return _expandWitWorldFunctions(
+    document,
+    world,
+    resolveTarget: resolveTarget,
+    visiting: visiting,
+    qualifyInterfaceName: qualifyInterfaceName,
+  ).functions;
+}
+
+({List<WASIComponentWitFunctionBinding> functions, Set<String> plainNames})
+_expandWitWorldFunctions(
+  WASIComponentWitDocument document,
+  WASIComponentWitWorld world, {
+  WASIComponentWitTargetResolver? resolveTarget,
+  Set<String>? visiting,
+  String Function(String interfaceName)? qualifyInterfaceName,
+}) {
   final active = visiting ?? <String>{};
   final visitKey = _witWorldVisitKey(document, world);
   if (!active.add(visitKey)) {
-    return const <WASIComponentWitFunctionBinding>[];
+    return (
+      functions: const <WASIComponentWitFunctionBinding>[],
+      plainNames: <String>{},
+    );
   }
   final functions = <WASIComponentWitFunctionBinding>[];
+  final plainNames = <String>{};
   for (final item in world.items) {
     final target = item.target;
     if (item.direction == WASIComponentWitWorldItemDirection.include) {
-      if (target.isQualified) {
-        final resolved = resolveTarget?.call(target.text);
-        if (resolved == null) {
-          throw WASIComponentWitTargetResolutionException(
-            target.text,
-            'no resolver result',
-          );
-        }
-        final included = resolved.document.worldNamed(resolved.memberName);
-        if (included == null) {
-          throw WASIComponentWitTargetResolutionException(
-            target.text,
-            "world '${resolved.memberName}' does not exist in the resolved document",
-          );
-        }
-        functions.addAll(
-          wasiComponentWitWorldFunctions(
-            resolved.document,
-            included,
-            resolveTarget: resolveTarget,
-            visiting: active,
-            qualifyInterfaceName: resolved.qualifiedInterfaceName,
-          ),
-        );
-        continue;
-      }
-      final included = document.worldNamed(target.text);
-      if (included != null) {
-        functions.addAll(
-          wasiComponentWitWorldFunctions(
-            document,
-            included,
-            resolveTarget: resolveTarget,
-            visiting: active,
-            qualifyInterfaceName: qualifyInterfaceName,
-          ),
+      final resolved = target.isQualified
+          ? resolveTarget?.call(target.text)
+          : null;
+      if (target.isQualified && resolved == null) {
+        throw WASIComponentWitTargetResolutionException(
+          target.text,
+          'no resolver result',
         );
       }
+      final includedDocument = resolved?.document ?? document;
+      final includedName = resolved?.memberName ?? target.text;
+      final included = includedDocument.worldNamed(includedName);
+      if (included == null) {
+        throw WASIComponentWitTargetResolutionException(
+          target.text,
+          "world '$includedName' does not exist in the resolved document",
+        );
+      }
+      final includedExpansion = _expandWitWorldFunctions(
+        includedDocument,
+        included,
+        resolveTarget: resolveTarget,
+        visiting: active,
+        qualifyInterfaceName:
+            resolved?.qualifiedInterfaceName ?? qualifyInterfaceName,
+      );
+      functions.addAll(
+        _renameIncludedWitFunctions(
+          includedExpansion.functions,
+          item,
+          includedExpansion.plainNames,
+        ),
+      );
+      plainNames.addAll(
+        includedExpansion.plainNames.map((name) => item.renames[name] ?? name),
+      );
       continue;
     }
+    if (item.name != null) plainNames.add(item.name!);
     final resolved = target.isQualified
         ? resolveTarget?.call(target.text)
         : null;
@@ -134,9 +154,13 @@ List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
       continue;
     }
     final callbackInterfaceName =
+        item.name ??
         resolved?.qualifiedInterfaceName(interface.name) ??
         qualifyInterfaceName?.call(interface.name) ??
         interface.name;
+    final resourceIdentities = item.name == null
+        ? null
+        : {for (final resource in interface.resources) resource: Object()};
     for (final function in interface.functions) {
       functions.add(
         WASIComponentWitFunctionBinding._(
@@ -149,13 +173,60 @@ List<WASIComponentWitFunctionBinding> wasiComponentWitWorldFunctions(
             interface,
             document: interfaceDocument,
             resolveTarget: resolveTarget,
+            resourceIdentities: resourceIdentities,
           ),
         ),
       );
     }
   }
   active.remove(visitKey);
-  return List<WASIComponentWitFunctionBinding>.unmodifiable(functions);
+  return (
+    functions: List<WASIComponentWitFunctionBinding>.unmodifiable(functions),
+    plainNames: plainNames,
+  );
+}
+
+List<WASIComponentWitFunctionBinding> _renameIncludedWitFunctions(
+  List<WASIComponentWitFunctionBinding> functions,
+  WASIComponentWitWorldItem include,
+  Set<String> plainNames,
+) {
+  if (include.renames.isEmpty) return functions;
+  for (final name in include.renames.keys) {
+    if (!plainNames.contains(name)) {
+      throw WASIComponentWitTargetResolutionException(
+        include.target.text,
+        "include rename '$name' does not name a plain binding",
+      );
+    }
+  }
+  final result = <WASIComponentWitFunctionBinding>[];
+  for (final binding in functions) {
+    final name = binding.item.name;
+    final renamed = include.renames[name];
+    if (renamed == null) {
+      result.add(binding);
+      continue;
+    }
+    final item = binding.item;
+    result.add(
+      WASIComponentWitFunctionBinding._(
+        item: WASIComponentWitWorldItem(
+          direction: item.direction,
+          target: item.target,
+          span: item.span,
+          name: renamed,
+          externalId: item.externalId,
+          renames: item.renames,
+        ),
+        interfaceName: renamed,
+        function: binding.function,
+        direction: binding.direction,
+        signature: binding.signature,
+      ),
+    );
+  }
+  return result;
 }
 
 String _witWorldVisitKey(
@@ -264,6 +335,7 @@ final class WASIComponentWitAdapterValueType {
     this.ok,
     this.error,
     this.resourceName,
+    this.resourceIdentity,
     this.isBorrowedResource = false,
   }) : elements = List<WASIComponentWitAdapterValueType>.unmodifiable(elements),
        fields = List<WASIComponentWitAdapterRecordField>.unmodifiable(fields),
@@ -387,10 +459,12 @@ final class WASIComponentWitAdapterValueType {
     required String text,
     required String resourceName,
     required bool isBorrowed,
+    Object? resourceIdentity,
   }) : this._(
          kind: WASIComponentWitAdapterValueKind.resource,
          text: text,
          resourceName: resourceName,
+         resourceIdentity: resourceIdentity,
          isBorrowedResource: isBorrowed,
        );
 
@@ -444,6 +518,9 @@ final class WASIComponentWitAdapterValueType {
 
   /// Local WIT resource name for resource-handle values.
   final String? resourceName;
+
+  /// Nominal resource definition, distinct for each plain-named interface copy.
+  final Object? resourceIdentity;
 
   /// Whether a resource-handle value is declared as `borrow<T>`.
   final bool isBorrowedResource;
@@ -763,6 +840,7 @@ WASIComponentWitAdapterSignature _parseWitAdapterSignature(
   WASIComponentWitInterface interface, {
   required WASIComponentWitDocument document,
   WASIComponentWitTargetResolver? resolveTarget,
+  Map<WASIComponentWitResource, Object>? resourceIdentities,
 }) {
   final signature = function.signature;
   final isAsync = signature.startsWith('asyncfunc');
@@ -771,6 +849,7 @@ WASIComponentWitAdapterSignature _parseWitAdapterSignature(
     document: document,
     interface: interface,
     resolveTarget: resolveTarget,
+    resourceIdentities: resourceIdentities,
   );
   if (signature == prefix) {
     return WASIComponentWitAdapterSignature._(
@@ -877,11 +956,16 @@ final class _WitAdapterTypeContext {
     required this.document,
     required this.interface,
     required this.resolveTarget,
+    this.resourceIdentities,
   });
 
   final WASIComponentWitDocument document;
   final WASIComponentWitInterface interface;
   final WASIComponentWitTargetResolver? resolveTarget;
+  final Map<WASIComponentWitResource, Object>? resourceIdentities;
+
+  Object resourceIdentity(WASIComponentWitResource resource) =>
+      resourceIdentities?[resource] ?? resource;
 
   _WitAdapterTypeContext withInterface(
     WASIComponentWitDocument nextDocument,
@@ -1250,6 +1334,7 @@ _parseWitAdapterValueType(
       type: WASIComponentWitAdapterValueType.resource(
         text: text,
         resourceName: resource.name,
+        resourceIdentity: typeContext.resourceIdentity(resource),
         isBorrowed: false,
       ),
       error: null,
@@ -1315,6 +1400,7 @@ _parseWitAdapterUsedValueType(
       type: WASIComponentWitAdapterValueType.resource(
         text: text,
         resourceName: used.alias,
+        resourceIdentity: type.resourceIdentity,
         isBorrowed: type.isBorrowedResource,
       ),
       error: null,
@@ -1354,6 +1440,7 @@ _parseWitAdapterUsedResourceValueType(
     type: WASIComponentWitAdapterValueType.resource(
       text: text,
       resourceName: used.alias,
+      resourceIdentity: resolved.interface.resourceNamed(used.name),
       isBorrowed: isBorrowed,
     ),
     error: null,
@@ -1477,6 +1564,7 @@ _parseWitAdapterResourceValueType(
     type: WASIComponentWitAdapterValueType.resource(
       text: text,
       resourceName: resource.name,
+      resourceIdentity: typeContext.resourceIdentity(resource),
       isBorrowed: isBorrowed,
     ),
     error: null,

@@ -4,6 +4,189 @@ import 'package:wasd/src/wasi/component/wit_document.dart';
 
 void main() {
   group('WASIComponentWitDocument', () {
+    test('retains external IDs without interpreting quoted URL comments', () {
+      final document = WASIComponentWitDocument.parse(r'''
+interface store {
+  @external-id("https://host/a/*b*/(c)")
+  get: func() -> u32;
+  @external-id("DB.Bucket")
+  resource bucket {
+    @external-id("read/1")
+    read: func() -> u32;
+  }
+  @external-id("Alias") type count = u32;
+  @external-id("Record") record entry { value: u32 }
+  @external-id("Variant") variant choice { none, some(u32) }
+  @external-id("Flags") flags options { enabled }
+  @external-id("Enum") enum status { ready }
+}
+world command {
+  @external-id("https://host/one") import one: store;
+  @external-id("☃") export two: store;
+}
+''');
+      final store = document.interfaceNamed('store')!;
+      expect(store.functions.first.externalId, 'https://host/a/*b*/(c)');
+      expect(store.functions.last.externalId, 'read/1');
+      expect(store.functions.last.name, 'bucket.read');
+      expect(store.functions.last.signature, 'func(self:borrow<bucket>)->u32');
+      expect(store.resources.single.externalId, 'DB.Bucket');
+      expect(
+        [
+          store.typeAliases.single.externalId,
+          store.records.single.externalId,
+          store.variants.single.externalId,
+          store.flags.single.externalId,
+          store.enums.single.externalId,
+        ],
+        ['Alias', 'Record', 'Variant', 'Flags', 'Enum'],
+      );
+      final world = document.worldNamed('command')!;
+      expect(world.imports.single.name, 'one');
+      expect(world.imports.single.target.text, 'store');
+      expect(world.imports.single.externalId, 'https://host/one');
+      expect(world.exports.single.externalId, '☃');
+    });
+
+    test('decodes Core name string escapes and empty external IDs', () {
+      final document = WASIComponentWitDocument.parse(r'''
+interface store {
+  @external-id("\e2\98\83\u{1f642}\n\t\r\"\'\\") get: func();
+  @external-id("") put: func();
+}
+world command { import store; }
+''');
+      final functions = document.interfaceNamed('store')!.functions;
+      expect(functions.first.externalId, '☃🙂\n\t\r"\'\\');
+      expect(functions.last.externalId, '');
+    });
+
+    test(
+      'rejects raw WIT controls and bidi characters in every lexer path',
+      () {
+        for (final scalar in <int>[0x202e, 0x202d, 0x0085, 0x009f, 0x0000]) {
+          final character = String.fromCharCode(scalar);
+          for (final source in <String>[
+            'interface store { @external-id("A${character}B") get: func(); }',
+            'interface store { $character get: func(); }',
+            '// A${character}B\ninterface store {}',
+            '/* A${character}B */ interface store {}',
+          ]) {
+            expect(
+              () => WASIComponentWitDocument.parse(source),
+              throwsA(isA<WASIComponentWitParseException>()),
+              reason: 'raw U+${scalar.toRadixString(16)}',
+            );
+          }
+        }
+      },
+    );
+
+    test('preserves escaped control and bidi external ID values', () {
+      for (final spelling in <String>[
+        r'\u{202e}',
+        r'\e2\80\ae',
+        r'\u{85}',
+        r'\c2\85',
+      ]) {
+        final document = WASIComponentWitDocument.parse(
+          'interface store { @external-id("$spelling") get: func(); }',
+        );
+        expect(
+          document.interfaces.single.functions.single.externalId,
+          spelling.contains('202e') || spelling.contains('ae')
+              ? String.fromCharCode(0x202e)
+              : String.fromCharCode(0x85),
+        );
+      }
+      expect(
+        WASIComponentWitDocument.parse(
+          'interface store {\n\r\tget: func(); }',
+        ).interfaces.single.functions.single.name,
+        'get',
+      );
+    });
+
+    test('rejects malformed external IDs instead of discarding metadata', () {
+      for (final annotation in <String>[
+        '@external-id(42)',
+        '@external-id("one", "two")',
+        '@external-id("one") @external-id("two")',
+        r'@external-id("\ff")',
+        r'@external-id("\u{d800}")',
+        r'@external-id("\u{_61}")',
+        r'@external-id("\u{61_}")',
+        r'@external-id("\q")',
+        '@external-id("unterminated)',
+      ]) {
+        expect(
+          () => WASIComponentWitDocument.parse(
+            'interface store { $annotation get: func(); }',
+          ),
+          throwsA(isA<WASIComponentWitParseException>()),
+          reason: annotation,
+        );
+      }
+    });
+
+    test(
+      'keeps direct function and inline interface external ID boundaries',
+      () {
+        final document = WASIComponentWitDocument.parse('''
+world command {
+  @external-id("https://host/slugify") import slugify: func(text: string) -> string;
+  @external-id("Handler") export handler: interface { run: func(); }
+}
+''');
+        final world = document.worldNamed('command')!;
+        expect(world.imports.single.name, 'slugify');
+        expect(world.imports.single.externalId, 'https://host/slugify');
+        expect(world.exports.single.name, 'handler');
+        expect(world.exports.single.externalId, 'Handler');
+      },
+    );
+
+    test('distinguishes a namespace token from a spaced plain label', () {
+      expect(
+        () => WASIComponentWitDocument.parse('''
+interface store {}
+world command { import one:store; }
+'''),
+        throwsA(isA<WASIComponentWitParseException>()),
+      );
+    });
+
+    test('external IDs are rejected on declarations without a linking name', () {
+      for (final source in <String>[
+        '@external-id("X") interface store {}',
+        'interface store {} world command { @external-id("X") import store; }',
+        'interface store {} world command { @external-id("X") include command; }',
+        'interface types { type t = u32; } interface store { @external-id("X") use types.{t}; }',
+      ]) {
+        expect(
+          () => WASIComponentWitDocument.parse(source),
+          throwsA(isA<WASIComponentWitParseException>()),
+          reason: source,
+        );
+      }
+    });
+
+    test('retains include renaming and qualified named interface targets', () {
+      final document = WASIComponentWitDocument.parse('''
+interface store { get: func() -> u32; }
+world base { import cache: store; }
+world command {
+  include base with { cache as primary }
+  import remote: acme:db/store@1.0.0;
+}
+''');
+      final world = document.worldNamed('command')!;
+      expect(world.includes.single.target.text, 'base');
+      expect(world.includes.single.renames, {'cache': 'primary'});
+      expect(world.imports.single.name, 'remote');
+      expect(world.imports.single.target.text, 'acme:db/store@1.0.0');
+    });
+
     test('binds map signatures with aliases and nested record values', () {
       final document = WASIComponentWitDocument.parse('''
 package acme:maps;

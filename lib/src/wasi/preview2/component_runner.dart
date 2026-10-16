@@ -425,7 +425,7 @@ final class WASIComponentNativeRuntime {
   }
 
   void _addComponentImport(WasmComponentImport import) {
-    final name = _externName(import.name, import.versionSuffix);
+    final name = import.name;
     switch (import.descriptor.kind) {
       case WasmComponentExternKind.function:
         _componentFunctions.add(_hostComponentFunction(name));
@@ -478,7 +478,7 @@ final class WASIComponentNativeRuntime {
           if (export == null) {
             continue;
           }
-          final name = _externName(export.name, export.versionSuffix);
+          final name = export.name;
           if (export.descriptor.kind == WasmComponentExternKind.function) {
             functions[name] = _hostComponentFunction(
               _witCallbackKey(interfaceName, name),
@@ -1308,21 +1308,18 @@ final class WASIComponentNativeRuntime {
           functions: Map.unmodifiable({
             for (final export in instance.exports)
               if (export.sort.kind == WasmComponentSortKind.function)
-                _externName(export.name, export.versionSuffix):
-                    _componentFunctions[export.sort.index],
+                export.name: _componentFunctions[export.sort.index],
           }),
           types: Map.unmodifiable({
             for (final export in instance.exports)
               if (export.sort.kind == WasmComponentSortKind.componentType)
-                _externName(export.name, export.versionSuffix):
-                    _visibleTypes[export.sort.index],
+                export.name: _visibleTypes[export.sort.index],
           }),
           resourceTypeNames: Map.unmodifiable({
             for (final export in instance.exports)
               if (export.sort.kind == WasmComponentSortKind.componentType &&
                   _visibleResourceTypeNames[export.sort.index] != null)
-                _externName(export.name, export.versionSuffix):
-                    _visibleResourceTypeNames[export.sort.index]!,
+                export.name: _visibleResourceTypeNames[export.sort.index]!,
           }),
         );
       case WasmComponentInstanceKind.instantiate:
@@ -1384,7 +1381,7 @@ final class WASIComponentNativeRuntime {
       switch (event.kind) {
         case WasmComponentDefinitionKind.import:
           final import = nested.imports[event.index];
-          final name = _externName(import.name, import.versionSuffix);
+          final name = import.name;
           switch (import.descriptor.kind) {
             case WasmComponentExternKind.function:
               final function = suppliedFunctions[name];
@@ -1430,8 +1427,7 @@ final class WASIComponentNativeRuntime {
               functions: Map.unmodifiable({
                 for (final export in instance.exports)
                   if (export.sort.kind == WasmComponentSortKind.function)
-                    _externName(export.name, export.versionSuffix):
-                        functions[export.sort.index],
+                    export.name: functions[export.sort.index],
               }),
               types: const <String, WasmComponentTypeDefinition>{},
               resourceTypeNames: const <String, String>{},
@@ -1482,7 +1478,7 @@ final class WASIComponentNativeRuntime {
           }
         case WasmComponentDefinitionKind.export:
           final export = nested.exports[event.index];
-          final name = _externName(export.name, export.versionSuffix);
+          final name = export.name;
           switch (export.sort.kind) {
             case WasmComponentSortKind.function:
               exportedFunctions[name] = functions[export.sort.index];
@@ -1544,7 +1540,7 @@ final class WASIComponentNativeRuntime {
   }
 
   void _addExport(WasmComponentExport export) {
-    final name = _externName(export.name, export.versionSuffix);
+    final name = export.name;
     switch (export.sort.kind) {
       case WasmComponentSortKind.function:
         final function = _componentFunctions[export.sort.index];
@@ -2010,13 +2006,6 @@ String _preview3HttpErrorCode(Object? value) {
   throw const WASIPreview2ComponentExecutionException(
     'wasi:http/handler.handle returned an invalid error-code.',
   );
-}
-
-String _externName(String name, String? versionSuffix) {
-  if (versionSuffix == null) {
-    return name;
-  }
-  return '$name@$versionSuffix';
 }
 
 String _witCallbackKey(String interfaceName, String functionName) {

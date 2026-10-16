@@ -63,6 +63,20 @@ memory conversion, bound callbacks and WIT binding regressions are described in
 [Component map adapters](component_maps.md). This bounded gate is separate from
 general Component assertion execution and the historical async gate above.
 
+The same unreleased Component source also supplies `implements`, version suffix
+and `external-id` name attributes. Imports, exports, type exports and inline
+exports preserve this metadata while linking and uniqueness use the external
+name. Modern binary name tags `0x00` and `0x01` both carry a plain name;
+`0x02` carries a name and attribute vector. The earlier suffix-first heuristic
+has been replaced by these frozen rules.
+
+WIT parsing retains applicable `externalId` metadata and separates named
+interface labels from their targets. Two imports of the same interface bind
+through separate labels and callbacks; `include ... with` preserves renamed
+labels and resource identities. These checks do not establish general
+Component composition, executable direct world functions or complete WASI
+`0.3.1` adoption.
+
 ## Implementation and evidence matrix
 
 | Area | Implementation in 0.5.0 | Evidence and remaining work |

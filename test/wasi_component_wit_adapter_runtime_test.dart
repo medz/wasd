@@ -8,6 +8,161 @@ import 'package:wasd/src/wasi/preview3/component_host.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 
 void main() {
+  group('WIT named interface adapters', () {
+    test('nested include with can rename a plain empty interface binding', () {
+      final document = WASIComponentWitDocument.parse('''
+interface store {}
+world base { import cache: store; }
+world middle { include base with { cache as primary } }
+world command { include middle with { primary as renamed } }
+''');
+      expect(
+        wasiComponentWitWorldFunctions(
+          document,
+          document.worldNamed('command')!,
+        ),
+        isEmpty,
+      );
+    });
+
+    test('invokes distinct labels and keeps external IDs as metadata', () {
+      final document = WASIComponentWitDocument.parse('''
+package acme:db;
+interface store { get: func() -> u32; }
+world command {
+  @external-id("same-id") import one: store;
+  @external-id("same-id") import two: store;
+  export result: store;
+}
+''');
+      final functions = wasiComponentWitWorldFunctions(
+        document,
+        document.worldNamed('command')!,
+      );
+      expect(functions.map((f) => f.qualifiedName), [
+        'one.get',
+        'two.get',
+        'result.get',
+      ]);
+      final program = WASIComponentWitAdapterProgram.bind(
+        functions,
+        imports: {'one.get': (_) => _u32(11), 'two.get': (_) => _u32(22)},
+        exports: {'result.get': (_) => _u32(33)},
+      );
+      expect(program.invokeImport('one.get', []), 11);
+      expect(program.invokeImport('two.get', []), 22);
+      expect(program.invokeExport('result.get', []), 33);
+      expect(() => program.invokeImport('same-id.get', []), throwsStateError);
+    });
+
+    test('include with renames callbacks and preserves interface metadata', () {
+      final document = WASIComponentWitDocument.parse('''
+package acme:db;
+interface store { @external-id("Read") get: func() -> u32; }
+world base { @external-id("DB") import cache: store; }
+world command {
+  import cache: store;
+  include base with { cache as renamed }
+}
+''');
+      final functions = wasiComponentWitWorldFunctions(
+        document,
+        document.worldNamed('command')!,
+      );
+      expect(functions.map((f) => f.qualifiedName), [
+        'cache.get',
+        'renamed.get',
+      ]);
+      expect(functions.last.item.target.text, 'store');
+      expect(functions.last.item.externalId, 'DB');
+      expect(functions.last.function.externalId, 'Read');
+      final program = WASIComponentWitAdapterProgram.bind(
+        functions,
+        imports: {'cache.get': (_) => _u32(1), 'renamed.get': (_) => _u32(2)},
+      );
+      expect(program.invokeImport('renamed.get', []), 2);
+    });
+
+    test('resolves a named qualified target using its interface path', () {
+      final dependency = WASIComponentWitDocument.parse('''
+package acme:db@1.0.0;
+interface store { get: func() -> u32; }
+''');
+      final document = WASIComponentWitDocument.parse('''
+world command { import remote: acme:db/store@1.0.0; }
+''');
+      final seen = <String>[];
+      final functions = wasiComponentWitWorldFunctions(
+        document,
+        document.worldNamed('command')!,
+        resolveTarget: (target) {
+          seen.add(target);
+          return WASIComponentWitResolvedTarget(
+            document: dependency,
+            memberName: 'store',
+          );
+        },
+      );
+      expect(seen, ['acme:db/store@1.0.0']);
+      expect(functions.single.qualifiedName, 'remote.get');
+      final program = WASIComponentWitAdapterProgram.bind(
+        functions,
+        imports: {'remote.get': (_) => 42},
+      );
+      expect(program.invokeImport('remote.get', []), 42);
+    });
+
+    test('include with rejects interface names and missing labels', () {
+      for (final rename in ['store as other', 'missing as other']) {
+        final document = WASIComponentWitDocument.parse('''
+interface store { get: func() -> u32; }
+world base { import store; }
+world command { include base with { $rename } }
+''');
+        expect(
+          () => wasiComponentWitWorldFunctions(
+            document,
+            document.worldNamed('command')!,
+          ),
+          throwsA(isA<WASIComponentWitTargetResolutionException>()),
+        );
+      }
+    });
+
+    test(
+      'copies local resources per named instance and shares used resources',
+      () {
+        final document = WASIComponentWitDocument.parse('''
+interface shared { resource bucket; }
+interface store {
+  use shared.{bucket as shared-bucket};
+  resource bucket { constructor(); read: func() -> u32; }
+  open-shared: func() -> shared-bucket;
+}
+world base { import cache: store; }
+world command { include base with { cache as one } import two: store; }
+''');
+        final functions = wasiComponentWitWorldFunctions(
+          document,
+          document.worldNamed('command')!,
+        );
+        WASIComponentWitFunctionBinding named(String name) =>
+            functions.singleWhere((function) => function.qualifiedName == name);
+        final one = named('one.bucket.constructor').signature.result!;
+        final two = named('two.bucket.constructor').signature.result!;
+        final method = named('one.bucket.read').signature.params.single.type;
+        expect(one.resourceIdentity, isNotNull);
+        expect(one.resourceIdentity, isNot(same(two.resourceIdentity)));
+        expect(method.resourceIdentity, same(one.resourceIdentity));
+        expect(method.isBorrowedResource, isTrue);
+        expect(
+          named('one.open-shared').signature.result!.resourceIdentity,
+          same(named('two.open-shared').signature.result!.resourceIdentity),
+        );
+      },
+    );
+  });
+
   group('WIT map adapter runtime', () {
     test('preserves ordered duplicate keys through nested record and list', () {
       final map = _runtimeMap(<Object?>[
