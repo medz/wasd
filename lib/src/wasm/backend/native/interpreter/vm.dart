@@ -130,17 +130,30 @@ final class _FunctionRefTarget {
   RuntimeFunction get function => vm._functions[functionIndex];
 }
 
-final class _ExceptionObject {
-  const _ExceptionObject({required this.nominalTypeKey, required this.values});
+final class WasmGuestException implements Exception {
+  WasmGuestException({required this.nominalTypeKey, required this.values});
+
+  factory WasmGuestException.fromReference(int reference) {
+    final exception = WasmVm._exceptionObjects[reference];
+    if (exception == null) {
+      throw StateError('throw_ref to non-exception reference.');
+    }
+    return exception;
+  }
 
   final String nominalTypeKey;
   final List<WasmValue> values;
-}
+  int? _reference;
 
-final class _WasmThrownException implements Exception {
-  const _WasmThrownException(this.exceptionRef);
-
-  final int exceptionRef;
+  // Only materialized exnrefs need a store entry. Ordinary throw/catch can
+  // propagate this object across synchronous and asynchronous interpreters.
+  int get exceptionRef {
+    final existing = _reference;
+    if (existing != null) return existing;
+    final reference = WasmVm._nextExceptionRef++;
+    WasmVm._exceptionObjects[reference] = this;
+    return _reference = reference;
+  }
 }
 
 typedef WasmAsyncFunctionRefInvoker =
@@ -256,8 +269,8 @@ final class WasmVm {
   static final Map<int, _FunctionRefTarget> _functionRefTargets =
       <int, _FunctionRefTarget>{};
   static int _nextExceptionRef = 0x20000000;
-  static final Map<int, _ExceptionObject> _exceptionObjects =
-      <int, _ExceptionObject>{};
+  static final Map<int, WasmGuestException> _exceptionObjects =
+      <int, WasmGuestException>{};
   static int _nextGcObjectId = 0;
   static final Map<int, _GcRefObject> _sharedGcObjects = <int, _GcRefObject>{};
   static final Map<int, int> _sharedI31Refs = <int, int>{};
@@ -574,20 +587,6 @@ final class WasmVm {
 
   int _internV128(Uint8List bytes) {
     return internV128Bytes(bytes);
-  }
-
-  int _allocateExceptionRef(_ExceptionObject exception) {
-    final ref = _nextExceptionRef++;
-    _exceptionObjects[ref] = exception;
-    return ref;
-  }
-
-  _ExceptionObject _requireExceptionObject(int reference) {
-    final exception = _exceptionObjects[reference];
-    if (exception == null) {
-      throw StateError('throw_ref to non-exception reference.');
-    }
-    return exception;
   }
 
   List<WasmValue> invokeFunction(int functionIndex, List<WasmValue> args) {
@@ -4013,7 +4012,7 @@ final class WasmVm {
                 'Unsupported opcode: 0x${instruction.opcode.toRadixString(16)}',
               );
           }
-        } on _WasmThrownException catch (thrown) {
+        } on WasmGuestException catch (thrown) {
           final handledPc = _handleThrownException(
             thrown,
             labels: labels,
@@ -4126,13 +4125,10 @@ final class WasmVm {
     final tagIndex = _checkTagIndex(instruction.immediate!);
     final tagType = _tagTypes[tagIndex];
     final values = _popArgs(stack, tagType.params);
-    final exceptionRef = _allocateExceptionRef(
-      _ExceptionObject(
-        nominalTypeKey: _tagNominalTypeKeys[tagIndex],
-        values: values,
-      ),
+    throw WasmGuestException(
+      nominalTypeKey: _tagNominalTypeKeys[tagIndex],
+      values: values,
     );
-    throw _WasmThrownException(exceptionRef);
   }
 
   void _throwRef(List<WasmValue> stack) {
@@ -4140,8 +4136,7 @@ final class WasmVm {
     if (exceptionRef == null) {
       throw StateError('null exception reference');
     }
-    _requireExceptionObject(exceptionRef);
-    throw _WasmThrownException(exceptionRef);
+    throw WasmGuestException.fromReference(exceptionRef);
   }
 
   int _handleLegacyCatchBoundary({
@@ -4180,15 +4175,15 @@ final class WasmVm {
     if (activeExceptionRef == null) {
       throw StateError('invalid rethrow label');
     }
-    throw _WasmThrownException(activeExceptionRef);
+    throw WasmGuestException.fromReference(activeExceptionRef);
   }
 
   int? _handleThrownException(
-    _WasmThrownException thrown, {
+    WasmGuestException thrown, {
     required List<_LabelFrame> labels,
     required List<WasmValue> stack,
   }) {
-    final exception = _requireExceptionObject(thrown.exceptionRef);
+    final exception = thrown;
     var i = labels.length - 1;
     while (i >= 0) {
       final frame = labels[i];

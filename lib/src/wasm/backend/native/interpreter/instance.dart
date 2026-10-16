@@ -28,16 +28,6 @@ typedef WasmInstantiationPhaseMeasure =
 
 enum _AsyncSubsetControlKind { block, loop, if_, tryLegacy }
 
-final class _AsyncSubsetThrownException implements Exception {
-  _AsyncSubsetThrownException({
-    required this.nominalTypeKey,
-    required this.values,
-  });
-
-  final String nominalTypeKey;
-  final List<WasmValue> values;
-}
-
 final class _AsyncSubsetExecutionError implements Exception {
   _AsyncSubsetExecutionError({
     required this.functionIndex,
@@ -80,7 +70,7 @@ final class _AsyncSubsetControlFrame {
   final List<TryTableCatchClause>? tryTableCatches;
   final List<LegacyCatchClause>? legacyCatches;
   final int? delegateDepth;
-  _AsyncSubsetThrownException? activeException;
+  WasmGuestException? activeException;
   int? activeCatchInstructionIndex;
 
   List<WasmValueType> get branchTypes =>
@@ -162,9 +152,6 @@ final class WasmInstance {
   final WasmVm _vm;
   late final List<bool> _asyncSubsetRequiredByFunction =
       _computeAsyncSubsetRequiredByFunction();
-  final Map<int, _AsyncSubsetThrownException> _asyncExceptionObjects =
-      <int, _AsyncSubsetThrownException>{};
-  int _nextAsyncExceptionRef = 1;
   late final Map<int, int> _functionRefIdToIndex = _buildFunctionRefIdToIndex();
 
   factory WasmInstance.fromBytes(
@@ -5433,7 +5420,7 @@ final class WasmInstance {
               '0x${instruction.opcode.toRadixString(16)}',
             );
         }
-      } on _AsyncSubsetThrownException catch (thrown) {
+      } on WasmGuestException catch (thrown) {
         final handledPc = _handleAsyncSubsetThrownException(
           thrown,
           stack: stack,
@@ -5565,11 +5552,10 @@ final class WasmInstance {
   }
 
   int? _handleAsyncSubsetThrownException(
-    _AsyncSubsetThrownException thrown, {
+    WasmGuestException thrown, {
     required List<WasmValue> stack,
     required List<_AsyncSubsetControlFrame> controlStack,
   }) {
-    final exceptionRef = _allocateAsyncSubsetExceptionRef(thrown);
     var i = controlStack.length - 1;
     while (i >= 0) {
       final frame = controlStack[i];
@@ -5615,11 +5601,11 @@ final class WasmInstance {
             case TryTableCatchKind.catchRef:
               stack
                 ..addAll(thrown.values)
-                ..add(WasmValue.i32(exceptionRef));
+                ..add(WasmValue.i32(thrown.exceptionRef));
             case TryTableCatchKind.catchAll:
               break;
             case TryTableCatchKind.catchAllRef:
-              stack.add(WasmValue.i32(exceptionRef));
+              stack.add(WasmValue.i32(thrown.exceptionRef));
             default:
               i--;
               continue;
@@ -5712,7 +5698,7 @@ final class WasmInstance {
     final tagIndex = _checkAsyncSubsetTagIndex(instruction.immediate!);
     final tagType = _tagTypes[tagIndex];
     final values = _popArgsForTypes(stack, tagType.params, context: 'throw');
-    throw _AsyncSubsetThrownException(
+    throw WasmGuestException(
       nominalTypeKey: _tagNominalTypeKeys[tagIndex],
       values: values,
     );
@@ -5726,17 +5712,7 @@ final class WasmInstance {
     if (exceptionRef == null) {
       throw StateError('null exception reference');
     }
-    final exception = _asyncExceptionObjects[exceptionRef];
-    if (exception == null) {
-      throw StateError('unknown exception reference');
-    }
-    throw exception;
-  }
-
-  int _allocateAsyncSubsetExceptionRef(_AsyncSubsetThrownException exception) {
-    final reference = _nextAsyncExceptionRef++;
-    _asyncExceptionObjects[reference] = exception;
-    return reference;
+    throw WasmGuestException.fromReference(exceptionRef);
   }
 
   Never _rethrowLegacyInAsyncSubset({

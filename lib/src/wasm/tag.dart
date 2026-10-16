@@ -15,8 +15,13 @@ class TagDescriptor {
 /// Represents a WebAssembly exception tag.
 abstract interface class Tag {
   /// Creates a tag from [descriptor].
+  ///
+  /// The tag snapshots the ordered parameters. Native module bindings currently
+  /// support empty and numeric (`i32`, `i64`, `f32`, `f64`) payloads.
   factory Tag(TagDescriptor descriptor) = backend.Tag;
 
   /// Returns the tag type information.
+  ///
+  /// The returned parameters are an independent snapshot.
   TagDescriptor type();
 }

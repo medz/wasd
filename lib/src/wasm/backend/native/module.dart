@@ -12,10 +12,14 @@ class Module implements wasm.Module {
   Module(ByteBuffer bytes, {Set<wasm.CoreFeature> features = const {}})
     : _bytes = bytes,
       features = native_features.WasmFeatureSet(
+        exceptionHandling: features.contains(
+          wasm.CoreFeature.exceptionHandling,
+        ),
         additionalEnabled: Set.unmodifiable(
           features.map(
             (feature) => switch (feature) {
               wasm.CoreFeature.multiMemory => 'multi-memory',
+              wasm.CoreFeature.exceptionHandling => 'exception-handling',
             },
           ),
         ),
@@ -29,6 +33,7 @@ class Module implements wasm.Module {
   final native_features.WasmFeatureSet features;
   static const supportedFeatures = <wasm.CoreFeature>{
     wasm.CoreFeature.multiMemory,
+    wasm.CoreFeature.exceptionHandling,
   };
   late final native_ir.WasmModule decoded;
   late final List<native_predecode.PredecodedFunction> predecodedFunctions;

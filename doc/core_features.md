@@ -1,7 +1,8 @@
 # Explicit Core options
 
-This API is part of the `0.6.0-dev.1` preview. Stable `0.5.2` does not
-provide it. The previously unpublished `0.5.3` floating-point fixes are included
+The multi-memory option is part of the `0.6.0-dev.1` preview. Stable `0.5.2`
+does not provide it. The [exception-handling option and public native tags](host_tags.md)
+are unreleased additions. The previously unpublished `0.5.3` floating-point fixes are included
 in this batch; their frozen artifacts remain archived for restoration, with no
 separate `0.5.3` release planned.
 
@@ -27,8 +28,9 @@ The Dart VM supports `CoreFeature.multiMemory` using the pure Dart interpreter.
 It allows multiple imported/defined/exported linear memories and indexed scalar
 loads/stores, size/grow, copy/fill/init and data segments. The existing public
 host ABI supports function, memory and [numeric global imports](host_globals.md).
-Enabling this option does not add reference global/table/tag imports or enable
-SIMD, GC, threads or multiple tables.
+Enabling this option does not add reference global/table imports or enable
+SIMD, GC, threads, exception handling or multiple tables. Native numeric tag
+imports/exports require the separate `CoreFeature.exceptionHandling` option.
 Invalid memory indices, alignment and operand types still fail compilation.
 Out-of-bounds accesses and dropped data segments still trap during execution;
 an out-of-bounds active data segment fails instantiation. Existing runtime trap
