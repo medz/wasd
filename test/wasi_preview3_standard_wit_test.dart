@@ -117,11 +117,13 @@ void main() {
       final wasmtime =
           gateResults['wasmtime_reference']! as Map<String, Object?>;
       final official = gateResults['wasi_testsuite']! as Map<String, Object?>;
-      final toolchains =
-          jsonDecode(File('tool/toolchain.lock.json').readAsStringSync())
-              as Map<String, Object?>;
-      final lockedWasmTools = toolchains['wasm_tools']! as Map<String, Object?>;
-      expect(wasmTools['version'], lockedWasmTools['version']);
+      expect(
+        wasmTools['version'],
+        '1.254.0',
+        reason:
+            'This frozen draft gate records its original validator; the '
+            'current Core converter may reject removed Component syntax.',
+      );
 
       final pubspec = File('pubspec.yaml').readAsStringSync();
       final version = RegExp(

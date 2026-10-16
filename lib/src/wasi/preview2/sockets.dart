@@ -1013,7 +1013,7 @@ base class WASIPreview2SocketsHost {
     }
     socket.pendingListen = null;
     if (!result.isOk) {
-      socket.state = _TcpSocketState.bound;
+      socket.state = _TcpSocketState.closed;
       return _errorResult(result.errorCode!);
     }
     socket.listener = result.value!;

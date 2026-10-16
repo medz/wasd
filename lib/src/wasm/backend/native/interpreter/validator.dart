@@ -199,6 +199,9 @@ abstract final class WasmValidator {
   static void _validateTypeReferences(WasmModule module) {
     for (var typeIndex = 0; typeIndex < module.types.length; typeIndex++) {
       final type = module.types[typeIndex];
+      if (type.superTypeIndices.length > 1) {
+        throw const FormatException('Validation failed: multiple supertypes.');
+      }
       for (final superTypeIndex in type.superTypeIndices) {
         _checkIndex(superTypeIndex, module.types.length, 'type');
       }
