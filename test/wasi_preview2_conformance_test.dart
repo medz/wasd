@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 // Fixture provenance is verified by SHA-256 before execution.
 import 'package:crypto/crypto.dart';
@@ -23,6 +24,23 @@ const _exitWithCodeSourceSha256 =
     'e743b5e0f5f88de84b9a4d00684b422f633ec06d97c1eef4fabb00b8b7d9b313';
 
 void main() {
+  test('executes attributed interface imports by their externnames', () async {
+    final component = WasmComponent.decode(
+      base64Decode(_nameAttributesCommandBase64),
+    );
+    expect(component.validate(), isEmpty);
+    final random = _CountingRandom();
+    final host = WASIPreview2ComponentHost(
+      randomHost: WASIPreview2RandomHost(secureRandom: random),
+    );
+
+    final result = await WASIPreview2CommandRunner(host).run(component);
+
+    expect(result.exitCode, 0);
+    // The guest invokes both the plain-named and version-attributed imports.
+    expect(random.wordCalls, 4);
+  });
+
   group('Wasmtime v47.0.3 WASI 0.2 command component', () {
     test('fixture is fixed and non-empty', () async {
       final bytes = await File(_fixturePath).readAsBytes();
@@ -109,3 +127,40 @@ void main() {
     });
   });
 }
+
+final class _CountingRandom implements math.Random {
+  var wordCalls = 0;
+
+  @override
+  int nextInt(int max) {
+    expect(max, 0x100000000);
+    wordCalls++;
+    return 7;
+  }
+
+  @override
+  bool nextBool() => throw StateError('Unexpected random bool request.');
+
+  @override
+  double nextDouble() => throw StateError('Unexpected random double request.');
+}
+
+// Component Model 0220da8 nameattributes encoding. A nested component imports
+// `primary` (implements + external-id) and `wasi:random/random@0.2`
+// (versionsuffix ".12" + external-id). Both are supplied by their externnames
+// from the same standard host interface and invoke get-random-u64. Function,
+// nested inline-export, and command export IDs are also metadata only.
+// The Core module calls each lowered function, drops both results, and returns
+// the successful CLI result. No external compiler is needed to run this input.
+const _nameAttributesCommandBase64 =
+    'AGFzbQ0AAQAHMQFCAgFAAAB3BAIOZ2V0LXJhbmRvbS11NjQBAhNpZ25vcmVkLWZ1bmN0aW9uLWlkAQAKMAECGXdhc2k6cmFuZG9t'
+    'L3JhbmRvbUAwLjIuMTIBAg9pZ25vcmVkLXJvb3QtaWQFAATSAgBhc20NAAEABzgBQgIBQAAAdwQCDmdldC1yYW5kb20tdTY0AQIa'
+    'aWdub3JlZC1uZXN0ZWQtZnVuY3Rpb24taWQBAAp7AgIHcHJpbWFyeQIAGXdhc2k6cmFuZG9tL3JhbmRvbUAwLjIuMTICG2h0dHBz'
+    'Oi8vZXhhbXBsZS50ZXN0L3JhbmRvbQUAAhZ3YXNpOnJhbmRvbS9yYW5kb21AMC4yAgEDLjEyAhRpZ25vcmVkLXZlcnNpb25lZC1p'
+    'ZAUABiUCAQAADmdldC1yYW5kb20tdTY0AQABDmdldC1yYW5kb20tdTY0BR4BAQECBnNlY29uZAECDmlnbm9yZWQtYmFnLWlkAQEG'
+    'CwEBAAIGc2Vjb25kCz0CAgVmaXJzdAECEGlnbm9yZWQtZmlyc3QtaWQBAAACBnNlY29uZAECEWlnbm9yZWQtc2Vjb25kLWlkAQIA'
+    'BScBAAACB3ByaW1hcnkFABZ3YXNpOnJhbmRvbS9yYW5kb21AMC4yBQAGFAIBAAEFZmlyc3QBAAEGc2Vjb25kCAkCAQAAAAEAAQAC'
+    'FAEBAgVmaXJzdAAABnNlY29uZAABAXAAYXNtAQAAAAEJAmAAAX5gAAF/AiACBnJhbmRvbQVmaXJzdAAABnJhbmRvbQZzZWNvbmQA'
+    'AAMCAQEHBwEDcnVuAAIKDAEKABAAGhABGkEACwAeBG5hbWUABQRtYWluARACAAVmaXJzdAEGc2Vjb25kAg0BAAABBnJhbmRvbRIA'
+    'BgkBAAABAQNydW4HCAJqAABAAAABCAYBAAACAAIFGwEBAQIDcnVuAQIOaWdub3JlZC1ydW4taWQBAgsuAQITd2FzaTpjbGkvcnVu'
+    'QDAuMi4xMgECEmlnbm9yZWQtY29tbWFuZC1pZAUCAA==';

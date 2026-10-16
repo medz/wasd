@@ -75,6 +75,8 @@ jobs:
       - run: dart test -p chrome test/wasm_exception_test.dart
       - run: dart test -p node test/component_test.dart
       - run: dart test -p chrome test/component_test.dart
+      - run: dart test -p node test/wasi_component_wit_test.dart test/wasi_component_wit_adapter_runtime_test.dart
+      - run: dart test -p chrome test/wasi_component_wit_test.dart test/wasi_component_wit_adapter_runtime_test.dart
 
   native:
     runs-on: ${{ matrix.os }}

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
@@ -5,6 +6,399 @@ import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/features.dart';
 
 void main() {
+  group('component name attributes', () {
+    const boundaries = [
+      'import',
+      'export',
+      'inline export',
+      'component type import',
+      'component type export',
+      'instance type export',
+    ];
+
+    test('decodes consecutive modern 0x01 names without suffixes', () {
+      final component = WasmComponent.decode(
+        _minimalFunctionComponentWithImports([
+          [1, ..._componentNameBytes('a'), 1, 0],
+          [1, ..._componentNameBytes('b'), 1, 0],
+          [1, ..._componentNameBytes('c'), 1, 0],
+        ]),
+      );
+      expect(component.imports.map((item) => item.name), ['a', 'b', 'c']);
+      expect(
+        component.imports.map((item) => item.versionSuffix),
+        everyElement(isNull),
+      );
+      expect(component.validate(), isEmpty);
+    });
+
+    for (final boundary in boundaries) {
+      test('decodes combined attributes on $boundary', () {
+        final component = WasmComponent.decode(
+          _nameAttributeComponent(boundary, 'primary', [
+            (0, 'wasi:keyvalue/store@1.2.3'),
+            (2, '用户数据库://region-a'),
+          ]),
+        );
+        expect(component.validate(), isEmpty);
+        expect(_decodedNameAttributes(component, boundary), (
+          implementsInterface: 'wasi:keyvalue/store@1.2.3',
+          externalId: '用户数据库://region-a',
+          versionSuffix: null,
+        ));
+      });
+
+      test('decodes both plain prefixes and empty attributes on $boundary', () {
+        for (final tag in [0, 1, 2]) {
+          final component = WasmComponent.decode(
+            _nameAttributeComponent(boundary, 'primary', [], plainTag: tag),
+          );
+          expect(component.validate(), isEmpty);
+          expect(_decodedNameAttributes(component, boundary), (
+            implementsInterface: null,
+            externalId: null,
+            versionSuffix: null,
+          ));
+        }
+      });
+
+      test('validates implements sort and names on $boundary', () {
+        for (final invalid in [
+          (name: 'primary', interface: 'wasi:keyvalue/store', instance: false),
+          (name: 'a:b/c', interface: 'wasi:keyvalue/store', instance: true),
+          (name: 'primary', interface: 'not-valid', instance: true),
+          (name: 'primary', interface: '', instance: true),
+          (name: 'primary', interface: 'a:b/c@01.0.0', instance: true),
+          (name: '[method]a.b', interface: 'a:b/c', instance: true),
+          (name: 'a.b', interface: 'a:b/c', instance: true),
+          (name: 'a-', interface: 'a:b/c', instance: true),
+        ]) {
+          final component = WasmComponent.decode(
+            _nameAttributeComponent(boundary, invalid.name, [
+              (0, invalid.interface),
+            ], instance: invalid.instance),
+          );
+          expect(
+            component.validate().map((error) => error.message),
+            contains(contains('implements')),
+            reason: '$boundary: $invalid',
+          );
+        }
+      });
+
+      test('allows arbitrary external IDs on $boundary', () {
+        for (final id in [
+          '',
+          '☃︎',
+          '\uFEFFid',
+          'https://example.test/a?b=1',
+          '\u0000',
+        ]) {
+          final component = WasmComponent.decode(
+            _nameAttributeComponent(boundary, 'a:b/c', [
+              (2, id),
+            ], instance: false),
+          );
+          expect(component.validate(), isEmpty, reason: '$boundary: $id');
+          expect(_decodedNameAttributes(component, boundary).externalId, id);
+        }
+      });
+
+      test('accepts nested interface names on $boundary', () {
+        for (final interface in [
+          'ns:sub:pkg/iface/child@1.2.3',
+          'ns:sub:pkg/iface/child@0.2',
+        ]) {
+          expect(
+            WasmComponent.decode(
+              _nameAttributeComponent(boundary, 'primary', [(0, interface)]),
+            ).validate(),
+            isEmpty,
+          );
+        }
+        for (final interface in [
+          'ns::pkg/iface/child',
+          'ns:pkg/iface//child',
+          'ns:pkg/iface/',
+        ]) {
+          expect(
+            WasmComponent.decode(
+              _nameAttributeComponent(boundary, 'primary', [(0, interface)]),
+            ).validate(),
+            isNotEmpty,
+          );
+        }
+      });
+
+      test('validates version suffixes on $boundary', () {
+        for (final (name, suffix) in [
+          ('a:b/c@1', '.2.3'),
+          ('ns:sub:pkg/iface/child@0.2', '.12'),
+          ('a:b/c@0.0.3', '-rc.1+build.9'),
+          ('a:b/c@0.0.0', ''),
+        ]) {
+          expect(
+            WasmComponent.decode(
+              _nameAttributeComponent(boundary, name, [(1, suffix)]),
+            ).validate(),
+            isEmpty,
+            reason: '$name + $suffix',
+          );
+        }
+        for (final (name, suffix) in [
+          ('primary', '.2.3'),
+          ('store@1', '.2.3'),
+          ('a:b/c@1.2.3', '.4'),
+          ('a:b/c@1', '.02.3'),
+          ('a:b/c@1', '☃'),
+          ('a:b/c@1', ''),
+          ('a:b/c@0.0', '.3'),
+          ('a:b/c@1.2', '.3'),
+        ]) {
+          expect(
+            WasmComponent.decode(
+              _nameAttributeComponent(boundary, name, [(1, suffix)]),
+            ).validate().map((error) => error.message),
+            contains(contains('version suffix')),
+            reason: '$name + $suffix',
+          );
+        }
+      });
+    }
+
+    test('rejects duplicate attributes and unknown attribute tags', () {
+      for (final kind in [0, 1, 2]) {
+        expect(
+          () => WasmComponent.decode(
+            _nameAttributeComponent('import', 'primary', [
+              (kind, 'a:b/c'),
+              (kind, 'a:b/c'),
+            ]),
+          ),
+          throwsA(
+            isA<FormatException>().having(
+              (error) => error.message,
+              'message',
+              contains('Duplicate Wasm component name attribute'),
+            ),
+          ),
+        );
+      }
+      expect(
+        () => WasmComponent.decode(
+          _nameAttributeComponent('import', 'primary', [(3, 'x')]),
+        ),
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'message',
+            contains('Unsupported Wasm component name attribute'),
+          ),
+        ),
+      );
+    });
+
+    test(
+      'decodes attributes in either order and preserves version suffixes',
+      () {
+        final combined = WasmComponent.decode(
+          _nameAttributeComponent('import', 'ABC-1', [
+            (2, 'id'),
+            (0, 'foo-bar:baz-qux/ABC-123@1.2.3-rc.1+build.01'),
+          ]),
+        );
+        expect(combined.validate(), isEmpty);
+        expect(combined.imports.single.externalId, 'id');
+        expect(
+          combined.imports.single.implementsInterface,
+          'foo-bar:baz-qux/ABC-123@1.2.3-rc.1+build.01',
+        );
+        final versioned = WasmComponent.decode(
+          _nameAttributeComponent('import', 'a:b/c@1', [
+            (2, 'id'),
+            (1, '.2.3'),
+          ]),
+        );
+        expect(versioned.validate(), isEmpty);
+        expect(versioned.imports.single.versionSuffix, '.2.3');
+        expect(versioned.imports.single.externalId, 'id');
+      },
+    );
+
+    test('rejects malformed UTF-8 and truncated attribute values', () {
+      for (final bytes in [
+        [2, 1, 0x61, 1, 2, 1, 0xff],
+        [2, 1, 0x61, 1],
+        [2, 1, 0x61, 1, 2, 2, 0x61],
+      ]) {
+        expect(
+          () => WasmComponent.decode(
+            _componentBytes([
+              _componentSection(0x0a, [1, ...bytes]),
+            ]),
+          ),
+          throwsFormatException,
+        );
+      }
+    });
+
+    test('attributes do not relax externname uniqueness', () {
+      final component = WasmComponent.decode(
+        _componentBytes([
+          _mapTypeSection([
+            [0x42, 0],
+          ]),
+          _componentSection(0x0a, [
+            2,
+            ..._nameAttributeBytes('primary', [(0, 'a:b/c'), (2, 'one')]),
+            5,
+            0,
+            ..._nameAttributeBytes('primary', [(0, 'd:e/f'), (2, 'two')]),
+            5,
+            0,
+          ]),
+        ]),
+      );
+      expect(
+        component.validate().map((error) => error.message),
+        contains(contains('conflicts with previous')),
+      );
+    });
+
+    test('different externnames may share implements and external IDs', () {
+      final component = WasmComponent.decode(
+        _componentBytes([
+          _mapTypeSection([
+            [0x42, 0],
+          ]),
+          _componentSection(0x0a, [
+            2,
+            ..._nameAttributeBytes('primary', [(0, 'a:b/c'), (2, 'same')]),
+            5,
+            0,
+            ..._nameAttributeBytes('secondary', [(0, 'a:b/c'), (2, 'same')]),
+            5,
+            0,
+          ]),
+        ]),
+      );
+      expect(component.validate(), isEmpty);
+      expect(component.imports.map((item) => item.name), [
+        'primary',
+        'secondary',
+      ]);
+    });
+
+    test('instantiation arguments use externname and ignore attributes', () {
+      for (final (name, attributes) in [
+        ('primary', [(0, 'a:b/c')]),
+        ('primary', [(2, 'the-id')]),
+        ('a:b/c@1', [(1, '.2.3')]),
+      ]) {
+        expect(
+          WasmComponent.decode(
+            _attributeInstantiationComponent(name, name, attributes),
+          ).validate(),
+          isEmpty,
+        );
+        final errors = WasmComponent.decode(
+          _attributeInstantiationComponent(
+            name,
+            attributes.single.$2,
+            attributes,
+          ),
+        ).validate();
+        expect(
+          errors.map((error) => error.message),
+          contains(contains('Missing Wasm component instantiation argument')),
+        );
+      }
+    });
+
+    test('nested instance attributes do not affect structural matching', () {
+      final supplied = _attributeNestedInstanceType('a:b/c', 'supplied-id');
+      final required = _attributeNestedInstanceType('d:e/f', 'required-id');
+      final child = _componentBytes([
+        _mapTypeSection([required]),
+        _componentSection(0x0a, [
+          1,
+          ..._nameAttributeBytes('i', [(0, 'x:y/z'), (2, 'child-id')]),
+          5,
+          0,
+        ]),
+      ]);
+      final component = WasmComponent.decode(
+        _componentBytes([
+          _mapTypeSection([supplied]),
+          _componentSection(0x0a, [
+            1,
+            ..._nameAttributeBytes('supplied', [
+              (0, 'x:y/z'),
+              (2, 'parent-id'),
+            ]),
+            5,
+            0,
+          ]),
+          _componentSection(0x04, child),
+          _componentSection(0x05, [
+            1,
+            0,
+            0,
+            1,
+            ..._componentNameBytes('i'),
+            5,
+            0,
+          ]),
+        ]),
+      );
+      expect(component.validate(), isEmpty);
+    });
+
+    test('shared attributes do not merge independent resource instances', () {
+      for (final valueInstance in [0, 1]) {
+        final component = WasmComponent.decode(
+          _componentBytes([
+            _mapTypeSection([
+              _mapFunctionAndValueInstanceType(withResource: true),
+            ]),
+            _componentSection(0x0a, [
+              2,
+              ..._nameAttributeBytes('primary', [(0, 'a:b/c'), (2, 'same')]),
+              5,
+              0,
+              ..._nameAttributeBytes('secondary', [(0, 'a:b/c'), (2, 'same')]),
+              5,
+              0,
+            ]),
+            _componentSection(0x06, [
+              2,
+              1,
+              0,
+              0,
+              1,
+              0x66,
+              2,
+              0,
+              valueInstance,
+              1,
+              0x76,
+            ]),
+            _componentSection(0x09, [0, 1, 0, 0]),
+          ]),
+        );
+        final errors = component.validate();
+        if (valueInstance == 0) {
+          expect(errors, isEmpty);
+        } else {
+          expect(
+            errors.map((error) => error.message),
+            contains(contains('does not match function parameter type')),
+          );
+        }
+      }
+    });
+  });
+
   group('component map types', () {
     // Component Model 0220da84209397d9067c19cac83dae969aa85a7b,
     // design/mvp/Binary.md: map = 0x63 key:<valtype> value:<valtype>.
@@ -472,8 +866,8 @@ void main() {
       final component = WasmComponent.decode(_versionedImportComponentBytes());
 
       final import = component.imports.single;
-      expect(import.name, 'wasi');
-      expect(import.versionSuffix, '0.3.0');
+      expect(import.name, 'wasi:cli/run@0.3');
+      expect(import.versionSuffix, '.0');
       expect(import.descriptor.kind, WasmComponentExternKind.function);
       expect(import.descriptor.typeIndex, 0);
     });
@@ -507,7 +901,7 @@ void main() {
       expect(
         versionedDuplicate.single.message,
         contains(
-          'import name foo@2.0.0 conflicts with previous import name foo@1.0.0',
+          'import name foo:bar/baz@1.2.0 conflicts with previous import name foo:bar/baz@1.0.0',
         ),
       );
 
@@ -539,7 +933,7 @@ void main() {
       );
     });
 
-    test('decodes legacy component import name prefixes', () {
+    test('decodes modern 0x01 component import names', () {
       final component = WasmComponent.decode(
         _legacyPrefixedImportComponentBytes(),
       );
@@ -966,7 +1360,7 @@ void main() {
       expect(
         versionedDuplicate.single.message,
         contains(
-          'import name foo@2.0.0 conflicts with previous import name foo@1.0.0',
+          'import name foo:bar/baz@1.2.0 conflicts with previous import name foo:bar/baz@1.0.0',
         ),
       );
 
@@ -1186,7 +1580,7 @@ void main() {
       expect(
         versionedDuplicate.single.message,
         contains(
-          'export name foo@2.0.0 conflicts with previous export name foo@1.0.0',
+          'export name foo:bar/baz@1.2.0 conflicts with previous export name foo:bar/baz@1.0.0',
         ),
       );
 
@@ -1661,7 +2055,7 @@ void main() {
       expect(
         versionedDuplicateName.single.message,
         contains(
-          'export name foo@2.0.0 conflicts with previous export name foo@1.0.0',
+          'export name foo:bar/baz@1.2.0 conflicts with previous export name foo:bar/baz@1.0.0',
         ),
       );
 
@@ -1792,7 +2186,9 @@ void main() {
       expect(versionedDuplicateInlineExportName, hasLength(1));
       expect(
         versionedDuplicateInlineExportName.single.message,
-        contains('inline export name "foo@2.0.0" conflicts with "foo@1.0.0"'),
+        contains(
+          'inline export name "foo:bar/baz@1.2.0" conflicts with "foo:bar/baz@1.0.0"',
+        ),
       );
 
       final structuredDuplicateInlineExportName = WasmComponent.decode(
@@ -2502,6 +2898,151 @@ void main() {
   });
 }
 
+({String? implementsInterface, String? externalId, String? versionSuffix})
+_decodedNameAttributes(WasmComponent component, String boundary) {
+  final item = switch (boundary) {
+    'import' => component.imports.single,
+    'export' => component.exports.single,
+    'inline export' => component.instances.single.exports.single,
+    'component type import' =>
+      component.typeDefinitions.single.component!.declarations.last.import!,
+    'component type export' =>
+      component.typeDefinitions.single.component!.declarations.last.export!,
+    'instance type export' =>
+      component.typeDefinitions.single.instance!.declarations.last.export!,
+    _ => throw ArgumentError(boundary),
+  };
+  return switch (item) {
+    WasmComponentImport() => (
+      implementsInterface: item.implementsInterface,
+      externalId: item.externalId,
+      versionSuffix: item.versionSuffix,
+    ),
+    WasmComponentExport() => (
+      implementsInterface: item.implementsInterface,
+      externalId: item.externalId,
+      versionSuffix: item.versionSuffix,
+    ),
+    WasmComponentInlineExport() => (
+      implementsInterface: item.implementsInterface,
+      externalId: item.externalId,
+      versionSuffix: item.versionSuffix,
+    ),
+    WasmComponentTypeExport() => (
+      implementsInterface: item.implementsInterface,
+      externalId: item.externalId,
+      versionSuffix: item.versionSuffix,
+    ),
+    _ => throw StateError('Unexpected name boundary.'),
+  };
+}
+
+List<int> _nameAttributeBytes(String name, List<(int, String)> attributes) => [
+  2,
+  ..._componentNameBytes(name),
+  ..._varUint32(attributes.length),
+  for (final (kind, value) in attributes) ...[
+    kind,
+    ..._componentNameBytes(value),
+  ],
+];
+
+Uint8List _nameAttributeComponent(
+  String boundary,
+  String name,
+  List<(int, String)> attributes, {
+  bool instance = true,
+  int plainTag = 2,
+}) {
+  final named = plainTag == 2
+      ? _nameAttributeBytes(name, attributes)
+      : [plainTag, ..._componentNameBytes(name)];
+  final descriptor = instance ? [5, 0] : [1, 1];
+  final localTypes = [
+    [0x42, 0],
+    [0x40, 0, 1, 0],
+  ];
+  if (boundary == 'component type import' ||
+      boundary == 'component type export' ||
+      boundary == 'instance type export') {
+    return _componentBytes([
+      _mapTypeSection([
+        [
+          boundary == 'instance type export' ? 0x42 : 0x41,
+          3,
+          for (final type in localTypes) ...[1, ...type],
+          boundary == 'component type import' ? 3 : 4,
+          ...named,
+          ...descriptor,
+        ],
+      ]),
+    ]);
+  }
+  return _componentBytes([
+    _mapTypeSection(localTypes),
+    if (boundary == 'import')
+      _componentSection(0x0a, [1, ...named, ...descriptor])
+    else ...[
+      _componentSection(0x0a, [
+        1,
+        0,
+        ..._componentNameBytes('supplied'),
+        ...descriptor,
+      ]),
+      if (boundary == 'export')
+        _componentSection(0x0b, [1, ...named, instance ? 5 : 1, 0, 0])
+      else
+        _componentSection(0x05, [1, 1, 1, ...named, instance ? 5 : 1, 0]),
+    ],
+  ]);
+}
+
+Uint8List _attributeInstantiationComponent(
+  String name,
+  String argument,
+  List<(int, String)> attributes,
+) {
+  final child = _componentBytes([
+    _mapTypeSection([
+      [0x42, 0],
+    ]),
+    _componentSection(0x0a, [
+      1,
+      ..._nameAttributeBytes(name, attributes),
+      5,
+      0,
+    ]),
+  ]);
+  return _componentBytes([
+    _mapTypeSection([
+      [0x42, 0],
+    ]),
+    _componentSection(0x0a, [1, 0, ..._componentNameBytes('supplied'), 5, 0]),
+    _componentSection(0x04, child),
+    _componentSection(0x05, [
+      1,
+      0,
+      0,
+      1,
+      ..._componentNameBytes(argument),
+      5,
+      0,
+    ]),
+  ]);
+}
+
+List<int> _attributeNestedInstanceType(String interface, String externalId) => [
+  0x42,
+  2,
+  1,
+  0x42,
+  0,
+  4,
+  ..._nameAttributeBytes('e', [(0, interface), (2, externalId)]),
+  5,
+  0,
+];
+
 Uint8List _emptyComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
   0x61,
@@ -2733,14 +3274,17 @@ List<int> _componentExternNameBytes(String name, String? versionSuffix) {
     return [0x00, ..._componentNameBytes(name)];
   }
   return [
-    0x01,
+    0x02,
     ..._componentNameBytes(name),
+    0x01,
+    0x01,
     ..._componentNameBytes(versionSuffix),
   ];
 }
 
 List<int> _componentNameBytes(String name) {
-  return [..._varUint32(name.length), ...name.codeUnits];
+  final bytes = utf8.encode(name);
+  return [..._varUint32(bytes.length), ...bytes];
 }
 
 List<int> _varUint32(int value) {
@@ -2818,32 +3362,11 @@ Uint8List _importComponentBytes() => Uint8List.fromList(const <int>[
   0x00,
 ]);
 
-Uint8List _versionedImportComponentBytes() => Uint8List.fromList(const <int>[
-  0x00,
-  0x61,
-  0x73,
-  0x6d,
-  0x0d,
-  0x00,
-  0x01,
-  0x00,
-  0x0a,
-  0x0f,
-  0x01,
-  0x01,
-  0x04,
-  0x77,
-  0x61,
-  0x73,
-  0x69,
-  0x05,
-  0x30,
-  0x2e,
-  0x33,
-  0x2e,
-  0x30,
-  0x01,
-  0x00,
+Uint8List _versionedImportComponentBytes() => _componentBytes([
+  _componentSection(0x0a, [
+    1,
+    ..._componentFunctionImport('wasi:cli/run@0.3', versionSuffix: '.0'),
+  ]),
 ]);
 
 Uint8List _duplicateImportNamesComponentBytes() =>
@@ -2924,8 +3447,8 @@ Uint8List _caseFoldedDuplicateImportNamesComponentBytes() =>
 
 Uint8List _versionedDuplicateImportNamesComponentBytes() =>
     _minimalFunctionComponentWithImports([
-      _componentFunctionImport('foo', versionSuffix: '1.0.0'),
-      _componentFunctionImport('foo', versionSuffix: '2.0.0'),
+      _componentFunctionImport('foo:bar/baz@1', versionSuffix: '.0.0'),
+      _componentFunctionImport('foo:bar/baz@1', versionSuffix: '.2.0'),
     ]);
 
 Uint8List _structuredDuplicateImportNamesComponentBytes() =>
@@ -3828,8 +4351,8 @@ Uint8List _caseFoldedDuplicateExportNamesComponentBytes() =>
 
 Uint8List _versionedDuplicateExportNamesComponentBytes() =>
     _minimalFunctionComponentWithExports([
-      _componentFunctionExport('foo', versionSuffix: '1.0.0'),
-      _componentFunctionExport('foo', versionSuffix: '2.0.0'),
+      _componentFunctionExport('foo:bar/baz@1', versionSuffix: '.0.0'),
+      _componentFunctionExport('foo:bar/baz@1', versionSuffix: '.2.0'),
     ]);
 
 Uint8List _structuredDuplicateExportNamesComponentBytes() =>
@@ -4864,8 +5387,8 @@ Uint8List _inlineInstanceDuplicateExportNameComponentBytes() =>
 
 Uint8List _inlineInstanceVersionedDuplicateExportNameComponentBytes() =>
     _minimalFunctionComponentWithInlineExports([
-      _componentInlineFunctionExport('foo', versionSuffix: '1.0.0'),
-      _componentInlineFunctionExport('foo', versionSuffix: '2.0.0'),
+      _componentInlineFunctionExport('foo:bar/baz@1', versionSuffix: '.0.0'),
+      _componentInlineFunctionExport('foo:bar/baz@1', versionSuffix: '.2.0'),
     ]);
 
 Uint8List _inlineInstanceStructuredDuplicateExportNameComponentBytes() =>
@@ -7159,8 +7682,14 @@ Uint8List _caseFoldedDuplicateTypeDeclarationImportNamesComponentBytes() =>
 
 Uint8List _versionedDuplicateTypeDeclarationImportNamesComponentBytes() =>
     _componentTypeWithDeclarations([
-      _componentTypeValueImportDeclaration('foo', versionSuffix: '1.0.0'),
-      _componentTypeValueImportDeclaration('foo', versionSuffix: '2.0.0'),
+      _componentTypeValueImportDeclaration(
+        'foo:bar/baz@1',
+        versionSuffix: '.0.0',
+      ),
+      _componentTypeValueImportDeclaration(
+        'foo:bar/baz@1',
+        versionSuffix: '.2.0',
+      ),
     ]);
 
 Uint8List _structuredDuplicateTypeDeclarationImportNamesComponentBytes() =>
@@ -8049,8 +8578,16 @@ Uint8List _caseFoldedDuplicateTypeDeclarationExportNamesComponentBytes() =>
 
 Uint8List _versionedDuplicateTypeDeclarationExportNamesComponentBytes() =>
     _componentInstanceTypeWithFunctionExportDeclarations([
-      _componentTypeFunctionExportDeclaration('foo', 0, versionSuffix: '1.0.0'),
-      _componentTypeFunctionExportDeclaration('foo', 0, versionSuffix: '2.0.0'),
+      _componentTypeFunctionExportDeclaration(
+        'foo:bar/baz@1',
+        0,
+        versionSuffix: '.0.0',
+      ),
+      _componentTypeFunctionExportDeclaration(
+        'foo:bar/baz@1',
+        0,
+        versionSuffix: '.2.0',
+      ),
     ]);
 
 Uint8List _structuredDuplicateTypeDeclarationExportNamesComponentBytes() =>

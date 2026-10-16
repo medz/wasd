@@ -105,10 +105,14 @@ final class WasmComponentImport {
     required this.name,
     required this.descriptor,
     this.versionSuffix,
+    this.implementsInterface,
+    this.externalId,
   });
 
   final String name;
   final String? versionSuffix;
+  final String? implementsInterface;
+  final String? externalId;
   final WasmComponentExternDescriptor descriptor;
 }
 
@@ -117,11 +121,15 @@ final class WasmComponentExport {
     required this.name,
     required this.sort,
     this.versionSuffix,
+    this.implementsInterface,
+    this.externalId,
     this.descriptor,
   });
 
   final String name;
   final String? versionSuffix;
+  final String? implementsInterface;
+  final String? externalId;
   final WasmComponentSortIndex sort;
   final WasmComponentExternDescriptor? descriptor;
 }
@@ -161,10 +169,14 @@ final class WasmComponentInlineExport {
     required this.name,
     required this.sort,
     this.versionSuffix,
+    this.implementsInterface,
+    this.externalId,
   });
 
   final String name;
   final String? versionSuffix;
+  final String? implementsInterface;
+  final String? externalId;
   final WasmComponentSortIndex sort;
 }
 
@@ -569,10 +581,14 @@ final class WasmComponentTypeExport {
     required this.name,
     required this.descriptor,
     this.versionSuffix,
+    this.implementsInterface,
+    this.externalId,
   });
 
   final String name;
   final String? versionSuffix;
+  final String? implementsInterface;
+  final String? externalId;
   final WasmComponentExternDescriptor descriptor;
 }
 
@@ -1966,10 +1982,7 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
                   definition: introduced,
                   typeScope: localTypeScope,
                 );
-          exports[_componentExternName(
-            export.name,
-            export.versionSuffix,
-          )] = _WasmComponentInstanceExportEntry(
+          exports[export.name] = _WasmComponentInstanceExportEntry(
             sort: sort,
             function: descriptor.kind == WasmComponentExternKind.function
                 ? _componentFunctionTypeFromDefinitions(
@@ -5309,6 +5322,13 @@ final class _WasmComponentValidationContext {
     String path,
     _WasmComponentExternNameSet seenImports,
   ) {
+    validateNameAttributes(
+      import.name,
+      import.implementsInterface,
+      import.versionSuffix,
+      import.descriptor.kind == WasmComponentExternKind.instance,
+      path,
+    );
     final name = _WasmComponentExternNameSignature(
       import.name,
       import.versionSuffix,
@@ -5331,6 +5351,13 @@ final class _WasmComponentValidationContext {
     String path,
     _WasmComponentExternNameSet seenExports,
   ) {
+    validateNameAttributes(
+      export.name,
+      export.implementsInterface,
+      export.versionSuffix,
+      export.sort.kind == WasmComponentSortKind.instance,
+      path,
+    );
     final name = _WasmComponentExternNameSignature(
       export.name,
       export.versionSuffix,
@@ -5353,6 +5380,13 @@ final class _WasmComponentValidationContext {
     String path,
     _WasmComponentExternNameSet seenExports,
   ) {
+    validateNameAttributes(
+      export.name,
+      export.implementsInterface,
+      export.versionSuffix,
+      export.descriptor.kind == WasmComponentExternKind.instance,
+      path,
+    );
     final name = _WasmComponentExternNameSignature(
       export.name,
       export.versionSuffix,
@@ -5367,6 +5401,53 @@ final class _WasmComponentValidationContext {
         ),
       );
       return;
+    }
+  }
+
+  void validateNameAttributes(
+    String name,
+    String? implementsInterface,
+    String? versionSuffix,
+    bool isInstance,
+    String path,
+  ) {
+    if (versionSuffix != null) {
+      final version = name.lastIndexOf('@');
+      if (version < 0 ||
+          !_isComponentInterfaceName(name) ||
+          !_componentCanonicalVersion.hasMatch(name.substring(version + 1)) ||
+          !_componentSemanticVersion.hasMatch(
+            '${name.substring(version + 1)}$versionSuffix',
+          )) {
+        errors.add(
+          WasmComponentValidationError(
+            path: path,
+            message:
+                'Wasm component version suffix requires a canonical interface version and a valid complete semantic version.',
+          ),
+        );
+      }
+    }
+    if (implementsInterface == null) {
+      return;
+    }
+    if (!isInstance || !_componentPlainLabel.hasMatch(name)) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component implements attribute requires an instance with a plain name.',
+        ),
+      );
+    }
+    if (!_isComponentInterfaceName(implementsInterface)) {
+      errors.add(
+        WasmComponentValidationError(
+          path: path,
+          message:
+              'Wasm component implements attribute must name a valid interface: "$implementsInterface".',
+        ),
+      );
     }
   }
 
@@ -5508,8 +5589,16 @@ final class _WasmComponentValidationContext {
           errors,
         );
         for (var i = 0; i < instance.exports.length; i++) {
+          final export = instance.exports[i];
+          validateNameAttributes(
+            export.name,
+            export.implementsInterface,
+            export.versionSuffix,
+            export.sort.kind == WasmComponentSortKind.instance,
+            '$path.exports[$i].name',
+          );
           validateComponentSortIndex(
-            instance.exports[i].sort,
+            export.sort,
             '$path.exports[$i].sort',
             functionTypes: functionTypes,
             valueEntries: valueEntries,
@@ -5529,10 +5618,7 @@ final class _WasmComponentValidationContext {
   ) {
     final importsByName = <String, WasmComponentImport>{};
     for (final import in component.imports) {
-      importsByName.putIfAbsent(
-        _componentExternName(import.name, import.versionSuffix),
-        () => import,
-      );
+      importsByName.putIfAbsent(import.name, () => import);
     }
 
     final providedNames = <String>{};
@@ -5570,10 +5656,7 @@ final class _WasmComponentValidationContext {
     }
 
     for (final import in component.imports) {
-      final importName = _componentExternName(
-        import.name,
-        import.versionSuffix,
-      );
+      final importName = import.name;
       if (providedNames.contains(importName)) {
         continue;
       }
@@ -6722,7 +6805,7 @@ void _validateUniqueComponentExternNames(
 }
 
 String _componentExternName(String name, String? versionSuffix) {
-  return versionSuffix == null ? name : '$name@$versionSuffix';
+  return versionSuffix == null ? name : '$name$versionSuffix';
 }
 
 final class _WasmComponentExternNameSet {
@@ -6843,6 +6926,35 @@ String _foldComponentExternName(String name) {
   return name.toLowerCase();
 }
 
+final _componentPlainLabel = RegExp(
+  r'^(?:[a-z][a-z0-9]*|[A-Z][A-Z0-9]*)(?:-(?:[a-z0-9]+|[A-Z0-9]+))*$',
+);
+final _componentPackageWord = RegExp(r'^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$');
+final _componentCanonicalVersion = RegExp(
+  r'^(?:[1-9][0-9]*|0\.[1-9][0-9]*|0\.0\.[1-9][0-9]*|0\.0\.0)$',
+);
+final _componentSemanticVersion = RegExp(
+  r'^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)'
+  r'(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+  r'(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?'
+  r'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$',
+);
+
+bool _isComponentInterfaceName(String name) {
+  final version = name.indexOf('@');
+  if (version >= 0 &&
+      !_componentSemanticVersion.hasMatch(name.substring(version + 1)) &&
+      !_componentCanonicalVersion.hasMatch(name.substring(version + 1))) {
+    return false;
+  }
+  final path = (version < 0 ? name : name.substring(0, version)).split('/');
+  if (path.length < 2 || !path.skip(1).every(_componentPlainLabel.hasMatch)) {
+    return false;
+  }
+  final package = path[0].split(':');
+  return package.length >= 2 && package.every(_componentPackageWord.hasMatch);
+}
+
 List<WasmComponentImport> _decodeImports(Uint8List payload) {
   final reader = ByteReader(payload);
   final count = reader.readVarUint32();
@@ -6852,11 +6964,14 @@ List<WasmComponentImport> _decodeImports(Uint8List payload) {
       _readExternWithName(
         reader,
         'import',
-        (name, versionSuffix) => WasmComponentImport(
-          name: name,
-          versionSuffix: versionSuffix,
-          descriptor: _readExternDescriptor(reader),
-        ),
+        (name, versionSuffix, implementsInterface, externalId) =>
+            WasmComponentImport(
+              name: name,
+              versionSuffix: versionSuffix,
+              implementsInterface: implementsInterface,
+              externalId: externalId,
+              descriptor: _readExternDescriptor(reader),
+            ),
       ),
     );
   }
@@ -6873,12 +6988,15 @@ List<WasmComponentExport> _decodeExports(Uint8List payload) {
       _readExternWithName(
         reader,
         'export',
-        (name, versionSuffix) => WasmComponentExport(
-          name: name,
-          versionSuffix: versionSuffix,
-          sort: _readSortIndex(reader),
-          descriptor: _readOptionalExternDescriptor(reader),
-        ),
+        (name, versionSuffix, implementsInterface, externalId) =>
+            WasmComponentExport(
+              name: name,
+              versionSuffix: versionSuffix,
+              implementsInterface: implementsInterface,
+              externalId: externalId,
+              sort: _readSortIndex(reader),
+              descriptor: _readOptionalExternDescriptor(reader),
+            ),
       ),
     );
   }
@@ -7960,11 +8078,14 @@ WasmComponentTypeDeclaration _readComponentTypeDeclaration(ByteReader reader) {
       import: _readExternWithName(
         reader,
         'type import',
-        (name, versionSuffix) => WasmComponentImport(
-          name: name,
-          versionSuffix: versionSuffix,
-          descriptor: _readExternDescriptor(reader),
-        ),
+        (name, versionSuffix, implementsInterface, externalId) =>
+            WasmComponentImport(
+              name: name,
+              versionSuffix: versionSuffix,
+              implementsInterface: implementsInterface,
+              externalId: externalId,
+              descriptor: _readExternDescriptor(reader),
+            ),
       ),
     );
   }
@@ -8011,11 +8132,14 @@ WasmComponentTypeExport _readComponentTypeExport(ByteReader reader) {
   return _readExternWithName(
     reader,
     'type export',
-    (name, versionSuffix) => WasmComponentTypeExport(
-      name: name,
-      versionSuffix: versionSuffix,
-      descriptor: _readExternDescriptor(reader),
-    ),
+    (name, versionSuffix, implementsInterface, externalId) =>
+        WasmComponentTypeExport(
+          name: name,
+          versionSuffix: versionSuffix,
+          implementsInterface: implementsInterface,
+          externalId: externalId,
+          descriptor: _readExternDescriptor(reader),
+        ),
   );
 }
 
@@ -8950,45 +9074,68 @@ WasmComponentInlineExport _readInlineExport(ByteReader reader) {
   return _readExternWithName(
     reader,
     'inline export',
-    (name, versionSuffix) => WasmComponentInlineExport(
-      name: name,
-      versionSuffix: versionSuffix,
-      sort: _readSortIndex(reader),
-    ),
+    (name, versionSuffix, implementsInterface, externalId) =>
+        WasmComponentInlineExport(
+          name: name,
+          versionSuffix: versionSuffix,
+          implementsInterface: implementsInterface,
+          externalId: externalId,
+          sort: _readSortIndex(reader),
+        ),
   );
 }
 
 T _readExternWithName<T>(
   ByteReader reader,
   String context,
-  T Function(String name, String? versionSuffix) readRemainder,
+  T Function(
+    String name,
+    String? versionSuffix,
+    String? implementsInterface,
+    String? externalId,
+  )
+  readRemainder,
 ) {
   final tag = reader.readByte();
-  switch (tag) {
-    case 0x00:
-      return readRemainder(reader.readName(), null);
-    case 0x01:
-      final name = reader.readName();
-      final afterNameOffset = reader.offset;
-      try {
-        return readRemainder(name, reader.readName());
-      } on FormatException catch (error) {
-        if (!_isUnexpectedEof(error)) {
-          rethrow;
-        }
-        // Older component binaries used this prefix without a version suffix.
-        reader.offset = afterNameOffset;
-        return readRemainder(name, null);
-      }
-    default:
-      throw FormatException(
-        'Unsupported Wasm component $context name tag: 0x${tag.toRadixString(16)}.',
-      );
+  if (tag == 0x00 || tag == 0x01) {
+    return readRemainder(reader.readName(), null, null, null);
   }
-}
-
-bool _isUnexpectedEof(FormatException error) {
-  return error.message.startsWith('Unexpected EOF');
+  if (tag != 0x02) {
+    throw FormatException(
+      'Unsupported Wasm component $context name tag: 0x${tag.toRadixString(16)}.',
+    );
+  }
+  final name = reader.readName();
+  final attributeCount = reader.readVarUint32();
+  var seen = 0;
+  String? versionSuffix;
+  String? implementsInterface;
+  String? externalId;
+  for (var i = 0; i < attributeCount; i++) {
+    final kind = reader.readByte();
+    if (kind > 0x02) {
+      throw FormatException(
+        'Unsupported Wasm component name attribute: 0x${kind.toRadixString(16)}.',
+      );
+    }
+    final bit = 1 << kind;
+    if ((seen & bit) != 0) {
+      throw FormatException(
+        'Duplicate Wasm component name attribute: 0x${kind.toRadixString(16)}.',
+      );
+    }
+    seen |= bit;
+    final value = reader.readName();
+    switch (kind) {
+      case 0x00:
+        implementsInterface = value;
+      case 0x01:
+        versionSuffix = value;
+      case 0x02:
+        externalId = value;
+    }
+  }
+  return readRemainder(name, versionSuffix, implementsInterface, externalId);
 }
 
 WasmComponentSortIndex _readSortIndex(ByteReader reader) {
