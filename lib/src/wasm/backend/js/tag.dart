@@ -8,7 +8,9 @@ import '../../value.dart';
 
 class Tag implements wasm.Tag {
   Tag(wasm.TagDescriptor descriptor)
-    : host = JSTag(
+    : _parameters = _copyParameters(descriptor.parameters),
+      _loadType = null,
+      host = JSTag(
         JSTagType(
           parameters: descriptor.parameters
               .map((kind) => (kind.alias ?? kind.name).toJS)
@@ -17,35 +19,23 @@ class Tag implements wasm.Tag {
         ),
       );
 
-  Tag.fromHost(this.host);
+  Tag.fromHost(this.host, this._loadType);
 
   final JSTag host;
+  final wasm.TagDescriptor Function()? _loadType;
+  List<ValueKind>? _parameters;
 
   @override
-  wasm.TagDescriptor type() {
-    final parameters = host
-        .type()
-        .parameters
-        .toDart
-        .map((name) {
-          final dartName = name.toDart;
-          return switch (dartName) {
-            'i32' => ValueKind.i32 as ValueKind,
-            'i64' => ValueKind.i64 as ValueKind,
-            'f32' => ValueKind.f32 as ValueKind,
-            'f64' => ValueKind.f64 as ValueKind,
-            'v128' => ValueKind.v128 as ValueKind,
-            'externref' => ValueKind.externref as ValueKind,
-            'funcref' || 'anyfunc' => ValueKind.funcref as ValueKind,
-            _ => throw UnsupportedError(
-              'Unsupported tag parameter type: $dartName',
-            ),
-          };
-        })
-        .toList(growable: false);
-    return wasm.TagDescriptor(parameters: parameters);
-  }
+  wasm.TagDescriptor type() => wasm.TagDescriptor(
+    parameters: _copyParameters(
+      _parameters ??= _copyParameters(_loadType!().parameters),
+    ),
+  );
 }
+
+// Avoid the SDK's Function type substitution bug in Iterable copy assertions.
+List<ValueKind> _copyParameters(List<ValueKind> parameters) =>
+    List<ValueKind>.generate(parameters.length, (index) => parameters[index]);
 
 extension type JSTagType._(JSObject _) implements JSObject {
   external factory JSTagType({required JSArray<JSString> parameters});
@@ -56,6 +46,4 @@ extension type JSTagType._(JSObject _) implements JSObject {
 @JS('WebAssembly.Tag')
 extension type JSTag._(JSObject _) implements JSObject {
   external factory JSTag(JSTagType descriptor);
-
-  external JSTagType type();
 }

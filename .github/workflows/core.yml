@@ -36,6 +36,7 @@ jobs:
       - run: dart test test/wasm_host_globals_test.dart
       - run: dart test test/wasm_host_tags_test.dart
       - run: dart test test/wasm_exception_bridge_test.dart
+      - run: dart test test/wasm_exception_test.dart
       - run: dart test test/wasm_import_keys_test.dart
       - run: dart run tool/spec_testsuite_runner.dart --suite=core --testsuite-dir=test/fixtures/import_keys --file=registry.wast --output-json=build/import-key-runner.json --output-md=build/import-key-runner.md
       - run: dart run tool/spec_testsuite_runner.dart --suite=core --testsuite-dir=test/fixtures/import_keys --file=registry.wast --prepare-manifest=build/import-key-manifest.json --prepare-root=build/import-key-input
@@ -56,7 +57,7 @@ jobs:
 
   explicit-core-js:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -69,6 +70,9 @@ jobs:
       - run: dart test -p chrome test/wasm_core_features_test.dart
       - run: dart test -p node test/wasm_host_globals_test.dart
       - run: dart test -p chrome test/wasm_host_globals_test.dart
+      - run: dart test -p node test/wasm_exception_test.dart
+      - run: dart test -p chrome test/wasm_exception_test.dart
+      - run: dart test -p chrome --compiler=dart2wasm test/wasm_exception_test.dart
 
   native:
     runs-on: ${{ matrix.os }}

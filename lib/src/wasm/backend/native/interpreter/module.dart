@@ -416,6 +416,50 @@ final class WasmModule {
     return globalIndex;
   }
 
+  static Map<String, List<String>> decodeExportedTagTypes(Uint8List bytes) {
+    final reader = ByteReader(bytes)..offset = 8;
+    final types = <WasmFunctionType>[];
+    final imports = <WasmImport>[];
+    final tags = <WasmTagType>[];
+    final exports = <WasmExport>[];
+    while (!reader.isEOF) {
+      final sectionId = reader.readByte();
+      final section = reader.readSubReader(reader.readVarUint32());
+      switch (sectionId) {
+        case 1:
+          _parseTypeSection(section, types);
+        case 2:
+          _parseImportSection(section, imports);
+        case 7:
+          _parseExportSection(section, exports);
+        case 13:
+          _parseTagSection(section, tags);
+      }
+    }
+    final allTags = [
+      for (final import in imports)
+        if (import.kind == WasmImportKind.tag) import.tagType!,
+      ...tags,
+    ];
+    String signature(String value) {
+      final ref = _parseRefSignatureForShapeCheck(value);
+      if (ref?.nullable ?? false) {
+        if (ref!.heapType == _shapeHeapExtern) return '6f';
+        if (ref.heapType == _shapeHeapFunc) return '70';
+      }
+      return value;
+    }
+
+    return {
+      for (final export in exports)
+        if (export.kind == WasmExportKind.tag)
+          export.name: types[allTags[export.index].typeIndex]
+              .paramTypeSignatures
+              .map(signature)
+              .toList(growable: false),
+    };
+  }
+
   static WasmModule decode(
     Uint8List wasmBytes, {
     WasmFeatureSet features = const WasmFeatureSet(),

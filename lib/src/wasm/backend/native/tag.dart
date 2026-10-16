@@ -15,6 +15,8 @@ class Tag implements wasm.Tag {
   final List<ValueKind> _parameters;
   WasmTagImport? _host;
 
+  String? get nominalTypeKey => _host?.nominalTypeKey;
+
   WasmTagImport get host {
     final existing = _host;
     if (existing != null) return existing;
