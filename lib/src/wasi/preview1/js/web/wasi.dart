@@ -914,10 +914,6 @@ class WASI implements wasi.WASI {
         }
         final clockId = _asInt(args[0]);
         final timePtr = _asInt(args[2]);
-        if (_clockResolutionNanos(clockId) == null) {
-          return _errnoInval;
-        }
-
         final view = _memoryView();
         if (view == null) {
           return _errnoInval;
@@ -926,8 +922,17 @@ class WASI implements wasi.WASI {
           return _errnoInval;
         }
 
-        final nowNanos = _clockNowNanos(clockId);
-        _setUint64(view.data, timePtr, nowNanos);
+        if (clockId == _clockProcessCpuTimeId ||
+            clockId == _clockThreadCpuTimeId) {
+          final cpuNanos = _nodeCpuClockNanos(clockId);
+          if (cpuNanos == null) return _errnoInval;
+          _setUint64BigInt(view.data, timePtr, cpuNanos);
+        } else {
+          if (clockId != _clockRealtime && clockId != _clockMonotonic) {
+            return _errnoInval;
+          }
+          _setUint64(view.data, timePtr, _clockNowNanos(clockId));
+        }
         return _errnoSuccess;
       });
 
@@ -938,11 +943,6 @@ class WASI implements wasi.WASI {
         }
         final clockId = _asInt(args[0]);
         final resolutionPtr = _asInt(args[1]);
-        final resolutionNanos = _clockResolutionNanos(clockId);
-        if (resolutionNanos == null) {
-          return _errnoInval;
-        }
-
         final view = _memoryView();
         if (view == null) {
           return _errnoInval;
@@ -951,6 +951,8 @@ class WASI implements wasi.WASI {
           return _errnoInval;
         }
 
+        final resolutionNanos = _clockResolutionNanos(clockId);
+        if (resolutionNanos == null) return _errnoInval;
         _setUint64(view.data, resolutionPtr, resolutionNanos);
         return _errnoSuccess;
       });
@@ -2158,7 +2160,8 @@ class WASI implements wasi.WASI {
       subscriptionPtr + _subscriptionClockFlagsOffset,
       Endian.little,
     );
-    if (_clockResolutionNanos(clockId) == null ||
+    // CPU counters can be read, but this host does not schedule CPU timers.
+    if ((clockId != _clockRealtime && clockId != _clockMonotonic) ||
         (flags & ~_subscriptionClockAbstime) != 0) {
       return _clockSubscriptionInvalid;
     }
@@ -3281,22 +3284,20 @@ class WASI implements wasi.WASI {
   }
 
   int _clockNowNanos(int clockId) {
-    if (clockId == _clockMonotonic ||
-        clockId == _clockProcessCpuTimeId ||
-        clockId == _clockThreadCpuTimeId) {
-      return _monotonicClock.elapsedMicroseconds * 1000;
-    }
-    return DateTime.now().microsecondsSinceEpoch * 1000;
+    return switch (clockId) {
+      _clockMonotonic => _monotonicClock.elapsedMicroseconds * 1000,
+      _clockRealtime => DateTime.now().microsecondsSinceEpoch * 1000,
+      _ => throw ArgumentError.value(clockId, 'clockId'),
+    };
   }
 
   int? _clockResolutionNanos(int clockId) {
-    if (clockId == _clockRealtime ||
-        clockId == _clockMonotonic ||
-        clockId == _clockProcessCpuTimeId ||
-        clockId == _clockThreadCpuTimeId) {
-      return 1000;
-    }
-    return null;
+    return switch (clockId) {
+      _clockRealtime || _clockMonotonic => 1000,
+      _clockProcessCpuTimeId || _clockThreadCpuTimeId =>
+        (_nodeCpuClockNanos(clockId) == null ? null : 1000),
+      _ => null,
+    };
   }
 }
 
@@ -3539,6 +3540,44 @@ JSObject? _requireNodeBuiltin(String name) {
   return null;
 }
 
+BigInt? _nodeCpuClockNanos(int clockId) {
+  try {
+    final process = _requireNodeBuiltin('node:process');
+    if (process == null) return null;
+    final name = clockId == _clockProcessCpuTimeId
+        ? 'cpuUsage'
+        : 'threadCpuUsage';
+    final callback = process.getProperty<JSAny?>(name.toJS);
+    if (callback == null || !callback.typeofEquals('function')) return null;
+    final result = process.callMethodVarArgs<JSAny?>(name.toJS, const []);
+    if (result == null || !result.isA<JSObject>()) return null;
+    final usage = result as JSObject;
+    final user = usage.getProperty<JSAny?>('user'.toJS);
+    final system = usage.getProperty<JSAny?>('system'.toJS);
+    if (user == null ||
+        !user.isA<JSNumber>() ||
+        system == null ||
+        !system.isA<JSNumber>()) {
+      return null;
+    }
+    final userMicros = (user as JSNumber).toDartDouble;
+    final systemMicros = (system as JSNumber).toDartDouble;
+    if (!userMicros.isFinite ||
+        !systemMicros.isFinite ||
+        userMicros < 0 ||
+        systemMicros < 0 ||
+        userMicros != userMicros.truncateToDouble() ||
+        systemMicros != systemMicros.truncateToDouble()) {
+      return null;
+    }
+    final micros = userMicros + systemMicros;
+    if (micros > 9007199254740991) return null;
+    return BigInt.from(micros.toInt()) * BigInt.from(1000);
+  } catch (_) {
+    return null;
+  }
+}
+
 int _raiseNodeProcessSignal(wasi.WASIProcessSignal signal) {
   final hostSignal = _nodeProcessSignalNameFor(signal);
   if (hostSignal == null) {
@@ -3604,7 +3643,10 @@ void _setUint64(ByteData data, int offset, int value) {
     data.setUint32(offset + 4, 0, Endian.little);
     return;
   }
-  final normalized = BigInt.from(value).toUnsigned(64);
+  _setUint64BigInt(data, offset, BigInt.from(value).toUnsigned(64));
+}
+
+void _setUint64BigInt(ByteData data, int offset, BigInt normalized) {
   data.setUint32(offset, (normalized & _u32Mask).toInt(), Endian.little);
   data.setUint32(
     offset + 4,

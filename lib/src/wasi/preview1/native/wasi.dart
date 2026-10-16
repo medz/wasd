@@ -927,10 +927,6 @@ class WASI implements wasi_iface.WASI {
         }
         final clockId = _asInt(args[0]);
         final timePtr = _asInt(args[2]);
-        if (_clockResolutionNanos(clockId) == null) {
-          return _errnoInval;
-        }
-
         final view = _memoryView();
         if (view == null) {
           return _errnoInval;
@@ -939,7 +935,13 @@ class WASI implements wasi_iface.WASI {
           return _errnoInval;
         }
 
-        final nowNanos = _clockNowNanos(clockId);
+        final nowNanos = switch (clockId) {
+          _clockRealtime || _clockMonotonic => _clockNowNanos(clockId),
+          _clockProcessCpuTimeId || _clockThreadCpuTimeId =>
+            _nativeCpuClockNanos(clockId, resolution: false),
+          _ => null,
+        };
+        if (nowNanos == null) return _errnoInval;
         _setUint64(view.data, timePtr, nowNanos);
         return _errnoSuccess;
       });
@@ -951,11 +953,6 @@ class WASI implements wasi_iface.WASI {
         }
         final clockId = _asInt(args[0]);
         final resolutionPtr = _asInt(args[1]);
-        final resolutionNanos = _clockResolutionNanos(clockId);
-        if (resolutionNanos == null) {
-          return _errnoInval;
-        }
-
         final view = _memoryView();
         if (view == null) {
           return _errnoInval;
@@ -964,6 +961,8 @@ class WASI implements wasi_iface.WASI {
           return _errnoInval;
         }
 
+        final resolutionNanos = _clockResolutionNanos(clockId);
+        if (resolutionNanos == null) return _errnoInval;
         _setUint64(view.data, resolutionPtr, resolutionNanos);
         return _errnoSuccess;
       });
@@ -3070,7 +3069,8 @@ class WASI implements wasi_iface.WASI {
       subscriptionPtr + _subscriptionClockFlagsOffset,
       Endian.little,
     );
-    if (_clockResolutionNanos(clockId) == null ||
+    // CPU counters can be read, but this host does not schedule CPU timers.
+    if ((clockId != _clockRealtime && clockId != _clockMonotonic) ||
         (flags & ~_subscriptionClockAbstime) != 0) {
       return _clockSubscriptionInvalid;
     }
@@ -3210,22 +3210,20 @@ class WASI implements wasi_iface.WASI {
   }
 
   int _clockNowNanos(int clockId) {
-    if (clockId == _clockMonotonic ||
-        clockId == _clockProcessCpuTimeId ||
-        clockId == _clockThreadCpuTimeId) {
-      return _monotonicClock.elapsedMicroseconds * 1000;
-    }
-    return DateTime.now().microsecondsSinceEpoch * 1000;
+    return switch (clockId) {
+      _clockMonotonic => _monotonicClock.elapsedMicroseconds * 1000,
+      _clockRealtime => DateTime.now().microsecondsSinceEpoch * 1000,
+      _ => throw ArgumentError.value(clockId, 'clockId'),
+    };
   }
 
   int? _clockResolutionNanos(int clockId) {
-    if (clockId == _clockRealtime ||
-        clockId == _clockMonotonic ||
-        clockId == _clockProcessCpuTimeId ||
-        clockId == _clockThreadCpuTimeId) {
-      return 1000;
-    }
-    return null;
+    return switch (clockId) {
+      _clockRealtime || _clockMonotonic => 1000,
+      _clockProcessCpuTimeId ||
+      _clockThreadCpuTimeId => _nativeCpuClockNanos(clockId, resolution: true),
+      _ => null,
+    };
   }
 
   @override
@@ -3637,6 +3635,50 @@ _WindowsCreateHardLinkDart _windowsCreateHardLinkFunction() =>
           _WindowsCreateHardLinkNative,
           _WindowsCreateHardLinkDart
         >('CreateHardLinkW');
+
+typedef _PosixClockNative =
+    ffi.Int32 Function(ffi.Int32, ffi.Pointer<_NativeTimespec>);
+typedef _PosixClockDart = int Function(int, ffi.Pointer<_NativeTimespec>);
+_PosixClockDart? _cachedClockGettime;
+_PosixClockDart? _cachedClockGetres;
+
+int? _nativeCpuClockNanos(int clockId, {required bool resolution}) {
+  if ((!io.Platform.isLinux && !io.Platform.isMacOS) ||
+      ffi.sizeOf<ffi.IntPtr>() != 8) {
+    return null;
+  }
+  final int nativeId;
+  if (io.Platform.isMacOS) {
+    nativeId = clockId == _clockProcessCpuTimeId ? 12 : 16;
+  } else {
+    nativeId = clockId;
+  }
+  final _PosixClockDart read;
+  try {
+    read = resolution
+        ? _cachedClockGetres ??= _openPosixCLibrary()
+              .lookupFunction<_PosixClockNative, _PosixClockDart>(
+                'clock_getres',
+              )
+        : _cachedClockGettime ??= _openPosixCLibrary()
+              .lookupFunction<_PosixClockNative, _PosixClockDart>(
+                'clock_gettime',
+              );
+  } catch (_) {
+    return null;
+  }
+  final output = calloc<_NativeTimespec>();
+  try {
+    if (read(nativeId, output) != 0) return null;
+    final seconds = output.ref.tvSec;
+    final nanos = output.ref.tvNsec;
+    if (seconds < 0 || nanos < 0 || nanos >= _nanosPerSecond) return null;
+    final value = seconds * _nanosPerSecond + nanos;
+    return resolution && value == 0 ? null : value;
+  } finally {
+    calloc.free(output);
+  }
+}
 
 ffi.DynamicLibrary _openPosixCLibrary() {
   if (io.Platform.isLinux) {

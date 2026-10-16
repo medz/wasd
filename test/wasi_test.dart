@@ -8,6 +8,7 @@ import 'package:wasd/src/wasi/preview1/common/fd_syscalls.dart' as preview1_fd;
 import 'package:wasd/src/wasi/preview1/common/vfs.dart';
 import 'package:wasd/wasm.dart';
 import 'package:wasd/wasi.dart';
+import 'support/cpu_clock.dart';
 import 'support/host_fs.dart';
 import 'support/node_stdio_spy.dart';
 import 'support/runtime_environment.dart';
@@ -299,7 +300,7 @@ void _writePollSubscription(
   }
 }
 
-const _supportedClockIds = <int>[0, 1, 2, 3];
+const _supportedClockIds = <int>[0, 1];
 
 void main() {
   group('WASI', () {
@@ -1940,6 +1941,186 @@ void main() {
         }
       });
 
+      for (final clockId in [2, 3]) {
+        test(
+          'CPU clock $clockId reports actual host capability and resolution',
+          () {
+            final preview1 = wasi.imports['wasi_snapshot_preview1']!;
+            final gettime =
+                preview1['clock_time_get'] as FunctionImportExportValue;
+            final getres =
+                preview1['clock_res_get'] as FunctionImportExportValue;
+            final memory =
+                (instance.exports['memory'] as MemoryImportExportValue).ref;
+            wasi.finalizeBindings(instance, memory: memory);
+            final data = ByteData.view(memory.buffer);
+            const ptr = 1700;
+            _setUint64Le(data, ptr, 123);
+            if (cpuClockAvailable(clockId)) {
+              expect(getres.ref([clockId, ptr]), 0);
+              expect(
+                _getUint64Le(data, ptr),
+                hostCpuClockResolutionNanos(clockId),
+              );
+              expect(gettime.ref([clockId, 0, ptr]), 0);
+              expect(_getUint64Le(data, ptr), greaterThanOrEqualTo(0));
+            } else {
+              expect(getres.ref([clockId, ptr]), _errnoInval);
+              expect(_getUint64Le(data, ptr), 123);
+              expect(gettime.ref([clockId, 0, ptr]), _errnoInval);
+              expect(_getUint64Le(data, ptr), 123);
+            }
+            expect(
+              gettime.ref([clockId, 0, memory.buffer.lengthInBytes - 4]),
+              _errnoInval,
+            );
+            expect(
+              getres.ref([clockId, memory.buffer.lengthInBytes - 4]),
+              _errnoInval,
+            );
+          },
+        );
+
+        test('CPU clock $clockId counts busy execution', () {
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
+          wasi.finalizeBindings(instance, memory: memory);
+          final data = ByteData.view(memory.buffer);
+          final gettime =
+              wasi.imports['wasi_snapshot_preview1']!['clock_time_get']
+                  as FunctionImportExportValue;
+          int read() {
+            expect(gettime.ref([clockId, 0, 1700]), 0);
+            return _getUint64Le(data, 1700);
+          }
+
+          // One synchronous stack keeps native thread-clock reads on the same OS thread.
+          final before = read();
+          final busy = Stopwatch()..start();
+          while (busy.elapsedMilliseconds < 40) {}
+          expect(read(), greaterThan(before));
+        }, skip: cpuClockAvailable(clockId) ? false : 'CPU clock is unavailable');
+      }
+
+      test(
+        'thread CPU clock excludes a blocking host sleep',
+        () {
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
+          wasi.finalizeBindings(instance, memory: memory);
+          final data = ByteData.view(memory.buffer);
+          final gettime =
+              wasi.imports['wasi_snapshot_preview1']!['clock_time_get']
+                  as FunctionImportExportValue;
+          int read() {
+            expect(gettime.ref([3, 0, 1700]), 0);
+            return _getUint64Le(data, 1700);
+          }
+
+          final warmup = Stopwatch()..start();
+          while (warmup.elapsedMilliseconds < 20) {
+            read();
+          }
+          final before = read();
+          final wall = Stopwatch()..start();
+          pauseForCpuClockTest(const Duration(milliseconds: 200));
+          final after = read();
+          wall.stop();
+          expect(after, greaterThanOrEqualTo(before));
+          expect(after - before, lessThan(wall.elapsedMicroseconds * 500));
+        },
+        skip: cpuClockAvailable(3) ? false : 'Thread CPU clock is unavailable',
+      );
+
+      for (final clockId in [2, 3]) {
+        for (final mode in [
+          'missing',
+          'not-function',
+          'throws',
+          'primitive',
+          'negative',
+          'fractional',
+          'nan',
+          'string',
+        ]) {
+          test('Node CPU clock $clockId rejects $mode API without writing', () {
+            final restore = overrideNodeCpuClockApi(clockId, mode);
+            addTearDown(restore);
+            final memory =
+                (instance.exports['memory'] as MemoryImportExportValue).ref;
+            wasi.finalizeBindings(instance, memory: memory);
+            final data = ByteData.view(memory.buffer);
+            _setUint64Le(data, 1700, 123);
+            final imports = wasi.imports['wasi_snapshot_preview1']!;
+            expect(
+              (imports['clock_time_get'] as FunctionImportExportValue).ref([
+                clockId,
+                0,
+                1700,
+              ]),
+              _errnoInval,
+            );
+            expect(_getUint64Le(data, 1700), 123);
+            expect(
+              (imports['clock_res_get'] as FunctionImportExportValue).ref([
+                clockId,
+                1700,
+              ]),
+              _errnoInval,
+            );
+            expect(_getUint64Le(data, 1700), 123);
+          }, skip: _skipUnlessNode('requires Node CPU API overrides'));
+        }
+        for (final mode in ['zero', 'large']) {
+          test('Node CPU clock $clockId preserves $mode u64 counters', () {
+            final restore = overrideNodeCpuClockApi(clockId, mode);
+            addTearDown(restore);
+            final memory =
+                (instance.exports['memory'] as MemoryImportExportValue).ref;
+            wasi.finalizeBindings(instance, memory: memory);
+            final data = ByteData.view(memory.buffer);
+            final gettime =
+                wasi.imports['wasi_snapshot_preview1']!['clock_time_get']
+                    as FunctionImportExportValue;
+            expect(gettime.ref([clockId, 0, 1700]), 0);
+            final value =
+                (BigInt.from(data.getUint32(1704, Endian.little)) << 32) |
+                BigInt.from(data.getUint32(1700, Endian.little));
+            expect(
+              value,
+              mode == 'zero'
+                  ? BigInt.zero
+                  : BigInt.parse('9007199254740991000'),
+            );
+          }, skip: _skipUnlessNode('requires Node CPU API overrides'));
+        }
+
+        test('Node CPU clock $clockId time_get reads the API exactly once', () {
+          var calls = 0;
+          final restore = overrideNodeCpuClockApi(
+            clockId,
+            'valid',
+            onCall: () => calls++,
+          );
+          addTearDown(restore);
+          final memory =
+              (instance.exports['memory'] as MemoryImportExportValue).ref;
+          wasi.finalizeBindings(instance, memory: memory);
+          final data = ByteData.view(memory.buffer);
+          final gettime =
+              wasi.imports['wasi_snapshot_preview1']!['clock_time_get']
+                  as FunctionImportExportValue;
+          expect(gettime.ref([clockId, 0, 1700]), 0);
+          expect(calls, 1);
+          expect(_getUint64Le(data, 1700), 18000);
+          expect(
+            gettime.ref([clockId, 0, memory.buffer.lengthInBytes - 4]),
+            _errnoInval,
+          );
+          expect(calls, 1);
+        }, skip: _skipUnlessNode('requires Node CPU API overrides'));
+      }
+
       test('clock_res_get returns inval for unsupported clock ids', () {
         final preview1 = wasi.imports['wasi_snapshot_preview1']!;
         final clockResGet =
@@ -2235,6 +2416,50 @@ void main() {
           );
         },
       );
+
+      test('poll_oneoff rejects CPU timers as clock event errors', () async {
+        final memory =
+            (instance.exports['memory'] as MemoryImportExportValue).ref;
+        wasi.finalizeBindings(instance, memory: memory);
+        final bytes = Uint8List.view(memory.buffer);
+        final data = ByteData.view(memory.buffer);
+        final poll =
+            wasi.imports['wasi_snapshot_preview1']!['poll_oneoff']
+                as FunctionImportExportValue;
+        const inPtr = 2448, outPtr = 2544, neventsPtr = 2640;
+        for (final id in [2, 3]) {
+          for (final flags in [0, 1]) {
+            _writePollSubscription(
+              data,
+              inPtr,
+              userdata: 0x9900 + id,
+              tag: _eventTypeClock,
+            );
+            data.setUint32(
+              inPtr + _subscriptionClockIdOffset,
+              id,
+              Endian.little,
+            );
+            data.setUint16(
+              inPtr + _subscriptionClockFlagsOffset,
+              flags,
+              Endian.little,
+            );
+            _setUint64Le(data, inPtr + _subscriptionClockTimeoutOffset, 0);
+            expect(
+              await _awaitMaybeFuture(poll.ref([inPtr, outPtr, 1, neventsPtr])),
+              0,
+            );
+            expect(data.getUint32(neventsPtr, Endian.little), 1);
+            expect(_getUint64Le(data, outPtr), 0x9900 + id);
+            expect(bytes[outPtr + _eventTypeOffset], _eventTypeClock);
+            expect(
+              data.getUint16(outPtr + _eventErrorOffset, Endian.little),
+              _errnoInval,
+            );
+          }
+        }
+      });
 
       test(
         'poll_oneoff waits for monotonic clock timeouts',

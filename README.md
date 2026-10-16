@@ -402,6 +402,13 @@ Model execution. Preview3 support is limited to the frozen stable WASI 0.3.0
 contract; experimental proposal packages and features outside that contract
 remain out of scope.
 
+Unreleased Preview1 CPU-clock queries use host process/current OS thread CPU
+time on 64-bit Linux/macOS and the corresponding Node CPU API when available.
+Unsupported CPU clocks return `INVAL` without modifying guest output. These
+are host counters; they do not isolate CPU consumption per guest. CPU-clock
+`poll_oneoff` subscriptions return an event with `INVAL`, since CPU timers are
+not implemented. Realtime and monotonic timers retain their existing behavior.
+
 Native Preview3 filesystem preopens reject guest absolute paths, `..`
 traversal, and symlink escapes at resolution time. Dart exposes path-based
 filesystem APIs rather than descriptor-relative traversal, so WASD cannot
