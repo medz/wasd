@@ -1031,6 +1031,10 @@ WasmComponentFunctionTypeContext? _canonicalAdapterFunctionTypeContext(
   switch (definition.kind) {
     case WasmComponentCanonicalKind.lift:
       final definitions = component.componentTypeIndexDefinitions;
+      final definitionContext = component.componentTypeIndexScope
+          .definitionContextAt(definition.typeIndex);
+      final scope =
+          definitionContext?.typeScope ?? component.componentTypeIndexScope;
       final functionType = _componentFunctionType(
         definitions,
         definition.typeIndex,
@@ -1039,8 +1043,8 @@ WasmComponentFunctionTypeContext? _canonicalAdapterFunctionTypeContext(
           ? null
           : WasmComponentFunctionTypeContext(
               functionType: functionType,
-              typeDefinitions: definitions,
-              typeScope: component.componentTypeIndexScope,
+              typeDefinitions: scope.definitions,
+              typeScope: scope,
             );
     case WasmComponentCanonicalKind.lower:
       final functionIndex = definition.functionIndex;

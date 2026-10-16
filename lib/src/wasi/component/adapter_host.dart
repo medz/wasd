@@ -4039,7 +4039,7 @@ String _flatCharToString(String path, int value) {
   if (isWASIComponentUnicodeScalar(value)) {
     return String.fromCharCode(value);
   }
-  throw StateError(
+  throw WASIComponentInvalidCharException(
     'WASI component canonical adapter value $path expected a Unicode scalar.',
   );
 }

@@ -868,6 +868,7 @@ final class _WasmComponentMaterializedIndexSpaces {
     required this.functionTypeContexts,
     required this.valueTypes,
     required this.valueTypeScopes,
+    required this.nestedComponents,
   });
 
   final List<WasmComponentTypeDefinition> typeDefinitions;
@@ -876,12 +877,14 @@ final class _WasmComponentMaterializedIndexSpaces {
   final List<WasmComponentFunctionTypeContext?> functionTypeContexts;
   final List<WasmComponentValueType?> valueTypes;
   final List<WasmComponentTypeScope?> valueTypeScopes;
+  final List<WasmComponent> nestedComponents;
 }
 
 final class WasmComponentTypeScope {
-  WasmComponentTypeScope._(this._definitions);
+  WasmComponentTypeScope._(this._definitions, [this._outerScopes = const []]);
 
   final List<WasmComponentTypeDefinitionContext> _definitions;
+  final List<WasmComponentTypeScope> _outerScopes;
 
   int get length => _definitions.length;
 
@@ -1068,7 +1071,9 @@ final class WasmComponent {
     required this.typeDefinitions,
     required this.valueDefinitions,
     required List<_WasmComponentDefinitionEvent> definitionEvents,
-  }) : _definitionEvents = definitionEvents;
+    List<_WasmComponentOuterAliasScope> outerAliasScopes = const [],
+  }) : _definitionEvents = definitionEvents,
+       _outerAliasScopes = outerAliasScopes;
 
   final List<WasmComponentSection> sections;
   final List<WasmComponentImport> imports;
@@ -1084,6 +1089,27 @@ final class WasmComponent {
   final List<WasmComponentTypeDefinition> typeDefinitions;
   final List<WasmComponentValueDefinition> valueDefinitions;
   final List<_WasmComponentDefinitionEvent> _definitionEvents;
+  final List<_WasmComponentOuterAliasScope> _outerAliasScopes;
+
+  WasmComponent _withOuterAliasScopes(
+    List<_WasmComponentOuterAliasScope> scopes,
+  ) => WasmComponent._(
+    sections: sections,
+    imports: imports,
+    exports: exports,
+    components: components,
+    coreModules: coreModules,
+    coreTypes: coreTypes,
+    coreInstances: coreInstances,
+    instances: instances,
+    aliases: aliases,
+    starts: starts,
+    canonicalDefinitions: canonicalDefinitions,
+    typeDefinitions: typeDefinitions,
+    valueDefinitions: valueDefinitions,
+    definitionEvents: _definitionEvents,
+    outerAliasScopes: scopes,
+  );
 
   /// Decoded definition events in component index-space order.
   List<WasmComponentDefinitionEvent> get definitionEvents =>
@@ -1120,6 +1146,12 @@ final class WasmComponent {
   List<WasmComponentFunctionTypeContext?>
   get componentFunctionIndexTypeContexts => _indexSpaces.functionTypeContexts;
 
+  /// A decoded child paired with its lexical context at the definition point.
+  ///
+  /// Validation and adapter planning retain the captured outer type identities.
+  WasmComponent nestedComponentInContext(int index) =>
+      _indexSpaces.nestedComponents[index];
+
   /// Locally materialized component value index types in definition order.
   List<WasmComponentValueType?> get componentValueIndexTypes =>
       _indexSpaces.valueTypes;
@@ -1130,7 +1162,9 @@ final class WasmComponent {
         <WasmComponentTypeDefinitionContext>[];
     final visibleTypeScope = WasmComponentTypeScope._(
       visibleTypeDefinitionContexts,
+      [for (final scope in _outerAliasScopes) scope.typeScope],
     );
+    final nestedComponents = <WasmComponent>[];
     final visibleComponentEntries = <WasmComponent?>[];
     final functionTypes = <WasmComponentFunctionType?>[];
     final functionTypeContexts = <WasmComponentFunctionTypeContext?>[];
@@ -1138,6 +1172,7 @@ final class WasmComponent {
     final valueTypeScopes = <WasmComponentTypeScope?>[];
     final instanceExportMaps = <_WasmComponentInstanceExportMap?>[];
     var decodedTypeDefinitionCount = 0;
+    var coreModuleCount = 0;
 
     void addVisibleType(
       WasmComponentTypeDefinition definition, {
@@ -1307,7 +1342,20 @@ final class WasmComponent {
             }
           }
         case _WasmComponentDefinitionEventKind.component:
-          visibleComponentEntries.add(components[event.index]);
+          final child = components[event.index]._withOuterAliasScopes([
+            _WasmComponentOuterAliasScope(
+              typeDefinitions: List.unmodifiable(visibleTypeDefinitions),
+              typeScope: WasmComponentTypeScope._(
+                List.unmodifiable(visibleTypeDefinitionContexts),
+                visibleTypeScope._outerScopes,
+              ),
+              coreModuleCount: coreModuleCount,
+              componentCount: visibleComponentEntries.length,
+            ),
+            ..._outerAliasScopes,
+          ]);
+          nestedComponents.add(child);
+          visibleComponentEntries.add(child);
         case _WasmComponentDefinitionEventKind.instance:
           instanceExportMaps.add(
             _componentInstanceExportTypeMap(
@@ -1337,7 +1385,12 @@ final class WasmComponent {
             valueTypes.add(aliasEntry?.value);
             valueTypeScopes.add(aliasEntry?.valueTypeScope);
           } else if (alias.sort.kind == WasmComponentSortKind.componentType) {
-            final typeDefinitionContext = aliasEntry?.typeDefinitionContext;
+            final typeDefinitionContext =
+                aliasEntry?.typeDefinitionContext ??
+                _componentTypeDeclarationAliasContext(alias, [
+                  visibleTypeScope,
+                  ...visibleTypeScope._outerScopes,
+                ]);
             final typeDefinition =
                 typeDefinitionContext?.definition ?? aliasEntry?.typeDefinition;
             if (typeDefinition != null) {
@@ -1367,6 +1420,8 @@ final class WasmComponent {
           valueTypeScopes.add(visibleTypeScope);
         case _WasmComponentDefinitionEventKind.typeCount:
           includeDecodedTypeDefinitionsTo(event.index);
+        case _WasmComponentDefinitionEventKind.coreModule:
+          coreModuleCount++;
         default:
           break;
       }
@@ -1388,10 +1443,12 @@ final class WasmComponent {
       valueTypeScopes: List<WasmComponentTypeScope?>.unmodifiable(
         valueTypeScopes,
       ),
+      nestedComponents: List.unmodifiable(nestedComponents),
     );
   }
 
-  List<WasmComponentValidationError> validate() => _validate();
+  List<WasmComponentValidationError> validate() =>
+      _validate(outerAliasScopes: _outerAliasScopes);
 
   List<WasmComponentValidationError> _validate({
     List<_WasmComponentOuterAliasScope> outerAliasScopes =
@@ -1854,10 +1911,13 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
 }) {
   final localTypeDefinitions = <WasmComponentTypeDefinition>[];
   final localTypeDefinitionContexts = <WasmComponentTypeDefinitionContext>[];
-  final localTypeScope = WasmComponentTypeScope._(localTypeDefinitionContexts);
   final outerTypeDefinitionContexts = <WasmComponentTypeDefinitionContext>[];
   final effectiveOuterTypeScope =
       outerTypeScope ?? WasmComponentTypeScope._(outerTypeDefinitionContexts);
+  final localTypeScope = WasmComponentTypeScope._(localTypeDefinitionContexts, [
+    effectiveOuterTypeScope,
+    ...effectiveOuterTypeScope._outerScopes,
+  ]);
   if (outerTypeScope == null) {
     for (final definition in outerTypeDefinitions) {
       outerTypeDefinitionContexts.add(
@@ -1879,10 +1939,17 @@ _WasmComponentInstanceExportMap _componentInstanceTypeExportTypeMap(
       definitions: effectiveOuterTypeScope.definitions,
       crossesComponentBoundary: true,
     ),
+    for (final scope in effectiveOuterTypeScope._outerScopes)
+      _WasmComponentTypeAliasScope(
+        definitions: scope.definitions,
+        crossesComponentBoundary: true,
+        typeScope: scope,
+      ),
   ];
   final contextScopes = <WasmComponentTypeScope>[
     localTypeScope,
     effectiveOuterTypeScope,
+    ...effectiveOuterTypeScope._outerScopes,
   ];
 
   void addLocalType(
@@ -4827,6 +4894,7 @@ final class _WasmComponentValidationContext {
         <WasmComponentTypeDefinitionContext>[];
     final visibleTypeScope = WasmComponentTypeScope._(
       visibleTypeDefinitionContexts,
+      [for (final scope in outerAliasScopes) scope.typeScope],
     );
     var decodedTypeDefinitionCount = 0;
 
@@ -5028,6 +5096,7 @@ final class _WasmComponentValidationContext {
             List<WasmComponentTypeDefinitionContext>.unmodifiable(
               visibleTypeDefinitionContexts,
             ),
+            visibleTypeScope._outerScopes,
           );
           final childOuterAliasScopes = <_WasmComponentOuterAliasScope>[
             _WasmComponentOuterAliasScope(
@@ -5042,9 +5111,10 @@ final class _WasmComponentValidationContext {
             ),
             ...outerAliasScopes,
           ];
-          for (final error in components[event.index]._validate(
-            outerAliasScopes: childOuterAliasScopes,
-          )) {
+          final child = components[event.index]._withOuterAliasScopes(
+            childOuterAliasScopes,
+          );
+          for (final error in child.validate()) {
             errors.add(
               WasmComponentValidationError(
                 path: 'component[${event.index}].${error.path}',
@@ -5052,7 +5122,7 @@ final class _WasmComponentValidationContext {
               ),
             );
           }
-          componentIndexEntries.add(components[event.index]);
+          componentIndexEntries.add(child);
           componentCount++;
         case _WasmComponentDefinitionEventKind.instance:
           final instance = instances[event.index];

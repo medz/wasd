@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import '../../../host_control_flow.dart';
 import 'byte_reader.dart';
 import 'features.dart';
+import 'execution_error.dart';
 import 'int64.dart';
 import 'imports.dart';
 import 'memory.dart';
@@ -28,7 +29,7 @@ typedef WasmInstantiationPhaseMeasure =
 
 enum _AsyncSubsetControlKind { block, loop, if_, tryLegacy }
 
-final class _AsyncSubsetExecutionError implements Exception {
+final class _AsyncSubsetExecutionError implements WasmExecutionErrorContext {
   _AsyncSubsetExecutionError({
     required this.functionIndex,
     required this.programCounter,
@@ -39,6 +40,7 @@ final class _AsyncSubsetExecutionError implements Exception {
   final int functionIndex;
   final int programCounter;
   final int opcode;
+  @override
   final Object cause;
 
   @override

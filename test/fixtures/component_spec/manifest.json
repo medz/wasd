@@ -57,6 +57,53 @@
           "path": "strings/script.json",
           "sha256": "4fdddcf6149baa10f9ee53dc623f4005b68f04818d50328d62c3417e65f7d763"
         }
+      ],
+      "definitions": 0
+    },
+    {
+      "path": "test/values/numerics.wast",
+      "source": "numerics/numerics.wast",
+      "blob": "99fcbc03b0b352b29db247c90085ad0febbd3fe5",
+      "sha256": "990040c362068e2c9d461439fc323af95878bcea283b43a10d67639015faf7b9",
+      "prepared": "numerics/script.json",
+      "commands": 26,
+      "instantiations": 9,
+      "definitions": 1,
+      "returns": 13,
+      "traps": 3,
+      "inputs": [
+        {
+          "path": "numerics/script.0.wasm",
+          "sha256": "314bd7d50a5d7ae24bedea370f499d57d9ec74aa3f90cf42729e7eae4738f171"
+        },
+        {
+          "path": "numerics/script.1.wasm",
+          "sha256": "bd014e3559192bdb37d2d9af7b66d7d700621eeced8c8e6ef11be2914a52d0db"
+        },
+        {
+          "path": "numerics/script.2.wasm",
+          "sha256": "8fd44e8b56f8955ac09342761a19846416becc17f186851e75d0a45cff366677"
+        },
+        {
+          "path": "numerics/script.3.wasm",
+          "sha256": "4e51533832980099833a59aa81e352f054d8c77280eb32bc6ef050a8298c5f51"
+        },
+        {
+          "path": "numerics/script.4.wasm",
+          "sha256": "13f056b355b390894eeada30ea83689f0b05773fe213ee767de585bc5285c8b1"
+        },
+        {
+          "path": "numerics/script.5.wasm",
+          "sha256": "9c05c78fb04b237564b1324206123783794c36f012f424b338296f5ebc475f2e"
+        },
+        {
+          "path": "numerics/script.6.wasm",
+          "sha256": "d3e18751f86b390428645e794520be4e64f9f73ae9ddb20f3421fb26b1461f89"
+        },
+        {
+          "path": "numerics/script.json",
+          "sha256": "a46e5112ff35a07f64dbca5ba19ade03f7fe9e0733e0620cb9c3cdc8a85714e6"
+        }
       ]
     }
   ]

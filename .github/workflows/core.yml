@@ -48,14 +48,14 @@ jobs:
       - run: dart run tool/core_multi_memory_public_runner.dart --output=build/core-multi-memory-public.json
       - run: dart test test/wasm_gc_element_globals_test.dart test/wasm_f64_const_test.dart test/wasm_f32_const_test.dart test/wasm_gc_v128_defaults_test.dart test/wasm_gc_array_test.dart test/wasm_async_tail_call_test.dart test/wasm_test.dart test/wasm_memory_test.dart test/wasm_table_test.dart test/wasm_predecode_test.dart test/wasi_preview3_async_runtime_test.dart test/wasi_preview3_task_return_runner_test.dart
       - run: dart run tool/core_spec_runner.dart --output-json=build/core.json --output-md=build/core.md
-      - run: dart run tool/component_spec_runner.dart --output-json=build/component-strings.json
+      - run: dart run tool/component_spec_runner.dart --output-json=build/component-values.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: core-${{ matrix.sdk }}
           path: |
             build/core.*
-            build/component-strings.json
+            build/component-values.json
             build/core-multi-memory-public.json
             build/import-key-runner.*
             build/import-key-player.json
@@ -79,8 +79,8 @@ jobs:
       - run: dart test -p chrome test/wasm_exception_test.dart
       - run: dart test -p node test/component_test.dart
       - run: dart test -p chrome test/component_test.dart
-      - run: dart test -p node test/wasi_component_wit_test.dart test/wasi_component_wit_adapter_runtime_test.dart
-      - run: dart test -p chrome test/wasi_component_wit_test.dart test/wasi_component_wit_adapter_runtime_test.dart
+      - run: dart test -p node test/wasi_component_wit_test.dart test/wasi_component_wit_adapter_runtime_test.dart test/wasi_component_adapter_plan_test.dart
+      - run: dart test -p chrome test/wasi_component_wit_test.dart test/wasi_component_wit_adapter_runtime_test.dart test/wasi_component_adapter_plan_test.dart
       - run: dart test -p node test/wasi_test.dart
       - run: dart test -p chrome test/wasi_test.dart
       - run: >-

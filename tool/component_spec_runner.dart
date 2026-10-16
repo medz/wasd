@@ -1,27 +1,44 @@
-// Executes the complete frozen Component strings script on WASD's Dart VM.
+// Executes selected complete frozen Component value scripts on WASD's Dart VM.
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:wasd/src/wasi/component/host.dart';
+import 'package:wasd/src/wasi/component/unicode_scalar.dart';
 import 'package:wasd/src/wasi/preview2/component_runner.dart';
 import 'package:wasd/src/wasm/backend/native/interpreter/component.dart';
+import 'package:wasd/src/wasm/backend/native/interpreter/execution_error.dart';
 
 const _defaultManifest = 'test/fixtures/component_spec/manifest.json';
 const _revision = '0220da84209397d9067c19cac83dae969aa85a7b';
-const _counts = ['instantiations', 'returns', 'traps'];
+const _counts = ['instantiations', 'definitions', 'returns', 'traps'];
 const _repository = 'https://github.com/WebAssembly/component-model';
 // Independent source anchor: changing a manifest and its input cannot silently
 // replace the complete upstream file while retaining the frozen revision.
-const _frozenStrings = {
-  'path': 'test/values/strings.wast',
-  'blob': 'e96f54e97689a32ba70b05e12226e01b8dea024b',
-  'sha256': 'a70c90a0ede0e2364040da75f4c2c0e56c2d34fdac746a11b6347fdbac60283c',
-  'commands': 17,
-  'instantiations': 8,
-  'returns': 5,
-  'traps': 4,
+const _frozenSources = {
+  'test/values/strings.wast': {
+    'path': 'test/values/strings.wast',
+    'blob': 'e96f54e97689a32ba70b05e12226e01b8dea024b',
+    'sha256':
+        'a70c90a0ede0e2364040da75f4c2c0e56c2d34fdac746a11b6347fdbac60283c',
+    'commands': 17,
+    'instantiations': 8,
+    'definitions': 0,
+    'returns': 5,
+    'traps': 4,
+  },
+  'test/values/numerics.wast': {
+    'path': 'test/values/numerics.wast',
+    'blob': '99fcbc03b0b352b29db247c90085ad0febbd3fe5',
+    'sha256':
+        '990040c362068e2c9d461439fc323af95878bcea283b43a10d67639015faf7b9',
+    'commands': 26,
+    'instantiations': 9,
+    'definitions': 1,
+    'returns': 13,
+    'traps': 3,
+  },
 };
 
 /// Recognizes only the three string trap categories used by the frozen file.
@@ -39,6 +56,151 @@ bool matchesComponentStringTrap(Object error, String expected) =>
       _ => false,
     };
 
+/// Matches only invalid core character scalars, preserving typed VM causes.
+/// Unknown wrappers, ordinary host errors and cause cycles never match.
+bool matchesComponentCharTrap(Object error) {
+  final seen = Set<Object>.identity();
+  while (error is WasmExecutionErrorContext) {
+    if (!seen.add(error)) return false;
+    error = error.cause;
+  }
+  return error is WASIComponentInvalidCharException;
+}
+
+void _checkFields(Map object, Set<String> allowed) {
+  if (object.keys.any((key) => !allowed.contains(key))) {
+    throw const FormatException('Unsupported Component JSON field.');
+  }
+}
+
+WasmComponentFunctionTypeContext _exportType(
+  WasmComponent component,
+  String name,
+) {
+  for (final export in component.exports) {
+    if (export.name != name ||
+        export.sort.kind != WasmComponentSortKind.function) {
+      continue;
+    }
+    final types = component.componentFunctionIndexTypeContexts;
+    final index = export.sort.index;
+    if (index >= 0 && index < types.length && types[index] != null) {
+      return types[index]!;
+    }
+    throw UnsupportedError('Unavailable Component export signature: $name');
+  }
+  throw StateError('Component function export `$name` not found.');
+}
+
+String _valueTypeName(
+  WasmComponentValueType type,
+  WasmComponentFunctionTypeContext context,
+) {
+  if (type.kind == WasmComponentValueTypeKind.primitive) {
+    return switch (type.primitive) {
+      WasmComponentPrimitiveValueType.boolean => 'bool',
+      WasmComponentPrimitiveValueType.u8 => 'u8',
+      WasmComponentPrimitiveValueType.s8 => 's8',
+      WasmComponentPrimitiveValueType.u16 => 'u16',
+      WasmComponentPrimitiveValueType.s16 => 's16',
+      WasmComponentPrimitiveValueType.u32 => 'u32',
+      WasmComponentPrimitiveValueType.char => 'char',
+      WasmComponentPrimitiveValueType.string => 'string',
+      _ => throw UnsupportedError('Unsupported Component scalar type.'),
+    };
+  }
+  final index = type.typeIndex;
+  final definition =
+      context.typeScope?.definitionAt(index) ??
+      (index != null && index >= 0 && index < context.typeDefinitions.length
+          ? context.typeDefinitions[index]
+          : null);
+  if (definition?.definedValue?.kind ==
+      WasmComponentDefinedValueTypeKind.flags) {
+    return 'flags';
+  }
+  throw UnsupportedError('Unsupported Component value type.');
+}
+
+Object _decodeValue(
+  Object? raw,
+  WasmComponentValueType type,
+  WasmComponentFunctionTypeContext context,
+) {
+  if (raw is! Map) throw const FormatException('Expected a Component value.');
+  _checkFields(raw, const {'type', 'value'});
+  final name = _valueTypeName(type, context);
+  if (raw['type'] != name) {
+    throw const FormatException(
+      'Component value type does not match export signature.',
+    );
+  }
+  final value = raw['value'];
+  switch (name) {
+    case 'string':
+      if (value is String) return value;
+      throw const FormatException('Invalid string value.');
+    case 'char':
+      if (singleWASIComponentUnicodeScalar(value) != null) {
+        return value as String;
+      }
+      throw const FormatException('Invalid char value.');
+    case 'bool':
+      if (value is bool) return value;
+      throw const FormatException('Invalid bool value.');
+    case 'flags':
+      if (value is! List ||
+          value.any((label) => label is! String) ||
+          value.toSet().length != value.length) {
+        throw const FormatException('Invalid flags value.');
+      }
+      return WasmComponentValueData(
+        kind: WasmComponentValueDataKind.flags,
+        rawBytes: Uint8List(0),
+        labels: value.cast<String>(),
+      );
+    default:
+      final (minimum, maximum) = switch (name) {
+        'u8' => (0, 255),
+        's8' => (-128, 127),
+        'u16' => (0, 65535),
+        's16' => (-32768, 32767),
+        'u32' => (0, 4294967295),
+        _ => throw UnsupportedError('Unsupported Component scalar type: $name'),
+      };
+      final integer =
+          value is String && RegExp(r'^(0|-?[1-9][0-9]*)$').hasMatch(value)
+          ? int.tryParse(value)
+          : null;
+      if (integer == null || integer < minimum || integer > maximum) {
+        throw FormatException('Invalid $name value.');
+      }
+      return integer;
+  }
+}
+
+bool _sameValue(Object expected, Object? actual) {
+  if (expected is WasmComponentValueData) {
+    if (actual is! WasmComponentValueData ||
+        actual.kind != WasmComponentValueDataKind.flags ||
+        actual.labels.length != expected.labels.length ||
+        actual.labels.toSet().length != actual.labels.length) {
+      return false;
+    }
+    final labels = actual.labels.toSet();
+    return expected.labels.every(labels.contains);
+  }
+  return switch (expected) {
+    int() => actual is int && actual == expected,
+    bool() => actual is bool && actual == expected,
+    String() => actual is String && actual == expected,
+    _ => false,
+  };
+}
+
+Object? _reportValue(Object? value) =>
+    value is WasmComponentValueData ? value.labels : value;
+
 /// Executes a prepared script. Unsupported commands, values and traps fail.
 /// A single resource scope preserves live instances throughout the script.
 Future<Map<String, Object?>> executeComponentSpecScript(
@@ -47,6 +209,7 @@ Future<Map<String, Object?>> executeComponentSpecScript(
 }) async {
   final records = <Map<String, Object?>>[];
   final host = WASIComponentHost();
+  final definitions = <String, WasmComponent>{};
   WASIComponentNativeRuntime? current;
   final commands = script['commands'];
   if (commands is! List || commands.isEmpty) {
@@ -71,82 +234,155 @@ Future<Map<String, Object?>> executeComponentSpecScript(
         record['line'] = raw['line'];
         switch (type) {
           case 'module':
-            current = null;
+          case 'module_definition':
+            if (type == 'module') current = null;
+            _checkFields(raw, const {
+              'type',
+              'line',
+              'name',
+              'filename',
+              'module_type',
+            });
             final encoding = raw['module_type'];
-            if (raw['name'] != null ||
-                (encoding != null && encoding != 'binary')) {
+            if (encoding != null && encoding != 'binary' ||
+                type == 'module' && raw['name'] != null) {
               throw UnsupportedError(
                 'Only unnamed binary components are supported.',
+              );
+            }
+            final name = raw['name'];
+            if (type == 'module_definition' &&
+                (name is! String || name.isEmpty)) {
+              throw const FormatException(
+                'Component definition requires a name.',
               );
             }
             final file = _inputFile(directory, raw['filename']);
             final bytes = file.readAsBytesSync();
             record['binary_sha256'] = sha256.convert(bytes).toString();
             final component = WasmComponent.decode(bytes);
+            if (type == 'module_definition') {
+              final errors = component.validate();
+              if (errors.isNotEmpty) {
+                throw FormatException(
+                  'Component definition validation failed: ${errors.join(', ')}',
+                );
+              }
+              definitions[name as String] = component;
+              record['definition'] = name;
+            } else {
+              final runtime = WASIComponentNativeRuntime.component(
+                component: component,
+                host: host,
+              );
+              await runtime.initialize();
+              current = runtime;
+            }
+            break;
+          case 'module_instance':
+            current = null;
+            _checkFields(raw, const {'type', 'line', 'instance', 'module'});
+            final name = raw['module'];
+            final instance = raw['instance'];
+            if (name is! String ||
+                name.isEmpty ||
+                instance is! String ||
+                instance.isEmpty) {
+              throw const FormatException(
+                'Component instance requires definition and instance names.',
+              );
+            }
+            final component = definitions[name];
+            if (component == null) {
+              throw StateError('Unknown component definition `$name`.');
+            }
             final runtime = WASIComponentNativeRuntime.component(
               component: component,
               host: host,
             );
             await runtime.initialize();
             current = runtime;
+            record['definition'] = name;
+            record['instance'] = instance;
             break;
           case 'assert_return':
           case 'assert_trap':
+            _checkFields(
+              raw,
+              type == 'assert_return'
+                  ? const {'type', 'line', 'action', 'expected'}
+                  : const {'type', 'line', 'action', 'text'},
+            );
             final action = raw['action'];
             if (action is! Map ||
                 action['type'] != 'invoke' ||
                 action['module'] != null ||
                 action['field'] is! String ||
-                action['args'] is! List ||
-                (action['args'] as List).isNotEmpty) {
-              throw UnsupportedError(
-                'Expected an unnamed zero-argument invoke.',
-              );
+                action['args'] is! List) {
+              throw UnsupportedError('Expected an unnamed Component invoke.');
             }
+            _checkFields(action, const {'type', 'module', 'field', 'args'});
             final runtime = current;
             if (runtime == null) throw StateError('No initialized component.');
             final name = action['field'] as String;
+            final context = _exportType(runtime.component, name);
+            final params = context.functionType.params;
+            final rawArgs = action['args'] as List;
+            if (rawArgs.length != params.length) {
+              throw const FormatException(
+                'Component invocation argument count mismatch.',
+              );
+            }
+            final args = <Object?>[
+              for (var j = 0; j < params.length; j++)
+                _decodeValue(rawArgs[j], params[j].type, context),
+            ];
             record['export'] = name;
             if (type == 'assert_return') {
               final expected = raw['expected'];
+              final resultType = context.functionType.result;
               if (expected is! List ||
                   expected.length != 1 ||
-                  expected.single is! Map ||
-                  (expected.single as Map)['type'] != 'string' ||
-                  (expected.single as Map)['value'] is! String) {
-                throw UnsupportedError('Expected exactly one string result.');
+                  resultType == null) {
+                throw UnsupportedError(
+                  'Expected exactly one Component result.',
+                );
               }
-              final actual = await runtime.invokeExport(name, const []);
-              final value = (expected.single as Map)['value'] as String;
-              record['expected'] = value;
-              record['actual'] = actual;
-              if (actual is! String || actual != value) {
+              final value = _decodeValue(expected.single, resultType, context);
+              final actual = await runtime.invokeExport(name, args);
+              record['expected'] = _reportValue(value);
+              record['actual'] = _reportValue(actual);
+              if (!_sameValue(value, actual)) {
                 throw StateError(
-                  'String result differs from the expected value.',
+                  'Component result differs from the expected value.',
                 );
               }
             } else {
               final expected = raw['text'];
               if (expected != 'string pointer/length out of bounds of memory' &&
                   expected != 'invalid utf-8' &&
-                  expected != 'incomplete utf-8 byte sequence') {
+                  expected != 'incomplete utf-8 byte sequence' &&
+                  expected != 'invalid `char` bit pattern') {
                 throw UnsupportedError('Unsupported expected trap: $expected');
               }
-              // Only this invocation may satisfy the expected trap. Parsing,
-              // initialization and action decoding happen outside this catch.
+              // Only the invocation may satisfy a trap; arguments, signature
+              // lookup, decoding, linking and initialization are outside here.
               Object? invocationError;
               try {
-                await runtime.invokeExport(name, const []);
+                await runtime.invokeExport(name, args);
               } catch (error) {
                 invocationError = error;
               }
               if (invocationError == null) {
                 throw StateError('Invocation did not trap.');
               }
-              if (!matchesComponentStringTrap(
-                invocationError,
-                expected as String,
-              )) {
+              final matches = expected == 'invalid `char` bit pattern'
+                  ? matchesComponentCharTrap(invocationError)
+                  : matchesComponentStringTrap(
+                      invocationError,
+                      expected as String,
+                    );
+              if (!matches) {
                 throw StateError(
                   'Unexpected invocation error: $invocationError',
                 );
@@ -183,11 +419,14 @@ Map<String, int> _totals(List<Map<String, Object?>> records) {
     'commands_skipped': 0,
   };
   for (final entry in {
-    'instantiations': 'module',
-    'returns': 'assert_return',
-    'traps': 'assert_trap',
+    'instantiations': const {'module', 'module_instance'},
+    'definitions': const {'module_definition'},
+    'returns': const {'assert_return'},
+    'traps': const {'assert_trap'},
   }.entries) {
-    final selected = records.where((record) => record['type'] == entry.value);
+    final selected = records.where(
+      (record) => entry.value.contains(record['type']),
+    );
     result['${entry.key}_seen'] = selected.length;
     result['${entry.key}_passed'] = selected
         .where((record) => record['passed'] == true)
@@ -273,10 +512,10 @@ Future<Map<String, Object?>> runComponentSpecManifest(
           throw const FormatException('File entry must be an object.');
         }
         report['path'] = entry['path'];
+        final anchor = _frozenSources[entry['path']];
         if (inventory['repository'] != _repository ||
-            _frozenStrings.entries.any(
-              (field) => entry[field.key] != field.value,
-            )) {
+            anchor == null ||
+            anchor.entries.any((field) => entry[field.key] != field.value)) {
           throw const FormatException(
             'Frozen Component source identity mismatch.',
           );
@@ -313,7 +552,10 @@ Future<Map<String, Object?>> runComponentSpecManifest(
           }
           final script = jsonDecode(prepared.readAsStringSync()) as Map;
           for (final command in script['commands'] as List) {
-            if (command['type'] != 'module') continue;
+            if (command['type'] != 'module' &&
+                command['type'] != 'module_definition') {
+              continue;
+            }
             final binary = _inputFile(prepared.parent, command['filename']);
             if (!inputs.any(
               (input) =>
@@ -419,7 +661,7 @@ Future<void> main(List<String> args) async {
     converter: option('--json-from-wast', '.toolchains/bin/wasm-tools'),
   );
   final file = File(
-    option('--output-json', '.dart_tool/component_spec/strings.json'),
+    option('--output-json', '.dart_tool/component_spec/values.json'),
   );
   await file.parent.create(recursive: true);
   await file.writeAsString(
@@ -427,7 +669,7 @@ Future<void> main(List<String> args) async {
   );
   final totals = report['totals'] as Map;
   stdout.writeln(
-    'Component strings: ${report['status']}; '
+    'Component values: ${report['status']}; '
     '${totals['commands_passed']}/${totals['commands_seen']} commands; '
     '${totals['commands_skipped']} skipped.',
   );
