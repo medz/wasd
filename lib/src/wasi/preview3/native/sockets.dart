@@ -1,17 +1,23 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:ffi' as ffi;
 import 'dart:io' as io;
+import 'dart:isolate';
 import 'dart:typed_data';
+
+import 'package:ffi/ffi.dart';
 
 import '../../component/async_values.dart';
 import '../sockets.dart';
 import 'socket_options.dart';
 
+part 'tcp_posix.dart';
+
 /// Dart VM-backed WASI 0.3 sockets host.
 ///
 /// Synchronous WIT socket calls are exposed as pending Dart callbacks while
-/// `dart:io` obtains the real OS endpoint. Explicit TCP bind is unsupported
-/// because [io.ServerSocket.bind] starts listening before WASI `listen`.
+/// `dart:io` obtains the real OS endpoint. Explicit TCP bind uses POSIX sockets
+/// on Linux and macOS, preserving the endpoint through `listen` or `connect`.
 final class WASIPreview3NativeSocketsHost extends WASIPreview3SocketsHost {
   /// Creates a Preview3 sockets host backed by `dart:io`.
   WASIPreview3NativeSocketsHost({
@@ -31,6 +37,8 @@ final class _NativeSocketsBackend
       );
 
   final Expando<io.Socket> _tcpSockets = Expando<io.Socket>();
+  final Expando<_PosixTcpEndpoint> _posixTcpSockets =
+      Expando<_PosixTcpEndpoint>();
   final NativeSocketOptionAbi? _optionAbi;
 
   @override
@@ -43,11 +51,26 @@ final class _NativeSocketsBackend
   WASIPreview3SocketOperation<WASIPreview3TcpBinding> startTcpBind(
     WASIPreview3IpSocketAddress localAddress, {
     required BigInt backlog,
-  }) => WASIPreview3SocketOperation<WASIPreview3TcpBinding>.completed(
-    const WASIPreview3SocketResult<WASIPreview3TcpBinding>.error(
-      'not-supported',
-    ),
-  );
+  }) {
+    try {
+      if (!io.Platform.isLinux && !io.Platform.isMacOS) {
+        throw UnsupportedError('Explicit TCP bind requires Linux or macOS.');
+      }
+      _internetAddress(localAddress);
+      final endpoint = _PosixTcpEndpoint.bind(localAddress);
+      return WASIPreview3SocketOperation<WASIPreview3TcpBinding>.completed(
+        WASIPreview3SocketResult<WASIPreview3TcpBinding>.ok(
+          _PosixTcpBinding(endpoint),
+        ),
+      );
+    } on Object catch (error) {
+      return WASIPreview3SocketOperation<WASIPreview3TcpBinding>.completed(
+        WASIPreview3SocketResult<WASIPreview3TcpBinding>.error(
+          _socketErrorCode(error),
+        ),
+      );
+    }
+  }
 
   @override
   WASIPreview3SocketOperation<WASIPreview3TcpConnection> startTcpConnect({
@@ -55,6 +78,14 @@ final class _NativeSocketsBackend
     WASIPreview3IpSocketAddress? localAddress,
     WASIPreview3TcpBinding? binding,
   }) {
+    if (binding is _PosixTcpBinding) {
+      final endpoint = binding.take();
+      return WASIPreview3SocketOperation<WASIPreview3TcpConnection>.pending(
+        _connectPosixTcp(endpoint, remoteAddress),
+        disposeValue: (connection) => connection.close(),
+        cancel: endpoint.close,
+      );
+    }
     try {
       final pending = _startConnect(
         remoteAddress,
@@ -92,6 +123,22 @@ final class _NativeSocketsBackend
   }) {
     try {
       if (binding != null) {
+        if (binding is _PosixTcpBinding) {
+          final endpoint = binding.take();
+          try {
+            endpoint.listen(_backlog(backlog));
+            return WASIPreview3SocketOperation<
+              WASIPreview3TcpListener
+            >.completed(
+              WASIPreview3SocketResult<WASIPreview3TcpListener>.ok(
+                _PosixTcpListener(endpoint, _createPosixTcpConnection),
+              ),
+            );
+          } on Object {
+            endpoint.close();
+            rethrow;
+          }
+        }
         binding.close();
         return WASIPreview3SocketOperation<WASIPreview3TcpListener>.completed(
           const WASIPreview3SocketResult<WASIPreview3TcpListener>.error(
@@ -219,6 +266,32 @@ final class _NativeSocketsBackend
     }
   }
 
+  WASIPreview3TcpConnection _createPosixTcpConnection(
+    _PosixTcpEndpoint endpoint,
+  ) {
+    try {
+      final connection = _posixTcpConnection(endpoint);
+      _posixTcpSockets[connection] = endpoint;
+      return connection;
+    } on Object {
+      endpoint.close();
+      rethrow;
+    }
+  }
+
+  Future<WASIPreview3SocketResult<WASIPreview3TcpConnection>> _connectPosixTcp(
+    _PosixTcpEndpoint endpoint,
+    WASIPreview3IpSocketAddress remoteAddress,
+  ) async {
+    try {
+      await endpoint.connect(remoteAddress);
+      return WASIPreview3SocketResult.ok(_createPosixTcpConnection(endpoint));
+    } on Object catch (error) {
+      endpoint.close();
+      return WASIPreview3SocketResult.error(_socketErrorCode(error));
+    }
+  }
+
   void _applyTcpOptionsToConnection(
     WASIPreview3TcpConnection connection,
     WASIPreview3TcpSocketOptions options,
@@ -244,10 +317,18 @@ final class _NativeSocketsBackend
     if (_optionAbi == null) return 'not-supported';
     try {
       if (connection != null) {
-        _applyTcpOptionsToConnection(connection, options);
+        final endpoint = _posixTcpSockets[connection];
+        if (endpoint != null) {
+          endpoint.applyOptions(options, _optionAbi!);
+        } else {
+          _applyTcpOptionsToConnection(connection, options);
+        }
       }
       if (listener case final _NativeTcpListener nativeListener) {
         nativeListener.applyOptions(options);
+      }
+      if (listener case final _PosixTcpListener nativeListener) {
+        nativeListener.applyOptions(options, _optionAbi!);
       }
       return null;
     } on Object catch (error) {

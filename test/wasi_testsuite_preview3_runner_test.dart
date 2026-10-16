@@ -87,6 +87,88 @@ print(json.dumps(payload))
     );
   });
 
+  test(
+    'wasd official adapter uses the native AOT runner only for Preview3',
+    () async {
+      final python = await _pythonExecutable();
+      if (python == null) {
+        markTestSkipped('requires Python 3');
+        return;
+      }
+      final adapterPath = File(
+        'tool/wasi_testsuite_wasd_adapter.py',
+      ).absolute.path;
+      const executable = '/tmp/WASD native AOT runner';
+      final result = await Process.run(
+        python,
+        <String>[
+          '-c',
+          '''
+import importlib.util
+import json
+
+spec = importlib.util.spec_from_file_location("adapter", ${json.encode(adapterPath)})
+adapter = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(adapter)
+payload = {
+    version: adapter.compute_argv(
+        "fixture with spaces.wasm",
+        (["guest argument", "--guest-flag"], {"foo": "bar value"}, "/tmp/root with spaces"),
+        ["http", "sockets"] if version == "wasm32-wasip3" else [],
+        "wasi:http/service" if version == "wasm32-wasip3" else "wasi:cli/command",
+        version,
+    )
+    for version in adapter.get_wasi_versions()
+}
+payload["timeout"] = adapter.get_timeout_seconds()
+print(json.dumps(payload))
+''',
+        ],
+        environment: const <String, String>{
+          'DART': 'dart --enable-asserts',
+          'WASD_PREVIEW3_RUNNER': executable,
+        },
+      );
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      final payload =
+          json.decode(result.stdout as String) as Map<String, Object?>;
+      const commonArguments = <String>['--env', 'foo=bar value'];
+      const guestArguments = <String>[
+        'fixture with spaces.wasm',
+        'guest argument',
+        '--guest-flag',
+      ];
+      expect(payload['wasm32-wasip3'], <String>[
+        executable,
+        '--world',
+        'wasi:http/service',
+        '--proposal',
+        'http',
+        '--proposal',
+        'sockets',
+        ...commonArguments,
+        '--copy-dir',
+        '/tmp/root with spaces::/',
+        ...guestArguments,
+      ]);
+      for (final (version, runner) in <(String, String)>[
+        ('wasm32-wasip1', 'wasi_testsuite_preview1_runner.dart'),
+        ('wasm32-wasip2', 'wasi_testsuite_preview2_component_runner.dart'),
+      ]) {
+        expect(payload[version], <String>[
+          'dart',
+          '--enable-asserts',
+          File('tool/$runner').absolute.path,
+          ...commonArguments,
+          '--dir',
+          '/tmp/root with spaces::/',
+          ...guestArguments,
+        ]);
+      }
+      expect(payload['timeout'], 30.0);
+    },
+  );
+
   test('Preview3 runner isolates copied preopens and cleans them', () async {
     final temp = await Directory.systemTemp.createTemp(
       'wasd_wasip3_preopen_test_',

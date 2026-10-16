@@ -10,6 +10,7 @@ final class WASIPreview3ClocksHost {
   WASIPreview3ClocksHost() : _monotonicClock = Stopwatch()..start();
 
   static final BigInt _nanosecondsPerMicrosecond = BigInt.from(1000);
+  static final BigInt _nanosecondsPerMillisecond = BigInt.from(1000000);
   static final BigInt _maxDelayNanoseconds =
       BigInt.from(const Duration(days: 1).inMicroseconds) *
       _nanosecondsPerMicrosecond;
@@ -41,7 +42,7 @@ final class WASIPreview3ClocksHost {
   }
 
   Future<void> _waitFor(Object? durationValue) async {
-    await _delayNanoseconds(_u64(durationValue));
+    await _delayUntil(_monotonicNow() + _u64(durationValue));
   }
 
   FutureOr<void> _waitUntil(Object? markValue) {
@@ -50,24 +51,22 @@ final class WASIPreview3ClocksHost {
     if (mark <= now) {
       return null;
     }
-    return _delayNanoseconds(mark - now);
+    return _delayUntil(mark);
   }
 
-  Future<void> _delayNanoseconds(BigInt duration) async {
-    var remaining = duration;
-    while (remaining > BigInt.zero) {
+  Future<void> _delayUntil(BigInt deadline) async {
+    while (true) {
+      final remaining = deadline - _monotonicNow();
+      if (remaining <= BigInt.zero) {
+        return;
+      }
       final chunk = remaining > _maxDelayNanoseconds
           ? _maxDelayNanoseconds
           : remaining;
-      final microseconds =
-          (chunk + _nanosecondsPerMicrosecond - BigInt.one) ~/
-          _nanosecondsPerMicrosecond;
-      if (microseconds > BigInt.zero) {
-        await Future<void>.delayed(
-          Duration(microseconds: microseconds.toInt()),
-        );
-      }
-      remaining -= chunk;
+      final milliseconds =
+          (chunk + _nanosecondsPerMillisecond - BigInt.one) ~/
+          _nanosecondsPerMillisecond;
+      await Future<void>.delayed(Duration(milliseconds: milliseconds.toInt()));
     }
   }
 
