@@ -57,7 +57,7 @@ jobs:
 
   explicit-core-js:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -72,7 +72,6 @@ jobs:
       - run: dart test -p chrome test/wasm_host_globals_test.dart
       - run: dart test -p node test/wasm_exception_test.dart
       - run: dart test -p chrome test/wasm_exception_test.dart
-      - run: dart test -p chrome --compiler=dart2wasm test/wasm_exception_test.dart
 
   native:
     runs-on: ${{ matrix.os }}

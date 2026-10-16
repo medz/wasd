@@ -66,8 +66,7 @@ including when thrown during module start. Re-throwing it into another guest
 preserves its tag, payload and wrapper identity. Inspecting floating-point
 payloads does not discard their original Wasm NaN bits before re-throwing.
 Weak caches preserve wrapper identity without keeping every exception alive.
-The JavaScript exception bridge preserves ordinary Dart host errors and their
-stack traces, including during module start.
+Ordinary Dart host failures are not matched by guest exception tags.
 `ExceptionOptions.traceStack` requests platform stack capture when available;
 the native adapter does not capture an additional construction stack.
 
@@ -75,30 +74,9 @@ JavaScript exported tags obtain their signatures lazily from the original
 module metadata. Byte and stream compilation snapshot the necessary sections;
 the adapter does not depend on a platform `WebAssembly.Tag.type()` method.
 
-## Dart2wasm setup
-
-Dart2wasm cannot synchronously catch a foreign Wasm exception directly. Load the
-packaged `lib/wasm_exception_bridge.js` asset before the Dart application to use
-this exception profile. Copy or serve that file alongside the application;
-for example, with both files served from the same directory:
-
-```html
-<script src="wasm_exception_bridge.js"></script>
-<!-- Load the compiled Dart application after the adapter. -->
-```
-
-For a Node ES module entrypoint in that directory, load it before invoking the
-compiled Dart application:
-
-```js
-import './wasm_exception_bridge.js';
-```
-
-The static adapter uses no `eval` or generated JavaScript. Dart VM and Dart2js do
-not need this asset. Ordinary Dart2wasm modules also work without it, but uncaught
-guest exceptions cannot be synchronously caught through the public Dart API
-without the adapter. Throwing public exceptions from JavaScript host callbacks
-requires the engine's `WebAssembly.JSTag` support.
+The verified host targets are Dart VM and Dart2js on Node/Chrome. Dart2wasm host
+exception interoperability remains unqualified. Throwing public exceptions
+from JavaScript host callbacks requires the engine's `WebAssembly.JSTag` support.
 
 General reference/vector native tags and whole-Core conformance remain separate
 acceptance work under the [standards plan](standards.md).
@@ -108,5 +86,4 @@ dart test test/wasm_host_tags_test.dart test/wasm_exception_bridge_test.dart tes
 dart test test/wasm_exception_test.dart
 dart test -p node test/wasm_exception_test.dart test/wasm_core_features_test.dart
 dart test -p chrome test/wasm_exception_test.dart test/wasm_core_features_test.dart
-dart test -p chrome --compiler=dart2wasm test/wasm_exception_test.dart
 ```

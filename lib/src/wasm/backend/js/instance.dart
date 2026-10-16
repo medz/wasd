@@ -13,7 +13,6 @@ import '../../table.dart' as wasm;
 import '../../value.dart';
 import 'errors.dart' as js_errors;
 import 'exception.dart' as js_exception;
-import 'exception_bridge.dart' as exception_bridge;
 import 'global.dart' as js_global;
 import 'memory.dart' as js_memory;
 import 'module.dart' as js_module;
@@ -42,13 +41,6 @@ class Instance implements wasm.Instance {
     JSObject imports,
   ) {
     try {
-      if (exception_bridge.isInstalled) {
-        return exception_bridge.construct(_instanceConstructor, [
-              jsModule,
-              imports,
-            ])
-            as JSImportInstance;
-      }
       return JSImportInstance(jsModule, imports);
     } catch (e, st) {
       js_errors.translateJsError(e, st);
@@ -110,7 +102,12 @@ JSAny? _encodeImport(wasm.ImportValue value) => switch (value) {
 wasm.WasmFunction _wrapFunction(JSFunction jsFunc) => (List<Object?> args) {
   try {
     final jsArgs = <JSAny?>[for (final arg in args) _encodeHostValue(arg)];
-    return _decodeHostArg(exception_bridge.invoke(jsFunc, jsArgs));
+    return _decodeHostArg(
+      (jsFunc as JSObject).callMethodVarArgs<JSAny?>('call'.toJS, [
+        null,
+        ...jsArgs,
+      ]),
+    );
   } catch (e, st) {
     js_errors.translateJsError(e, st);
   }
@@ -156,11 +153,6 @@ JSFunction _hostFuncToJS(wasm.WasmFunction hostFn) {
       return _encodeHostValue(hostFn(args));
     } on js_exception.Exception catch (error) {
       js_exception.throwToHost(error);
-    } catch (error, stackTrace) {
-      if (exception_bridge.isDart2Wasm) {
-        js_exception.throwHostFailure(error, stackTrace);
-      }
-      rethrow;
     }
   }
 
@@ -190,9 +182,6 @@ Object? _decodeHostArg(JSAny? value) {
 
 @JS('String')
 external JSString _jsString(JSAny? value);
-
-@JS('WebAssembly.Instance')
-external JSFunction get _instanceConstructor;
 
 class _ExportGlobal implements wasm.Global<ExternRef, Object?> {
   _ExportGlobal(this._host);

@@ -16,10 +16,6 @@ import 'exception.dart' as js_exception;
 Never translateJsError(Object e, StackTrace st) {
   // ignore: invalid_runtime_check_with_js_interop_types
   if (e is JSObject) {
-    final hostFailure = js_exception.hostFailure(e);
-    if (hostFailure != null) {
-      Error.throwWithStackTrace(hostFailure.$1, hostFailure.$2);
-    }
     final exceptionConstructor = _exceptionConstructor;
     if (exceptionConstructor != null && e.instanceof(exceptionConstructor)) {
       Error.throwWithStackTrace(

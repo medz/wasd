@@ -69,9 +69,8 @@ do not establish full Core, Component Model or WASI conformance. See the [fixed 
 
 The development checkout additionally provides [public tags and exceptions](doc/host_tags.md),
 including host/guest propagation on Dart VM, Node and browsers. Native modules
-require `CoreFeature.exceptionHandling`; Dart2wasm synchronous exception handling
-also requires the static adapter described in that guide. These additions are
-unreleased and are not included in the published `0.6.0-dev.1` preview.
+require `CoreFeature.exceptionHandling`. These additions are unreleased and are
+not included in the published `0.6.0-dev.1` preview.
 
 ## Quick Start
 

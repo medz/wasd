@@ -52,25 +52,6 @@ Never throwToHost(Exception error) {
   _throwValue(error.host);
 }
 
-final _hostFailureKey = JSSymbol();
-
-Never throwHostFailure(Object error, StackTrace stackTrace) {
-  final wrapper = JSObject();
-  wrapper.setProperty(
-    _hostFailureKey,
-    [error.toJSBox, stackTrace.toJSBox].toJS,
-  );
-  _throwValue(wrapper);
-}
-
-(Object, StackTrace)? hostFailure(JSObject value) {
-  final failure = value.getProperty<JSArray<JSBoxedDartObject>?>(
-    _hostFailureKey,
-  );
-  if (failure == null) return null;
-  return (failure[0].toDart, failure[1].toDart as StackTrace);
-}
-
 Never _throwValue(JSAny value) {
   _throwJsValue.callAsFunction(null, value);
   throw StateError('The WebAssembly exception thrower returned.');
