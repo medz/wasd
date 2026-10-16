@@ -43,20 +43,20 @@ dependencies:
   wasd: ^0.5.2
 ```
 
-The current published release is `0.6.0-dev.1`. It is a preview; the latest
-stable release is `0.5.2`, selected by the default installation above.
+This preview is `0.6.0-dev.2`. The latest stable release is `0.5.2`, selected
+by the default installation above.
 
 To opt into the preview explicitly:
 
 ```bash
-dart pub add wasd:^0.6.0-dev.1
+dart pub add wasd:^0.6.0-dev.2
 ```
 
 Or use:
 
 ```yaml
 dependencies:
-  wasd: ^0.6.0-dev.1
+  wasd: ^0.6.0-dev.2
 ```
 
 The preview combines Dart VM [multi-memory opt-in](doc/core_features.md),
@@ -67,10 +67,11 @@ were prepared as `0.5.3` and are now included in this batch; a separate `0.5.3`
 release is not planned. These additions require the preview installation and
 do not establish full Core, Component Model or WASI conformance. See the [fixed standards and acceptance plan](doc/standards.md).
 
-The development checkout additionally provides [public tags and exceptions](doc/host_tags.md),
-including host/guest propagation on Dart VM, Node and browsers. Native modules
-require `CoreFeature.exceptionHandling`. These additions are unreleased and are
-not included in the published `0.6.0-dev.1` preview.
+Version `0.6.0-dev.2` adds [public numeric tags and exceptions](doc/host_tags.md),
+including host/guest propagation on Dart VM and Dart2js on Node and Chrome.
+Native modules require `CoreFeature.exceptionHandling`. It also corrects
+Preview2 TCP listen failure state and adds the Preview3 TCP and clock fixes
+described below. These additions were not included in `0.6.0-dev.1`.
 
 The frozen Core 3.0 gate now checks all `261` official source files, preserving
 their original paths. It also exposed and fixed validation of multiple
@@ -321,20 +322,28 @@ dart run tool/wasi_testsuite_preview3_runner.dart \
   --python=/path/to/venv/bin/python
 ```
 
-The recorded published `wasm32-wasip3` baseline passes `39/45` fixtures. The remaining
-six (`sockets-tcp-bind`, `sockets-tcp-listen`, `sockets-echo`,
+The historical `0.5.0` and `0.6.0-dev.1` `wasm32-wasip3` baseline
+passes `39/45` fixtures. The six failures
+(`sockets-tcp-bind`, `sockets-tcp-listen`, `sockets-echo`,
 `sockets-tcp-connect`, `sockets-tcp-receive`, and `sockets-tcp-send`) require
 the explicit native TCP bind/listen split that `dart:io` cannot represent; they
 fail with `not-supported`. There are no skips, expected failures, or unexpected
 passes.
 
-The development checkout adds native Preview3 TCP bind/listen on Linux and
-macOS using the same OS socket through bind, listen or connect. Bind assigns
+Version `0.6.0-dev.2` records `45/45` frozen official fixtures passed
+through the native AOT runner, with zero failures, skips, expected failures or
+unexpected passes. The fixed input revisions and counts are recorded in
+`tool/wasi_preview3_contract.lock.json`.
+
+Version `0.6.0-dev.2` adds native Preview3 TCP bind/listen on Linux and macOS using
+the same OS socket through bind, listen or connect. Bind assigns
 a local address without starting a listener; address reuse follows the WASI
-contract and platform semantics. This addition is unreleased and is not
-included in published `0.6.0-dev.1`. Native CI runs the fixed official set through
-one compiled AOT runtime and runs host unit regressions on the JIT VM. Other
-native platforms still report `not-supported` for explicit TCP bind.
+contract and platform semantics. Monotonic waits recheck their deadlines after
+timer wakeups so they cannot complete early. These changes were absent from
+`0.6.0-dev.1`. Native CI runs the fixed official set through one
+compiled AOT runtime per Linux/macOS job and runs host unit regressions on the
+JIT VM. Other native platforms still report `not-supported` for explicit TCP
+bind.
 
 The frozen Component Model async gate currently records three distinct kinds
 of evidence:

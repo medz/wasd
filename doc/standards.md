@@ -1,9 +1,10 @@
 # Standards coverage and the road to 1.0
 
-This is an implementation and acceptance plan, checked against `0.5.0`
-(`528b2b828f979d08ba1798f7e8e955e892ab052d`) on 2026-10-01. A target in this
-document is not a support claim. Release support must be backed by WASD
-execution, validation, and host tests at the exact release commit.
+This implementation and acceptance plan retains the historical `0.5.0`
+(`528b2b828f979d08ba1798f7e8e955e892ab052d`) baseline checked on 2026-10-01.
+Acceptance evidence below applies to `0.6.0-dev.2`.
+A target in this document is not a support claim. Release support must be backed
+by WASD execution, validation, and host tests at the exact release commit.
 
 ## Fixed specification targets
 
@@ -65,10 +66,10 @@ newer Core converter rejects the frozen draft's removed `cancellable` option.
 | Threads and shared memory | Atomic/thread-related interpreter paths exist | Sequential instruction tests do not prove concurrent shared-memory, scheduling, or wait/notify behavior. Freeze an explicit threading profile and run real concurrency tests |
 | WASI Preview1 | VM host, in-repo Node host, browser shim and virtual filesystem | Unit/regression tests exist. Re-run a pinned official P1 suite and platform matrix; document permissions and native filesystem/syscall boundaries |
 | WASI Preview2 | VM command/proxy runners, synchronous Canonical ABI, WIT adapters and host interfaces for random, clocks, io, cli, filesystem, sockets, http | Focused conformance/toolchain tests exist. Audit all stable package exports and execution worlds. A command/proxy runner is not general Component Model execution |
-| WASI Preview3 0.3.0 | VM command/service runners, async Canonical ABI, stream/future/task/resource support; six-package/eight-world lock | `tool/wasi_preview3_contract.lock.json` records the published `39/45` baseline. The unreleased Linux/macOS native TCP split is tracked in #115 with official-fixture CI; update recorded acceptance after final verification. Upgrade to 0.3.1 with feature-level regressions |
+| WASI Preview3 0.3.0 | VM command/service runners, async Canonical ABI, stream/future/task/resource support; six-package/eight-world lock | Historical published `0.5.0` / `0.6.0-dev.1` baseline: `39/45` fixtures passed, with six native TCP failures. The `0.6.0-dev.2` acceptance gate records `45/45` passed and zero failed, skipped, xfailed or xpassed for the Linux/macOS native AOT profile, including same-socket TCP bind/listen/connect and monotonic clock deadline checks. `tool/wasi_preview3_contract.lock.json` records this gate. Upgrade to 0.3.1 with feature-level regressions |
 | Component Model binary/WIT | Strict decoder and component/WIT/adapter machinery exist | Frozen historical async gate: WASD decode `37/37`, wasm-tools validation `31/31`, Wasmtime reference execution `31/31`. Only the first executes WASD code, and it only decodes. Add WASD assertion execution for general synchronous and async components |
 | Component Model composition | WASI runners support particular compositions and host bindings | Cover nested components, imports/exports, aliasing, types, resource ownership, canonical lift/lower, instantiation and failure semantics independently of WASI-specific runners |
-| Stable host capabilities | VM filesystem/network/HTTP adapters and browser/Node P1 adapters | Native TCP bind/listen separation, HTTP trailers, IPv6 metadata and filesystem race guarantees need explicit capability contracts; never replace an unsupported operation with simulated success |
+| Stable host capabilities | VM filesystem/network/HTTP adapters and browser/Node P1 adapters | Keep explicit capability contracts for platform-scoped TCP bind/listen, HTTP trailers, IPv6 metadata and filesystem race guarantees; never replace an unsupported operation with simulated success |
 | Experimental WASI packages | Outside the current six/seven stable package contracts | Keep a separate tracked backlog for timezone, key-value, machine learning, runtime config, WebGPU and device APIs. Package names or proposal maturity alone do not establish portable host support |
 
 The pure Dart execution engine must remain free of a native Wasm-runtime
@@ -79,9 +80,10 @@ cross-target tests remain part of the 1.0 work. Preview2/3 currently require the
 Dart VM host. Browser permissions and missing host services must be represented
 explicitly rather than promised as identical OS capabilities.
 
-The `ffi` dependency currently provides native Preview1 OS facilities; it does
-not implement Wasm execution. Any future optional host adapter must state its
-OS dependencies and capabilities separately from the interpreter.
+The `ffi` dependency provides native Preview1 OS facilities and, in
+`0.6.0-dev.2`, Linux/macOS native Preview3 TCP host sockets. It does not implement
+Wasm execution or introduce a native Wasm runtime. Host adapters must state
+their OS dependencies and capabilities separately from the pure Dart interpreter.
 
 ## Incremental releases and acceptance
 

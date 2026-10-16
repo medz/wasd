@@ -1,3 +1,35 @@
+## 0.6.0-dev.2
+
+Preview.
+
+- Decode custom-section names as UTF-8, including non-ASCII names.
+- Add public numeric `Tag` and `Exception` APIs with host/guest propagation,
+  tag identity, cross-instance rethrows and preserved floating-point payloads.
+  Native modules require `CoreFeature.exceptionHandling`; Dart2js on Node and
+  Chrome uses the platform engine.
+- Restore all `261` original frozen Core 3.0 source paths and reject multiple
+  supertypes during validation. Record `65,336/65,336` commands with zero
+  failures or skips; empty conversions and skipped commands fail the gate.
+  Binary assertions use WASD's internal interpreter, while malformed text
+  assertions use external parsers. Public API coverage remains separate.
+- Close a Preview2 TCP socket after a terminal `finish-listen` failure;
+  an unfinished operation still returns `would-block` and remains pending.
+- Implement separate Preview3 TCP bind/listen on Linux and macOS using one
+  native OS socket through bind, listen or connect. Preserve the explicit
+  `not-supported` boundary for TCP bind on other platforms.
+- Recheck Preview3 monotonic deadlines after host timer wakeups and round
+  scheduled delays up to milliseconds, preserving zero waits and bounded
+  chunks for long waits.
+- Record `45/45` frozen official Preview3 fixtures with native AOT, zero
+  failures, skips, expected failures or unexpected passes. Native CI compiles
+  this repository's runner once for each Linux/macOS job and retains the
+  30-second per-fixture timeout. The earlier `39/45` published baseline remains
+  historical evidence below.
+- Keep the historical Component Model gate separate: WASD strict decode
+  `37/37`, `wasm-tools` `1.254.0` validation `31/31`, and Wasmtime
+  `48.0.0 (e8ac8c27f)` reference execution `31/31`. Updating the Core converter
+  to `wasm-tools` `1.262.0` does not replace that frozen draft validation.
+
 ## 0.6.0-dev.1
 
 Preview release. The floating-point fixes previously prepared

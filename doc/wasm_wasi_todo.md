@@ -130,7 +130,8 @@ P2/P3 work starts only after these P1 gates are green.
     ContextJ/ContextO are rejected explicitly.
 
 - [x] `SUPPORT-P3`
-  - Status: complete for the frozen native Dart VM scope: stable WASI 0.3.0
+  - Status: acceptance for `0.6.0-dev.2` covers the frozen
+    Linux/macOS native Dart VM AOT profile for stable WASI 0.3.0
     `wasi:cli/command` and `wasi:http/service` components.
   - Frozen WASI contract: stable WASI 0.3.0 commit
     `3ee2a590c766594ae44a54730fc74fc27da5c609`; six packages (`random`,
@@ -167,17 +168,21 @@ P2/P3 work starts only after these P1 gates are green.
     `dart test test/wasi_preview3_native_filesystem_test.dart`
     `dart test test/wasi_preview3_native_http_test.dart`
     `dart test test/wasi_preview3_sockets_test.dart`
+    `dart test test/wasi_preview3_clocks_test.dart`
     `dart test test/wasi_preview3_task_return_runner_test.dart`
     `dart test test/wasi_testsuite_preview3_runner_test.dart`
-  - Official closeout evidence:
-    `dart run tool/wasi_testsuite_preview3_runner.dart --testsuite-dir=/path/to/wasi-testsuite --runner-dir=/path/to/wasi-testsuite/test-runner --python=/path/to/venv/bin/python`
-    records the published baseline of `39/45` `wasm32-wasip3` fixtures passed with `0` skipped, xfailed,
-    or xpassed. The six failures (`sockets-tcp-bind`, `sockets-tcp-listen`,
+  - Official closeout evidence for the `0.6.0-dev.2` Linux/macOS native AOT profile:
+    `dart compile exe tool/wasi_testsuite_preview3_component_runner.dart -o /absolute/path/to/wasi-preview3-runner`
+    `WASD_PREVIEW3_RUNNER="/absolute/path/to/wasi-preview3-runner" dart run tool/wasi_testsuite_preview3_runner.dart --testsuite-dir=/path/to/wasi-testsuite --runner-dir=/path/to/wasi-testsuite/test-runner --python=/path/to/venv/bin/python`
+    records `45/45` `wasm32-wasip3` fixtures passed, with `0` failed, skipped,
+    xfailed or xpassed. Native TCP bind/listen/connect use the same OS socket;
+    monotonic waits recheck their deadline after each timer wakeup.
+  - Historical published `0.5.0` / `0.6.0-dev.1` baseline: `39/45` fixtures
+    passed, `6` failed, with `0` skipped, xfailed or xpassed. The six failures
+    (`sockets-tcp-bind`, `sockets-tcp-listen`,
     `sockets-echo`, `sockets-tcp-connect`, `sockets-tcp-receive`, and
-    `sockets-tcp-send`) require the explicitly unsupported native TCP
-    bind/listen split. The unreleased development backend now implements that
-    split on Linux/macOS with the same native socket; native CI executes the
-    fixed official set before this source is accepted.
+    `sockets-tcp-send`) required the native TCP bind/listen split that those
+    published builds explicitly did not support.
   - Scope boundary: Node.js and browser Preview3 runners, timezone, error
     context, explicit cooperative thread creation, more-async builtins,
     fixed-length lists, maps, memory64, and general Component Model WAST
@@ -188,7 +193,7 @@ P2/P3 work starts only after these P1 gates are green.
     path node; isolation therefore requires preopens that untrusted actors
     cannot mutate.
   - Native sockets boundary: synchronous Preview3 imports may return pending
-    Dart callbacks that the component runner waits for. The development
+    Dart callbacks that the component runner waits for. The `0.6.0-dev.2`
     Linux/macOS backend supports separate explicit TCP bind/listen using one
     native socket. Other platforms still report `not-supported` for explicit
     bind; unbound listen and connect remain available through `dart:io`. UDP bind
